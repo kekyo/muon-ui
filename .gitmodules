@@ -1,0 +1,6 @@
+[submodule "deps/cardio"]
+	path = deps/cardio
+	url = https://github.com/kekyo/libcardio
+[submodule "deps/tra-ffic"]
+	path = deps/tra-ffic
+	url = https://github.com/kekyo/tra-ffic.git

@@ -1,0 +1,60 @@
+/* muon - Multi-platform GUI application framework that uses CEF as its backend
+ * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+ * Under MIT.
+ * https://github.com/kekyo/muon
+ */
+
+#ifndef MUON_RUNTIME_INFO_GENERATED_H
+#define MUON_RUNTIME_INFO_GENERATED_H
+
+#include <stddef.h>
+
+#define MUON_RUNTIME_INFO_AVAILABLE 1
+
+typedef struct {
+  const char *file_name;
+  const char *url;
+  const char *sha1;
+  unsigned long long size;
+} MuonRuntimeCefArtifactInfo;
+
+typedef struct {
+  const char *name;
+  const char *executable_name;
+  const char *target;
+  const char *muon_core_version;
+  const char *muon_core_git_commit_hash;
+  const char *cef_reference_version;
+  const char *cef_reference_distribution;
+  int cef_reference_api_version;
+  const char *cef_reference_api_hash;
+  MuonRuntimeCefArtifactInfo cef_reference_artifact;
+  const char *const *core_payload;
+  size_t core_payload_count;
+} MuonRuntimeInfo;
+
+static const char *const kMuonRuntimeCorePayload[] = {
+@MUON_CORE_PAYLOAD_C@
+};
+
+static const MuonRuntimeInfo kMuonRuntimeInfo = {
+    "muon-core",
+    "@APP_EXECUTABLE_NAME@",
+    "@MUON_TARGET_NAME@",
+    "@MUON_CORE_VERSION@",
+    "@MUON_CORE_GIT_COMMIT_HASH@",
+    "@MUON_CEF_VERSION@",
+    "minimal",
+    @MUON_CEF_API_VERSION@,
+    "@MUON_CEF_API_HASH@",
+    {
+        "@MUON_CEF_PACKAGE@",
+        "@MUON_CEF_PACKAGE_URL@",
+        "@MUON_CEF_SHA1@",
+        @MUON_CEF_SIZE@,
+    },
+    kMuonRuntimeCorePayload,
+    @MUON_CORE_PAYLOAD_COUNT@,
+};
+
+#endif

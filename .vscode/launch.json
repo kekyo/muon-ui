@@ -1,0 +1,71 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Muon",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/muon/.run/dev-linux64-debug/muon",
+      "args": [],
+      "cwd": "${workspaceFolder}/muon/.run/dev-linux64-debug",
+      "preLaunchTask": "Build debug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "miDebuggerArgs": "-iex \"set debuginfod urls\"",
+      "symbolLoadInfo": {
+        "loadAll": false
+      },
+      "stopAtEntry": true,
+      "externalConsole": false,
+      "environment": []
+    },
+    {
+      "name": "Debug Muon (X11)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/muon/.run/dev-linux64-debug/muon",
+      "args": [
+        "--ozone-platform=x11"
+      ],
+      "cwd": "${workspaceFolder}/muon/.run/dev-linux64-debug",
+      "preLaunchTask": "Build debug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "miDebuggerArgs": "-iex \"set debuginfod urls\"",
+      "symbolLoadInfo": {
+        "loadAll": false
+      },
+      "stopAtEntry": true,
+      "externalConsole": false,
+      "environment": []
+    },
+    {
+      "name": "Debug Muon (Wayland)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/muon/.run/dev-linux64-debug/muon",
+      "args": [
+        "--enable-features=UseOzonePlatform",
+        "--ozone-platform=wayland"
+      ],
+      "cwd": "${workspaceFolder}/muon/.run/dev-linux64-debug",
+      "preLaunchTask": "Build debug",
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "miDebuggerArgs": "-iex \"set debuginfod urls\"",
+      "symbolLoadInfo": {
+        "loadAll": false
+      },
+      "stopAtEntry": true,
+      "externalConsole": false,
+      "environment": []
+    },
+    {
+      "name": "Attach Muon JS",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9222,
+      "webRoot": "${workspaceFolder}"
+    }
+  ]
+}

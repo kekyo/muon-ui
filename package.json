@@ -1,0 +1,44 @@
+{
+  "name": "muon-root",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A multi-platform GUI application framework that uses CEF as its backend",
+  "keywords": [
+    "chromium",
+    "chrome",
+    "cef",
+    "native-apps"
+  ],
+  "author": "Kouji Matsui (@kekyo@mi.kekyo.net)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kekyo/muon-ui.git"
+  },
+  "homepage": "https://github.com/kekyo/muon-ui#readme",
+  "readme": "README_pack.md",
+  "files": [
+    "LICENSE",
+    "images/muon-120.png",
+    "images/vscode.png"
+  ],
+  "workspaces": [
+    "muon-prepare",
+    "muon-ui",
+    "muon-core",
+    "muon-core-tester"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:dist": "bash ./build_package.sh --target dist",
+    "dev": "npm run dev --workspace muon-core",
+    "test": "npm run test --workspaces",
+    "test:ffi-closures": "npm run test:ffi-closures --workspace muon-core-tester",
+    "test:asan": "npm run test:asan --workspace muon-core-tester",
+    "test:valgrind": "npm run test:valgrind --workspace muon-core-tester",
+    "pack": "bash ./build_package.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

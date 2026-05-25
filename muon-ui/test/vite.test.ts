@@ -1,0 +1,419 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon
+
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
+
+import { delay } from "async-primitives";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createServer, type ViteDevServer } from "vite";
+
+import {
+  createMuonLaunchScript,
+  getMuonExecutablePath,
+  resolveMuonRuntimePath,
+} from "../src/vite-internals.js";
+import muon from "../src/vite.js";
+import {
+  buildTestMuonPrepare,
+  createRuntimeInfoHeader,
+} from "./test-muon-prepare.js";
+
+const execFileAsync = promisify(execFile);
+
+const originalBrowser = process.env.BROWSER;
+const originalCacheDir = process.env.MUON_CACHE_DIR;
+const originalPreparePath = process.env.MUON_PREPARE_PATH;
+const cleanupDirectories: string[] = [];
+const suiteCleanupDirectories: string[] = [];
+const servers: ViteDevServer[] = [];
+
+const wait = async (predicate: () => boolean): Promise<void> => {
+  for (let index = 0; index < 100; index += 1) {
+    if (predicate()) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error("Timed out waiting for condition");
+};
+
+const createTemporaryDirectory = async (prefix: string): Promise<string> => {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  cleanupDirectories.push(directory);
+  return directory;
+};
+
+const createSuiteTemporaryDirectory = async (
+  prefix: string,
+): Promise<string> => {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  suiteCleanupDirectories.push(directory);
+  return directory;
+};
+
+beforeAll(async () => {
+  const buildRoot = await createSuiteTemporaryDirectory("muon-vite-native-");
+  const executableName =
+    process.platform === "win32" ? "muon-core.exe" : "muon-core";
+  const binaries = await buildTestMuonPrepare(
+    buildRoot,
+    createRuntimeInfoHeader({
+      archiveFileName: "cef.tar.bz2",
+      archiveUrl: join(buildRoot, "cef.tar.bz2"),
+      archiveSha1: "0000000000000000000000000000000000000000",
+      archiveSize: 1,
+      executableName,
+      corePayload: [executableName, "plugins"],
+    }),
+  );
+  process.env.MUON_PREPARE_PATH = binaries.prepareExecutablePath;
+});
+
+afterAll(async () => {
+  if (originalPreparePath === undefined) {
+    delete process.env.MUON_PREPARE_PATH;
+  } else {
+    process.env.MUON_PREPARE_PATH = originalPreparePath;
+  }
+  for (const directory of suiteCleanupDirectories.splice(0)) {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+const writeBasicViteProject = async (root: string): Promise<void> => {
+  await writeFile(
+    join(root, "index.html"),
+    "<!doctype html><title>muon vite test</title>",
+  );
+};
+
+const writeProjectMuonConfig = async (root: string): Promise<void> => {
+  await writeFile(
+    join(root, "muon.json"),
+    `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
+  );
+};
+
+const writeFakeMuonExecutable = async (
+  runtimeDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  await mkdir(runtimeDirectory, { recursive: true });
+  const executable = getMuonExecutablePath(runtimeDirectory, "linux");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > '${outputDirectory.replaceAll("'", "'\\''")}/args.txt'
+pwd > '${outputDirectory.replaceAll("'", "'\\''")}/cwd.txt'
+cp "$4" '${outputDirectory.replaceAll("'", "'\\''")}/override.json'
+`,
+  );
+  await chmod(executable, 0o755);
+};
+
+const writeFakeCefDirectory = async (): Promise<string> => {
+  const cefDirectory = await createTemporaryDirectory("muon-vite-cef-dir-");
+  await mkdir(join(cefDirectory, "Release"), { recursive: true });
+  await mkdir(join(cefDirectory, "Resources", "locales"), {
+    recursive: true,
+  });
+  await writeFile(join(cefDirectory, "Release", "libcef.so"), "cef\n");
+  await writeFile(join(cefDirectory, "Resources", "icudtl.dat"), "cef\n");
+  await writeFile(
+    join(cefDirectory, "Resources", "locales", "en-US.pak"),
+    "locale\n",
+  );
+  return cefDirectory;
+};
+
+const writeFakeMuonSource = async (
+  muonDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  await writeFakeMuonExecutable(muonDirectory, outputDirectory);
+  await mkdir(join(muonDirectory, "plugins"), { recursive: true });
+  await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
+};
+
+interface StartServerPluginOptions {
+  muonPath: string;
+  cefPath: string | undefined;
+  stagePath: string | undefined;
+}
+
+const startServer = async (
+  root: string,
+  pluginOptions: StartServerPluginOptions,
+  open: boolean | string,
+): Promise<ViteDevServer> => {
+  const muonPluginOptions = {
+    muonPath: pluginOptions.muonPath,
+    ...(pluginOptions.cefPath === undefined
+      ? {}
+      : { cefPath: pluginOptions.cefPath }),
+    ...(pluginOptions.stagePath === undefined
+      ? {}
+      : { stagePath: pluginOptions.stagePath }),
+  };
+  const server = await createServer({
+    root,
+    logLevel: "silent",
+    server: {
+      host: "127.0.0.1",
+      port: 0,
+      open,
+    },
+    plugins: [muon(muonPluginOptions)],
+  });
+  servers.push(server);
+  await server.listen();
+  return server;
+};
+
+afterEach(async () => {
+  for (const server of servers.splice(0)) {
+    await server.close();
+  }
+  for (const directory of cleanupDirectories.splice(0)) {
+    await rm(directory, { recursive: true, force: true });
+  }
+  if (originalBrowser === undefined) {
+    delete process.env.BROWSER;
+  } else {
+    process.env.BROWSER = originalBrowser;
+  }
+  if (originalCacheDir === undefined) {
+    delete process.env.MUON_CACHE_DIR;
+  } else {
+    process.env.MUON_CACHE_DIR = originalCacheDir;
+  }
+});
+
+describe("muon Vite plugin", () => {
+  it("uses the packaged runtime for the host target by default", () => {
+    const packageDistDirectory = join("node_modules", "muon-ui", "dist");
+
+    expect(
+      resolveMuonRuntimePath({
+        root: "/project",
+        target: "linux64",
+        muonPath: undefined,
+        packageDirectory: packageDistDirectory,
+      }),
+    ).toBe(join(packageDistDirectory, "runtime", "linux64"));
+  });
+
+  it("keeps explicit muonPath for custom core builds", () => {
+    expect(
+      resolveMuonRuntimePath({
+        root: "/project",
+        target: "linux64",
+        muonPath: "../custom-muon-core",
+        packageDirectory: join("node_modules", "muon-ui", "dist"),
+      }),
+    ).toBe(resolve("/custom-muon-core"));
+  });
+
+  it("does not change BROWSER when server.open is false", async () => {
+    const root = await createTemporaryDirectory("muon-vite-closed-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    await writeBasicViteProject(root);
+    process.env.BROWSER = "existing-browser";
+
+    await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: undefined,
+        stagePath: undefined,
+      },
+      false,
+    );
+
+    expect(process.env.BROWSER).toBe("existing-browser");
+    await expect(access(join(root, ".muon"))).rejects.toThrow();
+  });
+
+  it("writes an override config before Vite launches BROWSER", async () => {
+    const root = await createTemporaryDirectory("muon-vite-open-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.BROWSER = "existing-browser";
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+      },
+      true,
+    );
+    await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+    const stagePath = join(root, ".muon", "linux64");
+    const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
+      .trim()
+      .split("\n");
+    const cwd = await readFile(join(outputDirectory, "cwd.txt"), "utf8");
+    const overrideConfigPath = args[3];
+    const overrideConfig = JSON.parse(
+      await readFile(join(outputDirectory, "override.json"), "utf8"),
+    ) as {
+      browser: { startPage: string; plugin: { allow: string[] } };
+      network: { allow: string[] };
+    };
+    const baseUrl = server.resolvedUrls?.local[0];
+    expect(baseUrl).toBeDefined();
+    expect(args).toEqual([
+      "-c",
+      join(root, "muon.json"),
+      "-c",
+      overrideConfigPath,
+    ]);
+    expect(cwd).toBe(`${stagePath}\n`);
+    await expect(access(join(stagePath, "libcef.so"))).resolves.toBeUndefined();
+    await expect(
+      access(join(stagePath, "icudtl.dat")),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(join(stagePath, "locales", "en-US.pak")),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(join(stagePath, "plugins", "plugin.txt")),
+    ).resolves.toBeUndefined();
+    expect(overrideConfig).toEqual({
+      browser: {
+        startPage: baseUrl,
+        plugin: { allow: [`${new URL(baseUrl ?? "").origin}/**`] },
+      },
+      network: {
+        allow: [
+          `${new URL(baseUrl ?? "").origin}/**`,
+          `${new URL(baseUrl ?? "").origin.replace(/^http:/, "ws:")}/**`,
+        ],
+      },
+    });
+    expect(process.env.BROWSER).not.toBe("existing-browser");
+
+    await server.close();
+    expect(process.env.BROWSER).toBe("existing-browser");
+    await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
+  });
+
+  it("uses a string server.open value as the browser start page", async () => {
+    const root = await createTemporaryDirectory("muon-vite-path-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+      },
+      "/path?x=1",
+    );
+    await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+    const overrideConfig = JSON.parse(
+      await readFile(join(outputDirectory, "override.json"), "utf8"),
+    ) as { browser: { startPage: string } };
+    const baseUrl = server.resolvedUrls?.local[0];
+    expect(baseUrl).toBeDefined();
+    expect(overrideConfig.browser.startPage).toBe(
+      new URL("/path?x=1", baseUrl).href,
+    );
+  });
+});
+
+describe("muon launch scripts", () => {
+  it("runs the POSIX script with paths containing spaces", async () => {
+    const root = await createTemporaryDirectory("muon vite shell root ");
+    const runtimeDirectory = join(root, "runtime dir");
+    const outputDirectory = join(root, "output dir");
+    const projectConfigPath = join(root, "project config", "muon.json");
+    const overrideConfigPath = join(root, "override config", "muon.vite.json");
+    await mkdir(dirname(projectConfigPath), { recursive: true });
+    await mkdir(dirname(overrideConfigPath), { recursive: true });
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(projectConfigPath, "{}\n");
+    await writeFile(overrideConfigPath, "{}\n");
+    await writeFakeMuonExecutable(runtimeDirectory, outputDirectory);
+    const scriptPath = join(root, "launch script.sh");
+    await writeFile(
+      scriptPath,
+      createMuonLaunchScript({
+        muonExecutablePath: getMuonExecutablePath(runtimeDirectory, "linux"),
+        projectConfigPath,
+        overrideConfigPath,
+        platform: "linux",
+      }),
+    );
+    await chmod(scriptPath, 0o755);
+
+    await execFileAsync(scriptPath, ["http://127.0.0.1:5173/"]);
+
+    await expect(
+      stat(join(outputDirectory, "override.json")),
+    ).resolves.toBeDefined();
+    await expect(
+      readFile(join(outputDirectory, "cwd.txt"), "utf8"),
+    ).resolves.toBe(`${runtimeDirectory}\n`);
+  });
+
+  it("creates a Windows script that preserves paths with spaces", () => {
+    const script = createMuonLaunchScript({
+      muonExecutablePath: "C:\\Muon Runtime\\muon-core.exe",
+      projectConfigPath: "C:\\My App\\muon.json",
+      overrideConfigPath: "C:\\Temp Dir\\muon.vite.json",
+      platform: "win32",
+    });
+
+    expect(script).toContain(
+      'set "MUON_EXECUTABLE=C:\\Muon Runtime\\muon-core.exe"',
+    );
+    expect(script).toContain(
+      'set "MUON_EXECUTABLE_DIRECTORY=C:\\Muon Runtime"',
+    );
+    expect(script).toContain('set "MUON_PROJECT_CONFIG=C:\\My App\\muon.json"');
+    expect(script).toContain(
+      'set "MUON_OVERRIDE_CONFIG=C:\\Temp Dir\\muon.vite.json"',
+    );
+    expect(script).toContain('pushd "%MUON_EXECUTABLE_DIRECTORY%"');
+    expect(script).toContain(
+      '"%MUON_EXECUTABLE%" -c "%MUON_PROJECT_CONFIG%" -c "%MUON_OVERRIDE_CONFIG%"',
+    );
+    expect(script).toContain("popd");
+  });
+});

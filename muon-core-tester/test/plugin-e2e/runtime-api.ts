@@ -1,0 +1,2015 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon
+
+import { expect, it } from "vitest";
+
+import {
+  MUON_PORT,
+  MUON_APP_URL,
+  DEBUG_MUON_DIRECTORY,
+  TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+  TEST_NETWORK_ALLOW_PATTERNS,
+  TEST_PLUGIN_ALLOW_PATTERNS,
+  access,
+  browserFunctionNames,
+  cdpCommandTimeoutMs,
+  configuredDevToolsShortcuts,
+  connectToMuonCdp,
+  constants,
+  createBrowserShortcutConfig,
+  ctrl0ZoomShortcut,
+  ctrlMinusZoomShortcut,
+  ctrlPlusZoomShortcut,
+  ctrlRReloadShortcut,
+  ctrlShiftIDevToolsShortcut,
+  ctrlShiftRShortcut,
+  describeMuonPluginBridge,
+  dispatchDevToolsShortcut,
+  dispatchKeyboardShortcut,
+  evaluateRejection,
+  expectNoDevTools,
+  expectNoPageLoad,
+  f11FullscreenShortcut,
+  f12DevToolsShortcut,
+  f5ReloadShortcut,
+  getOuterSize,
+  join,
+  listCdpTargets,
+  listProcessGroupCommandLines,
+  mkdir,
+  mkdtemp,
+  openPopupTarget,
+  processExitTimeoutMs,
+  readFile,
+  rm,
+  runBuiltinFsAbortScenarios,
+  runBuiltinFsAdditionalOperations,
+  runBuiltinFsDialogValidation,
+  runBuiltinFsFileUriOperations,
+  runBuiltinFsRoundtrip,
+  shiftF9DevToolsShortcut,
+  shouldUseValgrind,
+  startDebugMuon,
+  startReleaseMuon,
+  stopMuon,
+  targetTimeoutMs,
+  tmpdir,
+  wait,
+  waitForDocumentTitle,
+  waitForInnerWidth,
+  waitForNativeActiveWindowTitle,
+  waitForNativeWindowTitle,
+  waitForNativeWindowTitleAbsent,
+  waitForNativeWindowStatesAbsent,
+  waitForNativeWindowStates,
+  waitForOuterSizeChange,
+  waitForProcessExit,
+  waitForProcessExitOrTimeout,
+  waitForTargetClosed,
+  withMuon,
+  withMuonBrowserConfig,
+  withMuonEnvironment,
+  writeFile,
+} from "./shared.js";
+import type { BrowserInitialWindowState, CdpDriver } from "./shared.js";
+
+const withMuonInitialWindowState = async (
+  initialWindowState: BrowserInitialWindowState,
+  run: (driver: CdpDriver) => Promise<void>,
+): Promise<void> => {
+  const running = await startDebugMuon(
+    [],
+    TEST_NETWORK_ALLOW_PATTERNS,
+    {},
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    [],
+    TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    [],
+    null,
+    true,
+    initialWindowState,
+  );
+  let driver: CdpDriver | undefined = undefined;
+  try {
+    driver = await connectToMuonCdp({
+      port: MUON_PORT,
+      timeoutMs: cdpCommandTimeoutMs,
+    });
+    await driver.navigate(
+      "data:text/html,<title>muon test</title>",
+      cdpCommandTimeoutMs,
+    );
+    await run(driver);
+  } catch (error) {
+    throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+  } finally {
+    await stopMuon(running, driver);
+  }
+};
+
+describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
+  const linuxIt = process.platform === "linux" ? it : it.skip;
+
+  it("starts with internal plugins and exposes configured APIs", async () => {
+    await withMuon([], async (driver) => {
+      await expect(
+        driver.evaluate("typeof window.muon.fs.readFile"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.fs.writeFile"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.fs.dialogs.selectFile"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.environments.getVariables"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.environments.getAutostart"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.environments.getRuntimeInfo"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.environments.setAutostart"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.bootstrap.getSettings"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.bootstrap.setSettings"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.bootstrap.triggerUpdate"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate(`typeof window.muon.environments["run"]`),
+      ).resolves.toBe("undefined");
+      await expect(
+        driver.evaluate("typeof window.muon.executor.spawn"),
+      ).resolves.toBe("function");
+      await expect(
+        driver.evaluate("typeof window.muon.executor.run"),
+      ).resolves.toBe("undefined");
+      await expect(
+        driver.evaluate(
+          `(${JSON.stringify(browserFunctionNames)}).map((name) => typeof window.muon.browser[name])`,
+        ),
+      ).resolves.toEqual(browserFunctionNames.map(() => "function"));
+      await expect(driver.evaluate("typeof window.muon.test")).resolves.toBe(
+        "undefined",
+      );
+    });
+  });
+
+  it("does not expose plugin APIs when plugins allow is empty", async () => {
+    const running = await startDebugMuon(
+      ["muon_test_plugin_alpha"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      [],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin deny</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(driver.evaluate("typeof window.muon")).resolves.toBe(
+        "undefined",
+      );
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("does not load plugin libraries omitted from muon.json", async () => {
+    const markerDirectory = await mkdtemp(
+      join(tmpdir(), "muon-plugin-marker-"),
+    );
+    const markerPath = join(markerDirectory, "marker.txt");
+    const running = await startDebugMuon(
+      ["muon_test_plugin_alpha", "muon_test_plugin_load_marker"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      { MUON_TEST_PLUGIN_LOAD_MARKER: markerPath },
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      ["muon_test_plugin_alpha"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin explicit load</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
+      await expect(
+        driver.evaluate("typeof window.muon.test.loadMarker"),
+      ).resolves.toBe("undefined");
+      await expect(
+        driver.evaluate("window.muon.test.alpha.alphaName()"),
+      ).resolves.toBe("alpha");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+      await rm(markerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not load plugin libraries with an empty allow list", async () => {
+    const markerDirectory = await mkdtemp(
+      join(tmpdir(), "muon-plugin-marker-"),
+    );
+    const markerPath = join(markerDirectory, "marker.txt");
+    const running = await startDebugMuon(
+      ["muon_test_plugin_load_marker"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      { MUON_TEST_PLUGIN_LOAD_MARKER: markerPath },
+      undefined,
+      [],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin empty allow</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
+      await expect(driver.evaluate("typeof window.muon")).resolves.toBe(
+        "undefined",
+      );
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+      await rm(markerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("filters setup-script wrappers by public function path", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.executor.spawn"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin partial</title>",
+        cdpCommandTimeoutMs,
+      );
+      const values = await driver.evaluate<{
+        keys: string[];
+        spawnType: string;
+        runType: string;
+        internalRunType: string;
+        environmentType: string;
+        result: {
+          processId: number;
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+        };
+      }>(`(async () => {
+        const result = await window.muon.executor.spawn({
+          command: ${JSON.stringify(process.execPath)},
+          args: ["-e", "process.stdout.write('ok')"],
+        });
+        return {
+          keys: Object.keys(window.muon.executor).sort(),
+          spawnType: typeof window.muon.executor.spawn,
+          runType: typeof window.muon.executor.run,
+          internalRunType: typeof window.muon.executor.__run,
+          environmentType: typeof window.muon.environments,
+          result,
+        };
+      })()`);
+      expect(values).toEqual({
+        keys: ["spawn"],
+        spawnType: "function",
+        runType: "undefined",
+        internalRunType: "function",
+        environmentType: "undefined",
+        result: {
+          processId: expect.any(Number),
+          exitCode: 0,
+          stdout: "ok",
+          stderr: "",
+        },
+      });
+      expect(values.result.processId).toBeGreaterThan(0);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("exposes runtime information through the internal environment API", async () => {
+    await withMuonEnvironment(
+      [],
+      { MUON_E2E_ENVIRONMENTS_TEST: "visible-value" },
+      async (driver) => {
+        const values = await driver.evaluate<{
+          keys: string[];
+          runtimeInfo: {
+            name: string;
+            executableName: string;
+            target: string;
+            muonCore: {
+              version: string;
+              gitCommitHash: string;
+            };
+            cefReference: {
+              version: string;
+              distribution: string;
+              apiVersion: number;
+              apiHash: string;
+              artifact: {
+                fileName: string;
+                url: string;
+                sha1: string;
+                size: number;
+              };
+            };
+            cefRuntime: {
+              version: string;
+              apiVersion: number;
+              apiHash: string;
+            };
+            corePayload: string[];
+            cef?: unknown;
+          };
+          internalType: string;
+        }>(`(async () => {
+          const runtimeInfo = await window.muon.environments.getRuntimeInfo();
+          return {
+            keys: Object.keys(window.muon.environments).sort(),
+            runtimeInfo,
+            internalType: typeof window.muon.environments.__getRuntimeInfo,
+          };
+        })()`);
+
+        expect(values.keys).toEqual([
+          "getAutostart",
+          "getCommandLine",
+          "getProcessId",
+          "getRuntimeInfo",
+          "getVariables",
+          "setAutostart",
+        ]);
+        expect(values.internalType).toBe("function");
+        expect(values.runtimeInfo).toMatchObject({
+          name: "muon-core",
+          executableName:
+            process.platform === "win32" ? "muon-core.exe" : "muon-core",
+          target: "linux64",
+          muonCore: {
+            version: expect.any(String),
+            gitCommitHash: expect.any(String),
+          },
+          cefReference: {
+            version: expect.any(String),
+            distribution: "minimal",
+            apiVersion: expect.any(Number),
+            apiHash: expect.stringMatching(/^[0-9a-f]{40}$/),
+            artifact: {
+              fileName: expect.stringContaining("_linux64_minimal.tar.bz2"),
+              url: expect.stringContaining("_linux64_minimal.tar.bz2"),
+              sha1: expect.stringMatching(/^[0-9a-f]{40}$/),
+              size: expect.any(Number),
+            },
+          },
+          cefRuntime: {
+            version: expect.any(String),
+            apiVersion: expect.any(Number),
+            apiHash: expect.stringMatching(/^[0-9a-f]{40}$/),
+          },
+          corePayload: expect.arrayContaining([
+            process.platform === "win32" ? "muon-core.exe" : "muon-core",
+            "THIRD_PARTY_NOTICES.md",
+          ]),
+        });
+        expect(values.runtimeInfo.corePayload).not.toContain(
+          "muon-runtime.json",
+        );
+        expect(values.runtimeInfo.cef).toBeUndefined();
+        expect(values.runtimeInfo.cefReference.version).toBe(
+          values.runtimeInfo.cefRuntime.version,
+        );
+        expect(values.runtimeInfo.cefReference.apiVersion).toBe(
+          values.runtimeInfo.cefRuntime.apiVersion,
+        );
+        expect(values.runtimeInfo.cefReference.apiHash).toBe(
+          values.runtimeInfo.cefRuntime.apiHash,
+        );
+        expect(values.runtimeInfo.muonCore.version).not.toBe("");
+        expect(values.runtimeInfo.muonCore.gitCommitHash).not.toBe("");
+        expect(values.runtimeInfo.cefReference.artifact.size).toBeGreaterThan(
+          0,
+        );
+      },
+    );
+  });
+
+  it("filters runtime information through the internal plugin policy", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.environments.getRuntimeInfo"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon runtime info partial</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`(async () => {
+          const runtimeInfo = await window.muon.environments.getRuntimeInfo();
+          return {
+            keys: Object.keys(window.muon.environments).sort(),
+            runtimeInfoName: runtimeInfo.name,
+            variablesType: typeof window.muon.environments.getVariables,
+            internalType: typeof window.muon.environments.__getRuntimeInfo,
+          };
+        })()`),
+      ).resolves.toEqual({
+        keys: ["getRuntimeInfo"],
+        runtimeInfoName: "muon-core",
+        variablesType: "undefined",
+        internalType: "function",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("manages bootstrap update settings through the internal bootstrap API", async () => {
+    const configPath = join(DEBUG_MUON_DIRECTORY, "muon-bootstrap.ini");
+    let originalConfig: string | undefined = undefined;
+    try {
+      try {
+        originalConfig = await readFile(configPath, "utf8");
+      } catch {
+        originalConfig = undefined;
+      }
+      await rm(configPath, { force: true });
+      await withMuonEnvironment([], {}, async (driver) => {
+        const values = await driver.evaluate<{
+          keys: string[];
+          initial: {
+            cefVersionPolicy: string;
+            cefExactVersion: string;
+            catalogRefreshIntervalSeconds: number;
+          };
+          updated: {
+            cefVersionPolicy: string;
+            cefExactVersion: string;
+            catalogRefreshIntervalSeconds: number;
+          };
+          reverted: {
+            cefVersionPolicy: string;
+            cefExactVersion: string;
+            catalogRefreshIntervalSeconds: number;
+          };
+          internalType: string;
+        }>(`(async () => {
+          const initial = await window.muon.bootstrap.getSettings();
+          await window.muon.bootstrap.setSettings({
+            cefVersionPolicy: "compat-latest",
+            cefExactVersion: "",
+            catalogRefreshIntervalSeconds: 123,
+          });
+          const updated = await window.muon.bootstrap.getSettings();
+          await window.muon.bootstrap.setSettings({
+            cefVersionPolicy: null,
+            catalogRefreshIntervalSeconds: null,
+          });
+          const reverted = await window.muon.bootstrap.getSettings();
+          await window.muon.bootstrap.triggerUpdate();
+          return {
+            keys: Object.keys(window.muon.bootstrap).sort(),
+            initial,
+            updated,
+            reverted,
+            internalType: typeof window.muon.bootstrap.__triggerUpdate,
+          };
+        })()`);
+
+        expect(values).toEqual({
+          keys: ["getSettings", "setSettings", "triggerUpdate"],
+          initial: {
+            cefVersionPolicy: "tested",
+            cefExactVersion: "",
+            catalogRefreshIntervalSeconds: 604800,
+          },
+          updated: {
+            cefVersionPolicy: "compat-latest",
+            cefExactVersion: "",
+            catalogRefreshIntervalSeconds: 123,
+          },
+          reverted: {
+            cefVersionPolicy: "tested",
+            cefExactVersion: "",
+            catalogRefreshIntervalSeconds: 604800,
+          },
+          internalType: "function",
+        });
+      });
+      await expect(readFile(configPath, "utf8")).resolves.toContain(
+        "requested=true",
+      );
+      await expect(readFile(configPath, "utf8")).resolves.not.toContain(
+        "versionPolicy=",
+      );
+    } finally {
+      if (originalConfig === undefined) {
+        await rm(configPath, { force: true });
+      } else {
+        await writeFile(configPath, originalConfig);
+      }
+    }
+  });
+
+  it("filters bootstrap functions through the internal plugin policy", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.bootstrap.getSettings"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon bootstrap partial</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`(async () => {
+          const settings = await window.muon.bootstrap.getSettings();
+          return {
+            keys: Object.keys(window.muon.bootstrap).sort(),
+            policy: settings.cefVersionPolicy,
+            setSettingsType: typeof window.muon.bootstrap.setSettings,
+            internalType: typeof window.muon.bootstrap.__getSettings,
+          };
+        })()`),
+      ).resolves.toEqual({
+        keys: ["getSettings"],
+        policy: "tested",
+        setSettingsType: "undefined",
+        internalType: "function",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("filters filesystem dialogs through the internal plugin policy", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.fs.dialogs.selectFile"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon fs dialogs partial allow</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`({
+          fsType: typeof window.muon.fs,
+          readFileType: typeof window.muon.fs.readFile,
+          dialogsKeys: Object.keys(window.muon.fs.dialogs).sort(),
+          selectFileType: typeof window.muon.fs.dialogs.selectFile,
+          selectFilesType: typeof window.muon.fs.dialogs.selectFiles,
+          nativeSelectFileType: typeof window.muon.fs.dialogs.__selectFile,
+          environmentsType: typeof window.muon.environments,
+        })`),
+      ).resolves.toEqual({
+        fsType: "object",
+        readFileType: "undefined",
+        dialogsKeys: ["selectFile"],
+        selectFileType: "function",
+        selectFilesType: "undefined",
+        nativeSelectFileType: "function",
+        environmentsType: "undefined",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("exposes filesystem dialogs without a standard plugin entry", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon fs dialogs plugin omitted</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`({
+          fsType: typeof window.muon.fs,
+          readFileType: typeof window.muon.fs.readFile,
+          selectFileType: typeof window.muon.fs.dialogs.selectFile,
+        })`),
+      ).resolves.toEqual({
+        fsType: "object",
+        readFileType: "function",
+        selectFileType: "function",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("filters built-in browser functions by public function path", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.browser.reload"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser partial allow</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`({
+          browserKeys: Object.keys(window.muon.browser).sort(),
+          reloadType: typeof window.muon.browser.reload,
+          hardReloadType: typeof window.muon.browser.hardReload,
+          fsType: typeof window.muon.fs,
+          executorType: typeof window.muon.executor,
+        })`),
+      ).resolves.toEqual({
+        browserKeys: ["reload"],
+        reloadType: "function",
+        hardReloadType: "undefined",
+        fsType: "undefined",
+        executorType: "undefined",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("filters the explicit fullscreen browser function by public function path", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.browser.enterFullscreen"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser fullscreen partial allow</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`({
+          browserKeys: Object.keys(window.muon.browser).sort(),
+          enterFullscreenType: typeof window.muon.browser.enterFullscreen,
+          exitFullscreenType: typeof window.muon.browser.exitFullscreen,
+          toggleFullscreenType: typeof window.muon.browser.toggleFullscreen,
+        })`),
+      ).resolves.toEqual({
+        browserKeys: ["enterFullscreen"],
+        enterFullscreenType: "function",
+        exitFullscreenType: "undefined",
+        toggleFullscreenType: "undefined",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("filters the shutdown browser wrapper by public function path", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.browser.shutdown"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser shutdown partial allow</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`({
+          browserKeys: Object.keys(window.muon.browser).sort(),
+          shutdownType: typeof window.muon.browser.shutdown,
+          internalShutdownType: typeof window.muon.browser.__shutdown,
+          reloadType: typeof window.muon.browser.reload,
+          fsType: typeof window.muon.fs,
+          executorType: typeof window.muon.executor,
+        })`),
+      ).resolves.toEqual({
+        browserKeys: ["shutdown"],
+        shutdownType: "function",
+        internalShutdownType: "function",
+        reloadType: "undefined",
+        fsType: "undefined",
+        executorType: "undefined",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("exposes environment information and runs child processes", async () => {
+    await withMuonEnvironment(
+      [],
+      { MUON_E2E_ENVIRONMENTS_TEST: "visible-value" },
+      async (driver) => {
+        const childScript = `
+          let input = "";
+          process.stdin.setEncoding("utf8");
+          process.stdin.on("data", (chunk) => {
+            input += chunk;
+          });
+          process.stdin.on("end", () => {
+            process.stdout.write("stdout:" + input);
+            process.stderr.write("stderr:ok");
+            process.exitCode = 7;
+          });
+        `;
+        const values = await driver.evaluate<{
+          envValue: string;
+          commandLineHasPluginDir: boolean;
+          processId: number;
+          keys: string[];
+          internalType: string;
+          runtimeInfoName: string;
+          runResult: {
+            processId: number;
+            exitCode: number;
+            stdout: string;
+            stderr: string;
+          };
+          executorKeys: string[];
+          executorInternalType: string;
+        }>(`(async () => {
+          const variables = await window.muon.environments.getVariables();
+          const commandLine = await window.muon.environments.getCommandLine();
+          const processId = await window.muon.environments.getProcessId();
+          const runtimeInfo = await window.muon.environments.getRuntimeInfo();
+          const runResult = await window.muon.executor.spawn({
+            command: ${JSON.stringify(process.execPath)},
+            args: ["-e", ${JSON.stringify(childScript)}],
+            stdin: "hello",
+          });
+          return {
+            envValue: variables.MUON_E2E_ENVIRONMENTS_TEST,
+            commandLineHasPluginDir: commandLine.some((value) =>
+              value.startsWith("--muon-plugin-dir="),
+            ),
+            processId,
+            keys: Object.keys(window.muon.environments).sort(),
+            internalType: typeof window.muon.environments.__getVariables,
+            runtimeInfoName: runtimeInfo.name,
+            runResult,
+            executorKeys: Object.keys(window.muon.executor).sort(),
+            executorInternalType: typeof window.muon.executor.__run,
+          };
+        })()`);
+
+        expect(values).toEqual({
+          envValue: "visible-value",
+          commandLineHasPluginDir: false,
+          processId: expect.any(Number),
+          keys: [
+            "getAutostart",
+            "getCommandLine",
+            "getProcessId",
+            "getRuntimeInfo",
+            "getVariables",
+            "setAutostart",
+          ],
+          internalType: "function",
+          runtimeInfoName: "muon-core",
+          runResult: {
+            processId: expect.any(Number),
+            exitCode: 7,
+            stdout: "stdout:hello",
+            stderr: "stderr:ok",
+          },
+          executorKeys: ["spawn"],
+          executorInternalType: "function",
+        });
+        expect(values.processId).toBeGreaterThan(0);
+        expect(values.runResult.processId).toBeGreaterThan(0);
+      },
+    );
+  });
+
+  linuxIt("manages normal autostart through XDG autostart", async () => {
+    const configHome = await mkdtemp(join(tmpdir(), "muon-xdg-config-"));
+    const systemConfig = await mkdtemp(join(tmpdir(), "muon-xdg-system-"));
+    try {
+      await withMuonEnvironment(
+        [],
+        {
+          XDG_CONFIG_HOME: configHome,
+          XDG_CONFIG_DIRS: systemConfig,
+        },
+        async (driver) => {
+          const values = await driver.evaluate<{
+            initial: boolean | null;
+            enabled: boolean | null;
+            disabled: boolean | null;
+          }>(`(async () => {
+            const normalize = (value) => value === undefined ? null : value;
+            const initial = normalize(
+              await window.muon.environments.getAutostart(),
+            );
+            await window.muon.environments.setAutostart(true);
+            const enabled = normalize(
+              await window.muon.environments.getAutostart(),
+            );
+            await window.muon.environments.setAutostart(false);
+            const disabled = normalize(
+              await window.muon.environments.getAutostart(),
+            );
+            return { initial, enabled, disabled };
+          })()`);
+
+          expect(values).toEqual({
+            initial: false,
+            enabled: true,
+            disabled: false,
+          });
+        },
+      );
+    } finally {
+      await rm(configHome, { recursive: true, force: true });
+      await rm(systemConfig, { recursive: true, force: true });
+    }
+  });
+
+  it("reflects page titles to the native browser window", async () => {
+    await withMuon([], async (driver) => {
+      const title = "muon native title";
+      await driver.navigate(
+        `data:text/html,<title>${title}</title>`,
+        cdpCommandTimeoutMs,
+      );
+      await waitForDocumentTitle(driver, title, cdpCommandTimeoutMs);
+      await expect(
+        driver.evaluate(
+          `document.title = "muon changed title"; document.title`,
+        ),
+      ).resolves.toBe("muon changed title");
+      await waitForNativeWindowTitle("muon changed title", cdpCommandTimeoutMs);
+    });
+  });
+
+  it("reloads pages through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      await driver.navigate(
+        "data:text/html,<title>muon browser reload</title>",
+        cdpCommandTimeoutMs,
+      );
+      const reloadEvent = driver.waitForEvent(
+        "Page.loadEventFired",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`window.muon.browser.reload(); "requested"`),
+      ).resolves.toBe("requested");
+      await expect(reloadEvent).resolves.toBeDefined();
+
+      const hardReloadEvent = driver.waitForEvent(
+        "Page.loadEventFired",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`window.muon.browser.hardReload(); "requested"`),
+      ).resolves.toBe("requested");
+      await expect(hardReloadEvent).resolves.toBeDefined();
+    });
+  });
+
+  it("changes page zoom through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      await driver.navigate(
+        "data:text/html,<title>muon browser zoom</title>",
+        cdpCommandTimeoutMs,
+      );
+      const initialWidth = await driver.evaluate<number>("window.innerWidth");
+
+      await expect(
+        driver.evaluate("window.muon.browser.zoomIn()"),
+      ).resolves.toBeUndefined();
+      const zoomedInWidth = await waitForInnerWidth(
+        driver,
+        (value) => value < initialWidth,
+        cdpCommandTimeoutMs,
+      );
+
+      await expect(
+        driver.evaluate("window.muon.browser.zoomOut()"),
+      ).resolves.toBeUndefined();
+      await waitForInnerWidth(
+        driver,
+        (value) => Math.abs(value - initialWidth) <= 1,
+        cdpCommandTimeoutMs,
+      );
+
+      await expect(
+        driver.evaluate("window.muon.browser.zoomOut()"),
+      ).resolves.toBeUndefined();
+      await waitForInnerWidth(
+        driver,
+        (value) => value > initialWidth,
+        cdpCommandTimeoutMs,
+      );
+
+      await expect(
+        driver.evaluate("window.muon.browser.resetZoom()"),
+      ).resolves.toBeUndefined();
+      await waitForInnerWidth(
+        driver,
+        (value) =>
+          Math.abs(value - initialWidth) <= 1 && value !== zoomedInWidth,
+        cdpCommandTimeoutMs,
+      );
+    });
+  });
+
+  it("toggles fullscreen through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      const initialSize = await getOuterSize(driver);
+      await expect(
+        driver.evaluate("window.muon.browser.toggleFullscreen()"),
+      ).resolves.toBeUndefined();
+      await expect(
+        waitForOuterSizeChange(driver, initialSize, cdpCommandTimeoutMs),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          width: expect.any(Number),
+          height: expect.any(Number),
+        }),
+      );
+    });
+  });
+
+  it("enters and exits fullscreen through explicit built-in browser APIs", async () => {
+    await withMuon([], async (driver) => {
+      const initialSize = await getOuterSize(driver);
+      await expect(
+        driver.evaluate("window.muon.browser.enterFullscreen()"),
+      ).resolves.toBeUndefined();
+      const fullscreenSize = await waitForOuterSizeChange(
+        driver,
+        initialSize,
+        cdpCommandTimeoutMs,
+      );
+      if (process.platform === "linux") {
+        await waitForNativeWindowStates(
+          "muon test",
+          ["_NET_WM_STATE_FULLSCREEN"],
+          cdpCommandTimeoutMs,
+        );
+      }
+
+      await expect(
+        driver.evaluate("window.muon.browser.exitFullscreen()"),
+      ).resolves.toBeUndefined();
+      await expect(
+        waitForOuterSizeChange(driver, fullscreenSize, cdpCommandTimeoutMs),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          width: expect.any(Number),
+          height: expect.any(Number),
+        }),
+      );
+      if (process.platform === "linux") {
+        await waitForNativeWindowStatesAbsent(
+          "muon test",
+          ["_NET_WM_STATE_FULLSCREEN"],
+          cdpCommandTimeoutMs,
+        );
+      }
+    });
+  });
+
+  linuxIt(
+    "applies configured maximized and fullscreen startup window states",
+    async () => {
+      await withMuonInitialWindowState("maximized", async (driver) => {
+        await expect(driver.evaluate("document.title")).resolves.toBe(
+          "muon test",
+        );
+        await waitForNativeWindowStates(
+          "muon test",
+          ["_NET_WM_STATE_MAXIMIZED_HORZ", "_NET_WM_STATE_MAXIMIZED_VERT"],
+          cdpCommandTimeoutMs,
+        );
+      });
+      await withMuonInitialWindowState("fullscreen", async (driver) => {
+        await expect(driver.evaluate("document.title")).resolves.toBe(
+          "muon test",
+        );
+        await waitForNativeWindowStates(
+          "muon test",
+          ["_NET_WM_STATE_FULLSCREEN"],
+          cdpCommandTimeoutMs,
+        );
+      });
+    },
+  );
+
+  it("keeps hidden and minimized startup windows controllable from browser APIs", async () => {
+    await withMuonInitialWindowState("hidden", async (driver) => {
+      await expect(driver.evaluate("document.title")).resolves.toBe(
+        "muon test",
+      );
+      if (process.platform === "linux") {
+        await waitForNativeWindowTitleAbsent("muon test", cdpCommandTimeoutMs);
+      }
+
+      await expect(
+        driver.evaluate("window.muon.browser.show()"),
+      ).resolves.toBeUndefined();
+      if (process.platform === "linux") {
+        await expect(
+          waitForNativeWindowTitle("muon test", cdpCommandTimeoutMs),
+        ).resolves.toBe(true);
+        await waitForNativeWindowStatesAbsent(
+          "muon test",
+          ["_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_MODAL"],
+          cdpCommandTimeoutMs,
+        );
+      }
+    });
+
+    await withMuonInitialWindowState("hidden", async (driver) => {
+      await expect(driver.evaluate("document.title")).resolves.toBe(
+        "muon test",
+      );
+      await expect(
+        driver.evaluate("window.muon.browser.focus()"),
+      ).resolves.toBeUndefined();
+      if (process.platform === "linux") {
+        await expect(
+          waitForNativeWindowTitle("muon test", cdpCommandTimeoutMs),
+        ).resolves.toBe(true);
+        await waitForNativeActiveWindowTitle("muon test", cdpCommandTimeoutMs);
+      }
+    });
+
+    await withMuonInitialWindowState("minimized", async (driver) => {
+      await expect(
+        driver.evaluate("window.muon.browser.restore()"),
+      ).resolves.toBeUndefined();
+      await expect(driver.evaluate("document.title")).resolves.toBe(
+        "muon test",
+      );
+    });
+  });
+
+  it("maximizes and restores through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      const initialSize = await getOuterSize(driver);
+      await expect(
+        driver.evaluate("window.muon.browser.maximize()"),
+      ).resolves.toBeUndefined();
+      const maximizedSize = await waitForOuterSizeChange(
+        driver,
+        initialSize,
+        cdpCommandTimeoutMs,
+      );
+
+      await expect(
+        driver.evaluate("window.muon.browser.restore()"),
+      ).resolves.toBeUndefined();
+      await expect(
+        waitForOuterSizeChange(driver, maximizedSize, cdpCommandTimeoutMs),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          width: expect.any(Number),
+          height: expect.any(Number),
+        }),
+      );
+    });
+  });
+
+  it("runs basic native window operations through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          await window.muon.browser.hide();
+          await window.muon.browser.show();
+          await window.muon.browser.focus();
+          await window.muon.browser.blur();
+          await window.muon.browser.minimize();
+          await window.muon.browser.restore();
+          return document.title;
+        })()`),
+      ).resolves.toBe("muon test");
+    });
+  });
+
+  it("closes the main browser through the built-in browser API", async () => {
+    const running = await startDebugMuon([]);
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser close</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`window.muon.browser.close(); "requested"`),
+      ).resolves.toBe("requested");
+      driver.close();
+      driver = undefined;
+      await expect(
+        waitForProcessExit(running, processExitTimeoutMs),
+      ).resolves.toBeUndefined();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("keeps popup windows open after closing the main browser", async () => {
+    const running = await startDebugMuon([]);
+    let driver: CdpDriver | undefined = undefined;
+    let popupDriver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      const mainTarget = (
+        await listCdpTargets({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        })
+      ).find((target) => target.type === "page");
+      if (mainTarget === undefined) {
+        throw new Error("main page target was not found");
+      }
+      const popupTarget = await openPopupTarget(
+        driver,
+        MUON_APP_URL,
+        "noopener",
+        "muonCloseNoopenerPopup",
+      );
+      popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        targetId: popupTarget.id,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+
+      await expect(
+        popupDriver.evaluate("document.location.href"),
+      ).resolves.toBe(MUON_APP_URL);
+      await expect(
+        driver.evaluate(`window.muon.browser.close(); "requested"`),
+      ).resolves.toBe("requested");
+      driver.close();
+      driver = undefined;
+
+      await waitForTargetClosed(mainTarget.id, targetTimeoutMs);
+      await expect(waitForProcessExitOrTimeout(running, 1000)).resolves.toBe(
+        false,
+      );
+      await expect(
+        popupDriver.evaluate("document.location.href"),
+      ).resolves.toBe(MUON_APP_URL);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      if (driver !== undefined && popupDriver !== undefined) {
+        driver.close();
+        driver = undefined;
+      }
+      await stopMuon(running, popupDriver ?? driver);
+    }
+  });
+
+  it("keeps opener popup windows open after closing the main browser", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      [],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      ["asset://main/**"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    let popupDriver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      const mainTarget = (
+        await listCdpTargets({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        })
+      ).find((target) => target.type === "page");
+      if (mainTarget === undefined) {
+        throw new Error("main page target was not found");
+      }
+      const popupTarget = await openPopupTarget(
+        driver,
+        MUON_APP_URL,
+        "",
+        "muonCloseOpenerPopup",
+      );
+      popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        targetId: popupTarget.id,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+
+      await expect(
+        popupDriver.evaluate("window.opener !== null"),
+      ).resolves.toBe(true);
+      await expect(
+        driver.evaluate(`window.muon.browser.close(); "requested"`),
+      ).resolves.toBe("requested");
+      driver.close();
+      driver = undefined;
+
+      await waitForTargetClosed(mainTarget.id, targetTimeoutMs);
+      await expect(waitForProcessExitOrTimeout(running, 1000)).resolves.toBe(
+        false,
+      );
+      await expect(
+        popupDriver.evaluate(`(() => {
+          if (window.opener === null) {
+            return "null";
+          }
+          return window.opener.closed ? "closed" : "open";
+        })()`),
+      ).resolves.toMatch(/^(null|closed)$/u);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      if (driver !== undefined && popupDriver !== undefined) {
+        driver.close();
+        driver = undefined;
+      }
+      await stopMuon(running, popupDriver ?? driver);
+    }
+  });
+
+  it("keeps the main browser open after closing a popup browser", async () => {
+    const running = await startDebugMuon([]);
+    let driver: CdpDriver | undefined = undefined;
+    let popupDriver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+        MUON_APP_URL,
+      );
+      await driver.evaluate(`document.title = "muon main remains open";`);
+      const popupTarget = await openPopupTarget(
+        driver,
+        MUON_APP_URL,
+        "noopener",
+        "muonClosePopupOnly",
+      );
+      popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        targetId: popupTarget.id,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+
+      await expect(
+        popupDriver.evaluate(`window.muon.browser.close(); "requested"`),
+      ).resolves.toBe("requested");
+      popupDriver.close();
+      popupDriver = undefined;
+
+      await waitForTargetClosed(popupTarget.id, targetTimeoutMs);
+      await expect(waitForProcessExitOrTimeout(running, 1000)).resolves.toBe(
+        false,
+      );
+      await expect(driver.evaluate("document.title")).resolves.toBe(
+        "muon main remains open",
+      );
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, popupDriver ?? driver);
+    }
+  });
+
+  it("shuts down the process with the default exit code", async () => {
+    const running = await startDebugMuon([]);
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser shutdown default</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`(() => {
+          setTimeout(() => {
+            window.muon.browser.shutdown();
+          }, 50);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+      driver.close();
+      driver = undefined;
+      await expect(
+        waitForProcessExit(running, processExitTimeoutMs),
+      ).resolves.toBeUndefined();
+      expect(running.process.exitCode).toBe(0);
+      expect(running.process.signalCode).toBeNull();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("shuts down the process with the requested exit code", async () => {
+    const running = await startDebugMuon([]);
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser shutdown exit code</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`(() => {
+          setTimeout(() => {
+            window.muon.browser.shutdown(7);
+          }, 50);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+      driver.close();
+      driver = undefined;
+      await expect(
+        waitForProcessExit(running, processExitTimeoutMs),
+      ).resolves.toBeUndefined();
+      expect(running.process.exitCode).toBe(7);
+      expect(running.process.signalCode).toBeNull();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("shuts down the process when multiple browser windows are open", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      [],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      ["asset://main/**"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+        MUON_APP_URL,
+      );
+      const popupTarget = await openPopupTarget(driver, MUON_APP_URL);
+      expect(popupTarget.type).toBe("page");
+      await expect(
+        driver.evaluate(`(() => {
+          setTimeout(() => {
+            window.muon.browser.shutdown(9);
+          }, 50);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+      driver.close();
+      driver = undefined;
+      await expect(
+        waitForProcessExit(running, processExitTimeoutMs),
+      ).resolves.toBeUndefined();
+      expect(running.process.exitCode).toBe(9);
+      expect(running.process.signalCode).toBeNull();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("shuts down the process when DevTools is open", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      createBrowserShortcutConfig({ devtools: "f12" }),
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser shutdown devtools</title>",
+        cdpCommandTimeoutMs,
+      );
+      const devToolsTarget = await dispatchDevToolsShortcut(
+        driver,
+        f12DevToolsShortcut.event,
+      );
+      expect(devToolsTarget.url).toContain("devtools://");
+      await expect(
+        driver.evaluate(`(() => {
+          setTimeout(() => {
+            window.muon.browser.shutdown(123);
+          }, 50);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+      driver.close();
+      driver = undefined;
+      await expect(
+        waitForProcessExit(running, processExitTimeoutMs),
+      ).resolves.toBeUndefined();
+      expect(running.process.exitCode).toBe(123);
+      expect(running.process.signalCode).toBeNull();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("reads and writes files through the built-in filesystem API", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-"));
+    try {
+      await withMuon([], async (driver) => {
+        await runBuiltinFsRoundtrip(driver, directory);
+        await runBuiltinFsAdditionalOperations(driver, directory);
+        await runBuiltinFsFileUriOperations(driver, directory);
+        await runBuiltinFsAbortScenarios(driver, directory);
+        await runBuiltinFsDialogValidation(driver);
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("routes filesystem results to the calling V8 context", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-context-"));
+    try {
+      await withMuon([], async (driver) => {
+        await driver.send("Page.enable", undefined);
+        const frameTree = await driver.send<{
+          frameTree?: { frame?: { id?: string } };
+        }>("Page.getFrameTree", undefined);
+        const frameId = frameTree.frameTree?.frame?.id;
+        expect(frameId).not.toBeUndefined();
+        await driver.send("Page.createIsolatedWorld", {
+          frameId: frameId ?? "",
+          worldName: "muon-test-isolated-world",
+        });
+
+        const textPath = join(directory, "context.txt");
+        await expect(
+          driver.evaluate(`Promise.race([
+            (async () => {
+              await window.muon.fs.writeTextFile(
+                ${JSON.stringify(textPath)},
+                "context route",
+                "utf8",
+              );
+              const text = await window.muon.fs.readTextFile(
+                ${JSON.stringify(textPath)},
+                "utf8",
+              );
+              return { text };
+            })(),
+            new Promise((resolve) => {
+              setTimeout(() => resolve({ timeout: true }), 3000);
+            }),
+          ])`),
+        ).resolves.toEqual({ text: "context route" });
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsupported filesystem operations and invalid text", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-invalid-"));
+    try {
+      const missingPath = join(directory, "missing.txt");
+      const directoryPath = join(directory, "directory");
+      const invalidUtf8Path = join(directory, "invalid.txt");
+      const validTextPath = join(directory, "valid.txt");
+      const nulTextPath = join(directory, "nul.txt");
+      await mkdir(directoryPath);
+      await writeFile(invalidUtf8Path, Buffer.from([0xff, 0xfe]));
+      await writeFile(validTextPath, "valid text");
+
+      await withMuon([], async (driver) => {
+        const calls = [
+          `window.muon.fs.readFile(${JSON.stringify(missingPath)})`,
+          `window.muon.fs.readFile(${JSON.stringify(directoryPath)})`,
+          `window.muon.fs.readTextFile(${JSON.stringify(validTextPath)}, "utf16")`,
+          `window.muon.fs.readTextFile(${JSON.stringify(invalidUtf8Path)}, "utf8")`,
+          `window.muon.fs.writeTextFile(${JSON.stringify(nulTextPath)}, "a\\u0000b", "utf8")`,
+          `window.muon.fs.writeFile(${JSON.stringify(`${directory}/bad\u0000path`)}, new Uint8Array())`,
+        ];
+        for (const call of calls) {
+          await expect(evaluateRejection(driver, call)).resolves.not.toBe("");
+        }
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(configuredDevToolsShortcuts)(
+    "opens DevTools from the configured $name shortcut",
+    async ({ config, event }) => {
+      await withMuonBrowserConfig(
+        [],
+        createBrowserShortcutConfig({ devtools: config }),
+        async (driver) => {
+          await expect(
+            dispatchDevToolsShortcut(driver, event),
+          ).resolves.toMatchObject({
+            type: "page",
+          });
+        },
+      );
+    },
+  );
+
+  it("does not open DevTools from default shortcuts when remapped", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({ devtools: shiftF9DevToolsShortcut.config }),
+      async (driver) => {
+        await expectNoDevTools(driver, f12DevToolsShortcut.event);
+        await expectNoDevTools(driver, ctrlShiftIDevToolsShortcut.event);
+      },
+    );
+  });
+
+  it("reloads the page from the configured reload shortcut", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({ reload: "f5" }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon reload shortcut</title>",
+          cdpCommandTimeoutMs,
+        );
+        const loadEvent = driver.waitForEvent(
+          "Page.loadEventFired",
+          cdpCommandTimeoutMs,
+        );
+        await dispatchKeyboardShortcut(driver, f5ReloadShortcut);
+        await expect(loadEvent).resolves.toBeDefined();
+      },
+    );
+  });
+
+  it("does not reload from default shortcuts when remapped", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({ reload: "shift+f9" }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon reload disabled</title>",
+          cdpCommandTimeoutMs,
+        );
+        await wait(100);
+        await expectNoPageLoad(driver, f5ReloadShortcut);
+        await expectNoPageLoad(driver, ctrlRReloadShortcut);
+      },
+    );
+  });
+
+  it("reloads the page from a configured modifier shortcut", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({ reload: "shift+f9" }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon reload modifier</title>",
+          cdpCommandTimeoutMs,
+        );
+        const loadEvent = driver.waitForEvent(
+          "Page.loadEventFired",
+          cdpCommandTimeoutMs,
+        );
+        await dispatchKeyboardShortcut(driver, shiftF9DevToolsShortcut.event);
+        await expect(loadEvent).resolves.toBeDefined();
+      },
+    );
+  });
+
+  it("toggles fullscreen from the configured shortcut", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({ fullscreen: "f11" }),
+      async (driver) => {
+        const initialSize = await getOuterSize(driver);
+        await dispatchKeyboardShortcut(driver, f11FullscreenShortcut);
+        await expect(
+          waitForOuterSizeChange(driver, initialSize, cdpCommandTimeoutMs),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            width: expect.any(Number),
+            height: expect.any(Number),
+          }),
+        );
+      },
+    );
+  });
+
+  it("does not toggle fullscreen from the default shortcut when remapped", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({
+        fullscreen: shiftF9DevToolsShortcut.config,
+      }),
+      async (driver) => {
+        const initialSize = await getOuterSize(driver);
+        await dispatchKeyboardShortcut(driver, f11FullscreenShortcut);
+        await wait(1000);
+        await expect(getOuterSize(driver)).resolves.toEqual(initialSize);
+      },
+    );
+  });
+
+  it("toggles fullscreen from a remapped shortcut", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({
+        fullscreen: shiftF9DevToolsShortcut.config,
+      }),
+      async (driver) => {
+        const initialSize = await getOuterSize(driver);
+        await dispatchKeyboardShortcut(driver, shiftF9DevToolsShortcut.event);
+        await expect(
+          waitForOuterSizeChange(driver, initialSize, cdpCommandTimeoutMs),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            width: expect.any(Number),
+            height: expect.any(Number),
+          }),
+        );
+      },
+    );
+  });
+
+  it("hard reloads the page from the configured shortcut", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({ hardReload: "ctrl+shift+r" }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon hard reload shortcut</title>",
+          cdpCommandTimeoutMs,
+        );
+        const loadEvent = driver.waitForEvent(
+          "Page.loadEventFired",
+          cdpCommandTimeoutMs,
+        );
+        await dispatchKeyboardShortcut(driver, ctrlShiftRShortcut);
+        await expect(loadEvent).resolves.toBeDefined();
+      },
+    );
+  });
+
+  it("does not hard reload from the default shortcut when remapped", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({
+        hardReload: shiftF9DevToolsShortcut.config,
+      }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon hard reload disabled</title>",
+          cdpCommandTimeoutMs,
+        );
+        await expectNoPageLoad(driver, ctrlShiftRShortcut);
+      },
+    );
+  });
+
+  it("changes page zoom from configured shortcuts", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({
+        zoomIn: "ctrl+plus",
+        zoomOut: "ctrl+minus",
+        resetZoom: "ctrl+0",
+      }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon zoom shortcuts</title>",
+          cdpCommandTimeoutMs,
+        );
+        const initialWidth = await driver.evaluate<number>("window.innerWidth");
+
+        await dispatchKeyboardShortcut(driver, ctrlPlusZoomShortcut);
+        const zoomedInWidth = await waitForInnerWidth(
+          driver,
+          (value) => value < initialWidth,
+          cdpCommandTimeoutMs,
+        );
+
+        await dispatchKeyboardShortcut(driver, ctrlMinusZoomShortcut);
+        await waitForInnerWidth(
+          driver,
+          (value) => Math.abs(value - initialWidth) <= 1,
+          cdpCommandTimeoutMs,
+        );
+
+        await dispatchKeyboardShortcut(driver, ctrlMinusZoomShortcut);
+        await waitForInnerWidth(
+          driver,
+          (value) => value > initialWidth,
+          cdpCommandTimeoutMs,
+        );
+
+        await dispatchKeyboardShortcut(driver, ctrl0ZoomShortcut);
+        await waitForInnerWidth(
+          driver,
+          (value) =>
+            Math.abs(value - initialWidth) <= 1 && value !== zoomedInWidth,
+          cdpCommandTimeoutMs,
+        );
+      },
+    );
+  });
+
+  it("does not zoom from the default shortcut when remapped", async () => {
+    await withMuonBrowserConfig(
+      [],
+      createBrowserShortcutConfig({
+        zoomIn: shiftF9DevToolsShortcut.config,
+      }),
+      async (driver) => {
+        await driver.navigate(
+          "data:text/html,<title>muon zoom disabled</title>",
+          cdpCommandTimeoutMs,
+        );
+        const initialWidth = await driver.evaluate<number>("window.innerWidth");
+        await dispatchKeyboardShortcut(driver, ctrlPlusZoomShortcut);
+        await wait(1000);
+        await expect(driver.evaluate("window.innerWidth")).resolves.toBe(
+          initialWidth,
+        );
+      },
+    );
+  });
+
+  it("keeps Muon APIs out of the DevTools frontend", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-devtools-fs-"));
+    const devToolsDrivers: CdpDriver[] = [];
+    try {
+      await withMuonBrowserConfig(
+        [],
+        createBrowserShortcutConfig({ devtools: "f12" }),
+        async (driver) => {
+          const devToolsTarget = await dispatchDevToolsShortcut(
+            driver,
+            f12DevToolsShortcut.event,
+          );
+          const devToolsDriver = await connectToMuonCdp({
+            port: MUON_PORT,
+            targetId: devToolsTarget.id,
+            timeoutMs: cdpCommandTimeoutMs,
+          });
+          devToolsDrivers.push(devToolsDriver);
+
+          await expect(
+            devToolsDriver.evaluate(`({
+            href: document.location.href,
+            muon: typeof window.muon,
+          })`),
+          ).resolves.toMatchObject({
+            href: expect.stringContaining("devtools://"),
+            muon: "undefined",
+          });
+
+          const textPath = join(directory, "page.txt");
+          await expect(
+            driver.evaluate(`(async () => {
+            await window.muon.fs.writeTextFile(
+              ${JSON.stringify(textPath)},
+              "page api still works",
+              "utf8",
+            );
+            return await window.muon.fs.readTextFile(
+              ${JSON.stringify(textPath)},
+              "utf8",
+            );
+          })()`),
+          ).resolves.toBe("page api still works");
+        },
+      );
+    } finally {
+      for (const devToolsDriver of devToolsDrivers) {
+        devToolsDriver.close();
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the main page alive after closing DevTools and exits when the main browser closes", async () => {
+    const running = await startDebugMuon(
+      ["muon_test_plugin_alpha"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      createBrowserShortcutConfig({ devtools: "f12" }),
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon lifecycle</title>",
+        cdpCommandTimeoutMs,
+      );
+
+      const devToolsTarget = await dispatchDevToolsShortcut(
+        driver,
+        f12DevToolsShortcut.event,
+      );
+      await driver.send("Target.closeTarget", { targetId: devToolsTarget.id });
+      await waitForTargetClosed(devToolsTarget.id, targetTimeoutMs);
+
+      await expect(driver.evaluate("document.title")).resolves.toBe(
+        "muon lifecycle",
+      );
+      await expect(
+        driver.evaluate("window.muon.test.alpha.alphaName()"),
+      ).resolves.toBe("alpha");
+
+      try {
+        await driver.send("Browser.close", undefined);
+      } catch {
+        // Closing the browser can close the CDP socket before a response arrives.
+      }
+      driver.close();
+      driver = undefined;
+      await expect(
+        waitForProcessExit(running, processExitTimeoutMs),
+      ).resolves.toBeUndefined();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("does not expose the Debug CDP endpoint from a Release build", async () => {
+    const running = await startReleaseMuon();
+    try {
+      await wait(shouldUseValgrind ? 5000 : 1000);
+      expect(running.process.exitCode).toBeNull();
+      const processGroupId = running.process.pid;
+      if (processGroupId === undefined) {
+        throw new Error("Muon process id is unavailable");
+      }
+
+      const commandLines = await listProcessGroupCommandLines(processGroupId);
+      expect(commandLines.join("\n")).not.toContain("--no-sandbox");
+      await expect(
+        listCdpTargets({ port: MUON_PORT, timeoutMs: 500 }),
+      ).rejects.toThrow();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, undefined);
+    }
+  });
+});

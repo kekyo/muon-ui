@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build debug",
+      "type": "shell",
+      "command": "./muon/build.sh dev Debug linux64",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Build release",
+      "type": "shell",
+      "command": "./muon/build.sh dev Release linux64",
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Clean",
+      "type": "shell",
+      "command": "rm -rf muon/.build muon/build muon/.run muon/dist*",
+      "problemMatcher": []
+    }
+  ]
+}

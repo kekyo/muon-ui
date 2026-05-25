@@ -1,0 +1,55 @@
+/* muon - Multi-platform GUI application framework that uses CEF as its backend
+ * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+ * Under MIT.
+ * https://github.com/kekyo/muon
+ */
+
+#pragma once
+
+#include <string>
+#include <vector>
+
+/**
+ * Launch source that keeps local development startup behavior.
+ */
+inline constexpr char kMuonLaunchSourceNone[] = "none";
+
+/**
+ * Launch source used for platform-normal application startup.
+ */
+inline constexpr char kMuonLaunchSourceNormal[] = "normal";
+
+/**
+ * Command-line switch prefix used to select the Muon launch source.
+ */
+inline constexpr char kMuonLaunchSourceSwitchPrefix[] = "--muon-launch-from=";
+
+/**
+ * Stores the process command line captured at Muon startup.
+ *
+ * @param argc Argument count passed to main.
+ * @param argv Argument vector passed to main.
+ */
+void SetMuonStartupCommandLine(int argc, char* argv[]);
+
+/**
+ * Extracts the Muon launch source from a command line.
+ *
+ * @remarks Missing switch values default to `none`. When the switch appears
+ * more than once, the last value is used.
+ *
+ * @param command_line Process command line, including argv[0] when available.
+ * @return Launch source value.
+ */
+std::string GetMuonLaunchSourceFromCommandLine(
+    const std::vector<std::string>& command_line);
+
+/**
+ * Returns the command line captured at Muon startup.
+ */
+std::vector<std::string> GetMuonStartupCommandLine();
+
+/**
+ * Returns the launch source captured at Muon startup.
+ */
+std::string GetMuonStartupLaunchSource();

@@ -1,0 +1,4174 @@
+/* muon - Multi-platform GUI application framework that uses CEF as its backend
+ * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+ * Under MIT.
+ * https://github.com/kekyo/muon
+ */
+
+#include "plugins/builtin/muon_builtin_fs.h"
+
+#include "plugins/builtin/muon_builtin_fs_helpers.h"
+#include "plugins/muon_traffic_cardio_operation.h"
+
+#include <cardio.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <gio/gio.h>
+#include <sys/stat.h>
+#endif
+
+namespace muon_internal {
+
+static constexpr char kMuonBuiltinFsShutdownError[] =
+    "Muon filesystem runtime is shutting down";
+static constexpr char kMuonBuiltinFsUnavailableError[] =
+    "Muon filesystem runtime is unavailable";
+static constexpr char kMuonBuiltinFsEncodingError[] =
+    "Only utf8 encoding is supported";
+static constexpr char kMuonBuiltinFsGenericError[] =
+    "Filesystem operation failed";
+static constexpr char kMuonBuiltinFsAbortError[] =
+    "The operation was aborted";
+
+static void CompleteError(muon_completion_func completion,
+                          const char* message) {
+  if (completion != nullptr) {
+    completion(nullptr, message);
+  }
+}
+
+static void CompleteError(muon_completion_func completion,
+                          const std::string& message) {
+  CompleteError(completion, message.c_str());
+}
+
+static void CompleteVoid(muon_completion_func completion) {
+  if (completion != nullptr) {
+    completion(nullptr, nullptr);
+  }
+}
+
+static void CompleteBool(muon_completion_func completion, bool result) {
+  if (completion != nullptr) {
+    completion(&result, nullptr);
+  }
+}
+
+static void CompleteString(muon_completion_func completion,
+                           std::string result) {
+  if (completion == nullptr) {
+    return;
+  }
+  const auto* pointer = result.c_str();
+  completion(&pointer, nullptr);
+}
+
+static const muon_type_descriptor type_void = {
+    MUON_TYPE_VOID,
+    nullptr,
+};
+
+static const muon_type_descriptor type_bool = {
+    MUON_TYPE_BOOL,
+    nullptr,
+};
+
+static const muon_type_descriptor type_string = {
+    MUON_TYPE_STRING,
+    nullptr,
+};
+
+static const muon_type_descriptor type_buffer_view = {
+    MUON_TYPE_BUFFER_VIEW,
+    nullptr,
+};
+
+static const muon_function_signature cancel_operation_signature = {
+    0,
+    nullptr,
+    &type_void,
+};
+
+static const muon_type_descriptor type_cancel_operation_function = {
+    MUON_TYPE_FUNCTION,
+    &cancel_operation_signature,
+};
+
+static const muon_type_descriptor abort_watcher_args[] = {
+    type_cancel_operation_function,
+};
+
+static const muon_function_signature abort_watcher_signature = {
+    1,
+    abort_watcher_args,
+    &type_void,
+};
+
+static const muon_type_descriptor type_abort_watcher_function = {
+    MUON_TYPE_FUNCTION,
+    &abort_watcher_signature,
+};
+
+struct MuonFsBufferResult {
+  MuonFsBufferResult() = default;
+
+  MuonFsBufferResult(const muon_plugin_helpers* source_helpers,
+                     muon_buffer_view source_view,
+                     muon_shared_buffer_handle source_handle)
+      : helpers(source_helpers),
+        view(source_view),
+        handle(source_handle) {}
+
+  ~MuonFsBufferResult() {
+    Release();
+  }
+
+  MuonFsBufferResult(const MuonFsBufferResult&) = delete;
+  MuonFsBufferResult& operator=(const MuonFsBufferResult&) = delete;
+
+  MuonFsBufferResult(MuonFsBufferResult&& other) noexcept {
+    MoveFrom(other);
+  }
+
+  MuonFsBufferResult& operator=(MuonFsBufferResult&& other) noexcept {
+    if (this != &other) {
+      Release();
+      MoveFrom(other);
+    }
+    return *this;
+  }
+
+  std::span<std::byte> Bytes() {
+    return std::span<std::byte>(
+        static_cast<std::byte*>(view.data),
+        static_cast<size_t>(view.size));
+  }
+
+  void Resize(size_t size) {
+    view.size = static_cast<uintptr_t>(size);
+  }
+
+  void Complete(muon_completion_func completion) {
+    if (completion == nullptr) {
+      return;
+    }
+    completion(&view, nullptr);
+    handle = nullptr;
+    view = {nullptr, 0};
+  }
+
+  void Release() {
+    if (helpers == nullptr || helpers->release_shared_buffer == nullptr ||
+        handle == nullptr) {
+      return;
+    }
+    helpers->release_shared_buffer(handle);
+    handle = nullptr;
+    view = {nullptr, 0};
+  }
+
+  void MoveFrom(MuonFsBufferResult& other) noexcept {
+    helpers = other.helpers;
+    view = other.view;
+    handle = other.handle;
+    other.helpers = nullptr;
+    other.view = {nullptr, 0};
+    other.handle = nullptr;
+  }
+
+  const muon_plugin_helpers* helpers = nullptr;
+  muon_buffer_view view = {nullptr, 0};
+  muon_shared_buffer_handle handle = nullptr;
+};
+
+static MuonFsBufferResult AllocateResultBuffer(
+    const muon_plugin_helpers* helpers,
+    size_t size) {
+  if (size == 0) {
+    return MuonFsBufferResult(helpers, {nullptr, 0}, nullptr);
+  }
+  if (helpers == nullptr || helpers->allocate_shared_buffer == nullptr) {
+    throw std::runtime_error("Shared buffer helper is unavailable");
+  }
+
+  auto view = muon_buffer_view{nullptr, 0};
+  auto handle = muon_shared_buffer_handle{};
+  muon_error_buffer error = {};
+  char error_storage[MUON_COMPLETION_ERROR_MESSAGE_CAPACITY] = "";
+  error.message = error_storage;
+  error.message_capacity = static_cast<uint32_t>(sizeof(error_storage));
+  if (!helpers->allocate_shared_buffer(
+          static_cast<uintptr_t>(size), &view, &handle, &error)) {
+    throw std::runtime_error(error_storage[0] == '\0'
+                                 ? "Failed to allocate read buffer"
+                                 : error_storage);
+  }
+  return MuonFsBufferResult(helpers, view, handle);
+}
+
+#if defined(_WIN32)
+
+enum class MuonFsOpenMode {
+  Read,
+  WriteTruncate,
+  WriteAt,
+};
+
+struct MuonFsFile {
+  MuonFsFile() = default;
+
+  explicit MuonFsFile(HANDLE source_handle)
+      : handle(source_handle) {}
+
+  MuonFsFile(const MuonFsFile&) = delete;
+  MuonFsFile& operator=(const MuonFsFile&) = delete;
+
+  MuonFsFile(MuonFsFile&& other) noexcept
+      : handle(other.Release()) {}
+
+  MuonFsFile& operator=(MuonFsFile&& other) noexcept {
+    if (this != &other) {
+      handle = other.Release();
+    }
+    return *this;
+  }
+
+  bool IsOpen() const {
+    return handle != INVALID_HANDLE_VALUE;
+  }
+
+  HANDLE Release() {
+    const auto result = handle;
+    handle = INVALID_HANDLE_VALUE;
+    return result;
+  }
+
+  HANDLE handle = INVALID_HANDLE_VALUE;
+};
+
+#endif
+
+struct MuonFsIoContext {
+#if defined(_WIN32)
+  std::unique_ptr<cardio::io_completion_port> iocp;
+#endif
+};
+
+#if defined(_WIN32)
+
+static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
+                                            MuonFsFile& file);
+
+static size_t ClampNativeIoSize(size_t size) {
+  return size > static_cast<size_t>(std::numeric_limits<unsigned>::max())
+             ? static_cast<size_t>(std::numeric_limits<unsigned>::max())
+             : size;
+}
+
+static std::string WindowsErrorMessage(const char* action, DWORD error_code) {
+  char buffer[128];
+  std::snprintf(buffer, sizeof(buffer), "%s: Windows error %lu", action,
+                static_cast<unsigned long>(error_code));
+  return buffer;
+}
+
+static bool ConvertUtf8PathToWide(const std::string& source,
+                                  std::wstring* target,
+                                  std::string* error_message) {
+  if (target == nullptr || error_message == nullptr) {
+    return false;
+  }
+  if (source.empty()) {
+    target->clear();
+    return true;
+  }
+  const auto length = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, source.data(),
+      static_cast<int>(source.size()), nullptr, 0);
+  if (length <= 0) {
+    *error_message = "Path is not valid UTF-8";
+    return false;
+  }
+  target->resize(static_cast<size_t>(length));
+  const auto converted = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, source.data(),
+      static_cast<int>(source.size()), target->data(), length);
+  if (converted != length) {
+    *error_message = "Path conversion failed";
+    return false;
+  }
+  return true;
+}
+
+static void CloseWindowsFileSync(HANDLE& file) {
+  if (file != INVALID_HANDLE_VALUE) {
+    CloseHandle(file);
+    file = INVALID_HANDLE_VALUE;
+  }
+}
+
+static void ValidateWindowsRegularFile(HANDLE file) {
+  if (GetFileType(file) != FILE_TYPE_DISK) {
+    throw std::runtime_error("Path is not a regular file");
+  }
+  BY_HANDLE_FILE_INFORMATION info = {};
+  if (!GetFileInformationByHandle(file, &info)) {
+    throw std::runtime_error(
+        WindowsErrorMessage("GetFileInformationByHandle failed",
+                            GetLastError()));
+  }
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    throw std::runtime_error("Path is not a regular file");
+  }
+}
+
+static cardio::promise<MuonFsFile> OpenRegularFileAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    MuonFsOpenMode mode,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto error_message = std::string{};
+  auto wide_path = std::wstring{};
+  if (!ConvertUtf8PathToWide(path, &wide_path, &error_message)) {
+    throw std::runtime_error(error_message);
+  }
+  const auto access =
+      mode == MuonFsOpenMode::Read ? GENERIC_READ : GENERIC_WRITE;
+  const auto disposition = mode == MuonFsOpenMode::Read
+                               ? OPEN_EXISTING
+                               : (mode == MuonFsOpenMode::WriteAt
+                                      ? OPEN_ALWAYS
+                                      : CREATE_ALWAYS);
+  auto file = CreateFileW(
+      wide_path.c_str(),
+      access,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      disposition,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+      nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    throw std::runtime_error(
+        WindowsErrorMessage("CreateFileW failed", GetLastError()));
+  }
+  auto result = MuonFsFile(file);
+  try {
+    ValidateWindowsRegularFile(result.handle);
+  } catch (...) {
+    CloseWindowsFileSync(result.handle);
+    throw;
+  }
+  cancellation.throw_if_cancellation_requested();
+  co_return std::move(result);
+}
+
+static cardio::promise<size_t> GetFileSizeAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    cardio::cancellation cancellation) {
+  cancellation.throw_if_cancellation_requested();
+  (void)context;
+  LARGE_INTEGER file_size = {};
+  if (!GetFileSizeEx(file.handle, &file_size) || file_size.QuadPart < 0 ||
+      static_cast<uintmax_t>(file_size.QuadPart) >
+          static_cast<uintmax_t>(std::numeric_limits<size_t>::max())) {
+    throw std::runtime_error("File size is invalid");
+  }
+  co_return static_cast<size_t>(file_size.QuadPart);
+}
+
+static cardio::promise<size_t> ReadAtAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    std::span<std::byte> buffer,
+    uint64_t offset,
+    cardio::cancellation cancellation) {
+  cancellation.throw_if_cancellation_requested();
+  if (buffer.empty()) {
+    co_return size_t{0};
+  }
+  co_return co_await cardio::iocps::read(
+      *context.iocp, file.handle, buffer, offset, cancellation);
+}
+
+static cardio::promise<size_t> WriteAtAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    std::span<const std::byte> buffer,
+    uint64_t offset,
+    cardio::cancellation cancellation) {
+  cancellation.throw_if_cancellation_requested();
+  if (buffer.empty()) {
+    co_return size_t{0};
+  }
+  co_return co_await cardio::iocps::write(
+      *context.iocp, file.handle, buffer, offset, cancellation);
+}
+
+static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
+                                            MuonFsFile& file) {
+  if (!file.IsOpen()) {
+    co_return;
+  }
+  (void)context;
+  CloseWindowsFileSync(file.handle);
+  co_return;
+}
+
+template <typename Result, typename Body>
+static cardio::promise<Result> WithOpenRegularFileAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    MuonFsOpenMode mode,
+    cardio::cancellation cancellation,
+    Body body) {
+  auto open_promise = OpenRegularFileAsync(
+      context, std::move(path), mode, cancellation);
+  co_await open_promise;
+  auto file = std::move(open_promise).unsafe_result();
+  auto pending_exception = std::exception_ptr{};
+
+  if constexpr (std::is_void_v<Result>) {
+    try {
+      auto body_promise = body(file);
+      co_await body_promise;
+    } catch (...) {
+      pending_exception = std::current_exception();
+    }
+
+    try {
+      co_await CloseFileAsync(context, file);
+    } catch (...) {
+      if (!pending_exception) {
+        pending_exception = std::current_exception();
+      }
+    }
+    if (pending_exception) {
+      std::rethrow_exception(pending_exception);
+    }
+    co_return;
+  } else {
+    auto result = std::optional<Result>{};
+    try {
+      auto body_promise = body(file);
+      co_await body_promise;
+      result.emplace(std::move(body_promise).unsafe_result());
+    } catch (...) {
+      pending_exception = std::current_exception();
+    }
+
+    try {
+      co_await CloseFileAsync(context, file);
+    } catch (...) {
+      if (!pending_exception) {
+        pending_exception = std::current_exception();
+      }
+    }
+    if (pending_exception) {
+      std::rethrow_exception(pending_exception);
+    }
+    if (!result) {
+      throw std::runtime_error(kMuonBuiltinFsGenericError);
+    }
+    co_return std::move(*result);
+  }
+}
+
+static cardio::promise<size_t> ReadAllAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    std::span<std::byte> target,
+    uint64_t file_offset,
+    cardio::cancellation cancellation) {
+  auto offset = size_t{0};
+  while (offset < target.size()) {
+    cancellation.throw_if_cancellation_requested();
+    const auto chunk = ClampNativeIoSize(target.size() - offset);
+    const auto read_size = co_await ReadAtAsync(
+        context,
+        file,
+        target.subspan(offset, chunk),
+        file_offset + static_cast<uint64_t>(offset),
+        cancellation);
+    if (read_size == 0) {
+      break;
+    }
+    offset += read_size;
+  }
+  cancellation.throw_if_cancellation_requested();
+  co_return offset;
+}
+
+static cardio::promise<void> WriteAllAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    std::span<const std::byte> source,
+    uint64_t file_offset,
+    cardio::cancellation cancellation) {
+  auto offset = size_t{0};
+  while (offset < source.size()) {
+    cancellation.throw_if_cancellation_requested();
+    const auto chunk = ClampNativeIoSize(source.size() - offset);
+    const auto written = co_await WriteAtAsync(
+        context,
+        file,
+        source.subspan(offset, chunk),
+        file_offset + static_cast<uint64_t>(offset),
+        cancellation);
+    if (written == 0) {
+      throw std::runtime_error("write failed: wrote zero bytes");
+    }
+    offset += written;
+  }
+  cancellation.throw_if_cancellation_requested();
+}
+
+static cardio::promise<MuonFsBufferResult> ReadBytesFromOpenFileAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    const muon_plugin_helpers* helpers,
+    MuonFsReadOptions options,
+    cardio::cancellation cancellation) {
+  const auto size = co_await GetFileSizeAsync(context, file, cancellation);
+  const auto position = options.has_position ? options.position : uint64_t{0};
+  const auto available =
+      position >= size ? uint64_t{0} : static_cast<uint64_t>(size) - position;
+  const auto requested =
+      options.has_length ? std::min(options.length, available) : available;
+  if (requested > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    throw std::runtime_error("Read range is too large");
+  }
+  auto result = AllocateResultBuffer(helpers, static_cast<size_t>(requested));
+  const auto actual_size = co_await ReadAllAsync(
+      context, file, result.Bytes(), position, cancellation);
+  result.Resize(actual_size);
+  co_return std::move(result);
+}
+
+static cardio::promise<std::string> ReadTextFromOpenFileAsync(
+    MuonFsIoContext& context,
+    MuonFsFile& file,
+    cardio::cancellation cancellation) {
+  const auto size = co_await GetFileSizeAsync(context, file, cancellation);
+  auto storage = std::vector<uint8_t>(size);
+  auto buffer = std::span<std::byte>(
+      reinterpret_cast<std::byte*>(storage.data()), storage.size());
+  const auto actual_size =
+      co_await ReadAllAsync(context, file, buffer, 0, cancellation);
+  storage.resize(actual_size);
+  if (!IsValidUtf8WithoutNul(storage.data(), storage.size())) {
+    throw std::runtime_error("File is not valid UTF-8 text");
+  }
+  co_return std::string(reinterpret_cast<const char*>(storage.data()),
+                        storage.size());
+}
+
+static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    const muon_plugin_helpers* helpers,
+    MuonFsReadOptions options,
+    cardio::cancellation cancellation) {
+  auto result_promise = WithOpenRegularFileAsync<MuonFsBufferResult>(
+      context,
+      std::move(path),
+      MuonFsOpenMode::Read,
+      cancellation,
+      [&context, helpers, options, cancellation](MuonFsFile& file) {
+        return ReadBytesFromOpenFileAsync(
+            context, file, helpers, options, cancellation);
+      });
+  co_await result_promise;
+  co_return std::move(result_promise).unsafe_result();
+}
+
+static cardio::promise<std::string> ReadTextAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  co_return co_await WithOpenRegularFileAsync<std::string>(
+      context,
+      std::move(path),
+      MuonFsOpenMode::Read,
+      cancellation,
+      [&context, cancellation](MuonFsFile& file) {
+        return ReadTextFromOpenFileAsync(context, file, cancellation);
+      });
+}
+
+static cardio::promise<void> WriteBytesAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::span<const std::byte> source,
+    MuonFsWriteOptions options,
+    cardio::cancellation cancellation) {
+  co_await WithOpenRegularFileAsync<void>(
+      context,
+      std::move(path),
+      options.has_position ? MuonFsOpenMode::WriteAt
+                           : MuonFsOpenMode::WriteTruncate,
+      cancellation,
+      [&context, source, options, cancellation](MuonFsFile& file) {
+        return WriteAllAsync(
+            context, file, source, options.has_position ? options.position : 0,
+            cancellation);
+      });
+}
+
+static cardio::promise<void> WriteTextAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::string text,
+    cardio::cancellation cancellation) {
+  auto source = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(text.data()), text.size());
+  co_await WriteBytesAsync(
+      context, std::move(path), source, MuonFsWriteOptions{}, cancellation);
+}
+
+#else
+
+template <typename T>
+class MuonGObjectPtr final {
+ public:
+  explicit MuonGObjectPtr(T* source = nullptr)
+      : value_(source) {}
+
+  ~MuonGObjectPtr() {
+    Reset();
+  }
+
+  MuonGObjectPtr(const MuonGObjectPtr&) = delete;
+  MuonGObjectPtr& operator=(const MuonGObjectPtr&) = delete;
+
+  MuonGObjectPtr(MuonGObjectPtr&& other) noexcept
+      : value_(other.value_) {
+    other.value_ = nullptr;
+  }
+
+  MuonGObjectPtr& operator=(MuonGObjectPtr&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      value_ = other.value_;
+      other.value_ = nullptr;
+    }
+    return *this;
+  }
+
+  T* get() const {
+    return value_;
+  }
+
+  T* release() {
+    auto* value = value_;
+    value_ = nullptr;
+    return value;
+  }
+
+  void Reset(T* next = nullptr) {
+    if (value_ != nullptr) {
+      g_object_unref(value_);
+    }
+    value_ = next;
+  }
+
+ private:
+  T* value_ = nullptr;
+};
+
+struct MuonFsGFile {
+  explicit MuonFsGFile(const std::string& path)
+      : file(CreateGFileFromPathOrUri(path)) {
+    if (file.get() == nullptr) {
+      throw std::runtime_error(kMuonBuiltinFsGenericError);
+    }
+  }
+
+  MuonFsGFile(const MuonFsGFile&) = delete;
+  MuonFsGFile& operator=(const MuonFsGFile&) = delete;
+
+  GFile* get() const {
+    return file.get();
+  }
+
+  MuonGObjectPtr<GFile> file;
+};
+
+struct MuonFsGBytes {
+  explicit MuonFsGBytes(std::span<const std::byte> source)
+      : bytes(g_bytes_new(source.empty()
+                              ? static_cast<const void*>("")
+                              : static_cast<const void*>(source.data()),
+                          static_cast<gsize>(source.size()))) {
+    if (bytes == nullptr) {
+      throw std::runtime_error(kMuonBuiltinFsGenericError);
+    }
+  }
+
+  ~MuonFsGBytes() {
+    if (bytes != nullptr) {
+      g_bytes_unref(bytes);
+    }
+  }
+
+  MuonFsGBytes(const MuonFsGBytes&) = delete;
+  MuonFsGBytes& operator=(const MuonFsGBytes&) = delete;
+
+  GBytes* get() const {
+    return bytes;
+  }
+
+  GBytes* bytes = nullptr;
+};
+
+static constexpr char kMuonFsGFileInfoAttributes[] =
+    G_FILE_ATTRIBUTE_STANDARD_NAME ","
+    G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+    G_FILE_ATTRIBUTE_STANDARD_SIZE ","
+    G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET ","
+    G_FILE_ATTRIBUTE_TIME_MODIFIED ","
+    G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC ","
+    G_FILE_ATTRIBUTE_UNIX_MODE ","
+    G_FILE_ATTRIBUTE_ACCESS_CAN_READ ","
+    G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE ","
+    G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE;
+
+static constexpr int kMuonFsEnumeratorBatchSize = 64;
+
+static bool IsGioNotFound(const cardio::gio::gio_error& error) {
+  return error.domain() == G_IO_ERROR && error.code() == G_IO_ERROR_NOT_FOUND;
+}
+
+static std::string TakeGErrorMessage(GError* error, const char* fallback) {
+  if (error == nullptr) {
+    return fallback;
+  }
+  auto message = std::string(error->message == nullptr ? fallback
+                                                       : error->message);
+  g_error_free(error);
+  return message;
+}
+
+static void ThrowIfGioFailed(gboolean succeeded,
+                             GError* error,
+                             const char* fallback) {
+  if (succeeded) {
+    return;
+  }
+  throw std::runtime_error(TakeGErrorMessage(error, fallback));
+}
+
+static GFileQueryInfoFlags GetQueryFlags(bool follow_symlink) {
+  return follow_symlink ? G_FILE_QUERY_INFO_NONE
+                        : G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS;
+}
+
+static cardio::promise<GFileInfo*> QueryInfoAsync(
+    GFile* file,
+    bool follow_symlink,
+    cardio::cancellation cancellation) {
+  const auto flags = GetQueryFlags(follow_symlink);
+  return cardio::gio::submit<GFileInfo*>(
+      [file, flags](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_query_info_async(
+            file,
+            kMuonFsGFileInfoAttributes,
+            flags,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        return g_file_query_info_finish(G_FILE(source_object), result, error);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<GFileEnumerator*> EnumerateChildrenAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<GFileEnumerator*>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_enumerate_children_async(
+            file,
+            kMuonFsGFileInfoAttributes,
+            G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        return g_file_enumerate_children_finish(
+            G_FILE(source_object), result, error);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<GList*> NextFilesAsync(
+    GFileEnumerator* enumerator,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<GList*>(
+      [enumerator](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_enumerator_next_files_async(
+            enumerator,
+            kMuonFsEnumeratorBatchSize,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        return g_file_enumerator_next_files_finish(
+            G_FILE_ENUMERATOR(source_object), result, error);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> CloseEnumeratorAsync(
+    GFileEnumerator* enumerator,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [enumerator](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_enumerator_close_async(
+            enumerator, G_PRIORITY_DEFAULT, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded = g_file_enumerator_close_finish(
+            G_FILE_ENUMERATOR(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_file_enumerator_close_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> DeleteFileAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_delete_async(
+            file, G_PRIORITY_DEFAULT, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded =
+            g_file_delete_finish(G_FILE(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error, G_IO_ERROR, G_IO_ERROR_FAILED,
+              "g_file_delete_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> MakeDirectoryAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_make_directory_async(
+            file, G_PRIORITY_DEFAULT, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded =
+            g_file_make_directory_finish(G_FILE(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_file_make_directory_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> MoveFileAsync(GFile* source,
+                                           GFile* destination,
+                                           cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [source, destination](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_move_async(
+            source,
+            destination,
+            G_FILE_COPY_OVERWRITE,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            nullptr,
+            nullptr,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded =
+            g_file_move_finish(G_FILE(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error, G_IO_ERROR, G_IO_ERROR_FAILED,
+              "g_file_move_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> CopyFileContentsAsync(
+    GFile* source,
+    GFile* destination,
+    MuonFsCopyOptions options,
+    cardio::cancellation cancellation) {
+  const auto flags = options.overwrite ? G_FILE_COPY_OVERWRITE
+                                       : G_FILE_COPY_NONE;
+  return cardio::gio::submit<void>(
+      [source, destination, flags](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_copy_async(
+            source,
+            destination,
+            flags,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            nullptr,
+            nullptr,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded =
+            g_file_copy_finish(G_FILE(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error, G_IO_ERROR, G_IO_ERROR_FAILED,
+              "g_file_copy_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<GFileOutputStream*> AppendToAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<GFileOutputStream*>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_append_to_async(
+            file,
+            G_FILE_CREATE_NONE,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        return g_file_append_to_finish(G_FILE(source_object), result, error);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<GFileIOStream*> OpenReadwriteAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<GFileIOStream*>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_open_readwrite_async(
+            file, G_PRIORITY_DEFAULT, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        return g_file_open_readwrite_finish(
+            G_FILE(source_object), result, error);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<GFileIOStream*> CreateReadwriteAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<GFileIOStream*>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_create_readwrite_async(
+            file,
+            G_FILE_CREATE_NONE,
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        return g_file_create_readwrite_finish(
+            G_FILE(source_object), result, error);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> CloseOutputStreamAsync(
+    GOutputStream* stream,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [stream](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_output_stream_close_async(
+            stream, G_PRIORITY_DEFAULT, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded = g_output_stream_close_finish(
+            G_OUTPUT_STREAM(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_output_stream_close_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> CloseIoStreamAsync(
+    GIOStream* stream,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [stream](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_io_stream_close_async(
+            stream, G_PRIORITY_DEFAULT, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded =
+            g_io_stream_close_finish(G_IO_STREAM(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_io_stream_close_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> WriteAllToOutputStreamAsync(
+    GOutputStream* stream,
+    std::span<const std::byte> source,
+    cardio::cancellation cancellation) {
+  if (source.empty()) {
+    cancellation.throw_if_cancellation_requested();
+    co_return;
+  }
+  const auto* data = source.data();
+  const auto size = source.size();
+  co_await cardio::gio::submit<void>(
+      [stream, data, size](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_output_stream_write_all_async(
+            stream,
+            data,
+            static_cast<gsize>(size),
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        auto bytes_written = gsize{};
+        const auto succeeded = g_output_stream_write_all_finish(
+            G_OUTPUT_STREAM(source_object), result, &bytes_written, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_output_stream_write_all_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> MakeSymbolicLinkAsync(
+    GFile* file,
+    const std::string& target,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [file, target](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_make_symbolic_link_async(
+            file,
+            target.c_str(),
+            G_PRIORITY_DEFAULT,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        const auto succeeded = g_file_make_symbolic_link_finish(
+            G_FILE(source_object), result, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_file_make_symbolic_link_finish failed");
+        }
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<cardio::gio::file_contents> LoadContentsAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<cardio::gio::file_contents>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_load_contents_async(file, cancellable, callback, user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        auto* contents = static_cast<char*>(nullptr);
+        auto length = gsize{};
+        auto* etag = static_cast<char*>(nullptr);
+        auto loaded = cardio::gio::file_contents{};
+        const auto succeeded = g_file_load_contents_finish(
+            G_FILE(source_object), result, &contents, &length, &etag, error);
+        if (!succeeded) {
+          if (error != nullptr && *error == nullptr) {
+            g_set_error_literal(
+                error,
+                G_IO_ERROR,
+                G_IO_ERROR_FAILED,
+                "g_file_load_contents_finish failed");
+          }
+          g_free(contents);
+          g_free(etag);
+          return loaded;
+        }
+        loaded.bytes.resize(static_cast<size_t>(length));
+        if (length != 0) {
+          std::memcpy(
+              loaded.bytes.data(),
+              contents,
+              static_cast<size_t>(length));
+        }
+        if (etag != nullptr) {
+          loaded.etag = etag;
+        }
+        g_free(contents);
+        g_free(etag);
+        return loaded;
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> ReplaceContentsBytesAsync(
+    GFile* file,
+    GBytes* bytes,
+    cardio::cancellation cancellation) {
+  return cardio::gio::submit<void>(
+      [file, bytes](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_replace_contents_bytes_async(
+            file,
+            bytes,
+            nullptr,
+            FALSE,
+            G_FILE_CREATE_NONE,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        auto* new_etag = static_cast<char*>(nullptr);
+        const auto succeeded = g_file_replace_contents_finish(
+            G_FILE(source_object), result, &new_etag, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_file_replace_contents_finish failed");
+        }
+        g_free(new_etag);
+      },
+      std::move(cancellation));
+}
+
+static cardio::promise<void> ReplaceEmptyContentsAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  static constexpr char empty_contents[] = "";
+  return cardio::gio::submit<void>(
+      [file](
+          GCancellable* cancellable,
+          GAsyncReadyCallback callback,
+          gpointer user_data) {
+        g_file_replace_contents_async(
+            file,
+            empty_contents,
+            0,
+            nullptr,
+            FALSE,
+            G_FILE_CREATE_NONE,
+            cancellable,
+            callback,
+            user_data);
+      },
+      [](GObject* source_object, GAsyncResult* result, GError** error) {
+        auto* new_etag = static_cast<char*>(nullptr);
+        const auto succeeded = g_file_replace_contents_finish(
+            G_FILE(source_object), result, &new_etag, error);
+        if (!succeeded && error != nullptr && *error == nullptr) {
+          g_set_error_literal(
+              error,
+              G_IO_ERROR,
+              G_IO_ERROR_FAILED,
+              "g_file_replace_contents_finish failed");
+        }
+        g_free(new_etag);
+      },
+      std::move(cancellation));
+}
+
+static bool GFileInfoHasUnixMode(GFileInfo* info) {
+  return g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_UNIX_MODE);
+}
+
+static mode_t GFileInfoUnixMode(GFileInfo* info) {
+  return static_cast<mode_t>(
+      g_file_info_get_attribute_uint32(info, G_FILE_ATTRIBUTE_UNIX_MODE));
+}
+
+static std::string GFileTypeNameFromMode(mode_t mode) {
+  if (S_ISREG(mode)) {
+    return "file";
+  }
+  if (S_ISDIR(mode)) {
+    return "directory";
+  }
+  if (S_ISLNK(mode)) {
+    return "symlink";
+  }
+  if (S_ISBLK(mode)) {
+    return "blockDevice";
+  }
+  if (S_ISCHR(mode)) {
+    return "characterDevice";
+  }
+  if (S_ISFIFO(mode)) {
+    return "fifo";
+  }
+  if (S_ISSOCK(mode)) {
+    return "socket";
+  }
+  return "other";
+}
+
+static std::string GFileTypeNameFromInfo(GFileInfo* info) {
+  if (GFileInfoHasUnixMode(info)) {
+    return GFileTypeNameFromMode(GFileInfoUnixMode(info));
+  }
+  switch (g_file_info_get_file_type(info)) {
+    case G_FILE_TYPE_REGULAR:
+      return "file";
+    case G_FILE_TYPE_DIRECTORY:
+      return "directory";
+    case G_FILE_TYPE_SYMBOLIC_LINK:
+      return "symlink";
+    default:
+      return "other";
+  }
+}
+
+static bool GFileInfoIsRegularFile(GFileInfo* info) {
+  return GFileTypeNameFromInfo(info) == "file";
+}
+
+static bool GFileInfoIsDirectory(GFileInfo* info) {
+  return GFileTypeNameFromInfo(info) == "directory";
+}
+
+static bool GFileInfoIsSymlink(GFileInfo* info) {
+  return GFileTypeNameFromInfo(info) == "symlink";
+}
+
+static bool GFileInfoIsReadonly(GFileInfo* info) {
+  if (GFileInfoHasUnixMode(info)) {
+    constexpr auto write_permissions = S_IWUSR | S_IWGRP | S_IWOTH;
+    return (GFileInfoUnixMode(info) & write_permissions) == 0;
+  }
+  if (!g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE)) {
+    return false;
+  }
+  return !g_file_info_get_attribute_boolean(
+      info, G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE);
+}
+
+static uint64_t GFileInfoSize(GFileInfo* info) {
+  if (!GFileInfoIsRegularFile(info)) {
+    return 0;
+  }
+  const auto size = g_file_info_get_size(info);
+  return size < 0 ? 0 : static_cast<uint64_t>(size);
+}
+
+static uint64_t GFileInfoMtimeMs(GFileInfo* info) {
+  const auto seconds = g_file_info_get_attribute_uint64(
+      info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+  const auto usec =
+      g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC)
+          ? g_file_info_get_attribute_uint32(
+                info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC)
+          : uint32_t{0};
+  return seconds * uint64_t{1000} + usec / uint32_t{1000};
+}
+
+static std::string CreateGFileInfoStatusJson(GFileInfo* info) {
+  auto result = std::string("{\"type\":");
+  AppendJsonString(&result, GFileTypeNameFromInfo(info));
+  result += ",\"size\":";
+  result += std::to_string(GFileInfoSize(info));
+  result += ",\"mtimeMs\":";
+  result += std::to_string(GFileInfoMtimeMs(info));
+  result += ",\"readonly\":";
+  result += GFileInfoIsReadonly(info) ? "true" : "false";
+  result += "}";
+  return result;
+}
+
+static std::string CreateGFileInfoDirentJson(GFileInfo* info) {
+  auto result = std::string("{\"name\":");
+  const auto* name = g_file_info_get_name(info);
+  AppendJsonString(&result, name == nullptr ? std::string_view{}
+                                            : std::string_view(name));
+  result += ",\"type\":";
+  AppendJsonString(&result, GFileTypeNameFromInfo(info));
+  result += ",\"size\":";
+  result += std::to_string(GFileInfoSize(info));
+  result += ",\"mtimeMs\":";
+  result += std::to_string(GFileInfoMtimeMs(info));
+  result += ",\"readonly\":";
+  result += GFileInfoIsReadonly(info) ? "true" : "false";
+  result += "}";
+  return result;
+}
+
+static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    const muon_plugin_helpers* helpers,
+    MuonFsReadOptions options,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto contents = co_await LoadContentsAsync(file.get(), cancellation);
+  const auto position = options.has_position ? options.position : uint64_t{0};
+  const auto available = position >= contents.bytes.size()
+                             ? uint64_t{0}
+                             : static_cast<uint64_t>(contents.bytes.size()) -
+                                   position;
+  const auto requested =
+      options.has_length ? std::min(options.length, available) : available;
+  if (requested > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    throw std::runtime_error("Read range is too large");
+  }
+  auto result = AllocateResultBuffer(helpers, static_cast<size_t>(requested));
+  if (requested != 0) {
+    std::memcpy(
+        result.Bytes().data(),
+        contents.bytes.data() + static_cast<size_t>(position),
+        static_cast<size_t>(requested));
+  }
+  co_return std::move(result);
+}
+
+static cardio::promise<std::string> ReadTextAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto contents = co_await LoadContentsAsync(file.get(), cancellation);
+  if (!IsValidUtf8WithoutNul(
+          reinterpret_cast<const uint8_t*>(contents.bytes.data()),
+          contents.bytes.size())) {
+    throw std::runtime_error("File is not valid UTF-8 text");
+  }
+  if (contents.bytes.empty()) {
+    co_return std::string{};
+  }
+  co_return std::string(
+      reinterpret_cast<const char*>(contents.bytes.data()),
+      contents.bytes.size());
+}
+
+static cardio::promise<void> WriteBytesAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::span<const std::byte> source,
+    MuonFsWriteOptions options,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  if (options.has_position) {
+    auto file = MuonFsGFile(path);
+    auto stream = MuonGObjectPtr<GFileIOStream>();
+    auto should_create = false;
+    try {
+      stream.Reset(co_await OpenReadwriteAsync(file.get(), cancellation));
+    } catch (const cardio::gio::gio_error& error) {
+      if (!IsGioNotFound(error)) {
+        throw;
+      }
+      should_create = true;
+    }
+    if (should_create) {
+      stream.Reset(co_await CreateReadwriteAsync(file.get(), cancellation));
+    }
+    auto* io_stream = G_IO_STREAM(stream.get());
+    if (!G_IS_SEEKABLE(io_stream) ||
+        !g_seekable_can_seek(G_SEEKABLE(io_stream))) {
+      throw std::runtime_error("File does not support seeking");
+    }
+    if (options.position > static_cast<uint64_t>(
+                               std::numeric_limits<goffset>::max())) {
+      throw std::runtime_error("Write position is too large");
+    }
+    auto* error = static_cast<GError*>(nullptr);
+    ThrowIfGioFailed(
+        g_seekable_seek(
+            G_SEEKABLE(io_stream),
+            static_cast<goffset>(options.position),
+            G_SEEK_SET,
+            nullptr,
+            &error),
+        error,
+        "Failed to seek file");
+    co_await WriteAllToOutputStreamAsync(
+        g_io_stream_get_output_stream(io_stream), source, cancellation);
+    co_await CloseIoStreamAsync(io_stream, cancellation);
+    cancellation.throw_if_cancellation_requested();
+    co_return;
+  }
+  auto file = MuonFsGFile(path);
+  if (source.empty()) {
+    co_await ReplaceEmptyContentsAsync(file.get(), cancellation);
+    co_return;
+  }
+  auto bytes = MuonFsGBytes(source);
+  co_await ReplaceContentsBytesAsync(file.get(), bytes.get(), cancellation);
+}
+
+static cardio::promise<void> WriteTextAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::string text,
+    cardio::cancellation cancellation) {
+  auto source = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(text.data()), text.size());
+  co_await WriteBytesAsync(
+      context, std::move(path), source, MuonFsWriteOptions{}, cancellation);
+}
+
+#endif
+
+#if defined(_WIN32)
+
+static cardio::promise<std::string> StatAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    bool follow_symlink,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto result = CreateStatusJson(std::filesystem::path(path), follow_symlink);
+  cancellation.throw_if_cancellation_requested();
+  co_return result;
+}
+
+static cardio::promise<bool> ExistsAsync(MuonFsIoContext& context,
+                                         std::string path,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  const auto result = std::filesystem::exists(std::filesystem::path(path),
+                                              error);
+  cancellation.throw_if_cancellation_requested();
+  co_return !error && result;
+}
+
+static cardio::promise<bool> AccessAsync(MuonFsIoContext& context,
+                                         std::string path,
+                                         MuonFsAccessOptions options,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  const auto result = CanAccessPath(std::filesystem::path(path), options);
+  cancellation.throw_if_cancellation_requested();
+  co_return result;
+}
+
+static cardio::promise<std::string> ReaddirAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    MuonFsReaddirOptions options,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto result = std::string("[");
+  auto first = true;
+  std::error_code error;
+  for (const auto& entry :
+       std::filesystem::directory_iterator(std::filesystem::path(path),
+                                           error)) {
+    ThrowFilesystemError("readdir", std::filesystem::path(path), error);
+    cancellation.throw_if_cancellation_requested();
+    if (!first) {
+      result += ",";
+    }
+    first = false;
+    if (options.with_file_types) {
+      result += CreateDirentJson(entry);
+    } else {
+      AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
+    }
+  }
+  ThrowFilesystemError("readdir", std::filesystem::path(path), error);
+  result += "]";
+  cancellation.throw_if_cancellation_requested();
+  co_return result;
+}
+
+static cardio::promise<void> MkdirAsync(MuonFsIoContext& context,
+                                        std::string path,
+                                        MuonFsMkdirOptions options,
+                                        cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  const auto target = std::filesystem::path(path);
+  if (options.recursive) {
+    std::filesystem::create_directories(target, error);
+    ThrowFilesystemError("mkdir", target, error);
+    cancellation.throw_if_cancellation_requested();
+    co_return;
+  }
+  const auto created = std::filesystem::create_directory(target, error);
+  ThrowFilesystemError("mkdir", target, error);
+  if (!created) {
+    throw std::runtime_error("Path already exists");
+  }
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> RmAsync(MuonFsIoContext& context,
+                                     std::string path,
+                                     MuonFsRmOptions options,
+                                     cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  const auto target = std::filesystem::path(path);
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(target, error);
+  if (error || status.type() == std::filesystem::file_type::not_found) {
+    if (options.force) {
+      co_return;
+    }
+    ThrowFilesystemError("rm", target, error);
+    throw std::runtime_error("Path does not exist");
+  }
+  if (std::filesystem::is_directory(status) && !options.recursive) {
+    throw std::runtime_error("Path is a directory");
+  }
+  if (options.recursive && !std::filesystem::is_symlink(status)) {
+    std::filesystem::remove_all(target, error);
+  } else {
+    std::filesystem::remove(target, error);
+  }
+  ThrowFilesystemError("rm", target, error);
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> UnlinkAsync(MuonFsIoContext& context,
+                                         std::string path,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  const auto target = std::filesystem::path(path);
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(target, error);
+  ThrowFilesystemError("unlink", target, error);
+  if (std::filesystem::is_directory(status)) {
+    throw std::runtime_error("Path is a directory");
+  }
+  std::filesystem::remove(target, error);
+  ThrowFilesystemError("unlink", target, error);
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> RmdirAsync(MuonFsIoContext& context,
+                                        std::string path,
+                                        cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  const auto target = std::filesystem::path(path);
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(target, error);
+  ThrowFilesystemError("rmdir", target, error);
+  if (!std::filesystem::is_directory(status) ||
+      std::filesystem::is_symlink(status)) {
+    throw std::runtime_error("Path is not a directory");
+  }
+  std::filesystem::remove(target, error);
+  ThrowFilesystemError("rmdir", target, error);
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> RenameAsync(MuonFsIoContext& context,
+                                         std::string old_path,
+                                         std::string new_path,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  std::filesystem::rename(
+      std::filesystem::path(old_path), std::filesystem::path(new_path), error);
+  ThrowFilesystemError("rename", std::filesystem::path(old_path), error);
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> CopyFileAsync(MuonFsIoContext& context,
+                                           std::string source,
+                                           std::string destination,
+                                           MuonFsCopyOptions options,
+                                           cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  ThrowIfNotRegularFile(std::filesystem::path(source),
+                        "Source is not a regular file");
+  const auto copy_options =
+      options.overwrite ? std::filesystem::copy_options::overwrite_existing
+                        : std::filesystem::copy_options::none;
+  std::error_code error;
+  const auto copied = std::filesystem::copy_file(
+      std::filesystem::path(source), std::filesystem::path(destination),
+      copy_options, error);
+  ThrowFilesystemError("copyFile", std::filesystem::path(source), error);
+  if (!copied && !options.overwrite) {
+    throw std::runtime_error("Destination already exists");
+  }
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> AppendBytesAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::span<const std::byte> source,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto stream = std::ofstream(
+      std::filesystem::path(path), std::ios::binary | std::ios::app);
+  if (!stream.is_open()) {
+    throw std::runtime_error("Failed to open file");
+  }
+  if (!source.empty()) {
+    stream.write(reinterpret_cast<const char*>(source.data()),
+                 static_cast<std::streamsize>(source.size()));
+  }
+  if (!stream.good()) {
+    throw std::runtime_error("Failed to append file");
+  }
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<void> AppendTextAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::string text,
+    cardio::cancellation cancellation) {
+  auto source = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(text.data()), text.size());
+  co_await AppendBytesAsync(context, std::move(path), source, cancellation);
+}
+
+static cardio::promise<void> TruncateAsync(MuonFsIoContext& context,
+                                           std::string path,
+                                           uint64_t length,
+                                           cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  std::filesystem::resize_file(std::filesystem::path(path), length, error);
+  ThrowFilesystemError("truncate", std::filesystem::path(path), error);
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<std::string> RealpathAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  const auto canonical = std::filesystem::canonical(
+      std::filesystem::path(path), error);
+  ThrowFilesystemError("realpath", std::filesystem::path(path), error);
+  cancellation.throw_if_cancellation_requested();
+  co_return PathToUtf8String(canonical);
+}
+
+static cardio::promise<std::string> ReadlinkAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  const auto target = std::filesystem::read_symlink(
+      std::filesystem::path(path), error);
+  ThrowFilesystemError("readlink", std::filesystem::path(path), error);
+  cancellation.throw_if_cancellation_requested();
+  co_return PathToUtf8String(target);
+}
+
+static cardio::promise<void> SymlinkAsync(MuonFsIoContext& context,
+                                          std::string target,
+                                          std::string path,
+                                          std::string type,
+                                          cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  std::error_code error;
+  if (type == "dir" || type == "junction") {
+    std::filesystem::create_directory_symlink(
+        std::filesystem::path(target), std::filesystem::path(path), error);
+  } else if (type.empty() || type == "file") {
+    std::filesystem::create_symlink(
+        std::filesystem::path(target), std::filesystem::path(path), error);
+  } else {
+    throw std::runtime_error("Symlink type must be file, dir, or junction");
+  }
+  ThrowFilesystemError("symlink", std::filesystem::path(path), error);
+  cancellation.throw_if_cancellation_requested();
+  co_return;
+}
+
+static cardio::promise<std::string> WatchSnapshotAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  const auto target = std::filesystem::path(path);
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(target, error);
+  ThrowFilesystemError("watch", target, error);
+  auto result = std::string("{\"root\":");
+  result += CreateStatusJson(target, false);
+  result += ",\"entries\":";
+  if (std::filesystem::is_directory(status) &&
+      !std::filesystem::is_symlink(status)) {
+    result += "[";
+    auto first = true;
+    for (const auto& entry : std::filesystem::directory_iterator(target,
+                                                                 error)) {
+      ThrowFilesystemError("watch", target, error);
+      if (!first) {
+        result += ",";
+      }
+      first = false;
+      result += CreateDirentJson(entry);
+    }
+    ThrowFilesystemError("watch", target, error);
+    result += "]";
+  } else {
+    result += "[]";
+  }
+  result += "}";
+  cancellation.throw_if_cancellation_requested();
+  co_return result;
+}
+
+#else
+
+static cardio::promise<bool> ExistsAsync(MuonFsIoContext& context,
+                                         std::string path,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  try {
+    auto info = MuonGObjectPtr<GFileInfo>(
+        co_await QueryInfoAsync(file.get(), true, cancellation));
+    (void)info;
+    cancellation.throw_if_cancellation_requested();
+    co_return true;
+  } catch (const cardio::gio::gio_error&) {
+    cancellation.throw_if_cancellation_requested();
+    co_return false;
+  }
+}
+
+static cardio::promise<void> EnsureDirectoryAsync(
+    GFile* file,
+    cardio::cancellation cancellation) {
+  try {
+    auto info = MuonGObjectPtr<GFileInfo>(
+        co_await QueryInfoAsync(file, false, cancellation));
+    if (GFileInfoIsDirectory(info.get()) &&
+        !GFileInfoIsSymlink(info.get())) {
+      co_return;
+    }
+    throw std::runtime_error("Path already exists");
+  } catch (const cardio::gio::gio_error& error) {
+    if (!IsGioNotFound(error)) {
+      throw;
+    }
+  }
+
+  auto parent = MuonGObjectPtr<GFile>(g_file_get_parent(file));
+  if (parent.get() != nullptr) {
+    co_await EnsureDirectoryAsync(parent.get(), cancellation);
+  }
+  auto already_exists = false;
+  try {
+    co_await MakeDirectoryAsync(file, cancellation);
+  } catch (const cardio::gio::gio_error& error) {
+    if (error.domain() != G_IO_ERROR ||
+        error.code() != G_IO_ERROR_EXISTS) {
+      throw;
+    }
+    already_exists = true;
+  }
+  if (already_exists) {
+    auto info = MuonGObjectPtr<GFileInfo>(
+        co_await QueryInfoAsync(file, false, cancellation));
+    if (!GFileInfoIsDirectory(info.get()) ||
+        GFileInfoIsSymlink(info.get())) {
+      throw std::runtime_error("Path already exists");
+    }
+  }
+}
+
+static cardio::promise<std::string> StatAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    bool follow_symlink,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(file.get(), follow_symlink, cancellation));
+  cancellation.throw_if_cancellation_requested();
+  co_return CreateGFileInfoStatusJson(info.get());
+}
+
+static cardio::promise<bool> AccessAsync(MuonFsIoContext& context,
+                                         std::string path,
+                                         MuonFsAccessOptions options,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto info = MuonGObjectPtr<GFileInfo>();
+  try {
+    info.Reset(co_await QueryInfoAsync(file.get(), true, cancellation));
+  } catch (const cardio::gio::gio_error&) {
+    cancellation.throw_if_cancellation_requested();
+    co_return false;
+  }
+  if (!options.read && !options.write && !options.execute) {
+    cancellation.throw_if_cancellation_requested();
+    co_return true;
+  }
+  if (options.read &&
+      (!g_file_info_has_attribute(info.get(),
+                                  G_FILE_ATTRIBUTE_ACCESS_CAN_READ) ||
+       !g_file_info_get_attribute_boolean(
+           info.get(), G_FILE_ATTRIBUTE_ACCESS_CAN_READ))) {
+    co_return false;
+  }
+  if (options.write &&
+      (!g_file_info_has_attribute(info.get(),
+                                  G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE) ||
+       !g_file_info_get_attribute_boolean(
+           info.get(), G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE))) {
+    co_return false;
+  }
+  if (options.execute &&
+      (!g_file_info_has_attribute(info.get(),
+                                  G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE) ||
+       !g_file_info_get_attribute_boolean(
+           info.get(), G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE))) {
+    co_return false;
+  }
+  cancellation.throw_if_cancellation_requested();
+  co_return true;
+}
+
+static cardio::promise<std::string> ReaddirAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    MuonFsReaddirOptions options,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto enumerator = MuonGObjectPtr<GFileEnumerator>(
+      co_await EnumerateChildrenAsync(file.get(), cancellation));
+  auto result = std::string("[");
+  auto first = true;
+  while (true) {
+    auto* raw_list = co_await NextFilesAsync(enumerator.get(), cancellation);
+    if (raw_list == nullptr) {
+      break;
+    }
+    auto infos = std::vector<MuonGObjectPtr<GFileInfo>>();
+    for (auto* entry = raw_list; entry != nullptr; entry = entry->next) {
+      infos.emplace_back(static_cast<GFileInfo*>(entry->data));
+      entry->data = nullptr;
+    }
+    g_list_free(raw_list);
+    for (const auto& info : infos) {
+      cancellation.throw_if_cancellation_requested();
+      if (!first) {
+        result += ",";
+      }
+      first = false;
+      if (options.with_file_types) {
+        result += CreateGFileInfoDirentJson(info.get());
+      } else {
+        const auto* name = g_file_info_get_name(info.get());
+        AppendJsonString(&result, name == nullptr ? std::string_view{}
+                                                  : std::string_view(name));
+      }
+    }
+  }
+  co_await CloseEnumeratorAsync(enumerator.get(), cancellation);
+  result += "]";
+  cancellation.throw_if_cancellation_requested();
+  co_return result;
+}
+
+static cardio::promise<void> MkdirAsync(MuonFsIoContext& context,
+                                        std::string path,
+                                        MuonFsMkdirOptions options,
+                                        cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  if (options.recursive) {
+    co_await EnsureDirectoryAsync(file.get(), cancellation);
+    co_return;
+  }
+  co_await MakeDirectoryAsync(file.get(), cancellation);
+}
+
+static cardio::promise<void> RemoveGFileAsync(
+    GFile* file,
+    MuonFsRmOptions options,
+    cardio::cancellation cancellation) {
+  auto info = MuonGObjectPtr<GFileInfo>();
+  try {
+    info.Reset(co_await QueryInfoAsync(file, false, cancellation));
+  } catch (const cardio::gio::gio_error& error) {
+    if (options.force && IsGioNotFound(error)) {
+      co_return;
+    }
+    throw;
+  }
+  if (GFileInfoIsDirectory(info.get()) && !GFileInfoIsSymlink(info.get())) {
+    if (!options.recursive) {
+      throw std::runtime_error("Path is a directory");
+    }
+    auto enumerator = MuonGObjectPtr<GFileEnumerator>(
+        co_await EnumerateChildrenAsync(file, cancellation));
+    while (true) {
+      auto* raw_list = co_await NextFilesAsync(enumerator.get(), cancellation);
+      if (raw_list == nullptr) {
+        break;
+      }
+      auto children = std::vector<MuonGObjectPtr<GFile>>();
+      for (auto* entry = raw_list; entry != nullptr; entry = entry->next) {
+        auto* child_info = static_cast<GFileInfo*>(entry->data);
+        children.emplace_back(
+            g_file_enumerator_get_child(enumerator.get(), child_info));
+      }
+      g_list_free_full(raw_list, g_object_unref);
+      for (const auto& child : children) {
+        co_await RemoveGFileAsync(
+            child.get(),
+            MuonFsRmOptions{true, false},
+            cancellation);
+      }
+    }
+    co_await CloseEnumeratorAsync(enumerator.get(), cancellation);
+  }
+  try {
+    co_await DeleteFileAsync(file, cancellation);
+  } catch (const cardio::gio::gio_error& error) {
+    if (!options.force || !IsGioNotFound(error)) {
+      throw;
+    }
+  }
+}
+
+static cardio::promise<void> RmAsync(MuonFsIoContext& context,
+                                     std::string path,
+                                     MuonFsRmOptions options,
+                                     cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  co_await RemoveGFileAsync(file.get(), options, cancellation);
+}
+
+static cardio::promise<void> UnlinkAsync(MuonFsIoContext& context,
+                                         std::string path,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(file.get(), false, cancellation));
+  if (GFileInfoIsDirectory(info.get())) {
+    throw std::runtime_error("Path is a directory");
+  }
+  co_await DeleteFileAsync(file.get(), cancellation);
+}
+
+static cardio::promise<void> RmdirAsync(MuonFsIoContext& context,
+                                        std::string path,
+                                        cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(file.get(), false, cancellation));
+  if (!GFileInfoIsDirectory(info.get()) ||
+      GFileInfoIsSymlink(info.get())) {
+    throw std::runtime_error("Path is not a directory");
+  }
+  co_await DeleteFileAsync(file.get(), cancellation);
+}
+
+static cardio::promise<void> RenameAsync(MuonFsIoContext& context,
+                                         std::string old_path,
+                                         std::string new_path,
+                                         cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto source = MuonFsGFile(old_path);
+  auto destination = MuonFsGFile(new_path);
+  co_await MoveFileAsync(source.get(), destination.get(), cancellation);
+}
+
+static cardio::promise<void> CopyFileAsync(MuonFsIoContext& context,
+                                           std::string source,
+                                           std::string destination,
+                                           MuonFsCopyOptions options,
+                                           cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto source_file = MuonFsGFile(source);
+  auto destination_file = MuonFsGFile(destination);
+  auto info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(source_file.get(), false, cancellation));
+  if (!GFileInfoIsRegularFile(info.get())) {
+    throw std::runtime_error("Source is not a regular file");
+  }
+  co_await CopyFileContentsAsync(
+      source_file.get(), destination_file.get(), options, cancellation);
+}
+
+static cardio::promise<void> AppendBytesAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::span<const std::byte> source,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto stream = MuonGObjectPtr<GFileOutputStream>(
+      co_await AppendToAsync(file.get(), cancellation));
+  co_await WriteAllToOutputStreamAsync(
+      G_OUTPUT_STREAM(stream.get()), source, cancellation);
+  co_await CloseOutputStreamAsync(G_OUTPUT_STREAM(stream.get()), cancellation);
+}
+
+static cardio::promise<void> AppendTextAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    std::string text,
+    cardio::cancellation cancellation) {
+  auto source = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(text.data()), text.size());
+  co_await AppendBytesAsync(context, std::move(path), source, cancellation);
+}
+
+static cardio::promise<void> TruncateAsync(MuonFsIoContext& context,
+                                           std::string path,
+                                           uint64_t length,
+                                           cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  if (length >
+      static_cast<uint64_t>(std::numeric_limits<goffset>::max())) {
+    throw std::runtime_error("Length is too large");
+  }
+  auto file = MuonFsGFile(path);
+  auto stream = MuonGObjectPtr<GFileIOStream>(
+      co_await OpenReadwriteAsync(file.get(), cancellation));
+  auto* io_stream = G_IO_STREAM(stream.get());
+  if (!G_IS_SEEKABLE(io_stream) ||
+      !g_seekable_can_truncate(G_SEEKABLE(io_stream))) {
+    throw std::runtime_error("File does not support truncation");
+  }
+  auto* error = static_cast<GError*>(nullptr);
+  ThrowIfGioFailed(
+      g_seekable_truncate(
+          G_SEEKABLE(io_stream),
+          static_cast<goffset>(length),
+          nullptr,
+          &error),
+      error,
+      "Failed to truncate file");
+  co_await CloseIoStreamAsync(io_stream, cancellation);
+}
+
+static cardio::promise<std::string> RealpathAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(file.get(), true, cancellation));
+  (void)info;
+  auto* local_path = g_file_get_path(file.get());
+  if (local_path != nullptr) {
+    auto local_path_holder =
+        std::unique_ptr<char, decltype(&g_free)>(local_path, &g_free);
+    std::error_code error;
+    const auto canonical = std::filesystem::canonical(
+        std::filesystem::path(local_path_holder.get()), error);
+    ThrowFilesystemError("realpath",
+                         std::filesystem::path(local_path_holder.get()),
+                         error);
+    co_return PathToUtf8String(canonical);
+  }
+  auto* uri = g_file_get_uri(file.get());
+  if (uri == nullptr) {
+    throw std::runtime_error("Failed to resolve path");
+  }
+  auto uri_holder = std::unique_ptr<char, decltype(&g_free)>(uri, &g_free);
+  co_return std::string(uri_holder.get());
+}
+
+static cardio::promise<std::string> ReadlinkAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(file.get(), false, cancellation));
+  if (!GFileInfoIsSymlink(info.get())) {
+    throw std::runtime_error("Path is not a symbolic link");
+  }
+  const auto* target = g_file_info_get_symlink_target(info.get());
+  if (target == nullptr) {
+    throw std::runtime_error("Failed to read symbolic link");
+  }
+  co_return std::string(target);
+}
+
+static cardio::promise<void> SymlinkAsync(MuonFsIoContext& context,
+                                          std::string target,
+                                          std::string path,
+                                          std::string type,
+                                          cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  if (!type.empty() && type != "file" && type != "dir" &&
+      type != "junction") {
+    throw std::runtime_error("Symlink type must be file, dir, or junction");
+  }
+  auto file = MuonFsGFile(path);
+  co_await MakeSymbolicLinkAsync(file.get(), target, cancellation);
+}
+
+static cardio::promise<std::string> WatchSnapshotAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  cancellation.throw_if_cancellation_requested();
+  auto file = MuonFsGFile(path);
+  auto root_info = MuonGObjectPtr<GFileInfo>(
+      co_await QueryInfoAsync(file.get(), false, cancellation));
+  auto result = std::string("{\"root\":");
+  result += CreateGFileInfoStatusJson(root_info.get());
+  result += ",\"entries\":";
+  if (GFileInfoIsDirectory(root_info.get()) &&
+      !GFileInfoIsSymlink(root_info.get())) {
+    auto enumerator = MuonGObjectPtr<GFileEnumerator>(
+        co_await EnumerateChildrenAsync(file.get(), cancellation));
+    result += "[";
+    auto first = true;
+    while (true) {
+      auto* raw_list = co_await NextFilesAsync(enumerator.get(), cancellation);
+      if (raw_list == nullptr) {
+        break;
+      }
+      auto infos = std::vector<MuonGObjectPtr<GFileInfo>>();
+      for (auto* entry = raw_list; entry != nullptr; entry = entry->next) {
+        infos.emplace_back(static_cast<GFileInfo*>(entry->data));
+        entry->data = nullptr;
+      }
+      g_list_free(raw_list);
+      for (const auto& info : infos) {
+        cancellation.throw_if_cancellation_requested();
+        if (!first) {
+          result += ",";
+        }
+        first = false;
+        result += CreateGFileInfoDirentJson(info.get());
+      }
+    }
+    co_await CloseEnumeratorAsync(enumerator.get(), cancellation);
+    result += "]";
+  } else {
+    result += "[]";
+  }
+  result += "}";
+  cancellation.throw_if_cancellation_requested();
+  co_return result;
+}
+
+#endif
+
+static bool RegisterAbortWatcher(
+    const muon_plugin_helpers* helpers,
+    muon_native_function abort_watcher,
+    const std::shared_ptr<MuonTrafficCardioCancellation>& cancellation,
+    std::string* error_message);
+
+class MuonBuiltinFsRuntime final {
+ public:
+  explicit MuonBuiltinFsRuntime(const muon_plugin_helpers* helpers)
+      : helpers_(helpers),
+        context_(std::make_shared<MuonFsIoContext>()) {}
+
+  ~MuonBuiltinFsRuntime() {
+    Stop();
+    ResetIoContext();
+  }
+
+  bool Start(std::string* error_message) {
+    if (error_message == nullptr) {
+      return false;
+    }
+    if (helpers_ == nullptr) {
+      *error_message = "Muon filesystem helpers are unavailable";
+      return false;
+    }
+#if defined(_WIN32)
+    try {
+      context_->iocp = std::make_unique<cardio::io_completion_port>();
+    } catch (...) {
+      *error_message = CurrentExceptionMessage();
+      return false;
+    }
+#endif
+    running_ = true;
+    return true;
+  }
+
+  void Stop() {
+    running_ = false;
+    for (auto& operation : active_) {
+      operation.cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
+    }
+    PruneActiveOperationsLocked();
+  }
+
+  template <typename Result, typename Start, typename Complete>
+  void SubmitOperation(muon_completion_func completion,
+                       muon_native_function abort_watcher,
+                       Start&& start,
+                       Complete&& complete) {
+    PruneActiveOperations();
+    if (!running_) {
+      CompleteError(completion, kMuonBuiltinFsShutdownError);
+      return;
+    }
+    auto cancellation = std::make_shared<MuonTrafficCardioCancellation>();
+    auto abort_error = std::string{};
+    if (!RegisterAbortWatcher(
+            helpers_, abort_watcher, cancellation, &abort_error)) {
+      CompleteError(completion, abort_error);
+      return;
+    }
+    if (!running_) {
+      cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
+      CompleteError(completion, kMuonBuiltinFsShutdownError);
+      return;
+    }
+    auto context = context_;
+    auto start_copy = std::forward<Start>(start);
+    auto complete_copy = std::forward<Complete>(complete);
+    auto fail = [completion](std::string message) {
+      CompleteError(completion, message);
+    };
+    auto operation = RunMuonTrafficCardioOperation<Result>(
+        cancellation,
+        kMuonBuiltinFsGenericError,
+        [context, start = std::move(start_copy)](
+            cardio::cancellation cancellation_signal) mutable {
+          return start(*context, cancellation_signal);
+        },
+        std::move(complete_copy),
+        std::move(fail));
+    active_.push_back(
+        MuonFsActiveOperation{cancellation, std::move(operation)});
+    if (!running_) {
+      active_.back().cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
+    }
+    PruneActiveOperationsLocked();
+  }
+
+  const muon_plugin_helpers* helpers() const {
+    return helpers_;
+  }
+
+ private:
+  struct MuonFsActiveOperation {
+    std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
+    cardio::promise<void> completion;
+  };
+
+  void ResetIoContext() {
+#if defined(_WIN32)
+    context_->iocp.reset();
+#endif
+  }
+
+  void PruneActiveOperations() {
+    PruneActiveOperationsLocked();
+  }
+
+  void PruneActiveOperationsLocked() {
+    active_.erase(
+        std::remove_if(active_.begin(),
+                       active_.end(),
+                       [](const MuonFsActiveOperation& operation) {
+                         return operation.completion.is_ready();
+                       }),
+        active_.end());
+  }
+
+  const muon_plugin_helpers* helpers_ = nullptr;
+  std::shared_ptr<MuonFsIoContext> context_;
+  std::vector<MuonFsActiveOperation> active_;
+  bool running_ = false;
+};
+
+std::shared_ptr<MuonBuiltinFsRuntime> g_runtime;
+
+static std::shared_ptr<MuonBuiltinFsRuntime> GetRuntime() {
+  return g_runtime;
+}
+
+struct MuonFsAbortCallbackState {
+  std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
+};
+
+struct MuonFsAbortWatcherCompletionState {
+  const muon_plugin_helpers* helpers = nullptr;
+  muon_completion_func completion = nullptr;
+  std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
+};
+
+static void FinalizeMuonFsAbortCallbackState(void* raw_state) {
+  delete static_cast<MuonFsAbortCallbackState*>(raw_state);
+}
+
+extern "C" void muon_builtin_fs_cancel_task(muon_completion_func completion,
+                                             void* raw_state) {
+  auto* state = static_cast<MuonFsAbortCallbackState*>(raw_state);
+  if (state != nullptr && state->cancellation) {
+    state->cancellation->Cancel(kMuonBuiltinFsAbortError);
+  }
+  CompleteVoid(completion);
+}
+
+static void CompleteMuonFsAbortWatcherSetup(
+    void* raw_state,
+    const muon_completion_error* error) {
+  auto* state = static_cast<MuonFsAbortWatcherCompletionState*>(raw_state);
+  if (state == nullptr) {
+    return;
+  }
+  if (error != nullptr && state->cancellation) {
+    state->cancellation->Cancel(error->message[0] == '\0'
+                                    ? kMuonBuiltinFsAbortError
+                                    : error->message);
+  }
+  if (state->helpers != nullptr &&
+      state->helpers->__release_plugin_function_pointer_impl != nullptr &&
+      state->completion != nullptr) {
+    state->helpers->release_plugin_function_pointer(state->completion);
+  }
+  delete state;
+}
+
+static bool RegisterAbortWatcher(
+    const muon_plugin_helpers* helpers,
+    muon_native_function abort_watcher,
+    const std::shared_ptr<MuonTrafficCardioCancellation>& cancellation,
+    std::string* error_message) {
+  if (abort_watcher == nullptr) {
+    return true;
+  }
+  if (helpers == nullptr ||
+      helpers->__register_closure_impl == nullptr ||
+      helpers->__create_completion_function_impl == nullptr ||
+      helpers->__release_plugin_function_pointer_impl == nullptr) {
+    *error_message = "AbortSignal helper is unavailable";
+    return false;
+  }
+
+  auto* cancel_state = new MuonFsAbortCallbackState;
+  cancel_state->cancellation = cancellation;
+  auto cancel_function = muon_native_function{};
+  char cancel_error_storage[MUON_COMPLETION_ERROR_MESSAGE_CAPACITY] = "";
+  auto cancel_error = muon_error_buffer{
+      cancel_error_storage,
+      static_cast<uint32_t>(sizeof(cancel_error_storage)),
+  };
+  if (!helpers->register_closure(
+          &cancel_operation_signature,
+          &muon_builtin_fs_cancel_task,
+          cancel_state,
+          &FinalizeMuonFsAbortCallbackState,
+          &cancel_function,
+          &cancel_error)) {
+    delete cancel_state;
+    *error_message = cancel_error_storage[0] == '\0'
+                         ? "AbortSignal cancel callback registration failed"
+                         : cancel_error_storage;
+    return false;
+  }
+
+  auto* completion_state = new MuonFsAbortWatcherCompletionState;
+  completion_state->helpers = helpers;
+  completion_state->cancellation = cancellation;
+  char completion_error_storage[MUON_COMPLETION_ERROR_MESSAGE_CAPACITY] = "";
+  auto completion_error = muon_error_buffer{
+      completion_error_storage,
+      static_cast<uint32_t>(sizeof(completion_error_storage)),
+  };
+  if (!helpers->create_completion_function(
+          &type_void,
+          &CompleteMuonFsAbortWatcherSetup,
+          completion_state,
+          &completion_state->completion,
+          &completion_error)) {
+    helpers->release_plugin_function_pointer(cancel_function);
+    delete completion_state;
+    *error_message = completion_error_storage[0] == '\0'
+                         ? "AbortSignal watcher completion registration failed"
+                         : completion_error_storage;
+    return false;
+  }
+
+  using AbortWatcherFunction = void (*)(muon_completion_func,
+                                        muon_native_function);
+  reinterpret_cast<AbortWatcherFunction>(abort_watcher)(
+      completion_state->completion, cancel_function);
+  helpers->release_plugin_function_pointer(cancel_function);
+  return true;
+}
+
+static bool ValidatePathArgument(muon_completion_func completion,
+                                 const char* path,
+                                 std::string* target) {
+  if (path == nullptr) {
+    CompleteError(completion, "Path is required");
+    return false;
+  }
+  *target = path;
+  if (target->empty()) {
+    CompleteError(completion, "Path is required");
+    return false;
+  }
+  if (ContainsNul(*target)) {
+    CompleteError(completion, "Path must not contain NUL");
+    return false;
+  }
+  return true;
+}
+
+extern "C" void muon_builtin_fs_read_file(
+    muon_completion_func completion,
+    const char* path,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options = MuonFsReadOptions{};
+  auto options_error = std::string{};
+  if (!ParseReadOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  const auto* helpers = runtime->helpers();
+  runtime->SubmitOperation<MuonFsBufferResult>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), helpers, options](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return ReadBytesAsync(
+            context, std::move(target_path), helpers, options, cancellation);
+      },
+      [completion](MuonFsBufferResult result) mutable {
+        result.Complete(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_write_file(
+    muon_completion_func completion,
+    const char* path,
+    muon_buffer_view data,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options = MuonFsWriteOptions{};
+  auto options_error = std::string{};
+  if (!ParseWriteOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  if (data.data == nullptr && data.size != 0) {
+    CompleteError(completion, "Invalid buffer_view");
+    return;
+  }
+  auto source = std::span<const std::byte>(
+      static_cast<const std::byte*>(data.data),
+      static_cast<size_t>(data.size));
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), source, options](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return WriteBytesAsync(
+            context, std::move(target_path), source, options, cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_read_text_file(
+    muon_completion_func completion,
+    const char* path,
+    const char* encoding,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  if (!IsSupportedUtf8Encoding(encoding)) {
+    CompleteError(completion, kMuonBuiltinFsEncodingError);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return ReadTextAsync(context, std::move(target_path), cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+extern "C" void muon_builtin_fs_write_text_file(
+    muon_completion_func completion,
+    const char* path,
+    const char* data,
+    const char* encoding,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  if (data == nullptr) {
+    CompleteError(completion, "Text data is required");
+    return;
+  }
+  if (!IsSupportedUtf8Encoding(encoding)) {
+    CompleteError(completion, kMuonBuiltinFsEncodingError);
+    return;
+  }
+  auto text = std::string(data);
+  if (!IsValidUtf8WithoutNul(
+          reinterpret_cast<const uint8_t*>(text.data()), text.size())) {
+    CompleteError(completion, "Text data is not valid UTF-8");
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), text = std::move(text)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return WriteTextAsync(
+            context, std::move(target_path), std::move(text), cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_stat(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return StatAsync(context, std::move(target_path), true, cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+extern "C" void muon_builtin_fs_lstat(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return StatAsync(context, std::move(target_path), false, cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+extern "C" void muon_builtin_fs_exists(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<bool>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return ExistsAsync(context, std::move(target_path), cancellation);
+      },
+      [completion](bool result) {
+        CompleteBool(completion, result);
+      });
+}
+
+extern "C" void muon_builtin_fs_access(
+    muon_completion_func completion,
+    const char* path,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options = MuonFsAccessOptions{};
+  auto options_error = std::string{};
+  if (!ParseAccessOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<bool>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), options](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return AccessAsync(
+            context, std::move(target_path), options, cancellation);
+      },
+      [completion](bool result) {
+        CompleteBool(completion, result);
+      });
+}
+
+extern "C" void muon_builtin_fs_readdir(
+    muon_completion_func completion,
+    const char* path,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options = MuonFsReaddirOptions{};
+  auto options_error = std::string{};
+  if (!ParseReaddirOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), options](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return ReaddirAsync(
+            context, std::move(target_path), options, cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+extern "C" void muon_builtin_fs_mkdir(
+    muon_completion_func completion,
+    const char* path,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options = MuonFsMkdirOptions{};
+  auto options_error = std::string{};
+  if (!ParseMkdirOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), options](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return MkdirAsync(
+            context, std::move(target_path), options, cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_rm(
+    muon_completion_func completion,
+    const char* path,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options = MuonFsRmOptions{};
+  auto options_error = std::string{};
+  if (!ParseRmOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), options](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return RmAsync(
+            context, std::move(target_path), options, cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_unlink(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return UnlinkAsync(context, std::move(target_path), cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_rmdir(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return RmdirAsync(context, std::move(target_path), cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_rename(
+    muon_completion_func completion,
+    const char* old_path,
+    const char* new_path,
+    muon_native_function abort_watcher) {
+  auto source_path = std::string{};
+  auto destination_path = std::string{};
+  if (!ValidatePathArgument(completion, old_path, &source_path) ||
+      !ValidatePathArgument(completion, new_path, &destination_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [source_path = std::move(source_path),
+       destination_path = std::move(destination_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return RenameAsync(
+            context, std::move(source_path), std::move(destination_path),
+            cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_copy_file(
+    muon_completion_func completion,
+    const char* source,
+    const char* destination,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto source_path = std::string{};
+  auto destination_path = std::string{};
+  if (!ValidatePathArgument(completion, source, &source_path) ||
+      !ValidatePathArgument(completion, destination, &destination_path)) {
+    return;
+  }
+  auto options = MuonFsCopyOptions{};
+  auto options_error = std::string{};
+  if (!ParseCopyOptions(options_json, &options, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [source_path = std::move(source_path),
+       destination_path = std::move(destination_path),
+       options](MuonFsIoContext& context,
+                cardio::cancellation cancellation) mutable {
+        return CopyFileAsync(
+            context, std::move(source_path), std::move(destination_path),
+            options, cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_append_file(
+    muon_completion_func completion,
+    const char* path,
+    muon_buffer_view data,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  if (data.data == nullptr && data.size != 0) {
+    CompleteError(completion, "Invalid buffer_view");
+    return;
+  }
+  auto source = std::span<const std::byte>(
+      static_cast<const std::byte*>(data.data),
+      static_cast<size_t>(data.size));
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), source](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return AppendBytesAsync(
+            context, std::move(target_path), source, cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_append_text_file(
+    muon_completion_func completion,
+    const char* path,
+    const char* data,
+    const char* encoding,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  if (data == nullptr) {
+    CompleteError(completion, "Text data is required");
+    return;
+  }
+  if (!IsSupportedUtf8Encoding(encoding)) {
+    CompleteError(completion, kMuonBuiltinFsEncodingError);
+    return;
+  }
+  auto text = std::string(data);
+  if (!IsValidUtf8WithoutNul(
+          reinterpret_cast<const uint8_t*>(text.data()), text.size())) {
+    CompleteError(completion, "Text data is not valid UTF-8");
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), text = std::move(text)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return AppendTextAsync(
+            context, std::move(target_path), std::move(text), cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_truncate(
+    muon_completion_func completion,
+    const char* path,
+    const char* options_json,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  auto options_error = std::string{};
+  auto length = uint64_t{0};
+  if (!ParseTruncateLength(options_json, &length, &options_error)) {
+    CompleteError(completion, options_error);
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path), length](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return TruncateAsync(
+            context, std::move(target_path), length, cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_realpath(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return RealpathAsync(context, std::move(target_path), cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+extern "C" void muon_builtin_fs_readlink(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return ReadlinkAsync(context, std::move(target_path), cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+extern "C" void muon_builtin_fs_symlink(
+    muon_completion_func completion,
+    const char* target,
+    const char* path,
+    const char* type,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  auto link_path = std::string{};
+  if (!ValidatePathArgument(completion, target, &target_path) ||
+      !ValidatePathArgument(completion, path, &link_path)) {
+    return;
+  }
+  auto link_type = std::string(type == nullptr ? "" : type);
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<void>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path),
+       link_path = std::move(link_path),
+       link_type = std::move(link_type)](MuonFsIoContext& context,
+                                         cardio::cancellation cancellation)
+          mutable {
+        return SymlinkAsync(
+            context, std::move(target_path), std::move(link_path),
+            std::move(link_type), cancellation);
+      },
+      [completion]() {
+        CompleteVoid(completion);
+      });
+}
+
+extern "C" void muon_builtin_fs_watch_snapshot(
+    muon_completion_func completion,
+    const char* path,
+    muon_native_function abort_watcher) {
+  auto target_path = std::string{};
+  if (!ValidatePathArgument(completion, path, &target_path)) {
+    return;
+  }
+  const auto runtime = GetRuntime();
+  if (!runtime) {
+    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  runtime->SubmitOperation<std::string>(
+      completion,
+      abort_watcher,
+      [target_path = std::move(target_path)](
+          MuonFsIoContext& context,
+          cardio::cancellation cancellation) mutable {
+        return WatchSnapshotAsync(
+            context, std::move(target_path), cancellation);
+      },
+      [completion](std::string result) {
+        CompleteString(completion, std::move(result));
+      });
+}
+
+static const muon_type_descriptor read_file_args[] = {
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor write_file_args[] = {
+    type_string,
+    type_buffer_view,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor path_abort_args[] = {
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor path_options_abort_args[] = {
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor two_path_abort_args[] = {
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor two_path_options_abort_args[] = {
+    type_string,
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor read_text_file_args[] = {
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor write_text_file_args[] = {
+    type_string,
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor append_file_args[] = {
+    type_string,
+    type_buffer_view,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor symlink_args[] = {
+    type_string,
+    type_string,
+    type_string,
+    type_abort_watcher_function,
+};
+
+static constexpr char fs_setup_script[] = R"JS(
+const createAbortReason = (signal) => {
+  if ("reason" in signal && signal.reason !== undefined) {
+    return signal.reason;
+  }
+  if (typeof globalThis.DOMException === "function") {
+    return new globalThis.DOMException(
+      "The operation was aborted",
+      "AbortError",
+    );
+  }
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+};
+
+const getAbortSignal = (options) => {
+  if (options === undefined || options === null) {
+    return null;
+  }
+  if (typeof options !== "object") {
+    throw new TypeError("options must be an object");
+  }
+  const signal = options.signal;
+  if (signal === undefined || signal === null) {
+    return null;
+  }
+  if (
+    typeof signal.aborted !== "boolean" ||
+    typeof signal.addEventListener !== "function" ||
+    typeof signal.removeEventListener !== "function"
+  ) {
+    throw new TypeError("options.signal must be an AbortSignal");
+  }
+  return signal;
+};
+
+const runAbortable = (options, nativeCall) => {
+  let signal = null;
+  try {
+    signal = getAbortSignal(options);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  if (signal === null) {
+    return nativeCall(null);
+  }
+  if (signal.aborted) {
+    return Promise.reject(createAbortReason(signal));
+  }
+
+  let nativeCancel = null;
+  let cancelRequested = false;
+  let aborted = false;
+  let rejectAbort = null;
+  const abortPromise = new Promise((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const requestNativeCancel = () => {
+    if (cancelRequested || nativeCancel === null) {
+      return;
+    }
+    cancelRequested = true;
+    try {
+      Promise.resolve(nativeCancel()).catch(() => undefined);
+    } catch (_error) {
+    }
+  };
+  const onAbort = () => {
+    aborted = true;
+    rejectAbort(createAbortReason(signal));
+    requestNativeCancel();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+
+  const abortWatcher = (cancel) => {
+    nativeCancel = cancel;
+    if (aborted || signal.aborted) {
+      requestNativeCancel();
+    }
+  };
+
+  const nativePromise = Promise.resolve().then(() => nativeCall(abortWatcher));
+  return Promise.race([nativePromise, abortPromise]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+    nativeCancel = null;
+  });
+};
+
+const parseNativeJson = async (source) => JSON.parse(await source);
+
+const getOptionsObject = (options) => {
+  if (options === undefined || options === null) {
+    return {};
+  }
+  if (typeof options !== "object") {
+    throw new TypeError("options must be an object");
+  }
+  return options;
+};
+
+const validateSafeUint = (value, name) => {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(name + " must be a non-negative safe integer");
+  }
+  return value;
+};
+
+const normalizeReadOptions = (options) => {
+  const source = getOptionsObject(options);
+  const target = {};
+  if (source.position !== undefined && source.position !== null) {
+    target.position = validateSafeUint(source.position, "options.position");
+  }
+  if (source.length !== undefined && source.length !== null) {
+    target.length = validateSafeUint(source.length, "options.length");
+  }
+  return target;
+};
+
+const normalizeWriteOptions = (options) => {
+  const source = getOptionsObject(options);
+  const target = {};
+  if (source.position !== undefined && source.position !== null) {
+    target.position = validateSafeUint(source.position, "options.position");
+  }
+  return target;
+};
+
+const normalizeBooleanOptions = (options, keys) => {
+  const source = getOptionsObject(options);
+  const target = {};
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null) {
+      if (typeof source[key] !== "boolean") {
+        throw new TypeError("options." + key + " must be a boolean");
+      }
+      target[key] = source[key];
+    }
+  }
+  return target;
+};
+
+const normalizeAccessOptions = (options) => {
+  const source = getOptionsObject(options);
+  const target = {};
+  if (source.mode !== undefined && source.mode !== null) {
+    if (!Array.isArray(source.mode)) {
+      throw new TypeError("options.mode must be an array");
+    }
+    target.mode = source.mode.map((entry) => {
+      if (entry !== "read" && entry !== "write" && entry !== "execute") {
+        throw new TypeError(
+          "options.mode entries must be read, write, or execute",
+        );
+      }
+      return entry;
+    });
+  }
+  return target;
+};
+
+const addTypeMethods = (value) => {
+  Object.defineProperties(value, {
+    isFile: {
+      value: () => value.type === "file",
+    },
+    isDirectory: {
+      value: () => value.type === "directory",
+    },
+    isSymbolicLink: {
+      value: () => value.type === "symlink",
+    },
+  });
+  return value;
+};
+
+const parseStats = async (source) => addTypeMethods(await parseNativeJson(source));
+
+const parseDirents = async (source, withFileTypes) => {
+  const entries = await parseNativeJson(source);
+  return withFileTypes ? entries.map(addTypeMethods) : entries;
+};
+
+const emitWatchEvent = (listener, event) => {
+  try {
+    Promise.resolve(listener(event)).catch(() => undefined);
+  } catch (_error) {
+  }
+};
+
+const normalizeWatchSnapshot = (snapshot) => {
+  snapshot.root = addTypeMethods(snapshot.root);
+  snapshot.entries = snapshot.entries.map(addTypeMethods).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  return snapshot;
+};
+
+const statusKey = (entry) =>
+  [entry.type, entry.size, entry.mtimeMs, entry.readonly].join(":");
+
+const emitWatchDiff = (previous, next, listener) => {
+  if (statusKey(previous.root) !== statusKey(next.root)) {
+    emitWatchEvent(listener, { eventType: "change", filename: null });
+  }
+  const previousEntries = new Map(
+    previous.entries.map((entry) => [entry.name, entry]),
+  );
+  const nextEntries = new Map(next.entries.map((entry) => [entry.name, entry]));
+  for (const [name, entry] of previousEntries) {
+    const nextEntry = nextEntries.get(name);
+    if (nextEntry === undefined) {
+      emitWatchEvent(listener, { eventType: "rename", filename: name });
+    } else if (statusKey(entry) !== statusKey(nextEntry)) {
+      emitWatchEvent(listener, { eventType: "change", filename: name });
+    }
+  }
+  for (const name of nextEntries.keys()) {
+    if (!previousEntries.has(name)) {
+      emitWatchEvent(listener, { eventType: "rename", filename: name });
+    }
+  }
+};
+
+const properties = {};
+if (isAllowed("readFile")) {
+  properties.readFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) => {
+        const nativeOptions = normalizeReadOptions(options);
+        return namespace.__readFile(
+          path,
+          JSON.stringify(nativeOptions),
+          abortWatcher,
+        );
+      }),
+  };
+}
+if (isAllowed("writeFile")) {
+  properties.writeFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, data, options) =>
+      runAbortable(options, (abortWatcher) => {
+        const nativeOptions = normalizeWriteOptions(options);
+        return namespace.__writeFile(
+          path,
+          data,
+          JSON.stringify(nativeOptions),
+          abortWatcher,
+        );
+      }),
+  };
+}
+if (isAllowed("readTextFile")) {
+  properties.readTextFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, encoding, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__readTextFile(path, encoding, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("writeTextFile")) {
+  properties.writeTextFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, data, encoding, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__writeTextFile(path, data, encoding, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("stat")) {
+  properties.stat = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        parseStats(namespace.__stat(path, abortWatcher)),
+      ),
+  };
+}
+if (isAllowed("lstat")) {
+  properties.lstat = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        parseStats(namespace.__lstat(path, abortWatcher)),
+      ),
+  };
+}
+if (isAllowed("exists")) {
+  properties.exists = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__exists(path, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("access")) {
+  properties.access = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__access(
+          path,
+          JSON.stringify(normalizeAccessOptions(options)),
+          abortWatcher,
+        ),
+      ),
+  };
+}
+if (isAllowed("readdir")) {
+  properties.readdir = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) => {
+        const nativeOptions = normalizeBooleanOptions(options, [
+          "withFileTypes",
+        ]);
+        return parseDirents(
+          namespace.__readdir(
+            path,
+            JSON.stringify(nativeOptions),
+            abortWatcher,
+          ),
+          nativeOptions.withFileTypes === true,
+        );
+      }),
+  };
+}
+if (isAllowed("mkdir")) {
+  properties.mkdir = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__mkdir(
+          path,
+          JSON.stringify(normalizeBooleanOptions(options, ["recursive"])),
+          abortWatcher,
+        ),
+      ),
+  };
+}
+if (isAllowed("rm")) {
+  properties.rm = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__rm(
+          path,
+          JSON.stringify(normalizeBooleanOptions(options, [
+            "recursive",
+            "force",
+          ])),
+          abortWatcher,
+        ),
+      ),
+  };
+}
+if (isAllowed("unlink")) {
+  properties.unlink = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__unlink(path, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("rmdir")) {
+  properties.rmdir = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__rmdir(path, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("rename")) {
+  properties.rename = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (oldPath, newPath, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__rename(oldPath, newPath, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("copyFile")) {
+  properties.copyFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (source, destination, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__copyFile(
+          source,
+          destination,
+          JSON.stringify(normalizeBooleanOptions(options, ["overwrite"])),
+          abortWatcher,
+        ),
+      ),
+  };
+}
+if (isAllowed("appendFile")) {
+  properties.appendFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, data, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__appendFile(path, data, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("appendTextFile")) {
+  properties.appendTextFile = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, data, encoding, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__appendTextFile(path, data, encoding, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("truncate")) {
+  properties.truncate = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, length, options) => {
+      let nativeLength = 0;
+      let operationOptions = options;
+      if (length !== undefined && length !== null && typeof length === "object") {
+        operationOptions = length;
+      } else if (length !== undefined && length !== null) {
+        nativeLength = validateSafeUint(length, "length");
+      }
+      return runAbortable(operationOptions, (abortWatcher) =>
+        namespace.__truncate(
+          path,
+          JSON.stringify({ length: nativeLength }),
+          abortWatcher,
+        ),
+      );
+    },
+  };
+}
+if (isAllowed("realpath")) {
+  properties.realpath = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__realpath(path, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("readlink")) {
+  properties.readlink = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (path, options) =>
+      runAbortable(options, (abortWatcher) =>
+        namespace.__readlink(path, abortWatcher),
+      ),
+  };
+}
+if (isAllowed("symlink")) {
+  properties.symlink = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (target, path, type, options) => {
+      let linkType = "file";
+      let operationOptions = options;
+      if (type !== undefined && type !== null && typeof type === "object") {
+        operationOptions = type;
+      } else if (type !== undefined && type !== null) {
+        if (type !== "file" && type !== "dir" && type !== "junction") {
+          throw new TypeError("type must be file, dir, or junction");
+        }
+        linkType = type;
+      }
+      return runAbortable(operationOptions, (abortWatcher) =>
+        namespace.__symlink(target, path, linkType, abortWatcher),
+      );
+    },
+  };
+}
+if (isAllowed("watch")) {
+  properties.watch = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (path, listener, options) => {
+      if (typeof listener !== "function") {
+        throw new TypeError("listener must be a function");
+      }
+      const signal = getAbortSignal(options);
+      if (signal !== null && signal.aborted) {
+        throw createAbortReason(signal);
+      }
+      let snapshot = normalizeWatchSnapshot(
+        await runAbortable(options, (abortWatcher) =>
+          parseNativeJson(namespace.__watchSnapshot(path, abortWatcher)),
+        ),
+      );
+      let closed = false;
+      let polling = false;
+      let timer = null;
+      const close = async () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+        if (signal !== null) {
+          signal.removeEventListener("abort", close);
+        }
+      };
+      const poll = async () => {
+        if (closed || polling) {
+          return;
+        }
+        polling = true;
+        try {
+          const next = normalizeWatchSnapshot(
+            await parseNativeJson(namespace.__watchSnapshot(path, null)),
+          );
+          if (closed) {
+            return;
+          }
+          emitWatchDiff(snapshot, next, listener);
+          snapshot = next;
+        } catch (error) {
+          if (closed) {
+            return;
+          }
+          emitWatchEvent(listener, {
+            eventType: "error",
+            filename: null,
+            message: String(error && error.message ? error.message : error),
+          });
+          await close();
+        } finally {
+          polling = false;
+        }
+      };
+      timer = setInterval(() => {
+        void poll();
+      }, 100);
+      if (signal !== null) {
+        signal.addEventListener("abort", close, { once: true });
+      }
+      return { close };
+    },
+  };
+}
+Object.defineProperties(namespace, properties);
+)JS";
+
+static const muon_plugin_function_metadata fs_functions[] = {
+    {
+        "__readFile",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_read_file),
+        {3, read_file_args, &type_buffer_view},
+        "readFile",
+    },
+    {
+        "__writeFile",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_write_file),
+        {4, write_file_args, &type_void},
+        "writeFile",
+    },
+    {
+        "__readTextFile",
+        reinterpret_cast<muon_native_function>(
+            &muon_builtin_fs_read_text_file),
+        {3, read_text_file_args, &type_string},
+        "readTextFile",
+    },
+    {
+        "__writeTextFile",
+        reinterpret_cast<muon_native_function>(
+            &muon_builtin_fs_write_text_file),
+        {4, write_text_file_args, &type_void},
+        "writeTextFile",
+    },
+    {
+        "__stat",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_stat),
+        {2, path_abort_args, &type_string},
+        "stat",
+    },
+    {
+        "__lstat",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_lstat),
+        {2, path_abort_args, &type_string},
+        "lstat",
+    },
+    {
+        "__exists",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_exists),
+        {2, path_abort_args, &type_bool},
+        "exists",
+    },
+    {
+        "__access",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_access),
+        {3, path_options_abort_args, &type_bool},
+        "access",
+    },
+    {
+        "__readdir",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_readdir),
+        {3, path_options_abort_args, &type_string},
+        "readdir",
+    },
+    {
+        "__mkdir",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_mkdir),
+        {3, path_options_abort_args, &type_void},
+        "mkdir",
+    },
+    {
+        "__rm",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_rm),
+        {3, path_options_abort_args, &type_void},
+        "rm",
+    },
+    {
+        "__unlink",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_unlink),
+        {2, path_abort_args, &type_void},
+        "unlink",
+    },
+    {
+        "__rmdir",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_rmdir),
+        {2, path_abort_args, &type_void},
+        "rmdir",
+    },
+    {
+        "__rename",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_rename),
+        {3, two_path_abort_args, &type_void},
+        "rename",
+    },
+    {
+        "__copyFile",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_copy_file),
+        {4, two_path_options_abort_args, &type_void},
+        "copyFile",
+    },
+    {
+        "__appendFile",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_append_file),
+        {3, append_file_args, &type_void},
+        "appendFile",
+    },
+    {
+        "__appendTextFile",
+        reinterpret_cast<muon_native_function>(
+            &muon_builtin_fs_append_text_file),
+        {4, write_text_file_args, &type_void},
+        "appendTextFile",
+    },
+    {
+        "__truncate",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_truncate),
+        {3, path_options_abort_args, &type_void},
+        "truncate",
+    },
+    {
+        "__realpath",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_realpath),
+        {2, path_abort_args, &type_string},
+        "realpath",
+    },
+    {
+        "__readlink",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_readlink),
+        {2, path_abort_args, &type_string},
+        "readlink",
+    },
+    {
+        "__symlink",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_symlink),
+        {4, symlink_args, &type_void},
+        "symlink",
+    },
+    {
+        "__watchSnapshot",
+        reinterpret_cast<muon_native_function>(
+            &muon_builtin_fs_watch_snapshot),
+        {2, path_abort_args, &type_string},
+        "watch",
+    },
+};
+
+static const muon_plugin_function_metadata* const fs_function_pointers[] = {
+    &fs_functions[0],
+    &fs_functions[1],
+    &fs_functions[2],
+    &fs_functions[3],
+    &fs_functions[4],
+    &fs_functions[5],
+    &fs_functions[6],
+    &fs_functions[7],
+    &fs_functions[8],
+    &fs_functions[9],
+    &fs_functions[10],
+    &fs_functions[11],
+    &fs_functions[12],
+    &fs_functions[13],
+    &fs_functions[14],
+    &fs_functions[15],
+    &fs_functions[16],
+    &fs_functions[17],
+    &fs_functions[18],
+    &fs_functions[19],
+    &fs_functions[20],
+    &fs_functions[21],
+    nullptr,
+};
+
+}  // namespace muon_internal
+
+const muon_plugin_namespace kMuonBuiltinFsNamespace = {
+    "muon.fs",
+    muon_internal::fs_setup_script,
+    muon_internal::fs_function_pointers,
+};
+
+static const muon_plugin_namespace* const fs_namespaces[] = {
+    &kMuonBuiltinFsNamespace,
+    nullptr,
+};
+
+static const muon_plugin_metadata fs_metadata = {
+    fs_namespaces,
+};
+
+bool InitializeMuonBuiltinFs(const muon_plugin_helpers* helpers,
+                              std::string* error_message) {
+  if (error_message == nullptr) {
+    return false;
+  }
+  auto runtime =
+      std::make_shared<muon_internal::MuonBuiltinFsRuntime>(helpers);
+  if (!runtime->Start(error_message)) {
+    return false;
+  }
+  muon_internal::g_runtime = runtime;
+  return true;
+}
+
+void ShutdownMuonBuiltinFs() {
+  std::shared_ptr<muon_internal::MuonBuiltinFsRuntime> runtime;
+  runtime = std::move(muon_internal::g_runtime);
+  if (runtime) {
+    runtime->Stop();
+  }
+}
+
+const muon_plugin_metadata* GetMuonBuiltinFsPluginMetadata() {
+  return &fs_metadata;
+}

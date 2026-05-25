@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>muon</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        background: #f4f5f7;
+        color: #1f2328;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        background: #f4f5f7;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      .app {
+        width: min(100%, 920px);
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      .header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+
+      .status {
+        min-height: 32px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        padding: 6px 10px;
+        background: #ffffff;
+        color: #57606a;
+        font-size: 14px;
+      }
+
+      .status[data-state="error"] {
+        border-color: #cf222e;
+        color: #cf222e;
+      }
+
+      .status[data-state="ok"] {
+        border-color: #1a7f37;
+        color: #1a7f37;
+      }
+
+      .panel {
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .sections {
+        display: grid;
+        gap: 16px;
+      }
+
+      .section-title {
+        margin: 0;
+        padding: 16px 16px 0;
+        font-size: 18px;
+        font-weight: 650;
+      }
+
+      .inline-status {
+        width: 100%;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+        padding: 16px;
+        border-bottom: 1px solid #d0d7de;
+      }
+
+      .field:last-child {
+        border-bottom: 0;
+      }
+
+      label {
+        color: #57606a;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #1f2328;
+      }
+
+      input {
+        min-height: 40px;
+        padding: 8px 10px;
+      }
+
+      textarea {
+        min-height: 260px;
+        resize: vertical;
+        padding: 10px;
+        font-family:
+          "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        line-height: 1.45;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 16px;
+      }
+
+      button {
+        min-height: 38px;
+        border: 1px solid #1f2328;
+        border-radius: 6px;
+        padding: 8px 14px;
+        background: #1f2328;
+        color: #ffffff;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        border-color: #d0d7de;
+        background: #ffffff;
+        color: #1f2328;
+      }
+
+      button.danger {
+        border-color: #cf222e;
+        background: #cf222e;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          background: #1f2328;
+          color: #f0f3f6;
+        }
+
+        body {
+          background: #1f2328;
+        }
+
+        .panel,
+        .status,
+        input,
+        textarea,
+        button.secondary {
+          background: #272b33;
+          color: #f0f3f6;
+        }
+
+        .panel,
+        .field,
+        .status,
+        input,
+        textarea,
+        button.secondary {
+          border-color: #444c56;
+        }
+
+        .status,
+        label {
+          color: #adbac7;
+        }
+
+        button {
+          border-color: #539bf5;
+          background: #347dcb;
+        }
+
+        button.danger {
+          border-color: #f47067;
+          background: #da3633;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app" class="app">
+      <header class="header">
+        <h1 class="title">muon app</h1>
+        <output id="status" class="status" data-state="idle">Ready</output>
+      </header>
+      <div class="sections">
+        <section class="panel" aria-label="Filesystem demo">
+          <h2 class="section-title">Filesystem</h2>
+          <div class="field">
+            <label for="path">Path</label>
+            <input
+              id="path"
+              autocomplete="off"
+              spellcheck="false"
+              value="muon-fs-demo.txt"
+            />
+          </div>
+          <div class="field">
+            <label for="content">Text</label>
+            <textarea id="content" spellcheck="false">Hello from muon.fs</textarea>
+          </div>
+          <div class="actions">
+            <button id="write" type="button">Write</button>
+            <button id="read" class="secondary" type="button">Read</button>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Popup window demo">
+          <h2 class="section-title">Popup window</h2>
+          <div class="field">
+            <label for="popup-url">URL</label>
+            <input
+              id="popup-url"
+              autocomplete="off"
+              spellcheck="false"
+              value="asset://main/index.html#popup=connected"
+            />
+          </div>
+          <div class="actions">
+            <button id="open-connected-popup" type="button">Open popup</button>
+            <button id="open-noopener-popup" class="secondary" type="button">
+              Open noopener popup
+            </button>
+          </div>
+          <div class="field">
+            <label for="popup-status">Popup status</label>
+            <output
+              id="popup-status"
+              class="status inline-status"
+              data-state="idle"
+              >Not opened</output
+            >
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Browser API demo">
+          <h2 class="section-title">Browser window</h2>
+          <div class="actions">
+            <button data-browser-action="reload" type="button">Reload</button>
+            <button data-browser-action="hardReload" type="button">
+              Hard reload
+            </button>
+            <button data-browser-action="toggleFullscreen" type="button">
+              Toggle fullscreen
+            </button>
+            <button data-browser-action="zoomIn" type="button">Zoom in</button>
+            <button data-browser-action="zoomOut" type="button">
+              Zoom out
+            </button>
+            <button data-browser-action="resetZoom" type="button">
+              Reset zoom
+            </button>
+            <button data-browser-action="maximize" type="button">
+              Maximize
+            </button>
+            <button data-browser-action="restore" type="button">Restore</button>
+            <button data-browser-action="minimize" type="button">
+              Minimize
+            </button>
+            <button data-browser-action="focus" type="button">Focus</button>
+            <button data-browser-action="blur" type="button">Blur</button>
+            <button data-browser-action="hideShow" type="button">
+              Hide then show
+            </button>
+            <button data-browser-action="close" class="danger" type="button">
+              Close
+            </button>
+          </div>
+          <div class="field">
+            <label for="browser-status">Browser status</label>
+            <output
+              id="browser-status"
+              class="status inline-status"
+              data-state="idle"
+              >Ready</output
+            >
+          </div>
+        </section>
+      </div>
+    </main>
+    <script>
+      const pathInput = document.querySelector("#path");
+      const contentInput = document.querySelector("#content");
+      const statusOutput = document.querySelector("#status");
+      const writeButton = document.querySelector("#write");
+      const readButton = document.querySelector("#read");
+      const popupUrlInput = document.querySelector("#popup-url");
+      const popupStatusOutput = document.querySelector("#popup-status");
+      const browserStatusOutput = document.querySelector("#browser-status");
+      const openConnectedPopupButton = document.querySelector(
+        "#open-connected-popup",
+      );
+      const openNoopenerPopupButton = document.querySelector(
+        "#open-noopener-popup",
+      );
+      const browserActionButtons = Array.from(
+        document.querySelectorAll("[data-browser-action]"),
+      );
+      const buttons = [writeButton, readButton];
+
+      const setOutput = (output, message, state) => {
+        output.textContent = message;
+        output.dataset.state = state;
+      };
+
+      const setStatus = (message, state) =>
+        setOutput(statusOutput, message, state);
+
+      const setBusy = (busy) => {
+        for (const button of buttons) {
+          button.disabled = busy;
+        }
+      };
+
+      const getPath = () => pathInput.value.trim();
+
+      const run = async (task, successMessage) => {
+        const path = getPath();
+        if (path === "") {
+          setStatus("Path is required", "error");
+          return;
+        }
+
+        setBusy(true);
+        setStatus("Working", "idle");
+        try {
+          await task(path);
+          setStatus(successMessage, "ok");
+        } catch (error) {
+          const message =
+            error && typeof error.message === "string"
+              ? error.message
+              : String(error);
+          setStatus(message, "error");
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const getErrorMessage = (error) =>
+        error && typeof error.message === "string"
+          ? error.message
+          : String(error);
+
+      const getPopupMode = () => {
+        const hashParams = new URLSearchParams(
+          window.location.hash.replace(/^#/, ""),
+        );
+        return (
+          new URLSearchParams(window.location.search).get("popup") ??
+          hashParams.get("popup")
+        );
+      };
+
+      const openPopup = (features, targetName, fallbackUrl) => {
+        const url = popupUrlInput.value.trim() || fallbackUrl;
+        setOutput(popupStatusOutput, "Popup requested", "idle");
+        const popup = window.open(url, targetName, features);
+        if (popup === null && features.includes("noopener")) {
+          setOutput(
+            popupStatusOutput,
+            "Noopener popup requested without opener access",
+            "ok",
+          );
+          return;
+        }
+        if (popup === null) {
+          setOutput(
+            popupStatusOutput,
+            "Popup requested without opener access",
+            "ok",
+          );
+          return;
+        }
+        window.setTimeout(() => {
+          if (popupStatusOutput.textContent === "Popup requested") {
+            setOutput(popupStatusOutput, "Popup opened", "ok");
+          }
+        }, 100);
+      };
+
+      const handlePopupMode = () => {
+        const popupMode = getPopupMode();
+        if (popupMode === null) {
+          return;
+        }
+        setOutput(popupStatusOutput, `Popup mode: ${popupMode}`, "ok");
+        try {
+          if (window.opener === null || window.opener.closed) {
+            setOutput(popupStatusOutput, "Popup has no opener access", "ok");
+            return;
+          }
+          const openerStatus =
+            window.opener.document.querySelector("#popup-status");
+          if (openerStatus instanceof HTMLOutputElement) {
+            openerStatus.textContent =
+              "Popup confirmed opener access from child window";
+            openerStatus.dataset.state = "ok";
+          }
+          setOutput(popupStatusOutput, "Popup has opener access", "ok");
+        } catch (error) {
+          setOutput(popupStatusOutput, getErrorMessage(error), "error");
+        }
+      };
+
+      const browserActions = {
+        reload: async () => {
+          await window.muon.browser.reload();
+        },
+        hardReload: async () => {
+          await window.muon.browser.hardReload();
+        },
+        toggleFullscreen: async () => {
+          await window.muon.browser.toggleFullscreen();
+        },
+        zoomIn: async () => {
+          await window.muon.browser.zoomIn();
+        },
+        zoomOut: async () => {
+          await window.muon.browser.zoomOut();
+        },
+        resetZoom: async () => {
+          await window.muon.browser.resetZoom();
+        },
+        maximize: async () => {
+          await window.muon.browser.maximize();
+        },
+        restore: async () => {
+          await window.muon.browser.restore();
+        },
+        minimize: async () => {
+          await window.muon.browser.minimize();
+        },
+        focus: async () => {
+          await window.muon.browser.focus();
+        },
+        blur: async () => {
+          await window.muon.browser.blur();
+        },
+        hideShow: async () => {
+          await window.muon.browser.hide();
+          window.setTimeout(() => {
+            void window.muon.browser.show();
+          }, 400);
+        },
+        close: async () => {
+          await window.muon.browser.close();
+        },
+      };
+
+      const runBrowserAction = async (actionName) => {
+        const action = browserActions[actionName];
+        if (typeof action !== "function") {
+          setOutput(
+            browserStatusOutput,
+            `Unknown action: ${actionName}`,
+            "error",
+          );
+          return;
+        }
+        setOutput(browserStatusOutput, `${actionName} requested`, "idle");
+        try {
+          await action();
+          setOutput(browserStatusOutput, `${actionName} completed`, "ok");
+        } catch (error) {
+          setOutput(browserStatusOutput, getErrorMessage(error), "error");
+        }
+      };
+
+      writeButton.addEventListener("click", () => {
+        void run(
+          async (path) => {
+            await window.muon.fs.writeTextFile(
+              path,
+              contentInput.value,
+              "utf8",
+            );
+          },
+          "Wrote file",
+        );
+      });
+
+      readButton.addEventListener("click", () => {
+        void run(
+          async (path) => {
+            contentInput.value = await window.muon.fs.readTextFile(
+              path,
+              "utf8",
+            );
+          },
+          "Read file",
+        );
+      });
+
+      openConnectedPopupButton.addEventListener("click", () => {
+        openPopup(
+          "",
+          "muonDemoPopup",
+          "asset://main/index.html#popup=connected",
+        );
+      });
+
+      openNoopenerPopupButton.addEventListener("click", () => {
+        openPopup(
+          "noopener",
+          "muonDemoNoopenerPopup",
+          "asset://main/index.html#popup=noopener",
+        );
+      });
+
+      for (const button of browserActionButtons) {
+        button.addEventListener("click", () => {
+          void runBrowserAction(button.dataset.browserAction);
+        });
+      }
+
+      handlePopupMode();
+    </script>
+  </body>
+</html>

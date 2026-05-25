@@ -1,0 +1,34 @@
+{
+  "network": {
+    "allow": [
+      "asset://main/**"
+    ]
+  },
+  "plugin": {
+    "path": "./plugins",
+    "plugins": [
+      {
+        "name": "internal",
+        "allow": [
+          "muon.**"
+        ]
+      }
+    ]
+  },
+  "cdp": {
+    "enable": true,
+    "port": 9222
+  },
+  "browser": {
+    "initialWindowState": "normal",
+    "keybind": {
+      "devtools": "f12"
+    },
+    "plugin": {
+      "allow": [
+        "asset://main/**",
+        "data:**"
+      ]
+    }
+  }
+}

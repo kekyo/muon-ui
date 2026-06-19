@@ -128,6 +128,11 @@ type AssetInput = {
   prefix: string;
 };
 
+type BuildConfig = {
+  config: JsonObject;
+  directory: string;
+};
+
 type ZipEntry = {
   name: string;
   data: Buffer;
@@ -148,7 +153,7 @@ export type MuonBuildTarget =
  */
 export interface MuonBuildOptions {
   /**
-   * Project root containing package.json, muon.json, and assets/.
+   * Project root containing package.json, muon.json, and app assets.
    */
   root?: string;
   /**
@@ -176,7 +181,7 @@ export interface MuonBuildOptions {
    */
   outputRoot?: string;
   /**
-   * Directory to zip as app assets.
+   * Directory or ZIP file used as app assets.
    */
   assetSourcePath?: string;
   /**
@@ -302,12 +307,13 @@ export const buildMuonApp = async (
   const targets = resolveBuildTargets(options);
   const outputRoot = resolve(root, options.outputRoot ?? ".");
   const appName = await resolveAppName(root, options.appName);
+  const buildConfig = await readBuildConfig(root, options.configPath);
   const assetInput = resolveAssetInput(
     root,
     options.assetSourcePath,
     options.assetPrefix,
+    buildConfig,
   );
-  const sourceConfig = await readBuildConfig(root, options.configPath);
   const salt = Buffer.from(
     options.assetSalt ?? randomBytes(assetSaltByteLength),
   );
@@ -321,7 +327,7 @@ export const buildMuonApp = async (
       appName,
       target,
       assetInput,
-      sourceConfig,
+      sourceConfig: buildConfig.config,
       salt,
     });
     results.push(result);
@@ -364,8 +370,18 @@ const resolveAssetInput = (
   root: string,
   assetSourcePath: string | undefined,
   assetPrefix: string | undefined,
+  buildConfig: BuildConfig,
 ): AssetInput => {
-  const sourcePath = resolve(root, assetSourcePath ?? "assets");
+  const configuredAssetSourcePath =
+    assetSourcePath === undefined
+      ? readConfigAssetFrom(buildConfig.config)
+      : undefined;
+  const sourcePath =
+    assetSourcePath !== undefined
+      ? resolve(root, assetSourcePath)
+      : configuredAssetSourcePath !== undefined
+        ? resolve(buildConfig.directory, configuredAssetSourcePath)
+        : resolve(root, "assets");
   return {
     sourcePath,
     prefix: normalizeZipPrefix(assetPrefix ?? ""),
@@ -415,13 +431,39 @@ const sanitizeAppName = (name: string): string => {
 const readBuildConfig = async (
   root: string,
   configPath: string | undefined,
-): Promise<JsonObject> => {
+): Promise<BuildConfig> => {
   const resolvedConfigPath = await resolveConfigPath(root, configPath);
   if (resolvedConfigPath === undefined) {
-    return {};
+    return {
+      config: {},
+      directory: root,
+    };
   }
 
-  return readJsonObjectFile(resolvedConfigPath, "Muon config file");
+  return {
+    config: await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
+    directory: dirname(resolvedConfigPath),
+  };
+};
+
+const readConfigAssetFrom = (sourceConfig: JsonObject): string | undefined => {
+  const sourceAsset = sourceConfig.asset;
+  if (sourceAsset === undefined) {
+    return undefined;
+  }
+  if (!isJsonObject(sourceAsset)) {
+    throw new Error("muon.json asset must be an object when present.");
+  }
+
+  const sourceAssetFrom = sourceAsset.from;
+  if (sourceAssetFrom === undefined) {
+    return undefined;
+  }
+  if (typeof sourceAssetFrom !== "string") {
+    throw new Error("muon.json asset.from must be a string when present.");
+  }
+
+  return sourceAssetFrom;
 };
 
 const resolveConfigPath = async (
@@ -616,13 +658,21 @@ const writeAssetArchive = async (
   outputPath: string,
   salt: Buffer,
 ): Promise<MuonBuildAssetResult> => {
-  await assertDirectory(input.sourcePath, "Muon asset source");
-  const entries = await collectZipEntries(input.sourcePath, input.prefix);
-  if (entries.length === 0) {
-    throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
+  const sourceStats = await stat(input.sourcePath).catch(() => undefined);
+  if (sourceStats === undefined) {
+    throw new Error(`Muon asset source does not exist: ${input.sourcePath}`);
   }
 
-  const archive = createZipArchive(entries);
+  const archive = sourceStats.isDirectory()
+    ? await createAssetArchiveFromDirectory(input)
+    : sourceStats.isFile()
+      ? await readFile(input.sourcePath)
+      : undefined;
+  if (archive === undefined) {
+    throw new Error(
+      `Muon asset source is not a directory or file: ${input.sourcePath}`,
+    );
+  }
   await writeFile(outputPath, archive);
 
   const signature = createHash("sha1")
@@ -633,8 +683,39 @@ const writeAssetArchive = async (
     path: outputPath,
     signature,
     salt: salt.toString("hex"),
-    entryCount: entries.length,
+    entryCount: sourceStats.isDirectory()
+      ? readZipEntryCount(archive, outputPath)
+      : readZipEntryCount(archive, input.sourcePath),
   };
+};
+
+const createAssetArchiveFromDirectory = async (
+  input: AssetInput,
+): Promise<Buffer> => {
+  const entries = await collectZipEntries(input.sourcePath, input.prefix);
+  if (entries.length === 0) {
+    throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
+  }
+
+  return createZipArchive(entries);
+};
+
+const readZipEntryCount = (archive: Buffer, sourcePath: string): number => {
+  const endSignature = 0x06054b50;
+  const lastPossibleOffset = archive.length - 22;
+  const firstPossibleOffset = Math.max(0, lastPossibleOffset - 0xffff);
+
+  for (
+    let offset = lastPossibleOffset;
+    offset >= firstPossibleOffset;
+    offset -= 1
+  ) {
+    if (archive.readUInt32LE(offset) === endSignature) {
+      return archive.readUInt16LE(offset + 10);
+    }
+  }
+
+  throw new Error(`Muon asset ZIP could not be read: ${sourcePath}`);
 };
 
 const collectZipEntries = async (

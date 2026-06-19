@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import {
   access,
   chmod,
@@ -658,7 +658,7 @@ const writeAssetArchive = async (
   outputPath: string,
   salt: Buffer,
 ): Promise<MuonBuildAssetResult> => {
-  const sourceStats = await stat(input.sourcePath).catch(() => undefined);
+  const sourceStats = await statOrUndefined(input.sourcePath);
   if (sourceStats === undefined) {
     throw new Error(`Muon asset source does not exist: ${input.sourcePath}`);
   }
@@ -805,16 +805,24 @@ const withTemporaryConfig = async (
 };
 
 const assertDirectory = async (path: string, label: string): Promise<void> => {
-  const stats = await stat(path).catch(() => undefined);
+  const stats = await statOrUndefined(path);
   if (stats === undefined || !stats.isDirectory()) {
     throw new Error(`${label} directory does not exist: ${path}`);
   }
 };
 
 const assertFile = async (path: string, label: string): Promise<void> => {
-  const stats = await stat(path).catch(() => undefined);
+  const stats = await statOrUndefined(path);
   if (stats === undefined || !stats.isFile()) {
     throw new Error(`${label} file does not exist: ${path}`);
+  }
+};
+
+const statOrUndefined = async (path: string): Promise<Stats | undefined> => {
+  try {
+    return await stat(path);
+  } catch {
+    return undefined;
   }
 };
 

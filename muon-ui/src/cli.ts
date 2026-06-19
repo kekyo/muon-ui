@@ -289,10 +289,12 @@ const createCliCommand = (): Command => {
 };
 
 const main = async (): Promise<void> => {
-  await createCliCommand().parseAsync(process.argv);
+  try {
+    await createCliCommand().parseAsync(process.argv);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 };
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+void main();

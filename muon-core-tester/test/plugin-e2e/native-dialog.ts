@@ -131,9 +131,11 @@ const moveDialogAwayFromBrowserClickPoint = async (
   dialogWindow: GtkWindowElement,
   browserBounds: WindowBounds,
 ): Promise<void> => {
-  await dialogWindow
-    .moveTo(browserBounds.x + 160, browserBounds.y + 160)
-    .catch(() => undefined);
+  try {
+    await dialogWindow.moveTo(browserBounds.x + 160, browserBounds.y + 160);
+  } catch {
+    // Moving the dialog is only a best-effort aid for the click probe.
+  }
   await wait(100);
 };
 
@@ -422,7 +424,11 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
         const countWhileDialogOpen = await running.driver.evaluate<number>(
           "window.__muonCounter",
         );
-        await match.window.activate().catch(() => undefined);
+        try {
+          await match.window.activate();
+        } catch {
+          // Activation is best-effort; the next step can still find the button.
+        }
 
         const dialogButton = await findGestamentNativeDialogButtonByLabel(
           match.window,
@@ -491,7 +497,11 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
         const countWhileDialogOpen = await running.driver.evaluate<number>(
           "window.__muonCounter",
         );
-        await match.window.activate().catch(() => undefined);
+        try {
+          await match.window.activate();
+        } catch {
+          // Activation is best-effort; the next step can still find the button.
+        }
 
         const dialogButton = await findGestamentNativeDialogButtonByLabel(
           match.window,

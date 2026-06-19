@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import {
   access,
   chmod,
@@ -105,6 +105,7 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigFromPath = "./assets.zip";
 const defaultAppName = "muon-app";
+const muonLicenseFileName = "LICENSE_muon";
 const directoryMode = 0o755;
 const executableMode = 0o755;
 const assetSaltByteLength = 16;
@@ -128,6 +129,11 @@ type AssetInput = {
   prefix: string;
 };
 
+type BuildConfig = {
+  config: JsonObject;
+  directory: string;
+};
+
 type ZipEntry = {
   name: string;
   data: Buffer;
@@ -148,7 +154,7 @@ export type MuonBuildTarget =
  */
 export interface MuonBuildOptions {
   /**
-   * Project root containing package.json, muon.json, and assets/.
+   * Project root containing package.json, muon.json, and app assets.
    */
   root?: string;
   /**
@@ -176,7 +182,7 @@ export interface MuonBuildOptions {
    */
   outputRoot?: string;
   /**
-   * Directory to zip as app assets.
+   * Directory or ZIP file used as app assets.
    */
   assetSourcePath?: string;
   /**
@@ -302,12 +308,13 @@ export const buildMuonApp = async (
   const targets = resolveBuildTargets(options);
   const outputRoot = resolve(root, options.outputRoot ?? ".");
   const appName = await resolveAppName(root, options.appName);
+  const buildConfig = await readBuildConfig(root, options.configPath);
   const assetInput = resolveAssetInput(
     root,
     options.assetSourcePath,
     options.assetPrefix,
+    buildConfig,
   );
-  const sourceConfig = await readBuildConfig(root, options.configPath);
   const salt = Buffer.from(
     options.assetSalt ?? randomBytes(assetSaltByteLength),
   );
@@ -321,7 +328,7 @@ export const buildMuonApp = async (
       appName,
       target,
       assetInput,
-      sourceConfig,
+      sourceConfig: buildConfig.config,
       salt,
     });
     results.push(result);
@@ -364,8 +371,18 @@ const resolveAssetInput = (
   root: string,
   assetSourcePath: string | undefined,
   assetPrefix: string | undefined,
+  buildConfig: BuildConfig,
 ): AssetInput => {
-  const sourcePath = resolve(root, assetSourcePath ?? "assets");
+  const configuredAssetSourcePath =
+    assetSourcePath === undefined
+      ? readConfigAssetFrom(buildConfig.config)
+      : undefined;
+  const sourcePath =
+    assetSourcePath !== undefined
+      ? resolve(root, assetSourcePath)
+      : configuredAssetSourcePath !== undefined
+        ? resolve(buildConfig.directory, configuredAssetSourcePath)
+        : resolve(root, "assets");
   return {
     sourcePath,
     prefix: normalizeZipPrefix(assetPrefix ?? ""),
@@ -391,7 +408,7 @@ const resolveAppName = async (
   }
 
   const packageJsonPath = join(root, "package.json");
-  const packageJson = await readJsonObjectFile(packageJsonPath);
+  const packageJson = await readJsonObjectFile(packageJsonPath, "package.json");
   const packageName =
     typeof packageJson.name === "string" ? packageJson.name : defaultAppName;
   const unscopedName = packageName.startsWith("@")
@@ -415,13 +432,39 @@ const sanitizeAppName = (name: string): string => {
 const readBuildConfig = async (
   root: string,
   configPath: string | undefined,
-): Promise<JsonObject> => {
+): Promise<BuildConfig> => {
   const resolvedConfigPath = await resolveConfigPath(root, configPath);
   if (resolvedConfigPath === undefined) {
-    return {};
+    return {
+      config: {},
+      directory: root,
+    };
   }
 
-  return readJsonObjectFile(resolvedConfigPath);
+  return {
+    config: await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
+    directory: dirname(resolvedConfigPath),
+  };
+};
+
+const readConfigAssetFrom = (sourceConfig: JsonObject): string | undefined => {
+  const sourceAsset = sourceConfig.asset;
+  if (sourceAsset === undefined) {
+    return undefined;
+  }
+  if (!isJsonObject(sourceAsset)) {
+    throw new Error("muon.json asset must be an object when present.");
+  }
+
+  const sourceAssetFrom = sourceAsset.from;
+  if (sourceAssetFrom === undefined) {
+    return undefined;
+  }
+  if (typeof sourceAssetFrom !== "string") {
+    throw new Error("muon.json asset.from must be a string when present.");
+  }
+
+  return sourceAssetFrom;
 };
 
 const resolveConfigPath = async (
@@ -447,11 +490,30 @@ const resolveConfigPath = async (
   return undefined;
 };
 
-const readJsonObjectFile = async (filePath: string): Promise<JsonObject> => {
-  const content = await readFile(filePath, "utf8");
-  const parsed = parse(content);
+const readJsonObjectFile = async (
+  filePath: string,
+  label: string,
+): Promise<JsonObject> => {
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `${label} could not be read: ${filePath}: ${getErrorMessage(error)}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parse(content);
+  } catch (error) {
+    throw new Error(
+      `${label} could not be parsed: ${filePath}: ${getErrorMessage(error)}`,
+    );
+  }
+
   if (!isJsonObject(parsed)) {
-    throw new Error(`Expected JSON object in ${filePath}`);
+    throw new Error(`${label} must contain a JSON object: ${filePath}`);
   }
 
   return parsed;
@@ -556,8 +618,8 @@ const verifyTargetInputs = async (input: {
     );
   }
   await assertFile(
-    join(input.sourceRuntimePath, "THIRD_PARTY_NOTICES.md"),
-    `Muon third-party notices for ${input.target}`,
+    join(input.sourceRuntimePath, muonLicenseFileName),
+    `Muon license file for ${input.target}`,
   );
 };
 
@@ -587,8 +649,8 @@ const copyRuntimeFiles = async (
     );
   }
   await copyFile(
-    join(sourceRuntimePath, "THIRD_PARTY_NOTICES.md"),
-    join(outputPath, "THIRD_PARTY_NOTICES.md"),
+    join(sourceRuntimePath, muonLicenseFileName),
+    join(outputPath, muonLicenseFileName),
   );
 };
 
@@ -597,13 +659,21 @@ const writeAssetArchive = async (
   outputPath: string,
   salt: Buffer,
 ): Promise<MuonBuildAssetResult> => {
-  await assertDirectory(input.sourcePath, "Muon asset source");
-  const entries = await collectZipEntries(input.sourcePath, input.prefix);
-  if (entries.length === 0) {
-    throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
+  const sourceStats = await statOrUndefined(input.sourcePath);
+  if (sourceStats === undefined) {
+    throw new Error(`Muon asset source does not exist: ${input.sourcePath}`);
   }
 
-  const archive = createZipArchive(entries);
+  const archive = sourceStats.isDirectory()
+    ? await createAssetArchiveFromDirectory(input)
+    : sourceStats.isFile()
+      ? await readFile(input.sourcePath)
+      : undefined;
+  if (archive === undefined) {
+    throw new Error(
+      `Muon asset source is not a directory or file: ${input.sourcePath}`,
+    );
+  }
   await writeFile(outputPath, archive);
 
   const signature = createHash("sha1")
@@ -614,8 +684,39 @@ const writeAssetArchive = async (
     path: outputPath,
     signature,
     salt: salt.toString("hex"),
-    entryCount: entries.length,
+    entryCount: sourceStats.isDirectory()
+      ? readZipEntryCount(archive, outputPath)
+      : readZipEntryCount(archive, input.sourcePath),
   };
+};
+
+const createAssetArchiveFromDirectory = async (
+  input: AssetInput,
+): Promise<Buffer> => {
+  const entries = await collectZipEntries(input.sourcePath, input.prefix);
+  if (entries.length === 0) {
+    throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
+  }
+
+  return createZipArchive(entries);
+};
+
+const readZipEntryCount = (archive: Buffer, sourcePath: string): number => {
+  const endSignature = 0x06054b50;
+  const lastPossibleOffset = archive.length - 22;
+  const firstPossibleOffset = Math.max(0, lastPossibleOffset - 0xffff);
+
+  for (
+    let offset = lastPossibleOffset;
+    offset >= firstPossibleOffset;
+    offset -= 1
+  ) {
+    if (archive.readUInt32LE(offset) === endSignature) {
+      return archive.readUInt16LE(offset + 10);
+    }
+  }
+
+  throw new Error(`Muon asset ZIP could not be read: ${sourcePath}`);
 };
 
 const collectZipEntries = async (
@@ -705,16 +806,24 @@ const withTemporaryConfig = async (
 };
 
 const assertDirectory = async (path: string, label: string): Promise<void> => {
-  const stats = await stat(path).catch(() => undefined);
+  const stats = await statOrUndefined(path);
   if (stats === undefined || !stats.isDirectory()) {
     throw new Error(`${label} directory does not exist: ${path}`);
   }
 };
 
 const assertFile = async (path: string, label: string): Promise<void> => {
-  const stats = await stat(path).catch(() => undefined);
+  const stats = await statOrUndefined(path);
   if (stats === undefined || !stats.isFile()) {
     throw new Error(`${label} file does not exist: ${path}`);
+  }
+};
+
+const statOrUndefined = async (path: string): Promise<Stats | undefined> => {
+  try {
+    return await stat(path);
+  } catch {
+    return undefined;
   }
 };
 
@@ -730,3 +839,6 @@ const fileExists = async (path: string): Promise<boolean> => {
 const isJsonObject = (value: unknown): value is JsonObject => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 };
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);

@@ -65,6 +65,24 @@ const createMockDriver = (): { driver: CdpDriver; socket: MockSocket } => {
 const readSentMessage = (socket: MockSocket, index: number): unknown =>
   JSON.parse(socket.sentMessages[index] ?? "");
 
+const readPromiseState = async (
+  promise: Promise<unknown>,
+): Promise<"pending" | "settled"> => {
+  const pending = Symbol("pending");
+  const result = await Promise.race([
+    (async (): Promise<"settled"> => {
+      try {
+        await promise;
+      } catch {
+        // Rejections are still a settled state for this helper.
+      }
+      return "settled";
+    })(),
+    Promise.resolve(pending),
+  ]);
+  return result === pending ? "pending" : "settled";
+};
+
 describe("CDP helper calls", () => {
   it("loads the built ESM helper", async () => {
     const helperModule = (await import(
@@ -112,11 +130,7 @@ describe("CDP helper calls", () => {
   it("navigates with Page.enable and Page.navigate", async () => {
     const { driver, socket } = createMockDriver();
 
-    let resolved = false;
     const navigatePromise = driver.navigate("https://example.com/");
-    navigatePromise.then(() => {
-      resolved = true;
-    });
     expect(readSentMessage(socket, 0)).toEqual({
       id: 1,
       method: "Page.enable",
@@ -136,7 +150,7 @@ describe("CDP helper calls", () => {
       result: { frameId: "frame-1", loaderId: "loader-1" },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(resolved).toBe(false);
+    expect(await readPromiseState(navigatePromise)).toBe("pending");
     socket.message({
       method: "Page.frameNavigated",
       params: {

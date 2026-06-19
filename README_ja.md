@@ -162,6 +162,10 @@ export default defineConfig({
 `defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
 更に、`server.open: true` を加えることで、ブラウザの代わりにmuonが自動的に起動するようになります。
 
+開発起動では、プロジェクト直下の `muon.json5`、`muon.jsonc`、`muon.json` をこの順に探します。
+これらが存在しない場合は、Viteが生成する開発用設定のみでmuonを起動し、Viteログに警告を表示します。
+設定ファイルが存在しても読み取れない場合やパースできない場合も、Viteログに警告を表示し、そのファイルを無視して起動します。
+
 これで作業は完了です。
 
 開発作業を行うときには:
@@ -175,6 +179,54 @@ npm run dev
 ![Get started](./images/get-started.png)
 
 ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
+
+---
+
+### 配布用ビルド
+
+Viteを使用しているプロジェクトでは、`muon()` プラグインを設定した状態で通常どおり `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
+Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
+
+```bash
+npm run build
+# または
+npx vite build
+```
+
+既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-linux-amd64/` や `dist-windows-amd64/` のようなターゲット別ディレクトリです。
+アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
+
+複数ターゲットや出力先を指定したい場合は、`vite.config.ts` の `muon({ build: ... })` で指定できます:
+
+```ts
+import { defineConfig } from 'vite'
+import muon from 'muon-ui/vite'
+
+export default defineConfig({
+  plugins: [
+    muon({
+      build: {
+        targets: ['linux-amd64', 'windows-amd64'],
+        outputRoot: 'release',
+        appName: 'my-app',
+      },
+    }),
+  ],
+})
+```
+
+Viteを使用しないプロジェクトでは、任意の方法で先にアセットを生成してから `muon build` を実行します。
+`muon build` はコンテンツビルド用のnpm scriptなどを自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
+
+```bash
+muon build
+```
+
+`muon build` のアセット元は、`--assets`、`muon.json` の `asset.from`、`assets/` の順に解決されます。
+`asset.from` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
+アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
+
+ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
 
 ---
 
@@ -688,6 +740,11 @@ assets.zip
 
 `muon.json` は、muonの動作を決定し、いくつかの機能はこのファイルでのみ決定できます。
 特に、動作を許可するホワイトリストは、プログラマブルに変更できません。
+
+設定ファイルは `muon.json5`、`muon.jsonc`、`muon.json` の順に探索されます。
+Viteの開発起動では、設定ファイルが存在しない場合や不正な場合でも警告を表示し、プロジェクト設定を `{}` 相当として扱ってViteが生成する設定だけで起動します。
+一方で `muon build` では、設定ファイルが存在しない場合は `{}` 相当として扱いますが、存在するファイルが読み取れない場合やパースできない場合はビルドエラーになります。
+`--config` で明示した設定ファイルが存在しない場合もエラーです。
 
 以下は一例ですが、ファイルが存在しないか、全く何も定義しない `{ }` であっても、すべてデフォルト値として動作します:
 

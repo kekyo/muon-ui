@@ -75,7 +75,7 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
     descriptor.coreExecutable,
     descriptor.uiLibrary,
     descriptor.cardioLibrary,
-    "THIRD_PARTY_NOTICES.md",
+    "LICENSE_muon",
   ];
 
   await assertExists(join(nativePath, descriptor.nativePrepare));
@@ -83,6 +83,7 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
   }
+  await assertMissing(join(runtimePath, "THIRD_PARTY_NOTICES.md"));
   await assertMissing(join(runtimePath, "muon-runtime.json"));
   await assertMissing(join(runtimePath, "muon.json"));
   await assertMissing(join(runtimePath, "assets"));

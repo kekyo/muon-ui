@@ -61,6 +61,16 @@ export {
 
 export type { CdpDriver, CdpTarget };
 
+const resolveOrUndefined = async <T>(
+  operation: () => Promise<T>,
+): Promise<T | undefined> => {
+  try {
+    return await operation();
+  } catch {
+    return undefined;
+  }
+};
+
 export interface RunningMuon {
   process: ChildProcess;
   pluginDirectory: string;
@@ -1442,7 +1452,11 @@ export const startGestamentDebugMuon = async (
     });
     return { app, driver, pluginDirectory };
   } catch (error) {
-    const output = await app?.output().catch(() => undefined);
+    const currentApp = app;
+    const output =
+      currentApp === undefined
+        ? undefined
+        : await resolveOrUndefined(async () => await currentApp.output());
     await app?.release();
     await rm(pluginDirectory, { recursive: true, force: true });
     throw new Error(`${String(error)}\nMuon stderr:\n${output?.stderr ?? ""}`);
@@ -1516,25 +1530,29 @@ export const startNativeFileDialogProbe = async (
       expression: `new Promise((resolve) => {
         const controller = new AbortController();
         window.__muonNativeDialogProbeController = controller;
-        window.__muonNativeDialogProbe = window.muon.fs.dialogs.selectFile({
-          title: ${JSON.stringify(options.title)},
-          defaultPath: ${JSON.stringify(options.defaultPath)},
-          buttonLabel: ${JSON.stringify(options.buttonLabel)},
-          ${
-            options.modal === undefined
-              ? ""
-              : `modal: ${JSON.stringify(options.modal)},`
+        window.__muonNativeDialogProbe = (async () => {
+          try {
+            const value = await window.muon.fs.dialogs.selectFile({
+              title: ${JSON.stringify(options.title)},
+              defaultPath: ${JSON.stringify(options.defaultPath)},
+              buttonLabel: ${JSON.stringify(options.buttonLabel)},
+              ${
+                options.modal === undefined
+                  ? ""
+                  : `modal: ${JSON.stringify(options.modal)},`
+              }
+              gtk: { localOnly: false },
+              signal: controller.signal,
+            });
+            return { status: "fulfilled", value };
+          } catch (error) {
+            return {
+              status: "rejected",
+              name: String(error && error.name ? error.name : ""),
+              message: String(error && error.message ? error.message : error),
+            };
           }
-          gtk: { localOnly: false },
-          signal: controller.signal,
-        }).then(
-          (value) => ({ status: "fulfilled", value }),
-          (error) => ({
-            status: "rejected",
-            name: String(error && error.name ? error.name : ""),
-            message: String(error && error.message ? error.message : error),
-          }),
-        );
+        })();
         setTimeout(() => resolve("started"), 0);
       })`,
       returnByValue: true,
@@ -1720,7 +1738,7 @@ export const findGestamentNativeDialogButtonByLabel = async (
     }
     lastButtonDiagnostics = buttonDiagnostics;
     try {
-      await window.activate().catch(() => undefined);
+      await resolveOrUndefined(async () => await window.activate());
       const textClickOptions = createGestamentNativeDialogTextClickOptions();
       const textMatch = await window.findText(buttonName, textClickOptions);
       if (textMatch !== undefined) {
@@ -1789,9 +1807,13 @@ export const readGestamentWindow = async (
         window: undefined,
       };
     }
-    const info = await window.info().catch(() => undefined);
-    const x11Info = await window.x11Info().catch(() => undefined);
-    const debug = await window.debugDiagnostics().catch(() => undefined);
+    const info = await resolveOrUndefined(async () => await window.info());
+    const x11Info = await resolveOrUndefined(
+      async () => await window.x11Info(),
+    );
+    const debug = await resolveOrUndefined(
+      async () => await window.debugDiagnostics(),
+    );
     return {
       diagnostic: {
         error: undefined,

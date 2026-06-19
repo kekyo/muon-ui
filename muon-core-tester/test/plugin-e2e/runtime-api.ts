@@ -412,11 +412,14 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           },
           corePayload: expect.arrayContaining([
             process.platform === "win32" ? "muon-core.exe" : "muon-core",
-            "THIRD_PARTY_NOTICES.md",
+            "LICENSE_muon",
           ]),
         });
         expect(values.runtimeInfo.corePayload).not.toContain(
           "muon-runtime.json",
+        );
+        expect(values.runtimeInfo.corePayload).not.toContain(
+          "THIRD_PARTY_NOTICES.md",
         );
         expect(values.runtimeInfo.cef).toBeUndefined();
         expect(values.runtimeInfo.cefReference.version).toBe(

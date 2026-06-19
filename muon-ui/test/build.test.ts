@@ -76,10 +76,7 @@ const createFakeMuonPackageDist = async (root: string): Promise<string> => {
   );
   await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "ui\n");
   await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
-  await writeFile(
-    join(runtimeDirectory, "THIRD_PARTY_NOTICES.md"),
-    "notices\n",
-  );
+  await writeFile(join(runtimeDirectory, "LICENSE_muon"), "notices\n");
   await writeFile(join(runtimeDirectory, "libcef.so"), "cef\n");
   await writeFile(join(runtimeDirectory, "muon.json"), "{}\n");
   await mkdir(join(runtimeDirectory, "assets"), { recursive: true });
@@ -186,6 +183,7 @@ describe("muon build", () => {
       root,
       packageDirectory,
       targets: ["linux-amd64"],
+      assetSourcePath: "assets",
       assetSalt: salt,
     });
 
@@ -205,11 +203,11 @@ describe("muon build", () => {
       readFile(join(root, "dist-linux-amd64", "libcardio.so"), "utf8"),
     ).resolves.toBe("cardio\n");
     await expect(
-      readFile(
-        join(root, "dist-linux-amd64", "THIRD_PARTY_NOTICES.md"),
-        "utf8",
-      ),
+      readFile(join(root, "dist-linux-amd64", "LICENSE_muon"), "utf8"),
     ).resolves.toBe("notices\n");
+    await expect(
+      exists(join(root, "dist-linux-amd64", "THIRD_PARTY_NOTICES.md")),
+    ).resolves.toBe(false);
     await expect(
       exists(join(root, "dist-linux-amd64", "muon.json")),
     ).resolves.toBe(false);
@@ -307,5 +305,175 @@ describe("muon build", () => {
     await expect(exists(join(outputPath, "libcef.so"))).resolves.toBe(false);
     const embeddedCore = await readFile(join(outputPath, "muon-core"));
     expect(() => findMuonEmbeddedConfigSlot(embeddedCore)).toThrow("found 0");
+  });
+
+  it("builds with an empty config when project config is missing", async () => {
+    const root = await createTemporaryDirectory("muon-build-missing-config-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "missing-config-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from([0x12, 0x34]),
+    });
+
+    const [target] = result.targets;
+    expect(target?.embeddedConfig).toEqual({
+      asset: {
+        from: "./assets.zip",
+        signature: target?.asset.signature,
+        salt: "1234",
+      },
+    });
+  });
+
+  it("uses muon config asset.from relative to the config directory as the non-Vite asset source", async () => {
+    const root = await createTemporaryDirectory("muon-build-config-assets-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "config-assets-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "settings", "web", "main"), { recursive: true });
+    await writeFile(
+      join(root, "settings", "web", "main", "index.html"),
+      "<!doctype html><title>config asset app</title>",
+    );
+    await writeFile(
+      join(root, "settings", "muon.json"),
+      `${JSON.stringify(
+        {
+          asset: { from: "./web" },
+          network: { allow: ["asset://main/**"] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      configPath: "settings/muon.json",
+      assetSalt: Buffer.from([0x56, 0x78]),
+    });
+
+    const [target] = result.targets;
+    const archivePath = join(root, "dist-linux-amd64", "assets.zip");
+    const archiveContent = await readFile(archivePath);
+    const entries = await readZipEntries(archivePath);
+    expect(entries.get("main/index.html")?.toString("utf8")).toBe(
+      "<!doctype html><title>config asset app</title>",
+    );
+    expect(target?.asset.signature).toBe(
+      createHash("sha1")
+        .update(archiveContent)
+        .update(Buffer.from([0x56, 0x78]))
+        .digest("hex"),
+    );
+    expect(target?.embeddedConfig.asset).toEqual({
+      from: "./assets.zip",
+      signature: target?.asset.signature,
+      salt: "5678",
+    });
+  });
+
+  it("copies a muon.json asset.from ZIP file into the generated distribution", async () => {
+    const root = await createTemporaryDirectory("muon-build-config-zip-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "config-zip-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "packed"), { recursive: true });
+    const sourceZipPath = join(root, "packed", "web.zip");
+    const sourceZip = Buffer.from([
+      0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    await writeFile(sourceZipPath, sourceZip);
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          asset: { from: "./packed/web.zip" },
+          network: { allow: ["asset://main/**"] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from([0x9a, 0xbc]),
+    });
+
+    const [target] = result.targets;
+    const archivePath = join(root, "dist-linux-amd64", "assets.zip");
+    await expect(readFile(archivePath)).resolves.toEqual(sourceZip);
+    expect(target?.asset.entryCount).toBe(0);
+    expect(target?.asset.signature).toBe(
+      createHash("sha1")
+        .update(sourceZip)
+        .update(Buffer.from([0x9a, 0xbc]))
+        .digest("hex"),
+    );
+    expect(target?.embeddedConfig.asset).toEqual({
+      from: "./assets.zip",
+      signature: target?.asset.signature,
+      salt: "9abc",
+    });
+  });
+
+  it("reports the project config path when default config parsing fails", async () => {
+    const root = await createTemporaryDirectory("muon-build-invalid-config-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "invalid-config-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    await writeFile(join(root, "muon.json"), "{ invalid json\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+      }),
+    ).rejects.toThrow(join(root, "muon.json"));
+  });
+
+  it("reports the explicit config path when --config input is missing", async () => {
+    const root = await createTemporaryDirectory("muon-build-explicit-config-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const configPath = join(root, "missing-muon.json");
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "explicit-config-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        configPath,
+      }),
+    ).rejects.toThrow(`Muon config file does not exist: ${configPath}`);
   });
 });

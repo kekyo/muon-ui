@@ -21,7 +21,12 @@ import { promisify } from "node:util";
 
 import { delay } from "async-primitives";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createServer, type ViteDevServer } from "vite";
+import {
+  createLogger as createViteLogger,
+  createServer,
+  type Logger,
+  type ViteDevServer,
+} from "vite";
 
 import {
   createMuonLaunchScript,
@@ -51,6 +56,17 @@ const wait = async (predicate: () => boolean): Promise<void> => {
     await delay(50);
   }
   throw new Error("Timed out waiting for condition");
+};
+
+const createCapturingLogger = (): { logger: Logger; warnings: string[] } => {
+  const warnings: string[] = [];
+  const logger = createViteLogger("silent");
+  const originalWarn = logger.warn.bind(logger);
+  logger.warn = (message, options): void => {
+    warnings.push(message);
+    originalWarn(message, options);
+  };
+  return { logger, warnings };
 };
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
@@ -122,7 +138,19 @@ const writeFakeMuonExecutable = async (
 set -euo pipefail
 printf '%s\\n' "$@" > '${outputDirectory.replaceAll("'", "'\\''")}/args.txt'
 pwd > '${outputDirectory.replaceAll("'", "'\\''")}/cwd.txt'
-cp "$4" '${outputDirectory.replaceAll("'", "'\\''")}/override.json'
+override_config=''
+previous=''
+for argument in "$@"; do
+  if [[ "$previous" == '-c' ]]; then
+    override_config="$argument"
+  fi
+  previous="$argument"
+done
+if [[ -z "$override_config" ]]; then
+  echo 'missing override config' >&2
+  exit 1
+fi
+cp "$override_config" '${outputDirectory.replaceAll("'", "'\\''")}/override.json'
 `,
   );
   await chmod(executable, 0o755);
@@ -162,6 +190,7 @@ const startServer = async (
   root: string,
   pluginOptions: StartServerPluginOptions,
   open: boolean | string,
+  logger?: Logger,
 ): Promise<ViteDevServer> => {
   const muonPluginOptions = {
     muonPath: pluginOptions.muonPath,
@@ -175,6 +204,7 @@ const startServer = async (
   const server = await createServer({
     root,
     logLevel: "silent",
+    ...(logger === undefined ? {} : { customLogger: logger }),
     server: {
       host: "127.0.0.1",
       port: 0,
@@ -324,6 +354,71 @@ describe("muon Vite plugin", () => {
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
   });
 
+  it("starts with only the generated override config when project config is missing", async () => {
+    const root = await createTemporaryDirectory("muon-vite-missing-config-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    const { logger, warnings } = createCapturingLogger();
+    await writeBasicViteProject(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+      },
+      true,
+      logger,
+    );
+    await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+    const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
+      .trim()
+      .split("\n");
+    const overrideConfigPath = args[1];
+    expect(args).toEqual(["-c", overrideConfigPath]);
+    expect(warnings.join("\n")).toContain("Muon project config was not found");
+    expect(warnings.join("\n")).toContain("generated Vite config only");
+  });
+
+  it("warns and ignores an invalid project config during Vite dev startup", async () => {
+    const root = await createTemporaryDirectory("muon-vite-invalid-config-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    const { logger, warnings } = createCapturingLogger();
+    await writeBasicViteProject(root);
+    await writeFile(join(root, "muon.json"), "{ invalid json\n");
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+      },
+      true,
+      logger,
+    );
+    await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+    const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
+      .trim()
+      .split("\n");
+    const overrideConfigPath = args[1];
+    expect(args).toEqual(["-c", overrideConfigPath]);
+    expect(warnings.join("\n")).toContain(join(root, "muon.json"));
+    expect(warnings.join("\n")).toContain("will be ignored");
+  });
+
   it("uses a string server.open value as the browser start page", async () => {
     const root = await createTemporaryDirectory("muon-vite-path-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
@@ -392,6 +487,38 @@ describe("muon launch scripts", () => {
     ).resolves.toBe(`${runtimeDirectory}\n`);
   });
 
+  it("runs the POSIX script without a project config", async () => {
+    const root = await createTemporaryDirectory("muon vite shell optional ");
+    const runtimeDirectory = join(root, "runtime dir");
+    const outputDirectory = join(root, "output dir");
+    const projectConfigPath = join(root, "project config", "muon.json");
+    const overrideConfigPath = join(root, "override config", "muon.vite.json");
+    await mkdir(dirname(overrideConfigPath), { recursive: true });
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(overrideConfigPath, "{}\n");
+    await writeFakeMuonExecutable(runtimeDirectory, outputDirectory);
+    const scriptPath = join(root, "launch script.sh");
+    await writeFile(
+      scriptPath,
+      createMuonLaunchScript({
+        muonExecutablePath: getMuonExecutablePath(runtimeDirectory, "linux"),
+        projectConfigPath: undefined,
+        overrideConfigPath,
+        platform: "linux",
+      }),
+    );
+    await chmod(scriptPath, 0o755);
+
+    await execFileAsync(scriptPath, ["http://127.0.0.1:5173/"]);
+
+    await expect(
+      readFile(join(outputDirectory, "args.txt"), "utf8"),
+    ).resolves.toBe(`-c\n${overrideConfigPath}\n`);
+    await expect(
+      stat(join(outputDirectory, "override.json")),
+    ).resolves.toBeDefined();
+  });
+
   it("creates a Windows script that preserves paths with spaces", () => {
     const script = createMuonLaunchScript({
       muonExecutablePath: "C:\\Muon Runtime\\muon-core.exe",
@@ -414,6 +541,7 @@ describe("muon launch scripts", () => {
     expect(script).toContain(
       '"%MUON_EXECUTABLE%" -c "%MUON_PROJECT_CONFIG%" -c "%MUON_OVERRIDE_CONFIG%"',
     );
+    expect(script).toContain('"%MUON_EXECUTABLE%" -c "%MUON_OVERRIDE_CONFIG%"');
     expect(script).toContain("popd");
   });
 });

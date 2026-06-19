@@ -17,7 +17,7 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
-      "THIRD_PARTY_NOTICES.md",
+      "LICENSE_muon",
     ],
   },
   linuxarm: {
@@ -30,7 +30,7 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
-      "THIRD_PARTY_NOTICES.md",
+      "LICENSE_muon",
     ],
   },
   linuxarm64: {
@@ -43,7 +43,7 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
-      "THIRD_PARTY_NOTICES.md",
+      "LICENSE_muon",
     ],
   },
   windows32: {
@@ -56,7 +56,7 @@ const targetDescriptors = {
       "muon-core.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
-      "THIRD_PARTY_NOTICES.md",
+      "LICENSE_muon",
     ],
   },
   windows64: {
@@ -69,7 +69,7 @@ const targetDescriptors = {
       "muon-core.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
-      "THIRD_PARTY_NOTICES.md",
+      "LICENSE_muon",
     ],
   },
 };

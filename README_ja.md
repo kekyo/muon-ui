@@ -162,9 +162,11 @@ export default defineConfig({
 `defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
 更に、`server.open: true` を加えることで、ブラウザの代わりにmuonが自動的に起動するようになります。
 
-開発起動では、プロジェクト直下の `muon.json5`、`muon.jsonc`、`muon.json` をこの順に探します。
-これらが存在しない場合は、Viteが生成する開発用設定のみでmuonを起動し、Viteログに警告を表示します。
-設定ファイルが存在しても読み取れない場合やパースできない場合も、Viteログに警告を表示し、そのファイルを無視して起動します。
+Viteによってmuonを起動した場合は、`F12` を押すことで、Muon DevToolsを起動できます。
+また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です。
+
+この開発用設定は `vite build` によるビルドには反映されません。
+明示的に指定する場合は muonプラグインの引数に `enableDebugger: true | false` を指定します。
 
 これで作業は完了です。
 
@@ -343,12 +345,11 @@ muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのD
 
 ![Muon DevTools](./images/devtools.png)
 
-但し、既定ではDevToolsを開くことは出来ません。
+Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
 `muon.json` に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
 
 ```json
 {
-  "defaultVersionPolicy": "tested",
   "browser": {
     "keybind": {
       "devtools": "f12"

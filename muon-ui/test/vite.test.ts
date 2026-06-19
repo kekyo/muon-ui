@@ -184,6 +184,7 @@ interface StartServerPluginOptions {
   muonPath: string;
   cefPath: string | undefined;
   stagePath: string | undefined;
+  enableDebugger: boolean | undefined;
 }
 
 const startServer = async (
@@ -200,6 +201,9 @@ const startServer = async (
     ...(pluginOptions.stagePath === undefined
       ? {}
       : { stagePath: pluginOptions.stagePath }),
+    ...(pluginOptions.enableDebugger === undefined
+      ? {}
+      : { enableDebugger: pluginOptions.enableDebugger }),
   };
   const server = await createServer({
     root,
@@ -273,11 +277,15 @@ describe("muon Vite plugin", () => {
         muonPath: muonDirectory,
         cefPath: undefined,
         stagePath: undefined,
+        enableDebugger: undefined,
       },
       false,
     );
 
     expect(process.env.BROWSER).toBe("existing-browser");
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      ".muon/\n",
+    );
     await expect(access(join(root, ".muon"))).rejects.toThrow();
   });
 
@@ -299,6 +307,7 @@ describe("muon Vite plugin", () => {
         muonPath: muonDirectory,
         cefPath: cefDirectory,
         stagePath: undefined,
+        enableDebugger: undefined,
       },
       true,
     );
@@ -313,7 +322,12 @@ describe("muon Vite plugin", () => {
     const overrideConfig = JSON.parse(
       await readFile(join(outputDirectory, "override.json"), "utf8"),
     ) as {
-      browser: { startPage: string; plugin: { allow: string[] } };
+      cdp: { enable: boolean };
+      browser: {
+        startPage: string;
+        keybind: { devtools: string };
+        plugin: { allow: string[] };
+      };
       network: { allow: string[] };
     };
     const baseUrl = server.resolvedUrls?.local[0];
@@ -336,8 +350,14 @@ describe("muon Vite plugin", () => {
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
     expect(overrideConfig).toEqual({
+      cdp: {
+        enable: true,
+      },
       browser: {
         startPage: baseUrl,
+        keybind: {
+          devtools: "f12",
+        },
         plugin: { allow: [`${new URL(baseUrl ?? "").origin}/**`] },
       },
       network: {
@@ -352,6 +372,39 @@ describe("muon Vite plugin", () => {
     await server.close();
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
+  });
+
+  it("omits the debugger override when enableDebugger is false", async () => {
+    const root = await createTemporaryDirectory("muon-vite-debugger-off-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: false,
+      },
+      true,
+    );
+    await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+    const overrideConfig = JSON.parse(
+      await readFile(join(outputDirectory, "override.json"), "utf8"),
+    ) as {
+      cdp?: unknown;
+      browser: { keybind?: unknown };
+    };
+    expect(overrideConfig.cdp).toBeUndefined();
+    expect(overrideConfig.browser.keybind).toBeUndefined();
   });
 
   it("starts with only the generated override config when project config is missing", async () => {
@@ -371,6 +424,7 @@ describe("muon Vite plugin", () => {
         muonPath: muonDirectory,
         cefPath: cefDirectory,
         stagePath: undefined,
+        enableDebugger: undefined,
       },
       true,
       logger,
@@ -404,6 +458,7 @@ describe("muon Vite plugin", () => {
         muonPath: muonDirectory,
         cefPath: cefDirectory,
         stagePath: undefined,
+        enableDebugger: undefined,
       },
       true,
       logger,
@@ -436,6 +491,7 @@ describe("muon Vite plugin", () => {
         muonPath: muonDirectory,
         cefPath: cefDirectory,
         stagePath: undefined,
+        enableDebugger: undefined,
       },
       "/path?x=1",
     );

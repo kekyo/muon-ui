@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "json5";
 import type { ViteDevServer } from "vite";
 
+import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
@@ -46,8 +47,14 @@ interface MuonRuntimePaths {
 }
 
 interface MuonOverrideConfig {
+  cdp?: {
+    enable: true;
+  };
   browser: {
     startPage: string;
+    keybind?: {
+      devtools: "f12";
+    };
     plugin: {
       allow: string[];
     };
@@ -247,11 +254,28 @@ const getWebSocketOrigin = (startUrl: string): string => {
   return url.origin;
 };
 
-const createMuonOverrideConfig = (startUrl: string): MuonOverrideConfig => {
+const createMuonOverrideConfig = (
+  startUrl: string,
+  enableDebugger: boolean,
+): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
+    ...(enableDebugger
+      ? {
+          cdp: {
+            enable: true,
+          },
+        }
+      : {}),
     browser: {
       startPage: startUrl,
+      ...(enableDebugger
+        ? {
+            keybind: {
+              devtools: "f12",
+            },
+          }
+        : {}),
       plugin: {
         allow: [`${origin}/**`],
       },
@@ -266,6 +290,7 @@ const writeMuonOverrideConfig = (
   server: ViteDevServer,
   openValue: boolean | string,
   overrideConfigPath: string,
+  enableDebugger: boolean,
 ): void => {
   const startUrl = getStartUrl(server, openValue);
   if (startUrl === undefined) {
@@ -274,7 +299,7 @@ const writeMuonOverrideConfig = (
   }
   writeFileSync(
     overrideConfigPath,
-    `${JSON.stringify(createMuonOverrideConfig(startUrl), null, 2)}\n`,
+    `${JSON.stringify(createMuonOverrideConfig(startUrl, enableDebugger), null, 2)}\n`,
   );
 };
 
@@ -366,6 +391,8 @@ export const startMuonViteBrowserBridge = async ({
   architecture,
   environment,
 }: MuonViteSessionOptions): Promise<void> => {
+  await ensureMuonGitignoreEntry(server.config.root);
+
   const openValue = getServerOpenValue(server);
   if (openValue === false || server.httpServer === null) {
     return;
@@ -438,6 +465,11 @@ export const startMuonViteBrowserBridge = async ({
     void cleanup();
   });
   server.httpServer.once("listening", () => {
-    writeMuonOverrideConfig(server, openValue, paths.overrideConfigPath);
+    writeMuonOverrideConfig(
+      server,
+      openValue,
+      paths.overrideConfigPath,
+      pluginOptions.enableDebugger !== false,
+    );
   });
 };

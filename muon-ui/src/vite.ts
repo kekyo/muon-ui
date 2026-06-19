@@ -85,6 +85,14 @@ export interface MuonVitePluginOptions {
   stagePath?: string;
 
   /**
+   * Enable the Muon debugger defaults during Vite dev startup.
+   *
+   * @remarks Defaults to true. When enabled, the generated development config
+   * enables CDP and binds DevTools to F12. Vite build ignores this option.
+   */
+  enableDebugger?: boolean;
+
+  /**
    * Build app distributions from Vite output.
    *
    * @remarks Defaults to true during Vite build. Set false to disable the build

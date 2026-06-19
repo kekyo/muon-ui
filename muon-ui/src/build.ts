@@ -105,6 +105,7 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigFromPath = "./assets.zip";
 const defaultAppName = "muon-app";
+const muonLicenseFileName = "LICENSE_muon";
 const directoryMode = 0o755;
 const executableMode = 0o755;
 const assetSaltByteLength = 16;
@@ -617,8 +618,8 @@ const verifyTargetInputs = async (input: {
     );
   }
   await assertFile(
-    join(input.sourceRuntimePath, "THIRD_PARTY_NOTICES.md"),
-    `Muon third-party notices for ${input.target}`,
+    join(input.sourceRuntimePath, muonLicenseFileName),
+    `Muon license file for ${input.target}`,
   );
 };
 
@@ -648,8 +649,8 @@ const copyRuntimeFiles = async (
     );
   }
   await copyFile(
-    join(sourceRuntimePath, "THIRD_PARTY_NOTICES.md"),
-    join(outputPath, "THIRD_PARTY_NOTICES.md"),
+    join(sourceRuntimePath, muonLicenseFileName),
+    join(outputPath, muonLicenseFileName),
   );
 };
 

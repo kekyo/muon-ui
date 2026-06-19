@@ -3,12 +3,20 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { constants, writeFileSync } from "node:fs";
+import {
+  access,
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parse } from "json5";
 import type { ViteDevServer } from "vite";
 
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
@@ -16,7 +24,7 @@ import type { MuonVitePluginOptions } from "./vite.js";
 
 export interface MuonLaunchScriptOptions {
   muonExecutablePath: string;
-  projectConfigPath: string;
+  projectConfigPath: string | undefined;
   overrideConfigPath: string;
   platform: NodeJS.Platform;
 }
@@ -33,7 +41,7 @@ interface MuonRuntimePaths {
   temporaryDirectory: string;
   launchScriptPath: string;
   overrideConfigPath: string;
-  projectConfigPath: string;
+  projectConfigPath: string | undefined;
   muonExecutablePath: string;
 }
 
@@ -90,6 +98,7 @@ const moduleDirectory =
   typeof __dirname === "string"
     ? __dirname
     : dirname(fileURLToPath(import.meta.url));
+const defaultProjectConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 
 /**
  * Resolves the muon-core runtime directory used by the Vite plugin.
@@ -124,6 +133,9 @@ const getPlatformDirectoryName = (
   platform: NodeJS.Platform,
 ): string => (platform === "win32" ? win32.dirname(path) : dirname(path));
 
+const getOptionalPosixValue = (value: string | undefined): string =>
+  value === undefined ? "''" : quotePosix(value);
+
 const createPosixMuonLaunchScript = ({
   muonExecutablePath,
   projectConfigPath,
@@ -132,12 +144,16 @@ const createPosixMuonLaunchScript = ({
 set -euo pipefail
 MUON_EXECUTABLE=${quotePosix(muonExecutablePath)}
 MUON_EXECUTABLE_DIRECTORY=${quotePosix(getPlatformDirectoryName(muonExecutablePath, "linux"))}
-MUON_PROJECT_CONFIG=${quotePosix(projectConfigPath)}
+MUON_PROJECT_CONFIG=${getOptionalPosixValue(projectConfigPath)}
 MUON_OVERRIDE_CONFIG=${quotePosix(overrideConfigPath)}
 
-if [[ ! -f "$MUON_PROJECT_CONFIG" ]]; then
-  echo "Muon startup failed: project config does not exist: $MUON_PROJECT_CONFIG" >&2
-  exit 1
+MUON_CONFIG_ARGS=()
+if [[ -n "$MUON_PROJECT_CONFIG" ]]; then
+  if [[ ! -f "$MUON_PROJECT_CONFIG" ]]; then
+    echo "Muon startup failed: project config does not exist: $MUON_PROJECT_CONFIG" >&2
+    exit 1
+  fi
+  MUON_CONFIG_ARGS+=("-c" "$MUON_PROJECT_CONFIG")
 fi
 
 if [[ ! -x "$MUON_EXECUTABLE" ]]; then
@@ -149,13 +165,17 @@ if [[ ! -f "$MUON_OVERRIDE_CONFIG" ]]; then
   echo "Muon startup failed: generated override config does not exist: $MUON_OVERRIDE_CONFIG" >&2
   exit 1
 fi
+MUON_CONFIG_ARGS+=("-c" "$MUON_OVERRIDE_CONFIG")
 
 cd "$MUON_EXECUTABLE_DIRECTORY"
-exec "$MUON_EXECUTABLE" -c "$MUON_PROJECT_CONFIG" -c "$MUON_OVERRIDE_CONFIG"
+exec "$MUON_EXECUTABLE" "\${MUON_CONFIG_ARGS[@]}"
 `;
 
 const escapeWindowsCmdValue = (value: string): string =>
   value.replaceAll("%", "%%").replaceAll("\r", "").replaceAll("\n", "");
+
+const getOptionalWindowsCmdValue = (value: string | undefined): string =>
+  value === undefined ? "" : escapeWindowsCmdValue(value);
 
 const createWindowsMuonLaunchScript = ({
   muonExecutablePath,
@@ -165,13 +185,8 @@ const createWindowsMuonLaunchScript = ({
 setlocal
 set "MUON_EXECUTABLE=${escapeWindowsCmdValue(muonExecutablePath)}"
 set "MUON_EXECUTABLE_DIRECTORY=${escapeWindowsCmdValue(getPlatformDirectoryName(muonExecutablePath, "win32"))}"
-set "MUON_PROJECT_CONFIG=${escapeWindowsCmdValue(projectConfigPath)}"
+set "MUON_PROJECT_CONFIG=${getOptionalWindowsCmdValue(projectConfigPath)}"
 set "MUON_OVERRIDE_CONFIG=${escapeWindowsCmdValue(overrideConfigPath)}"
-
-if not exist "%MUON_PROJECT_CONFIG%" (
-  echo Muon startup failed: project config does not exist: %MUON_PROJECT_CONFIG% 1>&2
-  exit /b 1
-)
 
 if not exist "%MUON_EXECUTABLE%" (
   echo Muon startup failed: executable does not exist: %MUON_EXECUTABLE% 1>&2
@@ -184,7 +199,16 @@ if not exist "%MUON_OVERRIDE_CONFIG%" (
 )
 
 pushd "%MUON_EXECUTABLE_DIRECTORY%"
-"%MUON_EXECUTABLE%" -c "%MUON_PROJECT_CONFIG%" -c "%MUON_OVERRIDE_CONFIG%"
+if defined MUON_PROJECT_CONFIG (
+  if not exist "%MUON_PROJECT_CONFIG%" (
+    echo Muon startup failed: project config does not exist: %MUON_PROJECT_CONFIG% 1>&2
+    popd
+    exit /b 1
+  )
+  "%MUON_EXECUTABLE%" -c "%MUON_PROJECT_CONFIG%" -c "%MUON_OVERRIDE_CONFIG%"
+) else (
+  "%MUON_EXECUTABLE%" -c "%MUON_OVERRIDE_CONFIG%"
+)
 set "MUON_EXIT_CODE=%ERRORLEVEL%"
 popd
 exit /b %MUON_EXIT_CODE%
@@ -258,6 +282,7 @@ const createRuntimePaths = async (
   server: ViteDevServer,
   stagePath: string,
   platform: NodeJS.Platform,
+  projectConfigPath: string | undefined,
 ): Promise<MuonRuntimePaths> => {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "muon-vite-"));
   return {
@@ -267,9 +292,53 @@ const createRuntimePaths = async (
       getLaunchScriptFileName(platform),
     ),
     overrideConfigPath: join(temporaryDirectory, "muon.vite.json"),
-    projectConfigPath: join(server.config.root, "muon.json"),
+    projectConfigPath,
     muonExecutablePath: getMuonExecutablePath(stagePath, platform),
   };
+};
+
+const fileExists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const resolveProjectConfigPath = async (
+  server: ViteDevServer,
+): Promise<string | undefined> => {
+  for (const fileName of defaultProjectConfigFileNames) {
+    const candidatePath = join(server.config.root, fileName);
+    if (!(await fileExists(candidatePath))) {
+      continue;
+    }
+
+    try {
+      const parsed = parse(await readFile(candidatePath, "utf8"));
+      if (!isJsonObject(parsed)) {
+        throw new Error("muon config root must be an object");
+      }
+      return candidatePath;
+    } catch (error) {
+      server.config.logger.warn(
+        `Muon project config will be ignored because it could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
+      );
+      return undefined;
+    }
+  }
+
+  server.config.logger.warn(
+    `Muon project config was not found in ${server.config.root}; launching with generated Vite config only.`,
+  );
+  return undefined;
 };
 
 const writeLaunchScript = async (
@@ -335,6 +404,7 @@ export const startMuonViteBrowserBridge = async ({
     server,
     preparedRuntime.stagePath,
     platform,
+    await resolveProjectConfigPath(server),
   );
   await writeLaunchScript(paths, platform);
   const previousBrowser = environment.BROWSER;

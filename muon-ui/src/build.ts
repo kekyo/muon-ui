@@ -391,7 +391,7 @@ const resolveAppName = async (
   }
 
   const packageJsonPath = join(root, "package.json");
-  const packageJson = await readJsonObjectFile(packageJsonPath);
+  const packageJson = await readJsonObjectFile(packageJsonPath, "package.json");
   const packageName =
     typeof packageJson.name === "string" ? packageJson.name : defaultAppName;
   const unscopedName = packageName.startsWith("@")
@@ -421,7 +421,7 @@ const readBuildConfig = async (
     return {};
   }
 
-  return readJsonObjectFile(resolvedConfigPath);
+  return readJsonObjectFile(resolvedConfigPath, "Muon config file");
 };
 
 const resolveConfigPath = async (
@@ -447,11 +447,30 @@ const resolveConfigPath = async (
   return undefined;
 };
 
-const readJsonObjectFile = async (filePath: string): Promise<JsonObject> => {
-  const content = await readFile(filePath, "utf8");
-  const parsed = parse(content);
+const readJsonObjectFile = async (
+  filePath: string,
+  label: string,
+): Promise<JsonObject> => {
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `${label} could not be read: ${filePath}: ${getErrorMessage(error)}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parse(content);
+  } catch (error) {
+    throw new Error(
+      `${label} could not be parsed: ${filePath}: ${getErrorMessage(error)}`,
+    );
+  }
+
   if (!isJsonObject(parsed)) {
-    throw new Error(`Expected JSON object in ${filePath}`);
+    throw new Error(`${label} must contain a JSON object: ${filePath}`);
   }
 
   return parsed;
@@ -730,3 +749,6 @@ const fileExists = async (path: string): Promise<boolean> => {
 const isJsonObject = (value: unknown): value is JsonObject => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 };
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);

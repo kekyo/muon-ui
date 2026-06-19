@@ -308,4 +308,72 @@ describe("muon build", () => {
     const embeddedCore = await readFile(join(outputPath, "muon-core"));
     expect(() => findMuonEmbeddedConfigSlot(embeddedCore)).toThrow("found 0");
   });
+
+  it("builds with an empty config when project config is missing", async () => {
+    const root = await createTemporaryDirectory("muon-build-missing-config-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "missing-config-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from([0x12, 0x34]),
+    });
+
+    const [target] = result.targets;
+    expect(target?.embeddedConfig).toEqual({
+      asset: {
+        from: "./assets.zip",
+        signature: target?.asset.signature,
+        salt: "1234",
+      },
+    });
+  });
+
+  it("reports the project config path when default config parsing fails", async () => {
+    const root = await createTemporaryDirectory("muon-build-invalid-config-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "invalid-config-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    await writeFile(join(root, "muon.json"), "{ invalid json\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+      }),
+    ).rejects.toThrow(join(root, "muon.json"));
+  });
+
+  it("reports the explicit config path when --config input is missing", async () => {
+    const root = await createTemporaryDirectory("muon-build-explicit-config-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const configPath = join(root, "missing-muon.json");
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "explicit-config-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        configPath,
+      }),
+    ).rejects.toThrow(`Muon config file does not exist: ${configPath}`);
+  });
 });

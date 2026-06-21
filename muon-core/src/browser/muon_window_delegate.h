@@ -23,6 +23,8 @@ class MuonWindowDelegate final : public CefWindowDelegate {
    * @param browser_view Browser view owned by the window.
    * @param is_devtools Whether the window is for DevTools.
    * @param initial_window_state Initial state requested for the window.
+   * @param initial_title_bar_visibility Whether the custom title bar starts
+   * visible.
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
    */
@@ -30,6 +32,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
                       bool is_devtools,
                       MuonBrowserInitialWindowState initial_window_state =
                           kMuonBrowserInitialWindowStateNormal,
+                      bool initial_title_bar_visibility = true,
                       MuonTitleBarManifest title_bar_manifest =
                           CreateNativeMuonTitleBarManifest(),
                       MuonTitleBarBackgroundColor title_bar_background_color =
@@ -124,6 +127,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   CefRefPtr<MuonTitleBarController> title_bar_controller_;
   const bool is_devtools_;
   const MuonBrowserInitialWindowState initial_window_state_;
+  const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
 

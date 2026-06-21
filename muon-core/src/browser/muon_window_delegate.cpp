@@ -21,11 +21,13 @@ MuonWindowDelegate::MuonWindowDelegate(
     CefRefPtr<CefBrowserView> browser_view,
     bool is_devtools,
     MuonBrowserInitialWindowState initial_window_state,
+    bool initial_title_bar_visibility,
     MuonTitleBarManifest title_bar_manifest,
     MuonTitleBarBackgroundColor title_bar_background_color)
     : browser_view_(browser_view),
       is_devtools_(is_devtools),
       initial_window_state_(initial_window_state),
+      initial_title_bar_visibility_(initial_title_bar_visibility),
       title_bar_manifest_(std::move(title_bar_manifest)),
       title_bar_background_color_(title_bar_background_color) {}
 
@@ -91,6 +93,7 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
     title_bar_controller_->SetTitle(title);
     title_bar_controller_->SetActive(window->IsActive());
     title_bar_view_ = title_bar_controller_->CreateBrowserView();
+    title_bar_controller_->SetVisible(initial_title_bar_visibility_);
 
     CefBoxLayoutSettings settings;
     settings.horizontal = false;
@@ -103,6 +106,7 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
     }
     if (title_bar_view_) {
       window->AddChildViewAt(title_bar_view_, 0);
+      RegisterMuonTitleBarView(window, title_bar_view_);
     }
     title_bar_controller_->AttachWindow(window);
     RegisterMuonTitleBarBrowserView(window, browser_view_);
@@ -115,6 +119,8 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
     }
     RegisterMuonTitleBarController(
         window, title_bar_controller_, browser_id);
+    SetRegisteredMuonTitleBarVisibility(
+        window, initial_title_bar_visibility_);
   } else if (browser_view_) {
     window->AddChildView(browser_view_);
   }
@@ -162,8 +168,11 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
 
 CefSize MuonWindowDelegate::GetPreferredSize(CefRefPtr<CefView> view) {
   (void)view;
-  return CefSize(1024, UseCustomTitleBar() ? 768 + title_bar_manifest_.height
-                                           : 768);
+  const auto height =
+      UseCustomTitleBar() && initial_title_bar_visibility_
+          ? 768 + title_bar_manifest_.height
+          : 768;
+  return CefSize(1024, height);
 }
 
 bool MuonWindowDelegate::IsFrameless(CefRefPtr<CefWindow> window) {

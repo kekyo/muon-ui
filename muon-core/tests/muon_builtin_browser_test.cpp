@@ -30,6 +30,7 @@ static bool TestBrowserFunctionDefinitions() {
       "zoomOut",         "resetZoom",      "show",
       "hide",            "focus",          "blur",
       "minimize",        "maximize",       "restore",
+      "setTitleBarVisibility",
       "__close",         "__shutdown",
   };
   const auto expected_kinds = std::vector<MuonBuiltinBrowserFunctionKind>{
@@ -48,6 +49,7 @@ static bool TestBrowserFunctionDefinitions() {
       MuonBuiltinBrowserFunctionKind::Minimize,
       MuonBuiltinBrowserFunctionKind::Maximize,
       MuonBuiltinBrowserFunctionKind::Restore,
+      MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility,
       MuonBuiltinBrowserFunctionKind::Close,
       MuonBuiltinBrowserFunctionKind::Shutdown,
   };
@@ -70,8 +72,17 @@ static bool TestBrowserFunctionDefinitions() {
       return false;
     }
   }
+  const auto set_title_bar_visibility = definitions[expected_names.size() - 3];
   const auto shutdown = definitions.back();
-  if (!Expect(shutdown.filter_name != nullptr &&
+  if (!Expect(set_title_bar_visibility.arg_count == 1,
+              "unexpected title bar visibility argument count") ||
+      !Expect(set_title_bar_visibility.arg_types != nullptr,
+              "missing title bar visibility argument metadata") ||
+      !Expect(set_title_bar_visibility.arg_types[0].type == MUON_TYPE_BOOL,
+              "unexpected title bar visibility argument type") ||
+      !Expect(set_title_bar_visibility.return_type.type == MUON_TYPE_VOID,
+              "unexpected title bar visibility return type") ||
+      !Expect(shutdown.filter_name != nullptr &&
                   std::string(shutdown.filter_name) == "shutdown",
               "unexpected browser shutdown filter name") ||
       !Expect(shutdown.arg_count == 1,
@@ -199,20 +210,30 @@ static bool TestCustomTitleBarWindowDelegate() {
   const auto manifest = CreateTestCustomTitleBarManifest();
   auto browser =
       MuonWindowDelegate(nullptr, false, kMuonBrowserInitialWindowStateNormal,
-                         manifest);
+                         true, manifest);
+  auto hidden_title_bar =
+      MuonWindowDelegate(nullptr, false, kMuonBrowserInitialWindowStateNormal,
+                         false, manifest);
   auto devtools =
       MuonWindowDelegate(nullptr, true, kMuonBrowserInitialWindowStateNormal,
-                         manifest);
+                         true, manifest);
   auto native =
       MuonWindowDelegate(nullptr, false, kMuonBrowserInitialWindowStateNormal,
+                         true,
                          CreateNativeMuonTitleBarManifest());
   const auto browser_size = browser.GetPreferredSize(nullptr);
+  const auto hidden_title_bar_size =
+      hidden_title_bar.GetPreferredSize(nullptr);
   const auto devtools_size = devtools.GetPreferredSize(nullptr);
   const auto native_size = native.GetPreferredSize(nullptr);
   return Expect(browser.IsFrameless(nullptr),
                 "custom browser window did not become frameless") &&
          Expect(browser_size.width == 1024 && browser_size.height == 804,
                 "custom browser window did not include title bar height") &&
+         Expect(hidden_title_bar_size.width == 1024 &&
+                    hidden_title_bar_size.height == 768,
+                "hidden custom title bar preferred size should exclude title "
+                "bar height") &&
          Expect(!native.IsFrameless(nullptr),
                 "native title bar window should not become frameless") &&
          Expect(native_size.width == 1024 && native_size.height == 768,

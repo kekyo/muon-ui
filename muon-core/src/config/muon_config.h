@@ -239,6 +239,10 @@ struct MuonBrowserConfig {
    */
   MuonBrowserTitleBarMode title_bar = kMuonBrowserTitleBarMuon;
   /**
+   * Whether the custom title bar is initially visible.
+   */
+  bool initial_title_bar_visibility = true;
+  /**
    * Plugin API exposure configuration for browser pages.
    */
   MuonBrowserPluginConfig plugin;

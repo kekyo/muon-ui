@@ -26,6 +26,7 @@ import {
   writeFile,
 } from "./shared.js";
 import type { CdpDriver, RunningGestamentMuon } from "./shared.js";
+import type { BrowserInitialTitleBarVisibility } from "./shared.js";
 
 interface RgbaPixel {
   red: number;
@@ -57,10 +58,17 @@ const titleBarHeight = 36;
 const titleBarControlWidth = 46;
 const titleBarControlsWidth = 138;
 const configuredTitleBarBackgroundColor = "#123456";
+const appPageBackgroundColor = "#d7ebe5";
 const expectedTitleBarBackgroundColor: RgbaPixel = {
   red: 0x12,
   green: 0x34,
   blue: 0x56,
+  alpha: 255,
+};
+const expectedAppPageBackgroundColor: RgbaPixel = {
+  red: 0xd7,
+  green: 0xeb,
+  blue: 0xe5,
   alpha: 255,
 };
 
@@ -70,7 +78,7 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   await mkdir(mainRoot, { recursive: true });
   await writeFile(
     join(mainRoot, "index.html"),
-    `<!doctype html><title>${testWindowTitle}</title><main>title bar test</main>`,
+    `<!doctype html><title>${testWindowTitle}</title><style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}</style><main>title bar test</main>`,
   );
   return assetRoot;
 };
@@ -279,11 +287,56 @@ const getWindowPixel = (
 const getLuminance = (pixel: RgbaPixel): number =>
   0.2126 * pixel.red + 0.7152 * pixel.green + 0.0722 * pixel.blue;
 
-const expectPixelNear = (actual: RgbaPixel, expected: RgbaPixel): void => {
-  expect(Math.abs(actual.red - expected.red)).toBeLessThanOrEqual(2);
-  expect(Math.abs(actual.green - expected.green)).toBeLessThanOrEqual(2);
-  expect(Math.abs(actual.blue - expected.blue)).toBeLessThanOrEqual(2);
-  expect(actual.alpha).toBe(expected.alpha);
+const isPixelNear = (actual: RgbaPixel, expected: RgbaPixel): boolean =>
+  Math.abs(actual.red - expected.red) <= 2 &&
+  Math.abs(actual.green - expected.green) <= 2 &&
+  Math.abs(actual.blue - expected.blue) <= 2 &&
+  actual.alpha === expected.alpha;
+
+const waitForTitleBarBackgroundColor = async (
+  running: RunningGestamentMuon,
+  bounds: NativeWindowBounds,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastTopPixel: RgbaPixel | undefined = undefined;
+  let lastBottomPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const capture = await captureRoot(running);
+    lastTopPixel = getWindowPixel(capture, bounds, 0, 0);
+    lastBottomPixel = getWindowPixel(capture, bounds, 0, titleBarHeight - 2);
+    if (
+      isPixelNear(lastTopPixel, expectedTitleBarBackgroundColor) &&
+      isPixelNear(lastBottomPixel, expectedTitleBarBackgroundColor)
+    ) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for title bar background. Last pixels: ${JSON.stringify({
+      top: lastTopPixel,
+      bottom: lastBottomPixel,
+    })}`,
+  );
+};
+
+const waitForTitleBarHidden = async (
+  running: RunningGestamentMuon,
+  bounds: NativeWindowBounds,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const capture = await captureRoot(running);
+    lastPixel = getWindowPixel(capture, bounds, 0, 0);
+    if (isPixelNear(lastPixel, expectedAppPageBackgroundColor)) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for title bar to hide. Last pixel: ${JSON.stringify(lastPixel)}`,
+  );
 };
 
 const countContrastingWindowPixels = (
@@ -340,21 +393,6 @@ const expectTitleBarChrome = async (
   }
 };
 
-const expectTitleBarBackgroundColor = async (
-  running: RunningGestamentMuon,
-  bounds: NativeWindowBounds,
-): Promise<void> => {
-  const capture = await captureRoot(running);
-  expectPixelNear(
-    getWindowPixel(capture, bounds, 0, 0),
-    expectedTitleBarBackgroundColor,
-  );
-  expectPixelNear(
-    getWindowPixel(capture, bounds, 0, titleBarHeight - 2),
-    expectedTitleBarBackgroundColor,
-  );
-};
-
 const clickTitleBarButton = async (
   running: RunningGestamentMuon,
   bounds: NativeWindowBounds,
@@ -392,6 +430,9 @@ const withTitleBarMuon = async (
     bounds: NativeWindowBounds,
   ) => Promise<void>,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
 ): Promise<void> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-titlebar-"));
   const assetRoot = await createTitleBarAssetRoot(directory);
@@ -399,6 +440,7 @@ const withTitleBarMuon = async (
     null,
     assetRoot,
     browserBackgroundColor,
+    browserInitialTitleBarVisibility,
   );
   let caughtError: unknown = undefined;
 
@@ -492,8 +534,36 @@ titleBarIt(
     await withTitleBarMuon(async (_driver, running, _env, bounds) => {
       await runTitleBarStep(
         "verify configured title bar background",
-        async () => await expectTitleBarBackgroundColor(running, bounds),
+        async () => await waitForTitleBarBackgroundColor(running, bounds),
       );
     }, configuredTitleBarBackgroundColor);
+  },
+);
+
+titleBarIt(
+  "controls the Linux custom title bar visibility through config and browser API",
+  async () => {
+    await withTitleBarMuon(
+      async (driver, running, _env, bounds) => {
+        await runTitleBarStep(
+          "verify initial title bar is hidden",
+          async () => await waitForTitleBarHidden(running, bounds),
+        );
+        await runTitleBarStep("show title bar through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarVisibility(true)"),
+          ).resolves.toBeUndefined();
+          await waitForTitleBarBackgroundColor(running, bounds);
+        });
+        await runTitleBarStep("hide title bar through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarVisibility(false)"),
+          ).resolves.toBeUndefined();
+          await waitForTitleBarHidden(running, bounds);
+        });
+      },
+      configuredTitleBarBackgroundColor,
+      false,
+    );
   },
 );

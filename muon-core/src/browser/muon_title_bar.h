@@ -175,6 +175,11 @@ class MuonTitleBarController final : public CefClient,
   void SetMaximized(bool maximized);
 
   /**
+   * Updates title bar visibility state used for draggable regions.
+   */
+  void SetVisible(bool visible);
+
+  /**
    * Recomputes draggable regions from the current window size.
    */
   void UpdateDraggableRegions();
@@ -221,6 +226,7 @@ class MuonTitleBarController final : public CefClient,
   std::string title_ = "Muon";
   bool active_ = true;
   bool maximized_ = false;
+  bool visible_ = true;
   bool loaded_ = false;
 
   IMPLEMENT_REFCOUNTING(MuonTitleBarController);
@@ -234,6 +240,12 @@ void RegisterMuonTitleBarController(
     CefRefPtr<CefWindow> window,
     CefRefPtr<MuonTitleBarController> controller,
     int browser_id);
+
+/**
+ * Registers the BrowserView used to render a custom title bar.
+ */
+void RegisterMuonTitleBarView(CefRefPtr<CefWindow> window,
+                              CefRefPtr<CefBrowserView> title_bar_view);
 
 /**
  * Associates an internal title bar window with its app BrowserView.
@@ -275,6 +287,18 @@ void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
  */
 void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
                                               const std::string& title);
+
+/**
+ * Updates registered custom-titlebar visibility, if any.
+ */
+void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
+                                         bool visible);
+
+/**
+ * Updates registered custom-titlebar visibility for a browser, if any.
+ */
+void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
+                                                   bool visible);
 
 /**
  * Returns the registered custom-titlebar window for a browser, if any.

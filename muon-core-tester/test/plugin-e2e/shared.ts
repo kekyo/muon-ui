@@ -129,6 +129,8 @@ export type BrowserInitialWindowState =
   | "maximized"
   | "fullscreen";
 
+export type BrowserInitialTitleBarVisibility = boolean;
+
 export interface BrowserOuterSize {
   width: number;
   height: number;
@@ -281,6 +283,7 @@ export const browserFunctionNames = [
   "minimize",
   "maximize",
   "restore",
+  "setTitleBarVisibility",
   "close",
   "shutdown",
 ] as const;
@@ -1198,6 +1201,9 @@ export const writeMuonConfig = async (
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -1247,6 +1253,9 @@ export const writeMuonConfig = async (
   if (browserBackgroundColor !== undefined) {
     browser.backgroundColor = browserBackgroundColor;
   }
+  if (browserInitialTitleBarVisibility !== undefined) {
+    browser.initialTitleBarVisibility = browserInitialTitleBarVisibility;
+  }
   if (Object.keys(browser).length > 0) {
     config.browser = browser;
   }
@@ -1285,6 +1294,9 @@ export const startMuon = async (
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
 ): Promise<RunningMuon> => {
   const executable = getMuonExecutable(directory);
   await requireFile(executable);
@@ -1315,6 +1327,7 @@ export const startMuon = async (
     assetSignature,
     assetSalt,
     browserBackgroundColor,
+    browserInitialTitleBarVisibility,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -1384,6 +1397,9 @@ export const startDebugMuon = async (
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -1404,6 +1420,7 @@ export const startDebugMuon = async (
     assetSignature,
     assetSalt,
     browserBackgroundColor,
+    browserInitialTitleBarVisibility,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>
@@ -1421,6 +1438,9 @@ export const startGestamentDebugMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   assetRoot: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -1442,6 +1462,7 @@ export const startGestamentDebugMuon = async (
     undefined,
     undefined,
     browserBackgroundColor,
+    browserInitialTitleBarVisibility,
   );
   let app: GtkApp | undefined = undefined;
   const args = [

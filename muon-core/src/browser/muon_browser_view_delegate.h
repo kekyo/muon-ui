@@ -19,11 +19,14 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
    * Creates a browser view delegate.
    *
    * @param is_devtools Whether the view is for DevTools.
+   * @param initial_title_bar_visibility Whether custom title bars start
+   * visible.
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
    */
   explicit MuonBrowserViewDelegate(
       bool is_devtools,
+      bool initial_title_bar_visibility = true,
       MuonTitleBarManifest title_bar_manifest =
           CreateNativeMuonTitleBarManifest(),
       MuonTitleBarBackgroundColor title_bar_background_color = {});
@@ -63,6 +66,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
 
  private:
   const bool is_devtools_;
+  const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
 

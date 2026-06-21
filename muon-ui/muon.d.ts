@@ -175,6 +175,14 @@ declare global {
      */
     readonly restore: () => Promise<void>;
     /**
+     * Show or hide the current Muon custom title bar.
+     *
+     * @param visible - Whether the title bar should be visible.
+     * @returns A promise that resolves when the title bar visibility is requested.
+     * @remarks Native title bars are not affected.
+     */
+    readonly setTitleBarVisibility: (visible: boolean) => Promise<void>;
+    /**
      * Close the current browser window.
      *
      * @returns A promise that resolves after the close request is submitted.

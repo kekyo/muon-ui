@@ -158,12 +158,14 @@ class OpenMuonDetachedPopupTask final : public CefTask {
       std::string target_url,
       const CefBrowserSettings& settings,
       CefRefPtr<CefDictionaryValue> extra_info,
+      bool initial_title_bar_visibility,
       MuonTitleBarManifest title_bar_manifest,
       MuonTitleBarBackgroundColor title_bar_background_color)
       : client_(client),
         target_url_(std::move(target_url)),
         settings_(settings),
         extra_info_(extra_info),
+        initial_title_bar_visibility_(initial_title_bar_visibility),
         title_bar_manifest_(std::move(title_bar_manifest)),
         title_bar_background_color_(title_bar_background_color) {}
 
@@ -177,7 +179,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
         client_, GetMuonPopupNavigationUrl(target_url_), settings_,
         extra_info_, nullptr,
         new MuonBrowserViewDelegate(
-            false, title_bar_manifest_, title_bar_background_color_));
+            false, initial_title_bar_visibility_, title_bar_manifest_,
+            title_bar_background_color_));
     if (!browser_view) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "Failed to create detached popup browser view");
@@ -186,6 +189,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
     CefWindow::CreateTopLevelWindow(
         new MuonWindowDelegate(browser_view, false,
                                kMuonBrowserInitialWindowStateNormal,
+                               initial_title_bar_visibility_,
                                title_bar_manifest_,
                                title_bar_background_color_));
   }
@@ -195,6 +199,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
   const std::string target_url_;
   const CefBrowserSettings settings_;
   CefRefPtr<CefDictionaryValue> extra_info_;
+  const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
 
@@ -758,6 +763,7 @@ bool MuonClient::OnBeforePopup(
   }
   CefPostTask(TID_UI, new OpenMuonDetachedPopupTask(
                           client, url, settings, detached_extra_info,
+                          browser_config_.initial_title_bar_visibility,
                           title_bar_manifest_, title_bar_background_color_));
   return true;
 }
@@ -1797,6 +1803,17 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
       window->Restore();
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility: {
+      if (!call.encoded_args || call.encoded_args->GetSize() != 1 ||
+          call.encoded_args->GetType(0) != VTYPE_BOOL) {
+        RejectPluginCall(call, "Invalid title bar visibility");
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      SetRegisteredMuonTitleBarVisibilityForBrowser(
+          call.browser->GetIdentifier(), call.encoded_args->GetBool(0));
       break;
     }
     case MuonBuiltinBrowserFunctionKind::Close: {

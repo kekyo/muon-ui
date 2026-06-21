@@ -43,6 +43,8 @@ static constexpr char kMuonConfigBrowserStartPageKey[] = "startPage";
 static constexpr char kMuonConfigBrowserProfilePathKey[] = "profilePath";
 static constexpr char kMuonConfigBrowserInitialWindowStateKey[] =
     "initialWindowState";
+static constexpr char kMuonConfigBrowserInitialTitleBarVisibilityKey[] =
+    "initialTitleBarVisibility";
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
     "backgroundColor";
 static constexpr char kMuonConfigBrowserTitleBarKey[] = "titleBar";
@@ -1348,6 +1350,24 @@ static bool ReadBrowserInitialWindowStateConfig(
   return true;
 }
 
+static bool ReadBrowserInitialTitleBarVisibilityConfig(
+    yyjson_val* browser,
+    MuonConfig* config,
+    std::string* error_message) {
+  const auto visibility =
+      yyjson_obj_get(browser, kMuonConfigBrowserInitialTitleBarVisibilityKey);
+  if (visibility == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_bool(visibility)) {
+    *error_message =
+        "muon.json browser.initialTitleBarVisibility must be a boolean";
+    return false;
+  }
+  config->browser.initial_title_bar_visibility = yyjson_get_bool(visibility);
+  return true;
+}
+
 static bool IsHexDigit(char value) {
   return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
          (value >= 'A' && value <= 'F');
@@ -1591,6 +1611,8 @@ static bool ReadBrowserConfig(yyjson_val* root,
   if (!ReadBrowserStartPageConfig(browser, config, error_message) ||
       !ReadBrowserProfileConfig(browser, config, error_message) ||
       !ReadBrowserInitialWindowStateConfig(browser, config, error_message) ||
+      !ReadBrowserInitialTitleBarVisibilityConfig(
+          browser, config, error_message) ||
       !ReadBrowserBackgroundColorConfig(browser, config, error_message) ||
       !ReadBrowserTitleBarConfig(browser, config, error_message) ||
       !ReadBrowserKeybindsConfig(browser, config, error_message)) {

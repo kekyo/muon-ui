@@ -434,9 +434,11 @@ exit 1
 
 const reloadResult: Promise<void> = window.muon.browser.reload();
 const resetZoomResult: Promise<void> = window.muon.browser.resetZoom();
+const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(true);
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
+void titleBarVisibilityResult;
 void existsResult;
 `),
     ).resolves.toBeUndefined();
@@ -445,9 +447,11 @@ void existsResult;
 
 const reloadResult: Promise<void> = window.muon.browser.reload();
 const resetZoomResult: Promise<void> = window.muon.browser.resetZoom();
+const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(false);
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
+void titleBarVisibilityResult;
 void existsResult;
 `),
     ).resolves.toBeUndefined();

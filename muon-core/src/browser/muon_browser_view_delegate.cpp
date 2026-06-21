@@ -46,9 +46,11 @@ class EnablePopupOpenerBrowserViewTask final : public CefTask {
 
 MuonBrowserViewDelegate::MuonBrowserViewDelegate(
     bool is_devtools,
+    bool initial_title_bar_visibility,
     MuonTitleBarManifest title_bar_manifest,
     MuonTitleBarBackgroundColor title_bar_background_color)
     : is_devtools_(is_devtools),
+      initial_title_bar_visibility_(initial_title_bar_visibility),
       title_bar_manifest_(std::move(title_bar_manifest)),
       title_bar_background_color_(title_bar_background_color) {}
 
@@ -59,7 +61,8 @@ MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
     CefRefPtr<CefClient> client,
     bool is_devtools) {
   return new MuonBrowserViewDelegate(
-      is_devtools, title_bar_manifest_, title_bar_background_color_);
+      is_devtools, initial_title_bar_visibility_, title_bar_manifest_,
+      title_bar_background_color_);
 }
 
 bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
@@ -69,6 +72,7 @@ bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
   CefWindow::CreateTopLevelWindow(
       new MuonWindowDelegate(popup_browser_view, is_devtools,
                              kMuonBrowserInitialWindowStateNormal,
+                             initial_title_bar_visibility_,
                              title_bar_manifest_,
                              title_bar_background_color_));
   if (!is_devtools) {

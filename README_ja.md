@@ -776,6 +776,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
     "initialWindowState": "normal",
     "backgroundColor": "system",
     "titleBar": "muon",
+    "initialTitleBarVisibility": true,
     "keybinds": {
       "devtools": "f12",
       "zoomIn": "ctrl+plus",
@@ -827,6 +828,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBar`                            | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
+| `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
@@ -845,6 +847,10 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 `"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
 Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
 DevToolsウインドウはこの設定に関わらずCEF/Chrome styleのタイトルバーを使用します。
+
+`initialTitleBarVisibility` は、`titleBar` が `"muon"` の場合に、通常ブラウザウインドウのMuonカスタムタイトルバーを初期表示するかどうかを指定します。
+`false` を指定すると、起動直後はタイトルバーが非表示になります。
+`"native"` のタイトルバーとDevToolsウインドウには影響しません。
 
 `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom` を指定できます。
 値は `"Ctrl+Shift+I"` のように、修飾キーとキーを `+` で連結した文字列です。
@@ -982,15 +988,18 @@ Windows環境では `"debug"` と `"eventlog"` も使用できます。
 | `minimize()`          | なし                | `Promise<void>` | 現在のウインドウを最小化します。                                 |
 | `maximize()`          | なし                | `Promise<void>` | 現在のウインドウを最大化します。                                 |
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
+| `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | Muonカスタムタイトルバーの表示/非表示を切り替えます。             |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
 | `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Muonプロセスを終了します。`exitCode` を省略した場合は `0` です。 |
 
 `reload()`, `hardReload()`, `close()`, `shutdown()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
 `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
+`setTitleBarVisibility()` はMuonカスタムタイトルバーだけに作用し、ネイティブタイトルバーでは何も変更せず成功します。
 
 ```js
 await window.muon.browser.zoomIn();
 await window.muon.browser.resetZoom();
+await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.shutdown(0);
 ```
 

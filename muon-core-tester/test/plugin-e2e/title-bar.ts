@@ -26,7 +26,10 @@ import {
   writeFile,
 } from "./shared.js";
 import type { CdpDriver, RunningGestamentMuon } from "./shared.js";
-import type { BrowserInitialTitleBarVisibility } from "./shared.js";
+import type {
+  BrowserInitialTitleBarVisibility,
+  BrowserTitleBarType,
+} from "./shared.js";
 
 interface RgbaPixel {
   red: number;
@@ -193,6 +196,52 @@ const readNativeWindowStateAtomsByTitle = async (
   } catch {
     return [];
   }
+};
+
+const readNativeMotifDecorationsByTitle = async (
+  title: string,
+  env: NodeJS.ProcessEnv,
+): Promise<number | undefined> => {
+  const id = await findNativeWindowIdByTitle(title, env);
+  if (id === undefined) {
+    return undefined;
+  }
+  const { stdout } = await execFileAsync(
+    "xprop",
+    ["-id", id, "_MOTIF_WM_HINTS"],
+    {
+      env,
+    },
+  );
+  const output = String(stdout);
+  if (output.includes("not found")) {
+    return undefined;
+  }
+  const values = [...output.matchAll(/(?:0x[0-9a-f]+|-?\d+)/gi)].map(
+    ([value]) =>
+      Number.parseInt(value, value.toLowerCase().startsWith("0x") ? 16 : 10),
+  );
+  return values[2];
+};
+
+const waitForNativeMotifDecorationsByTitle = async (
+  title: string,
+  expectedDecorations: number,
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv,
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  let lastDecorations: number | undefined = undefined;
+  while (Date.now() < deadline) {
+    lastDecorations = await readNativeMotifDecorationsByTitle(title, env);
+    if (lastDecorations === expectedDecorations) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for _MOTIF_WM_HINTS decorations ${expectedDecorations}. Last decorations: ${String(lastDecorations)}`,
+  );
 };
 
 const parseXwininfoValue = (output: string, label: string): number => {
@@ -377,12 +426,14 @@ const waitForTitleBarIconColor = async (
   running: RunningGestamentMuon,
   bounds: NativeWindowBounds,
   expected: RgbaPixel,
+  x: number = 18,
+  y: number = 18,
 ): Promise<void> => {
   const deadline = Date.now() + cdpCommandTimeoutMs;
   let lastPixel: RgbaPixel | undefined = undefined;
   while (Date.now() < deadline) {
     const capture = await captureRoot(running);
-    lastPixel = getWindowPixel(capture, bounds, 18, 18);
+    lastPixel = getWindowPixel(capture, bounds, x, y);
     if (isPixelNear(lastPixel, expected)) {
       return;
     }
@@ -534,6 +585,7 @@ const withTitleBarMuon = async (
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<void> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-titlebar-"));
   const assetRoot = await createTitleBarAssetRoot(directory);
@@ -543,6 +595,7 @@ const withTitleBarMuon = async (
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
     browserInitialTitleBarIcon,
+    browserTitleBarType,
   );
   let caughtError: unknown = undefined;
 
@@ -700,6 +753,17 @@ titleBarIt("shows and updates the Linux custom title bar icon", async () => {
             expectedInitialTitleBarIconColor,
           ),
       );
+      await runTitleBarStep(
+        "verify enlarged initial title bar icon",
+        async () =>
+          await waitForTitleBarIconColor(
+            running,
+            bounds,
+            expectedInitialTitleBarIconColor,
+            8,
+            18,
+          ),
+      );
       await runTitleBarStep("update title bar icon through API", async () => {
         await expect(
           driver.evaluate(
@@ -730,3 +794,39 @@ titleBarIt("shows and updates the Linux custom title bar icon", async () => {
     initialTitleBarIconPath,
   );
 });
+
+titleBarIt(
+  "controls the Linux native title bar decoration hint through browser API",
+  async () => {
+    await withTitleBarMuon(
+      async (driver, _running, env) => {
+        await runTitleBarStep("hide native title bar through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarVisibility(false)"),
+          ).resolves.toBeUndefined();
+          await waitForNativeMotifDecorationsByTitle(
+            testWindowTitle,
+            0,
+            cdpCommandTimeoutMs,
+            env,
+          );
+        });
+        await runTitleBarStep("show native title bar through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarVisibility(true)"),
+          ).resolves.toBeUndefined();
+          await waitForNativeMotifDecorationsByTitle(
+            testWindowTitle,
+            1,
+            cdpCommandTimeoutMs,
+            env,
+          );
+        });
+      },
+      undefined,
+      undefined,
+      undefined,
+      "native",
+    );
+  },
+);

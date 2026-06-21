@@ -14,6 +14,12 @@
 #include "include/cef_request.h"
 #include "include/views/cef_browser_view_delegate.h"
 
+#if defined(OS_LINUX) && defined(CEF_X11)
+#include "include/internal/cef_types_linux.h"
+
+#include <X11/Xlib.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -44,6 +50,52 @@ std::map<int, CefRefPtr<CefWindow>> g_muon_title_bar_windows_by_browser_id;
 std::map<int, std::string> g_muon_title_bar_pending_titles_by_browser_id;
 std::map<int, std::string>
     g_muon_title_bar_pending_icon_data_urls_by_browser_id;
+
+#if defined(OS_LINUX) && defined(CEF_X11)
+struct MuonMotifWmHints {
+  unsigned long flags;
+  unsigned long functions;
+  unsigned long decorations;
+  long input_mode;
+  unsigned long status;
+};
+
+constexpr unsigned long kMuonMotifWmHintsDecorations = 1UL << 1;
+constexpr unsigned long kMuonMotifWmDecorAll = 1UL << 0;
+
+static void SetMuonX11TitleBarVisibility(CefRefPtr<CefWindow> window,
+                                         bool visible) {
+  if (!window) {
+    return;
+  }
+  const auto handle = window->GetWindowHandle();
+  if (handle == kNullWindowHandle) {
+    return;
+  }
+  auto* display = cef_get_xdisplay();
+  if (display == nullptr) {
+    return;
+  }
+  const auto hints_atom = XInternAtom(display, "_MOTIF_WM_HINTS", False);
+  if (hints_atom == None) {
+    return;
+  }
+
+  MuonMotifWmHints hints = {};
+  hints.flags = kMuonMotifWmHintsDecorations;
+  hints.decorations = visible ? kMuonMotifWmDecorAll : 0;
+  XChangeProperty(display, handle, hints_atom, hints_atom, 32,
+                  PropModeReplace,
+                  reinterpret_cast<const unsigned char*>(&hints), 5);
+  XFlush(display);
+}
+#else
+static void SetMuonX11TitleBarVisibility(CefRefPtr<CefWindow> window,
+                                         bool visible) {
+  (void)window;
+  (void)visible;
+}
+#endif
 
 static bool ReadJsonString(yyjson_val* root,
                            const char* key,
@@ -748,13 +800,14 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
   if (!window || browser_id <= 0) {
     return;
   }
+  g_muon_title_bar_browser_ids_by_window[window.get()] = browser_id;
+  g_muon_title_bar_windows_by_browser_id[browser_id] = window;
+
   const auto controller = g_muon_title_bar_controllers.find(window.get());
   if (controller == g_muon_title_bar_controllers.end()) {
     return;
   }
-  g_muon_title_bar_browser_ids_by_window[window.get()] = browser_id;
   g_muon_title_bar_controllers_by_browser_id[browser_id] = controller->second;
-  g_muon_title_bar_windows_by_browser_id[browser_id] = window;
   const auto pending =
       g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
   if (pending != g_muon_title_bar_pending_titles_by_browser_id.end()) {
@@ -899,6 +952,7 @@ void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
   }
   const auto view = g_muon_title_bar_views.find(window.get());
   if (view == g_muon_title_bar_views.end() || !view->second) {
+    SetMuonX11TitleBarVisibility(window, visible);
     return;
   }
   const auto controller = g_muon_title_bar_controllers.find(window.get());

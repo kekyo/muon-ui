@@ -847,12 +847,11 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 `titleBarType` には `"muon"` または `"native"` を指定できます。
 `"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
-Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
-DevToolsウインドウはこの設定に関わらずCEF/Chrome styleのタイトルバーを使用します。
+Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、
+Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
 
-`initialTitleBarVisibility` は、`titleBarType` が `"muon"` の場合に、通常ブラウザウインドウのMuonカスタムタイトルバーを初期表示するかどうかを指定します。
+`initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
 `false` を指定すると、起動直後はタイトルバーが非表示になります。
-`"native"` のタイトルバーとDevToolsウインドウには影響しません。
 
 `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
 省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
@@ -860,6 +859,8 @@ DevToolsウインドウはこの設定に関わらずCEF/Chrome styleのタイ�
 `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
 このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
 ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
+
+注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
 
 `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom` を指定できます。
 値は `"Ctrl+Shift+I"` のように、修飾キーとキーを `+` で連結した文字列です。
@@ -997,14 +998,16 @@ Windows環境では `"debug"` と `"eventlog"` も使用できます。
 | `minimize()`          | なし                | `Promise<void>` | 現在のウインドウを最小化します。                                 |
 | `maximize()`          | なし                | `Promise<void>` | 現在のウインドウを最大化します。                                 |
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
-| `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | Muonカスタムタイトルバーの表示/非表示を切り替えます。             |
+| `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
 | `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Muonプロセスを終了します。`exitCode` を省略した場合は `0` です。 |
 
 `reload()`, `hardReload()`, `close()`, `shutdown()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
 `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
-`setTitleBarVisibility()` はMuonカスタムタイトルバーだけに作用し、ネイティブタイトルバーでは何も変更せず成功します。
+`setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
+Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
+このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
 `setTitleBarIcon()` はPNGアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
 `path` には `initialTitleBarIcon` と同じ形式を指定します。
 

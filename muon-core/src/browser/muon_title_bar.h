@@ -361,13 +361,20 @@ void SetRegisteredMuonTitleBarIconForBrowser(
     const std::string& icon_data_url);
 
 /**
- * Updates registered custom-titlebar visibility, if any.
+ * Updates the custom title bar view or native title bar visibility hint.
+ *
+ * @param window Window whose title bar visibility should change.
+ * @param visible Whether the title bar should be visible.
  */
 void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
                                          bool visible);
 
 /**
- * Updates registered custom-titlebar visibility for a browser, if any.
+ * Updates the custom title bar view or native title bar visibility hint for a
+ * browser.
+ *
+ * @param browser_id Browser identifier whose window should be updated.
+ * @param visible Whether the title bar should be visible.
  */
 void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible);

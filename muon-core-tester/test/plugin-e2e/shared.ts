@@ -131,6 +131,8 @@ export type BrowserInitialWindowState =
 
 export type BrowserInitialTitleBarVisibility = boolean;
 
+export type BrowserTitleBarType = "muon" | "native";
+
 export interface BrowserOuterSize {
   width: number;
   height: number;
@@ -1206,6 +1208,7 @@ export const writeMuonConfig = async (
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -1261,6 +1264,9 @@ export const writeMuonConfig = async (
   if (browserInitialTitleBarIcon !== undefined) {
     browser.initialTitleBarIcon = browserInitialTitleBarIcon;
   }
+  if (browserTitleBarType !== undefined) {
+    browser.titleBarType = browserTitleBarType;
+  }
   if (Object.keys(browser).length > 0) {
     config.browser = browser;
   }
@@ -1302,6 +1308,7 @@ export const startMuon = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<RunningMuon> => {
   const executable = getMuonExecutable(directory);
   await requireFile(executable);
@@ -1333,6 +1340,8 @@ export const startMuon = async (
     assetSalt,
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
+    undefined,
+    browserTitleBarType,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -1405,6 +1414,7 @@ export const startDebugMuon = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -1426,6 +1436,7 @@ export const startDebugMuon = async (
     assetSalt,
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
+    browserTitleBarType,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>
@@ -1447,6 +1458,7 @@ export const startGestamentDebugMuon = async (
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -1470,6 +1482,7 @@ export const startGestamentDebugMuon = async (
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
     browserInitialTitleBarIcon,
+    browserTitleBarType,
   );
   let app: GtkApp | undefined = undefined;
   const args = [

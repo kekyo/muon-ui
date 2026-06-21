@@ -123,6 +123,10 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
         window, initial_title_bar_visibility_);
   } else if (browser_view_) {
     window->AddChildView(browser_view_);
+    if (!is_devtools_) {
+      SetRegisteredMuonTitleBarVisibility(
+          window, initial_title_bar_visibility_);
+    }
   }
   ApplyInitialWindowState(window, initial_window_state_);
 }

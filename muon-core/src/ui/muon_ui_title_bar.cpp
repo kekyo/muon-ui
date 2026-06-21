@@ -121,8 +121,8 @@ body {
 
 .app-icon {
   display: none;
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   object-fit: contain;
 }
 

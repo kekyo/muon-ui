@@ -8,6 +8,7 @@
 
 #include "app/muon_app_scheme.h"
 #include "app/muon_app_storage.h"
+#include "browser/muon_default_title_bar_icon.h"
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
 #include "browser/muon_client.h"
@@ -576,6 +577,16 @@ void MuonApp::OnContextInitialized() {
     if (!LoadMuonTitleBarIconFromStorage(
             app_storage, config_.browser.initial_title_bar_icon,
             &initial_title_bar_icon, &error_message)) {
+      exit_code_ = 1;
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Muon startup failed: " + error_message);
+      CefQuitMessageLoop();
+      return;
+    }
+    has_initial_title_bar_icon = true;
+  } else {
+    if (!LoadDefaultMuonTitleBarIcon(&initial_title_bar_icon,
+                                     &error_message)) {
       exit_code_ = 1;
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                      "Muon startup failed: " + error_message);

@@ -393,6 +393,34 @@ const waitForTitleBarIconColor = async (
   );
 };
 
+const waitForTitleBarIconContrast = async (
+  running: RunningGestamentMuon,
+  bounds: NativeWindowBounds,
+  reference: RgbaPixel,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastIconPixels = 0;
+  while (Date.now() < deadline) {
+    const capture = await captureRoot(running);
+    lastIconPixels = countContrastingWindowPixels(
+      capture,
+      bounds,
+      10,
+      10,
+      16,
+      16,
+      reference,
+    );
+    if (lastIconPixels > 0) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for title bar icon contrast. Last icon pixel count: ${lastIconPixels}`,
+  );
+};
+
 const countContrastingWindowPixels = (
   capture: RootCapture,
   bounds: NativeWindowBounds,
@@ -613,6 +641,24 @@ titleBarIt(
     }, configuredTitleBarBackgroundColor);
   },
 );
+
+titleBarIt("uses the embedded default title bar icon", async () => {
+  await withTitleBarMuon(async (_driver, running, _env, bounds) => {
+    await runTitleBarStep(
+      "verify configured title bar background",
+      async () => await waitForTitleBarBackgroundColor(running, bounds),
+    );
+    await runTitleBarStep(
+      "verify embedded default title bar icon",
+      async () =>
+        await waitForTitleBarIconContrast(
+          running,
+          bounds,
+          expectedTitleBarBackgroundColor,
+        ),
+    );
+  }, configuredTitleBarBackgroundColor);
+});
 
 titleBarIt(
   "controls the Linux custom title bar visibility through config and browser API",

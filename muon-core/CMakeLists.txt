@@ -566,6 +566,7 @@ set(APP_SOURCES
   src/browser/muon_browser_view_delegate.cpp
   src/browser/muon_builtin_browser.cpp
   src/browser/muon_client.cpp
+  src/browser/muon_default_title_bar_icon.cpp
   src/browser/muon_title_bar.cpp
   src/browser/muon_title_bar_loader.cpp
   src/browser/muon_window_delegate.cpp
@@ -603,6 +604,7 @@ set(APP_HEADERS
   src/browser/muon_browser_view_delegate.h
   src/browser/muon_builtin_browser.h
   src/browser/muon_client.h
+  src/browser/muon_default_title_bar_icon.h
   src/browser/muon_title_bar.h
   src/browser/muon_title_bar_loader.h
   src/browser/muon_window_delegate.h

@@ -830,7 +830,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
-| `initialTitleBarIcon`                 | `string`                                  | なし                      | 起動時にタイトルバーへ表示するPNGアイコンのアセットパスです。                            |
+| `initialTitleBarIcon`                 | `string`                                  | 内蔵Muonアイコン          | 起動時にタイトルバーへ表示するPNGアイコンのアセットパスです。                            |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
@@ -855,6 +855,8 @@ DevToolsウインドウはこの設定に関わらずCEF/Chrome styleのタイ�
 `"native"` のタイトルバーとDevToolsウインドウには影響しません。
 
 `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
+省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
+内蔵アイコンはコード中に埋め込まれているため、アプリ側のアセットファイルとして用意する必要はありません。
 `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
 このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
 ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。

@@ -14,6 +14,7 @@
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -113,6 +114,22 @@ struct MuonTitleBarIcon {
  * Creates a native title bar manifest used as the safe fallback.
  */
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest();
+
+/**
+ * Loads a title bar icon from PNG bytes.
+ *
+ * @param data PNG byte buffer.
+ * @param size PNG byte buffer size.
+ * @param source Diagnostic source label used in error messages.
+ * @param icon Receives the loaded icon.
+ * @param error_message Receives a validation diagnostic.
+ * @return true when a PNG icon was loaded.
+ */
+bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
+                                      size_t size,
+                                      const std::string& source,
+                                      MuonTitleBarIcon* icon,
+                                      std::string* error_message);
 
 /**
  * Loads a title bar icon from asset storage.

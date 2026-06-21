@@ -327,6 +327,35 @@ MuonTitleBarManifest CreateNativeMuonTitleBarManifest() {
   return {};
 }
 
+bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
+                                      size_t size,
+                                      const std::string& source,
+                                      MuonTitleBarIcon* icon,
+                                      std::string* error_message) {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  error_message->clear();
+  const auto diagnostic_source = source.empty() ? "title bar icon" : source;
+  if (data == nullptr || size == 0) {
+    *error_message =
+        "Title bar icon PNG must not be empty: " + diagnostic_source;
+    return false;
+  }
+
+  auto image = CefImage::CreateImage();
+  if (!image || !image->AddPNG(1.0f, data, size)) {
+    *error_message =
+        "Title bar icon must be a valid PNG: " + diagnostic_source;
+    return false;
+  }
+
+  icon->image = image;
+  icon->data_url =
+      "data:image/png;base64," + CefBase64Encode(data, size).ToString();
+  return true;
+}
+
 bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                      const std::string& path,
                                      MuonTitleBarIcon* icon,
@@ -362,18 +391,8 @@ bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
     return false;
   }
 
-  auto image = CefImage::CreateImage();
-  if (!image ||
-      !image->AddPNG(1.0f, resource.data.data(), resource.data.size())) {
-    *error_message = "Title bar icon must be a valid PNG: " + path;
-    return false;
-  }
-
-  icon->image = image;
-  icon->data_url =
-      "data:image/png;base64," +
-      CefBase64Encode(resource.data.data(), resource.data.size()).ToString();
-  return true;
+  return LoadMuonTitleBarIconFromPngBytes(
+      resource.data.data(), resource.data.size(), path, icon, error_message);
 }
 
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest) {

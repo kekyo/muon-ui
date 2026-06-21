@@ -21,11 +21,13 @@ MuonWindowDelegate::MuonWindowDelegate(
     CefRefPtr<CefBrowserView> browser_view,
     bool is_devtools,
     MuonBrowserInitialWindowState initial_window_state,
-    MuonTitleBarManifest title_bar_manifest)
+    MuonTitleBarManifest title_bar_manifest,
+    MuonTitleBarBackgroundColor title_bar_background_color)
     : browser_view_(browser_view),
       is_devtools_(is_devtools),
       initial_window_state_(initial_window_state),
-      title_bar_manifest_(std::move(title_bar_manifest)) {}
+      title_bar_manifest_(std::move(title_bar_manifest)),
+      title_bar_background_color_(title_bar_background_color) {}
 
 class ApplyInitialWindowStateTask final : public CefTask {
  public:
@@ -84,8 +86,8 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
                                   : GetMuonDefaultWindowTitle();
   window->SetTitle(title);
   if (UseCustomTitleBar()) {
-    title_bar_controller_ =
-        new MuonTitleBarController(title_bar_manifest_);
+    title_bar_controller_ = new MuonTitleBarController(
+        title_bar_manifest_, title_bar_background_color_);
     title_bar_controller_->SetTitle(title);
     title_bar_controller_->SetActive(window->IsActive());
     title_bar_view_ = title_bar_controller_->CreateBrowserView();

@@ -50,6 +50,7 @@ class MuonClient final : public CefClient,
    * @param shutdown_requester Callback that records a process shutdown request.
    * @param browser_config Browser keyboard shortcut configuration.
    * @param title_bar_manifest Parsed title bar provider manifest.
+   * @param title_bar_background_color Explicit title bar background color.
    */
   MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
              std::shared_ptr<MuonNetworkPolicy> network_policy,
@@ -58,7 +59,8 @@ class MuonClient final : public CefClient,
              std::function<bool(int32_t)> shutdown_requester,
              const MuonBrowserConfig& browser_config,
              MuonTitleBarManifest title_bar_manifest =
-                 CreateNativeMuonTitleBarManifest());
+                 CreateNativeMuonTitleBarManifest(),
+             MuonTitleBarBackgroundColor title_bar_background_color = {});
 
   /**
    * Returns this object as the browser lifetime handler.
@@ -325,6 +327,7 @@ class MuonClient final : public CefClient,
   bool shutdown_started_ = false;
   MuonBrowserConfig browser_config_;
   MuonTitleBarManifest title_bar_manifest_;
+  MuonTitleBarBackgroundColor title_bar_background_color_;
   std::function<bool(int32_t)> shutdown_requester_;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime_;
   std::shared_ptr<MuonNetworkPolicy> network_policy_;

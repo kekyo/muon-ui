@@ -24,13 +24,16 @@ class MuonWindowDelegate final : public CefWindowDelegate {
    * @param is_devtools Whether the window is for DevTools.
    * @param initial_window_state Initial state requested for the window.
    * @param title_bar_manifest Parsed title bar provider manifest.
+   * @param title_bar_background_color Explicit title bar background color.
    */
   MuonWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
                       bool is_devtools,
                       MuonBrowserInitialWindowState initial_window_state =
                           kMuonBrowserInitialWindowStateNormal,
                       MuonTitleBarManifest title_bar_manifest =
-                          CreateNativeMuonTitleBarManifest());
+                          CreateNativeMuonTitleBarManifest(),
+                      MuonTitleBarBackgroundColor title_bar_background_color =
+                          {});
 
   /**
    * Attaches the browser view and applies the initial window state.
@@ -122,6 +125,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   const bool is_devtools_;
   const MuonBrowserInitialWindowState initial_window_state_;
   const MuonTitleBarManifest title_bar_manifest_;
+  const MuonTitleBarBackgroundColor title_bar_background_color_;
 
   IMPLEMENT_REFCOUNTING(MuonWindowDelegate);
   DISALLOW_COPY_AND_ASSIGN(MuonWindowDelegate);

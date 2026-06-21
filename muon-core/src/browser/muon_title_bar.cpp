@@ -134,8 +134,38 @@ static std::string CreateJavaScriptStringLiteral(std::string_view value) {
   return literal;
 }
 
+static std::string CreateCssRgbColor(uint8_t red,
+                                     uint8_t green,
+                                     uint8_t blue) {
+  char buffer[8] = {};
+  std::snprintf(buffer, sizeof(buffer), "#%02x%02x%02x", red, green, blue);
+  return buffer;
+}
+
+static std::string CreateTitleBarBackgroundCss(
+    const MuonTitleBarBackgroundColor& background_color) {
+  if (!background_color.has_color) {
+    return {};
+  }
+  const auto color = CreateCssRgbColor(
+      background_color.red, background_color.green, background_color.blue);
+  return std::string(R"CSS(
+:root {
+  --muon-titlebar-bg-top: )CSS") +
+         color + R"CSS(;
+  --muon-titlebar-bg-bottom: )CSS" + color +
+         R"CSS(;
+  --muon-titlebar-bg-inactive-top: )CSS" + color +
+         R"CSS(;
+  --muon-titlebar-bg-inactive-bottom: )CSS" + color +
+         R"CSS(;
+}
+)CSS";
+}
+
 static std::string CreateTitleBarDocument(
-    const MuonTitleBarManifest& manifest) {
+    const MuonTitleBarManifest& manifest,
+    const MuonTitleBarBackgroundColor& background_color) {
   return std::string(R"HTML(<!doctype html>
 <html>
 <head>
@@ -144,6 +174,7 @@ static std::string CreateTitleBarDocument(
          kMuonTitleBarTitle + R"HTML(</title>
 <style>
 )HTML" + manifest.css +
+         CreateTitleBarBackgroundCss(background_color) +
          R"HTML(
 </style>
 </head>
@@ -348,12 +379,15 @@ MuonTitleBarManifest ParseMuonTitleBarManifest(const char* manifest_json) {
   return manifest;
 }
 
-MuonTitleBarController::MuonTitleBarController(MuonTitleBarManifest manifest)
-    : manifest_(std::move(manifest)) {}
+MuonTitleBarController::MuonTitleBarController(
+    MuonTitleBarManifest manifest,
+    MuonTitleBarBackgroundColor background_color)
+    : manifest_(std::move(manifest)),
+      background_color_(background_color) {}
 
 CefRefPtr<CefBrowserView> MuonTitleBarController::CreateBrowserView() {
   CefBrowserSettings settings;
-  const auto document = CreateTitleBarDocument(manifest_);
+  const auto document = CreateTitleBarDocument(manifest_, background_color_);
   return CefBrowserView::CreateBrowserView(
       this, CreateDataUrl(document), settings, CreateMuonTitleBarExtraInfo(),
       nullptr,

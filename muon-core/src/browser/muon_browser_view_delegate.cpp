@@ -46,9 +46,11 @@ class EnablePopupOpenerBrowserViewTask final : public CefTask {
 
 MuonBrowserViewDelegate::MuonBrowserViewDelegate(
     bool is_devtools,
-    MuonTitleBarManifest title_bar_manifest)
+    MuonTitleBarManifest title_bar_manifest,
+    MuonTitleBarBackgroundColor title_bar_background_color)
     : is_devtools_(is_devtools),
-      title_bar_manifest_(std::move(title_bar_manifest)) {}
+      title_bar_manifest_(std::move(title_bar_manifest)),
+      title_bar_background_color_(title_bar_background_color) {}
 
 CefRefPtr<CefBrowserViewDelegate>
 MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
@@ -56,7 +58,8 @@ MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
     const CefBrowserSettings& settings,
     CefRefPtr<CefClient> client,
     bool is_devtools) {
-  return new MuonBrowserViewDelegate(is_devtools, title_bar_manifest_);
+  return new MuonBrowserViewDelegate(
+      is_devtools, title_bar_manifest_, title_bar_background_color_);
 }
 
 bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
@@ -66,7 +69,8 @@ bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
   CefWindow::CreateTopLevelWindow(
       new MuonWindowDelegate(popup_browser_view, is_devtools,
                              kMuonBrowserInitialWindowStateNormal,
-                             title_bar_manifest_));
+                             title_bar_manifest_,
+                             title_bar_background_color_));
   if (!is_devtools) {
     // Popups are modeless in Muon even when they keep an opener reference.
     EnablePopupOpenerBrowserViewTask::EnablePopupOpenerBrowserView(browser_view);

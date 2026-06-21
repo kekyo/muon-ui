@@ -158,12 +158,14 @@ class OpenMuonDetachedPopupTask final : public CefTask {
       std::string target_url,
       const CefBrowserSettings& settings,
       CefRefPtr<CefDictionaryValue> extra_info,
-      MuonTitleBarManifest title_bar_manifest)
+      MuonTitleBarManifest title_bar_manifest,
+      MuonTitleBarBackgroundColor title_bar_background_color)
       : client_(client),
         target_url_(std::move(target_url)),
         settings_(settings),
         extra_info_(extra_info),
-        title_bar_manifest_(std::move(title_bar_manifest)) {}
+        title_bar_manifest_(std::move(title_bar_manifest)),
+        title_bar_background_color_(title_bar_background_color) {}
 
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
@@ -174,7 +176,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
     const auto browser_view = CefBrowserView::CreateBrowserView(
         client_, GetMuonPopupNavigationUrl(target_url_), settings_,
         extra_info_, nullptr,
-        new MuonBrowserViewDelegate(false, title_bar_manifest_));
+        new MuonBrowserViewDelegate(
+            false, title_bar_manifest_, title_bar_background_color_));
     if (!browser_view) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "Failed to create detached popup browser view");
@@ -183,7 +186,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
     CefWindow::CreateTopLevelWindow(
         new MuonWindowDelegate(browser_view, false,
                                kMuonBrowserInitialWindowStateNormal,
-                               title_bar_manifest_));
+                               title_bar_manifest_,
+                               title_bar_background_color_));
   }
 
  private:
@@ -192,6 +196,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
   const CefBrowserSettings settings_;
   CefRefPtr<CefDictionaryValue> extra_info_;
   const MuonTitleBarManifest title_bar_manifest_;
+  const MuonTitleBarBackgroundColor title_bar_background_color_;
 
   IMPLEMENT_REFCOUNTING(OpenMuonDetachedPopupTask);
   DISALLOW_COPY_AND_ASSIGN(OpenMuonDetachedPopupTask);
@@ -639,9 +644,11 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
                            unsafe_parent_access_policy,
                        std::function<bool(int32_t)> shutdown_requester,
                        const MuonBrowserConfig& browser_config,
-                       MuonTitleBarManifest title_bar_manifest)
+                       MuonTitleBarManifest title_bar_manifest,
+                       MuonTitleBarBackgroundColor title_bar_background_color)
     : browser_config_(browser_config),
       title_bar_manifest_(std::move(title_bar_manifest)),
+      title_bar_background_color_(title_bar_background_color),
       shutdown_requester_(std::move(shutdown_requester)),
       plugin_runtime_(std::move(plugin_runtime)),
       network_policy_(std::move(network_policy)),
@@ -751,7 +758,7 @@ bool MuonClient::OnBeforePopup(
   }
   CefPostTask(TID_UI, new OpenMuonDetachedPopupTask(
                           client, url, settings, detached_extra_info,
-                          title_bar_manifest_));
+                          title_bar_manifest_, title_bar_background_color_));
   return true;
 }
 

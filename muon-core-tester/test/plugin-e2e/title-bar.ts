@@ -56,6 +56,13 @@ const maximizedStates = [
 const titleBarHeight = 36;
 const titleBarControlWidth = 46;
 const titleBarControlsWidth = 138;
+const configuredTitleBarBackgroundColor = "#123456";
+const expectedTitleBarBackgroundColor: RgbaPixel = {
+  red: 0x12,
+  green: 0x34,
+  blue: 0x56,
+  alpha: 255,
+};
 
 const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   const assetRoot = join(directory, "titlebar-assets");
@@ -272,6 +279,13 @@ const getWindowPixel = (
 const getLuminance = (pixel: RgbaPixel): number =>
   0.2126 * pixel.red + 0.7152 * pixel.green + 0.0722 * pixel.blue;
 
+const expectPixelNear = (actual: RgbaPixel, expected: RgbaPixel): void => {
+  expect(Math.abs(actual.red - expected.red)).toBeLessThanOrEqual(2);
+  expect(Math.abs(actual.green - expected.green)).toBeLessThanOrEqual(2);
+  expect(Math.abs(actual.blue - expected.blue)).toBeLessThanOrEqual(2);
+  expect(actual.alpha).toBe(expected.alpha);
+};
+
 const countContrastingWindowPixels = (
   capture: RootCapture,
   bounds: NativeWindowBounds,
@@ -326,6 +340,21 @@ const expectTitleBarChrome = async (
   }
 };
 
+const expectTitleBarBackgroundColor = async (
+  running: RunningGestamentMuon,
+  bounds: NativeWindowBounds,
+): Promise<void> => {
+  const capture = await captureRoot(running);
+  expectPixelNear(
+    getWindowPixel(capture, bounds, 0, 0),
+    expectedTitleBarBackgroundColor,
+  );
+  expectPixelNear(
+    getWindowPixel(capture, bounds, 0, titleBarHeight - 2),
+    expectedTitleBarBackgroundColor,
+  );
+};
+
 const clickTitleBarButton = async (
   running: RunningGestamentMuon,
   bounds: NativeWindowBounds,
@@ -362,10 +391,15 @@ const withTitleBarMuon = async (
     env: NodeJS.ProcessEnv,
     bounds: NativeWindowBounds,
   ) => Promise<void>,
+  browserBackgroundColor: string | undefined = undefined,
 ): Promise<void> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-titlebar-"));
   const assetRoot = await createTitleBarAssetRoot(directory);
-  const running = await startGestamentDebugMuon(null, assetRoot);
+  const running = await startGestamentDebugMuon(
+    null,
+    assetRoot,
+    browserBackgroundColor,
+  );
   let caughtError: unknown = undefined;
 
   try {
@@ -451,3 +485,15 @@ titleBarIt("renders and controls the Linux custom title bar", async () => {
     });
   });
 });
+
+titleBarIt(
+  "uses browser.backgroundColor for the Linux custom title bar background",
+  async () => {
+    await withTitleBarMuon(async (_driver, running, _env, bounds) => {
+      await runTitleBarStep(
+        "verify configured title bar background",
+        async () => await expectTitleBarBackgroundColor(running, bounds),
+      );
+    }, configuredTitleBarBackgroundColor);
+  },
+);

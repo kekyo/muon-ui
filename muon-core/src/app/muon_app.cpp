@@ -104,6 +104,15 @@ static MuonTitleBarManifest LoadConfiguredMuonTitleBarManifest(
   return CreateNativeMuonTitleBarManifest();
 }
 
+static MuonTitleBarBackgroundColor CreateMuonTitleBarBackgroundColor(
+    const MuonBrowserBackgroundColorConfig& background_color) {
+  if (background_color.mode != kMuonBrowserBackgroundColorRgb) {
+    return {};
+  }
+  return {true, background_color.red, background_color.green,
+          background_color.blue};
+}
+
 static CefString CreateCefPathString(const std::filesystem::path& path) {
   CefString value;
 #if defined(_WIN32)
@@ -567,20 +576,24 @@ void MuonApp::OnContextInitialized() {
                                   config_.browser.background_color);
   const auto title_bar_manifest =
       LoadConfiguredMuonTitleBarManifest(config_.browser);
+  const auto title_bar_background_color =
+      CreateMuonTitleBarBackgroundColor(config_.browser.background_color);
   CefRefPtr<MuonClient> client(
       new MuonClient(plugin_runtime, network_policy, plugin_page_policy_,
                      unsafe_parent_access_policy_,
                      [this](int32_t exit_code) {
                        return RequestShutdown(exit_code);
                      },
-                     config_.browser, title_bar_manifest));
+                     config_.browser, title_bar_manifest,
+                     title_bar_background_color));
   auto browser_view = CefBrowserView::CreateBrowserView(
       client, config_.browser.start_page, browser_settings, extra_info, nullptr,
-      new MuonBrowserViewDelegate(false, title_bar_manifest));
+      new MuonBrowserViewDelegate(
+          false, title_bar_manifest, title_bar_background_color));
 
   CefWindow::CreateTopLevelWindow(new MuonWindowDelegate(
       browser_view, false, config_.browser.initial_window_state,
-      title_bar_manifest));
+      title_bar_manifest, title_bar_background_color));
 }
 
 void MuonApp::OnBrowserCreated(CefRefPtr<CefBrowser> browser,

@@ -11,6 +11,7 @@
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,31 @@ struct MuonTitleBarManifest {
 };
 
 /**
+ * Optional explicit title bar background color.
+ */
+struct MuonTitleBarBackgroundColor {
+  /**
+   * Whether the explicit color should override the title bar theme.
+   */
+  bool has_color = false;
+
+  /**
+   * Red component for explicit RGB mode.
+   */
+  uint8_t red = 0;
+
+  /**
+   * Green component for explicit RGB mode.
+   */
+  uint8_t green = 0;
+
+  /**
+   * Blue component for explicit RGB mode.
+   */
+  uint8_t blue = 0;
+};
+
+/**
  * Creates a native title bar manifest used as the safe fallback.
  */
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest();
@@ -114,7 +140,9 @@ class MuonTitleBarController final : public CefClient,
   /**
    * Creates a title bar controller from a parsed custom manifest.
    */
-  explicit MuonTitleBarController(MuonTitleBarManifest manifest);
+  explicit MuonTitleBarController(
+      MuonTitleBarManifest manifest,
+      MuonTitleBarBackgroundColor background_color = {});
 
   /**
    * Creates the title bar BrowserView.
@@ -187,6 +215,7 @@ class MuonTitleBarController final : public CefClient,
   void ExecuteJavaScript(const std::string& source);
 
   const MuonTitleBarManifest manifest_;
+  const MuonTitleBarBackgroundColor background_color_;
   CefWindow* window_ = nullptr;
   CefRefPtr<CefBrowser> browser_;
   std::string title_ = "Muon";

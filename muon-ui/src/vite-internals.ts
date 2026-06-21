@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import { spawn } from "node:child_process";
 import { constants, writeFileSync } from "node:fs";
 import {
   access,
@@ -19,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "json5";
 import type { ViteDevServer } from "vite";
 
+import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
@@ -46,8 +48,16 @@ interface MuonRuntimePaths {
 }
 
 interface MuonOverrideConfig {
+  cdp?: {
+    enable: true;
+  };
   browser: {
     startPage: string;
+    titleBarType?: "native" | "muon";
+    initialTitleBarVisibility?: boolean;
+    keybind?: {
+      devtools: "f12";
+    };
     plugin: {
       allow: string[];
     };
@@ -83,13 +93,6 @@ export interface MuonRuntimePathOptions {
    */
   packageDirectory?: string;
 }
-
-const getServerOpenValue = (
-  server: ViteDevServer,
-): boolean | string | false => {
-  const open = server.config.server.open;
-  return open === true || typeof open === "string" ? open : false;
-};
 
 const resolveFromRoot = (root: string, path: string): string =>
   isAbsolute(path) ? path : resolve(root, path);
@@ -224,19 +227,6 @@ export const createMuonLaunchScript = (
 const getBaseUrl = (server: ViteDevServer): string | undefined =>
   server.resolvedUrls?.local[0] ?? server.resolvedUrls?.network[0];
 
-const getStartUrl = (
-  server: ViteDevServer,
-  openValue: boolean | string,
-): string | undefined => {
-  const baseUrl = getBaseUrl(server);
-  if (baseUrl === undefined) {
-    return undefined;
-  }
-  return typeof openValue === "string"
-    ? new URL(openValue, baseUrl).href
-    : baseUrl;
-};
-
 const getWebSocketOrigin = (startUrl: string): string => {
   const url = new URL(startUrl);
   if (url.protocol === "https:") {
@@ -247,11 +237,28 @@ const getWebSocketOrigin = (startUrl: string): string => {
   return url.origin;
 };
 
-const createMuonOverrideConfig = (startUrl: string): MuonOverrideConfig => {
+const createMuonOverrideConfig = (
+  startUrl: string,
+  enableDebugger: boolean,
+): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
+    ...(enableDebugger
+      ? {
+          cdp: {
+            enable: true,
+          },
+        }
+      : {}),
     browser: {
       startPage: startUrl,
+      ...(enableDebugger
+        ? {
+            keybind: {
+              devtools: "f12",
+            },
+          }
+        : {}),
       plugin: {
         allow: [`${origin}/**`],
       },
@@ -264,18 +271,19 @@ const createMuonOverrideConfig = (startUrl: string): MuonOverrideConfig => {
 
 const writeMuonOverrideConfig = (
   server: ViteDevServer,
-  openValue: boolean | string,
   overrideConfigPath: string,
-): void => {
-  const startUrl = getStartUrl(server, openValue);
+  enableDebugger: boolean,
+): boolean => {
+  const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
     server.config.logger.warn("Muon Vite plugin could not resolve a Vite URL.");
-    return;
+    return false;
   }
   writeFileSync(
     overrideConfigPath,
-    `${JSON.stringify(createMuonOverrideConfig(startUrl), null, 2)}\n`,
+    `${JSON.stringify(createMuonOverrideConfig(startUrl, enableDebugger), null, 2)}\n`,
   );
+  return true;
 };
 
 const createRuntimePaths = async (
@@ -359,6 +367,30 @@ const writeLaunchScript = async (
   }
 };
 
+const quoteWindowsCommandArgument = (value: string): string =>
+  `"${value.replaceAll('"', '\\"')}"`;
+
+const launchMuon = (
+  paths: MuonRuntimePaths,
+  platform: NodeJS.Platform,
+  server: ViteDevServer,
+): void => {
+  const command = platform === "win32" ? "cmd.exe" : paths.launchScriptPath;
+  const args =
+    platform === "win32"
+      ? ["/d", "/s", "/c", quoteWindowsCommandArgument(paths.launchScriptPath)]
+      : [];
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  child.once("error", (error) => {
+    server.config.logger.warn(`Muon startup failed: ${getErrorMessage(error)}`);
+  });
+  child.unref();
+};
+
 export const startMuonViteBrowserBridge = async ({
   server,
   pluginOptions,
@@ -366,8 +398,9 @@ export const startMuonViteBrowserBridge = async ({
   architecture,
   environment,
 }: MuonViteSessionOptions): Promise<void> => {
-  const openValue = getServerOpenValue(server);
-  if (openValue === false || server.httpServer === null) {
+  await ensureMuonGitignoreEntry(server.config.root);
+
+  if (pluginOptions.open === false || server.httpServer === null) {
     return;
   }
 
@@ -407,8 +440,6 @@ export const startMuonViteBrowserBridge = async ({
     await resolveProjectConfigPath(server),
   );
   await writeLaunchScript(paths, platform);
-  const previousBrowser = environment.BROWSER;
-  environment.BROWSER = paths.launchScriptPath;
 
   let cleanupPromise: Promise<void> | undefined = undefined;
   const cleanup = async (): Promise<void> => {
@@ -416,11 +447,6 @@ export const startMuonViteBrowserBridge = async ({
       return cleanupPromise;
     }
     cleanupPromise = (async () => {
-      if (previousBrowser === undefined) {
-        delete environment.BROWSER;
-      } else {
-        environment.BROWSER = previousBrowser;
-      }
       await rm(paths.temporaryDirectory, { recursive: true, force: true });
     })();
     return cleanupPromise;
@@ -438,6 +464,13 @@ export const startMuonViteBrowserBridge = async ({
     void cleanup();
   });
   server.httpServer.once("listening", () => {
-    writeMuonOverrideConfig(server, openValue, paths.overrideConfigPath);
+    const configWritten = writeMuonOverrideConfig(
+      server,
+      paths.overrideConfigPath,
+      pluginOptions.enableDebugger !== false,
+    );
+    if (configWritten) {
+      launchMuon(paths, platform, server);
+    }
   });
 };

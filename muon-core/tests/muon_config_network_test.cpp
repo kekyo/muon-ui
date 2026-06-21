@@ -194,6 +194,10 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
          Expect(browser.initial_window_state ==
                     kMuonBrowserInitialWindowStateNormal,
                 message + " initial window state changed") &&
+         Expect(browser.title_bar == kMuonBrowserTitleBarMuon,
+                message + " title bar mode changed") &&
+         Expect(browser.initial_title_bar_visibility,
+                message + " initial title bar visibility changed") &&
          ExpectBrowserBackgroundSystem(browser.background_color,
                                        message + " background color") &&
          Expect(browser.plugin.allow.size() == 1,
@@ -282,7 +286,7 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
 
   WriteRawString(&bytes, "asset");
   BeginTlvObject(&bytes, 3);
-  WriteRawString(&bytes, "from");
+  WriteRawString(&bytes, "sourcePath");
   WriteTlvString(&bytes, "assets.zip");
   WriteRawString(&bytes, "signature");
   WriteTlvBinary(
@@ -296,7 +300,7 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   BeginTlvObject(&bytes, 3);
   WriteRawString(&bytes, "startPage");
   WriteTlvString(&bytes, "https://embedded.example/app");
-  WriteRawString(&bytes, "profile");
+  WriteRawString(&bytes, "profilePath");
   WriteTlvString(&bytes, "profiles/embedded");
   WriteRawString(&bytes, "backgroundColor");
   WriteTlvBinary(&bytes, {0x12, 0x3a, 0xbc});
@@ -332,7 +336,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.network.allow[0] == "asset://**",
               "missing muon.json default network allowlist is wrong") ||
       !Expect(!config.asset.has_from,
-              "missing muon.json configured asset.from") ||
+              "missing muon.json configured asset.sourcePath") ||
       !Expect(!config.asset.has_signature,
               "missing muon.json configured asset.signature") ||
       !Expect(!config.asset.has_salt,
@@ -519,7 +523,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"from":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profile":"profiles/custom","initialWindowState":"maximized","backgroundColor":"#123abc","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -541,13 +545,21 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.browser.start_page == "https://example.com/app",
                 "browser.startPage was not parsed") &&
          Expect(config.browser.profile == test_directory / "profiles/custom",
-                "browser.profile was not parsed") &&
+                "browser.profilePath was not parsed") &&
          Expect(config.browser.initial_window_state ==
                     kMuonBrowserInitialWindowStateMaximized,
                 "browser.initialWindowState was not parsed") &&
          ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
                                     0x3a, 0xbc,
                                     "browser.backgroundColor was not parsed") &&
+         Expect(config.browser.title_bar == kMuonBrowserTitleBarNative,
+                "browser.titleBarType was not parsed") &&
+         Expect(!config.browser.initial_title_bar_visibility,
+                "browser.initialTitleBarVisibility was not parsed") &&
+         Expect(config.browser.has_initial_title_bar_icon,
+                "browser.initialTitleBarIcon was not marked present") &&
+         Expect(config.browser.initial_title_bar_icon == "icons/app.png",
+                "browser.initialTitleBarIcon was not parsed") &&
          Expect(config.browser.plugin.allow.size() == 2,
                 "browser.plugin.allow pattern count is wrong") &&
          Expect(config.browser.plugin.allow[0] == "asset://main/**",
@@ -586,9 +598,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                 "external plugin allow pattern count is wrong") &&
          Expect(config.plugin.plugins[1].allow[0] == "foobar.*",
                 "external plugin allow pattern changed") &&
-         Expect(config.asset.has_from, "asset.from was not parsed") &&
+         Expect(config.asset.has_from, "asset.sourcePath was not parsed") &&
          Expect(config.asset.from == test_directory / "packed/assets.zip",
-                "asset.from was not resolved from config directory") &&
+                "asset.sourcePath was not resolved from config directory") &&
          Expect(config.asset.has_signature,
                 "asset.signature was not parsed") &&
          Expect(config.asset.signature ==
@@ -667,13 +679,13 @@ static bool RunLaunchSourceProfilePathTest(
 
   const auto explicit_path = test_directory / "profile-explicit.json";
   if (!Expect(WriteFile(explicit_path,
-                        R"({"browser":{"profile":"profiles/custom"}})"),
+                        R"({"browser":{"profilePath":"profiles/custom"}})"),
               "failed to write explicit profile config") ||
       !LoadConfigExpectSuccess(explicit_path, &config)) {
     return false;
   }
   return Expect(config.browser.profile == test_directory / "profiles/custom",
-                "explicit browser.profile should override launch source");
+                "explicit browser.profilePath should override launch source");
 }
 
 static bool ExpectDefaultConfigStart(
@@ -789,7 +801,7 @@ static bool RunEmbeddedConfigLoadingTest(
                 "embedded browser.startPage was not parsed") &&
          Expect(config.browser.profile ==
                     runtime_directory / "profiles/embedded",
-                "embedded browser.profile was not resolved from executable "
+                "embedded browser.profilePath was not resolved from executable "
                 "directory") &&
          ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
                                     0x3a, 0xbc,
@@ -798,9 +810,10 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.plugin.path == runtime_directory / "plugins",
                 "embedded plugin.path was not resolved from executable "
                 "directory") &&
-         Expect(config.asset.has_from, "embedded asset.from was not parsed") &&
+         Expect(config.asset.has_from,
+                "embedded asset.sourcePath was not parsed") &&
          Expect(config.asset.from == runtime_directory / "assets.zip",
-                "embedded asset.from was not resolved from executable "
+                "embedded asset.sourcePath was not resolved from executable "
                 "directory") &&
          Expect(config.asset.has_signature,
                 "embedded asset.signature was not parsed") &&
@@ -867,11 +880,11 @@ static bool RunConfigOverrideLoadingTest(
   const auto second_path = second_directory / "override.json";
   if (!Expect(WriteFile(
                   first_path,
-                  R"({"asset":{"from":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profile":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
               "failed to write first override config") ||
       !Expect(WriteFile(
                   second_path,
-                  R"({"asset":{"from":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write second override config")) {
     return false;
   }
@@ -884,13 +897,15 @@ static bool RunConfigOverrideLoadingTest(
   if (!Expect(config.browser.start_page == "https://second.example/app",
               "later scalar browser.startPage did not override") ||
       !Expect(config.browser.profile == first_directory / "profiles/first",
-              "browser.profile was not resolved from its config directory") ||
+              "browser.profilePath was not resolved from its config directory") ||
       !Expect(config.browser.initial_window_state ==
                   kMuonBrowserInitialWindowStateFullscreen,
               "later scalar browser.initialWindowState did not override") ||
       !ExpectBrowserBackgroundRgb(
           config.browser.background_color, 0xab, 0xcd, 0xef,
           "later scalar browser.backgroundColor did not override") ||
+      !Expect(config.browser.title_bar == kMuonBrowserTitleBarMuon,
+              "later scalar browser.titleBarType did not override") ||
       !Expect(config.browser.plugin.allow.size() == 2,
               "browser.plugin.allow array was not merged by equality") ||
       !Expect(config.browser.plugin.allow[0] == "asset://first/**",
@@ -941,9 +956,9 @@ static bool RunConfigOverrideLoadingTest(
     return false;
   }
   if (!Expect(config.asset.has_from,
-              "merged config did not preserve asset.from") ||
+              "merged config did not preserve asset.sourcePath") ||
       !Expect(config.asset.from == second_directory / "assets-second.zip",
-              "asset.from was not resolved from the later config directory") ||
+              "asset.sourcePath was not resolved from the later config directory") ||
       !Expect(config.asset.has_signature,
               "merged config did not preserve asset.signature") ||
       !Expect(config.asset.signature ==
@@ -1066,6 +1081,28 @@ static bool RunBrowserConfigLoadingTest(
                     test_case.value)) {
       return false;
     }
+  }
+
+  const auto initial_title_bar_visible_path =
+      test_directory / "browser-initial-title-bar-visible.json";
+  if (!Expect(WriteFile(initial_title_bar_visible_path,
+                        R"({"browser":{"initialTitleBarVisibility":true}})"),
+              "failed to write visible initial title bar config") ||
+      !LoadConfigExpectSuccess(initial_title_bar_visible_path, &config) ||
+      !Expect(config.browser.initial_title_bar_visibility,
+              "browser.initialTitleBarVisibility true was not parsed")) {
+    return false;
+  }
+
+  const auto initial_title_bar_hidden_path =
+      test_directory / "browser-initial-title-bar-hidden.json";
+  if (!Expect(WriteFile(initial_title_bar_hidden_path,
+                        R"({"browser":{"initialTitleBarVisibility":false}})"),
+              "failed to write hidden initial title bar config") ||
+      !LoadConfigExpectSuccess(initial_title_bar_hidden_path, &config) ||
+      !Expect(!config.browser.initial_title_bar_visibility,
+              "browser.initialTitleBarVisibility false was not parsed")) {
+    return false;
   }
 
   const auto combo_path = test_directory / "browser-combo.json";
@@ -1283,11 +1320,11 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(invalid_asset_path, R"({"asset":true})"),
                 "failed to write invalid asset config") &&
          Expect(WriteFile(invalid_asset_from_type_path,
-                          R"({"asset":{"from":42}})"),
-                "failed to write invalid asset.from type config") &&
+                          R"({"asset":{"sourcePath":42}})"),
+                "failed to write invalid asset.sourcePath type config") &&
          Expect(WriteFile(empty_asset_from_path,
-                          R"({"asset":{"from":""}})"),
-                "failed to write empty asset.from config") &&
+                          R"({"asset":{"sourcePath":""}})"),
+                "failed to write empty asset.sourcePath config") &&
          Expect(WriteFile(invalid_asset_signature_type_path,
                           R"({"asset":{"signature":42}})"),
                 "failed to write invalid asset.signature type config") &&
@@ -1372,9 +1409,9 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_asset_path,
                                  "asset must be an object") &&
          LoadConfigExpectFailure(invalid_asset_from_type_path,
-                                 "asset.from must be a string") &&
+                                 "asset.sourcePath must be a string") &&
          LoadConfigExpectFailure(empty_asset_from_path,
-                                 "asset.from must not be empty") &&
+                                 "asset.sourcePath must not be empty") &&
          LoadConfigExpectFailure(invalid_asset_signature_type_path,
                                  "asset.signature must be a string") &&
          LoadConfigExpectFailure(short_asset_signature_path,
@@ -1556,6 +1593,12 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "empty-browser-initial-window-state.json";
   const auto unknown_initial_window_state_path =
       test_directory / "unknown-browser-initial-window-state.json";
+  const auto invalid_initial_title_bar_visibility_path =
+      test_directory / "invalid-browser-initial-title-bar-visibility.json";
+  const auto invalid_initial_title_bar_icon_path =
+      test_directory / "invalid-browser-initial-title-bar-icon.json";
+  const auto empty_initial_title_bar_icon_path =
+      test_directory / "empty-browser-initial-title-bar-icon.json";
   const auto invalid_background_color_path =
       test_directory / "invalid-browser-background-color.json";
   const auto empty_background_color_path =
@@ -1566,6 +1609,12 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "alpha-browser-background-color.json";
   const auto named_background_color_path =
       test_directory / "named-browser-background-color.json";
+  const auto invalid_title_bar_path =
+      test_directory / "invalid-browser-title-bar.json";
+  const auto empty_title_bar_path =
+      test_directory / "empty-browser-title-bar.json";
+  const auto unknown_title_bar_path =
+      test_directory / "unknown-browser-title-bar.json";
   return Expect(WriteFile(invalid_browser_path, R"({"browser":true})"),
                 "failed to write invalid browser config") &&
          Expect(WriteFile(invalid_browser_start_path,
@@ -1575,10 +1624,10 @@ static bool RunBrowserConfigValidationTest(
                           R"({"browser":{"startPage":""}})"),
                 "failed to write empty browser start config") &&
          Expect(WriteFile(invalid_browser_profile_path,
-                          R"({"browser":{"profile":42}})"),
+                          R"({"browser":{"profilePath":42}})"),
                 "failed to write invalid browser profile config") &&
          Expect(WriteFile(empty_browser_profile_path,
-                          R"({"browser":{"profile":""}})"),
+                          R"({"browser":{"profilePath":""}})"),
                 "failed to write empty browser profile config") &&
          Expect(WriteFile(invalid_initial_window_state_path,
                           R"({"browser":{"initialWindowState":42}})"),
@@ -1589,6 +1638,15 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(unknown_initial_window_state_path,
                           R"({"browser":{"initialWindowState":"iconified"}})"),
                 "failed to write unknown initial window state config") &&
+         Expect(WriteFile(invalid_initial_title_bar_visibility_path,
+                          R"({"browser":{"initialTitleBarVisibility":"hidden"}})"),
+                "failed to write invalid initial title bar visibility config") &&
+         Expect(WriteFile(invalid_initial_title_bar_icon_path,
+                          R"({"browser":{"initialTitleBarIcon":42}})"),
+                "failed to write invalid initial title bar icon config") &&
+         Expect(WriteFile(empty_initial_title_bar_icon_path,
+                          R"({"browser":{"initialTitleBarIcon":""}})"),
+                "failed to write empty initial title bar icon config") &&
          Expect(WriteFile(invalid_background_color_path,
                           R"({"browser":{"backgroundColor":42}})"),
                 "failed to write invalid background color config") &&
@@ -1604,6 +1662,15 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(named_background_color_path,
                           R"({"browser":{"backgroundColor":"black"}})"),
                 "failed to write named background color config") &&
+         Expect(WriteFile(invalid_title_bar_path,
+                          R"({"browser":{"titleBarType":42}})"),
+                "failed to write invalid title bar config") &&
+         Expect(WriteFile(empty_title_bar_path,
+                          R"({"browser":{"titleBarType":""}})"),
+                "failed to write empty title bar config") &&
+         Expect(WriteFile(unknown_title_bar_path,
+                          R"({"browser":{"titleBarType":"system"}})"),
+                "failed to write unknown title bar config") &&
          Expect(WriteFile(invalid_keybinds_path,
                           R"({"browser":{"keybind":true}})"),
                 "failed to write invalid browser keybind config") &&
@@ -1658,9 +1725,9 @@ static bool RunBrowserConfigValidationTest(
          LoadConfigExpectFailure(empty_browser_start_path,
                                  "browser.startPage must not be empty") &&
          LoadConfigExpectFailure(invalid_browser_profile_path,
-                                 "browser.profile must be a string") &&
+                                 "browser.profilePath must be a string") &&
          LoadConfigExpectFailure(empty_browser_profile_path,
-                                 "browser.profile must not be empty") &&
+                                 "browser.profilePath must not be empty") &&
          LoadConfigExpectFailure(invalid_initial_window_state_path,
                                  "browser.initialWindowState must be a "
                                  "string") &&
@@ -1670,6 +1737,15 @@ static bool RunBrowserConfigValidationTest(
          LoadConfigExpectFailure(unknown_initial_window_state_path,
                                  "browser.initialWindowState has unknown "
                                  "value") &&
+         LoadConfigExpectFailure(invalid_initial_title_bar_visibility_path,
+                                 "browser.initialTitleBarVisibility must be a "
+                                 "boolean") &&
+         LoadConfigExpectFailure(invalid_initial_title_bar_icon_path,
+                                 "browser.initialTitleBarIcon must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(empty_initial_title_bar_icon_path,
+                                 "browser.initialTitleBarIcon must not be "
+                                 "empty") &&
          LoadConfigExpectFailure(invalid_background_color_path,
                                  "browser.backgroundColor must be a string") &&
          LoadConfigExpectFailure(empty_background_color_path,
@@ -1680,6 +1756,12 @@ static bool RunBrowserConfigValidationTest(
                                  "browser.backgroundColor has unknown value") &&
          LoadConfigExpectFailure(named_background_color_path,
                                  "browser.backgroundColor has unknown value") &&
+         LoadConfigExpectFailure(invalid_title_bar_path,
+                                 "browser.titleBarType must be a string") &&
+         LoadConfigExpectFailure(empty_title_bar_path,
+                                 "browser.titleBarType must not be empty") &&
+         LoadConfigExpectFailure(unknown_title_bar_path,
+                                 "browser.titleBarType has unknown value") &&
          LoadConfigExpectFailure(invalid_keybinds_path,
                                  "browser.keybind must be an object") &&
          LoadConfigExpectFailure(invalid_devtools_path,

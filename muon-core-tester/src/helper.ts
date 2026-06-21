@@ -10,6 +10,11 @@ const OPEN_READY_STATE = 1;
 const CLOSED_READY_STATE = 3;
 
 /**
+ * CDP title used by the internal Muon custom title bar target.
+ */
+export const MUON_TITLE_BAR_TARGET_TITLE = "Muon Title Bar";
+
+/**
  * JSON-compatible value used for CDP parameters and results.
  */
 export type JsonValue =
@@ -90,6 +95,17 @@ export interface CdpTarget {
    */
   webSocketDebuggerUrl?: string;
 }
+
+/**
+ * Returns true when a CDP target belongs to the internal Muon title bar.
+ *
+ * @param target CDP target entry.
+ */
+export const isMuonTitleBarTarget = (target: CdpTarget): boolean =>
+  target.title === MUON_TITLE_BAR_TARGET_TITLE ||
+  target.url.includes("Muon%20Title%20Bar") ||
+  target.url.includes("Muon Title Bar") ||
+  target.url.includes("muon-title-bar");
 
 /**
  * CDP event message.
@@ -313,11 +329,18 @@ const selectTarget = (
 ): ConnectableCdpTarget => {
   const target =
     targetId === undefined
-      ? targets.find(
-          (candidate) =>
-            candidate.type === "page" &&
-            candidate.webSocketDebuggerUrl !== undefined,
-        )
+      ? (() => {
+          const candidates = targets.filter(
+            (candidate) =>
+              candidate.type === "page" &&
+              !isMuonTitleBarTarget(candidate) &&
+              candidate.webSocketDebuggerUrl !== undefined,
+          );
+          return (
+            candidates.find((candidate) => candidate.url !== "about:blank") ??
+            candidates[0]
+          );
+        })()
       : targets.find((candidate) => candidate.id === targetId);
 
   if (target === undefined) {

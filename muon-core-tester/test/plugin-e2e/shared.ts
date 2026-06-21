@@ -39,7 +39,9 @@ import { afterEach, describe, expect } from "vitest";
 
 import {
   connectToMuonCdp,
+  isMuonTitleBarTarget,
   listCdpTargets,
+  MUON_TITLE_BAR_TARGET_TITLE,
   type CdpTarget,
   type CdpDriver,
 } from "../../src/helper.js";
@@ -49,10 +51,12 @@ export {
   appendFile,
   constants,
   connectToMuonCdp,
+  isMuonTitleBarTarget,
   join,
   listCdpTargets,
   mkdir,
   mkdtemp,
+  MUON_TITLE_BAR_TARGET_TITLE,
   readFile,
   rm,
   tmpdir,
@@ -124,6 +128,10 @@ export type BrowserInitialWindowState =
   | "minimized"
   | "maximized"
   | "fullscreen";
+
+export type BrowserInitialTitleBarVisibility = boolean;
+
+export type BrowserTitleBarType = "muon" | "native";
 
 export interface BrowserOuterSize {
   width: number;
@@ -277,6 +285,8 @@ export const browserFunctionNames = [
   "minimize",
   "maximize",
   "restore",
+  "setTitleBarVisibility",
+  "setTitleBarIcon",
   "close",
   "shutdown",
 ] as const;
@@ -398,7 +408,15 @@ export const waitForCdp = async (timeoutMs: number): Promise<void> => {
         port: MUON_PORT,
         timeoutMs: 1000,
       });
-      if (targets.some((target) => target.type === "page")) {
+      if (
+        targets.some(
+          (target) =>
+            target.type === "page" &&
+            target.webSocketDebuggerUrl !== undefined &&
+            target.url !== "about:blank" &&
+            !isMuonTitleBarTarget(target),
+        )
+      ) {
         return;
       }
     } catch (error) {
@@ -801,6 +819,7 @@ export const waitForNewPageTarget = async (
       (candidate) =>
         !previousTargetIds.has(candidate.id) &&
         candidate.type === "page" &&
+        !isMuonTitleBarTarget(candidate) &&
         matches(candidate),
     );
     if (target !== undefined) {
@@ -823,7 +842,9 @@ export const expectNoNewPageTarget = async (
   expect(
     targets.some(
       (candidate) =>
-        !previousTargetIds.has(candidate.id) && candidate.type === "page",
+        !previousTargetIds.has(candidate.id) &&
+        candidate.type === "page" &&
+        !isMuonTitleBarTarget(candidate),
     ),
   ).toBe(false);
 };
@@ -1179,10 +1200,15 @@ export const writeMuonConfig = async (
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[] = [],
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
-  assetFrom: string | undefined = undefined,
+  assetSourcePath: string | undefined = undefined,
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -1232,11 +1258,20 @@ export const writeMuonConfig = async (
   if (browserBackgroundColor !== undefined) {
     browser.backgroundColor = browserBackgroundColor;
   }
+  if (browserInitialTitleBarVisibility !== undefined) {
+    browser.initialTitleBarVisibility = browserInitialTitleBarVisibility;
+  }
+  if (browserInitialTitleBarIcon !== undefined) {
+    browser.initialTitleBarIcon = browserInitialTitleBarIcon;
+  }
+  if (browserTitleBarType !== undefined) {
+    browser.titleBarType = browserTitleBarType;
+  }
   if (Object.keys(browser).length > 0) {
     config.browser = browser;
   }
-  if (assetFrom !== undefined) {
-    const asset: Record<string, unknown> = { from: assetFrom };
+  if (assetSourcePath !== undefined) {
+    const asset: Record<string, unknown> = { sourcePath: assetSourcePath };
     if (assetSignature !== undefined) {
       asset.signature = assetSignature;
     }
@@ -1266,10 +1301,14 @@ export const startMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   includeStandardPlugins = true,
   browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
-  assetFrom: string | undefined = undefined,
+  assetSourcePath: string | undefined = undefined,
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<RunningMuon> => {
   const executable = getMuonExecutable(directory);
   await requireFile(executable);
@@ -1296,10 +1335,13 @@ export const startMuon = async (
     networkAuthorizedOrigins,
     browserAllowUnsafeJavaScriptParentAccess,
     browserInitialWindowState,
-    assetFrom,
+    assetSourcePath,
     assetSignature,
     assetSalt,
     browserBackgroundColor,
+    browserInitialTitleBarVisibility,
+    undefined,
+    browserTitleBarType,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -1365,10 +1407,14 @@ export const startDebugMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   includeStandardPlugins = true,
   browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
-  assetFrom: string | undefined = undefined,
+  assetSourcePath: string | undefined = undefined,
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -1385,10 +1431,12 @@ export const startDebugMuon = async (
     browserAllowUnsafeJavaScriptParentAccess,
     includeStandardPlugins,
     browserInitialWindowState,
-    assetFrom,
+    assetSourcePath,
     assetSignature,
     assetSalt,
     browserBackgroundColor,
+    browserInitialTitleBarVisibility,
+    browserTitleBarType,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>
@@ -1404,6 +1452,13 @@ export const startReleaseMuon = async (): Promise<RunningMuon> =>
 
 export const startGestamentDebugMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
+  assetRoot: string | undefined = undefined,
+  browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -1420,6 +1475,14 @@ export const startGestamentDebugMuon = async (
     true,
     [],
     browserAllowUnsafeJavaScriptParentAccess,
+    undefined,
+    assetRoot,
+    undefined,
+    undefined,
+    browserBackgroundColor,
+    browserInitialTitleBarVisibility,
+    browserInitialTitleBarIcon,
+    browserTitleBarType,
   );
   let app: GtkApp | undefined = undefined;
   const args = [

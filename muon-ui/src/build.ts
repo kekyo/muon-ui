@@ -103,7 +103,7 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
 };
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
-const appConfigFromPath = "./assets.zip";
+const appConfigSourcePath = "./assets.zip";
 const defaultAppName = "muon-app";
 const muonLicenseFileName = "LICENSE_muon";
 const directoryMode = 0o755;
@@ -375,7 +375,7 @@ const resolveAssetInput = (
 ): AssetInput => {
   const configuredAssetSourcePath =
     assetSourcePath === undefined
-      ? readConfigAssetFrom(buildConfig.config)
+      ? readConfigAssetSourcePath(buildConfig.config)
       : undefined;
   const sourcePath =
     assetSourcePath !== undefined
@@ -447,7 +447,9 @@ const readBuildConfig = async (
   };
 };
 
-const readConfigAssetFrom = (sourceConfig: JsonObject): string | undefined => {
+const readConfigAssetSourcePath = (
+  sourceConfig: JsonObject,
+): string | undefined => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset === undefined) {
     return undefined;
@@ -456,15 +458,17 @@ const readConfigAssetFrom = (sourceConfig: JsonObject): string | undefined => {
     throw new Error("muon.json asset must be an object when present.");
   }
 
-  const sourceAssetFrom = sourceAsset.from;
-  if (sourceAssetFrom === undefined) {
+  const sourceAssetPath = sourceAsset.sourcePath;
+  if (sourceAssetPath === undefined) {
     return undefined;
   }
-  if (typeof sourceAssetFrom !== "string") {
-    throw new Error("muon.json asset.from must be a string when present.");
+  if (typeof sourceAssetPath !== "string") {
+    throw new Error(
+      "muon.json asset.sourcePath must be a string when present.",
+    );
   }
 
-  return sourceAssetFrom;
+  return sourceAssetPath;
 };
 
 const resolveConfigPath = async (
@@ -784,7 +788,7 @@ const createEmbeddedConfig = (
     ...sourceConfig,
     asset: {
       ...(sourceAsset ?? {}),
-      from: appConfigFromPath,
+      sourcePath: appConfigSourcePath,
       signature: asset.signature,
       salt: asset.salt,
     },

@@ -8,6 +8,7 @@
 
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
+#include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
 #include "plugins/muon_plugin_metadata.h"
@@ -95,6 +96,21 @@ class QuitMuonMessageLoopTask final : public CefTask {
   DISALLOW_COPY_AND_ASSIGN(QuitMuonMessageLoopTask);
 };
 
+static CefRefPtr<CefWindow> GetMuonWindowForCloseBrowser(
+    CefRefPtr<CefBrowser> browser) {
+  if (!browser) {
+    return nullptr;
+  }
+  const auto browser_view = CefBrowserView::GetForBrowser(browser);
+  if (browser_view) {
+    const auto window = browser_view->GetWindow();
+    if (window) {
+      return window;
+    }
+  }
+  return GetRegisteredMuonWindowForBrowser(browser->GetIdentifier());
+}
+
 class CloseMuonBrowsersForShutdownTask final : public CefTask {
  public:
   explicit CloseMuonBrowsersForShutdownTask(
@@ -114,6 +130,12 @@ class CloseMuonBrowsersForShutdownTask final : public CefTask {
         continue;
       }
       host->CloseDevTools();
+      const auto window = GetMuonWindowForCloseBrowser(browser);
+      if (window) {
+        window->Close();
+        started_close = true;
+        continue;
+      }
       host->CloseBrowser(true);
       started_close = true;
     }
@@ -135,11 +157,17 @@ class OpenMuonDetachedPopupTask final : public CefTask {
       CefRefPtr<CefClient> client,
       std::string target_url,
       const CefBrowserSettings& settings,
-      CefRefPtr<CefDictionaryValue> extra_info)
+      CefRefPtr<CefDictionaryValue> extra_info,
+      bool initial_title_bar_visibility,
+      MuonTitleBarManifest title_bar_manifest,
+      MuonTitleBarBackgroundColor title_bar_background_color)
       : client_(client),
         target_url_(std::move(target_url)),
         settings_(settings),
-        extra_info_(extra_info) {}
+        extra_info_(extra_info),
+        initial_title_bar_visibility_(initial_title_bar_visibility),
+        title_bar_manifest_(std::move(title_bar_manifest)),
+        title_bar_background_color_(title_bar_background_color) {}
 
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
@@ -149,14 +177,21 @@ class OpenMuonDetachedPopupTask final : public CefTask {
     }
     const auto browser_view = CefBrowserView::CreateBrowserView(
         client_, GetMuonPopupNavigationUrl(target_url_), settings_,
-        extra_info_, nullptr, new MuonBrowserViewDelegate(false));
+        extra_info_, nullptr,
+        new MuonBrowserViewDelegate(
+            false, initial_title_bar_visibility_, title_bar_manifest_,
+            title_bar_background_color_));
     if (!browser_view) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "Failed to create detached popup browser view");
       return;
     }
     CefWindow::CreateTopLevelWindow(
-        new MuonWindowDelegate(browser_view, false));
+        new MuonWindowDelegate(browser_view, false,
+                               kMuonBrowserInitialWindowStateNormal,
+                               initial_title_bar_visibility_,
+                               title_bar_manifest_,
+                               title_bar_background_color_));
   }
 
  private:
@@ -164,6 +199,9 @@ class OpenMuonDetachedPopupTask final : public CefTask {
   const std::string target_url_;
   const CefBrowserSettings settings_;
   CefRefPtr<CefDictionaryValue> extra_info_;
+  const bool initial_title_bar_visibility_;
+  const MuonTitleBarManifest title_bar_manifest_;
+  const MuonTitleBarBackgroundColor title_bar_background_color_;
 
   IMPLEMENT_REFCOUNTING(OpenMuonDetachedPopupTask);
   DISALLOW_COPY_AND_ASSIGN(OpenMuonDetachedPopupTask);
@@ -610,9 +648,19 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
                        std::shared_ptr<MuonNetworkPolicy>
                            unsafe_parent_access_policy,
                        std::function<bool(int32_t)> shutdown_requester,
-                       const MuonBrowserConfig& browser_config)
+                       std::shared_ptr<MuonAppStorage> app_storage,
+                       const MuonBrowserConfig& browser_config,
+                       MuonTitleBarManifest title_bar_manifest,
+                       MuonTitleBarBackgroundColor title_bar_background_color,
+                       bool has_initial_title_bar_icon,
+                       MuonTitleBarIcon initial_title_bar_icon)
     : browser_config_(browser_config),
+      title_bar_manifest_(std::move(title_bar_manifest)),
+      title_bar_background_color_(title_bar_background_color),
+      has_initial_title_bar_icon_(has_initial_title_bar_icon),
+      initial_title_bar_icon_(std::move(initial_title_bar_icon)),
       shutdown_requester_(std::move(shutdown_requester)),
+      app_storage_(std::move(app_storage)),
       plugin_runtime_(std::move(plugin_runtime)),
       network_policy_(std::move(network_policy)),
       plugin_page_policy_(std::move(plugin_page_policy)),
@@ -720,13 +768,37 @@ bool MuonClient::OnBeforePopup(
     }
   }
   CefPostTask(TID_UI, new OpenMuonDetachedPopupTask(
-                          client, url, settings, detached_extra_info));
+                          client, url, settings, detached_extra_info,
+                          browser_config_.initial_title_bar_visibility,
+                          title_bar_manifest_, title_bar_background_color_));
   return true;
 }
 
 void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   browsers_by_id_[browser->GetIdentifier()] = browser;
+  const auto browser_view = CefBrowserView::GetForBrowser(browser);
+  if (browser_view) {
+    const auto window = browser_view->GetWindow();
+    if (window) {
+      RegisterMuonTitleBarBrowser(window, browser->GetIdentifier());
+    }
+    RegisterMuonTitleBarBrowserViewBrowser(
+        browser_view, browser->GetIdentifier());
+  }
+  CefRefPtr<CefWindow> window;
+  std::string error_message;
+  if (GetBrowserViewAndWindow(browser, nullptr, &window, &error_message)) {
+    RegisterMuonTitleBarBrowser(window, browser->GetIdentifier());
+  }
+  if (has_initial_title_bar_icon_) {
+    std::string title_bar_icon_error;
+    if (!SetTitleBarIconForBrowser(
+            browser, &initial_title_bar_icon_, &title_bar_icon_error)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
+                     title_bar_icon_error);
+    }
+  }
   if (!message_loop_quit_requested_) {
     quit_message_loop_after_pending_fs_dialogs_ = false;
     quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
@@ -818,9 +890,37 @@ void MuonClient::QuitMessageLoopWhenIdle() {
   RequestMessageLoopQuit(false);
 }
 
+bool MuonClient::SetTitleBarIconForBrowser(
+    CefRefPtr<CefBrowser> browser,
+    const MuonTitleBarIcon* icon,
+    std::string* error_message) {
+  if (!browser) {
+    if (error_message != nullptr) {
+      *error_message = "Browser is not available";
+    }
+    return false;
+  }
+  CefRefPtr<CefBrowserView> browser_view;
+  CefRefPtr<CefWindow> window;
+  if (!GetBrowserViewAndWindow(browser, &browser_view, &window,
+                               error_message)) {
+    return false;
+  }
+  (void)browser_view;
+  SetRegisteredMuonTitleBarIconForBrowser(
+      browser->GetIdentifier(), icon == nullptr ? nullptr : icon->image,
+      icon == nullptr ? std::string() : icon->data_url);
+  return true;
+}
+
 void MuonClient::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                 const CefString& title) {
   CEF_REQUIRE_UI_THREAD();
+  const auto window_title = GetMuonWindowTitleOrDefault(title.ToString());
+  if (browser) {
+    SetRegisteredMuonTitleBarTitleForBrowser(
+        browser->GetIdentifier(), window_title);
+  }
   CefRefPtr<CefBrowserView> browser_view;
   CefRefPtr<CefWindow> window;
   std::string error_message;
@@ -828,7 +928,8 @@ void MuonClient::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                &error_message)) {
     return;
   }
-  window->SetTitle(GetMuonWindowTitleOrDefault(title.ToString()));
+  window->SetTitle(window_title);
+  SetRegisteredMuonTitleBarTitle(window, window_title);
 }
 
 bool MuonClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -1270,7 +1371,11 @@ bool MuonClient::GetBrowserViewAndWindow(
     }
     return false;
   }
-  const auto resolved_window = resolved_browser_view->GetWindow();
+  auto resolved_window = resolved_browser_view->GetWindow();
+  if (!resolved_window) {
+    resolved_window =
+        GetRegisteredMuonWindowForBrowser(browser->GetIdentifier());
+  }
   if (!resolved_window) {
     if (error_message != nullptr) {
       *error_message = "Muon browser window is unavailable";
@@ -1735,6 +1840,47 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
       window->Restore();
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility: {
+      if (!call.encoded_args || call.encoded_args->GetSize() != 1 ||
+          call.encoded_args->GetType(0) != VTYPE_BOOL) {
+        RejectPluginCall(call, "Invalid title bar visibility");
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      SetRegisteredMuonTitleBarVisibilityForBrowser(
+          call.browser->GetIdentifier(), call.encoded_args->GetBool(0));
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetTitleBarIcon: {
+      if (!call.encoded_args || call.encoded_args->GetSize() != 1) {
+        RejectPluginCall(call, "Invalid title bar icon");
+        return;
+      }
+      const auto arg_type = call.encoded_args->GetType(0);
+      if (arg_type == VTYPE_NULL) {
+        if (!SetTitleBarIconForBrowser(call.browser, nullptr,
+                                       &error_message)) {
+          RejectPluginCall(call, error_message);
+          return;
+        }
+        SendPluginResult(call.context, call.frame, call.call_id, result);
+        break;
+      }
+      if (arg_type != VTYPE_STRING) {
+        RejectPluginCall(call, "Invalid title bar icon");
+        return;
+      }
+      MuonTitleBarIcon icon;
+      if (!LoadMuonTitleBarIconFromStorage(
+              app_storage_, call.encoded_args->GetString(0).ToString(), &icon,
+              &error_message) ||
+          !SetTitleBarIconForBrowser(call.browser, &icon, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
       break;
     }
     case MuonBuiltinBrowserFunctionKind::Close: {

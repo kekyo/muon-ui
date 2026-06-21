@@ -189,7 +189,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
     }
   });
 
-  it("loads app assets from asset.from ZIP storage", async () => {
+  it("loads app assets from asset.sourcePath ZIP storage", async () => {
     const configDirectory = join(DEBUG_MUON_DIRECTORY, ".muon-test-config");
     const archivePath = join(configDirectory, "assets.zip");
     const assetSalt = "deadbeef";

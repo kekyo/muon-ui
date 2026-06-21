@@ -566,6 +566,9 @@ set(APP_SOURCES
   src/browser/muon_browser_view_delegate.cpp
   src/browser/muon_builtin_browser.cpp
   src/browser/muon_client.cpp
+  src/browser/muon_default_title_bar_icon.cpp
+  src/browser/muon_title_bar.cpp
+  src/browser/muon_title_bar_loader.cpp
   src/browser/muon_window_delegate.cpp
   src/browser/muon_window_state.cpp
   src/browser/muon_window_title.cpp
@@ -601,6 +604,9 @@ set(APP_HEADERS
   src/browser/muon_browser_view_delegate.h
   src/browser/muon_builtin_browser.h
   src/browser/muon_client.h
+  src/browser/muon_default_title_bar_icon.h
+  src/browser/muon_title_bar.h
+  src/browser/muon_title_bar_loader.h
   src/browser/muon_window_delegate.h
   src/browser/muon_window_state.h
   src/browser/muon_window_title.h
@@ -631,6 +637,7 @@ set(APP_HEADERS
   src/plugins/muon_type_metadata.h
   src/plugins/muon_v8_handler.h
   src/ui/muon_ui_fs_dialogs.h
+  src/ui/muon_ui_title_bar.h
   include/muon_plugin_api.h
   )
 
@@ -663,6 +670,8 @@ add_library(muon_ui SHARED
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
   src/plugins/builtin/muon_builtin_fs_helpers.h
   src/ui/muon_ui_fs_dialogs.h
+  src/ui/muon_ui_title_bar.cpp
+  src/ui/muon_ui_title_bar.h
   )
 set_target_properties(muon_ui PROPERTIES
   OUTPUT_NAME "muon-ui"
@@ -1124,6 +1133,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_builtin_browser_test
     tests/muon_builtin_browser_test.cpp
     src/browser/muon_builtin_browser.cpp
+    src/browser/muon_title_bar.cpp
     src/plugins/muon_type_metadata.cpp
     src/browser/muon_window_delegate.cpp
     src/browser/muon_window_state.cpp
@@ -1139,11 +1149,29 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   target_link_libraries(muon_builtin_browser_test PRIVATE
     libcef_dll_wrapper
     libcef_lib
+    yyjson
     ${LIBFFI_TARGET}
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_builtin_browser_test)
+  add_executable(muon_ui_title_bar_manifest_test
+    tests/muon_ui_title_bar_manifest_test.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_ui_title_bar_manifest_test)
+  target_compile_features(muon_ui_title_bar_manifest_test PRIVATE cxx_std_20)
+  set_target_properties(muon_ui_title_bar_manifest_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}"
+    )
+  target_include_directories(muon_ui_title_bar_manifest_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_ui_title_bar_manifest_test PRIVATE
+    muon_ui
+    yyjson
+    )
+  MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
   add_executable(muon_config_network_test
     tests/muon_config_network_test.cpp
     src/browser/muon_browser_background_color.cpp
@@ -1241,6 +1269,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME builtin_browser
     COMMAND muon_builtin_browser_test
+    )
+  add_test(
+    NAME muon_ui_title_bar_manifest
+    COMMAND "${MUON_RUNTIME_DIR}/muon_ui_title_bar_manifest_test"
     )
   add_test(
     NAME config_network

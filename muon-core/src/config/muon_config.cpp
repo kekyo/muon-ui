@@ -35,16 +35,21 @@ static constexpr const char* kMuonConfigSearchFileNames[] = {
 };
 static constexpr yyjson_read_flag kMuonConfigReadFlags = YYJSON_READ_JSON5;
 static constexpr char kMuonConfigAssetKey[] = "asset";
-static constexpr char kMuonConfigAssetFromKey[] = "from";
+static constexpr char kMuonConfigAssetSourcePathKey[] = "sourcePath";
 static constexpr char kMuonConfigAssetSignatureKey[] = "signature";
 static constexpr char kMuonConfigAssetSaltKey[] = "salt";
 static constexpr char kMuonConfigBrowserKey[] = "browser";
 static constexpr char kMuonConfigBrowserStartPageKey[] = "startPage";
-static constexpr char kMuonConfigBrowserProfileKey[] = "profile";
+static constexpr char kMuonConfigBrowserProfilePathKey[] = "profilePath";
 static constexpr char kMuonConfigBrowserInitialWindowStateKey[] =
     "initialWindowState";
+static constexpr char kMuonConfigBrowserInitialTitleBarVisibilityKey[] =
+    "initialTitleBarVisibility";
+static constexpr char kMuonConfigBrowserInitialTitleBarIconKey[] =
+    "initialTitleBarIcon";
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
     "backgroundColor";
+static constexpr char kMuonConfigBrowserTitleBarTypeKey[] = "titleBarType";
 static constexpr char kMuonConfigBrowserKeybindsKey[] = "keybind";
 static constexpr char kMuonConfigBrowserDevToolsKey[] = "devtools";
 static constexpr char kMuonConfigBrowserReloadKey[] = "reload";
@@ -738,7 +743,8 @@ static bool ResolveDefaultBrowserProfilePath(
   }
 
   *error_message =
-      "Unsupported --muon-launch-from for browser.profile: " + launch_source;
+      "Unsupported --muon-launch-from for browser.profilePath: " +
+      launch_source;
   return false;
 }
 
@@ -810,7 +816,7 @@ static yyjson_val* GetObjectValue(yyjson_val* object, const char* key) {
 
 static bool HasBrowserProfilePath(yyjson_val* root) {
   const auto browser = GetObjectValue(root, kMuonConfigBrowserKey);
-  return GetObjectValue(browser, kMuonConfigBrowserProfileKey) != nullptr;
+  return GetObjectValue(browser, kMuonConfigBrowserProfilePathKey) != nullptr;
 }
 
 static bool HasPluginPath(yyjson_val* root) {
@@ -820,7 +826,7 @@ static bool HasPluginPath(yyjson_val* root) {
 
 static bool HasAssetFromPath(yyjson_val* root) {
   const auto asset = GetObjectValue(root, kMuonConfigAssetKey);
-  return GetObjectValue(asset, kMuonConfigAssetFromKey) != nullptr;
+  return GetObjectValue(asset, kMuonConfigAssetSourcePathKey) != nullptr;
 }
 
 static bool HasLogOutputPath(yyjson_val* root) {
@@ -1270,17 +1276,18 @@ static bool ReadBrowserStartPageConfig(yyjson_val* browser,
 static bool ReadBrowserProfileConfig(yyjson_val* browser,
                                      MuonConfig* config,
                                      std::string* error_message) {
-  const auto profile = yyjson_obj_get(browser, kMuonConfigBrowserProfileKey);
+  const auto profile =
+      yyjson_obj_get(browser, kMuonConfigBrowserProfilePathKey);
   if (profile == nullptr) {
     return true;
   }
   if (!yyjson_is_str(profile)) {
-    *error_message = "muon.json browser.profile must be a string";
+    *error_message = "muon.json browser.profilePath must be a string";
     return false;
   }
   const auto profile_path = ReadJsonString(profile);
   if (profile_path.empty()) {
-    *error_message = "muon.json browser.profile must not be empty";
+    *error_message = "muon.json browser.profilePath must not be empty";
     return false;
   }
   config->browser.profile = profile_path;
@@ -1342,6 +1349,48 @@ static bool ReadBrowserInitialWindowStateConfig(
         "muon.json browser.initialWindowState has unknown value: " + raw_state;
     return false;
   }
+  return true;
+}
+
+static bool ReadBrowserInitialTitleBarVisibilityConfig(
+    yyjson_val* browser,
+    MuonConfig* config,
+    std::string* error_message) {
+  const auto visibility =
+      yyjson_obj_get(browser, kMuonConfigBrowserInitialTitleBarVisibilityKey);
+  if (visibility == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_bool(visibility)) {
+    *error_message =
+        "muon.json browser.initialTitleBarVisibility must be a boolean";
+    return false;
+  }
+  config->browser.initial_title_bar_visibility = yyjson_get_bool(visibility);
+  return true;
+}
+
+static bool ReadBrowserInitialTitleBarIconConfig(
+    yyjson_val* browser,
+    MuonConfig* config,
+    std::string* error_message) {
+  const auto icon =
+      yyjson_obj_get(browser, kMuonConfigBrowserInitialTitleBarIconKey);
+  if (icon == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(icon)) {
+    *error_message =
+        "muon.json browser.initialTitleBarIcon must be a string";
+    return false;
+  }
+  config->browser.initial_title_bar_icon = ReadJsonString(icon);
+  if (config->browser.initial_title_bar_icon.empty()) {
+    *error_message =
+        "muon.json browser.initialTitleBarIcon must not be empty";
+    return false;
+  }
+  config->browser.has_initial_title_bar_icon = true;
   return true;
 }
 
@@ -1419,6 +1468,48 @@ static bool ReadBrowserBackgroundColorConfig(
                                    &config->browser.background_color)) {
     *error_message =
         "muon.json browser.backgroundColor has unknown value: " + raw_color;
+    return false;
+  }
+  return true;
+}
+
+static bool ParseBrowserTitleBar(
+    const std::string& raw_title_bar,
+    MuonBrowserTitleBarMode* title_bar) {
+  if (title_bar == nullptr) {
+    return false;
+  }
+  if (raw_title_bar == "native") {
+    *title_bar = kMuonBrowserTitleBarNative;
+    return true;
+  }
+  if (raw_title_bar == "muon") {
+    *title_bar = kMuonBrowserTitleBarMuon;
+    return true;
+  }
+  return false;
+}
+
+static bool ReadBrowserTitleBarConfig(yyjson_val* browser,
+                                      MuonConfig* config,
+                                      std::string* error_message) {
+  const auto title_bar =
+      yyjson_obj_get(browser, kMuonConfigBrowserTitleBarTypeKey);
+  if (title_bar == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(title_bar)) {
+    *error_message = "muon.json browser.titleBarType must be a string";
+    return false;
+  }
+  const auto raw_title_bar = ReadJsonString(title_bar);
+  if (raw_title_bar.empty()) {
+    *error_message = "muon.json browser.titleBarType must not be empty";
+    return false;
+  }
+  if (!ParseBrowserTitleBar(raw_title_bar, &config->browser.title_bar)) {
+    *error_message =
+        "muon.json browser.titleBarType has unknown value: " + raw_title_bar;
     return false;
   }
   return true;
@@ -1547,7 +1638,11 @@ static bool ReadBrowserConfig(yyjson_val* root,
   if (!ReadBrowserStartPageConfig(browser, config, error_message) ||
       !ReadBrowserProfileConfig(browser, config, error_message) ||
       !ReadBrowserInitialWindowStateConfig(browser, config, error_message) ||
+      !ReadBrowserInitialTitleBarVisibilityConfig(
+          browser, config, error_message) ||
+      !ReadBrowserInitialTitleBarIconConfig(browser, config, error_message) ||
       !ReadBrowserBackgroundColorConfig(browser, config, error_message) ||
+      !ReadBrowserTitleBarConfig(browser, config, error_message) ||
       !ReadBrowserKeybindsConfig(browser, config, error_message)) {
     return false;
   }
@@ -1931,15 +2026,15 @@ static bool ReadAssetConfig(yyjson_val* root,
     return false;
   }
 
-  const auto from = yyjson_obj_get(asset, kMuonConfigAssetFromKey);
+  const auto from = yyjson_obj_get(asset, kMuonConfigAssetSourcePathKey);
   if (from != nullptr) {
     if (!yyjson_is_str(from)) {
-      *error_message = "muon.json asset.from must be a string";
+      *error_message = "muon.json asset.sourcePath must be a string";
       return false;
     }
     config->asset.from = ReadJsonString(from);
     if (config->asset.from.empty()) {
-      *error_message = "muon.json asset.from must not be empty";
+      *error_message = "muon.json asset.sourcePath must not be empty";
       return false;
     }
     config->asset.has_from = true;

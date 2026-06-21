@@ -226,9 +226,9 @@ static bool RunConfiguredStorageValidationTest(
   const auto missing = CreateConfiguredMuonAppStorage(
       true, test_directory / "missing-assets", false, "", false, {},
       &error_message);
-  if (!Expect(!missing, "missing asset.from path was accepted") ||
-      !Expect(error_message.find("asset.from") != std::string::npos,
-              "missing asset.from error message lacks context")) {
+  if (!Expect(!missing, "missing asset.sourcePath path was accepted") ||
+      !Expect(error_message.find("asset.sourcePath") != std::string::npos,
+              "missing asset.sourcePath error message lacks context")) {
     return false;
   }
 
@@ -299,7 +299,8 @@ static bool RunConfiguredStorageSignatureTest(
   const auto without_from = CreateConfiguredMuonAppStorage(
       false, {}, true, "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", true,
       salt, &error_message);
-  if (!Expect(!without_from, "asset.signature without asset.from was accepted")) {
+  if (!Expect(!without_from,
+              "asset.signature without asset.sourcePath was accepted")) {
     return false;
   }
 
@@ -313,7 +314,7 @@ static bool RunConfiguredStorageSignatureTest(
       "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", true, salt,
       &error_message);
   if (!Expect(!directory,
-              "asset.signature with directory asset.from was accepted")) {
+              "asset.signature with directory asset.sourcePath was accepted")) {
     return false;
   }
 
@@ -326,7 +327,7 @@ static bool RunConfiguredStorageSignatureTest(
       true, broken_path, true,
       "4c986ce62f046843c0164eeb7dcf8db92fdf55e1", true, salt,
       &error_message);
-  return Expect(!broken, "signed non-ZIP asset.from was accepted") &&
+  return Expect(!broken, "signed non-ZIP asset.sourcePath was accepted") &&
          Expect(error_message.find("ZIP") != std::string::npos,
                 "signed non-ZIP error did not mention ZIP");
 }

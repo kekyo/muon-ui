@@ -56,7 +56,17 @@ static const std::array<MuonTypeMetadata, 1> kMuonBuiltinBrowserShutdownArgs = {
     {CreateMuonPrimitiveType(MUON_TYPE_I32)},
 };
 
-static const std::array<MuonBuiltinBrowserFunctionDefinition, 17>
+static const std::array<MuonTypeMetadata, 1>
+    kMuonBuiltinBrowserTitleBarVisibilityArgs = {
+        {CreateMuonPrimitiveType(MUON_TYPE_BOOL)},
+};
+
+static const std::array<MuonTypeMetadata, 1> kMuonBuiltinBrowserTitleBarIconArgs =
+    {
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+};
+
+static const std::array<MuonBuiltinBrowserFunctionDefinition, 19>
     kMuonBuiltinBrowserFunctions = {{
         {"reload", MuonBuiltinBrowserFunctionKind::Reload},
         {"hardReload", MuonBuiltinBrowserFunctionKind::HardReload},
@@ -73,6 +83,18 @@ static const std::array<MuonBuiltinBrowserFunctionDefinition, 17>
         {"minimize", MuonBuiltinBrowserFunctionKind::Minimize},
         {"maximize", MuonBuiltinBrowserFunctionKind::Maximize},
         {"restore", MuonBuiltinBrowserFunctionKind::Restore},
+        {"setTitleBarVisibility",
+         MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility,
+         nullptr,
+         kMuonBuiltinBrowserTitleBarVisibilityArgs.data(),
+         kMuonBuiltinBrowserTitleBarVisibilityArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"setTitleBarIcon",
+         MuonBuiltinBrowserFunctionKind::SetTitleBarIcon,
+         nullptr,
+         kMuonBuiltinBrowserTitleBarIconArgs.data(),
+         kMuonBuiltinBrowserTitleBarIconArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
         {"__close",
          MuonBuiltinBrowserFunctionKind::Close,
          "close"},

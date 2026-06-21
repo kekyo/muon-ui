@@ -18,6 +18,7 @@
 #include <cardio.h>
 
 #include "app/muon_app.h"
+#include "browser/muon_title_bar.h"
 #include "config/muon_config.h"
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
@@ -162,12 +163,14 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
       !StartMuonCefLogForwarder(cef_log_path, &error_message)) {
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                    "Muon startup failed: " + error_message);
+    ClearMuonTitleBarRegistrations();
     CefShutdown();
     ShutdownMuonLogger();
     return 1;
   }
   if (app->GetExitCode() != 0) {
     const auto exit_code = app->GetExitCode();
+    ClearMuonTitleBarRegistrations();
     CefShutdown();
     StopMuonCefLogForwarder();
     ShutdownMuonLogger();
@@ -176,6 +179,7 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
 
   CefRunMessageLoop();
 
+  ClearMuonTitleBarRegistrations();
   CefShutdown();
   const auto app_exit_code = app->GetExitCode();
   StopMuonCefLogForwarder();

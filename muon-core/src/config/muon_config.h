@@ -179,6 +179,16 @@ enum MuonBrowserBackgroundColorMode : uint32_t {
 };
 
 /**
+ * Main browser title bar mode from muon.json.
+ */
+enum MuonBrowserTitleBarMode : uint32_t {
+  /** Use the platform native title bar. */
+  kMuonBrowserTitleBarNative = 0,
+  /** Use the Muon title bar provided by libmuon-ui. */
+  kMuonBrowserTitleBarMuon = 1,
+};
+
+/**
  * Browser background color configuration from muon.json.
  */
 struct MuonBrowserBackgroundColorConfig {
@@ -224,6 +234,22 @@ struct MuonBrowserConfig {
    * color is specified.
    */
   MuonBrowserBackgroundColorConfig background_color;
+  /**
+   * Title bar implementation used for normal browser windows.
+   */
+  MuonBrowserTitleBarMode title_bar = kMuonBrowserTitleBarMuon;
+  /**
+   * Whether the custom title bar is initially visible.
+   */
+  bool initial_title_bar_visibility = true;
+  /**
+   * Whether the initial title bar icon was explicitly configured.
+   */
+  bool has_initial_title_bar_icon = false;
+  /**
+   * Initial title bar icon asset path.
+   */
+  std::string initial_title_bar_icon;
   /**
    * Plugin API exposure configuration for browser pages.
    */
@@ -344,7 +370,7 @@ struct MuonPluginConfig {
  */
 struct MuonAssetConfig {
   /**
-   * Whether asset.from was explicitly configured.
+   * Whether asset.sourcePath was explicitly configured.
    */
   bool has_from = false;
   /**
@@ -364,7 +390,7 @@ struct MuonAssetConfig {
    */
   std::filesystem::path from;
   /**
-   * Expected SHA-1 digest for the salted ZIP file specified by asset.from.
+   * Expected SHA-1 digest for the salted ZIP file specified by asset.sourcePath.
    *
    * @remarks This value is normalized to lowercase hexadecimal while reading
    * muon.json.

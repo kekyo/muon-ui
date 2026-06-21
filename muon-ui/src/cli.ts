@@ -11,6 +11,7 @@ import {
   runMuonPrepare,
   type MuonPrepareOptions,
 } from "./prepare.js";
+import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import {
   embedMuonConfigInBootstrapFile,
   embedMuonConfigInCoreFile,
@@ -159,6 +160,13 @@ const runPrepareCommand = async (
   }
 };
 
+const runInitCommand = async (): Promise<void> => {
+  const result = await ensureMuonGitignoreEntry(process.cwd());
+  console.log(
+    result.changed ? `Updated ${result.gitignorePath}` : result.gitignorePath,
+  );
+};
+
 const printEmbedConfigResult = (
   result: EmbedMuonConfigResult,
   json: boolean | undefined,
@@ -253,6 +261,13 @@ const createCliCommand = (): Command => {
     .option("--json", "write result as JSON")
     .action(async (options: BuildCommandOptions) => {
       await runBuildCommand(options);
+    });
+
+  program
+    .command("init")
+    .description("Initialize Muon project helper files")
+    .action(async () => {
+      await runInitCommand();
     });
 
   program

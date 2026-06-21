@@ -4,7 +4,7 @@ CEFをバックエンドで使用する、マルチプラットフォームGUI�
 
 ![muon](./images/muon-120.png)
 
-[![Project Status: Concept – Minimal or no implementation has been done yet, or the repository is only intended to be a limited example, demo, or proof-of-concept.](https://www.repostatus.org/badges/latest/concept.svg)](https://www.repostatus.org/#concept)
+[![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![npm version](https://img.shields.io/npm/v/muon-ui.svg)](https://www.npmjs.com/package/muon-ui)
 
@@ -144,28 +144,19 @@ muonはHMRに対応していて、ブラウザの代わりにmuonを起動して
 これを有効化するために、`vite.config.ts` に以下のコードを追加します:
 
 ```ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import muon from 'muon-ui/vite'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import muon from 'muon-ui/vite';
 
 export default defineConfig({
   plugins: [
     react(),  // Reactプラグイン
     muon(),   // muonプラグイン (追加する)
   ],
-  server: {
-    open: true,  // muonを起動する
-  },
-})
+});
 ```
 
 `defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
-更に、`server.open: true` を加えることで、ブラウザの代わりにmuonが自動的に起動するようになります。
-
-開発起動では、プロジェクト直下の `muon.json5`、`muon.jsonc`、`muon.json` をこの順に探します。
-これらが存在しない場合は、Viteが生成する開発用設定のみでmuonを起動し、Viteログに警告を表示します。
-設定ファイルが存在しても読み取れない場合やパースできない場合も、Viteログに警告を表示し、そのファイルを無視して起動します。
-
 これで作業は完了です。
 
 開発作業を行うときには:
@@ -180,39 +171,41 @@ npm run dev
 
 ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
 
+`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動できます。
+また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+
 ---
 
 ### 配布用ビルド
 
-Viteを使用しているプロジェクトでは、`muon()` プラグインを設定した状態で通常どおり `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
-Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
+Vite muonプラグインを設定した状態で `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
 ```bash
 npm run build
-# または
-npx vite build
 ```
+
+Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
 既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-linux-amd64/` や `dist-windows-amd64/` のようなターゲット別ディレクトリです。
 アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
 
-複数ターゲットや出力先を指定したい場合は、`vite.config.ts` の `muon({ build: ... })` で指定できます:
+複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
 ```ts
-import { defineConfig } from 'vite'
-import muon from 'muon-ui/vite'
+import { defineConfig } from 'vite';
+import muon from 'muon-ui/vite';
 
 export default defineConfig({
   plugins: [
     muon({
-      build: {
+      build: {  // ビルドオプションの指定
         targets: ['linux-amd64', 'windows-amd64'],
         outputRoot: 'release',
         appName: 'my-app',
       },
     }),
   ],
-})
+});
 ```
 
 Viteを使用しないプロジェクトでは、任意の方法で先にアセットを生成してから `muon build` を実行します。
@@ -222,8 +215,8 @@ Viteを使用しないプロジェクトでは、任意の方法で先にアセ�
 muon build
 ```
 
-`muon build` のアセット元は、`--assets`、`muon.json` の `asset.from`、`assets/` の順に解決されます。
-`asset.from` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
+`muon build` のアセット元は、`--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
+`asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
@@ -232,10 +225,16 @@ muon build
 
 ### CEFのダウンロードと更新
 
-`npm run dev` するときや `muon-core` をビルドするとき、必要なCEFのバイナリがローカルに存在しない場合は、CEFの公式配布サイトから自動的にダウンロードされます。
+CEFのバイナリアセットファイルは非常にサイズが大きことで有名です。
+また、CEFに脆弱性が発見された場合はCEFバイナリが更新されることになり、muonアプリをそのまま配布しているとCEFバイナリの更新のためにmuonアプリ全体の更新に見舞われます。
+
+そこでmuonは、muonアプリの配布物のサイズ削減と、CEFバイナリの更新の簡略化のため、
+muonアプリ起動時に、必要なCEFバイナリをダウンロードして動作完了を整えます。
+
+`npm run dev` する時、 `muon-core` をビルドする時、あるいはビルド後の生成物を配布して、エンドユーザーがmuonアプリを起動する場合に、必要なCEFのバイナリがローカルに存在しない場合は、CEFの公式配布サイトから自動的にダウンロードされます。
 これには少し時間がかかりますが、ダウンロードされたCEF tarballはローカルにキャッシュされるので、次回以降はキャッシュを使用します。
 
-- ローカルのキャッシュは、Linuxでは `~/.cache/muon` ディレクトリ内に、Windowsでは `$HOME\.cache\muon` ディレクトリ内に配置されます。
+- ローカルのキャッシュは、Linuxでは `~/.cache/muon/` ディレクトリ内に、Windowsでは `$HOME\.cache\muon\` ディレクトリ内に配置されます。
 - `MUON_CACHE_DIR` 環境変数を指定すると、キャッシュディレクトリを上書きできます。
 
 キャッシュディレクトリには、カタログとダウンロード済みのCEF tarballだけが配置されます:
@@ -247,8 +246,11 @@ muon build
     └── cef_binary_<version>_<target>_minimal.tar.bz2
 ```
 
-起動時の準備では、runtimeディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
-`versionPolicy` が保存されていない場合は、`muon-bootstrap` に埋め込まれた `muon.json` の `defaultVersionPolicy` を使用し、それも未指定の場合は `tested` を使用します:
+起動時の準備では、muonアプリが配置されているディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+
+実行に使用するCEFバージョンは、事前に決められた規則（ポリシー・後述）で判定されます。
+
+以下は `muon-bootstrap.ini` の例です:
 
 ```ini
 [cef]
@@ -262,37 +264,18 @@ requested=false
 requestedAtUnix=0
 ```
 
-`versionPolicy` には以下を指定できます:
+このファイルは手動で構成することは意図していません。
+muonアプリからは、後述の `window.muon.bootstrap` 名前空間のAPIを使用します。
 
-| 値                  | 動作                                                                                                                                             |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
-| `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
-| `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
-| `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
+通常は、CEFのダウンロードと更新のプロセスを操作する必要はないと思われますが、
+特に細かくアップデートプロセスを制御したい場合は、これらのAPIを使用してください。
+例えば、muonアプリ内からアップデートトリガーを行うことが出来ます。
 
-`catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
-`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+詳しくは別章を参照してください。
 
-`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+---
 
-```bash
-muon embed-config \
-  --runtime-path ./dist/runtime/linux64 \
-  --bootstrap-path ./myapp \
-  --config ./muon.json
-```
-
-このプロセスは大きく3段階あります:
-
-1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
-2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
-3. 実行時の準備ではCEFをプロジェクトの `.muon/` ディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
-
-CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
-テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
-
-#### CEFバージョンとCEF APIバージョン (Advanced topics)
+### CEFバージョンとCEF APIバージョン (Advanced topics)
 
 CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
 
@@ -335,6 +318,42 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 
 `compat-latest` や `same-major-latest` はABI互換を確認しますが、Chromium/CEFのブラウザ機能としての挙動差までは保証しません。アプリケーション側で対象CEFの検証を行ってから配布して下さい。
 
+### CEFバイナリ更新の詳細 (Advanced Topics)
+
+この情報は、CEFバイナリアップデート処理の詳細な情報ですが、
+問題が発生した場合の分析のために示しています。
+`muon-bootstrap.ini` は手動で構成することを想定していないため注意してください。
+
+`muon-bootstrap.ini` の `versionPolicy` には以下の値が指定されます:
+
+| 値                  | 動作                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
+| `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
+| `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
+| `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
+
+`catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
+`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+
+`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+
+```bash
+muon embed-config \
+  --runtime-path ./dist/runtime/linux64 \
+  --bootstrap-path ./myapp \
+  --config ./muon.json
+```
+
+このプロセスは大きく3段階あります:
+
+1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
+2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
+3. 実行時の準備ではCEFをプロジェクトの `.muon/` ディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
+
+CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
+テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
+
 ---
 
 ### Muon DevToolsを表示
@@ -343,12 +362,11 @@ muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのD
 
 ![Muon DevTools](./images/devtools.png)
 
-但し、既定ではDevToolsを開くことは出来ません。
+Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
 `muon.json` に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
 
 ```json
 {
-  "defaultVersionPolicy": "tested",
   "browser": {
     "keybind": {
       "devtools": "f12"
@@ -462,10 +480,6 @@ TypeScriptを使用してコードを記述する場合は、型チェックに�
 内蔵プラグインに限り、特別な `"internal"` を使用します。
 その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `plugin.plugins.name` に指定します。
 
-例えば、Linux環境においては、ファイルオープンダイアログをGTK3かGTK4から選択できます。
-これはプラグインファイル `muon_fs_dialogs_gtk3.so` または `muon_fs_dialogs_gtk4.so` で提供されるので、
-GTK3とGTK4のどちらを使用するかに応じて `plugin.plugins.name: "muon_fs_dialogs_gtk3"` または  `plugin.plugins.name: "muon_fs_dialogs_gtk4"` と指定します。
-
 内蔵プラグインの詳細は別章を参照して下さい。
 
 ---
@@ -490,13 +504,13 @@ assets/
     └── child.js
 ```
 
-ローカルアセットディレクトリは、 `muon.json` の `asset.from` で位置を指定できます。
+ローカルアセットディレクトリは、 `muon.json` の `asset.sourcePath` で位置を指定できます。
 既定では `muon.json` が存在するディレクトリからの相対パス、または絶対パス指定です。
 
 ```json
 {
   "asset": {
-    "from": "./assets/"
+    "sourcePath": "./assets/"
   }
 }
 ```
@@ -616,24 +630,24 @@ assets.zip
     └── child.js
 ```
 
-その後、そのファイルを `asset.from` に指定します:
+その後、そのファイルを `asset.sourcePath` に指定します:
 
 ```json
 {
   "asset": {
-    "from": "./assets.zip"
+    "sourcePath": "./assets.zip"
   }
 }
 ```
 
-`asset.from` がファイルを示している場合は、muonがパッキングされたローカルアセットと見なしてアクセスを行います。
+`asset.sourcePath` がファイルを示している場合は、muonがパッキングされたローカルアセットと見なしてアクセスを行います。
 
 更に、パッキングファイルの全体検証を行わせることが出来ます:
 
 ```json
 {
   "asset": {
-    "from": "./assets.zip",
+    "sourcePath": "./assets.zip",
     "signature": "a64b4e1c945373908df3a5b79f8000d8beb4e5a7",
     "salt": "0d48cab58f2a45efa1f883c1f0c6f88c"
   }
@@ -753,6 +767,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
+    "titleBarType": "muon",
+    "initialTitleBarVisibility": true,
+    "initialTitleBarIcon": "icons/app.png",
     "keybinds": {
       "devtools": "f12",
       "zoomIn": "ctrl+plus",
@@ -803,6 +820,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `profile`                             | `string`                                  | `"./.profile"`            | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
+| `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
+| `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
+| `initialTitleBarIcon`                 | `string`                                  | 内蔵Muonアイコン          | 起動時にタイトルバーへ表示するPNGアイコンのアセットパスです。                            |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
@@ -816,6 +836,23 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定できます。
 `"system"` はOSの明暗設定が取得できる場合に黒または白として反映し、取得できない場合はCEFの既定値を使用します。
+
+`titleBarType` には `"muon"` または `"native"` を指定できます。
+`"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
+Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、
+Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
+
+`initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
+`false` を指定すると、起動直後はタイトルバーが非表示になります。
+
+`initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
+省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
+内蔵アイコンはコード中に埋め込まれているため、アプリ側のアセットファイルとして用意する必要はありません。
+`"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
+このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
+ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
+
+注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
 
 `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom` を指定できます。
 値は `"Ctrl+Shift+I"` のように、修飾キーとキーを `+` で連結した文字列です。
@@ -930,6 +967,77 @@ Windows環境では `"debug"` と `"eventlog"` も使用できます。
 
 ---
 
+## muon Viteプラグインリファレンス
+
+`muon-ui/vite` の既定exportは、 `muon(options)` の形でViteプラグインを生成します。
+`options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
+
+### rootキー
+
+| キー             | 型                    | 既定値                      | 概要                                                                 |
+| ---------------- | --------------------- | --------------------------- | -------------------------------------------------------------------- |
+| `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
+| `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
+| `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
+| `open`           | `boolean`             | `true`                      | `vite dev` 起動時にMuonを自動起動するかどうかです。                  |
+| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDPと `F12` のMuon DevToolsキーバインドを有効化します。  |
+| `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
+
+`muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` にだけ影響します。
+`vite build` では無視されます。
+
+`muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
+`muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
+`cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
+`stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
+
+`open` は、Viteの `server.open` とは独立したMuon起動設定です。
+`open` に `false` を指定すると、Vite serverは通常通り起動しますが、Muonランタイムの準備とMuonプロセスの起動は行われません。
+
+`enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開けるようになります。
+配布ビルドでDevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
+
+### buildキー
+
+`build` に `false` を指定すると、Viteの通常ビルドだけを実行し、muon配布用ディレクトリの生成を無効化します。
+`build` にオブジェクトを指定すると、 `vite build` 後のmuon配布用ビルドに追加オプションを渡せます。
+`build` に `true` を指定した場合、または省略した場合は、 `{}` 相当として扱われます。
+
+| キー               | 型                  | 既定値                         | 概要                                                                            |
+| ------------------ | ------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
+| `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
+| `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
+| `outputRoot`       | `string`            | `"."`                          | `dist-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
+| `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
+| `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
+| `assetSalt`        | `Uint8Array`        | ランダムな16 bytes             | `assets.zip` の署名計算に使うsaltです。                                         |
+
+`targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
+`allTargets` が `true` の場合、 `targets` よりも優先されます。
+`targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
+
+`appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
+`name` が存在しない場合は `muon-app` を使用します。
+scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
+Windowsターゲットでは `.exe` が自動的に付与されます。
+
+`outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
+`configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
+設定ファイルが存在しない場合は `{}` 相当として扱います。
+
+Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
+そのため、ビルド後のアセットは `asset://main/` から参照できます。
+
+`packageDirectory` は通常指定しません。
+muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
+相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。
+
+`assetSalt` は再現可能なテストのための引数です。
+通常の配布ビルドでは省略してください。
+
+---
+
 ## muon内蔵プラグインリファレンス
 
 ### muon.browser名前空間
@@ -953,15 +1061,24 @@ Windows環境では `"debug"` と `"eventlog"` も使用できます。
 | `minimize()`          | なし                | `Promise<void>` | 現在のウインドウを最小化します。                                 |
 | `maximize()`          | なし                | `Promise<void>` | 現在のウインドウを最大化します。                                 |
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
+| `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
+| `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
 | `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Muonプロセスを終了します。`exitCode` を省略した場合は `0` です。 |
 
 `reload()`, `hardReload()`, `close()`, `shutdown()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
 `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
+`setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
+Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
+このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
+`setTitleBarIcon()` はPNGアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
+`path` には `initialTitleBarIcon` と同じ形式を指定します。
 
 ```js
 await window.muon.browser.zoomIn();
 await window.muon.browser.resetZoom();
+await window.muon.browser.setTitleBarVisibility(false);
+await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);
 ```
 

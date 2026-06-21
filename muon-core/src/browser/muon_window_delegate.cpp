@@ -6,19 +6,30 @@
 
 #include "browser/muon_window_delegate.h"
 
+#include "browser/muon_title_bar.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 
 #include "include/cef_browser.h"
 #include "include/cef_task.h"
+#include "include/views/cef_box_layout.h"
+#include "include/views/cef_panel.h"
+
+#include <utility>
 
 MuonWindowDelegate::MuonWindowDelegate(
     CefRefPtr<CefBrowserView> browser_view,
     bool is_devtools,
-    MuonBrowserInitialWindowState initial_window_state)
+    MuonBrowserInitialWindowState initial_window_state,
+    bool initial_title_bar_visibility,
+    MuonTitleBarManifest title_bar_manifest,
+    MuonTitleBarBackgroundColor title_bar_background_color)
     : browser_view_(browser_view),
       is_devtools_(is_devtools),
-      initial_window_state_(initial_window_state) {}
+      initial_window_state_(initial_window_state),
+      initial_title_bar_visibility_(initial_title_bar_visibility),
+      title_bar_manifest_(std::move(title_bar_manifest)),
+      title_bar_background_color_(title_bar_background_color) {}
 
 class ApplyInitialWindowStateTask final : public CefTask {
  public:
@@ -73,14 +84,78 @@ static void ApplyInitialWindowState(
 }
 
 void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
-  window->SetTitle(is_devtools_ ? GetMuonDevToolsWindowTitle()
-                                : GetMuonDefaultWindowTitle());
-  window->AddChildView(browser_view_);
+  const auto title = is_devtools_ ? GetMuonDevToolsWindowTitle()
+                                  : GetMuonDefaultWindowTitle();
+  window->SetTitle(title);
+  if (UseCustomTitleBar()) {
+    title_bar_controller_ = new MuonTitleBarController(
+        title_bar_manifest_, title_bar_background_color_);
+    title_bar_controller_->SetTitle(title);
+    title_bar_controller_->SetActive(window->IsActive());
+    title_bar_view_ = title_bar_controller_->CreateBrowserView();
+    title_bar_controller_->SetVisible(initial_title_bar_visibility_);
+
+    CefBoxLayoutSettings settings;
+    settings.horizontal = false;
+    auto layout = window->SetToBoxLayout(settings);
+    if (browser_view_) {
+      window->AddChildView(browser_view_);
+      if (layout) {
+        layout->SetFlexForView(browser_view_, 1);
+      }
+    }
+    if (title_bar_view_) {
+      window->AddChildViewAt(title_bar_view_, 0);
+      RegisterMuonTitleBarView(window, title_bar_view_);
+    }
+    title_bar_controller_->AttachWindow(window);
+    RegisterMuonTitleBarBrowserView(window, browser_view_);
+    auto browser_id = 0;
+    if (browser_view_) {
+      const auto browser = browser_view_->GetBrowser();
+      if (browser) {
+        browser_id = browser->GetIdentifier();
+      }
+    }
+    RegisterMuonTitleBarController(
+        window, title_bar_controller_, browser_id);
+    SetRegisteredMuonTitleBarVisibility(
+        window, initial_title_bar_visibility_);
+  } else if (browser_view_) {
+    window->AddChildView(browser_view_);
+    if (!is_devtools_) {
+      SetRegisteredMuonTitleBarVisibility(
+          window, initial_title_bar_visibility_);
+    }
+  }
   ApplyInitialWindowState(window, initial_window_state_);
 }
 
 void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
+  UnregisterMuonTitleBarController(window);
+  if (title_bar_controller_) {
+    title_bar_controller_->DetachWindow();
+  }
+  title_bar_controller_ = nullptr;
+  title_bar_view_ = nullptr;
   browser_view_ = nullptr;
+}
+
+void MuonWindowDelegate::OnWindowActivationChanged(CefRefPtr<CefWindow> window,
+                                                   bool active) {
+  (void)window;
+  if (title_bar_controller_) {
+    title_bar_controller_->SetActive(active);
+  }
+}
+
+void MuonWindowDelegate::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
+                                               const CefRect& new_bounds) {
+  (void)new_bounds;
+  if (title_bar_controller_) {
+    title_bar_controller_->SetMaximized(window && window->IsMaximized());
+    title_bar_controller_->UpdateDraggableRegions();
+  }
 }
 
 bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
@@ -96,7 +171,17 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
 }
 
 CefSize MuonWindowDelegate::GetPreferredSize(CefRefPtr<CefView> view) {
-  return CefSize(1024, 768);
+  (void)view;
+  const auto height =
+      UseCustomTitleBar() && initial_title_bar_visibility_
+          ? 768 + title_bar_manifest_.height
+          : 768;
+  return CefSize(1024, height);
+}
+
+bool MuonWindowDelegate::IsFrameless(CefRefPtr<CefWindow> window) {
+  (void)window;
+  return UseCustomTitleBar();
 }
 
 cef_show_state_t MuonWindowDelegate::GetInitialShowState(
@@ -107,6 +192,10 @@ cef_show_state_t MuonWindowDelegate::GetInitialShowState(
 
 cef_runtime_style_t MuonWindowDelegate::GetWindowRuntimeStyle() {
   return is_devtools_ ? CEF_RUNTIME_STYLE_CHROME : CEF_RUNTIME_STYLE_ALLOY;
+}
+
+bool MuonWindowDelegate::UseCustomTitleBar() const {
+  return !is_devtools_ && IsCustomMuonTitleBar(title_bar_manifest_);
 }
 
 #if defined(OS_LINUX)

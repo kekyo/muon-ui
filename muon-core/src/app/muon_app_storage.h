@@ -108,14 +108,15 @@ std::shared_ptr<MuonAppStorage> CreateMuonZipAppStorage(
     std::filesystem::path archive_path);
 
 /**
- * Creates app storage from an optional muon.json asset.from path.
+ * Creates app storage from an optional muon.json asset.sourcePath path.
  *
- * @remarks Missing asset.from keeps the executable-directory/assets default.
+ * @remarks Missing asset.sourcePath keeps the executable-directory/assets
+ * default.
  * Explicit directories are served directly, and explicit regular files are
  * treated as ZIP archives.
  *
- * @param has_asset_from Whether asset.from was explicitly configured.
- * @param asset_from Configured asset.from path.
+ * @param has_asset_from Whether asset.sourcePath was explicitly configured.
+ * @param asset_from Configured asset.sourcePath path.
  * @param has_asset_signature Whether asset.signature was explicitly configured.
  * @param asset_signature Expected lowercase SHA-1 hex digest for ZIP storage.
  * @param has_asset_salt Whether asset.salt was explicitly configured.

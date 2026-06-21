@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -158,6 +159,7 @@ class MuonApp final : public CefApp,
   std::string unsafe_parent_access_policy_error_;
   MuonRendererMetadata renderer_metadata_;
   std::map<int, std::string> renderer_url_hints_by_browser_;
+  std::set<int> renderer_title_bar_browsers_;
   std::map<int, CefRefPtr<MuonV8Handler>> v8_handlers_by_context_;
   int exit_code_ = 0;
   bool shutdown_requested_ = false;

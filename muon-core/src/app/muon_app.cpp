@@ -8,10 +8,14 @@
 
 #include "app/muon_app_scheme.h"
 #include "app/muon_app_storage.h"
+#include "browser/muon_default_title_bar_icon.h"
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
 #include "browser/muon_client.h"
+#include "browser/muon_title_bar.h"
+#include "browser/muon_title_bar_loader.h"
 #include "config/muon_config.h"
+#include "config/muon_startup.h"
 #include "log/muon_log.h"
 #include "plugins/muon_js_bridge.h"
 #include "network/muon_network_policy.h"
@@ -30,6 +34,7 @@
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <utility>
@@ -80,6 +85,33 @@ static CefRefPtr<CefV8Value> CreateMuonNamespaceObject() {
     object->SetUserData(new MuonNamespaceMarker());
   }
   return object;
+}
+
+static MuonTitleBarManifest LoadConfiguredMuonTitleBarManifest(
+    const MuonBrowserConfig& browser_config) {
+  if (browser_config.title_bar == kMuonBrowserTitleBarMuon) {
+    return LoadMuonTitleBarManifestFromUi();
+  }
+  if (!IsMuonNativeTitleBarSupported(
+          GetMuonStartupCommandLine(), std::getenv("XDG_SESSION_TYPE"),
+          std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"))) {
+    LogMuonMessage(
+        kMuonLogSourceMuon, kMuonLogLevelWarning,
+        "browser.titleBarType is native, but native title bar decoration is not "
+        "available on the current Linux display backend. Falling back to the "
+        "Muon title bar.");
+    return LoadMuonTitleBarManifestFromUi();
+  }
+  return CreateNativeMuonTitleBarManifest();
+}
+
+static MuonTitleBarBackgroundColor CreateMuonTitleBarBackgroundColor(
+    const MuonBrowserBackgroundColorConfig& background_color) {
+  if (background_color.mode != kMuonBrowserBackgroundColorRgb) {
+    return {};
+  }
+  return {true, background_color.red, background_color.green,
+          background_color.blue};
 }
 
 static CefString CreateCefPathString(const std::filesystem::path& path) {
@@ -539,28 +571,66 @@ void MuonApp::OnContextInitialized() {
     CefQuitMessageLoop();
     return;
   }
+  auto has_initial_title_bar_icon = false;
+  MuonTitleBarIcon initial_title_bar_icon;
+  if (config_.browser.has_initial_title_bar_icon) {
+    if (!LoadMuonTitleBarIconFromStorage(
+            app_storage, config_.browser.initial_title_bar_icon,
+            &initial_title_bar_icon, &error_message)) {
+      exit_code_ = 1;
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Muon startup failed: " + error_message);
+      CefQuitMessageLoop();
+      return;
+    }
+    has_initial_title_bar_icon = true;
+  } else {
+    if (!LoadDefaultMuonTitleBarIcon(&initial_title_bar_icon,
+                                     &error_message)) {
+      exit_code_ = 1;
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Muon startup failed: " + error_message);
+      CefQuitMessageLoop();
+      return;
+    }
+    has_initial_title_bar_icon = true;
+  }
   const auto extra_info = plugin_runtime->CreateRendererMetadata();
   CefBrowserSettings browser_settings;
   ApplyMuonBrowserBackgroundColor(browser_settings,
                                   config_.browser.background_color);
+  const auto title_bar_manifest =
+      LoadConfiguredMuonTitleBarManifest(config_.browser);
+  const auto title_bar_background_color =
+      CreateMuonTitleBarBackgroundColor(config_.browser.background_color);
   CefRefPtr<MuonClient> client(
       new MuonClient(plugin_runtime, network_policy, plugin_page_policy_,
                      unsafe_parent_access_policy_,
                      [this](int32_t exit_code) {
                        return RequestShutdown(exit_code);
                      },
-                     config_.browser));
+                     app_storage, config_.browser, title_bar_manifest,
+                     title_bar_background_color, has_initial_title_bar_icon,
+                     initial_title_bar_icon));
   auto browser_view = CefBrowserView::CreateBrowserView(
       client, config_.browser.start_page, browser_settings, extra_info, nullptr,
-      new MuonBrowserViewDelegate(false));
+      new MuonBrowserViewDelegate(
+          false, config_.browser.initial_title_bar_visibility,
+          title_bar_manifest, title_bar_background_color));
 
   CefWindow::CreateTopLevelWindow(new MuonWindowDelegate(
-      browser_view, false, config_.browser.initial_window_state));
+      browser_view, false, config_.browser.initial_window_state,
+      config_.browser.initial_title_bar_visibility,
+      title_bar_manifest, title_bar_background_color));
 }
 
 void MuonApp::OnBrowserCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefDictionaryValue> extra_info) {
   CEF_REQUIRE_RENDERER_THREAD();
+  if (browser && IsMuonTitleBarExtraInfo(extra_info)) {
+    renderer_title_bar_browsers_.insert(browser->GetIdentifier());
+    return;
+  }
   const auto renderer_metadata = ReadMuonRendererMetadata(extra_info);
   if (!renderer_metadata.functions.empty() ||
       !renderer_metadata.namespaces.empty()) {
@@ -576,6 +646,7 @@ void MuonApp::OnBrowserDestroyed(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_RENDERER_THREAD();
   if (browser) {
     renderer_url_hints_by_browser_.erase(browser->GetIdentifier());
+    renderer_title_bar_browsers_.erase(browser->GetIdentifier());
   }
 }
 
@@ -583,6 +654,11 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefRefPtr<CefV8Context> context) {
   CEF_REQUIRE_RENDERER_THREAD();
+  if (browser &&
+      renderer_title_bar_browsers_.find(browser->GetIdentifier()) !=
+          renderer_title_bar_browsers_.end()) {
+    return;
+  }
   auto url_hint = std::string{};
   if (browser) {
     const auto url_hint_iterator =

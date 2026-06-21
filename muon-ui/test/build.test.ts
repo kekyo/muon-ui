@@ -170,7 +170,7 @@ describe("muon build", () => {
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          asset: { from: "./old-assets" },
+          asset: { sourcePath: "./old-assets" },
           network: { allow: ["asset://main/**"] },
         },
         null,
@@ -232,7 +232,7 @@ describe("muon build", () => {
     );
     expect(target?.asset.salt).toBe("deadbeef");
     expect(target?.embeddedConfig.asset).toEqual({
-      from: "./assets.zip",
+      sourcePath: "./assets.zip",
       signature: target?.asset.signature,
       salt: "deadbeef",
     });
@@ -327,14 +327,14 @@ describe("muon build", () => {
     const [target] = result.targets;
     expect(target?.embeddedConfig).toEqual({
       asset: {
-        from: "./assets.zip",
+        sourcePath: "./assets.zip",
         signature: target?.asset.signature,
         salt: "1234",
       },
     });
   });
 
-  it("uses muon config asset.from relative to the config directory as the non-Vite asset source", async () => {
+  it("uses muon config asset.sourcePath relative to the config directory as the non-Vite asset source", async () => {
     const root = await createTemporaryDirectory("muon-build-config-assets-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     await writeFile(
@@ -350,7 +350,7 @@ describe("muon build", () => {
       join(root, "settings", "muon.json"),
       `${JSON.stringify(
         {
-          asset: { from: "./web" },
+          asset: { sourcePath: "./web" },
           network: { allow: ["asset://main/**"] },
         },
         null,
@@ -380,13 +380,13 @@ describe("muon build", () => {
         .digest("hex"),
     );
     expect(target?.embeddedConfig.asset).toEqual({
-      from: "./assets.zip",
+      sourcePath: "./assets.zip",
       signature: target?.asset.signature,
       salt: "5678",
     });
   });
 
-  it("copies a muon.json asset.from ZIP file into the generated distribution", async () => {
+  it("copies a muon.json asset.sourcePath ZIP file into the generated distribution", async () => {
     const root = await createTemporaryDirectory("muon-build-config-zip-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     await writeFile(
@@ -404,7 +404,7 @@ describe("muon build", () => {
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          asset: { from: "./packed/web.zip" },
+          asset: { sourcePath: "./packed/web.zip" },
           network: { allow: ["asset://main/**"] },
         },
         null,
@@ -430,7 +430,7 @@ describe("muon build", () => {
         .digest("hex"),
     );
     expect(target?.embeddedConfig.asset).toEqual({
-      from: "./assets.zip",
+      sourcePath: "./assets.zip",
       signature: target?.asset.signature,
       salt: "9abc",
     });

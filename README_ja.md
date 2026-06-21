@@ -775,7 +775,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
-    "titleBar": "muon",
+    "titleBarType": "muon",
     "initialTitleBarVisibility": true,
     "keybinds": {
       "devtools": "f12",
@@ -827,7 +827,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `profile`                             | `string`                                  | `"./.profile"`            | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
-| `titleBar`                            | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
+| `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
@@ -843,12 +843,12 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定できます。
 `"system"` はOSの明暗設定が取得できる場合に黒または白として反映し、取得できない場合はCEFの既定値を使用します。
 
-`titleBar` には `"muon"` または `"native"` を指定できます。
+`titleBarType` には `"muon"` または `"native"` を指定できます。
 `"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
 Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
 DevToolsウインドウはこの設定に関わらずCEF/Chrome styleのタイトルバーを使用します。
 
-`initialTitleBarVisibility` は、`titleBar` が `"muon"` の場合に、通常ブラウザウインドウのMuonカスタムタイトルバーを初期表示するかどうかを指定します。
+`initialTitleBarVisibility` は、`titleBarType` が `"muon"` の場合に、通常ブラウザウインドウのMuonカスタムタイトルバーを初期表示するかどうかを指定します。
 `false` を指定すると、起動直後はタイトルバーが非表示になります。
 `"native"` のタイトルバーとDevToolsウインドウには影響しません。
 

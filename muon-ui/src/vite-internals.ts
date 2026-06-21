@@ -52,7 +52,7 @@ interface MuonOverrideConfig {
   };
   browser: {
     startPage: string;
-    titleBar?: "native" | "muon";
+    titleBarType?: "native" | "muon";
     initialTitleBarVisibility?: boolean;
     keybind?: {
       devtools: "f12";

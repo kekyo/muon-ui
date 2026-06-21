@@ -47,7 +47,7 @@ static constexpr char kMuonConfigBrowserInitialTitleBarVisibilityKey[] =
     "initialTitleBarVisibility";
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
     "backgroundColor";
-static constexpr char kMuonConfigBrowserTitleBarKey[] = "titleBar";
+static constexpr char kMuonConfigBrowserTitleBarTypeKey[] = "titleBarType";
 static constexpr char kMuonConfigBrowserKeybindsKey[] = "keybind";
 static constexpr char kMuonConfigBrowserDevToolsKey[] = "devtools";
 static constexpr char kMuonConfigBrowserReloadKey[] = "reload";
@@ -1467,22 +1467,23 @@ static bool ParseBrowserTitleBar(
 static bool ReadBrowserTitleBarConfig(yyjson_val* browser,
                                       MuonConfig* config,
                                       std::string* error_message) {
-  const auto title_bar = yyjson_obj_get(browser, kMuonConfigBrowserTitleBarKey);
+  const auto title_bar =
+      yyjson_obj_get(browser, kMuonConfigBrowserTitleBarTypeKey);
   if (title_bar == nullptr) {
     return true;
   }
   if (!yyjson_is_str(title_bar)) {
-    *error_message = "muon.json browser.titleBar must be a string";
+    *error_message = "muon.json browser.titleBarType must be a string";
     return false;
   }
   const auto raw_title_bar = ReadJsonString(title_bar);
   if (raw_title_bar.empty()) {
-    *error_message = "muon.json browser.titleBar must not be empty";
+    *error_message = "muon.json browser.titleBarType must not be empty";
     return false;
   }
   if (!ParseBrowserTitleBar(raw_title_bar, &config->browser.title_bar)) {
     *error_message =
-        "muon.json browser.titleBar has unknown value: " + raw_title_bar;
+        "muon.json browser.titleBarType has unknown value: " + raw_title_bar;
     return false;
   }
   return true;

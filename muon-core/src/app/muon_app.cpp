@@ -96,7 +96,7 @@ static MuonTitleBarManifest LoadConfiguredMuonTitleBarManifest(
           std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"))) {
     LogMuonMessage(
         kMuonLogSourceMuon, kMuonLogLevelWarning,
-        "browser.titleBar is native, but native title bar decoration is not "
+        "browser.titleBarType is native, but native title bar decoration is not "
         "available on the current Linux display backend. Falling back to the "
         "Muon title bar.");
     return LoadMuonTitleBarManifestFromUi();

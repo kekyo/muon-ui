@@ -82,7 +82,7 @@ describe("muon embedded config", () => {
       `{
         // JSON5 input must be accepted by the packaging CLI.
         asset: {
-          from: 'assets.zip',
+          sourcePath: 'assets.zip',
           signature: 'A9993E364706816ABA3E25717850C26C9CD0D89D',
           salt: '0A10ff',
         },

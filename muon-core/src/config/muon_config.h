@@ -358,7 +358,7 @@ struct MuonPluginConfig {
  */
 struct MuonAssetConfig {
   /**
-   * Whether asset.from was explicitly configured.
+   * Whether asset.sourcePath was explicitly configured.
    */
   bool has_from = false;
   /**
@@ -378,7 +378,7 @@ struct MuonAssetConfig {
    */
   std::filesystem::path from;
   /**
-   * Expected SHA-1 digest for the salted ZIP file specified by asset.from.
+   * Expected SHA-1 digest for the salted ZIP file specified by asset.sourcePath.
    *
    * @remarks This value is normalized to lowercase hexadecimal while reading
    * muon.json.

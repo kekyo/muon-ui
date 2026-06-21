@@ -35,12 +35,12 @@ static constexpr const char* kMuonConfigSearchFileNames[] = {
 };
 static constexpr yyjson_read_flag kMuonConfigReadFlags = YYJSON_READ_JSON5;
 static constexpr char kMuonConfigAssetKey[] = "asset";
-static constexpr char kMuonConfigAssetFromKey[] = "from";
+static constexpr char kMuonConfigAssetSourcePathKey[] = "sourcePath";
 static constexpr char kMuonConfigAssetSignatureKey[] = "signature";
 static constexpr char kMuonConfigAssetSaltKey[] = "salt";
 static constexpr char kMuonConfigBrowserKey[] = "browser";
 static constexpr char kMuonConfigBrowserStartPageKey[] = "startPage";
-static constexpr char kMuonConfigBrowserProfileKey[] = "profile";
+static constexpr char kMuonConfigBrowserProfilePathKey[] = "profilePath";
 static constexpr char kMuonConfigBrowserInitialWindowStateKey[] =
     "initialWindowState";
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
@@ -739,7 +739,8 @@ static bool ResolveDefaultBrowserProfilePath(
   }
 
   *error_message =
-      "Unsupported --muon-launch-from for browser.profile: " + launch_source;
+      "Unsupported --muon-launch-from for browser.profilePath: " +
+      launch_source;
   return false;
 }
 
@@ -811,7 +812,7 @@ static yyjson_val* GetObjectValue(yyjson_val* object, const char* key) {
 
 static bool HasBrowserProfilePath(yyjson_val* root) {
   const auto browser = GetObjectValue(root, kMuonConfigBrowserKey);
-  return GetObjectValue(browser, kMuonConfigBrowserProfileKey) != nullptr;
+  return GetObjectValue(browser, kMuonConfigBrowserProfilePathKey) != nullptr;
 }
 
 static bool HasPluginPath(yyjson_val* root) {
@@ -821,7 +822,7 @@ static bool HasPluginPath(yyjson_val* root) {
 
 static bool HasAssetFromPath(yyjson_val* root) {
   const auto asset = GetObjectValue(root, kMuonConfigAssetKey);
-  return GetObjectValue(asset, kMuonConfigAssetFromKey) != nullptr;
+  return GetObjectValue(asset, kMuonConfigAssetSourcePathKey) != nullptr;
 }
 
 static bool HasLogOutputPath(yyjson_val* root) {
@@ -1271,17 +1272,18 @@ static bool ReadBrowserStartPageConfig(yyjson_val* browser,
 static bool ReadBrowserProfileConfig(yyjson_val* browser,
                                      MuonConfig* config,
                                      std::string* error_message) {
-  const auto profile = yyjson_obj_get(browser, kMuonConfigBrowserProfileKey);
+  const auto profile =
+      yyjson_obj_get(browser, kMuonConfigBrowserProfilePathKey);
   if (profile == nullptr) {
     return true;
   }
   if (!yyjson_is_str(profile)) {
-    *error_message = "muon.json browser.profile must be a string";
+    *error_message = "muon.json browser.profilePath must be a string";
     return false;
   }
   const auto profile_path = ReadJsonString(profile);
   if (profile_path.empty()) {
-    *error_message = "muon.json browser.profile must not be empty";
+    *error_message = "muon.json browser.profilePath must not be empty";
     return false;
   }
   config->browser.profile = profile_path;
@@ -1974,15 +1976,15 @@ static bool ReadAssetConfig(yyjson_val* root,
     return false;
   }
 
-  const auto from = yyjson_obj_get(asset, kMuonConfigAssetFromKey);
+  const auto from = yyjson_obj_get(asset, kMuonConfigAssetSourcePathKey);
   if (from != nullptr) {
     if (!yyjson_is_str(from)) {
-      *error_message = "muon.json asset.from must be a string";
+      *error_message = "muon.json asset.sourcePath must be a string";
       return false;
     }
     config->asset.from = ReadJsonString(from);
     if (config->asset.from.empty()) {
-      *error_message = "muon.json asset.from must not be empty";
+      *error_message = "muon.json asset.sourcePath must not be empty";
       return false;
     }
     config->asset.has_from = true;

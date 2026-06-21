@@ -179,10 +179,10 @@ static bool RunInternalCefLogPathTest(
                     (test_directory / "profiles" / "custom" /
                      "muon-cef.log")
                         .lexically_normal(),
-                "relative browser.profile was not used for CEF log path") &&
+                "relative browser.profilePath was not used for CEF log path") &&
          Expect(absolute_profile_path ==
                     (absolute_profile / "muon-cef.log").lexically_normal(),
-                "absolute browser.profile was not used for CEF log path");
+                "absolute browser.profilePath was not used for CEF log path");
 }
 
 static bool RunFileLoggerTest(const std::filesystem::path& test_directory) {

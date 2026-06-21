@@ -219,8 +219,8 @@ Viteを使用しないプロジェクトでは、任意の方法で先にアセ�
 muon build
 ```
 
-`muon build` のアセット元は、`--assets`、`muon.json` の `asset.from`、`assets/` の順に解決されます。
-`asset.from` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
+`muon build` のアセット元は、`--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
+`asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
@@ -512,13 +512,13 @@ assets/
     └── child.js
 ```
 
-ローカルアセットディレクトリは、 `muon.json` の `asset.from` で位置を指定できます。
+ローカルアセットディレクトリは、 `muon.json` の `asset.sourcePath` で位置を指定できます。
 既定では `muon.json` が存在するディレクトリからの相対パス、または絶対パス指定です。
 
 ```json
 {
   "asset": {
-    "from": "./assets/"
+    "sourcePath": "./assets/"
   }
 }
 ```
@@ -638,24 +638,24 @@ assets.zip
     └── child.js
 ```
 
-その後、そのファイルを `asset.from` に指定します:
+その後、そのファイルを `asset.sourcePath` に指定します:
 
 ```json
 {
   "asset": {
-    "from": "./assets.zip"
+    "sourcePath": "./assets.zip"
   }
 }
 ```
 
-`asset.from` がファイルを示している場合は、muonがパッキングされたローカルアセットと見なしてアクセスを行います。
+`asset.sourcePath` がファイルを示している場合は、muonがパッキングされたローカルアセットと見なしてアクセスを行います。
 
 更に、パッキングファイルの全体検証を行わせることが出来ます:
 
 ```json
 {
   "asset": {
-    "from": "./assets.zip",
+    "sourcePath": "./assets.zip",
     "signature": "a64b4e1c945373908df3a5b79f8000d8beb4e5a7",
     "salt": "0d48cab58f2a45efa1f883c1f0c6f88c"
   }

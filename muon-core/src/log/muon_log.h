@@ -53,7 +53,7 @@ bool IsMuonLogEnabled(const MuonLogConfig& config,
  * Returns the internal CEF log file path used for CEF log forwarding.
  *
  * @param base_directory Directory relative paths are resolved against.
- * @param profile_path CEF profile directory path from browser.profile.
+ * @param profile_path CEF profile directory path from browser.profilePath.
  * @return Internal CEF log file path.
  */
 std::filesystem::path GetMuonInternalCefLogPath(

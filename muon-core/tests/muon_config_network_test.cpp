@@ -284,7 +284,7 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
 
   WriteRawString(&bytes, "asset");
   BeginTlvObject(&bytes, 3);
-  WriteRawString(&bytes, "from");
+  WriteRawString(&bytes, "sourcePath");
   WriteTlvString(&bytes, "assets.zip");
   WriteRawString(&bytes, "signature");
   WriteTlvBinary(
@@ -298,7 +298,7 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   BeginTlvObject(&bytes, 3);
   WriteRawString(&bytes, "startPage");
   WriteTlvString(&bytes, "https://embedded.example/app");
-  WriteRawString(&bytes, "profile");
+  WriteRawString(&bytes, "profilePath");
   WriteTlvString(&bytes, "profiles/embedded");
   WriteRawString(&bytes, "backgroundColor");
   WriteTlvBinary(&bytes, {0x12, 0x3a, 0xbc});
@@ -334,7 +334,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.network.allow[0] == "asset://**",
               "missing muon.json default network allowlist is wrong") ||
       !Expect(!config.asset.has_from,
-              "missing muon.json configured asset.from") ||
+              "missing muon.json configured asset.sourcePath") ||
       !Expect(!config.asset.has_signature,
               "missing muon.json configured asset.signature") ||
       !Expect(!config.asset.has_salt,
@@ -521,7 +521,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"from":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profile":"profiles/custom","initialWindowState":"maximized","backgroundColor":"#123abc","titleBar":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","backgroundColor":"#123abc","titleBar":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -543,7 +543,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.browser.start_page == "https://example.com/app",
                 "browser.startPage was not parsed") &&
          Expect(config.browser.profile == test_directory / "profiles/custom",
-                "browser.profile was not parsed") &&
+                "browser.profilePath was not parsed") &&
          Expect(config.browser.initial_window_state ==
                     kMuonBrowserInitialWindowStateMaximized,
                 "browser.initialWindowState was not parsed") &&
@@ -590,9 +590,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                 "external plugin allow pattern count is wrong") &&
          Expect(config.plugin.plugins[1].allow[0] == "foobar.*",
                 "external plugin allow pattern changed") &&
-         Expect(config.asset.has_from, "asset.from was not parsed") &&
+         Expect(config.asset.has_from, "asset.sourcePath was not parsed") &&
          Expect(config.asset.from == test_directory / "packed/assets.zip",
-                "asset.from was not resolved from config directory") &&
+                "asset.sourcePath was not resolved from config directory") &&
          Expect(config.asset.has_signature,
                 "asset.signature was not parsed") &&
          Expect(config.asset.signature ==
@@ -671,13 +671,13 @@ static bool RunLaunchSourceProfilePathTest(
 
   const auto explicit_path = test_directory / "profile-explicit.json";
   if (!Expect(WriteFile(explicit_path,
-                        R"({"browser":{"profile":"profiles/custom"}})"),
+                        R"({"browser":{"profilePath":"profiles/custom"}})"),
               "failed to write explicit profile config") ||
       !LoadConfigExpectSuccess(explicit_path, &config)) {
     return false;
   }
   return Expect(config.browser.profile == test_directory / "profiles/custom",
-                "explicit browser.profile should override launch source");
+                "explicit browser.profilePath should override launch source");
 }
 
 static bool ExpectDefaultConfigStart(
@@ -793,7 +793,7 @@ static bool RunEmbeddedConfigLoadingTest(
                 "embedded browser.startPage was not parsed") &&
          Expect(config.browser.profile ==
                     runtime_directory / "profiles/embedded",
-                "embedded browser.profile was not resolved from executable "
+                "embedded browser.profilePath was not resolved from executable "
                 "directory") &&
          ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
                                     0x3a, 0xbc,
@@ -802,9 +802,10 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.plugin.path == runtime_directory / "plugins",
                 "embedded plugin.path was not resolved from executable "
                 "directory") &&
-         Expect(config.asset.has_from, "embedded asset.from was not parsed") &&
+         Expect(config.asset.has_from,
+                "embedded asset.sourcePath was not parsed") &&
          Expect(config.asset.from == runtime_directory / "assets.zip",
-                "embedded asset.from was not resolved from executable "
+                "embedded asset.sourcePath was not resolved from executable "
                 "directory") &&
          Expect(config.asset.has_signature,
                 "embedded asset.signature was not parsed") &&
@@ -871,11 +872,11 @@ static bool RunConfigOverrideLoadingTest(
   const auto second_path = second_directory / "override.json";
   if (!Expect(WriteFile(
                   first_path,
-                  R"({"asset":{"from":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profile":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBar":"native","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBar":"native","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
               "failed to write first override config") ||
       !Expect(WriteFile(
                   second_path,
-                  R"({"asset":{"from":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBar":"muon","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBar":"muon","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write second override config")) {
     return false;
   }
@@ -888,7 +889,7 @@ static bool RunConfigOverrideLoadingTest(
   if (!Expect(config.browser.start_page == "https://second.example/app",
               "later scalar browser.startPage did not override") ||
       !Expect(config.browser.profile == first_directory / "profiles/first",
-              "browser.profile was not resolved from its config directory") ||
+              "browser.profilePath was not resolved from its config directory") ||
       !Expect(config.browser.initial_window_state ==
                   kMuonBrowserInitialWindowStateFullscreen,
               "later scalar browser.initialWindowState did not override") ||
@@ -947,9 +948,9 @@ static bool RunConfigOverrideLoadingTest(
     return false;
   }
   if (!Expect(config.asset.has_from,
-              "merged config did not preserve asset.from") ||
+              "merged config did not preserve asset.sourcePath") ||
       !Expect(config.asset.from == second_directory / "assets-second.zip",
-              "asset.from was not resolved from the later config directory") ||
+              "asset.sourcePath was not resolved from the later config directory") ||
       !Expect(config.asset.has_signature,
               "merged config did not preserve asset.signature") ||
       !Expect(config.asset.signature ==
@@ -1289,11 +1290,11 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(invalid_asset_path, R"({"asset":true})"),
                 "failed to write invalid asset config") &&
          Expect(WriteFile(invalid_asset_from_type_path,
-                          R"({"asset":{"from":42}})"),
-                "failed to write invalid asset.from type config") &&
+                          R"({"asset":{"sourcePath":42}})"),
+                "failed to write invalid asset.sourcePath type config") &&
          Expect(WriteFile(empty_asset_from_path,
-                          R"({"asset":{"from":""}})"),
-                "failed to write empty asset.from config") &&
+                          R"({"asset":{"sourcePath":""}})"),
+                "failed to write empty asset.sourcePath config") &&
          Expect(WriteFile(invalid_asset_signature_type_path,
                           R"({"asset":{"signature":42}})"),
                 "failed to write invalid asset.signature type config") &&
@@ -1378,9 +1379,9 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_asset_path,
                                  "asset must be an object") &&
          LoadConfigExpectFailure(invalid_asset_from_type_path,
-                                 "asset.from must be a string") &&
+                                 "asset.sourcePath must be a string") &&
          LoadConfigExpectFailure(empty_asset_from_path,
-                                 "asset.from must not be empty") &&
+                                 "asset.sourcePath must not be empty") &&
          LoadConfigExpectFailure(invalid_asset_signature_type_path,
                                  "asset.signature must be a string") &&
          LoadConfigExpectFailure(short_asset_signature_path,
@@ -1587,10 +1588,10 @@ static bool RunBrowserConfigValidationTest(
                           R"({"browser":{"startPage":""}})"),
                 "failed to write empty browser start config") &&
          Expect(WriteFile(invalid_browser_profile_path,
-                          R"({"browser":{"profile":42}})"),
+                          R"({"browser":{"profilePath":42}})"),
                 "failed to write invalid browser profile config") &&
          Expect(WriteFile(empty_browser_profile_path,
-                          R"({"browser":{"profile":""}})"),
+                          R"({"browser":{"profilePath":""}})"),
                 "failed to write empty browser profile config") &&
          Expect(WriteFile(invalid_initial_window_state_path,
                           R"({"browser":{"initialWindowState":42}})"),
@@ -1679,9 +1680,9 @@ static bool RunBrowserConfigValidationTest(
          LoadConfigExpectFailure(empty_browser_start_path,
                                  "browser.startPage must not be empty") &&
          LoadConfigExpectFailure(invalid_browser_profile_path,
-                                 "browser.profile must be a string") &&
+                                 "browser.profilePath must be a string") &&
          LoadConfigExpectFailure(empty_browser_profile_path,
-                                 "browser.profile must not be empty") &&
+                                 "browser.profilePath must not be empty") &&
          LoadConfigExpectFailure(invalid_initial_window_state_path,
                                  "browser.initialWindowState must be a "
                                  "string") &&

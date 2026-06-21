@@ -540,7 +540,8 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
   if (!has_asset_from) {
     if (has_asset_signature) {
       *error_message =
-          "muon.json asset.signature requires asset.from to be a ZIP file";
+          "muon.json asset.signature requires asset.sourcePath to be a ZIP "
+          "file";
       return nullptr;
     }
     return CreateDefaultMuonFileAppStorage();
@@ -548,14 +549,15 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
 
   std::error_code error;
   if (!std::filesystem::exists(asset_from, error) || error) {
-    *error_message = "muon.json asset.from does not exist: " +
+    *error_message = "muon.json asset.sourcePath does not exist: " +
                      asset_from.string();
     return nullptr;
   }
   if (std::filesystem::is_directory(asset_from, error) && !error) {
     if (has_asset_signature) {
       *error_message =
-          "muon.json asset.signature requires asset.from to be a ZIP file: " +
+          "muon.json asset.signature requires asset.sourcePath to be a ZIP "
+          "file: " +
           asset_from.string();
       return nullptr;
     }
@@ -566,22 +568,22 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
     if (has_asset_signature) {
       std::vector<uint8_t> archive_data;
       if (!ReadBinaryFile(asset_from, &archive_data)) {
-        *error_message = "Failed to read muon.json asset.from: " +
+        *error_message = "Failed to read muon.json asset.sourcePath: " +
                          asset_from.string();
         return nullptr;
       }
       const auto actual_signature = CalculateSha1Hex(archive_data, asset_salt);
       if (actual_signature != normalized_asset_signature) {
         *error_message =
-            "muon.json asset.signature does not match asset.from salted "
+            "muon.json asset.signature does not match asset.sourcePath salted "
             "SHA-1: " +
             asset_from.string();
         return nullptr;
       }
       if (!IsZipArchiveData(archive_data)) {
         *error_message =
-            "muon.json asset.signature requires asset.from to be a valid ZIP "
-            "file: " +
+            "muon.json asset.signature requires asset.sourcePath to be a "
+            "valid ZIP file: " +
             asset_from.string();
         return nullptr;
       }
@@ -590,7 +592,7 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
   }
 
   *error_message =
-      "muon.json asset.from must be a directory or regular file: " +
+      "muon.json asset.sourcePath must be a directory or regular file: " +
       asset_from.string();
   return nullptr;
 }

@@ -1194,7 +1194,7 @@ export const writeMuonConfig = async (
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[] = [],
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
-  assetFrom: string | undefined = undefined,
+  assetSourcePath: string | undefined = undefined,
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
@@ -1250,8 +1250,8 @@ export const writeMuonConfig = async (
   if (Object.keys(browser).length > 0) {
     config.browser = browser;
   }
-  if (assetFrom !== undefined) {
-    const asset: Record<string, unknown> = { from: assetFrom };
+  if (assetSourcePath !== undefined) {
+    const asset: Record<string, unknown> = { sourcePath: assetSourcePath };
     if (assetSignature !== undefined) {
       asset.signature = assetSignature;
     }
@@ -1281,7 +1281,7 @@ export const startMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   includeStandardPlugins = true,
   browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
-  assetFrom: string | undefined = undefined,
+  assetSourcePath: string | undefined = undefined,
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
@@ -1311,7 +1311,7 @@ export const startMuon = async (
     networkAuthorizedOrigins,
     browserAllowUnsafeJavaScriptParentAccess,
     browserInitialWindowState,
-    assetFrom,
+    assetSourcePath,
     assetSignature,
     assetSalt,
     browserBackgroundColor,
@@ -1380,7 +1380,7 @@ export const startDebugMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   includeStandardPlugins = true,
   browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
-  assetFrom: string | undefined = undefined,
+  assetSourcePath: string | undefined = undefined,
   assetSignature: string | undefined = undefined,
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
@@ -1400,7 +1400,7 @@ export const startDebugMuon = async (
     browserAllowUnsafeJavaScriptParentAccess,
     includeStandardPlugins,
     browserInitialWindowState,
-    assetFrom,
+    assetSourcePath,
     assetSignature,
     assetSalt,
     browserBackgroundColor,
@@ -1420,6 +1420,7 @@ export const startReleaseMuon = async (): Promise<RunningMuon> =>
 export const startGestamentDebugMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   assetRoot: string | undefined = undefined,
+  browserBackgroundColor: string | undefined = undefined,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -1438,6 +1439,9 @@ export const startGestamentDebugMuon = async (
     browserAllowUnsafeJavaScriptParentAccess,
     undefined,
     assetRoot,
+    undefined,
+    undefined,
+    browserBackgroundColor,
   );
   let app: GtkApp | undefined = undefined;
   const args = [

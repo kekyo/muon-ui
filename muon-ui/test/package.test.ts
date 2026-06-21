@@ -469,13 +469,16 @@ const defaultPlugin = muon();
 const plugin = muon({
   muonPath: "../muon-core/.run/dev-linux64-debug",
   cefPath: "../muon-core/.cef/cef_binary_fake_linux64_minimal",
+  open: false,
   enableDebugger: false,
   build: {
     targets: ["linux-amd64"],
   },
 });
+const explicitOpenPlugin = muon({ open: true });
 void defaultPlugin;
 void plugin;
+void explicitOpenPlugin;
 `),
     ).resolves.toBeUndefined();
   });

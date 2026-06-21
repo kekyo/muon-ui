@@ -153,16 +153,12 @@ export default defineConfig({
     react(),  // Reactプラグイン
     muon(),   // muonプラグイン (追加する)
   ],
-  server: {
-    open: true,  // muonを起動する
-  },
 })
 ```
 
 `defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
-更に、`server.open: true` を加えることで、ブラウザの代わりにmuonが自動的に起動するようになります。
-
 これで作業は完了です。
+
 開発作業を行うときには:
 
 ```bash
@@ -483,10 +479,6 @@ TypeScriptを使用してコードを記述する場合は、型チェックに�
 `muon.json` に指定する `plugin.plugins.name` は、プラグイン名です。
 内蔵プラグインに限り、特別な `"internal"` を使用します。
 その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `plugin.plugins.name` に指定します。
-
-例えば、Linux環境においては、ファイルオープンダイアログをGTK3かGTK4から選択できます。
-これはプラグインファイル `muon_fs_dialogs_gtk3.so` または `muon_fs_dialogs_gtk4.so` で提供されるので、
-GTK3とGTK4のどちらを使用するかに応じて `plugin.plugins.name: "muon_fs_dialogs_gtk3"` または  `plugin.plugins.name: "muon_fs_dialogs_gtk4"` と指定します。
 
 内蔵プラグインの詳細は別章を参照して下さい。
 

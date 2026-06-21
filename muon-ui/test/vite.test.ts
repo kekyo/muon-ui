@@ -180,17 +180,33 @@ const writeFakeMuonSource = async (
   await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
 };
 
+const writeFakeBrowserExecutable = async (
+  outputDirectory: string,
+): Promise<string> => {
+  const executable = join(outputDirectory, "browser.sh");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > '${outputDirectory.replaceAll("'", "'\\''")}/browser-args.txt'
+`,
+  );
+  await chmod(executable, 0o755);
+  return executable;
+};
+
 interface StartServerPluginOptions {
   muonPath: string;
   cefPath: string | undefined;
   stagePath: string | undefined;
   enableDebugger: boolean | undefined;
+  open: boolean | undefined;
 }
 
 const startServer = async (
   root: string,
   pluginOptions: StartServerPluginOptions,
-  open: boolean | string,
+  serverOpen: boolean | string | undefined,
   logger?: Logger,
 ): Promise<ViteDevServer> => {
   const muonPluginOptions = {
@@ -204,6 +220,7 @@ const startServer = async (
     ...(pluginOptions.enableDebugger === undefined
       ? {}
       : { enableDebugger: pluginOptions.enableDebugger }),
+    ...(pluginOptions.open === undefined ? {} : { open: pluginOptions.open }),
   };
   const server = await createServer({
     root,
@@ -212,7 +229,7 @@ const startServer = async (
     server: {
       host: "127.0.0.1",
       port: 0,
-      open,
+      ...(serverOpen === undefined ? {} : { open: serverOpen }),
     },
     plugins: [muon(muonPluginOptions)],
   });
@@ -265,7 +282,41 @@ describe("muon Vite plugin", () => {
     ).toBe(resolve("/custom-muon-core"));
   });
 
-  it("does not change BROWSER when server.open is false", async () => {
+  it("launches Muon when server.open is false", async () => {
+    const root = await createTemporaryDirectory("muon-vite-server-closed-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.BROWSER = "existing-browser";
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+      },
+      false,
+    );
+    await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+    expect(process.env.BROWSER).toBe("existing-browser");
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      ".muon/\n",
+    );
+    await expect(
+      access(join(root, ".muon", "linux64")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not launch Muon when the plugin open option is false", async () => {
     const root = await createTemporaryDirectory("muon-vite-closed-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     await writeBasicViteProject(root);
@@ -278,8 +329,9 @@ describe("muon Vite plugin", () => {
         cefPath: undefined,
         stagePath: undefined,
         enableDebugger: undefined,
+        open: false,
       },
-      false,
+      undefined,
     );
 
     expect(process.env.BROWSER).toBe("existing-browser");
@@ -289,7 +341,7 @@ describe("muon Vite plugin", () => {
     await expect(access(join(root, ".muon"))).rejects.toThrow();
   });
 
-  it("writes an override config before Vite launches BROWSER", async () => {
+  it("launches Muon without server.open", async () => {
     const root = await createTemporaryDirectory("muon-vite-open-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -308,8 +360,9 @@ describe("muon Vite plugin", () => {
         cefPath: cefDirectory,
         stagePath: undefined,
         enableDebugger: undefined,
+        open: undefined,
       },
-      true,
+      undefined,
     );
     await wait(() => existsSync(join(outputDirectory, "override.json")));
 
@@ -367,11 +420,50 @@ describe("muon Vite plugin", () => {
         ],
       },
     });
-    expect(process.env.BROWSER).not.toBe("existing-browser");
+    expect(process.env.BROWSER).toBe("existing-browser");
 
     await server.close();
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
+  });
+
+  it("launches both the browser and Muon when server.open is true", async () => {
+    const root = await createTemporaryDirectory("muon-vite-browser-and-muon-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.BROWSER = await writeFakeBrowserExecutable(outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+      },
+      true,
+    );
+    await wait(
+      () =>
+        existsSync(join(outputDirectory, "override.json")) &&
+        existsSync(join(outputDirectory, "browser-args.txt")),
+    );
+
+    const browserArgs = (
+      await readFile(join(outputDirectory, "browser-args.txt"), "utf8")
+    )
+      .trim()
+      .split("\n");
+    const baseUrl = server.resolvedUrls?.local[0];
+    expect(baseUrl).toBeDefined();
+    expect(browserArgs).toContain(baseUrl);
   });
 
   it("omits the debugger override when enableDebugger is false", async () => {
@@ -392,8 +484,9 @@ describe("muon Vite plugin", () => {
         cefPath: cefDirectory,
         stagePath: undefined,
         enableDebugger: false,
+        open: undefined,
       },
-      true,
+      undefined,
     );
     await wait(() => existsSync(join(outputDirectory, "override.json")));
 
@@ -425,8 +518,9 @@ describe("muon Vite plugin", () => {
         cefPath: cefDirectory,
         stagePath: undefined,
         enableDebugger: undefined,
+        open: undefined,
       },
-      true,
+      undefined,
       logger,
     );
     await wait(() => existsSync(join(outputDirectory, "override.json")));
@@ -459,8 +553,9 @@ describe("muon Vite plugin", () => {
         cefPath: cefDirectory,
         stagePath: undefined,
         enableDebugger: undefined,
+        open: undefined,
       },
-      true,
+      undefined,
       logger,
     );
     await wait(() => existsSync(join(outputDirectory, "override.json")));
@@ -474,7 +569,7 @@ describe("muon Vite plugin", () => {
     expect(warnings.join("\n")).toContain("will be ignored");
   });
 
-  it("uses a string server.open value as the browser start page", async () => {
+  it("uses the Vite base URL as the Muon start page when server.open is a string", async () => {
     const root = await createTemporaryDirectory("muon-vite-path-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -492,6 +587,7 @@ describe("muon Vite plugin", () => {
         cefPath: cefDirectory,
         stagePath: undefined,
         enableDebugger: undefined,
+        open: undefined,
       },
       "/path?x=1",
     );
@@ -502,9 +598,7 @@ describe("muon Vite plugin", () => {
     ) as { browser: { startPage: string } };
     const baseUrl = server.resolvedUrls?.local[0];
     expect(baseUrl).toBeDefined();
-    expect(overrideConfig.browser.startPage).toBe(
-      new URL("/path?x=1", baseUrl).href,
-    );
+    expect(overrideConfig.browser.startPage).toBe(baseUrl);
   });
 });
 

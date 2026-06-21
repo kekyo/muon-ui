@@ -85,6 +85,14 @@ export interface MuonVitePluginOptions {
   stagePath?: string;
 
   /**
+   * Launch Muon automatically during Vite dev startup.
+   *
+   * @remarks Defaults to true. This is independent from Vite's server.open
+   * browser startup option. Vite build ignores this option.
+   */
+  open?: boolean;
+
+  /**
    * Enable the Muon debugger defaults during Vite dev startup.
    *
    * @remarks Defaults to true. When enabled, the generated development config
@@ -102,9 +110,9 @@ export interface MuonVitePluginOptions {
 }
 
 /**
- * Creates a Vite plugin that launches Muon through Vite's server.open flow.
+ * Creates a Vite plugin that launches Muon during Vite dev startup.
  *
- * @param options Muon runtime location used for development startup.
+ * @param options Muon plugin options used for development startup and build.
  * @returns Vite plugin instance.
  */
 const muon = (options: MuonVitePluginOptions = {}): Plugin => {

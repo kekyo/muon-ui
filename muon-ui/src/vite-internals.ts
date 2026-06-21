@@ -52,6 +52,7 @@ interface MuonOverrideConfig {
   };
   browser: {
     startPage: string;
+    titleBar?: "native" | "muon";
     keybind?: {
       devtools: "f12";
     };

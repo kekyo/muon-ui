@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "browser/muon_title_bar.h"
+
 #include "include/views/cef_browser_view.h"
 
 /**
@@ -17,8 +19,12 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
    * Creates a browser view delegate.
    *
    * @param is_devtools Whether the view is for DevTools.
+   * @param title_bar_manifest Parsed title bar provider manifest.
    */
-  explicit MuonBrowserViewDelegate(bool is_devtools);
+  explicit MuonBrowserViewDelegate(
+      bool is_devtools,
+      MuonTitleBarManifest title_bar_manifest =
+          CreateNativeMuonTitleBarManifest());
 
   /**
    * Creates delegates for popup browser views.
@@ -55,6 +61,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
 
  private:
   const bool is_devtools_;
+  const MuonTitleBarManifest title_bar_manifest_;
 
   IMPLEMENT_REFCOUNTING(MuonBrowserViewDelegate);
   DISALLOW_COPY_AND_ASSIGN(MuonBrowserViewDelegate);

@@ -45,6 +45,7 @@ static constexpr char kMuonConfigBrowserInitialWindowStateKey[] =
     "initialWindowState";
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
     "backgroundColor";
+static constexpr char kMuonConfigBrowserTitleBarKey[] = "titleBar";
 static constexpr char kMuonConfigBrowserKeybindsKey[] = "keybind";
 static constexpr char kMuonConfigBrowserDevToolsKey[] = "devtools";
 static constexpr char kMuonConfigBrowserReloadKey[] = "reload";
@@ -1424,6 +1425,47 @@ static bool ReadBrowserBackgroundColorConfig(
   return true;
 }
 
+static bool ParseBrowserTitleBar(
+    const std::string& raw_title_bar,
+    MuonBrowserTitleBarMode* title_bar) {
+  if (title_bar == nullptr) {
+    return false;
+  }
+  if (raw_title_bar == "native") {
+    *title_bar = kMuonBrowserTitleBarNative;
+    return true;
+  }
+  if (raw_title_bar == "muon") {
+    *title_bar = kMuonBrowserTitleBarMuon;
+    return true;
+  }
+  return false;
+}
+
+static bool ReadBrowserTitleBarConfig(yyjson_val* browser,
+                                      MuonConfig* config,
+                                      std::string* error_message) {
+  const auto title_bar = yyjson_obj_get(browser, kMuonConfigBrowserTitleBarKey);
+  if (title_bar == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(title_bar)) {
+    *error_message = "muon.json browser.titleBar must be a string";
+    return false;
+  }
+  const auto raw_title_bar = ReadJsonString(title_bar);
+  if (raw_title_bar.empty()) {
+    *error_message = "muon.json browser.titleBar must not be empty";
+    return false;
+  }
+  if (!ParseBrowserTitleBar(raw_title_bar, &config->browser.title_bar)) {
+    *error_message =
+        "muon.json browser.titleBar has unknown value: " + raw_title_bar;
+    return false;
+  }
+  return true;
+}
+
 static bool ShortcutAcceptsModifiers(const MuonKeyboardShortcut& shortcut,
                                      uint32_t modifiers) {
   if (shortcut.modifiers == modifiers) {
@@ -1548,6 +1590,7 @@ static bool ReadBrowserConfig(yyjson_val* root,
       !ReadBrowserProfileConfig(browser, config, error_message) ||
       !ReadBrowserInitialWindowStateConfig(browser, config, error_message) ||
       !ReadBrowserBackgroundColorConfig(browser, config, error_message) ||
+      !ReadBrowserTitleBarConfig(browser, config, error_message) ||
       !ReadBrowserKeybindsConfig(browser, config, error_message)) {
     return false;
   }

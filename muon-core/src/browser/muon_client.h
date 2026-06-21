@@ -7,6 +7,7 @@
 #pragma once
 
 #include "browser/muon_builtin_browser.h"
+#include "browser/muon_title_bar.h"
 #include "config/muon_config.h"
 #include "network/muon_network_policy.h"
 #include "plugins/muon_plugin_runtime.h"
@@ -48,13 +49,16 @@ class MuonClient final : public CefClient,
    * access.
    * @param shutdown_requester Callback that records a process shutdown request.
    * @param browser_config Browser keyboard shortcut configuration.
+   * @param title_bar_manifest Parsed title bar provider manifest.
    */
   MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
              std::shared_ptr<MuonNetworkPolicy> network_policy,
              std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
              std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy,
              std::function<bool(int32_t)> shutdown_requester,
-             const MuonBrowserConfig& browser_config);
+             const MuonBrowserConfig& browser_config,
+             MuonTitleBarManifest title_bar_manifest =
+                 CreateNativeMuonTitleBarManifest());
 
   /**
    * Returns this object as the browser lifetime handler.
@@ -320,6 +324,7 @@ class MuonClient final : public CefClient,
 
   bool shutdown_started_ = false;
   MuonBrowserConfig browser_config_;
+  MuonTitleBarManifest title_bar_manifest_;
   std::function<bool(int32_t)> shutdown_requester_;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime_;
   std::shared_ptr<MuonNetworkPolicy> network_policy_;

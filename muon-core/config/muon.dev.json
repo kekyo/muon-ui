@@ -21,6 +21,7 @@
   },
   "browser": {
     "initialWindowState": "normal",
+    "titleBar": "muon",
     "keybind": {
       "devtools": "f12"
     },

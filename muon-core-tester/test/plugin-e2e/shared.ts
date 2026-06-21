@@ -39,7 +39,9 @@ import { afterEach, describe, expect } from "vitest";
 
 import {
   connectToMuonCdp,
+  isMuonTitleBarTarget,
   listCdpTargets,
+  MUON_TITLE_BAR_TARGET_TITLE,
   type CdpTarget,
   type CdpDriver,
 } from "../../src/helper.js";
@@ -49,10 +51,12 @@ export {
   appendFile,
   constants,
   connectToMuonCdp,
+  isMuonTitleBarTarget,
   join,
   listCdpTargets,
   mkdir,
   mkdtemp,
+  MUON_TITLE_BAR_TARGET_TITLE,
   readFile,
   rm,
   tmpdir,
@@ -398,7 +402,15 @@ export const waitForCdp = async (timeoutMs: number): Promise<void> => {
         port: MUON_PORT,
         timeoutMs: 1000,
       });
-      if (targets.some((target) => target.type === "page")) {
+      if (
+        targets.some(
+          (target) =>
+            target.type === "page" &&
+            target.webSocketDebuggerUrl !== undefined &&
+            target.url !== "about:blank" &&
+            !isMuonTitleBarTarget(target),
+        )
+      ) {
         return;
       }
     } catch (error) {
@@ -801,6 +813,7 @@ export const waitForNewPageTarget = async (
       (candidate) =>
         !previousTargetIds.has(candidate.id) &&
         candidate.type === "page" &&
+        !isMuonTitleBarTarget(candidate) &&
         matches(candidate),
     );
     if (target !== undefined) {
@@ -823,7 +836,9 @@ export const expectNoNewPageTarget = async (
   expect(
     targets.some(
       (candidate) =>
-        !previousTargetIds.has(candidate.id) && candidate.type === "page",
+        !previousTargetIds.has(candidate.id) &&
+        candidate.type === "page" &&
+        !isMuonTitleBarTarget(candidate),
     ),
   ).toBe(false);
 };
@@ -1404,6 +1419,7 @@ export const startReleaseMuon = async (): Promise<RunningMuon> =>
 
 export const startGestamentDebugMuon = async (
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
+  assetRoot: string | undefined = undefined,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -1420,6 +1436,8 @@ export const startGestamentDebugMuon = async (
     true,
     [],
     browserAllowUnsafeJavaScriptParentAccess,
+    undefined,
+    assetRoot,
   );
   let app: GtkApp | undefined = undefined;
   const args = [

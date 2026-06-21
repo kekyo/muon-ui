@@ -194,6 +194,8 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
          Expect(browser.initial_window_state ==
                     kMuonBrowserInitialWindowStateNormal,
                 message + " initial window state changed") &&
+         Expect(browser.title_bar == kMuonBrowserTitleBarMuon,
+                message + " title bar mode changed") &&
          ExpectBrowserBackgroundSystem(browser.background_color,
                                        message + " background color") &&
          Expect(browser.plugin.allow.size() == 1,
@@ -519,7 +521,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"from":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profile":"profiles/custom","initialWindowState":"maximized","backgroundColor":"#123abc","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"from":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profile":"profiles/custom","initialWindowState":"maximized","backgroundColor":"#123abc","titleBar":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -548,6 +550,8 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
                                     0x3a, 0xbc,
                                     "browser.backgroundColor was not parsed") &&
+         Expect(config.browser.title_bar == kMuonBrowserTitleBarNative,
+                "browser.titleBar was not parsed") &&
          Expect(config.browser.plugin.allow.size() == 2,
                 "browser.plugin.allow pattern count is wrong") &&
          Expect(config.browser.plugin.allow[0] == "asset://main/**",
@@ -867,11 +871,11 @@ static bool RunConfigOverrideLoadingTest(
   const auto second_path = second_directory / "override.json";
   if (!Expect(WriteFile(
                   first_path,
-                  R"({"asset":{"from":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profile":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                  R"({"asset":{"from":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profile":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBar":"native","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
               "failed to write first override config") ||
       !Expect(WriteFile(
                   second_path,
-                  R"({"asset":{"from":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                  R"({"asset":{"from":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBar":"muon","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write second override config")) {
     return false;
   }
@@ -891,6 +895,8 @@ static bool RunConfigOverrideLoadingTest(
       !ExpectBrowserBackgroundRgb(
           config.browser.background_color, 0xab, 0xcd, 0xef,
           "later scalar browser.backgroundColor did not override") ||
+      !Expect(config.browser.title_bar == kMuonBrowserTitleBarMuon,
+              "later scalar browser.titleBar did not override") ||
       !Expect(config.browser.plugin.allow.size() == 2,
               "browser.plugin.allow array was not merged by equality") ||
       !Expect(config.browser.plugin.allow[0] == "asset://first/**",
@@ -1566,6 +1572,12 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "alpha-browser-background-color.json";
   const auto named_background_color_path =
       test_directory / "named-browser-background-color.json";
+  const auto invalid_title_bar_path =
+      test_directory / "invalid-browser-title-bar.json";
+  const auto empty_title_bar_path =
+      test_directory / "empty-browser-title-bar.json";
+  const auto unknown_title_bar_path =
+      test_directory / "unknown-browser-title-bar.json";
   return Expect(WriteFile(invalid_browser_path, R"({"browser":true})"),
                 "failed to write invalid browser config") &&
          Expect(WriteFile(invalid_browser_start_path,
@@ -1604,6 +1616,15 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(named_background_color_path,
                           R"({"browser":{"backgroundColor":"black"}})"),
                 "failed to write named background color config") &&
+         Expect(WriteFile(invalid_title_bar_path,
+                          R"({"browser":{"titleBar":42}})"),
+                "failed to write invalid title bar config") &&
+         Expect(WriteFile(empty_title_bar_path,
+                          R"({"browser":{"titleBar":""}})"),
+                "failed to write empty title bar config") &&
+         Expect(WriteFile(unknown_title_bar_path,
+                          R"({"browser":{"titleBar":"system"}})"),
+                "failed to write unknown title bar config") &&
          Expect(WriteFile(invalid_keybinds_path,
                           R"({"browser":{"keybind":true}})"),
                 "failed to write invalid browser keybind config") &&
@@ -1680,6 +1701,12 @@ static bool RunBrowserConfigValidationTest(
                                  "browser.backgroundColor has unknown value") &&
          LoadConfigExpectFailure(named_background_color_path,
                                  "browser.backgroundColor has unknown value") &&
+         LoadConfigExpectFailure(invalid_title_bar_path,
+                                 "browser.titleBar must be a string") &&
+         LoadConfigExpectFailure(empty_title_bar_path,
+                                 "browser.titleBar must not be empty") &&
+         LoadConfigExpectFailure(unknown_title_bar_path,
+                                 "browser.titleBar has unknown value") &&
          LoadConfigExpectFailure(invalid_keybinds_path,
                                  "browser.keybind must be an object") &&
          LoadConfigExpectFailure(invalid_devtools_path,

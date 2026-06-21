@@ -179,6 +179,16 @@ enum MuonBrowserBackgroundColorMode : uint32_t {
 };
 
 /**
+ * Main browser title bar mode from muon.json.
+ */
+enum MuonBrowserTitleBarMode : uint32_t {
+  /** Use the platform native title bar. */
+  kMuonBrowserTitleBarNative = 0,
+  /** Use the Muon title bar provided by libmuon-ui. */
+  kMuonBrowserTitleBarMuon = 1,
+};
+
+/**
  * Browser background color configuration from muon.json.
  */
 struct MuonBrowserBackgroundColorConfig {
@@ -224,6 +234,10 @@ struct MuonBrowserConfig {
    * color is specified.
    */
   MuonBrowserBackgroundColorConfig background_color;
+  /**
+   * Title bar implementation used for normal browser windows.
+   */
+  MuonBrowserTitleBarMode title_bar = kMuonBrowserTitleBarMuon;
   /**
    * Plugin API exposure configuration for browser pages.
    */

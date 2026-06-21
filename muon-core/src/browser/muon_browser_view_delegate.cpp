@@ -11,6 +11,8 @@
 #include "include/cef_task.h"
 #include "include/views/cef_window.h"
 
+#include <utility>
+
 class EnablePopupOpenerBrowserViewTask final : public CefTask {
  public:
   explicit EnablePopupOpenerBrowserViewTask(
@@ -42,8 +44,11 @@ class EnablePopupOpenerBrowserViewTask final : public CefTask {
   DISALLOW_COPY_AND_ASSIGN(EnablePopupOpenerBrowserViewTask);
 };
 
-MuonBrowserViewDelegate::MuonBrowserViewDelegate(bool is_devtools)
-    : is_devtools_(is_devtools) {}
+MuonBrowserViewDelegate::MuonBrowserViewDelegate(
+    bool is_devtools,
+    MuonTitleBarManifest title_bar_manifest)
+    : is_devtools_(is_devtools),
+      title_bar_manifest_(std::move(title_bar_manifest)) {}
 
 CefRefPtr<CefBrowserViewDelegate>
 MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
@@ -51,7 +56,7 @@ MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
     const CefBrowserSettings& settings,
     CefRefPtr<CefClient> client,
     bool is_devtools) {
-  return new MuonBrowserViewDelegate(is_devtools);
+  return new MuonBrowserViewDelegate(is_devtools, title_bar_manifest_);
 }
 
 bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
@@ -59,7 +64,9 @@ bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
     CefRefPtr<CefBrowserView> popup_browser_view,
     bool is_devtools) {
   CefWindow::CreateTopLevelWindow(
-      new MuonWindowDelegate(popup_browser_view, is_devtools));
+      new MuonWindowDelegate(popup_browser_view, is_devtools,
+                             kMuonBrowserInitialWindowStateNormal,
+                             title_bar_manifest_));
   if (!is_devtools) {
     // Popups are modeless in Muon even when they keep an opener reference.
     EnablePopupOpenerBrowserViewTask::EnablePopupOpenerBrowserView(browser_view);

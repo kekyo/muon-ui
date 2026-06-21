@@ -162,14 +162,7 @@ export default defineConfig({
 `defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
 更に、`server.open: true` を加えることで、ブラウザの代わりにmuonが自動的に起動するようになります。
 
-Viteによってmuonを起動した場合は、`F12` を押すことで、Muon DevToolsを起動できます。
-また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です。
-
-この開発用設定は `vite build` によるビルドには反映されません。
-明示的に指定する場合は muonプラグインの引数に `enableDebugger: true | false` を指定します。
-
 これで作業は完了です。
-
 開発作業を行うときには:
 
 ```bash
@@ -182,23 +175,25 @@ npm run dev
 
 ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
 
+`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動できます。
+また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+
 ---
 
 ### 配布用ビルド
 
-Viteを使用しているプロジェクトでは、`muon()` プラグインを設定した状態で通常どおり `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
-Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
+Vite muonプラグインを設定した状態で `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
 ```bash
 npm run build
-# または
-npx vite build
 ```
+
+Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
 既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-linux-amd64/` や `dist-windows-amd64/` のようなターゲット別ディレクトリです。
 アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
 
-複数ターゲットや出力先を指定したい場合は、`vite.config.ts` の `muon({ build: ... })` で指定できます:
+複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
 ```ts
 import { defineConfig } from 'vite'
@@ -207,7 +202,7 @@ import muon from 'muon-ui/vite'
 export default defineConfig({
   plugins: [
     muon({
-      build: {
+      build: {  // ビルドオプションの指定
         targets: ['linux-amd64', 'windows-amd64'],
         outputRoot: 'release',
         appName: 'my-app',
@@ -234,10 +229,16 @@ muon build
 
 ### CEFのダウンロードと更新
 
-`npm run dev` するときや `muon-core` をビルドするとき、必要なCEFのバイナリがローカルに存在しない場合は、CEFの公式配布サイトから自動的にダウンロードされます。
+CEFのバイナリアセットファイルは非常にサイズが大きことで有名です。
+また、CEFに脆弱性が発見された場合はCEFバイナリが更新されることになり、muonアプリをそのまま配布しているとCEFバイナリの更新のためにmuonアプリ全体の更新に見舞われます。
+
+そこでmuonは、muonアプリの配布物のサイズ削減と、CEFバイナリの更新の簡略化のため、
+muonアプリ起動時に、必要なCEFバイナリをダウンロードして動作完了を整えます。
+
+`npm run dev` する時、 `muon-core` をビルドする時、あるいはビルド後の生成物を配布して、エンドユーザーがmuonアプリを起動する場合に、必要なCEFのバイナリがローカルに存在しない場合は、CEFの公式配布サイトから自動的にダウンロードされます。
 これには少し時間がかかりますが、ダウンロードされたCEF tarballはローカルにキャッシュされるので、次回以降はキャッシュを使用します。
 
-- ローカルのキャッシュは、Linuxでは `~/.cache/muon` ディレクトリ内に、Windowsでは `$HOME\.cache\muon` ディレクトリ内に配置されます。
+- ローカルのキャッシュは、Linuxでは `~/.cache/muon/` ディレクトリ内に、Windowsでは `$HOME\.cache\muon\` ディレクトリ内に配置されます。
 - `MUON_CACHE_DIR` 環境変数を指定すると、キャッシュディレクトリを上書きできます。
 
 キャッシュディレクトリには、カタログとダウンロード済みのCEF tarballだけが配置されます:
@@ -249,8 +250,11 @@ muon build
     └── cef_binary_<version>_<target>_minimal.tar.bz2
 ```
 
-起動時の準備では、runtimeディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
-`versionPolicy` が保存されていない場合は、`muon-bootstrap` に埋め込まれた `muon.json` の `defaultVersionPolicy` を使用し、それも未指定の場合は `tested` を使用します:
+起動時の準備では、muonアプリが配置されているディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+
+実行に使用するCEFバージョンは、事前に決められた規則（ポリシー・後述）で判定されます。
+
+以下は `muon-bootstrap.ini` の例です:
 
 ```ini
 [cef]
@@ -264,37 +268,18 @@ requested=false
 requestedAtUnix=0
 ```
 
-`versionPolicy` には以下を指定できます:
+このファイルは手動で構成することは意図していません。
+muonアプリからは、後述の `window.muon.bootstrap` 名前空間のAPIを使用します。
 
-| 値                  | 動作                                                                                                                                             |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
-| `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
-| `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
-| `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
+通常は、CEFのダウンロードと更新のプロセスを操作する必要はないと思われますが、
+特に細かくアップデートプロセスを制御したい場合は、これらのAPIを使用してください。
+例えば、muonアプリ内からアップデートトリガーを行うことが出来ます。
 
-`catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
-`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+詳しくは別章を参照してください。
 
-`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+---
 
-```bash
-muon embed-config \
-  --runtime-path ./dist/runtime/linux64 \
-  --bootstrap-path ./myapp \
-  --config ./muon.json
-```
-
-このプロセスは大きく3段階あります:
-
-1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
-2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
-3. 実行時の準備ではCEFをプロジェクトの `.muon/` ディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
-
-CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
-テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
-
-#### CEFバージョンとCEF APIバージョン (Advanced topics)
+### CEFバージョンとCEF APIバージョン (Advanced topics)
 
 CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
 
@@ -336,6 +321,42 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
   CEF APIバージョニングの詳細は、CEF公式の [API Versioning](https://chromiumembedded.github.io/cef/api_versioning.html) を参照して下さい。
 
 `compat-latest` や `same-major-latest` はABI互換を確認しますが、Chromium/CEFのブラウザ機能としての挙動差までは保証しません。アプリケーション側で対象CEFの検証を行ってから配布して下さい。
+
+### CEFバイナリ更新の詳細 (Advanced Topics)
+
+この情報は、CEFバイナリアップデート処理の詳細な情報ですが、
+問題が発生した場合の分析のために示しています。
+`muon-bootstrap.ini` は手動で構成することを想定していないため注意してください。
+
+`muon-bootstrap.ini` の `versionPolicy` には以下の値が指定されます:
+
+| 値                  | 動作                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
+| `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
+| `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
+| `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
+
+`catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
+`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+
+`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+
+```bash
+muon embed-config \
+  --runtime-path ./dist/runtime/linux64 \
+  --bootstrap-path ./myapp \
+  --config ./muon.json
+```
+
+このプロセスは大きく3段階あります:
+
+1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
+2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
+3. 実行時の準備ではCEFをプロジェクトの `.muon/` ディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
+
+CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
+テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
 
 ---
 
@@ -754,6 +775,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
+    "titleBar": "muon",
     "keybinds": {
       "devtools": "f12",
       "zoomIn": "ctrl+plus",
@@ -804,6 +826,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `profile`                             | `string`                                  | `"./.profile"`            | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
+| `titleBar`                            | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
@@ -817,6 +840,11 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定できます。
 `"system"` はOSの明暗設定が取得できる場合に黒または白として反映し、取得できない場合はCEFの既定値を使用します。
+
+`titleBar` には `"muon"` または `"native"` を指定できます。
+`"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
+Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
+DevToolsウインドウはこの設定に関わらずCEF/Chrome styleのタイトルバーを使用します。
 
 `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom` を指定できます。
 値は `"Ctrl+Shift+I"` のように、修飾キーとキーを `+` で連結した文字列です。

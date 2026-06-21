@@ -45,6 +45,8 @@ static constexpr char kMuonConfigBrowserInitialWindowStateKey[] =
     "initialWindowState";
 static constexpr char kMuonConfigBrowserInitialTitleBarVisibilityKey[] =
     "initialTitleBarVisibility";
+static constexpr char kMuonConfigBrowserInitialTitleBarIconKey[] =
+    "initialTitleBarIcon";
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
     "backgroundColor";
 static constexpr char kMuonConfigBrowserTitleBarTypeKey[] = "titleBarType";
@@ -1368,6 +1370,30 @@ static bool ReadBrowserInitialTitleBarVisibilityConfig(
   return true;
 }
 
+static bool ReadBrowserInitialTitleBarIconConfig(
+    yyjson_val* browser,
+    MuonConfig* config,
+    std::string* error_message) {
+  const auto icon =
+      yyjson_obj_get(browser, kMuonConfigBrowserInitialTitleBarIconKey);
+  if (icon == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(icon)) {
+    *error_message =
+        "muon.json browser.initialTitleBarIcon must be a string";
+    return false;
+  }
+  config->browser.initial_title_bar_icon = ReadJsonString(icon);
+  if (config->browser.initial_title_bar_icon.empty()) {
+    *error_message =
+        "muon.json browser.initialTitleBarIcon must not be empty";
+    return false;
+  }
+  config->browser.has_initial_title_bar_icon = true;
+  return true;
+}
+
 static bool IsHexDigit(char value) {
   return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
          (value >= 'A' && value <= 'F');
@@ -1614,6 +1640,7 @@ static bool ReadBrowserConfig(yyjson_val* root,
       !ReadBrowserInitialWindowStateConfig(browser, config, error_message) ||
       !ReadBrowserInitialTitleBarVisibilityConfig(
           browser, config, error_message) ||
+      !ReadBrowserInitialTitleBarIconConfig(browser, config, error_message) ||
       !ReadBrowserBackgroundColorConfig(browser, config, error_message) ||
       !ReadBrowserTitleBarConfig(browser, config, error_message) ||
       !ReadBrowserKeybindsConfig(browser, config, error_message)) {

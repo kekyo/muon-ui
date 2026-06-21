@@ -59,6 +59,8 @@ const titleBarControlWidth = 46;
 const titleBarControlsWidth = 138;
 const configuredTitleBarBackgroundColor = "#123456";
 const appPageBackgroundColor = "#d7ebe5";
+const initialTitleBarIconPath = "icons/title-bar-initial.png";
+const updatedTitleBarIconPath = "icons/title-bar-updated.png";
 const expectedTitleBarBackgroundColor: RgbaPixel = {
   red: 0x12,
   green: 0x34,
@@ -71,14 +73,46 @@ const expectedAppPageBackgroundColor: RgbaPixel = {
   blue: 0xe5,
   alpha: 255,
 };
+const expectedInitialTitleBarIconColor: RgbaPixel = {
+  red: 0xed,
+  green: 0x20,
+  blue: 0x30,
+  alpha: 255,
+};
+const expectedUpdatedTitleBarIconColor: RgbaPixel = {
+  red: 0x20,
+  green: 0xd0,
+  blue: 0x60,
+  alpha: 255,
+};
+
+const createSolidPng = (color: RgbaPixel): Buffer => {
+  const png = new PNG({ width: 16, height: 16 });
+  for (let index = 0; index < png.data.length; index += 4) {
+    png.data[index] = color.red;
+    png.data[index + 1] = color.green;
+    png.data[index + 2] = color.blue;
+    png.data[index + 3] = color.alpha;
+  }
+  return PNG.sync.write(png);
+};
 
 const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   const assetRoot = join(directory, "titlebar-assets");
   const mainRoot = join(assetRoot, "main");
-  await mkdir(mainRoot, { recursive: true });
+  const iconsRoot = join(mainRoot, "icons");
+  await mkdir(iconsRoot, { recursive: true });
   await writeFile(
     join(mainRoot, "index.html"),
     `<!doctype html><title>${testWindowTitle}</title><style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}</style><main>title bar test</main>`,
+  );
+  await writeFile(
+    join(assetRoot, "main", initialTitleBarIconPath),
+    createSolidPng(expectedInitialTitleBarIconColor),
+  );
+  await writeFile(
+    join(assetRoot, "main", updatedTitleBarIconPath),
+    createSolidPng(expectedUpdatedTitleBarIconColor),
   );
   return assetRoot;
 };
@@ -339,6 +373,26 @@ const waitForTitleBarHidden = async (
   );
 };
 
+const waitForTitleBarIconColor = async (
+  running: RunningGestamentMuon,
+  bounds: NativeWindowBounds,
+  expected: RgbaPixel,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const capture = await captureRoot(running);
+    lastPixel = getWindowPixel(capture, bounds, 18, 18);
+    if (isPixelNear(lastPixel, expected)) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for title bar icon color. Last pixel: ${JSON.stringify(lastPixel)}`,
+  );
+};
+
 const countContrastingWindowPixels = (
   capture: RootCapture,
   bounds: NativeWindowBounds,
@@ -365,32 +419,50 @@ const expectTitleBarChrome = async (
   running: RunningGestamentMuon,
   bounds: NativeWindowBounds,
 ): Promise<void> => {
-  const capture = await captureRoot(running);
   expect(bounds.width).toBeGreaterThanOrEqual(1024);
   expect(bounds.height).toBeGreaterThanOrEqual(768 + titleBarHeight);
-
-  const pixel = getWindowPixel(capture, bounds, 0, 0);
-  expect(pixel.alpha).toBe(255);
-  const titleBarLuminance = getLuminance(pixel);
-  expect(titleBarLuminance < 120 || titleBarLuminance > 200).toBe(true);
 
   const controlCenters = [
     bounds.width - titleBarControlsWidth + titleBarControlWidth / 2,
     bounds.width - titleBarControlsWidth + titleBarControlWidth * 1.5,
     bounds.width - titleBarControlWidth / 2,
   ];
-  for (const centerX of controlCenters) {
-    const iconPixels = countContrastingWindowPixels(
-      capture,
-      bounds,
-      Math.round(centerX - 8),
-      Math.round(titleBarHeight / 2 - 8),
-      16,
-      16,
-      pixel,
+
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  let lastIconPixelCounts: number[] = [];
+  while (Date.now() < deadline) {
+    const capture = await captureRoot(running);
+    const pixel = getWindowPixel(capture, bounds, 0, 0);
+    lastPixel = pixel;
+    const titleBarLuminance = getLuminance(pixel);
+    const titleBarLooksPainted =
+      pixel.alpha === 255 &&
+      (titleBarLuminance < 120 || titleBarLuminance > 200);
+    lastIconPixelCounts = controlCenters.map((centerX) =>
+      countContrastingWindowPixels(
+        capture,
+        bounds,
+        Math.round(centerX - 8),
+        Math.round(titleBarHeight / 2 - 8),
+        16,
+        16,
+        pixel,
+      ),
     );
-    expect(iconPixels).toBeGreaterThan(0);
+    if (
+      titleBarLooksPainted &&
+      lastIconPixelCounts.every((iconPixels) => iconPixels > 0)
+    ) {
+      return;
+    }
+    await wait(100);
   }
+  throw new Error(
+    `Timed out waiting for title bar chrome. Last top-left pixel: ${JSON.stringify(
+      lastPixel,
+    )}, icon pixel counts: ${JSON.stringify(lastIconPixelCounts)}`,
+  );
 };
 
 const clickTitleBarButton = async (
@@ -433,6 +505,7 @@ const withTitleBarMuon = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
 ): Promise<void> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-titlebar-"));
   const assetRoot = await createTitleBarAssetRoot(directory);
@@ -441,6 +514,7 @@ const withTitleBarMuon = async (
     assetRoot,
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
+    browserInitialTitleBarIcon,
   );
   let caughtError: unknown = undefined;
 
@@ -567,3 +641,46 @@ titleBarIt(
     );
   },
 );
+
+titleBarIt("shows and updates the Linux custom title bar icon", async () => {
+  await withTitleBarMuon(
+    async (driver, running, _env, bounds) => {
+      await runTitleBarStep(
+        "verify initial title bar icon",
+        async () =>
+          await waitForTitleBarIconColor(
+            running,
+            bounds,
+            expectedInitialTitleBarIconColor,
+          ),
+      );
+      await runTitleBarStep("update title bar icon through API", async () => {
+        await expect(
+          driver.evaluate(
+            `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+              updatedTitleBarIconPath,
+            )})`,
+          ),
+        ).resolves.toBeUndefined();
+        await waitForTitleBarIconColor(
+          running,
+          bounds,
+          expectedUpdatedTitleBarIconColor,
+        );
+      });
+      await runTitleBarStep("clear title bar icon through API", async () => {
+        await expect(
+          driver.evaluate("window.muon.browser.setTitleBarIcon(null)"),
+        ).resolves.toBeUndefined();
+        await waitForTitleBarIconColor(
+          running,
+          bounds,
+          expectedTitleBarBackgroundColor,
+        );
+      });
+    },
+    configuredTitleBarBackgroundColor,
+    undefined,
+    initialTitleBarIconPath,
+  );
+});

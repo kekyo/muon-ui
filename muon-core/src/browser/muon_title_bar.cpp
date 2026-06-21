@@ -10,6 +10,7 @@
 
 #include "include/cef_browser.h"
 #include "include/cef_frame.h"
+#include "include/cef_parser.h"
 #include "include/cef_request.h"
 #include "include/views/cef_browser_view_delegate.h"
 
@@ -41,6 +42,8 @@ std::map<int, MuonTitleBarController*>
     g_muon_title_bar_controllers_by_browser_id;
 std::map<int, CefRefPtr<CefWindow>> g_muon_title_bar_windows_by_browser_id;
 std::map<int, std::string> g_muon_title_bar_pending_titles_by_browser_id;
+std::map<int, std::string>
+    g_muon_title_bar_pending_icon_data_urls_by_browser_id;
 
 static bool ReadJsonString(yyjson_val* root,
                            const char* key,
@@ -195,6 +198,56 @@ static std::string CreateDataUrl(const std::string& document) {
   return "data:text/html;charset=utf-8," + PercentEncode(document);
 }
 
+static bool ParseMuonTitleBarIconPath(const std::string& path,
+                                      MuonAppStorageRequest* request,
+                                      std::string* error_message) {
+  if (request == nullptr || error_message == nullptr) {
+    return false;
+  }
+  if (path.empty()) {
+    *error_message = "Title bar icon path must not be empty";
+    return false;
+  }
+
+  const auto scheme_separator = path.find("://");
+  if (scheme_separator != std::string::npos) {
+    if (path.rfind("asset://", 0) != 0) {
+      *error_message = "Title bar icon path must use asset://main";
+      return false;
+    }
+    const auto host_start = std::strlen("asset://");
+    const auto path_start = path.find('/', host_start);
+    if (path_start == std::string::npos || path_start == host_start ||
+        path_start + 1 >= path.size()) {
+      *error_message = "Title bar icon path must use asset://main/<path>";
+      return false;
+    }
+    if (path.find_first_of("?#", path_start) != std::string::npos) {
+      *error_message = "Title bar icon path must not contain a query or hash";
+      return false;
+    }
+    request->host = path.substr(host_start, path_start - host_start);
+    request->path = path.substr(path_start + 1);
+    return true;
+  }
+
+  const auto colon = path.find(':');
+  const auto slash = path.find('/');
+  if (colon != std::string::npos &&
+      (slash == std::string::npos || colon < slash)) {
+    *error_message = "Title bar icon path must use asset://main";
+    return false;
+  }
+  if (path.find_first_of("?#") != std::string::npos) {
+    *error_message = "Title bar icon path must not contain a query or hash";
+    return false;
+  }
+
+  request->host = "main";
+  request->path = path;
+  return true;
+}
+
 class MuonTitleBarViewDelegate final : public CefBrowserViewDelegate {
  public:
   explicit MuonTitleBarViewDelegate(int height) : height_(height) {}
@@ -272,6 +325,55 @@ static bool IsNonEmptyString(const char* value) {
 
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest() {
   return {};
+}
+
+bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
+                                     const std::string& path,
+                                     MuonTitleBarIcon* icon,
+                                     std::string* error_message) {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  error_message->clear();
+  if (!storage) {
+    *error_message = "Title bar icon storage is not available";
+    return false;
+  }
+  MuonAppStorageRequest request;
+  if (!ParseMuonTitleBarIconPath(path, &request, error_message)) {
+    return false;
+  }
+
+  auto resource = storage->ReadResource(request);
+  if (resource.status == MuonAppStorageStatus::kNotFound) {
+    *error_message = "Title bar icon was not found: " + path;
+    return false;
+  }
+  if (resource.status == MuonAppStorageStatus::kRejected) {
+    *error_message = "Title bar icon path was rejected: " + path;
+    return false;
+  }
+  if (resource.status != MuonAppStorageStatus::kOk) {
+    *error_message = "Failed to read title bar icon: " + path;
+    return false;
+  }
+  if (resource.data.empty()) {
+    *error_message = "Title bar icon PNG must not be empty: " + path;
+    return false;
+  }
+
+  auto image = CefImage::CreateImage();
+  if (!image ||
+      !image->AddPNG(1.0f, resource.data.data(), resource.data.size())) {
+    *error_message = "Title bar icon must be a valid PNG: " + path;
+    return false;
+  }
+
+  icon->image = image;
+  icon->data_url =
+      "data:image/png;base64," +
+      CefBase64Encode(resource.data.data(), resource.data.size()).ToString();
+  return true;
 }
 
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest) {
@@ -412,6 +514,12 @@ void MuonTitleBarController::SetTitle(const std::string& title) {
   SendTitle();
 }
 
+void MuonTitleBarController::SetIconDataUrl(
+    const std::string& icon_data_url) {
+  icon_data_url_ = icon_data_url;
+  SendIcon();
+}
+
 void MuonTitleBarController::SetActive(bool active) {
   active_ = active;
   SendState();
@@ -428,6 +536,7 @@ void MuonTitleBarController::SetVisible(bool visible) {
   if (visible_) {
     SendTitle();
     SendState();
+    SendIcon();
   }
 }
 
@@ -495,6 +604,7 @@ void MuonTitleBarController::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   loaded_ = true;
   SendTitle();
   SendState();
+  SendIcon();
 }
 
 bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -558,6 +668,16 @@ void MuonTitleBarController::SendTitle() {
       CreateJavaScriptStringLiteral(title_) + ");");
 }
 
+void MuonTitleBarController::SendIcon() {
+  ExecuteJavaScript(
+      std::string("window.__muonTitleBar && "
+                  "window.__muonTitleBar.setIcon(") +
+      (icon_data_url_.empty() ? std::string("null")
+                              : CreateJavaScriptStringLiteral(
+                                    icon_data_url_)) +
+      ");");
+}
+
 void MuonTitleBarController::ExecuteJavaScript(const std::string& source) {
   if (!loaded_ || !browser_) {
     return;
@@ -588,6 +708,12 @@ void RegisterMuonTitleBarController(
   if (pending != g_muon_title_bar_pending_titles_by_browser_id.end()) {
     controller->SetTitle(pending->second);
   }
+  const auto pending_icon =
+      g_muon_title_bar_pending_icon_data_urls_by_browser_id.find(browser_id);
+  if (pending_icon !=
+      g_muon_title_bar_pending_icon_data_urls_by_browser_id.end()) {
+    controller->SetIconDataUrl(pending_icon->second);
+  }
 }
 
 void RegisterMuonTitleBarView(CefRefPtr<CefWindow> window,
@@ -614,6 +740,12 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
       g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
   if (pending != g_muon_title_bar_pending_titles_by_browser_id.end()) {
     controller->second->SetTitle(pending->second);
+  }
+  const auto pending_icon =
+      g_muon_title_bar_pending_icon_data_urls_by_browser_id.find(browser_id);
+  if (pending_icon !=
+      g_muon_title_bar_pending_icon_data_urls_by_browser_id.end()) {
+    controller->second->SetIconDataUrl(pending_icon->second);
   }
 }
 
@@ -656,6 +788,8 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
     g_muon_title_bar_controllers_by_browser_id.erase(browser_id->second);
     g_muon_title_bar_windows_by_browser_id.erase(browser_id->second);
     g_muon_title_bar_pending_titles_by_browser_id.erase(browser_id->second);
+    g_muon_title_bar_pending_icon_data_urls_by_browser_id.erase(
+        browser_id->second);
     g_muon_title_bar_browser_ids_by_window.erase(browser_id);
   }
   for (auto iterator = g_muon_title_bar_windows_by_browser_view.begin();
@@ -683,6 +817,7 @@ void ClearMuonTitleBarRegistrations() {
   g_muon_title_bar_controllers_by_browser_id.clear();
   g_muon_title_bar_windows_by_browser_id.clear();
   g_muon_title_bar_pending_titles_by_browser_id.clear();
+  g_muon_title_bar_pending_icon_data_urls_by_browser_id.clear();
 }
 
 void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
@@ -697,6 +832,20 @@ void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
   iterator->second->SetTitle(title);
 }
 
+void SetRegisteredMuonTitleBarIcon(CefRefPtr<CefWindow> window,
+                                   CefRefPtr<CefImage> image,
+                                   const std::string& icon_data_url) {
+  if (!window) {
+    return;
+  }
+  window->SetWindowIcon(image ? image : CefImage::CreateImage());
+  const auto iterator = g_muon_title_bar_controllers.find(window.get());
+  if (iterator == g_muon_title_bar_controllers.end()) {
+    return;
+  }
+  iterator->second->SetIconDataUrl(icon_data_url);
+}
+
 void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
                                               const std::string& title) {
   if (browser_id <= 0) {
@@ -709,6 +858,19 @@ void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
     return;
   }
   iterator->second->SetTitle(title);
+}
+
+void SetRegisteredMuonTitleBarIconForBrowser(
+    int browser_id,
+    CefRefPtr<CefImage> image,
+    const std::string& icon_data_url) {
+  if (browser_id <= 0) {
+    return;
+  }
+  g_muon_title_bar_pending_icon_data_urls_by_browser_id[browser_id] =
+      icon_data_url;
+  const auto window = GetRegisteredMuonWindowForBrowser(browser_id);
+  SetRegisteredMuonTitleBarIcon(window, image, icon_data_url);
 }
 
 void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,

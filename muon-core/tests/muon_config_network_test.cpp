@@ -523,7 +523,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -556,6 +556,10 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                 "browser.titleBarType was not parsed") &&
          Expect(!config.browser.initial_title_bar_visibility,
                 "browser.initialTitleBarVisibility was not parsed") &&
+         Expect(config.browser.has_initial_title_bar_icon,
+                "browser.initialTitleBarIcon was not marked present") &&
+         Expect(config.browser.initial_title_bar_icon == "icons/app.png",
+                "browser.initialTitleBarIcon was not parsed") &&
          Expect(config.browser.plugin.allow.size() == 2,
                 "browser.plugin.allow pattern count is wrong") &&
          Expect(config.browser.plugin.allow[0] == "asset://main/**",
@@ -1591,6 +1595,10 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "unknown-browser-initial-window-state.json";
   const auto invalid_initial_title_bar_visibility_path =
       test_directory / "invalid-browser-initial-title-bar-visibility.json";
+  const auto invalid_initial_title_bar_icon_path =
+      test_directory / "invalid-browser-initial-title-bar-icon.json";
+  const auto empty_initial_title_bar_icon_path =
+      test_directory / "empty-browser-initial-title-bar-icon.json";
   const auto invalid_background_color_path =
       test_directory / "invalid-browser-background-color.json";
   const auto empty_background_color_path =
@@ -1633,6 +1641,12 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(invalid_initial_title_bar_visibility_path,
                           R"({"browser":{"initialTitleBarVisibility":"hidden"}})"),
                 "failed to write invalid initial title bar visibility config") &&
+         Expect(WriteFile(invalid_initial_title_bar_icon_path,
+                          R"({"browser":{"initialTitleBarIcon":42}})"),
+                "failed to write invalid initial title bar icon config") &&
+         Expect(WriteFile(empty_initial_title_bar_icon_path,
+                          R"({"browser":{"initialTitleBarIcon":""}})"),
+                "failed to write empty initial title bar icon config") &&
          Expect(WriteFile(invalid_background_color_path,
                           R"({"browser":{"backgroundColor":42}})"),
                 "failed to write invalid background color config") &&
@@ -1726,6 +1740,12 @@ static bool RunBrowserConfigValidationTest(
          LoadConfigExpectFailure(invalid_initial_title_bar_visibility_path,
                                  "browser.initialTitleBarVisibility must be a "
                                  "boolean") &&
+         LoadConfigExpectFailure(invalid_initial_title_bar_icon_path,
+                                 "browser.initialTitleBarIcon must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(empty_initial_title_bar_icon_path,
+                                 "browser.initialTitleBarIcon must not be "
+                                 "empty") &&
          LoadConfigExpectFailure(invalid_background_color_path,
                                  "browser.backgroundColor must be a string") &&
          LoadConfigExpectFailure(empty_background_color_path,

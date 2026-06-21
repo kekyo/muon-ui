@@ -19,6 +19,7 @@ constexpr int kMuonTitleBarControlsWidth = 138;
 
 constexpr char kMuonTitleBarHtml[] = R"HTML(
 <div id="muon-title-bar" class="title-bar">
+  <div id="muon-icon-slot" class="app-icon-slot"><img id="muon-icon" class="app-icon" alt=""></div>
   <div id="muon-title" class="title">Muon</div>
   <div id="muon-controls" class="controls" aria-label="Window controls">
     <button id="muon-minimize" class="control" data-action="minimize" aria-label="Minimize"><span class="icon minimize"></span></button>
@@ -102,12 +103,31 @@ body {
 .title {
   min-width: 0;
   flex: 1 1 auto;
-  padding: 0 12px;
+  padding: 0 12px 0 0;
   font-size: 13px;
   line-height: 35px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.app-icon-slot {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 35px;
+  display: grid;
+  place-items: center;
+}
+
+.app-icon {
+  display: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.app-icon.visible {
+  display: block;
 }
 
 .controls {
@@ -219,6 +239,7 @@ body {
 constexpr char kMuonTitleBarJs[] = R"JS(
 (() => {
   const bar = document.getElementById("muon-title-bar");
+  const icon = document.getElementById("muon-icon");
   const title = document.getElementById("muon-title");
   const sendAction = (action) => {
     globalThis.location.href =
@@ -237,6 +258,15 @@ constexpr char kMuonTitleBarJs[] = R"JS(
       title.textContent = typeof nextTitle === "string" && nextTitle.length > 0
         ? nextTitle
         : "Muon";
+    },
+    setIcon(nextIcon) {
+      if (typeof nextIcon === "string" && nextIcon.length > 0) {
+        icon.src = nextIcon;
+        icon.classList.add("visible");
+        return;
+      }
+      icon.removeAttribute("src");
+      icon.classList.remove("visible");
     },
     setState(state) {
       bar.classList.toggle("inactive", state?.active === false);

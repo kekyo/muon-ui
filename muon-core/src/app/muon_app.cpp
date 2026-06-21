@@ -570,6 +570,20 @@ void MuonApp::OnContextInitialized() {
     CefQuitMessageLoop();
     return;
   }
+  auto has_initial_title_bar_icon = false;
+  MuonTitleBarIcon initial_title_bar_icon;
+  if (config_.browser.has_initial_title_bar_icon) {
+    if (!LoadMuonTitleBarIconFromStorage(
+            app_storage, config_.browser.initial_title_bar_icon,
+            &initial_title_bar_icon, &error_message)) {
+      exit_code_ = 1;
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Muon startup failed: " + error_message);
+      CefQuitMessageLoop();
+      return;
+    }
+    has_initial_title_bar_icon = true;
+  }
   const auto extra_info = plugin_runtime->CreateRendererMetadata();
   CefBrowserSettings browser_settings;
   ApplyMuonBrowserBackgroundColor(browser_settings,
@@ -584,8 +598,9 @@ void MuonApp::OnContextInitialized() {
                      [this](int32_t exit_code) {
                        return RequestShutdown(exit_code);
                      },
-                     config_.browser, title_bar_manifest,
-                     title_bar_background_color));
+                     app_storage, config_.browser, title_bar_manifest,
+                     title_bar_background_color, has_initial_title_bar_icon,
+                     initial_title_bar_icon));
   auto browser_view = CefBrowserView::CreateBrowserView(
       client, config_.browser.start_page, browser_settings, extra_info, nullptr,
       new MuonBrowserViewDelegate(

@@ -284,6 +284,7 @@ export const browserFunctionNames = [
   "maximize",
   "restore",
   "setTitleBarVisibility",
+  "setTitleBarIcon",
   "close",
   "shutdown",
 ] as const;
@@ -1204,6 +1205,7 @@ export const writeMuonConfig = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -1255,6 +1257,9 @@ export const writeMuonConfig = async (
   }
   if (browserInitialTitleBarVisibility !== undefined) {
     browser.initialTitleBarVisibility = browserInitialTitleBarVisibility;
+  }
+  if (browserInitialTitleBarIcon !== undefined) {
+    browser.initialTitleBarIcon = browserInitialTitleBarIcon;
   }
   if (Object.keys(browser).length > 0) {
     config.browser = browser;
@@ -1441,6 +1446,7 @@ export const startGestamentDebugMuon = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -1463,6 +1469,7 @@ export const startGestamentDebugMuon = async (
     undefined,
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
+    browserInitialTitleBarIcon,
   );
   let app: GtkApp | undefined = undefined;
   const args = [

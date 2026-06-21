@@ -31,6 +31,7 @@ static bool TestBrowserFunctionDefinitions() {
       "hide",            "focus",          "blur",
       "minimize",        "maximize",       "restore",
       "setTitleBarVisibility",
+      "setTitleBarIcon",
       "__close",         "__shutdown",
   };
   const auto expected_kinds = std::vector<MuonBuiltinBrowserFunctionKind>{
@@ -50,6 +51,7 @@ static bool TestBrowserFunctionDefinitions() {
       MuonBuiltinBrowserFunctionKind::Maximize,
       MuonBuiltinBrowserFunctionKind::Restore,
       MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility,
+      MuonBuiltinBrowserFunctionKind::SetTitleBarIcon,
       MuonBuiltinBrowserFunctionKind::Close,
       MuonBuiltinBrowserFunctionKind::Shutdown,
   };
@@ -72,7 +74,8 @@ static bool TestBrowserFunctionDefinitions() {
       return false;
     }
   }
-  const auto set_title_bar_visibility = definitions[expected_names.size() - 3];
+  const auto set_title_bar_visibility = definitions[expected_names.size() - 4];
+  const auto set_title_bar_icon = definitions[expected_names.size() - 3];
   const auto shutdown = definitions.back();
   if (!Expect(set_title_bar_visibility.arg_count == 1,
               "unexpected title bar visibility argument count") ||
@@ -82,6 +85,14 @@ static bool TestBrowserFunctionDefinitions() {
               "unexpected title bar visibility argument type") ||
       !Expect(set_title_bar_visibility.return_type.type == MUON_TYPE_VOID,
               "unexpected title bar visibility return type") ||
+      !Expect(set_title_bar_icon.arg_count == 1,
+              "unexpected title bar icon argument count") ||
+      !Expect(set_title_bar_icon.arg_types != nullptr,
+              "missing title bar icon argument metadata") ||
+      !Expect(set_title_bar_icon.arg_types[0].type == MUON_TYPE_STRING,
+              "unexpected title bar icon argument type") ||
+      !Expect(set_title_bar_icon.return_type.type == MUON_TYPE_VOID,
+              "unexpected title bar icon return type") ||
       !Expect(shutdown.filter_name != nullptr &&
                   std::string(shutdown.filter_name) == "shutdown",
               "unexpected browser shutdown filter name") ||

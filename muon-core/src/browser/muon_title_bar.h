@@ -6,12 +6,16 @@
 
 #pragma once
 
+#include "app/muon_app_storage.h"
+
 #include "include/cef_client.h"
+#include "include/cef_image.h"
 #include "include/cef_values.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -91,9 +95,38 @@ struct MuonTitleBarBackgroundColor {
 };
 
 /**
+ * Loaded PNG title bar icon data for native and Muon title bars.
+ */
+struct MuonTitleBarIcon {
+  /**
+   * CEF image used by native title bars.
+   */
+  CefRefPtr<CefImage> image;
+
+  /**
+   * PNG data URL used by the Muon custom title bar.
+   */
+  std::string data_url;
+};
+
+/**
  * Creates a native title bar manifest used as the safe fallback.
  */
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest();
+
+/**
+ * Loads a title bar icon from asset storage.
+ *
+ * @param storage Asset storage backing asset:// resources.
+ * @param path Icon asset path. Accepts asset://main/... or main-relative paths.
+ * @param icon Receives the loaded icon.
+ * @param error_message Receives a validation or loading diagnostic.
+ * @return true when a PNG icon was loaded.
+ */
+bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
+                                     const std::string& path,
+                                     MuonTitleBarIcon* icon,
+                                     std::string* error_message);
 
 /**
  * Returns whether the manifest requests a custom title bar.
@@ -165,6 +198,11 @@ class MuonTitleBarController final : public CefClient,
   void SetTitle(const std::string& title);
 
   /**
+   * Updates the displayed title bar icon data URL.
+   */
+  void SetIconDataUrl(const std::string& icon_data_url);
+
+  /**
    * Updates the active/inactive visual state.
    */
   void SetActive(bool active);
@@ -217,6 +255,7 @@ class MuonTitleBarController final : public CefClient,
  private:
   void SendState();
   void SendTitle();
+  void SendIcon();
   void ExecuteJavaScript(const std::string& source);
 
   const MuonTitleBarManifest manifest_;
@@ -224,6 +263,7 @@ class MuonTitleBarController final : public CefClient,
   CefWindow* window_ = nullptr;
   CefRefPtr<CefBrowser> browser_;
   std::string title_ = "Muon";
+  std::string icon_data_url_;
   bool active_ = true;
   bool maximized_ = false;
   bool visible_ = true;
@@ -287,6 +327,21 @@ void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
  */
 void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
                                               const std::string& title);
+
+/**
+ * Updates the registered custom or native title bar icon, if any.
+ */
+void SetRegisteredMuonTitleBarIcon(CefRefPtr<CefWindow> window,
+                                   CefRefPtr<CefImage> image,
+                                   const std::string& icon_data_url);
+
+/**
+ * Updates the registered custom or native title bar icon for a browser, if any.
+ */
+void SetRegisteredMuonTitleBarIconForBrowser(
+    int browser_id,
+    CefRefPtr<CefImage> image,
+    const std::string& icon_data_url);
 
 /**
  * Updates registered custom-titlebar visibility, if any.

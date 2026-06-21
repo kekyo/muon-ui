@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "app/muon_app_storage.h"
 #include "browser/muon_builtin_browser.h"
 #include "browser/muon_title_bar.h"
 #include "config/muon_config.h"
@@ -48,19 +49,25 @@ class MuonClient final : public CefClient,
    * @param unsafe_parent_access_policy Popup URL policy for JavaScript parent
    * access.
    * @param shutdown_requester Callback that records a process shutdown request.
+   * @param app_storage Asset storage used for browser UI assets.
    * @param browser_config Browser keyboard shortcut configuration.
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
+   * @param has_initial_title_bar_icon Whether initial_title_bar_icon is valid.
+   * @param initial_title_bar_icon Initial title bar icon data.
    */
   MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
              std::shared_ptr<MuonNetworkPolicy> network_policy,
              std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
              std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy,
              std::function<bool(int32_t)> shutdown_requester,
+             std::shared_ptr<MuonAppStorage> app_storage,
              const MuonBrowserConfig& browser_config,
              MuonTitleBarManifest title_bar_manifest =
                  CreateNativeMuonTitleBarManifest(),
-             MuonTitleBarBackgroundColor title_bar_background_color = {});
+             MuonTitleBarBackgroundColor title_bar_background_color = {},
+             bool has_initial_title_bar_icon = false,
+             MuonTitleBarIcon initial_title_bar_icon = {});
 
   /**
    * Returns this object as the browser lifetime handler.
@@ -315,6 +322,9 @@ class MuonClient final : public CefClient,
   void QuitMessageLoopWhenIdle();
   void DispatchBuiltinBrowserCall(MuonBuiltinBrowserFunctionKind kind,
                                   const PendingPluginCall& call);
+  bool SetTitleBarIconForBrowser(CefRefPtr<CefBrowser> browser,
+                                 const MuonTitleBarIcon* icon,
+                                 std::string* error_message);
   void DispatchPluginCall(const PendingPluginCall& call,
                           std::shared_ptr<MuonSharedBufferPayload> payload);
   void RejectPluginCall(const PendingPluginCall& call,
@@ -328,7 +338,10 @@ class MuonClient final : public CefClient,
   MuonBrowserConfig browser_config_;
   MuonTitleBarManifest title_bar_manifest_;
   MuonTitleBarBackgroundColor title_bar_background_color_;
+  bool has_initial_title_bar_icon_ = false;
+  MuonTitleBarIcon initial_title_bar_icon_;
   std::function<bool(int32_t)> shutdown_requester_;
+  std::shared_ptr<MuonAppStorage> app_storage_;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime_;
   std::shared_ptr<MuonNetworkPolicy> network_policy_;
   std::shared_ptr<MuonNetworkPolicy> plugin_page_policy_;

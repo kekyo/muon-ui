@@ -243,6 +243,14 @@ struct MuonBrowserConfig {
    */
   bool initial_title_bar_visibility = true;
   /**
+   * Whether the initial title bar icon was explicitly configured.
+   */
+  bool has_initial_title_bar_icon = false;
+  /**
+   * Initial title bar icon asset path.
+   */
+  std::string initial_title_bar_icon;
+  /**
    * Plugin API exposure configuration for browser pages.
    */
   MuonBrowserPluginConfig plugin;

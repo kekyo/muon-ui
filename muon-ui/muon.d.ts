@@ -183,6 +183,15 @@ declare global {
      */
     readonly setTitleBarVisibility: (visible: boolean) => Promise<void>;
     /**
+     * Set or clear the current window title bar icon.
+     *
+     * @param path - Asset path for a PNG icon, or `null` to clear the icon.
+     * @returns A promise that resolves when the title bar icon is requested.
+     * @remarks Accepts `asset://main/...` URLs or `main`-relative asset paths.
+     * The icon is loaded from the configured Muon asset storage.
+     */
+    readonly setTitleBarIcon: (path: string | null) => Promise<void>;
+    /**
      * Close the current browser window.
      *
      * @returns A promise that resolves after the close request is submitted.

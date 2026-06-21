@@ -32,6 +32,7 @@ enum class MuonBuiltinBrowserFunctionKind {
   Maximize,
   Restore,
   SetTitleBarVisibility,
+  SetTitleBarIcon,
   Close,
   Shutdown,
 };

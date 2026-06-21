@@ -144,16 +144,16 @@ muonはHMRに対応していて、ブラウザの代わりにmuonを起動して
 これを有効化するために、`vite.config.ts` に以下のコードを追加します:
 
 ```ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import muon from 'muon-ui/vite'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import muon from 'muon-ui/vite';
 
 export default defineConfig({
   plugins: [
     react(),  // Reactプラグイン
     muon(),   // muonプラグイン (追加する)
   ],
-})
+});
 ```
 
 `defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
@@ -192,8 +192,8 @@ Viteの `build.outDir` に出力されたファイル群は `assets.zip` にま�
 複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
 ```ts
-import { defineConfig } from 'vite'
-import muon from 'muon-ui/vite'
+import { defineConfig } from 'vite';
+import muon from 'muon-ui/vite';
 
 export default defineConfig({
   plugins: [
@@ -205,7 +205,7 @@ export default defineConfig({
       },
     }),
   ],
-})
+});
 ```
 
 Viteを使用しないプロジェクトでは、任意の方法で先にアセットを生成してから `muon build` を実行します。
@@ -750,77 +750,6 @@ assets.zip
 
 ---
 
-## muon Viteプラグインリファレンス
-
-`muon-ui/vite` の既定exportは、 `muon(options)` の形でViteプラグインを生成します。
-`options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
-
-### rootキー
-
-| キー             | 型                    | 既定値                      | 概要                                                                 |
-| ---------------- | --------------------- | --------------------------- | -------------------------------------------------------------------- |
-| `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
-| `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
-| `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
-| `open`           | `boolean`             | `true`                      | `vite dev` 起動時にMuonを自動起動するかどうかです。                  |
-| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDPと `F12` のMuon DevToolsキーバインドを有効化します。  |
-| `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
-
-`muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` にだけ影響します。
-`vite build` では無視されます。
-
-`muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
-`muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
-`cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
-`stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
-
-`open` は、Viteの `server.open` とは独立したMuon起動設定です。
-`open` に `false` を指定すると、Vite serverは通常通り起動しますが、Muonランタイムの準備とMuonプロセスの起動は行われません。
-
-`enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開けるようになります。
-配布ビルドでDevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
-
-### buildキー
-
-`build` に `false` を指定すると、Viteの通常ビルドだけを実行し、muon配布用ディレクトリの生成を無効化します。
-`build` にオブジェクトを指定すると、 `vite build` 後のmuon配布用ビルドに追加オプションを渡せます。
-`build` に `true` を指定した場合、または省略した場合は、 `{}` 相当として扱われます。
-
-| キー               | 型                  | 既定値                         | 概要                                                                            |
-| ------------------ | ------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
-| `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
-| `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
-| `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
-| `outputRoot`       | `string`            | `"."`                          | `dist-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
-| `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
-| `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
-| `assetSalt`        | `Uint8Array`        | ランダムな16 bytes             | `assets.zip` の署名計算に使うsaltです。                                         |
-
-`targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
-`allTargets` が `true` の場合、 `targets` よりも優先されます。
-`targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
-
-`appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
-`name` が存在しない場合は `muon-app` を使用します。
-scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
-Windowsターゲットでは `.exe` が自動的に付与されます。
-
-`outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
-`configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
-設定ファイルが存在しない場合は `{}` 相当として扱います。
-
-Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
-そのため、ビルド後のアセットは `asset://main/` から参照できます。
-
-`packageDirectory` は通常指定しません。
-muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
-相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。
-
-`assetSalt` は再現可能なテストのための引数です。
-通常の配布ビルドでは省略してください。
-
----
-
 ## muon.jsonリファレンス
 
 `muon.json` は、muonの動作を決定し、いくつかの機能はこのファイルでのみ決定できます。
@@ -1035,6 +964,77 @@ Windows環境では `"debug"` と `"eventlog"` も使用できます。
 `cdp.enable` を `true` にすると、外部のDevToolsやCDPクライアントから接続できるようになります。
 開発・デバッグ用の設定であり、配布ビルドでは必要な場合だけ有効化してください。
 `port` は `1024` から `65535` の整数である必要があります。
+
+---
+
+## muon Viteプラグインリファレンス
+
+`muon-ui/vite` の既定exportは、 `muon(options)` の形でViteプラグインを生成します。
+`options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
+
+### rootキー
+
+| キー             | 型                    | 既定値                      | 概要                                                                 |
+| ---------------- | --------------------- | --------------------------- | -------------------------------------------------------------------- |
+| `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
+| `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
+| `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
+| `open`           | `boolean`             | `true`                      | `vite dev` 起動時にMuonを自動起動するかどうかです。                  |
+| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDPと `F12` のMuon DevToolsキーバインドを有効化します。  |
+| `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
+
+`muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` にだけ影響します。
+`vite build` では無視されます。
+
+`muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
+`muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
+`cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
+`stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
+
+`open` は、Viteの `server.open` とは独立したMuon起動設定です。
+`open` に `false` を指定すると、Vite serverは通常通り起動しますが、Muonランタイムの準備とMuonプロセスの起動は行われません。
+
+`enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開けるようになります。
+配布ビルドでDevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
+
+### buildキー
+
+`build` に `false` を指定すると、Viteの通常ビルドだけを実行し、muon配布用ディレクトリの生成を無効化します。
+`build` にオブジェクトを指定すると、 `vite build` 後のmuon配布用ビルドに追加オプションを渡せます。
+`build` に `true` を指定した場合、または省略した場合は、 `{}` 相当として扱われます。
+
+| キー               | 型                  | 既定値                         | 概要                                                                            |
+| ------------------ | ------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
+| `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
+| `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
+| `outputRoot`       | `string`            | `"."`                          | `dist-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
+| `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
+| `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
+| `assetSalt`        | `Uint8Array`        | ランダムな16 bytes             | `assets.zip` の署名計算に使うsaltです。                                         |
+
+`targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
+`allTargets` が `true` の場合、 `targets` よりも優先されます。
+`targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
+
+`appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
+`name` が存在しない場合は `muon-app` を使用します。
+scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
+Windowsターゲットでは `.exe` が自動的に付与されます。
+
+`outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
+`configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
+設定ファイルが存在しない場合は `{}` 相当として扱います。
+
+Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
+そのため、ビルド後のアセットは `asset://main/` から参照できます。
+
+`packageDirectory` は通常指定しません。
+muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
+相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。
+
+`assetSalt` は再現可能なテストのための引数です。
+通常の配布ビルドでは省略してください。
 
 ---
 

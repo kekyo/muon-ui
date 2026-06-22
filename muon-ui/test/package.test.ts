@@ -367,6 +367,7 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain("Usage: muon [options] [command]");
     expect(stdout).toContain("build");
+    expect(stdout).toContain("dev");
     expect(stdout).toContain("init");
     expect(stdout).toContain("prepare");
     expect(stdout).toContain("embed-config");

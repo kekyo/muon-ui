@@ -1014,6 +1014,16 @@ if(WIN32)
     COMMAND bash -c
       "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${APP_EXECUTABLE_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt' && grep -Fq 'DLL Name: ${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt'"
     )
+  add_test(
+    NAME runtime_cardio_uses_static_mingw_runtime
+    COMMAND bash -c
+      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt'"
+    )
+  add_test(
+    NAME runtime_contains_muon_ui_mingw_runtime
+    COMMAND bash -c
+      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/libmuon-ui${CMAKE_SHARED_LIBRARY_SUFFIX}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-ui-runtime-imports.txt' && while IFS= read -r dll; do test -f '${MUON_RUNTIME_DIR}/'\"$dll\"; done < <(sed -n 's/.*DLL Name: \\(libgcc_s_.*-1\\.dll\\|libstdc++-6\\.dll\\|libwinpthread-1\\.dll\\).*/\\1/p' '${CMAKE_CURRENT_BINARY_DIR}/muon-ui-runtime-imports.txt')"
+    )
 else()
   add_test(
     NAME runtime_contains_chrome_sandbox

@@ -102,6 +102,7 @@ const moduleDirectory =
     ? __dirname
     : dirname(fileURLToPath(import.meta.url));
 const defaultProjectConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
+const muonRecycleExitCode = 88;
 
 /**
  * Resolves the muon-core runtime directory used by the Vite plugin.
@@ -145,6 +146,7 @@ const createPosixMuonLaunchScript = ({
   overrideConfigPath,
 }: MuonLaunchScriptOptions): string => `#!/usr/bin/env bash
 set -euo pipefail
+MUON_RECYCLE_EXIT_CODE=${muonRecycleExitCode}
 MUON_EXECUTABLE=${quotePosix(muonExecutablePath)}
 MUON_EXECUTABLE_DIRECTORY=${quotePosix(getPlatformDirectoryName(muonExecutablePath, "linux"))}
 MUON_PROJECT_CONFIG=${getOptionalPosixValue(projectConfigPath)}
@@ -171,7 +173,15 @@ fi
 MUON_CONFIG_ARGS+=("-c" "$MUON_OVERRIDE_CONFIG")
 
 cd "$MUON_EXECUTABLE_DIRECTORY"
-exec "$MUON_EXECUTABLE" "\${MUON_CONFIG_ARGS[@]}"
+while true; do
+  set +e
+  "$MUON_EXECUTABLE" "\${MUON_CONFIG_ARGS[@]}"
+  MUON_EXIT_CODE=$?
+  set -e
+  if [[ "$MUON_EXIT_CODE" -ne "$MUON_RECYCLE_EXIT_CODE" ]]; then
+    exit "$MUON_EXIT_CODE"
+  fi
+done
 `;
 
 const escapeWindowsCmdValue = (value: string): string =>
@@ -186,6 +196,7 @@ const createWindowsMuonLaunchScript = ({
   overrideConfigPath,
 }: MuonLaunchScriptOptions): string => `@echo off
 setlocal
+set "MUON_RECYCLE_EXIT_CODE=${muonRecycleExitCode}"
 set "MUON_EXECUTABLE=${escapeWindowsCmdValue(muonExecutablePath)}"
 set "MUON_EXECUTABLE_DIRECTORY=${escapeWindowsCmdValue(getPlatformDirectoryName(muonExecutablePath, "win32"))}"
 set "MUON_PROJECT_CONFIG=${getOptionalWindowsCmdValue(projectConfigPath)}"
@@ -202,6 +213,7 @@ if not exist "%MUON_OVERRIDE_CONFIG%" (
 )
 
 pushd "%MUON_EXECUTABLE_DIRECTORY%"
+:muon_recycle_loop
 if defined MUON_PROJECT_CONFIG (
   if not exist "%MUON_PROJECT_CONFIG%" (
     echo Muon startup failed: project config does not exist: %MUON_PROJECT_CONFIG% 1>&2
@@ -213,6 +225,7 @@ if defined MUON_PROJECT_CONFIG (
   "%MUON_EXECUTABLE%" -c "%MUON_OVERRIDE_CONFIG%"
 )
 set "MUON_EXIT_CODE=%ERRORLEVEL%"
+if "%MUON_EXIT_CODE%"=="%MUON_RECYCLE_EXIT_CODE%" goto muon_recycle_loop
 popd
 exit /b %MUON_EXIT_CODE%
 `;

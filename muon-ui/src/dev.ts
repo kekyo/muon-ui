@@ -23,6 +23,8 @@ import {
 } from "./vite-options.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
+const muonRecycleExitCode = 88;
+
 type JsonObject = Record<string, unknown>;
 
 interface LoadedViteMuonOptions {
@@ -461,18 +463,22 @@ const runMuonExecutable = async (
   environment: NodeJS.ProcessEnv,
 ): Promise<number> => {
   const args = configPaths.flatMap((configPath) => ["-c", configPath]);
-  const child = spawn(muonExecutablePath, args, {
-    cwd: dirname(muonExecutablePath),
-    env: environment,
-    stdio: ["ignore", "inherit", "inherit"],
-  });
-
-  return await new Promise<number>((resolvePromise, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => {
-      resolvePromise(code ?? 1);
+  let exitCode = 0;
+  do {
+    const child = spawn(muonExecutablePath, args, {
+      cwd: dirname(muonExecutablePath),
+      env: environment,
+      stdio: ["ignore", "inherit", "inherit"],
     });
-  });
+
+    exitCode = await new Promise<number>((resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        resolvePromise(code ?? 1);
+      });
+    });
+  } while (exitCode === muonRecycleExitCode);
+  return exitCode;
 };
 
 /**

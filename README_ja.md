@@ -61,6 +61,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 - 扱いやすいNPMパッケージとして提供され、あなたのウェブアプリケーションプロジェクトを簡単にネイティブGUIアプリケーション化できます。複雑な構成や変更は不要です。
 - レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、Chromiumやchromeを使用しているのとほぼ同等です。
 - Viteプラグインに対応しています（オプション）。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
+- `muon dev` で、HTTPサーバーを起動せずにローカルアセットを直接使った開発起動ができます。
 - Chromium DevToolsを使用できます。更にCDP (Chromium DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
 - 複数のブラウザウインドウを表示できます。ブラウザウインドウは親子関係をもたせることも出来ます。
 - プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限できます。
@@ -86,7 +87,7 @@ muonは開発体験を直交的なものに感じられるように、開発ラ�
 再現可能な最小の手順で実現出来るような開発ライフサイクルが重要だと考えています。
 
 これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトから始めましょう。
-例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って:
+例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を作りましょう:
 
 ```bash
 npm create vite@latest my-muon-app -- --template react-ts
@@ -103,7 +104,7 @@ npm install
 npm run dev
 ```
 
-これで、Viteを使ったサンプルのページが表示されるはずです。
+これで、Viteの開発サーバーが起動するので、リンクをクリックしてブラウザでページを表示できます。
 まだmuonは導入していません。素のViteプロジェクトです。
 
 このプロジェクトにmuonを導入します。必要な作業は:
@@ -156,15 +157,15 @@ export default defineConfig({
 })
 ```
 
-`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。これで作業は完了です!
+`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。これで準備は完了です!
 
-開発作業を行うときには:
+いよいよmuonを起動します:
 
 ```bash
 npm run dev
 ```
 
-で、muonが起動して、あなたのページが表示されるはずです!
+で、muonのウインドウとあなたのページが表示されるはずです!
 
 ![Get started](./images/get-started.png)
 
@@ -172,6 +173,23 @@ npm run dev
 
 `npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動できます。
 また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+
+### muon devで直接起動
+
+Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon dev` を使用できます。
+`muon dev` はHTTPサーバーを起動せず、`asset.sourcePath` を開発用に上書きしてmuonをフォアグラウンド起動します。
+そのため、ViteのHMRは動作しません。
+
+```bash
+muon dev
+```
+
+開発アセットは `--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
+`--assets` はローカルディレクトリを指定し、相対パスはproject rootから解決されます。
+
+`vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
+CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon dev` では無視されます。
+Muon DevToolsとCDPの開発用既定値を無効化するには `--no-debugger` を指定します。
 
 ---
 
@@ -686,6 +704,7 @@ assets.zip
 例えば、意図的に空リスト (`network.allow: []`) にすると、ローカルアセットを含むすべてのネットワークアクセスが無効となり、何も表示できなくなります。
 しかし、実際に空にしてみると、 `npm run dev` でViteサーバーとmuonを起動してみても正しく表示されるでしょう。
 これは、 `npm run dev` した時に、この `network.allow` リストにViteサーバーのURLが一時的に追加されるためです。
+`muon dev` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することはできません。
 空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
 
 - 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。
@@ -756,6 +775,7 @@ assets.zip
 
 設定ファイルは `muon.json5`、`muon.jsonc`、`muon.json` の順に探索されます。
 Viteの開発起動では、設定ファイルが存在しない場合や不正な場合でも警告を表示し、プロジェクト設定を `{}` 相当として扱ってViteが生成する設定だけで起動します。
+`muon dev` では、設定ファイルが存在しない場合は開発用の生成設定だけで起動しますが、存在するファイルが読み取れない場合やパースできない場合はエラーになります。
 一方で `muon build` では、設定ファイルが存在しない場合は `{}` 相当として扱いますが、存在するファイルが読み取れない場合やパースできない場合はビルドエラーになります。
 `--config` で明示した設定ファイルが存在しない場合もエラーです。
 
@@ -988,8 +1008,9 @@ export default defineConfig({
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDPと `F12` のMuon DevToolsキーバインドを有効化します。  |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
-- `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` にだけ影響します。
-  `vite build` では無視されます。
+- `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` に影響します。
+  `muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` だけを読み取り、 `open` は無視します。
+  `vite build` ではこれらの開発起動用オプションは無視されます。
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
 - `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
 - `cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。

@@ -59,6 +59,7 @@ you can develop modern local GUI applications using the web-based technology eco
 - The browser responsible for rendering is CEF (Chromium Embedded Framework).
   This means that, from the perspective of your web application, it is virtually equivalent to using Chromium or Chrome.
 - Supports Vite plugins (optional). With support for Vite’s HMR, you can update previews in real time during development.
+- Provides `muon dev` for launching local development assets directly without starting an HTTP server.
 - You can use Chromium DevTools. Furthermore, because it supports CDP (Chromium DevTools Protocol), you can perform remote debugging from an external source.
 - You can display multiple browser windows. Browser windows can also be organized into a parent-child hierarchy.
 - It features a plugin system. Additionally, plugin functionality can be restricted using a whitelist filter.
@@ -72,6 +73,19 @@ you can develop modern local GUI applications using the web-based technology eco
 - Build Environment
   - Node.js 20 or later
   - Vite 7 or later (optional)
+
+### Development Startup
+
+Use `muon dev` when you want to launch Muon directly against already-generated local assets.
+It does not start a Vite or HTTP server, so HMR is not available.
+
+```bash
+muon dev
+```
+
+Development assets are resolved from `--assets`, `muon.json` `asset.sourcePath`, then `assets/`.
+If a single `muon()` Vite plugin is present in `vite.config.*`, `muon dev` reads its `muonPath`, `cefPath`, `stagePath`, and `enableDebugger` options.
+CLI options override the Vite plugin options; `open` and `build` are ignored by `muon dev`.
 
 ---
 

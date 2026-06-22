@@ -74,7 +74,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
   - Windows: i686, amd64
 - ビルド環境
   - Node.js 20以降
-  - Vite 7以降（オプション）
+  - Vite 5以降（オプション）
 
 ---
 
@@ -171,7 +171,7 @@ npm run dev
 
 ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
 
-`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動できます。
+`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動でき、`Ctrl+F12` キーでmuonをリサイクル再起動できます。
 また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
 
 ### muon devで直接起動
@@ -189,7 +189,7 @@ muon dev
 
 `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
 CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon dev` では無視されます。
-Muon DevToolsとCDPの開発用既定値を無効化するには `--no-debugger` を指定します。
+Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
 
 ---
 
@@ -379,7 +379,7 @@ muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのD
 
 ![Muon DevTools](./images/devtools.png)
 
-Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
+Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
 `muon.json` に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
 
 ```json
@@ -851,6 +851,8 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   `"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
   Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、
   Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
+  `"muon"` タイトルバーでは、ページ内の任意の要素へCSSで `-webkit-app-region: drag` を指定すると、その領域をドラッグしてウインドウを移動できます。
+  リンク、ボタン、入力欄など通常のページ操作を受け取る要素には `-webkit-app-region: no-drag` を指定してください。
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
 - `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
@@ -1005,7 +1007,7 @@ export default defineConfig({
 | `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
 | `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
-| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDPと `F12` のMuon DevToolsキーバインドを有効化します。  |
+| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
 - `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` に影響します。
@@ -1015,7 +1017,7 @@ export default defineConfig({
 - `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
 - `cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
-- `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開けるようになります。
+- `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
 
 ### buildキー

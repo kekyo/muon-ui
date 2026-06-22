@@ -232,6 +232,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
  public:
   OpenMuonDetachedPopupTask(
       CefRefPtr<CefClient> client,
+      CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler,
       std::string target_url,
       const CefBrowserSettings& settings,
       CefRefPtr<CefDictionaryValue> extra_info,
@@ -239,6 +240,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
       MuonTitleBarManifest title_bar_manifest,
       MuonTitleBarBackgroundColor title_bar_background_color)
       : client_(client),
+        shortcut_handler_(shortcut_handler),
         target_url_(std::move(target_url)),
         settings_(settings),
         extra_info_(extra_info),
@@ -257,7 +259,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
         extra_info_, nullptr,
         new MuonBrowserViewDelegate(
             false, initial_title_bar_visibility_, title_bar_manifest_,
-            title_bar_background_color_));
+            title_bar_background_color_, shortcut_handler_));
     if (!browser_view) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "Failed to create detached popup browser view");
@@ -268,11 +270,13 @@ class OpenMuonDetachedPopupTask final : public CefTask {
                                kMuonBrowserInitialWindowStateNormal,
                                initial_title_bar_visibility_,
                                title_bar_manifest_,
-                               title_bar_background_color_));
+                               title_bar_background_color_,
+                               shortcut_handler_));
   }
 
  private:
   CefRefPtr<CefClient> client_;
+  CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler_;
   const std::string target_url_;
   const CefBrowserSettings settings_;
   CefRefPtr<CefDictionaryValue> extra_info_;
@@ -767,6 +771,10 @@ CefRefPtr<CefDialogHandler> MuonClient::GetDialogHandler() {
   return this;
 }
 
+CefRefPtr<CefDragHandler> MuonClient::GetDragHandler() {
+  return this;
+}
+
 CefRefPtr<CefRequestHandler> MuonClient::GetRequestHandler() {
   return this;
 }
@@ -784,6 +792,28 @@ CefRefPtr<CefResourceRequestHandler> MuonClient::GetResourceRequestHandler(
       is_navigation && (!frame || frame->IsMain());
   return CreateMuonNetworkResourceRequestHandler(
       network_policy_, is_top_level_navigation, request_initiator.ToString());
+}
+
+bool MuonClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                                CefRefPtr<CefFrame> frame,
+                                CefRefPtr<CefRequest> request,
+                                bool user_gesture,
+                                bool is_redirect) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)request;
+  (void)user_gesture;
+  (void)is_redirect;
+
+  if (IsCustomMuonTitleBar(title_bar_manifest_) && frame && frame->IsMain()) {
+    CefRefPtr<CefBrowserView> browser_view;
+    CefRefPtr<CefWindow> window;
+    std::string error_message;
+    if (GetBrowserViewAndWindow(browser, &browser_view, &window,
+                                &error_message)) {
+      SetRegisteredMuonPageDraggableRegions(window, browser_view, {});
+    }
+  }
+  return false;
 }
 
 bool MuonClient::OnBeforePopup(
@@ -844,8 +874,10 @@ bool MuonClient::OnBeforePopup(
       WriteMuonRendererUrlHint(detached_extra_info, url);
     }
   }
+  CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler(this);
   CefPostTask(TID_UI, new OpenMuonDetachedPopupTask(
-                          client, url, settings, detached_extra_info,
+                          client, shortcut_handler, url, settings,
+                          detached_extra_info,
                           browser_config_.initial_title_bar_visibility,
                           title_bar_manifest_, title_bar_background_color_));
   return true;
@@ -1260,6 +1292,13 @@ bool MuonClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
                                 CefEventHandle os_event,
                                 bool* is_keyboard_shortcut) {
   CEF_REQUIRE_UI_THREAD();
+  return HandleBrowserShortcut(browser, event, is_keyboard_shortcut);
+}
+
+bool MuonClient::HandleBrowserShortcut(CefRefPtr<CefBrowser> browser,
+                                       const CefKeyEvent& event,
+                                       bool* is_keyboard_shortcut) {
+  CEF_REQUIRE_UI_THREAD();
   if (event.type != KEYEVENT_RAWKEYDOWN && event.type != KEYEVENT_KEYDOWN) {
     return false;
   }
@@ -1365,6 +1404,27 @@ bool MuonClient::OnFileDialog(
   }
   raw_state->operation = operation;
   return true;
+}
+
+void MuonClient::OnDraggableRegionsChanged(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    const std::vector<CefDraggableRegion>& regions) {
+  CEF_REQUIRE_UI_THREAD();
+
+  if (!IsCustomMuonTitleBar(title_bar_manifest_) || !frame ||
+      !frame->IsMain()) {
+    return;
+  }
+
+  CefRefPtr<CefBrowserView> browser_view;
+  CefRefPtr<CefWindow> window;
+  std::string error_message;
+  if (!GetBrowserViewAndWindow(browser, &browser_view, &window,
+                               &error_message)) {
+    return;
+  }
+  SetRegisteredMuonPageDraggableRegions(window, browser_view, regions);
 }
 
 bool MuonClient::OnProcessMessageReceived(

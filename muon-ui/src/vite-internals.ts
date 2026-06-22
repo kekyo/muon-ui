@@ -57,6 +57,7 @@ interface MuonOverrideConfig {
     initialTitleBarVisibility?: boolean;
     keybind?: {
       devtools: "f12";
+      recycle: "ctrl+f12";
     };
     plugin: {
       allow: string[];
@@ -269,6 +270,7 @@ const createMuonOverrideConfig = (
         ? {
             keybind: {
               devtools: "f12",
+              recycle: "ctrl+f12",
             },
           }
         : {}),

@@ -531,7 +531,7 @@ describe("muon Vite plugin", () => {
       cdp: { enable: boolean };
       browser: {
         startPage: string;
-        keybind: { devtools: string };
+        keybind: { devtools: string; recycle: string };
         plugin: { allow: string[] };
       };
       network: { allow: string[] };
@@ -563,6 +563,7 @@ describe("muon Vite plugin", () => {
         startPage: baseUrl,
         keybind: {
           devtools: "f12",
+          recycle: "ctrl+f12",
         },
         plugin: { allow: [`${new URL(baseUrl ?? "").origin}/**`] },
       },
@@ -792,7 +793,7 @@ describe("muon dev CLI", () => {
     ) as {
       asset: { sourcePath: string };
       cdp: { enable: boolean };
-      browser: { keybind: { devtools: string } };
+      browser: { keybind: { devtools: string; recycle: string } };
     };
 
     expect(await readCapturedArguments(outputDirectory)).toEqual([
@@ -818,6 +819,7 @@ describe("muon dev CLI", () => {
       browser: {
         keybind: {
           devtools: "f12",
+          recycle: "ctrl+f12",
         },
       },
     });

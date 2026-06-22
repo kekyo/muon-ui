@@ -16,6 +16,7 @@ import {
   parseXpropWindowTitle,
   processExitTimeoutMs,
   rm,
+  sendNativeMouseWheel,
   shouldUseValgrind,
   startGestamentDebugMuon,
   stopGestamentMuon,
@@ -48,6 +49,11 @@ interface NativeWindowBounds {
 
 interface RootCapture {
   png: PNG;
+  x: number;
+  y: number;
+}
+
+interface PageScrollPosition {
   x: number;
   y: number;
 }
@@ -113,12 +119,23 @@ const createSolidSvg = (color: RgbaPixel): string =>
 const createTitleBarPage = (
   title: string,
   faviconPath: string | undefined = undefined,
+  pageDraggable: boolean = false,
 ): string =>
   `<!doctype html><title>${title}</title>${
     faviconPath === undefined
       ? ""
       : `<link rel="icon" type="image/svg+xml" href="${faviconPath}">`
-  }<style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}</style><main>title bar test</main>`;
+  }<style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}${
+    pageDraggable
+      ? "body{-webkit-app-region:drag;}.no-drag{position:fixed;left:24px;top:112px;min-width:120px;min-height:64px;-webkit-app-region:no-drag;}.drag-space{width:1800px;min-height:1600px;padding:220px 24px 24px;box-sizing:border-box;}.scroll-marker{margin-left:1400px;margin-top:1200px;}"
+      : ""
+  }</style><main class="drag-space">title bar test${
+    pageDraggable ? '<div class="scroll-marker">scroll marker</div>' : ""
+  }${
+    pageDraggable
+      ? '<button id="no-drag-button" class="no-drag">click <span id="no-drag-count">0</span></button><script>document.getElementById("no-drag-button").addEventListener("click",()=>{const count=document.getElementById("no-drag-count");count.textContent=String(Number(count.textContent)+1);});</script>'
+      : ""
+  }</main>`;
 
 const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   const assetRoot = join(directory, "titlebar-assets");
@@ -140,6 +157,10 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   await writeFile(
     join(mainRoot, "no-favicon.html"),
     createTitleBarPage(testWindowTitle),
+  );
+  await writeFile(
+    join(mainRoot, "draggable.html"),
+    createTitleBarPage(testWindowTitle, undefined, true),
   );
   await writeFile(
     join(assetRoot, "main", initialTitleBarIconPath),
@@ -598,6 +619,111 @@ const clickTitleBarButton = async (
   await wait(100);
 };
 
+const dragMouse = async (
+  running: RunningGestamentMuon,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): Promise<void> => {
+  await running.app.input.moveMouseTo(startX, startY);
+  await running.app.input.setMouseButton("left", true);
+  await wait(100);
+  const stepCount = 10;
+  for (let step = 1; step <= stepCount; step += 1) {
+    await running.app.input.moveMouseTo(
+      Math.round(startX + ((endX - startX) * step) / stepCount),
+      Math.round(startY + ((endY - startY) * step) / stepCount),
+    );
+    await wait(50);
+  }
+  await running.app.input.setMouseButton("left", false);
+  await wait(300);
+};
+
+const clickPageNoDragControl = async (
+  driver: CdpDriver,
+  running: RunningGestamentMuon,
+  clickX: number,
+  clickY: number,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  while (Date.now() < deadline) {
+    await running.app.input.moveMouseTo(clickX, clickY);
+    await running.app.input.setMouseButton("left", true);
+    await running.app.input.setMouseButton("left", false);
+    const clickCount = Number(
+      await driver.evaluate(
+        'document.getElementById("no-drag-count").textContent',
+      ),
+    );
+    if (clickCount >= 1) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error("Timed out waiting for page no-drag control click");
+};
+
+const readPageScrollPosition = async (
+  driver: CdpDriver,
+): Promise<PageScrollPosition> => ({
+  x: Number(await driver.evaluate("window.scrollX")),
+  y: Number(await driver.evaluate("window.scrollY")),
+});
+
+const waitForPageScrollChange = async (
+  driver: CdpDriver,
+  initial: PageScrollPosition,
+  axis: keyof PageScrollPosition,
+): Promise<PageScrollPosition> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPosition = initial;
+  while (Date.now() < deadline) {
+    lastPosition = await readPageScrollPosition(driver);
+    if (lastPosition[axis] > initial[axis]) {
+      return lastPosition;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for page ${axis} scroll. Initial: ${JSON.stringify(
+      initial,
+    )}, last: ${JSON.stringify(lastPosition)}`,
+  );
+};
+
+const waitForNativeWindowMove = async (
+  initialBounds: NativeWindowBounds,
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv,
+): Promise<NativeWindowBounds> => {
+  const deadline = Date.now() + timeoutMs;
+  let lastBounds = initialBounds;
+  while (Date.now() < deadline) {
+    lastBounds = await readNativeWindowBounds(initialBounds.id, env);
+    if (lastBounds.x !== initialBounds.x || lastBounds.y !== initialBounds.y) {
+      return lastBounds;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for native window move. Initial: ${JSON.stringify(
+      initialBounds,
+    )}, last: ${JSON.stringify(lastBounds)}`,
+  );
+};
+
+const expectNativeWindowStill = async (
+  initialBounds: NativeWindowBounds,
+  env: NodeJS.ProcessEnv,
+): Promise<void> => {
+  await wait(300);
+  const currentBounds = await readNativeWindowBounds(initialBounds.id, env);
+  expect(currentBounds.x).toBe(initialBounds.x);
+  expect(currentBounds.y).toBe(initialBounds.y);
+};
+
 const runTitleBarStep = async <T>(
   name: string,
   operation: () => Promise<T>,
@@ -718,6 +844,90 @@ titleBarIt("renders and controls the Linux custom title bar", async () => {
     });
   });
 });
+
+titleBarIt(
+  "moves the Linux custom window from page CSS draggable regions",
+  async () => {
+    await withTitleBarMuon(async (driver, running, env, initialBounds) => {
+      let bounds = initialBounds;
+      await runTitleBarStep("navigate to draggable page", async () => {
+        await driver.evaluate('location.href = "asset://main/draggable.html"');
+        await driver.evaluate(
+          'new Promise((resolve) => { const check = () => document.getElementById("no-drag-button") === null ? setTimeout(check, 50) : resolve(true); check(); })',
+        );
+      });
+
+      await runTitleBarStep("click page no-drag control", async () => {
+        await clickPageNoDragControl(
+          driver,
+          running,
+          initialBounds.x + 84,
+          initialBounds.y + titleBarHeight + 130,
+        );
+        await expectNativeWindowStill(initialBounds, env);
+      });
+
+      await runTitleBarStep(
+        "wheel page draggable region vertically",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          const initialScroll = await readPageScrollPosition(driver);
+          await sendNativeMouseWheel(
+            testWindowTitle,
+            bounds.x + 220,
+            bounds.y + titleBarHeight + 260,
+            "down",
+          );
+          await waitForPageScrollChange(driver, initialScroll, "y");
+        },
+      );
+
+      await runTitleBarStep(
+        "wheel page draggable region horizontally",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          const initialScroll = await readPageScrollPosition(driver);
+          await sendNativeMouseWheel(
+            testWindowTitle,
+            bounds.x + 220,
+            bounds.y + titleBarHeight + 260,
+            "right",
+          );
+          await waitForPageScrollChange(driver, initialScroll, "x");
+        },
+      );
+
+      await runTitleBarStep(
+        "drag title bar over page draggable regions",
+        async () => {
+          await dragMouse(
+            running,
+            bounds.x + 220,
+            bounds.y + Math.round(titleBarHeight / 2),
+            bounds.x + 320,
+            bounds.y + Math.round(titleBarHeight / 2) + 80,
+          );
+          bounds = await waitForNativeWindowMove(
+            bounds,
+            cdpCommandTimeoutMs,
+            env,
+          );
+        },
+      );
+
+      await runTitleBarStep("drag page background", async () => {
+        await dragMouse(
+          running,
+          bounds.x + 220,
+          bounds.y + titleBarHeight + 260,
+          bounds.x + 320,
+          bounds.y + titleBarHeight + 340,
+        );
+        await waitForNativeWindowMove(bounds, cdpCommandTimeoutMs, env);
+      });
+    });
+  },
+);
 
 titleBarIt(
   "uses browser.backgroundColor for the Linux custom title bar background",

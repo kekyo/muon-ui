@@ -47,6 +47,7 @@ interface MuonDevOverrideConfig {
   browser?: {
     keybind: {
       devtools: "f12";
+      recycle: "ctrl+f12";
     };
   };
 }
@@ -440,6 +441,7 @@ const createMuonDevOverrideConfig = (
         browser: {
           keybind: {
             devtools: "f12",
+            recycle: "ctrl+f12",
           },
         },
       }

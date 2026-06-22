@@ -7,6 +7,7 @@
 #pragma once
 
 #include "app/muon_app_storage.h"
+#include "browser/muon_browser_shortcut_handler.h"
 #include "browser/muon_builtin_browser.h"
 #include "browser/muon_title_bar.h"
 #include "config/muon_config.h"
@@ -17,6 +18,7 @@
 #include "include/cef_client.h"
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
+#include "include/cef_drag_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_urlrequest.h"
 #include "include/views/cef_browser_view.h"
@@ -33,12 +35,14 @@
  * Main browser client handling browser callbacks.
  */
 class MuonClient final : public CefClient,
+                          public MuonBrowserShortcutHandler,
                           public CefLifeSpanHandler,
                           public CefDisplayHandler,
                           public CefContextMenuHandler,
                           public CefCommandHandler,
                           public CefKeyboardHandler,
                           public CefDialogHandler,
+                          public CefDragHandler,
                           public CefRequestHandler {
  public:
   /**
@@ -101,6 +105,11 @@ class MuonClient final : public CefClient,
   CefRefPtr<CefDialogHandler> GetDialogHandler() override;
 
   /**
+   * Returns this object as the drag event handler.
+   */
+  CefRefPtr<CefDragHandler> GetDragHandler() override;
+
+  /**
    * Returns this object as the request handler.
    */
   CefRefPtr<CefRequestHandler> GetRequestHandler() override;
@@ -125,6 +134,22 @@ class MuonClient final : public CefClient,
       bool is_download,
       const CefString& request_initiator,
       bool& disable_default_handling) override;
+
+  /**
+   * Clears page draggable regions before main frame navigation.
+   *
+   * @param browser Browser that is navigating.
+   * @param frame Frame that is navigating.
+   * @param request Navigation request.
+   * @param user_gesture Whether navigation was initiated by user gesture.
+   * @param is_redirect Whether navigation is a redirect.
+   * @return false to allow navigation.
+   */
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefFrame> frame,
+                      CefRefPtr<CefRequest> request,
+                      bool user_gesture,
+                      bool is_redirect) override;
 
   /**
    * Handles popup browser creation requests from window.open and target links.
@@ -258,6 +283,19 @@ class MuonClient final : public CefClient,
                      bool* is_keyboard_shortcut) override;
 
   /**
+   * Handles browser shortcuts for keyboard events delivered outside the
+   * browser view focus path.
+   *
+   * @param browser Browser associated with the active window.
+   * @param event CEF key event.
+   * @param is_keyboard_shortcut Output flag set when the event is handled.
+   * @return true when the event was handled.
+   */
+  bool HandleBrowserShortcut(CefRefPtr<CefBrowser> browser,
+                             const CefKeyEvent& event,
+                             bool* is_keyboard_shortcut) override;
+
+  /**
    * Runs CEF file input dialogs through the Muon UI dialog provider.
    *
    * @return true when the Muon UI provider accepted the dialog request.
@@ -270,6 +308,18 @@ class MuonClient final : public CefClient,
                     const std::vector<CefString>& accept_extensions,
                     const std::vector<CefString>& accept_descriptions,
                     CefRefPtr<CefFileDialogCallback> callback) override;
+
+  /**
+   * Applies page CSS app-region rectangles to the host window.
+   *
+   * @param browser Browser whose page regions changed.
+   * @param frame Frame whose document produced the regions.
+   * @param regions Draggable regions reported by CEF.
+   */
+  void OnDraggableRegionsChanged(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefFrame> frame,
+      const std::vector<CefDraggableRegion>& regions) override;
 
   /**
    * Handles messages sent from the renderer process.

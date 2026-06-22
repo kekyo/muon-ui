@@ -13,6 +13,7 @@
 #include "include/cef_parser.h"
 #include "include/cef_request.h"
 #include "include/views/cef_browser_view_delegate.h"
+#include "include/wrapper/cef_helpers.h"
 
 #if defined(OS_LINUX) && defined(CEF_X11)
 #include "include/internal/cef_types_linux.h"
@@ -22,10 +23,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <map>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -50,6 +53,19 @@ std::map<int, CefRefPtr<CefWindow>> g_muon_title_bar_windows_by_browser_id;
 std::map<int, std::string> g_muon_title_bar_pending_titles_by_browser_id;
 std::map<int, std::string>
     g_muon_title_bar_pending_icon_data_urls_by_browser_id;
+using MuonWindowDraggableRegionKey = std::uintptr_t;
+std::map<MuonWindowDraggableRegionKey, std::vector<CefDraggableRegion>>
+    g_muon_title_bar_draggable_regions;
+std::map<MuonWindowDraggableRegionKey, std::vector<CefDraggableRegion>>
+    g_muon_applied_draggable_regions;
+
+struct MuonPageDraggableRegions {
+  CefRefPtr<CefBrowserView> browser_view;
+  std::vector<CefDraggableRegion> regions;
+};
+
+std::map<MuonWindowDraggableRegionKey, MuonPageDraggableRegions>
+    g_muon_page_draggable_regions;
 
 #if defined(OS_LINUX) && defined(CEF_X11)
 struct MuonMotifWmHints {
@@ -346,6 +362,7 @@ static std::string ExtractTitleBarAction(const std::string& url) {
   return url.substr(action_start, action_end - action_start);
 }
 
+#if defined(OS_LINUX)
 static std::string ToLowerAscii(std::string value) {
   for (auto& character : value) {
     character = static_cast<char>(
@@ -380,6 +397,198 @@ static bool StringEqualsIgnoreCase(const char* value, const char* expected) {
 
 static bool IsNonEmptyString(const char* value) {
   return value != nullptr && value[0] != '\0';
+}
+#endif
+
+template <typename TWindowHandle>
+static MuonWindowDraggableRegionKey GetWindowHandleDraggableRegionKey(
+    TWindowHandle handle) {
+  if constexpr (std::is_pointer_v<TWindowHandle>) {
+    return reinterpret_cast<MuonWindowDraggableRegionKey>(handle);
+  } else {
+    return static_cast<MuonWindowDraggableRegionKey>(handle);
+  }
+}
+
+static MuonWindowDraggableRegionKey GetWindowPointerDraggableRegionKey(
+    CefWindow* window) {
+  return reinterpret_cast<MuonWindowDraggableRegionKey>(window);
+}
+
+static MuonWindowDraggableRegionKey GetDraggableRegionKey(CefWindow* window) {
+  if (window == nullptr) {
+    return 0;
+  }
+  const auto handle_key =
+      GetWindowHandleDraggableRegionKey(window->GetWindowHandle());
+  return handle_key != 0 ? handle_key
+                         : GetWindowPointerDraggableRegionKey(window);
+}
+
+static void EraseMuonDraggableRegionState(CefWindow* window) {
+  const auto key = GetDraggableRegionKey(window);
+  g_muon_title_bar_draggable_regions.erase(key);
+  g_muon_page_draggable_regions.erase(key);
+  g_muon_applied_draggable_regions.erase(key);
+
+  const auto pointer_key = GetWindowPointerDraggableRegionKey(window);
+  if (pointer_key != key) {
+    g_muon_title_bar_draggable_regions.erase(pointer_key);
+    g_muon_page_draggable_regions.erase(pointer_key);
+    g_muon_applied_draggable_regions.erase(pointer_key);
+  }
+}
+
+static void AppendDraggableRegions(
+    std::vector<CefDraggableRegion>* target,
+    const std::vector<CefDraggableRegion>& source) {
+  target->insert(target->end(), source.begin(), source.end());
+}
+
+static void AppendBrowserViewDraggableRegions(
+    std::vector<CefDraggableRegion>* target,
+    CefRefPtr<CefBrowserView> browser_view,
+    const std::vector<CefDraggableRegion>& source) {
+  if (!browser_view) {
+    return;
+  }
+  for (const auto& source_region : source) {
+    auto region = source_region;
+    CefPoint origin(region.bounds.x, region.bounds.y);
+    if (!browser_view->ConvertPointToWindow(origin)) {
+      continue;
+    }
+    region.bounds.x = origin.x;
+    region.bounds.y = origin.y;
+    target->push_back(region);
+  }
+}
+
+static bool AreDraggableRegionsEqual(
+    const std::vector<CefDraggableRegion>& left,
+    const std::vector<CefDraggableRegion>& right) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left.size(); ++i) {
+    const auto& left_region = left[i];
+    const auto& right_region = right[i];
+    if (left_region.draggable != right_region.draggable ||
+        left_region.bounds.x != right_region.bounds.x ||
+        left_region.bounds.y != right_region.bounds.y ||
+        left_region.bounds.width != right_region.bounds.width ||
+        left_region.bounds.height != right_region.bounds.height) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool ContainsPoint(const CefRect& bounds, const CefPoint& point) {
+  return point.x >= bounds.x && point.y >= bounds.y &&
+         point.x < bounds.x + bounds.width &&
+         point.y < bounds.y + bounds.height;
+}
+
+static bool IsPageDraggableRegionPoint(
+    const std::vector<CefDraggableRegion>& regions,
+    const CefPoint& point) {
+  auto draggable = false;
+  for (const auto& region : regions) {
+    if (!ContainsPoint(region.bounds, point)) {
+      continue;
+    }
+    if (!region.draggable) {
+      return false;
+    }
+    draggable = true;
+  }
+  return draggable;
+}
+
+static bool ForwardPageDraggableRegionWheel(
+    const MuonPageDraggableRegions& page_regions,
+    const CefPoint& screen_point,
+    int delta_x,
+    int delta_y,
+    uint32_t modifiers) {
+  if (!page_regions.browser_view || (delta_x == 0 && delta_y == 0)) {
+    return false;
+  }
+
+  auto view_point = screen_point;
+  if (!page_regions.browser_view->ConvertPointFromScreen(view_point) ||
+      !IsPageDraggableRegionPoint(page_regions.regions, view_point)) {
+    return false;
+  }
+
+  const auto browser = page_regions.browser_view->GetBrowser();
+  if (!browser) {
+    return false;
+  }
+  const auto host = browser->GetHost();
+  if (!host) {
+    return false;
+  }
+
+  CefMouseEvent event;
+  event.x = view_point.x;
+  event.y = view_point.y;
+  event.modifiers = modifiers;
+  host->SendMouseWheelEvent(event, delta_x, delta_y);
+  return true;
+}
+
+static void ApplyMuonDraggableRegions(CefWindow* window) {
+  if (window == nullptr) {
+    return;
+  }
+  const auto key = GetDraggableRegionKey(window);
+
+  std::vector<CefDraggableRegion> regions;
+  const auto page_regions = g_muon_page_draggable_regions.find(key);
+  if (page_regions != g_muon_page_draggable_regions.end()) {
+    AppendBrowserViewDraggableRegions(
+        &regions, page_regions->second.browser_view,
+        page_regions->second.regions);
+  }
+  const auto title_bar_regions =
+      g_muon_title_bar_draggable_regions.find(key);
+  if (title_bar_regions != g_muon_title_bar_draggable_regions.end()) {
+    AppendDraggableRegions(&regions, title_bar_regions->second);
+  }
+
+  const auto applied = g_muon_applied_draggable_regions.find(key);
+  if (applied != g_muon_applied_draggable_regions.end() &&
+      AreDraggableRegionsEqual(applied->second, regions)) {
+    return;
+  }
+
+  // Avoid disturbing native move loops with redundant region updates.
+  if (regions.empty()) {
+    if (applied == g_muon_applied_draggable_regions.end()) {
+      return;
+    }
+    g_muon_applied_draggable_regions.erase(key);
+  } else {
+    g_muon_applied_draggable_regions[key] = regions;
+  }
+  window->SetDraggableRegions(regions);
+}
+
+static void SetMuonTitleBarDraggableRegions(
+    CefWindow* window,
+    const std::vector<CefDraggableRegion>& regions) {
+  if (window == nullptr) {
+    return;
+  }
+  const auto key = GetDraggableRegionKey(window);
+  if (regions.empty()) {
+    g_muon_title_bar_draggable_regions.erase(key);
+  } else {
+    g_muon_title_bar_draggable_regions[key] = regions;
+  }
+  ApplyMuonDraggableRegions(window);
 }
 
 }  // namespace
@@ -694,7 +903,7 @@ void MuonTitleBarController::UpdateDraggableRegions() {
     return;
   }
   if (!visible_) {
-    window_->SetDraggableRegions({});
+    SetMuonTitleBarDraggableRegions(window_, {});
     return;
   }
 
@@ -709,7 +918,7 @@ void MuonTitleBarController::UpdateDraggableRegions() {
   regions.emplace_back(
       CefRect(width - controls_width, 0, controls_width, manifest_.height),
       false);
-  window_->SetDraggableRegions(regions);
+  SetMuonTitleBarDraggableRegions(window_, regions);
 }
 
 int MuonTitleBarController::GetHeight() const {
@@ -905,6 +1114,7 @@ void RegisterMuonTitleBarBrowserView(CefRefPtr<CefWindow> window,
     return;
   }
   g_muon_title_bar_windows_by_browser_view[browser_view.get()] = window;
+  ApplyMuonDraggableRegions(window.get());
 }
 
 void RegisterMuonTitleBarBrowser(CefRefPtr<CefWindow> window, int browser_id) {
@@ -952,6 +1162,7 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
   }
   g_muon_title_bar_controllers.erase(window.get());
   g_muon_title_bar_views.erase(window.get());
+  EraseMuonDraggableRegionState(window.get());
 }
 
 void ClearMuonTitleBarRegistrations() {
@@ -968,6 +1179,9 @@ void ClearMuonTitleBarRegistrations() {
   g_muon_title_bar_windows_by_browser_id.clear();
   g_muon_title_bar_pending_titles_by_browser_id.clear();
   g_muon_title_bar_pending_icon_data_urls_by_browser_id.clear();
+  g_muon_title_bar_draggable_regions.clear();
+  g_muon_page_draggable_regions.clear();
+  g_muon_applied_draggable_regions.clear();
 }
 
 void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
@@ -1042,12 +1256,56 @@ void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
   view->second->InvalidateLayout();
   window->InvalidateLayout();
   window->Layout();
+  ApplyMuonDraggableRegions(window.get());
 }
 
 void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible) {
   const auto window = GetRegisteredMuonWindowForBrowser(browser_id);
   SetRegisteredMuonTitleBarVisibility(window, visible);
+}
+
+void SetRegisteredMuonPageDraggableRegions(
+    CefRefPtr<CefWindow> window,
+    CefRefPtr<CefBrowserView> browser_view,
+    const std::vector<CefDraggableRegion>& regions) {
+  if (!window) {
+    return;
+  }
+  const auto key = GetDraggableRegionKey(window.get());
+  if (regions.empty() || !browser_view) {
+    g_muon_page_draggable_regions.erase(key);
+  } else {
+    g_muon_page_draggable_regions[key] = {browser_view, regions};
+  }
+  ApplyMuonDraggableRegions(window.get());
+}
+
+bool ForwardRegisteredMuonPageDraggableRegionWheel(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    int delta_x,
+    int delta_y,
+    uint32_t modifiers) {
+  CEF_REQUIRE_UI_THREAD();
+
+  if (window_handle != 0) {
+    const auto key = GetWindowHandleDraggableRegionKey(window_handle);
+    const auto page_regions = g_muon_page_draggable_regions.find(key);
+    if (page_regions != g_muon_page_draggable_regions.end() &&
+        ForwardPageDraggableRegionWheel(page_regions->second, screen_point,
+                                        delta_x, delta_y, modifiers)) {
+      return true;
+    }
+  }
+
+  for (const auto& page_regions : g_muon_page_draggable_regions) {
+    if (ForwardPageDraggableRegionWheel(page_regions.second, screen_point,
+                                        delta_x, delta_y, modifiers)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id) {

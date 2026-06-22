@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "browser/muon_browser_shortcut_handler.h"
 #include "browser/muon_title_bar.h"
 
 #include "include/views/cef_browser_view.h"
@@ -23,13 +24,15 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
    * visible.
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
+   * @param shortcut_handler Browser shortcut handler for window-level events.
    */
   explicit MuonBrowserViewDelegate(
       bool is_devtools,
       bool initial_title_bar_visibility = true,
       MuonTitleBarManifest title_bar_manifest =
           CreateNativeMuonTitleBarManifest(),
-      MuonTitleBarBackgroundColor title_bar_background_color = {});
+      MuonTitleBarBackgroundColor title_bar_background_color = {},
+      CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler = nullptr);
 
   /**
    * Creates delegates for popup browser views.
@@ -69,6 +72,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
   const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
+  CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler_;
 
   IMPLEMENT_REFCOUNTING(MuonBrowserViewDelegate);
   DISALLOW_COPY_AND_ASSIGN(MuonBrowserViewDelegate);

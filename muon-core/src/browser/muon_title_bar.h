@@ -417,6 +417,35 @@ void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible);
 
 /**
+ * Updates page CSS draggable regions for a registered custom-titlebar window.
+ *
+ * @param window Window whose draggable regions should be updated.
+ * @param browser_view Browser view that reported the draggable regions.
+ * @param regions Draggable regions in browser view coordinates.
+ */
+void SetRegisteredMuonPageDraggableRegions(
+    CefRefPtr<CefWindow> window,
+    CefRefPtr<CefBrowserView> browser_view,
+    const std::vector<CefDraggableRegion>& regions);
+
+/**
+ * Forwards a native wheel event when it hits a page CSS draggable region.
+ *
+ * @param window_handle Native window handle that received the wheel event.
+ * @param screen_point DIP screen point for the wheel event.
+ * @param delta_x Wheel delta in the horizontal direction.
+ * @param delta_y Wheel delta in the vertical direction.
+ * @param modifiers Event flags using cef_event_flags_t values.
+ * @return true when the wheel event was forwarded to a browser.
+ */
+bool ForwardRegisteredMuonPageDraggableRegionWheel(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    int delta_x,
+    int delta_y,
+    uint32_t modifiers);
+
+/**
  * Returns the registered custom-titlebar window for a browser, if any.
  */
 CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id);

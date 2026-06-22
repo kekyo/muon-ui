@@ -182,9 +182,21 @@ if(NOT WIN32)
   pkg_check_modules(MUON_GLIB REQUIRED IMPORTED_TARGET glib-2.0)
   pkg_check_modules(MUON_GIO REQUIRED IMPORTED_TARGET "gio-2.0>=2.74")
   pkg_check_modules(MUON_GTK3 REQUIRED IMPORTED_TARGET "gtk+-3.0")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(MUON_X11 REQUIRED IMPORTED_TARGET x11)
+    pkg_check_modules(MUON_XI REQUIRED IMPORTED_TARGET xi)
+  endif()
   set(MUON_CARDIO_GLIB_TARGETS
     PkgConfig::MUON_GLIB
     PkgConfig::MUON_GIO
+    )
+endif()
+
+set(MUON_NATIVE_WHEEL_TARGETS)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(MUON_NATIVE_WHEEL_TARGETS
+    PkgConfig::MUON_X11
+    PkgConfig::MUON_XI
     )
 endif()
 
@@ -601,6 +613,7 @@ set(APP_SOURCES
   src/browser/muon_builtin_browser.cpp
   src/browser/muon_client.cpp
   src/browser/muon_default_title_bar_icon.cpp
+  src/browser/muon_native_wheel_forwarder.cpp
   src/browser/muon_title_bar.cpp
   src/browser/muon_title_bar_loader.cpp
   src/browser/muon_window_delegate.cpp
@@ -639,6 +652,7 @@ set(APP_HEADERS
   src/browser/muon_builtin_browser.h
   src/browser/muon_client.h
   src/browser/muon_default_title_bar_icon.h
+  src/browser/muon_native_wheel_forwarder.h
   src/browser/muon_title_bar.h
   src/browser/muon_title_bar_loader.h
   src/browser/muon_window_delegate.h
@@ -794,12 +808,14 @@ target_link_libraries(${APP_NAME} PRIVATE
   yyjson
   miniz
   ${LIBFFI_TARGET}
+  ${MUON_NATIVE_WHEEL_TARGETS}
   ${CEF_STANDARD_LIBS}
   ${CMAKE_DL_LIBS}
   )
 if(WIN32)
   target_link_libraries(${APP_NAME} PRIVATE
     advapi32
+    comctl32
     ole32
     shell32
     uuid
@@ -987,6 +1003,11 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES)
         "-DOUTPUT=${MUON_RUNTIME_DIR}/muon.json"
         "-DKEYBIND_NAME=devtools"
         "-DKEYBIND_VALUE=f12"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ensure_browser_keybind_config.cmake"
+      COMMAND ${CMAKE_COMMAND}
+        "-DOUTPUT=${MUON_RUNTIME_DIR}/muon.json"
+        "-DKEYBIND_NAME=recycle"
+        "-DKEYBIND_VALUE=ctrl+f12"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ensure_browser_keybind_config.cmake"
       )
   endif()
@@ -1187,6 +1208,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_builtin_browser_test
     tests/muon_builtin_browser_test.cpp
     src/browser/muon_builtin_browser.cpp
+    src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
     src/plugins/muon_type_metadata.cpp
     src/browser/muon_window_delegate.cpp
@@ -1205,6 +1227,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     libcef_lib
     yyjson
     ${LIBFFI_TARGET}
+    ${MUON_NATIVE_WHEEL_TARGETS}
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}
     )

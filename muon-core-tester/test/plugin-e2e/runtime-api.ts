@@ -36,6 +36,7 @@ import {
   f11FullscreenShortcut,
   f12DevToolsShortcut,
   f5ReloadShortcut,
+  getCurrentTargetIds,
   getOuterSize,
   join,
   listCdpTargets,
@@ -51,6 +52,7 @@ import {
   runBuiltinFsDialogValidation,
   runBuiltinFsFileUriOperations,
   runBuiltinFsRoundtrip,
+  sendNativeKeyboardShortcut,
   shiftF9DevToolsShortcut,
   shouldUseValgrind,
   startDebugMuon,
@@ -63,6 +65,7 @@ import {
   waitForCdp,
   waitForDocumentTitle,
   waitForInnerWidth,
+  waitForDevToolsTarget,
   waitForNativeActiveWindowTitle,
   waitForNativeWindowTitle,
   waitForNativeWindowTitleAbsent,
@@ -144,6 +147,23 @@ const waitForRecycledMuon = async (
   }
   throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
 };
+
+const createNativeShortcutDragPageUrl = (title: string): string =>
+  `data:text/html;charset=utf-8,${encodeURIComponent(
+    `<!doctype html>
+<title>${title}</title>
+<style>
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-app-region: drag;
+  background: #d7ebe5;
+}
+</style>
+<main>native shortcut drag region</main>`,
+  )}`;
 
 describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   const linuxIt = process.platform === "linux" ? it : it.skip;
@@ -1834,6 +1854,74 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       await stopMuon(running, driver);
     }
   });
+
+  linuxIt(
+    "opens DevTools from native F12 after focusing a draggable page region",
+    async () => {
+      await withMuonBrowserConfig(
+        [],
+        createBrowserShortcutConfig({ devtools: "f12" }),
+        async (driver) => {
+          const title = "muon native f12 drag shortcut";
+          await driver.navigate(
+            createNativeShortcutDragPageUrl(title),
+            cdpCommandTimeoutMs,
+          );
+          await waitForNativeWindowTitle(title, cdpCommandTimeoutMs);
+
+          const previousTargetIds = await getCurrentTargetIds();
+          await sendNativeKeyboardShortcut(title, "f12");
+          await expect(
+            waitForDevToolsTarget(previousTargetIds, targetTimeoutMs),
+          ).resolves.toMatchObject({
+            type: "page",
+          });
+        },
+      );
+    },
+  );
+
+  linuxIt(
+    "recycles from native Ctrl+F12 after focusing a draggable page region",
+    async () => {
+      const running = await startDebugMuonBootstrap(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        createBrowserShortcutConfig({ devtools: "f12", recycle: "ctrl+f12" }),
+      );
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        const title = "muon native ctrl f12 drag shortcut";
+        await driver.navigate(
+          createNativeShortcutDragPageUrl(title),
+          cdpCommandTimeoutMs,
+        );
+        await waitForNativeWindowTitle(title, cdpCommandTimeoutMs);
+        const firstProcessId = await driver.evaluate<number>(
+          "window.muon.environments.getProcessId()",
+        );
+
+        await sendNativeKeyboardShortcut(title, "ctrl+f12");
+        driver.close();
+        driver = undefined;
+        const recycled = await waitForRecycledMuon(firstProcessId);
+        driver = recycled.driver;
+        expect(recycled.processId).not.toBe(firstProcessId);
+        await expect(driver.evaluate("document.location.href")).resolves.toBe(
+          MUON_APP_URL,
+        );
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+      }
+    },
+  );
 
   it("reloads the page from the configured reload shortcut", async () => {
     await withMuonBrowserConfig(

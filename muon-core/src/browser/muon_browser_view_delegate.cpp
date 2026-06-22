@@ -48,11 +48,13 @@ MuonBrowserViewDelegate::MuonBrowserViewDelegate(
     bool is_devtools,
     bool initial_title_bar_visibility,
     MuonTitleBarManifest title_bar_manifest,
-    MuonTitleBarBackgroundColor title_bar_background_color)
+    MuonTitleBarBackgroundColor title_bar_background_color,
+    CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler)
     : is_devtools_(is_devtools),
       initial_title_bar_visibility_(initial_title_bar_visibility),
       title_bar_manifest_(std::move(title_bar_manifest)),
-      title_bar_background_color_(title_bar_background_color) {}
+      title_bar_background_color_(title_bar_background_color),
+      shortcut_handler_(shortcut_handler) {}
 
 CefRefPtr<CefBrowserViewDelegate>
 MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
@@ -62,7 +64,7 @@ MuonBrowserViewDelegate::GetDelegateForPopupBrowserView(
     bool is_devtools) {
   return new MuonBrowserViewDelegate(
       is_devtools, initial_title_bar_visibility_, title_bar_manifest_,
-      title_bar_background_color_);
+      title_bar_background_color_, shortcut_handler_);
 }
 
 bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
@@ -74,7 +76,8 @@ bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
                              kMuonBrowserInitialWindowStateNormal,
                              initial_title_bar_visibility_,
                              title_bar_manifest_,
-                             title_bar_background_color_));
+                             title_bar_background_color_,
+                             shortcut_handler_));
   if (!is_devtools) {
     // Popups are modeless in Muon even when they keep an opener reference.
     EnablePopupOpenerBrowserViewTask::EnablePopupOpenerBrowserView(browser_view);

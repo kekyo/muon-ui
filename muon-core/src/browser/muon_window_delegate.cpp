@@ -6,6 +6,7 @@
 
 #include "browser/muon_window_delegate.h"
 
+#include "browser/muon_native_wheel_forwarder.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
@@ -23,8 +24,10 @@ MuonWindowDelegate::MuonWindowDelegate(
     MuonBrowserInitialWindowState initial_window_state,
     bool initial_title_bar_visibility,
     MuonTitleBarManifest title_bar_manifest,
-    MuonTitleBarBackgroundColor title_bar_background_color)
+    MuonTitleBarBackgroundColor title_bar_background_color,
+    CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler)
     : browser_view_(browser_view),
+      shortcut_handler_(shortcut_handler),
       is_devtools_(is_devtools),
       initial_window_state_(initial_window_state),
       initial_title_bar_visibility_(initial_title_bar_visibility),
@@ -121,6 +124,9 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
         window, title_bar_controller_, browser_id);
     SetRegisteredMuonTitleBarVisibility(
         window, initial_title_bar_visibility_);
+    if (!is_devtools_) {
+      RegisterMuonNativeWheelForwarder(window);
+    }
   } else if (browser_view_) {
     window->AddChildView(browser_view_);
     if (!is_devtools_) {
@@ -132,6 +138,7 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
 }
 
 void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
+  UnregisterMuonNativeWheelForwarder(window);
   UnregisterMuonTitleBarController(window);
   if (title_bar_controller_) {
     title_bar_controller_->DetachWindow();
@@ -139,6 +146,7 @@ void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
   title_bar_controller_ = nullptr;
   title_bar_view_ = nullptr;
   browser_view_ = nullptr;
+  shortcut_handler_ = nullptr;
 }
 
 void MuonWindowDelegate::OnWindowActivationChanged(CefRefPtr<CefWindow> window,
@@ -192,6 +200,18 @@ cef_show_state_t MuonWindowDelegate::GetInitialShowState(
 
 cef_runtime_style_t MuonWindowDelegate::GetWindowRuntimeStyle() {
   return is_devtools_ ? CEF_RUNTIME_STYLE_CHROME : CEF_RUNTIME_STYLE_ALLOY;
+}
+
+bool MuonWindowDelegate::OnKeyEvent(CefRefPtr<CefWindow> window,
+                                    const CefKeyEvent& event) {
+  (void)window;
+  if (is_devtools_ || !shortcut_handler_ || !browser_view_ ||
+      !browser_view_->IsValid() ||
+      browser_view_->HasFocus()) {
+    return false;
+  }
+  return shortcut_handler_->HandleBrowserShortcut(browser_view_->GetBrowser(),
+                                                 event, nullptr);
 }
 
 bool MuonWindowDelegate::UseCustomTitleBar() const {

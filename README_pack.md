@@ -72,20 +72,7 @@ you can develop modern local GUI applications using the web-based technology eco
   - Windows: i686, amd64
 - Build Environment
   - Node.js 20 or later
-  - Vite 7 or later (optional)
-
-### Development Startup
-
-Use `muon dev` when you want to launch Muon directly against already-generated local assets.
-It does not start a Vite or HTTP server, so HMR is not available.
-
-```bash
-muon dev
-```
-
-Development assets are resolved from `--assets`, `muon.json` `asset.sourcePath`, then `assets/`.
-If a single `muon()` Vite plugin is present in `vite.config.*`, `muon dev` reads its `muonPath`, `cefPath`, `stagePath`, and `enableDebugger` options.
-CLI options override the Vite plugin options; `open` and `build` are ignored by `muon dev`.
+  - Vite 5 or later (optional)
 
 ---
 

@@ -7,7 +7,7 @@
     "build:dist": "bash ./build.sh dist Release linux64 && bash ./build.sh dist Release mingw32 && bash ./build.sh dist Release mingw64",
     "build:target": "bash ./build.sh",
     "build:test": "bash ./build.sh test Release linux64",
-    "dev": "bash ./build.sh dev && (cd .run/dev-linux64-debug && ./muon-core)",
+    "dev": "bash ./build.sh dev && node scripts/run-dev-supervisor.mjs",
     "test": "npm run build:test && xvfb-run -a node ../scripts/run-xvfb-command.mjs ctest --test-dir .build/test/linux64/release --output-on-failure"
   }
 }

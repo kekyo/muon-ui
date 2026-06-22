@@ -208,6 +208,35 @@ const writeFakeRecyclingMuonSource = async (
   await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
 };
 
+const writeFakeDirectRecyclingMuonExecutable = async (
+  runtimeDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  const executableName =
+    process.platform === "win32" ? "muon-core.exe" : "muon-core";
+  const executable = join(runtimeDirectory, executableName);
+  const escapedOutputDirectory = outputDirectory.replaceAll("'", "'\\''");
+  await mkdir(runtimeDirectory, { recursive: true });
+  await writeFile(
+    executable,
+    `#!/usr/bin/env bash
+set -euo pipefail
+counter_file='${escapedOutputDirectory}/direct-recycle-count.txt'
+count=0
+if [[ -f "$counter_file" ]]; then
+  count="$(cat "$counter_file")"
+fi
+count=$((count + 1))
+printf '%s\\n' "$count" > "$counter_file"
+pwd > "${escapedOutputDirectory}/direct-cwd-$count.txt"
+if [[ "$count" -eq 1 ]]; then
+  exit 88
+fi
+`,
+  );
+  await chmod(executable, 0o755);
+};
+
 const writeFakeCefDirectory = async (): Promise<string> => {
   const cefDirectory = await createTemporaryDirectory("muon-vite-cef-dir-");
   await mkdir(join(cefDirectory, "Release"), { recursive: true });
@@ -297,6 +326,9 @@ interface CommandResult {
 }
 
 const getCliPath = (): string => resolve("dist", "cli.cjs");
+
+const getMuonCoreDevSupervisorPath = (): string =>
+  resolve("..", "muon-core", "scripts", "run-dev-supervisor.mjs");
 
 const runMuonCli = async (
   root: string,
@@ -829,6 +861,39 @@ describe("muon dev CLI", () => {
       "-c",
       devResult.overrideConfigPath,
     ]);
+  });
+
+  it("restarts Muon from the muon-core dev supervisor", async () => {
+    const runtimeDirectory = await createTemporaryDirectory(
+      "muon-core-dev-runtime-",
+    );
+    const outputDirectory = await createTemporaryDirectory(
+      "muon-core-dev-output-",
+    );
+    await writeFakeDirectRecyclingMuonExecutable(
+      runtimeDirectory,
+      outputDirectory,
+    );
+
+    const result = await execFileAsync(
+      process.execPath,
+      [getMuonCoreDevSupervisorPath(), runtimeDirectory],
+      {
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+    await expect(
+      readFile(join(outputDirectory, "direct-recycle-count.txt"), "utf8"),
+    ).resolves.toBe("2\n");
+    await expect(
+      readFile(join(outputDirectory, "direct-cwd-1.txt"), "utf8"),
+    ).resolves.toBe(`${runtimeDirectory}\n`);
+    await expect(
+      readFile(join(outputDirectory, "direct-cwd-2.txt"), "utf8"),
+    ).resolves.toBe(`${runtimeDirectory}\n`);
   });
 
   it("uses muon Vite plugin options when vite.config.* is present", async () => {

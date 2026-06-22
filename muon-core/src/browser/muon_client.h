@@ -18,6 +18,7 @@
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
 #include "include/cef_request_handler.h"
+#include "include/cef_urlrequest.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
@@ -173,6 +174,17 @@ class MuonClient final : public CefClient,
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
   /**
+   * Restores the initial title bar icon when the main-frame address changes.
+   *
+   * @param browser Browser whose address changed.
+   * @param frame Frame whose address changed.
+   * @param url New frame URL.
+   */
+  void OnAddressChange(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       const CefString& url) override;
+
+  /**
    * Updates the native window title from the page title.
    *
    * @param browser Browser whose title changed.
@@ -180,6 +192,15 @@ class MuonClient final : public CefClient,
    */
   void OnTitleChange(CefRefPtr<CefBrowser> browser,
                      const CefString& title) override;
+
+  /**
+   * Starts a title bar icon update from page favicon candidates.
+   *
+   * @param browser Browser whose favicon candidates changed.
+   * @param icon_urls Favicon candidate URLs reported by CEF.
+   */
+  void OnFaviconURLChange(CefRefPtr<CefBrowser> browser,
+                          const std::vector<CefString>& icon_urls) override;
 
   /**
    * Logs JavaScript console output through the unified Muon logger.
@@ -322,6 +343,22 @@ class MuonClient final : public CefClient,
   void QuitMessageLoopWhenIdle();
   void DispatchBuiltinBrowserCall(MuonBuiltinBrowserFunctionKind kind,
                                   const PendingPluginCall& call);
+  uint64_t BeginTitleBarIconUpdateForBrowser(int browser_id);
+  bool IsCurrentTitleBarIconUpdate(int browser_id, uint64_t generation) const;
+  void RestoreInitialTitleBarIconForBrowser(CefRefPtr<CefBrowser> browser,
+                                            uint64_t generation);
+  void StartFaviconTitleBarIconUpdate(CefRefPtr<CefBrowser> browser,
+                                      std::vector<std::string> icon_urls);
+  void ContinueFaviconTitleBarIconUpdate(CefRefPtr<CefBrowser> browser,
+                                         std::vector<std::string> icon_urls,
+                                         size_t icon_url_index,
+                                         uint64_t generation);
+  void CompleteFaviconTitleBarIconUpdate(CefRefPtr<CefBrowser> browser,
+                                         std::vector<std::string> icon_urls,
+                                         size_t icon_url_index,
+                                         uint64_t generation,
+                                         const std::string& mime_type,
+                                         std::vector<uint8_t> data);
   bool SetTitleBarIconForBrowser(CefRefPtr<CefBrowser> browser,
                                  const MuonTitleBarIcon* icon,
                                  std::string* error_message);
@@ -360,6 +397,8 @@ class MuonClient final : public CefClient,
       pending_renderer_function_result_payloads_;
   std::map<int, ModalBrowserViewDisableState>
       modal_browser_view_disable_states_;
+  std::map<int, uint64_t> title_bar_icon_update_generations_;
+  std::map<int, CefRefPtr<CefURLRequest>> pending_favicon_requests_;
 
   IMPLEMENT_REFCOUNTING(MuonClient);
   DISALLOW_COPY_AND_ASSIGN(MuonClient);

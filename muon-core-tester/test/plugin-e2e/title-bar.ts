@@ -64,6 +64,7 @@ const configuredTitleBarBackgroundColor = "#123456";
 const appPageBackgroundColor = "#d7ebe5";
 const initialTitleBarIconPath = "icons/title-bar-initial.png";
 const updatedTitleBarIconPath = "icons/title-bar-updated.png";
+const svgTitleBarIconPath = "icons/title-bar-vector.svg";
 const expectedTitleBarBackgroundColor: RgbaPixel = {
   red: 0x12,
   green: 0x34,
@@ -88,6 +89,12 @@ const expectedUpdatedTitleBarIconColor: RgbaPixel = {
   blue: 0x60,
   alpha: 255,
 };
+const expectedSvgTitleBarIconColor: RgbaPixel = {
+  red: 0x30,
+  green: 0x70,
+  blue: 0xe0,
+  alpha: 255,
+};
 
 const createSolidPng = (color: RgbaPixel): Buffer => {
   const png = new PNG({ width: 16, height: 16 });
@@ -100,6 +107,19 @@ const createSolidPng = (color: RgbaPixel): Buffer => {
   return PNG.sync.write(png);
 };
 
+const createSolidSvg = (color: RgbaPixel): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="rgb(${color.red},${color.green},${color.blue})"/></svg>`;
+
+const createTitleBarPage = (
+  title: string,
+  faviconPath: string | undefined = undefined,
+): string =>
+  `<!doctype html><title>${title}</title>${
+    faviconPath === undefined
+      ? ""
+      : `<link rel="icon" type="image/svg+xml" href="${faviconPath}">`
+  }<style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}</style><main>title bar test</main>`;
+
 const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   const assetRoot = join(directory, "titlebar-assets");
   const mainRoot = join(assetRoot, "main");
@@ -107,7 +127,19 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   await mkdir(iconsRoot, { recursive: true });
   await writeFile(
     join(mainRoot, "index.html"),
-    `<!doctype html><title>${testWindowTitle}</title><style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}</style><main>title bar test</main>`,
+    createTitleBarPage(testWindowTitle),
+  );
+  await writeFile(
+    join(mainRoot, "favicon-svg.html"),
+    createTitleBarPage(testWindowTitle, svgTitleBarIconPath),
+  );
+  await writeFile(
+    join(mainRoot, "broken-favicon.html"),
+    createTitleBarPage(testWindowTitle, "icons/missing.svg"),
+  );
+  await writeFile(
+    join(mainRoot, "no-favicon.html"),
+    createTitleBarPage(testWindowTitle),
   );
   await writeFile(
     join(assetRoot, "main", initialTitleBarIconPath),
@@ -116,6 +148,10 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   await writeFile(
     join(assetRoot, "main", updatedTitleBarIconPath),
     createSolidPng(expectedUpdatedTitleBarIconColor),
+  );
+  await writeFile(
+    join(assetRoot, "main", svgTitleBarIconPath),
+    createSolidSvg(expectedSvgTitleBarIconColor),
   );
   return assetRoot;
 };
@@ -778,6 +814,23 @@ titleBarIt("shows and updates the Linux custom title bar icon", async () => {
           expectedUpdatedTitleBarIconColor,
         );
       });
+      await runTitleBarStep(
+        "update title bar icon to SVG through API",
+        async () => {
+          await expect(
+            driver.evaluate(
+              `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+                svgTitleBarIconPath,
+              )})`,
+            ),
+          ).resolves.toBeUndefined();
+          await waitForTitleBarIconColor(
+            running,
+            bounds,
+            expectedSvgTitleBarIconColor,
+          );
+        },
+      );
       await runTitleBarStep("clear title bar icon through API", async () => {
         await expect(
           driver.evaluate("window.muon.browser.setTitleBarIcon(null)"),
@@ -794,6 +847,58 @@ titleBarIt("shows and updates the Linux custom title bar icon", async () => {
     initialTitleBarIconPath,
   );
 });
+
+titleBarIt(
+  "updates the Linux custom title bar icon from favicon changes",
+  async () => {
+    await withTitleBarMuon(
+      async (driver, running, _env, bounds) => {
+        await runTitleBarStep(
+          "verify initial title bar icon",
+          async () =>
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            ),
+        );
+        await runTitleBarStep("navigate to SVG favicon page", async () => {
+          await driver.navigate("asset://main/favicon-svg.html");
+          await waitForTitleBarIconColor(
+            running,
+            bounds,
+            expectedSvgTitleBarIconColor,
+          );
+        });
+        await runTitleBarStep(
+          "fall back when favicon cannot be loaded",
+          async () => {
+            await driver.navigate("asset://main/broken-favicon.html");
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+        await runTitleBarStep(
+          "fall back when page has no favicon",
+          async () => {
+            await driver.navigate("asset://main/no-favicon.html");
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+      },
+      configuredTitleBarBackgroundColor,
+      undefined,
+      initialTitleBarIconPath,
+    );
+  },
+);
 
 titleBarIt(
   "controls the Linux native title bar decoration hint through browser API",
@@ -822,6 +927,32 @@ titleBarIt(
             env,
           );
         });
+      },
+      undefined,
+      undefined,
+      undefined,
+      "native",
+    );
+  },
+);
+
+titleBarIt(
+  "rejects non-PNG title bar icons for the Linux native title bar",
+  async () => {
+    await withTitleBarMuon(
+      async (driver) => {
+        await runTitleBarStep(
+          "reject SVG title bar icon through API",
+          async () => {
+            await expect(
+              driver.evaluate(
+                `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+                  svgTitleBarIconPath,
+                )}).then(() => "resolved", (error) => error instanceof Error ? error.message : String(error))`,
+              ),
+            ).resolves.toContain("PNG");
+          },
+        );
       },
       undefined,
       undefined,

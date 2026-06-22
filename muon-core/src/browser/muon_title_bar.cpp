@@ -250,6 +250,15 @@ static std::string CreateDataUrl(const std::string& document) {
   return "data:text/html;charset=utf-8," + PercentEncode(document);
 }
 
+static std::string CreateImageDataUrl(const uint8_t* data,
+                                      size_t size,
+                                      const std::string& mime_type) {
+  const auto effective_mime_type =
+      mime_type.empty() ? std::string("application/octet-stream") : mime_type;
+  return "data:" + effective_mime_type + ";base64," +
+         CefBase64Encode(data, size).ToString();
+}
+
 static bool ParseMuonTitleBarIconPath(const std::string& path,
                                       MuonAppStorageRequest* request,
                                       std::string* error_message) {
@@ -408,6 +417,38 @@ bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
   return true;
 }
 
+bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
+                                        size_t size,
+                                        const std::string& mime_type,
+                                        const std::string& source,
+                                        bool require_png,
+                                        MuonTitleBarIcon* icon,
+                                        std::string* error_message) {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  error_message->clear();
+  if (data == nullptr || size == 0) {
+    const auto diagnostic_source = source.empty() ? "title bar icon" : source;
+    *error_message = "Title bar icon image must not be empty: " +
+                     diagnostic_source;
+    return false;
+  }
+
+  std::string png_error;
+  if (LoadMuonTitleBarIconFromPngBytes(data, size, source, icon, &png_error)) {
+    return true;
+  }
+  if (require_png) {
+    *error_message = png_error;
+    return false;
+  }
+
+  icon->image = nullptr;
+  icon->data_url = CreateImageDataUrl(data, size, mime_type);
+  return true;
+}
+
 bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                      const std::string& path,
                                      MuonTitleBarIcon* icon,
@@ -445,6 +486,43 @@ bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
 
   return LoadMuonTitleBarIconFromPngBytes(
       resource.data.data(), resource.data.size(), path, icon, error_message);
+}
+
+bool LoadMuonTitleBarIconDataUrlFromStorage(
+    std::shared_ptr<MuonAppStorage> storage,
+    const std::string& path,
+    MuonTitleBarIcon* icon,
+    std::string* error_message) {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  error_message->clear();
+  if (!storage) {
+    *error_message = "Title bar icon storage is not available";
+    return false;
+  }
+  MuonAppStorageRequest request;
+  if (!ParseMuonTitleBarIconPath(path, &request, error_message)) {
+    return false;
+  }
+
+  auto resource = storage->ReadResource(request);
+  if (resource.status == MuonAppStorageStatus::kNotFound) {
+    *error_message = "Title bar icon was not found: " + path;
+    return false;
+  }
+  if (resource.status == MuonAppStorageStatus::kRejected) {
+    *error_message = "Title bar icon path was rejected: " + path;
+    return false;
+  }
+  if (resource.status != MuonAppStorageStatus::kOk) {
+    *error_message = "Failed to read title bar icon: " + path;
+    return false;
+  }
+
+  return LoadMuonTitleBarIconFromImageBytes(
+      resource.data.data(), resource.data.size(), resource.mime_type, path,
+      false, icon, error_message);
 }
 
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest) {

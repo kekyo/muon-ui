@@ -24,7 +24,9 @@
 #include "include/cef_app.h"
 #include "include/cef_command_ids.h"
 #include "include/cef_process_message.h"
+#include "include/cef_request.h"
 #include "include/cef_task.h"
+#include "include/cef_urlrequest.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_panel.h"
 #include "include/views/cef_window.h"
@@ -36,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,6 +97,79 @@ class QuitMuonMessageLoopTask final : public CefTask {
  private:
   IMPLEMENT_REFCOUNTING(QuitMuonMessageLoopTask);
   DISALLOW_COPY_AND_ASSIGN(QuitMuonMessageLoopTask);
+};
+
+class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
+ public:
+  using Completion =
+      std::function<void(bool, std::string, std::vector<uint8_t>)>;
+
+  explicit MuonFaviconUrlRequestClient(Completion completion)
+      : completion_(std::move(completion)) {}
+
+  void OnRequestComplete(CefRefPtr<CefURLRequest> request) override {
+    auto success = false;
+    std::string mime_type;
+    if (request && request->GetRequestStatus() == UR_SUCCESS) {
+      const auto response = request->GetResponse();
+      const auto status = response ? response->GetStatus() : 0;
+      if (status >= 200 && status < 300) {
+        success = true;
+        mime_type = response->GetMimeType().ToString();
+      }
+    }
+    completion_(success, std::move(mime_type),
+                success ? std::move(data_) : std::vector<uint8_t>());
+  }
+
+  void OnUploadProgress(CefRefPtr<CefURLRequest> request,
+                        int64_t current,
+                        int64_t total) override {
+    (void)request;
+    (void)current;
+    (void)total;
+  }
+
+  void OnDownloadProgress(CefRefPtr<CefURLRequest> request,
+                          int64_t current,
+                          int64_t total) override {
+    (void)request;
+    (void)current;
+    (void)total;
+  }
+
+  void OnDownloadData(CefRefPtr<CefURLRequest> request,
+                      const void* data,
+                      size_t data_length) override {
+    (void)request;
+    if (data == nullptr || data_length == 0) {
+      return;
+    }
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    data_.insert(data_.end(), bytes, bytes + data_length);
+  }
+
+  bool GetAuthCredentials(bool isProxy,
+                          const CefString& host,
+                          int port,
+                          const CefString& realm,
+                          const CefString& scheme,
+                          CefRefPtr<CefAuthCallback> callback) override {
+    (void)isProxy;
+    (void)host;
+    (void)port;
+    (void)realm;
+    (void)scheme;
+    (void)callback;
+    return false;
+  }
+
+ private:
+  Completion completion_;
+  std::vector<uint8_t> data_;
+
+  IMPLEMENT_REFCOUNTING(MuonFaviconUrlRequestClient);
+  DISALLOW_COPY_AND_ASSIGN(MuonFaviconUrlRequestClient);
 };
 
 static CefRefPtr<CefWindow> GetMuonWindowForCloseBrowser(
@@ -791,14 +867,8 @@ void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   if (GetBrowserViewAndWindow(browser, nullptr, &window, &error_message)) {
     RegisterMuonTitleBarBrowser(window, browser->GetIdentifier());
   }
-  if (has_initial_title_bar_icon_) {
-    std::string title_bar_icon_error;
-    if (!SetTitleBarIconForBrowser(
-            browser, &initial_title_bar_icon_, &title_bar_icon_error)) {
-      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
-                     title_bar_icon_error);
-    }
-  }
+  RestoreInitialTitleBarIconForBrowser(
+      browser, BeginTitleBarIconUpdateForBrowser(browser->GetIdentifier()));
   if (!message_loop_quit_requested_) {
     quit_message_loop_after_pending_fs_dialogs_ = false;
     quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
@@ -811,6 +881,14 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   if (plugin_runtime_) {
     plugin_runtime_->CancelFsDialogsForOwner(browser_id);
   }
+  const auto pending_favicon_request =
+      pending_favicon_requests_.find(browser_id);
+  if (pending_favicon_request != pending_favicon_requests_.end() &&
+      pending_favicon_request->second) {
+    pending_favicon_request->second->Cancel();
+  }
+  pending_favicon_requests_.erase(browser_id);
+  title_bar_icon_update_generations_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   browsers_by_id_.erase(browser_id);
   QuitMessageLoopWhenIdle();
@@ -890,6 +968,148 @@ void MuonClient::QuitMessageLoopWhenIdle() {
   RequestMessageLoopQuit(false);
 }
 
+uint64_t MuonClient::BeginTitleBarIconUpdateForBrowser(int browser_id) {
+  if (browser_id <= 0) {
+    return 0;
+  }
+  const auto pending_favicon_request =
+      pending_favicon_requests_.find(browser_id);
+  if (pending_favicon_request != pending_favicon_requests_.end() &&
+      pending_favicon_request->second) {
+    pending_favicon_request->second->Cancel();
+  }
+  pending_favicon_requests_.erase(browser_id);
+  auto& generation = title_bar_icon_update_generations_[browser_id];
+  generation += 1;
+  return generation;
+}
+
+bool MuonClient::IsCurrentTitleBarIconUpdate(int browser_id,
+                                             uint64_t generation) const {
+  if (browser_id <= 0 || generation == 0) {
+    return false;
+  }
+  const auto iterator = title_bar_icon_update_generations_.find(browser_id);
+  return iterator != title_bar_icon_update_generations_.end() &&
+         iterator->second == generation;
+}
+
+void MuonClient::RestoreInitialTitleBarIconForBrowser(
+    CefRefPtr<CefBrowser> browser,
+    uint64_t generation) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser ||
+      !IsCurrentTitleBarIconUpdate(browser->GetIdentifier(), generation)) {
+    return;
+  }
+
+  std::string title_bar_icon_error;
+  if (!SetTitleBarIconForBrowser(
+          browser,
+          has_initial_title_bar_icon_ ? &initial_title_bar_icon_ : nullptr,
+          &title_bar_icon_error)) {
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
+                   title_bar_icon_error);
+  }
+}
+
+void MuonClient::StartFaviconTitleBarIconUpdate(
+    CefRefPtr<CefBrowser> browser,
+    std::vector<std::string> icon_urls) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser) {
+    return;
+  }
+  const auto generation =
+      BeginTitleBarIconUpdateForBrowser(browser->GetIdentifier());
+  if (icon_urls.empty()) {
+    RestoreInitialTitleBarIconForBrowser(browser, generation);
+    return;
+  }
+  ContinueFaviconTitleBarIconUpdate(browser, std::move(icon_urls), 0,
+                                    generation);
+}
+
+void MuonClient::ContinueFaviconTitleBarIconUpdate(
+    CefRefPtr<CefBrowser> browser,
+    std::vector<std::string> icon_urls,
+    size_t icon_url_index,
+    uint64_t generation) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser ||
+      !IsCurrentTitleBarIconUpdate(browser->GetIdentifier(), generation)) {
+    return;
+  }
+  while (icon_url_index < icon_urls.size() &&
+         icon_urls[icon_url_index].empty()) {
+    ++icon_url_index;
+  }
+  if (icon_url_index >= icon_urls.size()) {
+    RestoreInitialTitleBarIconForBrowser(browser, generation);
+    return;
+  }
+
+  const auto frame = browser->GetMainFrame();
+  if (!frame || !frame->IsValid()) {
+    RestoreInitialTitleBarIconForBrowser(browser, generation);
+    return;
+  }
+
+  auto request = CefRequest::Create();
+  request->SetMethod("GET");
+  request->SetURL(icon_urls[icon_url_index]);
+
+  CefRefPtr<MuonClient> self(this);
+  CefRefPtr<MuonFaviconUrlRequestClient> client(new MuonFaviconUrlRequestClient(
+      [self, browser, icon_urls, icon_url_index,
+       generation](bool success, std::string mime_type,
+                   std::vector<uint8_t> data) mutable {
+        if (!success) {
+          data.clear();
+        }
+        self->CompleteFaviconTitleBarIconUpdate(
+            browser, std::move(icon_urls), icon_url_index, generation,
+            std::move(mime_type), std::move(data));
+      }));
+  auto url_request = frame->CreateURLRequest(request, client);
+  if (!url_request) {
+    ContinueFaviconTitleBarIconUpdate(browser, std::move(icon_urls),
+                                      icon_url_index + 1, generation);
+    return;
+  }
+  pending_favicon_requests_[browser->GetIdentifier()] = url_request;
+}
+
+void MuonClient::CompleteFaviconTitleBarIconUpdate(
+    CefRefPtr<CefBrowser> browser,
+    std::vector<std::string> icon_urls,
+    size_t icon_url_index,
+    uint64_t generation,
+    const std::string& mime_type,
+    std::vector<uint8_t> data) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser ||
+      !IsCurrentTitleBarIconUpdate(browser->GetIdentifier(), generation)) {
+    return;
+  }
+  pending_favicon_requests_.erase(browser->GetIdentifier());
+
+  if (!data.empty()) {
+    MuonTitleBarIcon icon;
+    std::string error_message;
+    if (LoadMuonTitleBarIconFromImageBytes(
+            data.data(), data.size(), mime_type, icon_urls[icon_url_index],
+            !IsCustomMuonTitleBar(title_bar_manifest_), &icon,
+            &error_message) &&
+        SetTitleBarIconForBrowser(browser, &icon, &error_message)) {
+      return;
+    }
+  }
+
+  ContinueFaviconTitleBarIconUpdate(browser, std::move(icon_urls),
+                                    icon_url_index + 1, generation);
+}
+
 bool MuonClient::SetTitleBarIconForBrowser(
     CefRefPtr<CefBrowser> browser,
     const MuonTitleBarIcon* icon,
@@ -913,6 +1133,18 @@ bool MuonClient::SetTitleBarIconForBrowser(
   return true;
 }
 
+void MuonClient::OnAddressChange(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 const CefString& url) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)url;
+  if (!browser || !frame || !frame->IsMain()) {
+    return;
+  }
+  RestoreInitialTitleBarIconForBrowser(
+      browser, BeginTitleBarIconUpdateForBrowser(browser->GetIdentifier()));
+}
+
 void MuonClient::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                 const CefString& title) {
   CEF_REQUIRE_UI_THREAD();
@@ -930,6 +1162,18 @@ void MuonClient::OnTitleChange(CefRefPtr<CefBrowser> browser,
   }
   window->SetTitle(window_title);
   SetRegisteredMuonTitleBarTitle(window, window_title);
+}
+
+void MuonClient::OnFaviconURLChange(
+    CefRefPtr<CefBrowser> browser,
+    const std::vector<CefString>& icon_urls) {
+  CEF_REQUIRE_UI_THREAD();
+  std::vector<std::string> urls;
+  urls.reserve(icon_urls.size());
+  for (const auto& icon_url : icon_urls) {
+    urls.push_back(icon_url.ToString());
+  }
+  StartFaviconTitleBarIconUpdate(browser, std::move(urls));
 }
 
 bool MuonClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -1860,6 +2104,7 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       const auto arg_type = call.encoded_args->GetType(0);
       if (arg_type == VTYPE_NULL) {
+        BeginTitleBarIconUpdateForBrowser(call.browser->GetIdentifier());
         if (!SetTitleBarIconForBrowser(call.browser, nullptr,
                                        &error_message)) {
           RejectPluginCall(call, error_message);
@@ -1873,10 +2118,19 @@ void MuonClient::DispatchBuiltinBrowserCall(
         return;
       }
       MuonTitleBarIcon icon;
-      if (!LoadMuonTitleBarIconFromStorage(
-              app_storage_, call.encoded_args->GetString(0).ToString(), &icon,
-              &error_message) ||
-          !SetTitleBarIconForBrowser(call.browser, &icon, &error_message)) {
+      const auto icon_path = call.encoded_args->GetString(0).ToString();
+      const auto icon_loaded =
+          IsCustomMuonTitleBar(title_bar_manifest_)
+              ? LoadMuonTitleBarIconDataUrlFromStorage(
+                    app_storage_, icon_path, &icon, &error_message)
+              : LoadMuonTitleBarIconFromStorage(
+                    app_storage_, icon_path, &icon, &error_message);
+      if (!icon_loaded) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      BeginTitleBarIconUpdateForBrowser(call.browser->GetIdentifier());
+      if (!SetTitleBarIconForBrowser(call.browser, &icon, &error_message)) {
         RejectPluginCall(call, error_message);
         return;
       }

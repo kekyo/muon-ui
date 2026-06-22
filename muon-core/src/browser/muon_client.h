@@ -341,6 +341,10 @@ class MuonClient final : public CefClient,
   void EndPendingFsDialogCall(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
   void QuitMessageLoopWhenIdle();
+  bool PrepareShutdown(int32_t exit_code,
+                       std::vector<CefRefPtr<CefBrowser>>* browsers,
+                       bool* should_start_shutdown,
+                       std::string* error_message);
   void DispatchBuiltinBrowserCall(MuonBuiltinBrowserFunctionKind kind,
                                   const PendingPluginCall& call);
   uint64_t BeginTitleBarIconUpdateForBrowser(int browser_id);

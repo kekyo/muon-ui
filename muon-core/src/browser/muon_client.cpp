@@ -16,6 +16,7 @@
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 #include "browser/show_dev_tools_task.h"
+#include "config/muon_startup.h"
 #include "log/muon_log.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
@@ -968,6 +969,39 @@ void MuonClient::QuitMessageLoopWhenIdle() {
   RequestMessageLoopQuit(false);
 }
 
+bool MuonClient::PrepareShutdown(
+    int32_t exit_code,
+    std::vector<CefRefPtr<CefBrowser>>* browsers,
+    bool* should_start_shutdown,
+    std::string* error_message) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browsers == nullptr || should_start_shutdown == nullptr ||
+      error_message == nullptr) {
+    return false;
+  }
+  browsers->clear();
+  *should_start_shutdown = false;
+  error_message->clear();
+  if (shutdown_started_) {
+    return true;
+  }
+  if (!shutdown_requester_) {
+    *error_message = "Muon shutdown is unavailable";
+    return false;
+  }
+  if (!shutdown_requester_(exit_code)) {
+    *error_message = "Muon shutdown was not accepted";
+    return false;
+  }
+
+  shutdown_started_ = true;
+  *should_start_shutdown = true;
+  for (const auto& browser_entry : browsers_by_id_) {
+    browsers->push_back(browser_entry.second);
+  }
+  return true;
+}
+
 uint64_t MuonClient::BeginTitleBarIconUpdateForBrowser(int browser_id) {
   if (browser_id <= 0) {
     return 0;
@@ -1267,6 +1301,23 @@ bool MuonClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
   if (MatchesShortcut(browser_config_.reset_zoom, event)) {
     MarkKeyboardShortcut(is_keyboard_shortcut);
     ZoomBrowser(browser, CEF_ZOOM_COMMAND_RESET);
+    return true;
+  }
+  if (MatchesShortcut(browser_config_.recycle, event)) {
+    MarkKeyboardShortcut(is_keyboard_shortcut);
+    std::vector<CefRefPtr<CefBrowser>> browsers;
+    auto should_start_shutdown = false;
+    std::string error_message;
+    if (!PrepareShutdown(kMuonRecycleExitCode, &browsers,
+                         &should_start_shutdown, &error_message)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
+                     "Muon recycle shortcut failed: " + error_message);
+      return true;
+    }
+    if (should_start_shutdown) {
+      CefPostTask(TID_UI,
+                  new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
+    }
     return true;
   }
   if (IsKnownBrowserShortcut(event)) {
@@ -2162,19 +2213,36 @@ void MuonClient::DispatchBuiltinBrowserCall(
         RejectPluginCall(call, "Invalid shutdown exit code");
         return;
       }
-      if (!shutdown_requester_) {
-        RejectPluginCall(call, "Muon shutdown is unavailable");
+      const auto exit_code = call.encoded_args->GetInt(0);
+      if (exit_code == kMuonRecycleExitCode) {
+        RejectPluginCall(call, "Invalid shutdown exit code");
         return;
       }
-      if (!shutdown_requester_(call.encoded_args->GetInt(0))) {
-        RejectPluginCall(call, "Muon shutdown was not accepted");
-        return;
-      }
-      const auto should_start_shutdown = !shutdown_started_;
-      shutdown_started_ = true;
       std::vector<CefRefPtr<CefBrowser>> browsers;
-      for (const auto& browser_entry : browsers_by_id_) {
-        browsers.push_back(browser_entry.second);
+      auto should_start_shutdown = false;
+      if (!PrepareShutdown(exit_code, &browsers, &should_start_shutdown,
+                           &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      if (should_start_shutdown) {
+        CefPostTask(TID_UI,
+                    new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
+      }
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::Recycle: {
+      if (!call.encoded_args || call.encoded_args->GetSize() != 0) {
+        RejectPluginCall(call, "Invalid recycle request");
+        return;
+      }
+      std::vector<CefRefPtr<CefBrowser>> browsers;
+      auto should_start_shutdown = false;
+      if (!PrepareShutdown(kMuonRecycleExitCode, &browsers,
+                           &should_start_shutdown, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
       if (should_start_shutdown) {

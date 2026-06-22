@@ -49,6 +49,14 @@ if (isAllowed("shutdown")) {
     value: (exitCode = 0) => namespace.__shutdown(exitCode),
   };
 }
+if (isAllowed("recycle")) {
+  properties.recycle = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: () => namespace.__recycle(),
+  };
+}
 Object.defineProperties(namespace, properties);
 )JS";
 
@@ -66,7 +74,7 @@ static const std::array<MuonTypeMetadata, 1> kMuonBuiltinBrowserTitleBarIconArgs
         {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
 };
 
-static const std::array<MuonBuiltinBrowserFunctionDefinition, 19>
+static const std::array<MuonBuiltinBrowserFunctionDefinition, 20>
     kMuonBuiltinBrowserFunctions = {{
         {"reload", MuonBuiltinBrowserFunctionKind::Reload},
         {"hardReload", MuonBuiltinBrowserFunctionKind::HardReload},
@@ -104,6 +112,9 @@ static const std::array<MuonBuiltinBrowserFunctionDefinition, 19>
          kMuonBuiltinBrowserShutdownArgs.data(),
          kMuonBuiltinBrowserShutdownArgs.size(),
          CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__recycle",
+         MuonBuiltinBrowserFunctionKind::Recycle,
+         "recycle"},
     }};
 
 const char* GetMuonBuiltinBrowserPluginNamespace() {

@@ -6,8 +6,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
+/**
+ * Process exit code reserved for Muon recycle requests.
+ */
+inline constexpr int32_t kMuonRecycleExitCode = 88;
 
 /**
  * Launch source that keeps local development startup behavior.

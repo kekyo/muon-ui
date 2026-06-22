@@ -59,6 +59,7 @@ static constexpr char kMuonConfigBrowserFullscreenKey[] = "fullscreen";
 static constexpr char kMuonConfigBrowserZoomInKey[] = "zoomIn";
 static constexpr char kMuonConfigBrowserZoomOutKey[] = "zoomOut";
 static constexpr char kMuonConfigBrowserResetZoomKey[] = "resetZoom";
+static constexpr char kMuonConfigBrowserRecycleKey[] = "recycle";
 static constexpr char kMuonConfigBrowserPluginKey[] = "plugin";
 static constexpr char kMuonConfigBrowserPluginAllowKey[] = "allow";
 static constexpr char kMuonConfigBrowserAllowUnsafeJavaScriptParentAccessKey[] =
@@ -1597,6 +1598,7 @@ static bool ReadBrowserKeybindsConfig(yyjson_val* browser,
       {kMuonConfigBrowserZoomInKey, &config->browser.zoom_in},
       {kMuonConfigBrowserZoomOutKey, &config->browser.zoom_out},
       {kMuonConfigBrowserResetZoomKey, &config->browser.reset_zoom},
+      {kMuonConfigBrowserRecycleKey, &config->browser.recycle},
   };
   constexpr size_t entry_count = sizeof(entries) / sizeof(entries[0]);
   for (auto index = size_t{0}; index < entry_count; ++index) {

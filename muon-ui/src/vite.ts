@@ -9,6 +9,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
+import { attachMuonVitePluginOptions } from "./vite-options.js";
 
 /**
  * Options for generating Muon app distributions after Vite build.
@@ -118,7 +119,7 @@ export interface MuonVitePluginOptions {
 const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   let resolvedConfig: ResolvedConfig | undefined = undefined;
 
-  return {
+  const plugin: Plugin = {
     name: "muon",
     configResolved: (config) => {
       resolvedConfig = config;
@@ -145,6 +146,8 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       await buildMuonApp(createMuonBuildOptions(resolvedConfig, buildOptions));
     },
   };
+
+  return attachMuonVitePluginOptions(plugin, options);
 };
 
 const createMuonBuildOptions = (

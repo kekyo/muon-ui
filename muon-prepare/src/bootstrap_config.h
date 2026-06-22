@@ -45,7 +45,8 @@ int muon_bootstrap_config_write(const char *runtime_dir,
                                 const MuonBootstrapConfig *config);
 int muon_bootstrap_config_validate(const MuonBootstrapConfig *config);
 /**
- * Reads the embedded muon.json defaultVersionPolicy from this executable.
+ * Reads the embedded muon.json bootstrap.defaultVersionPolicy from this
+ * executable.
  *
  * The returned policy is heap-allocated and must be released with free().
  */

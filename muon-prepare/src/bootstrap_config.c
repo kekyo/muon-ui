@@ -209,6 +209,22 @@ static int tlv_read_raw_key(MuonBootstrapTlvReader *reader,
   return 0;
 }
 
+static int tlv_key_equals(const char *key,
+                          size_t key_length,
+                          const char *expected) {
+  const size_t expected_length = strlen(expected);
+  return key_length == expected_length &&
+         memcmp(key, expected, key_length) == 0;
+}
+
+static int tlv_read_object_value_count(MuonBootstrapTlvReader *reader,
+                                       unsigned long long *count) {
+  if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 7) {
+    return -1;
+  }
+  return tlv_read_var_uint(reader, count);
+}
+
 static int tlv_read_string_value(MuonBootstrapTlvReader *reader,
                                  char **value) {
   if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 4) {
@@ -230,6 +246,42 @@ static int tlv_read_string_value(MuonBootstrapTlvReader *reader,
   return 0;
 }
 
+static int tlv_read_bootstrap_default_version_policy(
+    MuonBootstrapTlvReader *reader,
+    unsigned long long count,
+    char **policy) {
+  for (unsigned long long index = 0; index < count; index += 1) {
+    const char *key = NULL;
+    size_t key_length = 0;
+    if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
+      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      return -1;
+    }
+    if (tlv_key_equals(key, key_length, "defaultVersionPolicy")) {
+      char *value = NULL;
+      if (tlv_read_string_value(reader, &value) != 0) {
+        muon_print_error(
+            "muon.json bootstrap.defaultVersionPolicy must be a string.\n");
+        return -1;
+      }
+      if (!is_valid_policy(value)) {
+        muon_print_error(
+            "muon.json bootstrap.defaultVersionPolicy has unknown value: %s\n",
+            value);
+        free(value);
+        return -1;
+      }
+      *policy = value;
+      return 1;
+    }
+    if (tlv_skip_value(reader) != 0) {
+      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      return -1;
+    }
+  }
+  return 0;
+}
+
 int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
   if (policy == NULL) {
     return -1;
@@ -244,12 +296,8 @@ int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
       kMuonBootstrapEmbeddedConfigSlot,
       MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE,
       0};
-  if (reader.offset >= reader.size || reader.bytes[reader.offset++] != 7) {
-    muon_print_error("Invalid embedded muon bootstrap config.\n");
-    return -1;
-  }
   unsigned long long count = 0;
-  if (tlv_read_var_uint(&reader, &count) != 0) {
+  if (tlv_read_object_value_count(&reader, &count) != 0) {
     muon_print_error("Invalid embedded muon bootstrap config.\n");
     return -1;
   }
@@ -260,23 +308,18 @@ int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
       muon_print_error("Invalid embedded muon bootstrap config.\n");
       return -1;
     }
-    if (key_length == strlen("defaultVersionPolicy") &&
-        memcmp(key, "defaultVersionPolicy", key_length) == 0) {
-      char *value = NULL;
-      if (tlv_read_string_value(&reader, &value) != 0) {
-        muon_print_error(
-            "muon.json defaultVersionPolicy must be a string.\n");
+    if (tlv_key_equals(key, key_length, "bootstrap")) {
+      unsigned long long bootstrap_count = 0;
+      if (tlv_read_object_value_count(&reader, &bootstrap_count) != 0) {
+        muon_print_error("muon.json bootstrap must be an object.\n");
         return -1;
       }
-      if (!is_valid_policy(value)) {
-        muon_print_error(
-            "muon.json defaultVersionPolicy has unknown value: %s\n",
-            value);
-        free(value);
-        return -1;
+      const int result = tlv_read_bootstrap_default_version_policy(
+          &reader, bootstrap_count, policy);
+      if (result != 0) {
+        return result < 0 ? -1 : 0;
       }
-      *policy = value;
-      return 0;
+      continue;
     }
     if (tlv_skip_value(&reader) != 0) {
       muon_print_error("Invalid embedded muon bootstrap config.\n");

@@ -387,13 +387,26 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   const auto default_policy_path =
       test_directory / "default-version-policy.json";
   if (!Expect(WriteFile(default_policy_path,
-                        R"({"defaultVersionPolicy":"compat-latest"})"),
+                        R"({"bootstrap":{"defaultVersionPolicy":"compat-latest"}})"),
               "failed to write defaultVersionPolicy config") ||
       !LoadConfigExpectSuccess(default_policy_path, &config)) {
     return false;
   }
   if (!Expect(config.default_version_policy == "compat-latest",
               "defaultVersionPolicy was not parsed")) {
+    return false;
+  }
+
+  const auto root_default_policy_path =
+      test_directory / "root-default-version-policy.json";
+  if (!Expect(WriteFile(root_default_policy_path,
+                        R"({"defaultVersionPolicy":"compat-latest"})"),
+              "failed to write root defaultVersionPolicy config") ||
+      !LoadConfigExpectSuccess(root_default_policy_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.default_version_policy == "tested",
+              "root defaultVersionPolicy should be ignored")) {
     return false;
   }
 
@@ -1175,6 +1188,8 @@ static bool RunLogConfigLoadingTest(
 static bool RunConfigValidationTest(
     const std::filesystem::path& test_directory) {
   const auto invalid_json_path = test_directory / "invalid-json.json";
+  const auto invalid_bootstrap_path =
+      test_directory / "invalid-bootstrap.json";
   const auto invalid_network_path = test_directory / "invalid-network.json";
   const auto invalid_allow_path = test_directory / "invalid-allow.json";
   const auto invalid_entry_path = test_directory / "invalid-entry.json";
@@ -1242,6 +1257,8 @@ static bool RunConfigValidationTest(
       test_directory / "non-hex-asset-salt.json";
   return Expect(WriteFile(invalid_json_path, "{"),
                 "failed to write invalid JSON config") &&
+         Expect(WriteFile(invalid_bootstrap_path, R"({"bootstrap":true})"),
+                "failed to write invalid bootstrap config") &&
          Expect(WriteFile(invalid_network_path, R"({"network":true})"),
                 "failed to write invalid network config") &&
          Expect(WriteFile(invalid_allow_path,
@@ -1251,10 +1268,10 @@ static bool RunConfigValidationTest(
                           R"({"network":{"allow":["data:**",42]}})"),
                 "failed to write invalid allow entry config") &&
          Expect(WriteFile(invalid_default_version_policy_type_path,
-                          R"({"defaultVersionPolicy":42})"),
+                          R"({"bootstrap":{"defaultVersionPolicy":42}})"),
                 "failed to write invalid defaultVersionPolicy type config") &&
          Expect(WriteFile(invalid_default_version_policy_path,
-                          R"({"defaultVersionPolicy":"invalid"})"),
+                          R"({"bootstrap":{"defaultVersionPolicy":"invalid"}})"),
                 "failed to write invalid defaultVersionPolicy config") &&
          Expect(WriteFile(invalid_authorized_origin_path,
                           R"({"network":{"authorizedOrigin":true}})"),
@@ -1347,6 +1364,8 @@ static bool RunConfigValidationTest(
                           R"({"asset":{"salt":"0x"}})"),
                 "failed to write non-hex asset.salt config") &&
          LoadConfigExpectFailure(invalid_json_path, "Invalid muon.json") &&
+         LoadConfigExpectFailure(invalid_bootstrap_path,
+                                 "bootstrap must be an object") &&
          LoadConfigExpectFailure(invalid_network_path,
                                  "network must be an object") &&
          LoadConfigExpectFailure(invalid_allow_path,
@@ -1354,9 +1373,11 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_entry_path,
                                  "network.allow entries must be strings") &&
          LoadConfigExpectFailure(invalid_default_version_policy_type_path,
-                                 "defaultVersionPolicy must be a string") &&
+                                 "bootstrap.defaultVersionPolicy must be a "
+                                 "string") &&
          LoadConfigExpectFailure(invalid_default_version_policy_path,
-                                 "defaultVersionPolicy has unknown value") &&
+                                 "bootstrap.defaultVersionPolicy has unknown "
+                                 "value") &&
          LoadConfigExpectFailure(invalid_authorized_origin_path,
                                  "network.authorizedOrigin must be an array") &&
          LoadConfigExpectFailure(invalid_authorized_origin_entry_path,

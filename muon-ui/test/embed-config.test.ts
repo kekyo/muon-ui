@@ -209,7 +209,7 @@ describe("muon embedded config", () => {
     const bootstrapPath = await createFakeBootstrap(directory);
     const configPath = await writeConfig(
       directory,
-      `{ defaultVersionPolicy: 'compat-latest' }\n`,
+      `{ bootstrap: { defaultVersionPolicy: 'compat-latest' } }\n`,
     );
 
     const result = await embedMuonConfigInBootstrapFile({
@@ -240,7 +240,7 @@ describe("muon embedded config", () => {
     const outputPath = join(directory, "patched-bootstrap");
     const configPath = await writeConfig(
       directory,
-      `{ defaultVersionPolicy: 'same-major-latest' }\n`,
+      `{ bootstrap: { defaultVersionPolicy: 'same-major-latest' } }\n`,
     );
     const original = await readFile(bootstrapPath);
 

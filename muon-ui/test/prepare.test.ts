@@ -1262,7 +1262,7 @@ lastCatalogUpdateUnix=0
     const configPath = join(fixture.projectPath, "muon.json");
     await writeFile(
       configPath,
-      `{ "defaultVersionPolicy": "compat-latest" }\n`,
+      `{ "bootstrap": { "defaultVersionPolicy": "compat-latest" } }\n`,
     );
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
@@ -1308,7 +1308,10 @@ exit 17
   it("rejects an invalid embedded defaultVersionPolicy during bootstrap", async () => {
     const fixture = await createPrepareFixture();
     const configPath = join(fixture.projectPath, "muon.json");
-    await writeFile(configPath, `{ "defaultVersionPolicy": "invalid" }\n`);
+    await writeFile(
+      configPath,
+      `{ "bootstrap": { "defaultVersionPolicy": "invalid" } }\n`,
+    );
     const appBootstrapPath = join(fixture.muonPath, "myapp");
     await embedMuonConfigInBootstrapFile({
       bootstrapPath: bootstrapExecutablePath,

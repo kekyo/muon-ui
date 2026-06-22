@@ -26,6 +26,7 @@
 static constexpr char kMuonConfigJson5FileName[] = "muon.json5";
 static constexpr char kMuonConfigJsoncFileName[] = "muon.jsonc";
 static constexpr char kMuonConfigFileName[] = "muon.json";
+static constexpr char kMuonConfigBootstrapKey[] = "bootstrap";
 static constexpr char kMuonConfigDefaultVersionPolicyKey[] =
     "defaultVersionPolicy";
 static constexpr const char* kMuonConfigSearchFileNames[] = {
@@ -2383,22 +2384,33 @@ static bool MergeJsonObject(yyjson_mut_doc* target_document,
   return true;
 }
 
-static bool ReadDefaultVersionPolicyConfig(yyjson_val* root,
-                                           MuonConfig* config,
-                                           std::string* error_message) {
+static bool ReadBootstrapConfig(yyjson_val* root,
+                                MuonConfig* config,
+                                std::string* error_message) {
   config->default_version_policy = "tested";
-  const auto value = yyjson_obj_get(root, kMuonConfigDefaultVersionPolicyKey);
+  const auto bootstrap = yyjson_obj_get(root, kMuonConfigBootstrapKey);
+  if (bootstrap == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_obj(bootstrap)) {
+    *error_message = "muon.json bootstrap must be an object";
+    return false;
+  }
+  const auto value =
+      yyjson_obj_get(bootstrap, kMuonConfigDefaultVersionPolicyKey);
   if (value == nullptr) {
     return true;
   }
   if (!yyjson_is_str(value)) {
-    *error_message = "muon.json defaultVersionPolicy must be a string";
+    *error_message =
+        "muon.json bootstrap.defaultVersionPolicy must be a string";
     return false;
   }
   const std::string policy(yyjson_get_str(value));
   if (!IsValidCefVersionPolicy(policy)) {
     *error_message =
-        "muon.json defaultVersionPolicy has unknown value: " + policy;
+        "muon.json bootstrap.defaultVersionPolicy has unknown value: " +
+        policy;
     return false;
   }
   config->default_version_policy = policy;
@@ -2412,7 +2424,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     *error_message = "muon.json root must be an object";
     return false;
   }
-  return ReadDefaultVersionPolicyConfig(root, config, error_message) &&
+  return ReadBootstrapConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&
          ReadLogConfig(root, config, error_message) &&
          ReadBrowserConfig(root, config, error_message) &&

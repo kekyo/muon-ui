@@ -86,7 +86,7 @@ muonは開発体験を直交的なものに感じられるように、開発ラ�
 新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するために、
 再現可能な最小の手順で実現出来るような開発ライフサイクルが重要だと考えています。
 
-これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトから始めましょう。
+これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトを用意する事から始めましょう。
 例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を作りましょう:
 
 ```bash
@@ -353,7 +353,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 `catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
 `window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
 
-`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`bootstrap.defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
 
 ```bash
 muon embed-config \
@@ -825,12 +825,6 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 }
 ```
 
-### rootキー
-
-| キー                   | 型       | 既定値     | 概要                                                                 |
-| :--------------------- | :------- | :--------- | :------------------------------------------------------------------- |
-| `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
-
 ### browserキー
 
 | キー                                  | 型                                        | 既定値                    | 概要                                                                                     |
@@ -974,6 +968,12 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - `cdp.enable` を `true` にすると、外部のDevToolsやCDPクライアントから接続できるようになります。
   開発・デバッグ用の設定であり、配布ビルドでは必要な場合だけ有効化してください。
 - `port` は `1024` から `65535` の整数である必要があります。
+
+### bootstrapキー
+
+| キー                   | 型       | 既定値     | 概要                                                                                                  |
+| :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
+| `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 ---
 

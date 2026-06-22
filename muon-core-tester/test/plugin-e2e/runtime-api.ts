@@ -20,6 +20,7 @@ import {
   constants,
   createBrowserShortcutConfig,
   ctrl0ZoomShortcut,
+  ctrlF12RecycleShortcut,
   ctrlMinusZoomShortcut,
   ctrlPlusZoomShortcut,
   ctrlShiftF10RecycleShortcut,
@@ -1783,6 +1784,42 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         "window.muon.environments.getProcessId()",
       );
       await dispatchKeyboardShortcut(driver, ctrlShiftF10RecycleShortcut);
+      driver.close();
+      driver = undefined;
+      const recycled = await waitForRecycledMuon(firstProcessId);
+      driver = recycled.driver;
+      expect(recycled.processId).not.toBe(firstProcessId);
+      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+        MUON_APP_URL,
+      );
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("recycles the process from the configured Ctrl+F12 shortcut", async () => {
+    const running = await startDebugMuonBootstrap(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      createBrowserShortcutConfig({ devtools: "f12", recycle: "ctrl+f12" }),
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon ctrl f12 recycle shortcut</title>",
+        cdpCommandTimeoutMs,
+      );
+      const firstProcessId = await driver.evaluate<number>(
+        "window.muon.environments.getProcessId()",
+      );
+      await dispatchKeyboardShortcut(driver, ctrlF12RecycleShortcut);
       driver.close();
       driver = undefined;
       const recycled = await waitForRecycledMuon(firstProcessId);

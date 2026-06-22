@@ -1260,7 +1260,7 @@ bool MuonClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
                                 CefEventHandle os_event,
                                 bool* is_keyboard_shortcut) {
   CEF_REQUIRE_UI_THREAD();
-  if (event.type != KEYEVENT_RAWKEYDOWN) {
+  if (event.type != KEYEVENT_RAWKEYDOWN && event.type != KEYEVENT_KEYDOWN) {
     return false;
   }
 

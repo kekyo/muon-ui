@@ -3370,6 +3370,15 @@ export const ctrlShiftF10RecycleShortcut: KeyboardShortcutEvent = {
   modifiers: 10,
 };
 
+export const ctrlF12RecycleShortcut: KeyboardShortcutEvent = {
+  type: "keyDown",
+  windowsVirtualKeyCode: 123,
+  nativeVirtualKeyCode: 123,
+  key: "F12",
+  code: "F12",
+  modifiers: 2,
+};
+
 export const configuredDevToolsShortcuts = [
   f12DevToolsShortcut,
   ctrlShiftIDevToolsShortcut,

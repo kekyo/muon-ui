@@ -32,7 +32,7 @@ static bool TestBrowserFunctionDefinitions() {
       "minimize",        "maximize",       "restore",
       "setTitleBarVisibility",
       "setTitleBarIcon",
-      "__close",         "__shutdown",
+      "__close",         "__shutdown",     "__recycle",
   };
   const auto expected_kinds = std::vector<MuonBuiltinBrowserFunctionKind>{
       MuonBuiltinBrowserFunctionKind::Reload,
@@ -54,6 +54,7 @@ static bool TestBrowserFunctionDefinitions() {
       MuonBuiltinBrowserFunctionKind::SetTitleBarIcon,
       MuonBuiltinBrowserFunctionKind::Close,
       MuonBuiltinBrowserFunctionKind::Shutdown,
+      MuonBuiltinBrowserFunctionKind::Recycle,
   };
 
   if (!Expect(GetMuonBuiltinBrowserPluginNamespace() ==
@@ -74,9 +75,10 @@ static bool TestBrowserFunctionDefinitions() {
       return false;
     }
   }
-  const auto set_title_bar_visibility = definitions[expected_names.size() - 4];
-  const auto set_title_bar_icon = definitions[expected_names.size() - 3];
-  const auto shutdown = definitions.back();
+  const auto set_title_bar_visibility = definitions[expected_names.size() - 5];
+  const auto set_title_bar_icon = definitions[expected_names.size() - 4];
+  const auto shutdown = definitions[expected_names.size() - 2];
+  const auto recycle = definitions.back();
   if (!Expect(set_title_bar_visibility.arg_count == 1,
               "unexpected title bar visibility argument count") ||
       !Expect(set_title_bar_visibility.arg_types != nullptr,
@@ -104,6 +106,13 @@ static bool TestBrowserFunctionDefinitions() {
               "unexpected browser shutdown argument type") ||
       !Expect(shutdown.return_type.type == MUON_TYPE_VOID,
               "unexpected browser shutdown return type") ||
+      !Expect(recycle.filter_name != nullptr &&
+                  std::string(recycle.filter_name) == "recycle",
+              "unexpected browser recycle filter name") ||
+      !Expect(recycle.arg_count == 0,
+              "unexpected browser recycle argument count") ||
+      !Expect(recycle.return_type.type == MUON_TYPE_VOID,
+              "unexpected browser recycle return type") ||
       !Expect(GetMuonBuiltinBrowserSetupScript() != nullptr,
               "missing browser setup script")) {
     return false;

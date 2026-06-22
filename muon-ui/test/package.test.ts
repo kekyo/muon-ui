@@ -435,11 +435,13 @@ exit 1
 
 const reloadResult: Promise<void> = window.muon.browser.reload();
 const resetZoomResult: Promise<void> = window.muon.browser.resetZoom();
+const recycleResult: Promise<void> = window.muon.browser.recycle();
 const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(true);
 const titleBarIconResult: Promise<void> = window.muon.browser.setTitleBarIcon("icons/app.png");
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
+void recycleResult;
 void titleBarVisibilityResult;
 void titleBarIconResult;
 void existsResult;
@@ -450,11 +452,13 @@ void existsResult;
 
 const reloadResult: Promise<void> = window.muon.browser.reload();
 const resetZoomResult: Promise<void> = window.muon.browser.resetZoom();
+const recycleResult: Promise<void> = window.muon.browser.recycle();
 const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(false);
 const clearTitleBarIconResult: Promise<void> = window.muon.browser.setTitleBarIcon(null);
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
+void recycleResult;
 void titleBarVisibilityResult;
 void clearTitleBarIconResult;
 void existsResult;

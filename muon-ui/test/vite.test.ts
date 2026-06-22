@@ -157,6 +157,57 @@ cp "$override_config" '${outputDirectory.replaceAll("'", "'\\''")}/override.json
   await chmod(executable, 0o755);
 };
 
+const writeFakeRecyclingMuonExecutable = async (
+  runtimeDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  await mkdir(runtimeDirectory, { recursive: true });
+  const escapedOutputDirectory = outputDirectory.replaceAll("'", "'\\''");
+  const executable = getMuonExecutablePath(runtimeDirectory, "linux");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env bash
+set -euo pipefail
+counter_file='${escapedOutputDirectory}/recycle-count.txt'
+count=0
+if [[ -f "$counter_file" ]]; then
+  count="$(cat "$counter_file")"
+fi
+count=$((count + 1))
+printf '%s\\n' "$count" > "$counter_file"
+printf '%s\\n' "$@" > "${escapedOutputDirectory}/args-$count.txt"
+printf '%s\\n' "$@" > "${escapedOutputDirectory}/args.txt"
+pwd > "${escapedOutputDirectory}/cwd-$count.txt"
+override_config=''
+previous=''
+for argument in "$@"; do
+  if [[ "$previous" == '-c' ]]; then
+    override_config="$argument"
+  fi
+  previous="$argument"
+done
+if [[ -z "$override_config" ]]; then
+  echo 'missing override config' >&2
+  exit 1
+fi
+cp "$override_config" "${escapedOutputDirectory}/override-$count.json"
+if [[ "$count" -eq 1 ]]; then
+  exit 88
+fi
+`,
+  );
+  await chmod(executable, 0o755);
+};
+
+const writeFakeRecyclingMuonSource = async (
+  muonDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  await writeFakeRecyclingMuonExecutable(muonDirectory, outputDirectory);
+  await mkdir(join(muonDirectory, "plugins"), { recursive: true });
+  await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
+};
+
 const writeFakeCefDirectory = async (): Promise<string> => {
   const cefDirectory = await createTemporaryDirectory("muon-vite-cef-dir-");
   await mkdir(join(cefDirectory, "Release"), { recursive: true });
@@ -740,6 +791,46 @@ describe("muon dev CLI", () => {
     });
   });
 
+  it("restarts Muon when the direct dev process requests recycle", async () => {
+    const root = await createTemporaryDirectory("muon-dev-recycle-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    const assetsPath = await writeDevAssets(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeRecyclingMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-dev-cache-");
+
+    const result = await runMuonCli(root, [
+      "dev",
+      "--muon-path",
+      muonDirectory,
+      "--cef-path",
+      cefDirectory,
+      "--assets",
+      assetsPath,
+      "--json",
+    ]);
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    const devResult = JSON.parse(result.stdout) as {
+      exitCode: number;
+      overrideConfigPath: string;
+    };
+    expect(devResult.exitCode).toBe(0);
+    await expect(
+      readFile(join(outputDirectory, "recycle-count.txt"), "utf8"),
+    ).resolves.toBe("2\n");
+    expect(await readCapturedArguments(outputDirectory)).toEqual([
+      "-c",
+      join(root, "muon.json"),
+      "-c",
+      devResult.overrideConfigPath,
+    ]);
+  });
+
   it("uses muon Vite plugin options when vite.config.* is present", async () => {
     const root = await createTemporaryDirectory("muon-dev-vite-config-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
@@ -973,6 +1064,40 @@ describe("muon launch scripts", () => {
     await expect(
       readFile(join(outputDirectory, "cwd.txt"), "utf8"),
     ).resolves.toBe(`${runtimeDirectory}\n`);
+  });
+
+  it("restarts from the POSIX script when Muon requests recycle", async () => {
+    const root = await createTemporaryDirectory("muon vite shell recycle ");
+    const runtimeDirectory = join(root, "runtime dir");
+    const outputDirectory = join(root, "output dir");
+    const projectConfigPath = join(root, "project config", "muon.json");
+    const overrideConfigPath = join(root, "override config", "muon.vite.json");
+    await mkdir(dirname(projectConfigPath), { recursive: true });
+    await mkdir(dirname(overrideConfigPath), { recursive: true });
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(projectConfigPath, "{}\n");
+    await writeFile(overrideConfigPath, "{}\n");
+    await writeFakeRecyclingMuonExecutable(runtimeDirectory, outputDirectory);
+    const scriptPath = join(root, "launch script.sh");
+    await writeFile(
+      scriptPath,
+      createMuonLaunchScript({
+        muonExecutablePath: getMuonExecutablePath(runtimeDirectory, "linux"),
+        projectConfigPath,
+        overrideConfigPath,
+        platform: "linux",
+      }),
+    );
+    await chmod(scriptPath, 0o755);
+
+    await execFileAsync(scriptPath, ["http://127.0.0.1:5173/"]);
+
+    await expect(
+      readFile(join(outputDirectory, "recycle-count.txt"), "utf8"),
+    ).resolves.toBe("2\n");
+    await expect(
+      readFile(join(outputDirectory, "args-2.txt"), "utf8"),
+    ).resolves.toBe(`-c\n${projectConfigPath}\n-c\n${overrideConfigPath}\n`);
   });
 
   it("runs the POSIX script without a project config", async () => {

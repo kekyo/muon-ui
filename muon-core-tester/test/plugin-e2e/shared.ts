@@ -120,6 +120,7 @@ export interface BrowserShortcutConfig {
   zoomIn: string | undefined;
   zoomOut: string | undefined;
   resetZoom: string | undefined;
+  recycle: string | undefined;
 }
 
 export type BrowserInitialWindowState =
@@ -246,6 +247,7 @@ export const shouldForceX11Ozone =
   process.platform === "linux" &&
   process.env.MUON_TEST_XVFB_WINDOW_MANAGER === "1";
 export const cdpStartupTimeoutMs = shouldUseValgrind ? 120000 : 30000;
+export const bootstrapCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
 export const cdpCommandTimeoutMs = shouldUseValgrind ? 60000 : 10000;
 export const targetTimeoutMs = shouldUseValgrind ? 60000 : 5000;
 export const processExitTimeoutMs = shouldUseValgrind ? 120000 : 5000;
@@ -268,6 +270,7 @@ export const emptyBrowserShortcutConfig: BrowserShortcutConfig = {
   zoomIn: undefined,
   zoomOut: undefined,
   resetZoom: undefined,
+  recycle: undefined,
 };
 export const browserFunctionNames = [
   "reload",
@@ -289,12 +292,19 @@ export const browserFunctionNames = [
   "setTitleBarIcon",
   "close",
   "shutdown",
+  "recycle",
 ] as const;
 
 export const getMuonExecutable = (directory: string): string =>
   resolve(
     directory,
     process.platform === "win32" ? "muon-core.exe" : "muon-core",
+  );
+
+export const getMuonBootstrapExecutable = (directory: string): string =>
+  resolve(
+    directory,
+    process.platform === "win32" ? "muon-bootstrap.exe" : "muon-bootstrap",
   );
 
 export const createBrowserShortcutConfig = (
@@ -1235,6 +1245,7 @@ export const writeMuonConfig = async (
       "zoomIn",
       "zoomOut",
       "resetZoom",
+      "recycle",
     ] as const) {
       const value = browserConfig[key];
       if (value !== undefined) {
@@ -1309,8 +1320,10 @@ export const startMuon = async (
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  executablePath: string | undefined = undefined,
+  cdpTimeoutMs = cdpStartupTimeoutMs,
 ): Promise<RunningMuon> => {
-  const executable = getMuonExecutable(directory);
+  const executable = executablePath ?? getMuonExecutable(directory);
   await requireFile(executable);
   const pluginConfig = createPluginConfigEntries(
     configuredPluginNames,
@@ -1376,7 +1389,7 @@ export const startMuon = async (
   runningProcesses.push(running);
   if (waitForDebugPort) {
     try {
-      await waitForCdp(cdpStartupTimeoutMs);
+      await waitForCdp(cdpTimeoutMs);
     } catch (error) {
       try {
         await stopMuon(running, undefined);
@@ -1437,6 +1450,46 @@ export const startDebugMuon = async (
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
     browserTitleBarType,
+  );
+
+export const startDebugMuonBootstrap = async (
+  pluginNames: string[],
+  networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
+  environment: NodeJS.ProcessEnv = {},
+  browserConfig: BrowserShortcutConfig | undefined = undefined,
+  pluginAllowPatterns = TEST_PLUGIN_ALLOW_PATTERNS,
+  configuredPluginNames: string[] = pluginNames,
+  browserPluginAllowPatterns:
+    | string[]
+    | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+  networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[] = [],
+  browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
+  includeStandardPlugins = true,
+  browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
+): Promise<RunningMuon> =>
+  await startMuon(
+    DEBUG_MUON_DIRECTORY,
+    pluginNames,
+    networkAllowPatterns,
+    pluginAllowPatterns,
+    true,
+    shouldUseValgrind,
+    browserConfig,
+    environment,
+    configuredPluginNames,
+    browserPluginAllowPatterns,
+    networkAuthorizedOrigins,
+    browserAllowUnsafeJavaScriptParentAccess,
+    includeStandardPlugins,
+    browserInitialWindowState,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
+    bootstrapCdpStartupTimeoutMs,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>
@@ -3306,6 +3359,15 @@ export const ctrl0ZoomShortcut: KeyboardShortcutEvent = {
   key: "0",
   code: "Digit0",
   modifiers: 2,
+};
+
+export const ctrlShiftF10RecycleShortcut: KeyboardShortcutEvent = {
+  type: "rawKeyDown",
+  windowsVirtualKeyCode: 121,
+  nativeVirtualKeyCode: 121,
+  key: "F10",
+  code: "F10",
+  modifiers: 10,
 };
 
 export const configuredDevToolsShortcuts = [

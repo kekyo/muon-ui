@@ -864,8 +864,8 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
     favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
     `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用できますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
   - 注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
-- `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom` を指定できます。
-  値は `"Ctrl+Shift+I"` のように、修飾キーとキーを `+` で連結した文字列です。
+- `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom`, `recycle` を指定できます。
+  値は `"ctrl+shift+i"` のように、修飾キーとキーを `+` で連結した文字列です。
   修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用できます。
   キーには `f1` から `f24`, `a` から `z`, `0` から `9`, `plus`, `equal`, `minus`, `backspace`, `tab`, `enter`/`return`, `escape`/`esc`, `space`, `insert`, `delete`/`del`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` を使用できます。
   空文字列、修飾キーだけの指定、同一ショートカットの重複は設定エラーになります。
@@ -1078,8 +1078,10 @@ export default defineConfig({
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
 | `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Muonプロセスを終了します。`exitCode` を省略した場合は `0` です。 |
+| `recycle()`           | なし                | `Promise<void>` | Muonプロセスを終了し、起動元が対応している場合は自動再起動します。 |
 
-- `reload()`, `hardReload()`, `close()`, `shutdown()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
+- `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
+- `recycle()` は `muon-bootstrap` や `muon dev` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
 - `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
 - `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
@@ -1095,6 +1097,7 @@ await window.muon.browser.resetZoom();
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);
+await window.muon.browser.recycle();
 ```
 
 ### muon.bootstrap名前空間

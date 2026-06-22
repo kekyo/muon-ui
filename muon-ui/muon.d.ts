@@ -209,6 +209,14 @@ declare global {
      * @returns A promise that resolves after the shutdown request is submitted.
      */
     readonly shutdown: (exitCode?: number) => Promise<void>;
+    /**
+     * Recycle the Muon process by requesting an automatic restart.
+     *
+     * @returns A promise that resolves after the recycle request is submitted.
+     * @remarks The page context can be destroyed by process shutdown before
+     * callers can observe promise settlement.
+     */
+    readonly recycle: () => Promise<void>;
   }
 
   /**

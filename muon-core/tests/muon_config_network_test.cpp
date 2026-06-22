@@ -219,7 +219,9 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
          ExpectShortcut(browser.zoom_out, false, 0, 0,
                         message + " zoomOut shortcut") &&
          ExpectShortcut(browser.reset_zoom, false, 0, 0,
-                        message + " resetZoom shortcut");
+                        message + " resetZoom shortcut") &&
+         ExpectShortcut(browser.recycle, false, 0, 0,
+                        message + " recycle shortcut");
 }
 
 static bool ExpectDebuggerConfig(const MuonDebuggerConfig& cdp,
@@ -1032,7 +1034,7 @@ static bool RunBrowserConfigLoadingTest(
   const auto browser_path = test_directory / "browser.json";
   if (!Expect(WriteFile(
                   browser_path,
-                  R"({"browser":{"keybind":{"devtools":" f12 ","reload":"F5","hardReload":"ctrl+shift+r","fullscreen":"f11","zoomIn":"ctrl+plus","zoomOut":"ctrl+minus","resetZoom":"ctrl+0"}}})"),
+                  R"({"browser":{"keybind":{"devtools":" f12 ","reload":"F5","hardReload":"ctrl+shift+r","fullscreen":"f11","zoomIn":"ctrl+plus","zoomOut":"ctrl+minus","resetZoom":"ctrl+0","recycle":"ctrl+shift+f10"}}})"),
               "failed to write browser config") ||
       !LoadConfigExpectSuccess(browser_path, &config)) {
     return false;
@@ -1056,6 +1058,10 @@ static bool RunBrowserConfigLoadingTest(
       !ExpectShortcut(config.browser.reset_zoom, true, 0x30,
                       kMuonShortcutModifierControl,
                       "ctrl+0 resetZoom shortcut") ||
+      !ExpectShortcut(config.browser.recycle, true, 0x79,
+                      kMuonShortcutModifierControl |
+                          kMuonShortcutModifierShift,
+                      "ctrl+shift+f10 recycle shortcut") ||
       !Expect(config.browser.start_page == "asset://main/index.html",
               "browser shortcut config changed default start URL") ||
       !Expect(config.browser.profile == test_directory / ".profile",
@@ -1576,6 +1582,8 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "invalid-browser-devtools.json";
   const auto invalid_zoom_path =
       test_directory / "invalid-browser-zoom.json";
+  const auto invalid_recycle_path =
+      test_directory / "invalid-browser-recycle.json";
   const auto empty_shortcut_path =
       test_directory / "invalid-browser-empty-shortcut.json";
   const auto unknown_key_path =
@@ -1701,6 +1709,9 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(invalid_zoom_path,
                           R"({"browser":{"keybind":{"zoomIn":true}}})"),
                 "failed to write invalid zoom config") &&
+         Expect(WriteFile(invalid_recycle_path,
+                          R"({"browser":{"keybind":{"recycle":true}}})"),
+                "failed to write invalid recycle config") &&
          Expect(WriteFile(empty_shortcut_path,
                           R"({"browser":{"keybind":{"devtools":" "}}})"),
                 "failed to write empty shortcut config") &&
@@ -1718,7 +1729,7 @@ static bool RunBrowserConfigValidationTest(
                 "failed to write multiple keys config") &&
          Expect(WriteFile(
                     duplicate_assignment_path,
-                    R"({"browser":{"keybind":{"devtools":"shift+f9","reload":"SHIFT + F9"}}})"),
+                    R"({"browser":{"keybind":{"devtools":"shift+f9","recycle":"SHIFT + F9"}}})"),
                 "failed to write duplicate assignment config") &&
          Expect(WriteFile(
                     overlapping_assignment_path,
@@ -1789,6 +1800,8 @@ static bool RunBrowserConfigValidationTest(
                                  "browser.keybind.devtools must be a string") &&
          LoadConfigExpectFailure(invalid_zoom_path,
                                  "browser.keybind.zoomIn must be a string") &&
+         LoadConfigExpectFailure(invalid_recycle_path,
+                                 "browser.keybind.recycle must be a string") &&
          LoadConfigExpectFailure(empty_shortcut_path,
                                  "shortcut must not be empty") &&
          LoadConfigExpectFailure(unknown_key_path, "unsupported key") &&

@@ -373,6 +373,34 @@ if(MINGW)
     bootstrap.exe
     bootstrapc.exe
     )
+
+  set(MUON_MINGW_RUNTIME_DLL_NAMES
+    libgcc_s_seh-1.dll
+    libgcc_s_dw2-1.dll
+    libgcc_s_sjlj-1.dll
+    libstdc++-6.dll
+    libwinpthread-1.dll
+    )
+  set(MUON_MINGW_RUNTIME_DLLS)
+  foreach(MUON_MINGW_RUNTIME_DLL_NAME IN LISTS MUON_MINGW_RUNTIME_DLL_NAMES)
+    execute_process(
+      COMMAND "${CMAKE_CXX_COMPILER}"
+        "-print-file-name=${MUON_MINGW_RUNTIME_DLL_NAME}"
+      RESULT_VARIABLE MUON_MINGW_RUNTIME_DLL_RESULT
+      OUTPUT_VARIABLE MUON_MINGW_RUNTIME_DLL_PATH
+      ERROR_QUIET
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+    if(MUON_MINGW_RUNTIME_DLL_RESULT EQUAL 0 AND
+        IS_ABSOLUTE "${MUON_MINGW_RUNTIME_DLL_PATH}" AND
+        EXISTS "${MUON_MINGW_RUNTIME_DLL_PATH}")
+      get_filename_component(MUON_MINGW_RUNTIME_DLL_PATH
+        "${MUON_MINGW_RUNTIME_DLL_PATH}" ABSOLUTE)
+      list(APPEND MUON_MINGW_RUNTIME_DLLS
+        "${MUON_MINGW_RUNTIME_DLL_NAME}=${MUON_MINGW_RUNTIME_DLL_PATH}")
+    endif()
+  endforeach()
+  list(JOIN MUON_MINGW_RUNTIME_DLLS "|" MUON_MINGW_RUNTIME_DLLS_ARG)
 endif()
 
 # CEF defaults disable C++ exceptions, but Muon builds with exceptions enabled.
@@ -541,6 +569,12 @@ target_link_libraries(cardio_shared PRIVATE
   Threads::Threads
   ${MUON_CARDIO_GLIB_TARGETS}
   )
+if(MINGW)
+  target_link_options(cardio_shared PRIVATE
+    -static-libgcc
+    -static-libstdc++
+    )
+endif()
 MUON_APPLY_SANITIZERS(cardio_shared)
 
 add_library(muon_cardio INTERFACE)
@@ -960,6 +994,16 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES)
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
   list(APPEND MUON_RUNTIME_COPY_DEPENDS
     ${MUON_ASSET_FILES}
+    )
+endif()
+if(MINGW)
+  list(APPEND MUON_RUNTIME_COPY_COMMANDS
+    COMMAND ${CMAKE_COMMAND}
+      "-DINPUT=$<TARGET_FILE:muon_ui>"
+      "-DOUTPUT_DIR=${MUON_RUNTIME_DIR}"
+      "-DOBJDUMP=${CMAKE_OBJDUMP}"
+      "-DCANDIDATES=${MUON_MINGW_RUNTIME_DLLS_ARG}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_mingw_runtime_imports.cmake"
     )
 endif()
 list(APPEND MUON_RUNTIME_COPY_COMMANDS

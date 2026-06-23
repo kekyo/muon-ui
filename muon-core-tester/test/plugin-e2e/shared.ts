@@ -120,6 +120,7 @@ export interface BrowserShortcutConfig {
   zoomIn: string | undefined;
   zoomOut: string | undefined;
   resetZoom: string | undefined;
+  recycle: string | undefined;
 }
 
 export type BrowserInitialWindowState =
@@ -246,11 +247,238 @@ export const shouldForceX11Ozone =
   process.platform === "linux" &&
   process.env.MUON_TEST_XVFB_WINDOW_MANAGER === "1";
 export const cdpStartupTimeoutMs = shouldUseValgrind ? 120000 : 30000;
+export const bootstrapCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
 export const cdpCommandTimeoutMs = shouldUseValgrind ? 60000 : 10000;
 export const targetTimeoutMs = shouldUseValgrind ? 60000 : 5000;
 export const processExitTimeoutMs = shouldUseValgrind ? 120000 : 5000;
 export const runningProcesses: RunningMuon[] = [];
 export const execFileAsync = promisify(execFile);
+const nativeInputSenderCacheDirectory = resolve(
+  "..",
+  "node_modules",
+  ".cache",
+  "muon",
+);
+const nativeInputSenderSourcePath = join(
+  nativeInputSenderCacheDirectory,
+  "muon-xvfb-input-sender.c",
+);
+const nativeInputSenderBinaryPath = join(
+  nativeInputSenderCacheDirectory,
+  "muon-xvfb-input-sender",
+);
+let nativeInputSenderBuilt = false;
+const nativeInputSenderSource = String.raw`
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <X11/extensions/XTest.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+
+static char* CopyBytes(const unsigned char* data, unsigned long length) {
+  char* value = (char*)malloc(length + 1);
+  if (value == NULL) {
+    return NULL;
+  }
+  memcpy(value, data, length);
+  value[length] = '\0';
+  return value;
+}
+
+static char* ReadWindowString(Display* display, Window window, Atom atom) {
+  Atom actual_type = None;
+  int actual_format = 0;
+  unsigned long item_count = 0;
+  unsigned long bytes_after = 0;
+  unsigned char* data = NULL;
+  if (XGetWindowProperty(display, window, atom, 0, 1024, False,
+                         AnyPropertyType, &actual_type, &actual_format,
+                         &item_count, &bytes_after, &data) != Success ||
+      data == NULL) {
+    return NULL;
+  }
+
+  char* value = NULL;
+  if (actual_format == 8 && item_count > 0) {
+    value = CopyBytes(data, item_count);
+  }
+  XFree(data);
+  return value;
+}
+
+static Window FindWindowByTitle(Display* display, const char* title) {
+  const Window root = DefaultRootWindow(display);
+  const Atom client_list = XInternAtom(display, "_NET_CLIENT_LIST", False);
+  const Atom utf8_title = XInternAtom(display, "_NET_WM_NAME", False);
+  const Atom wm_title = XInternAtom(display, "WM_NAME", False);
+  Atom actual_type = None;
+  int actual_format = 0;
+  unsigned long item_count = 0;
+  unsigned long bytes_after = 0;
+  unsigned char* data = NULL;
+  if (XGetWindowProperty(display, root, client_list, 0, 1024, False, XA_WINDOW,
+                         &actual_type, &actual_format, &item_count,
+                         &bytes_after, &data) != Success ||
+      data == NULL) {
+    return 0;
+  }
+
+  Window found = 0;
+  Window* windows = (Window*)data;
+  for (unsigned long index = 0; index < item_count; ++index) {
+    char* value = ReadWindowString(display, windows[index], utf8_title);
+    if (value == NULL) {
+      value = ReadWindowString(display, windows[index], wm_title);
+    }
+    if (value != NULL && strcmp(value, title) == 0) {
+      found = windows[index];
+      free(value);
+      break;
+    }
+    free(value);
+  }
+  XFree(data);
+  return found;
+}
+
+static void SleepMilliseconds(long milliseconds) {
+  struct timeval delay;
+  delay.tv_sec = milliseconds / 1000;
+  delay.tv_usec = (milliseconds % 1000) * 1000L;
+  select(0, NULL, NULL, NULL, &delay);
+}
+
+static void PressKey(Display* display, KeySym keysym, int pressed) {
+  const KeyCode code = XKeysymToKeycode(display, keysym);
+  if (code == 0) {
+    fprintf(stderr, "Unable to resolve keycode\n");
+    exit(2);
+  }
+  XTestFakeKeyEvent(display, code, pressed ? True : False, CurrentTime);
+}
+
+static void SendShortcut(Display* display, const char* shortcut) {
+  if (strcmp(shortcut, "f12") == 0) {
+    PressKey(display, XK_F12, 1);
+    PressKey(display, XK_F12, 0);
+    return;
+  }
+  if (strcmp(shortcut, "ctrl+f12") == 0) {
+    PressKey(display, XK_Control_L, 1);
+    PressKey(display, XK_F12, 1);
+    PressKey(display, XK_F12, 0);
+    PressKey(display, XK_Control_L, 0);
+    return;
+  }
+  fprintf(stderr, "Unknown shortcut: %s\n", shortcut);
+  exit(2);
+}
+
+static long ParseCoordinate(const char* value, const char* name) {
+  char* end = NULL;
+  const long parsed = strtol(value, &end, 10);
+  if (end == value || end == NULL || *end != '\0') {
+    fprintf(stderr, "Invalid %s coordinate: %s\n", name, value);
+    exit(2);
+  }
+  return parsed;
+}
+
+static int WheelButtonFromDirection(const char* direction) {
+  if (strcmp(direction, "up") == 0) {
+    return 4;
+  }
+  if (strcmp(direction, "down") == 0) {
+    return 5;
+  }
+  if (strcmp(direction, "left") == 0) {
+    return 6;
+  }
+  if (strcmp(direction, "right") == 0) {
+    return 7;
+  }
+  fprintf(stderr, "Unknown wheel direction: %s\n", direction);
+  exit(2);
+}
+
+static void SendWheel(Display* display, long root_x, long root_y,
+                      const char* direction) {
+  const int button = WheelButtonFromDirection(direction);
+  XTestFakeMotionEvent(display, DefaultScreen(display), (int)root_x,
+                       (int)root_y, CurrentTime);
+  XTestFakeButtonEvent(display, (unsigned int)button, True, CurrentTime);
+  XTestFakeButtonEvent(display, (unsigned int)button, False, CurrentTime);
+}
+
+int main(int argc, char** argv) {
+  if (argc != 3 && argc != 6) {
+    fprintf(stderr,
+            "Usage: %s <window-title> <shortcut>\n"
+            "       %s <window-title> wheel <root-x> <root-y> <direction>\n",
+            argv[0], argv[0]);
+    return 2;
+  }
+
+  Display* display = XOpenDisplay(NULL);
+  if (display == NULL) {
+    fprintf(stderr, "Unable to open X display\n");
+    return 2;
+  }
+
+  const Window window = FindWindowByTitle(display, argv[1]);
+  if (window == 0) {
+    fprintf(stderr, "Window not found: %s\n", argv[1]);
+    XCloseDisplay(display);
+    return 3;
+  }
+
+  XWindowAttributes attributes;
+  if (XGetWindowAttributes(display, window, &attributes) == 0) {
+    fprintf(stderr, "Unable to read window attributes\n");
+    XCloseDisplay(display);
+    return 3;
+  }
+
+  int root_x = 0;
+  int root_y = 0;
+  Window child = None;
+  if (XTranslateCoordinates(display, window, DefaultRootWindow(display),
+                            attributes.width / 2, attributes.height / 2,
+                            &root_x, &root_y, &child) == 0) {
+    fprintf(stderr, "Unable to translate window coordinates\n");
+    XCloseDisplay(display);
+    return 3;
+  }
+
+  XRaiseWindow(display, window);
+  XSetInputFocus(display, window, RevertToParent, CurrentTime);
+  if (argc == 3) {
+    XTestFakeMotionEvent(display, DefaultScreen(display), root_x, root_y,
+                         CurrentTime);
+    XTestFakeButtonEvent(display, 1, True, CurrentTime);
+    XTestFakeButtonEvent(display, 1, False, CurrentTime);
+    XFlush(display);
+    SleepMilliseconds(300);
+    SendShortcut(display, argv[2]);
+  } else if (strcmp(argv[2], "wheel") == 0) {
+    SendWheel(display, ParseCoordinate(argv[3], "x"),
+              ParseCoordinate(argv[4], "y"), argv[5]);
+  } else {
+    fprintf(stderr, "Unknown command: %s\n", argv[2]);
+    XCloseDisplay(display);
+    return 2;
+  }
+  XFlush(display);
+  SleepMilliseconds(300);
+
+  XCloseDisplay(display);
+  return 0;
+}
+`;
 export const valgrindArgs = [
   "--tool=memcheck",
   "--leak-check=full",
@@ -268,6 +496,7 @@ export const emptyBrowserShortcutConfig: BrowserShortcutConfig = {
   zoomIn: undefined,
   zoomOut: undefined,
   resetZoom: undefined,
+  recycle: undefined,
 };
 export const browserFunctionNames = [
   "reload",
@@ -289,12 +518,19 @@ export const browserFunctionNames = [
   "setTitleBarIcon",
   "close",
   "shutdown",
+  "recycle",
 ] as const;
 
 export const getMuonExecutable = (directory: string): string =>
   resolve(
     directory,
     process.platform === "win32" ? "muon-core.exe" : "muon-core",
+  );
+
+export const getMuonBootstrapExecutable = (directory: string): string =>
+  resolve(
+    directory,
+    process.platform === "win32" ? "muon-bootstrap.exe" : "muon-bootstrap",
   );
 
 export const createBrowserShortcutConfig = (
@@ -775,6 +1011,59 @@ export const waitForNativeWindowTitle = async (
   );
 };
 
+const ensureNativeInputSenderBuilt = async (): Promise<string> => {
+  if (nativeInputSenderBuilt) {
+    return nativeInputSenderBinaryPath;
+  }
+
+  await mkdir(nativeInputSenderCacheDirectory, { recursive: true });
+  await writeFile(nativeInputSenderSourcePath, nativeInputSenderSource, "utf8");
+  await execFileAsync("gcc", [
+    nativeInputSenderSourcePath,
+    "-std=c99",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-O2",
+    "-o",
+    nativeInputSenderBinaryPath,
+    "-lX11",
+    "-lXtst",
+  ]);
+  nativeInputSenderBuilt = true;
+  return nativeInputSenderBinaryPath;
+};
+
+export const sendNativeKeyboardShortcut = async (
+  windowTitle: string,
+  shortcut: "f12" | "ctrl+f12",
+): Promise<void> => {
+  if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
+    throw new Error("Native keyboard shortcut dispatch requires Linux X11");
+  }
+  const sender = await ensureNativeInputSenderBuilt();
+  await execFileAsync(sender, [windowTitle, shortcut]);
+};
+
+export const sendNativeMouseWheel = async (
+  windowTitle: string,
+  rootX: number,
+  rootY: number,
+  direction: "up" | "down" | "left" | "right",
+): Promise<void> => {
+  if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
+    throw new Error("Native mouse wheel dispatch requires Linux X11");
+  }
+  const sender = await ensureNativeInputSenderBuilt();
+  await execFileAsync(sender, [
+    windowTitle,
+    "wheel",
+    String(Math.round(rootX)),
+    String(Math.round(rootY)),
+    direction,
+  ]);
+};
+
 export const getCurrentTargetIds = async (): Promise<Set<string>> => {
   const targets = await listCdpTargets({
     port: MUON_PORT,
@@ -1235,6 +1524,7 @@ export const writeMuonConfig = async (
       "zoomIn",
       "zoomOut",
       "resetZoom",
+      "recycle",
     ] as const) {
       const value = browserConfig[key];
       if (value !== undefined) {
@@ -1309,8 +1599,10 @@ export const startMuon = async (
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  executablePath: string | undefined = undefined,
+  cdpTimeoutMs = cdpStartupTimeoutMs,
 ): Promise<RunningMuon> => {
-  const executable = getMuonExecutable(directory);
+  const executable = executablePath ?? getMuonExecutable(directory);
   await requireFile(executable);
   const pluginConfig = createPluginConfigEntries(
     configuredPluginNames,
@@ -1376,7 +1668,7 @@ export const startMuon = async (
   runningProcesses.push(running);
   if (waitForDebugPort) {
     try {
-      await waitForCdp(cdpStartupTimeoutMs);
+      await waitForCdp(cdpTimeoutMs);
     } catch (error) {
       try {
         await stopMuon(running, undefined);
@@ -1437,6 +1729,46 @@ export const startDebugMuon = async (
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
     browserTitleBarType,
+  );
+
+export const startDebugMuonBootstrap = async (
+  pluginNames: string[],
+  networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
+  environment: NodeJS.ProcessEnv = {},
+  browserConfig: BrowserShortcutConfig | undefined = undefined,
+  pluginAllowPatterns = TEST_PLUGIN_ALLOW_PATTERNS,
+  configuredPluginNames: string[] = pluginNames,
+  browserPluginAllowPatterns:
+    | string[]
+    | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+  networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[] = [],
+  browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
+  includeStandardPlugins = true,
+  browserInitialWindowState: BrowserInitialWindowState | undefined = undefined,
+): Promise<RunningMuon> =>
+  await startMuon(
+    DEBUG_MUON_DIRECTORY,
+    pluginNames,
+    networkAllowPatterns,
+    pluginAllowPatterns,
+    true,
+    shouldUseValgrind,
+    browserConfig,
+    environment,
+    configuredPluginNames,
+    browserPluginAllowPatterns,
+    networkAuthorizedOrigins,
+    browserAllowUnsafeJavaScriptParentAccess,
+    includeStandardPlugins,
+    browserInitialWindowState,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
+    bootstrapCdpStartupTimeoutMs,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>
@@ -3305,6 +3637,24 @@ export const ctrl0ZoomShortcut: KeyboardShortcutEvent = {
   nativeVirtualKeyCode: 48,
   key: "0",
   code: "Digit0",
+  modifiers: 2,
+};
+
+export const ctrlShiftF10RecycleShortcut: KeyboardShortcutEvent = {
+  type: "rawKeyDown",
+  windowsVirtualKeyCode: 121,
+  nativeVirtualKeyCode: 121,
+  key: "F10",
+  code: "F10",
+  modifiers: 10,
+};
+
+export const ctrlF12RecycleShortcut: KeyboardShortcutEvent = {
+  type: "keyDown",
+  windowsVirtualKeyCode: 123,
+  nativeVirtualKeyCode: 123,
+  key: "F12",
+  code: "F12",
   modifiers: 2,
 };
 

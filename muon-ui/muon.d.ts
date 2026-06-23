@@ -185,10 +185,12 @@ declare global {
     /**
      * Set or clear the current window title bar icon.
      *
-     * @param path - Asset path for a PNG icon, or `null` to clear the icon.
+     * @param path - Asset path for an icon, or `null` to clear the icon.
      * @returns A promise that resolves when the title bar icon is requested.
      * @remarks Accepts `asset://main/...` URLs or `main`-relative asset paths.
-     * The icon is loaded from the configured Muon asset storage.
+     * The icon is loaded from the configured Muon asset storage. Muon custom
+     * title bars accept browser-displayable image formats. Native title bars
+     * accept PNG icons only and reject other formats.
      */
     readonly setTitleBarIcon: (path: string | null) => Promise<void>;
     /**
@@ -207,6 +209,14 @@ declare global {
      * @returns A promise that resolves after the shutdown request is submitted.
      */
     readonly shutdown: (exitCode?: number) => Promise<void>;
+    /**
+     * Recycle the Muon process by requesting an automatic restart.
+     *
+     * @returns A promise that resolves after the recycle request is submitted.
+     * @remarks The page context can be destroyed by process shutdown before
+     * callers can observe promise settlement.
+     */
+    readonly recycle: () => Promise<void>;
   }
 
   /**

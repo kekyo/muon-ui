@@ -32,7 +32,7 @@ constexpr char kMuonTitleBarHtml[] = R"HTML(
 constexpr char kMuonTitleBarCss[] = R"CSS(
 :root {
   color-scheme: light dark;
-  font-family: Cantarell, "Noto Sans", "Segoe UI", sans-serif;
+  font-family: "Noto Sans", "Segoe UI", sans-serif;
   --muon-titlebar-bg-top: #f6f5f4;
   --muon-titlebar-bg-bottom: #e7e5e2;
   --muon-titlebar-bg-inactive-top: #eeeeec;
@@ -42,8 +42,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
   --muon-titlebar-border: #b9b7b3;
   --muon-titlebar-button-hover: rgba(0, 0, 0, 0.08);
   --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);
-  --muon-titlebar-close-hover: #c01c28;
-  --muon-titlebar-close-active: #a51d2d;
+  --muon-titlebar-close-hover: #753d3d;
+  --muon-titlebar-close-active: #d05858;
   --muon-titlebar-close-fg: #ffffff;
   --muon-titlebar-icon-backdrop: #ebe9e6;
 }
@@ -59,8 +59,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
     --muon-titlebar-border: #1f1f1f;
     --muon-titlebar-button-hover: rgba(255, 255, 255, 0.12);
     --muon-titlebar-button-active: rgba(255, 255, 255, 0.18);
-    --muon-titlebar-close-hover: #e01b24;
-    --muon-titlebar-close-active: #c01c28;
+    --muon-titlebar-close-hover: #753d3d;
+    --muon-titlebar-close-active: #d05858;
     --muon-titlebar-icon-backdrop: #303030;
   }
 }

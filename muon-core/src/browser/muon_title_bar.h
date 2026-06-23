@@ -96,16 +96,18 @@ struct MuonTitleBarBackgroundColor {
 };
 
 /**
- * Loaded PNG title bar icon data for native and Muon title bars.
+ * Loaded title bar icon data for native and Muon title bars.
  */
 struct MuonTitleBarIcon {
   /**
    * CEF image used by native title bars.
+   *
+   * @remarks Non-PNG icons used by the Muon custom title bar leave this empty.
    */
   CefRefPtr<CefImage> image;
 
   /**
-   * PNG data URL used by the Muon custom title bar.
+   * Image data URL used by the Muon custom title bar.
    */
   std::string data_url;
 };
@@ -144,6 +146,41 @@ bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                      const std::string& path,
                                      MuonTitleBarIcon* icon,
                                      std::string* error_message);
+
+/**
+ * Loads a title bar icon from asset storage for the Muon custom title bar.
+ *
+ * @param storage Asset storage backing asset:// resources.
+ * @param path Icon asset path. Accepts asset://main/... or main-relative paths.
+ * @param icon Receives the loaded icon.
+ * @param error_message Receives a validation or loading diagnostic.
+ * @return true when an icon data URL was loaded.
+ */
+bool LoadMuonTitleBarIconDataUrlFromStorage(
+    std::shared_ptr<MuonAppStorage> storage,
+    const std::string& path,
+    MuonTitleBarIcon* icon,
+    std::string* error_message);
+
+/**
+ * Loads a title bar icon from fetched response bytes.
+ *
+ * @param data Image byte buffer.
+ * @param size Image byte buffer size.
+ * @param mime_type Response MIME type.
+ * @param source Diagnostic source label used in error messages.
+ * @param require_png Whether non-PNG images should be rejected.
+ * @param icon Receives the loaded icon.
+ * @param error_message Receives a validation diagnostic.
+ * @return true when an icon was loaded.
+ */
+bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
+                                        size_t size,
+                                        const std::string& mime_type,
+                                        const std::string& source,
+                                        bool require_png,
+                                        MuonTitleBarIcon* icon,
+                                        std::string* error_message);
 
 /**
  * Returns whether the manifest requests a custom title bar.
@@ -378,6 +415,35 @@ void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
  */
 void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible);
+
+/**
+ * Updates page CSS draggable regions for a registered custom-titlebar window.
+ *
+ * @param window Window whose draggable regions should be updated.
+ * @param browser_view Browser view that reported the draggable regions.
+ * @param regions Draggable regions in browser view coordinates.
+ */
+void SetRegisteredMuonPageDraggableRegions(
+    CefRefPtr<CefWindow> window,
+    CefRefPtr<CefBrowserView> browser_view,
+    const std::vector<CefDraggableRegion>& regions);
+
+/**
+ * Forwards a native wheel event when it hits a page CSS draggable region.
+ *
+ * @param window_handle Native window handle that received the wheel event.
+ * @param screen_point DIP screen point for the wheel event.
+ * @param delta_x Wheel delta in the horizontal direction.
+ * @param delta_y Wheel delta in the vertical direction.
+ * @param modifiers Event flags using cef_event_flags_t values.
+ * @return true when the wheel event was forwarded to a browser.
+ */
+bool ForwardRegisteredMuonPageDraggableRegionWheel(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    int delta_x,
+    int delta_y,
+    uint32_t modifiers);
 
 /**
  * Returns the registered custom-titlebar window for a browser, if any.

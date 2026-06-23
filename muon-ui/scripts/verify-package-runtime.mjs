@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { access } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRuntimeTargets = {
@@ -61,6 +61,15 @@ const assertMissing = async (path) => {
   throw new Error(`Unexpected package runtime file exists: ${path}`);
 };
 
+const assertHasMatchingFile = async (directory, pattern) => {
+  const entries = await readdir(directory);
+  if (!entries.some((entry) => pattern.test(entry))) {
+    throw new Error(
+      `Expected package runtime file matching ${pattern} is missing in: ${directory}`,
+    );
+  }
+};
+
 await assertMissing(join("dist", "muon-prepare"));
 await assertMissing(join("dist", "muon-bootstrap"));
 await assertMissing(join("dist", "muon-prepare.exe"));
@@ -82,6 +91,10 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   await assertExists(join(nativePath, descriptor.nativeBootstrap));
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
+  }
+  if (target === "windows32" || target === "windows64") {
+    await assertHasMatchingFile(runtimePath, /^libgcc_s_.*-1\.dll$/);
+    await assertExists(join(runtimePath, "libstdc++-6.dll"));
   }
   await assertMissing(join(runtimePath, "THIRD_PARTY_NOTICES.md"));
   await assertMissing(join(runtimePath, "muon-runtime.json"));

@@ -35,6 +35,7 @@ enum class MuonBuiltinBrowserFunctionKind {
   SetTitleBarIcon,
   Close,
   Shutdown,
+  Recycle,
 };
 
 /**

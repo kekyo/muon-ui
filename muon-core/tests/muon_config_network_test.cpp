@@ -219,7 +219,9 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
          ExpectShortcut(browser.zoom_out, false, 0, 0,
                         message + " zoomOut shortcut") &&
          ExpectShortcut(browser.reset_zoom, false, 0, 0,
-                        message + " resetZoom shortcut");
+                        message + " resetZoom shortcut") &&
+         ExpectShortcut(browser.recycle, false, 0, 0,
+                        message + " recycle shortcut");
 }
 
 static bool ExpectDebuggerConfig(const MuonDebuggerConfig& cdp,
@@ -387,13 +389,26 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   const auto default_policy_path =
       test_directory / "default-version-policy.json";
   if (!Expect(WriteFile(default_policy_path,
-                        R"({"defaultVersionPolicy":"compat-latest"})"),
+                        R"({"bootstrap":{"defaultVersionPolicy":"compat-latest"}})"),
               "failed to write defaultVersionPolicy config") ||
       !LoadConfigExpectSuccess(default_policy_path, &config)) {
     return false;
   }
   if (!Expect(config.default_version_policy == "compat-latest",
               "defaultVersionPolicy was not parsed")) {
+    return false;
+  }
+
+  const auto root_default_policy_path =
+      test_directory / "root-default-version-policy.json";
+  if (!Expect(WriteFile(root_default_policy_path,
+                        R"({"defaultVersionPolicy":"compat-latest"})"),
+              "failed to write root defaultVersionPolicy config") ||
+      !LoadConfigExpectSuccess(root_default_policy_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.default_version_policy == "tested",
+              "root defaultVersionPolicy should be ignored")) {
     return false;
   }
 
@@ -1019,7 +1034,7 @@ static bool RunBrowserConfigLoadingTest(
   const auto browser_path = test_directory / "browser.json";
   if (!Expect(WriteFile(
                   browser_path,
-                  R"({"browser":{"keybind":{"devtools":" f12 ","reload":"F5","hardReload":"ctrl+shift+r","fullscreen":"f11","zoomIn":"ctrl+plus","zoomOut":"ctrl+minus","resetZoom":"ctrl+0"}}})"),
+                  R"({"browser":{"keybind":{"devtools":" f12 ","reload":"F5","hardReload":"ctrl+shift+r","fullscreen":"f11","zoomIn":"ctrl+plus","zoomOut":"ctrl+minus","resetZoom":"ctrl+0","recycle":"ctrl+shift+f10"}}})"),
               "failed to write browser config") ||
       !LoadConfigExpectSuccess(browser_path, &config)) {
     return false;
@@ -1043,6 +1058,10 @@ static bool RunBrowserConfigLoadingTest(
       !ExpectShortcut(config.browser.reset_zoom, true, 0x30,
                       kMuonShortcutModifierControl,
                       "ctrl+0 resetZoom shortcut") ||
+      !ExpectShortcut(config.browser.recycle, true, 0x79,
+                      kMuonShortcutModifierControl |
+                          kMuonShortcutModifierShift,
+                      "ctrl+shift+f10 recycle shortcut") ||
       !Expect(config.browser.start_page == "asset://main/index.html",
               "browser shortcut config changed default start URL") ||
       !Expect(config.browser.profile == test_directory / ".profile",
@@ -1175,6 +1194,8 @@ static bool RunLogConfigLoadingTest(
 static bool RunConfigValidationTest(
     const std::filesystem::path& test_directory) {
   const auto invalid_json_path = test_directory / "invalid-json.json";
+  const auto invalid_bootstrap_path =
+      test_directory / "invalid-bootstrap.json";
   const auto invalid_network_path = test_directory / "invalid-network.json";
   const auto invalid_allow_path = test_directory / "invalid-allow.json";
   const auto invalid_entry_path = test_directory / "invalid-entry.json";
@@ -1242,6 +1263,8 @@ static bool RunConfigValidationTest(
       test_directory / "non-hex-asset-salt.json";
   return Expect(WriteFile(invalid_json_path, "{"),
                 "failed to write invalid JSON config") &&
+         Expect(WriteFile(invalid_bootstrap_path, R"({"bootstrap":true})"),
+                "failed to write invalid bootstrap config") &&
          Expect(WriteFile(invalid_network_path, R"({"network":true})"),
                 "failed to write invalid network config") &&
          Expect(WriteFile(invalid_allow_path,
@@ -1251,10 +1274,10 @@ static bool RunConfigValidationTest(
                           R"({"network":{"allow":["data:**",42]}})"),
                 "failed to write invalid allow entry config") &&
          Expect(WriteFile(invalid_default_version_policy_type_path,
-                          R"({"defaultVersionPolicy":42})"),
+                          R"({"bootstrap":{"defaultVersionPolicy":42}})"),
                 "failed to write invalid defaultVersionPolicy type config") &&
          Expect(WriteFile(invalid_default_version_policy_path,
-                          R"({"defaultVersionPolicy":"invalid"})"),
+                          R"({"bootstrap":{"defaultVersionPolicy":"invalid"}})"),
                 "failed to write invalid defaultVersionPolicy config") &&
          Expect(WriteFile(invalid_authorized_origin_path,
                           R"({"network":{"authorizedOrigin":true}})"),
@@ -1347,6 +1370,8 @@ static bool RunConfigValidationTest(
                           R"({"asset":{"salt":"0x"}})"),
                 "failed to write non-hex asset.salt config") &&
          LoadConfigExpectFailure(invalid_json_path, "Invalid muon.json") &&
+         LoadConfigExpectFailure(invalid_bootstrap_path,
+                                 "bootstrap must be an object") &&
          LoadConfigExpectFailure(invalid_network_path,
                                  "network must be an object") &&
          LoadConfigExpectFailure(invalid_allow_path,
@@ -1354,9 +1379,11 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_entry_path,
                                  "network.allow entries must be strings") &&
          LoadConfigExpectFailure(invalid_default_version_policy_type_path,
-                                 "defaultVersionPolicy must be a string") &&
+                                 "bootstrap.defaultVersionPolicy must be a "
+                                 "string") &&
          LoadConfigExpectFailure(invalid_default_version_policy_path,
-                                 "defaultVersionPolicy has unknown value") &&
+                                 "bootstrap.defaultVersionPolicy has unknown "
+                                 "value") &&
          LoadConfigExpectFailure(invalid_authorized_origin_path,
                                  "network.authorizedOrigin must be an array") &&
          LoadConfigExpectFailure(invalid_authorized_origin_entry_path,
@@ -1555,6 +1582,8 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "invalid-browser-devtools.json";
   const auto invalid_zoom_path =
       test_directory / "invalid-browser-zoom.json";
+  const auto invalid_recycle_path =
+      test_directory / "invalid-browser-recycle.json";
   const auto empty_shortcut_path =
       test_directory / "invalid-browser-empty-shortcut.json";
   const auto unknown_key_path =
@@ -1680,6 +1709,9 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(invalid_zoom_path,
                           R"({"browser":{"keybind":{"zoomIn":true}}})"),
                 "failed to write invalid zoom config") &&
+         Expect(WriteFile(invalid_recycle_path,
+                          R"({"browser":{"keybind":{"recycle":true}}})"),
+                "failed to write invalid recycle config") &&
          Expect(WriteFile(empty_shortcut_path,
                           R"({"browser":{"keybind":{"devtools":" "}}})"),
                 "failed to write empty shortcut config") &&
@@ -1697,7 +1729,7 @@ static bool RunBrowserConfigValidationTest(
                 "failed to write multiple keys config") &&
          Expect(WriteFile(
                     duplicate_assignment_path,
-                    R"({"browser":{"keybind":{"devtools":"shift+f9","reload":"SHIFT + F9"}}})"),
+                    R"({"browser":{"keybind":{"devtools":"shift+f9","recycle":"SHIFT + F9"}}})"),
                 "failed to write duplicate assignment config") &&
          Expect(WriteFile(
                     overlapping_assignment_path,
@@ -1768,6 +1800,8 @@ static bool RunBrowserConfigValidationTest(
                                  "browser.keybind.devtools must be a string") &&
          LoadConfigExpectFailure(invalid_zoom_path,
                                  "browser.keybind.zoomIn must be a string") &&
+         LoadConfigExpectFailure(invalid_recycle_path,
+                                 "browser.keybind.recycle must be a string") &&
          LoadConfigExpectFailure(empty_shortcut_path,
                                  "shortcut must not be empty") &&
          LoadConfigExpectFailure(unknown_key_path, "unsupported key") &&

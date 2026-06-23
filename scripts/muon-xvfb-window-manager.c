@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+
+#define NET_WM_MOVERESIZE_MOVE 8
 
 typedef struct {
   Atom net_active_window;
@@ -11,6 +14,7 @@ typedef struct {
   Atom net_supported;
   Atom net_supporting_wm_check;
   Atom net_wm_name;
+  Atom net_wm_moveresize;
   Atom net_wm_state;
   Atom net_wm_state_fullscreen;
   Atom net_wm_state_maximized_horz;
@@ -63,6 +67,7 @@ static MuonAtoms CreateAtoms(Display *display) {
   atoms.net_supporting_wm_check =
       InternAtom(display, "_NET_SUPPORTING_WM_CHECK");
   atoms.net_wm_name = InternAtom(display, "_NET_WM_NAME");
+  atoms.net_wm_moveresize = InternAtom(display, "_NET_WM_MOVERESIZE");
   atoms.net_wm_state = InternAtom(display, "_NET_WM_STATE");
   atoms.net_wm_state_fullscreen =
       InternAtom(display, "_NET_WM_STATE_FULLSCREEN");
@@ -290,6 +295,134 @@ static void HandleMapRequest(MuonWindowManager *manager,
   XFlush(manager->display);
 }
 
+static unsigned int ButtonMaskFromButton(long button) {
+  if (button == 1) {
+    return Button1Mask;
+  }
+  if (button == 2) {
+    return Button2Mask;
+  }
+  if (button == 3) {
+    return Button3Mask;
+  }
+  if (button == 4) {
+    return Button4Mask;
+  }
+  if (button == 5) {
+    return Button5Mask;
+  }
+  return Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask;
+}
+
+static int QueryPointerDragState(MuonWindowManager *manager, long button,
+                                 int *root_x, int *root_y,
+                                 int *button_pressed) {
+  Window root_return;
+  Window child_return;
+  int window_x;
+  int window_y;
+  unsigned int mask = 0;
+  if (XQueryPointer(manager->display, manager->root, &root_return,
+                    &child_return, root_x, root_y, &window_x, &window_y,
+                    &mask) == 0) {
+    return 0;
+  }
+  *button_pressed = (mask & ButtonMaskFromButton(button)) != 0;
+  return 1;
+}
+
+static void SleepMicroseconds(long microseconds) {
+  struct timeval timeout;
+  timeout.tv_sec = microseconds / 1000000;
+  timeout.tv_usec = microseconds % 1000000;
+  select(0, NULL, NULL, NULL, &timeout);
+}
+
+static int GrabPointerForMove(MuonWindowManager *manager) {
+  for (int retry = 0; retry < 50; ++retry) {
+    const int result =
+        XGrabPointer(manager->display, manager->root, False,
+                     PointerMotionMask | ButtonReleaseMask, GrabModeAsync,
+                     GrabModeAsync, None, None, CurrentTime);
+    if (result == GrabSuccess) {
+      return 1;
+    }
+    SleepMicroseconds(1000);
+  }
+  return 0;
+}
+
+static void HandleWindowMoveResizeMessage(MuonWindowManager *manager,
+                                          XClientMessageEvent *event) {
+  if ((int)event->data.l[2] != NET_WM_MOVERESIZE_MOVE) {
+    return;
+  }
+
+  MuonManagedWindow *window = FindWindow(manager, event->window);
+  if (window == NULL) {
+    if (!AddWindow(manager, event->window)) {
+      return;
+    }
+    window = FindWindow(manager, event->window);
+    if (window == NULL) {
+      return;
+    }
+  }
+
+  XWindowAttributes attributes;
+  if (XGetWindowAttributes(manager->display, window->window, &attributes) ==
+      0) {
+    return;
+  }
+  const int pointer_grabbed = GrabPointerForMove(manager);
+
+  const int start_root_x = (int)event->data.l[0];
+  const int start_root_y = (int)event->data.l[1];
+  const int start_window_x = attributes.x;
+  const int start_window_y = attributes.y;
+  const long button = event->data.l[3];
+
+  for (;;) {
+    while (XPending(manager->display) > 0) {
+      XEvent next_event;
+      XNextEvent(manager->display, &next_event);
+      if (next_event.type == ButtonRelease) {
+        if (button == 0 || next_event.xbutton.button == (unsigned int)button) {
+          if (pointer_grabbed) {
+            XUngrabPointer(manager->display, CurrentTime);
+          }
+          XFlush(manager->display);
+          return;
+        }
+      } else if (next_event.type == DestroyNotify) {
+        RemoveWindow(manager, next_event.xdestroywindow.window);
+      } else if (next_event.type == UnmapNotify) {
+        RemoveWindow(manager, next_event.xunmap.window);
+      }
+    }
+
+    int current_root_x = start_root_x;
+    int current_root_y = start_root_y;
+    int button_pressed = 0;
+    if (!QueryPointerDragState(manager, button, &current_root_x,
+                               &current_root_y, &button_pressed) ||
+        !button_pressed) {
+      break;
+    }
+
+    XMoveWindow(manager->display, window->window,
+                start_window_x + current_root_x - start_root_x,
+                start_window_y + current_root_y - start_root_y);
+    XFlush(manager->display);
+    SleepMicroseconds(1000);
+  }
+
+  if (pointer_grabbed) {
+    XUngrabPointer(manager->display, CurrentTime);
+  }
+  XFlush(manager->display);
+}
+
 static void ManageExistingWindows(MuonWindowManager *manager) {
   Window root_return;
   Window parent_return;
@@ -343,6 +476,7 @@ static int InitializeWindowManager(MuonWindowManager *manager) {
       manager->atoms.net_supported,
       manager->atoms.net_supporting_wm_check,
       manager->atoms.net_wm_name,
+      manager->atoms.net_wm_moveresize,
       manager->atoms.net_wm_state,
       manager->atoms.net_wm_state_fullscreen,
       manager->atoms.net_wm_state_maximized_horz,
@@ -408,6 +542,9 @@ int main(void) {
       case ClientMessage:
         if (event.xclient.message_type == manager.atoms.net_wm_state) {
           HandleWindowStateMessage(&manager, &event.xclient);
+        } else if (event.xclient.message_type ==
+                   manager.atoms.net_wm_moveresize) {
+          HandleWindowMoveResizeMessage(&manager, &event.xclient);
         }
         break;
       case DestroyNotify:

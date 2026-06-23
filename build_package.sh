@@ -401,6 +401,13 @@ verify_package_file_list() {
     fi
   }
 
+  require_pack_file_match() {
+    local pattern="$1"
+    if ! grep -Eq "${pattern}" <<< "${files}"; then
+      fail "${source_name} is missing required file matching: ${pattern}"
+    fi
+  }
+
   reject_pack_file() {
     local file="$1"
     if grep -Fxq "${file}" <<< "${files}"; then
@@ -421,6 +428,10 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linuxarm64/libcardio.so"
   require_pack_file "dist/runtime/windows32/libcardio.dll"
   require_pack_file "dist/runtime/windows64/libcardio.dll"
+  require_pack_file_match '^dist/runtime/windows32/libgcc_s_.*-1\.dll$'
+  require_pack_file "dist/runtime/windows32/libstdc++-6.dll"
+  require_pack_file_match '^dist/runtime/windows64/libgcc_s_.*-1\.dll$'
+  require_pack_file "dist/runtime/windows64/libstdc++-6.dll"
 
   reject_pack_file "dist/cli.mjs"
   reject_pack_file "dist/vite.d.ts"

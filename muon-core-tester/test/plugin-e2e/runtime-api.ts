@@ -20,8 +20,10 @@ import {
   constants,
   createBrowserShortcutConfig,
   ctrl0ZoomShortcut,
+  ctrlF12RecycleShortcut,
   ctrlMinusZoomShortcut,
   ctrlPlusZoomShortcut,
+  ctrlShiftF10RecycleShortcut,
   ctrlRReloadShortcut,
   ctrlShiftIDevToolsShortcut,
   ctrlShiftRShortcut,
@@ -34,6 +36,7 @@ import {
   f11FullscreenShortcut,
   f12DevToolsShortcut,
   f5ReloadShortcut,
+  getCurrentTargetIds,
   getOuterSize,
   join,
   listCdpTargets,
@@ -49,16 +52,20 @@ import {
   runBuiltinFsDialogValidation,
   runBuiltinFsFileUriOperations,
   runBuiltinFsRoundtrip,
+  sendNativeKeyboardShortcut,
   shiftF9DevToolsShortcut,
   shouldUseValgrind,
   startDebugMuon,
+  startDebugMuonBootstrap,
   startReleaseMuon,
   stopMuon,
   targetTimeoutMs,
   tmpdir,
   wait,
+  waitForCdp,
   waitForDocumentTitle,
   waitForInnerWidth,
+  waitForDevToolsTarget,
   waitForNativeActiveWindowTitle,
   waitForNativeWindowTitle,
   waitForNativeWindowTitleAbsent,
@@ -109,6 +116,54 @@ const withMuonInitialWindowState = async (
     await stopMuon(running, driver);
   }
 };
+
+const waitForRecycledMuon = async (
+  previousProcessId: number,
+): Promise<{ driver: CdpDriver; processId: number }> => {
+  const deadline = Date.now() + processExitTimeoutMs;
+  let lastError: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      await waitForCdp(1000);
+      const driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      try {
+        const processId = await driver.evaluate<number>(
+          "window.muon.environments.getProcessId()",
+        );
+        if (processId !== previousProcessId) {
+          return { driver, processId };
+        }
+      } catch (error) {
+        lastError = error;
+      }
+      driver.close();
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(200);
+  }
+  throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
+};
+
+const createNativeShortcutDragPageUrl = (title: string): string =>
+  `data:text/html;charset=utf-8,${encodeURIComponent(
+    `<!doctype html>
+<title>${title}</title>
+<style>
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-app-region: drag;
+  background: #d7ebe5;
+}
+</style>
+<main>native shortcut drag region</main>`,
+  )}`;
 
 describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   const linuxIt = process.platform === "linux" ? it : it.skip;
@@ -1477,6 +1532,54 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
+  it("rejects the reserved recycle exit code for shutdown", async () => {
+    await withMuon([], async (driver) => {
+      await expect(
+        evaluateRejection(driver, "window.muon.browser.shutdown(88)"),
+      ).resolves.toContain("Invalid shutdown exit code");
+    });
+  });
+
+  it("recycles the process through the built-in browser API from bootstrap", async () => {
+    const running = await startDebugMuonBootstrap([]);
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser recycle api</title>",
+        cdpCommandTimeoutMs,
+      );
+      const firstProcessId = await driver.evaluate<number>(
+        "window.muon.environments.getProcessId()",
+      );
+      await expect(
+        driver.evaluate(`(() => {
+          setTimeout(() => {
+            window.muon.browser.recycle();
+          }, 50);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+      driver.close();
+      driver = undefined;
+      const recycled = await waitForRecycledMuon(firstProcessId);
+      driver = recycled.driver;
+      expect(recycled.processId).not.toBe(firstProcessId);
+      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+        MUON_APP_URL,
+      );
+      expect(running.process.exitCode).toBeNull();
+      expect(running.process.signalCode).toBeNull();
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
   it("shuts down the process when multiple browser windows are open", async () => {
     const running = await startDebugMuon(
       [],
@@ -1679,6 +1782,146 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       },
     );
   });
+
+  it("recycles the process from the configured recycle shortcut", async () => {
+    const running = await startDebugMuonBootstrap(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      createBrowserShortcutConfig({ recycle: "ctrl+shift+f10" }),
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon recycle shortcut</title>",
+        cdpCommandTimeoutMs,
+      );
+      const firstProcessId = await driver.evaluate<number>(
+        "window.muon.environments.getProcessId()",
+      );
+      await dispatchKeyboardShortcut(driver, ctrlShiftF10RecycleShortcut);
+      driver.close();
+      driver = undefined;
+      const recycled = await waitForRecycledMuon(firstProcessId);
+      driver = recycled.driver;
+      expect(recycled.processId).not.toBe(firstProcessId);
+      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+        MUON_APP_URL,
+      );
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("recycles the process from the configured Ctrl+F12 shortcut", async () => {
+    const running = await startDebugMuonBootstrap(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      createBrowserShortcutConfig({ devtools: "f12", recycle: "ctrl+f12" }),
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon ctrl f12 recycle shortcut</title>",
+        cdpCommandTimeoutMs,
+      );
+      const firstProcessId = await driver.evaluate<number>(
+        "window.muon.environments.getProcessId()",
+      );
+      await dispatchKeyboardShortcut(driver, ctrlF12RecycleShortcut);
+      driver.close();
+      driver = undefined;
+      const recycled = await waitForRecycledMuon(firstProcessId);
+      driver = recycled.driver;
+      expect(recycled.processId).not.toBe(firstProcessId);
+      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+        MUON_APP_URL,
+      );
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  linuxIt(
+    "opens DevTools from native F12 after focusing a draggable page region",
+    async () => {
+      await withMuonBrowserConfig(
+        [],
+        createBrowserShortcutConfig({ devtools: "f12" }),
+        async (driver) => {
+          const title = "muon native f12 drag shortcut";
+          await driver.navigate(
+            createNativeShortcutDragPageUrl(title),
+            cdpCommandTimeoutMs,
+          );
+          await waitForNativeWindowTitle(title, cdpCommandTimeoutMs);
+
+          const previousTargetIds = await getCurrentTargetIds();
+          await sendNativeKeyboardShortcut(title, "f12");
+          await expect(
+            waitForDevToolsTarget(previousTargetIds, targetTimeoutMs),
+          ).resolves.toMatchObject({
+            type: "page",
+          });
+        },
+      );
+    },
+  );
+
+  linuxIt(
+    "recycles from native Ctrl+F12 after focusing a draggable page region",
+    async () => {
+      const running = await startDebugMuonBootstrap(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        createBrowserShortcutConfig({ devtools: "f12", recycle: "ctrl+f12" }),
+      );
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        const title = "muon native ctrl f12 drag shortcut";
+        await driver.navigate(
+          createNativeShortcutDragPageUrl(title),
+          cdpCommandTimeoutMs,
+        );
+        await waitForNativeWindowTitle(title, cdpCommandTimeoutMs);
+        const firstProcessId = await driver.evaluate<number>(
+          "window.muon.environments.getProcessId()",
+        );
+
+        await sendNativeKeyboardShortcut(title, "ctrl+f12");
+        driver.close();
+        driver = undefined;
+        const recycled = await waitForRecycledMuon(firstProcessId);
+        driver = recycled.driver;
+        expect(recycled.processId).not.toBe(firstProcessId);
+        await expect(driver.evaluate("document.location.href")).resolves.toBe(
+          MUON_APP_URL,
+        );
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+      }
+    },
+  );
 
   it("reloads the page from the configured reload shortcut", async () => {
     await withMuonBrowserConfig(

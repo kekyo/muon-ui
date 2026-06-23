@@ -19,6 +19,7 @@
 #include <windows.h>
 #else
 #include <limits.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -27,6 +28,8 @@
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
+
+#define MUON_RECYCLE_EXIT_CODE 88
 
 static int is_path_separator(char value) {
   return value == '/' || value == '\\';
@@ -173,11 +176,34 @@ static int launch_core(const char *runtime_dir, const char *core_path, int argc,
     free(core_argv);
     return 1;
   }
-  execv(core_path, core_argv);
-  const int error_code = errno;
-  perror(core_path);
+  const pid_t child = fork();
+  if (child < 0) {
+    perror("fork");
+    free(core_argv);
+    return 1;
+  }
+  if (child == 0) {
+    execv(core_path, core_argv);
+    const int error_code = errno;
+    perror(core_path);
+    _exit(error_code == ENOENT ? 127 : 126);
+  }
+
   free(core_argv);
-  return error_code == ENOENT ? 127 : 126;
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) {
+      perror("waitpid");
+      return 1;
+    }
+  }
+  if (WIFEXITED(status)) {
+    return WEXITSTATUS(status);
+  }
+  if (WIFSIGNALED(status)) {
+    return 128 + WTERMSIG(status);
+  }
+  return 1;
 #endif
 }
 
@@ -195,14 +221,17 @@ int main(int argc, char **argv) {
     return 1;
   }
   const char *cache_dir = getenv("MUON_CACHE_DIR");
-  if (muon_prepare_in_place(runtime_dir, get_default_target(), cache_dir, 0,
-                            0) != 0) {
-    free(bootstrap_path);
-    free(runtime_dir);
-    free(core_path);
-    return 1;
-  }
-  const int exit_code = launch_core(runtime_dir, core_path, argc, argv);
+  int exit_code = 0;
+  do {
+    if (muon_prepare_in_place(runtime_dir, get_default_target(), cache_dir, 0,
+                              0) != 0) {
+      free(bootstrap_path);
+      free(runtime_dir);
+      free(core_path);
+      return 1;
+    }
+    exit_code = launch_core(runtime_dir, core_path, argc, argv);
+  } while (exit_code == MUON_RECYCLE_EXIT_CODE);
   free(bootstrap_path);
   free(runtime_dir);
   free(core_path);

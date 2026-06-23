@@ -182,9 +182,21 @@ if(NOT WIN32)
   pkg_check_modules(MUON_GLIB REQUIRED IMPORTED_TARGET glib-2.0)
   pkg_check_modules(MUON_GIO REQUIRED IMPORTED_TARGET "gio-2.0>=2.74")
   pkg_check_modules(MUON_GTK3 REQUIRED IMPORTED_TARGET "gtk+-3.0")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(MUON_X11 REQUIRED IMPORTED_TARGET x11)
+    pkg_check_modules(MUON_XI REQUIRED IMPORTED_TARGET xi)
+  endif()
   set(MUON_CARDIO_GLIB_TARGETS
     PkgConfig::MUON_GLIB
     PkgConfig::MUON_GIO
+    )
+endif()
+
+set(MUON_NATIVE_WHEEL_TARGETS)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(MUON_NATIVE_WHEEL_TARGETS
+    PkgConfig::MUON_X11
+    PkgConfig::MUON_XI
     )
 endif()
 
@@ -373,6 +385,34 @@ if(MINGW)
     bootstrap.exe
     bootstrapc.exe
     )
+
+  set(MUON_MINGW_RUNTIME_DLL_NAMES
+    libgcc_s_seh-1.dll
+    libgcc_s_dw2-1.dll
+    libgcc_s_sjlj-1.dll
+    libstdc++-6.dll
+    libwinpthread-1.dll
+    )
+  set(MUON_MINGW_RUNTIME_DLLS)
+  foreach(MUON_MINGW_RUNTIME_DLL_NAME IN LISTS MUON_MINGW_RUNTIME_DLL_NAMES)
+    execute_process(
+      COMMAND "${CMAKE_CXX_COMPILER}"
+        "-print-file-name=${MUON_MINGW_RUNTIME_DLL_NAME}"
+      RESULT_VARIABLE MUON_MINGW_RUNTIME_DLL_RESULT
+      OUTPUT_VARIABLE MUON_MINGW_RUNTIME_DLL_PATH
+      ERROR_QUIET
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+    if(MUON_MINGW_RUNTIME_DLL_RESULT EQUAL 0 AND
+        IS_ABSOLUTE "${MUON_MINGW_RUNTIME_DLL_PATH}" AND
+        EXISTS "${MUON_MINGW_RUNTIME_DLL_PATH}")
+      get_filename_component(MUON_MINGW_RUNTIME_DLL_PATH
+        "${MUON_MINGW_RUNTIME_DLL_PATH}" ABSOLUTE)
+      list(APPEND MUON_MINGW_RUNTIME_DLLS
+        "${MUON_MINGW_RUNTIME_DLL_NAME}=${MUON_MINGW_RUNTIME_DLL_PATH}")
+    endif()
+  endforeach()
+  list(JOIN MUON_MINGW_RUNTIME_DLLS "|" MUON_MINGW_RUNTIME_DLLS_ARG)
 endif()
 
 # CEF defaults disable C++ exceptions, but Muon builds with exceptions enabled.
@@ -541,6 +581,12 @@ target_link_libraries(cardio_shared PRIVATE
   Threads::Threads
   ${MUON_CARDIO_GLIB_TARGETS}
   )
+if(MINGW)
+  target_link_options(cardio_shared PRIVATE
+    -static-libgcc
+    -static-libstdc++
+    )
+endif()
 MUON_APPLY_SANITIZERS(cardio_shared)
 
 add_library(muon_cardio INTERFACE)
@@ -567,6 +613,7 @@ set(APP_SOURCES
   src/browser/muon_builtin_browser.cpp
   src/browser/muon_client.cpp
   src/browser/muon_default_title_bar_icon.cpp
+  src/browser/muon_native_wheel_forwarder.cpp
   src/browser/muon_title_bar.cpp
   src/browser/muon_title_bar_loader.cpp
   src/browser/muon_window_delegate.cpp
@@ -605,6 +652,7 @@ set(APP_HEADERS
   src/browser/muon_builtin_browser.h
   src/browser/muon_client.h
   src/browser/muon_default_title_bar_icon.h
+  src/browser/muon_native_wheel_forwarder.h
   src/browser/muon_title_bar.h
   src/browser/muon_title_bar_loader.h
   src/browser/muon_window_delegate.h
@@ -760,12 +808,14 @@ target_link_libraries(${APP_NAME} PRIVATE
   yyjson
   miniz
   ${LIBFFI_TARGET}
+  ${MUON_NATIVE_WHEEL_TARGETS}
   ${CEF_STANDARD_LIBS}
   ${CMAKE_DL_LIBS}
   )
 if(WIN32)
   target_link_libraries(${APP_NAME} PRIVATE
     advapi32
+    comctl32
     ole32
     shell32
     uuid
@@ -954,12 +1004,27 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES)
         "-DKEYBIND_NAME=devtools"
         "-DKEYBIND_VALUE=f12"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ensure_browser_keybind_config.cmake"
+      COMMAND ${CMAKE_COMMAND}
+        "-DOUTPUT=${MUON_RUNTIME_DIR}/muon.json"
+        "-DKEYBIND_NAME=recycle"
+        "-DKEYBIND_VALUE=ctrl+f12"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ensure_browser_keybind_config.cmake"
       )
   endif()
   file(GLOB_RECURSE MUON_ASSET_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
   list(APPEND MUON_RUNTIME_COPY_DEPENDS
     ${MUON_ASSET_FILES}
+    )
+endif()
+if(MINGW)
+  list(APPEND MUON_RUNTIME_COPY_COMMANDS
+    COMMAND ${CMAKE_COMMAND}
+      "-DINPUT=$<TARGET_FILE:muon_ui>"
+      "-DOUTPUT_DIR=${MUON_RUNTIME_DIR}"
+      "-DOBJDUMP=${CMAKE_OBJDUMP}"
+      "-DCANDIDATES=${MUON_MINGW_RUNTIME_DLLS_ARG}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_mingw_runtime_imports.cmake"
     )
 endif()
 list(APPEND MUON_RUNTIME_COPY_COMMANDS
@@ -1013,6 +1078,16 @@ if(WIN32)
     NAME runtime_muon_links_cardio
     COMMAND bash -c
       "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${APP_EXECUTABLE_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt' && grep -Fq 'DLL Name: ${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt'"
+    )
+  add_test(
+    NAME runtime_cardio_uses_static_mingw_runtime
+    COMMAND bash -c
+      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt'"
+    )
+  add_test(
+    NAME runtime_contains_muon_ui_mingw_runtime
+    COMMAND bash -c
+      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/libmuon-ui${CMAKE_SHARED_LIBRARY_SUFFIX}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-ui-runtime-imports.txt' && while IFS= read -r dll; do test -f '${MUON_RUNTIME_DIR}/'\"$dll\"; done < <(sed -n 's/.*DLL Name: \\(libgcc_s_.*-1\\.dll\\|libstdc++-6\\.dll\\|libwinpthread-1\\.dll\\).*/\\1/p' '${CMAKE_CURRENT_BINARY_DIR}/muon-ui-runtime-imports.txt')"
     )
 else()
   add_test(
@@ -1133,6 +1208,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_builtin_browser_test
     tests/muon_builtin_browser_test.cpp
     src/browser/muon_builtin_browser.cpp
+    src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
     src/plugins/muon_type_metadata.cpp
     src/browser/muon_window_delegate.cpp
@@ -1151,6 +1227,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     libcef_lib
     yyjson
     ${LIBFFI_TARGET}
+    ${MUON_NATIVE_WHEEL_TARGETS}
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}
     )

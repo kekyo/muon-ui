@@ -3,7 +3,15 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { chmod, copyFile, cp, mkdir, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  readdir,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const targetDescriptors = {
@@ -58,6 +66,11 @@ const targetDescriptors = {
       "libcardio.dll",
       "LICENSE_muon",
     ],
+    runtimeOptionalPayloadPatterns: [
+      /^libgcc_s_.*-1\.dll$/,
+      /^libstdc\+\+-6\.dll$/,
+      /^libwinpthread-1\.dll$/,
+    ],
   },
   windows64: {
     prepareExecutableName: "muon-prepare.exe",
@@ -70,6 +83,11 @@ const targetDescriptors = {
       "libmuon-ui.dll",
       "libcardio.dll",
       "LICENSE_muon",
+    ],
+    runtimeOptionalPayloadPatterns: [
+      /^libgcc_s_.*-1\.dll$/,
+      /^libstdc\+\+-6\.dll$/,
+      /^libwinpthread-1\.dll$/,
     ],
   },
 };
@@ -229,7 +247,7 @@ const stageRuntimeTarget = async (target) => {
   const destinationPath = resolve("dist", "runtime", target);
   await rm(destinationPath, { recursive: true, force: true });
   await mkdir(destinationPath, { recursive: true });
-  for (const item of descriptor.runtimePayload) {
+  const copyRuntimeItem = async (item) => {
     if (typeof item !== "string" || item === "" || item.includes("..")) {
       throw new Error(`Invalid runtime payload item for ${target}: ${item}`);
     }
@@ -237,6 +255,21 @@ const stageRuntimeTarget = async (target) => {
       recursive: true,
       preserveTimestamps: true,
     });
+  };
+  for (const item of descriptor.runtimePayload) {
+    await copyRuntimeItem(item);
+  }
+  if (descriptor.runtimeOptionalPayloadPatterns !== undefined) {
+    const entries = await readdir(sourcePath);
+    for (const item of entries) {
+      if (
+        descriptor.runtimeOptionalPayloadPatterns.some((pattern) =>
+          pattern.test(item),
+        )
+      ) {
+        await copyRuntimeItem(item);
+      }
+    }
   }
 };
 

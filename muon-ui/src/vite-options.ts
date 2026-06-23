@@ -1,0 +1,122 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon
+
+import type { MuonVitePluginOptions } from "./vite.js";
+
+/**
+ * Metadata symbol used to recover `muon()` plugin options from `vite.config.*`.
+ */
+export const muonVitePluginOptionsSymbol = Symbol.for(
+  "muon.vite.plugin.options",
+);
+
+interface MuonVitePluginWithOptions {
+  [muonVitePluginOptionsSymbol]: MuonVitePluginOptions;
+}
+
+const isRecord = (value: unknown): value is Record<string | symbol, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isStringArray = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string");
+
+const isMuonViteBuildOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.targets === undefined || isStringArray(value.targets)) &&
+    (value.allTargets === undefined || typeof value.allTargets === "boolean") &&
+    (value.appName === undefined || typeof value.appName === "string") &&
+    (value.outputRoot === undefined || typeof value.outputRoot === "string") &&
+    (value.configPath === undefined || typeof value.configPath === "string") &&
+    (value.packageDirectory === undefined ||
+      typeof value.packageDirectory === "string") &&
+    (value.assetSalt === undefined || value.assetSalt instanceof Uint8Array)
+  );
+};
+
+const isMuonVitePluginOptions = (
+  value: unknown,
+): value is MuonVitePluginOptions => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.muonPath === undefined || typeof value.muonPath === "string") &&
+    (value.cefPath === undefined || typeof value.cefPath === "string") &&
+    (value.stagePath === undefined || typeof value.stagePath === "string") &&
+    (value.open === undefined || typeof value.open === "boolean") &&
+    (value.enableDebugger === undefined ||
+      typeof value.enableDebugger === "boolean") &&
+    (value.build === undefined ||
+      typeof value.build === "boolean" ||
+      isMuonViteBuildOptions(value.build))
+  );
+};
+
+/**
+ * Attaches raw Muon Vite plugin options to a plugin instance.
+ *
+ * @param plugin Plugin object.
+ * @param options Raw plugin options.
+ * @returns Plugin object with internal Muon metadata.
+ */
+export const attachMuonVitePluginOptions = <TPlugin extends object>(
+  plugin: TPlugin,
+  options: MuonVitePluginOptions,
+): TPlugin & MuonVitePluginWithOptions => {
+  Object.defineProperty(plugin, muonVitePluginOptionsSymbol, {
+    configurable: false,
+    enumerable: false,
+    value: { ...options },
+    writable: false,
+  });
+
+  return plugin as TPlugin & MuonVitePluginWithOptions;
+};
+
+/**
+ * Reads raw Muon Vite plugin options from a plugin instance.
+ *
+ * @param plugin Candidate plugin object.
+ * @returns Attached Muon options, if present.
+ */
+export const getMuonVitePluginOptions = (
+  plugin: unknown,
+): MuonVitePluginOptions | undefined => {
+  if (!isRecord(plugin)) {
+    return undefined;
+  }
+
+  const options = plugin[muonVitePluginOptionsSymbol];
+  return isMuonVitePluginOptions(options) ? options : undefined;
+};
+
+/**
+ * Resolves nested Vite plugin option values into a flat list.
+ *
+ * @param pluginOptions Raw `plugins` field from a Vite config.
+ * @returns Flat plugin object list.
+ */
+export const flattenVitePluginOptions = async (
+  pluginOptions: unknown,
+): Promise<unknown[]> => {
+  const resolvedValue = await pluginOptions;
+  if (resolvedValue === null || resolvedValue === undefined || !resolvedValue) {
+    return [];
+  }
+
+  if (Array.isArray(resolvedValue)) {
+    const nested = await Promise.all(
+      resolvedValue.map((entry) => flattenVitePluginOptions(entry)),
+    );
+    return nested.flat();
+  }
+
+  return [resolvedValue];
+};

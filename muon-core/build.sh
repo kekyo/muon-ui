@@ -48,6 +48,36 @@ prepare_executable_name() {
   esac
 }
 
+bootstrap_executable_name() {
+  case "$1" in
+    windows32|windows64)
+      printf '%s\n' muon-bootstrap.exe
+      ;;
+    *)
+      printf '%s\n' muon-bootstrap
+      ;;
+  esac
+}
+
+prepare_output_dir() {
+  local usage="$1"
+  local target_name="$2"
+  local build_type="$3"
+  local build_type_lower="${build_type,,}"
+  case "${usage}" in
+    dev|test|check)
+      printf '%s\n' "${PROJECT_ROOT}/muon-prepare/.run/${usage}-${target_name}-${build_type_lower}"
+      ;;
+    dist)
+      if [[ "${build_type}" == "Debug" ]]; then
+        printf '%s\n' "${PROJECT_ROOT}/muon-prepare/dist-${target_name}-debug"
+      else
+        printf '%s\n' "${PROJECT_ROOT}/muon-prepare/dist-${target_name}"
+      fi
+      ;;
+  esac
+}
+
 ensure_host_muon_prepare() {
   if [[ -n "${MUON_PREPARE_PATH:-}" ]]; then
     printf '%s\n' "${MUON_PREPARE_PATH}"
@@ -245,3 +275,9 @@ MUON_RUNTIME_INFO_HEADER="${BUILD_DIR}/generated/muon_runtime_info_generated.h" 
     "${BUILD_USAGE}" \
     "${BUILD_TYPE}" \
     "${TARGET_NAME}"
+
+BOOTSTRAP_EXECUTABLE_NAME="$(bootstrap_executable_name "${TARGET_NAME}")"
+PREPARE_OUTPUT_DIR="$(prepare_output_dir "${BUILD_USAGE}" "${TARGET_NAME}" "${BUILD_TYPE}")"
+cp -f \
+  "${PREPARE_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
+  "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"

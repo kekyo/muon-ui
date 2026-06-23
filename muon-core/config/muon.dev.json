@@ -23,7 +23,8 @@
     "initialWindowState": "normal",
     "titleBarType": "muon",
     "keybind": {
-      "devtools": "f12"
+      "devtools": "f12",
+      "recycle": "ctrl+f12"
     },
     "plugin": {
       "allow": [

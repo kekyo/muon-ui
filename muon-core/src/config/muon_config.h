@@ -286,6 +286,10 @@ struct MuonBrowserConfig {
    * Shortcut that resets page zoom.
    */
   MuonKeyboardShortcut reset_zoom;
+  /**
+   * Shortcut that recycles the Muon process.
+   */
+  MuonKeyboardShortcut recycle;
 };
 
 /**

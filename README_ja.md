@@ -61,6 +61,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 - 扱いやすいNPMパッケージとして提供され、あなたのウェブアプリケーションプロジェクトを簡単にネイティブGUIアプリケーション化できます。複雑な構成や変更は不要です。
 - レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、Chromiumやchromeを使用しているのとほぼ同等です。
 - Viteプラグインに対応しています（オプション）。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
+- `muon dev` で、HTTPサーバーを起動せずにローカルアセットを直接使った開発起動ができます。
 - Chromium DevToolsを使用できます。更にCDP (Chromium DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
 - 複数のブラウザウインドウを表示できます。ブラウザウインドウは親子関係をもたせることも出来ます。
 - プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限できます。
@@ -73,7 +74,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
   - Windows: i686, amd64
 - ビルド環境
   - Node.js 20以降
-  - Vite 7以降（オプション）
+  - Vite 5以降（オプション）
 
 ---
 
@@ -85,11 +86,11 @@ muonは開発体験を直交的なものに感じられるように、開発ラ�
 新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するために、
 再現可能な最小の手順で実現出来るような開発ライフサイクルが重要だと考えています。
 
-これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトから始めましょう。
-例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って:
+これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトを用意する事から始めましょう。
+例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を作りましょう:
 
 ```bash
-npm create vite@latest -- --template react-ts
+npm create vite@latest my-muon-app -- --template react-ts
 ```
 
 ここではReact+TypeScriptを選択しましたが、もちろん他の選択肢でもOKです。
@@ -98,14 +99,15 @@ TypeScriptは使用したほうが良いでしょう。理由は後で説明し�
 そして、以下のコマンドで必要なパッケージのインストールを行って、アプリケーションを実行します:
 
 ```bash
+cd my-muon-app
 npm install
 npm run dev
 ```
 
-これで、Viteを使ったサンプルのページが表示されるはずです。
-ここまでは予定通り進行したはずです。まだmuonを使う上での前提作業はありません。
+これで、Viteの開発サーバーが起動するので、リンクをクリックしてブラウザでページを表示できます。
+まだmuonは導入していません。素のViteプロジェクトです。
 
-この、素のプロジェクトにmuonを導入します。必要な作業は:
+このプロジェクトにmuonを導入します。必要な作業は:
 
 1. muonパッケージをインストール
 2. muon Viteプラグインを構成
@@ -131,11 +133,10 @@ muonパッケージには、以下の要素を含みます:
 
 CEF本体バイナリは、NPMパッケージに含まれません。
 
----
-
 ### muon Viteプラグインを構成
 
-実はmuonパッケージを導入しただけでほぼ準備は整っていますが、Viteを使っているので、ぜひViteのHMR (Hot Module Replacement)を使用出来るようにすることをお勧めします。
+実はmuonパッケージを導入しただけでほぼ準備は整っていますが、このプロジェクトではViteを使っているので、
+ぜひViteのHMR (Hot Module Replacement)を使用出来るようにすることをお勧めします。
 
 HMRを知らない人に簡単に説明すると、開発中にViteが擬似的なサーバーとなって、ブラウザにページを表示可能にし、かつ、ページを編集した時にほぼリアルタイムで表示を更新してくれます。
 つまり、編集結果を自動的にプレビュー表示する、非常に便利な機能です。
@@ -144,35 +145,51 @@ muonはHMRに対応していて、ブラウザの代わりにmuonを起動して
 これを有効化するために、`vite.config.ts` に以下のコードを追加します:
 
 ```ts
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import muon from 'muon-ui/vite';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import muon from 'muon-ui/vite'
 
 export default defineConfig({
   plugins: [
     react(),  // Reactプラグイン
     muon(),   // muonプラグイン (追加する)
   ],
-});
+})
 ```
 
-`defineConfig()` の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。
-これで作業は完了です。
+`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。これで準備は完了です!
 
-開発作業を行うときには:
+いよいよmuonを起動します:
 
 ```bash
 npm run dev
 ```
 
-で、ブラウザの代わりにmuonが起動して、あなたのページが表示されるはずです!
+で、muonのウインドウとあなたのページが表示されるはずです!
 
 ![Get started](./images/get-started.png)
 
 ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
 
-`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動できます。
+`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動でき、`Ctrl+F12` キーでmuonをリサイクル再起動できます。
 また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+
+### muon devで直接起動
+
+Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon dev` を使用できます。
+`muon dev` はHTTPサーバーを起動せず、`asset.sourcePath` を開発用に上書きしてmuonをフォアグラウンド起動します。
+そのため、ViteのHMRは動作しません。
+
+```bash
+muon dev
+```
+
+開発アセットは `--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
+`--assets` はローカルディレクトリを指定し、相対パスはproject rootから解決されます。
+
+`vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
+CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon dev` では無視されます。
+Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
 
 ---
 
@@ -327,7 +344,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 `muon-bootstrap.ini` の `versionPolicy` には以下の値が指定されます:
 
 | 値                  | 動作                                                                                                                                             |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| :------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
 | `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
 | `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
@@ -336,7 +353,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 `catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
 `window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
 
-`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`bootstrap.defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
 
 ```bash
 muon embed-config \
@@ -362,7 +379,7 @@ muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのD
 
 ![Muon DevTools](./images/devtools.png)
 
-Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
+Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
 `muon.json` に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
 
 ```json
@@ -687,6 +704,7 @@ assets.zip
 例えば、意図的に空リスト (`network.allow: []`) にすると、ローカルアセットを含むすべてのネットワークアクセスが無効となり、何も表示できなくなります。
 しかし、実際に空にしてみると、 `npm run dev` でViteサーバーとmuonを起動してみても正しく表示されるでしょう。
 これは、 `npm run dev` した時に、この `network.allow` リストにViteサーバーのURLが一時的に追加されるためです。
+`muon dev` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することはできません。
 空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
 
 - 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。
@@ -757,6 +775,7 @@ assets.zip
 
 設定ファイルは `muon.json5`、`muon.jsonc`、`muon.json` の順に探索されます。
 Viteの開発起動では、設定ファイルが存在しない場合や不正な場合でも警告を表示し、プロジェクト設定を `{}` 相当として扱ってViteが生成する設定だけで起動します。
+`muon dev` では、設定ファイルが存在しない場合は開発用の生成設定だけで起動しますが、存在するファイルが読み取れない場合やパースできない場合はエラーになります。
 一方で `muon build` では、設定ファイルが存在しない場合は `{}` 相当として扱いますが、存在するファイルが読み取れない場合やパースできない場合はビルドエラーになります。
 `--config` で明示した設定ファイルが存在しない場合もエラーです。
 
@@ -806,16 +825,10 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 }
 ```
 
-### rootキー
-
-| キー                   | 型       | 既定値     | 概要                                                                 |
-| ---------------------- | -------- | ---------- | -------------------------------------------------------------------- |
-| `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
-
 ### browserキー
 
 | キー                                  | 型                                        | 既定値                    | 概要                                                                                     |
-| ------------------------------------- | ----------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
+| :------------------------------------ | :---------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------- |
 | `startPage`                           | `string`                                  | `"asset://main/index.html"` | 起動時に最初に読み込むURLです。                                                          |
 | `profile`                             | `string`                                  | `"./.profile"`            | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
@@ -827,109 +840,104 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
 
-`profile` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
-通常起動時に `profile` を明示しない場合は、OS標準のユーザーデータ領域にアプリケーション用プロファイルが作成されます。
-開発・テスト向けの直接起動では、既定値の `./.profile` が使われます。
-
-`initialWindowState` には `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, `"fullscreen"` を指定できます。
-ただし、最終的な表示状態はOSやウインドウマネージャーによって調整される場合があります。
-
-`backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定できます。
-`"system"` はOSの明暗設定が取得できる場合に黒または白として反映し、取得できない場合はCEFの既定値を使用します。
-
-`titleBarType` には `"muon"` または `"native"` を指定できます。
-`"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
-Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、
-Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
-
-`initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
-`false` を指定すると、起動直後はタイトルバーが非表示になります。
-
-`initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
-省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
-内蔵アイコンはコード中に埋め込まれているため、アプリ側のアセットファイルとして用意する必要はありません。
-`"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
-このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
-ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
-
-注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
-
-`keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom` を指定できます。
-値は `"Ctrl+Shift+I"` のように、修飾キーとキーを `+` で連結した文字列です。
-修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用できます。
-キーには `f1` から `f24`, `a` から `z`, `0` から `9`, `plus`, `equal`, `minus`, `backspace`, `tab`, `enter`/`return`, `escape`/`esc`, `space`, `insert`, `delete`/`del`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` を使用できます。
-空文字列、修飾キーだけの指定、同一ショートカットの重複は設定エラーになります。
-
-`browser.plugin.allow` は、ページにプラグインAPIを注入するかどうかだけを制御します。
-ページやサブリソースを実際に読み込めるかどうかは、別途 `network.allow` で許可する必要があります。
-`allowUnsafeJavaScriptParentAccess` は安全性を下げる互換設定です。
-未指定または空配列の場合、popupから親ページへのJavaScriptアクセスは許可されません。
-この場合のpopupは `noopener` 相当の独立ウインドウとして開かれ、 `window.open()` は `null` を返します。
-ページ側で `noopener` または `noreferrer` を指定した場合も、許可リストの内容に関係なく `window.opener` は `null` になります。
+- `profile` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
+  通常起動時に `profile` を明示しない場合は、OS標準のユーザーデータ領域にアプリケーション用プロファイルが作成されます。
+  開発・テスト向けの直接起動では、既定値の `./.profile` が使われます。
+- `initialWindowState` には `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, `"fullscreen"` を指定できます。
+  ただし、最終的な表示状態はOSやウインドウマネージャーによって調整される場合があります。
+- `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定できます。
+  `"system"` はOSの明暗設定が取得できる場合に黒または白として反映し、取得できない場合はCEFの既定値を使用します。
+- `titleBarType` には `"muon"` または `"native"` を指定できます。
+  `"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
+  Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、
+  Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
+  `"muon"` タイトルバーでは、ページ内の任意の要素へCSSで `-webkit-app-region: drag` を指定すると、その領域をドラッグしてウインドウを移動できます。
+  リンク、ボタン、入力欄など通常のページ操作を受け取る要素には `-webkit-app-region: no-drag` を指定してください。
+- `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
+  `false` を指定すると、起動直後はタイトルバーが非表示になります。
+- `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
+  省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
+  内蔵アイコンはコード中に埋め込まれているため、アプリ側のアセットファイルとして用意する必要はありません。
+  `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
+  このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
+  ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
+  - ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
+    ページ遷移時、faviconが存在しない場合や取得・変換できない場合は `initialTitleBarIcon`、または内蔵Muonアイコンへ戻ります。
+    favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
+    `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用できますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
+  - 注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
+- `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom`, `recycle` を指定できます。
+  値は `"ctrl+shift+i"` のように、修飾キーとキーを `+` で連結した文字列です。
+  修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用できます。
+  キーには `f1` から `f24`, `a` から `z`, `0` から `9`, `plus`, `equal`, `minus`, `backspace`, `tab`, `enter`/`return`, `escape`/`esc`, `space`, `insert`, `delete`/`del`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` を使用できます。
+  空文字列、修飾キーだけの指定、同一ショートカットの重複は設定エラーになります。
+- `browser.plugin.allow` は、ページにプラグインAPIを注入するかどうかだけを制御します。
+  ページやサブリソースを実際に読み込めるかどうかは、別途 `network.allow` で許可する必要があります。
+- `allowUnsafeJavaScriptParentAccess` は安全性を下げる互換設定です。通常、この項目を指定する必要はありません。
+  未指定または空配列の場合、popupから親ページへのJavaScriptアクセスは許可されません。
+  この場合のpopupは `noopener` 相当の独立ウインドウとして開かれ、 `window.open()` は `null` を返します。
+  ページ側で `noopener` または `noreferrer` を指定した場合も、許可リストの内容に関係なく `window.opener` は `null` になります。
 
 ### assetキー
 
 | キー        | 型       | 既定値   | 概要                                                                 |
-| ----------- | -------- | -------- | -------------------------------------------------------------------- |
-| `from`      | `string` | `assets` | `asset://` URLとして公開するアセットディレクトリまたはZIPファイルです。 |
+| :---------- | :------- | :------- | :------------------------------------------------------------------- |
+| `sourcePath` | `string` | `assets` | `asset://` URLとして公開するアセットディレクトリまたはZIPファイルです。 |
 | `signature` | `string` | なし     | ZIPアセットの改ざん検出に使う40桁のSHA-1署名です。                   |
 | `salt`      | `string` | なし     | `signature` の計算に使うsaltを16進文字列で指定します。                |
 
-`from` を省略した場合は、実行ファイルと同じディレクトリにある `assets` が使用されます。
-相対パスは `muon.json` からの相対パスとして解決されます。
-ディレクトリを指定した場合はその内容が、ZIPファイルを指定した場合はZIP内の内容が `asset://main/...` として参照できます。
-
-`signature` は、アセットをZIPファイルとして配布する場合の整合性検証に使います。
-`signature` を指定する場合は `salt` も指定してください。
-検証に失敗した場合、muonアプリケーションは起動しません。
+- `sourcePath` を省略した場合は、実行ファイルと同じディレクトリにある `assets` が使用されます。
+  相対パスは `muon.json` からの相対パスとして解決されます。
+  ディレクトリを指定した場合はその内容が、ZIPファイルを指定した場合はZIP内の内容が `asset://main/...` として参照できます。
+- `signature` は、アセットをZIPファイルとして配布する場合の整合性検証に使います。
+  `signature` を指定する場合は `salt` も指定してください。
+  検証に失敗した場合、muonアプリケーションは起動しません。
 
 ### networkキー
 
 | キー               | 型                 | 既定値          | 概要                                                                                 |
-| ------------------ | ------------------ | --------------- | ------------------------------------------------------------------------------------ |
+| :----------------- | :----------------- | :-------------- | :----------------------------------------------------------------------------------- |
 | `allow`            | `readonly string[]` | `["asset://**"]` | 読み込みを許可するURLパターンのリストです。                                          |
 | `authorizedOrigin` | `readonly object[]` | `[]`            | 指定オリジンから発生したリクエストに、追加のネットワークアクセスを許可します。       |
 
-`allow` はホワイトリストです。
-空配列を指定すると、ローカルアセットを含むすべてのネットワークアクセスが許可されなくなります。
-`data:` プロトコルのURLも例外ではないため、インラインデータURLを読み込む場合は `data:**` などを明示的に追加してください。
-URLパターンでは `*` と `**` を使用できます。
-`*` は `:`, `/`, `?`, `#` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
-パターンの大文字小文字は区別されます。
-
-`authorizedOrigin` の各要素には `scheme` と `domain` を必ず指定し、必要な場合だけ `port` を指定します。
-`scheme` と `domain` は小文字に正規化されます。
-`domain` には `:`, `/`, `?`, `#`, `*` を含められません。
-`port` を指定する場合は `1` から `65535` の整数である必要があります。
-この設定は権限移譲に近い挙動になるため、信頼できる認証プロバイダーなど、リクエスト元として信頼できるオリジンだけを指定してください。
+- `allow` はホワイトリストです。
+  空配列を指定すると、ローカルアセットを含むすべてのネットワークアクセスが許可されなくなります。
+  `data:` プロトコルのURLも例外ではないため、インラインデータURLを読み込む場合は `data:**` などを明示的に追加してください。
+  URLパターンでは `*` と `**` を使用できます。
+  `*` は `:`, `/`, `?`, `#` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
+  パターンの大文字小文字は区別されます。
+- `authorizedOrigin` の各要素には `scheme` と `domain` を必ず指定し、必要な場合だけ `port` を指定します。
+  - `scheme` と `domain` は小文字に正規化されます。
+  - `domain` には `:`, `/`, `?`, `#`, `*` を含められません。
+  - `port` を指定する場合は `1` から `65535` の整数である必要があります。
+  - この設定は権限移譲に近い挙動になるため、信頼できる認証プロバイダーなど、リクエスト元として信頼できるオリジンだけを指定してください。
 
 ### pluginキー
 
 | キー                 | 型                 | 既定値      | 概要                                                                       |
-| -------------------- | ------------------ | ----------- | -------------------------------------------------------------------------- |
+| :------------------- | :----------------- | :---------- | :------------------------------------------------------------------------- |
 | `path`               | `string`           | `"./plugins"` | 外部プラグインファイルを探索するディレクトリです。                         |
 | `plugins`            | `readonly object[]` | `[]`        | 有効化するプラグインのリストです。                                         |
 | `plugins[].name`     | `string`           | なし        | 有効化するプラグイン名です。                                               |
 | `plugins[].allow`    | `readonly string[]` | なし        | そのプラグインから公開する関数パスの許可リストです。                       |
 
-`path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
-`plugins` を省略した場合、プラグイン関数は公開されません。
-内蔵プラグインを有効化する場合は `name` に `"internal"` を指定します。
-外部プラグインを有効化する場合は、拡張子を除いたファイル名を `name` に指定します。
-例えば `muon_fs_dialogs_gtk3.so` を使う場合の `name` は `"muon_fs_dialogs_gtk3"` です。
-`"internal"` は予約名であり、外部プラグイン名としては使用できません。
-同じ `name` を複数回指定することはできません。
-
-`plugins[].allow` は、プラグインが持つ関数パスに対するホワイトリストです。
-`muon.fs.*` のようなパターンを指定できます。
-`*` は `.` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
-パターンの大文字小文字は区別されます。
-ページ側で関数を呼び出せるようにするには、 `plugin.plugins[].allow` に加えて、 `browser.plugin.allow` で対象ページへのAPI注入も許可する必要があります。
+- `path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
+- `plugins` を省略した場合、プラグイン関数は公開されません。
+  内蔵プラグインを有効化する場合は `name` に `"internal"` を指定します。
+  外部プラグインを有効化する場合は、拡張子を除いたファイル名を `name` に指定します。
+  例えば `muon_fs_dialogs_gtk3.so` を使う場合の `name` は `"muon_fs_dialogs_gtk3"` です。
+  `"internal"` は予約名であり、外部プラグイン名としては使用できません。
+  同じ `name` を複数回指定することはできません。
+- `plugins[].allow` は、プラグインが持つ関数パスに対するホワイトリストです。
+  `muon.fs.*` のようなパターンを指定できます。
+  `*` は `.` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
+  パターンの大文字小文字は区別されます。
+  ページ側で関数を呼び出せるようにするには、 `plugin.plugins[].allow` に加えて、 `browser.plugin.allow` で対象ページへのAPI注入も許可する必要があります。
 
 ### logキー
 
 | キー                 | 型       | 既定値     | 概要                                                             |
-| -------------------- | -------- | ---------- | ---------------------------------------------------------------- |
+| :------------------- | :------- | :--------- | :--------------------------------------------------------------- |
 | `level`              | `string` | `"info"`   | 全ログソースの基準ログレベルです。                               |
 | `output.type`        | `string` | `"stderr"` | ログの出力先です。                                               |
 | `output.path`        | `string` | なし       | `output.type` が `"file"` の場合に使用する出力ファイルパスです。 |
@@ -938,64 +946,79 @@ URLパターンでは `*` と `**` を使用できます。
 | `sources.console`    | `string` | `"debug"`  | JavaScript console出力のログレベルです。                         |
 | `sources.plugin`     | `string` | `"info"`   | ネイティブプラグイン出力のログレベルです。                       |
 
-ログレベルには `"debug"`, `"info"`, `"warning"`/`"warn"`, `"error"`, `"fatal"`, `"off"` を指定できます。
+- ログレベルには `"debug"`, `"info"`, `"warning"`/`"warn"`, `"error"`, `"fatal"`, `"off"` を指定できます。
 `off` を指定したソースのログは出力されません。
-
-`level` を指定すると、すべてのログソースの基準レベルがその値に揃います。
-そのうえで `sources` に `muon`, `cef`, `console`, `plugin` を指定すると、対象ソースだけを個別に上書きできます。
-`sources` だけを指定した場合も、未指定ソースは現在の `level` に揃えられてから個別上書きされます。
-そのため、既定値の `cef: "warning"` や `console: "debug"` を維持したい場合は、必要に応じて `sources` に明示してください。
-
-`output.type` には `"stdout"`, `"stderr"`, `"file"` を指定できます。
-POSIX環境では `"syslog"` も使用できます。
-Windows環境では `"debug"` と `"eventlog"` も使用できます。
-`output.type` が `"file"` の場合、 `output.path` は必須です。
-相対パスは `muon.json` からの相対パスとして解決され、親ディレクトリは必要に応じて作成されます。
-ファイル出力は追記で行われます。
-`output.type` が `"file"` 以外の場合、 `output.path` を指定すると設定エラーになります。
+- `level` を指定すると、すべてのログソースの基準レベルがその値に揃います。
+  そのうえで `sources` に `muon`, `cef`, `console`, `plugin` を指定すると、対象ソースだけを個別に上書きできます。
+  `sources` だけを指定した場合も、未指定ソースは現在の `level` に揃えられてから個別上書きされます。
+  そのため、既定値の `cef: "warning"` や `console: "debug"` を維持したい場合は、必要に応じて `sources` に明示してください。
+- `output.type` には `"stdout"`, `"stderr"`, `"file"` を指定できます。
+  POSIX環境では `"syslog"` も使用できます。
+  Windows環境では `"debug"` と `"eventlog"` も使用できます。
+- `output.type` が `"file"` の場合、 `output.path` は必須です。
+- 相対パスは `muon.json` からの相対パスとして解決され、親ディレクトリは必要に応じて作成されます。
+  ファイル出力は追記で行われます。
+- `output.type` が `"file"` 以外の場合、 `output.path` を指定すると設定エラーになります。
 
 ### cdpキー
 
 | キー     | 型        | 既定値 | 概要                                             |
-| -------- | --------- | ------ | ------------------------------------------------ |
+| :------- | :-------- | :----- | :----------------------------------------------- |
 | `enable` | `boolean` | `false` | Chrome DevTools Protocolを有効化します。         |
 | `port`   | `number`  | `9222` | DevTools Protocolの待ち受けポート番号です。      |
 
-`cdp.enable` を `true` にすると、外部のDevToolsやCDPクライアントから接続できるようになります。
-開発・デバッグ用の設定であり、配布ビルドでは必要な場合だけ有効化してください。
-`port` は `1024` から `65535` の整数である必要があります。
+- `cdp.enable` を `true` にすると、外部のDevToolsやCDPクライアントから接続できるようになります。
+  開発・デバッグ用の設定であり、配布ビルドでは必要な場合だけ有効化してください。
+- `port` は `1024` から `65535` の整数である必要があります。
+
+### bootstrapキー
+
+| キー                   | 型       | 既定値     | 概要                                                                                                  |
+| :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
+| `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 ---
 
 ## muon Viteプラグインリファレンス
 
-`muon-ui/vite` の既定exportは、 `muon(options)` の形でViteプラグインを生成します。
-`options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
+muon Viteプラグインの引数 `options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
+
+```ts
+import { defineConfig } from 'vite';
+import muon from 'muon-ui/vite';
+
+export default defineConfig({
+  plugins: [
+    muon({  // muon Viteプラグインのオプション
+      build: {
+        targets: ['linux-amd64', 'windows-amd64'],
+        outputRoot: 'release',
+        appName: 'my-app',
+      },
+    }),
+  ],
+});
+```
 
 ### rootキー
 
 | キー             | 型                    | 既定値                      | 概要                                                                 |
-| ---------------- | --------------------- | --------------------------- | -------------------------------------------------------------------- |
+| :--------------- | :-------------------- | :-------------------------- | :------------------------------------------------------------------- |
 | `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
 | `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
-| `open`           | `boolean`             | `true`                      | `vite dev` 起動時にMuonを自動起動するかどうかです。                  |
-| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDPと `F12` のMuon DevToolsキーバインドを有効化します。  |
+| `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
-`muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` にだけ影響します。
-`vite build` では無視されます。
-
-`muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
-`muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
-`cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
-`stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
-
-`open` は、Viteの `server.open` とは独立したMuon起動設定です。
-`open` に `false` を指定すると、Vite serverは通常通り起動しますが、Muonランタイムの準備とMuonプロセスの起動は行われません。
-
-`enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開けるようになります。
-配布ビルドでDevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
+- `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` に影響します。
+  `muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` だけを読み取り、 `open` は無視します。
+  `vite build` ではこれらの開発起動用オプションは無視されます。
+- `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
+- `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
+- `cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
+- `stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
+- `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
+  配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
 
 ### buildキー
 
@@ -1004,37 +1027,29 @@ Windows環境では `"debug"` と `"eventlog"` も使用できます。
 `build` に `true` を指定した場合、または省略した場合は、 `{}` 相当として扱われます。
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |
-| ------------------ | ------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| :----------------- | :------------------ | :----------------------------- | :------------------------------------------------------------------------------ |
 | `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
 | `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
 | `outputRoot`       | `string`            | `"."`                          | `dist-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
-| `assetSalt`        | `Uint8Array`        | ランダムな16 bytes             | `assets.zip` の署名計算に使うsaltです。                                         |
 
-`targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
-`allTargets` が `true` の場合、 `targets` よりも優先されます。
-`targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
-
-`appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
-`name` が存在しない場合は `muon-app` を使用します。
-scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
-Windowsターゲットでは `.exe` が自動的に付与されます。
-
-`outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
-`configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
-設定ファイルが存在しない場合は `{}` 相当として扱います。
-
-Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
-そのため、ビルド後のアセットは `asset://main/` から参照できます。
-
-`packageDirectory` は通常指定しません。
-muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
-相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。
-
-`assetSalt` は再現可能なテストのための引数です。
-通常の配布ビルドでは省略してください。
+- `targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
+  `allTargets` が `true` の場合、 `targets` よりも優先されます。
+  `targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
+- `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
+  `name` が存在しない場合は `muon-app` を使用します。
+  scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
+  Windowsターゲットでは `.exe` が自動的に付与されます。
+- `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
+  `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
+  設定ファイルが存在しない場合は `{}` 相当として扱います。
+- Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
+  そのため、ビルド後のアセットは `asset://main/` から参照できます。
+- `packageDirectory` は通常指定しません。
+  muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
+  相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。
 
 ---
 
@@ -1045,7 +1060,7 @@ muonパッケージとは別の場所にある `runtime/` と `native/` をビ�
 `window.muon.browser` は、現在のMuonブラウザウインドウとページ表示を操作します。
 
 | 関数                  | 引数                | 戻り値          | 説明                                                             |
-| --------------------- | ------------------- | --------------- | ---------------------------------------------------------------- |
+| :-------------------- | :------------------ | :-------------- | :--------------------------------------------------------------- |
 | `reload()`            | なし                | `Promise<void>` | 現在のページを再読み込みします。                                 |
 | `hardReload()`        | なし                | `Promise<void>` | キャッシュを無視して現在のページを再読み込みします。             |
 | `toggleFullscreen()`  | なし                | `Promise<void>` | フルスクリーン状態を切り替えます。                               |
@@ -1065,14 +1080,18 @@ muonパッケージとは別の場所にある `runtime/` と `native/` をビ�
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
 | `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Muonプロセスを終了します。`exitCode` を省略した場合は `0` です。 |
+| `recycle()`           | なし                | `Promise<void>` | Muonプロセスを終了し、起動元が対応している場合は自動再起動します。 |
 
-`reload()`, `hardReload()`, `close()`, `shutdown()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
-`close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
-`setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
-Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
-このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
-`setTitleBarIcon()` はPNGアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
-`path` には `initialTitleBarIcon` と同じ形式を指定します。
+- `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
+- `recycle()` は `muon-bootstrap` や `muon dev` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
+- `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
+- `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
+  Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
+  このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
+- `setTitleBarIcon()` はアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
+  `path` には `initialTitleBarIcon` と同じ形式を指定します。
+  `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を指定できます。
+  `"native"` タイトルバーではPNG以外を指定するとPromiseが拒否されます。
 
 ```js
 await window.muon.browser.zoomIn();
@@ -1080,6 +1099,7 @@ await window.muon.browser.resetZoom();
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);
+await window.muon.browser.recycle();
 ```
 
 ### muon.bootstrap名前空間
@@ -1088,7 +1108,7 @@ await window.muon.browser.shutdown(0);
 設定はruntimeディレクトリの `muon-bootstrap.ini` に保存され、現在実行中のCEFには影響しません。
 
 | 関数                    | 引数                                                                           | 戻り値                           | 説明                                                                 |
-| ----------------------- | ------------------------------------------------------------------------------ | -------------------------------- | -------------------------------------------------------------------- |
+| :---------------------- | :----------------------------------------------------------------------------- | :------------------------------- | :------------------------------------------------------------------- |
 | `getSettings()`         | なし                                                                           | `Promise<MuonBootstrapSettings>` | 現在有効なbootstrap設定を返します。                                  |
 | `setSettings(settings)` | `MuonBootstrapSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやカタログ更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
 | `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-bootstrap` 起動時にCEFカタログ更新を試行するよう要求します。 |
@@ -1106,7 +1126,7 @@ await window.muon.bootstrap.triggerUpdate();
 `window.muon.environments` は、Muonプロセスの環境情報と自動起動設定を扱います。
 
 | 関数                    | 引数               | 戻り値                            | 説明                                                                                                            |
-| ----------------------- | ------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| :---------------------- | :----------------- | :-------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
 | `getVariables()`        | なし               | `Promise<Record<string, string>>` | 現在のプロセス環境変数を返します。                                                                              |
 | `getCommandLine()`      | なし               | `Promise<string[]>`               | Muon起動時に記録されたコマンドラインを返します。利用可能な場合は `argv[0]` も含みます。                         |
 | `getProcessId()`        | なし               | `Promise<number>`                 | ネイティブMuonプロセスIDを返します。                                                                            |
@@ -1114,8 +1134,8 @@ await window.muon.bootstrap.triggerUpdate();
 | `getAutostart()`        | なし               | `Promise<boolean \| undefined>`   | ユーザーセッション開始時に現在のアプリを自動起動する設定かどうかを返します。判別不能な場合は `undefined` です。 |
 | `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>`                   | 自動起動設定を有効または無効にします。                                                                          |
 
-`getAutostart()` と `setAutostart()` は、起動時のlaunch sourceに応じたプラットフォームバックエンドを使用します。
-POSIX desktopではXDG Autostart、Windowsでは現在のユーザーのRun registry entryを使用します。
+- `getAutostart()` と `setAutostart()` は、起動時のlaunch sourceに応じたプラットフォームバックエンドを使用します。
+  POSIX desktopではXDG Autostart、Windowsでは現在のユーザーのRun registry entryを使用します。
 
 ```js
 const variables = await window.muon.environments.getVariables();
@@ -1134,13 +1154,13 @@ if (autostart !== true) {
 `window.muon.executor` は、シェルを介さずに子プロセスを起動します。
 
 | 関数             | 引数                                | 戻り値                             | 説明                                         |
-| ---------------- | ----------------------------------- | ---------------------------------- | -------------------------------------------- |
+| :--------------- | :---------------------------------- | :--------------------------------- | :------------------------------------------- |
 | `spawn(options)` | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorSpawnResult>` | 子プロセスを起動し、終了後に結果を返します。 |
 
 `MuonExecutorSpawnOptions`:
 
 | プロパティ | 型                       | 説明                                                                                                          |
-| ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------ |
 | `command`  | `string`                 | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用できません。 |
 | `args`     | `readonly string[]`      | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
 | `stdin`    | `string`                 | 子プロセスの標準入力へ書き込むUTF-8テキストです。省略時は何も書き込みません。                                 |
@@ -1150,7 +1170,7 @@ if (autostart !== true) {
 `MuonExecutorSpawnResult`:
 
 | プロパティ  | 型       | 説明                                                           |
-| ----------- | -------- | -------------------------------------------------------------- |
+| :---------- | :------- | :------------------------------------------------------------- |
 | `processId` | `number` | 起動した子プロセスIDです。                                     |
 | `exitCode`  | `number` | 子プロセスの終了コードです。非0終了でもPromiseは解決されます。 |
 | `stdout`    | `string` | 標準出力として収集されたUTF-8テキストです。                    |
@@ -1178,7 +1198,7 @@ GTKファイルダイアログで `gtk.localOnly: false` の場合にGVfs上のU
 Linux以外の環境では、通常の `muon.fs` 関数はローカルファイルシステム上のパスを扱います。
 
 | 関数                                             | 引数                                                                                                                 | 戻り値                    | 説明                                                                                                                                                       |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `readFile(path, options?)`                       | `path: string`, `options?: { position?: number, length?: number, signal?: AbortSignal }`                             | `Promise<ArrayBuffer>`    | バイナリファイルを読み込みます。`position` は読み取り開始バイト位置、`length` は最大読み取りバイト数です。どちらも非負のsafe integerである必要があります。 |
 | `writeFile(path, data, options?)`                | `path: string`, `data: BufferSource`, `options?: { position?: number, signal?: AbortSignal }`                        | `Promise<void>`           | バイナリデータを書き込みます。`position` 省略時はファイル全体を置き換え、指定時はそのバイト位置へ書き込みます。                                            |
 | `readTextFile(path, encoding, options?)`         | `path: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                                  | `Promise<string>`         | UTF-8テキストファイルを読み込みます。ファイルはNUL文字を含まない有効なUTF-8である必要があります。                                                          |
@@ -1208,7 +1228,7 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 `MuonFsStats`:
 
 | プロパティ/メソッド | 型                                                                                                          | 説明                                                          |
-| ------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| :------------------ | :---------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------ |
 | `type`              | `"file" \| "directory" \| "symlink" \| "blockDevice" \| "characterDevice" \| "fifo" \| "socket" \| "other"` | エントリ種別です。                                            |
 | `size`              | `number`                                                                                                    | 通常ファイルのバイトサイズです。それ以外では `0` です。       |
 | `mtimeMs`           | `number`                                                                                                    | 最終更新時刻です。Unix epochからのミリ秒で表されます。        |
@@ -1217,21 +1237,21 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 | `isDirectory()`     | `() => boolean`                                                                                             | `type === "directory"` の場合に `true` を返します。           |
 | `isSymbolicLink()`  | `() => boolean`                                                                                             | `type === "symlink"` の場合に `true` を返します。             |
 
-`MuonFsDirent` は `MuonFsStats` に `name: string` を加えた型です。
-`name` は読み取ったディレクトリからの相対エントリ名です。
+- `MuonFsDirent` は `MuonFsStats` に `name: string` を加えた型です。
+- `name` は読み取ったディレクトリからの相対エントリ名です。
 
 `MuonFsWatchEvent`:
 
 | プロパティ  | 型                                | 説明                                                               |
-| ----------- | --------------------------------- | ------------------------------------------------------------------ |
+| :---------- | :-------------------------------- | :----------------------------------------------------------------- |
 | `eventType` | `"rename" \| "change" \| "error"` | 通知種別です。作成と削除は `"rename"` として通知されます。         |
 | `filename`  | `string \| null`                  | 変更されたエントリ名です。監視対象そのものの変更では `null` です。 |
 | `message`   | `string`                          | `eventType === "error"` の場合のエラーメッセージです。             |
 
-`MuonFsWatcher` は `close(): Promise<void>` を持ちます。
-`close()` は複数回呼んでも問題ありません。
-`watch()` の `listener` が例外を投げたりrejectされたPromiseを返した場合、そのエラーは無視されます。
-watcher作成前にabortされた場合は `watch()` がrejectされ、作成後にabortされた場合はwatcherが閉じられます。
+- `MuonFsWatcher` は `close(): Promise<void>` を持ちます。
+- `close()` は複数回呼んでも問題ありません。
+- `watch()` の `listener` が例外を投げたりrejectされたPromiseを返した場合、そのエラーは無視されます。
+  watcher作成前にabortされた場合は `watch()` がrejectされ、作成後にabortされた場合はwatcherが閉じられます。
 
 ```js
 await window.muon.fs.writeTextFile("/tmp/muon-note.txt", "hello\n", "utf8");
@@ -1254,7 +1274,7 @@ await watcher.close();
 この名前空間の関数はファイルやディレクトリを作成・変更せず、ユーザーが選択したパスまたはURIを返すだけです。
 
 | 関数                          | 引数                                | 戻り値                    | 説明                                                                          |
-| ----------------------------- | ----------------------------------- | ------------------------- | ----------------------------------------------------------------------------- |
+| :---------------------------- | :---------------------------------- | :------------------------ | :---------------------------------------------------------------------------- |
 | `selectFile(options?)`        | `options?: MuonFsOpenDialogOptions` | `Promise<string \| null>` | ファイルを1つ選択するダイアログを表示します。キャンセル時は `null` です。     |
 | `selectFiles(options?)`       | `options?: MuonFsOpenDialogOptions` | `Promise<string[]>`       | 複数ファイルを選択するダイアログを表示します。キャンセル時は空配列です。      |
 | `selectDirectory(options?)`   | `options?: MuonFsOpenDialogOptions` | `Promise<string \| null>` | ディレクトリを1つ選択するダイアログを表示します。キャンセル時は `null` です。 |
@@ -1264,7 +1284,7 @@ await watcher.close();
 共通オプション:
 
 | プロパティ    | 型                                                           | 説明                                                                                                                                                             |
-| ------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| :------------ | :----------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `signal`      | `AbortSignal`                                                | ダイアログ操作を中断するsignalです。                                                                                                                             |
 | `title`       | `string`                                                     | ダイアログタイトルです。                                                                                                                                         |
 | `defaultPath` | `string`                                                     | 初期表示パスまたはURIです。GTKでは `gtk.localOnly: false` の場合にGVfs URIも受け付けます。                                                                       |
@@ -1278,14 +1298,14 @@ await watcher.close();
 `MuonFsSaveDialogOptions` では、共通オプションに加えて以下を指定できます。
 
 | プロパティ         | 型        | 説明                                                           |
-| ------------------ | --------- | -------------------------------------------------------------- |
+| :----------------- | :-------- | :------------------------------------------------------------- |
 | `defaultName`      | `string`  | 保存ダイアログに表示する初期ファイル名です。                   |
 | `confirmOverwrite` | `boolean` | 既存ファイルを置き換える前に確認します。省略時は `true` です。 |
 
 GTK固有オプション:
 
 | プロパティ      | 型                  | 説明                                                                                                 |
-| --------------- | ------------------- | ---------------------------------------------------------------------------------------------------- |
+| :-------------- | :------------------ | :--------------------------------------------------------------------------------------------------- |
 | `localOnly`     | `boolean`           | ローカルファイルだけに制限します。省略時は `false` で、GVfsロケーションからURIが返ることがあります。 |
 | `createFolders` | `boolean`           | 対応している保存・フォルダ選択ダイアログでフォルダ作成を許可します。                                 |
 | `mimeTypes`     | `readonly string[]` | 追加のMIME typeフィルタです。各要素は空ではない文字列です。                                          |
@@ -1293,7 +1313,7 @@ GTK固有オプション:
 Win32固有オプション:
 
 | プロパティ           | 型        | 説明                                                                   |
-| -------------------- | --------- | ---------------------------------------------------------------------- |
+| :------------------- | :-------- | :--------------------------------------------------------------------- |
 | `forceFilesystem`    | `boolean` | ファイルシステムに裏付けられたshell itemだけを選択できるようにします。 |
 | `noDereferenceLinks` | `boolean` | ショートカットやリンクの参照先ではなく、リンク項目自体を返します。     |
 | `dontAddToRecent`    | `boolean` | 選択した場所を最近使ったドキュメントに追加しません。                   |
@@ -1313,36 +1333,6 @@ if (path !== null) {
   console.log(image.byteLength);
 }
 ```
-
-#### Linux環境においてのGTK選択
-
-Linux環境のファイルダイアログは、標準プラグインとして提供されるGTK実装を `plugin.plugins` で有効化して使用します。
-MuonはGTKのバージョンを自動選択しないため、アプリケーションに同梱するプラグインファイルと `muon.json` の `name` を開発者が選択してください。
-GTK3実装を使用する場合は、例えば以下のように指定します。
-
-```json
-{
-  "plugin": {
-    "path": "./plugins",
-    "plugins": [
-      {
-        "name": "internal",
-        "allow": ["muon.browser.*", "muon.fs.*"]
-      },
-      {
-        "name": "muon_fs_dialogs_gtk3",
-        "allow": ["muon.fs.dialogs.*"]
-      }
-    ]
-  }
-}
-```
-
-GTK4実装を使う場合は、同梱するプラグインファイルに合わせて `name` を `"muon_fs_dialogs_gtk4"` に変更します。
-どちらの場合も、ページへAPIを注入するには `browser.plugin.allow` で対象ページを許可しておく必要があります。
-
-Windows環境ではファイルダイアログ実装がMuon本体に完全に内蔵されているため、GTK用の追加プラグインファイルを配置したり、GTKバージョンを選択したりする必要はありません。
-ただし、ほかの内蔵APIと同様に、 `plugin.plugins` と `browser.plugin.allow` による公開範囲の設定は必要です。
 
 ---
 

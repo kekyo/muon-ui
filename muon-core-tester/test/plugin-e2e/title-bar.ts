@@ -16,6 +16,7 @@ import {
   parseXpropWindowTitle,
   processExitTimeoutMs,
   rm,
+  sendNativeMouseWheel,
   shouldUseValgrind,
   startGestamentDebugMuon,
   stopGestamentMuon,
@@ -52,6 +53,11 @@ interface RootCapture {
   y: number;
 }
 
+interface PageScrollPosition {
+  x: number;
+  y: number;
+}
+
 const testWindowTitle = "muon titlebar main";
 const maximizedStates = [
   "_NET_WM_STATE_MAXIMIZED_HORZ",
@@ -64,6 +70,7 @@ const configuredTitleBarBackgroundColor = "#123456";
 const appPageBackgroundColor = "#d7ebe5";
 const initialTitleBarIconPath = "icons/title-bar-initial.png";
 const updatedTitleBarIconPath = "icons/title-bar-updated.png";
+const svgTitleBarIconPath = "icons/title-bar-vector.svg";
 const expectedTitleBarBackgroundColor: RgbaPixel = {
   red: 0x12,
   green: 0x34,
@@ -88,6 +95,12 @@ const expectedUpdatedTitleBarIconColor: RgbaPixel = {
   blue: 0x60,
   alpha: 255,
 };
+const expectedSvgTitleBarIconColor: RgbaPixel = {
+  red: 0x30,
+  green: 0x70,
+  blue: 0xe0,
+  alpha: 255,
+};
 
 const createSolidPng = (color: RgbaPixel): Buffer => {
   const png = new PNG({ width: 16, height: 16 });
@@ -100,6 +113,30 @@ const createSolidPng = (color: RgbaPixel): Buffer => {
   return PNG.sync.write(png);
 };
 
+const createSolidSvg = (color: RgbaPixel): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="rgb(${color.red},${color.green},${color.blue})"/></svg>`;
+
+const createTitleBarPage = (
+  title: string,
+  faviconPath: string | undefined = undefined,
+  pageDraggable: boolean = false,
+): string =>
+  `<!doctype html><title>${title}</title>${
+    faviconPath === undefined
+      ? ""
+      : `<link rel="icon" type="image/svg+xml" href="${faviconPath}">`
+  }<style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}${
+    pageDraggable
+      ? "body{-webkit-app-region:drag;}.no-drag{position:fixed;left:24px;top:112px;min-width:120px;min-height:64px;-webkit-app-region:no-drag;}.drag-space{width:1800px;min-height:1600px;padding:220px 24px 24px;box-sizing:border-box;}.scroll-marker{margin-left:1400px;margin-top:1200px;}"
+      : ""
+  }</style><main class="drag-space">title bar test${
+    pageDraggable ? '<div class="scroll-marker">scroll marker</div>' : ""
+  }${
+    pageDraggable
+      ? '<button id="no-drag-button" class="no-drag">click <span id="no-drag-count">0</span></button><script>document.getElementById("no-drag-button").addEventListener("click",()=>{const count=document.getElementById("no-drag-count");count.textContent=String(Number(count.textContent)+1);});</script>'
+      : ""
+  }</main>`;
+
 const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   const assetRoot = join(directory, "titlebar-assets");
   const mainRoot = join(assetRoot, "main");
@@ -107,7 +144,23 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   await mkdir(iconsRoot, { recursive: true });
   await writeFile(
     join(mainRoot, "index.html"),
-    `<!doctype html><title>${testWindowTitle}</title><style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}</style><main>title bar test</main>`,
+    createTitleBarPage(testWindowTitle),
+  );
+  await writeFile(
+    join(mainRoot, "favicon-svg.html"),
+    createTitleBarPage(testWindowTitle, svgTitleBarIconPath),
+  );
+  await writeFile(
+    join(mainRoot, "broken-favicon.html"),
+    createTitleBarPage(testWindowTitle, "icons/missing.svg"),
+  );
+  await writeFile(
+    join(mainRoot, "no-favicon.html"),
+    createTitleBarPage(testWindowTitle),
+  );
+  await writeFile(
+    join(mainRoot, "draggable.html"),
+    createTitleBarPage(testWindowTitle, undefined, true),
   );
   await writeFile(
     join(assetRoot, "main", initialTitleBarIconPath),
@@ -116,6 +169,10 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   await writeFile(
     join(assetRoot, "main", updatedTitleBarIconPath),
     createSolidPng(expectedUpdatedTitleBarIconColor),
+  );
+  await writeFile(
+    join(assetRoot, "main", svgTitleBarIconPath),
+    createSolidSvg(expectedSvgTitleBarIconColor),
   );
   return assetRoot;
 };
@@ -562,6 +619,111 @@ const clickTitleBarButton = async (
   await wait(100);
 };
 
+const dragMouse = async (
+  running: RunningGestamentMuon,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): Promise<void> => {
+  await running.app.input.moveMouseTo(startX, startY);
+  await running.app.input.setMouseButton("left", true);
+  await wait(100);
+  const stepCount = 10;
+  for (let step = 1; step <= stepCount; step += 1) {
+    await running.app.input.moveMouseTo(
+      Math.round(startX + ((endX - startX) * step) / stepCount),
+      Math.round(startY + ((endY - startY) * step) / stepCount),
+    );
+    await wait(50);
+  }
+  await running.app.input.setMouseButton("left", false);
+  await wait(300);
+};
+
+const clickPageNoDragControl = async (
+  driver: CdpDriver,
+  running: RunningGestamentMuon,
+  clickX: number,
+  clickY: number,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  while (Date.now() < deadline) {
+    await running.app.input.moveMouseTo(clickX, clickY);
+    await running.app.input.setMouseButton("left", true);
+    await running.app.input.setMouseButton("left", false);
+    const clickCount = Number(
+      await driver.evaluate(
+        'document.getElementById("no-drag-count").textContent',
+      ),
+    );
+    if (clickCount >= 1) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error("Timed out waiting for page no-drag control click");
+};
+
+const readPageScrollPosition = async (
+  driver: CdpDriver,
+): Promise<PageScrollPosition> => ({
+  x: Number(await driver.evaluate("window.scrollX")),
+  y: Number(await driver.evaluate("window.scrollY")),
+});
+
+const waitForPageScrollChange = async (
+  driver: CdpDriver,
+  initial: PageScrollPosition,
+  axis: keyof PageScrollPosition,
+): Promise<PageScrollPosition> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPosition = initial;
+  while (Date.now() < deadline) {
+    lastPosition = await readPageScrollPosition(driver);
+    if (lastPosition[axis] > initial[axis]) {
+      return lastPosition;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for page ${axis} scroll. Initial: ${JSON.stringify(
+      initial,
+    )}, last: ${JSON.stringify(lastPosition)}`,
+  );
+};
+
+const waitForNativeWindowMove = async (
+  initialBounds: NativeWindowBounds,
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv,
+): Promise<NativeWindowBounds> => {
+  const deadline = Date.now() + timeoutMs;
+  let lastBounds = initialBounds;
+  while (Date.now() < deadline) {
+    lastBounds = await readNativeWindowBounds(initialBounds.id, env);
+    if (lastBounds.x !== initialBounds.x || lastBounds.y !== initialBounds.y) {
+      return lastBounds;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for native window move. Initial: ${JSON.stringify(
+      initialBounds,
+    )}, last: ${JSON.stringify(lastBounds)}`,
+  );
+};
+
+const expectNativeWindowStill = async (
+  initialBounds: NativeWindowBounds,
+  env: NodeJS.ProcessEnv,
+): Promise<void> => {
+  await wait(300);
+  const currentBounds = await readNativeWindowBounds(initialBounds.id, env);
+  expect(currentBounds.x).toBe(initialBounds.x);
+  expect(currentBounds.y).toBe(initialBounds.y);
+};
+
 const runTitleBarStep = async <T>(
   name: string,
   operation: () => Promise<T>,
@@ -684,6 +846,90 @@ titleBarIt("renders and controls the Linux custom title bar", async () => {
 });
 
 titleBarIt(
+  "moves the Linux custom window from page CSS draggable regions",
+  async () => {
+    await withTitleBarMuon(async (driver, running, env, initialBounds) => {
+      let bounds = initialBounds;
+      await runTitleBarStep("navigate to draggable page", async () => {
+        await driver.evaluate('location.href = "asset://main/draggable.html"');
+        await driver.evaluate(
+          'new Promise((resolve) => { const check = () => document.getElementById("no-drag-button") === null ? setTimeout(check, 50) : resolve(true); check(); })',
+        );
+      });
+
+      await runTitleBarStep("click page no-drag control", async () => {
+        await clickPageNoDragControl(
+          driver,
+          running,
+          initialBounds.x + 84,
+          initialBounds.y + titleBarHeight + 130,
+        );
+        await expectNativeWindowStill(initialBounds, env);
+      });
+
+      await runTitleBarStep(
+        "wheel page draggable region vertically",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          const initialScroll = await readPageScrollPosition(driver);
+          await sendNativeMouseWheel(
+            testWindowTitle,
+            bounds.x + 220,
+            bounds.y + titleBarHeight + 260,
+            "down",
+          );
+          await waitForPageScrollChange(driver, initialScroll, "y");
+        },
+      );
+
+      await runTitleBarStep(
+        "wheel page draggable region horizontally",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          const initialScroll = await readPageScrollPosition(driver);
+          await sendNativeMouseWheel(
+            testWindowTitle,
+            bounds.x + 220,
+            bounds.y + titleBarHeight + 260,
+            "right",
+          );
+          await waitForPageScrollChange(driver, initialScroll, "x");
+        },
+      );
+
+      await runTitleBarStep(
+        "drag title bar over page draggable regions",
+        async () => {
+          await dragMouse(
+            running,
+            bounds.x + 220,
+            bounds.y + Math.round(titleBarHeight / 2),
+            bounds.x + 320,
+            bounds.y + Math.round(titleBarHeight / 2) + 80,
+          );
+          bounds = await waitForNativeWindowMove(
+            bounds,
+            cdpCommandTimeoutMs,
+            env,
+          );
+        },
+      );
+
+      await runTitleBarStep("drag page background", async () => {
+        await dragMouse(
+          running,
+          bounds.x + 220,
+          bounds.y + titleBarHeight + 260,
+          bounds.x + 320,
+          bounds.y + titleBarHeight + 340,
+        );
+        await waitForNativeWindowMove(bounds, cdpCommandTimeoutMs, env);
+      });
+    });
+  },
+);
+
+titleBarIt(
   "uses browser.backgroundColor for the Linux custom title bar background",
   async () => {
     await withTitleBarMuon(async (_driver, running, _env, bounds) => {
@@ -778,6 +1024,23 @@ titleBarIt("shows and updates the Linux custom title bar icon", async () => {
           expectedUpdatedTitleBarIconColor,
         );
       });
+      await runTitleBarStep(
+        "update title bar icon to SVG through API",
+        async () => {
+          await expect(
+            driver.evaluate(
+              `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+                svgTitleBarIconPath,
+              )})`,
+            ),
+          ).resolves.toBeUndefined();
+          await waitForTitleBarIconColor(
+            running,
+            bounds,
+            expectedSvgTitleBarIconColor,
+          );
+        },
+      );
       await runTitleBarStep("clear title bar icon through API", async () => {
         await expect(
           driver.evaluate("window.muon.browser.setTitleBarIcon(null)"),
@@ -794,6 +1057,58 @@ titleBarIt("shows and updates the Linux custom title bar icon", async () => {
     initialTitleBarIconPath,
   );
 });
+
+titleBarIt(
+  "updates the Linux custom title bar icon from favicon changes",
+  async () => {
+    await withTitleBarMuon(
+      async (driver, running, _env, bounds) => {
+        await runTitleBarStep(
+          "verify initial title bar icon",
+          async () =>
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            ),
+        );
+        await runTitleBarStep("navigate to SVG favicon page", async () => {
+          await driver.navigate("asset://main/favicon-svg.html");
+          await waitForTitleBarIconColor(
+            running,
+            bounds,
+            expectedSvgTitleBarIconColor,
+          );
+        });
+        await runTitleBarStep(
+          "fall back when favicon cannot be loaded",
+          async () => {
+            await driver.navigate("asset://main/broken-favicon.html");
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+        await runTitleBarStep(
+          "fall back when page has no favicon",
+          async () => {
+            await driver.navigate("asset://main/no-favicon.html");
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+      },
+      configuredTitleBarBackgroundColor,
+      undefined,
+      initialTitleBarIconPath,
+    );
+  },
+);
 
 titleBarIt(
   "controls the Linux native title bar decoration hint through browser API",
@@ -822,6 +1137,32 @@ titleBarIt(
             env,
           );
         });
+      },
+      undefined,
+      undefined,
+      undefined,
+      "native",
+    );
+  },
+);
+
+titleBarIt(
+  "rejects non-PNG title bar icons for the Linux native title bar",
+  async () => {
+    await withTitleBarMuon(
+      async (driver) => {
+        await runTitleBarStep(
+          "reject SVG title bar icon through API",
+          async () => {
+            await expect(
+              driver.evaluate(
+                `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+                  svgTitleBarIconPath,
+                )}).then(() => "resolved", (error) => error instanceof Error ? error.message : String(error))`,
+              ),
+            ).resolves.toContain("PNG");
+          },
+        );
       },
       undefined,
       undefined,

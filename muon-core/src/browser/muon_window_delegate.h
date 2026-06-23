@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "browser/muon_browser_shortcut_handler.h"
 #include "config/muon_config.h"
 #include "browser/muon_title_bar.h"
 
@@ -27,6 +28,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
    * visible.
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
+   * @param shortcut_handler Browser shortcut handler for window-level events.
    */
   MuonWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
                       bool is_devtools,
@@ -36,7 +38,9 @@ class MuonWindowDelegate final : public CefWindowDelegate {
                       MuonTitleBarManifest title_bar_manifest =
                           CreateNativeMuonTitleBarManifest(),
                       MuonTitleBarBackgroundColor title_bar_background_color =
-                          {});
+                          {},
+                      CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler =
+                          nullptr);
 
   /**
    * Attaches the browser view and applies the initial window state.
@@ -107,6 +111,16 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   cef_runtime_style_t GetWindowRuntimeStyle() override;
 
   /**
+   * Handles keyboard events that did not reach the focused browser view.
+   *
+   * @param window Window that received the key event.
+   * @param event CEF key event.
+   * @return true when the event was handled.
+   */
+  bool OnKeyEvent(CefRefPtr<CefWindow> window,
+                  const CefKeyEvent& event) override;
+
+  /**
    * Sets Linux window metadata for desktop environments.
    *
    * @param window Window whose properties are requested.
@@ -125,6 +139,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   CefRefPtr<CefBrowserView> browser_view_;
   CefRefPtr<CefBrowserView> title_bar_view_;
   CefRefPtr<MuonTitleBarController> title_bar_controller_;
+  CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler_;
   const bool is_devtools_;
   const MuonBrowserInitialWindowState initial_window_state_;
   const bool initial_title_bar_visibility_;

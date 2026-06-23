@@ -19,6 +19,7 @@ import {
   type EmbedMuonConfigResult,
 } from "./embed-config.js";
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
+import { runMuonDev, type MuonDevOptions } from "./dev.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
 
 interface PrepareCommandOptions {
@@ -50,6 +51,16 @@ interface BuildCommandOptions {
   config: string | undefined;
   outDir: string | undefined;
   name: string | undefined;
+  json: boolean | undefined;
+}
+
+interface DevCommandOptions {
+  muonPath: string | undefined;
+  cefPath: string | undefined;
+  stageDir: string | undefined;
+  config: string | undefined;
+  assets: string | undefined;
+  debugger: boolean | undefined;
   json: boolean | undefined;
 }
 
@@ -160,6 +171,44 @@ const runPrepareCommand = async (
   }
 };
 
+const runDevCommand = async (
+  commandOptions: DevCommandOptions,
+  command: Command,
+): Promise<void> => {
+  const devOptions: MuonDevOptions = {
+    root: process.cwd(),
+    environment: process.env,
+    quietPrepare: commandOptions.json === true,
+  };
+
+  if (commandOptions.muonPath !== undefined) {
+    devOptions.muonPath = commandOptions.muonPath;
+  }
+  if (commandOptions.cefPath !== undefined) {
+    devOptions.cefPath = commandOptions.cefPath;
+  }
+  if (commandOptions.stageDir !== undefined) {
+    devOptions.stagePath = commandOptions.stageDir;
+  }
+  if (commandOptions.config !== undefined) {
+    devOptions.configPath = commandOptions.config;
+  }
+  if (commandOptions.assets !== undefined) {
+    devOptions.assetSourcePath = commandOptions.assets;
+  }
+  if (command.getOptionValueSource("debugger") === "cli") {
+    devOptions.enableDebugger = commandOptions.debugger === true;
+  }
+
+  const result = await runMuonDev(devOptions);
+  if (commandOptions.json === true) {
+    console.log(JSON.stringify(result, null, 2));
+  }
+  if (result.exitCode !== 0) {
+    process.exitCode = result.exitCode;
+  }
+};
+
 const runInitCommand = async (): Promise<void> => {
   const result = await ensureMuonGitignoreEntry(process.cwd());
   console.log(
@@ -261,6 +310,20 @@ const createCliCommand = (): Command => {
     .option("--json", "write result as JSON")
     .action(async (options: BuildCommandOptions) => {
       await runBuildCommand(options);
+    });
+
+  const devCommand = program
+    .command("dev")
+    .description("Launch Muon directly with local development assets")
+    .option("--muon-path <path>", "Muon runtime file root")
+    .option("--cef-path <path>", "CEF file root")
+    .option("--stage-dir <path>", "prepared runtime output directory")
+    .option("--config <path>", "muon config path")
+    .option("--assets <path>", "development asset directory")
+    .option("--no-debugger", "disable Muon debugger defaults")
+    .option("--json", "write result as JSON")
+    .action(async (options: DevCommandOptions) => {
+      await runDevCommand(options, devCommand);
     });
 
   program

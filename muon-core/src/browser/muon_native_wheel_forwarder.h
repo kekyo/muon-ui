@@ -8,6 +8,20 @@
 
 #include "include/views/cef_window.h"
 
+#include <vector>
+
+/**
+ * Builds unique native window handles that should be observed for page CSS
+ * draggable-region input forwarding.
+ *
+ * @param root_window_handle Top-level native window handle.
+ * @param child_window_handles Descendant native window handles.
+ * @return Ordered handles to register for native input forwarding.
+ */
+std::vector<CefWindowHandle> GetMuonNativeForwarderWindowHandlesForRegistration(
+    CefWindowHandle root_window_handle,
+    const std::vector<CefWindowHandle>& child_window_handles);
+
 /**
  * Registers native input forwarding for page CSS draggable regions.
  *

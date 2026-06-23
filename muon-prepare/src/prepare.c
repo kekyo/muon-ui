@@ -52,6 +52,9 @@ typedef struct {
   int force;
   int quiet;
   int json;
+  MuonPrepareProgressCallback progress_callback;
+  void *progress_user_data;
+  int progress_emitted;
 } PrepareOptions;
 
 typedef struct {
@@ -62,6 +65,35 @@ typedef struct {
 } PrepareResult;
 
 static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
+
+static void prepare_report_progress(const PrepareOptions *options,
+                                    MuonPrepareProgressPhase phase,
+                                    const char *status,
+                                    unsigned long long current,
+                                    unsigned long long total,
+                                    int determinate) {
+  if (options->progress_callback != NULL) {
+    ((PrepareOptions *)options)->progress_emitted = 1;
+  }
+  muon_report_progress(options->progress_callback, options->progress_user_data,
+                       phase, status, current, total, determinate);
+}
+
+static void forward_prepare_progress(const MuonPrepareProgress *progress,
+                                     void *user_data) {
+  PrepareOptions *options = (PrepareOptions *)user_data;
+  options->progress_emitted = 1;
+  options->progress_callback(progress, options->progress_user_data);
+}
+
+static MuonPrepareProgressCallback get_prepare_progress_callback(
+    const PrepareOptions *options) {
+  return options->progress_callback == NULL ? NULL : forward_prepare_progress;
+}
+
+static void *get_prepare_progress_user_data(const PrepareOptions *options) {
+  return options->progress_callback == NULL ? NULL : (void *)options;
+}
 
 static void set_default_bootstrap_options(PrepareOptions *options) {
   options->cef_version_policy = muon_duplicate_string("tested");
@@ -197,8 +229,9 @@ static char *sanitize_key(const char *value) {
   return result;
 }
 
-static int extract_archive(const char *archive_path, const char *destination,
-                           size_t *file_count) {
+static int extract_archive(
+    const char *archive_path, const char *destination, size_t *file_count,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (muon_ensure_directory(destination) != 0) {
     return -1;
   }
@@ -208,8 +241,10 @@ static int extract_archive(const char *archive_path, const char *destination,
     free(temporary_directory);
     return -1;
   }
-  if (muon_extract_tar_bz2_archive(archive_path, temporary_directory, 1, NULL) !=
-      0) {
+  if (muon_extract_tar_bz2_archive_progress(
+          archive_path, temporary_directory, 1, NULL, progress_callback,
+          progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...") != 0) {
     muon_remove_recursive(temporary_directory);
     free(temporary_directory);
     return -1;
@@ -228,14 +263,22 @@ static int extract_archive(const char *archive_path, const char *destination,
   int result = 0;
   if (has_release || has_resources) {
     if (has_release) {
-      result = muon_copy_directory_contents(release_path, destination, file_count);
+      result = muon_copy_directory_contents_progress(
+          release_path, destination, file_count, progress_callback,
+          progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...");
     }
     if (result == 0 && has_resources) {
-      result = muon_copy_directory_contents(resource_path, destination, file_count);
+      result = muon_copy_directory_contents_progress(
+          resource_path, destination, file_count, progress_callback,
+          progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...");
     }
   } else {
-    result = muon_copy_directory_contents(temporary_directory, destination,
-                                     file_count);
+    result = muon_copy_directory_contents_progress(
+        temporary_directory, destination, file_count, progress_callback,
+        progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+        "Installing CEF runtime...");
   }
   if (muon_remove_recursive(temporary_directory) != 0) {
     result = -1;
@@ -433,8 +476,12 @@ static int ensure_catalog_cache(const PrepareOptions *options,
     return 0;
   }
   int updated = 0;
-  const int result = muon_prepare_ensure_catalog_cache_with_status(
-      options->cache_dir, 1, &updated);
+  if (options->progress_callback != NULL) {
+    mutable_options->progress_emitted = 1;
+  }
+  const int result = muon_prepare_ensure_catalog_cache_with_status_progress(
+      options->cache_dir, 1, &updated, get_prepare_progress_callback(options),
+      get_prepare_progress_user_data(options));
   mutable_options->catalog_updated = updated;
   if (updated) {
     mutable_options->last_catalog_update_unix = muon_current_unix_time();
@@ -468,18 +515,20 @@ static int ensure_cef_archive_cache(const PrepareOptions *options,
                                     char **cef_path) {
   const MuonCefReference reference = create_cef_reference(runtime_info);
   MuonCefArtifact artifact;
-  if (muon_prepare_ensure_cef_archive_cache_for_policy(
+  if (muon_prepare_ensure_cef_archive_cache_for_policy_progress(
           options->cache_dir, &reference, options->cef_version_policy,
-          options->cef_exact_version, options->force, &artifact, cef_path) !=
-      0) {
+          options->cef_exact_version, options->force, &artifact, cef_path,
+          get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options)) != 0) {
     return -1;
   }
   muon_prepare_free_cef_artifact(&artifact);
   return 0;
 }
 
-static int copy_cef_source(const char *cef_path, const char *destination,
-                           size_t *file_count) {
+static int copy_cef_source(
+    const char *cef_path, const char *destination, size_t *file_count,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (!muon_path_exists(cef_path)) {
     muon_print_error("CEF path does not exist: %s\n", cef_path);
     return -1;
@@ -496,13 +545,22 @@ static int copy_cef_source(const char *cef_path, const char *destination,
   int result = 0;
   if (has_release || has_resources) {
     if (has_release) {
-      result = muon_copy_directory_contents(release_path, destination, file_count);
+      result = muon_copy_directory_contents_progress(
+          release_path, destination, file_count, progress_callback,
+          progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...");
     }
     if (result == 0 && has_resources) {
-      result = muon_copy_directory_contents(resource_path, destination, file_count);
+      result = muon_copy_directory_contents_progress(
+          resource_path, destination, file_count, progress_callback,
+          progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...");
     }
   } else {
-    result = muon_copy_directory_contents(cef_path, destination, file_count);
+    result = muon_copy_directory_contents_progress(
+        cef_path, destination, file_count, progress_callback,
+        progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+        "Installing CEF runtime...");
   }
   free(release_path);
   free(resource_path);
@@ -630,7 +688,12 @@ static int prepare_staging(const PrepareOptions *options,
     free(lock_name);
     return set_result;
   }
-  if (muon_ensure_directory(parent) != 0 || muon_acquire_lock(lock_name) != 0) {
+  if (muon_ensure_directory(parent) != 0 ||
+      muon_acquire_lock_with_progress(
+          lock_name, get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options),
+          MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...") != 0) {
     free(ready_content);
     free(ready_path);
     free(parent);
@@ -676,10 +739,16 @@ static int prepare_staging(const PrepareOptions *options,
     return -1;
   }
   size_t cef_file_count = 0;
+  prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+                          "Installing CEF runtime...", 0, 0, 0);
   if ((cef_is_archive
-           ? extract_archive(cef_path, temporary_directory, &cef_file_count)
+           ? extract_archive(cef_path, temporary_directory, &cef_file_count,
+                             get_prepare_progress_callback(options),
+                             get_prepare_progress_user_data(options))
            : copy_cef_source(cef_path, temporary_directory,
-                             &cef_file_count)) != 0) {
+                             &cef_file_count,
+                             get_prepare_progress_callback(options),
+                             get_prepare_progress_user_data(options))) != 0) {
     muon_remove_recursive(temporary_directory);
     muon_release_lock(lock_name);
     free(ready_content);
@@ -722,6 +791,8 @@ static int prepare_staging(const PrepareOptions *options,
     free(temporary_ready);
     return -1;
   }
+  prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
+                          "Starting Muon...", 0, 0, 0);
   if (muon_path_exists(options->stage_dir) &&
       muon_remove_recursive(options->stage_dir) != 0) {
     muon_remove_recursive(temporary_directory);
@@ -797,7 +868,11 @@ static int prepare_cef_in_place(const PrepareOptions *options,
     free(lock_name);
     return set_result;
   }
-  if (muon_acquire_lock(lock_name) != 0) {
+  if (muon_acquire_lock_with_progress(
+          lock_name, get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options),
+          MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...") != 0) {
     free(ready_content);
     free(ready_path);
     free(raw_key);
@@ -816,10 +891,16 @@ static int prepare_cef_in_place(const PrepareOptions *options,
     return set_result;
   }
   size_t cef_file_count = 0;
+  prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+                          "Installing CEF runtime...", 0, 0, 0);
   if ((cef_is_archive
-           ? extract_archive(cef_path, options->muon_path, &cef_file_count)
+           ? extract_archive(cef_path, options->muon_path, &cef_file_count,
+                             get_prepare_progress_callback(options),
+                             get_prepare_progress_user_data(options))
            : copy_cef_source(cef_path, options->muon_path,
-                             &cef_file_count)) != 0) {
+                             &cef_file_count,
+                             get_prepare_progress_callback(options),
+                             get_prepare_progress_user_data(options))) != 0) {
     muon_release_lock(lock_name);
     free(ready_content);
     free(ready_path);
@@ -838,6 +919,8 @@ static int prepare_cef_in_place(const PrepareOptions *options,
     free(lock_name);
     return -1;
   }
+  prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
+                          "Starting Muon...", 0, 0, 0);
   muon_release_lock(lock_name);
   const int set_result = set_prepare_result(result, options->muon_path,
                                             options->muon_path, cef_path, 0);
@@ -1030,10 +1113,12 @@ static int parse_buildtime_arguments(int argc, char **argv, int start_index,
              : 0;
 }
 
-int muon_prepare_in_place(const char *muon_path, const char *target,
-                          const char *cache_dir, int force, int quiet) {
+int muon_prepare_in_place_with_progress(
+    const char *muon_path, const char *target, const char *cache_dir, int force,
+    int quiet, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data) {
   setvbuf(stderr, NULL, _IONBF, 0);
-  muon_set_quiet(quiet);
+  muon_set_quiet(0);
   PrepareOptions options;
   memset(&options, 0, sizeof(options));
   options.muon_path = muon_duplicate_path_string(muon_path);
@@ -1047,6 +1132,8 @@ int muon_prepare_in_place(const char *muon_path, const char *target,
           : muon_duplicate_path_string(cache_dir);
   options.force = force;
   options.quiet = quiet;
+  options.progress_callback = progress_callback;
+  options.progress_user_data = progress_user_data;
   set_default_bootstrap_options(&options);
   if (options.muon_path == NULL || options.target == NULL ||
       options.cache_dir == NULL || options.cef_version_policy == NULL ||
@@ -1094,6 +1181,7 @@ int muon_prepare_in_place(const char *muon_path, const char *target,
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_paths;
   }
+  muon_set_quiet(quiet);
   const int catalog_required = strcmp(options.cef_version_policy, "exact") == 0;
   if ((policy_uses_catalog(&options) || options.force ||
        options.update_requested) &&
@@ -1114,6 +1202,14 @@ int muon_prepare_in_place(const char *muon_path, const char *target,
   }
   exit_code = 0;
 cleanup_paths:
+  if (options.progress_emitted) {
+    prepare_report_progress(
+        &options,
+        exit_code == 0 ? MUON_PREPARE_PROGRESS_PHASE_DONE
+                       : MUON_PREPARE_PROGRESS_PHASE_FAILED,
+        exit_code == 0 ? "Starting Muon..." : "Failed to prepare CEF.", 0, 0,
+        0);
+  }
   free(cef_path);
   free(result.stage_path);
   free(result.muon_path);
@@ -1125,6 +1221,12 @@ cleanup_paths:
   free(options.cef_exact_version);
   free(options.bootstrap_config_dir);
   return exit_code;
+}
+
+int muon_prepare_in_place(const char *muon_path, const char *target,
+                          const char *cache_dir, int force, int quiet) {
+  return muon_prepare_in_place_with_progress(muon_path, target, cache_dir,
+                                             force, quiet, NULL, NULL);
 }
 
 static int run_runtime_command(int argc, char **argv, int start_index) {

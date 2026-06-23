@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "prepare_progress.h"
 #include "sha1.h"
 #include "yyjson.h"
 
@@ -16,6 +17,13 @@ void muon_set_quiet(int quiet);
 void muon_print_error(const char *format, ...);
 void muon_print_errno(const char *message);
 void muon_log_message(const char *format, ...);
+void muon_report_progress(MuonPrepareProgressCallback callback,
+                          void *user_data,
+                          MuonPrepareProgressPhase phase,
+                          const char *status,
+                          unsigned long long current,
+                          unsigned long long total,
+                          int determinate);
 
 void muon_free_string_array(char **values, size_t count);
 char *muon_duplicate_string(const char *value);
@@ -32,8 +40,16 @@ int muon_ensure_directory(const char *path);
 int muon_copy_file(const char *source, const char *destination, int mode);
 int muon_copy_file_with_source_mode(const char *source,
                                     const char *destination);
+int muon_copy_file_with_source_mode_progress(
+    const char *source, const char *destination,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status);
 int muon_copy_directory_contents(const char *source, const char *destination,
                                  size_t *file_count);
+int muon_copy_directory_contents_progress(
+    const char *source, const char *destination, size_t *file_count,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status);
 int muon_remove_recursive(const char *path);
 char *muon_read_text_file(const char *path);
 int muon_write_text_file(const char *path, const char *content);
@@ -68,12 +84,25 @@ int muon_extract_tar_bz2_archive(const char *archive_path,
                                  const char *destination,
                                  int strip_components,
                                  size_t *file_count);
+int muon_extract_tar_bz2_archive_progress(
+    const char *archive_path, const char *destination, int strip_components,
+    size_t *file_count, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data, MuonPrepareProgressPhase phase,
+    const char *status);
 char *muon_read_tar_bz2_text_file(const char *archive_path,
                                   const char *relative_path,
                                   int strip_components);
 
 int muon_run_process(char *const argv[]);
+int muon_run_process_with_file_progress(
+    char *const argv[], const char *progress_path, unsigned long long total,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status);
 int muon_acquire_lock(const char *lock_path);
+int muon_acquire_lock_with_progress(
+    const char *lock_path, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data, MuonPrepareProgressPhase phase,
+    const char *status);
 void muon_release_lock(const char *lock_path);
 char *muon_create_temporary_path(const char *parent, const char *key);
 int muon_atomic_replace(const char *source, const char *destination);

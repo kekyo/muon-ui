@@ -18,6 +18,8 @@
 #endif
 #endif
 
+#include "prepare_progress.h"
+
 /**
  * Runs the muon-prepare command-line entry point.
  *
@@ -40,5 +42,24 @@ int muon_prepare_main(int argc, char **argv);
  */
 int muon_prepare_in_place(const char *muon_path, const char *target,
                           const char *cache_dir, int force, int quiet);
+
+/**
+ * Prepares CEF files inside an existing portable Muon runtime directory and
+ * reports progress events to the caller.
+ *
+ * @param muon_path Directory containing muon-core runtime files.
+ * @param target Runtime target such as linux64, linuxarm, linuxarm64,
+ * windows32, or windows64.
+ * @param cache_dir Cache directory. Pass NULL to use the default cache.
+ * @param force Non-zero to rebuild cached CEF files and runtime placement.
+ * @param quiet Non-zero to suppress diagnostic text output.
+ * @param progress_callback Callback receiving progress events, or NULL.
+ * @param progress_user_data Opaque value passed to progress_callback.
+ * @return 0 when the runtime is ready; non-zero on failure.
+ */
+int muon_prepare_in_place_with_progress(
+    const char *muon_path, const char *target, const char *cache_dir, int force,
+    int quiet, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data);
 
 #endif

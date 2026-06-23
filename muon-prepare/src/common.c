@@ -85,6 +85,25 @@ void muon_log_message(const char *format, ...) {
   fflush(stderr);
 }
 
+void muon_report_progress(MuonPrepareProgressCallback callback,
+                          void *user_data,
+                          MuonPrepareProgressPhase phase,
+                          const char *status,
+                          unsigned long long current,
+                          unsigned long long total,
+                          int determinate) {
+  if (callback == NULL) {
+    return;
+  }
+  MuonPrepareProgress progress;
+  progress.phase = phase;
+  progress.status = status;
+  progress.current = current;
+  progress.total = total;
+  progress.determinate = determinate;
+  callback(&progress, user_data);
+}
+
 void muon_free_string_array(char **values, size_t count) {
   if (values == NULL) {
     return;
@@ -313,7 +332,11 @@ int muon_ensure_directory(const char *path) {
   return 0;
 }
 
-int muon_copy_file(const char *source, const char *destination, int mode) {
+static int muon_copy_file_internal(
+    const char *source, const char *destination, int mode,
+    unsigned long long total_size,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
   char buffer[64 * 1024];
   char *parent = muon_parent_directory(destination);
   if (parent == NULL) {
@@ -336,6 +359,7 @@ int muon_copy_file(const char *source, const char *destination, int mode) {
     muon_close(input);
     return -1;
   }
+  unsigned long long copied_size = 0;
   for (;;) {
     const MuonSSize read_size = muon_read(input, buffer, sizeof(buffer));
     if (read_size < 0) {
@@ -358,6 +382,11 @@ int muon_copy_file(const char *source, const char *destination, int mode) {
         return -1;
       }
       written += write_size;
+      copied_size += (unsigned long long)write_size;
+      if (total_size != 0) {
+        muon_report_progress(progress_callback, progress_user_data, phase,
+                             status, copied_size, total_size, 1);
+      }
     }
   }
   muon_close(input);
@@ -372,6 +401,11 @@ int muon_copy_file(const char *source, const char *destination, int mode) {
   return 0;
 }
 
+int muon_copy_file(const char *source, const char *destination, int mode) {
+  return muon_copy_file_internal(source, destination, mode, 0, NULL, NULL,
+                                 MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
+}
+
 int muon_copy_file_with_source_mode(const char *source,
                                     const char *destination) {
   struct stat entry;
@@ -379,11 +413,31 @@ int muon_copy_file_with_source_mode(const char *source,
     muon_print_errno(source);
     return -1;
   }
-  return muon_copy_file(source, destination, (int)entry.st_mode);
+  return muon_copy_file_internal(source, destination, (int)entry.st_mode, 0,
+                                 NULL, NULL,
+                                 MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
+}
+
+int muon_copy_file_with_source_mode_progress(
+    const char *source, const char *destination,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
+  struct stat entry;
+  if (muon_stat(source, &entry) != 0) {
+    muon_print_errno(source);
+    return -1;
+  }
+  return muon_copy_file_internal(
+      source, destination, (int)entry.st_mode, (unsigned long long)entry.st_size,
+      progress_callback, progress_user_data, phase, status);
 }
 
 static int muon_copy_path(const char *source, const char *destination,
-                          size_t *file_count) {
+                          size_t *file_count,
+                          MuonPrepareProgressCallback progress_callback,
+                          void *progress_user_data,
+                          MuonPrepareProgressPhase phase,
+                          const char *status) {
   struct stat entry;
   if (muon_lstat(source, &entry) != 0) {
     muon_print_errno(source);
@@ -406,7 +460,9 @@ static int muon_copy_path(const char *source, const char *destination,
       char *child_source = muon_path_join(source, child->d_name);
       char *child_destination = muon_path_join(destination, child->d_name);
       if (child_source == NULL || child_destination == NULL ||
-          muon_copy_path(child_source, child_destination, file_count) != 0) {
+          muon_copy_path(child_source, child_destination, file_count,
+                         progress_callback, progress_user_data, phase,
+                         status) != 0) {
         free(child_source);
         free(child_destination);
         closedir(directory);
@@ -426,13 +482,18 @@ static int muon_copy_path(const char *source, const char *destination,
     if (file_count != NULL) {
       *file_count += 1;
     }
+    muon_report_progress(progress_callback, progress_user_data, phase, status,
+                         file_count == NULL ? 0 : (unsigned long long)*file_count,
+                         0, 0);
     return 0;
   }
   return 0;
 }
 
-int muon_copy_directory_contents(const char *source, const char *destination,
-                                 size_t *file_count) {
+int muon_copy_directory_contents_progress(
+    const char *source, const char *destination, size_t *file_count,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
   DIR *directory = opendir(source);
   if (directory == NULL) {
     if (errno == ENOENT) {
@@ -453,7 +514,9 @@ int muon_copy_directory_contents(const char *source, const char *destination,
     char *child_source = muon_path_join(source, child->d_name);
     char *child_destination = muon_path_join(destination, child->d_name);
     if (child_source == NULL || child_destination == NULL ||
-        muon_copy_path(child_source, child_destination, file_count) != 0) {
+        muon_copy_path(child_source, child_destination, file_count,
+                       progress_callback, progress_user_data, phase,
+                       status) != 0) {
       free(child_source);
       free(child_destination);
       closedir(directory);
@@ -464,6 +527,13 @@ int muon_copy_directory_contents(const char *source, const char *destination,
   }
   closedir(directory);
   return 0;
+}
+
+int muon_copy_directory_contents(const char *source, const char *destination,
+                                 size_t *file_count) {
+  return muon_copy_directory_contents_progress(
+      source, destination, file_count, NULL, NULL,
+      MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
 }
 
 int muon_remove_recursive(const char *path) {
@@ -1023,7 +1093,11 @@ static int archive_print_error(struct archive *reader, const char *prefix) {
 
 static int extract_archive_file(struct archive *reader, struct archive_entry *entry,
                                 const char *destination, int mode,
-                                size_t *file_count) {
+                                size_t *file_count,
+                                MuonPrepareProgressCallback progress_callback,
+                                void *progress_user_data,
+                                MuonPrepareProgressPhase phase,
+                                const char *status) {
   char *parent = muon_parent_directory(destination);
   if (parent == NULL) {
     return -1;
@@ -1074,14 +1148,18 @@ static int extract_archive_file(struct archive *reader, struct archive_entry *en
   if (file_count != NULL) {
     *file_count += 1;
   }
+  muon_report_progress(progress_callback, progress_user_data, phase, status,
+                       file_count == NULL ? 0 : (unsigned long long)*file_count,
+                       0, 0);
   (void)entry;
   return 0;
 }
 
-int muon_extract_tar_bz2_archive(const char *archive_path,
-                                 const char *destination,
-                                 int strip_components,
-                                 size_t *file_count) {
+int muon_extract_tar_bz2_archive_progress(
+    const char *archive_path, const char *destination, int strip_components,
+    size_t *file_count, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data, MuonPrepareProgressPhase phase,
+    const char *status) {
   if (file_count != NULL) {
     *file_count = 0;
   }
@@ -1103,11 +1181,11 @@ int muon_extract_tar_bz2_archive(const char *archive_path,
   int result = 0;
   struct archive_entry *entry = NULL;
   for (;;) {
-    const int status = archive_read_next_header(reader, &entry);
-    if (status == ARCHIVE_EOF) {
+    const int archive_status = archive_read_next_header(reader, &entry);
+    if (archive_status == ARCHIVE_EOF) {
       break;
     }
-    if (status != ARCHIVE_OK) {
+    if (archive_status != ARCHIVE_OK) {
       result = archive_print_error(reader, "Failed to read archive header");
       break;
     }
@@ -1147,7 +1225,8 @@ int muon_extract_tar_bz2_archive(const char *archive_path,
       }
     } else if (S_ISREG(file_type)) {
       if (extract_archive_file(reader, entry, entry_destination, mode,
-                               file_count) != 0) {
+                               file_count, progress_callback,
+                               progress_user_data, phase, status) != 0) {
         free(entry_destination);
         result = -1;
         break;
@@ -1161,6 +1240,15 @@ int muon_extract_tar_bz2_archive(const char *archive_path,
     result = -1;
   }
   return result;
+}
+
+int muon_extract_tar_bz2_archive(const char *archive_path,
+                                 const char *destination,
+                                 int strip_components,
+                                 size_t *file_count) {
+  return muon_extract_tar_bz2_archive_progress(
+      archive_path, destination, strip_components, file_count, NULL, NULL,
+      MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
 }
 
 static int read_archive_entry_text(struct archive *reader, char **content) {
@@ -1256,6 +1344,31 @@ char *muon_read_tar_bz2_text_file(const char *archive_path,
   return result;
 }
 
+static void report_file_progress(
+    const char *path, unsigned long long total,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
+  unsigned long long size = 0;
+  if (progress_callback == NULL || total == 0 ||
+      !muon_path_exists(path) || muon_get_file_size(path, &size) != 0) {
+    return;
+  }
+  if (size > total) {
+    size = total;
+  }
+  muon_report_progress(progress_callback, progress_user_data, phase, status,
+                       size, total, 1);
+}
+
+#ifndef _WIN32
+static void wait_for_progress_poll(void) {
+  struct timespec delay;
+  delay.tv_sec = 0;
+  delay.tv_nsec = 100 * 1000 * 1000;
+  nanosleep(&delay, NULL);
+}
+#endif
+
 int muon_run_process(char *const argv[]) {
 #ifdef _WIN32
   const intptr_t status =
@@ -1303,6 +1416,69 @@ int muon_run_process(char *const argv[]) {
 #endif
 }
 
+int muon_run_process_with_file_progress(
+    char *const argv[], const char *progress_path, unsigned long long total,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
+  muon_report_progress(progress_callback, progress_user_data, phase, status, 0,
+                       total, total != 0);
+#ifdef _WIN32
+  const intptr_t process_status =
+      _spawnvp(_P_WAIT, argv[0], (const char *const *)argv);
+  report_file_progress(progress_path, total, progress_callback,
+                       progress_user_data, phase, status);
+  if (process_status < 0) {
+    muon_print_errno(argv[0]);
+    return -1;
+  }
+  if (process_status != 0) {
+    muon_print_error("Command failed: %s\n", argv[0]);
+    return -1;
+  }
+  return 0;
+#else
+  pid_t pid = fork();
+  if (pid < 0) {
+    muon_print_errno("fork");
+    return -1;
+  }
+  if (pid == 0) {
+    const int null_output = open("/dev/null", O_WRONLY);
+    if (null_output >= 0) {
+      dup2(null_output, STDOUT_FILENO);
+      dup2(null_output, STDERR_FILENO);
+      if (null_output > STDERR_FILENO) {
+        close(null_output);
+      }
+    }
+    execvp(argv[0], argv);
+    muon_print_errno(argv[0]);
+    _exit(127);
+  }
+  int wait_status = 0;
+  for (;;) {
+    const pid_t wait_result = waitpid(pid, &wait_status, WNOHANG);
+    if (wait_result < 0) {
+      muon_print_errno("waitpid");
+      return -1;
+    }
+    if (wait_result == pid) {
+      break;
+    }
+    report_file_progress(progress_path, total, progress_callback,
+                         progress_user_data, phase, status);
+    wait_for_progress_poll();
+  }
+  report_file_progress(progress_path, total, progress_callback,
+                       progress_user_data, phase, status);
+  if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {
+    muon_print_error("Command failed: %s\n", argv[0]);
+    return -1;
+  }
+  return 0;
+#endif
+}
+
 static void wait_for_lock(void) {
 #ifdef _WIN32
   Sleep(100);
@@ -1314,7 +1490,10 @@ static void wait_for_lock(void) {
 #endif
 }
 
-int muon_acquire_lock(const char *lock_path) {
+int muon_acquire_lock_with_progress(
+    const char *lock_path, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data, MuonPrepareProgressPhase phase,
+    const char *status) {
   char *parent = muon_parent_directory(lock_path);
   if (parent == NULL) {
     return -1;
@@ -1329,9 +1508,16 @@ int muon_acquire_lock(const char *lock_path) {
       muon_print_errno(lock_path);
       return -1;
     }
+    muon_report_progress(progress_callback, progress_user_data, phase, status,
+                         0, 0, 0);
     wait_for_lock();
   }
   return 0;
+}
+
+int muon_acquire_lock(const char *lock_path) {
+  return muon_acquire_lock_with_progress(
+      lock_path, NULL, NULL, MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
 }
 
 void muon_release_lock(const char *lock_path) { muon_rmdir(lock_path); }

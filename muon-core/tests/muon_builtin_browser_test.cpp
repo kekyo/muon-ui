@@ -254,6 +254,27 @@ static bool TestNativeForwarderRegistersChildWindows() {
                 "native input forwarder omitted second child");
 }
 
+static bool TestWindowIconUpdateBehavior() {
+  const auto native_icon =
+      GetMuonWindowIconUpdateBehavior(true, "data:image/png;base64,icon");
+  const auto data_url_only =
+      GetMuonWindowIconUpdateBehavior(false, "data:image/svg+xml;base64,icon");
+  const auto clear_icon = GetMuonWindowIconUpdateBehavior(false, "");
+
+  return Expect(native_icon.window_icon_action == MuonWindowIconAction::Set,
+                "native title bar icon image should update the window icon") &&
+         Expect(native_icon.app_icon_action == MuonWindowIconAction::Set,
+                "native title bar icon image should update the app icon") &&
+         Expect(data_url_only.window_icon_action == MuonWindowIconAction::Keep,
+                "data-url-only title bar icon should keep the window icon") &&
+         Expect(data_url_only.app_icon_action == MuonWindowIconAction::Keep,
+                "data-url-only title bar icon should keep the app icon") &&
+         Expect(clear_icon.window_icon_action == MuonWindowIconAction::Clear,
+                "clearing the title bar icon should clear the window icon") &&
+         Expect(clear_icon.app_icon_action == MuonWindowIconAction::Clear,
+                "clearing the title bar icon should clear the app icon");
+}
+
 static bool TestCustomTitleBarWindowDelegate() {
   const auto manifest = CreateTestCustomTitleBarManifest();
   auto browser =
@@ -298,6 +319,7 @@ int main() {
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&
                  TestNativeForwarderRegistersChildWindows() &&
+                 TestWindowIconUpdateBehavior() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0
              : 1;

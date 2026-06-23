@@ -113,6 +113,41 @@ struct MuonTitleBarIcon {
 };
 
 /**
+ * Native window icon update action.
+ */
+enum class MuonWindowIconAction {
+  /**
+   * Keep the current native icon unchanged.
+   */
+  Keep,
+
+  /**
+   * Set the native icon from the loaded CefImage.
+   */
+  Set,
+
+  /**
+   * Clear the native icon by applying an empty CefImage.
+   */
+  Clear,
+};
+
+/**
+ * Native title/app icon update behavior derived from loaded icon data.
+ */
+struct MuonWindowIconUpdateBehavior {
+  /**
+   * Action for the native title bar icon.
+   */
+  MuonWindowIconAction window_icon_action = MuonWindowIconAction::Keep;
+
+  /**
+   * Action for the app icon shown by platform shell UI.
+   */
+  MuonWindowIconAction app_icon_action = MuonWindowIconAction::Keep;
+};
+
+/**
  * Creates a native title bar manifest used as the safe fallback.
  */
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest();
@@ -181,6 +216,17 @@ bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
                                         bool require_png,
                                         MuonTitleBarIcon* icon,
                                         std::string* error_message);
+
+/**
+ * Returns the native window icon update behavior for a loaded title bar icon.
+ *
+ * @param has_native_image Whether the icon has a CefImage usable by native UI.
+ * @param icon_data_url Custom title bar icon data URL.
+ * @return Native window/app icon update behavior.
+ */
+MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
+    bool has_native_image,
+    const std::string& icon_data_url);
 
 /**
  * Returns whether the manifest requests a custom title bar.

@@ -752,6 +752,18 @@ bool LoadMuonTitleBarIconDataUrlFromStorage(
       false, icon, error_message);
 }
 
+MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
+    bool has_native_image,
+    const std::string& icon_data_url) {
+  if (has_native_image) {
+    return {MuonWindowIconAction::Set, MuonWindowIconAction::Set};
+  }
+  if (!icon_data_url.empty()) {
+    return {MuonWindowIconAction::Keep, MuonWindowIconAction::Keep};
+  }
+  return {MuonWindowIconAction::Clear, MuonWindowIconAction::Clear};
+}
+
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest) {
   return manifest.mode == MuonTitleBarMode::Custom && manifest.height > 0 &&
          manifest.controls_width > 0 && !manifest.html.empty() &&
@@ -1220,7 +1232,18 @@ void SetRegisteredMuonTitleBarIcon(CefRefPtr<CefWindow> window,
   if (!window) {
     return;
   }
-  window->SetWindowIcon(image ? image : CefImage::CreateImage());
+  const auto behavior =
+      GetMuonWindowIconUpdateBehavior(image != nullptr, icon_data_url);
+  if (behavior.window_icon_action == MuonWindowIconAction::Set) {
+    window->SetWindowIcon(image);
+  } else if (behavior.window_icon_action == MuonWindowIconAction::Clear) {
+    window->SetWindowIcon(CefImage::CreateImage());
+  }
+  if (behavior.app_icon_action == MuonWindowIconAction::Set) {
+    window->SetWindowAppIcon(image);
+  } else if (behavior.app_icon_action == MuonWindowIconAction::Clear) {
+    window->SetWindowAppIcon(CefImage::CreateImage());
+  }
   const auto iterator = g_muon_title_bar_controllers.find(window.get());
   if (iterator == g_muon_title_bar_controllers.end()) {
     return;

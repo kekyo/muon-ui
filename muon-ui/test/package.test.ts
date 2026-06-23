@@ -455,7 +455,7 @@ exit 1
   it("keeps an existing Muon gitignore entry when the muon CLI init command is repeated", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-existing-"));
     cleanupDirectories.push(root);
-    await writeFile(join(root, ".gitignore"), "dist/\n.muon/\n");
+    await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\n");
     const cliPath = resolve("dist", "cli.cjs");
 
     await execFileAsync(process.execPath, [cliPath, "init"], {
@@ -464,7 +464,7 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist/\n.muon/\n",
+      "dist*/\n.muon/\n",
     );
   });
 

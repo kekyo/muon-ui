@@ -14,18 +14,6 @@
 #include "include/views/cef_window.h"
 
 /**
- * Returns whether a window close can proceed for the current browser close
- * state.
- *
- * @param is_ready_to_be_closed Whether CEF has completed mandatory close
- * handling.
- * @param close_request_accepted Whether the close request was accepted.
- * @return true when the native window may close.
- */
-bool ShouldAllowMuonWindowClose(bool is_ready_to_be_closed,
-                                bool close_request_accepted);
-
-/**
  * Top-level window delegate for browser and DevTools windows.
  */
 class MuonWindowDelegate final : public CefWindowDelegate {

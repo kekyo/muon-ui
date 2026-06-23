@@ -18,6 +18,11 @@
 
 #include <utility>
 
+bool ShouldAllowMuonWindowClose(bool is_ready_to_be_closed,
+                                bool close_request_accepted) {
+  return is_ready_to_be_closed || close_request_accepted;
+}
+
 MuonWindowDelegate::MuonWindowDelegate(
     CefRefPtr<CefBrowserView> browser_view,
     bool is_devtools,
@@ -173,7 +178,16 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
 
   auto browser = browser_view_->GetBrowser();
   if (browser) {
-    return browser->GetHost()->TryCloseBrowser();
+    auto host = browser->GetHost();
+    if (!host) {
+      return true;
+    }
+    const auto is_ready_to_be_closed = host->IsReadyToBeClosed();
+    if (is_ready_to_be_closed) {
+      return ShouldAllowMuonWindowClose(is_ready_to_be_closed, false);
+    }
+    return ShouldAllowMuonWindowClose(is_ready_to_be_closed,
+                                      host->TryCloseBrowser());
   }
   return true;
 }

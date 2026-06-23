@@ -275,6 +275,17 @@ static bool TestWindowIconUpdateBehavior() {
                 "clearing the title bar icon should clear the app icon");
 }
 
+static bool TestWindowCloseDecision() {
+  return Expect(ShouldAllowMuonWindowClose(true, false),
+                "ready browser close should allow window close") &&
+         Expect(ShouldAllowMuonWindowClose(true, true),
+                "ready browser close should stay allowed") &&
+         Expect(ShouldAllowMuonWindowClose(false, true),
+                "accepted browser close request should allow window close") &&
+         Expect(!ShouldAllowMuonWindowClose(false, false),
+                "delayed browser close request should keep the window open");
+}
+
 static bool TestCustomTitleBarWindowDelegate() {
   const auto manifest = CreateTestCustomTitleBarManifest();
   auto browser =
@@ -320,6 +331,7 @@ int main() {
                  TestPageDraggableRegionHitTesting() &&
                  TestNativeForwarderRegistersChildWindows() &&
                  TestWindowIconUpdateBehavior() &&
+                 TestWindowCloseDecision() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0
              : 1;

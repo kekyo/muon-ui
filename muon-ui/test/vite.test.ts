@@ -48,6 +48,7 @@ const originalPreparePath = process.env.MUON_PREPARE_PATH;
 const cleanupDirectories: string[] = [];
 const suiteCleanupDirectories: string[] = [];
 const servers: ViteDevServer[] = [];
+const fakeBrowserExecutablePaths = new Set<string>();
 
 const wait = async (predicate: () => boolean): Promise<void> => {
   for (let index = 0; index < 100; index += 1) {
@@ -273,6 +274,7 @@ printf '%s\\n' "$@" > '${outputDirectory.replaceAll("'", "'\\''")}/browser-args.
 `,
   );
   await chmod(executable, 0o755);
+  fakeBrowserExecutablePaths.add(executable);
   return executable;
 };
 
@@ -290,6 +292,16 @@ const startServer = async (
   serverOpen: boolean | string | undefined,
   logger?: Logger,
 ): Promise<ViteDevServer> => {
+  if (
+    serverOpen !== undefined &&
+    serverOpen !== false &&
+    !fakeBrowserExecutablePaths.has(process.env.BROWSER ?? "")
+  ) {
+    throw new Error(
+      "Vite server.open tests must set BROWSER to a fake executable.",
+    );
+  }
+
   const muonPluginOptions = {
     muonPath: pluginOptions.muonPath,
     ...(pluginOptions.cefPath === undefined
@@ -408,6 +420,7 @@ afterEach(async () => {
   } else {
     process.env.MUON_CACHE_DIR = originalCacheDir;
   }
+  fakeBrowserExecutablePaths.clear();
 });
 
 describe("muon Vite plugin", () => {
@@ -731,6 +744,7 @@ describe("muon Vite plugin", () => {
     await writeBasicViteProject(root);
     await writeProjectMuonConfig(root);
     await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.BROWSER = await writeFakeBrowserExecutable(outputDirectory);
     process.env.MUON_CACHE_DIR =
       await createTemporaryDirectory("muon-vite-cache-");
 
@@ -745,14 +759,26 @@ describe("muon Vite plugin", () => {
       },
       "/path?x=1",
     );
-    await wait(() => existsSync(join(outputDirectory, "override.json")));
+    await wait(
+      () =>
+        existsSync(join(outputDirectory, "override.json")) &&
+        existsSync(join(outputDirectory, "browser-args.txt")),
+    );
 
     const overrideConfig = JSON.parse(
       await readFile(join(outputDirectory, "override.json"), "utf8"),
     ) as { browser: { startPage: string } };
+    const browserArgs = (
+      await readFile(join(outputDirectory, "browser-args.txt"), "utf8")
+    )
+      .trim()
+      .split("\n");
     const baseUrl = server.resolvedUrls?.local[0];
-    expect(baseUrl).toBeDefined();
+    if (baseUrl === undefined) {
+      throw new Error("Vite base URL was not resolved.");
+    }
     expect(overrideConfig.browser.startPage).toBe(baseUrl);
+    expect(browserArgs).toContain(new URL("/path?x=1", baseUrl).href);
   });
 });
 

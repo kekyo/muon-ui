@@ -7,22 +7,136 @@
 #include "network/muon_network_request_handler.h"
 
 #include <algorithm>
-#include <cstdint>
-#include <cstring>
 #include <string>
+#include <string_view>
 #include <utility>
-#include <vector>
 
 static constexpr int kHttpForbidden = 403;
 static constexpr char kHttpForbiddenText[] = "Forbidden";
 static constexpr char kTextPlainMimeType[] = "text/plain";
+static constexpr char kTextHtmlMimeType[] = "text/html";
+
+static void AppendHtmlEscaped(std::string* target, std::string_view value) {
+  for (const auto character : value) {
+    switch (character) {
+      case '&':
+        target->append("&amp;");
+        break;
+      case '<':
+        target->append("&lt;");
+        break;
+      case '>':
+        target->append("&gt;");
+        break;
+      case '"':
+        target->append("&quot;");
+        break;
+      case '\'':
+        target->append("&#39;");
+        break;
+      default:
+        target->push_back(character);
+        break;
+    }
+  }
+}
+
+static void AppendJavaScriptUnicodeEscape(std::string* target,
+                                          unsigned char value) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  target->append("\\u00");
+  target->push_back(kHex[(value >> 4) & 0x0f]);
+  target->push_back(kHex[value & 0x0f]);
+}
+
+static void AppendJavaScriptStringLiteral(std::string* target,
+                                          std::string_view value) {
+  target->push_back('"');
+  for (const auto raw : value) {
+    const auto byte = static_cast<unsigned char>(raw);
+    switch (byte) {
+      case '\\':
+        target->append("\\\\");
+        break;
+      case '"':
+        target->append("\\\"");
+        break;
+      case '\b':
+        target->append("\\b");
+        break;
+      case '\f':
+        target->append("\\f");
+        break;
+      case '\n':
+        target->append("\\n");
+        break;
+      case '\r':
+        target->append("\\r");
+        break;
+      case '\t':
+        target->append("\\t");
+        break;
+      case '<':
+        target->append("\\u003c");
+        break;
+      case '>':
+        target->append("\\u003e");
+        break;
+      case '&':
+        target->append("\\u0026");
+        break;
+      default:
+        if (byte < 0x20) {
+          AppendJavaScriptUnicodeEscape(target, byte);
+        } else {
+          target->push_back(static_cast<char>(byte));
+        }
+        break;
+    }
+  }
+  target->push_back('"');
+}
+
+static std::string CreateForbiddenHtmlDocument(const std::string& url) {
+  const auto message =
+      std::string("Forbidden: blocked by Muon network policy: ") + url;
+  std::string document;
+  document.reserve(url.size() * 2 + message.size() + 512);
+  document.append(R"HTML(<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Forbidden</title>
+</head>
+<body>
+<h1>Forbidden</h1>
+<p>Blocked by Muon network policy:</p>
+<pre>)HTML");
+  AppendHtmlEscaped(&document, url);
+  document.append(R"HTML(</pre>
+<script>
+console.error()HTML");
+  AppendJavaScriptStringLiteral(&document, message);
+  document.append(R"HTML();
+</script>
+</body>
+</html>
+)HTML");
+  return document;
+}
 
 class MuonForbiddenResourceHandler final : public CefResourceHandler {
  public:
-  explicit MuonForbiddenResourceHandler(bool is_head_response)
+  MuonForbiddenResourceHandler(std::string url,
+                               bool is_top_level_navigation,
+                               bool is_head_response)
       : is_head_response_(is_head_response),
-        body_(kHttpForbiddenText,
-              kHttpForbiddenText + std::strlen(kHttpForbiddenText)) {}
+        mime_type_(is_top_level_navigation ? kTextHtmlMimeType
+                                           : kTextPlainMimeType),
+        body_(is_head_response ? std::string()
+                               : is_top_level_navigation
+                                     ? CreateForbiddenHtmlDocument(url)
+                                     : std::string(kHttpForbiddenText)) {}
 
   bool Open(CefRefPtr<CefRequest> request,
             bool& handle_request,
@@ -36,7 +150,7 @@ class MuonForbiddenResourceHandler final : public CefResourceHandler {
                           CefString& redirect_url) override {
     response->SetStatus(kHttpForbidden);
     response->SetStatusText(kHttpForbiddenText);
-    response->SetMimeType(kTextPlainMimeType);
+    response->SetMimeType(mime_type_);
     response_length = static_cast<int64_t>(body_.size());
   }
 
@@ -63,7 +177,8 @@ class MuonForbiddenResourceHandler final : public CefResourceHandler {
 
  private:
   bool is_head_response_ = false;
-  std::vector<uint8_t> body_;
+  std::string mime_type_;
+  std::string body_;
   size_t read_offset_ = 0;
 
   IMPLEMENT_REFCOUNTING(MuonForbiddenResourceHandler);
@@ -93,7 +208,9 @@ class MuonNetworkResourceRequestHandler final
     }
 
     const auto method = request->GetMethod().ToString();
-    return new MuonForbiddenResourceHandler(method == "HEAD");
+    return new MuonForbiddenResourceHandler(request->GetURL().ToString(),
+                                            is_top_level_navigation_,
+                                            method == "HEAD");
   }
 
   void OnProtocolExecution(CefRefPtr<CefBrowser> browser,

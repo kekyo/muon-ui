@@ -20,7 +20,6 @@ import {
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   describeMuonPluginBridge,
-  expectNoNewPageTarget,
   getCurrentTargetIds,
   join,
   mkdir,
@@ -48,6 +47,13 @@ import type { CdpDriver, RuntimeEvaluateResponse } from "./shared.js";
 interface StoredZipEntry {
   name: string;
   content: string;
+}
+
+interface RuntimeConsoleAPICalledParams {
+  type?: string;
+  args?: Array<{
+    value?: unknown;
+  }>;
 }
 
 const createCrc32Table = (): Uint32Array => {
@@ -320,9 +326,12 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
       await expect(driver.evaluate("document.location.href")).resolves.toBe(
         MUON_APP_URL,
       );
-      await expect(driver.evaluate("document.body.innerText")).resolves.toBe(
-        "Forbidden",
-      );
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain(MUON_APP_URL);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
@@ -644,9 +653,12 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           status: 403,
         },
       });
-      await expect(driver.evaluate("document.body.innerText")).resolves.toBe(
-        "Forbidden",
-      );
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain(blockedUrl);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
@@ -1025,12 +1037,15 @@ try {
     }
   });
 
-  it("cancels popup creation for network-blocked target URLs", async () => {
-    const popupUrl = `data:text/html,${encodeURIComponent(
-      "<title>muon blocked popup</title>",
-    )}`;
+  it("opens blocked popup targets with a visible console-observable error page", async () => {
+    const server = await startHttpServer((request, response) => {
+      response.statusCode = 500;
+      response.end("blocked popup target should not reach the server");
+    });
+    const popupUrl = `${server.origin}/blocked-popup.html`;
     const running = await startDebugMuon([], ["asset://main/**"]);
     let driver: CdpDriver | undefined = undefined;
+    let popupDriver: CdpDriver | undefined = undefined;
     try {
       driver = await connectToMuonCdp({
         port: MUON_PORT,
@@ -1044,11 +1059,51 @@ try {
         returnByValue: true,
         userGesture: true,
       });
-      await expectNoNewPageTarget(previousTargetIds, 1000);
+      const popupTarget = await waitForNewPageTarget(
+        previousTargetIds,
+        targetTimeoutMs,
+        (target) => target.url === popupUrl,
+      );
+      popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+        targetId: popupTarget.id,
+      });
+      await popupDriver.send("Runtime.enable");
+      await popupDriver.send("Network.enable");
+      const consoleEvent =
+        popupDriver.waitForEvent<RuntimeConsoleAPICalledParams>(
+          "Runtime.consoleAPICalled",
+          cdpCommandTimeoutMs,
+        );
+      const responseEvent = waitForNetworkResponse(
+        popupDriver,
+        popupUrl,
+        cdpCommandTimeoutMs,
+      );
+      await popupDriver.send("Page.reload", { ignoreCache: true });
+      const response = await responseEvent;
+      expect(response.response?.url).toBe(popupUrl);
+      expect(response.response?.status).toBe(403);
+      const consoleMessage = await consoleEvent;
+      expect(consoleMessage.type).toBe("error");
+      expect(consoleMessage.args?.[0]?.value).toContain("Forbidden");
+      expect(consoleMessage.args?.[0]?.value).toContain(popupUrl);
+      await expect(
+        popupDriver.evaluate("document.body.textContent"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        popupDriver.evaluate("document.body.textContent"),
+      ).resolves.toContain(popupUrl);
+      await expect(
+        popupDriver.evaluate("window.opener === null"),
+      ).resolves.toBe(true);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
+      popupDriver?.close();
       await stopMuon(running, driver);
+      await stopHttpServer(server.server);
     }
   });
 
@@ -1317,9 +1372,12 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
           status: 403,
         },
       });
-      await expect(driver.evaluate("document.body.innerText")).resolves.toBe(
-        "Forbidden",
-      );
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain(blockedUrl);
       expect(blockedHits).toBe(0);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);

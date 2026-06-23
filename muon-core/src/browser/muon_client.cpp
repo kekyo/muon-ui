@@ -842,10 +842,9 @@ bool MuonClient::OnBeforePopup(
 
   const auto url = target_url.ToString();
   const auto has_known_target_url = IsPopupTargetUrlKnown(url);
-  if (has_known_target_url && network_policy_ &&
-      !network_policy_->IsAllowedRequest(url, true, "")) {
-    return true;
-  }
+  const auto is_network_allowed_target =
+      !has_known_target_url || !network_policy_ ||
+      network_policy_->IsAllowedRequest(url, true, "");
 
   client = this;
   if (plugin_runtime_) {
@@ -857,7 +856,8 @@ bool MuonClient::OnBeforePopup(
   const auto cef_requests_no_javascript_access =
       no_javascript_access != nullptr && *no_javascript_access;
   const auto allows_opener_access =
-      has_known_target_url && unsafe_parent_access_policy_ &&
+      is_network_allowed_target && has_known_target_url &&
+      unsafe_parent_access_policy_ &&
       unsafe_parent_access_policy_->IsAllowedUrl(url) &&
       !cef_requests_no_javascript_access;
   if (allows_opener_access) {

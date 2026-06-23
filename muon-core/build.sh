@@ -91,6 +91,20 @@ ensure_host_muon_prepare() {
   printf '%s\n' "${PROJECT_ROOT}/muon-prepare/.run/dev-${host_target}-debug/${executable_name}"
 }
 
+generate_core_version_header() {
+  local output_path="$1"
+  mkdir -p "$(dirname "${output_path}")"
+  if [[ -n "${MUON_CORE_VERSION_HEADER:-}" ]]; then
+    if [[ "${MUON_CORE_VERSION_HEADER}" != "${output_path}" ]]; then
+      cp "${MUON_CORE_VERSION_HEADER}" "${output_path}"
+    fi
+    return
+  fi
+  command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
+  npm run generate:runtime-version-header --workspace muon-core -- \
+    "${output_path}" >/dev/null
+}
+
 BUILD_USAGE="${1:-dev}"
 USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux64|linuxarm|linuxarm64|mingw32|mingw64|win32|win64|windows32|windows64]"
 case "${BUILD_USAGE}" in
@@ -210,6 +224,8 @@ CEF_ARCHIVE_SIZE="${CEF_PREPARE_METADATA[3]}"
 
 BUILD_TYPE_LOWER="${BUILD_TYPE,,}"
 BUILD_DIR="${OUTPUT_ROOT}/.build/${BUILD_USAGE}/${TARGET_NAME}/${BUILD_TYPE_LOWER}"
+MUON_CORE_VERSION_HEADER_PATH="${BUILD_DIR}/generated/muon_core_version_generated.h"
+generate_core_version_header "${MUON_CORE_VERSION_HEADER_PATH}"
 CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.json"
 if [[ "${TARGET_NAME}" == linux* ]]; then
   CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.linux.json"
@@ -257,6 +273,7 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DMUON_CEF_PACKAGE_URL="${CEF_PACKAGE_URL}" \
   -DMUON_CEF_SHA1="${expected}" \
   -DMUON_CEF_SIZE="${CEF_ARCHIVE_SIZE}" \
+  -DMUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_PATH}" \
   -DMUON_CORE_VERSION="${MUON_CORE_VERSION:-}" \
   -DMUON_CORE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH:-}" \
   -DMUON_BUILD_TESTS="${BUILD_TESTS}" \
@@ -271,6 +288,7 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G Ninja \
 cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
 
 MUON_RUNTIME_INFO_HEADER="${BUILD_DIR}/generated/muon_runtime_info_generated.h" \
+  MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_PATH}" \
   bash "${PROJECT_ROOT}/muon-prepare/build.sh" \
     "${BUILD_USAGE}" \
     "${BUILD_TYPE}" \

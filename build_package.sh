@@ -12,6 +12,9 @@ ARTIFACT_DIR="${ARTIFACT_DIR:-${SCRIPT_DIR}/artifacts}"
 PACKAGE_LOG_DIR="${PACKAGE_LOG_DIR:-${SCRIPT_DIR}/.deps/package-logs}"
 TRA_FFIC_ROOT_HOST="${TRA_FFIC_ROOT_HOST:-${SCRIPT_DIR}/deps/tra-ffic}"
 CARDIO_ROOT_HOST="${CARDIO_ROOT_HOST:-${SCRIPT_DIR}/deps/cardio}"
+MUON_CORE_VERSION_HEADER_RELATIVE="muon-core/.build/package/muon_core_version_generated.h"
+MUON_CORE_VERSION_HEADER_HOST="${SCRIPT_DIR}/${MUON_CORE_VERSION_HEADER_RELATIVE}"
+MUON_CORE_VERSION_HEADER_CONTAINER="/workspace/${MUON_CORE_VERSION_HEADER_RELATIVE}"
 
 usage() {
   cat <<'EOF'
@@ -163,6 +166,14 @@ git_commit_hash() {
   fi
 }
 
+generate_core_version_header() {
+  mkdir -p "$(dirname "${MUON_CORE_VERSION_HEADER_HOST}")"
+  npm run generate:runtime-version-header --workspace muon-core -- \
+    "${MUON_CORE_VERSION_HEADER_HOST}" >/dev/null
+  [[ -f "${MUON_CORE_VERSION_HEADER_HOST}" ]] ||
+    fail "muon-core version header was not generated: ${MUON_CORE_VERSION_HEADER_HOST}"
+}
+
 assert_prereq_image() {
   local arch="$1"
   local image
@@ -204,8 +215,7 @@ build_linux_target() {
     -e "MUON_PACKAGE_TARGET=${target_name}" \
     -e "MUON_PREPARE_VERSION=${MUON_PREPARE_VERSION}" \
     -e "MUON_PREPARE_GIT_COMMIT_HASH=${MUON_PREPARE_GIT_COMMIT_HASH}" \
-    -e "MUON_CORE_VERSION=${MUON_CORE_VERSION}" \
-    -e "MUON_CORE_GIT_COMMIT_HASH=${MUON_CORE_GIT_COMMIT_HASH}" \
+    -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
     -e "MUON_CACHE_DIR=/workspace/.deps/muon-cache" \
@@ -360,12 +370,11 @@ build_dist() {
 
   export MUON_PREPARE_VERSION
   export MUON_PREPARE_GIT_COMMIT_HASH
-  export MUON_CORE_VERSION
-  export MUON_CORE_GIT_COMMIT_HASH
+  export MUON_CORE_VERSION_HEADER
   MUON_PREPARE_VERSION="$(package_version "muon-prepare/package.json")"
   MUON_PREPARE_GIT_COMMIT_HASH="$(git_commit_hash)"
-  MUON_CORE_VERSION="$(package_version "muon-core/package.json")"
-  MUON_CORE_GIT_COMMIT_HASH="${MUON_PREPARE_GIT_COMMIT_HASH}"
+  generate_core_version_header
+  MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_HOST}"
 
   assert_native_dependency_checkouts
 

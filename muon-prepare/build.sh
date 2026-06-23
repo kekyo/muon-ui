@@ -175,6 +175,9 @@ EOF
 fi
 if [[ -n "${MUON_RUNTIME_INFO_HEADER:-}" ]]; then
   cp "${MUON_RUNTIME_INFO_HEADER}" "${RUNTIME_INFO_HEADER}"
+  if [[ -n "${MUON_CORE_VERSION_HEADER:-}" ]]; then
+    cp "${MUON_CORE_VERSION_HEADER}" "${VERSION_DIR}/muon_core_version_generated.h"
+  fi
 else
   cp "${SCRIPT_DIR}/src/muon_runtime_info_fallback.h" "${RUNTIME_INFO_HEADER}"
 fi

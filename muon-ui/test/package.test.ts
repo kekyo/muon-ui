@@ -141,6 +141,10 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
     `${JSON.stringify({ version: "0.0.0" }, null, 2)}\n`,
   );
   await writeFile(
+    join(root, "muon-ui", "package.json"),
+    `${JSON.stringify({ version: "1.2.3" }, null, 2)}\n`,
+  );
+  await writeFile(
     join(root, "muon-ui", "scripts", "stage-muon-prepare.mjs"),
     "process.exit(0);\n",
   );
@@ -223,6 +227,20 @@ exit 1
       `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "\${MUON_FAKE_NPM_LOG:?}"
+if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
+  output_path=""
+  for arg in "$@"; do
+    output_path="\${arg}"
+  done
+  mkdir -p "$(dirname "\${output_path}")"
+  cat > "\${output_path}" <<'HEADER'
+#ifndef MUON_CORE_VERSION_GENERATED_H
+#define MUON_CORE_VERSION_GENERATED_H
+#define MUON_CORE_VERSION "1.2.3"
+#define MUON_CORE_GIT_COMMIT_HASH "fake-generated-hash"
+#endif
+HEADER
+fi
 `,
     );
     await writeExecutableScript(
@@ -265,6 +283,24 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
     expect(containerInvocation).toContain(
       `${join(root, "deps", "cardio")}:/workspace-deps/cardio:ro,Z`,
     );
+    expect(containerInvocation).toContain(
+      "MUON_CORE_VERSION_HEADER=/workspace/muon-core/.build/package/muon_core_version_generated.h",
+    );
+    await expect(
+      readFile(
+        join(
+          root,
+          "muon-core",
+          ".build",
+          "package",
+          "muon_core_version_generated.h",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain('#define MUON_CORE_VERSION "1.2.3"');
+    await expect(readFile(npmLog, "utf8")).resolves.toContain(
+      "generate:runtime-version-header",
+    );
   });
 
   it("reports the failed Linux package target and log path", async () => {
@@ -287,6 +323,29 @@ if [[ "\${1:-}" == "run" ]]; then
   exit 0
 fi
 printf 'Unexpected fake container invocation: %s\\n' "$*" >&2
+exit 1
+`,
+    );
+    await writeExecutableScript(
+      join(binDirectory, "npm"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
+  output_path=""
+  for arg in "$@"; do
+    output_path="\${arg}"
+  done
+  mkdir -p "$(dirname "\${output_path}")"
+  cat > "\${output_path}" <<'HEADER'
+#ifndef MUON_CORE_VERSION_GENERATED_H
+#define MUON_CORE_VERSION_GENERATED_H
+#define MUON_CORE_VERSION "1.2.3"
+#define MUON_CORE_GIT_COMMIT_HASH "fake-generated-hash"
+#endif
+HEADER
+  exit 0
+fi
+printf 'Unexpected fake npm invocation: %s\\n' "$*" >&2
 exit 1
 `,
     );

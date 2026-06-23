@@ -71,6 +71,7 @@ case "${TARGET}" in
     CC="${CC:-i686-w64-mingw32-gcc}"
     AR="${AR:-i686-w64-mingw32-ar}"
     RANLIB="${RANLIB:-i686-w64-mingw32-ranlib}"
+    WINDRES="${WINDRES:-i686-w64-mingw32-windres}"
     EXECUTABLE_NAME="muon-prepare.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
@@ -81,6 +82,7 @@ case "${TARGET}" in
     CC="${CC:-x86_64-w64-mingw32-gcc}"
     AR="${AR:-x86_64-w64-mingw32-ar}"
     RANLIB="${RANLIB:-x86_64-w64-mingw32-ranlib}"
+    WINDRES="${WINDRES:-x86_64-w64-mingw32-windres}"
     EXECUTABLE_NAME="muon-prepare.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
@@ -95,6 +97,9 @@ esac
 command -v "${CC}" >/dev/null || { echo "${CC} is required" >&2; exit 1; }
 command -v "${AR}" >/dev/null || { echo "${AR} is required" >&2; exit 1; }
 command -v "${RANLIB}" >/dev/null || { echo "${RANLIB} is required" >&2; exit 1; }
+if [[ "${TARGET_NAME}" == windows* ]]; then
+  command -v "${WINDRES}" >/dev/null || { echo "${WINDRES} is required" >&2; exit 1; }
+fi
 BOOTSTRAP_CPPFLAGS_EXTRA=""
 BOOTSTRAP_LDLIBS_EXTRA=""
 case "${TARGET_NAME}" in
@@ -104,7 +109,7 @@ case "${TARGET_NAME}" in
     BOOTSTRAP_LDLIBS_EXTRA="$(pkg-config --libs xcb) -pthread"
     ;;
   windows*)
-    BOOTSTRAP_LDLIBS_EXTRA="-lcomctl32"
+    BOOTSTRAP_LDLIBS_EXTRA="-lcomctl32 -lgdi32"
     ;;
 esac
 
@@ -199,6 +204,14 @@ else
   cp "${SCRIPT_DIR}/src/muon_runtime_info_fallback.h" "${RUNTIME_INFO_HEADER}"
 fi
 
+BOOTSTRAP_RESOURCE_OBJECTS_VALUE=""
+if [[ "${TARGET_NAME}" == windows* ]]; then
+  BOOTSTRAP_RESOURCE_OBJECTS_VALUE="${OUT_DIR}/muon_bootstrap_resource.o"
+  "${WINDRES}" -I "${SCRIPT_DIR}/src" \
+    "${SCRIPT_DIR}/src/muon_bootstrap.rc" \
+    "${BOOTSTRAP_RESOURCE_OBJECTS_VALUE}"
+fi
+
 CPPFLAGS_VALUE="-I${VERSION_DIR} -I${YYJSON_SOURCE_DIR} -I${LIBARCHIVE_INCLUDE_DIR} -I${BZIP2_SOURCE_DIR} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\\"${TARGET_NAME}\\\""
 if [[ -n "${CPPFLAGS:-}" ]]; then
   CPPFLAGS_VALUE="${CPPFLAGS_VALUE} ${CPPFLAGS}"
@@ -231,5 +244,6 @@ make -j -C "${SCRIPT_DIR}" -B \
   CFLAGS="${CFLAGS_VALUE}" \
   LDFLAGS="${LDFLAGS_VALUE}" \
   BOOTSTRAP_LDFLAGS="${BOOTSTRAP_LDFLAGS_VALUE}" \
+  BOOTSTRAP_RESOURCE_OBJECTS="${BOOTSTRAP_RESOURCE_OBJECTS_VALUE}" \
   LDLIBS="${LDLIBS_VALUE}" \
   BOOTSTRAP_LDLIBS="${BOOTSTRAP_LDLIBS_VALUE}"

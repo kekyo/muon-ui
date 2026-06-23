@@ -30,7 +30,8 @@
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
     "verify:package-runtime": "node scripts/verify-package-runtime.mjs",
-    "pack": "bash ../build_package.sh"
+    "pack": "bash ../build_package.sh",
+    "dependencies": "reskill"
   },
   "dependencies": {
     "adm-zip": ">=0.5.0",

@@ -38,6 +38,9 @@
     "test:valgrind": "npm run test:valgrind --workspace muon-core-tester",
     "pack": "bash ./build_package.sh"
   },
+  "allowScripts": {
+    "tesseract.js": false
+  },
   "engines": {
     "node": ">=20"
   }

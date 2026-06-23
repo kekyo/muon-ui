@@ -233,9 +233,9 @@ static unsigned long long progress_position(const MuonPrepareProgress *event,
 
 static void draw_progress(MuonBootstrapProgressBackend *backend) {
   const uint16_t bar_x = 24;
-  const uint16_t bar_y = 62;
+  const uint16_t bar_y = 68;
   const uint16_t bar_width = backend->width - 48;
-  const uint16_t bar_height = 18;
+  const uint16_t bar_height = 6;
   fill_rect(backend, backend->screen->white_pixel, 0, 0, backend->width,
             backend->height);
   fill_rect(backend, 0x606060, bar_x, bar_y, bar_width, bar_height);

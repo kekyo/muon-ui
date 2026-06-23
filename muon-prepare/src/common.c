@@ -43,6 +43,7 @@
 #ifdef _WIN32
 #define MUON_OPEN_READ_FLAGS (_O_RDONLY | _O_BINARY)
 #define MUON_OPEN_WRITE_FLAGS (_O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY)
+#define MUON_PROGRESS_POLL_MILLISECONDS 100
 typedef int MuonSSize;
 #else
 #define MUON_OPEN_READ_FLAGS O_RDONLY
@@ -1423,15 +1424,35 @@ int muon_run_process_with_file_progress(
   muon_report_progress(progress_callback, progress_user_data, phase, status, 0,
                        total, total != 0);
 #ifdef _WIN32
-  const intptr_t process_status =
-      _spawnvp(_P_WAIT, argv[0], (const char *const *)argv);
-  report_file_progress(progress_path, total, progress_callback,
-                       progress_user_data, phase, status);
-  if (process_status < 0) {
+  const intptr_t process_handle_value =
+      _spawnvp(_P_NOWAIT, argv[0], (const char *const *)argv);
+  if (process_handle_value < 0) {
     muon_print_errno(argv[0]);
     return -1;
   }
-  if (process_status != 0) {
+  HANDLE process_handle = (HANDLE)process_handle_value;
+  for (;;) {
+    const DWORD wait_result =
+        WaitForSingleObject(process_handle, MUON_PROGRESS_POLL_MILLISECONDS);
+    report_file_progress(progress_path, total, progress_callback,
+                         progress_user_data, phase, status);
+    if (wait_result == WAIT_OBJECT_0) {
+      break;
+    }
+    if (wait_result != WAIT_TIMEOUT) {
+      CloseHandle(process_handle);
+      muon_print_error("Failed to wait for command: %s\n", argv[0]);
+      return -1;
+    }
+  }
+  DWORD exit_code = 0;
+  if (!GetExitCodeProcess(process_handle, &exit_code)) {
+    CloseHandle(process_handle);
+    muon_print_error("Failed to read command exit code: %s\n", argv[0]);
+    return -1;
+  }
+  CloseHandle(process_handle);
+  if (exit_code != 0) {
     muon_print_error("Command failed: %s\n", argv[0]);
     return -1;
   }

@@ -217,7 +217,7 @@ if [[ -n "${BOOTSTRAP_LDLIBS:-}" ]]; then
   BOOTSTRAP_LDLIBS_VALUE="${BOOTSTRAP_LDLIBS_VALUE} ${BOOTSTRAP_LDLIBS}"
 fi
 
-make -C "${SCRIPT_DIR}" -B \
+make -j -C "${SCRIPT_DIR}" -B \
   CC="${CC}" \
   AR="${AR}" \
   OUT_DIR="${OUT_DIR}" \

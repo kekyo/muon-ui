@@ -26,6 +26,11 @@ bash "${SCRIPT_DIR}/build.sh" check Release windows64
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
 
+slow_writer_src="${temp_dir}/slow-writer.c"
+slow_writer_exe="${temp_dir}/slow-writer.exe"
+progress_harness_src="${temp_dir}/process-progress-harness.c"
+progress_harness_exe="${temp_dir}/process-progress-harness.exe"
+progress_output="${temp_dir}/process-progress-output.bin"
 source_dir="${temp_dir}/source"
 cache_dir="${temp_dir}/cache"
 output_dir="${temp_dir}/output"
@@ -34,6 +39,92 @@ archive_root="${source_dir}/cef_binary_fake_windows64_minimal"
 archive_path="${source_dir}/cef.tar.bz2"
 catalog_path="${source_dir}/source-catalog.json"
 executable="${SCRIPT_DIR}/.run/check-windows64-release/muon-prepare.exe"
+
+cat > "${slow_writer_src}" <<'C_EOF'
+#define WIN32_LEAN_AND_MEAN
+#include <stdio.h>
+#include <windows.h>
+
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    return 64;
+  }
+  FILE *file = fopen(argv[1], "wb");
+  if (file == NULL) {
+    return 1;
+  }
+  for (int index = 0; index < 4; index += 1) {
+    if (fwrite("0123456789", 1, 10, file) != 10) {
+      fclose(file);
+      return 1;
+    }
+    fflush(file);
+    Sleep(250);
+  }
+  fclose(file);
+  return 0;
+}
+C_EOF
+
+cat > "${progress_harness_src}" <<'C_EOF'
+#include <stdio.h>
+
+#include "common.h"
+
+typedef struct {
+  int seen_intermediate;
+} ProgressState;
+
+static void on_progress(const MuonPrepareProgress *progress,
+                        void *user_data) {
+  ProgressState *state = (ProgressState *)user_data;
+  printf("%llu/%llu\n", progress->current, progress->total);
+  if (progress->determinate && progress->current > 0 &&
+      progress->current < progress->total) {
+    state->seen_intermediate = 1;
+  }
+}
+
+int main(int argc, char **argv) {
+  if (argc != 3) {
+    return 64;
+  }
+  char *child_argv[] = {argv[1], argv[2], NULL};
+  ProgressState state = {0};
+  const int result = muon_run_process_with_file_progress(
+      child_argv, argv[2], 40, on_progress, &state,
+      MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING,
+      "Downloading CEF runtime...");
+  if (result != 0) {
+    return 1;
+  }
+  if (!state.seen_intermediate) {
+    fprintf(stderr, "missing intermediate file progress\n");
+    return 2;
+  }
+  return 0;
+}
+C_EOF
+
+x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
+  -o "${slow_writer_exe}" "${slow_writer_src}"
+
+x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
+  -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
+  -o "${progress_harness_exe}" \
+  "${progress_harness_src}" \
+  "${SCRIPT_DIR}/.run/check-windows64-release/libmuon-prepare.a" \
+  "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
+  "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a"
+
+slow_writer_windows="$(winepath -w "${slow_writer_exe}")"
+progress_output_windows="$(winepath -w "${progress_output}")"
+WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
+  wine "${progress_harness_exe}" \
+    "${slow_writer_windows}" \
+    "${progress_output_windows}" > "${temp_dir}/progress.log"
+WINEPREFIX="${wine_prefix}" wineserver -w
 
 mkdir -p "${archive_root}/Release" "${archive_root}/Resources/locales"
 printf 'cef library\r\n' > "${archive_root}/Release/libcef.dll"

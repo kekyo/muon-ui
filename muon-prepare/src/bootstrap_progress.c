@@ -117,10 +117,8 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
   }
   INITCOMMONCONTROLSEX controls;
   controls.dwSize = sizeof(controls);
-  controls.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
-  if (!InitCommonControlsEx(&controls)) {
-    return 0;
-  }
+  controls.dwICC = ICC_PROGRESS_CLASS;
+  const int has_progress_control = InitCommonControlsEx(&controls);
   const int x =
       (GetSystemMetrics(SM_CXSCREEN) - MUON_PROGRESS_WIDTH) / 2;
   const int y =
@@ -137,18 +135,22 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
       0, "STATIC", "", WS_CHILD | WS_VISIBLE, 20, 18,
       MUON_PROGRESS_WIDTH - 40, 22, backend->window, NULL, backend->instance,
       NULL);
-  backend->progress_bar = CreateWindowExA(
-      0, PROGRESS_CLASSA, "", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 20, 52,
-      MUON_PROGRESS_WIDTH - 40, 22, backend->window, NULL, backend->instance,
-      NULL);
-  if (backend->status_label == NULL || backend->progress_bar == NULL) {
+  if (has_progress_control) {
+    backend->progress_bar = CreateWindowExA(
+        0, PROGRESS_CLASSA, "", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 20, 52,
+        MUON_PROGRESS_WIDTH - 40, 22, backend->window, NULL,
+        backend->instance, NULL);
+  }
+  if (backend->status_label == NULL) {
     DestroyWindow(backend->window);
     backend->window = NULL;
     backend->status_label = NULL;
     backend->progress_bar = NULL;
     return 0;
   }
-  SendMessageA(backend->progress_bar, PBM_SETRANGE, 0, MAKELPARAM(0, 1000));
+  if (backend->progress_bar != NULL) {
+    SendMessageA(backend->progress_bar, PBM_SETRANGE, 0, MAKELPARAM(0, 1000));
+  }
   ShowWindow(backend->window, SW_SHOWNORMAL);
   UpdateWindow(backend->window);
   backend->shown = 1;
@@ -167,6 +169,9 @@ static void update_window_controls(MuonBootstrapProgressBackend *backend,
                                    const MuonPrepareProgress *event,
                                    const char *status) {
   SetWindowTextA(backend->status_label, status);
+  if (backend->progress_bar == NULL) {
+    return;
+  }
   if (event->determinate && event->total != 0) {
     const unsigned long long position = progress_position(event, 1000);
     SendMessageA(backend->progress_bar, PBM_SETPOS, (WPARAM)position, 0);

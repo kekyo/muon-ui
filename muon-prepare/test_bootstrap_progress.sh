@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${SCRIPT_DIR}/.run/test-bootstrap-progress"
 HARNESS="${OUT_DIR}/bootstrap_progress_harness.c"
+WIN_HARNESS="${OUT_DIR}/bootstrap_progress_windows_harness.c"
 mkdir -p "${OUT_DIR}"
 
 cat >"${HARNESS}" <<'HARNESS_EOF'
@@ -62,3 +63,73 @@ gcc -std=c99 -Wall -Wextra -pedantic \
   $(pkg-config --cflags --libs xcb) \
   -pthread
 "${OUT_DIR}/bootstrap_progress_harness"
+
+cat >"${WIN_HARNESS}" <<'HARNESS_EOF'
+#define WIN32_LEAN_AND_MEAN
+#include <stdio.h>
+#include <windows.h>
+#include <commctrl.h>
+
+static BOOL WINAPI muon_test_init_common_controls_ex(
+    const INITCOMMONCONTROLSEX *controls) {
+  (void)controls;
+  return FALSE;
+}
+
+#define InitCommonControlsEx muon_test_init_common_controls_ex
+#define MUON_BOOTSTRAP_PROGRESS_TEST
+#include "../../src/bootstrap_progress.c"
+#undef InitCommonControlsEx
+
+static int wait_for_progress_window(void) {
+  for (int attempt = 0; attempt < 100; attempt += 1) {
+    HWND window = FindWindowA("MuonBootstrapProgressWindow", "Muon");
+    if (window != NULL && IsWindowVisible(window)) {
+      return 0;
+    }
+    Sleep(20);
+  }
+  fprintf(stderr, "bootstrap progress window was not shown\n");
+  return 1;
+}
+
+int main(void) {
+  MuonBootstrapProgress progress;
+  muon_bootstrap_progress_init(&progress);
+  if (!muon_bootstrap_progress_is_available(&progress)) {
+    fprintf(stderr, "bootstrap progress backend is unavailable\n");
+    return 1;
+  }
+  MuonPrepareProgress event;
+  event.phase = MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING;
+  event.status = "Downloading CEF runtime...";
+  event.current = 1;
+  event.total = 100;
+  event.determinate = 1;
+  muon_bootstrap_progress_update(&progress, &event);
+  const int result = wait_for_progress_window();
+  muon_bootstrap_progress_dispose(&progress);
+  return result;
+}
+HARNESS_EOF
+
+wine_prefix="${OUT_DIR}/wineprefix"
+rm -rf "${wine_prefix}"
+
+x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
+  -I"${SCRIPT_DIR}/src" \
+  -o "${OUT_DIR}/bootstrap_progress_windows64_harness.exe" \
+  "${WIN_HARNESS}" \
+  -lcomctl32
+xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
+  wine "${OUT_DIR}/bootstrap_progress_windows64_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -w
+
+i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
+  -I"${SCRIPT_DIR}/src" \
+  -o "${OUT_DIR}/bootstrap_progress_windows32_harness.exe" \
+  "${WIN_HARNESS}" \
+  -lcomctl32
+xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
+  wine "${OUT_DIR}/bootstrap_progress_windows32_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -w

@@ -62,6 +62,15 @@ constexpr UINT_PTR kMuonWheelForwarderSubclassId = 0x4d574648u;
 std::mutex g_muon_windows_subclass_mutex;
 std::set<HWND> g_muon_windows_subclassed_for_wheel;
 
+static bool IsNativePageDraggableRegionScreenPixels(
+    CefWindowHandle window_handle,
+    CefPoint screen_point) {
+  const auto dip_screen_point =
+      CefDisplay::ConvertScreenPointFromPixels(screen_point);
+  return IsRegisteredMuonPageDraggableRegionPoint(
+      window_handle, dip_screen_point);
+}
+
 static uint32_t GetMuonWindowsEventFlags(WPARAM wparam) {
   const auto key_state = GET_KEYSTATE_WPARAM(wparam);
   auto modifiers = uint32_t{0};
@@ -91,6 +100,27 @@ static void ForgetMuonWindowsSubclass(HWND window_handle) {
   g_muon_windows_subclassed_for_wheel.erase(window_handle);
 }
 
+static bool StartMuonWindowsPageDrag(HWND window_handle, LPARAM lparam) {
+  POINT screen_point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+  if (ClientToScreen(window_handle, &screen_point) == FALSE) {
+    return false;
+  }
+
+  if (!IsNativePageDraggableRegionScreenPixels(
+          window_handle, CefPoint(screen_point.x, screen_point.y))) {
+    return false;
+  }
+
+  auto drag_handle = GetAncestor(window_handle, GA_ROOT);
+  if (drag_handle == nullptr) {
+    drag_handle = window_handle;
+  }
+  ReleaseCapture();
+  SendMessage(drag_handle, WM_NCLBUTTONDOWN, HTCAPTION,
+              MAKELPARAM(screen_point.x, screen_point.y));
+  return true;
+}
+
 static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     HWND window_handle,
     UINT message,
@@ -104,6 +134,11 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
   }
 
   switch (message) {
+    case WM_LBUTTONDOWN:
+      if (StartMuonWindowsPageDrag(window_handle, lparam)) {
+        return 0;
+      }
+      break;
     case WM_MOUSEWHEEL: {
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));

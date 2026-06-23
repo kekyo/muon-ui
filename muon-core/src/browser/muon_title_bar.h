@@ -429,6 +429,30 @@ void SetRegisteredMuonPageDraggableRegions(
     const std::vector<CefDraggableRegion>& regions);
 
 /**
+ * Returns whether a point hits a CSS draggable page region.
+ *
+ * @param regions Draggable regions in page or browser view coordinates.
+ * @param point Point in the same coordinate space as regions.
+ * @return true when the point belongs to a draggable region and is not covered
+ * by a no-drag region.
+ */
+bool IsMuonPageDraggableRegionPoint(
+    const std::vector<CefDraggableRegion>& regions,
+    const CefPoint& point);
+
+/**
+ * Returns whether a screen point hits registered page CSS draggable regions.
+ *
+ * @param window_handle Native window handle used to prefer one registered
+ * window, or null to search all registered windows.
+ * @param screen_point DIP screen point to test.
+ * @return true when the point belongs to a registered page draggable region.
+ */
+bool IsRegisteredMuonPageDraggableRegionPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point);
+
+/**
  * Forwards a native wheel event when it hits a page CSS draggable region.
  *
  * @param window_handle Native window handle that received the wheel event.

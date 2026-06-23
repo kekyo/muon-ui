@@ -9,20 +9,20 @@
 #include "include/views/cef_window.h"
 
 /**
- * Registers native wheel forwarding for page CSS draggable regions.
+ * Registers native input forwarding for page CSS draggable regions.
  *
- * @param window Window whose native wheel events should be observed.
+ * @param window Window whose native input events should be observed.
  */
 void RegisterMuonNativeWheelForwarder(CefRefPtr<CefWindow> window);
 
 /**
- * Unregisters native wheel forwarding for a window.
+ * Unregisters native input forwarding for a window.
  *
- * @param window Window whose native wheel events should no longer be observed.
+ * @param window Window whose native input events should no longer be observed.
  */
 void UnregisterMuonNativeWheelForwarder(CefRefPtr<CefWindow> window);
 
 /**
- * Clears all native wheel forwarding registrations before CEF shutdown.
+ * Clears all native input forwarding registrations before CEF shutdown.
  */
 void ClearMuonNativeWheelForwarders();

@@ -84,7 +84,7 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
     descriptor.coreExecutable,
     descriptor.uiLibrary,
     descriptor.cardioLibrary,
-    "LICENSE_muon",
+    "CREDITS.md",
   ];
 
   await assertExists(join(nativePath, descriptor.nativePrepare));

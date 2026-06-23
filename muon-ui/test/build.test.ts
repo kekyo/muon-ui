@@ -145,7 +145,7 @@ const createFakeMuonPackageDistForTargets = async (
         `${target} ${fileName}\n`,
       );
     }
-    await writeFile(join(runtimeDirectory, "LICENSE_muon"), "notices\n");
+    await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
     await writeFile(join(runtimeDirectory, "libcef.so"), "cef\n");
     await writeFile(join(runtimeDirectory, "muon.json"), "{}\n");
     await mkdir(join(runtimeDirectory, "assets"), { recursive: true });
@@ -276,7 +276,7 @@ describe("muon build", () => {
       readFile(join(root, "dist-linux-amd64", "libcardio.so"), "utf8"),
     ).resolves.toBe("cardio\n");
     await expect(
-      readFile(join(root, "dist-linux-amd64", "LICENSE_muon"), "utf8"),
+      readFile(join(root, "dist-linux-amd64", "CREDITS.md"), "utf8"),
     ).resolves.toBe("notices\n");
     await expect(
       exists(join(root, "dist-linux-amd64", "THIRD_PARTY_NOTICES.md")),

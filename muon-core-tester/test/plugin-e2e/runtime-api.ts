@@ -467,7 +467,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           },
           corePayload: expect.arrayContaining([
             process.platform === "win32" ? "muon-core.exe" : "muon-core",
-            "LICENSE_muon",
+            "CREDITS.md",
           ]),
         });
         expect(values.runtimeInfo.corePayload).not.toContain(

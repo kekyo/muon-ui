@@ -25,7 +25,7 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
-      "LICENSE_muon",
+      "CREDITS.md",
     ],
   },
   linuxarm: {
@@ -38,7 +38,7 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
-      "LICENSE_muon",
+      "CREDITS.md",
     ],
   },
   linuxarm64: {
@@ -51,7 +51,7 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
-      "LICENSE_muon",
+      "CREDITS.md",
     ],
   },
   windows32: {
@@ -64,7 +64,7 @@ const targetDescriptors = {
       "muon-core.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
-      "LICENSE_muon",
+      "CREDITS.md",
     ],
     runtimeOptionalPayloadPatterns: [
       /^libgcc_s_.*-1\.dll$/,
@@ -82,7 +82,7 @@ const targetDescriptors = {
       "muon-core.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
-      "LICENSE_muon",
+      "CREDITS.md",
     ],
     runtimeOptionalPayloadPatterns: [
       /^libgcc_s_.*-1\.dll$/,

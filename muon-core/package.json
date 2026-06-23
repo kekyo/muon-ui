@@ -6,8 +6,12 @@
     "build": "bash ./build.sh dev Debug linux64 && bash ./build.sh check Release mingw32 && bash ./build.sh check Release mingw64",
     "build:dist": "bash ./build.sh dist Release linux64 && bash ./build.sh dist Release mingw32 && bash ./build.sh dist Release mingw64",
     "build:target": "bash ./build.sh",
+    "generate:runtime-version-header": "screw-up format --input cmake/muon_core_version_generated.h.in",
     "build:test": "bash ./build.sh test Release linux64",
     "dev": "bash ./build.sh dev && node scripts/run-dev-supervisor.mjs",
     "test": "npm run build:test && xvfb-run -a node ../scripts/run-xvfb-command.mjs ctest --test-dir .build/test/linux64/release --output-on-failure"
+  },
+  "devDependencies": {
+    "screw-up": ">=1.34.0"
   }
 }

@@ -62,6 +62,29 @@ static int copy_url_to_file(const char *url, const char *destination) {
   return muon_copy_file_with_source_mode(source, destination);
 }
 
+static int copy_url_to_file_progress(
+    const char *url, const char *destination, unsigned long long size,
+    const char *status,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
+  if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
+    char *argv[] = {"curl", "-fsSL", "-o", (char *)destination, (char *)url,
+                    NULL};
+    return muon_run_process_with_file_progress(
+        argv, destination, size, progress_callback, progress_user_data,
+        MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status);
+  }
+  const char *source = url;
+  if (strncmp(url, "file://", 7) == 0) {
+    source = url + 7;
+  }
+  muon_report_progress(progress_callback, progress_user_data,
+                       MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status, 0,
+                       size, size != 0);
+  return muon_copy_file_with_source_mode_progress(
+      source, destination, progress_callback, progress_user_data,
+      MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status);
+}
+
 static const char *get_catalog_url(void) {
   const char *url = getenv("MUON_CEF_CATALOG_URL");
   return url == NULL || url[0] == '\0' ? kDefaultCefCatalogUrl : url;
@@ -140,6 +163,13 @@ int muon_prepare_ensure_catalog_cache(const char *cache_dir, int force) {
 int muon_prepare_ensure_catalog_cache_with_status(const char *cache_dir,
                                                   int force,
                                                   int *updated) {
+  return muon_prepare_ensure_catalog_cache_with_status_progress(
+      cache_dir, force, updated, NULL, NULL);
+}
+
+int muon_prepare_ensure_catalog_cache_with_status_progress(
+    const char *cache_dir, int force, int *updated,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (updated != NULL) {
     *updated = 0;
   }
@@ -159,7 +189,13 @@ int muon_prepare_ensure_catalog_cache_with_status(const char *cache_dir,
     return 0;
   }
   int result = 0;
-  if (copy_url_to_file(get_catalog_url(), temporary_path) == 0) {
+  const int copy_result =
+      progress_callback == NULL
+          ? copy_url_to_file(get_catalog_url(), temporary_path)
+          : copy_url_to_file_progress(get_catalog_url(), temporary_path, 0,
+                                      "Checking for CEF updates...",
+                                      progress_callback, progress_user_data);
+  if (copy_result == 0) {
     result = muon_atomic_replace(temporary_path, catalog_path);
     if (result == 0 && updated != NULL) {
       *updated = 1;
@@ -569,12 +605,15 @@ static int ensure_tested_archive(const char *cache_dir,
                                  const MuonCefReference *reference,
                                  int force,
                                  MuonCefArtifact *artifact,
-                                 char **archive_path) {
+                                 char **archive_path,
+                                 MuonPrepareProgressCallback progress_callback,
+                                 void *progress_user_data) {
   if (set_artifact_from_reference(reference, artifact) != 0) {
     return -1;
   }
-  if (muon_prepare_ensure_cef_artifact_cache(cache_dir, artifact, force,
-                                             archive_path) != 0) {
+  if (muon_prepare_ensure_cef_artifact_cache_progress(
+          cache_dir, artifact, force, archive_path, progress_callback,
+          progress_user_data) != 0) {
     muon_prepare_free_cef_artifact(artifact);
     return -1;
   }
@@ -586,19 +625,22 @@ static int ensure_latest_policy_archive(const char *cache_dir,
                                         int require_same_major,
                                         int force,
                                         MuonCefArtifact *artifact,
-                                        char **archive_path) {
+                                        char **archive_path,
+                                        MuonPrepareProgressCallback progress_callback,
+                                        void *progress_user_data) {
   MuonCefCandidateList candidates;
   if (collect_policy_candidates(cache_dir, reference, require_same_major,
                                 &candidates) != 0) {
     return ensure_tested_archive(cache_dir, reference, force, artifact,
-                                 archive_path);
+                                 archive_path, progress_callback,
+                                 progress_user_data);
   }
   for (size_t index = 0; index < candidates.count; index += 1) {
     MuonCefCandidate *candidate = &candidates.values[index];
     char *candidate_archive_path = NULL;
-    if (muon_prepare_ensure_cef_artifact_cache(
-            cache_dir, &candidate->artifact, force,
-            &candidate_archive_path) != 0) {
+    if (muon_prepare_ensure_cef_artifact_cache_progress(
+            cache_dir, &candidate->artifact, force, &candidate_archive_path,
+            progress_callback, progress_user_data) != 0) {
       free(candidate_archive_path);
       continue;
     }
@@ -613,26 +655,40 @@ static int ensure_latest_policy_archive(const char *cache_dir,
   }
   free_candidate_list(&candidates);
   return ensure_tested_archive(cache_dir, reference, force, artifact,
-                               archive_path);
+                               archive_path, progress_callback,
+                               progress_user_data);
 }
 
 int muon_prepare_ensure_cef_archive_cache_for_policy(
     const char *cache_dir, const MuonCefReference *reference,
     const char *policy, const char *exact_version, int force,
     MuonCefArtifact *artifact, char **archive_path) {
+  return muon_prepare_ensure_cef_archive_cache_for_policy_progress(
+      cache_dir, reference, policy, exact_version, force, artifact,
+      archive_path, NULL, NULL);
+}
+
+int muon_prepare_ensure_cef_archive_cache_for_policy_progress(
+    const char *cache_dir, const MuonCefReference *reference,
+    const char *policy, const char *exact_version, int force,
+    MuonCefArtifact *artifact, char **archive_path,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   memset(artifact, 0, sizeof(*artifact));
   *archive_path = NULL;
   if (strcmp(policy, "tested") == 0) {
     return ensure_tested_archive(cache_dir, reference, force, artifact,
-                                 archive_path);
+                                 archive_path, progress_callback,
+                                 progress_user_data);
   }
   if (strcmp(policy, "same-major-latest") == 0) {
     return ensure_latest_policy_archive(cache_dir, reference, 1, force,
-                                        artifact, archive_path);
+                                        artifact, archive_path,
+                                        progress_callback, progress_user_data);
   }
   if (strcmp(policy, "compat-latest") == 0) {
     return ensure_latest_policy_archive(cache_dir, reference, 0, force,
-                                        artifact, archive_path);
+                                        artifact, archive_path,
+                                        progress_callback, progress_user_data);
   }
   if (strcmp(policy, "exact") == 0) {
     if (exact_version == NULL || exact_version[0] == '\0') {
@@ -641,7 +697,8 @@ int muon_prepare_ensure_cef_archive_cache_for_policy(
     }
     if (strcmp(exact_version, reference->version) == 0) {
       return ensure_tested_archive(cache_dir, reference, force, artifact,
-                                   archive_path);
+                                   archive_path, progress_callback,
+                                   progress_user_data);
     }
     if (muon_prepare_resolve_cef_artifact(cache_dir, exact_version,
                                           reference->target,
@@ -649,8 +706,9 @@ int muon_prepare_ensure_cef_archive_cache_for_policy(
                                           artifact) != 0) {
       return -1;
     }
-    if (muon_prepare_ensure_cef_artifact_cache(cache_dir, artifact, force,
-                                               archive_path) != 0) {
+    if (muon_prepare_ensure_cef_artifact_cache_progress(
+            cache_dir, artifact, force, archive_path, progress_callback,
+            progress_user_data) != 0) {
       muon_prepare_free_cef_artifact(artifact);
       return -1;
     }
@@ -669,6 +727,14 @@ int muon_prepare_ensure_cef_archive_cache_for_policy(
 int muon_prepare_ensure_cef_artifact_cache(
     const char *cache_dir, const MuonCefArtifact *artifact, int force,
     char **archive_path) {
+  return muon_prepare_ensure_cef_artifact_cache_progress(
+      cache_dir, artifact, force, archive_path, NULL, NULL);
+}
+
+int muon_prepare_ensure_cef_artifact_cache_progress(
+    const char *cache_dir, const MuonCefArtifact *artifact, int force,
+    char **archive_path, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data) {
   *archive_path = NULL;
   char *artifacts_dir = muon_path_join(cache_dir, "artifacts");
   char *final_path =
@@ -700,8 +766,18 @@ int muon_prepare_ensure_cef_artifact_cache(
   muon_print_error("Downloading CEF binary: version=%s target=%s distribution=%s\n",
               artifact->version, artifact->target, artifact->distribution);
   int result = -1;
-  if (copy_url_to_file(artifact->url, temporary_path) == 0 &&
-      verify_sha1(temporary_path, artifact->sha1) == 0 &&
+  const int copy_result =
+      progress_callback == NULL
+          ? copy_url_to_file(artifact->url, temporary_path)
+          : copy_url_to_file_progress(artifact->url, temporary_path,
+                                      artifact->size,
+                                      "Downloading CEF runtime...",
+                                      progress_callback, progress_user_data);
+  if (copy_result == 0 &&
+      (muon_report_progress(progress_callback, progress_user_data,
+                            MUON_PREPARE_PROGRESS_PHASE_VERIFYING,
+                            "Verifying download...", 0, 0, 0),
+       verify_sha1(temporary_path, artifact->sha1)) == 0 &&
       verify_size(temporary_path, artifact->size) == 0 &&
       muon_atomic_replace(temporary_path, final_path) == 0) {
     muon_print_error("CEF binary downloaded: version=%s target=%s distribution=%s\n",

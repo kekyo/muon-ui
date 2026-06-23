@@ -178,9 +178,12 @@ export const buildTestMuonPrepare = async (
     `VERSION_HEADER=${versionHeader}`,
     `RUNTIME_INFO_HEADER=${runtimeInfoHeaderPath}`,
     `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux64\\"`,
+    "BOOTSTRAP_CPPFLAGS=",
     "CFLAGS=-std=c99 -O0 -g -Wall -Wextra -pedantic",
     "LDFLAGS=-static",
+    "BOOTSTRAP_LDFLAGS=",
     `LDLIBS=${libarchiveLib} ${bzip2Lib}`,
+    "BOOTSTRAP_LDLIBS=-lxcb",
   ]);
 
   return {

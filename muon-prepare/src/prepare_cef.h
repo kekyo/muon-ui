@@ -8,6 +8,8 @@
 
 #include <stddef.h>
 
+#include "prepare_progress.h"
+
 /**
  * CEF artifact metadata resolved from the cached catalog.
  */
@@ -79,6 +81,9 @@ int muon_prepare_ensure_catalog_cache(const char *cache_dir, int force);
 int muon_prepare_ensure_catalog_cache_with_status(const char *cache_dir,
                                                   int force,
                                                   int *updated);
+int muon_prepare_ensure_catalog_cache_with_status_progress(
+    const char *cache_dir, int force, int *updated,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data);
 
 /**
  * Resolves metadata for a CEF artifact from the cached catalog.
@@ -112,6 +117,11 @@ int muon_prepare_ensure_cef_archive_cache_for_policy(
     const char *cache_dir, const MuonCefReference *reference,
     const char *policy, const char *exact_version, int force,
     MuonCefArtifact *artifact, char **archive_path);
+int muon_prepare_ensure_cef_archive_cache_for_policy_progress(
+    const char *cache_dir, const MuonCefReference *reference,
+    const char *policy, const char *exact_version, int force,
+    MuonCefArtifact *artifact, char **archive_path,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data);
 
 /**
  * Ensures the CEF archive exists in the artifact cache and is verified.
@@ -125,6 +135,10 @@ int muon_prepare_ensure_cef_archive_cache_for_policy(
 int muon_prepare_ensure_cef_artifact_cache(
     const char *cache_dir, const MuonCefArtifact *artifact, int force,
     char **archive_path);
+int muon_prepare_ensure_cef_artifact_cache_progress(
+    const char *cache_dir, const MuonCefArtifact *artifact, int force,
+    char **archive_path, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data);
 
 /**
  * Extracts a full CEF distribution root from an archive.

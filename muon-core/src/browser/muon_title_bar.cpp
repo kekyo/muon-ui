@@ -490,35 +490,53 @@ static bool ContainsPoint(const CefRect& bounds, const CefPoint& point) {
          point.y < bounds.y + bounds.height;
 }
 
-static bool IsPageDraggableRegionPoint(
-    const std::vector<CefDraggableRegion>& regions,
-    const CefPoint& point) {
-  auto draggable = false;
-  for (const auto& region : regions) {
-    if (!ContainsPoint(region.bounds, point)) {
-      continue;
-    }
-    if (!region.draggable) {
-      return false;
-    }
-    draggable = true;
+static bool GetPageDraggableRegionViewPoint(
+    const MuonPageDraggableRegions& page_regions,
+    const CefPoint& screen_point,
+    CefPoint* view_point) {
+  if (!page_regions.browser_view || view_point == nullptr) {
+    return false;
   }
-  return draggable;
+
+  auto converted_point = screen_point;
+  if (!page_regions.browser_view->ConvertPointFromScreen(converted_point) ||
+      !IsMuonPageDraggableRegionPoint(page_regions.regions, converted_point)) {
+    return false;
+  }
+  *view_point = converted_point;
+  return true;
+}
+
+static const MuonPageDraggableRegions* FindPageDraggableRegionsAtScreenPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    CefPoint* view_point) {
+  if (window_handle != 0) {
+    const auto key = GetWindowHandleDraggableRegionKey(window_handle);
+    const auto page_regions = g_muon_page_draggable_regions.find(key);
+    if (page_regions != g_muon_page_draggable_regions.end() &&
+        GetPageDraggableRegionViewPoint(page_regions->second, screen_point,
+                                        view_point)) {
+      return &page_regions->second;
+    }
+  }
+
+  for (const auto& page_regions : g_muon_page_draggable_regions) {
+    if (GetPageDraggableRegionViewPoint(page_regions.second, screen_point,
+                                        view_point)) {
+      return &page_regions.second;
+    }
+  }
+  return nullptr;
 }
 
 static bool ForwardPageDraggableRegionWheel(
     const MuonPageDraggableRegions& page_regions,
-    const CefPoint& screen_point,
+    const CefPoint& view_point,
     int delta_x,
     int delta_y,
     uint32_t modifiers) {
   if (!page_regions.browser_view || (delta_x == 0 && delta_y == 0)) {
-    return false;
-  }
-
-  auto view_point = screen_point;
-  if (!page_regions.browser_view->ConvertPointFromScreen(view_point) ||
-      !IsPageDraggableRegionPoint(page_regions.regions, view_point)) {
     return false;
   }
 
@@ -1281,6 +1299,32 @@ void SetRegisteredMuonPageDraggableRegions(
   ApplyMuonDraggableRegions(window.get());
 }
 
+bool IsMuonPageDraggableRegionPoint(
+    const std::vector<CefDraggableRegion>& regions,
+    const CefPoint& point) {
+  auto draggable = false;
+  for (const auto& region : regions) {
+    if (!ContainsPoint(region.bounds, point)) {
+      continue;
+    }
+    if (!region.draggable) {
+      return false;
+    }
+    draggable = true;
+  }
+  return draggable;
+}
+
+bool IsRegisteredMuonPageDraggableRegionPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point) {
+  CEF_REQUIRE_UI_THREAD();
+
+  CefPoint view_point;
+  return FindPageDraggableRegionsAtScreenPoint(
+             window_handle, screen_point, &view_point) != nullptr;
+}
+
 bool ForwardRegisteredMuonPageDraggableRegionWheel(
     CefWindowHandle window_handle,
     const CefPoint& screen_point,
@@ -1289,23 +1333,14 @@ bool ForwardRegisteredMuonPageDraggableRegionWheel(
     uint32_t modifiers) {
   CEF_REQUIRE_UI_THREAD();
 
-  if (window_handle != 0) {
-    const auto key = GetWindowHandleDraggableRegionKey(window_handle);
-    const auto page_regions = g_muon_page_draggable_regions.find(key);
-    if (page_regions != g_muon_page_draggable_regions.end() &&
-        ForwardPageDraggableRegionWheel(page_regions->second, screen_point,
-                                        delta_x, delta_y, modifiers)) {
-      return true;
-    }
+  CefPoint view_point;
+  const auto* page_regions = FindPageDraggableRegionsAtScreenPoint(
+      window_handle, screen_point, &view_point);
+  if (page_regions == nullptr) {
+    return false;
   }
-
-  for (const auto& page_regions : g_muon_page_draggable_regions) {
-    if (ForwardPageDraggableRegionWheel(page_regions.second, screen_point,
-                                        delta_x, delta_y, modifiers)) {
-      return true;
-    }
-  }
-  return false;
+  return ForwardPageDraggableRegionWheel(
+      *page_regions, view_point, delta_x, delta_y, modifiers);
 }
 
 CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id) {

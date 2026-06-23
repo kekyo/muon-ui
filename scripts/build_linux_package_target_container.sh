@@ -38,8 +38,7 @@ require_env MUON_PACKAGE_ARCH
 require_env MUON_PACKAGE_TARGET
 require_env MUON_PREPARE_VERSION
 require_env MUON_PREPARE_GIT_COMMIT_HASH
-require_env MUON_CORE_VERSION
-require_env MUON_CORE_GIT_COMMIT_HASH
+require_env MUON_CORE_VERSION_HEADER
 require_env MUON_TRA_FFIC_ROOT
 require_env MUON_CARDIO_ROOT
 
@@ -63,8 +62,7 @@ cd /workspace
 
 export MUON_PREPARE_VERSION
 export MUON_PREPARE_GIT_COMMIT_HASH
-export MUON_CORE_VERSION
-export MUON_CORE_GIT_COMMIT_HASH
+export MUON_CORE_VERSION_HEADER
 
 bash muon-prepare/build.sh dist Release "${MUON_PACKAGE_TARGET}"
 rm -rf "muon-core/.build/dist/${MUON_PACKAGE_TARGET}"

@@ -226,6 +226,21 @@ static bool TestNativeTitleBarSupportDetection() {
 #endif
 }
 
+static bool TestPageDraggableRegionHitTesting() {
+  const auto regions = std::vector<CefDraggableRegion>{
+      CefDraggableRegion(CefRect(10, 20, 200, 120), true),
+      CefDraggableRegion(CefRect(70, 60, 48, 32), false),
+  };
+  return Expect(IsMuonPageDraggableRegionPoint(regions, CefPoint(20, 30)),
+                "drag region point was not accepted") &&
+         Expect(!IsMuonPageDraggableRegionPoint(regions, CefPoint(80, 70)),
+                "no-drag region point was accepted") &&
+         Expect(!IsMuonPageDraggableRegionPoint(regions, CefPoint(220, 40)),
+                "outside point was accepted") &&
+         Expect(!IsMuonPageDraggableRegionPoint({}, CefPoint(20, 30)),
+                "empty regions accepted a point");
+}
+
 static bool TestCustomTitleBarWindowDelegate() {
   const auto manifest = CreateTestCustomTitleBarManifest();
   auto browser =
@@ -268,6 +283,7 @@ int main() {
   return TestBrowserFunctionDefinitions() && TestWindowTitleFallback() &&
                  TestInitialWindowShowState() && TestTitleBarManifestParsing() &&
                  TestNativeTitleBarSupportDetection() &&
+                 TestPageDraggableRegionHitTesting() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0
              : 1;

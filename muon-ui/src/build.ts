@@ -92,6 +92,11 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
     bootstrapExecutableName: "muon-bootstrap.exe",
     launcherExtension: ".exe",
     runtimeFiles: ["muon-core.exe", "libmuon-ui.dll", "libcardio.dll"],
+    optionalRuntimeFilePatterns: [
+      /^libgcc_s_.*-1\.dll$/,
+      /^libstdc\+\+-6\.dll$/,
+      /^libwinpthread-1\.dll$/,
+    ],
   },
   windows64: {
     distributionDirectoryName: "dist-windows-amd64",
@@ -99,6 +104,11 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
     bootstrapExecutableName: "muon-bootstrap.exe",
     launcherExtension: ".exe",
     runtimeFiles: ["muon-core.exe", "libmuon-ui.dll", "libcardio.dll"],
+    optionalRuntimeFilePatterns: [
+      /^libgcc_s_.*-1\.dll$/,
+      /^libstdc\+\+-6\.dll$/,
+      /^libwinpthread-1\.dll$/,
+    ],
   },
 };
 
@@ -122,6 +132,7 @@ type MuonBuildTargetDescriptor = {
   bootstrapExecutableName: string;
   launcherExtension: string;
   runtimeFiles: readonly string[];
+  optionalRuntimeFilePatterns?: readonly RegExp[];
 };
 
 type AssetInput = {
@@ -169,6 +180,9 @@ export interface MuonBuildOptions {
   targets?: readonly string[];
   /**
    * Build every supported target from the installed package.
+   *
+   * @remarks Defaults to true when targets is omitted. Set false to build only
+   * the host target.
    */
   allTargets?: boolean;
   /**
@@ -362,6 +376,10 @@ const resolveBuildTargets = (options: MuonBuildOptions): MuonBuildTarget[] => {
         options.targets.map((target) => normalizeMuonBuildTarget(target)),
       ),
     ];
+  }
+
+  if (options.allTargets !== false) {
+    return [...allTargets];
   }
 
   return [getDefaultMuonBuildTarget()];
@@ -651,6 +669,21 @@ const copyRuntimeFiles = async (
       join(sourceRuntimePath, fileName),
       join(outputPath, fileName),
     );
+  }
+  if (descriptor.optionalRuntimeFilePatterns !== undefined) {
+    const fileNames = await readdir(sourceRuntimePath);
+    for (const fileName of fileNames) {
+      if (
+        descriptor.optionalRuntimeFilePatterns.some((pattern) =>
+          pattern.test(fileName),
+        )
+      ) {
+        await copyFile(
+          join(sourceRuntimePath, fileName),
+          join(outputPath, fileName),
+        );
+      }
+    }
   }
   await copyFile(
     join(sourceRuntimePath, muonLicenseFileName),

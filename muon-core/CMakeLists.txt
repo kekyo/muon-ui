@@ -37,6 +37,8 @@ set(MUON_CORE_VERSION "" CACHE STRING
   "muon-core version used to generate runtime metadata.")
 set(MUON_CORE_GIT_COMMIT_HASH "" CACHE STRING
   "muon-core git commit hash used to generate runtime metadata.")
+set(MUON_CORE_VERSION_HEADER "" CACHE FILEPATH
+  "Generated muon-core version header used to generate runtime metadata.")
 set(TRA_FFIC_ROOT "../deps/tra-ffic" CACHE PATH
   "Path to the tra-ffic checkout.")
 set(CARDIO_ROOT "../deps/cardio" CACHE PATH
@@ -783,15 +785,40 @@ foreach(MUON_CORE_PAYLOAD_INDEX RANGE 0 ${MUON_CORE_PAYLOAD_LAST_INDEX})
 endforeach()
 set(MUON_GENERATED_INCLUDE_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(MUON_CORE_VERSION_HEADER_PATH
+  "${MUON_GENERATED_INCLUDE_DIR}/muon_core_version_generated.h")
 set(MUON_RUNTIME_INFO_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/muon_runtime_info_generated.h")
 file(MAKE_DIRECTORY "${MUON_GENERATED_INCLUDE_DIR}")
+if(MUON_CORE_VERSION_HEADER)
+  get_filename_component(MUON_CORE_VERSION_HEADER_ABSOLUTE
+    "${MUON_CORE_VERSION_HEADER}" ABSOLUTE)
+  if(NOT "${MUON_CORE_VERSION_HEADER_ABSOLUTE}" STREQUAL
+      "${MUON_CORE_VERSION_HEADER_PATH}")
+    configure_file(
+      "${MUON_CORE_VERSION_HEADER_ABSOLUTE}"
+      "${MUON_CORE_VERSION_HEADER_PATH}"
+      COPYONLY
+      )
+  endif()
+else()
+  file(WRITE "${MUON_CORE_VERSION_HEADER_PATH}"
+"#ifndef MUON_CORE_VERSION_GENERATED_H
+#define MUON_CORE_VERSION_GENERATED_H
+
+#define MUON_CORE_VERSION \"${MUON_CORE_VERSION}\"
+#define MUON_CORE_GIT_COMMIT_HASH \"${MUON_CORE_GIT_COMMIT_HASH}\"
+
+#endif
+")
+endif()
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/muon_runtime_info_generated.h.in"
   "${MUON_RUNTIME_INFO_HEADER_PATH}"
   @ONLY
   )
 list(APPEND APP_HEADERS
+  "${MUON_CORE_VERSION_HEADER_PATH}"
   "${MUON_RUNTIME_INFO_HEADER_PATH}"
   )
 add_executable(${APP_NAME} ${APP_SOURCES} ${APP_HEADERS})
@@ -1151,8 +1178,6 @@ if(MUON_BUILD_TESTS)
   target_compile_definitions(muon_runtime_info_generated_test PRIVATE
     EXPECTED_EXECUTABLE_NAME="${APP_EXECUTABLE_NAME}"
     EXPECTED_TARGET_NAME="${MUON_TARGET_NAME}"
-    EXPECTED_MUON_CORE_VERSION="${MUON_CORE_VERSION}"
-    EXPECTED_MUON_CORE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH}"
     EXPECTED_CEF_VERSION="${MUON_CEF_VERSION}"
     EXPECTED_CEF_API_VERSION=${MUON_CEF_API_VERSION}
     )

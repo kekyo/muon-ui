@@ -26,7 +26,7 @@ import {
   findMuonBootstrapEmbeddedConfigSlot,
   findMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
-import { buildMuonApp } from "../src/build.js";
+import { buildMuonApp, type MuonBuildTarget } from "../src/build.js";
 import muon from "../src/vite.js";
 
 const cleanupDirectories: string[] = [];
@@ -63,31 +63,104 @@ const writeExecutable = async (
   await chmod(path, 0o755);
 };
 
-const createFakeMuonPackageDist = async (root: string): Promise<string> => {
+const fakePackageTargetDescriptors: Record<
+  MuonBuildTarget,
+  {
+    runtimeExecutableName: string;
+    uiLibraryName: string;
+    cardioLibraryName: string;
+    bootstrapExecutableName: string;
+    mingwRuntimeFiles: readonly string[];
+  }
+> = {
+  linux64: {
+    runtimeExecutableName: "muon-core",
+    uiLibraryName: "libmuon-ui.so",
+    cardioLibraryName: "libcardio.so",
+    bootstrapExecutableName: "muon-bootstrap",
+    mingwRuntimeFiles: [],
+  },
+  linuxarm: {
+    runtimeExecutableName: "muon-core",
+    uiLibraryName: "libmuon-ui.so",
+    cardioLibraryName: "libcardio.so",
+    bootstrapExecutableName: "muon-bootstrap",
+    mingwRuntimeFiles: [],
+  },
+  linuxarm64: {
+    runtimeExecutableName: "muon-core",
+    uiLibraryName: "libmuon-ui.so",
+    cardioLibraryName: "libcardio.so",
+    bootstrapExecutableName: "muon-bootstrap",
+    mingwRuntimeFiles: [],
+  },
+  windows32: {
+    runtimeExecutableName: "muon-core.exe",
+    uiLibraryName: "libmuon-ui.dll",
+    cardioLibraryName: "libcardio.dll",
+    bootstrapExecutableName: "muon-bootstrap.exe",
+    mingwRuntimeFiles: [
+      "libgcc_s_dw2-1.dll",
+      "libstdc++-6.dll",
+      "libwinpthread-1.dll",
+    ],
+  },
+  windows64: {
+    runtimeExecutableName: "muon-core.exe",
+    uiLibraryName: "libmuon-ui.dll",
+    cardioLibraryName: "libcardio.dll",
+    bootstrapExecutableName: "muon-bootstrap.exe",
+    mingwRuntimeFiles: [
+      "libgcc_s_seh-1.dll",
+      "libstdc++-6.dll",
+      "libwinpthread-1.dll",
+    ],
+  },
+};
+
+const createFakeMuonPackageDistForTargets = async (
+  root: string,
+  targets: readonly MuonBuildTarget[],
+): Promise<string> => {
   const packageDirectory = join(root, "package-dist");
-  const runtimeDirectory = join(packageDirectory, "runtime", "linux64");
-  const nativeDirectory = join(packageDirectory, "native", "linux64");
-  await mkdir(runtimeDirectory, { recursive: true });
-  await mkdir(nativeDirectory, { recursive: true });
-  await writeExecutable(
-    join(runtimeDirectory, "muon-core"),
-    createMuonEmbeddedConfigSlot(),
-    "core",
-  );
-  await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "ui\n");
-  await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
-  await writeFile(join(runtimeDirectory, "LICENSE_muon"), "notices\n");
-  await writeFile(join(runtimeDirectory, "libcef.so"), "cef\n");
-  await writeFile(join(runtimeDirectory, "muon.json"), "{}\n");
-  await mkdir(join(runtimeDirectory, "assets"), { recursive: true });
-  await writeFile(join(runtimeDirectory, "assets", "debug.txt"), "debug\n");
-  await writeExecutable(
-    join(nativeDirectory, "muon-bootstrap"),
-    createMuonBootstrapEmbeddedConfigSlot(),
-    "bootstrap",
-  );
+  for (const target of targets) {
+    const descriptor = fakePackageTargetDescriptors[target];
+    const runtimeDirectory = join(packageDirectory, "runtime", target);
+    const nativeDirectory = join(packageDirectory, "native", target);
+    await mkdir(runtimeDirectory, { recursive: true });
+    await mkdir(nativeDirectory, { recursive: true });
+    await writeExecutable(
+      join(runtimeDirectory, descriptor.runtimeExecutableName),
+      createMuonEmbeddedConfigSlot(),
+      "core",
+    );
+    await writeFile(join(runtimeDirectory, descriptor.uiLibraryName), "ui\n");
+    await writeFile(
+      join(runtimeDirectory, descriptor.cardioLibraryName),
+      "cardio\n",
+    );
+    for (const fileName of descriptor.mingwRuntimeFiles) {
+      await writeFile(
+        join(runtimeDirectory, fileName),
+        `${target} ${fileName}\n`,
+      );
+    }
+    await writeFile(join(runtimeDirectory, "LICENSE_muon"), "notices\n");
+    await writeFile(join(runtimeDirectory, "libcef.so"), "cef\n");
+    await writeFile(join(runtimeDirectory, "muon.json"), "{}\n");
+    await mkdir(join(runtimeDirectory, "assets"), { recursive: true });
+    await writeFile(join(runtimeDirectory, "assets", "debug.txt"), "debug\n");
+    await writeExecutable(
+      join(nativeDirectory, descriptor.bootstrapExecutableName),
+      createMuonBootstrapEmbeddedConfigSlot(),
+      "bootstrap",
+    );
+  }
   return packageDirectory;
 };
+
+const createFakeMuonPackageDist = async (root: string): Promise<string> =>
+  await createFakeMuonPackageDistForTargets(root, ["linux64"]);
 
 const readZipEntries = async (
   archivePath: string,
@@ -246,6 +319,74 @@ describe("muon build", () => {
     expect(() => findMuonBootstrapEmbeddedConfigSlot(embeddedLauncher)).toThrow(
       "found 0",
     );
+  });
+
+  it("builds every supported target by default when targets are omitted", async () => {
+    const root = await createTemporaryDirectory("muon-build-default-all-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "linux64",
+      "linuxarm",
+      "linuxarm64",
+      "windows32",
+      "windows64",
+    ]);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "default-targets-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      assetSalt: Buffer.from([0x0a, 0x11]),
+    });
+
+    expect(result.targets.map((target) => target.target)).toEqual([
+      "linux64",
+      "linuxarm",
+      "linuxarm64",
+      "windows32",
+      "windows64",
+    ]);
+    await expect(
+      exists(join(root, "dist-windows-i686", "default-targets-sample.exe")),
+    ).resolves.toBe(true);
+    await expect(
+      exists(join(root, "dist-windows-amd64", "default-targets-sample.exe")),
+    ).resolves.toBe(true);
+  });
+
+  it("copies MinGW runtime DLLs into Windows target distributions", async () => {
+    const root = await createTemporaryDirectory("muon-build-windows-runtime-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows64",
+    ]);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "windows-runtime-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["windows-x64"],
+      assetSalt: Buffer.from([0x0b, 0x22]),
+    });
+
+    const outputPath = join(root, "dist-windows-amd64");
+    await expect(
+      readFile(join(outputPath, "libgcc_s_seh-1.dll"), "utf8"),
+    ).resolves.toBe("windows64 libgcc_s_seh-1.dll\n");
+    await expect(
+      readFile(join(outputPath, "libstdc++-6.dll"), "utf8"),
+    ).resolves.toBe("windows64 libstdc++-6.dll\n");
+    await expect(
+      readFile(join(outputPath, "libwinpthread-1.dll"), "utf8"),
+    ).resolves.toBe("windows64 libwinpthread-1.dll\n");
   });
 
   it("packages Vite output under asset://main/ during vite build", async () => {

@@ -22,6 +22,9 @@ export interface MuonViteBuildOptions {
 
   /**
    * Build every supported target from the installed package.
+   *
+   * @remarks Defaults to true when targets is omitted. Set false to build only
+   * the host target.
    */
   allTargets?: boolean;
 

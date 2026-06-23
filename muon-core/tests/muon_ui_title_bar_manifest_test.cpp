@@ -58,6 +58,25 @@ int main() {
       Expect(ReadInt(root, "height") > 0, "missing title bar height") &&
       Expect(ReadInt(root, "controlsWidth") > 0,
              "missing title bar control width") &&
+#if defined(_WIN32)
+      Expect(ReadInt(root, "controlsWidth") == 138,
+             "Windows title bar controls should keep the current width") &&
+      Expect(Contains(css, "width: 46px;"),
+             "Windows title bar controls should keep rectangular buttons") &&
+#else
+      Expect(ReadInt(root, "controlsWidth") == 96,
+             "Linux title bar controls should use compact round button width") &&
+      Expect(Contains(css, "width: 20px;"),
+             "Linux title bar controls should use round button width") &&
+      Expect(Contains(css, "height: 20px;"),
+             "Linux title bar controls should use round button height") &&
+      Expect(Contains(css, "gap: 12px;"),
+             "Linux title bar controls should use wider button spacing") &&
+      Expect(Contains(css, "border-radius: 999px;"),
+             "Linux title bar controls should be round") &&
+      Expect(Contains(css, "--muon-titlebar-round-button-bg"),
+             "Linux title bar controls should define round button background") &&
+#endif
       Expect(Contains(html, "data-action=\"minimize\""),
              "missing minimize action") &&
       Expect(Contains(html, "data-action=\"maximize\""),

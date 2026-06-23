@@ -46,8 +46,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
   --muon-titlebar-border: #b9b7b3;
   --muon-titlebar-button-hover: rgba(0, 0, 0, 0.08);
   --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);"
-  --muon-titlebar-close-hover: #6c0c0c;
-  --muon-titlebar-close-active: #b00404;
+  --muon-titlebar-close-hover: #c81010;
+  --muon-titlebar-close-active: #ff2020;
   --muon-titlebar-close-fg: #ffffff;
   --muon-titlebar-icon-backdrop: #ebe9e6;
 }
@@ -63,8 +63,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
     --muon-titlebar-border: #1f1f1f;
     --muon-titlebar-button-hover: rgba(255, 255, 255, 0.12);
     --muon-titlebar-button-active: rgba(255, 255, 255, 0.18);
-    --muon-titlebar-close-hover: #511010;
-    --muon-titlebar-close-active: #8f1a1a;
+    --muon-titlebar-close-hover: #c01010;
+    --muon-titlebar-close-active: #e82020;
     --muon-titlebar-icon-backdrop: #303030;
   }
 }

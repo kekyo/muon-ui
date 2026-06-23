@@ -40,6 +40,7 @@ case "${TARGET}" in
     EXECUTABLE_NAME="muon-prepare"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
+    BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
     ;;
   linuxarm|armv7l|armv7|armhf|arm)
     TARGET_NAME="linuxarm"
@@ -49,6 +50,7 @@ case "${TARGET}" in
     EXECUTABLE_NAME="muon-prepare"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
+    BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
     ;;
   linuxarm64|arm64|aarch64)
     TARGET_NAME="linuxarm64"
@@ -58,6 +60,7 @@ case "${TARGET}" in
     EXECUTABLE_NAME="muon-prepare"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
+    BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
     ;;
   linux32|i686|i386|ia32|x86)
     echo "Unsupported target: ${TARGET}. Linux 32-bit CEF builds are discontinued after CEF 101." >&2
@@ -71,6 +74,7 @@ case "${TARGET}" in
     EXECUTABLE_NAME="muon-prepare.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
+    BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-${LDFLAGS_VALUE} -mwindows}"
     ;;
   mingw64|win64|windows64)
     TARGET_NAME="windows64"
@@ -80,6 +84,7 @@ case "${TARGET}" in
     EXECUTABLE_NAME="muon-prepare.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
+    BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-${LDFLAGS_VALUE} -mwindows}"
     ;;
   *)
     echo "${USAGE}" >&2
@@ -90,6 +95,18 @@ esac
 command -v "${CC}" >/dev/null || { echo "${CC} is required" >&2; exit 1; }
 command -v "${AR}" >/dev/null || { echo "${AR} is required" >&2; exit 1; }
 command -v "${RANLIB}" >/dev/null || { echo "${RANLIB} is required" >&2; exit 1; }
+BOOTSTRAP_CPPFLAGS_EXTRA=""
+BOOTSTRAP_LDLIBS_EXTRA=""
+case "${TARGET_NAME}" in
+  linux*)
+    command -v pkg-config >/dev/null || { echo "pkg-config is required" >&2; exit 1; }
+    BOOTSTRAP_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb)"
+    BOOTSTRAP_LDLIBS_EXTRA="$(pkg-config --libs xcb)"
+    ;;
+  windows*)
+    BOOTSTRAP_LDLIBS_EXTRA="-lcomctl32"
+    ;;
+esac
 
 case "${BUILD_TYPE}" in
   Debug)
@@ -186,10 +203,18 @@ CPPFLAGS_VALUE="-I${VERSION_DIR} -I${YYJSON_SOURCE_DIR} -I${LIBARCHIVE_INCLUDE_D
 if [[ -n "${CPPFLAGS:-}" ]]; then
   CPPFLAGS_VALUE="${CPPFLAGS_VALUE} ${CPPFLAGS}"
 fi
+BOOTSTRAP_CPPFLAGS_VALUE="${BOOTSTRAP_CPPFLAGS_EXTRA}"
+if [[ -n "${BOOTSTRAP_CPPFLAGS:-}" ]]; then
+  BOOTSTRAP_CPPFLAGS_VALUE="${BOOTSTRAP_CPPFLAGS_VALUE} ${BOOTSTRAP_CPPFLAGS}"
+fi
 
 LDLIBS_VALUE="${LIBARCHIVE_LIB} ${BZIP2_LIB}"
 if [[ -n "${LDLIBS:-}" ]]; then
   LDLIBS_VALUE="${LDLIBS_VALUE} ${LDLIBS}"
+fi
+BOOTSTRAP_LDLIBS_VALUE="${BOOTSTRAP_LDLIBS_EXTRA}"
+if [[ -n "${BOOTSTRAP_LDLIBS:-}" ]]; then
+  BOOTSTRAP_LDLIBS_VALUE="${BOOTSTRAP_LDLIBS_VALUE} ${BOOTSTRAP_LDLIBS}"
 fi
 
 make -C "${SCRIPT_DIR}" -B \
@@ -202,6 +227,9 @@ make -C "${SCRIPT_DIR}" -B \
   VERSION_HEADER="${VERSION_HEADER}" \
   RUNTIME_INFO_HEADER="${RUNTIME_INFO_HEADER}" \
   CPPFLAGS="${CPPFLAGS_VALUE}" \
+  BOOTSTRAP_CPPFLAGS="${BOOTSTRAP_CPPFLAGS_VALUE}" \
   CFLAGS="${CFLAGS_VALUE}" \
   LDFLAGS="${LDFLAGS_VALUE}" \
-  LDLIBS="${LDLIBS_VALUE}"
+  BOOTSTRAP_LDFLAGS="${BOOTSTRAP_LDFLAGS_VALUE}" \
+  LDLIBS="${LDLIBS_VALUE}" \
+  BOOTSTRAP_LDLIBS="${BOOTSTRAP_LDLIBS_VALUE}"

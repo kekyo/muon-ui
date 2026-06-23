@@ -23,6 +23,7 @@
 #include <unistd.h>
 #endif
 
+#include "bootstrap_progress.h"
 #include "prepare.h"
 
 #ifndef PATH_MAX
@@ -207,6 +208,11 @@ static int launch_core(const char *runtime_dir, const char *core_path, int argc,
 #endif
 }
 
+static void on_prepare_progress(const MuonPrepareProgress *progress,
+                                void *user_data) {
+  muon_bootstrap_progress_update((MuonBootstrapProgress *)user_data, progress);
+}
+
 int main(int argc, char **argv) {
   char *bootstrap_path = get_bootstrap_path(argv[0]);
   char *runtime_dir =
@@ -223,13 +229,23 @@ int main(int argc, char **argv) {
   const char *cache_dir = getenv("MUON_CACHE_DIR");
   int exit_code = 0;
   do {
-    if (muon_prepare_in_place(runtime_dir, get_default_target(), cache_dir, 0,
-                              0) != 0) {
+    MuonBootstrapProgress progress;
+    muon_bootstrap_progress_init(&progress);
+    const int has_progress = muon_bootstrap_progress_is_available(&progress);
+    if (muon_prepare_in_place_with_progress(
+            runtime_dir, get_default_target(), cache_dir, 0, has_progress,
+            has_progress ? on_prepare_progress : NULL,
+            has_progress ? &progress : NULL) != 0) {
+      if (has_progress) {
+        muon_bootstrap_progress_fail(&progress);
+      }
+      muon_bootstrap_progress_dispose(&progress);
       free(bootstrap_path);
       free(runtime_dir);
       free(core_path);
       return 1;
     }
+    muon_bootstrap_progress_dispose(&progress);
     exit_code = launch_core(runtime_dir, core_path, argc, argv);
   } while (exit_code == MUON_RECYCLE_EXIT_CODE);
   free(bootstrap_path);

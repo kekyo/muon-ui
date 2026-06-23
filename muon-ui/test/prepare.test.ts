@@ -19,7 +19,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -348,6 +348,119 @@ const requireStagePath = (
 ): string => {
   expect(result.stagePath).toBeDefined();
   return result.stagePath ?? "";
+};
+
+const buildProgressHarness = async (root: string): Promise<string> => {
+  const harnessPath = join(root, "prepare-progress-harness.c");
+  const executablePath = join(root, "prepare-progress-harness");
+  const prepareRoot = resolve("..", "muon-prepare");
+  const bzip2Lib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "bzip2-linux64",
+    "libbz2.a",
+  );
+  const libarchiveLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "libarchive-linux64",
+    "libarchive",
+    "libarchive.a",
+  );
+  await writeFile(
+    harnessPath,
+    `#include <stdio.h>
+#include "prepare.h"
+
+static const char *phase_name(MuonPrepareProgressPhase phase) {
+  switch (phase) {
+    case MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING:
+      return "download";
+    case MUON_PREPARE_PROGRESS_PHASE_VERIFYING:
+      return "verify";
+    case MUON_PREPARE_PROGRESS_PHASE_INSTALLING:
+      return "install";
+    case MUON_PREPARE_PROGRESS_PHASE_FINALIZING:
+      return "finalize";
+    case MUON_PREPARE_PROGRESS_PHASE_DONE:
+      return "done";
+    case MUON_PREPARE_PROGRESS_PHASE_FAILED:
+      return "failed";
+    default:
+      return "other";
+  }
+}
+
+static void on_progress(const MuonPrepareProgress *progress, void *user_data) {
+  (void)user_data;
+  printf("%s|%s|%d|%llu|%llu\\n",
+         phase_name(progress->phase),
+         progress->status == NULL ? "" : progress->status,
+         progress->determinate,
+         progress->current,
+         progress->total);
+}
+
+int main(int argc, char **argv) {
+  if (argc != 4) {
+    return 64;
+  }
+  return muon_prepare_in_place_with_progress(
+      argv[1], argv[2], argv[3], 0, 1, on_progress, NULL);
+}
+`,
+  );
+  await execFileAsync("gcc", [
+    harnessPath,
+    "-std=c99",
+    "-Wall",
+    "-Wextra",
+    "-pedantic",
+    "-I",
+    join(prepareRoot, "src"),
+    "-o",
+    executablePath,
+    join(dirname(prepareExecutablePath), "libmuon-prepare.a"),
+    libarchiveLib,
+    bzip2Lib,
+  ]);
+  return executablePath;
+};
+
+const runProgressHarness = async (
+  harnessPath: string,
+  fixture: PrepareFixture,
+): Promise<string[]> => {
+  const { stdout } = await execFileAsync(
+    harnessPath,
+    [fixture.muonPath, "linux64", fixture.cacheDir],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      },
+    },
+  );
+  return stdout.trim() === "" ? [] : stdout.trim().split(/\r?\n/);
+};
+
+const findCommand = async (name: string): Promise<string | undefined> => {
+  try {
+    const { stdout } = await execFileAsync(
+      "bash",
+      ["-lc", `command -v ${name}`],
+      {
+        encoding: "utf8",
+      },
+    );
+    const path = stdout.trim();
+    return path === "" ? undefined : path;
+  } catch {
+    return undefined;
+  }
 };
 
 const listCacheEntries = async (root: string): Promise<string[]> => {
@@ -930,6 +1043,36 @@ lastCatalogUpdateUnix=0
     expect(stderr).toContain("Muon files copied to staging: files=4");
   });
 
+  it("reports structured progress for bootstrap in-place CEF preparation", async () => {
+    const fixture = await createPrepareFixture();
+    const harnessPath = await buildProgressHarness(fixture.projectPath);
+
+    const firstRun = await runProgressHarness(harnessPath, fixture);
+    const firstPhases = firstRun.map((line) => line.split("|")[0] ?? "");
+
+    expect(firstPhases).toEqual(
+      expect.arrayContaining(["download", "verify", "install", "finalize"]),
+    );
+    expect(firstRun).toContainEqual(
+      expect.stringContaining("|Downloading CEF runtime...|"),
+    );
+    expect(firstRun).toContainEqual(
+      expect.stringContaining("|Verifying download...|"),
+    );
+    expect(firstRun).toContainEqual(
+      expect.stringContaining("|Installing CEF runtime...|"),
+    );
+    expect(firstRun).toContainEqual(
+      expect.stringContaining("|Starting Muon...|"),
+    );
+
+    await expect(
+      access(join(fixture.muonPath, "libcef.so")),
+    ).resolves.toBeUndefined();
+
+    await expect(runProgressHarness(harnessPath, fixture)).resolves.toEqual([]);
+  });
+
   it("does not forward progress messages from the TypeScript wrapper in quiet mode", async () => {
     const fixture = await createPrepareFixture();
     const chunks: string[] = [];
@@ -1232,6 +1375,54 @@ exit 17
     await expect(
       access(join(fixture.muonPath, "locales", "en-US.pak")),
     ).resolves.toBeUndefined();
+  });
+
+  it("hides bootstrap preparation diagnostics when a progress window is available", async () => {
+    const xvfbRun = await findCommand("xvfb-run");
+    if (xvfbRun === undefined) {
+      return;
+    }
+    const fixture = await createPrepareFixture();
+    const outputDirectory = await createTemporaryDirectory(
+      "muon-bootstrap-output-",
+    );
+    const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+pwd > '${escapedOutput}/cwd.txt'
+exit 17
+`,
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    const appBootstrapPath = join(fixture.muonPath, "myapp");
+    await copyFile(bootstrapExecutablePath, appBootstrapPath);
+    await chmod(appBootstrapPath, 0o755);
+
+    await expect(
+      execFileAsync(
+        xvfbRun,
+        [
+          "-a",
+          "node",
+          resolve("..", "scripts/run-xvfb-command.mjs"),
+          appBootstrapPath,
+        ],
+        {
+          cwd: fixture.projectPath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MUON_CACHE_DIR: fixture.cacheDir,
+            MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 17,
+      stderr: expect.not.stringContaining("Downloading CEF binary"),
+    });
   });
 
   it("uses embedded defaultVersionPolicy when bootstrap ini omits versionPolicy", async () => {

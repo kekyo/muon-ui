@@ -15,7 +15,11 @@ namespace {
 
 constexpr char kMuonTitleBarMode[] = "custom";
 constexpr int kMuonTitleBarHeight = 36;
+#if defined(_WIN32)
 constexpr int kMuonTitleBarControlsWidth = 138;
+#else
+constexpr int kMuonTitleBarControlsWidth = 96;
+#endif
 
 constexpr char kMuonTitleBarHtml[] = R"HTML(
 <div id="muon-title-bar" class="title-bar">
@@ -41,9 +45,9 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
   --muon-titlebar-fg-inactive: #77767b;
   --muon-titlebar-border: #b9b7b3;
   --muon-titlebar-button-hover: rgba(0, 0, 0, 0.08);
-  --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);
-  --muon-titlebar-close-hover: #753d3d;
-  --muon-titlebar-close-active: #d05858;
+  --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);"
+  --muon-titlebar-close-hover: #6c0c0c;
+  --muon-titlebar-close-active: #b00404;
   --muon-titlebar-close-fg: #ffffff;
   --muon-titlebar-icon-backdrop: #ebe9e6;
 }
@@ -59,8 +63,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
     --muon-titlebar-border: #1f1f1f;
     --muon-titlebar-button-hover: rgba(255, 255, 255, 0.12);
     --muon-titlebar-button-active: rgba(255, 255, 255, 0.18);
-    --muon-titlebar-close-hover: #753d3d;
-    --muon-titlebar-close-active: #d05858;
+    --muon-titlebar-close-hover: #511010;
+    --muon-titlebar-close-active: #8f1a1a;
     --muon-titlebar-icon-backdrop: #303030;
   }
 }
@@ -179,8 +183,8 @@ body {
 .icon.minimize::before {
   content: "";
   position: absolute;
-  left: 1px;
-  right: 1px;
+  left: 2px;
+  right: 2px;
   bottom: 2px;
   height: 1px;
   background: currentColor;
@@ -189,10 +193,10 @@ body {
 .icon.maximize::before {
   content: "";
   position: absolute;
-  left: 1px;
-  top: 1px;
-  width: 10px;
-  height: 10px;
+  left: 3px;
+  top: 3px;
+  width: 6px;
+  height: 6px;
   box-sizing: border-box;
   border: 1px solid currentColor;
 }
@@ -236,6 +240,62 @@ body {
 }
 )CSS";
 
+#if !defined(_WIN32)
+constexpr char kMuonTitleBarLinuxCss[] = R"CSS(
+:root {
+  --muon-titlebar-round-button-bg: rgba(0, 0, 0, 0.16);
+  --muon-titlebar-round-button-hover: rgba(0, 0, 0, 0.24);
+  --muon-titlebar-round-button-active: rgba(0, 0, 0, 0.32);
+  --muon-titlebar-close-hover: rgba(0, 0, 0, 0.24);
+  --muon-titlebar-close-active: rgba(0, 0, 0, 0.32);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --muon-titlebar-round-button-bg: rgba(255, 255, 255, 0.12);
+    --muon-titlebar-round-button-hover: rgba(255, 255, 255, 0.18);
+    --muon-titlebar-round-button-active: rgba(255, 255, 255, 0.24);
+    --muon-titlebar-close-hover: rgba(255, 255, 255, 0.18);
+    --muon-titlebar-close-active: rgba(255, 255, 255, 0.24);
+  }
+}
+
+.controls {
+  flex: 0 0 96px;
+  width: 96px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  padding-right: 8px;
+}
+
+.control {
+  width: 20px;
+  height: 20px;
+  appearance: none;
+  border-radius: 999px;
+  background: var(--muon-titlebar-round-button-bg);
+}
+
+.control:hover {
+  background: var(--muon-titlebar-round-button-hover);
+}
+
+.control:active {
+  background: var(--muon-titlebar-round-button-active);
+}
+
+.control.close:hover {
+  background: var(--muon-titlebar-close-hover);
+  color: var(--muon-titlebar-close-fg);
+}
+
+.control.close:active {
+  background: var(--muon-titlebar-close-active);
+}
+)CSS";
+#endif
+
 constexpr char kMuonTitleBarJs[] = R"JS(
 (() => {
   const bar = document.getElementById("muon-title-bar");
@@ -276,6 +336,14 @@ constexpr char kMuonTitleBarJs[] = R"JS(
 })();
 )JS";
 
+static std::string CreateTitleBarCss() {
+#if defined(_WIN32)
+  return kMuonTitleBarCss;
+#else
+  return std::string(kMuonTitleBarCss) + kMuonTitleBarLinuxCss;
+#endif
+}
+
 static std::string CreateTitleBarManifest() {
   yyjson_mut_doc* document = yyjson_mut_doc_new(nullptr);
   if (document == nullptr) {
@@ -288,7 +356,8 @@ static std::string CreateTitleBarManifest() {
   yyjson_mut_obj_add_int(
       document, root, "controlsWidth", kMuonTitleBarControlsWidth);
   yyjson_mut_obj_add_str(document, root, "html", kMuonTitleBarHtml);
-  yyjson_mut_obj_add_str(document, root, "css", kMuonTitleBarCss);
+  const auto css = CreateTitleBarCss();
+  yyjson_mut_obj_add_str(document, root, "css", css.c_str());
   yyjson_mut_obj_add_str(document, root, "js", kMuonTitleBarJs);
 
   char* encoded = yyjson_mut_write(document, 0, nullptr);

@@ -64,8 +64,13 @@ const maximizedStates = [
   "_NET_WM_STATE_MAXIMIZED_VERT",
 ];
 const titleBarHeight = 36;
-const titleBarControlWidth = 46;
-const titleBarControlsWidth = 138;
+const titleBarRoundControlSize = 20;
+const titleBarRoundControlGap = 12;
+const titleBarRoundControlRightInset = 8;
+const titleBarControlsWidth =
+  titleBarRoundControlSize * 3 +
+  titleBarRoundControlGap * 2 +
+  titleBarRoundControlRightInset;
 const configuredTitleBarBackgroundColor = "#123456";
 const appPageBackgroundColor = "#d7ebe5";
 const initialTitleBarIconPath = "icons/title-bar-initial.png";
@@ -558,10 +563,17 @@ const expectTitleBarChrome = async (
   expect(bounds.width).toBeGreaterThanOrEqual(1024);
   expect(bounds.height).toBeGreaterThanOrEqual(768 + titleBarHeight);
 
+  const closeCenter =
+    bounds.width -
+    titleBarRoundControlRightInset -
+    titleBarRoundControlSize / 2;
   const controlCenters = [
-    bounds.width - titleBarControlsWidth + titleBarControlWidth / 2,
-    bounds.width - titleBarControlsWidth + titleBarControlWidth * 1.5,
-    bounds.width - titleBarControlWidth / 2,
+    bounds.width - titleBarControlsWidth + titleBarRoundControlSize / 2,
+    bounds.width -
+      titleBarControlsWidth +
+      titleBarRoundControlSize * 1.5 +
+      titleBarRoundControlGap,
+    closeCenter,
   ];
 
   const deadline = Date.now() + cdpCommandTimeoutMs;
@@ -608,8 +620,15 @@ const clickTitleBarButton = async (
 ): Promise<void> => {
   const centerX =
     action === "maximize"
-      ? bounds.x + bounds.width - titleBarControlWidth * 1.5
-      : bounds.x + bounds.width - titleBarControlWidth / 2;
+      ? bounds.x +
+        bounds.width -
+        titleBarControlsWidth +
+        titleBarRoundControlSize * 1.5 +
+        titleBarRoundControlGap
+      : bounds.x +
+        bounds.width -
+        titleBarRoundControlRightInset -
+        titleBarRoundControlSize / 2;
   await running.app.input.moveMouseTo(
     Math.round(centerX),
     Math.round(bounds.y + titleBarHeight / 2),

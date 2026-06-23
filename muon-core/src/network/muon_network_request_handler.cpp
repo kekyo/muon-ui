@@ -107,6 +107,30 @@ static std::string CreateForbiddenHtmlDocument(const std::string& url) {
 <head>
 <meta charset="utf-8">
 <title>Forbidden</title>
+<style>
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: #fff;
+  color: #111;
+  font: 14px/1.45 sans-serif;
+}
+
+body {
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>
 </head>
 <body>
 <h1>Forbidden</h1>

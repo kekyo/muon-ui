@@ -1096,6 +1096,18 @@ try {
         popupDriver.evaluate("document.body.textContent"),
       ).resolves.toContain(popupUrl);
       await expect(
+        popupDriver.evaluate(`(() => {
+          const style = getComputedStyle(document.body);
+          return {
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+          };
+        })()`),
+      ).resolves.toEqual({
+        backgroundColor: "rgb(255, 255, 255)",
+        color: "rgb(17, 17, 17)",
+      });
+      await expect(
         popupDriver.evaluate("window.opener === null"),
       ).resolves.toBe(true);
     } catch (error) {

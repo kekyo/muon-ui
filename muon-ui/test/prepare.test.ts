@@ -1110,13 +1110,16 @@ lastCatalogUpdateUnix=0
 
   it("does not duplicate an existing .muon gitignore entry", async () => {
     const fixture = await createPrepareFixture();
-    await writeFile(join(fixture.projectPath, ".gitignore"), "dist/\n.muon/\n");
+    await writeFile(
+      join(fixture.projectPath, ".gitignore"),
+      "dist*/\n.muon/\n",
+    );
 
     await prepareFixture(fixture);
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe("dist/\n.muon/\n");
+    ).resolves.toBe("dist*/\n.muon/\n");
   });
 
   it("stages a flat CEF cache directory", async () => {

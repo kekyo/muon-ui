@@ -5,6 +5,7 @@
  */
 
 #include "browser/muon_builtin_browser.h"
+#include "browser/muon_native_wheel_forwarder.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "browser/muon_window_title.h"
@@ -241,6 +242,18 @@ static bool TestPageDraggableRegionHitTesting() {
                 "empty regions accepted a point");
 }
 
+static bool TestNativeForwarderRegistersChildWindows() {
+  const auto handles = GetMuonNativeForwarderWindowHandlesForRegistration(
+      10, std::vector<CefWindowHandle>{20, 30});
+  return Expect(handles.size() == 3,
+                "native input forwarder did not include child windows") &&
+         Expect(handles[0] == 10, "native input forwarder reordered root") &&
+         Expect(handles[1] == 20,
+                "native input forwarder omitted first child") &&
+         Expect(handles[2] == 30,
+                "native input forwarder omitted second child");
+}
+
 static bool TestCustomTitleBarWindowDelegate() {
   const auto manifest = CreateTestCustomTitleBarManifest();
   auto browser =
@@ -284,6 +297,7 @@ int main() {
                  TestInitialWindowShowState() && TestTitleBarManifestParsing() &&
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&
+                 TestNativeForwarderRegistersChildWindows() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0
              : 1;

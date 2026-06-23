@@ -12,6 +12,8 @@
 #include "include/views/cef_display.h"
 
 #include <cstdint>
+#include <set>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,9 +23,8 @@
 #include <windowsx.h>
 #include <commctrl.h>
 
+#include <map>
 #include <mutex>
-#include <set>
-#include <vector>
 #endif
 
 #if defined(OS_LINUX) && defined(CEF_X11)
@@ -60,7 +61,24 @@ static bool ForwardNativeWheelFromScreenPixels(CefWindowHandle window_handle,
 
 constexpr UINT_PTR kMuonWheelForwarderSubclassId = 0x4d574648u;
 std::mutex g_muon_windows_subclass_mutex;
-std::set<HWND> g_muon_windows_subclassed_for_wheel;
+std::map<HWND, std::set<HWND>> g_muon_windows_subclassed_for_wheel_by_root;
+std::map<HWND, HWND> g_muon_windows_wheel_root_by_subclassed_window;
+
+static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
+    HWND window_handle,
+    UINT message,
+    WPARAM wparam,
+    LPARAM lparam,
+    UINT_PTR subclass_id,
+    DWORD_PTR ref_data);
+
+static HWND GetMuonWindowsRootWindow(HWND window_handle) {
+  if (window_handle == nullptr) {
+    return nullptr;
+  }
+  auto root_handle = GetAncestor(window_handle, GA_ROOT);
+  return root_handle != nullptr ? root_handle : window_handle;
+}
 
 static bool IsNativePageDraggableRegionScreenPixels(
     CefWindowHandle window_handle,
@@ -97,7 +115,23 @@ static uint32_t GetMuonWindowsEventFlags(WPARAM wparam) {
 
 static void ForgetMuonWindowsSubclass(HWND window_handle) {
   std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-  g_muon_windows_subclassed_for_wheel.erase(window_handle);
+  const auto root =
+      g_muon_windows_wheel_root_by_subclassed_window.find(window_handle);
+  if (root == g_muon_windows_wheel_root_by_subclassed_window.end()) {
+    return;
+  }
+  const auto root_window_handle = root->second;
+  g_muon_windows_wheel_root_by_subclassed_window.erase(root);
+
+  const auto windows =
+      g_muon_windows_subclassed_for_wheel_by_root.find(root_window_handle);
+  if (windows == g_muon_windows_subclassed_for_wheel_by_root.end()) {
+    return;
+  }
+  windows->second.erase(window_handle);
+  if (windows->second.empty()) {
+    g_muon_windows_subclassed_for_wheel_by_root.erase(windows);
+  }
 }
 
 static bool StartMuonWindowsPageDrag(HWND window_handle, LPARAM lparam) {
@@ -106,19 +140,85 @@ static bool StartMuonWindowsPageDrag(HWND window_handle, LPARAM lparam) {
     return false;
   }
 
+  const auto drag_handle = GetMuonWindowsRootWindow(window_handle);
   if (!IsNativePageDraggableRegionScreenPixels(
-          window_handle, CefPoint(screen_point.x, screen_point.y))) {
+          drag_handle, CefPoint(screen_point.x, screen_point.y))) {
     return false;
   }
 
-  auto drag_handle = GetAncestor(window_handle, GA_ROOT);
-  if (drag_handle == nullptr) {
-    drag_handle = window_handle;
-  }
   ReleaseCapture();
   SendMessage(drag_handle, WM_NCLBUTTONDOWN, HTCAPTION,
               MAKELPARAM(screen_point.x, screen_point.y));
   return true;
+}
+
+static BOOL CALLBACK AppendMuonWindowsChildForwarderTarget(
+    HWND child_window_handle,
+    LPARAM user_data) {
+  auto* child_window_handles =
+      reinterpret_cast<std::vector<CefWindowHandle>*>(user_data);
+  child_window_handles->push_back(child_window_handle);
+  return TRUE;
+}
+
+static std::vector<HWND> GetMuonWindowsForwarderTargets(
+    HWND root_window_handle) {
+  std::vector<CefWindowHandle> child_window_handles;
+  EnumChildWindows(root_window_handle, AppendMuonWindowsChildForwarderTarget,
+                   reinterpret_cast<LPARAM>(&child_window_handles));
+
+  std::vector<HWND> targets;
+  const auto handles = GetMuonNativeForwarderWindowHandlesForRegistration(
+      root_window_handle, child_window_handles);
+  targets.reserve(handles.size());
+  for (const auto handle : handles) {
+    targets.push_back(handle);
+  }
+  return targets;
+}
+
+static bool IsMuonWindowsWheelForwarderRootRegistered(
+    HWND root_window_handle) {
+  std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  return g_muon_windows_subclassed_for_wheel_by_root.find(
+             root_window_handle) !=
+         g_muon_windows_subclassed_for_wheel_by_root.end();
+}
+
+static void RegisterMuonWindowsWheelForwarderTarget(HWND root_window_handle,
+                                                    HWND target_window_handle) {
+  if (root_window_handle == nullptr || target_window_handle == nullptr) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+    if (g_muon_windows_wheel_root_by_subclassed_window.find(
+            target_window_handle) !=
+        g_muon_windows_wheel_root_by_subclassed_window.end()) {
+      return;
+    }
+  }
+  if (SetWindowSubclass(target_window_handle, MuonWheelForwarderSubclassProc,
+                        kMuonWheelForwarderSubclassId, 0) == FALSE) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  g_muon_windows_wheel_root_by_subclassed_window[target_window_handle] =
+      root_window_handle;
+  g_muon_windows_subclassed_for_wheel_by_root[root_window_handle].insert(
+      target_window_handle);
+}
+
+static void RefreshMuonWindowsWheelForwarder(HWND window_handle) {
+  const auto root_window_handle = GetMuonWindowsRootWindow(window_handle);
+  if (!IsMuonWindowsWheelForwarderRootRegistered(root_window_handle)) {
+    return;
+  }
+  for (const auto target_window_handle :
+       GetMuonWindowsForwarderTargets(root_window_handle)) {
+    RegisterMuonWindowsWheelForwarderTarget(root_window_handle,
+                                            target_window_handle);
+  }
 }
 
 static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
@@ -139,11 +239,17 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
         return 0;
       }
       break;
+    case WM_PARENTNOTIFY:
+      if (LOWORD(wparam) == WM_CREATE) {
+        RefreshMuonWindowsWheelForwarder(window_handle);
+      }
+      break;
     case WM_MOUSEWHEEL: {
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
       if (ForwardNativeWheelFromScreenPixels(
-              window_handle, screen_point, 0, GET_WHEEL_DELTA_WPARAM(wparam),
+              GetMuonWindowsRootWindow(window_handle), screen_point, 0,
+              GET_WHEEL_DELTA_WPARAM(wparam),
               GetMuonWindowsEventFlags(wparam))) {
         return 0;
       }
@@ -153,7 +259,8 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
       if (ForwardNativeWheelFromScreenPixels(
-              window_handle, screen_point, -GET_WHEEL_DELTA_WPARAM(wparam), 0,
+              GetMuonWindowsRootWindow(window_handle), screen_point,
+              -GET_WHEEL_DELTA_WPARAM(wparam), 0,
               GetMuonWindowsEventFlags(wparam))) {
         return 0;
       }
@@ -171,43 +278,55 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
 }
 
 static void RegisterMuonWindowsWheelForwarder(HWND window_handle) {
-  if (window_handle == nullptr) {
+  const auto root_window_handle = GetMuonWindowsRootWindow(window_handle);
+  if (root_window_handle == nullptr) {
     return;
   }
-  {
-    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-    if (g_muon_windows_subclassed_for_wheel.find(window_handle) !=
-        g_muon_windows_subclassed_for_wheel.end()) {
-      return;
-    }
+  for (const auto target_window_handle :
+       GetMuonWindowsForwarderTargets(root_window_handle)) {
+    RegisterMuonWindowsWheelForwarderTarget(root_window_handle,
+                                            target_window_handle);
   }
-  if (SetWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,
-                        kMuonWheelForwarderSubclassId, 0) == FALSE) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-  g_muon_windows_subclassed_for_wheel.insert(window_handle);
 }
 
 static void UnregisterMuonWindowsWheelForwarder(HWND window_handle) {
-  if (window_handle == nullptr) {
+  const auto root_window_handle = GetMuonWindowsRootWindow(window_handle);
+  if (root_window_handle == nullptr) {
     return;
   }
+  std::vector<HWND> window_handles;
   {
     std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-    g_muon_windows_subclassed_for_wheel.erase(window_handle);
+    const auto windows =
+        g_muon_windows_subclassed_for_wheel_by_root.find(root_window_handle);
+    if (windows == g_muon_windows_subclassed_for_wheel_by_root.end()) {
+      return;
+    }
+    window_handles.assign(windows->second.begin(), windows->second.end());
+    for (const auto target_window_handle : window_handles) {
+      g_muon_windows_wheel_root_by_subclassed_window.erase(
+          target_window_handle);
+    }
+    g_muon_windows_subclassed_for_wheel_by_root.erase(windows);
   }
-  RemoveWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,
-                       kMuonWheelForwarderSubclassId);
+  for (const auto target_window_handle : window_handles) {
+    RemoveWindowSubclass(target_window_handle, MuonWheelForwarderSubclassProc,
+                         kMuonWheelForwarderSubclassId);
+  }
 }
 
 static void ClearMuonWindowsWheelForwarders() {
   std::vector<HWND> window_handles;
   {
     std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-    window_handles.assign(g_muon_windows_subclassed_for_wheel.begin(),
-                          g_muon_windows_subclassed_for_wheel.end());
-    g_muon_windows_subclassed_for_wheel.clear();
+    window_handles.reserve(
+        g_muon_windows_wheel_root_by_subclassed_window.size());
+    for (const auto& window :
+         g_muon_windows_wheel_root_by_subclassed_window) {
+      window_handles.push_back(window.first);
+    }
+    g_muon_windows_wheel_root_by_subclassed_window.clear();
+    g_muon_windows_subclassed_for_wheel_by_root.clear();
   }
   for (const auto window_handle : window_handles) {
     RemoveWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,
@@ -512,6 +631,24 @@ static void ClearMuonX11WheelForwarders() {
 #endif
 
 }  // namespace
+
+std::vector<CefWindowHandle> GetMuonNativeForwarderWindowHandlesForRegistration(
+    CefWindowHandle root_window_handle,
+    const std::vector<CefWindowHandle>& child_window_handles) {
+  std::set<CefWindowHandle> seen;
+  std::vector<CefWindowHandle> handles;
+  if (root_window_handle != 0 && seen.insert(root_window_handle).second) {
+    handles.push_back(root_window_handle);
+  }
+  for (const auto child_window_handle : child_window_handles) {
+    if (child_window_handle == 0 ||
+        !seen.insert(child_window_handle).second) {
+      continue;
+    }
+    handles.push_back(child_window_handle);
+  }
+  return handles;
+}
 
 void RegisterMuonNativeWheelForwarder(CefRefPtr<CefWindow> window) {
   if (!window) {

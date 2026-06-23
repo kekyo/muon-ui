@@ -100,8 +100,8 @@ BOOTSTRAP_LDLIBS_EXTRA=""
 case "${TARGET_NAME}" in
   linux*)
     command -v pkg-config >/dev/null || { echo "pkg-config is required" >&2; exit 1; }
-    BOOTSTRAP_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb)"
-    BOOTSTRAP_LDLIBS_EXTRA="$(pkg-config --libs xcb)"
+    BOOTSTRAP_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb) -pthread"
+    BOOTSTRAP_LDLIBS_EXTRA="$(pkg-config --libs xcb) -pthread"
     ;;
   windows*)
     BOOTSTRAP_LDLIBS_EXTRA="-lcomctl32"
@@ -217,7 +217,7 @@ if [[ -n "${BOOTSTRAP_LDLIBS:-}" ]]; then
   BOOTSTRAP_LDLIBS_VALUE="${BOOTSTRAP_LDLIBS_VALUE} ${BOOTSTRAP_LDLIBS}"
 fi
 
-make -C "${SCRIPT_DIR}" -B \
+make -j -C "${SCRIPT_DIR}" -B \
   CC="${CC}" \
   AR="${AR}" \
   OUT_DIR="${OUT_DIR}" \

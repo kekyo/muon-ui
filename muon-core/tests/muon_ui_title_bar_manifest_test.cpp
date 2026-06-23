@@ -30,6 +30,11 @@ static int ReadInt(yyjson_val* root, const char* key) {
   return yyjson_is_int(value) ? static_cast<int>(yyjson_get_int(value)) : 0;
 }
 
+static bool ReadBool(yyjson_val* root, const char* key) {
+  auto* value = yyjson_obj_get(root, key);
+  return yyjson_is_bool(value) && yyjson_get_bool(value);
+}
+
 static bool Contains(const std::string& value, const char* needle) {
   return value.find(needle) != std::string::npos;
 }
@@ -58,6 +63,8 @@ int main() {
       Expect(ReadInt(root, "height") > 0, "missing title bar height") &&
       Expect(ReadInt(root, "controlsWidth") > 0,
              "missing title bar control width") &&
+      Expect(ReadBool(root, "nativeWindowControls"),
+             "built-in title bar should enable native window controls") &&
 #if defined(_WIN32)
       Expect(ReadInt(root, "controlsWidth") == 138,
              "Windows title bar controls should keep the current width") &&

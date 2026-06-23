@@ -54,6 +54,8 @@ std::map<int, std::string> g_muon_title_bar_pending_titles_by_browser_id;
 std::map<int, std::string>
     g_muon_title_bar_pending_icon_data_urls_by_browser_id;
 using MuonWindowDraggableRegionKey = std::uintptr_t;
+std::map<MuonWindowDraggableRegionKey, MuonTitleBarController*>
+    g_muon_title_bar_controllers_by_window_handle;
 std::map<MuonWindowDraggableRegionKey, std::vector<CefDraggableRegion>>
     g_muon_title_bar_draggable_regions;
 std::map<MuonWindowDraggableRegionKey, std::vector<CefDraggableRegion>>
@@ -139,6 +141,11 @@ static bool ReadJsonInt(yyjson_val* root,
   }
   *value = static_cast<int>(parsed);
   return true;
+}
+
+static bool ReadOptionalJsonBool(yyjson_val* root, const char* key) {
+  auto* raw = yyjson_obj_get(root, key);
+  return yyjson_is_bool(raw) && yyjson_get_bool(raw);
 }
 
 static bool IsUnreservedUrlByte(unsigned char value) {
@@ -490,6 +497,33 @@ static bool ContainsPoint(const CefRect& bounds, const CefPoint& point) {
          point.y < bounds.y + bounds.height;
 }
 
+static const char* GetMuonTitleBarControlActionName(
+    MuonTitleBarControlAction action) {
+  switch (action) {
+    case MuonTitleBarControlAction::Minimize:
+      return "minimize";
+    case MuonTitleBarControlAction::Maximize:
+      return "maximize";
+    case MuonTitleBarControlAction::Close:
+      return "close";
+    case MuonTitleBarControlAction::NoControl:
+      return nullptr;
+  }
+  return nullptr;
+}
+
+static MuonTitleBarController* FindMuonTitleBarControllerByWindowHandle(
+    CefWindowHandle window_handle) {
+  if (window_handle == 0) {
+    return nullptr;
+  }
+  const auto controller = g_muon_title_bar_controllers_by_window_handle.find(
+      GetWindowHandleDraggableRegionKey(window_handle));
+  return controller != g_muon_title_bar_controllers_by_window_handle.end()
+             ? controller->second
+             : nullptr;
+}
+
 static bool GetPageDraggableRegionViewPoint(
     const MuonPageDraggableRegions& page_regions,
     const CefPoint& screen_point,
@@ -770,6 +804,41 @@ bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest) {
          !manifest.css.empty() && !manifest.js.empty();
 }
 
+MuonTitleBarControlAction GetMuonTitleBarControlActionAtWindowPoint(
+    bool native_window_controls,
+    int title_bar_height,
+    int controls_width,
+    const CefSize& window_size,
+    const CefPoint& window_point) {
+  if (!native_window_controls || title_bar_height <= 0 || controls_width <= 0 ||
+      window_size.width <= 0 || window_size.height <= 0) {
+    return MuonTitleBarControlAction::NoControl;
+  }
+  if (window_point.x < 0 || window_point.y < 0 ||
+      window_point.x >= window_size.width ||
+      window_point.y >= window_size.height ||
+      window_point.y >= title_bar_height) {
+    return MuonTitleBarControlAction::NoControl;
+  }
+
+  const auto effective_controls_width =
+      std::min(controls_width, window_size.width);
+  const auto controls_x = window_size.width - effective_controls_width;
+  if (window_point.x < controls_x) {
+    return MuonTitleBarControlAction::NoControl;
+  }
+
+  const auto control_x = window_point.x - controls_x;
+  const auto control_index = (control_x * 3) / effective_controls_width;
+  if (control_index == 0) {
+    return MuonTitleBarControlAction::Minimize;
+  }
+  if (control_index == 1) {
+    return MuonTitleBarControlAction::Maximize;
+  }
+  return MuonTitleBarControlAction::Close;
+}
+
 bool IsMuonNativeTitleBarSupported(
     const std::vector<std::string>& command_line,
     const char* xdg_session_type,
@@ -854,6 +923,8 @@ MuonTitleBarManifest ParseMuonTitleBarManifest(const char* manifest_json) {
 
   MuonTitleBarManifest manifest;
   manifest.mode = MuonTitleBarMode::Custom;
+  manifest.native_window_controls =
+      ReadOptionalJsonBool(root, "nativeWindowControls");
   if (!ReadJsonInt(root, "height", 1, kMuonTitleBarMaxHeight,
                    &manifest.height) ||
       !ReadJsonInt(root, "controlsWidth", 1, kMuonTitleBarMaxControlsWidth,
@@ -957,6 +1028,11 @@ int MuonTitleBarController::GetHeight() const {
 
 int MuonTitleBarController::GetControlsWidth() const {
   return manifest_.controls_width;
+}
+
+bool MuonTitleBarController::CanHandleNativeWindowControls() const {
+  return visible_ && manifest_.native_window_controls &&
+         IsCustomMuonTitleBar(manifest_);
 }
 
 CefRefPtr<CefLifeSpanHandler> MuonTitleBarController::GetLifeSpanHandler() {
@@ -1085,6 +1161,11 @@ void RegisterMuonTitleBarController(
     return;
   }
   g_muon_title_bar_controllers[window.get()] = controller.get();
+  const auto window_handle = window->GetWindowHandle();
+  if (window_handle != 0) {
+    g_muon_title_bar_controllers_by_window_handle
+        [GetWindowHandleDraggableRegionKey(window_handle)] = controller.get();
+  }
   if (browser_id <= 0) {
     return;
   }
@@ -1190,6 +1271,11 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
       ++iterator;
     }
   }
+  const auto window_handle = window->GetWindowHandle();
+  if (window_handle != 0) {
+    g_muon_title_bar_controllers_by_window_handle.erase(
+        GetWindowHandleDraggableRegionKey(window_handle));
+  }
   g_muon_title_bar_controllers.erase(window.get());
   g_muon_title_bar_views.erase(window.get());
   EraseMuonDraggableRegionState(window.get());
@@ -1206,6 +1292,7 @@ void ClearMuonTitleBarRegistrations() {
   g_muon_title_bar_browser_ids_by_window.clear();
   g_muon_title_bar_windows_by_browser_view.clear();
   g_muon_title_bar_controllers_by_browser_id.clear();
+  g_muon_title_bar_controllers_by_window_handle.clear();
   g_muon_title_bar_windows_by_browser_id.clear();
   g_muon_title_bar_pending_titles_by_browser_id.clear();
   g_muon_title_bar_pending_icon_data_urls_by_browser_id.clear();
@@ -1364,6 +1451,49 @@ bool ForwardRegisteredMuonPageDraggableRegionWheel(
   }
   return ForwardPageDraggableRegionWheel(
       *page_regions, view_point, delta_x, delta_y, modifiers);
+}
+
+MuonTitleBarControlAction GetRegisteredMuonTitleBarControlActionAtScreenPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    const CefRect& window_bounds_in_screen) {
+  CEF_REQUIRE_UI_THREAD();
+
+  const auto controller =
+      FindMuonTitleBarControllerByWindowHandle(window_handle);
+  if (controller == nullptr ||
+      !controller->CanHandleNativeWindowControls()) {
+    return MuonTitleBarControlAction::NoControl;
+  }
+  if (window_bounds_in_screen.width <= 0 ||
+      window_bounds_in_screen.height <= 0) {
+    return MuonTitleBarControlAction::NoControl;
+  }
+
+  return GetMuonTitleBarControlActionAtWindowPoint(
+      true, controller->GetHeight(), controller->GetControlsWidth(),
+      CefSize(window_bounds_in_screen.width, window_bounds_in_screen.height),
+      CefPoint(screen_point.x - window_bounds_in_screen.x,
+               screen_point.y - window_bounds_in_screen.y));
+}
+
+bool HandleRegisteredMuonTitleBarControlAction(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action) {
+  CEF_REQUIRE_UI_THREAD();
+
+  const auto controller =
+      FindMuonTitleBarControllerByWindowHandle(window_handle);
+  if (controller == nullptr ||
+      !controller->CanHandleNativeWindowControls()) {
+    return false;
+  }
+  const auto* action_name = GetMuonTitleBarControlActionName(action);
+  if (action_name == nullptr) {
+    return false;
+  }
+  controller->HandleAction(action_name);
+  return true;
 }
 
 CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id) {

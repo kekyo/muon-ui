@@ -55,6 +55,13 @@ struct MuonTitleBarManifest {
   int controls_width = 0;
 
   /**
+   * Whether Muon may handle the standard right-side controls from native input.
+   *
+   * @remarks This is only set by the built-in Muon title bar manifest.
+   */
+  bool native_window_controls = false;
+
+  /**
    * HTML fragment rendered inside the internal title bar document.
    */
   std::string html;
@@ -234,6 +241,48 @@ MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest);
 
 /**
+ * Standard Muon title bar control hit-test result.
+ */
+enum class MuonTitleBarControlAction {
+  /**
+   * No native title bar control was hit.
+   */
+  NoControl,
+
+  /**
+   * The minimize button was hit.
+   */
+  Minimize,
+
+  /**
+   * The maximize/restore button was hit.
+   */
+  Maximize,
+
+  /**
+   * The close button was hit.
+   */
+  Close,
+};
+
+/**
+ * Hit-tests a standard Muon title bar control at a window-relative point.
+ *
+ * @param native_window_controls Whether native controls are enabled.
+ * @param title_bar_height Title bar height in DIP.
+ * @param controls_width Right-side controls width in DIP.
+ * @param window_size Window size in DIP.
+ * @param window_point Point relative to the window top-left in DIP.
+ * @return Hit title bar control action, or NoControl.
+ */
+MuonTitleBarControlAction GetMuonTitleBarControlActionAtWindowPoint(
+    bool native_window_controls,
+    int title_bar_height,
+    int controls_width,
+    const CefSize& window_size,
+    const CefPoint& window_point);
+
+/**
  * Returns whether Linux native window-manager title bar decoration is available.
  *
  * @remarks Non-Linux platforms return true. On Linux, only an explicit or
@@ -336,6 +385,11 @@ class MuonTitleBarController final : public CefClient,
    * Handles an action requested by the internal title bar document.
    */
   void HandleAction(const std::string& action);
+
+  /**
+   * Returns whether native input may handle the standard title bar controls.
+   */
+  bool CanHandleNativeWindowControls() const;
 
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override;
   CefRefPtr<CefLoadHandler> GetLoadHandler() override;
@@ -514,6 +568,31 @@ bool ForwardRegisteredMuonPageDraggableRegionWheel(
     int delta_x,
     int delta_y,
     uint32_t modifiers);
+
+/**
+ * Returns a registered standard title bar control hit by a screen point.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param screen_point DIP screen point to test.
+ * @param window_bounds_in_screen Native top-level window bounds in DIP screen
+ * coordinates.
+ * @return Hit title bar control action, or NoControl.
+ */
+MuonTitleBarControlAction GetRegisteredMuonTitleBarControlActionAtScreenPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    const CefRect& window_bounds_in_screen);
+
+/**
+ * Handles a registered standard title bar control action.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param action Control action to handle.
+ * @return true when a registered title bar handled the action.
+ */
+bool HandleRegisteredMuonTitleBarControlAction(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action);
 
 /**
  * Returns the registered custom-titlebar window for a browser, if any.

@@ -176,6 +176,8 @@ static bool TestTitleBarManifestParsing() {
   const auto native = ParseMuonTitleBarManifest(R"({"mode":"native"})");
   const auto custom = ParseMuonTitleBarManifest(
       R"({"mode":"custom","height":36,"controlsWidth":138,"html":"<div></div>","css":"body{}","js":"void 0;"})");
+  const auto native_controls = ParseMuonTitleBarManifest(
+      R"({"mode":"custom","height":36,"controlsWidth":138,"nativeWindowControls":true,"html":"<div></div>","css":"body{}","js":"void 0;"})");
   const auto invalid_json = ParseMuonTitleBarManifest("{");
   const auto unknown_mode = ParseMuonTitleBarManifest(R"({"mode":"other"})");
   const auto missing_fields =
@@ -190,6 +192,10 @@ static bool TestTitleBarManifestParsing() {
          Expect(custom.height == 36, "unexpected custom title bar height") &&
          Expect(custom.controls_width == 138,
                 "unexpected custom title bar controls width") &&
+         Expect(!custom.native_window_controls,
+                "custom title bar unexpectedly enabled native controls") &&
+         Expect(native_controls.native_window_controls,
+                "built-in title bar native controls flag was not accepted") &&
          Expect(!IsCustomMuonTitleBar(invalid_json),
                 "invalid JSON title bar manifest did not fall back") &&
          Expect(!IsCustomMuonTitleBar(unknown_mode),
@@ -252,6 +258,34 @@ static bool TestNativeForwarderRegistersChildWindows() {
                 "native input forwarder omitted first child") &&
          Expect(handles[2] == 30,
                 "native input forwarder omitted second child");
+}
+
+static bool TestTitleBarControlHitTesting() {
+  const auto window_size = CefSize(300, 200);
+  return Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(170, 10)) ==
+                    MuonTitleBarControlAction::Minimize,
+                "minimize title bar control was not hit") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(220, 10)) ==
+                    MuonTitleBarControlAction::Maximize,
+                "maximize title bar control was not hit") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(280, 10)) ==
+                    MuonTitleBarControlAction::Close,
+                "close title bar control was not hit") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(120, 10)) ==
+                    MuonTitleBarControlAction::NoControl,
+                "left title bar area was treated as a control") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(280, 40)) ==
+                    MuonTitleBarControlAction::NoControl,
+                "point below title bar was treated as a control") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    false, 36, 138, window_size, CefPoint(280, 10)) ==
+                    MuonTitleBarControlAction::NoControl,
+                "custom title bar without native controls was hit");
 }
 
 static bool TestWindowIconUpdateBehavior() {
@@ -319,6 +353,7 @@ int main() {
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&
                  TestNativeForwarderRegistersChildWindows() &&
+                 TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0

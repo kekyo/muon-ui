@@ -355,6 +355,7 @@ static std::string CreateTitleBarManifest() {
   yyjson_mut_obj_add_int(document, root, "height", kMuonTitleBarHeight);
   yyjson_mut_obj_add_int(
       document, root, "controlsWidth", kMuonTitleBarControlsWidth);
+  yyjson_mut_obj_add_bool(document, root, "nativeWindowControls", true);
   yyjson_mut_obj_add_str(document, root, "html", kMuonTitleBarHtml);
   const auto css = CreateTitleBarCss();
   yyjson_mut_obj_add_str(document, root, "css", css.c_str());

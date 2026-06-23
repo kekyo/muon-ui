@@ -11,6 +11,7 @@
 #include "include/cef_task.h"
 #include "include/views/cef_display.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <vector>
@@ -64,6 +65,14 @@ std::mutex g_muon_windows_subclass_mutex;
 std::map<HWND, std::set<HWND>> g_muon_windows_subclassed_for_wheel_by_root;
 std::map<HWND, HWND> g_muon_windows_wheel_root_by_subclassed_window;
 
+struct MuonWindowsPendingTitleBarControl {
+  HWND root_window_handle = nullptr;
+  MuonTitleBarControlAction action = MuonTitleBarControlAction::NoControl;
+};
+
+std::map<HWND, MuonWindowsPendingTitleBarControl>
+    g_muon_windows_pending_title_bar_controls;
+
 static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     HWND window_handle,
     UINT message,
@@ -87,6 +96,56 @@ static bool IsNativePageDraggableRegionScreenPixels(
       CefDisplay::ConvertScreenPointFromPixels(screen_point);
   return IsRegisteredMuonPageDraggableRegionPoint(
       window_handle, dip_screen_point);
+}
+
+static bool GetMuonWindowsScreenPointFromClientPoint(
+    HWND window_handle,
+    LPARAM lparam,
+    CefPoint* screen_point) {
+  if (screen_point == nullptr) {
+    return false;
+  }
+  POINT raw_screen_point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+  if (ClientToScreen(window_handle, &raw_screen_point) == FALSE) {
+    return false;
+  }
+  *screen_point = CefPoint(raw_screen_point.x, raw_screen_point.y);
+  return true;
+}
+
+static bool GetMuonWindowsWindowBoundsInScreenDip(
+    HWND window_handle,
+    CefRect* window_bounds) {
+  if (window_handle == nullptr || window_bounds == nullptr) {
+    return false;
+  }
+  RECT rect = {};
+  if (GetWindowRect(window_handle, &rect) == FALSE) {
+    return false;
+  }
+  const auto top_left = CefDisplay::ConvertScreenPointFromPixels(
+      CefPoint(rect.left, rect.top));
+  const auto bottom_right = CefDisplay::ConvertScreenPointFromPixels(
+      CefPoint(rect.right, rect.bottom));
+  *window_bounds = CefRect(
+      top_left.x, top_left.y,
+      std::max(0, bottom_right.x - top_left.x),
+      std::max(0, bottom_right.y - top_left.y));
+  return window_bounds->width > 0 && window_bounds->height > 0;
+}
+
+static MuonTitleBarControlAction GetMuonWindowsTitleBarControlAction(
+    HWND root_window_handle,
+    CefPoint screen_point_pixels) {
+  CefRect window_bounds;
+  if (!GetMuonWindowsWindowBoundsInScreenDip(root_window_handle,
+                                            &window_bounds)) {
+    return MuonTitleBarControlAction::NoControl;
+  }
+  const auto dip_screen_point =
+      CefDisplay::ConvertScreenPointFromPixels(screen_point_pixels);
+  return GetRegisteredMuonTitleBarControlActionAtScreenPoint(
+      root_window_handle, dip_screen_point, window_bounds);
 }
 
 static uint32_t GetMuonWindowsEventFlags(WPARAM wparam) {
@@ -115,6 +174,7 @@ static uint32_t GetMuonWindowsEventFlags(WPARAM wparam) {
 
 static void ForgetMuonWindowsSubclass(HWND window_handle) {
   std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  g_muon_windows_pending_title_bar_controls.erase(window_handle);
   const auto root =
       g_muon_windows_wheel_root_by_subclassed_window.find(window_handle);
   if (root == g_muon_windows_wheel_root_by_subclassed_window.end()) {
@@ -132,6 +192,73 @@ static void ForgetMuonWindowsSubclass(HWND window_handle) {
   if (windows->second.empty()) {
     g_muon_windows_subclassed_for_wheel_by_root.erase(windows);
   }
+}
+
+static void ClearMuonWindowsPendingTitleBarControl(HWND window_handle,
+                                                   bool release_capture) {
+  {
+    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+    g_muon_windows_pending_title_bar_controls.erase(window_handle);
+  }
+  if (release_capture && GetCapture() == window_handle) {
+    ReleaseCapture();
+  }
+}
+
+static bool BeginMuonWindowsTitleBarControl(HWND window_handle,
+                                            LPARAM lparam) {
+  CefPoint screen_point;
+  if (!GetMuonWindowsScreenPointFromClientPoint(
+          window_handle, lparam, &screen_point)) {
+    return false;
+  }
+
+  const auto root_window_handle = GetMuonWindowsRootWindow(window_handle);
+  const auto action =
+      GetMuonWindowsTitleBarControlAction(root_window_handle, screen_point);
+  if (action == MuonTitleBarControlAction::NoControl) {
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+    g_muon_windows_pending_title_bar_controls[window_handle] =
+        {root_window_handle, action};
+  }
+  SetCapture(window_handle);
+  return true;
+}
+
+static bool CompleteMuonWindowsTitleBarControl(HWND window_handle,
+                                               LPARAM lparam) {
+  MuonWindowsPendingTitleBarControl pending;
+  {
+    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+    const auto iterator =
+        g_muon_windows_pending_title_bar_controls.find(window_handle);
+    if (iterator == g_muon_windows_pending_title_bar_controls.end()) {
+      return false;
+    }
+    pending = iterator->second;
+    g_muon_windows_pending_title_bar_controls.erase(iterator);
+  }
+
+  if (GetCapture() == window_handle) {
+    ReleaseCapture();
+  }
+
+  CefPoint screen_point;
+  if (!GetMuonWindowsScreenPointFromClientPoint(
+          window_handle, lparam, &screen_point)) {
+    return true;
+  }
+  const auto action = GetMuonWindowsTitleBarControlAction(
+      pending.root_window_handle, screen_point);
+  if (action == pending.action) {
+    HandleRegisteredMuonTitleBarControlAction(
+        pending.root_window_handle, pending.action);
+  }
+  return true;
 }
 
 static bool StartMuonWindowsPageDrag(HWND window_handle, LPARAM lparam) {
@@ -235,9 +362,23 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
 
   switch (message) {
     case WM_LBUTTONDOWN:
+      if (BeginMuonWindowsTitleBarControl(window_handle, lparam)) {
+        return 0;
+      }
       if (StartMuonWindowsPageDrag(window_handle, lparam)) {
         return 0;
       }
+      break;
+    case WM_LBUTTONUP:
+      if (CompleteMuonWindowsTitleBarControl(window_handle, lparam)) {
+        return 0;
+      }
+      break;
+    case WM_CAPTURECHANGED:
+      ClearMuonWindowsPendingTitleBarControl(window_handle, false);
+      break;
+    case WM_CANCELMODE:
+      ClearMuonWindowsPendingTitleBarControl(window_handle, true);
       break;
     case WM_PARENTNOTIFY:
       if (LOWORD(wparam) == WM_CREATE) {
@@ -267,6 +408,7 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       break;
     }
     case WM_NCDESTROY:
+      ClearMuonWindowsPendingTitleBarControl(window_handle, true);
       RemoveWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,
                            kMuonWheelForwarderSubclassId);
       ForgetMuonWindowsSubclass(window_handle);
@@ -306,6 +448,7 @@ static void UnregisterMuonWindowsWheelForwarder(HWND window_handle) {
     for (const auto target_window_handle : window_handles) {
       g_muon_windows_wheel_root_by_subclassed_window.erase(
           target_window_handle);
+      g_muon_windows_pending_title_bar_controls.erase(target_window_handle);
     }
     g_muon_windows_subclassed_for_wheel_by_root.erase(windows);
   }
@@ -327,6 +470,7 @@ static void ClearMuonWindowsWheelForwarders() {
     }
     g_muon_windows_wheel_root_by_subclassed_window.clear();
     g_muon_windows_subclassed_for_wheel_by_root.clear();
+    g_muon_windows_pending_title_bar_controls.clear();
   }
   for (const auto window_handle : window_handles) {
     RemoveWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,

@@ -432,7 +432,7 @@ exit 1
     expect(stdout).toContain("embed-config");
   });
 
-  it("adds the Muon staging directory through the muon CLI init command", async () => {
+  it("adds Muon generated directories through the muon CLI init command", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-"));
     cleanupDirectories.push(root);
     const cliPath = resolve("dist", "cli.cjs");
@@ -448,11 +448,11 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain(".gitignore");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\n",
     );
   });
 
-  it("keeps an existing Muon gitignore entry when the muon CLI init command is repeated", async () => {
+  it("appends a missing Muon dist gitignore entry when the muon CLI init command is repeated", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-existing-"));
     cleanupDirectories.push(root);
     await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\n");
@@ -464,7 +464,23 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\n",
+      "dist*/\n.muon/\ndist-muon-*/\n",
+    );
+  });
+
+  it("keeps existing Muon generated gitignore entries when the muon CLI init command is repeated", async () => {
+    const root = await mkdtemp(join(tmpdir(), "muon-init-generated-existing-"));
+    cleanupDirectories.push(root);
+    await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\ndist-muon-*/\n");
+    const cliPath = resolve("dist", "cli.cjs");
+
+    await execFileAsync(process.execPath, [cliPath, "init"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      "dist*/\n.muon/\ndist-muon-*/\n",
     );
   });
 

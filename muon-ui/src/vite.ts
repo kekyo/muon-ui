@@ -36,7 +36,7 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
-   * Parent directory that receives dist-linux-amd64/ style outputs.
+   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
    */
   outputRoot?: string;
 

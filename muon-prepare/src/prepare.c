@@ -136,7 +136,39 @@ static char *find_muon_stage_project_root(const char *stage_dir) {
   return NULL;
 }
 
-static int gitignore_has_muon_entry(const char *content) {
+static const char *const k_muon_gitignore_entries[] = {
+    ".muon/",
+    "dist-muon-*/",
+};
+
+static int gitignore_line_equals(const char *line_start,
+                                 const char *line_end,
+                                 const char *value) {
+  const size_t line_length = (size_t)(line_end - line_start);
+  const size_t value_length = strlen(value);
+  return line_length == value_length &&
+         strncmp(line_start, value, value_length) == 0;
+}
+
+static int gitignore_line_matches_entry(const char *line_start,
+                                        const char *line_end,
+                                        const char *entry) {
+  if (strcmp(entry, ".muon/") == 0) {
+    return gitignore_line_equals(line_start, line_end, ".muon/") ||
+           gitignore_line_equals(line_start, line_end, "/.muon/") ||
+           gitignore_line_equals(line_start, line_end, ".muon") ||
+           gitignore_line_equals(line_start, line_end, "/.muon");
+  }
+  if (strcmp(entry, "dist-muon-*/") == 0) {
+    return gitignore_line_equals(line_start, line_end, "dist-muon-*/") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon-*/") ||
+           gitignore_line_equals(line_start, line_end, "dist-muon-*") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon-*");
+  }
+  return gitignore_line_equals(line_start, line_end, entry);
+}
+
+static int gitignore_has_entry(const char *content, const char *entry) {
   const char *cursor = content;
   while (*cursor != '\0') {
     const char *line_start = cursor;
@@ -153,13 +185,39 @@ static int gitignore_has_muon_entry(const char *content) {
            isspace((unsigned char)line_end[-1])) {
       line_end -= 1;
     }
-    if ((size_t)(line_end - line_start) == strlen(".muon/") &&
-        strncmp(line_start, ".muon/", strlen(".muon/")) == 0) {
+    if (gitignore_line_matches_entry(line_start, line_end, entry)) {
       return 1;
     }
     cursor = *line_limit == '\0' ? line_limit : line_limit + 1;
   }
   return 0;
+}
+
+static int append_gitignore_entry(const char *gitignore_path,
+                                  const char *entry,
+                                  int *needs_newline) {
+  const size_t prefix_length = *needs_newline ? 1 : 0;
+  const size_t entry_length = strlen(entry);
+  char *content = malloc(prefix_length + entry_length + 2);
+  if (content == NULL) {
+    return -1;
+  }
+  char *cursor = content;
+  if (*needs_newline) {
+    *cursor = '\n';
+    cursor += 1;
+  }
+  memcpy(cursor, entry, entry_length);
+  cursor += entry_length;
+  *cursor = '\n';
+  cursor += 1;
+  *cursor = '\0';
+  const int result = muon_append_text_file(gitignore_path, content);
+  free(content);
+  if (result == 0) {
+    *needs_newline = 0;
+  }
+  return result;
 }
 
 static int ensure_muon_gitignore_entry(const char *stage_dir) {
@@ -179,17 +237,24 @@ static int ensure_muon_gitignore_entry(const char *stage_dir) {
       free(gitignore_path);
       return -1;
     }
-    if (gitignore_has_muon_entry(content)) {
-      free(content);
-      free(gitignore_path);
-      return 0;
-    }
   }
-  const int needs_newline =
+  int needs_newline =
       content != NULL && content[0] != '\0' &&
       content[strlen(content) - 1] != '\n';
-  const int result = muon_append_text_file(
-      gitignore_path, needs_newline ? "\n.muon/\n" : ".muon/\n");
+  int result = 0;
+  for (size_t index = 0;
+       index < sizeof(k_muon_gitignore_entries) /
+                   sizeof(k_muon_gitignore_entries[0]);
+       index += 1) {
+    const char *entry = k_muon_gitignore_entries[index];
+    if (content != NULL && gitignore_has_entry(content, entry)) {
+      continue;
+    }
+    result = append_gitignore_entry(gitignore_path, entry, &needs_newline);
+    if (result != 0) {
+      break;
+    }
+  }
   free(content);
   free(gitignore_path);
   return result;

@@ -1101,17 +1101,17 @@ lastCatalogUpdateUnix=0
     expect(chunks).toEqual([]);
   });
 
-  it("adds .muon to gitignore when staging under the project .muon directory", async () => {
+  it("adds Muon generated directories to gitignore when staging under the project .muon directory", async () => {
     const fixture = await createPrepareFixture();
 
     await prepareFixture(fixture);
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe(".muon/\n");
+    ).resolves.toBe(".muon/\ndist-muon-*/\n");
   });
 
-  it("does not duplicate an existing .muon gitignore entry", async () => {
+  it("appends a missing Muon dist gitignore entry without duplicating .muon", async () => {
     const fixture = await createPrepareFixture();
     await writeFile(
       join(fixture.projectPath, ".gitignore"),
@@ -1122,7 +1122,7 @@ lastCatalogUpdateUnix=0
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe("dist*/\n.muon/\n");
+    ).resolves.toBe("dist*/\n.muon/\ndist-muon-*/\n");
   });
 
   it("stages a flat CEF cache directory", async () => {

@@ -66,28 +66,28 @@ const targetAliases: Record<string, MuonBuildTarget> = {
 
 const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
   linux64: {
-    distributionDirectoryName: "dist-linux-amd64",
+    distributionDirectoryName: "dist-muon-linux-amd64",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
   },
   linuxarm: {
-    distributionDirectoryName: "dist-linux-armv7l",
+    distributionDirectoryName: "dist-muon-linux-armv7l",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
   },
   linuxarm64: {
-    distributionDirectoryName: "dist-linux-arm64",
+    distributionDirectoryName: "dist-muon-linux-arm64",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
   },
   windows32: {
-    distributionDirectoryName: "dist-windows-i686",
+    distributionDirectoryName: "dist-muon-windows-i686",
     runtimeExecutableName: "muon-core.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
     launcherExtension: ".exe",
@@ -99,7 +99,7 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
     ],
   },
   windows64: {
-    distributionDirectoryName: "dist-windows-amd64",
+    distributionDirectoryName: "dist-muon-windows-amd64",
     runtimeExecutableName: "muon-core.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
     launcherExtension: ".exe",
@@ -192,7 +192,7 @@ export interface MuonBuildOptions {
    */
   appName?: string;
   /**
-   * Parent directory that receives dist-linux-amd64/ style outputs.
+   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
    */
   outputRoot?: string;
   /**

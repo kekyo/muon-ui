@@ -475,7 +475,7 @@ describe("muon Vite plugin", () => {
 
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\n",
     );
     await expect(
       access(join(root, ".muon", "linux64")),
@@ -502,7 +502,7 @@ describe("muon Vite plugin", () => {
 
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\n",
     );
     await expect(access(join(root, ".muon"))).rejects.toThrow();
   });
@@ -829,7 +829,7 @@ describe("muon dev CLI", () => {
       devResult.overrideConfigPath,
     ]);
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\n",
     );
     expect(devResult.exitCode).toBe(0);
     expect(devResult.projectConfigPath).toBe(join(root, "muon.json"));

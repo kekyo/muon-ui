@@ -203,7 +203,7 @@ npm run build
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
-既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-linux-amd64/` や `dist-windows-amd64/` のようなターゲット別ディレクトリです。
+既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリです。
 アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
 
 複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
@@ -1034,7 +1034,7 @@ export default defineConfig({
 | `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
 | `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
-| `outputRoot`       | `string`            | `"."`                          | `dist-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
+| `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 

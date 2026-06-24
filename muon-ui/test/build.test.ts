@@ -262,39 +262,39 @@ describe("muon build", () => {
 
     const [target] = result.targets;
     expect(target?.target).toBe("linux64");
-    expect(target?.outputPath).toBe(join(root, "dist-linux-amd64"));
+    expect(target?.outputPath).toBe(join(root, "dist-muon-linux-amd64"));
     expect(target?.launcherPath).toBe(
-      join(root, "dist-linux-amd64", "muon-sample"),
+      join(root, "dist-muon-linux-amd64", "muon-sample"),
     );
     await expect(
-      readFile(join(root, "dist-linux-amd64", "muon-core")),
+      readFile(join(root, "dist-muon-linux-amd64", "muon-core")),
     ).resolves.toBeDefined();
     await expect(
-      readFile(join(root, "dist-linux-amd64", "libmuon-ui.so"), "utf8"),
+      readFile(join(root, "dist-muon-linux-amd64", "libmuon-ui.so"), "utf8"),
     ).resolves.toBe("ui\n");
     await expect(
-      readFile(join(root, "dist-linux-amd64", "libcardio.so"), "utf8"),
+      readFile(join(root, "dist-muon-linux-amd64", "libcardio.so"), "utf8"),
     ).resolves.toBe("cardio\n");
     await expect(
-      readFile(join(root, "dist-linux-amd64", "CREDITS.md"), "utf8"),
+      readFile(join(root, "dist-muon-linux-amd64", "CREDITS.md"), "utf8"),
     ).resolves.toBe("notices\n");
     await expect(
-      exists(join(root, "dist-linux-amd64", "THIRD_PARTY_NOTICES.md")),
+      exists(join(root, "dist-muon-linux-amd64", "THIRD_PARTY_NOTICES.md")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-linux-amd64", "muon.json")),
+      exists(join(root, "dist-muon-linux-amd64", "muon.json")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-linux-amd64", "assets")),
+      exists(join(root, "dist-muon-linux-amd64", "assets")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-linux-amd64", "muon-prepare")),
+      exists(join(root, "dist-muon-linux-amd64", "muon-prepare")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-linux-amd64", "libcef.so")),
+      exists(join(root, "dist-muon-linux-amd64", "libcef.so")),
     ).resolves.toBe(false);
 
-    const archivePath = join(root, "dist-linux-amd64", "assets.zip");
+    const archivePath = join(root, "dist-muon-linux-amd64", "assets.zip");
     const archiveContent = await readFile(archivePath);
     const entries = await readZipEntries(archivePath);
     expect(entries.get("main/index.html")?.toString("utf8")).toBe(
@@ -310,10 +310,10 @@ describe("muon build", () => {
       salt: "deadbeef",
     });
     const embeddedCore = await readFile(
-      join(root, "dist-linux-amd64", "muon-core"),
+      join(root, "dist-muon-linux-amd64", "muon-core"),
     );
     const embeddedLauncher = await readFile(
-      join(root, "dist-linux-amd64", "muon-sample"),
+      join(root, "dist-muon-linux-amd64", "muon-sample"),
     );
     expect(() => findMuonEmbeddedConfigSlot(embeddedCore)).toThrow("found 0");
     expect(() => findMuonBootstrapEmbeddedConfigSlot(embeddedLauncher)).toThrow(
@@ -351,10 +351,14 @@ describe("muon build", () => {
       "windows64",
     ]);
     await expect(
-      exists(join(root, "dist-windows-i686", "default-targets-sample.exe")),
+      exists(
+        join(root, "dist-muon-windows-i686", "default-targets-sample.exe"),
+      ),
     ).resolves.toBe(true);
     await expect(
-      exists(join(root, "dist-windows-amd64", "default-targets-sample.exe")),
+      exists(
+        join(root, "dist-muon-windows-amd64", "default-targets-sample.exe"),
+      ),
     ).resolves.toBe(true);
   });
 
@@ -377,7 +381,7 @@ describe("muon build", () => {
       assetSalt: Buffer.from([0x0b, 0x22]),
     });
 
-    const outputPath = join(root, "dist-windows-amd64");
+    const outputPath = join(root, "dist-muon-windows-amd64");
     await expect(
       readFile(join(outputPath, "libgcc_s_seh-1.dll"), "utf8"),
     ).resolves.toBe("windows64 libgcc_s_seh-1.dll\n");
@@ -436,7 +440,7 @@ describe("muon build", () => {
       ],
     });
 
-    const outputPath = join(root, "dist-linux-amd64");
+    const outputPath = join(root, "dist-muon-linux-amd64");
     const entries = await readZipEntries(join(outputPath, "assets.zip"));
     expect(entries.has("main/index.html")).toBe(true);
     expect(
@@ -508,7 +512,7 @@ describe("muon build", () => {
     });
 
     const [target] = result.targets;
-    const archivePath = join(root, "dist-linux-amd64", "assets.zip");
+    const archivePath = join(root, "dist-muon-linux-amd64", "assets.zip");
     const archiveContent = await readFile(archivePath);
     const entries = await readZipEntries(archivePath);
     expect(entries.get("main/index.html")?.toString("utf8")).toBe(
@@ -561,7 +565,7 @@ describe("muon build", () => {
     });
 
     const [target] = result.targets;
-    const archivePath = join(root, "dist-linux-amd64", "assets.zip");
+    const archivePath = join(root, "dist-muon-linux-amd64", "assets.zip");
     await expect(readFile(archivePath)).resolves.toEqual(sourceZip);
     expect(target?.asset.entryCount).toBe(0);
     expect(target?.asset.signature).toBe(

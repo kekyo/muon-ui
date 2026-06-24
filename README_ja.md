@@ -1079,6 +1079,8 @@ export default defineConfig({
 | `minimize()`          | なし                | `Promise<void>` | 現在のウインドウを最小化します。                                 |
 | `maximize()`          | なし                | `Promise<void>` | 現在のウインドウを最大化します。                                 |
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
+| `getWindowBounds()`   | なし                | `Promise<MuonWindowBounds>` | 現在のトップレベルウインドウ領域を取得します。             |
+| `setWindowBounds(bounds)` | `bounds: MuonWindowBounds` | `Promise<void>` | 現在のトップレベルウインドウ領域の変更を要求します。     |
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
@@ -1088,6 +1090,11 @@ export default defineConfig({
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
 - `recycle()` は `muon-bootstrap` や `muon dev` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
 - `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
+- `getWindowBounds()` と `setWindowBounds()` の bounds はブラウザ表示領域ではなく、Muonカスタムタイトルバーやネイティブフレームを含むトップレベルウインドウ領域です。
+  座標とサイズの単位はCEF Viewsと同じDIP screen coordinatesです。
+  `setWindowBounds()` では `x`, `y`, `width`, `height` に32bit符号付き整数範囲のsafe integerを指定し、`width` と `height` は1以上である必要があります。
+  Waylandではトップレベルウインドウの配置がcompositorに管理されるため、位置やサイズの要求が無視または調整されることがあります。
+  厳密な位置制御が必要な場合はX11バックエンド（例: `--ozone-platform=x11`）を使用して下さい。
 - `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
@@ -1099,6 +1106,12 @@ export default defineConfig({
 ```js
 await window.muon.browser.zoomIn();
 await window.muon.browser.resetZoom();
+const bounds = await window.muon.browser.getWindowBounds();
+await window.muon.browser.setWindowBounds({
+  ...bounds,
+  width: 960,
+  height: 640,
+});
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);

@@ -328,6 +328,22 @@ static bool TestWindowIconUpdateBehavior() {
                 "clearing the title bar icon should clear the app icon");
 }
 
+static bool TestTitleBarIconNativeScaleFactors() {
+  return Expect(GetMuonTitleBarIconPngScaleFactors(16, 16) ==
+                    std::vector<float>{1.0f},
+                "16px title bar icon should use the default scale only") &&
+         Expect(GetMuonTitleBarIconPngScaleFactors(32, 32) ==
+                    (std::vector<float>{1.0f, 2.0f}),
+                "32px title bar icon should include a 16 DIP scale") &&
+         Expect(GetMuonTitleBarIconPngScaleFactors(256, 256) ==
+                    (std::vector<float>{1.0f, 16.0f}),
+                "embedded default title bar icon should include a 16 DIP "
+                "native scale") &&
+         Expect(GetMuonTitleBarIconPngScaleFactors(32, 16) ==
+                    std::vector<float>{1.0f},
+                "non-square title bar icon should not add a native scale");
+}
+
 static bool TestCustomTitleBarWindowDelegate() {
   const auto manifest = CreateTestCustomTitleBarManifest();
   auto browser =
@@ -375,6 +391,7 @@ int main() {
                  TestNativeForwarderRegistersChildWindows() &&
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
+                 TestTitleBarIconNativeScaleFactors() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0
              : 1;

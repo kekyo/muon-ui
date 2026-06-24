@@ -1171,16 +1171,18 @@ bool MuonClient::SetTitleBarIconForBrowser(
     }
     return false;
   }
+  SetRegisteredMuonTitleBarIconForBrowser(
+      browser->GetIdentifier(), icon == nullptr ? nullptr : icon->image,
+      icon == nullptr ? std::string() : icon->data_url);
+
   CefRefPtr<CefBrowserView> browser_view;
   CefRefPtr<CefWindow> window;
   if (!GetBrowserViewAndWindow(browser, &browser_view, &window,
                                error_message)) {
-    return false;
+    return true;
   }
   (void)browser_view;
-  SetRegisteredMuonTitleBarIconForBrowser(
-      browser->GetIdentifier(), icon == nullptr ? nullptr : icon->image,
-      icon == nullptr ? std::string() : icon->data_url);
+  (void)window;
   return true;
 }
 

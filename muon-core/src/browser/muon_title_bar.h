@@ -176,6 +176,16 @@ bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
                                       std::string* error_message);
 
 /**
+ * Returns PNG scale factors used for title bar icon native images.
+ *
+ * @param pixel_width PNG image width in pixels.
+ * @param pixel_height PNG image height in pixels.
+ * @return Ordered scale factors added to the CefImage.
+ */
+std::vector<float> GetMuonTitleBarIconPngScaleFactors(int pixel_width,
+                                                      int pixel_height);
+
+/**
  * Loads a title bar icon from asset storage.
  *
  * @param storage Asset storage backing asset:// resources.

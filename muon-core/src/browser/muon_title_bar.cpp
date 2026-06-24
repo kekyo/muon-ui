@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 #include <map>
 #include <string>
 #include <type_traits>
@@ -43,6 +44,7 @@ constexpr char kMuonTitleBarExtraInfoKey[] = "muonInternalTitleBar";
 constexpr int kMuonTitleBarDefaultWindowWidth = 1024;
 constexpr int kMuonTitleBarMaxHeight = 96;
 constexpr int kMuonTitleBarMaxControlsWidth = 512;
+constexpr int kMuonNativeTitleBarIconDipSize = 16;
 
 std::map<CefWindow*, MuonTitleBarController*> g_muon_title_bar_controllers;
 std::map<CefWindow*, CefRefPtr<CefBrowserView>> g_muon_title_bar_views;
@@ -53,8 +55,7 @@ std::map<int, MuonTitleBarController*>
     g_muon_title_bar_controllers_by_browser_id;
 std::map<int, CefRefPtr<CefWindow>> g_muon_title_bar_windows_by_browser_id;
 std::map<int, std::string> g_muon_title_bar_pending_titles_by_browser_id;
-std::map<int, std::string>
-    g_muon_title_bar_pending_icon_data_urls_by_browser_id;
+std::map<int, MuonTitleBarIcon> g_muon_title_bar_pending_icons_by_browser_id;
 using MuonWindowDraggableRegionKey = std::uintptr_t;
 std::map<MuonWindowDraggableRegionKey, MuonTitleBarController*>
     g_muon_title_bar_controllers_by_window_handle;
@@ -282,6 +283,40 @@ static std::string CreateImageDataUrl(const uint8_t* data,
       mime_type.empty() ? std::string("application/octet-stream") : mime_type;
   return "data:" + effective_mime_type + ";base64," +
          CefBase64Encode(data, size).ToString();
+}
+
+static uint32_t ReadBigEndianUint32(const uint8_t* data) {
+  return (static_cast<uint32_t>(data[0]) << 24) |
+         (static_cast<uint32_t>(data[1]) << 16) |
+         (static_cast<uint32_t>(data[2]) << 8) |
+         static_cast<uint32_t>(data[3]);
+}
+
+static bool ReadPngPixelSize(const uint8_t* data,
+                             size_t size,
+                             int* pixel_width,
+                             int* pixel_height) {
+  static constexpr uint8_t kPngSignature[] = {
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  };
+  static constexpr char kPngIhdrChunkType[] = "IHDR";
+  if (data == nullptr || size < 24 || pixel_width == nullptr ||
+      pixel_height == nullptr ||
+      std::memcmp(data, kPngSignature, sizeof(kPngSignature)) != 0 ||
+      std::memcmp(data + 12, kPngIhdrChunkType, 4) != 0) {
+    return false;
+  }
+
+  const auto width = ReadBigEndianUint32(data + 16);
+  const auto height = ReadBigEndianUint32(data + 20);
+  if (width == 0 || height == 0 ||
+      width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+      height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+  *pixel_width = static_cast<int>(width);
+  *pixel_height = static_cast<int>(height);
+  return true;
 }
 
 static bool ParseMuonTitleBarIconPath(const std::string& path,
@@ -646,6 +681,18 @@ MuonTitleBarManifest CreateNativeMuonTitleBarManifest() {
   return {};
 }
 
+std::vector<float> GetMuonTitleBarIconPngScaleFactors(int pixel_width,
+                                                      int pixel_height) {
+  auto scale_factors = std::vector<float>{1.0f};
+  if (pixel_width == pixel_height &&
+      pixel_width > kMuonNativeTitleBarIconDipSize) {
+    scale_factors.push_back(
+        static_cast<float>(pixel_width) /
+        static_cast<float>(kMuonNativeTitleBarIconDipSize));
+  }
+  return scale_factors;
+}
+
 bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
                                       size_t size,
                                       const std::string& source,
@@ -663,10 +710,24 @@ bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
   }
 
   auto image = CefImage::CreateImage();
-  if (!image || !image->AddPNG(1.0f, data, size)) {
+  if (!image) {
     *error_message =
         "Title bar icon must be a valid PNG: " + diagnostic_source;
     return false;
+  }
+  auto scale_factors = std::vector<float>{1.0f};
+  auto pixel_width = 0;
+  auto pixel_height = 0;
+  if (ReadPngPixelSize(data, size, &pixel_width, &pixel_height)) {
+    scale_factors =
+        GetMuonTitleBarIconPngScaleFactors(pixel_width, pixel_height);
+  }
+  for (const auto scale_factor : scale_factors) {
+    if (!image->AddPNG(scale_factor, data, size)) {
+      *error_message =
+          "Title bar icon must be a valid PNG: " + diagnostic_source;
+      return false;
+    }
   }
 
   icon->image = image;
@@ -1175,10 +1236,10 @@ void RegisterMuonTitleBarController(
     controller->SetTitle(pending->second);
   }
   const auto pending_icon =
-      g_muon_title_bar_pending_icon_data_urls_by_browser_id.find(browser_id);
-  if (pending_icon !=
-      g_muon_title_bar_pending_icon_data_urls_by_browser_id.end()) {
-    controller->SetIconDataUrl(pending_icon->second);
+      g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
+  if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
+    SetRegisteredMuonTitleBarIcon(window, pending_icon->second.image,
+                                  pending_icon->second.data_url);
   }
 }
 
@@ -1197,6 +1258,12 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
   }
   g_muon_title_bar_browser_ids_by_window[window.get()] = browser_id;
   g_muon_title_bar_windows_by_browser_id[browser_id] = window;
+  const auto pending_icon =
+      g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
+  if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
+    SetRegisteredMuonTitleBarIcon(window, pending_icon->second.image,
+                                  pending_icon->second.data_url);
+  }
 
   const auto controller = g_muon_title_bar_controllers.find(window.get());
   if (controller == g_muon_title_bar_controllers.end()) {
@@ -1207,12 +1274,6 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
       g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
   if (pending != g_muon_title_bar_pending_titles_by_browser_id.end()) {
     controller->second->SetTitle(pending->second);
-  }
-  const auto pending_icon =
-      g_muon_title_bar_pending_icon_data_urls_by_browser_id.find(browser_id);
-  if (pending_icon !=
-      g_muon_title_bar_pending_icon_data_urls_by_browser_id.end()) {
-    controller->second->SetIconDataUrl(pending_icon->second);
   }
 }
 
@@ -1256,8 +1317,7 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
     g_muon_title_bar_controllers_by_browser_id.erase(browser_id->second);
     g_muon_title_bar_windows_by_browser_id.erase(browser_id->second);
     g_muon_title_bar_pending_titles_by_browser_id.erase(browser_id->second);
-    g_muon_title_bar_pending_icon_data_urls_by_browser_id.erase(
-        browser_id->second);
+    g_muon_title_bar_pending_icons_by_browser_id.erase(browser_id->second);
     g_muon_title_bar_browser_ids_by_window.erase(browser_id);
   }
   for (auto iterator = g_muon_title_bar_windows_by_browser_view.begin();
@@ -1292,7 +1352,7 @@ void ClearMuonTitleBarRegistrations() {
   g_muon_title_bar_controllers_by_window_handle.clear();
   g_muon_title_bar_windows_by_browser_id.clear();
   g_muon_title_bar_pending_titles_by_browser_id.clear();
-  g_muon_title_bar_pending_icon_data_urls_by_browser_id.clear();
+  g_muon_title_bar_pending_icons_by_browser_id.clear();
   g_muon_title_bar_draggable_regions.clear();
   g_muon_page_draggable_regions.clear();
   g_muon_applied_draggable_regions.clear();
@@ -1356,8 +1416,8 @@ void SetRegisteredMuonTitleBarIconForBrowser(
   if (browser_id <= 0) {
     return;
   }
-  g_muon_title_bar_pending_icon_data_urls_by_browser_id[browser_id] =
-      icon_data_url;
+  g_muon_title_bar_pending_icons_by_browser_id[browser_id] =
+      MuonTitleBarIcon{image, icon_data_url};
   const auto window = GetRegisteredMuonWindowForBrowser(browser_id);
   SetRegisteredMuonTitleBarIcon(window, image, icon_data_url);
 }

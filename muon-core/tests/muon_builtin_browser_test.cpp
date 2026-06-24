@@ -393,6 +393,15 @@ static bool TestWindowIconUpdateBehavior() {
                 "clearing the title bar icon should clear the app icon");
 }
 
+static bool TestTitleBarBrowserIdResolution() {
+  return Expect(GetMuonResolvedTitleBarBrowserId(7, 42) == 7,
+                "direct title bar browser id was not preserved") &&
+         Expect(GetMuonResolvedTitleBarBrowserId(0, 42) == 42,
+                "registered title bar browser id was not reused") &&
+         Expect(GetMuonResolvedTitleBarBrowserId(0, 0) == 0,
+                "missing title bar browser id should remain missing");
+}
+
 static bool TestTitleBarIconNativeScaleFactors() {
   return Expect(GetMuonTitleBarIconPngScaleFactors(16, 16) ==
                     std::vector<float>{1.0f},
@@ -458,6 +467,7 @@ int main() {
                  TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() &&
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
+                 TestTitleBarBrowserIdResolution() &&
                  TestTitleBarIconNativeScaleFactors() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0

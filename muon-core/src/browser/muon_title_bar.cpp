@@ -51,6 +51,7 @@ std::map<CefWindow*, CefRefPtr<CefBrowserView>> g_muon_title_bar_views;
 std::map<CefWindow*, int> g_muon_title_bar_browser_ids_by_window;
 std::map<CefBrowserView*, CefRefPtr<CefWindow>>
     g_muon_title_bar_windows_by_browser_view;
+std::map<CefBrowserView*, int> g_muon_title_bar_browser_ids_by_browser_view;
 std::map<int, MuonTitleBarController*>
     g_muon_title_bar_controllers_by_browser_id;
 std::map<int, CefRefPtr<CefWindow>> g_muon_title_bar_windows_by_browser_id;
@@ -675,6 +676,36 @@ static void SetMuonTitleBarDraggableRegions(
   ApplyMuonDraggableRegions(window);
 }
 
+static int GetRegisteredMuonTitleBarBrowserIdForWindow(CefWindow* window) {
+  if (window == nullptr) {
+    return 0;
+  }
+  const auto iterator = g_muon_title_bar_browser_ids_by_window.find(window);
+  return iterator == g_muon_title_bar_browser_ids_by_window.end()
+             ? 0
+             : iterator->second;
+}
+
+static void ApplyPendingMuonTitleBarState(CefRefPtr<CefWindow> window,
+                                          int browser_id) {
+  if (!window || browser_id <= 0) {
+    return;
+  }
+  const auto controller = g_muon_title_bar_controllers.find(window.get());
+  const auto pending_title =
+      g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
+  if (controller != g_muon_title_bar_controllers.end() &&
+      pending_title != g_muon_title_bar_pending_titles_by_browser_id.end()) {
+    controller->second->SetTitle(pending_title->second);
+  }
+  const auto pending_icon =
+      g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
+  if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
+    SetRegisteredMuonTitleBarIcon(window, pending_icon->second.image,
+                                  pending_icon->second.data_url);
+  }
+}
+
 }  // namespace
 
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest() {
@@ -860,6 +891,14 @@ bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest) {
   return manifest.mode == MuonTitleBarMode::Custom && manifest.height > 0 &&
          manifest.controls_width > 0 && !manifest.html.empty() &&
          !manifest.css.empty() && !manifest.js.empty();
+}
+
+int GetMuonResolvedTitleBarBrowserId(int browser_id,
+                                     int registered_browser_id) {
+  if (browser_id > 0) {
+    return browser_id;
+  }
+  return registered_browser_id > 0 ? registered_browser_id : 0;
 }
 
 MuonTitleBarControlAction GetMuonTitleBarControlActionAtWindowPoint(
@@ -1224,23 +1263,16 @@ void RegisterMuonTitleBarController(
     g_muon_title_bar_controllers_by_window_handle
         [GetWindowHandleDraggableRegionKey(window_handle)] = controller.get();
   }
-  if (browser_id <= 0) {
+  const auto effective_browser_id = GetMuonResolvedTitleBarBrowserId(
+      browser_id, GetRegisteredMuonTitleBarBrowserIdForWindow(window.get()));
+  if (effective_browser_id <= 0) {
     return;
   }
-  g_muon_title_bar_browser_ids_by_window[window.get()] = browser_id;
-  g_muon_title_bar_controllers_by_browser_id[browser_id] = controller.get();
-  g_muon_title_bar_windows_by_browser_id[browser_id] = window;
-  const auto pending =
-      g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
-  if (pending != g_muon_title_bar_pending_titles_by_browser_id.end()) {
-    controller->SetTitle(pending->second);
-  }
-  const auto pending_icon =
-      g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
-  if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
-    SetRegisteredMuonTitleBarIcon(window, pending_icon->second.image,
-                                  pending_icon->second.data_url);
-  }
+  g_muon_title_bar_browser_ids_by_window[window.get()] = effective_browser_id;
+  g_muon_title_bar_controllers_by_browser_id[effective_browser_id] =
+      controller.get();
+  g_muon_title_bar_windows_by_browser_id[effective_browser_id] = window;
+  ApplyPendingMuonTitleBarState(window, effective_browser_id);
 }
 
 void RegisterMuonTitleBarView(CefRefPtr<CefWindow> window,
@@ -1258,23 +1290,12 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
   }
   g_muon_title_bar_browser_ids_by_window[window.get()] = browser_id;
   g_muon_title_bar_windows_by_browser_id[browser_id] = window;
-  const auto pending_icon =
-      g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
-  if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
-    SetRegisteredMuonTitleBarIcon(window, pending_icon->second.image,
-                                  pending_icon->second.data_url);
-  }
-
   const auto controller = g_muon_title_bar_controllers.find(window.get());
-  if (controller == g_muon_title_bar_controllers.end()) {
-    return;
+  if (controller != g_muon_title_bar_controllers.end()) {
+    g_muon_title_bar_controllers_by_browser_id[browser_id] =
+        controller->second;
   }
-  g_muon_title_bar_controllers_by_browser_id[browser_id] = controller->second;
-  const auto pending =
-      g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
-  if (pending != g_muon_title_bar_pending_titles_by_browser_id.end()) {
-    controller->second->SetTitle(pending->second);
-  }
+  ApplyPendingMuonTitleBarState(window, browser_id);
 }
 
 void RegisterMuonTitleBarBrowserView(CefRefPtr<CefWindow> window,
@@ -1283,6 +1304,11 @@ void RegisterMuonTitleBarBrowserView(CefRefPtr<CefWindow> window,
     return;
   }
   g_muon_title_bar_windows_by_browser_view[browser_view.get()] = window;
+  const auto browser_id =
+      g_muon_title_bar_browser_ids_by_browser_view.find(browser_view.get());
+  if (browser_id != g_muon_title_bar_browser_ids_by_browser_view.end()) {
+    RegisterMuonTitleBarBrowserForWindow(window, browser_id->second);
+  }
   ApplyMuonDraggableRegions(window.get());
 }
 
@@ -1299,6 +1325,8 @@ void RegisterMuonTitleBarBrowserViewBrowser(
   if (!browser_view || browser_id <= 0) {
     return;
   }
+  g_muon_title_bar_browser_ids_by_browser_view[browser_view.get()] =
+      browser_id;
   const auto window =
       g_muon_title_bar_windows_by_browser_view.find(browser_view.get());
   if (window == g_muon_title_bar_windows_by_browser_view.end()) {
@@ -1323,6 +1351,7 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
   for (auto iterator = g_muon_title_bar_windows_by_browser_view.begin();
        iterator != g_muon_title_bar_windows_by_browser_view.end();) {
     if (iterator->second.get() == window.get()) {
+      g_muon_title_bar_browser_ids_by_browser_view.erase(iterator->first);
       iterator = g_muon_title_bar_windows_by_browser_view.erase(iterator);
     } else {
       ++iterator;
@@ -1348,6 +1377,7 @@ void ClearMuonTitleBarRegistrations() {
   g_muon_title_bar_views.clear();
   g_muon_title_bar_browser_ids_by_window.clear();
   g_muon_title_bar_windows_by_browser_view.clear();
+  g_muon_title_bar_browser_ids_by_browser_view.clear();
   g_muon_title_bar_controllers_by_browser_id.clear();
   g_muon_title_bar_controllers_by_window_handle.clear();
   g_muon_title_bar_windows_by_browser_id.clear();

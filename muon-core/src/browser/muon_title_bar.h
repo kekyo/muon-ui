@@ -251,6 +251,17 @@ MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest);
 
 /**
+ * Resolves the effective browser id for a title bar controller registration.
+ *
+ * @param browser_id Browser id observed directly while registering.
+ * @param registered_browser_id Browser id previously associated with the same
+ * window.
+ * @return Effective positive browser id, or 0 when none is available.
+ */
+int GetMuonResolvedTitleBarBrowserId(int browser_id,
+                                     int registered_browser_id);
+
+/**
  * Standard Muon title bar control hit-test result.
  */
 enum class MuonTitleBarControlAction {

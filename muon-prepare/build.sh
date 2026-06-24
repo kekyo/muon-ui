@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 BUILD_USAGE="${1:-dev}"
 USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux64|linuxarm|linuxarm64|mingw32|mingw64|win32|win64|windows32|windows64]"
@@ -207,7 +208,7 @@ fi
 BOOTSTRAP_RESOURCE_OBJECTS_VALUE=""
 if [[ "${TARGET_NAME}" == windows* ]]; then
   BOOTSTRAP_RESOURCE_OBJECTS_VALUE="${OUT_DIR}/muon_bootstrap_resource.o"
-  "${WINDRES}" -I "${SCRIPT_DIR}/src" \
+  "${WINDRES}" -I "${SCRIPT_DIR}/src" -I "${PROJECT_ROOT}/images" \
     "${SCRIPT_DIR}/src/muon_bootstrap.rc" \
     "${BOOTSTRAP_RESOURCE_OBJECTS_VALUE}"
 fi

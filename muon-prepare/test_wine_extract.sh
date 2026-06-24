@@ -10,6 +10,7 @@ required_commands=(
   x86_64-w64-mingw32-gcc
   x86_64-w64-mingw32-ar
   x86_64-w64-mingw32-ranlib
+  x86_64-w64-mingw32-objdump
   node
   tar
 )
@@ -22,6 +23,17 @@ for command_name in "${required_commands[@]}"; do
 done
 
 bash "${SCRIPT_DIR}/build.sh" check Release windows64
+
+bootstrap_executable="${SCRIPT_DIR}/.run/check-windows64-release/muon-bootstrap.exe"
+bootstrap_dump="${SCRIPT_DIR}/.run/check-windows64-release/muon-bootstrap-resources.txt"
+x86_64-w64-mingw32-objdump -x "${bootstrap_executable}" > "${bootstrap_dump}"
+sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
+  "${bootstrap_dump}" > "${bootstrap_dump}.section"
+if ! grep -Fq 'Entry: ID: 0x000003' "${bootstrap_dump}.section" ||
+    ! grep -Fq 'Entry: ID: 0x00000e' "${bootstrap_dump}.section"; then
+  echo "muon-bootstrap.exe is missing Windows icon resources." >&2
+  exit 1
+fi
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT

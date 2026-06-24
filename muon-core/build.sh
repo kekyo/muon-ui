@@ -105,6 +105,25 @@ generate_core_version_header() {
     "${output_path}" >/dev/null
 }
 
+verify_windows_icon_resources() {
+  local executable_path="$1"
+  local label="$2"
+  local dump_path
+  local resources_path
+  dump_path="$(mktemp)"
+  resources_path="$(mktemp)"
+  "${OBJDUMP}" -x "${executable_path}" >"${dump_path}"
+  sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
+    "${dump_path}" >"${resources_path}"
+  if ! grep -Fq 'Entry: ID: 0x000003' "${resources_path}" ||
+      ! grep -Fq 'Entry: ID: 0x00000e' "${resources_path}"; then
+    echo "${label} is missing Windows icon resources: ${executable_path}" >&2
+    rm -f "${dump_path}" "${resources_path}"
+    return 1
+  fi
+  rm -f "${dump_path}" "${resources_path}"
+}
+
 BUILD_USAGE="${1:-dev}"
 USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux64|linuxarm|linuxarm64|mingw32|mingw64|win32|win64|windows32|windows64]"
 case "${BUILD_USAGE}" in
@@ -165,11 +184,13 @@ case "${TARGET}" in
   mingw32|win32|windows32)
     CEF_ARCH="windows32"
     TARGET_NAME="windows32"
+    OBJDUMP="${OBJDUMP:-i686-w64-mingw32-objdump}"
     TOOLCHAIN_ARGS=("-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_DIR}/cmake/toolchains/mingw32.cmake")
     ;;
   mingw64|win64|windows64)
     CEF_ARCH="windows64"
     TARGET_NAME="windows64"
+    OBJDUMP="${OBJDUMP:-x86_64-w64-mingw32-objdump}"
     TOOLCHAIN_ARGS=("-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_DIR}/cmake/toolchains/mingw64.cmake")
     ;;
   *)
@@ -181,12 +202,14 @@ esac
 case "${TARGET_NAME}" in
   windows32)
     command -v i686-w64-mingw32-g++ >/dev/null || { echo "i686-w64-mingw32-g++ is required" >&2; exit 1; }
+    command -v "${OBJDUMP}" >/dev/null || { echo "${OBJDUMP} is required" >&2; exit 1; }
     "${SCRIPT_DIR}/build_libffi_mingw32.sh" mingw32
     LIBFFI_CACHE_ARGS=("-U" "LIBFFI_*" "-U" "pkgcfg_lib_LIBFFI_*")
     LIBFFI_ARGS=("-DLIBFFI_ROOT=${OUTPUT_ROOT}/.deps/libffi-mingw32")
     ;;
   windows64)
     command -v x86_64-w64-mingw32-g++ >/dev/null || { echo "x86_64-w64-mingw32-g++ is required" >&2; exit 1; }
+    command -v "${OBJDUMP}" >/dev/null || { echo "${OBJDUMP} is required" >&2; exit 1; }
     "${SCRIPT_DIR}/build_libffi_mingw32.sh" mingw64
     LIBFFI_CACHE_ARGS=("-U" "LIBFFI_*" "-U" "pkgcfg_lib_LIBFFI_*")
     LIBFFI_ARGS=("-DLIBFFI_ROOT=${OUTPUT_ROOT}/.deps/libffi-mingw64")
@@ -299,3 +322,10 @@ PREPARE_OUTPUT_DIR="$(prepare_output_dir "${BUILD_USAGE}" "${TARGET_NAME}" "${BU
 cp -f \
   "${PREPARE_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
   "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"
+
+if [[ "${TARGET_NAME}" == windows* ]]; then
+  verify_windows_icon_resources "${RUNTIME_DIR}/muon-core.exe" "muon-core"
+  verify_windows_icon_resources \
+    "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
+    "muon-bootstrap"
+fi

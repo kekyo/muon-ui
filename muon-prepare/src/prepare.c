@@ -74,6 +74,8 @@ static void prepare_report_progress(const PrepareOptions *options,
                                     int determinate) {
   if (options->progress_callback != NULL) {
     ((PrepareOptions *)options)->progress_emitted = 1;
+  } else if (status != NULL && status[0] != '\0') {
+    muon_log_message("%s", status);
   }
   muon_report_progress(options->progress_callback, options->progress_user_data,
                        phase, status, current, total, determinate);

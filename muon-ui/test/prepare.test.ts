@@ -979,10 +979,12 @@ lastCatalogUpdateUnix=0
     expect(stderr).toContain(
       "CEF binary downloaded: version=fake-cef target=linux64 distribution=minimal",
     );
+    expect(stderr).toContain("Installing CEF runtime...");
     expect(stderr).toContain(
       "CEF files copied to staging: version=fake-cef files=3",
     );
     expect(stderr).toContain("Muon files copied to staging: files=4");
+    expect(stderr).toContain("Starting Muon...");
   });
 
   it("does not write progress messages when native quiet mode is enabled", async () => {
@@ -1043,7 +1045,9 @@ lastCatalogUpdateUnix=0
     expect(stderr).toContain(
       "Downloading CEF binary: version=fake-cef target=linux64 distribution=minimal",
     );
+    expect(stderr).toContain("Installing CEF runtime...");
     expect(stderr).toContain("Muon files copied to staging: files=4");
+    expect(stderr).toContain("Starting Muon...");
   });
 
   it("reports structured progress for bootstrap in-place CEF preparation", async () => {

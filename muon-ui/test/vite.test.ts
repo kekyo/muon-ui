@@ -21,7 +21,15 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { delay } from "async-primitives";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   createLogger as createViteLogger,
   createServer,
@@ -535,6 +543,47 @@ describe("muon Vite plugin", () => {
     await expect(
       access(join(root, ".muon", "linux64")),
     ).resolves.toBeUndefined();
+  });
+
+  it("forwards native prepare phase progress while starting Muon", async () => {
+    const root = await createTemporaryDirectory("muon-vite-prepare-progress-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    const chunks: string[] = [];
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
+      );
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      await startServer(
+        root,
+        {
+          muonPath: muonDirectory,
+          cefPath: cefDirectory,
+          stagePath: undefined,
+          enableDebugger: undefined,
+          open: undefined,
+        },
+        false,
+      );
+      await wait(() => existsSync(join(outputDirectory, "override.json")));
+    } finally {
+      write.mockRestore();
+    }
+
+    const stderr = chunks.join("");
+    expect(stderr).toContain("Installing CEF runtime...");
+    expect(stderr).toContain("Starting Muon...");
   });
 
   it("does not launch Muon when the plugin open option is false", async () => {

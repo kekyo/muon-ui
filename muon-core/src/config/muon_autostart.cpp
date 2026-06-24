@@ -8,6 +8,7 @@
 
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
+#include "muon_string_helpers.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -16,7 +17,6 @@
 #endif
 
 #include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <cwctype>
 #include <fstream>
@@ -74,30 +74,6 @@ static bool ValidateAutostartOptions(const MuonAutostartOptions& options,
 }
 
 #if !defined(_WIN32)
-
-static bool IsAsciiSpace(char value) {
-  return std::isspace(static_cast<unsigned char>(value)) != 0;
-}
-
-static std::string ToLowerAscii(std::string value) {
-  for (auto& character : value) {
-    character = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(character)));
-  }
-  return value;
-}
-
-static std::string TrimAscii(const std::string& value) {
-  auto begin = size_t{0};
-  while (begin < value.size() && IsAsciiSpace(value[begin])) {
-    ++begin;
-  }
-  auto end = value.size();
-  while (end > begin && IsAsciiSpace(value[end - 1])) {
-    --end;
-  }
-  return value.substr(begin, end - begin);
-}
 
 static std::string GetAutostartEntryName(
     const std::filesystem::path& executable_path) {

@@ -6,12 +6,12 @@
 
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 
+#include "muon_json_helpers.h"
 #include "yyjson.h"
 
 #include <cardio.h>
 
 #include <chrono>
-#include <cstring>
 #include <exception>
 #include <stdexcept>
 
@@ -37,55 +37,6 @@ GFile* CreateGFileFromPathOrUri(const std::string& value) {
                              : g_file_new_for_path(value.c_str());
 }
 #endif
-
-static std::string ReadJsonString(yyjson_val* value) {
-  return std::string(yyjson_get_str(value), yyjson_get_len(value));
-}
-
-static void AppendJsonHex(std::string* target, uint8_t value) {
-  constexpr char kHex[] = "0123456789abcdef";
-  target->push_back(kHex[(value >> 4) & 0x0f]);
-  target->push_back(kHex[value & 0x0f]);
-}
-
-void AppendJsonString(std::string* target, std::string_view value) {
-  target->push_back('"');
-  for (const auto character : value) {
-    const auto byte = static_cast<uint8_t>(character);
-    switch (character) {
-      case '"':
-        *target += "\\\"";
-        break;
-      case '\\':
-        *target += "\\\\";
-        break;
-      case '\b':
-        *target += "\\b";
-        break;
-      case '\f':
-        *target += "\\f";
-        break;
-      case '\n':
-        *target += "\\n";
-        break;
-      case '\r':
-        *target += "\\r";
-        break;
-      case '\t':
-        *target += "\\t";
-        break;
-      default:
-        if (byte < 0x20) {
-          *target += "\\u00";
-          AppendJsonHex(target, byte);
-        } else {
-          target->push_back(character);
-        }
-        break;
-    }
-  }
-  target->push_back('"');
-}
 
 std::string PathToUtf8String(const std::filesystem::path& path) {
   const auto value = path.u8string();
@@ -214,69 +165,6 @@ std::string CreateDirentJson(
   return result;
 }
 
-class MuonJsonDocument final {
- public:
-  explicit MuonJsonDocument(yyjson_doc* source)
-      : document_(source) {}
-
-  ~MuonJsonDocument() {
-    if (document_ != nullptr) {
-      yyjson_doc_free(document_);
-    }
-  }
-
-  MuonJsonDocument(const MuonJsonDocument&) = delete;
-  MuonJsonDocument& operator=(const MuonJsonDocument&) = delete;
-
-  MuonJsonDocument(MuonJsonDocument&& other) noexcept
-      : document_(other.document_) {
-    other.document_ = nullptr;
-  }
-
-  MuonJsonDocument& operator=(MuonJsonDocument&& other) noexcept {
-    if (this != &other) {
-      if (document_ != nullptr) {
-        yyjson_doc_free(document_);
-      }
-      document_ = other.document_;
-      other.document_ = nullptr;
-    }
-    return *this;
-  }
-
-  yyjson_doc* get() const {
-    return document_;
-  }
-
- private:
-  yyjson_doc* document_ = nullptr;
-};
-
-static bool ParseOptionsJson(const char* options_json,
-                             MuonJsonDocument* document,
-                             yyjson_val** root,
-                             std::string* error_message) {
-  if (options_json == nullptr) {
-    *error_message = "Options JSON is required";
-    return false;
-  }
-  yyjson_read_err read_error = {};
-  auto* raw_document = yyjson_read_opts(
-      const_cast<char*>(options_json), std::strlen(options_json),
-      YYJSON_READ_NOFLAG, nullptr, &read_error);
-  if (raw_document == nullptr) {
-    *error_message = "Options JSON is invalid";
-    return false;
-  }
-  *document = MuonJsonDocument(raw_document);
-  *root = yyjson_doc_get_root(document->get());
-  if (!yyjson_is_obj(*root)) {
-    *error_message = "Options JSON root must be an object";
-    return false;
-  }
-  return true;
-}
-
 static bool ReadOptionalBool(yyjson_val* object,
                              const char* key,
                              bool default_value,
@@ -320,7 +208,7 @@ bool ParseReadOptions(const char* options_json,
                       std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  return ParseOptionsJson(options_json, &document, &root, error_message) &&
+  return ParseJsonObjectOptions(options_json, &document, &root, error_message) &&
          ReadOptionalUint64(root, "position", &options->has_position,
                             &options->position, error_message) &&
          ReadOptionalUint64(root, "length", &options->has_length,
@@ -332,7 +220,7 @@ bool ParseWriteOptions(const char* options_json,
                        std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  return ParseOptionsJson(options_json, &document, &root, error_message) &&
+  return ParseJsonObjectOptions(options_json, &document, &root, error_message) &&
          ReadOptionalUint64(root, "position", &options->has_position,
                             &options->position, error_message);
 }
@@ -447,7 +335,7 @@ bool ParseReaddirOptions(const char* options_json,
                          std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  return ParseOptionsJson(options_json, &document, &root, error_message) &&
+  return ParseJsonObjectOptions(options_json, &document, &root, error_message) &&
          ReadOptionalBool(root, "withFileTypes", false,
                           &options->with_file_types, error_message);
 }
@@ -457,7 +345,7 @@ bool ParseMkdirOptions(const char* options_json,
                        std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  return ParseOptionsJson(options_json, &document, &root, error_message) &&
+  return ParseJsonObjectOptions(options_json, &document, &root, error_message) &&
          ReadOptionalBool(root, "recursive", false, &options->recursive,
                           error_message);
 }
@@ -467,7 +355,7 @@ bool ParseRmOptions(const char* options_json,
                     std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  return ParseOptionsJson(options_json, &document, &root, error_message) &&
+  return ParseJsonObjectOptions(options_json, &document, &root, error_message) &&
          ReadOptionalBool(root, "recursive", false, &options->recursive,
                           error_message) &&
          ReadOptionalBool(root, "force", false, &options->force,
@@ -479,7 +367,7 @@ bool ParseCopyOptions(const char* options_json,
                       std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  return ParseOptionsJson(options_json, &document, &root, error_message) &&
+  return ParseJsonObjectOptions(options_json, &document, &root, error_message) &&
          ReadOptionalBool(root, "overwrite", true, &options->overwrite,
                           error_message);
 }
@@ -489,7 +377,7 @@ bool ParseAccessOptions(const char* options_json,
                         std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  if (!ParseOptionsJson(options_json, &document, &root, error_message)) {
+  if (!ParseJsonObjectOptions(options_json, &document, &root, error_message)) {
     return false;
   }
   const auto mode = yyjson_obj_get(root, "mode");
@@ -528,7 +416,7 @@ bool ParseTruncateLength(const char* options_json,
                          std::string* error_message) {
   auto document = MuonJsonDocument(nullptr);
   yyjson_val* root = nullptr;
-  if (!ParseOptionsJson(options_json, &document, &root, error_message)) {
+  if (!ParseJsonObjectOptions(options_json, &document, &root, error_message)) {
     return false;
   }
   auto has_length = false;

@@ -8,6 +8,7 @@
 
 #include "muon_cardio_post.h"
 
+#include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "ui/muon_ui_fs_dialogs.h"
 
@@ -16,7 +17,6 @@
 #include <cardio.h>
 
 #include <algorithm>
-#include <cstring>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -170,73 +170,6 @@ struct MuonFsDialogOptions {
   MuonFsGtkDialogOptions gtk;
   MuonFsWin32DialogOptions win32;
 };
-
-class MuonJsonDocument final {
- public:
-  explicit MuonJsonDocument(yyjson_doc* source)
-      : document_(source) {}
-
-  ~MuonJsonDocument() {
-    if (document_ != nullptr) {
-      yyjson_doc_free(document_);
-    }
-  }
-
-  MuonJsonDocument(const MuonJsonDocument&) = delete;
-  MuonJsonDocument& operator=(const MuonJsonDocument&) = delete;
-
-  MuonJsonDocument(MuonJsonDocument&& other) noexcept
-      : document_(other.document_) {
-    other.document_ = nullptr;
-  }
-
-  MuonJsonDocument& operator=(MuonJsonDocument&& other) noexcept {
-    if (this != &other) {
-      if (document_ != nullptr) {
-        yyjson_doc_free(document_);
-      }
-      document_ = other.document_;
-      other.document_ = nullptr;
-    }
-    return *this;
-  }
-
-  yyjson_doc* get() const {
-    return document_;
-  }
-
- private:
-  yyjson_doc* document_ = nullptr;
-};
-
-static std::string ReadJsonString(yyjson_val* value) {
-  return std::string(yyjson_get_str(value), yyjson_get_len(value));
-}
-
-static bool ParseOptionsJson(const char* options_json,
-                             MuonJsonDocument* document,
-                             yyjson_val** root,
-                             std::string* error_message) {
-  if (options_json == nullptr) {
-    *error_message = "Options JSON is required";
-    return false;
-  }
-  yyjson_read_err read_error = {};
-  auto* raw_document = yyjson_read_opts(
-      const_cast<char*>(options_json), std::strlen(options_json),
-      YYJSON_READ_NOFLAG, nullptr, &read_error);
-  if (raw_document == nullptr) {
-    *error_message = "Options JSON is invalid";
-    return false;
-  }
-  *document = MuonJsonDocument(raw_document);
-  *root = yyjson_doc_get_root(document->get());
-  if (!yyjson_is_obj(*root)) {
-    *error_message = "Options JSON root must be an object";
-    return false;
-  }
-  return true;
-}
 
 static bool ReadOptionalString(yyjson_val* object,
                                const char* key,
@@ -421,7 +354,8 @@ static bool ParseDialogOptions(const char* options_json,
                                std::string* error_message) {
   MuonJsonDocument document(nullptr);
   yyjson_val* root = nullptr;
-  if (!ParseOptionsJson(options_json, &document, &root, error_message)) {
+  if (!ParseJsonObjectOptions(options_json, &document, &root,
+                              error_message)) {
     return false;
   }
   return ReadOptionalString(root, "title", &options->has_title,

@@ -6,6 +6,7 @@
 
 #include "plugins/builtin/muon_builtin_fs.h"
 
+#include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "plugins/muon_traffic_cardio_operation.h"
 

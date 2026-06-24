@@ -18,7 +18,7 @@
 #include "browser/show_dev_tools_task.h"
 #include "config/muon_startup.h"
 #include "log/muon_log.h"
-#include "plugins/builtin/muon_builtin_fs_helpers.h"
+#include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 #include "ui/muon_ui_fs_dialogs.h"
 

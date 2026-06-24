@@ -7,6 +7,7 @@
 #include "plugins/builtin/muon_builtin_bootstrap.h"
 
 #include "config/muon_paths.h"
+#include "muon_string_helpers.h"
 #include "yyjson.h"
 
 #include <chrono>
@@ -87,20 +88,6 @@ static bool IsValidPolicy(std::string_view value) {
 static std::string GetDefaultVersionPolicy() {
   return IsValidPolicy(g_default_version_policy) ? g_default_version_policy
                                                  : "tested";
-}
-
-static std::string Trim(std::string_view value) {
-  auto first = size_t{0};
-  while (first < value.size() &&
-         std::isspace(static_cast<unsigned char>(value[first]))) {
-    ++first;
-  }
-  auto last = value.size();
-  while (last > first &&
-         std::isspace(static_cast<unsigned char>(value[last - 1]))) {
-    --last;
-  }
-  return std::string(value.substr(first, last - first));
 }
 
 static bool ParseUint64(const std::string& value, uint64_t* result) {
@@ -220,20 +207,21 @@ static bool ReadSettings(BootstrapSettings* settings,
   std::string section;
   std::string line;
   while (std::getline(input, line)) {
-    auto entry = Trim(line);
+    auto entry = TrimAscii(line);
     if (entry.empty() || entry[0] == '#' || entry[0] == ';') {
       continue;
     }
     if (entry.front() == '[' && entry.back() == ']') {
-      section = Trim(std::string_view(entry).substr(1, entry.size() - 2));
+      section = TrimAscii(std::string_view(entry).substr(1, entry.size() - 2));
       continue;
     }
     const auto equals = entry.find('=');
     if (equals == std::string::npos) {
       continue;
     }
-    if (!ApplyEntry(settings, section, Trim(std::string_view(entry).substr(0, equals)),
-                    Trim(std::string_view(entry).substr(equals + 1)),
+    if (!ApplyEntry(settings, section,
+                    TrimAscii(std::string_view(entry).substr(0, equals)),
+                    TrimAscii(std::string_view(entry).substr(equals + 1)),
                     error_message)) {
       return false;
     }

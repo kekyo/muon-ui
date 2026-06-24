@@ -607,6 +607,8 @@ target_link_libraries(muon_cardio INTERFACE
 
 set(APP_SOURCES
   src/main.cpp
+  src/muon_json_helpers.cpp
+  src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
   src/app/muon_app_storage.cpp
@@ -646,6 +648,8 @@ set(APP_SOURCES
   src/plugins/muon_v8_handler.cpp
   )
 set(APP_HEADERS
+  src/muon_json_helpers.h
+  src/muon_string_helpers.h
   src/app/muon_app.h
   src/app/muon_app_scheme.h
   src/app/muon_app_storage.h
@@ -715,6 +719,8 @@ elseif(MSVC)
 endif()
 
 add_library(muon_ui SHARED
+  src/muon_json_helpers.cpp
+  src/muon_json_helpers.h
   src/plugins/builtin/muon_builtin_fs_dialogs.cpp
   src/plugins/builtin/muon_builtin_fs_dialogs.h
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
@@ -1232,6 +1238,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_app_scheme_storage_test)
   add_executable(muon_builtin_browser_test
     tests/muon_builtin_browser_test.cpp
+    src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
@@ -1274,8 +1281,25 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     yyjson
     )
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
+  add_executable(muon_internal_helpers_test
+    tests/muon_internal_helpers_test.cpp
+    src/muon_json_helpers.cpp
+    src/muon_string_helpers.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_internal_helpers_test)
+  target_compile_features(muon_internal_helpers_test PRIVATE cxx_std_20)
+  target_include_directories(muon_internal_helpers_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_internal_helpers_test PRIVATE
+    yyjson
+    )
+  MUON_APPLY_SANITIZERS(muon_internal_helpers_test)
   add_executable(muon_config_network_test
     tests/muon_config_network_test.cpp
+    src/muon_json_helpers.cpp
+    src/muon_string_helpers.cpp
     src/browser/muon_browser_background_color.cpp
     src/config/muon_config.cpp
     src/config/muon_glob.cpp
@@ -1301,6 +1325,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_config_network_test)
   add_executable(muon_autostart_test
     tests/muon_autostart_test.cpp
+    src/muon_string_helpers.cpp
     src/config/muon_autostart.cpp
     src/config/muon_paths.cpp
     src/config/muon_startup.cpp
@@ -1375,6 +1400,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME muon_ui_title_bar_manifest
     COMMAND "${MUON_RUNTIME_DIR}/muon_ui_title_bar_manifest_test"
+    )
+  add_test(
+    NAME internal_helpers
+    COMMAND muon_internal_helpers_test
     )
   add_test(
     NAME config_network

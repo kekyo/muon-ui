@@ -6,6 +6,7 @@
 
 #include "plugins/builtin/muon_builtin_executor.h"
 
+#include "muon_json_helpers.h"
 #include "yyjson.h"
 
 #if defined(_WIN32)
@@ -63,51 +64,6 @@ static const muon_type_descriptor run_args[] = {
 
 static bool ContainsNul(std::string_view value) {
   return value.find('\0') != std::string_view::npos;
-}
-
-static void AppendJsonHex(std::string* target, uint8_t value) {
-  constexpr char kHex[] = "0123456789abcdef";
-  target->push_back(kHex[(value >> 4) & 0x0f]);
-  target->push_back(kHex[value & 0x0f]);
-}
-
-static void AppendJsonString(std::string* target, std::string_view value) {
-  target->push_back('"');
-  for (const auto character : value) {
-    const auto byte = static_cast<uint8_t>(character);
-    switch (character) {
-      case '"':
-        *target += "\\\"";
-        break;
-      case '\\':
-        *target += "\\\\";
-        break;
-      case '\b':
-        *target += "\\b";
-        break;
-      case '\f':
-        *target += "\\f";
-        break;
-      case '\n':
-        *target += "\\n";
-        break;
-      case '\r':
-        *target += "\\r";
-        break;
-      case '\t':
-        *target += "\\t";
-        break;
-      default:
-        if (byte < 0x20) {
-          *target += "\\u00";
-          AppendJsonHex(target, byte);
-        } else {
-          target->push_back(character);
-        }
-        break;
-    }
-  }
-  target->push_back('"');
 }
 
 static void CompleteString(muon_completion_func completion,

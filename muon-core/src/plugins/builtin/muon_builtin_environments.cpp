@@ -8,6 +8,7 @@
 
 #include "config/muon_autostart.h"
 #include "config/muon_startup.h"
+#include "muon_json_helpers.h"
 
 #include "include/cef_api_hash.h"
 #include "include/cef_version_info.h"
@@ -25,7 +26,6 @@
 #include <cstring>
 #include <cwchar>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -64,51 +64,6 @@ static constexpr char kRuntimeInfoVersionKey[] = "version";
 static constexpr char kRuntimeInfoApiVersionKey[] = "apiVersion";
 static constexpr char kRuntimeInfoApiHashKey[] = "apiHash";
 
-static void AppendJsonHex(std::string* target, uint8_t value) {
-  constexpr char kHex[] = "0123456789abcdef";
-  target->push_back(kHex[(value >> 4) & 0x0f]);
-  target->push_back(kHex[value & 0x0f]);
-}
-
-static void AppendJsonString(std::string* target, std::string_view value) {
-  target->push_back('"');
-  for (const auto character : value) {
-    const auto byte = static_cast<uint8_t>(character);
-    switch (character) {
-      case '"':
-        *target += "\\\"";
-        break;
-      case '\\':
-        *target += "\\\\";
-        break;
-      case '\b':
-        *target += "\\b";
-        break;
-      case '\f':
-        *target += "\\f";
-        break;
-      case '\n':
-        *target += "\\n";
-        break;
-      case '\r':
-        *target += "\\r";
-        break;
-      case '\t':
-        *target += "\\t";
-        break;
-      default:
-        if (byte < 0x20) {
-          *target += "\\u00";
-          AppendJsonHex(target, byte);
-        } else {
-          target->push_back(character);
-        }
-        break;
-    }
-  }
-  target->push_back('"');
-}
-
 static void CompleteString(muon_completion_func completion,
                            const std::string& result) {
   const auto* pointer = result.c_str();
@@ -122,34 +77,6 @@ static void CompleteVoid(muon_completion_func completion) {
 static void CompleteError(muon_completion_func completion,
                           const std::string& message) {
   completion(nullptr, message.c_str());
-}
-
-static std::string CreateJsonStringArray(
-    const std::vector<std::string>& values) {
-  std::string json = "[";
-  for (auto index = size_t{0}; index < values.size(); ++index) {
-    if (index > 0) {
-      json += ",";
-    }
-    AppendJsonString(&json, values[index]);
-  }
-  json += "]";
-  return json;
-}
-
-static std::string CreateJsonStringObject(
-    const std::vector<std::pair<std::string, std::string>>& entries) {
-  std::string json = "{";
-  for (auto index = size_t{0}; index < entries.size(); ++index) {
-    if (index > 0) {
-      json += ",";
-    }
-    AppendJsonString(&json, entries[index].first);
-    json += ":";
-    AppendJsonString(&json, entries[index].second);
-  }
-  json += "}";
-  return json;
 }
 
 static std::string CreateCefRuntimeVersion(const cef_version_info_t& info,

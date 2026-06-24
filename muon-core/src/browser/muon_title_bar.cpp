@@ -6,6 +6,7 @@
 
 #include "browser/muon_title_bar.h"
 
+#include "muon_string_helpers.h"
 #include "yyjson.h"
 
 #include "include/cef_browser.h"
@@ -22,7 +23,6 @@
 #endif
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -33,6 +33,8 @@
 #include <vector>
 
 namespace {
+
+using muon_internal::ToLowerAscii;
 
 constexpr char kMuonTitleBarTitle[] = "Muon Title Bar";
 constexpr char kMuonTitleBarActionPrefix[] =
@@ -370,14 +372,6 @@ static std::string ExtractTitleBarAction(const std::string& url) {
 }
 
 #if defined(OS_LINUX)
-static std::string ToLowerAscii(std::string value) {
-  for (auto& character : value) {
-    character = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(character)));
-  }
-  return value;
-}
-
 static std::string GetCommandLineSwitchValue(
     const std::vector<std::string>& command_line,
     const char* name) {

@@ -628,21 +628,6 @@ static void CompleteCefFileDialog(
                           std::move(parsed_error)));
 }
 
-static bool FindMuonSharedBufferEntryInList(
-    const std::vector<MuonSharedBufferEntry>& entries,
-    size_t value_index,
-    MuonSharedBufferEntry* entry) {
-  for (const auto& candidate : entries) {
-    if (candidate.value_index == value_index) {
-      if (entry != nullptr) {
-        *entry = candidate;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
 static uint32_t ReadMuonShortcutModifiers(const CefKeyEvent& event) {
   auto modifiers = uint32_t{0};
   if ((event.modifiers & EVENTFLAG_SHIFT_DOWN) != 0) {
@@ -2431,7 +2416,7 @@ void MuonClient::SendPluginResult(const MuonPluginInvocationContext& context,
     case MUON_TYPE_BUFFER_VIEW: {
       MuonSharedBufferEntry entry;
       if (!result.has_shared_buffer_message ||
-          !FindMuonSharedBufferEntryInList(
+          !FindMuonSharedBufferEntry(
               result.shared_buffer_message.entries, 3, &entry) ||
           !result.shared_buffer_message.message) {
         args->SetBool(1, false);

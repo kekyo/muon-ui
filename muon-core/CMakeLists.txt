@@ -1289,6 +1289,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/plugins/builtin/muon_builtin_environment_helpers.cpp
+    src/plugins/muon_shared_buffer.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_internal_helpers_test)
   target_compile_features(muon_internal_helpers_test PRIVATE cxx_std_20)
@@ -1297,7 +1298,11 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src
     )
   target_link_libraries(muon_internal_helpers_test PRIVATE
+    libcef_dll_wrapper
+    libcef_lib
     yyjson
+    ${CEF_STANDARD_LIBS}
+    ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_internal_helpers_test)
   add_executable(muon_config_network_test

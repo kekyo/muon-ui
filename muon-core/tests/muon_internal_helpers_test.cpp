@@ -8,12 +8,14 @@
 #include "muon_string_helpers.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_environment_helpers.h"
+#include "plugins/muon_shared_buffer.h"
 
 #include "yyjson.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 static bool Expect(bool condition, const std::string& message) {
   if (!condition) {
@@ -221,9 +223,24 @@ static bool TestEnvironmentHelpers() {
 #endif
 }
 
+static bool TestSharedBufferHelpers() {
+  const std::vector<MuonSharedBufferEntry> entries = {
+      {1, 16, 4},
+      {3, 32, 8},
+  };
+  MuonSharedBufferEntry entry;
+  return Expect(FindMuonSharedBufferEntry(entries, 3, &entry),
+                "shared buffer entry was not found") &&
+         Expect(entry.value_index == 3, "shared buffer entry index changed") &&
+         Expect(entry.offset == 32, "shared buffer entry offset changed") &&
+         Expect(entry.size == 8, "shared buffer entry size changed") &&
+         Expect(!FindMuonSharedBufferEntry(entries, 2, nullptr),
+                "missing shared buffer entry was found");
+}
+
 int main() {
   return TestStringHelpers() && TestJsonHelpers() && TestCompletionHelpers() &&
-                 TestEnvironmentHelpers()
+                 TestEnvironmentHelpers() && TestSharedBufferHelpers()
              ? 0
              : 1;
 }

@@ -467,10 +467,10 @@ bool CefListValueHasMuonSharedBufferPlaceholders(
   return false;
 }
 
-bool FindMuonSharedBufferEntry(const MuonSharedBufferPayload& payload,
+bool FindMuonSharedBufferEntry(const std::vector<MuonSharedBufferEntry>& entries,
                                 size_t value_index,
                                 MuonSharedBufferEntry* entry) {
-  for (const auto& candidate : payload.entries) {
+  for (const auto& candidate : entries) {
     if (candidate.value_index == value_index) {
       if (entry != nullptr) {
         *entry = candidate;
@@ -479,6 +479,12 @@ bool FindMuonSharedBufferEntry(const MuonSharedBufferPayload& payload,
     }
   }
   return false;
+}
+
+bool FindMuonSharedBufferEntry(const MuonSharedBufferPayload& payload,
+                                size_t value_index,
+                                MuonSharedBufferEntry* entry) {
+  return FindMuonSharedBufferEntry(payload.entries, value_index, entry);
 }
 
 void* GetMuonSharedBufferEntryData(const MuonSharedBufferPayload& payload,

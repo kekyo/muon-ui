@@ -1171,9 +1171,7 @@ bool MuonClient::SetTitleBarIconForBrowser(
     }
     return false;
   }
-  SetRegisteredMuonTitleBarIconForBrowser(
-      browser->GetIdentifier(), icon == nullptr ? nullptr : icon->image,
-      icon == nullptr ? std::string() : icon->data_url);
+  SetRegisteredMuonTitleBarIconForBrowser(browser->GetIdentifier(), icon);
 
   CefRefPtr<CefBrowserView> browser_view;
   CefRefPtr<CefWindow> window;

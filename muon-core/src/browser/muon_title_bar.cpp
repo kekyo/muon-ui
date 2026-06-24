@@ -45,6 +45,7 @@ constexpr int kMuonTitleBarDefaultWindowWidth = 1024;
 constexpr int kMuonTitleBarMaxHeight = 96;
 constexpr int kMuonTitleBarMaxControlsWidth = 512;
 constexpr int kMuonNativeTitleBarIconDipSize = 16;
+constexpr int kMuonNativeAppIconDipSize = 32;
 
 std::map<CefWindow*, MuonTitleBarController*> g_muon_title_bar_controllers;
 std::map<CefWindow*, CefRefPtr<CefBrowserView>> g_muon_title_bar_views;
@@ -68,6 +69,12 @@ std::map<MuonWindowDraggableRegionKey, std::vector<CefDraggableRegion>>
 struct MuonPageDraggableRegions {
   CefRefPtr<CefBrowserView> browser_view;
   std::vector<CefDraggableRegion> regions;
+};
+
+struct MuonDecodedIconBitmap {
+  std::vector<uint8_t> rgba;
+  int pixel_width = 0;
+  int pixel_height = 0;
 };
 
 std::map<MuonWindowDraggableRegionKey, MuonPageDraggableRegions>
@@ -286,38 +293,108 @@ static std::string CreateImageDataUrl(const uint8_t* data,
          CefBase64Encode(data, size).ToString();
 }
 
-static uint32_t ReadBigEndianUint32(const uint8_t* data) {
-  return (static_cast<uint32_t>(data[0]) << 24) |
-         (static_cast<uint32_t>(data[1]) << 16) |
-         (static_cast<uint32_t>(data[2]) << 8) |
-         static_cast<uint32_t>(data[3]);
+static std::vector<float> GetMuonNativeIconPngScaleFactors(
+    int pixel_width,
+    int pixel_height,
+    int dip_size) {
+  auto scale_factors = std::vector<float>{1.0f};
+  if (pixel_width == pixel_height && pixel_width >= dip_size * 2) {
+    scale_factors.push_back(2.0f);
+  }
+  return scale_factors;
 }
 
-static bool ReadPngPixelSize(const uint8_t* data,
-                             size_t size,
-                             int* pixel_width,
-                             int* pixel_height) {
-  static constexpr uint8_t kPngSignature[] = {
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  };
-  static constexpr char kPngIhdrChunkType[] = "IHDR";
-  if (data == nullptr || size < 24 || pixel_width == nullptr ||
-      pixel_height == nullptr ||
-      std::memcmp(data, kPngSignature, sizeof(kPngSignature)) != 0 ||
-      std::memcmp(data + 12, kPngIhdrChunkType, 4) != 0) {
+static bool DecodeMuonTitleBarIconPng(const std::vector<uint8_t>& png_data,
+                                      MuonDecodedIconBitmap* bitmap) {
+  if (png_data.empty() || bitmap == nullptr) {
+    return false;
+  }
+  auto image = CefImage::CreateImage();
+  if (!image || !image->AddPNG(1.0f, png_data.data(), png_data.size())) {
     return false;
   }
 
-  const auto width = ReadBigEndianUint32(data + 16);
-  const auto height = ReadBigEndianUint32(data + 20);
-  if (width == 0 || height == 0 ||
-      width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-      height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+  auto pixel_width = 0;
+  auto pixel_height = 0;
+  auto data = image->GetAsBitmap(1.0f, CEF_COLOR_TYPE_RGBA_8888,
+                                 CEF_ALPHA_TYPE_PREMULTIPLIED, pixel_width,
+                                 pixel_height);
+  if (!data || !data->IsValid() || pixel_width <= 0 || pixel_height <= 0) {
     return false;
   }
-  *pixel_width = static_cast<int>(width);
-  *pixel_height = static_cast<int>(height);
+
+  const auto width = static_cast<size_t>(pixel_width);
+  const auto height = static_cast<size_t>(pixel_height);
+  if (width > std::numeric_limits<size_t>::max() / height / 4) {
+    return false;
+  }
+  const auto expected_size = width * height * 4;
+  if (data->GetSize() != expected_size) {
+    return false;
+  }
+
+  auto rgba = std::vector<uint8_t>(expected_size);
+  if (data->GetData(rgba.data(), rgba.size(), 0) != rgba.size()) {
+    return false;
+  }
+
+  bitmap->rgba = std::move(rgba);
+  bitmap->pixel_width = pixel_width;
+  bitmap->pixel_height = pixel_height;
   return true;
+}
+
+static std::vector<uint8_t> ResizeMuonTitleBarIconBitmap(
+    const MuonDecodedIconBitmap& source,
+    int target_width,
+    int target_height) {
+  auto target = std::vector<uint8_t>(
+      static_cast<size_t>(target_width) * static_cast<size_t>(target_height) *
+      4);
+  for (auto y = 0; y < target_height; ++y) {
+    const auto source_y =
+        (static_cast<int64_t>(y) * source.pixel_height) / target_height;
+    for (auto x = 0; x < target_width; ++x) {
+      const auto source_x =
+          (static_cast<int64_t>(x) * source.pixel_width) / target_width;
+      const auto source_offset =
+          (static_cast<size_t>(source_y) *
+               static_cast<size_t>(source.pixel_width) +
+           static_cast<size_t>(source_x)) *
+          4;
+      const auto target_offset =
+          (static_cast<size_t>(y) * static_cast<size_t>(target_width) +
+           static_cast<size_t>(x)) *
+          4;
+      std::memcpy(target.data() + target_offset,
+                  source.rgba.data() + source_offset, 4);
+    }
+  }
+  return target;
+}
+
+static CefRefPtr<CefImage> CreateMuonNativeIconImage(
+    const MuonDecodedIconBitmap& source,
+    int dip_size) {
+  auto image = CefImage::CreateImage();
+  if (!image) {
+    return nullptr;
+  }
+  const auto scale_factors = GetMuonNativeIconPngScaleFactors(
+      source.pixel_width, source.pixel_height, dip_size);
+  for (const auto scale_factor : scale_factors) {
+    const auto pixel_size =
+        static_cast<int>(static_cast<float>(dip_size) * scale_factor);
+    const auto bitmap =
+        ResizeMuonTitleBarIconBitmap(source, pixel_size, pixel_size);
+    if (!image->AddBitmap(scale_factor, pixel_size, pixel_size,
+                          CEF_COLOR_TYPE_RGBA_8888,
+                          CEF_ALPHA_TYPE_PREMULTIPLIED, bitmap.data(),
+                          bitmap.size())) {
+      return nullptr;
+    }
+  }
+  return image->IsEmpty() ? nullptr : image;
 }
 
 static bool ParseMuonTitleBarIconPath(const std::string& path,
@@ -701,8 +778,7 @@ static void ApplyPendingMuonTitleBarState(CefRefPtr<CefWindow> window,
   const auto pending_icon =
       g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
   if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
-    SetRegisteredMuonTitleBarIcon(window, pending_icon->second.image,
-                                  pending_icon->second.data_url);
+    SetRegisteredMuonTitleBarIcon(window, &pending_icon->second);
   }
 }
 
@@ -714,14 +790,8 @@ MuonTitleBarManifest CreateNativeMuonTitleBarManifest() {
 
 std::vector<float> GetMuonTitleBarIconPngScaleFactors(int pixel_width,
                                                       int pixel_height) {
-  auto scale_factors = std::vector<float>{1.0f};
-  if (pixel_width == pixel_height &&
-      pixel_width > kMuonNativeTitleBarIconDipSize) {
-    scale_factors.push_back(
-        static_cast<float>(pixel_width) /
-        static_cast<float>(kMuonNativeTitleBarIconDipSize));
-  }
-  return scale_factors;
+  return GetMuonNativeIconPngScaleFactors(
+      pixel_width, pixel_height, kMuonNativeTitleBarIconDipSize);
 }
 
 bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
@@ -746,24 +816,17 @@ bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
         "Title bar icon must be a valid PNG: " + diagnostic_source;
     return false;
   }
-  auto scale_factors = std::vector<float>{1.0f};
-  auto pixel_width = 0;
-  auto pixel_height = 0;
-  if (ReadPngPixelSize(data, size, &pixel_width, &pixel_height)) {
-    scale_factors =
-        GetMuonTitleBarIconPngScaleFactors(pixel_width, pixel_height);
-  }
-  for (const auto scale_factor : scale_factors) {
-    if (!image->AddPNG(scale_factor, data, size)) {
-      *error_message =
-          "Title bar icon must be a valid PNG: " + diagnostic_source;
-      return false;
-    }
+  if (!image->AddPNG(1.0f, data, size)) {
+    *error_message =
+        "Title bar icon must be a valid PNG: " + diagnostic_source;
+    return false;
   }
 
-  icon->image = image;
-  icon->data_url =
+  auto loaded_icon = MuonTitleBarIcon{};
+  loaded_icon.png_data.assign(data, data + size);
+  loaded_icon.data_url =
       "data:image/png;base64," + CefBase64Encode(data, size).ToString();
+  *icon = std::move(loaded_icon);
   return true;
 }
 
@@ -794,7 +857,7 @@ bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
     return false;
   }
 
-  icon->image = nullptr;
+  *icon = MuonTitleBarIcon{};
   icon->data_url = CreateImageDataUrl(data, size, mime_type);
   return true;
 }
@@ -876,9 +939,9 @@ bool LoadMuonTitleBarIconDataUrlFromStorage(
 }
 
 MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
-    bool has_native_image,
+    bool has_native_png_data,
     const std::string& icon_data_url) {
-  if (has_native_image) {
+  if (has_native_png_data) {
     return {MuonWindowIconAction::Set, MuonWindowIconAction::Set};
   }
   if (!icon_data_url.empty()) {
@@ -1401,20 +1464,35 @@ void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
 }
 
 void SetRegisteredMuonTitleBarIcon(CefRefPtr<CefWindow> window,
-                                   CefRefPtr<CefImage> image,
-                                   const std::string& icon_data_url) {
+                                   const MuonTitleBarIcon* icon) {
   if (!window) {
     return;
   }
+  const auto icon_data_url = icon == nullptr ? std::string() : icon->data_url;
   const auto behavior =
-      GetMuonWindowIconUpdateBehavior(image != nullptr, icon_data_url);
+      GetMuonWindowIconUpdateBehavior(
+          icon != nullptr && !icon->png_data.empty(), icon_data_url);
+  auto decoded_icon = MuonDecodedIconBitmap{};
+  const auto has_decoded_icon =
+      icon != nullptr &&
+      behavior.window_icon_action == MuonWindowIconAction::Set &&
+      DecodeMuonTitleBarIconPng(icon->png_data, &decoded_icon);
   if (behavior.window_icon_action == MuonWindowIconAction::Set) {
-    window->SetWindowIcon(image);
+    CefRefPtr<CefImage> image;
+    if (has_decoded_icon) {
+      image = CreateMuonNativeIconImage(decoded_icon,
+                                        kMuonNativeTitleBarIconDipSize);
+    }
+    window->SetWindowIcon(image ? image : CefImage::CreateImage());
   } else if (behavior.window_icon_action == MuonWindowIconAction::Clear) {
     window->SetWindowIcon(CefImage::CreateImage());
   }
   if (behavior.app_icon_action == MuonWindowIconAction::Set) {
-    window->SetWindowAppIcon(image);
+    CefRefPtr<CefImage> image;
+    if (has_decoded_icon) {
+      image = CreateMuonNativeIconImage(decoded_icon, kMuonNativeAppIconDipSize);
+    }
+    window->SetWindowAppIcon(image ? image : CefImage::CreateImage());
   } else if (behavior.app_icon_action == MuonWindowIconAction::Clear) {
     window->SetWindowAppIcon(CefImage::CreateImage());
   }
@@ -1441,15 +1519,19 @@ void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
 
 void SetRegisteredMuonTitleBarIconForBrowser(
     int browser_id,
-    CefRefPtr<CefImage> image,
-    const std::string& icon_data_url) {
+    const MuonTitleBarIcon* icon) {
   if (browser_id <= 0) {
     return;
   }
   g_muon_title_bar_pending_icons_by_browser_id[browser_id] =
-      MuonTitleBarIcon{image, icon_data_url};
+      icon == nullptr ? MuonTitleBarIcon{} : *icon;
   const auto window = GetRegisteredMuonWindowForBrowser(browser_id);
-  SetRegisteredMuonTitleBarIcon(window, image, icon_data_url);
+  const auto pending_icon =
+      g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
+  SetRegisteredMuonTitleBarIcon(
+      window, pending_icon == g_muon_title_bar_pending_icons_by_browser_id.end()
+                  ? nullptr
+                  : &pending_icon->second);
 }
 
 void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,

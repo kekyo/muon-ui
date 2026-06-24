@@ -107,11 +107,11 @@ struct MuonTitleBarBackgroundColor {
  */
 struct MuonTitleBarIcon {
   /**
-   * CEF image used by native title bars.
+   * PNG bytes used to create native title/app bar images.
    *
    * @remarks Non-PNG icons used by the Muon custom title bar leave this empty.
    */
-  CefRefPtr<CefImage> image;
+  std::vector<uint8_t> png_data;
 
   /**
    * Image data URL used by the Muon custom title bar.
@@ -237,12 +237,12 @@ bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
 /**
  * Returns the native window icon update behavior for a loaded title bar icon.
  *
- * @param has_native_image Whether the icon has a CefImage usable by native UI.
+ * @param has_native_png_data Whether the icon has PNG data usable by native UI.
  * @param icon_data_url Custom title bar icon data URL.
  * @return Native window/app icon update behavior.
  */
 MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
-    bool has_native_image,
+    bool has_native_png_data,
     const std::string& icon_data_url);
 
 /**
@@ -507,16 +507,14 @@ void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
  * Updates the registered custom or native title bar icon, if any.
  */
 void SetRegisteredMuonTitleBarIcon(CefRefPtr<CefWindow> window,
-                                   CefRefPtr<CefImage> image,
-                                   const std::string& icon_data_url);
+                                   const MuonTitleBarIcon* icon);
 
 /**
  * Updates the registered custom or native title bar icon for a browser, if any.
  */
 void SetRegisteredMuonTitleBarIconForBrowser(
     int browser_id,
-    CefRefPtr<CefImage> image,
-    const std::string& icon_data_url);
+    const MuonTitleBarIcon* icon);
 
 /**
  * Updates the custom title bar view or native title bar visibility hint.

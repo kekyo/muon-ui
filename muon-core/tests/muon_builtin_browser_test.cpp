@@ -470,9 +470,9 @@ static bool TestTitleBarIconNativeScaleFactors() {
                     (std::vector<float>{1.0f, 2.0f}),
                 "32px title bar icon should include a 16 DIP scale") &&
          Expect(GetMuonTitleBarIconPngScaleFactors(256, 256) ==
-                    (std::vector<float>{1.0f, 16.0f}),
-                "embedded default title bar icon should include a 16 DIP "
-                "native scale") &&
+                    (std::vector<float>{1.0f, 2.0f}),
+                "embedded default title bar icon should use physical 16 and "
+                "32px native bitmaps") &&
          Expect(GetMuonTitleBarIconPngScaleFactors(32, 16) ==
                     std::vector<float>{1.0f},
                 "non-square title bar icon should not add a native scale");

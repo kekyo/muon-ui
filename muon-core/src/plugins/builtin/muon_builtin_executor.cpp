@@ -7,6 +7,8 @@
 #include "plugins/builtin/muon_builtin_executor.h"
 
 #include "muon_json_helpers.h"
+#include "plugins/builtin/muon_builtin_completion.h"
+#include "plugins/builtin/muon_builtin_environment_helpers.h"
 #include "yyjson.h"
 
 #if defined(_WIN32)
@@ -23,7 +25,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <cwchar>
 #include <map>
 #include <string>
 #include <string_view>
@@ -64,17 +65,6 @@ static const muon_type_descriptor run_args[] = {
 
 static bool ContainsNul(std::string_view value) {
   return value.find('\0') != std::string_view::npos;
-}
-
-static void CompleteString(muon_completion_func completion,
-                           const std::string& result) {
-  const auto* pointer = result.c_str();
-  completion(&pointer, nullptr);
-}
-
-static void CompleteError(muon_completion_func completion,
-                          const std::string& message) {
-  completion(nullptr, message.c_str());
 }
 
 static std::string CreateRunResultJson(const RunResult& result) {
@@ -240,72 +230,6 @@ static bool ParseRunOptions(const char* options_json,
 
 #if defined(_WIN32)
 
-static bool WideToUtf8(const wchar_t* source, std::string* target) {
-  if (source == nullptr || target == nullptr) {
-    return false;
-  }
-  const auto required = WideCharToMultiByte(
-      CP_UTF8, 0, source, -1, nullptr, 0, nullptr, nullptr);
-  if (required <= 0) {
-    return false;
-  }
-  std::string converted;
-  converted.resize(static_cast<size_t>(required));
-  if (required > 1 &&
-      WideCharToMultiByte(CP_UTF8, 0, source, -1, converted.data(), required,
-                          nullptr, nullptr) <= 0) {
-    return false;
-  }
-  converted.resize(static_cast<size_t>(required - 1));
-  *target = std::move(converted);
-  return true;
-}
-
-static bool Utf8ToWide(const std::string& source, std::wstring* target) {
-  if (target == nullptr) {
-    return false;
-  }
-  const auto required = MultiByteToWideChar(
-      CP_UTF8, 0, source.c_str(), -1, nullptr, 0);
-  if (required <= 0) {
-    return false;
-  }
-  std::wstring converted;
-  converted.resize(static_cast<size_t>(required));
-  if (required > 1 &&
-      MultiByteToWideChar(CP_UTF8, 0, source.c_str(), -1, converted.data(),
-                          required) <= 0) {
-    return false;
-  }
-  converted.resize(static_cast<size_t>(required - 1));
-  *target = std::move(converted);
-  return true;
-}
-
-static std::vector<std::pair<std::string, std::string>> GetEnvironmentEntries() {
-  std::vector<std::pair<std::string, std::string>> entries;
-  auto* block = GetEnvironmentStringsW();
-  if (block == nullptr) {
-    return entries;
-  }
-  for (auto* entry = block; *entry != L'\0'; entry += std::wcslen(entry) + 1) {
-    const auto* separator = std::wcschr(entry, L'=');
-    if (separator == nullptr || separator == entry) {
-      continue;
-    }
-    std::wstring key_wide(entry, separator - entry);
-    std::wstring value_wide(separator + 1);
-    std::string key;
-    std::string value;
-    if (WideToUtf8(key_wide.c_str(), &key) &&
-        WideToUtf8(value_wide.c_str(), &value)) {
-      entries.emplace_back(std::move(key), std::move(value));
-    }
-  }
-  FreeEnvironmentStringsW(block);
-  return entries;
-}
-
 static std::wstring QuoteWindowsArgument(const std::wstring& argument) {
   if (argument.empty()) {
     return L"\"\"";
@@ -362,7 +286,7 @@ static bool CreateWindowsEnvironmentBlock(const RunOptions& options,
   }
 
   std::map<std::string, std::string> merged;
-  for (auto entry : GetEnvironmentEntries()) {
+  for (auto entry : GetMuonEnvironmentEntries()) {
     merged[std::move(entry.first)] = std::move(entry.second);
   }
   for (const auto& entry : options.env) {
@@ -372,7 +296,8 @@ static bool CreateWindowsEnvironmentBlock(const RunOptions& options,
   for (const auto& entry : merged) {
     std::wstring key;
     std::wstring value;
-    if (!Utf8ToWide(entry.first, &key) || !Utf8ToWide(entry.second, &value)) {
+    if (!MuonUtf8ToWide(entry.first, &key) ||
+        !MuonUtf8ToWide(entry.second, &value)) {
       *error_message = "env entries must be valid UTF-8";
       return false;
     }
@@ -426,7 +351,7 @@ static bool RunProcess(const RunOptions& options,
   SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
 
   std::wstring command;
-  if (!Utf8ToWide(options.command, &command)) {
+  if (!MuonUtf8ToWide(options.command, &command)) {
     close_pipe_handles();
     *error_message = "Command is not valid UTF-8";
     return false;
@@ -434,7 +359,7 @@ static bool RunProcess(const RunOptions& options,
   std::wstring command_line = QuoteWindowsArgument(command);
   for (const auto& arg : options.args) {
     std::wstring wide_arg;
-    if (!Utf8ToWide(arg, &wide_arg)) {
+    if (!MuonUtf8ToWide(arg, &wide_arg)) {
       close_pipe_handles();
       *error_message = "Argument is not valid UTF-8";
       return false;
@@ -449,7 +374,7 @@ static bool RunProcess(const RunOptions& options,
   std::wstring cwd;
   const wchar_t* cwd_pointer = nullptr;
   if (options.has_cwd) {
-    if (!Utf8ToWide(options.cwd, &cwd)) {
+    if (!MuonUtf8ToWide(options.cwd, &cwd)) {
       close_pipe_handles();
       *error_message = "cwd is not valid UTF-8";
       return false;
@@ -590,15 +515,11 @@ static std::vector<std::string> CreateCommandCandidates(
 static std::map<std::string, std::string> CreateMergedEnvironment(
     const RunOptions& options) {
   std::map<std::string, std::string> merged;
-  if (environ != nullptr) {
-    for (auto index = size_t{0}; environ[index] != nullptr; ++index) {
-      const auto* entry = environ[index];
-      const auto* separator = std::strchr(entry, '=');
-      if (separator == nullptr || separator == entry) {
-        continue;
-      }
-      merged[std::string(entry, separator - entry)] = separator + 1;
+  for (auto entry : GetMuonEnvironmentEntries()) {
+    if (entry.first.empty()) {
+      continue;
     }
+    merged[std::move(entry.first)] = std::move(entry.second);
   }
   for (const auto& entry : options.env) {
     merged[entry.first] = entry.second;
@@ -798,15 +719,15 @@ extern "C" void muon_builtin_executor_run(muon_completion_func completion,
   RunOptions options;
   std::string error_message;
   if (!ParseRunOptions(options_json, &options, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
   RunResult result;
   if (!RunProcess(options, &result, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
-  CompleteString(completion, CreateRunResultJson(result));
+  CompleteMuonString(completion, CreateRunResultJson(result));
 }
 
 static const muon_plugin_function_metadata spawn_function = {

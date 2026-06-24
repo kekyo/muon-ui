@@ -9,6 +9,8 @@
 #include "config/muon_autostart.h"
 #include "config/muon_startup.h"
 #include "muon_json_helpers.h"
+#include "plugins/builtin/muon_builtin_completion.h"
+#include "plugins/builtin/muon_builtin_environment_helpers.h"
 
 #include "include/cef_api_hash.h"
 #include "include/cef_version_info.h"
@@ -24,14 +26,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <cwchar>
 #include <string>
-#include <utility>
-#include <vector>
-
-#if !defined(_WIN32)
-extern char** environ;
-#endif
 
 namespace muon_internal {
 
@@ -63,21 +58,6 @@ static constexpr char kRuntimeInfoKey[] = "cefRuntime";
 static constexpr char kRuntimeInfoVersionKey[] = "version";
 static constexpr char kRuntimeInfoApiVersionKey[] = "apiVersion";
 static constexpr char kRuntimeInfoApiHashKey[] = "apiHash";
-
-static void CompleteString(muon_completion_func completion,
-                           const std::string& result) {
-  const auto* pointer = result.c_str();
-  completion(&pointer, nullptr);
-}
-
-static void CompleteVoid(muon_completion_func completion) {
-  completion(nullptr, nullptr);
-}
-
-static void CompleteError(muon_completion_func completion,
-                          const std::string& message) {
-  completion(nullptr, message.c_str());
-}
 
 static std::string CreateCefRuntimeVersion(const cef_version_info_t& info,
                                            const char* commit_hash) {
@@ -210,83 +190,16 @@ static bool CreateRuntimeInfoJson(std::string* result,
   return true;
 }
 
-#if defined(_WIN32)
-
-static bool WideToUtf8(const wchar_t* source, std::string* target) {
-  if (source == nullptr || target == nullptr) {
-    return false;
-  }
-  const auto required = WideCharToMultiByte(
-      CP_UTF8, 0, source, -1, nullptr, 0, nullptr, nullptr);
-  if (required <= 0) {
-    return false;
-  }
-  std::string converted;
-  converted.resize(static_cast<size_t>(required));
-  if (required > 1 &&
-      WideCharToMultiByte(CP_UTF8, 0, source, -1, converted.data(), required,
-                          nullptr, nullptr) <= 0) {
-    return false;
-  }
-  converted.resize(static_cast<size_t>(required - 1));
-  *target = std::move(converted);
-  return true;
-}
-
-static std::vector<std::pair<std::string, std::string>> GetEnvironmentEntries() {
-  std::vector<std::pair<std::string, std::string>> entries;
-  auto* block = GetEnvironmentStringsW();
-  if (block == nullptr) {
-    return entries;
-  }
-  for (auto* entry = block; *entry != L'\0'; entry += std::wcslen(entry) + 1) {
-    const auto* separator = std::wcschr(entry, L'=');
-    if (separator == nullptr || separator == entry) {
-      continue;
-    }
-    std::wstring key_wide(entry, separator - entry);
-    std::wstring value_wide(separator + 1);
-    std::string key;
-    std::string value;
-    if (WideToUtf8(key_wide.c_str(), &key) &&
-        WideToUtf8(value_wide.c_str(), &value)) {
-      entries.emplace_back(std::move(key), std::move(value));
-    }
-  }
-  FreeEnvironmentStringsW(block);
-  return entries;
-}
-
-#else
-
-static std::vector<std::pair<std::string, std::string>> GetEnvironmentEntries() {
-  std::vector<std::pair<std::string, std::string>> entries;
-  if (environ == nullptr) {
-    return entries;
-  }
-  for (auto index = size_t{0}; environ[index] != nullptr; ++index) {
-    const auto* entry = environ[index];
-    const auto* separator = std::strchr(entry, '=');
-    if (separator == nullptr) {
-      entries.emplace_back(entry, "");
-      continue;
-    }
-    entries.emplace_back(std::string(entry, separator - entry), separator + 1);
-  }
-  return entries;
-}
-
-#endif
-
 extern "C" void muon_builtin_environments_get_variables(
     muon_completion_func completion) {
-  CompleteString(completion, CreateJsonStringObject(GetEnvironmentEntries()));
+  CompleteMuonString(
+      completion, CreateJsonStringObject(GetMuonEnvironmentEntries()));
 }
 
 extern "C" void muon_builtin_environments_get_command_line(
     muon_completion_func completion) {
-  CompleteString(completion,
-                 CreateJsonStringArray(GetMuonStartupCommandLine()));
+  CompleteMuonString(completion,
+                     CreateJsonStringArray(GetMuonStartupCommandLine()));
 }
 
 extern "C" void muon_builtin_environments_get_process_id(
@@ -304,10 +217,10 @@ extern "C" void muon_builtin_environments_get_runtime_info(
   std::string runtime_info;
   std::string error_message;
   if (!CreateRuntimeInfoJson(&runtime_info, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
-  CompleteString(completion, runtime_info);
+  CompleteMuonString(completion, runtime_info);
 }
 
 extern "C" void muon_builtin_environments_get_autostart(
@@ -315,27 +228,27 @@ extern "C" void muon_builtin_environments_get_autostart(
   MuonAutostartOptions options;
   std::string error_message;
   if (!CreateDefaultMuonAutostartOptions(&options, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
 
   MuonAutostartStatus status = kMuonAutostartStatusUnknown;
   if (!GetMuonAutostartStatus(options, &status, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
   switch (status) {
     case kMuonAutostartStatusDisabled:
-      CompleteString(completion, "false");
+      CompleteMuonString(completion, "false");
       return;
     case kMuonAutostartStatusEnabled:
-      CompleteString(completion, "true");
+      CompleteMuonString(completion, "true");
       return;
     case kMuonAutostartStatusUnknown:
-      CompleteString(completion, "null");
+      CompleteMuonString(completion, "null");
       return;
   }
-  CompleteString(completion, "null");
+  CompleteMuonString(completion, "null");
 }
 
 extern "C" void muon_builtin_environments_set_autostart(
@@ -344,14 +257,14 @@ extern "C" void muon_builtin_environments_set_autostart(
   MuonAutostartOptions options;
   std::string error_message;
   if (!CreateDefaultMuonAutostartOptions(&options, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
   if (!SetMuonAutostart(options, enabled, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
-  CompleteVoid(completion);
+  CompleteMuonVoid(completion);
 }
 
 static const muon_plugin_function_metadata get_variables_function = {

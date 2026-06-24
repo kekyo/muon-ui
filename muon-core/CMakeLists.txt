@@ -634,6 +634,7 @@ set(APP_SOURCES
   src/network/muon_network_request_handler.cpp
   src/plugins/builtin/muon_builtin.cpp
   src/plugins/builtin/muon_builtin_bootstrap.cpp
+  src/plugins/builtin/muon_builtin_environment_helpers.cpp
   src/plugins/builtin/muon_builtin_environments.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
   src/plugins/builtin/muon_builtin_fs.cpp
@@ -675,6 +676,8 @@ set(APP_HEADERS
   src/network/muon_network_request_handler.h
   src/plugins/builtin/muon_builtin.h
   src/plugins/builtin/muon_builtin_bootstrap.h
+  src/plugins/builtin/muon_builtin_completion.h
+  src/plugins/builtin/muon_builtin_environment_helpers.h
   src/plugins/builtin/muon_builtin_environments.h
   src/plugins/builtin/muon_builtin_executor.h
   src/plugins/builtin/muon_builtin_fs.h
@@ -1285,6 +1288,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     tests/muon_internal_helpers_test.cpp
     src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
+    src/plugins/builtin/muon_builtin_environment_helpers.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_internal_helpers_test)
   target_compile_features(muon_internal_helpers_test PRIVATE cxx_std_20)

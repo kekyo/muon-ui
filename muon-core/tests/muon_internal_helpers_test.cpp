@@ -6,6 +6,8 @@
 
 #include "muon_json_helpers.h"
 #include "muon_string_helpers.h"
+#include "plugins/builtin/muon_builtin_completion.h"
+#include "plugins/builtin/muon_builtin_environment_helpers.h"
 
 #include "yyjson.h"
 
@@ -99,6 +101,129 @@ static bool TestJsonHelpers() {
                 "moved JSON document lost data");
 }
 
+struct CompletionCapture {
+  bool called = false;
+  bool has_result = false;
+  bool bool_result = false;
+  std::string string_result;
+  std::string error;
+};
+
+static CompletionCapture* g_completion_capture = nullptr;
+
+static void CaptureVoidCompletion(const void* result, const char* error) {
+  if (g_completion_capture == nullptr) {
+    return;
+  }
+  g_completion_capture->called = true;
+  g_completion_capture->has_result = result != nullptr;
+  if (error != nullptr) {
+    g_completion_capture->error = error;
+  } else {
+    g_completion_capture->error.clear();
+  }
+}
+
+static void CaptureBoolCompletion(const void* result, const char* error) {
+  CaptureVoidCompletion(result, error);
+  if (g_completion_capture == nullptr || result == nullptr) {
+    return;
+  }
+  g_completion_capture->bool_result = *static_cast<const bool*>(result);
+}
+
+static void CaptureStringCompletion(const void* result, const char* error) {
+  CaptureVoidCompletion(result, error);
+  if (g_completion_capture == nullptr || result == nullptr) {
+    return;
+  }
+  const auto* string_result = *static_cast<const char* const*>(result);
+  if (string_result != nullptr) {
+    g_completion_capture->string_result = string_result;
+  }
+}
+
+static bool TestCompletionHelpers() {
+  CompletionCapture capture;
+  g_completion_capture = &capture;
+
+  muon_internal::CompleteMuonVoid(CaptureVoidCompletion);
+  if (!Expect(capture.called, "void completion was not called") ||
+      !Expect(!capture.has_result, "void completion produced a result") ||
+      !Expect(capture.error.empty(), "void completion produced an error")) {
+    g_completion_capture = nullptr;
+    return false;
+  }
+
+  capture = {};
+  muon_internal::CompleteMuonBool(CaptureBoolCompletion, true);
+  if (!Expect(capture.called, "bool completion was not called") ||
+      !Expect(capture.has_result, "bool completion did not produce result") ||
+      !Expect(capture.bool_result, "bool completion result changed") ||
+      !Expect(capture.error.empty(), "bool completion produced an error")) {
+    g_completion_capture = nullptr;
+    return false;
+  }
+
+  capture = {};
+  muon_internal::CompleteMuonString(CaptureStringCompletion, "muon");
+  if (!Expect(capture.called, "string completion was not called") ||
+      !Expect(capture.has_result, "string completion did not produce result") ||
+      !Expect(capture.string_result == "muon",
+              "string completion result changed") ||
+      !Expect(capture.error.empty(), "string completion produced an error")) {
+    g_completion_capture = nullptr;
+    return false;
+  }
+
+  capture = {};
+  muon_internal::CompleteMuonError(CaptureVoidCompletion, "boom");
+  if (!Expect(capture.called, "error completion was not called") ||
+      !Expect(!capture.has_result, "error completion produced a result") ||
+      !Expect(capture.error == "boom", "error completion message changed")) {
+    g_completion_capture = nullptr;
+    return false;
+  }
+
+  muon_internal::CompleteMuonVoid(nullptr);
+  muon_internal::CompleteMuonBool(nullptr, false);
+  muon_internal::CompleteMuonString(nullptr, "ignored");
+  muon_internal::CompleteMuonError(nullptr, "ignored");
+  g_completion_capture = nullptr;
+  return true;
+}
+
+static bool TestEnvironmentHelpers() {
+#if defined(_WIN32)
+  return true;
+#else
+  constexpr char kKey[] = "MUON_INTERNAL_HELPERS_TEST_ENTRY";
+  constexpr char kValue[] = "muon-value";
+  if (setenv(kKey, kValue, 1) != 0) {
+    return Expect(false, "failed to set test environment variable");
+  }
+
+  const auto entries = muon_internal::GetMuonEnvironmentEntries();
+  auto found = false;
+  for (const auto& entry : entries) {
+    if (entry.first == kKey) {
+      found = true;
+      if (!Expect(entry.second == kValue,
+                  "environment helper value changed")) {
+        unsetenv(kKey);
+        return false;
+      }
+      break;
+    }
+  }
+  unsetenv(kKey);
+  return Expect(found, "environment helper did not enumerate test variable");
+#endif
+}
+
 int main() {
-  return TestStringHelpers() && TestJsonHelpers() ? 0 : 1;
+  return TestStringHelpers() && TestJsonHelpers() && TestCompletionHelpers() &&
+                 TestEnvironmentHelpers()
+             ? 0
+             : 1;
 }

@@ -7,6 +7,7 @@
 #include "plugins/builtin/muon_builtin_fs.h"
 
 #include "muon_json_helpers.h"
+#include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "plugins/muon_traffic_cardio_operation.h"
 
@@ -51,39 +52,6 @@ static constexpr char kMuonBuiltinFsGenericError[] =
     "Filesystem operation failed";
 static constexpr char kMuonBuiltinFsAbortError[] =
     "The operation was aborted";
-
-static void CompleteError(muon_completion_func completion,
-                          const char* message) {
-  if (completion != nullptr) {
-    completion(nullptr, message);
-  }
-}
-
-static void CompleteError(muon_completion_func completion,
-                          const std::string& message) {
-  CompleteError(completion, message.c_str());
-}
-
-static void CompleteVoid(muon_completion_func completion) {
-  if (completion != nullptr) {
-    completion(nullptr, nullptr);
-  }
-}
-
-static void CompleteBool(muon_completion_func completion, bool result) {
-  if (completion != nullptr) {
-    completion(&result, nullptr);
-  }
-}
-
-static void CompleteString(muon_completion_func completion,
-                           std::string result) {
-  if (completion == nullptr) {
-    return;
-  }
-  const auto* pointer = result.c_str();
-  completion(&pointer, nullptr);
-}
 
 static const muon_type_descriptor type_void = {
     MUON_TYPE_VOID,
@@ -2383,26 +2351,26 @@ class MuonBuiltinFsRuntime final {
                        Complete&& complete) {
     PruneActiveOperations();
     if (!running_) {
-      CompleteError(completion, kMuonBuiltinFsShutdownError);
+      CompleteMuonError(completion, kMuonBuiltinFsShutdownError);
       return;
     }
     auto cancellation = std::make_shared<MuonTrafficCardioCancellation>();
     auto abort_error = std::string{};
     if (!RegisterAbortWatcher(
             helpers_, abort_watcher, cancellation, &abort_error)) {
-      CompleteError(completion, abort_error);
+      CompleteMuonError(completion, abort_error);
       return;
     }
     if (!running_) {
       cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
-      CompleteError(completion, kMuonBuiltinFsShutdownError);
+      CompleteMuonError(completion, kMuonBuiltinFsShutdownError);
       return;
     }
     auto context = context_;
     auto start_copy = std::forward<Start>(start);
     auto complete_copy = std::forward<Complete>(complete);
     auto fail = [completion](std::string message) {
-      CompleteError(completion, message);
+      CompleteMuonError(completion, message);
     };
     auto operation = RunMuonTrafficCardioOperation<Result>(
         cancellation,
@@ -2483,7 +2451,7 @@ extern "C" void muon_builtin_fs_cancel_task(muon_completion_func completion,
   if (state != nullptr && state->cancellation) {
     state->cancellation->Cancel(kMuonBuiltinFsAbortError);
   }
-  CompleteVoid(completion);
+  CompleteMuonVoid(completion);
 }
 
 static void CompleteMuonFsAbortWatcherSetup(
@@ -2578,16 +2546,16 @@ static bool ValidatePathArgument(muon_completion_func completion,
                                  const char* path,
                                  std::string* target) {
   if (path == nullptr) {
-    CompleteError(completion, "Path is required");
+    CompleteMuonError(completion, "Path is required");
     return false;
   }
   *target = path;
   if (target->empty()) {
-    CompleteError(completion, "Path is required");
+    CompleteMuonError(completion, "Path is required");
     return false;
   }
   if (ContainsNul(*target)) {
-    CompleteError(completion, "Path must not contain NUL");
+    CompleteMuonError(completion, "Path must not contain NUL");
     return false;
   }
   return true;
@@ -2605,12 +2573,12 @@ extern "C" void muon_builtin_fs_read_file(
   auto options = MuonFsReadOptions{};
   auto options_error = std::string{};
   if (!ParseReadOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   const auto* helpers = runtime->helpers();
@@ -2641,11 +2609,11 @@ extern "C" void muon_builtin_fs_write_file(
   auto options = MuonFsWriteOptions{};
   auto options_error = std::string{};
   if (!ParseWriteOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   if (data.data == nullptr && data.size != 0) {
-    CompleteError(completion, "Invalid buffer_view");
+    CompleteMuonError(completion, "Invalid buffer_view");
     return;
   }
   auto source = std::span<const std::byte>(
@@ -2653,7 +2621,7 @@ extern "C" void muon_builtin_fs_write_file(
       static_cast<size_t>(data.size));
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -2666,7 +2634,7 @@ extern "C" void muon_builtin_fs_write_file(
             context, std::move(target_path), source, options, cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -2680,12 +2648,12 @@ extern "C" void muon_builtin_fs_read_text_file(
     return;
   }
   if (!IsSupportedUtf8Encoding(encoding)) {
-    CompleteError(completion, kMuonBuiltinFsEncodingError);
+    CompleteMuonError(completion, kMuonBuiltinFsEncodingError);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -2697,7 +2665,7 @@ extern "C" void muon_builtin_fs_read_text_file(
         return ReadTextAsync(context, std::move(target_path), cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 
@@ -2712,22 +2680,22 @@ extern "C" void muon_builtin_fs_write_text_file(
     return;
   }
   if (data == nullptr) {
-    CompleteError(completion, "Text data is required");
+    CompleteMuonError(completion, "Text data is required");
     return;
   }
   if (!IsSupportedUtf8Encoding(encoding)) {
-    CompleteError(completion, kMuonBuiltinFsEncodingError);
+    CompleteMuonError(completion, kMuonBuiltinFsEncodingError);
     return;
   }
   auto text = std::string(data);
   if (!IsValidUtf8WithoutNul(
           reinterpret_cast<const uint8_t*>(text.data()), text.size())) {
-    CompleteError(completion, "Text data is not valid UTF-8");
+    CompleteMuonError(completion, "Text data is not valid UTF-8");
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -2740,7 +2708,7 @@ extern "C" void muon_builtin_fs_write_text_file(
             context, std::move(target_path), std::move(text), cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -2754,7 +2722,7 @@ extern "C" void muon_builtin_fs_stat(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -2766,7 +2734,7 @@ extern "C" void muon_builtin_fs_stat(
         return StatAsync(context, std::move(target_path), true, cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 
@@ -2780,7 +2748,7 @@ extern "C" void muon_builtin_fs_lstat(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -2792,7 +2760,7 @@ extern "C" void muon_builtin_fs_lstat(
         return StatAsync(context, std::move(target_path), false, cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 
@@ -2806,7 +2774,7 @@ extern "C" void muon_builtin_fs_exists(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<bool>(
@@ -2818,7 +2786,7 @@ extern "C" void muon_builtin_fs_exists(
         return ExistsAsync(context, std::move(target_path), cancellation);
       },
       [completion](bool result) {
-        CompleteBool(completion, result);
+        CompleteMuonBool(completion, result);
       });
 }
 
@@ -2834,12 +2802,12 @@ extern "C" void muon_builtin_fs_access(
   auto options = MuonFsAccessOptions{};
   auto options_error = std::string{};
   if (!ParseAccessOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<bool>(
@@ -2852,7 +2820,7 @@ extern "C" void muon_builtin_fs_access(
             context, std::move(target_path), options, cancellation);
       },
       [completion](bool result) {
-        CompleteBool(completion, result);
+        CompleteMuonBool(completion, result);
       });
 }
 
@@ -2868,12 +2836,12 @@ extern "C" void muon_builtin_fs_readdir(
   auto options = MuonFsReaddirOptions{};
   auto options_error = std::string{};
   if (!ParseReaddirOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -2886,7 +2854,7 @@ extern "C" void muon_builtin_fs_readdir(
             context, std::move(target_path), options, cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 
@@ -2902,12 +2870,12 @@ extern "C" void muon_builtin_fs_mkdir(
   auto options = MuonFsMkdirOptions{};
   auto options_error = std::string{};
   if (!ParseMkdirOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -2920,7 +2888,7 @@ extern "C" void muon_builtin_fs_mkdir(
             context, std::move(target_path), options, cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -2936,12 +2904,12 @@ extern "C" void muon_builtin_fs_rm(
   auto options = MuonFsRmOptions{};
   auto options_error = std::string{};
   if (!ParseRmOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -2954,7 +2922,7 @@ extern "C" void muon_builtin_fs_rm(
             context, std::move(target_path), options, cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -2968,7 +2936,7 @@ extern "C" void muon_builtin_fs_unlink(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -2980,7 +2948,7 @@ extern "C" void muon_builtin_fs_unlink(
         return UnlinkAsync(context, std::move(target_path), cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -2994,7 +2962,7 @@ extern "C" void muon_builtin_fs_rmdir(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3006,7 +2974,7 @@ extern "C" void muon_builtin_fs_rmdir(
         return RmdirAsync(context, std::move(target_path), cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3023,7 +2991,7 @@ extern "C" void muon_builtin_fs_rename(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3038,7 +3006,7 @@ extern "C" void muon_builtin_fs_rename(
             cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3057,12 +3025,12 @@ extern "C" void muon_builtin_fs_copy_file(
   auto options = MuonFsCopyOptions{};
   auto options_error = std::string{};
   if (!ParseCopyOptions(options_json, &options, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3077,7 +3045,7 @@ extern "C" void muon_builtin_fs_copy_file(
             options, cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3091,7 +3059,7 @@ extern "C" void muon_builtin_fs_append_file(
     return;
   }
   if (data.data == nullptr && data.size != 0) {
-    CompleteError(completion, "Invalid buffer_view");
+    CompleteMuonError(completion, "Invalid buffer_view");
     return;
   }
   auto source = std::span<const std::byte>(
@@ -3099,7 +3067,7 @@ extern "C" void muon_builtin_fs_append_file(
       static_cast<size_t>(data.size));
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3112,7 +3080,7 @@ extern "C" void muon_builtin_fs_append_file(
             context, std::move(target_path), source, cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3127,22 +3095,22 @@ extern "C" void muon_builtin_fs_append_text_file(
     return;
   }
   if (data == nullptr) {
-    CompleteError(completion, "Text data is required");
+    CompleteMuonError(completion, "Text data is required");
     return;
   }
   if (!IsSupportedUtf8Encoding(encoding)) {
-    CompleteError(completion, kMuonBuiltinFsEncodingError);
+    CompleteMuonError(completion, kMuonBuiltinFsEncodingError);
     return;
   }
   auto text = std::string(data);
   if (!IsValidUtf8WithoutNul(
           reinterpret_cast<const uint8_t*>(text.data()), text.size())) {
-    CompleteError(completion, "Text data is not valid UTF-8");
+    CompleteMuonError(completion, "Text data is not valid UTF-8");
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3155,7 +3123,7 @@ extern "C" void muon_builtin_fs_append_text_file(
             context, std::move(target_path), std::move(text), cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3171,12 +3139,12 @@ extern "C" void muon_builtin_fs_truncate(
   auto options_error = std::string{};
   auto length = uint64_t{0};
   if (!ParseTruncateLength(options_json, &length, &options_error)) {
-    CompleteError(completion, options_error);
+    CompleteMuonError(completion, options_error);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3189,7 +3157,7 @@ extern "C" void muon_builtin_fs_truncate(
             context, std::move(target_path), length, cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3203,7 +3171,7 @@ extern "C" void muon_builtin_fs_realpath(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -3215,7 +3183,7 @@ extern "C" void muon_builtin_fs_realpath(
         return RealpathAsync(context, std::move(target_path), cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 
@@ -3229,7 +3197,7 @@ extern "C" void muon_builtin_fs_readlink(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -3241,7 +3209,7 @@ extern "C" void muon_builtin_fs_readlink(
         return ReadlinkAsync(context, std::move(target_path), cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 
@@ -3260,7 +3228,7 @@ extern "C" void muon_builtin_fs_symlink(
   auto link_type = std::string(type == nullptr ? "" : type);
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<void>(
@@ -3276,7 +3244,7 @@ extern "C" void muon_builtin_fs_symlink(
             std::move(link_type), cancellation);
       },
       [completion]() {
-        CompleteVoid(completion);
+        CompleteMuonVoid(completion);
       });
 }
 
@@ -3290,7 +3258,7 @@ extern "C" void muon_builtin_fs_watch_snapshot(
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
-    CompleteError(completion, kMuonBuiltinFsUnavailableError);
+    CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -3303,7 +3271,7 @@ extern "C" void muon_builtin_fs_watch_snapshot(
             context, std::move(target_path), cancellation);
       },
       [completion](std::string result) {
-        CompleteString(completion, std::move(result));
+        CompleteMuonString(completion, std::move(result));
       });
 }
 

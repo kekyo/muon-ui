@@ -6,6 +6,7 @@
 
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 
+#include "plugins/builtin/muon_builtin_completion.h"
 #include "ui/muon_ui_fs_dialogs.h"
 
 #include "yyjson.h"
@@ -63,28 +64,6 @@ static const muon_type_descriptor options_abort_args[] = {
     type_string,
     type_abort_watcher_function,
 };
-
-static void CompleteVoid(muon_completion_func completion) {
-  if (completion != nullptr) {
-    completion(nullptr, nullptr);
-  }
-}
-
-static void CompleteError(muon_completion_func completion,
-                          const char* message) {
-  if (completion != nullptr) {
-    completion(nullptr, message);
-  }
-}
-
-static void CompleteString(muon_completion_func completion,
-                           std::string result) {
-  if (completion == nullptr) {
-    return;
-  }
-  const auto* pointer = result.c_str();
-  completion(&pointer, nullptr);
-}
 
 struct MuonFsDialogsAbortCallbackState {
   std::shared_ptr<struct MuonFsDialogsProviderOperation> operation;
@@ -196,7 +175,7 @@ extern "C" void muon_builtin_fs_dialogs_cancel_task(
   if (state != nullptr) {
     CancelProviderOperation(state->operation);
   }
-  CompleteVoid(completion);
+  CompleteMuonVoid(completion);
 }
 
 static void CompleteMuonFsDialogsProviderOperation(
@@ -210,9 +189,9 @@ static void CompleteMuonFsDialogsProviderOperation(
   }
   MarkProviderOperationCompleted(state->provider_operation);
   if (error_message != nullptr) {
-    CompleteError(state->completion, error_message);
+    CompleteMuonError(state->completion, error_message);
   } else {
-    CompleteString(state->completion,
+    CompleteMuonString(state->completion,
                    result_json == nullptr ? "[]" : result_json);
   }
 }
@@ -228,7 +207,7 @@ static void PostMuonFsDialogsOperation(
   if (started != 0) {
     state.reset(raw_state);
     MarkProviderOperationCompleted(state->provider_operation);
-    CompleteError(state->completion, "Native dialog failed to start");
+    CompleteMuonError(state->completion, "Native dialog failed to start");
     return;
   }
   SetProviderOperationHandle(raw_state->provider_operation, handle);
@@ -247,7 +226,7 @@ static void CompleteMuonFsDialogsAbortWatcherSetup(
     CancelProviderOperation(state->provider_operation);
     if (operation) {
       MarkProviderOperationCompleted(operation->provider_operation);
-      CompleteError(
+      CompleteMuonError(
           operation->completion,
           error->message[0] == '\0'
               ? "AbortSignal watcher setup failed"
@@ -340,7 +319,7 @@ static void RunMuonFsDialogsOperation(muon_completion_func completion,
                                       const char* options_json,
                                       muon_native_function abort_watcher) {
   if (options_json == nullptr) {
-    CompleteError(completion, "Options JSON is required");
+    CompleteMuonError(completion, "Options JSON is required");
     return;
   }
   auto operation = std::make_unique<MuonFsDialogsOperationState>();
@@ -355,7 +334,7 @@ static void RunMuonFsDialogsOperation(muon_completion_func completion,
           g_fs_dialogs_helpers, abort_watcher, operation->provider_operation,
           &operation, &abort_error)) {
     MarkProviderOperationCompleted(operation->provider_operation);
-    CompleteError(completion, abort_error.c_str());
+    CompleteMuonError(completion, abort_error.c_str());
     return;
   }
   if (operation) {

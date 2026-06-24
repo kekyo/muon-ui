@@ -8,6 +8,7 @@
 
 #include "config/muon_paths.h"
 #include "muon_string_helpers.h"
+#include "plugins/builtin/muon_builtin_completion.h"
 #include "yyjson.h"
 
 #include <chrono>
@@ -64,21 +65,6 @@ enum class JsonPatchFieldState {
 static std::string g_default_version_policy = "tested";
 
 static uint64_t CurrentTimeSeconds();
-
-static void CompleteString(muon_completion_func completion,
-                           const std::string& result) {
-  const auto* pointer = result.c_str();
-  completion(&pointer, nullptr);
-}
-
-static void CompleteVoid(muon_completion_func completion) {
-  completion(nullptr, nullptr);
-}
-
-static void CompleteError(muon_completion_func completion,
-                          const std::string& message) {
-  completion(nullptr, message.c_str());
-}
 
 static bool IsValidPolicy(std::string_view value) {
   return value == "tested" || value == "same-major-latest" ||
@@ -449,15 +435,15 @@ extern "C" void muon_builtin_bootstrap_get_settings(
   BootstrapSettings settings;
   std::string error_message;
   if (!ReadSettings(&settings, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
   std::string json;
   if (!CreateSettingsJson(settings, &json, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
-  CompleteString(completion, json);
+  CompleteMuonString(completion, json);
 }
 
 extern "C" void muon_builtin_bootstrap_set_settings(
@@ -469,10 +455,10 @@ extern "C" void muon_builtin_bootstrap_set_settings(
       !ReadSettings(&settings, &error_message) ||
       !ApplySettingsPatch(&settings, settings_json, &error_message) ||
       !WriteSettings(settings, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
-  CompleteVoid(completion);
+  CompleteMuonVoid(completion);
 }
 
 extern "C" void muon_builtin_bootstrap_trigger_update(
@@ -480,16 +466,16 @@ extern "C" void muon_builtin_bootstrap_trigger_update(
   BootstrapSettings settings;
   std::string error_message;
   if (!ReadSettings(&settings, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
   settings.update_requested = true;
   settings.update_requested_at_unix = CurrentTimeSeconds();
   if (!WriteSettings(settings, &error_message)) {
-    CompleteError(completion, error_message);
+    CompleteMuonError(completion, error_message);
     return;
   }
-  CompleteVoid(completion);
+  CompleteMuonVoid(completion);
 }
 
 static const muon_plugin_function_metadata get_settings_function = {

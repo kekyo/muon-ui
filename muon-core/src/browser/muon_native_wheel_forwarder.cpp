@@ -89,6 +89,13 @@ static HWND GetMuonWindowsRootWindow(HWND window_handle) {
   return root_handle != nullptr ? root_handle : window_handle;
 }
 
+static HWND GetMuonWindowsSubclassRootWindow(HWND window_handle,
+                                             DWORD_PTR ref_data) {
+  const auto root_window_handle = reinterpret_cast<HWND>(ref_data);
+  return root_window_handle != nullptr ? root_window_handle
+                                       : GetMuonWindowsRootWindow(window_handle);
+}
+
 static bool IsNativePageDraggableRegionScreenPixels(
     CefWindowHandle window_handle,
     CefPoint screen_point) {
@@ -194,6 +201,29 @@ static void ForgetMuonWindowsSubclass(HWND window_handle) {
   }
 }
 
+static void ForgetMuonWindowsSubclassForRoot(HWND root_window_handle,
+                                             HWND window_handle) {
+  std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  const auto root =
+      g_muon_windows_wheel_root_by_subclassed_window.find(window_handle);
+  if (root == g_muon_windows_wheel_root_by_subclassed_window.end() ||
+      root->second != root_window_handle) {
+    return;
+  }
+  g_muon_windows_pending_title_bar_controls.erase(window_handle);
+  g_muon_windows_wheel_root_by_subclassed_window.erase(root);
+
+  const auto windows =
+      g_muon_windows_subclassed_for_wheel_by_root.find(root_window_handle);
+  if (windows == g_muon_windows_subclassed_for_wheel_by_root.end()) {
+    return;
+  }
+  windows->second.erase(window_handle);
+  if (windows->second.empty()) {
+    g_muon_windows_subclassed_for_wheel_by_root.erase(windows);
+  }
+}
+
 static void ClearMuonWindowsPendingTitleBarControl(HWND window_handle,
                                                    bool release_capture) {
   {
@@ -205,7 +235,8 @@ static void ClearMuonWindowsPendingTitleBarControl(HWND window_handle,
   }
 }
 
-static bool BeginMuonWindowsTitleBarControl(HWND window_handle,
+static bool BeginMuonWindowsTitleBarControl(HWND root_window_handle,
+                                            HWND window_handle,
                                             LPARAM lparam) {
   CefPoint screen_point;
   if (!GetMuonWindowsScreenPointFromClientPoint(
@@ -213,7 +244,6 @@ static bool BeginMuonWindowsTitleBarControl(HWND window_handle,
     return false;
   }
 
-  const auto root_window_handle = GetMuonWindowsRootWindow(window_handle);
   const auto action =
       GetMuonWindowsTitleBarControlAction(root_window_handle, screen_point);
   if (action == MuonTitleBarControlAction::NoControl) {
@@ -261,13 +291,17 @@ static bool CompleteMuonWindowsTitleBarControl(HWND window_handle,
   return true;
 }
 
-static bool StartMuonWindowsPageDrag(HWND window_handle, LPARAM lparam) {
+static bool StartMuonWindowsPageDrag(HWND root_window_handle,
+                                     HWND window_handle,
+                                     LPARAM lparam) {
   POINT screen_point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
   if (ClientToScreen(window_handle, &screen_point) == FALSE) {
     return false;
   }
 
-  const auto drag_handle = GetMuonWindowsRootWindow(window_handle);
+  const auto drag_handle = root_window_handle != nullptr
+                               ? root_window_handle
+                               : GetMuonWindowsRootWindow(window_handle);
   if (!IsNativePageDraggableRegionScreenPixels(
           drag_handle, CefPoint(screen_point.x, screen_point.y))) {
     return false;
@@ -312,32 +346,67 @@ static bool IsMuonWindowsWheelForwarderRootRegistered(
          g_muon_windows_subclassed_for_wheel_by_root.end();
 }
 
+static bool IsMuonWindowsWheelForwarderTargetRegisteredForRoot(
+    HWND root_window_handle,
+    HWND target_window_handle) {
+  std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  const auto root =
+      g_muon_windows_wheel_root_by_subclassed_window.find(target_window_handle);
+  return root != g_muon_windows_wheel_root_by_subclassed_window.end() &&
+         root->second == root_window_handle;
+}
+
+static std::vector<HWND> GetMuonWindowsWheelForwarderTargetsForRoot(
+    HWND root_window_handle) {
+  std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  std::vector<HWND> window_handles;
+  const auto windows =
+      g_muon_windows_subclassed_for_wheel_by_root.find(root_window_handle);
+  if (windows == g_muon_windows_subclassed_for_wheel_by_root.end()) {
+    return window_handles;
+  }
+  window_handles.assign(windows->second.begin(), windows->second.end());
+  return window_handles;
+}
+
 static void RegisterMuonWindowsWheelForwarderTarget(HWND root_window_handle,
                                                     HWND target_window_handle) {
   if (root_window_handle == nullptr || target_window_handle == nullptr) {
     return;
   }
-  {
-    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-    if (g_muon_windows_wheel_root_by_subclassed_window.find(
-            target_window_handle) !=
-        g_muon_windows_wheel_root_by_subclassed_window.end()) {
-      return;
-    }
-  }
   if (SetWindowSubclass(target_window_handle, MuonWheelForwarderSubclassProc,
-                        kMuonWheelForwarderSubclassId, 0) == FALSE) {
+                        kMuonWheelForwarderSubclassId,
+                        reinterpret_cast<DWORD_PTR>(
+                            root_window_handle)) == FALSE) {
     return;
   }
   std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
+  const auto previous_root =
+      g_muon_windows_wheel_root_by_subclassed_window.find(
+          target_window_handle);
+  if (previous_root != g_muon_windows_wheel_root_by_subclassed_window.end() &&
+      previous_root->second != root_window_handle) {
+    const auto previous_windows =
+        g_muon_windows_subclassed_for_wheel_by_root.find(
+            previous_root->second);
+    if (previous_windows != g_muon_windows_subclassed_for_wheel_by_root.end()) {
+      previous_windows->second.erase(target_window_handle);
+      if (previous_windows->second.empty()) {
+        g_muon_windows_subclassed_for_wheel_by_root.erase(previous_windows);
+      }
+    }
+  }
   g_muon_windows_wheel_root_by_subclassed_window[target_window_handle] =
       root_window_handle;
   g_muon_windows_subclassed_for_wheel_by_root[root_window_handle].insert(
       target_window_handle);
 }
 
-static void RefreshMuonWindowsWheelForwarder(HWND window_handle) {
-  const auto root_window_handle = GetMuonWindowsRootWindow(window_handle);
+static void RefreshMuonWindowsWheelForwarder(HWND root_window_handle,
+                                             HWND window_handle) {
+  if (root_window_handle == nullptr) {
+    root_window_handle = GetMuonWindowsRootWindow(window_handle);
+  }
   if (!IsMuonWindowsWheelForwarderRootRegistered(root_window_handle)) {
     return;
   }
@@ -355,17 +424,20 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     LPARAM lparam,
     UINT_PTR subclass_id,
     DWORD_PTR ref_data) {
-  (void)ref_data;
   if (subclass_id != kMuonWheelForwarderSubclassId) {
     return DefSubclassProc(window_handle, message, wparam, lparam);
   }
+  const auto root_window_handle =
+      GetMuonWindowsSubclassRootWindow(window_handle, ref_data);
 
   switch (message) {
     case WM_LBUTTONDOWN:
-      if (BeginMuonWindowsTitleBarControl(window_handle, lparam)) {
+      if (BeginMuonWindowsTitleBarControl(
+              root_window_handle, window_handle, lparam)) {
         return 0;
       }
-      if (StartMuonWindowsPageDrag(window_handle, lparam)) {
+      if (StartMuonWindowsPageDrag(
+              root_window_handle, window_handle, lparam)) {
         return 0;
       }
       break;
@@ -382,14 +454,14 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       break;
     case WM_PARENTNOTIFY:
       if (LOWORD(wparam) == WM_CREATE) {
-        RefreshMuonWindowsWheelForwarder(window_handle);
+        RefreshMuonWindowsWheelForwarder(root_window_handle, window_handle);
       }
       break;
     case WM_MOUSEWHEEL: {
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
       if (ForwardNativeWheelFromScreenPixels(
-              GetMuonWindowsRootWindow(window_handle), screen_point, 0,
+              root_window_handle, screen_point, 0,
               GET_WHEEL_DELTA_WPARAM(wparam),
               GetMuonWindowsEventFlags(wparam))) {
         return 0;
@@ -400,7 +472,7 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
       if (ForwardNativeWheelFromScreenPixels(
-              GetMuonWindowsRootWindow(window_handle), screen_point,
+              root_window_handle, screen_point,
               -GET_WHEEL_DELTA_WPARAM(wparam), 0,
               GetMuonWindowsEventFlags(wparam))) {
         return 0;
@@ -436,25 +508,18 @@ static void UnregisterMuonWindowsWheelForwarder(HWND window_handle) {
   if (root_window_handle == nullptr) {
     return;
   }
-  std::vector<HWND> window_handles;
-  {
-    std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-    const auto windows =
-        g_muon_windows_subclassed_for_wheel_by_root.find(root_window_handle);
-    if (windows == g_muon_windows_subclassed_for_wheel_by_root.end()) {
-      return;
-    }
-    window_handles.assign(windows->second.begin(), windows->second.end());
-    for (const auto target_window_handle : window_handles) {
-      g_muon_windows_wheel_root_by_subclassed_window.erase(
-          target_window_handle);
-      g_muon_windows_pending_title_bar_controls.erase(target_window_handle);
-    }
-    g_muon_windows_subclassed_for_wheel_by_root.erase(windows);
-  }
+  const auto window_handles =
+      GetMuonWindowsWheelForwarderTargetsForRoot(root_window_handle);
   for (const auto target_window_handle : window_handles) {
-    RemoveWindowSubclass(target_window_handle, MuonWheelForwarderSubclassProc,
-                         kMuonWheelForwarderSubclassId);
+    if (!IsMuonWindowsWheelForwarderTargetRegisteredForRoot(
+            root_window_handle, target_window_handle)) {
+      continue;
+    }
+    if (IsWindow(target_window_handle) != FALSE) {
+      RemoveWindowSubclass(target_window_handle, MuonWheelForwarderSubclassProc,
+                           kMuonWheelForwarderSubclassId);
+    }
+    ForgetMuonWindowsSubclassForRoot(root_window_handle, target_window_handle);
   }
 }
 
@@ -473,8 +538,10 @@ static void ClearMuonWindowsWheelForwarders() {
     g_muon_windows_pending_title_bar_controls.clear();
   }
   for (const auto window_handle : window_handles) {
-    RemoveWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,
-                         kMuonWheelForwarderSubclassId);
+    if (IsWindow(window_handle) != FALSE) {
+      RemoveWindowSubclass(window_handle, MuonWheelForwarderSubclassProc,
+                           kMuonWheelForwarderSubclassId);
+    }
   }
 }
 

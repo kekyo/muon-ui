@@ -11,6 +11,22 @@
 #include <vector>
 
 /**
+ * Snapshot entry for a top-level native window considered for wheel forwarding.
+ *
+ * @remarks
+ * The entries are expected to be ordered from bottom-most to top-most.
+ */
+struct MuonNativeWheelForwarderTopLevelWindow {
+  CefWindowHandle window_handle = 0;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+  bool visible = false;
+  bool override_redirect = false;
+};
+
+/**
  * Builds unique native window handles that should be observed for page CSS
  * draggable-region input forwarding.
  *
@@ -21,6 +37,35 @@
 std::vector<CefWindowHandle> GetMuonNativeForwarderWindowHandlesForRegistration(
     CefWindowHandle root_window_handle,
     const std::vector<CefWindowHandle>& child_window_handles);
+
+/**
+ * Selects the native window handle used for wheel forwarding.
+ *
+ * @param event_window_handle Native event window handle.
+ * @param child_window_handle Native child window handle from the event, or null.
+ * @param registered_window_handles Native window handles registered for forwarding.
+ * @return Native window handle to use for page draggable-region lookup.
+ */
+CefWindowHandle GetMuonNativeWheelForwarderTargetWindowHandle(
+    CefWindowHandle event_window_handle,
+    CefWindowHandle child_window_handle,
+    const std::vector<CefWindowHandle>& registered_window_handles);
+
+/**
+ * Selects the top-most registered native window at a screen point.
+ *
+ * @param screen_point Native root/screen point.
+ * @param registered_window_handles Native window handles registered for forwarding.
+ * @param top_level_windows Top-level windows in bottom-most to top-most order.
+ * @return Registered top-level window handle at the point, or null when the
+ * point is covered by another normal top-level window or no registered window
+ * contains the point.
+ */
+CefWindowHandle GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+    CefPoint screen_point,
+    const std::vector<CefWindowHandle>& registered_window_handles,
+    const std::vector<MuonNativeWheelForwarderTopLevelWindow>&
+        top_level_windows);
 
 /**
  * Registers native input forwarding for page CSS draggable regions.

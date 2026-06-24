@@ -279,6 +279,71 @@ static bool TestNativeForwarderRegistersChildWindows() {
                 "native input forwarder omitted second child");
 }
 
+static bool TestNativeWheelForwarderTargetWindowSelection() {
+  const auto event_registered =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 20, std::vector<CefWindowHandle>{10});
+  const auto child_registered =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 20, std::vector<CefWindowHandle>{20});
+  const auto fallback_child =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 20, std::vector<CefWindowHandle>{30});
+  const auto fallback_event =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 0, std::vector<CefWindowHandle>{30});
+  return Expect(event_registered == 10,
+                "native wheel forwarder ignored registered event window") &&
+         Expect(child_registered == 20,
+                "native wheel forwarder ignored registered child window") &&
+         Expect(fallback_child == 20,
+                "native wheel forwarder did not fall back to child window") &&
+         Expect(fallback_event == 10,
+                "native wheel forwarder did not fall back to event window");
+}
+
+static bool TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() {
+  const auto registered_window_handles = std::vector<CefWindowHandle>{10};
+  const auto registered =
+      MuonNativeWheelForwarderTopLevelWindow{10, 0, 0, 100, 100, true, false};
+  const auto hidden =
+      MuonNativeWheelForwarderTopLevelWindow{10, 0, 0, 100, 100, false, false};
+  const auto override_redirect =
+      MuonNativeWheelForwarderTopLevelWindow{20, 0, 0, 100, 100, true, true};
+  const auto foreign =
+      MuonNativeWheelForwarderTopLevelWindow{20, 0, 0, 100, 100, true, false};
+
+  const auto direct_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles, {registered});
+  const auto outside =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(120, 30), registered_window_handles, {registered});
+  const auto hidden_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles, {hidden});
+  const auto override_redirect_over_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles,
+          {registered, override_redirect});
+  const auto foreign_over_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles, {registered, foreign});
+
+  return Expect(direct_hit == 10,
+                "native wheel forwarder did not select registered top-level "
+                "window at point") &&
+         Expect(outside == 0,
+                "native wheel forwarder selected window outside point") &&
+         Expect(hidden_hit == 0,
+                "native wheel forwarder selected hidden window") &&
+         Expect(override_redirect_over_hit == 10,
+                "native wheel forwarder did not ignore override-redirect "
+                "overlay") &&
+         Expect(foreign_over_hit == 0,
+                "native wheel forwarder crossed into covered foreign window");
+}
+
 static bool TestTitleBarControlHitTesting() {
   const auto window_size = CefSize(300, 200);
   return Expect(GetMuonTitleBarControlActionAtWindowPoint(
@@ -389,6 +454,8 @@ int main() {
                  TestPageDraggableRegionHitTesting() &&
                  TestPageDraggableRegionSearchKeys() &&
                  TestNativeForwarderRegistersChildWindows() &&
+                 TestNativeWheelForwarderTargetWindowSelection() &&
+                 TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() &&
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
                  TestTitleBarIconNativeScaleFactors() &&

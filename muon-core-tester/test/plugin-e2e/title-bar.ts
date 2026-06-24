@@ -58,6 +58,21 @@ interface PageScrollPosition {
   y: number;
 }
 
+interface PageAppRegionHitElement {
+  tagName: string;
+  id: string;
+  className: string;
+  appRegion: string;
+}
+
+interface PageAppRegionHit {
+  x: number;
+  y: number;
+  elements: PageAppRegionHitElement[];
+  hasDrag: boolean;
+  hasNoDrag: boolean;
+}
+
 const testWindowTitle = "muon titlebar main";
 const maximizedStates = [
   "_NET_WM_STATE_MAXIMIZED_HORZ",
@@ -691,6 +706,67 @@ const readPageScrollPosition = async (
   y: Number(await driver.evaluate("window.scrollY")),
 });
 
+const readPageAppRegionHit = async (
+  driver: CdpDriver,
+  x: number,
+  y: number,
+): Promise<PageAppRegionHit> =>
+  await driver.evaluate<PageAppRegionHit>(`(() => {
+    const elements = [];
+    for (let current = document.elementFromPoint(${x}, ${y}); current !== null; current = current.parentElement) {
+      const appRegion = getComputedStyle(current).webkitAppRegion;
+      elements.push({
+        tagName: current.tagName,
+        id: current.id,
+        className: String(current.className ?? ""),
+        appRegion,
+      });
+    }
+    return {
+      x: ${x},
+      y: ${y},
+      elements,
+      hasDrag: elements.some((element) => element.appRegion === "drag"),
+      hasNoDrag: elements.some((element) => element.appRegion === "no-drag"),
+    };
+  })()`);
+
+const formatPageAppRegionHit = (hit: PageAppRegionHit): string =>
+  hit.elements
+    .map(
+      (element) =>
+        `${element.tagName}${element.id.length === 0 ? "" : `#${element.id}`}${
+          element.className.length === 0 ? "" : `.${element.className}`
+        }[${element.appRegion}]`,
+    )
+    .join(" > ");
+
+const expectPageDragRegionPoint = async (
+  driver: CdpDriver,
+  x: number,
+  y: number,
+): Promise<void> => {
+  const hit = await readPageAppRegionHit(driver, x, y);
+  if (!hit.hasDrag || hit.hasNoDrag) {
+    throw new Error(
+      `Expected page point to be a drag region: ${formatPageAppRegionHit(hit)}`,
+    );
+  }
+};
+
+const expectPageNoDragRegionPoint = async (
+  driver: CdpDriver,
+  x: number,
+  y: number,
+): Promise<void> => {
+  const hit = await readPageAppRegionHit(driver, x, y);
+  if (!hit.hasNoDrag) {
+    throw new Error(
+      `Expected page point to be a no-drag region: ${formatPageAppRegionHit(hit)}`,
+    );
+  }
+};
+
 const waitForPageScrollChange = async (
   driver: CdpDriver,
   initial: PageScrollPosition,
@@ -887,9 +963,26 @@ titleBarIt(
       });
 
       await runTitleBarStep(
+        "wheel page no-drag region vertically",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          await expectPageNoDragRegionPoint(driver, 84, 130);
+          const initialScroll = await readPageScrollPosition(driver);
+          await sendNativeMouseWheel(
+            testWindowTitle,
+            bounds.x + 84,
+            bounds.y + titleBarHeight + 130,
+            "down",
+          );
+          await waitForPageScrollChange(driver, initialScroll, "y");
+        },
+      );
+
+      await runTitleBarStep(
         "wheel page draggable region vertically",
         async () => {
           await driver.evaluate("window.scrollTo(0, 0)");
+          await expectPageDragRegionPoint(driver, 220, 260);
           const initialScroll = await readPageScrollPosition(driver);
           await sendNativeMouseWheel(
             testWindowTitle,
@@ -905,6 +998,7 @@ titleBarIt(
         "wheel page draggable region horizontally",
         async () => {
           await driver.evaluate("window.scrollTo(0, 0)");
+          await expectPageDragRegionPoint(driver, 220, 260);
           const initialScroll = await readPageScrollPosition(driver);
           await sendNativeMouseWheel(
             testWindowTitle,

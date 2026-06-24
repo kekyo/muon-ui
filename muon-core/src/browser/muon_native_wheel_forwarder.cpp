@@ -45,14 +45,24 @@
 
 namespace {
 
+#if defined(_WIN32)
+static CefPoint GetNativeWheelDipScreenPoint(CefPoint screen_point) {
+  return CefDisplay::ConvertScreenPointFromPixels(screen_point);
+}
+#elif defined(OS_LINUX) && defined(CEF_X11)
+static CefPoint GetNativeWheelDipScreenPoint(CefPoint screen_point) {
+  return screen_point;
+}
+#endif
+
 #if defined(_WIN32) || (defined(OS_LINUX) && defined(CEF_X11))
-static bool ForwardNativeWheelFromScreenPixels(CefWindowHandle window_handle,
-                                               CefPoint screen_point,
-                                               int delta_x,
-                                               int delta_y,
-                                               uint32_t modifiers) {
+static bool ForwardNativeWheelFromScreenPoint(CefWindowHandle window_handle,
+                                              CefPoint screen_point,
+                                              int delta_x,
+                                              int delta_y,
+                                              uint32_t modifiers) {
   const auto dip_screen_point =
-      CefDisplay::ConvertScreenPointFromPixels(screen_point);
+      GetNativeWheelDipScreenPoint(screen_point);
   return ForwardRegisteredMuonPageDraggableRegionWheel(
       window_handle, dip_screen_point, delta_x, delta_y, modifiers);
 }
@@ -460,7 +470,7 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     case WM_MOUSEWHEEL: {
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
-      if (ForwardNativeWheelFromScreenPixels(
+      if (ForwardNativeWheelFromScreenPoint(
               root_window_handle, screen_point, 0,
               GET_WHEEL_DELTA_WPARAM(wparam),
               GetMuonWindowsEventFlags(wparam))) {
@@ -471,7 +481,7 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     case WM_MOUSEHWHEEL: {
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
-      if (ForwardNativeWheelFromScreenPixels(
+      if (ForwardNativeWheelFromScreenPoint(
               root_window_handle, screen_point,
               -GET_WHEEL_DELTA_WPARAM(wparam), 0,
               GetMuonWindowsEventFlags(wparam))) {
@@ -570,7 +580,7 @@ class MuonForwardX11WheelTask final : public CefTask {
         modifiers_(modifiers) {}
 
   void Execute() override {
-    ForwardNativeWheelFromScreenPixels(
+    ForwardNativeWheelFromScreenPoint(
         window_handle_, screen_point_, delta_x_, delta_y_, modifiers_);
   }
 
@@ -629,23 +639,101 @@ static bool GetMuonX11WheelDeltas(int button, int* delta_x, int* delta_y) {
   }
 }
 
-static void PostMuonX11WheelEvent(const XIDeviceEvent* event) {
+static CefWindowHandle GetRegisteredMuonX11WheelWindowAtRootPoint(
+    Display* display,
+    CefPoint root_point,
+    const std::vector<CefWindowHandle>& registered_window_handles) {
+  if (display == nullptr) {
+    return 0;
+  }
+
+  const auto root_window = DefaultRootWindow(display);
+  Window root_return = None;
+  Window parent_return = None;
+  Window* children = nullptr;
+  unsigned int child_count = 0;
+  if (XQueryTree(display, root_window, &root_return, &parent_return,
+                 &children, &child_count) == False) {
+    return 0;
+  }
+
+  std::vector<MuonNativeWheelForwarderTopLevelWindow> top_level_windows;
+  top_level_windows.reserve(child_count);
+  for (auto index = 0u; index < child_count; ++index) {
+    XWindowAttributes attributes;
+    if (XGetWindowAttributes(display, children[index], &attributes) ==
+        False) {
+      continue;
+    }
+
+    int root_x = 0;
+    int root_y = 0;
+    Window translated_child = None;
+    if (XTranslateCoordinates(display, children[index], root_window, 0, 0,
+                              &root_x, &root_y,
+                              &translated_child) == False) {
+      continue;
+    }
+
+    top_level_windows.push_back(
+        {static_cast<CefWindowHandle>(children[index]), root_x, root_y,
+         attributes.width, attributes.height,
+         attributes.map_state == IsViewable,
+         attributes.override_redirect != False});
+  }
+  if (children != nullptr) {
+    XFree(children);
+  }
+
+  return GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+      root_point, registered_window_handles, top_level_windows);
+}
+
+static bool IsMuonNativeWheelForwarderWindowRegistered(
+    CefWindowHandle window_handle,
+    const std::vector<CefWindowHandle>& registered_window_handles) {
+  return window_handle != 0 &&
+         std::find(registered_window_handles.begin(),
+                   registered_window_handles.end(),
+                   window_handle) != registered_window_handles.end();
+}
+
+static void PostMuonX11WheelEvent(Display* display,
+                                  const XIDeviceEvent* event) {
   int delta_x = 0;
   int delta_y = 0;
   if (!GetMuonX11WheelDeltas(event->detail, &delta_x, &delta_y)) {
     return;
   }
 
+  std::vector<CefWindowHandle> registered_window_handles;
+  {
+    std::lock_guard<std::mutex> lock(g_muon_x11_wheel_mutex);
+    registered_window_handles.assign(g_muon_x11_wheel_windows.begin(),
+                                     g_muon_x11_wheel_windows.end());
+  }
   const auto window_handle =
-      static_cast<CefWindowHandle>(event->child != None ? event->child
-                                                       : event->event);
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          static_cast<CefWindowHandle>(event->event),
+          static_cast<CefWindowHandle>(event->child != None ? event->child : 0),
+          registered_window_handles);
   const auto screen_point =
       CefPoint(static_cast<int>(std::lround(event->root_x)),
                static_cast<int>(std::lround(event->root_y)));
+  auto target_window_handle = window_handle;
+  if (!IsMuonNativeWheelForwarderWindowRegistered(
+          target_window_handle, registered_window_handles)) {
+    const auto point_window_handle =
+        GetRegisteredMuonX11WheelWindowAtRootPoint(
+            display, screen_point, registered_window_handles);
+    if (point_window_handle != 0) {
+      target_window_handle = point_window_handle;
+    }
+  }
   CefPostTask(
       TID_UI,
-      new MuonForwardX11WheelTask(window_handle, screen_point, delta_x, delta_y,
-                                  GetMuonX11ButtonEventFlags(event)));
+      new MuonForwardX11WheelTask(target_window_handle, screen_point, delta_x,
+                                  delta_y, GetMuonX11ButtonEventFlags(event)));
 }
 
 static bool SelectMuonX11WheelEvents(Display* display, int* xi_opcode) {
@@ -694,6 +782,7 @@ static void HandleMuonX11Event(Display* display,
   }
   if (event->xcookie.evtype == XI_ButtonPress) {
     PostMuonX11WheelEvent(
+        display,
         static_cast<const XIDeviceEvent*>(event->xcookie.data));
   }
   XFreeEventData(display, &event->xcookie);
@@ -859,6 +948,53 @@ std::vector<CefWindowHandle> GetMuonNativeForwarderWindowHandlesForRegistration(
     handles.push_back(child_window_handle);
   }
   return handles;
+}
+
+CefWindowHandle GetMuonNativeWheelForwarderTargetWindowHandle(
+    CefWindowHandle event_window_handle,
+    CefWindowHandle child_window_handle,
+    const std::vector<CefWindowHandle>& registered_window_handles) {
+  if (event_window_handle != 0 &&
+      std::find(registered_window_handles.begin(),
+                registered_window_handles.end(),
+                event_window_handle) != registered_window_handles.end()) {
+    return event_window_handle;
+  }
+  if (child_window_handle != 0 &&
+      std::find(registered_window_handles.begin(),
+                registered_window_handles.end(),
+                child_window_handle) != registered_window_handles.end()) {
+    return child_window_handle;
+  }
+  return child_window_handle != 0 ? child_window_handle : event_window_handle;
+}
+
+CefWindowHandle GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+    CefPoint screen_point,
+    const std::vector<CefWindowHandle>& registered_window_handles,
+    const std::vector<MuonNativeWheelForwarderTopLevelWindow>&
+        top_level_windows) {
+  for (auto iterator = top_level_windows.rbegin();
+       iterator != top_level_windows.rend(); ++iterator) {
+    if (!iterator->visible || iterator->override_redirect ||
+        iterator->width <= 0 || iterator->height <= 0) {
+      continue;
+    }
+    if (screen_point.x < iterator->x ||
+        screen_point.y < iterator->y ||
+        screen_point.x >= iterator->x + iterator->width ||
+        screen_point.y >= iterator->y + iterator->height) {
+      continue;
+    }
+    if (std::find(registered_window_handles.begin(),
+                  registered_window_handles.end(),
+                  iterator->window_handle) !=
+        registered_window_handles.end()) {
+      return iterator->window_handle;
+    }
+    return 0;
+  }
+  return 0;
 }
 
 void RegisterMuonNativeWheelForwarder(CefRefPtr<CefWindow> window) {

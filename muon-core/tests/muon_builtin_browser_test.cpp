@@ -8,6 +8,7 @@
 #include "browser/muon_native_wheel_forwarder.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
+#include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 
 #include <cstddef>
@@ -160,6 +161,33 @@ static bool TestInitialWindowShowState() {
                     CEF_SHOW_STATE_FULLSCREEN,
                 "fullscreen initial window state did not use fullscreen show "
                 "state");
+}
+
+static bool BoundsAreInsideWorkArea(const CefRect& bounds,
+                                    const CefRect& work_area) {
+  return bounds.x >= work_area.x && bounds.y >= work_area.y &&
+         bounds.x + bounds.width <= work_area.x + work_area.width &&
+         bounds.y + bounds.height <= work_area.y + work_area.height;
+}
+
+static bool TestInitialWindowWorkAreaBounds() {
+  const auto offset_work_area = CefRect(67, 34, 1000, 700);
+  const auto centered =
+      GetMuonCenteredWindowBounds(offset_work_area, CefSize(400, 300));
+  const auto clamped =
+      GetMuonCenteredWindowBounds(offset_work_area, CefSize(1200, 900));
+  return Expect(BoundsAreInsideWorkArea(centered, offset_work_area),
+                "centered initial window bounds escaped the work area") &&
+         Expect(centered.x == 367 && centered.y == 234 &&
+                    centered.width == 400 && centered.height == 300,
+                "initial window bounds were not centered in offset work "
+                "area") &&
+         Expect(BoundsAreInsideWorkArea(clamped, offset_work_area),
+                "clamped initial window bounds escaped the work area") &&
+         Expect(clamped.x == 67 && clamped.y == 34 &&
+                    clamped.width == 1000 && clamped.height == 700,
+                "oversized initial window bounds were not clamped to work "
+                "area");
 }
 
 static MuonTitleBarManifest CreateTestCustomTitleBarManifest() {
@@ -459,6 +487,7 @@ static bool TestCustomTitleBarWindowDelegate() {
 int main() {
   return TestBrowserFunctionDefinitions() && TestWindowTitleFallback() &&
                  TestInitialWindowShowState() && TestTitleBarManifestParsing() &&
+                 TestInitialWindowWorkAreaBounds() &&
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&
                  TestPageDraggableRegionSearchKeys() &&

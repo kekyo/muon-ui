@@ -132,7 +132,10 @@ const moveDialogAwayFromBrowserClickPoint = async (
   browserBounds: WindowBounds,
 ): Promise<void> => {
   try {
-    await dialogWindow.moveTo(browserBounds.x + 160, browserBounds.y + 160);
+    await dialogWindow.moveTo(
+      browserBounds.x + 160,
+      Math.max(0, browserBounds.y + 40),
+    );
   } catch {
     // Moving the dialog is only a best-effort aid for the click probe.
   }
@@ -320,6 +323,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
         ).toBe(true);
 
         const button = await findGestamentNativeDialogButtonByLabel(
+          running.app,
           match.window,
           buttonLabel,
           cdpCommandTimeoutMs,
@@ -363,6 +367,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           cdpCommandTimeoutMs,
         );
         const cancelButton = await findGestamentNativeDialogButtonByLabel(
+          running.app,
           match.window,
           "Cancel",
           cdpCommandTimeoutMs,
@@ -419,6 +424,12 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           title,
           cdpCommandTimeoutMs,
         );
+        const dialogButton = await findGestamentNativeDialogButtonByLabel(
+          running.app,
+          match.window,
+          buttonLabel,
+          cdpCommandTimeoutMs,
+        );
         await moveDialogAwayFromBrowserClickPoint(match.window, browserBounds);
         await clickBrowserWindow(running.app, browserBounds, match.window);
         const countWhileDialogOpen = await running.driver.evaluate<number>(
@@ -430,11 +441,6 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           // Activation is best-effort; the next step can still find the button.
         }
 
-        const dialogButton = await findGestamentNativeDialogButtonByLabel(
-          match.window,
-          buttonLabel,
-          cdpCommandTimeoutMs,
-        );
         await dialogButton.click();
         await expect(
           readNativeFileDialogProbeResult(running.driver),
@@ -492,6 +498,12 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           title,
           cdpCommandTimeoutMs,
         );
+        const dialogButton = await findGestamentNativeDialogButtonByLabel(
+          running.app,
+          match.window,
+          buttonLabel,
+          cdpCommandTimeoutMs,
+        );
         await moveDialogAwayFromBrowserClickPoint(match.window, browserBounds);
         await clickBrowserWindow(running.app, browserBounds, match.window);
         const countWhileDialogOpen = await running.driver.evaluate<number>(
@@ -503,11 +515,6 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           // Activation is best-effort; the next step can still find the button.
         }
 
-        const dialogButton = await findGestamentNativeDialogButtonByLabel(
-          match.window,
-          buttonLabel,
-          cdpCommandTimeoutMs,
-        );
         await dialogButton.click();
         await expect(
           readNativeFileDialogProbeResult(running.driver),
@@ -591,17 +598,18 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           title,
           cdpCommandTimeoutMs,
         );
+        const dialogButton = await findGestamentNativeDialogButtonByLabel(
+          running.app,
+          match.window,
+          buttonLabel,
+          cdpCommandTimeoutMs,
+        );
         await closeOwnerBrowserWindow(running.driver);
         await wait(500);
         await expect(
           findGestamentNativeWindow(running.app, title, cdpCommandTimeoutMs),
         ).resolves.toBeDefined();
 
-        const dialogButton = await findGestamentNativeDialogButtonByLabel(
-          match.window,
-          buttonLabel,
-          cdpCommandTimeoutMs,
-        );
         await dialogButton.click();
         await expectGestamentMuonExitedNormally(running.app);
       } finally {

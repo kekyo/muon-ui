@@ -14,6 +14,7 @@
 #include "include/cef_browser.h"
 #include "include/cef_task.h"
 #include "include/views/cef_box_layout.h"
+#include "include/views/cef_display.h"
 #include "include/views/cef_panel.h"
 
 #include <utility>
@@ -86,6 +87,25 @@ static void ApplyInitialWindowState(
   }
 }
 
+static bool GetInitialWindowWorkArea(CefRefPtr<CefWindow> window,
+                                     CefRect* work_area) {
+  if (!window || work_area == nullptr) {
+    return false;
+  }
+  auto display = window->GetDisplay();
+  if (!display) {
+    display = CefDisplay::GetPrimaryDisplay();
+  }
+  if (display) {
+    const auto display_work_area = display->GetWorkArea();
+    if (display_work_area.width > 0 && display_work_area.height > 0) {
+      *work_area = display_work_area;
+      return true;
+    }
+  }
+  return false;
+}
+
 void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
   const auto title = is_devtools_ ? GetMuonDevToolsWindowTitle()
                                   : GetMuonDefaultWindowTitle();
@@ -133,6 +153,9 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
       SetRegisteredMuonTitleBarVisibility(
           window, initial_title_bar_visibility_);
     }
+  }
+  if (!initial_bounds_provided_) {
+    window->CenterWindow(GetPreferredSize(nullptr));
   }
   ApplyInitialWindowState(window, initial_window_state_);
 }
@@ -185,6 +208,16 @@ CefSize MuonWindowDelegate::GetPreferredSize(CefRefPtr<CefView> view) {
           ? 768 + title_bar_manifest_.height
           : 768;
   return CefSize(1024, height);
+}
+
+CefRect MuonWindowDelegate::GetInitialBounds(CefRefPtr<CefWindow> window) {
+  CefRect work_area;
+  if (!GetInitialWindowWorkArea(window, &work_area)) {
+    initial_bounds_provided_ = false;
+    return CefRect();
+  }
+  initial_bounds_provided_ = true;
+  return GetMuonCenteredWindowBounds(work_area, GetPreferredSize(nullptr));
 }
 
 bool MuonWindowDelegate::IsFrameless(CefRefPtr<CefWindow> window) {

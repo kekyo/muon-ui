@@ -91,6 +91,14 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   CefSize GetPreferredSize(CefRefPtr<CefView> view) override;
 
   /**
+   * Returns initial bounds inside the display work area.
+   *
+   * @param window Window requesting its initial bounds.
+   * @return Initial window bounds, or an empty rectangle to use CEF fallback.
+   */
+  CefRect GetInitialBounds(CefRefPtr<CefWindow> window) override;
+
+  /**
    * Returns true when the window should use a frameless custom title bar.
    *
    * @param window Window being created.
@@ -145,6 +153,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
+  bool initial_bounds_provided_ = false;
 
   IMPLEMENT_REFCOUNTING(MuonWindowDelegate);
   DISALLOW_COPY_AND_ASSIGN(MuonWindowDelegate);

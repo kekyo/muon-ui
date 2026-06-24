@@ -2106,6 +2106,7 @@ const createGestamentNativeDialogTextClickOptions =
   });
 
 export const findGestamentNativeDialogButtonByLabel = async (
+  app: GtkApp,
   window: GtkWindowElement,
   buttonName: string,
   timeoutMs: number,
@@ -2137,12 +2138,39 @@ export const findGestamentNativeDialogButtonByLabel = async (
       const textClickOptions = createGestamentNativeDialogTextClickOptions();
       const textMatch = await window.findText(buttonName, textClickOptions);
       if (textMatch !== undefined) {
+        const detectedWindowBounds = await resolveOrUndefined(
+          async () => await window.bounds(),
+        );
         return {
           click: async () => {
-            await window.clickText(
-              buttonName,
-              createGestamentNativeDialogTextClickOptions(),
+            await resolveOrUndefined(async () => await window.activate());
+            const currentWindowBounds = await resolveOrUndefined(
+              async () => await window.bounds(),
             );
+            const offsetX =
+              detectedWindowBounds !== undefined &&
+              currentWindowBounds !== undefined
+                ? currentWindowBounds.x - detectedWindowBounds.x
+                : 0;
+            const offsetY =
+              detectedWindowBounds !== undefined &&
+              currentWindowBounds !== undefined
+                ? currentWindowBounds.y - detectedWindowBounds.y
+                : 0;
+            await app.input.moveMouseTo(
+              Math.round(
+                textMatch.screenBounds.x +
+                  textMatch.screenBounds.width / 2 +
+                  offsetX,
+              ),
+              Math.round(
+                textMatch.screenBounds.y +
+                  textMatch.screenBounds.height / 2 +
+                  offsetY,
+              ),
+            );
+            await app.input.setMouseButton("left", true);
+            await app.input.setMouseButton("left", false);
           },
           detection: "windowText",
           label: buttonName,

@@ -539,20 +539,23 @@ static const MuonPageDraggableRegions* FindPageDraggableRegionsAtScreenPoint(
     CefWindowHandle window_handle,
     const CefPoint& screen_point,
     CefPoint* view_point) {
-  if (window_handle != 0) {
-    const auto key = GetWindowHandleDraggableRegionKey(window_handle);
+  std::vector<std::uintptr_t> registered_window_keys;
+  registered_window_keys.reserve(g_muon_page_draggable_regions.size());
+  for (const auto& page_regions : g_muon_page_draggable_regions) {
+    registered_window_keys.push_back(page_regions.first);
+  }
+
+  const auto window_key =
+      window_handle != 0 ? GetWindowHandleDraggableRegionKey(window_handle)
+                         : 0;
+  for (const auto key :
+       GetMuonPageDraggableRegionSearchKeys(window_key,
+                                            registered_window_keys)) {
     const auto page_regions = g_muon_page_draggable_regions.find(key);
     if (page_regions != g_muon_page_draggable_regions.end() &&
         GetPageDraggableRegionViewPoint(page_regions->second, screen_point,
                                         view_point)) {
       return &page_regions->second;
-    }
-  }
-
-  for (const auto& page_regions : g_muon_page_draggable_regions) {
-    if (GetPageDraggableRegionViewPoint(page_regions.second, screen_point,
-                                        view_point)) {
-      return &page_regions.second;
     }
   }
   return nullptr;
@@ -1417,6 +1420,23 @@ bool IsMuonPageDraggableRegionPoint(
     draggable = true;
   }
   return draggable;
+}
+
+std::vector<std::uintptr_t> GetMuonPageDraggableRegionSearchKeys(
+    std::uintptr_t window_key,
+    const std::vector<std::uintptr_t>& registered_window_keys) {
+  std::vector<std::uintptr_t> search_keys;
+  if (window_key != 0) {
+    search_keys.push_back(window_key);
+    return search_keys;
+  }
+  for (const auto registered_window_key : registered_window_keys) {
+    if (registered_window_key == 0) {
+      continue;
+    }
+    search_keys.push_back(registered_window_key);
+  }
+  return search_keys;
 }
 
 bool IsRegisteredMuonPageDraggableRegionPoint(

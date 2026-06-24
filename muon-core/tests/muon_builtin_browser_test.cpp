@@ -11,6 +11,7 @@
 #include "browser/muon_window_title.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -248,6 +249,24 @@ static bool TestPageDraggableRegionHitTesting() {
                 "empty regions accepted a point");
 }
 
+static bool TestPageDraggableRegionSearchKeys() {
+  const auto registered_window_keys = std::vector<std::uintptr_t>{10, 20};
+  const auto specific =
+      GetMuonPageDraggableRegionSearchKeys(10, registered_window_keys);
+  const auto foreign =
+      GetMuonPageDraggableRegionSearchKeys(30, registered_window_keys);
+  const auto global =
+      GetMuonPageDraggableRegionSearchKeys(0, registered_window_keys);
+  return Expect(specific == std::vector<std::uintptr_t>{10},
+                "specific draggable-region search fell back to other windows") &&
+         Expect(foreign == std::vector<std::uintptr_t>{30},
+                "foreign draggable-region search fell back to registered "
+                "windows") &&
+         Expect(global == registered_window_keys,
+                "global draggable-region search did not use registered "
+                "windows");
+}
+
 static bool TestNativeForwarderRegistersChildWindows() {
   const auto handles = GetMuonNativeForwarderWindowHandlesForRegistration(
       10, std::vector<CefWindowHandle>{20, 30});
@@ -352,6 +371,7 @@ int main() {
                  TestInitialWindowShowState() && TestTitleBarManifestParsing() &&
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&
+                 TestPageDraggableRegionSearchKeys() &&
                  TestNativeForwarderRegistersChildWindows() &&
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&

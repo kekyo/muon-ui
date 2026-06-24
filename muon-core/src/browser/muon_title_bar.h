@@ -541,10 +541,21 @@ bool IsMuonPageDraggableRegionPoint(
     const CefPoint& point);
 
 /**
+ * Builds registered page draggable-region search keys for a native input event.
+ *
+ * @param window_key Native window key for the event target, or zero.
+ * @param registered_window_keys Registered page draggable-region window keys.
+ * @return Window keys to test, in search order.
+ */
+std::vector<std::uintptr_t> GetMuonPageDraggableRegionSearchKeys(
+    std::uintptr_t window_key,
+    const std::vector<std::uintptr_t>& registered_window_keys);
+
+/**
  * Returns whether a screen point hits registered page CSS draggable regions.
  *
- * @param window_handle Native window handle used to prefer one registered
- * window, or null to search all registered windows.
+ * @param window_handle Native window handle to search, or null to search all
+ * registered windows.
  * @param screen_point DIP screen point to test.
  * @return true when the point belongs to a registered page draggable region.
  */

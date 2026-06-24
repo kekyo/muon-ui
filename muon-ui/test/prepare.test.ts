@@ -350,6 +350,9 @@ const requireStagePath = (
   return result.stagePath ?? "";
 };
 
+const sanitizePrepareLockKey = (value: string): string =>
+  value.replace(/[^A-Za-z0-9._-]/g, "_");
+
 const buildProgressHarness = async (root: string): Promise<string> => {
   const harnessPath = join(root, "prepare-progress-harness.c");
   const executablePath = join(root, "prepare-progress-harness");
@@ -1184,6 +1187,51 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(results[0]?.stagePath ?? "", ".muon-ready.json")),
     ).resolves.toBeUndefined();
+  });
+
+  it("recovers an abandoned staging lock from an interrupted prepare", async () => {
+    const fixture = await createPrepareFixture();
+    const lockPath = join(
+      dirname(fixture.stageDir),
+      `.muon-stage-${sanitizePrepareLockKey(fixture.stageDir)}.lock`,
+    );
+    await mkdir(lockPath, { recursive: true });
+    const staleTime = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleTime, staleTime);
+
+    const { stdout } = await execFileAsync(
+      prepareExecutablePath,
+      [
+        "runtime",
+        "--muon-path",
+        fixture.muonPath,
+        "--cef-path",
+        fixture.cefPath,
+        "--stage-dir",
+        fixture.stageDir,
+        "--target",
+        "linux64",
+        "--cache-dir",
+        fixture.cacheDir,
+        "--quiet",
+        "--json",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+        },
+        timeout: 10_000,
+      },
+    );
+
+    const result = JSON.parse(stdout) as { stagePath: string };
+    expect(result.stagePath).toBe(fixture.stageDir);
+    await expect(
+      access(join(fixture.stageDir, "muon-core")),
+    ).resolves.toBeUndefined();
+    await expect(access(lockPath)).rejects.toThrow();
   });
 
   it("reuses the staged runtime while its ready marker matches", async () => {

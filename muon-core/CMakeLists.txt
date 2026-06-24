@@ -798,7 +798,41 @@ set(MUON_CORE_VERSION_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/muon_core_version_generated.h")
 set(MUON_RUNTIME_INFO_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/muon_runtime_info_generated.h")
+set(MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH
+  "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon-256.png")
+set(MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH
+  "${MUON_GENERATED_INCLUDE_DIR}/browser/muon_default_title_bar_icon_generated.h")
+set(MUON_WINDOWS_ICON_PATH
+  "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon.ico")
 file(MAKE_DIRECTORY "${MUON_GENERATED_INCLUDE_DIR}")
+add_custom_command(
+  OUTPUT "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
+  COMMAND ${CMAKE_COMMAND}
+    "-DINPUT=${MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH}"
+    "-DOUTPUT=${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_default_title_bar_icon_header.cmake"
+  DEPENDS
+    "${MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_default_title_bar_icon_header.cmake"
+  VERBATIM
+  )
+if(WIN32)
+  set(MUON_CORE_WINDOWS_RESOURCE_PATH
+    "${MUON_GENERATED_INCLUDE_DIR}/muon_core.rc")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/muon_core.rc.in"
+    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
+    @ONLY
+    )
+  set_source_files_properties(
+    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
+    PROPERTIES
+    OBJECT_DEPENDS "${MUON_WINDOWS_ICON_PATH}"
+    )
+  list(APPEND APP_SOURCES
+    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
+    )
+endif()
 if(MUON_CORE_VERSION_HEADER)
   get_filename_component(MUON_CORE_VERSION_HEADER_ABSOLUTE
     "${MUON_CORE_VERSION_HEADER}" ABSOLUTE)
@@ -827,6 +861,7 @@ configure_file(
   @ONLY
   )
 list(APPEND APP_HEADERS
+  "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
   "${MUON_CORE_VERSION_HEADER_PATH}"
   "${MUON_RUNTIME_INFO_HEADER_PATH}"
   )
@@ -1267,6 +1302,23 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_builtin_browser_test)
+  add_executable(muon_default_title_bar_icon_generated_test
+    tests/muon_default_title_bar_icon_generated_test.cpp
+    "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
+    )
+  target_compile_features(muon_default_title_bar_icon_generated_test PRIVATE
+    cxx_std_20)
+  target_include_directories(muon_default_title_bar_icon_generated_test PRIVATE
+    "${MUON_GENERATED_INCLUDE_DIR}"
+    )
+  target_compile_definitions(muon_default_title_bar_icon_generated_test PRIVATE
+    EXPECTED_DEFAULT_TITLE_BAR_ICON_PNG="${MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH}"
+    )
+  MUON_APPLY_SANITIZERS(muon_default_title_bar_icon_generated_test)
+  add_test(
+    NAME default_title_bar_icon_generated
+    COMMAND muon_default_title_bar_icon_generated_test
+    )
   add_executable(muon_ui_title_bar_manifest_test
     tests/muon_ui_title_bar_manifest_test.cpp
     )

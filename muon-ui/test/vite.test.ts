@@ -403,6 +403,9 @@ const readCapturedArguments = async (
   return content.trim().length === 0 ? [] : content.trim().split("\n");
 };
 
+const pathEndsWith = (value: string, suffix: string): boolean =>
+  value.replaceAll("\\", "/").endsWith(suffix);
+
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     await server.close();
@@ -446,6 +449,58 @@ describe("muon Vite plugin", () => {
         packageDirectory: join("node_modules", "muon-ui", "dist"),
       }),
     ).toBe(resolve("/custom-muon-core"));
+  });
+
+  it("ignores generated .muon staging files while preserving custom watch ignores", async () => {
+    const root = await createTemporaryDirectory("muon-vite-watch-ignore-");
+    await writeBasicViteProject(root);
+    const watchChanges: string[] = [];
+    const customIgnoredPath = join(root, "custom.tmp");
+    const server = await createServer({
+      root,
+      logLevel: "silent",
+      server: {
+        host: "127.0.0.1",
+        port: 0,
+        watch: {
+          ignored: (path: string): boolean => path === customIgnoredPath,
+        },
+      },
+      plugins: [
+        muon({ open: false }),
+        {
+          name: "muon-watch-change-capture",
+          watchChange: (id): void => {
+            watchChanges.push(id);
+          },
+        },
+      ],
+    });
+    servers.push(server);
+    await server.listen();
+
+    watchChanges.length = 0;
+    await writeFile(
+      join(root, "index.html"),
+      "<!doctype html><title>changed</title>",
+    );
+    await wait(() =>
+      watchChanges.some((id) => pathEndsWith(id, "/index.html")),
+    );
+
+    watchChanges.length = 0;
+    await writeFile(customIgnoredPath, "ignored\n");
+    await delay(500);
+    expect(watchChanges.some((id) => pathEndsWith(id, "/custom.tmp"))).toBe(
+      false,
+    );
+
+    watchChanges.length = 0;
+    const stagingFilePath = join(root, ".muon", "linux64", "CREDITS.html");
+    await mkdir(dirname(stagingFilePath), { recursive: true });
+    await writeFile(stagingFilePath, "ignored\n");
+    await delay(500);
+    expect(watchChanges.some((id) => id.includes("/.muon/"))).toBe(false);
   });
 
   it("launches Muon when server.open is false", async () => {

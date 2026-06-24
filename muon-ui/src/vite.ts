@@ -3,13 +3,14 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import type { Plugin } from "vite";
-import type { ResolvedConfig } from "vite";
+import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";
 
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
+
+type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
 /**
  * Options for generating Muon app distributions after Vite build.
@@ -124,6 +125,17 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
   const plugin: Plugin = {
     name: "muon",
+    config: (config): Omit<UserConfig, "plugins"> | null => {
+      if (config.server?.watch === null) {
+        return null;
+      }
+
+      return {
+        server: {
+          watch: createMuonWatchOptions(config.server?.watch),
+        },
+      };
+    },
     configResolved: (config) => {
       resolvedConfig = config;
     },
@@ -152,6 +164,35 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
   return attachMuonVitePluginOptions(plugin, options);
 };
+
+const isMuonStagingWatchPath = (path: string): boolean => {
+  const normalized = path.replaceAll("\\", "/");
+  return (
+    normalized === ".muon" ||
+    normalized.startsWith(".muon/") ||
+    normalized.endsWith("/.muon") ||
+    normalized.includes("/.muon/")
+  );
+};
+
+const mergeMuonWatchIgnored = (
+  ignored: WatchOptions["ignored"] | undefined,
+): MuonWatchIgnored => {
+  const muonIgnored = (path: string): boolean => isMuonStagingWatchPath(path);
+  if (ignored === undefined) {
+    return muonIgnored;
+  }
+  return Array.isArray(ignored)
+    ? [...ignored, muonIgnored]
+    : [ignored, muonIgnored];
+};
+
+const createMuonWatchOptions = (
+  watch: WatchOptions | undefined,
+): WatchOptions => ({
+  ...(watch ?? {}),
+  ignored: mergeMuonWatchIgnored(watch?.ignored),
+});
 
 const createMuonBuildOptions = (
   config: ResolvedConfig,

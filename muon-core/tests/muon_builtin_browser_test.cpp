@@ -35,6 +35,8 @@ static bool TestBrowserFunctionDefinitions() {
       "minimize",        "maximize",       "restore",
       "setTitleBarVisibility",
       "setTitleBarIcon",
+      "__getWindowBounds",
+      "__setWindowBounds",
       "__close",         "__shutdown",     "__recycle",
   };
   const auto expected_kinds = std::vector<MuonBuiltinBrowserFunctionKind>{
@@ -55,6 +57,8 @@ static bool TestBrowserFunctionDefinitions() {
       MuonBuiltinBrowserFunctionKind::Restore,
       MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility,
       MuonBuiltinBrowserFunctionKind::SetTitleBarIcon,
+      MuonBuiltinBrowserFunctionKind::GetWindowBounds,
+      MuonBuiltinBrowserFunctionKind::SetWindowBounds,
       MuonBuiltinBrowserFunctionKind::Close,
       MuonBuiltinBrowserFunctionKind::Shutdown,
       MuonBuiltinBrowserFunctionKind::Recycle,
@@ -78,8 +82,10 @@ static bool TestBrowserFunctionDefinitions() {
       return false;
     }
   }
-  const auto set_title_bar_visibility = definitions[expected_names.size() - 5];
-  const auto set_title_bar_icon = definitions[expected_names.size() - 4];
+  const auto set_title_bar_visibility = definitions[15];
+  const auto set_title_bar_icon = definitions[16];
+  const auto get_window_bounds = definitions[17];
+  const auto set_window_bounds = definitions[18];
   const auto shutdown = definitions[expected_names.size() - 2];
   const auto recycle = definitions.back();
   if (!Expect(set_title_bar_visibility.arg_count == 1,
@@ -98,6 +104,32 @@ static bool TestBrowserFunctionDefinitions() {
               "unexpected title bar icon argument type") ||
       !Expect(set_title_bar_icon.return_type.type == MUON_TYPE_VOID,
               "unexpected title bar icon return type") ||
+      !Expect(get_window_bounds.filter_name != nullptr &&
+                  std::string(get_window_bounds.filter_name) ==
+                      "getWindowBounds",
+              "unexpected get window bounds filter name") ||
+      !Expect(get_window_bounds.arg_count == 0,
+              "unexpected get window bounds argument count") ||
+      !Expect(get_window_bounds.return_type.type == MUON_TYPE_STRING,
+              "unexpected get window bounds return type") ||
+      !Expect(set_window_bounds.filter_name != nullptr &&
+                  std::string(set_window_bounds.filter_name) ==
+                      "setWindowBounds",
+              "unexpected set window bounds filter name") ||
+      !Expect(set_window_bounds.arg_count == 4,
+              "unexpected set window bounds argument count") ||
+      !Expect(set_window_bounds.arg_types != nullptr,
+              "missing set window bounds argument metadata") ||
+      !Expect(set_window_bounds.arg_types[0].type == MUON_TYPE_I32,
+              "unexpected set window bounds x argument type") ||
+      !Expect(set_window_bounds.arg_types[1].type == MUON_TYPE_I32,
+              "unexpected set window bounds y argument type") ||
+      !Expect(set_window_bounds.arg_types[2].type == MUON_TYPE_I32,
+              "unexpected set window bounds width argument type") ||
+      !Expect(set_window_bounds.arg_types[3].type == MUON_TYPE_I32,
+              "unexpected set window bounds height argument type") ||
+      !Expect(set_window_bounds.return_type.type == MUON_TYPE_VOID,
+              "unexpected set window bounds return type") ||
       !Expect(shutdown.filter_name != nullptr &&
                   std::string(shutdown.filter_name) == "shutdown",
               "unexpected browser shutdown filter name") ||

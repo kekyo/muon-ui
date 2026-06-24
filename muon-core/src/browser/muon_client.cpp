@@ -2235,6 +2235,53 @@ void MuonClient::DispatchBuiltinBrowserCall(
       SendPluginResult(call.context, call.frame, call.call_id, result);
       break;
     }
+    case MuonBuiltinBrowserFunctionKind::GetWindowBounds: {
+      CefRefPtr<CefWindow> window;
+      if (!GetBrowserViewAndWindow(call.browser, nullptr, &window,
+                                   &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      const auto bounds = window->GetBounds();
+      result.value.type = MUON_TYPE_STRING;
+      result.value.string_value = "{\"x\":" + std::to_string(bounds.x) +
+                                  ",\"y\":" + std::to_string(bounds.y) +
+                                  ",\"width\":" +
+                                  std::to_string(bounds.width) +
+                                  ",\"height\":" +
+                                  std::to_string(bounds.height) + "}";
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetWindowBounds: {
+      if (!call.encoded_args || call.encoded_args->GetSize() != 4) {
+        RejectPluginCall(call, "Invalid window bounds");
+        return;
+      }
+      for (auto index = size_t{0}; index < 4; ++index) {
+        if (call.encoded_args->GetType(index) != VTYPE_INT) {
+          RejectPluginCall(call, "Invalid window bounds");
+          return;
+        }
+      }
+      const auto x = call.encoded_args->GetInt(0);
+      const auto y = call.encoded_args->GetInt(1);
+      const auto width = call.encoded_args->GetInt(2);
+      const auto height = call.encoded_args->GetInt(3);
+      if (width <= 0 || height <= 0) {
+        RejectPluginCall(call, "Invalid window bounds");
+        return;
+      }
+      CefRefPtr<CefWindow> window;
+      if (!GetBrowserViewAndWindow(call.browser, nullptr, &window,
+                                   &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      window->SetBounds(CefRect(x, y, width, height));
+      break;
+    }
     case MuonBuiltinBrowserFunctionKind::Close: {
       CefRefPtr<CefWindow> window;
       if (!GetBrowserViewAndWindow(call.browser, nullptr, &window,

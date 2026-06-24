@@ -38,6 +38,7 @@ import {
   f5ReloadShortcut,
   getCurrentTargetIds,
   getOuterSize,
+  getWindowBounds,
   join,
   listCdpTargets,
   listProcessGroupCommandLines,
@@ -72,6 +73,7 @@ import {
   waitForNativeWindowStatesAbsent,
   waitForNativeWindowStates,
   waitForOuterSizeChange,
+  waitForWindowBounds,
   waitForProcessExit,
   waitForProcessExitOrTimeout,
   waitForTargetClosed,
@@ -80,7 +82,11 @@ import {
   withMuonEnvironment,
   writeFile,
 } from "./shared.js";
-import type { BrowserInitialWindowState, CdpDriver } from "./shared.js";
+import type {
+  BrowserInitialWindowState,
+  BrowserWindowBounds,
+  CdpDriver,
+} from "./shared.js";
 
 const withMuonInitialWindowState = async (
   initialWindowState: BrowserInitialWindowState,
@@ -146,6 +152,15 @@ const waitForRecycledMuon = async (
     await wait(200);
   }
   throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
+};
+
+const expectWindowBoundsShape = (bounds: BrowserWindowBounds): void => {
+  expect(Number.isSafeInteger(bounds.x)).toBe(true);
+  expect(Number.isSafeInteger(bounds.y)).toBe(true);
+  expect(Number.isSafeInteger(bounds.width)).toBe(true);
+  expect(Number.isSafeInteger(bounds.height)).toBe(true);
+  expect(bounds.width).toBeGreaterThan(0);
+  expect(bounds.height).toBeGreaterThan(0);
 };
 
 const createNativeShortcutDragPageUrl = (title: string): string =>
@@ -827,6 +842,48 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
+  it("filters the window bounds browser wrappers by public function path", async () => {
+    const running = await startDebugMuon(
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.browser.getWindowBounds", "muon.browser.setWindowBounds"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon browser bounds partial allow</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate(`({
+          browserKeys: Object.keys(window.muon.browser).sort(),
+          getWindowBoundsType: typeof window.muon.browser.getWindowBounds,
+          setWindowBoundsType: typeof window.muon.browser.setWindowBounds,
+          internalGetWindowBoundsType: typeof window.muon.browser.__getWindowBounds,
+          internalSetWindowBoundsType: typeof window.muon.browser.__setWindowBounds,
+          reloadType: typeof window.muon.browser.reload,
+        })`),
+      ).resolves.toEqual({
+        browserKeys: ["getWindowBounds", "setWindowBounds"],
+        getWindowBoundsType: "function",
+        setWindowBoundsType: "function",
+        internalGetWindowBoundsType: "function",
+        internalSetWindowBoundsType: "function",
+        reloadType: "undefined",
+      });
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
   it("filters the shutdown browser wrapper by public function path", async () => {
     const running = await startDebugMuon(
       [],
@@ -1244,6 +1301,62 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           height: expect.any(Number),
         }),
       );
+    });
+  });
+
+  it("reads top-level window bounds through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      const bounds = await getWindowBounds(driver);
+      const viewportSize = await driver.evaluate<{
+        width: number;
+        height: number;
+      }>("({ width: window.innerWidth, height: window.innerHeight })");
+
+      expectWindowBoundsShape(bounds);
+      expect(bounds.width).toBeGreaterThanOrEqual(viewportSize.width);
+      expect(bounds.height).toBeGreaterThan(viewportSize.height);
+    });
+  });
+
+  it("sets top-level window bounds through the built-in browser API", async () => {
+    await withMuon([], async (driver) => {
+      const initialBounds = await getWindowBounds(driver);
+      const targetBounds: BrowserWindowBounds = {
+        x: initialBounds.x + 24,
+        y: initialBounds.y + 24,
+        width: Math.max(640, initialBounds.width - 120),
+        height: Math.max(520, initialBounds.height - 120),
+      };
+
+      await expect(
+        driver.evaluate(
+          `window.muon.browser.setWindowBounds(${JSON.stringify(targetBounds)})`,
+        ),
+      ).resolves.toBeUndefined();
+      const updatedBounds = await waitForWindowBounds(
+        driver,
+        targetBounds,
+        cdpCommandTimeoutMs,
+      );
+      expectWindowBoundsShape(updatedBounds);
+    });
+  });
+
+  it("rejects invalid top-level window bounds", async () => {
+    await withMuon([], async (driver) => {
+      const calls = [
+        "window.muon.browser.setWindowBounds(null)",
+        "window.muon.browser.setWindowBounds({ x: 0, y: 0, width: 0, height: 100 })",
+        "window.muon.browser.setWindowBounds({ x: 0, y: 0, width: 100, height: -1 })",
+        "window.muon.browser.setWindowBounds({ x: 0.5, y: 0, width: 100, height: 100 })",
+        "window.muon.browser.setWindowBounds({ x: 2147483648, y: 0, width: 100, height: 100 })",
+      ];
+
+      for (const call of calls) {
+        await expect(evaluateRejection(driver, call)).resolves.toContain(
+          "Invalid window bounds",
+        );
+      }
     });
   });
 

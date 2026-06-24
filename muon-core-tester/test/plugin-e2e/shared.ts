@@ -139,6 +139,13 @@ export interface BrowserOuterSize {
   height: number;
 }
 
+export interface BrowserWindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface PluginConfigEntry {
   name: string;
   allow: string[];
@@ -514,6 +521,8 @@ export const browserFunctionNames = [
   "minimize",
   "maximize",
   "restore",
+  "getWindowBounds",
+  "setWindowBounds",
   "setTitleBarVisibility",
   "setTitleBarIcon",
   "close",
@@ -1276,6 +1285,42 @@ export const getOuterSize = async (
   await driver.evaluate<BrowserOuterSize>(
     "({ width: window.outerWidth, height: window.outerHeight })",
   );
+
+export const getWindowBounds = async (
+  driver: CdpDriver,
+): Promise<BrowserWindowBounds> =>
+  await driver.evaluate<BrowserWindowBounds>(
+    "window.muon.browser.getWindowBounds()",
+  );
+
+export const isCloseWindowBounds = (
+  actual: BrowserWindowBounds,
+  expected: BrowserWindowBounds,
+  tolerance: number,
+): boolean =>
+  Math.abs(actual.x - expected.x) <= tolerance &&
+  Math.abs(actual.y - expected.y) <= tolerance &&
+  Math.abs(actual.width - expected.width) <= tolerance &&
+  Math.abs(actual.height - expected.height) <= tolerance;
+
+export const waitForWindowBounds = async (
+  driver: CdpDriver,
+  expectedBounds: BrowserWindowBounds,
+  timeoutMs: number,
+): Promise<BrowserWindowBounds> => {
+  const deadline = Date.now() + timeoutMs;
+  let lastBounds = await getWindowBounds(driver);
+  while (Date.now() < deadline) {
+    lastBounds = await getWindowBounds(driver);
+    if (isCloseWindowBounds(lastBounds, expectedBounds, 2)) {
+      return lastBounds;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for window bounds change. Last bounds: ${JSON.stringify(lastBounds)}`,
+  );
+};
 
 export const isDifferentOuterSize = (
   actual: BrowserOuterSize,

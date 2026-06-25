@@ -17,6 +17,7 @@
 #include "browser/muon_window_title.h"
 #include "browser/show_dev_tools_task.h"
 #include "config/muon_startup.h"
+#include "log/muon_close_debug_log.h"
 #include "log/muon_log.h"
 #include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
@@ -40,6 +41,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,6 +75,12 @@ class CloseMuonWindowTask final : public CefTask {
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
 
+    {
+      std::ostringstream log;
+      log << "CloseWindowTask Execute window="
+          << FormatMuonCloseDebugPointer(window_.get());
+      AppendMuonCloseDebugLog(log.str());
+    }
     if (window_) {
       window_->Close();
     }
@@ -92,6 +100,7 @@ class QuitMuonMessageLoopTask final : public CefTask {
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
 
+    AppendMuonCloseDebugLog("QuitMessageLoopTask Execute CefQuitMessageLoop");
     CefQuitMessageLoop();
   }
 
@@ -198,25 +207,54 @@ class CloseMuonBrowsersForShutdownTask final : public CefTask {
     CEF_REQUIRE_UI_THREAD();
 
     auto started_close = false;
+    {
+      std::ostringstream log;
+      log << "ShutdownCloseTask Execute browsers=" << browsers_.size();
+      AppendMuonCloseDebugLog(log.str());
+    }
     for (const auto& browser : browsers_) {
       if (!browser || !browser->IsValid()) {
+        std::ostringstream log;
+        log << "ShutdownCloseTask skip invalid browser="
+            << FormatMuonCloseDebugPointer(browser.get());
+        AppendMuonCloseDebugLog(log.str());
         continue;
       }
       auto host = browser->GetHost();
       if (!host) {
+        std::ostringstream log;
+        log << "ShutdownCloseTask skip no_host browser="
+            << FormatMuonCloseDebugPointer(browser.get())
+            << " browser_id=" << browser->GetIdentifier();
+        AppendMuonCloseDebugLog(log.str());
         continue;
       }
       host->CloseDevTools();
       const auto window = GetMuonWindowForCloseBrowser(browser);
       if (window) {
+        std::ostringstream log;
+        log << "ShutdownCloseTask close window="
+            << FormatMuonCloseDebugPointer(window.get())
+            << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+            << " browser_id=" << browser->GetIdentifier();
+        AppendMuonCloseDebugLog(log.str());
         window->Close();
         started_close = true;
         continue;
+      }
+      {
+        std::ostringstream log;
+        log << "ShutdownCloseTask close browser="
+            << FormatMuonCloseDebugPointer(browser.get())
+            << " browser_id=" << browser->GetIdentifier();
+        AppendMuonCloseDebugLog(log.str());
       }
       host->CloseBrowser(true);
       started_close = true;
     }
     if (!started_close) {
+      AppendMuonCloseDebugLog(
+          "ShutdownCloseTask no_started_close CefQuitMessageLoop");
       CefQuitMessageLoop();
     }
   }
@@ -251,6 +289,14 @@ class OpenMuonDetachedPopupTask final : public CefTask {
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
 
+    {
+      std::ostringstream log;
+      log << "DetachedPopupTask Execute target_url=" << target_url_
+          << " client=" << FormatMuonCloseDebugPointer(client_.get())
+          << " titlebar_custom="
+          << FormatMuonCloseDebugBool(IsCustomMuonTitleBar(title_bar_manifest_));
+      AppendMuonCloseDebugLog(log.str());
+    }
     if (!client_) {
       return;
     }
@@ -263,7 +309,15 @@ class OpenMuonDetachedPopupTask final : public CefTask {
     if (!browser_view) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "Failed to create detached popup browser view");
+      AppendMuonCloseDebugLog(
+          "DetachedPopupTask failed reason=no_browser_view");
       return;
+    }
+    {
+      std::ostringstream log;
+      log << "DetachedPopupTask CreateTopLevelWindow browser_view="
+          << FormatMuonCloseDebugPointer(browser_view.get());
+      AppendMuonCloseDebugLog(log.str());
     }
     CefWindow::CreateTopLevelWindow(
         new MuonWindowDelegate(browser_view, false,
@@ -708,6 +762,59 @@ static MuonLogLevel GetMuonLogLevelFromCefSeverity(cef_log_severity_t level) {
   return kMuonLogLevelInfo;
 }
 
+static const char* GetMuonBuiltinBrowserFunctionKindName(
+    MuonBuiltinBrowserFunctionKind kind) {
+  switch (kind) {
+    case MuonBuiltinBrowserFunctionKind::Reload:
+      return "Reload";
+    case MuonBuiltinBrowserFunctionKind::HardReload:
+      return "HardReload";
+    case MuonBuiltinBrowserFunctionKind::ToggleFullscreen:
+      return "ToggleFullscreen";
+    case MuonBuiltinBrowserFunctionKind::EnterFullscreen:
+      return "EnterFullscreen";
+    case MuonBuiltinBrowserFunctionKind::ExitFullscreen:
+      return "ExitFullscreen";
+    case MuonBuiltinBrowserFunctionKind::ZoomIn:
+      return "ZoomIn";
+    case MuonBuiltinBrowserFunctionKind::ZoomOut:
+      return "ZoomOut";
+    case MuonBuiltinBrowserFunctionKind::ResetZoom:
+      return "ResetZoom";
+    case MuonBuiltinBrowserFunctionKind::Show:
+      return "Show";
+    case MuonBuiltinBrowserFunctionKind::Hide:
+      return "Hide";
+    case MuonBuiltinBrowserFunctionKind::Focus:
+      return "Focus";
+    case MuonBuiltinBrowserFunctionKind::Blur:
+      return "Blur";
+    case MuonBuiltinBrowserFunctionKind::Minimize:
+      return "Minimize";
+    case MuonBuiltinBrowserFunctionKind::Maximize:
+      return "Maximize";
+    case MuonBuiltinBrowserFunctionKind::Restore:
+      return "Restore";
+    case MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility:
+      return "SetTitleBarVisibility";
+    case MuonBuiltinBrowserFunctionKind::SetTitleBarIcon:
+      return "SetTitleBarIcon";
+    case MuonBuiltinBrowserFunctionKind::GetWindowBounds:
+      return "GetWindowBounds";
+    case MuonBuiltinBrowserFunctionKind::SetWindowBounds:
+      return "SetWindowBounds";
+    case MuonBuiltinBrowserFunctionKind::Close:
+      return "Close";
+    case MuonBuiltinBrowserFunctionKind::Shutdown:
+      return "Shutdown";
+    case MuonBuiltinBrowserFunctionKind::Recycle:
+      return "Recycle";
+    case MuonBuiltinBrowserFunctionKind::None:
+      return "None";
+  }
+  return "Unknown";
+}
+
 MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
                        std::shared_ptr<MuonNetworkPolicy> network_policy,
                        std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
@@ -730,7 +837,15 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       plugin_runtime_(std::move(plugin_runtime)),
       network_policy_(std::move(network_policy)),
       plugin_page_policy_(std::move(plugin_page_policy)),
-      unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {}
+      unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {
+  std::ostringstream log;
+  log << "MuonClient ctor this=" << FormatMuonCloseDebugPointer(this)
+      << " titlebar_custom="
+      << FormatMuonCloseDebugBool(IsCustomMuonTitleBar(title_bar_manifest_))
+      << " has_initial_title_bar_icon="
+      << FormatMuonCloseDebugBool(has_initial_title_bar_icon_);
+  AppendMuonCloseDebugLog(log.str());
+}
 
 CefRefPtr<CefLifeSpanHandler> MuonClient::GetLifeSpanHandler() {
   return this;
@@ -830,6 +945,20 @@ bool MuonClient::OnBeforePopup(
   const auto is_network_allowed_target =
       !has_known_target_url || !network_policy_ ||
       network_policy_->IsAllowedRequest(url, true, "");
+  {
+    std::ostringstream log;
+    log << "MuonClient OnBeforePopup browser="
+        << FormatMuonCloseDebugPointer(browser.get())
+        << " browser_id=" << (browser ? browser->GetIdentifier() : 0)
+        << " popup_id=" << popup_id
+        << " target_url=" << url
+        << " has_known_target_url="
+        << FormatMuonCloseDebugBool(has_known_target_url)
+        << " is_network_allowed_target="
+        << FormatMuonCloseDebugBool(is_network_allowed_target)
+        << " tracked=" << browsers_by_id_.size();
+    AppendMuonCloseDebugLog(log.str());
+  }
 
   client = this;
   if (plugin_runtime_) {
@@ -846,6 +975,8 @@ bool MuonClient::OnBeforePopup(
       unsafe_parent_access_policy_->IsAllowedUrl(url) &&
       !cef_requests_no_javascript_access;
   if (allows_opener_access) {
+    AppendMuonCloseDebugLog(
+        "MuonClient OnBeforePopup allow_cef_default reason=opener_access");
     if (no_javascript_access != nullptr) {
       *no_javascript_access = false;
     }
@@ -860,6 +991,8 @@ bool MuonClient::OnBeforePopup(
     }
   }
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler(this);
+  AppendMuonCloseDebugLog(
+      "MuonClient OnBeforePopup post DetachedPopupTask");
   CefPostTask(TID_UI, new OpenMuonDetachedPopupTask(
                           client, shortcut_handler, url, settings,
                           detached_extra_info,
@@ -870,6 +1003,17 @@ bool MuonClient::OnBeforePopup(
 
 void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
+  {
+    std::ostringstream log;
+    log << "MuonClient OnAfterCreated begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " browser_id=" << (browser ? browser->GetIdentifier() : 0)
+        << " tracked_before=" << browsers_by_id_.size()
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   browsers_by_id_[browser->GetIdentifier()] = browser;
   const auto browser_view = CefBrowserView::GetForBrowser(browser);
   if (browser_view) {
@@ -891,11 +1035,39 @@ void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     quit_message_loop_after_pending_fs_dialogs_ = false;
     quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
   }
+  {
+    std::ostringstream log;
+    log << "MuonClient OnAfterCreated end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " browser_id=" << browser->GetIdentifier()
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view.get())
+        << " tracked_after=" << browsers_by_id_.size()
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   const auto browser_id = browser->GetIdentifier();
+  {
+    std::ostringstream log;
+    log << "MuonClient OnBeforeClose begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " browser_id=" << browser_id
+        << " tracked_before=" << browsers_by_id_.size()
+        << " has_browser="
+        << FormatMuonCloseDebugBool(
+               browsers_by_id_.find(browser_id) != browsers_by_id_.end())
+        << " pending_fs=" << pending_fs_dialog_calls_
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (plugin_runtime_) {
     plugin_runtime_->CancelFsDialogsForOwner(browser_id);
   }
@@ -909,6 +1081,17 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   title_bar_icon_update_generations_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   browsers_by_id_.erase(browser_id);
+  {
+    std::ostringstream log;
+    log << "MuonClient OnBeforeClose after_erase this="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser_id=" << browser_id
+        << " tracked_after=" << browsers_by_id_.size()
+        << " pending_fs=" << pending_fs_dialog_calls_
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   QuitMessageLoopWhenIdle();
 }
 
@@ -922,6 +1105,19 @@ void MuonClient::BeginPendingFsDialogCall(int browser_id) {
 
 void MuonClient::EndPendingFsDialogCall(int browser_id) {
   CEF_REQUIRE_UI_THREAD();
+  {
+    std::ostringstream log;
+    log << "MuonClient EndPendingFsDialogCall begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser_id=" << browser_id
+        << " pending_before=" << pending_fs_dialog_calls_
+        << " tracked=" << browsers_by_id_.size()
+        << " quit_after_pending="
+        << FormatMuonCloseDebugBool(quit_message_loop_after_pending_fs_dialogs_)
+        << " quit_after_pending_browser_id="
+        << quit_message_loop_after_pending_fs_dialogs_browser_id_;
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (pending_fs_dialog_calls_ > 0) {
     pending_fs_dialog_calls_ -= 1;
   }
@@ -956,33 +1152,77 @@ void MuonClient::EndPendingFsDialogCall(int browser_id) {
     }
     QuitMessageLoopWhenIdle();
   }
+  {
+    std::ostringstream log;
+    log << "MuonClient EndPendingFsDialogCall end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser_id=" << browser_id
+        << " pending_after=" << pending_fs_dialog_calls_
+        << " tracked=" << browsers_by_id_.size()
+        << " quit_after_pending="
+        << FormatMuonCloseDebugBool(quit_message_loop_after_pending_fs_dialogs_)
+        << " quit_after_pending_browser_id="
+        << quit_message_loop_after_pending_fs_dialogs_browser_id_;
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void MuonClient::RequestMessageLoopQuit(bool post_task) {
   CEF_REQUIRE_UI_THREAD();
+  {
+    std::ostringstream log;
+    log << "MuonClient RequestMessageLoopQuit enter this="
+        << FormatMuonCloseDebugPointer(this)
+        << " post_task=" << FormatMuonCloseDebugBool(post_task)
+        << " already_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_)
+        << " tracked=" << browsers_by_id_.size()
+        << " pending_fs=" << pending_fs_dialog_calls_;
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (message_loop_quit_requested_) {
     return;
   }
   message_loop_quit_requested_ = true;
   if (post_task) {
+    AppendMuonCloseDebugLog(
+        "MuonClient RequestMessageLoopQuit post QuitMessageLoopTask");
     CefPostTask(TID_UI, new QuitMuonMessageLoopTask());
     return;
   }
+  AppendMuonCloseDebugLog(
+      "MuonClient RequestMessageLoopQuit direct CefQuitMessageLoop");
   CefQuitMessageLoop();
 }
 
 void MuonClient::QuitMessageLoopWhenIdle() {
   CEF_REQUIRE_UI_THREAD();
+  {
+    std::ostringstream log;
+    log << "MuonClient QuitWhenIdle enter this="
+        << FormatMuonCloseDebugPointer(this)
+        << " tracked=" << browsers_by_id_.size()
+        << " pending_fs=" << pending_fs_dialog_calls_
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!browsers_by_id_.empty() || message_loop_quit_requested_) {
+    AppendMuonCloseDebugLog(
+        "MuonClient QuitWhenIdle return reason=busy_or_already_requested");
     return;
   }
   if (pending_fs_dialog_calls_ > 0) {
     quit_message_loop_after_pending_fs_dialogs_ = true;
     quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
+    AppendMuonCloseDebugLog(
+        "MuonClient QuitWhenIdle defer reason=pending_fs_dialogs");
     return;
   }
   quit_message_loop_after_pending_fs_dialogs_ = false;
   quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
+  AppendMuonCloseDebugLog(
+      "MuonClient QuitWhenIdle request_quit reason=no_tracked_browsers");
   RequestMessageLoopQuit(false);
 }
 
@@ -992,6 +1232,18 @@ bool MuonClient::PrepareShutdown(
     bool* should_start_shutdown,
     std::string* error_message) {
   CEF_REQUIRE_UI_THREAD();
+  {
+    std::ostringstream log;
+    log << "MuonClient PrepareShutdown begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " exit_code=" << exit_code
+        << " tracked=" << browsers_by_id_.size()
+        << " shutdown_started="
+        << FormatMuonCloseDebugBool(shutdown_started_)
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (browsers == nullptr || should_start_shutdown == nullptr ||
       error_message == nullptr) {
     return false;
@@ -1015,6 +1267,16 @@ bool MuonClient::PrepareShutdown(
   *should_start_shutdown = true;
   for (const auto& browser_entry : browsers_by_id_) {
     browsers->push_back(browser_entry.second);
+  }
+  {
+    std::ostringstream log;
+    log << "MuonClient PrepareShutdown end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " exit_code=" << exit_code
+        << " should_start_shutdown="
+        << FormatMuonCloseDebugBool(*should_start_shutdown)
+        << " browsers_to_close=" << browsers->size();
+    AppendMuonCloseDebugLog(log.str());
   }
   return true;
 }
@@ -2046,8 +2308,24 @@ void MuonClient::DispatchBuiltinBrowserCall(
 
   std::string error_message;
   if (!call.browser) {
+    std::ostringstream log;
+    log << "MuonClient DispatchBuiltinBrowserCall no_browser kind="
+        << GetMuonBuiltinBrowserFunctionKindName(kind);
+    AppendMuonCloseDebugLog(log.str());
     RejectPluginCall(call, "Muon browser is unavailable");
     return;
+  }
+  {
+    std::ostringstream log;
+    log << "MuonClient DispatchBuiltinBrowserCall kind="
+        << GetMuonBuiltinBrowserFunctionKindName(kind)
+        << " browser=" << FormatMuonCloseDebugPointer(call.browser.get())
+        << " browser_id=" << call.browser->GetIdentifier()
+        << " tracked=" << browsers_by_id_.size()
+        << " pending_fs=" << pending_fs_dialog_calls_
+        << " quit_requested="
+        << FormatMuonCloseDebugBool(message_loop_quit_requested_);
+    AppendMuonCloseDebugLog(log.str());
   }
 
   MuonPluginCallResult result;
@@ -2288,6 +2566,14 @@ void MuonClient::DispatchBuiltinBrowserCall(
         return;
       }
       const auto browser_id = call.browser->GetIdentifier();
+      {
+        std::ostringstream log;
+        log << "MuonClient BuiltinClose begin browser_id=" << browser_id
+            << " window=" << FormatMuonCloseDebugPointer(window.get())
+            << " tracked=" << browsers_by_id_.size()
+            << " pending_fs=" << pending_fs_dialog_calls_;
+        AppendMuonCloseDebugLog(log.str());
+      }
       const auto pending_iterator =
           pending_fs_dialog_calls_by_browser_.find(browser_id);
       if (pending_iterator != pending_fs_dialog_calls_by_browser_.end() &&
@@ -2296,6 +2582,17 @@ void MuonClient::DispatchBuiltinBrowserCall(
         quit_message_loop_after_pending_fs_dialogs_browser_id_ = browser_id;
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
+      {
+        std::ostringstream log;
+        log << "MuonClient BuiltinClose post CloseWindowTask browser_id="
+            << browser_id
+            << " quit_after_pending="
+            << FormatMuonCloseDebugBool(
+                   quit_message_loop_after_pending_fs_dialogs_)
+            << " quit_after_pending_browser_id="
+            << quit_message_loop_after_pending_fs_dialogs_browser_id_;
+        AppendMuonCloseDebugLog(log.str());
+      }
       CefPostTask(TID_UI, new CloseMuonWindowTask(window));
       break;
     }
@@ -2319,6 +2616,10 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
       if (should_start_shutdown) {
+        std::ostringstream log;
+        log << "MuonClient BuiltinShutdown post ShutdownCloseTask browsers="
+            << browsers.size() << " exit_code=" << exit_code;
+        AppendMuonCloseDebugLog(log.str());
         CefPostTask(TID_UI,
                     new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
       }
@@ -2338,6 +2639,10 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
       if (should_start_shutdown) {
+        std::ostringstream log;
+        log << "MuonClient BuiltinRecycle post ShutdownCloseTask browsers="
+            << browsers.size();
+        AppendMuonCloseDebugLog(log.str());
         CefPostTask(TID_UI,
                     new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
       }

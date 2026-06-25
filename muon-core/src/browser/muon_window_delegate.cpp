@@ -10,6 +10,7 @@
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
+#include "log/muon_close_debug_log.h"
 
 #include "include/cef_browser.h"
 #include "include/cef_task.h"
@@ -17,6 +18,7 @@
 #include "include/views/cef_display.h"
 #include "include/views/cef_panel.h"
 
+#include <sstream>
 #include <utility>
 
 MuonWindowDelegate::MuonWindowDelegate(
@@ -106,9 +108,30 @@ static bool GetInitialWindowWorkArea(CefRefPtr<CefWindow> window,
   return false;
 }
 
+static int GetMuonWindowDelegateBrowserId(
+    CefRefPtr<CefBrowserView> browser_view) {
+  if (!browser_view) {
+    return 0;
+  }
+  const auto browser = browser_view->GetBrowser();
+  return browser ? browser->GetIdentifier() : 0;
+}
+
 void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
   const auto title = is_devtools_ ? GetMuonDevToolsWindowTitle()
                                   : GetMuonDefaultWindowTitle();
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowCreated begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " custom_titlebar=" << FormatMuonCloseDebugBool(UseCustomTitleBar())
+        << " is_devtools=" << FormatMuonCloseDebugBool(is_devtools_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   window->SetTitle(title);
   if (UseCustomTitleBar()) {
     title_bar_controller_ = new MuonTitleBarController(
@@ -158,9 +181,37 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
     window->CenterWindow(GetPreferredSize(nullptr));
   }
   ApplyInitialWindowState(window, initial_window_state_);
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowCreated end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " titlebar_controller="
+        << FormatMuonCloseDebugPointer(title_bar_controller_.get())
+        << " titlebar_view="
+        << FormatMuonCloseDebugPointer(title_bar_view_.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowDestroyed begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " titlebar_controller="
+        << FormatMuonCloseDebugPointer(title_bar_controller_.get())
+        << " titlebar_view="
+        << FormatMuonCloseDebugPointer(title_bar_view_.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   UnregisterMuonNativeWheelForwarder(window);
   UnregisterMuonTitleBarController(window);
   if (title_bar_controller_) {
@@ -171,6 +222,13 @@ void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
   title_bar_view_ = nullptr;
   browser_view_ = nullptr;
   shortcut_handler_ = nullptr;
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowDestroyed end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void MuonWindowDelegate::OnWindowActivationChanged(CefRefPtr<CefWindow> window,
@@ -191,14 +249,46 @@ void MuonWindowDelegate::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
 }
 
 bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
+  {
+    std::ostringstream log;
+    log << "WindowDelegate CanClose enter this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " is_devtools=" << FormatMuonCloseDebugBool(is_devtools_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!browser_view_) {
+    AppendMuonCloseDebugLog(
+        "WindowDelegate CanClose return true reason=no_browser_view");
     return true;
   }
 
   auto browser = browser_view_->GetBrowser();
   if (browser) {
-    return browser->GetHost()->TryCloseBrowser();
+    const auto host = browser->GetHost();
+    const auto ready_to_be_closed = host && host->IsReadyToBeClosed();
+    const auto valid = browser->IsValid();
+    const auto result = host && host->TryCloseBrowser();
+    std::ostringstream log;
+    log << "WindowDelegate CanClose browser this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " host=" << FormatMuonCloseDebugPointer(host.get())
+        << " browser_id=" << browser->GetIdentifier()
+        << " valid=" << FormatMuonCloseDebugBool(valid)
+        << " ready_before_try="
+        << FormatMuonCloseDebugBool(ready_to_be_closed)
+        << " try_close_result=" << FormatMuonCloseDebugBool(result)
+        << " return=" << FormatMuonCloseDebugBool(result);
+    AppendMuonCloseDebugLog(log.str());
+    return result;
   }
+  AppendMuonCloseDebugLog(
+      "WindowDelegate CanClose return true reason=no_browser");
   return true;
 }
 

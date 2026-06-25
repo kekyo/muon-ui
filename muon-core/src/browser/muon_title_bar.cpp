@@ -6,6 +6,7 @@
 
 #include "browser/muon_title_bar.h"
 
+#include "log/muon_close_debug_log.h"
 #include "muon_string_helpers.h"
 #include "yyjson.h"
 
@@ -28,6 +29,7 @@
 #include <cstdio>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -783,26 +785,73 @@ static MuonTitleBarController* GetRegisteredMuonTitleBarController(
 static void RegisterMuonTitleBarWindowForBrowser(CefRefPtr<CefWindow> window,
                                                  int browser_id) {
   if (!window || browser_id <= 0) {
+    std::ostringstream log;
+    log << "TitleBar RegisterWindowForBrowser skipped window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
     return;
   }
   const auto current = g_muon_title_bar_windows_by_browser_id.find(browser_id);
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterWindowForBrowser begin window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id
+        << " current_window="
+        << (current == g_muon_title_bar_windows_by_browser_id.end()
+                ? "null"
+                : FormatMuonCloseDebugPointer(current->second.get()))
+        << " new_has_controller="
+        << FormatMuonCloseDebugBool(
+               HasRegisteredMuonTitleBarController(window.get()));
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (current == g_muon_title_bar_windows_by_browser_id.end() ||
       current->second.get() == window.get() ||
       ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(
           HasRegisteredMuonTitleBarController(current->second.get()),
           HasRegisteredMuonTitleBarController(window.get()))) {
     g_muon_title_bar_windows_by_browser_id[browser_id] = window;
+    std::ostringstream log;
+    log << "TitleBar RegisterWindowForBrowser stored window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
   }
 }
 
 static void ApplyPendingMuonTitleBarState(CefRefPtr<CefWindow> window,
                                           int browser_id) {
   if (!window || browser_id <= 0) {
+    std::ostringstream log;
+    log << "TitleBar ApplyPendingState skipped window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
     return;
   }
   const auto controller = g_muon_title_bar_controllers.find(window.get());
   const auto pending_title =
       g_muon_title_bar_pending_titles_by_browser_id.find(browser_id);
+  {
+    std::ostringstream log;
+    log << "TitleBar ApplyPendingState window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id
+        << " has_controller="
+        << FormatMuonCloseDebugBool(
+               controller != g_muon_title_bar_controllers.end())
+        << " has_pending_title="
+        << FormatMuonCloseDebugBool(
+               pending_title !=
+               g_muon_title_bar_pending_titles_by_browser_id.end())
+        << " has_pending_icon="
+        << FormatMuonCloseDebugBool(
+               g_muon_title_bar_pending_icons_by_browser_id.find(browser_id) !=
+               g_muon_title_bar_pending_icons_by_browser_id.end());
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (controller != g_muon_title_bar_controllers.end() &&
       pending_title != g_muon_title_bar_pending_titles_by_browser_id.end()) {
     controller->second->SetTitle(pending_title->second);
@@ -875,6 +924,18 @@ static std::vector<int> CollectRegisteredMuonTitleBarBrowserIds(
 
 static void EraseRegisteredMuonTitleBarBrowserState(
     const std::vector<int>& browser_ids) {
+  {
+    std::ostringstream log;
+    log << "TitleBar EraseBrowserState browser_ids=";
+    for (size_t index = 0; index < browser_ids.size(); ++index) {
+      if (index != 0) {
+        log << ",";
+      }
+      log << browser_ids[index];
+    }
+    log << " count=" << browser_ids.size();
+    AppendMuonCloseDebugLog(log.str());
+  }
   for (const auto browser_id : browser_ids) {
     g_muon_title_bar_controllers_by_browser_id.erase(browser_id);
     g_muon_title_bar_windows_by_browser_id.erase(browser_id);
@@ -905,6 +966,28 @@ static void EraseRegisteredMuonTitleBarController(
     MuonTitleBarController* requested_controller) {
   const auto browser_ids = CollectRegisteredMuonTitleBarBrowserIds(
       requested_window, requested_controller);
+  {
+    std::ostringstream log;
+    log << "TitleBar EraseController begin requested_window="
+        << FormatMuonCloseDebugPointer(requested_window)
+        << " requested_controller="
+        << FormatMuonCloseDebugPointer(requested_controller)
+        << " collected_browser_ids=";
+    for (size_t index = 0; index < browser_ids.size(); ++index) {
+      if (index != 0) {
+        log << ",";
+      }
+      log << browser_ids[index];
+    }
+    log << " controllers=" << g_muon_title_bar_controllers.size()
+        << " controllers_by_browser="
+        << g_muon_title_bar_controllers_by_browser_id.size()
+        << " windows_by_browser="
+        << g_muon_title_bar_windows_by_browser_id.size()
+        << " windows_by_browser_view="
+        << g_muon_title_bar_windows_by_browser_view.size();
+    AppendMuonCloseDebugLog(log.str());
+  }
   EraseRegisteredMuonTitleBarBrowserState(browser_ids);
 
   for (auto iterator = g_muon_title_bar_windows_by_browser_view.begin();
@@ -957,6 +1040,21 @@ static void EraseRegisteredMuonTitleBarController(
   if (requested_window != nullptr) {
     g_muon_title_bar_views.erase(requested_window);
     EraseMuonDraggableRegionState(requested_window);
+  }
+  {
+    std::ostringstream log;
+    log << "TitleBar EraseController end requested_window="
+        << FormatMuonCloseDebugPointer(requested_window)
+        << " requested_controller="
+        << FormatMuonCloseDebugPointer(requested_controller)
+        << " controllers=" << g_muon_title_bar_controllers.size()
+        << " controllers_by_browser="
+        << g_muon_title_bar_controllers_by_browser_id.size()
+        << " windows_by_browser="
+        << g_muon_title_bar_windows_by_browser_id.size()
+        << " windows_by_browser_view="
+        << g_muon_title_bar_windows_by_browser_view.size();
+    AppendMuonCloseDebugLog(log.str());
   }
 }
 
@@ -1403,10 +1501,30 @@ CefRefPtr<CefRequestHandler> MuonTitleBarController::GetRequestHandler() {
 }
 
 void MuonTitleBarController::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
+  {
+    std::ostringstream log;
+    log << "TitleBarController OnAfterCreated controller="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " browser_id=" << (browser ? browser->GetIdentifier() : 0)
+        << " window=" << FormatMuonCloseDebugPointer(window_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   browser_ = browser;
 }
 
 void MuonTitleBarController::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+  {
+    std::ostringstream log;
+    log << "TitleBarController OnBeforeClose controller="
+        << FormatMuonCloseDebugPointer(this)
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " browser_id=" << (browser ? browser->GetIdentifier() : 0)
+        << " current_browser="
+        << FormatMuonCloseDebugPointer(browser_.get())
+        << " window=" << FormatMuonCloseDebugPointer(window_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (browser_ && browser_ == browser) {
     browser_ = nullptr;
   }
@@ -1447,6 +1565,16 @@ bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 }
 
 void MuonTitleBarController::HandleAction(const std::string& action) {
+  {
+    std::ostringstream log;
+    log << "TitleBarController HandleAction controller="
+        << FormatMuonCloseDebugPointer(this)
+        << " action=" << action
+        << " window=" << FormatMuonCloseDebugPointer(window_)
+        << " browser=" << FormatMuonCloseDebugPointer(browser_.get())
+        << " browser_id=" << (browser_ ? browser_->GetIdentifier() : 0);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window_) {
     return;
   }
@@ -1467,6 +1595,15 @@ void MuonTitleBarController::HandleAction(const std::string& action) {
     return;
   }
   if (action == "close") {
+    {
+      std::ostringstream log;
+      log << "TitleBarController HandleAction close window_close controller="
+          << FormatMuonCloseDebugPointer(this)
+          << " window=" << FormatMuonCloseDebugPointer(window_)
+          << " browser=" << FormatMuonCloseDebugPointer(browser_.get())
+          << " browser_id=" << (browser_ ? browser_->GetIdentifier() : 0);
+      AppendMuonCloseDebugLog(log.str());
+    }
     window_->Close();
     return;
   }
@@ -1512,6 +1649,16 @@ void RegisterMuonTitleBarController(
     CefRefPtr<CefWindow> window,
     CefRefPtr<MuonTitleBarController> controller,
     int browser_id) {
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterController begin window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " controller=" << FormatMuonCloseDebugPointer(controller.get())
+        << " browser_id_arg=" << browser_id
+        << " existing_browser_id="
+        << GetRegisteredMuonTitleBarBrowserIdForWindow(window.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window || !controller) {
     return;
   }
@@ -1524,6 +1671,11 @@ void RegisterMuonTitleBarController(
   const auto effective_browser_id = GetMuonResolvedTitleBarBrowserId(
       browser_id, GetRegisteredMuonTitleBarBrowserIdForWindow(window.get()));
   if (effective_browser_id <= 0) {
+    std::ostringstream log;
+    log << "TitleBar RegisterController no_effective_browser window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " controller=" << FormatMuonCloseDebugPointer(controller.get());
+    AppendMuonCloseDebugLog(log.str());
     return;
   }
   g_muon_title_bar_browser_ids_by_window[window.get()] = effective_browser_id;
@@ -1531,10 +1683,26 @@ void RegisterMuonTitleBarController(
       controller.get();
   RegisterMuonTitleBarWindowForBrowser(window, effective_browser_id);
   ApplyPendingMuonTitleBarState(window, effective_browser_id);
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterController end window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " controller=" << FormatMuonCloseDebugPointer(controller.get())
+        << " effective_browser_id=" << effective_browser_id;
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void RegisterMuonTitleBarView(CefRefPtr<CefWindow> window,
                               CefRefPtr<CefBrowserView> title_bar_view) {
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterView window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " title_bar_view="
+        << FormatMuonCloseDebugPointer(title_bar_view.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window || !title_bar_view) {
     return;
   }
@@ -1543,6 +1711,13 @@ void RegisterMuonTitleBarView(CefRefPtr<CefWindow> window,
 
 static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
                                                  int browser_id) {
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterBrowserForWindow begin window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window || browser_id <= 0) {
     return;
   }
@@ -1556,10 +1731,28 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
   const auto registered_window = GetRegisteredMuonWindowForBrowser(browser_id);
   ApplyPendingMuonTitleBarState(registered_window ? registered_window : window,
                                 browser_id);
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterBrowserForWindow end window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id
+        << " registered_window="
+        << FormatMuonCloseDebugPointer(
+               (registered_window ? registered_window : window).get());
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void RegisterMuonTitleBarBrowserView(CefRefPtr<CefWindow> window,
                                      CefRefPtr<CefBrowserView> browser_view) {
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterBrowserView window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window || !browser_view) {
     return;
   }
@@ -1573,6 +1766,13 @@ void RegisterMuonTitleBarBrowserView(CefRefPtr<CefWindow> window,
 }
 
 void RegisterMuonTitleBarBrowser(CefRefPtr<CefWindow> window, int browser_id) {
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterBrowser window="
+        << FormatMuonCloseDebugPointer(window.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window || browser_id <= 0) {
     return;
   }
@@ -1582,6 +1782,13 @@ void RegisterMuonTitleBarBrowser(CefRefPtr<CefWindow> window, int browser_id) {
 void RegisterMuonTitleBarBrowserViewBrowser(
     CefRefPtr<CefBrowserView> browser_view,
     int browser_id) {
+  {
+    std::ostringstream log;
+    log << "TitleBar RegisterBrowserViewBrowser browser_view="
+        << FormatMuonCloseDebugPointer(browser_view.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!browser_view || browser_id <= 0) {
     return;
   }
@@ -1590,12 +1797,23 @@ void RegisterMuonTitleBarBrowserViewBrowser(
   const auto window =
       g_muon_title_bar_windows_by_browser_view.find(browser_view.get());
   if (window == g_muon_title_bar_windows_by_browser_view.end()) {
+    std::ostringstream log;
+    log << "TitleBar RegisterBrowserViewBrowser pending browser_view="
+        << FormatMuonCloseDebugPointer(browser_view.get())
+        << " browser_id=" << browser_id;
+    AppendMuonCloseDebugLog(log.str());
     return;
   }
   RegisterMuonTitleBarBrowserForWindow(window->second, browser_id);
 }
 
 void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
+  {
+    std::ostringstream log;
+    log << "TitleBar UnregisterControllerByWindow window="
+        << FormatMuonCloseDebugPointer(window.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!window) {
     return;
   }
@@ -1604,6 +1822,12 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
 
 void UnregisterMuonTitleBarController(
     CefRefPtr<MuonTitleBarController> controller) {
+  {
+    std::ostringstream log;
+    log << "TitleBar UnregisterControllerByController controller="
+        << FormatMuonCloseDebugPointer(controller.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!controller) {
     return;
   }

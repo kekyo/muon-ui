@@ -630,6 +630,7 @@ set(APP_SOURCES
   src/config/muon_paths.cpp
   src/config/muon_startup.cpp
   src/log/muon_log.cpp
+  src/log/muon_close_debug_log.cpp
   src/network/muon_network_policy.cpp
   src/network/muon_network_request_handler.cpp
   src/plugins/builtin/muon_builtin.cpp
@@ -672,6 +673,7 @@ set(APP_HEADERS
   src/config/muon_paths.h
   src/config/muon_startup.h
   src/log/muon_log.h
+  src/log/muon_close_debug_log.h
   src/network/muon_network_policy.h
   src/network/muon_network_request_handler.h
   src/plugins/builtin/muon_builtin.h
@@ -1278,6 +1280,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     tests/muon_builtin_browser_test.cpp
     src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
+    src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
     src/plugins/muon_type_metadata.cpp

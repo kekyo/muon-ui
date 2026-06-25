@@ -262,6 +262,20 @@ int GetMuonResolvedTitleBarBrowserId(int browser_id,
                                      int registered_browser_id);
 
 /**
+ * Returns whether a browser-to-window registration should replace an existing
+ * registration.
+ *
+ * @param current_has_controller Whether the currently registered window owns a
+ * custom title bar controller.
+ * @param candidate_has_controller Whether the candidate window owns a custom
+ * title bar controller.
+ * @return true when the candidate should replace the current registration.
+ */
+bool ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(
+    bool current_has_controller,
+    bool candidate_has_controller);
+
+/**
  * Standard Muon title bar control hit-test result.
  */
 enum class MuonTitleBarControlAction {

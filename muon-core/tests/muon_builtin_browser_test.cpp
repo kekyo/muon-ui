@@ -462,6 +462,24 @@ static bool TestTitleBarBrowserIdResolution() {
                 "missing title bar browser id should remain missing");
 }
 
+static bool TestTitleBarBrowserWindowRegistrationResolution() {
+  return Expect(ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(false,
+                                                                    false),
+                "plain title bar window registration should remain last-wins") &&
+         Expect(ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(false,
+                                                                    true),
+                "custom title bar controller window should replace a plain "
+                "window") &&
+         Expect(ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(true,
+                                                                    true),
+                "custom title bar controller window should replace another "
+                "controller window") &&
+         Expect(!ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(true,
+                                                                     false),
+                "plain window should not replace a custom title bar "
+                "controller window");
+}
+
 static bool TestTitleBarIconNativeScaleFactors() {
   return Expect(GetMuonTitleBarIconPngScaleFactors(16, 16) ==
                     std::vector<float>{1.0f},
@@ -529,6 +547,7 @@ int main() {
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
                  TestTitleBarBrowserIdResolution() &&
+                 TestTitleBarBrowserWindowRegistrationResolution() &&
                  TestTitleBarIconNativeScaleFactors() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0

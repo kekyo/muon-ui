@@ -496,9 +496,34 @@ void RegisterMuonTitleBarBrowserViewBrowser(
     int browser_id);
 
 /**
+ * Returns whether a registered custom title bar controller entry should be
+ * removed by an unregister request.
+ *
+ * @param registered_window Window pointer stored when the controller was
+ * registered.
+ * @param requested_window Window pointer received by the unregister request.
+ * @param registered_controller Controller pointer stored when the controller
+ * was registered.
+ * @param requested_controller Controller pointer owned by the unregistering
+ * window delegate.
+ * @return true when the stored registration matches the unregister request.
+ */
+bool ShouldRemoveRegisteredMuonTitleBarController(
+    const CefWindow* registered_window,
+    const CefWindow* requested_window,
+    const MuonTitleBarController* registered_controller,
+    const MuonTitleBarController* requested_controller);
+
+/**
  * Removes a custom title bar controller registration for a window.
  */
 void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window);
+
+/**
+ * Removes a custom title bar controller registration by controller identity.
+ */
+void UnregisterMuonTitleBarController(
+    CefRefPtr<MuonTitleBarController> controller);
 
 /**
  * Clears all custom title bar registrations before CEF shutdown.

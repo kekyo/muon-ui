@@ -164,6 +164,7 @@ void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
   UnregisterMuonNativeWheelForwarder(window);
   UnregisterMuonTitleBarController(window);
   if (title_bar_controller_) {
+    UnregisterMuonTitleBarController(title_bar_controller_);
     title_bar_controller_->DetachWindow();
   }
   title_bar_controller_ = nullptr;

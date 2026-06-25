@@ -769,6 +769,17 @@ static bool HasRegisteredMuonTitleBarController(CefWindow* window) {
              g_muon_title_bar_controllers.end();
 }
 
+static MuonTitleBarController* GetRegisteredMuonTitleBarController(
+    CefWindow* window) {
+  if (window == nullptr) {
+    return nullptr;
+  }
+  const auto controller = g_muon_title_bar_controllers.find(window);
+  return controller == g_muon_title_bar_controllers.end()
+             ? nullptr
+             : controller->second;
+}
+
 static void RegisterMuonTitleBarWindowForBrowser(CefRefPtr<CefWindow> window,
                                                  int browser_id) {
   if (!window || browser_id <= 0) {
@@ -800,6 +811,152 @@ static void ApplyPendingMuonTitleBarState(CefRefPtr<CefWindow> window,
       g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
   if (pending_icon != g_muon_title_bar_pending_icons_by_browser_id.end()) {
     SetRegisteredMuonTitleBarIcon(window, &pending_icon->second);
+  }
+}
+
+static bool HasMuonTitleBarBrowserId(const std::vector<int>& browser_ids,
+                                     int browser_id) {
+  return std::find(browser_ids.begin(), browser_ids.end(), browser_id) !=
+         browser_ids.end();
+}
+
+static void AddMuonTitleBarBrowserId(std::vector<int>* browser_ids,
+                                     int browser_id) {
+  if (browser_ids == nullptr || browser_id <= 0 ||
+      HasMuonTitleBarBrowserId(*browser_ids, browser_id)) {
+    return;
+  }
+  browser_ids->push_back(browser_id);
+}
+
+static std::vector<int> CollectRegisteredMuonTitleBarBrowserIds(
+    CefWindow* requested_window,
+    MuonTitleBarController* requested_controller) {
+  auto browser_ids = std::vector<int>{};
+  for (const auto& entry : g_muon_title_bar_browser_ids_by_window) {
+    if (ShouldRemoveRegisteredMuonTitleBarController(
+            entry.first, requested_window,
+            GetRegisteredMuonTitleBarController(entry.first),
+            requested_controller)) {
+      AddMuonTitleBarBrowserId(&browser_ids, entry.second);
+    }
+  }
+  for (const auto& entry : g_muon_title_bar_controllers_by_browser_id) {
+    if (ShouldRemoveRegisteredMuonTitleBarController(
+            nullptr, requested_window, entry.second, requested_controller)) {
+      AddMuonTitleBarBrowserId(&browser_ids, entry.first);
+    }
+  }
+  for (const auto& entry : g_muon_title_bar_windows_by_browser_id) {
+    const auto registered_window = entry.second.get();
+    if (ShouldRemoveRegisteredMuonTitleBarController(
+            registered_window, requested_window,
+            GetRegisteredMuonTitleBarController(registered_window),
+            requested_controller)) {
+      AddMuonTitleBarBrowserId(&browser_ids, entry.first);
+    }
+  }
+  for (const auto& entry : g_muon_title_bar_browser_ids_by_browser_view) {
+    const auto window =
+        g_muon_title_bar_windows_by_browser_view.find(entry.first);
+    const auto registered_window =
+        window == g_muon_title_bar_windows_by_browser_view.end()
+            ? nullptr
+            : window->second.get();
+    if (ShouldRemoveRegisteredMuonTitleBarController(
+            registered_window, requested_window,
+            GetRegisteredMuonTitleBarController(registered_window),
+            requested_controller)) {
+      AddMuonTitleBarBrowserId(&browser_ids, entry.second);
+    }
+  }
+  return browser_ids;
+}
+
+static void EraseRegisteredMuonTitleBarBrowserState(
+    const std::vector<int>& browser_ids) {
+  for (const auto browser_id : browser_ids) {
+    g_muon_title_bar_controllers_by_browser_id.erase(browser_id);
+    g_muon_title_bar_windows_by_browser_id.erase(browser_id);
+    g_muon_title_bar_pending_titles_by_browser_id.erase(browser_id);
+    g_muon_title_bar_pending_icons_by_browser_id.erase(browser_id);
+  }
+  for (auto iterator = g_muon_title_bar_browser_ids_by_window.begin();
+       iterator != g_muon_title_bar_browser_ids_by_window.end();) {
+    if (HasMuonTitleBarBrowserId(browser_ids, iterator->second)) {
+      iterator = g_muon_title_bar_browser_ids_by_window.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = g_muon_title_bar_browser_ids_by_browser_view.begin();
+       iterator != g_muon_title_bar_browser_ids_by_browser_view.end();) {
+    if (HasMuonTitleBarBrowserId(browser_ids, iterator->second)) {
+      g_muon_title_bar_windows_by_browser_view.erase(iterator->first);
+      iterator = g_muon_title_bar_browser_ids_by_browser_view.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+}
+
+static void EraseRegisteredMuonTitleBarController(
+    CefWindow* requested_window,
+    MuonTitleBarController* requested_controller) {
+  const auto browser_ids = CollectRegisteredMuonTitleBarBrowserIds(
+      requested_window, requested_controller);
+  EraseRegisteredMuonTitleBarBrowserState(browser_ids);
+
+  for (auto iterator = g_muon_title_bar_windows_by_browser_view.begin();
+       iterator != g_muon_title_bar_windows_by_browser_view.end();) {
+    const auto registered_window = iterator->second.get();
+    if (ShouldRemoveRegisteredMuonTitleBarController(
+            registered_window, requested_window,
+            GetRegisteredMuonTitleBarController(registered_window),
+            requested_controller)) {
+      g_muon_title_bar_browser_ids_by_browser_view.erase(iterator->first);
+      iterator = g_muon_title_bar_windows_by_browser_view.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+
+  if (requested_window != nullptr) {
+    const auto window_handle = requested_window->GetWindowHandle();
+    if (window_handle != 0) {
+      g_muon_title_bar_controllers_by_window_handle.erase(
+          GetWindowHandleDraggableRegionKey(window_handle));
+    }
+  }
+  if (requested_controller != nullptr) {
+    for (auto iterator =
+             g_muon_title_bar_controllers_by_window_handle.begin();
+         iterator != g_muon_title_bar_controllers_by_window_handle.end();) {
+      if (iterator->second == requested_controller) {
+        iterator = g_muon_title_bar_controllers_by_window_handle.erase(
+            iterator);
+      } else {
+        ++iterator;
+      }
+    }
+  }
+
+  for (auto iterator = g_muon_title_bar_controllers.begin();
+       iterator != g_muon_title_bar_controllers.end();) {
+    const auto registered_window = iterator->first;
+    if (ShouldRemoveRegisteredMuonTitleBarController(
+            registered_window, requested_window, iterator->second,
+            requested_controller)) {
+      g_muon_title_bar_views.erase(registered_window);
+      EraseMuonDraggableRegionState(registered_window);
+      iterator = g_muon_title_bar_controllers.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  if (requested_window != nullptr) {
+    g_muon_title_bar_views.erase(requested_window);
+    EraseMuonDraggableRegionState(requested_window);
   }
 }
 
@@ -989,6 +1146,17 @@ bool ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(
     bool current_has_controller,
     bool candidate_has_controller) {
   return !current_has_controller || candidate_has_controller;
+}
+
+bool ShouldRemoveRegisteredMuonTitleBarController(
+    const CefWindow* registered_window,
+    const CefWindow* requested_window,
+    const MuonTitleBarController* registered_controller,
+    const MuonTitleBarController* requested_controller) {
+  return (registered_window != nullptr &&
+          registered_window == requested_window) ||
+         (registered_controller != nullptr &&
+          registered_controller == requested_controller);
 }
 
 MuonTitleBarControlAction GetMuonTitleBarControlActionAtWindowPoint(
@@ -1431,32 +1599,15 @@ void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window) {
   if (!window) {
     return;
   }
-  const auto browser_id =
-      g_muon_title_bar_browser_ids_by_window.find(window.get());
-  if (browser_id != g_muon_title_bar_browser_ids_by_window.end()) {
-    g_muon_title_bar_controllers_by_browser_id.erase(browser_id->second);
-    g_muon_title_bar_windows_by_browser_id.erase(browser_id->second);
-    g_muon_title_bar_pending_titles_by_browser_id.erase(browser_id->second);
-    g_muon_title_bar_pending_icons_by_browser_id.erase(browser_id->second);
-    g_muon_title_bar_browser_ids_by_window.erase(browser_id);
+  EraseRegisteredMuonTitleBarController(window.get(), nullptr);
+}
+
+void UnregisterMuonTitleBarController(
+    CefRefPtr<MuonTitleBarController> controller) {
+  if (!controller) {
+    return;
   }
-  for (auto iterator = g_muon_title_bar_windows_by_browser_view.begin();
-       iterator != g_muon_title_bar_windows_by_browser_view.end();) {
-    if (iterator->second.get() == window.get()) {
-      g_muon_title_bar_browser_ids_by_browser_view.erase(iterator->first);
-      iterator = g_muon_title_bar_windows_by_browser_view.erase(iterator);
-    } else {
-      ++iterator;
-    }
-  }
-  const auto window_handle = window->GetWindowHandle();
-  if (window_handle != 0) {
-    g_muon_title_bar_controllers_by_window_handle.erase(
-        GetWindowHandleDraggableRegionKey(window_handle));
-  }
-  g_muon_title_bar_controllers.erase(window.get());
-  g_muon_title_bar_views.erase(window.get());
-  EraseMuonDraggableRegionState(window.get());
+  EraseRegisteredMuonTitleBarController(nullptr, controller.get());
 }
 
 void ClearMuonTitleBarRegistrations() {

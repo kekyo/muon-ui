@@ -480,6 +480,39 @@ static bool TestTitleBarBrowserWindowRegistrationResolution() {
                 "controller window");
 }
 
+static bool TestTitleBarControllerRegistrationRemoval() {
+  char registered_window_storage = 0;
+  char requested_window_storage = 0;
+  char registered_controller_storage = 0;
+  char requested_controller_storage = 0;
+  const auto registered_window =
+      reinterpret_cast<const CefWindow*>(&registered_window_storage);
+  const auto requested_window =
+      reinterpret_cast<const CefWindow*>(&requested_window_storage);
+  const auto registered_controller =
+      reinterpret_cast<const MuonTitleBarController*>(
+          &registered_controller_storage);
+  const auto requested_controller =
+      reinterpret_cast<const MuonTitleBarController*>(
+          &requested_controller_storage);
+
+  return Expect(ShouldRemoveRegisteredMuonTitleBarController(
+                    registered_window, registered_window,
+                    registered_controller, nullptr),
+                "same window should remove the title bar controller "
+                "registration") &&
+         Expect(ShouldRemoveRegisteredMuonTitleBarController(
+                    registered_window, requested_window,
+                    registered_controller, registered_controller),
+                "same controller should remove the title bar controller "
+                "registration even when CEF supplies another window wrapper") &&
+         Expect(!ShouldRemoveRegisteredMuonTitleBarController(
+                    registered_window, requested_window,
+                    registered_controller, requested_controller),
+                "unrelated window and controller should not remove the title "
+                "bar controller registration");
+}
+
 static bool TestTitleBarIconNativeScaleFactors() {
   return Expect(GetMuonTitleBarIconPngScaleFactors(16, 16) ==
                     std::vector<float>{1.0f},
@@ -548,6 +581,7 @@ int main() {
                  TestWindowIconUpdateBehavior() &&
                  TestTitleBarBrowserIdResolution() &&
                  TestTitleBarBrowserWindowRegistrationResolution() &&
+                 TestTitleBarControllerRegistrationRemoval() &&
                  TestTitleBarIconNativeScaleFactors() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0

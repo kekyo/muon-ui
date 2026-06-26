@@ -767,14 +767,20 @@ const expectPageNoDragRegionPoint = async (
   }
 };
 
-const waitForPageScrollChange = async (
+const sendNativeMouseWheelUntilPageScrollChange = async (
   driver: CdpDriver,
-  initial: PageScrollPosition,
+  windowTitle: string,
+  rootX: number,
+  rootY: number,
+  direction: "up" | "down" | "left" | "right",
   axis: keyof PageScrollPosition,
 ): Promise<PageScrollPosition> => {
   const deadline = Date.now() + cdpCommandTimeoutMs;
+  const initial = await readPageScrollPosition(driver);
   let lastPosition = initial;
   while (Date.now() < deadline) {
+    await sendNativeMouseWheel(windowTitle, rootX, rootY, direction);
+    await wait(100);
     lastPosition = await readPageScrollPosition(driver);
     if (lastPosition[axis] > initial[axis]) {
       return lastPosition;
@@ -967,14 +973,14 @@ titleBarIt(
         async () => {
           await driver.evaluate("window.scrollTo(0, 0)");
           await expectPageNoDragRegionPoint(driver, 84, 130);
-          const initialScroll = await readPageScrollPosition(driver);
-          await sendNativeMouseWheel(
+          await sendNativeMouseWheelUntilPageScrollChange(
+            driver,
             testWindowTitle,
             bounds.x + 84,
             bounds.y + titleBarHeight + 130,
             "down",
+            "y",
           );
-          await waitForPageScrollChange(driver, initialScroll, "y");
         },
       );
 
@@ -983,14 +989,14 @@ titleBarIt(
         async () => {
           await driver.evaluate("window.scrollTo(0, 0)");
           await expectPageDragRegionPoint(driver, 220, 260);
-          const initialScroll = await readPageScrollPosition(driver);
-          await sendNativeMouseWheel(
+          await sendNativeMouseWheelUntilPageScrollChange(
+            driver,
             testWindowTitle,
             bounds.x + 220,
             bounds.y + titleBarHeight + 260,
             "down",
+            "y",
           );
-          await waitForPageScrollChange(driver, initialScroll, "y");
         },
       );
 
@@ -999,14 +1005,14 @@ titleBarIt(
         async () => {
           await driver.evaluate("window.scrollTo(0, 0)");
           await expectPageDragRegionPoint(driver, 220, 260);
-          const initialScroll = await readPageScrollPosition(driver);
-          await sendNativeMouseWheel(
+          await sendNativeMouseWheelUntilPageScrollChange(
+            driver,
             testWindowTitle,
             bounds.x + 220,
             bounds.y + titleBarHeight + 260,
             "right",
+            "x",
           );
-          await waitForPageScrollChange(driver, initialScroll, "x");
         },
       );
 

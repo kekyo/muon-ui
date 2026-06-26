@@ -323,6 +323,35 @@ const parseTarget = (value: unknown): CdpTarget => {
   return target;
 };
 
+const isLoopbackCdpHost = (host: string): boolean =>
+  host === "127.0.0.1" ||
+  host === "localhost" ||
+  host === "::1" ||
+  host === "[::1]";
+
+/**
+ * Rewrites loopback CDP WebSocket URLs when tests connect through a remote host.
+ *
+ * @param webSocketDebuggerUrl WebSocket URL returned by the CDP `/json/list`
+ * endpoint.
+ * @param host Remote debugging HTTP host used for target discovery.
+ * @returns A WebSocket URL reachable from the same host as target discovery.
+ */
+export const rewriteCdpWebSocketDebuggerUrl = (
+  webSocketDebuggerUrl: string,
+  host: string | undefined,
+): string => {
+  if (host === undefined || host.trim() === "") {
+    return webSocketDebuggerUrl;
+  }
+
+  const url = new URL(webSocketDebuggerUrl);
+  if (isLoopbackCdpHost(url.hostname)) {
+    url.hostname = host;
+  }
+  return url.toString();
+};
+
 const selectTarget = (
   targets: CdpTarget[],
   targetId: string | undefined,
@@ -763,7 +792,9 @@ export const connectToMuonCdp = async (
   }
 
   const timeoutMs = getTimeoutMs(options);
-  const socket = new WebSocketConstructor(target.webSocketDebuggerUrl);
+  const socket = new WebSocketConstructor(
+    rewriteCdpWebSocketDebuggerUrl(target.webSocketDebuggerUrl, options.host),
+  );
   await waitForSocketOpen(socket, timeoutMs);
   return createDriver(socket, timeoutMs);
 };

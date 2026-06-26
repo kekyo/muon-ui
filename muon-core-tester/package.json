@@ -7,6 +7,8 @@
   "scripts": {
     "build": "vite build",
     "test:vitest": "xvfb-run -a node ../scripts/run-dbus-session-command.mjs node ../scripts/run-xvfb-command.mjs vitest run",
+    "test:windows-e2e": "npm run build:target --workspace muon-core -- test Debug windows32 && npm run build:target --workspace muon-core -- test Release windows32 && npm run build:target --workspace muon-core -- test Debug windows64 && npm run build:target --workspace muon-core -- test Release windows64 && vite build && npm run test:windows-e2e:vitest",
+    "test:windows-e2e:vitest": "vitest run test/plugin-e2e-windows.test.ts",
     "test": "npm run build:target --workspace muon-core -- test Release linux64 && npm run build:target --workspace muon-core -- test Debug linux64 && vite build && npm run test:vitest",
     "test:ffi-closures": "npm run build:target --workspace muon-core -- test Release linux64 && npm run build:target --workspace muon-core -- test Debug linux64 -DMUON_TRACK_FFI_CLOSURES=ON && vite build && MUON_EXPECT_FFI_CLOSURE_TRACKER=1 npm run test:vitest",
     "test:asan": "npm run build:target --workspace muon-core -- test Release linux64 && npm run build:target --workspace muon-core -- test Debug linux64 -DMUON_TRACK_FFI_CLOSURES=ON && vite build && MUON_EXPECT_FFI_CLOSURE_TRACKER=1 npm run test:vitest && npm run build:target --workspace muon-core -- test Debug linux64 -DMUON_TRACK_FFI_CLOSURES=ON -DMUON_ENABLE_SANITIZERS=ON && ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 LSAN_OPTIONS=exitcode=23 xvfb-run -a node ../scripts/run-xvfb-command.mjs ctest --test-dir ../muon-core/.build/test/linux64/debug --output-on-failure -R '(plugin_api_header|traffic_type_metadata|traffic_bridge)_sanitizer'",
@@ -15,6 +17,7 @@
   "devDependencies": {
     "@types/node": ">=24.0.0",
     "@types/pngjs": "^6.0.5",
+    "agent-rover": "^0.1.0",
     "gestament": ">=1.4.0",
     "pngjs": "^7.0.0",
     "prettier-max": ">=1.16.0",

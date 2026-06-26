@@ -9,7 +9,11 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { createXvfbCommandEnvironment } from "../../scripts/xvfb-environment.mjs";
-import { createDriver, type CdpDriver } from "../src/helper.js";
+import {
+  createDriver,
+  rewriteCdpWebSocketDebuggerUrl,
+  type CdpDriver,
+} from "../src/helper.js";
 
 interface MockSocket {
   readyState: number;
@@ -210,6 +214,36 @@ describe("CDP helper calls", () => {
       Uint8Array.from(Buffer.from("png")),
     );
     driver.close();
+  });
+
+  it("rewrites loopback WebSocket debugger URLs only for remote hosts", () => {
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://127.0.0.1:9222/devtools/page/1",
+        undefined,
+      ),
+    ).toBe("ws://127.0.0.1:9222/devtools/page/1");
+
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://127.0.0.1:9222/devtools/page/1",
+        "192.0.2.10",
+      ),
+    ).toBe("ws://192.0.2.10:9222/devtools/page/1");
+
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://localhost:9222/devtools/page/1",
+        "test-agent.local",
+      ),
+    ).toBe("ws://test-agent.local:9222/devtools/page/1");
+
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://192.0.2.20:9222/devtools/page/1",
+        "192.0.2.10",
+      ),
+    ).toBe("ws://192.0.2.20:9222/devtools/page/1");
   });
 });
 

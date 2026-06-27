@@ -1382,6 +1382,20 @@ muonをデバッグページで起動するには:
 npm run dev
 ```
 
+### Windowsバイナリのe2eテスト
+
+Windowsバイナリのe2eテストを実行するには、 [agent-rover](https://github.com/kekyo/agent-rover/) のリモートエージェントを起動した Windows 11 (amd64) のマシンが必要です。
+これは、仮想マシン上のインスタンスでも構いません。その上で、以下のようにテストを起動します:
+
+```bash
+export AGENT_ROVER_WIN11_HOST=<agent-host-address>
+export AGENT_ROVER_WIN11_TOKEN=<agent-token>
+
+npm run test:windows-e2e --workspace muon-core-tester
+```
+
+あるいは、環境変数が定義されていれば、 `npm run test` で一括テストにWindows e2eテストが含まれます。
+
 ### パッケージ生成
 
 ```bash

@@ -119,7 +119,9 @@ const expectedCefArtifactNamePart = (): string =>
 
 const isCdpWebSocketFailure = (error: unknown): boolean =>
   error instanceof Error &&
-  /CDP WebSocket (failed|closed|is closed)/u.test(error.message);
+  /CDP WebSocket (?:(?:connection )?failed|closed|is closed)/u.test(
+    error.message,
+  );
 
 const getMainPageTarget = async (): Promise<CdpTarget> => {
   const target = (
@@ -144,24 +146,44 @@ const evaluateWithWindowsCdpReconnect = async <T>(
   targetId: string,
   expression: string,
 ): Promise<{ driver: CdpDriver; value: T }> => {
-  try {
-    return { driver, value: await driver.evaluate<T>(expression) };
-  } catch (error) {
-    if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
-      throw error;
+  let currentDriver: CdpDriver | undefined = driver;
+  let lastError: unknown = undefined;
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+
+  while (Date.now() < deadline) {
+    if (currentDriver !== undefined) {
+      try {
+        return {
+          driver: currentDriver,
+          value: await currentDriver.evaluate<T>(expression),
+        };
+      } catch (error) {
+        if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
+          throw error;
+        }
+        lastError = error;
+        currentDriver.close();
+        currentDriver = undefined;
+      }
+    }
+
+    try {
+      currentDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        targetId,
+        timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())),
+      });
+    } catch (error) {
+      lastError = error;
+      await wait(100);
     }
   }
 
-  driver.close();
-  const reconnectedDriver = await connectToMuonCdp({
-    port: MUON_PORT,
-    targetId,
-    timeoutMs: cdpCommandTimeoutMs,
-  });
-  return {
-    driver: reconnectedDriver,
-    value: await reconnectedDriver.evaluate<T>(expression),
-  };
+  throw new Error(
+    `Timed out evaluating Windows remote CDP target '${targetId}': ${String(
+      lastError,
+    )}`,
+  );
 };
 
 const readMainDocumentTitle = async (
@@ -174,6 +196,24 @@ const readMainDocumentTitle = async (
     "document.title",
   );
   return { driver: result.driver, title: result.value };
+};
+
+const requestBrowserClose = async (
+  driver: CdpDriver,
+): Promise<CdpDriver | undefined> => {
+  try {
+    const closeResult = await driver.evaluate<string>(
+      `window.muon.browser.close(); "requested"`,
+    );
+    expect(closeResult).toBe("requested");
+    return driver;
+  } catch (error) {
+    if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
+      throw error;
+    }
+    driver.close();
+    return undefined;
+  }
 };
 
 const createExecutorOkSpawnOptions = (): ExecutorSpawnOptions =>
@@ -1513,10 +1553,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         "data:text/html,<title>muon browser close</title>",
         cdpCommandTimeoutMs,
       );
-      await expect(
-        driver.evaluate(`window.muon.browser.close(); "requested"`),
-      ).resolves.toBe("requested");
-      driver.close();
+      driver = await requestBrowserClose(driver);
+      driver?.close();
       driver = undefined;
       await expect(
         waitForProcessExit(running, processExitTimeoutMs),
@@ -1557,10 +1595,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       );
       popupDriver = initialPopupHref.driver;
       expect(initialPopupHref.value).toBe(MUON_APP_URL);
-      await expect(
-        driver.evaluate(`window.muon.browser.close(); "requested"`),
-      ).resolves.toBe("requested");
-      driver.close();
+      driver = await requestBrowserClose(driver);
+      driver?.close();
       driver = undefined;
 
       await waitForTargetClosed(mainTarget.id, targetTimeoutMs);
@@ -1624,10 +1660,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       );
       popupDriver = openerExists.driver;
       expect(openerExists.value).toBe(true);
-      await expect(
-        driver.evaluate(`window.muon.browser.close(); "requested"`),
-      ).resolves.toBe("requested");
-      driver.close();
+      driver = await requestBrowserClose(driver);
+      driver?.close();
       driver = undefined;
 
       await waitForTargetClosed(mainTarget.id, targetTimeoutMs);

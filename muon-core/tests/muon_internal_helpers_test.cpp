@@ -8,12 +8,14 @@
 #include "muon_string_helpers.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_environment_helpers.h"
+#include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "plugins/muon_shared_buffer.h"
 
 #include "yyjson.h"
 
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,17 @@ static bool Expect(bool condition, const std::string& message) {
     return false;
   }
   return true;
+}
+
+template <typename Operation>
+static bool ExpectThrows(Operation operation, const std::string& message) {
+  try {
+    operation();
+  } catch (const std::runtime_error&) {
+    return true;
+  }
+  std::cerr << message << "\n";
+  return false;
 }
 
 static bool ExpectJsonStringValue(const std::string& json,
@@ -223,6 +236,40 @@ static bool TestEnvironmentHelpers() {
 #endif
 }
 
+static bool TestFilesystemPathHelpers() {
+  if (!Expect(muon_internal::NormalizeLocalPathOrFileUri(
+                  "file:///tmp/muon%20file.txt") ==
+                  "/tmp/muon file.txt",
+              "file URI path was not decoded")) {
+    return false;
+  }
+
+#if defined(_WIN32)
+  constexpr char kExpectedDrivePath[] = "C:\\muon e2e\\#asset.txt";
+#else
+  constexpr char kExpectedDrivePath[] = "/C:/muon e2e/#asset.txt";
+#endif
+  if (!Expect(muon_internal::NormalizeLocalPathOrFileUri(
+                  "file:///C:/muon%20e2e/%23asset.txt") ==
+                  kExpectedDrivePath,
+              "drive file URI path was not decoded")) {
+    return false;
+  }
+
+  return ExpectThrows(
+             [] {
+               (void)muon_internal::NormalizeLocalPathOrFileUri(
+                   "file:///tmp/%zz");
+             },
+             "invalid file URI percent encoding was accepted") &&
+         ExpectThrows(
+             [] {
+               (void)muon_internal::NormalizeLocalPathOrFileUri(
+                   "file:///tmp/%00");
+             },
+             "NUL file URI path was accepted");
+}
+
 static bool TestSharedBufferHelpers() {
   const std::vector<MuonSharedBufferEntry> entries = {
       {1, 16, 4},
@@ -240,7 +287,8 @@ static bool TestSharedBufferHelpers() {
 
 int main() {
   return TestStringHelpers() && TestJsonHelpers() && TestCompletionHelpers() &&
-                 TestEnvironmentHelpers() && TestSharedBufferHelpers()
+                 TestEnvironmentHelpers() && TestFilesystemPathHelpers() &&
+                 TestSharedBufferHelpers()
              ? 0
              : 1;
 }

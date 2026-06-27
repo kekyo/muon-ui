@@ -11,9 +11,19 @@
 
 #include <cardio.h>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <exception>
+#include <limits>
 #include <stdexcept>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace muon_internal {
 
@@ -24,6 +34,71 @@ static constexpr char kMuonBuiltinFsGenericError[] =
 
 bool ContainsNul(const std::string& value) {
   return value.find('\0') != std::string::npos;
+}
+
+static int DecodeAsciiHex(char value) {
+  if (value >= '0' && value <= '9') {
+    return value - '0';
+  }
+  if (value >= 'a' && value <= 'f') {
+    return value - 'a' + 10;
+  }
+  if (value >= 'A' && value <= 'F') {
+    return value - 'A' + 10;
+  }
+  return -1;
+}
+
+static bool StartsWithFileScheme(std::string_view value) {
+  constexpr auto scheme = std::string_view{"file:"};
+  if (value.size() < scheme.size()) {
+    return false;
+  }
+  for (auto index = size_t{0}; index < scheme.size(); ++index) {
+    const auto left = static_cast<unsigned char>(value[index]);
+    const auto right = static_cast<unsigned char>(scheme[index]);
+    if (std::tolower(left) != std::tolower(right)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static std::string ToLowerAsciiString(std::string_view value) {
+  auto result = std::string(value);
+  std::transform(result.begin(), result.end(), result.begin(), [](char item) {
+    return static_cast<char>(
+        std::tolower(static_cast<unsigned char>(item)));
+  });
+  return result;
+}
+
+static std::string DecodeFileUriPath(std::string_view value) {
+  auto result = std::string{};
+  result.reserve(value.size());
+  for (auto index = size_t{0}; index < value.size(); ++index) {
+    if (value[index] != '%') {
+      result.push_back(value[index]);
+      continue;
+    }
+    if (index + 2 >= value.size()) {
+      throw std::runtime_error("File URI percent encoding is invalid");
+    }
+    const auto upper = DecodeAsciiHex(value[index + 1]);
+    const auto lower = DecodeAsciiHex(value[index + 2]);
+    if (upper < 0 || lower < 0) {
+      throw std::runtime_error("File URI percent encoding is invalid");
+    }
+    result.push_back(static_cast<char>((upper << 4) | lower));
+    index += 2;
+  }
+  if (ContainsNul(result) ||
+      !IsValidUtf8WithoutNul(
+          reinterpret_cast<const uint8_t*>(result.data()),
+          result.size())) {
+    throw std::runtime_error("File URI path is not valid UTF-8");
+  }
+  return result;
 }
 
 #if !defined(_WIN32)
@@ -37,6 +112,100 @@ GFile* CreateGFileFromPathOrUri(const std::string& value) {
                              : g_file_new_for_path(value.c_str());
 }
 #endif
+
+#if defined(_WIN32)
+static void ReplacePathSeparators(std::string* path, char separator) {
+  std::replace(path->begin(), path->end(), '/', separator);
+  std::replace(path->begin(), path->end(), '\\', separator);
+}
+#endif
+
+std::string NormalizeLocalPathOrFileUri(std::string_view value) {
+  if (!StartsWithFileScheme(value)) {
+    return std::string(value);
+  }
+
+  auto rest = value.substr(5);
+  auto authority = std::string_view{};
+  auto path_part = std::string_view{};
+  if (rest.rfind("//", 0) == 0) {
+    rest.remove_prefix(2);
+    const auto slash = rest.find('/');
+    if (slash == std::string_view::npos) {
+      authority = rest;
+      path_part = std::string_view{};
+    } else {
+      authority = rest.substr(0, slash);
+      path_part = rest.substr(slash);
+    }
+  } else {
+    path_part = rest;
+  }
+
+  const auto decoded_path = DecodeFileUriPath(path_part);
+  const auto lowercase_authority = ToLowerAsciiString(authority);
+  const auto has_local_authority =
+      authority.empty() || lowercase_authority == "localhost";
+#if defined(_WIN32)
+  auto result = decoded_path;
+  if (!has_local_authority) {
+    while (!result.empty() && (result.front() == '/' ||
+                              result.front() == '\\')) {
+      result.erase(result.begin());
+    }
+    ReplacePathSeparators(&result, '\\');
+    return "\\\\" + std::string(authority) +
+           (result.empty() ? std::string{} : "\\" + result);
+  }
+  if (result.size() >= 3 && result[0] == '/' &&
+      std::isalpha(static_cast<unsigned char>(result[1])) &&
+      result[2] == ':') {
+    result.erase(result.begin());
+  }
+  ReplacePathSeparators(&result, '\\');
+  return result;
+#else
+  if (!has_local_authority) {
+    throw std::runtime_error("File URI host is not supported");
+  }
+  return decoded_path;
+#endif
+}
+
+#if defined(_WIN32)
+static std::wstring Utf8ToWidePath(const std::string& value) {
+  if (value.size() >
+      static_cast<size_t>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error("Path is too long");
+  }
+  if (value.empty()) {
+    return std::wstring{};
+  }
+  const auto source_size = static_cast<int>(value.size());
+  const auto length = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), source_size, nullptr, 0);
+  if (length <= 0) {
+    throw std::runtime_error("Path is not valid UTF-8");
+  }
+  auto result = std::wstring(static_cast<size_t>(length), L'\0');
+  const auto converted = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), source_size,
+      result.data(), length);
+  if (converted != length) {
+    throw std::runtime_error("Path conversion failed");
+  }
+  return result;
+}
+#endif
+
+std::filesystem::path CreateLocalFilesystemPath(std::string_view value) {
+  auto normalized = NormalizeLocalPathOrFileUri(value);
+#if defined(_WIN32)
+  return std::filesystem::path(Utf8ToWidePath(normalized));
+#else
+  return std::filesystem::path(normalized);
+#endif
+}
 
 std::string PathToUtf8String(const std::filesystem::path& path) {
   const auto value = path.u8string();
@@ -86,6 +255,14 @@ static bool IsReadonly(std::filesystem::perms permissions) {
   return (permissions & write_permissions) == std::filesystem::perms::none;
 }
 
+static std::string FilesystemErrorMessage(const std::error_code& error) {
+#if defined(_WIN32)
+  return "Windows filesystem error " + std::to_string(error.value());
+#else
+  return error.message();
+#endif
+}
+
 void ThrowFilesystemError(const char* action,
                           const std::filesystem::path& path,
                           const std::error_code& error) {
@@ -94,7 +271,7 @@ void ThrowFilesystemError(const char* action,
   }
   throw std::runtime_error(
       std::string(action) + " failed for " + PathToUtf8String(path) +
-      ": " + error.message());
+      ": " + FilesystemErrorMessage(error));
 }
 
 void ThrowIfNotRegularFile(const std::filesystem::path& path,
@@ -124,10 +301,10 @@ std::string CreateStatusJson(const std::filesystem::path& path,
   const auto status = follow_symlink ? std::filesystem::status(path, error)
                                      : std::filesystem::symlink_status(path,
                                                                        error);
-  ThrowFilesystemError("stat", path, error);
   if (status.type() == std::filesystem::file_type::not_found) {
     throw std::runtime_error("Path does not exist");
   }
+  ThrowFilesystemError("stat", path, error);
   const auto size = ReadFileSize(path, status);
   const auto last_write_time = std::filesystem::last_write_time(path, error);
   ThrowFilesystemError("last_write_time", path, error);

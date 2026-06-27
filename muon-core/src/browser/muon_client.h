@@ -10,6 +10,7 @@
 #include "browser/muon_browser_shortcut_handler.h"
 #include "browser/muon_builtin_browser.h"
 #include "browser/muon_title_bar.h"
+#include "browser/muon_window_delegate.h"
 #include "config/muon_config.h"
 #include "network/muon_network_policy.h"
 #include "plugins/muon_plugin_runtime.h"
@@ -43,7 +44,8 @@ class MuonClient final : public CefClient,
                           public CefKeyboardHandler,
                           public CefDialogHandler,
                           public CefDragHandler,
-                          public CefRequestHandler {
+                          public CefRequestHandler,
+                          public MuonWindowCloseHandler {
  public:
   /**
    * Creates the browser client.
@@ -335,6 +337,24 @@ class MuonClient final : public CefClient,
                                 CefProcessId source_process,
                                 CefRefPtr<CefProcessMessage> message) override;
 
+  /**
+   * Cancels pending filesystem dialogs and retries closing the owner window.
+   *
+   * @param browser Browser that owns the pending dialog.
+   * @param window Window to close after the dialog finishes.
+   * @return true when a pending dialog close retry was scheduled.
+   */
+  bool RequestCloseAfterPendingFsDialog(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefWindow> window) override;
+
+  /**
+   * Returns whether the browser owns a pending filesystem dialog call.
+   *
+   * @param browser_id Browser identifier to query.
+   * @return true when at least one filesystem dialog is still pending.
+   */
+  bool HasPendingFsDialogCallForBrowser(int browser_id) const override;
+
  private:
   struct PendingSharedPayload {
     std::shared_ptr<MuonSharedBufferPayload> payload;
@@ -368,6 +388,7 @@ class MuonClient final : public CefClient,
   static bool CreateFsDialogArgsWithOwnerBrowserId(
       CefRefPtr<CefListValue> encoded_args,
       int browser_id,
+      CefWindowHandle owner_window_handle,
       CefRefPtr<CefListValue>* target,
       std::string* error_message);
   static std::string CreatePendingSharedKey(const std::string& message_name,
@@ -384,6 +405,7 @@ class MuonClient final : public CefClient,
   bool IsFsDialogFunction(uint32_t function_id) const;
   bool BeginModalBrowserViewDisable(const PendingPluginCall& call,
                                     int* browser_id,
+                                    CefWindowHandle* owner_window_handle,
                                     std::string* error_message);
   void EndModalBrowserViewDisable(int browser_id);
   void ClearModalBrowserViewDisable(int browser_id);
@@ -440,6 +462,7 @@ class MuonClient final : public CefClient,
   std::map<int, CefRefPtr<CefBrowser>> browsers_by_id_;
   int pending_fs_dialog_calls_ = 0;
   std::map<int, int> pending_fs_dialog_calls_by_browser_;
+  std::map<int, CefRefPtr<CefWindow>> close_windows_after_pending_fs_dialogs_;
   bool quit_message_loop_after_pending_fs_dialogs_ = false;
   int quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
   bool message_loop_quit_requested_ = false;

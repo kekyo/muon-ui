@@ -7,11 +7,40 @@
 #pragma once
 
 #include "browser/muon_browser_shortcut_handler.h"
-#include "config/muon_config.h"
 #include "browser/muon_title_bar.h"
+#include "config/muon_config.h"
 
+#include "include/cef_browser.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
+
+/**
+ * Handles browser-owned work that must finish before a window can close.
+ */
+class MuonWindowCloseHandler {
+ public:
+  /**
+   * Cancels pending filesystem dialogs and retries closing the owner window.
+   *
+   * @param browser Browser that owns the pending dialog.
+   * @param window Window to close after the dialog finishes.
+   * @return true when a pending dialog close retry was scheduled.
+   */
+  virtual bool RequestCloseAfterPendingFsDialog(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefWindow> window) = 0;
+
+  /**
+   * Returns whether the browser owns a pending filesystem dialog call.
+   *
+   * @param browser_id Browser identifier to query.
+   * @return true when at least one filesystem dialog is still pending.
+   */
+  virtual bool HasPendingFsDialogCallForBrowser(int browser_id) const = 0;
+
+ protected:
+  ~MuonWindowCloseHandler() = default;
+};
 
 /**
  * Top-level window delegate for browser and DevTools windows.
@@ -29,6 +58,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
    * @param shortcut_handler Browser shortcut handler for window-level events.
+   * @param close_handler Browser close handler for pending owner work.
    */
   MuonWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
                       bool is_devtools,
@@ -40,7 +70,8 @@ class MuonWindowDelegate final : public CefWindowDelegate {
                       MuonTitleBarBackgroundColor title_bar_background_color =
                           {},
                       CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler =
-                          nullptr);
+                          nullptr,
+                      MuonWindowCloseHandler* close_handler = nullptr);
 
   /**
    * Attaches the browser view and applies the initial window state.
@@ -148,6 +179,7 @@ class MuonWindowDelegate final : public CefWindowDelegate {
   CefRefPtr<CefBrowserView> title_bar_view_;
   CefRefPtr<MuonTitleBarController> title_bar_controller_;
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler_;
+  MuonWindowCloseHandler* close_handler_;
   const bool is_devtools_;
   const MuonBrowserInitialWindowState initial_window_state_;
   const bool initial_title_bar_visibility_;

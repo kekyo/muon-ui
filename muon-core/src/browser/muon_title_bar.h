@@ -402,9 +402,9 @@ class MuonTitleBarController final : public CefClient,
   void SetVisible(bool visible);
 
   /**
-   * Recomputes draggable regions from the current window size.
+   * Recomputes draggable regions from the current or attached window size.
    */
-  void UpdateDraggableRegions();
+  void UpdateDraggableRegions(CefRefPtr<CefWindow> window = nullptr);
 
   /**
    * Returns the configured title bar height in DIP.
@@ -446,10 +446,12 @@ class MuonTitleBarController final : public CefClient,
   void SendTitle();
   void SendIcon();
   void ExecuteJavaScript(const std::string& source);
+  CefRefPtr<CefBrowserView> ResolveTitleBarView() const;
+  CefRefPtr<CefWindow> ResolveWindow() const;
 
   const MuonTitleBarManifest manifest_;
   const MuonTitleBarBackgroundColor background_color_;
-  CefWindow* window_ = nullptr;
+  CefWindowHandle window_handle_ = 0;
   CefRefPtr<CefBrowser> browser_;
   std::string title_ = "Muon";
   std::string icon_data_url_;
@@ -653,6 +655,21 @@ MuonTitleBarControlAction GetRegisteredMuonTitleBarControlActionAtScreenPoint(
     const CefRect& window_bounds_in_screen);
 
 /**
+ * Returns whether a screen point hits a registered draggable title bar area.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param screen_point DIP screen point to test.
+ * @param window_bounds_in_screen Native top-level window bounds in DIP screen
+ * coordinates.
+ * @return true when the point belongs to the title bar but not to a standard
+ * control.
+ */
+bool IsRegisteredMuonTitleBarDragRegionPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    const CefRect& window_bounds_in_screen);
+
+/**
  * Handles a registered standard title bar control action.
  *
  * @param window_handle Native top-level window handle.
@@ -664,6 +681,9 @@ bool HandleRegisteredMuonTitleBarControlAction(
     MuonTitleBarControlAction action);
 
 /**
- * Returns the registered custom-titlebar window for a browser, if any.
+ * Returns whether a custom-titlebar window has been registered for a browser.
+ *
+ * @param browser_id Browser identifier to test.
+ * @return true when the browser has reached the window-created registration.
  */
-CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id);
+bool HasRegisteredMuonWindowForBrowser(int browser_id);

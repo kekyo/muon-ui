@@ -28,9 +28,11 @@ MuonWindowDelegate::MuonWindowDelegate(
     bool initial_title_bar_visibility,
     MuonTitleBarManifest title_bar_manifest,
     MuonTitleBarBackgroundColor title_bar_background_color,
-    CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler)
+    CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler,
+    MuonWindowCloseHandler* close_handler)
     : browser_view_(browser_view),
       shortcut_handler_(shortcut_handler),
+      close_handler_(close_handler),
       is_devtools_(is_devtools),
       initial_window_state_(initial_window_state),
       initial_title_bar_visibility_(initial_title_bar_visibility),
@@ -172,6 +174,7 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
     }
   } else if (browser_view_) {
     window->AddChildView(browser_view_);
+    RegisterMuonTitleBarBrowserView(window, browser_view_);
     if (!is_devtools_) {
       SetRegisteredMuonTitleBarVisibility(
           window, initial_title_bar_visibility_);
@@ -244,7 +247,7 @@ void MuonWindowDelegate::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
   (void)new_bounds;
   if (title_bar_controller_) {
     title_bar_controller_->SetMaximized(window && window->IsMaximized());
-    title_bar_controller_->UpdateDraggableRegions();
+    title_bar_controller_->UpdateDraggableRegions(window);
   }
 }
 
@@ -271,7 +274,14 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
     const auto host = browser->GetHost();
     const auto ready_to_be_closed = host && host->IsReadyToBeClosed();
     const auto valid = browser->IsValid();
+    const auto has_pending_fs_dialog =
+        close_handler_ != nullptr &&
+        close_handler_->HasPendingFsDialogCallForBrowser(
+            browser->GetIdentifier());
     const auto result = host && host->TryCloseBrowser();
+    const auto pending_fs_dialog_close_requested =
+        !result && has_pending_fs_dialog &&
+        close_handler_->RequestCloseAfterPendingFsDialog(browser, window);
     std::ostringstream log;
     log << "WindowDelegate CanClose browser this="
         << FormatMuonCloseDebugPointer(this)
@@ -283,6 +293,10 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
         << " ready_before_try="
         << FormatMuonCloseDebugBool(ready_to_be_closed)
         << " try_close_result=" << FormatMuonCloseDebugBool(result)
+        << " pending_fs_dialog="
+        << FormatMuonCloseDebugBool(has_pending_fs_dialog)
+        << " pending_fs_dialog_close_requested="
+        << FormatMuonCloseDebugBool(pending_fs_dialog_close_requested)
         << " return=" << FormatMuonCloseDebugBool(result);
     AppendMuonCloseDebugLog(log.str());
     return result;

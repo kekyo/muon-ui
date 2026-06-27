@@ -124,6 +124,49 @@ verify_windows_icon_resources() {
   rm -f "${dump_path}" "${resources_path}"
 }
 
+patch_windows_cef_popup_settings() {
+  if [[ "${TARGET_NAME}" != windows* ]]; then
+    return
+  fi
+
+  local life_span_source_path="${CEF_ROOT}/libcef_dll/cpptoc/life_span_handler_cpptoc.cc"
+  local browser_view_delegate_source_path="${CEF_ROOT}/libcef_dll/cpptoc/views/browser_view_delegate_cpptoc.cc"
+
+  node -e '
+const fs = require("fs");
+const patches = [
+  {
+    sourcePath: process.argv[1],
+    marker: "Muon: tolerate CEF Windows popup settings without size",
+  },
+  {
+    sourcePath: process.argv[2],
+    marker: "Muon: tolerate CEF Windows browser view settings without size",
+  },
+];
+const guardPattern = /  if \(!template_util::has_valid_size\(settings\)\) {\n    DCHECK\(false\) << "invalid settings->\[base\.\]size";\n    return(?: 0| NULL)?;\n  }/g;
+for (const patch of patches) {
+  if (!fs.existsSync(patch.sourcePath)) {
+    continue;
+  }
+  let source = fs.readFileSync(patch.sourcePath, "utf8");
+  const replacement = `  if (!template_util::has_valid_size(settings)) {
+    // ${patch.marker}.
+    const_cast<struct _cef_browser_settings_t*>(settings)->size = sizeof(*settings);
+  }`;
+  let replacementCount = 0;
+  source = source.replace(guardPattern, () => {
+    replacementCount += 1;
+    return replacement;
+  });
+  if (replacementCount === 0 && !source.includes(patch.marker)) {
+    throw new Error(`CEF settings guard was not found: ${patch.sourcePath}`);
+  }
+  fs.writeFileSync(patch.sourcePath, source);
+}
+' "${life_span_source_path}" "${browser_view_delegate_source_path}"
+}
+
 BUILD_USAGE="${1:-dev}"
 USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux64|linuxarm|linuxarm64|mingw32|mingw64|win32|win64|windows32|windows64]"
 case "${BUILD_USAGE}" in
@@ -244,11 +287,13 @@ CEF_PACKAGE="${CEF_PREPARE_METADATA[0]}"
 CEF_PACKAGE_URL="${CEF_PREPARE_METADATA[1]}"
 expected="${CEF_PREPARE_METADATA[2]}"
 CEF_ARCHIVE_SIZE="${CEF_PREPARE_METADATA[3]}"
+patch_windows_cef_popup_settings
 
 BUILD_TYPE_LOWER="${BUILD_TYPE,,}"
 BUILD_DIR="${OUTPUT_ROOT}/.build/${BUILD_USAGE}/${TARGET_NAME}/${BUILD_TYPE_LOWER}"
 MUON_CORE_VERSION_HEADER_PATH="${BUILD_DIR}/generated/muon_core_version_generated.h"
 generate_core_version_header "${MUON_CORE_VERSION_HEADER_PATH}"
+MUON_CEF_API_VERSION="${MUON_CEF_API_VERSION:-}"
 CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.json"
 if [[ "${TARGET_NAME}" == linux* ]]; then
   CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.linux.json"
@@ -296,6 +341,7 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DMUON_CEF_PACKAGE_URL="${CEF_PACKAGE_URL}" \
   -DMUON_CEF_SHA1="${expected}" \
   -DMUON_CEF_SIZE="${CEF_ARCHIVE_SIZE}" \
+  -DMUON_CEF_API_VERSION="${MUON_CEF_API_VERSION}" \
   -DMUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_PATH}" \
   -DMUON_CORE_VERSION="${MUON_CORE_VERSION:-}" \
   -DMUON_CORE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH:-}" \

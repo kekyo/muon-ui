@@ -18,6 +18,29 @@ struct CompletionState {
   std::string error_message;
 };
 
+struct MoveOnlyResult {
+  explicit MoveOnlyResult(int source_value)
+      : value(source_value) {}
+
+  MoveOnlyResult(const MoveOnlyResult&) = delete;
+  MoveOnlyResult& operator=(const MoveOnlyResult&) = delete;
+
+  MoveOnlyResult(MoveOnlyResult&& other) noexcept
+      : value(other.value) {
+    other.value = 0;
+  }
+
+  MoveOnlyResult& operator=(MoveOnlyResult&& other) noexcept {
+    if (this != &other) {
+      value = other.value;
+      other.value = 0;
+    }
+    return *this;
+  }
+
+  int value = 0;
+};
+
 static bool Expect(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << message << "\n";
@@ -50,6 +73,12 @@ static cardio::promise<int> ReturnValueAsync(
   co_return 42;
 }
 
+static cardio::promise<MoveOnlyResult> ReturnMoveOnlyAsync(
+    cardio::cancellation cancellation) {
+  cancellation.throw_if_cancellation_requested();
+  co_return MoveOnlyResult(57);
+}
+
 static cardio::promise<void> ReturnVoidAsync(
     cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
@@ -66,6 +95,15 @@ static cardio::promise<int> ThrowRuntimeErrorAsync(
     cardio::cancellation cancellation) {
   (void)cancellation;
   throw std::runtime_error("specific failure");
+  co_return 0;
+}
+
+static cardio::promise<int> ThrowRuntimeErrorAfterSuspendAsync(
+    cardio::cancellation cancellation) {
+  auto start_gate = cardio::resolved();
+  co_await start_gate;
+  cancellation.throw_if_cancellation_requested();
+  throw std::runtime_error("suspended failure");
   co_return 0;
 }
 
@@ -86,6 +124,18 @@ static cardio::promise<void> CancelAfterDelay(
 static cardio::promise<void> ShutdownAfterDelay(
     cardio::dispatcher_group* group) {
   co_await cardio::promises::delay(5000);
+  group->shutdown();
+}
+
+static cardio::promise<void> ResolveCompletionGateAfterProbe(
+    std::shared_ptr<cardio::promise_source<void>> completion_gate,
+    cardio::promise<void>* operation,
+    bool* operation_ready_before_completion,
+    cardio::dispatcher_group* group) {
+  co_await cardio::promises::delay(1);
+  *operation_ready_before_completion = operation->is_ready();
+  completion_gate->resolve();
+  co_await cardio::promises::delay(1);
   group->shutdown();
 }
 
@@ -150,6 +200,86 @@ static bool RunVoidCompletionTest() {
   return Expect(operation.is_ready(), "void operation did not finish") &&
          Expect(state.completed, "void operation did not complete") &&
          Expect(state.succeeded, state.error_message);
+}
+
+static bool RunMoveOnlyCompletionTest() {
+  auto group = cardio::dispatcher_group(
+      cardio::exit_condition::exit_by_manual);
+  auto host = cardio::dispatcher_host(group);
+  auto cancellation =
+      std::make_shared<muon_internal::MuonTrafficCardioCancellation>();
+  auto state = CompletionState{};
+  auto timeout = ShutdownAfterDelay(&group);
+  auto operation =
+      muon_internal::RunMuonTrafficCardioOperation<MoveOnlyResult>(
+          cancellation,
+          "generic failure",
+          [](cardio::cancellation cancellation_signal) {
+            return ReturnMoveOnlyAsync(cancellation_signal);
+          },
+          [&group, &state](MoveOnlyResult result) {
+            ResolveCompletion(&state, result.value);
+            group.shutdown();
+          },
+          [&group, &state](std::string error) {
+            RejectCompletion(&state, std::move(error));
+            group.shutdown();
+          });
+  (void)timeout;
+
+  host.park();
+
+  return Expect(operation.is_ready(),
+                "move-only operation did not finish") &&
+         Expect(state.completed, "move-only operation did not complete") &&
+         Expect(state.succeeded, state.error_message) &&
+         Expect(state.result == 57,
+                "move-only operation returned wrong value");
+}
+
+static bool RunAsyncCompletionWaitTest() {
+  auto group = cardio::dispatcher_group(
+      cardio::exit_condition::exit_by_manual);
+  auto host = cardio::dispatcher_host(group);
+  auto cancellation =
+      std::make_shared<muon_internal::MuonTrafficCardioCancellation>();
+  auto state = CompletionState{};
+  auto completion_gate =
+      std::make_shared<cardio::promise_source<void>>();
+  auto completion_requested = false;
+  auto operation_ready_before_completion = false;
+  auto timeout = ShutdownAfterDelay(&group);
+  auto operation = muon_internal::RunMuonTrafficCardioOperation<int>(
+      cancellation,
+      "generic failure",
+      [](cardio::cancellation cancellation_signal) {
+        return ReturnValueAsync(cancellation_signal);
+      },
+      [&state, completion_gate, &completion_requested](int result) {
+        ResolveCompletion(&state, result);
+        completion_requested = true;
+        return completion_gate->get_promise();
+      },
+      [&group, &state](std::string error) {
+        RejectCompletion(&state, std::move(error));
+        group.shutdown();
+      });
+  auto gate = ResolveCompletionGateAfterProbe(
+      completion_gate, &operation, &operation_ready_before_completion, &group);
+  (void)timeout;
+  (void)gate;
+
+  host.park();
+
+  return Expect(completion_requested,
+                "async completion was not requested") &&
+         Expect(!operation_ready_before_completion,
+                "operation finished before async completion") &&
+         Expect(operation.is_ready(), "async completion operation did not finish") &&
+         Expect(state.completed, "async completion did not complete") &&
+         Expect(state.succeeded, state.error_message) &&
+         Expect(state.result == 42,
+                "async completion operation returned wrong value");
 }
 
 static bool RunPreCanceledOperationTest() {
@@ -257,6 +387,41 @@ static bool RunExceptionMessageTest() {
                 "exception operation returned wrong error");
 }
 
+static bool RunSuspendedExceptionMessageTest() {
+  auto group = cardio::dispatcher_group(
+      cardio::exit_condition::exit_by_manual);
+  auto host = cardio::dispatcher_host(group);
+  auto cancellation =
+      std::make_shared<muon_internal::MuonTrafficCardioCancellation>();
+  auto state = CompletionState{};
+  auto timeout = ShutdownAfterDelay(&group);
+  auto operation = muon_internal::RunMuonTrafficCardioOperation<int>(
+      cancellation,
+      "generic failure",
+      [](cardio::cancellation cancellation_signal) {
+        return ThrowRuntimeErrorAfterSuspendAsync(cancellation_signal);
+      },
+      [&group, &state](int result) {
+        ResolveCompletion(&state, result);
+        group.shutdown();
+      },
+      [&group, &state](std::string error) {
+        RejectCompletion(&state, std::move(error));
+        group.shutdown();
+      });
+  (void)timeout;
+
+  host.park();
+
+  return Expect(operation.is_ready(),
+                "suspended exception operation did not finish") &&
+         Expect(state.completed,
+                "suspended exception operation did not complete") &&
+         Expect(!state.succeeded, "suspended exception operation succeeded") &&
+         Expect(state.error_message == "suspended failure",
+                "suspended exception operation returned wrong error");
+}
+
 static bool RunEmptyExceptionMessageTest() {
   auto group = cardio::dispatcher_group(
       cardio::exit_condition::exit_by_manual);
@@ -292,8 +457,10 @@ static bool RunEmptyExceptionMessageTest() {
 
 int main() {
   return RunValueCompletionTest() && RunVoidCompletionTest() &&
-                 RunPreCanceledOperationTest() &&
+                 RunMoveOnlyCompletionTest() &&
+                 RunAsyncCompletionWaitTest() && RunPreCanceledOperationTest() &&
                  RunRunningCancellationTest() && RunExceptionMessageTest() &&
+                 RunSuspendedExceptionMessageTest() &&
                  RunEmptyExceptionMessageTest()
              ? 0
              : 1;

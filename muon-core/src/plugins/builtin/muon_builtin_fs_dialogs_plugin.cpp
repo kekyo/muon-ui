@@ -70,11 +70,24 @@ struct MuonFsDialogsAbortCallbackState {
 };
 
 struct MuonFsDialogsOperationState {
+  ~MuonFsDialogsOperationState() {
+    if (abort_cancel_function == nullptr) {
+      return;
+    }
+    if (abort_helpers != nullptr &&
+        abort_helpers->__release_plugin_function_pointer_impl != nullptr) {
+      abort_helpers->release_plugin_function_pointer(abort_cancel_function);
+    }
+    abort_cancel_function = nullptr;
+  }
+
   muon_completion_func completion = nullptr;
   muon_ui_fs_dialog_kind kind = MUON_UI_FS_DIALOG_SELECT_FILE;
   std::string options_json;
   int owner_browser_id = 0;
   std::shared_ptr<struct MuonFsDialogsProviderOperation> provider_operation;
+  const muon_plugin_helpers* abort_helpers = nullptr;
+  muon_native_function abort_cancel_function = nullptr;
 };
 
 struct MuonFsDialogsAbortWatcherCompletionState {
@@ -306,11 +319,12 @@ static bool RegisterAbortWatcher(
   }
 
   completion_state->operation = std::move(*operation);
+  completion_state->operation->abort_helpers = helpers;
+  completion_state->operation->abort_cancel_function = cancel_function;
   using AbortWatcherFunction = void (*)(muon_completion_func,
                                         muon_native_function);
   reinterpret_cast<AbortWatcherFunction>(abort_watcher)(
       completion_state->watcher_completion, cancel_function);
-  helpers->release_plugin_function_pointer(cancel_function);
   return true;
 }
 

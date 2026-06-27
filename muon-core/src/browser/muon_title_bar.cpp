@@ -51,6 +51,7 @@ constexpr int kMuonNativeAppIconDipSize = 32;
 
 std::map<CefWindow*, MuonTitleBarController*> g_muon_title_bar_controllers;
 std::map<CefWindow*, CefRefPtr<CefBrowserView>> g_muon_title_bar_views;
+std::map<int, CefRefPtr<CefBrowserView>> g_muon_title_bar_views_by_browser_id;
 std::map<CefWindow*, int> g_muon_title_bar_browser_ids_by_window;
 std::map<CefBrowserView*, CefRefPtr<CefWindow>>
     g_muon_title_bar_windows_by_browser_view;
@@ -61,6 +62,8 @@ std::map<int, CefRefPtr<CefWindow>> g_muon_title_bar_windows_by_browser_id;
 std::map<int, std::string> g_muon_title_bar_pending_titles_by_browser_id;
 std::map<int, MuonTitleBarIcon> g_muon_title_bar_pending_icons_by_browser_id;
 using MuonWindowDraggableRegionKey = std::uintptr_t;
+std::map<CefWindow*, MuonWindowDraggableRegionKey>
+    g_muon_draggable_region_keys_by_window;
 std::map<MuonWindowDraggableRegionKey, MuonTitleBarController*>
     g_muon_title_bar_controllers_by_window_handle;
 std::map<MuonWindowDraggableRegionKey, std::vector<CefDraggableRegion>>
@@ -531,28 +534,75 @@ static MuonWindowDraggableRegionKey GetWindowPointerDraggableRegionKey(
   return reinterpret_cast<MuonWindowDraggableRegionKey>(window);
 }
 
+template <typename TValue>
+static void MoveMuonDraggableRegionMapEntry(
+    std::map<MuonWindowDraggableRegionKey, TValue>* map,
+    MuonWindowDraggableRegionKey from,
+    MuonWindowDraggableRegionKey to) {
+  if (map == nullptr || from == to) {
+    return;
+  }
+  const auto from_entry = map->find(from);
+  if (from_entry == map->end()) {
+    return;
+  }
+  if (map->find(to) == map->end()) {
+    (*map)[to] = std::move(from_entry->second);
+  }
+  map->erase(from_entry);
+}
+
+static void MoveMuonDraggableRegionState(
+    MuonWindowDraggableRegionKey from,
+    MuonWindowDraggableRegionKey to) {
+  MoveMuonDraggableRegionMapEntry(
+      &g_muon_title_bar_controllers_by_window_handle, from, to);
+  MoveMuonDraggableRegionMapEntry(&g_muon_title_bar_draggable_regions, from,
+                                  to);
+  MoveMuonDraggableRegionMapEntry(&g_muon_applied_draggable_regions, from, to);
+  MoveMuonDraggableRegionMapEntry(&g_muon_page_draggable_regions, from, to);
+}
+
 static MuonWindowDraggableRegionKey GetDraggableRegionKey(CefWindow* window) {
   if (window == nullptr) {
     return 0;
   }
   const auto handle_key =
       GetWindowHandleDraggableRegionKey(window->GetWindowHandle());
-  return handle_key != 0 ? handle_key
-                         : GetWindowPointerDraggableRegionKey(window);
+  const auto pointer_key = GetWindowPointerDraggableRegionKey(window);
+  const auto stored_key = g_muon_draggable_region_keys_by_window.find(window);
+  if (handle_key != 0) {
+    if (stored_key != g_muon_draggable_region_keys_by_window.end() &&
+        stored_key->second != handle_key) {
+      MoveMuonDraggableRegionState(stored_key->second, handle_key);
+    }
+    MoveMuonDraggableRegionState(pointer_key, handle_key);
+    g_muon_draggable_region_keys_by_window[window] = handle_key;
+    return handle_key;
+  }
+  const auto key = stored_key != g_muon_draggable_region_keys_by_window.end()
+                       ? stored_key->second
+                       : pointer_key;
+  g_muon_draggable_region_keys_by_window[window] = key;
+  return key;
 }
 
 static void EraseMuonDraggableRegionState(CefWindow* window) {
-  const auto key = GetDraggableRegionKey(window);
-  g_muon_title_bar_draggable_regions.erase(key);
-  g_muon_page_draggable_regions.erase(key);
-  g_muon_applied_draggable_regions.erase(key);
+  if (window == nullptr) {
+    return;
+  }
+  const auto stored_key = g_muon_draggable_region_keys_by_window.find(window);
+  if (stored_key != g_muon_draggable_region_keys_by_window.end()) {
+    g_muon_title_bar_draggable_regions.erase(stored_key->second);
+    g_muon_page_draggable_regions.erase(stored_key->second);
+    g_muon_applied_draggable_regions.erase(stored_key->second);
+    g_muon_draggable_region_keys_by_window.erase(stored_key);
+  }
 
   const auto pointer_key = GetWindowPointerDraggableRegionKey(window);
-  if (pointer_key != key) {
-    g_muon_title_bar_draggable_regions.erase(pointer_key);
-    g_muon_page_draggable_regions.erase(pointer_key);
-    g_muon_applied_draggable_regions.erase(pointer_key);
-  }
+  g_muon_title_bar_draggable_regions.erase(pointer_key);
+  g_muon_page_draggable_regions.erase(pointer_key);
+  g_muon_applied_draggable_regions.erase(pointer_key);
 }
 
 static void AppendDraggableRegions(
@@ -563,7 +613,7 @@ static void AppendDraggableRegions(
 
 static void AppendBrowserViewDraggableRegions(
     std::vector<CefDraggableRegion>* target,
-    CefRefPtr<CefBrowserView> browser_view,
+    CefBrowserView* browser_view,
     const std::vector<CefDraggableRegion>& source) {
   if (!browser_view) {
     return;
@@ -626,11 +676,25 @@ static MuonTitleBarController* FindMuonTitleBarControllerByWindowHandle(
   if (window_handle == 0) {
     return nullptr;
   }
-  const auto controller = g_muon_title_bar_controllers_by_window_handle.find(
-      GetWindowHandleDraggableRegionKey(window_handle));
-  return controller != g_muon_title_bar_controllers_by_window_handle.end()
-             ? controller->second
-             : nullptr;
+  const auto handle_key = GetWindowHandleDraggableRegionKey(window_handle);
+  const auto controller =
+      g_muon_title_bar_controllers_by_window_handle.find(handle_key);
+  if (controller != g_muon_title_bar_controllers_by_window_handle.end()) {
+    return controller->second;
+  }
+  for (const auto& entry : g_muon_title_bar_controllers) {
+    auto* window = entry.first;
+    if (window == nullptr || window->GetWindowHandle() != window_handle) {
+      continue;
+    }
+    const auto key = GetDraggableRegionKey(window);
+    const auto migrated =
+        g_muon_title_bar_controllers_by_window_handle.find(key);
+    return migrated != g_muon_title_bar_controllers_by_window_handle.end()
+               ? migrated->second
+               : entry.second;
+  }
+  return nullptr;
 }
 
 static bool GetPageDraggableRegionViewPoint(
@@ -713,7 +777,7 @@ static void ApplyMuonDraggableRegions(CefWindow* window) {
   const auto page_regions = g_muon_page_draggable_regions.find(key);
   if (page_regions != g_muon_page_draggable_regions.end()) {
     AppendBrowserViewDraggableRegions(
-        &regions, page_regions->second.browser_view,
+        &regions, page_regions->second.browser_view.get(),
         page_regions->second.regions);
   }
   const auto title_bar_regions =
@@ -939,6 +1003,7 @@ static void EraseRegisteredMuonTitleBarBrowserState(
   for (const auto browser_id : browser_ids) {
     g_muon_title_bar_controllers_by_browser_id.erase(browser_id);
     g_muon_title_bar_windows_by_browser_id.erase(browser_id);
+    g_muon_title_bar_views_by_browser_id.erase(browser_id);
     g_muon_title_bar_pending_titles_by_browser_id.erase(browser_id);
     g_muon_title_bar_pending_icons_by_browser_id.erase(browser_id);
   }
@@ -1410,14 +1475,14 @@ CefRefPtr<CefBrowserView> MuonTitleBarController::CreateBrowserView() {
 }
 
 void MuonTitleBarController::AttachWindow(CefRefPtr<CefWindow> window) {
-  window_ = window.get();
-  maximized_ = window_ && window_->IsMaximized();
-  UpdateDraggableRegions();
+  window_handle_ = window ? window->GetWindowHandle() : 0;
+  maximized_ = window && window->IsMaximized();
+  UpdateDraggableRegions(window);
   SendState();
 }
 
 void MuonTitleBarController::DetachWindow() {
-  window_ = nullptr;
+  window_handle_ = 0;
   browser_ = nullptr;
 }
 
@@ -1444,7 +1509,21 @@ void MuonTitleBarController::SetMaximized(bool maximized) {
 
 void MuonTitleBarController::SetVisible(bool visible) {
   visible_ = visible;
-  UpdateDraggableRegions();
+  const auto title_bar_view = ResolveTitleBarView();
+  auto window = CefRefPtr<CefWindow>();
+  if (title_bar_view) {
+    title_bar_view->SetVisible(visible);
+    title_bar_view->InvalidateLayout();
+    window = title_bar_view->GetWindow();
+  }
+  if (!window) {
+    window = ResolveWindow();
+  }
+  if (window) {
+    window->InvalidateLayout();
+    window->Layout();
+  }
+  UpdateDraggableRegions(window);
   if (visible_) {
     SendTitle();
     SendState();
@@ -1452,16 +1531,20 @@ void MuonTitleBarController::SetVisible(bool visible) {
   }
 }
 
-void MuonTitleBarController::UpdateDraggableRegions() {
-  if (!window_ || !IsCustomMuonTitleBar(manifest_)) {
+void MuonTitleBarController::UpdateDraggableRegions(
+    CefRefPtr<CefWindow> window) {
+  if (!window) {
+    window = ResolveWindow();
+  }
+  if (!window || !IsCustomMuonTitleBar(manifest_)) {
     return;
   }
   if (!visible_) {
-    SetMuonTitleBarDraggableRegions(window_, {});
+    SetMuonTitleBarDraggableRegions(window.get(), {});
     return;
   }
 
-  auto bounds = window_->GetBounds();
+  auto bounds = window->GetBounds();
   auto width = bounds.width;
   if (width <= 0) {
     width = kMuonTitleBarDefaultWindowWidth;
@@ -1472,7 +1555,7 @@ void MuonTitleBarController::UpdateDraggableRegions() {
   regions.emplace_back(
       CefRect(width - controls_width, 0, controls_width, manifest_.height),
       false);
-  SetMuonTitleBarDraggableRegions(window_, regions);
+  SetMuonTitleBarDraggableRegions(window.get(), regions);
 }
 
 int MuonTitleBarController::GetHeight() const {
@@ -1507,10 +1590,12 @@ void MuonTitleBarController::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         << FormatMuonCloseDebugPointer(this)
         << " browser=" << FormatMuonCloseDebugPointer(browser.get())
         << " browser_id=" << (browser ? browser->GetIdentifier() : 0)
-        << " window=" << FormatMuonCloseDebugPointer(window_);
+        << " window_handle=" << GetWindowHandleDraggableRegionKey(
+               window_handle_);
     AppendMuonCloseDebugLog(log.str());
   }
   browser_ = browser;
+  SetVisible(visible_);
 }
 
 void MuonTitleBarController::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
@@ -1522,7 +1607,8 @@ void MuonTitleBarController::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
         << " browser_id=" << (browser ? browser->GetIdentifier() : 0)
         << " current_browser="
         << FormatMuonCloseDebugPointer(browser_.get())
-        << " window=" << FormatMuonCloseDebugPointer(window_);
+        << " window_handle=" << GetWindowHandleDraggableRegionKey(
+               window_handle_);
     AppendMuonCloseDebugLog(log.str());
   }
   if (browser_ && browser_ == browser) {
@@ -1565,33 +1651,36 @@ bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 }
 
 void MuonTitleBarController::HandleAction(const std::string& action) {
+  const auto window = ResolveWindow();
   {
     std::ostringstream log;
     log << "TitleBarController HandleAction controller="
         << FormatMuonCloseDebugPointer(this)
         << " action=" << action
-        << " window=" << FormatMuonCloseDebugPointer(window_)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " window_handle=" << GetWindowHandleDraggableRegionKey(
+               window_handle_)
         << " browser=" << FormatMuonCloseDebugPointer(browser_.get())
         << " browser_id=" << (browser_ ? browser_->GetIdentifier() : 0);
     AppendMuonCloseDebugLog(log.str());
   }
-  if (!window_) {
+  if (!window) {
     return;
   }
   if (action == "minimize") {
-    window_->Minimize();
+    window->Minimize();
     return;
   }
   if (action == "maximize") {
-    if (window_->IsMaximized()) {
-      window_->Restore();
+    if (window->IsMaximized()) {
+      window->Restore();
       maximized_ = false;
     } else {
-      window_->Maximize();
+      window->Maximize();
       maximized_ = true;
     }
     SendState();
-    UpdateDraggableRegions();
+    UpdateDraggableRegions(window);
     return;
   }
   if (action == "close") {
@@ -1599,12 +1688,12 @@ void MuonTitleBarController::HandleAction(const std::string& action) {
       std::ostringstream log;
       log << "TitleBarController HandleAction close window_close controller="
           << FormatMuonCloseDebugPointer(this)
-          << " window=" << FormatMuonCloseDebugPointer(window_)
+          << " window=" << FormatMuonCloseDebugPointer(window.get())
           << " browser=" << FormatMuonCloseDebugPointer(browser_.get())
           << " browser_id=" << (browser_ ? browser_->GetIdentifier() : 0);
       AppendMuonCloseDebugLog(log.str());
     }
-    window_->Close();
+    window->Close();
     return;
   }
 }
@@ -1645,6 +1734,21 @@ void MuonTitleBarController::ExecuteJavaScript(const std::string& source) {
   frame->ExecuteJavaScript(source, "muon-title-bar://internal", 0);
 }
 
+CefRefPtr<CefBrowserView> MuonTitleBarController::ResolveTitleBarView() const {
+  if (!browser_) {
+    return nullptr;
+  }
+  return CefBrowserView::GetForBrowser(browser_);
+}
+
+CefRefPtr<CefWindow> MuonTitleBarController::ResolveWindow() const {
+  const auto title_bar_view = ResolveTitleBarView();
+  if (!title_bar_view) {
+    return nullptr;
+  }
+  return title_bar_view->GetWindow();
+}
+
 void RegisterMuonTitleBarController(
     CefRefPtr<CefWindow> window,
     CefRefPtr<MuonTitleBarController> controller,
@@ -1663,11 +1767,8 @@ void RegisterMuonTitleBarController(
     return;
   }
   g_muon_title_bar_controllers[window.get()] = controller.get();
-  const auto window_handle = window->GetWindowHandle();
-  if (window_handle != 0) {
-    g_muon_title_bar_controllers_by_window_handle
-        [GetWindowHandleDraggableRegionKey(window_handle)] = controller.get();
-  }
+  g_muon_title_bar_controllers_by_window_handle
+      [GetDraggableRegionKey(window.get())] = controller.get();
   const auto effective_browser_id = GetMuonResolvedTitleBarBrowserId(
       browser_id, GetRegisteredMuonTitleBarBrowserIdForWindow(window.get()));
   if (effective_browser_id <= 0) {
@@ -1681,6 +1782,12 @@ void RegisterMuonTitleBarController(
   g_muon_title_bar_browser_ids_by_window[window.get()] = effective_browser_id;
   g_muon_title_bar_controllers_by_browser_id[effective_browser_id] =
       controller.get();
+  const auto title_bar_view = g_muon_title_bar_views.find(window.get());
+  if (title_bar_view != g_muon_title_bar_views.end() &&
+      title_bar_view->second) {
+    g_muon_title_bar_views_by_browser_id[effective_browser_id] =
+        title_bar_view->second;
+  }
   RegisterMuonTitleBarWindowForBrowser(window, effective_browser_id);
   ApplyPendingMuonTitleBarState(window, effective_browser_id);
   {
@@ -1728,17 +1835,20 @@ static void RegisterMuonTitleBarBrowserForWindow(CefRefPtr<CefWindow> window,
     g_muon_title_bar_controllers_by_browser_id[browser_id] =
         controller->second;
   }
-  const auto registered_window = GetRegisteredMuonWindowForBrowser(browser_id);
-  ApplyPendingMuonTitleBarState(registered_window ? registered_window : window,
-                                browser_id);
+  const auto title_bar_view = g_muon_title_bar_views.find(window.get());
+  if (title_bar_view != g_muon_title_bar_views.end() &&
+      title_bar_view->second) {
+    g_muon_title_bar_views_by_browser_id[browser_id] =
+        title_bar_view->second;
+  }
+  ApplyPendingMuonTitleBarState(window, browser_id);
   {
     std::ostringstream log;
     log << "TitleBar RegisterBrowserForWindow end window="
         << FormatMuonCloseDebugPointer(window.get())
         << " browser_id=" << browser_id
         << " registered_window="
-        << FormatMuonCloseDebugPointer(
-               (registered_window ? registered_window : window).get());
+        << FormatMuonCloseDebugPointer(window.get());
     AppendMuonCloseDebugLog(log.str());
   }
 }
@@ -1842,6 +1952,7 @@ void ClearMuonTitleBarRegistrations() {
   }
   g_muon_title_bar_controllers.clear();
   g_muon_title_bar_views.clear();
+  g_muon_title_bar_views_by_browser_id.clear();
   g_muon_title_bar_browser_ids_by_window.clear();
   g_muon_title_bar_windows_by_browser_view.clear();
   g_muon_title_bar_browser_ids_by_browser_view.clear();
@@ -1853,6 +1964,7 @@ void ClearMuonTitleBarRegistrations() {
   g_muon_title_bar_draggable_regions.clear();
   g_muon_page_draggable_regions.clear();
   g_muon_applied_draggable_regions.clear();
+  g_muon_draggable_region_keys_by_window.clear();
 }
 
 void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,
@@ -1929,13 +2041,20 @@ void SetRegisteredMuonTitleBarIconForBrowser(
   }
   g_muon_title_bar_pending_icons_by_browser_id[browser_id] =
       icon == nullptr ? MuonTitleBarIcon{} : *icon;
-  const auto window = GetRegisteredMuonWindowForBrowser(browser_id);
   const auto pending_icon =
       g_muon_title_bar_pending_icons_by_browser_id.find(browser_id);
-  SetRegisteredMuonTitleBarIcon(
-      window, pending_icon == g_muon_title_bar_pending_icons_by_browser_id.end()
-                  ? nullptr
-                  : &pending_icon->second);
+  const auto controller =
+      g_muon_title_bar_controllers_by_browser_id.find(browser_id);
+  if (controller == g_muon_title_bar_controllers_by_browser_id.end() ||
+      controller->second == nullptr) {
+    return;
+  }
+  const auto* resolved_icon =
+      pending_icon == g_muon_title_bar_pending_icons_by_browser_id.end()
+          ? nullptr
+          : &pending_icon->second;
+  controller->second->SetIconDataUrl(
+      resolved_icon == nullptr ? std::string() : resolved_icon->data_url);
 }
 
 void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
@@ -1962,8 +2081,26 @@ void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
 
 void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible) {
-  const auto window = GetRegisteredMuonWindowForBrowser(browser_id);
-  SetRegisteredMuonTitleBarVisibility(window, visible);
+  const auto controller =
+      g_muon_title_bar_controllers_by_browser_id.find(browser_id);
+  if (controller != g_muon_title_bar_controllers_by_browser_id.end() &&
+      controller->second != nullptr) {
+    controller->second->SetVisible(visible);
+    return;
+  }
+  const auto view = g_muon_title_bar_views_by_browser_id.find(browser_id);
+  if (view == g_muon_title_bar_views_by_browser_id.end() || !view->second) {
+    return;
+  }
+  view->second->SetVisible(visible);
+  view->second->InvalidateLayout();
+  const auto window = view->second->GetWindow();
+  if (!window) {
+    return;
+  }
+  window->InvalidateLayout();
+  window->Layout();
+  ApplyMuonDraggableRegions(window.get());
 }
 
 void SetRegisteredMuonPageDraggableRegions(
@@ -2067,6 +2204,41 @@ MuonTitleBarControlAction GetRegisteredMuonTitleBarControlActionAtScreenPoint(
                screen_point.y - window_bounds_in_screen.y));
 }
 
+bool IsRegisteredMuonTitleBarDragRegionPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    const CefRect& window_bounds_in_screen) {
+  CEF_REQUIRE_UI_THREAD();
+
+  const auto controller =
+      FindMuonTitleBarControllerByWindowHandle(window_handle);
+  if (controller == nullptr ||
+      !controller->CanHandleNativeWindowControls()) {
+    return false;
+  }
+  if (window_bounds_in_screen.width <= 0 ||
+      window_bounds_in_screen.height <= 0 ||
+      controller->GetHeight() <= 0) {
+    return false;
+  }
+
+  const auto window_point =
+      CefPoint(screen_point.x - window_bounds_in_screen.x,
+               screen_point.y - window_bounds_in_screen.y);
+  if (window_point.x < 0 || window_point.y < 0 ||
+      window_point.x >= window_bounds_in_screen.width ||
+      window_point.y >= window_bounds_in_screen.height ||
+      window_point.y >= controller->GetHeight()) {
+    return false;
+  }
+
+  return GetMuonTitleBarControlActionAtWindowPoint(
+             true, controller->GetHeight(), controller->GetControlsWidth(),
+             CefSize(window_bounds_in_screen.width,
+                     window_bounds_in_screen.height),
+             window_point) == MuonTitleBarControlAction::NoControl;
+}
+
 bool HandleRegisteredMuonTitleBarControlAction(
     CefWindowHandle window_handle,
     MuonTitleBarControlAction action) {
@@ -2086,9 +2258,7 @@ bool HandleRegisteredMuonTitleBarControlAction(
   return true;
 }
 
-CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id) {
-  const auto iterator = g_muon_title_bar_windows_by_browser_id.find(browser_id);
-  return iterator == g_muon_title_bar_windows_by_browser_id.end()
-             ? nullptr
-             : iterator->second;
+bool HasRegisteredMuonWindowForBrowser(int browser_id) {
+  return g_muon_title_bar_windows_by_browser_id.find(browser_id) !=
+         g_muon_title_bar_windows_by_browser_id.end();
 }

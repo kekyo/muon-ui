@@ -11,6 +11,8 @@
 
 #include "include/views/cef_browser_view.h"
 
+class MuonWindowCloseHandler;
+
 /**
  * Browser view delegate that creates matching popup window delegates.
  */
@@ -25,6 +27,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
    * @param title_bar_manifest Parsed title bar provider manifest.
    * @param title_bar_background_color Explicit title bar background color.
    * @param shortcut_handler Browser shortcut handler for window-level events.
+   * @param close_handler Browser close handler for pending owner work.
    */
   explicit MuonBrowserViewDelegate(
       bool is_devtools,
@@ -32,7 +35,8 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
       MuonTitleBarManifest title_bar_manifest =
           CreateNativeMuonTitleBarManifest(),
       MuonTitleBarBackgroundColor title_bar_background_color = {},
-      CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler = nullptr);
+      CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler = nullptr,
+      MuonWindowCloseHandler* close_handler = nullptr);
 
   /**
    * Creates delegates for popup browser views.
@@ -73,6 +77,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler_;
+  MuonWindowCloseHandler* close_handler_;
 
   IMPLEMENT_REFCOUNTING(MuonBrowserViewDelegate);
   DISALLOW_COPY_AND_ASSIGN(MuonBrowserViewDelegate);

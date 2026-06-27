@@ -391,6 +391,7 @@
           hashParams.get("popup")
         );
       };
+      const defaultPopupFeatures = "width=360,height=240";
 
       const openPopup = (features, targetName, fallbackUrl) => {
         const url = popupUrlInput.value.trim() || fallbackUrl;
@@ -534,7 +535,7 @@
 
       openConnectedPopupButton.addEventListener("click", () => {
         openPopup(
-          "",
+          defaultPopupFeatures,
           "muonDemoPopup",
           "asset://main/index.html#popup=connected",
         );
@@ -542,7 +543,7 @@
 
       openNoopenerPopupButton.addEventListener("click", () => {
         openPopup(
-          "noopener",
+          `noopener,${defaultPopupFeatures}`,
           "muonDemoNoopenerPopup",
           "asset://main/index.html#popup=noopener",
         );

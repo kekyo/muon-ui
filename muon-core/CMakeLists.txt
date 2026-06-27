@@ -19,8 +19,8 @@ set(MUON_CONFIG_TEMPLATE "" CACHE FILEPATH
 set(MUON_CONFIG_COPY_MODE "always" CACHE STRING
   "How to copy MUON_CONFIG_TEMPLATE into the runtime directory.")
 set_property(CACHE MUON_CONFIG_COPY_MODE PROPERTY STRINGS always if_missing none)
-set(MUON_CEF_API_VERSION "14700" CACHE STRING
-  "Explicit CEF C API version used by muon-core and libcef_dll_wrapper.")
+set(MUON_CEF_API_VERSION "" CACHE STRING
+  "CEF C API version used by muon-core and libcef_dll_wrapper.")
 set(MUON_CEF_VERSION "" CACHE STRING
   "CEF version used to generate muon runtime metadata.")
 set(MUON_CEF_PACKAGE "" CACHE STRING
@@ -125,12 +125,23 @@ endif()
 find_package(CEF REQUIRED)
 find_package(Threads REQUIRED)
 
-add_compile_definitions(CEF_API_VERSION=${MUON_CEF_API_VERSION})
-if(TARGET libcef_dll_wrapper)
-  target_compile_definitions(libcef_dll_wrapper PUBLIC
-    CEF_API_VERSION=${MUON_CEF_API_VERSION}
-    )
+if(NOT MUON_CEF_API_VERSION)
+  file(STRINGS "${CEF_ROOT}/include/cef_api_versions.h"
+    MUON_CEF_API_VERSION_LAST_LINES
+    REGEX "^#define CEF_API_VERSION_LAST CEF_API_VERSION_[0-9]+$")
+  list(GET MUON_CEF_API_VERSION_LAST_LINES 0
+    MUON_CEF_API_VERSION_LAST_LINE)
+  string(REGEX REPLACE ".*CEF_API_VERSION_([0-9]+).*" "\\1"
+    MUON_CEF_API_VERSION "${MUON_CEF_API_VERSION_LAST_LINE}")
+  if(NOT MUON_CEF_API_VERSION MATCHES "^[0-9]+$")
+    message(FATAL_ERROR
+      "Unable to resolve CEF_API_VERSION_LAST from ${CEF_ROOT}/include/cef_api_versions.h")
+  endif()
+  set(MUON_CEF_API_VERSION "${MUON_CEF_API_VERSION}" CACHE STRING
+    "CEF C API version used by muon-core and libcef_dll_wrapper." FORCE)
 endif()
+
+add_compile_definitions(CEF_API_VERSION=${MUON_CEF_API_VERSION})
 
 if(NOT MUON_TARGET_NAME)
   if(WIN32)
@@ -308,6 +319,11 @@ if(MINGW)
     -Wno-unknown-pragmas
     -Wno-cast-function-type
     )
+  if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    list(APPEND CEF_COMPILER_FLAGS
+      -mms-bitfields
+      )
+  endif()
   set(CEF_C_COMPILER_FLAGS
     -std=c99
     )
@@ -451,6 +467,9 @@ endif()
 
 ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG_EFFECTIVE}" "${CEF_LIB_RELEASE}")
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" libcef_dll_wrapper)
+target_compile_definitions(libcef_dll_wrapper PUBLIC
+  CEF_API_VERSION=${MUON_CEF_API_VERSION}
+  )
 if(MINGW)
   get_target_property(LIBCEF_DLL_WRAPPER_SOURCES libcef_dll_wrapper SOURCES)
   foreach(WRAPPER_EXCLUDE_SOURCE IN ITEMS
@@ -1344,6 +1363,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/plugins/builtin/muon_builtin_environment_helpers.cpp
+    src/plugins/builtin/muon_builtin_fs_helpers.cpp
     src/plugins/muon_shared_buffer.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_internal_helpers_test)
@@ -1355,6 +1375,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   target_link_libraries(muon_internal_helpers_test PRIVATE
     libcef_dll_wrapper
     libcef_lib
+    muon_cardio
     yyjson
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}

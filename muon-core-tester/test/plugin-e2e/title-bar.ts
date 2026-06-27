@@ -5,9 +5,11 @@
 
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
+import type { AppWindow, ScreenRect } from "agent-rover";
 
 import {
   cdpCommandTimeoutMs,
+  connectToMuonCdp,
   execFileAsync,
   join,
   mkdir,
@@ -18,15 +20,22 @@ import {
   rm,
   sendNativeMouseWheel,
   shouldUseValgrind,
+  startDebugMuon,
   startGestamentDebugMuon,
+  stopMuon,
   stopGestamentMuon,
   tmpdir,
   wait,
   waitForDocumentTitle,
   waitForGestamentMuonExit,
+  waitForProcessExit,
   writeFile,
 } from "./shared.js";
-import type { CdpDriver, RunningGestamentMuon } from "./shared.js";
+import {
+  isWindowsRemoteE2e,
+  requireWindowsRemoteContext,
+} from "./windows-context.js";
+import type { CdpDriver, RunningGestamentMuon, RunningMuon } from "./shared.js";
 import type {
   BrowserInitialTitleBarVisibility,
   BrowserTitleBarType,
@@ -51,6 +60,12 @@ interface RootCapture {
   png: PNG;
   x: number;
   y: number;
+}
+
+interface WindowsWindowCapture {
+  bounds: ScreenRect;
+  png: PNG;
+  visibleBounds: ScreenRect;
 }
 
 interface PageScrollPosition {
@@ -86,6 +101,8 @@ const titleBarControlsWidth =
   titleBarRoundControlSize * 3 +
   titleBarRoundControlGap * 2 +
   titleBarRoundControlRightInset;
+const windowsTitleBarControlWidth = 46;
+const windowsTitleBarControlsWidth = 138;
 const configuredTitleBarBackgroundColor = "#123456";
 const appPageBackgroundColor = "#d7ebe5";
 const initialTitleBarIconPath = "icons/title-bar-initial.png";
@@ -147,13 +164,13 @@ const createTitleBarPage = (
       : `<link rel="icon" type="image/svg+xml" href="${faviconPath}">`
   }<style>html,body{margin:0;min-width:100%;min-height:100%;background:${appPageBackgroundColor};}${
     pageDraggable
-      ? "body{-webkit-app-region:drag;}.no-drag{position:fixed;left:24px;top:112px;min-width:120px;min-height:64px;-webkit-app-region:no-drag;}.drag-space{width:1800px;min-height:1600px;padding:220px 24px 24px;box-sizing:border-box;}.scroll-marker{margin-left:1400px;margin-top:1200px;}"
+      ? "body{-webkit-app-region:drag;}.no-drag{position:fixed;left:24px;top:112px;min-width:120px;min-height:64px;-webkit-app-region:no-drag;}.no-drag-wheel{position:absolute;left:24px;top:196px;width:160px;height:80px;-webkit-app-region:no-drag;background:rgba(255,255,255,0.01);overflow:hidden;}.drag-space{width:1800px;min-height:1600px;padding:300px 24px 24px;box-sizing:border-box;}.scroll-marker{margin-left:1400px;margin-top:1200px;}"
       : ""
   }</style><main class="drag-space">title bar test${
     pageDraggable ? '<div class="scroll-marker">scroll marker</div>' : ""
   }${
     pageDraggable
-      ? '<button id="no-drag-button" class="no-drag">click <span id="no-drag-count">0</span></button><script>document.getElementById("no-drag-button").addEventListener("click",()=>{const count=document.getElementById("no-drag-count");count.textContent=String(Number(count.textContent)+1);});</script>'
+      ? '<button id="no-drag-button" class="no-drag">click <span id="no-drag-count">0</span></button><div id="no-drag-wheel" class="no-drag-wheel">wheel</div><script>document.getElementById("no-drag-button").addEventListener("click",()=>{const count=document.getElementById("no-drag-count");count.textContent=String(Number(count.textContent)+1);});</script>'
       : ""
   }</main>`;
 
@@ -447,10 +464,14 @@ const getWindowPixel = (
 const getLuminance = (pixel: RgbaPixel): number =>
   0.2126 * pixel.red + 0.7152 * pixel.green + 0.0722 * pixel.blue;
 
-const isPixelNear = (actual: RgbaPixel, expected: RgbaPixel): boolean =>
-  Math.abs(actual.red - expected.red) <= 2 &&
-  Math.abs(actual.green - expected.green) <= 2 &&
-  Math.abs(actual.blue - expected.blue) <= 2 &&
+const isPixelNear = (
+  actual: RgbaPixel,
+  expected: RgbaPixel,
+  tolerance = 2,
+): boolean =>
+  Math.abs(actual.red - expected.red) <= tolerance &&
+  Math.abs(actual.green - expected.green) <= tolerance &&
+  Math.abs(actual.blue - expected.blue) <= tolerance &&
   actual.alpha === expected.alpha;
 
 const waitForTitleBarBackgroundColor = async (
@@ -684,7 +705,9 @@ const clickPageNoDragControl = async (
   const deadline = Date.now() + cdpCommandTimeoutMs;
   while (Date.now() < deadline) {
     await running.app.input.moveMouseTo(clickX, clickY);
+    await wait(50);
     await running.app.input.setMouseButton("left", true);
+    await wait(50);
     await running.app.input.setMouseButton("left", false);
     const clickCount = Number(
       await driver.evaluate(
@@ -825,6 +848,297 @@ const expectNativeWindowStill = async (
   expect(currentBounds.y).toBe(initialBounds.y);
 };
 
+const captureWindowsWindow = async (
+  window: AppWindow,
+): Promise<WindowsWindowCapture> => {
+  const capture = await window.screenshot();
+  return {
+    bounds: capture.bounds,
+    png: PNG.sync.read(capture.image),
+    visibleBounds: capture.visibleBounds,
+  };
+};
+
+const getWindowsWindowPixel = (
+  capture: WindowsWindowCapture,
+  x: number,
+  y: number,
+): RgbaPixel =>
+  getPixel(
+    capture.png,
+    capture.bounds.x + x - capture.visibleBounds.x,
+    capture.bounds.y + y - capture.visibleBounds.y,
+  );
+
+const waitForWindowsTitleBarWindow = async (): Promise<AppWindow> =>
+  await requireWindowsRemoteContext().agent.waitForWindow(
+    {
+      title: testWindowTitle,
+      visible: true,
+    },
+    {
+      intervalMs: 100,
+      message: `Timed out waiting for Windows native window '${testWindowTitle}'`,
+      timeoutMs: cdpCommandTimeoutMs,
+    },
+  );
+
+const waitForWindowsWindowMaximized = async (
+  expectedMaximized: boolean,
+): Promise<AppWindow> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastWindow: AppWindow | undefined = undefined;
+  while (Date.now() < deadline) {
+    lastWindow = await waitForWindowsTitleBarWindow();
+    if (lastWindow.maximized === expectedMaximized) {
+      return lastWindow;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows window maximized=${String(
+      expectedMaximized,
+    )}. Last window: ${JSON.stringify(lastWindow)}`,
+  );
+};
+
+const waitForWindowsWindowMove = async (
+  initialBounds: ScreenRect,
+): Promise<AppWindow> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastWindow = await waitForWindowsTitleBarWindow();
+  while (Date.now() < deadline) {
+    lastWindow = await waitForWindowsTitleBarWindow();
+    if (
+      lastWindow.bounds.x !== initialBounds.x ||
+      lastWindow.bounds.y !== initialBounds.y
+    ) {
+      return lastWindow;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows window move. Initial: ${JSON.stringify(
+      initialBounds,
+    )}, last: ${JSON.stringify(lastWindow.bounds)}`,
+  );
+};
+
+const expectWindowsWindowStill = async (
+  initialBounds: ScreenRect,
+): Promise<void> => {
+  await wait(300);
+  const currentWindow = await waitForWindowsTitleBarWindow();
+  expect(currentWindow.bounds.x).toBe(initialBounds.x);
+  expect(currentWindow.bounds.y).toBe(initialBounds.y);
+};
+
+const dragWindowsMouse = async (
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): Promise<void> => {
+  const context = requireWindowsRemoteContext();
+  const start = { x: Math.round(startX), y: Math.round(startY) };
+  const end = { x: Math.round(endX), y: Math.round(endY) };
+  const window = await waitForWindowsTitleBarWindow();
+  await window.activate();
+  await context.agent.mouse.move(start);
+  await wait(150);
+  await context.agent.mouse.drag(start, end, { button: "left" });
+  await wait(300);
+};
+
+const clickWindowsPagePoint = async (
+  driver: CdpDriver,
+  clickX: number,
+  clickY: number,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  while (Date.now() < deadline) {
+    await requireWindowsRemoteContext().agent.mouse.click(
+      { x: clickX, y: clickY },
+      { button: "left" },
+    );
+    const clickCount = Number(
+      await driver.evaluate(
+        'document.getElementById("no-drag-count").textContent',
+      ),
+    );
+    if (clickCount >= 1) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error("Timed out waiting for Windows page no-drag control click");
+};
+
+const waitForWindowsTitleBarBackgroundColor = async (
+  window: AppWindow,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastTopPixel: RgbaPixel | undefined = undefined;
+  let lastBottomPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const capture = await captureWindowsWindow(window);
+    lastTopPixel = getWindowsWindowPixel(capture, 8, 8);
+    lastBottomPixel = getWindowsWindowPixel(capture, 8, titleBarHeight - 4);
+    if (
+      isPixelNear(lastTopPixel, expectedTitleBarBackgroundColor, 6) &&
+      isPixelNear(lastBottomPixel, expectedTitleBarBackgroundColor, 6)
+    ) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows title bar background. Last pixels: ${JSON.stringify(
+      {
+        top: lastTopPixel,
+        bottom: lastBottomPixel,
+      },
+    )}`,
+  );
+};
+
+const waitForWindowsTitleBarHidden = async (
+  window: AppWindow,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const capture = await captureWindowsWindow(window);
+    lastPixel = getWindowsWindowPixel(capture, 8, 8);
+    if (isPixelNear(lastPixel, expectedAppPageBackgroundColor, 6)) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows title bar to hide. Last pixel: ${JSON.stringify(lastPixel)}`,
+  );
+};
+
+const waitForWindowsTitleBarIconColor = async (
+  window: AppWindow,
+  expected: RgbaPixel,
+  x: number = 18,
+  y: number = 18,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const capture = await captureWindowsWindow(window);
+    lastPixel = getWindowsWindowPixel(capture, x, y);
+    if (isPixelNear(lastPixel, expected, 8)) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows title bar icon color. Last pixel: ${JSON.stringify(lastPixel)}`,
+  );
+};
+
+const waitForWindowsTitleBarIconContrast = async (
+  window: AppWindow,
+  reference: RgbaPixel,
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastIconPixels = 0;
+  while (Date.now() < deadline) {
+    const capture = await captureWindowsWindow(window);
+    lastIconPixels = countContrastingWindowPixels(
+      {
+        png: capture.png,
+        x: capture.visibleBounds.x,
+        y: capture.visibleBounds.y,
+      },
+      {
+        id: window.id,
+        x: capture.bounds.x,
+        y: capture.bounds.y,
+        width: capture.bounds.width,
+        height: capture.bounds.height,
+      },
+      10,
+      10,
+      22,
+      22,
+      reference,
+    );
+    if (lastIconPixels > 0) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows title bar icon contrast. Last icon pixel count: ${lastIconPixels}`,
+  );
+};
+
+const expectWindowsTitleBarChrome = async (
+  window: AppWindow,
+): Promise<void> => {
+  expect(window.bounds.width).toBeGreaterThanOrEqual(1024);
+  expect(window.bounds.height).toBeGreaterThanOrEqual(768);
+  const controlCenters = [
+    window.bounds.width -
+      windowsTitleBarControlsWidth +
+      windowsTitleBarControlWidth / 2,
+    window.bounds.width -
+      windowsTitleBarControlsWidth +
+      windowsTitleBarControlWidth * 1.5,
+    window.bounds.width - windowsTitleBarControlWidth / 2,
+  ];
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  let lastIconPixelCounts: number[] = [];
+  while (Date.now() < deadline) {
+    const capture = await captureWindowsWindow(window);
+    const pixel = getWindowsWindowPixel(capture, 8, 8);
+    lastPixel = pixel;
+    const titleBarLuminance = getLuminance(pixel);
+    const titleBarLooksPainted =
+      pixel.alpha === 255 &&
+      (titleBarLuminance < 120 || titleBarLuminance > 200);
+    lastIconPixelCounts = controlCenters.map((centerX) =>
+      countContrastingWindowPixels(
+        {
+          png: capture.png,
+          x: capture.visibleBounds.x,
+          y: capture.visibleBounds.y,
+        },
+        {
+          id: window.id,
+          x: capture.bounds.x,
+          y: capture.bounds.y,
+          width: capture.bounds.width,
+          height: capture.bounds.height,
+        },
+        Math.round(centerX - 8),
+        Math.round(titleBarHeight / 2 - 8),
+        16,
+        16,
+        pixel,
+      ),
+    );
+    if (
+      titleBarLooksPainted &&
+      lastIconPixelCounts.every((iconPixels) => iconPixels > 0)
+    ) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows title bar chrome. Last top pixel: ${JSON.stringify(
+      lastPixel,
+    )}, icon pixel counts: ${JSON.stringify(lastIconPixelCounts)}`,
+  );
+};
+
 const runTitleBarStep = async <T>(
   name: string,
   operation: () => Promise<T>,
@@ -833,6 +1147,25 @@ const runTitleBarStep = async <T>(
     return await operation();
   } catch (error) {
     throw new Error(`${name}: ${String(error)}`);
+  }
+};
+
+const isCdpWebSocketFailure = (error: unknown): boolean =>
+  String(error).includes("CDP WebSocket failed");
+
+const closeWindowsBrowserAndWait = async (
+  driver: CdpDriver,
+  running: RunningMuon,
+): Promise<void> => {
+  let closeError: unknown = undefined;
+  try {
+    await driver.evaluate("window.muon.browser.close()");
+  } catch (error) {
+    closeError = error;
+  }
+  await waitForProcessExit(running, processExitTimeoutMs);
+  if (closeError !== undefined && !isCdpWebSocketFailure(closeError)) {
+    throw closeError;
   }
 };
 
@@ -895,8 +1228,430 @@ const withTitleBarMuon = async (
   }
 };
 
-const titleBarIt =
-  process.platform === "linux" && !shouldUseValgrind ? it : it.skip;
+const withWindowsTitleBarMuon = async (
+  run: (
+    driver: CdpDriver,
+    running: RunningMuon,
+    window: AppWindow,
+  ) => Promise<void>,
+  browserBackgroundColor: string | undefined = undefined,
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
+  browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+): Promise<void> => {
+  const directory = await mkdtemp(join(tmpdir(), "muon-windows-titlebar-"));
+  const assetRoot = await createTitleBarAssetRoot(directory);
+  let running: RunningMuon | undefined = undefined;
+  let driver: CdpDriver | undefined = undefined;
+  let caughtError: unknown = undefined;
+
+  try {
+    running = await startDebugMuon(
+      [],
+      undefined,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [],
+      null,
+      true,
+      undefined,
+      assetRoot,
+      undefined,
+      undefined,
+      browserBackgroundColor,
+      browserInitialTitleBarVisibility,
+      browserInitialTitleBarIcon,
+      browserTitleBarType,
+    );
+    driver = await connectToMuonCdp({
+      timeoutMs: cdpCommandTimeoutMs,
+    });
+    await waitForDocumentTitle(driver, testWindowTitle, cdpCommandTimeoutMs);
+    const window = await (
+      await waitForWindowsTitleBarWindow()
+    ).waitForStableBounds({
+      intervalMs: 100,
+      stableIterations: 2,
+      timeoutMs: cdpCommandTimeoutMs,
+    });
+    await run(driver, running, window);
+  } catch (error) {
+    caughtError = error;
+  }
+
+  if (running !== undefined) {
+    try {
+      await stopMuon(running, driver);
+    } catch (error) {
+      caughtError = caughtError ?? error;
+    }
+  }
+  await rm(directory, { recursive: true, force: true });
+
+  if (caughtError !== undefined) {
+    throw new Error(
+      `${String(caughtError)}\nMuon stderr:\n${running?.stderr ?? ""}`,
+    );
+  }
+};
+
+const isLocalLinuxTitleBarE2e =
+  process.platform === "linux" && !isWindowsRemoteE2e();
+const titleBarIt = isLocalLinuxTitleBarE2e && !shouldUseValgrind ? it : it.skip;
+const windowsTitleBarIt = isWindowsRemoteE2e() ? it : it.skip;
+
+windowsTitleBarIt(
+  "renders and controls the Windows custom title bar",
+  async () => {
+    await withWindowsTitleBarMuon(async (driver, running, window) => {
+      await runTitleBarStep("verify app DOM is untouched", async () => {
+        await expect(
+          driver.evaluate('document.getElementById("muon-title-bar") === null'),
+        ).resolves.toBe(true);
+      });
+      await runTitleBarStep(
+        "verify title bar screenshot",
+        async () => await expectWindowsTitleBarChrome(window),
+      );
+
+      await runTitleBarStep("maximize through browser API", async () => {
+        await expect(
+          driver.evaluate("window.muon.browser.maximize()"),
+        ).resolves.toBeUndefined();
+        await waitForWindowsWindowMaximized(true);
+      });
+      await runTitleBarStep("restore through browser API", async () => {
+        await expect(
+          driver.evaluate("window.muon.browser.restore()"),
+        ).resolves.toBeUndefined();
+        await waitForWindowsWindowMaximized(false);
+      });
+      await runTitleBarStep("close through browser API", async () => {
+        await closeWindowsBrowserAndWait(driver, running);
+      });
+    });
+  },
+);
+
+windowsTitleBarIt(
+  "moves the Windows custom window from page CSS draggable regions",
+  async () => {
+    await withWindowsTitleBarMuon(async (driver, _running, window) => {
+      let currentWindow = window;
+      await runTitleBarStep("navigate to draggable page", async () => {
+        await driver.evaluate('location.href = "asset://main/draggable.html"');
+        await driver.evaluate(
+          'new Promise((resolve) => { const check = () => document.getElementById("no-drag-button") === null ? setTimeout(check, 50) : resolve(true); check(); })',
+        );
+      });
+
+      await runTitleBarStep("click page no-drag control", async () => {
+        await clickWindowsPagePoint(
+          driver,
+          currentWindow.bounds.x + 84,
+          currentWindow.bounds.y + titleBarHeight + 130,
+        );
+        await expectWindowsWindowStill(currentWindow.bounds);
+      });
+
+      await runTitleBarStep(
+        "wheel page no-drag region vertically",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          await expectPageNoDragRegionPoint(driver, 84, 220);
+          await sendNativeMouseWheelUntilPageScrollChange(
+            driver,
+            testWindowTitle,
+            currentWindow.bounds.x + 84,
+            currentWindow.bounds.y + titleBarHeight + 220,
+            "down",
+            "y",
+          );
+        },
+      );
+
+      await runTitleBarStep(
+        "wheel page draggable region vertically",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          await expectPageDragRegionPoint(driver, 220, 260);
+          await sendNativeMouseWheelUntilPageScrollChange(
+            driver,
+            testWindowTitle,
+            currentWindow.bounds.x + 220,
+            currentWindow.bounds.y + titleBarHeight + 260,
+            "down",
+            "y",
+          );
+        },
+      );
+
+      await runTitleBarStep(
+        "wheel page draggable region horizontally",
+        async () => {
+          await driver.evaluate("window.scrollTo(0, 0)");
+          await expectPageDragRegionPoint(driver, 220, 260);
+          await sendNativeMouseWheelUntilPageScrollChange(
+            driver,
+            testWindowTitle,
+            currentWindow.bounds.x + 220,
+            currentWindow.bounds.y + titleBarHeight + 260,
+            "right",
+            "x",
+          );
+        },
+      );
+
+      await runTitleBarStep(
+        "drag title bar over page draggable regions",
+        async () => {
+          await dragWindowsMouse(
+            currentWindow.bounds.x + 220,
+            currentWindow.bounds.y + Math.round(titleBarHeight / 2),
+            currentWindow.bounds.x + 320,
+            currentWindow.bounds.y + Math.round(titleBarHeight / 2) + 80,
+          );
+          currentWindow = await waitForWindowsWindowMove(currentWindow.bounds);
+        },
+      );
+
+      await runTitleBarStep("drag page background", async () => {
+        await dragWindowsMouse(
+          currentWindow.bounds.x + 220,
+          currentWindow.bounds.y + titleBarHeight + 260,
+          currentWindow.bounds.x + 320,
+          currentWindow.bounds.y + titleBarHeight + 340,
+        );
+        await waitForWindowsWindowMove(currentWindow.bounds);
+      });
+    });
+  },
+);
+
+windowsTitleBarIt(
+  "uses browser.backgroundColor for the Windows custom title bar background",
+  async () => {
+    await withWindowsTitleBarMuon(async (_driver, _running, window) => {
+      await runTitleBarStep(
+        "verify configured title bar background",
+        async () => await waitForWindowsTitleBarBackgroundColor(window),
+      );
+    }, configuredTitleBarBackgroundColor);
+  },
+);
+
+windowsTitleBarIt(
+  "uses the embedded default title bar icon on Windows",
+  async () => {
+    await withWindowsTitleBarMuon(async (_driver, _running, window) => {
+      await runTitleBarStep(
+        "verify configured title bar background",
+        async () => await waitForWindowsTitleBarBackgroundColor(window),
+      );
+      await runTitleBarStep(
+        "verify embedded default title bar icon",
+        async () =>
+          await waitForWindowsTitleBarIconContrast(
+            window,
+            expectedTitleBarBackgroundColor,
+          ),
+      );
+    }, configuredTitleBarBackgroundColor);
+  },
+);
+
+windowsTitleBarIt(
+  "controls the Windows custom title bar visibility through config and browser API",
+  async () => {
+    await withWindowsTitleBarMuon(
+      async (driver, _running, window) => {
+        await runTitleBarStep(
+          "verify initial title bar is hidden",
+          async () => await waitForWindowsTitleBarHidden(window),
+        );
+        await runTitleBarStep("show title bar through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarVisibility(true)"),
+          ).resolves.toBeUndefined();
+          await waitForWindowsTitleBarBackgroundColor(window);
+        });
+        await runTitleBarStep("hide title bar through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarVisibility(false)"),
+          ).resolves.toBeUndefined();
+          await waitForWindowsTitleBarHidden(window);
+        });
+      },
+      configuredTitleBarBackgroundColor,
+      false,
+    );
+  },
+);
+
+windowsTitleBarIt(
+  "shows and updates the Windows custom title bar icon",
+  async () => {
+    await withWindowsTitleBarMuon(
+      async (driver, _running, window) => {
+        await runTitleBarStep(
+          "verify initial title bar icon",
+          async () =>
+            await waitForWindowsTitleBarIconColor(
+              window,
+              expectedInitialTitleBarIconColor,
+            ),
+        );
+        await runTitleBarStep("update title bar icon through API", async () => {
+          await expect(
+            driver.evaluate(
+              `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+                updatedTitleBarIconPath,
+              )})`,
+            ),
+          ).resolves.toBeUndefined();
+          await waitForWindowsTitleBarIconColor(
+            window,
+            expectedUpdatedTitleBarIconColor,
+          );
+        });
+        await runTitleBarStep(
+          "update title bar icon to SVG through API",
+          async () => {
+            await expect(
+              driver.evaluate(
+                `window.muon.browser.setTitleBarIcon(${JSON.stringify(
+                  svgTitleBarIconPath,
+                )})`,
+              ),
+            ).resolves.toBeUndefined();
+            await waitForWindowsTitleBarIconColor(
+              window,
+              expectedSvgTitleBarIconColor,
+            );
+          },
+        );
+        await runTitleBarStep("clear title bar icon through API", async () => {
+          await expect(
+            driver.evaluate("window.muon.browser.setTitleBarIcon(null)"),
+          ).resolves.toBeUndefined();
+          await waitForWindowsTitleBarIconColor(
+            window,
+            expectedTitleBarBackgroundColor,
+          );
+        });
+      },
+      configuredTitleBarBackgroundColor,
+      undefined,
+      initialTitleBarIconPath,
+    );
+  },
+);
+
+windowsTitleBarIt(
+  "updates the Windows custom title bar icon from favicon changes",
+  async () => {
+    await withWindowsTitleBarMuon(
+      async (driver, _running, window) => {
+        await runTitleBarStep(
+          "verify initial title bar icon",
+          async () =>
+            await waitForWindowsTitleBarIconColor(
+              window,
+              expectedInitialTitleBarIconColor,
+            ),
+        );
+        await runTitleBarStep("navigate to SVG favicon page", async () => {
+          await driver.navigate("asset://main/favicon-svg.html");
+          await waitForWindowsTitleBarIconColor(
+            window,
+            expectedSvgTitleBarIconColor,
+          );
+        });
+        await runTitleBarStep(
+          "fall back when favicon cannot be loaded",
+          async () => {
+            await driver.navigate("asset://main/broken-favicon.html");
+            await waitForWindowsTitleBarIconColor(
+              window,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+        await runTitleBarStep(
+          "fall back when page has no favicon",
+          async () => {
+            await driver.navigate("asset://main/no-favicon.html");
+            await waitForWindowsTitleBarIconColor(
+              window,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+      },
+      configuredTitleBarBackgroundColor,
+      undefined,
+      initialTitleBarIconPath,
+    );
+  },
+);
+
+windowsTitleBarIt(
+  "keeps the Windows native title bar usable when visibility API has no decoration hint",
+  async () => {
+    await withWindowsTitleBarMuon(
+      async (driver, _running, window) => {
+        await expect(
+          driver.evaluate("window.muon.browser.setTitleBarVisibility(false)"),
+        ).resolves.toBeUndefined();
+        const hiddenRequestWindow = await waitForWindowsTitleBarWindow();
+        expect(hiddenRequestWindow.visible).toBe(true);
+        expect(hiddenRequestWindow.enabled).toBe(true);
+        expect(hiddenRequestWindow.bounds.width).toBe(window.bounds.width);
+
+        await expect(
+          driver.evaluate("window.muon.browser.setTitleBarVisibility(true)"),
+        ).resolves.toBeUndefined();
+        const shownRequestWindow = await waitForWindowsTitleBarWindow();
+        expect(shownRequestWindow.visible).toBe(true);
+        expect(shownRequestWindow.enabled).toBe(true);
+      },
+      undefined,
+      undefined,
+      undefined,
+      "native",
+    );
+  },
+);
+
+windowsTitleBarIt(
+  "rejects non-PNG title bar icons for the Windows native title bar",
+  async () => {
+    await withWindowsTitleBarMuon(
+      async (driver) => {
+        const message = await driver.evaluate<string>(`(async () => {
+          try {
+            await window.muon.browser.setTitleBarIcon(${JSON.stringify(
+              svgTitleBarIconPath,
+            )});
+            return "resolved";
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        })()`);
+        expect(message).toContain("PNG");
+      },
+      undefined,
+      undefined,
+      undefined,
+      "native",
+    );
+  },
+);
 
 titleBarIt("renders and controls the Linux custom title bar", async () => {
   await withTitleBarMuon(async (driver, running, env, initialBounds) => {
@@ -972,12 +1727,12 @@ titleBarIt(
         "wheel page no-drag region vertically",
         async () => {
           await driver.evaluate("window.scrollTo(0, 0)");
-          await expectPageNoDragRegionPoint(driver, 84, 130);
+          await expectPageNoDragRegionPoint(driver, 84, 220);
           await sendNativeMouseWheelUntilPageScrollChange(
             driver,
             testWindowTitle,
             bounds.x + 84,
-            bounds.y + titleBarHeight + 130,
+            bounds.y + titleBarHeight + 220,
             "down",
             "y",
           );

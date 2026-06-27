@@ -5,16 +5,16 @@
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
-  access,
-  appendFile,
+  access as nodeAccess,
+  appendFile as nodeAppendFile,
   constants,
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
+  copyFile as nodeCopyFile,
+  mkdir as nodeMkdir,
+  mkdtemp as nodeMkdtemp,
+  readFile as nodeReadFile,
+  rm as nodeRm,
   stat,
-  writeFile,
+  writeFile as nodeWriteFile,
 } from "node:fs/promises";
 import {
   createServer,
@@ -22,8 +22,14 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { tmpdir } from "node:os";
-import { delimiter, join, relative, resolve } from "node:path";
+import { tmpdir as nodeTmpdir } from "node:os";
+import {
+  delimiter,
+  dirname as nodeDirname,
+  join as nodeJoin,
+  relative as nodeRelative,
+  resolve,
+} from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -35,33 +41,41 @@ import {
   type GtkWindowElement,
   type GtkWindowTextClickOptions,
 } from "gestament";
-import { afterEach, describe, expect } from "vitest";
+import {
+  saveDiagnostics,
+  type AppWindow,
+  type KeyboardModifier,
+  type RemoteAgent,
+} from "agent-rover";
+import { afterEach, describe, expect, type TestContext } from "vitest";
 
 import {
-  connectToMuonCdp,
+  connectToMuonCdp as baseConnectToMuonCdp,
   isMuonTitleBarTarget,
-  listCdpTargets,
+  listCdpTargets as baseListCdpTargets,
   MUON_TITLE_BAR_TARGET_TITLE,
   type CdpTarget,
   type CdpDriver,
+  type ConnectOptions,
 } from "../../src/helper.js";
+import {
+  appendWindowsRemoteFile,
+  applyWindowsRemoteProcessSnapshot,
+  allocateWindowsRemoteCdpPort,
+  createFallbackWindowsRemoteTempDirectory,
+  createWindowsRemoteProcessHandle,
+  dirnameWindowsPath,
+  getWindowsRemoteContext,
+  isWindowsAbsolutePath,
+  isWindowsRemoteE2e,
+  joinWindowsPath,
+  pathToWindowsFileUrlHref,
+  relativeWindowsPath,
+  requireWindowsRemoteContext,
+  type WindowsRemoteProcessHandle,
+} from "./windows-context.js";
 
-export {
-  access,
-  appendFile,
-  constants,
-  connectToMuonCdp,
-  isMuonTitleBarTarget,
-  join,
-  listCdpTargets,
-  mkdir,
-  mkdtemp,
-  MUON_TITLE_BAR_TARGET_TITLE,
-  readFile,
-  rm,
-  tmpdir,
-  writeFile,
-};
+export { constants, isMuonTitleBarTarget, MUON_TITLE_BAR_TARGET_TITLE };
 
 export type { CdpDriver, CdpTarget };
 
@@ -75,9 +89,328 @@ const resolveOrUndefined = async <T>(
   }
 };
 
+const usesWindowsPath = (paths: readonly string[]): boolean =>
+  paths.some((path) => isWindowsAbsolutePath(path));
+
+const dirname = (path: string): string =>
+  isWindowsAbsolutePath(path) ? dirnameWindowsPath(path) : nodeDirname(path);
+
+const encodeRemoteFileData = (
+  data: string | Buffer | NodeJS.ArrayBufferView,
+  encoding: BufferEncoding | undefined,
+): Buffer => {
+  if (typeof data === "string") {
+    return Buffer.from(data, encoding ?? "utf8");
+  }
+  if (Buffer.isBuffer(data)) {
+    return data;
+  }
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+};
+
+const readRemoteFile = async (
+  path: string,
+  encoding: BufferEncoding | undefined,
+): Promise<Buffer | string> => {
+  const data = await requireWindowsRemoteContext().agent.files.readFile(path);
+  return encoding === undefined ? data : data.toString(encoding);
+};
+
+const refreshWindowsRemoteStderr = async (
+  running: RunningMuon,
+): Promise<void> => {
+  const remote = running.remoteWindows;
+  if (remote === undefined) {
+    return;
+  }
+  try {
+    running.stderr = (
+      await requireWindowsRemoteContext().agent.files.readFile(
+        remote.stderrPath,
+      )
+    ).toString("utf8");
+  } catch {
+    // The stderr file may not exist before the process writes to it.
+  }
+};
+
+export const join = (...paths: string[]): string =>
+  usesWindowsPath(paths) ? joinWindowsPath(...paths) : nodeJoin(...paths);
+
+export const relative = (from: string, to: string): string =>
+  usesWindowsPath([from, to])
+    ? relativeWindowsPath(from, to)
+    : nodeRelative(from, to);
+
+const pathToFileUrlHref = (path: string): string =>
+  isWindowsAbsolutePath(path)
+    ? pathToWindowsFileUrlHref(path)
+    : pathToFileURL(path).href;
+
+export const tmpdir = (): string =>
+  getWindowsRemoteContext()?.tempDirectory ?? nodeTmpdir();
+
+export const access = async (path: string, _mode?: number): Promise<void> => {
+  if (!isWindowsAbsolutePath(path)) {
+    await nodeAccess(path, _mode);
+    return;
+  }
+  if (!(await requireWindowsRemoteContext().agent.files.exists(path))) {
+    throw new Error(`ENOENT: no such file or directory, access '${path}'`);
+  }
+};
+
+export const mkdir = async (
+  path: string,
+  options?: { recursive?: boolean },
+): Promise<string | undefined> => {
+  if (!isWindowsAbsolutePath(path)) {
+    return await nodeMkdir(path, options);
+  }
+  await requireWindowsRemoteContext().agent.files.mkdir(path, options);
+  return undefined;
+};
+
+export const mkdtemp = async (prefix: string): Promise<string> => {
+  if (!isWindowsAbsolutePath(prefix)) {
+    return await nodeMkdtemp(prefix);
+  }
+  const files = requireWindowsRemoteContext().agent.files;
+  if (typeof files.mkdtemp === "function") {
+    return await files.mkdtemp(prefix);
+  }
+  return await createFallbackWindowsRemoteTempDirectory(prefix);
+};
+
+const readFileImplementation = async (
+  path: string,
+  encoding?: BufferEncoding,
+): Promise<Buffer | string> => {
+  if (!isWindowsAbsolutePath(path)) {
+    return encoding === undefined
+      ? await nodeReadFile(path)
+      : await nodeReadFile(path, encoding);
+  }
+  return await readRemoteFile(path, encoding);
+};
+
+export const readFile = readFileImplementation as {
+  (path: string): Promise<Buffer>;
+  (path: string, encoding: BufferEncoding): Promise<string>;
+};
+
+export const writeFile = async (
+  path: string,
+  data: string | Buffer | NodeJS.ArrayBufferView,
+  encoding?: BufferEncoding,
+): Promise<void> => {
+  if (!isWindowsAbsolutePath(path)) {
+    await nodeWriteFile(path, data, encoding);
+    return;
+  }
+  await requireWindowsRemoteContext().agent.files.mkdir(dirname(path), {
+    recursive: true,
+  });
+  await requireWindowsRemoteContext().agent.files.writeFile(
+    path,
+    encodeRemoteFileData(data, encoding),
+  );
+};
+
+export const appendFile = async (
+  path: string,
+  data: string | Buffer | NodeJS.ArrayBufferView,
+  encoding?: BufferEncoding,
+): Promise<void> => {
+  if (!isWindowsAbsolutePath(path)) {
+    await nodeAppendFile(
+      path,
+      typeof data === "string" ? data : encodeRemoteFileData(data, encoding),
+      encoding,
+    );
+    return;
+  }
+  await appendWindowsRemoteFile(path, encodeRemoteFileData(data, encoding));
+};
+
+export const rm = async (
+  path: string,
+  options?: { force?: boolean; recursive?: boolean },
+): Promise<void> => {
+  if (!isWindowsAbsolutePath(path)) {
+    await nodeRm(path, options);
+    return;
+  }
+  const files = requireWindowsRemoteContext().agent.files;
+  if (!(await files.exists(path))) {
+    if (options?.force) {
+      return;
+    }
+    throw new Error(`ENOENT: no such file or directory, rm '${path}'`);
+  }
+  try {
+    await files.remove(
+      path,
+      options?.recursive === undefined
+        ? undefined
+        : { recursive: options.recursive },
+    );
+  } catch (error) {
+    if (options?.force) {
+      return;
+    }
+    throw error;
+  }
+};
+
+const applyRemoteCdpOptions = (
+  options: ConnectOptions = {},
+): ConnectOptions => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    return options;
+  }
+  return {
+    ...options,
+    host: options.host ?? context.cdpHost,
+    port:
+      options.port === undefined || options.port === MUON_PORT
+        ? context.cdpPort
+        : options.port,
+  };
+};
+
+export const listCdpTargets = async (
+  options: ConnectOptions = {},
+): Promise<CdpTarget[]> =>
+  await baseListCdpTargets(applyRemoteCdpOptions(options));
+
+const isMuonTitleBarUrl = (url: string): boolean =>
+  url.includes("Muon%20Title%20Bar") ||
+  url.includes("Muon Title Bar") ||
+  url.includes("muon-title-bar");
+
+const isUsableWindowsRemotePageUrl = (url: string): boolean =>
+  url !== "about:blank" && !isMuonTitleBarUrl(url);
+
+const getWindowsRemoteCdpTargetScore = (target: CdpTarget): number =>
+  (target.url === "about:blank" ? 10 : 0) +
+  (isMuonTitleBarTarget(target) ? 100 : 0);
+
+const formatWindowsRemoteCdpTargets = (targets: CdpTarget[]): string =>
+  targets
+    .map(
+      (target) => `${target.id}:${target.type}:${target.title}:${target.url}`,
+    )
+    .join(", ");
+
+export const connectToMuonCdp = async (
+  options: ConnectOptions = {},
+): Promise<CdpDriver> => {
+  const cdpOptions = applyRemoteCdpOptions(options);
+  if (!isWindowsRemoteE2e()) {
+    return await baseConnectToMuonCdp(cdpOptions);
+  }
+
+  const timeoutMs = options.timeoutMs ?? cdpCommandTimeoutMs;
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = undefined;
+  if (cdpOptions.targetId !== undefined) {
+    while (Date.now() < deadline) {
+      try {
+        return await baseConnectToMuonCdp({
+          ...cdpOptions,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+        });
+      } catch (error) {
+        lastError = error;
+      }
+      await wait(100);
+    }
+    throw new Error(
+      `Timed out connecting to Windows remote CDP target '${cdpOptions.targetId}': ${String(
+        lastError,
+      )}`,
+    );
+  }
+
+  while (Date.now() < deadline) {
+    try {
+      const targetTimeoutMs = Math.max(1, deadline - Date.now());
+      const targets = await baseListCdpTargets({
+        ...cdpOptions,
+        timeoutMs: targetTimeoutMs,
+      });
+      const candidates = targets
+        .filter(
+          (target) =>
+            target.type === "page" && target.webSocketDebuggerUrl !== undefined,
+        )
+        .sort(
+          (left, right) =>
+            getWindowsRemoteCdpTargetScore(left) -
+            getWindowsRemoteCdpTargetScore(right),
+        );
+      const candidateErrors: string[] = [];
+      for (const candidate of candidates) {
+        let driver: CdpDriver | undefined = undefined;
+        try {
+          driver = await baseConnectToMuonCdp({
+            ...cdpOptions,
+            targetId: candidate.id,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+          });
+          const currentUrl = await driver.evaluate<string>(
+            "document.location.href",
+          );
+          if (isUsableWindowsRemotePageUrl(currentUrl)) {
+            return driver;
+          }
+          throw new Error(
+            `CDP target is not the main page: listed=${candidate.url} runtime=${currentUrl}`,
+          );
+        } catch (error) {
+          candidateErrors.push(`${candidate.id}: ${String(error)}`);
+          driver?.close();
+        }
+      }
+      lastError = new Error(
+        `No usable Windows remote CDP page target. targets=${formatWindowsRemoteCdpTargets(
+          targets,
+        )} errors=${candidateErrors.join(" | ")}`,
+      );
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out connecting to Windows remote CDP: ${String(lastError)}`,
+  );
+};
+
+export type MuonProcessHandle = ChildProcess | WindowsRemoteProcessHandle;
+
+export interface RunningWindowsRemoteMuon {
+  artifactDirectory: string | undefined;
+  buildType: "debug" | "release";
+  cdpPort: number;
+  configPath: string;
+  configDirectory: string;
+  relayStderrPath: string;
+  relayStdoutPath: string;
+  relayProcessId: number;
+  runId: number;
+  profilePath: string;
+  stderrPath: string;
+  stdoutPath: string;
+  target: string;
+}
+
 export interface RunningMuon {
-  process: ChildProcess;
+  process: MuonProcessHandle;
   pluginDirectory: string;
+  remoteWindows?: RunningWindowsRemoteMuon;
   stderr: string;
   usesValgrind: boolean;
 }
@@ -224,26 +557,28 @@ export const MUON_APP_URL = "asset://main/index.html";
 export const TEST_NETWORK_ALLOW_PATTERNS = ["asset://main/**", "data:**"];
 export const TEST_BROWSER_PLUGIN_ALLOW_PATTERNS = TEST_NETWORK_ALLOW_PATTERNS;
 export const TEST_PLUGIN_ALLOW_PATTERNS = ["muon.**"];
-export const DEBUG_MUON_DIRECTORY = resolve(
-  "..",
-  "muon-core",
-  ".run",
-  "test-linux64-debug",
-);
-export const RELEASE_MUON_DIRECTORY = resolve(
-  "..",
-  "muon-core",
-  ".run",
-  "test-linux64-release",
-);
-export const TEST_PLUGIN_DIRECTORY = resolve(
-  "..",
-  "muon-core",
-  ".run",
-  "test-linux64-debug",
-  "test-plugins",
-);
-export const PLUGIN_SUFFIX = process.platform === "win32" ? ".dll" : ".so";
+const windowsRemoteContextAtLoad = getWindowsRemoteContext();
+const isWindowsRemoteAtLoad =
+  windowsRemoteContextAtLoad !== undefined ||
+  process.env.MUON_E2E_REMOTE_WINDOWS === "1";
+export const DEBUG_MUON_DIRECTORY =
+  windowsRemoteContextAtLoad?.runtime.debugRuntimeDirectory ??
+  resolve("..", "muon-core", ".run", "test-linux64-debug");
+export const RELEASE_MUON_DIRECTORY =
+  windowsRemoteContextAtLoad?.runtime.releaseRuntimeDirectory ??
+  resolve("..", "muon-core", ".run", "test-linux64-release");
+export const TEST_PLUGIN_DIRECTORY =
+  windowsRemoteContextAtLoad === undefined
+    ? resolve("..", "muon-core", ".run", "test-linux64-debug", "test-plugins")
+    : join(
+        windowsRemoteContextAtLoad.runtime.debugRuntimeDirectory,
+        "test-plugins",
+      );
+export const PLUGIN_SUFFIX = isWindowsRemoteE2e()
+  ? ".dll"
+  : process.platform === "win32"
+    ? ".dll"
+    : ".so";
 export const STANDARD_PLUGIN_NAMES = [];
 const STANDARD_PLUGIN_FUNCTION_PATHS: Record<string, string[]> = {};
 export const isWindows = process.platform === "win32";
@@ -253,11 +588,28 @@ export const shouldUseValgrind = process.env.MUON_TEST_USE_VALGRIND === "1";
 export const shouldForceX11Ozone =
   process.platform === "linux" &&
   process.env.MUON_TEST_XVFB_WINDOW_MANAGER === "1";
-export const cdpStartupTimeoutMs = shouldUseValgrind ? 120000 : 30000;
+export const cdpStartupTimeoutMs = shouldUseValgrind
+  ? 120000
+  : isWindowsRemoteAtLoad
+    ? 60000
+    : 30000;
 export const bootstrapCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
-export const cdpCommandTimeoutMs = shouldUseValgrind ? 60000 : 10000;
-export const targetTimeoutMs = shouldUseValgrind ? 60000 : 5000;
-export const processExitTimeoutMs = shouldUseValgrind ? 120000 : 5000;
+export const cdpCommandTimeoutMs = shouldUseValgrind
+  ? 60000
+  : isWindowsRemoteAtLoad
+    ? 30000
+    : 10000;
+const cdpTargetDiscoveryTimeoutMs = isWindowsRemoteAtLoad ? 5000 : 1000;
+export const targetTimeoutMs = shouldUseValgrind
+  ? 60000
+  : isWindowsRemoteAtLoad
+    ? 10000
+    : 5000;
+export const processExitTimeoutMs = shouldUseValgrind
+  ? 120000
+  : isWindowsRemoteAtLoad
+    ? 30000
+    : 5000;
 export const runningProcesses: RunningMuon[] = [];
 export const execFileAsync = promisify(execFile);
 const nativeInputSenderCacheDirectory = resolve(
@@ -531,15 +883,19 @@ export const browserFunctionNames = [
 ] as const;
 
 export const getMuonExecutable = (directory: string): string =>
-  resolve(
+  join(
     directory,
-    process.platform === "win32" ? "muon-core.exe" : "muon-core",
+    isWindowsAbsolutePath(directory) || process.platform === "win32"
+      ? "muon-core.exe"
+      : "muon-core",
   );
 
 export const getMuonBootstrapExecutable = (directory: string): string =>
-  resolve(
+  join(
     directory,
-    process.platform === "win32" ? "muon-bootstrap.exe" : "muon-bootstrap",
+    isWindowsAbsolutePath(directory) || process.platform === "win32"
+      ? "muon-bootstrap.exe"
+      : "muon-bootstrap",
   );
 
 export const createBrowserShortcutConfig = (
@@ -651,7 +1007,7 @@ export const waitForCdp = async (timeoutMs: number): Promise<void> => {
     try {
       const targets = await listCdpTargets({
         port: MUON_PORT,
-        timeoutMs: 1000,
+        timeoutMs: cdpTargetDiscoveryTimeoutMs,
       });
       if (
         targets.some(
@@ -680,7 +1036,7 @@ export const waitForDevToolsTarget = async (
   while (Date.now() < deadline) {
     const targets = await listCdpTargets({
       port: MUON_PORT,
-      timeoutMs: 1000,
+      timeoutMs: cdpTargetDiscoveryTimeoutMs,
     });
     const devToolsTarget = targets.find(
       (target) =>
@@ -718,6 +1074,23 @@ export const waitForProcessExit = async (
   running: RunningMuon,
   timeoutMs: number,
 ): Promise<void> => {
+  if (running.remoteWindows !== undefined) {
+    const snapshot =
+      await requireWindowsRemoteContext().agent.processes.waitForExit(
+        running.process.pid ?? 0,
+        {
+          intervalMs: 100,
+          timeoutMs,
+        },
+      );
+    applyWindowsRemoteProcessSnapshot(
+      running.process as WindowsRemoteProcessHandle,
+      snapshot,
+    );
+    await refreshWindowsRemoteStderr(running);
+    return;
+  }
+
   if (
     running.process.exitCode !== null ||
     running.process.signalCode !== null
@@ -738,9 +1111,63 @@ export const waitForProcessExit = async (
   });
 };
 
+const readWindowsRemoteCloseDebugLog = async (
+  running: RunningMuon,
+): Promise<string> => {
+  const remote = running.remoteWindows;
+  if (remote === undefined) {
+    return "";
+  }
+
+  const context = requireWindowsRemoteContext();
+  const runtimeDirectory =
+    remote.buildType === "release"
+      ? context.runtime.releaseRuntimeDirectory
+      : context.runtime.debugRuntimeDirectory;
+  const logPath = joinWindowsPath(runtimeDirectory, "muon-close-debug.log");
+  if (!(await context.agent.files.exists(logPath))) {
+    return "";
+  }
+  return (await context.agent.files.readFile(logPath)).toString("utf8");
+};
+
+export const expectProcessExitCode = async (
+  running: RunningMuon,
+  expectedExitCode: number,
+): Promise<void> => {
+  if (
+    running.remoteWindows === undefined ||
+    running.process.exitCode !== null
+  ) {
+    expect(running.process.exitCode).toBe(expectedExitCode);
+    return;
+  }
+
+  const log = await readWindowsRemoteCloseDebugLog(running);
+  const processId = running.process.pid;
+  const shutdownLine = log
+    .split(/\r?\n/u)
+    .find(
+      (line) =>
+        line.includes(`pid=${processId} `) &&
+        line.includes("MuonClient PrepareShutdown end") &&
+        line.includes(`exit_code=${expectedExitCode}`) &&
+        line.includes("should_start_shutdown=true"),
+    );
+  expect(shutdownLine).not.toBeUndefined();
+};
+
 export const listProcessGroupCommandLines = async (
   processGroupId: number,
 ): Promise<string[]> => {
+  if (isWindowsRemoteE2e()) {
+    const snapshot =
+      await requireWindowsRemoteContext().agent.processes.snapshot(
+        processGroupId,
+      );
+    return [`${snapshot.path} ${snapshot.name}`];
+  }
+
   const { stdout } = await execFileAsync("ps", ["-eo", "pgid=,args="]);
   return String(stdout)
     .split("\n")
@@ -786,6 +1213,13 @@ export const parseXpropWindowStateAtoms = (output: string): string[] => {
 export const listNativeWindowTitles = async (): Promise<
   string[] | undefined
 > => {
+  if (isWindowsRemoteE2e()) {
+    const windows = await requireWindowsRemoteContext().agent.windows();
+    return windows
+      .filter((window) => window.visible)
+      .map((window) => window.title);
+  }
+
   if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
     return undefined;
   }
@@ -822,6 +1256,18 @@ export const listNativeWindowTitles = async (): Promise<
   return titles;
 };
 
+const findWindowsRemoteNativeWindow = async (
+  expectedTitle: string,
+  visible: boolean | undefined,
+): Promise<AppWindow | undefined> => {
+  const windows = await requireWindowsRemoteContext().agent.windows();
+  return windows.find(
+    (window) =>
+      window.title === expectedTitle &&
+      (visible === undefined || window.visible === visible),
+  );
+};
+
 export const waitForNativeWindowTitleAbsent = async (
   expectedTitle: string,
   timeoutMs: number,
@@ -847,6 +1293,24 @@ export const waitForNativeWindowTitleAbsent = async (
 export const readNativeWindowStateAtoms = async (
   expectedTitle: string,
 ): Promise<string[] | undefined> => {
+  if (isWindowsRemoteE2e()) {
+    const window = await findWindowsRemoteNativeWindow(
+      expectedTitle,
+      undefined,
+    );
+    if (window === undefined) {
+      return [];
+    }
+
+    return [
+      ...(window.active ? ["WINDOW_ACTIVE"] : []),
+      ...(window.focused ? ["WINDOW_FOCUSED"] : []),
+      ...(window.maximized ? ["WINDOW_MAXIMIZED"] : []),
+      ...(window.minimized ? ["WINDOW_MINIMIZED"] : []),
+      ...(window.visible ? [] : ["WINDOW_HIDDEN"]),
+    ];
+  }
+
   if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
     return undefined;
   }
@@ -886,6 +1350,13 @@ export const readNativeWindowStateAtoms = async (
 export const readNativeActiveWindowTitle = async (): Promise<
   string | undefined
 > => {
+  if (isWindowsRemoteE2e()) {
+    const windows = await requireWindowsRemoteContext().agent.windows();
+    return (
+      windows.find((window) => window.active && window.visible)?.title ?? ""
+    );
+  }
+
   if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
     return undefined;
   }
@@ -1047,6 +1518,29 @@ export const sendNativeKeyboardShortcut = async (
   windowTitle: string,
   shortcut: "f12" | "ctrl+f12",
 ): Promise<void> => {
+  if (isWindowsRemoteE2e()) {
+    const context = requireWindowsRemoteContext();
+    const window = await findWindowsRemoteNativeWindow(windowTitle, true);
+    if (window === undefined) {
+      throw new Error(`Windows native window was not found: ${windowTitle}`);
+    }
+    try {
+      await window.activate();
+      await window.focus();
+    } catch {
+      // SetForegroundWindow can be denied; clicking the window is the fallback.
+    }
+    const center = {
+      x: window.bounds.x + Math.round(window.bounds.width / 2),
+      y: window.bounds.y + Math.round(window.bounds.height / 2),
+    };
+    await context.agent.mouse.click(center, { button: "left" });
+    const modifiers: KeyboardModifier[] =
+      shortcut === "ctrl+f12" ? ["Control"] : [];
+    await context.agent.keyboard.press("F12", { modifiers });
+    return;
+  }
+
   if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
     throw new Error("Native keyboard shortcut dispatch requires Linux X11");
   }
@@ -1060,6 +1554,20 @@ export const sendNativeMouseWheel = async (
   rootY: number,
   direction: "up" | "down" | "left" | "right",
 ): Promise<void> => {
+  if (isWindowsRemoteE2e()) {
+    const window = await findWindowsRemoteNativeWindow(windowTitle, true);
+    if (window === undefined) {
+      throw new Error(`Windows native window was not found: ${windowTitle}`);
+    }
+    const delta = 120;
+    await requireWindowsRemoteContext().agent.mouse.wheel({
+      deltaX: direction === "left" ? -delta : direction === "right" ? delta : 0,
+      deltaY: direction === "up" ? delta : direction === "down" ? -delta : 0,
+      point: { x: Math.round(rootX), y: Math.round(rootY) },
+    });
+    return;
+  }
+
   if (process.platform !== "linux" || process.env.DISPLAY === undefined) {
     throw new Error("Native mouse wheel dispatch requires Linux X11");
   }
@@ -1092,7 +1600,10 @@ export const waitForPageTargetUrl = async (
       timeoutMs: 1000,
     });
     const target = targets.find(
-      (candidate) => candidate.type === "page" && candidate.url === expectedUrl,
+      (candidate) =>
+        candidate.type === "page" &&
+        candidate.url === expectedUrl &&
+        candidate.webSocketDebuggerUrl !== undefined,
     );
     if (target !== undefined) {
       return target;
@@ -1153,13 +1664,16 @@ export const openPopupTarget = async (
   features = "",
   targetName = "_blank",
 ): Promise<CdpTarget> => {
+  const effectiveFeatures = addPopupSizeFeatures(features);
   const previousTargetIds = await getCurrentTargetIds();
   const response = await driver.send<RuntimeEvaluateResponse>(
     "Runtime.evaluate",
     {
       expression: `window.open(${JSON.stringify(
         url,
-      )}, ${JSON.stringify(targetName)}, ${JSON.stringify(features)}); "opened"`,
+      )}, ${JSON.stringify(targetName)}, ${JSON.stringify(
+        effectiveFeatures,
+      )}); "opened"`,
       returnByValue: true,
       userGesture: true,
     },
@@ -1173,6 +1687,26 @@ export const openPopupTarget = async (
     (target) => target.url === url,
   );
 };
+
+export const addPopupSizeFeatures = (features: string): string => {
+  if (!isWindowsRemoteE2e()) {
+    return features;
+  }
+  const parts = features
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (!parts.some((part) => /^width=/i.test(part))) {
+    parts.push("width=360");
+  }
+  if (!parts.some((part) => /^height=/i.test(part))) {
+    parts.push("height=240");
+  }
+  return parts.join(",");
+};
+
+const formatHttpOriginHost = (host: string): string =>
+  host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 
 export const waitForNetworkResponse = async (
   driver: CdpDriver,
@@ -1205,6 +1739,11 @@ export const startHttpServer = async (
   handler: (request: IncomingMessage, response: ServerResponse) => void,
 ): Promise<RunningHttpServer> => {
   const server = createServer(handler);
+  const remoteContext = getWindowsRemoteContext();
+  const listenHost = remoteContext === undefined ? "127.0.0.1" : "0.0.0.0";
+  const originHost = formatHttpOriginHost(
+    remoteContext?.httpHost ?? "127.0.0.1",
+  );
   await new Promise<void>((resolvePromise, reject) => {
     const handleError = (error: Error): void => {
       server.off("listening", handleListening);
@@ -1215,7 +1754,7 @@ export const startHttpServer = async (
       resolvePromise();
     };
     server.once("error", handleError);
-    server.listen(0, "127.0.0.1", handleListening);
+    server.listen(0, listenHost, handleListening);
   });
 
   const address = server.address();
@@ -1224,7 +1763,7 @@ export const startHttpServer = async (
   }
   return {
     server,
-    origin: `http://127.0.0.1:${String(address.port)}`,
+    origin: `http://${originHost}:${String(address.port)}`,
     port: address.port,
   };
 };
@@ -1367,6 +1906,7 @@ export const waitForMuonStderr = async (
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    await refreshWindowsRemoteStderr(running);
     if (running.stderr.includes(expected)) {
       return;
     }
@@ -1405,7 +1945,7 @@ export const createPluginDirectory = async (
   if (includeStandardPlugins) {
     for (const pluginName of STANDARD_PLUGIN_NAMES) {
       const fileName = `${pluginName}${PLUGIN_SUFFIX}`;
-      await copyFile(
+      await nodeCopyFile(
         join(muonDirectory, "plugins", fileName),
         join(pluginDirectory, fileName),
       );
@@ -1413,7 +1953,7 @@ export const createPluginDirectory = async (
   }
   for (const pluginName of pluginNames) {
     const fileName = `${pluginName}${PLUGIN_SUFFIX}`;
-    await copyFile(
+    await nodeCopyFile(
       join(TEST_PLUGIN_DIRECTORY, fileName),
       join(pluginDirectory, fileName),
     );
@@ -1543,6 +2083,8 @@ export const writeMuonConfig = async (
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  logConfig: Record<string, unknown> | undefined = undefined,
+  browserProfilePath: string | undefined = undefined,
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -1555,6 +2097,9 @@ export const writeMuonConfig = async (
       plugins,
     },
   };
+  if (logConfig !== undefined) {
+    config.log = logConfig;
+  }
   if (debuggerEnabled) {
     config.cdp = { enable: true, port: MUON_PORT };
   }
@@ -1602,6 +2147,11 @@ export const writeMuonConfig = async (
   if (browserTitleBarType !== undefined) {
     browser.titleBarType = browserTitleBarType;
   }
+  if (browserProfilePath !== undefined) {
+    browser.profilePath = browserProfilePath;
+  } else if (isWindowsRemoteE2e()) {
+    browser.profilePath = joinWindowsPath(directory, ".profile");
+  }
   if (Object.keys(browser).length > 0) {
     config.browser = browser;
   }
@@ -1619,6 +2169,425 @@ export const writeMuonConfig = async (
   const configPath = join(directory, "muon.json");
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
   return configPath;
+};
+
+interface StartWindowsRemoteMuonOptions {
+  assetSalt: string | undefined;
+  assetSignature: string | undefined;
+  assetSourcePath: string | undefined;
+  browserAllowUnsafeJavaScriptParentAccess: string[] | null;
+  browserBackgroundColor: string | undefined;
+  browserConfig: BrowserShortcutConfig | undefined;
+  browserInitialTitleBarVisibility:
+    | BrowserInitialTitleBarVisibility
+    | undefined;
+  browserInitialTitleBarIcon: string | undefined;
+  browserInitialWindowState: BrowserInitialWindowState | undefined;
+  browserPluginAllowPatterns: string[] | null;
+  browserTitleBarType: BrowserTitleBarType | undefined;
+  configuredPluginNames: string[];
+  directory: string;
+  environment: NodeJS.ProcessEnv;
+  executablePath: string | undefined;
+  includeStandardPlugins: boolean;
+  logConfig: Record<string, unknown> | undefined;
+  networkAllowPatterns: string[];
+  networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
+  pluginAllowPatterns: string[];
+  pluginNames: string[];
+  waitForDebugPort: boolean;
+}
+
+interface RunningWindowsRemoteCdpRelay {
+  cdpPort: number;
+  processId: number;
+  stderrPath: string;
+  stdoutPath: string;
+}
+
+interface SelectedWindowsRemoteRuntimeDirectory {
+  buildType: "debug" | "release";
+  directory: string;
+}
+
+const selectWindowsRemoteRuntimeDirectory = (
+  directory: string,
+  _waitForDebugPort: boolean,
+): SelectedWindowsRemoteRuntimeDirectory => {
+  const context = requireWindowsRemoteContext();
+  if (
+    directory === RELEASE_MUON_DIRECTORY ||
+    directory.toLowerCase().includes("release")
+  ) {
+    return {
+      buildType: "release",
+      directory: context.runtime.releaseRuntimeDirectory,
+    };
+  }
+  return {
+    buildType: "debug",
+    directory: context.runtime.debugRuntimeDirectory,
+  };
+};
+
+const createWindowsRemoteEnvironment = (
+  environment: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> => {
+  const values: Record<string, string> = {};
+  for (const [key, value] of Object.entries(environment)) {
+    if (value !== undefined) {
+      values[key] = value;
+    }
+  }
+  return values;
+};
+
+let windowsRemoteRunSequence = 0;
+
+export const toWindowsE2eArtifactName = (value: string): string => {
+  const sanitized = value
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (sanitized.length === 0) {
+    return "unnamed";
+  }
+  return sanitized.slice(0, 120);
+};
+
+const createWindowsRemoteArtifactDirectory = (
+  prefix: string,
+  parts: readonly string[],
+): string =>
+  nodeJoin(
+    resolve("test-results", "windows-e2e"),
+    ...parts.map((part) => toWindowsE2eArtifactName(part)),
+    `${toWindowsE2eArtifactName(prefix)}-${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")}`,
+  );
+
+const writeWindowsRemoteArtifactJson = async (
+  directory: string,
+  name: string,
+  value: unknown,
+): Promise<void> => {
+  await nodeWriteFile(
+    nodeJoin(directory, name),
+    `${JSON.stringify(value, null, 2)}\n`,
+  );
+};
+
+const copyWindowsRemoteArtifactFile = async (
+  agent: RemoteAgent,
+  directory: string,
+  artifactName: string,
+  remotePath: string,
+): Promise<void> => {
+  if (!(await agent.files.exists(remotePath))) {
+    return;
+  }
+  try {
+    await nodeWriteFile(
+      nodeJoin(directory, artifactName),
+      await agent.files.readFile(remotePath),
+    );
+  } catch {
+    // The process under test can still hold diagnostic files briefly.
+  }
+};
+
+const saveWindowsRemoteMuonArtifacts = async (
+  running: RunningMuon,
+): Promise<void> => {
+  const remote = running.remoteWindows;
+  if (remote === undefined || remote.artifactDirectory !== undefined) {
+    return;
+  }
+
+  const context = requireWindowsRemoteContext();
+  const artifactDirectory = createWindowsRemoteArtifactDirectory(
+    `run-${String(remote.runId).padStart(4, "0")}-${remote.buildType}`,
+    [remote.target],
+  );
+  remote.artifactDirectory = artifactDirectory;
+  await nodeMkdir(artifactDirectory, { recursive: true });
+  await writeWindowsRemoteArtifactJson(artifactDirectory, "metadata.json", {
+    buildType: remote.buildType,
+    cdpPort: remote.cdpPort,
+    configDirectory: remote.configDirectory,
+    configPath: remote.configPath,
+    exitCode: running.process.exitCode,
+    processId: running.process.pid,
+    processName: "name" in running.process ? running.process.name : "muon-core",
+    relayProcessId: remote.relayProcessId,
+    target: remote.target,
+    timestamp: new Date().toISOString(),
+  });
+
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "muon.json",
+    remote.configPath,
+  );
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "muon-stdout.log",
+    remote.stdoutPath,
+  );
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "muon-stderr.log",
+    remote.stderrPath,
+  );
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "relay-stdout.log",
+    remote.relayStdoutPath,
+  );
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "relay-stderr.log",
+    remote.relayStderrPath,
+  );
+  const runtimeDirectory =
+    remote.buildType === "release"
+      ? context.runtime.releaseRuntimeDirectory
+      : context.runtime.debugRuntimeDirectory;
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "muon-close-debug.log",
+    join(runtimeDirectory, "muon-close-debug.log"),
+  );
+  await copyWindowsRemoteArtifactFile(
+    context.agent,
+    artifactDirectory,
+    "muon-cef.log",
+    joinWindowsPath(remote.profilePath, "muon-cef.log"),
+  );
+};
+
+const saveWindowsRemoteFailureDiagnostics = async (
+  taskName: string,
+): Promise<void> => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    return;
+  }
+  const artifactDirectory = createWindowsRemoteArtifactDirectory(
+    `failure-${toWindowsE2eArtifactName(taskName)}`,
+    [context.runtime.target, "diagnostics"],
+  );
+  try {
+    await saveDiagnostics(artifactDirectory, {
+      agent: context.agent,
+      captureOptions: {
+        includeDescendants: true,
+        maxDescendantDepth: 4,
+      },
+    });
+  } catch {
+    // Preserve the original test failure. Diagnostics failures are secondary.
+  }
+};
+
+const normalizeWindowsProcessPath = (path: string): string =>
+  path.replaceAll("/", "\\").toLowerCase();
+
+const isWindowsProcessPathInside = (
+  processPath: string,
+  directory: string,
+): boolean => {
+  const normalizedProcessPath = normalizeWindowsProcessPath(processPath);
+  const normalizedDirectory = normalizeWindowsProcessPath(directory);
+  return (
+    normalizedProcessPath === normalizedDirectory ||
+    normalizedProcessPath.startsWith(`${normalizedDirectory}\\`)
+  );
+};
+
+export const cleanupWindowsRemoteTestProcesses = async (): Promise<void> => {
+  const context = requireWindowsRemoteContext();
+  const processes = await context.agent.processes.list();
+  const relayPath = normalizeWindowsProcessPath(
+    context.runtime.relayExecutablePath,
+  );
+  for (const processInfo of processes) {
+    const processName = processInfo.name.toLowerCase();
+    const processPath = normalizeWindowsProcessPath(processInfo.path);
+    const isTestRuntimeProcess =
+      isWindowsProcessPathInside(
+        processPath,
+        context.runtime.debugRuntimeDirectory,
+      ) ||
+      isWindowsProcessPathInside(
+        processPath,
+        context.runtime.releaseRuntimeDirectory,
+      ) ||
+      processPath === relayPath ||
+      processName === "muon-cdp-relay.exe";
+    if (!processInfo.running || !isTestRuntimeProcess) {
+      continue;
+    }
+    try {
+      await context.agent.processes.kill(processInfo.id);
+      await context.agent.processes.waitForExit(processInfo.id, {
+        intervalMs: 100,
+        timeoutMs: 3000,
+      });
+    } catch {
+      // The stale test process may have exited between list and kill.
+    }
+  }
+};
+
+const startWindowsRemoteCdpRelay = async (
+  configDirectory: string,
+  runId: number,
+  cdpPort: number,
+): Promise<RunningWindowsRemoteCdpRelay> => {
+  const context = requireWindowsRemoteContext();
+  const stdoutPath = join(
+    configDirectory,
+    `muon-cdp-relay-${String(runId)}-stdout.log`,
+  );
+  const stderrPath = join(
+    configDirectory,
+    `muon-cdp-relay-${String(runId)}-stderr.log`,
+  );
+  const processInfo = await context.agent.applications.launch({
+    arguments: [String(cdpPort), String(MUON_PORT)],
+    createNoWindow: true,
+    path: context.runtime.relayExecutablePath,
+    stderrPath,
+    stdoutPath,
+    workingDirectory: join(context.runtime.relayExecutablePath, ".."),
+  });
+  await wait(250);
+  const snapshot = await context.agent.processes.snapshot(processInfo.id);
+  if (!snapshot.running) {
+    const stderr = (await context.agent.files.exists(stderrPath))
+      ? (await context.agent.files.readFile(stderrPath)).toString("utf8")
+      : "";
+    throw new Error(
+      `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
+    );
+  }
+  return { cdpPort, processId: processInfo.id, stderrPath, stdoutPath };
+};
+
+const startWindowsRemoteMuon = async (
+  options: StartWindowsRemoteMuonOptions,
+  cdpTimeoutMs: number,
+): Promise<RunningMuon> => {
+  const context = requireWindowsRemoteContext();
+  const selectedRuntime = selectWindowsRemoteRuntimeDirectory(
+    options.directory,
+    options.waitForDebugPort,
+  );
+  const directory = selectedRuntime.directory;
+  const executable =
+    options.executablePath?.toLowerCase().includes("bootstrap") === true
+      ? getMuonBootstrapExecutable(directory)
+      : getMuonExecutable(directory);
+  const pluginConfig = createPluginConfigEntries(
+    options.configuredPluginNames,
+    options.pluginAllowPatterns,
+    options.includeStandardPlugins,
+  );
+  const configDirectory = join(directory, ".muon-test-config");
+  const pluginDirectory = join(directory, "test-plugins");
+  windowsRemoteRunSequence += 1;
+  const runId = windowsRemoteRunSequence;
+  const profilePath = join(
+    configDirectory,
+    `.profile-${String(runId).padStart(4, "0")}`,
+  );
+  await cleanupWindowsRemoteTestProcesses();
+  await rm(configDirectory, { recursive: true, force: true });
+  const pluginPath = relative(configDirectory, pluginDirectory) || ".";
+  const configPath = await writeMuonConfig(
+    configDirectory,
+    options.networkAllowPatterns,
+    pluginPath,
+    pluginConfig,
+    options.browserConfig,
+    options.browserPluginAllowPatterns,
+    options.waitForDebugPort,
+    options.networkAuthorizedOrigins,
+    options.browserAllowUnsafeJavaScriptParentAccess,
+    options.browserInitialWindowState,
+    options.assetSourcePath,
+    options.assetSignature,
+    options.assetSalt,
+    options.browserBackgroundColor,
+    options.browserInitialTitleBarVisibility,
+    options.browserInitialTitleBarIcon,
+    options.browserTitleBarType,
+    options.logConfig,
+    profilePath,
+  );
+  const stderrPath = join(configDirectory, `muon-${String(runId)}-stderr.log`);
+  const stdoutPath = join(configDirectory, `muon-${String(runId)}-stdout.log`);
+  const cdpPort = allocateWindowsRemoteCdpPort();
+  const relay = await startWindowsRemoteCdpRelay(
+    configDirectory,
+    runId,
+    cdpPort,
+  );
+  const launched = await context.agent.applications.launch({
+    arguments: ["-c", configPath],
+    environment: createWindowsRemoteEnvironment(options.environment),
+    path: executable,
+    stderrPath,
+    stdoutPath,
+    workingDirectory: directory,
+  });
+  const running: RunningMuon = {
+    pluginDirectory: configDirectory,
+    process: createWindowsRemoteProcessHandle(launched.id, launched.name),
+    remoteWindows: {
+      artifactDirectory: undefined,
+      buildType: selectedRuntime.buildType,
+      cdpPort: relay.cdpPort,
+      configDirectory,
+      configPath,
+      relayStderrPath: relay.stderrPath,
+      relayStdoutPath: relay.stdoutPath,
+      relayProcessId: relay.processId,
+      runId,
+      profilePath,
+      stderrPath,
+      stdoutPath,
+      target: context.runtime.target,
+    },
+    stderr: "",
+    usesValgrind: false,
+  };
+  runningProcesses.push(running);
+  if (options.waitForDebugPort) {
+    try {
+      await waitForCdp(cdpTimeoutMs);
+    } catch (error) {
+      await refreshWindowsRemoteStderr(running);
+      try {
+        await stopMuon(running, undefined);
+      } catch (stopError) {
+        throw new Error(
+          `${String(error)}\n${String(stopError)}\nMuon stderr:\n${
+            running.stderr
+          }`,
+        );
+      }
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    }
+  }
+  return running;
 };
 
 export const startMuon = async (
@@ -1643,10 +2612,42 @@ export const startMuon = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   executablePath: string | undefined = undefined,
   cdpTimeoutMs = cdpStartupTimeoutMs,
+  logConfig: Record<string, unknown> | undefined = undefined,
 ): Promise<RunningMuon> => {
+  if (getWindowsRemoteContext() !== undefined) {
+    return await startWindowsRemoteMuon(
+      {
+        assetSalt,
+        assetSignature,
+        assetSourcePath,
+        browserAllowUnsafeJavaScriptParentAccess,
+        browserBackgroundColor,
+        browserConfig,
+        browserInitialTitleBarIcon,
+        browserInitialTitleBarVisibility,
+        browserInitialWindowState,
+        browserPluginAllowPatterns,
+        browserTitleBarType,
+        configuredPluginNames,
+        directory,
+        environment,
+        executablePath,
+        includeStandardPlugins,
+        logConfig,
+        networkAllowPatterns,
+        networkAuthorizedOrigins,
+        pluginAllowPatterns,
+        pluginNames,
+        waitForDebugPort,
+      },
+      cdpTimeoutMs,
+    );
+  }
+
   const executable = executablePath ?? getMuonExecutable(directory);
   await requireFile(executable);
   const pluginConfig = createPluginConfigEntries(
@@ -1677,8 +2678,9 @@ export const startMuon = async (
     assetSalt,
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
-    undefined,
+    browserInitialTitleBarIcon,
     browserTitleBarType,
+    logConfig,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -1751,7 +2753,9 @@ export const startDebugMuon = async (
   browserInitialTitleBarVisibility:
     | BrowserInitialTitleBarVisibility
     | undefined = undefined,
+  browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  logConfig: Record<string, unknown> | undefined = undefined,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -1773,7 +2777,13 @@ export const startDebugMuon = async (
     assetSalt,
     browserBackgroundColor,
     browserInitialTitleBarVisibility,
+    browserInitialTitleBarIcon,
     browserTitleBarType,
+    isWindowsRemoteE2e()
+      ? undefined
+      : getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
+    isWindowsRemoteE2e() ? cdpStartupTimeoutMs : bootstrapCdpStartupTimeoutMs,
+    logConfig,
   );
 
 export const startDebugMuonBootstrap = async (
@@ -1806,6 +2816,7 @@ export const startDebugMuonBootstrap = async (
     browserAllowUnsafeJavaScriptParentAccess,
     includeStandardPlugins,
     browserInitialWindowState,
+    undefined,
     undefined,
     undefined,
     undefined,
@@ -2434,6 +3445,38 @@ export const stopMuon = async (
     driver.close();
   }
 
+  if (running.remoteWindows !== undefined) {
+    const context = requireWindowsRemoteContext();
+    let exited = false;
+    if (driver !== undefined) {
+      exited = await waitForProcessExitOrTimeout(running, processExitTimeoutMs);
+    }
+
+    if (!exited && running.process.exitCode === null) {
+      try {
+        await context.agent.processes.kill(running.process.pid ?? 0);
+      } catch {
+        // The process may already be closed.
+      }
+    }
+
+    if (!exited) {
+      await waitForProcessExitOrTimeout(running, 3000);
+    }
+    try {
+      await context.agent.processes.kill(running.remoteWindows.relayProcessId);
+    } catch {
+      // The relay may already be closed.
+    }
+    await refreshWindowsRemoteStderr(running);
+    await saveWindowsRemoteMuonArtifacts(running);
+    await rm(running.remoteWindows.configDirectory, {
+      recursive: true,
+      force: true,
+    });
+    return;
+  }
+
   let exited = false;
   if (driver !== undefined) {
     exited = await waitForProcessExitOrTimeout(running, processExitTimeoutMs);
@@ -2594,6 +3637,7 @@ export const expectDebugMuonStartupFailure = async (
   );
   try {
     await waitForProcessExit(running, processExitTimeoutMs);
+    await waitForMuonStderr(running, expectedStderr, targetTimeoutMs);
     expect(running.process.signalCode).toBeNull();
     expect(running.process.exitCode).not.toBe(0);
     expect(running.stderr).toContain(expectedStderr);
@@ -2700,7 +3744,7 @@ export const runBuiltinFsAdditionalOperations = async (
   directory: string,
 ): Promise<void> => {
   const rootPath = join(directory, "extra");
-  const values = await driver.evaluate<{
+  type AdditionalOperationValues = {
     stat: {
       type: string;
       size: number;
@@ -2719,7 +3763,9 @@ export const runBuiltinFsAdditionalOperations = async (
     };
     partial: number[];
     symlink: {
+      error: string;
       lstatType: string;
+      supported: boolean;
       symbolicLink: boolean;
       readlinkBasename: string;
       text: string;
@@ -2736,19 +3782,25 @@ export const runBuiltinFsAdditionalOperations = async (
       badOptions: string;
       unlinkDirectory: string;
     };
-  }>(`(async () => {
-    const rootPath = ${JSON.stringify(rootPath)};
-    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    const basename = (path) => path.split("/").filter(Boolean).at(-1) ?? "";
-    const rejection = async (operation) => {
-      try {
-        await operation();
-        return "";
-      } catch (error) {
-        return String(error && error.message ? error.message : error);
-      }
-    };
+  };
 
+  const evaluateStep = async <T>(
+    name: string,
+    expression: string,
+  ): Promise<T> => {
+    try {
+      return await driver.evaluate<T>(expression);
+    } catch (error) {
+      throw new Error(`${name}: ${String(error)}`);
+    }
+  };
+
+  const setupValues = await evaluateStep<
+    Pick<AdditionalOperationValues, "access" | "exists" | "stat">
+  >(
+    "additional stat/access",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
     await window.muon.fs.mkdir(rootPath, { recursive: true });
     const filePath = rootPath + "/file.txt";
     await window.muon.fs.writeTextFile(filePath, "alpha", "utf8");
@@ -2772,7 +3824,14 @@ export const runBuiltinFsAdditionalOperations = async (
       execute: await window.muon.fs.access(filePath, { mode: ["execute"] }),
       missing: await window.muon.fs.access(rootPath + "/missing.txt"),
     };
+    return { stat, exists, access };
+  })()`,
+  );
 
+  const readdir = await evaluateStep<AdditionalOperationValues["readdir"]>(
+    "additional readdir",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
     const nestedPath = rootPath + "/nested/child";
     await window.muon.fs.mkdir(nestedPath, { recursive: true });
     await window.muon.fs.writeTextFile(nestedPath + "/one.txt", "one", "utf8");
@@ -2781,21 +3840,67 @@ export const runBuiltinFsAdditionalOperations = async (
       withFileTypes: true,
     });
     const nestedDirent = dirents.find((entry) => entry.name === "nested");
+    return {
+      names,
+      dirent: {
+        name: nestedDirent ? nestedDirent.name : "",
+        directory: nestedDirent ? nestedDirent.isDirectory() : false,
+      },
+    };
+  })()`,
+  );
 
+  const copyText = await evaluateStep<string>(
+    "additional copy first",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const filePath = rootPath + "/file.txt";
     const copyPath = rootPath + "/copy.txt";
     await window.muon.fs.copyFile(filePath, copyPath);
-    const copyText = await window.muon.fs.readTextFile(copyPath, "utf8");
-    const noOverwriteRejected =
+    return await window.muon.fs.readTextFile(copyPath, "utf8");
+  })()`,
+  );
+
+  const noOverwriteRejected = await evaluateStep<boolean>(
+    "additional copy no-overwrite",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const rejection = async (operation) => {
+      try {
+        await operation();
+        return "";
+      } catch (error) {
+        return String(error && error.message ? error.message : error);
+      }
+    };
+    const filePath = rootPath + "/file.txt";
+    const copyPath = rootPath + "/copy.txt";
+    return (
       (await rejection(() =>
         window.muon.fs.copyFile(filePath, copyPath, { overwrite: false }),
-      )) !== "";
+      )) !== ""
+    );
+  })()`,
+  );
+
+  const truncated = await evaluateStep<string>(
+    "additional rename/append/truncate",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const copyPath = rootPath + "/copy.txt";
     const renamedPath = rootPath + "/renamed.txt";
     await window.muon.fs.rename(copyPath, renamedPath);
     await window.muon.fs.appendTextFile(renamedPath, "+text", "utf8");
     await window.muon.fs.appendFile(renamedPath, new Uint8Array([33]));
     await window.muon.fs.truncate(renamedPath, 5);
-    const truncated = await window.muon.fs.readTextFile(renamedPath, "utf8");
+    return await window.muon.fs.readTextFile(renamedPath, "utf8");
+  })()`,
+  );
 
+  const partial = await evaluateStep<AdditionalOperationValues["partial"]>(
+    "additional partial I/O",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
     const partialPath = rootPath + "/partial.bin";
     await window.muon.fs.writeFile(
       partialPath,
@@ -2817,14 +3922,66 @@ export const runBuiltinFsAdditionalOperations = async (
     const partial = Array.from(
       new Uint8Array(await window.muon.fs.readFile(partialPath)),
     );
+    return partial;
+  })()`,
+  );
 
+  const copyRenameAppend = {
+    copyText,
+    noOverwriteRejected,
+    truncated,
+  };
+
+  const symlink = await evaluateStep<AdditionalOperationValues["symlink"]>(
+    "additional symlink",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const basename = (path) => path.split("/").filter(Boolean).at(-1) ?? "";
+    const rejection = async (operation) => {
+      try {
+        await operation();
+        return "";
+      } catch (error) {
+        return String(error && error.message ? error.message : error);
+      }
+    };
+    const renamedPath = rootPath + "/renamed.txt";
     const linkPath = rootPath + "/link.txt";
-    await window.muon.fs.symlink(renamedPath, linkPath, "file");
-    const linkStat = await window.muon.fs.lstat(linkPath);
-    const readlinkTarget = await window.muon.fs.readlink(linkPath);
-    const realpath = await window.muon.fs.realpath(linkPath);
-    const linkedText = await window.muon.fs.readTextFile(realpath, "utf8");
+    let symlink = {
+      error: "",
+      lstatType: "",
+      supported: false,
+      symbolicLink: false,
+      readlinkBasename: "",
+      text: "",
+    };
+    const symlinkError = await rejection(async () => {
+      await window.muon.fs.symlink(renamedPath, linkPath, "file");
+      const linkStat = await window.muon.fs.lstat(linkPath);
+      const readlinkTarget = await window.muon.fs.readlink(linkPath);
+      const realpath = await window.muon.fs.realpath(linkPath);
+      const linkedText = await window.muon.fs.readTextFile(realpath, "utf8");
+      symlink = {
+        error: "",
+        lstatType: linkStat.type,
+        supported: true,
+        symbolicLink: linkStat.isSymbolicLink(),
+        readlinkBasename: basename(readlinkTarget),
+        text: linkedText,
+      };
+    });
+    if (symlinkError !== "") {
+      symlink.error = symlinkError;
+    }
+    return symlink;
+  })()`,
+  );
 
+  const watch = await evaluateStep<AdditionalOperationValues["watch"]>(
+    "additional watch",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const watchPath = rootPath + "/watch";
     await window.muon.fs.mkdir(watchPath);
     const events = [];
@@ -2842,62 +3999,86 @@ export const runBuiltinFsAdditionalOperations = async (
     const afterCloseCount = events.length;
     await window.muon.fs.writeTextFile(watchPath + "/after.txt", "two", "utf8");
     await wait(250);
+    return {
+      filenames: events.map((event) => event.filename),
+      afterCloseCount,
+    };
+  })()`,
+  );
 
-    await window.muon.fs.unlink(linkPath);
+  const removed = await evaluateStep<AdditionalOperationValues["removed"]>(
+    "additional cleanup",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const symlinkSupported = ${JSON.stringify(symlink.supported)};
+    const linkPath = rootPath + "/link.txt";
+    if (symlinkSupported) {
+      await window.muon.fs.unlink(linkPath);
+    }
     const emptyDirectory = rootPath + "/empty";
     await window.muon.fs.mkdir(emptyDirectory);
     await window.muon.fs.rmdir(emptyDirectory);
     await window.muon.fs.rm(rootPath + "/nested", { recursive: true });
     await window.muon.fs.rm(rootPath + "/missing-rm", { force: true });
 
-    const invalid = {
-      missingStat: await rejection(() =>
-        window.muon.fs.stat(rootPath + "/missing-stat"),
-      ),
-      badOptions: await rejection(() =>
-        window.muon.fs.readFile(filePath, { position: 1.5 }),
-      ),
-      unlinkDirectory: await rejection(() =>
-        window.muon.fs.unlink(watchPath),
-      ),
-    };
-
     return {
-      stat,
-      exists,
-      access,
-      readdir: {
-        names,
-        dirent: {
-          name: nestedDirent ? nestedDirent.name : "",
-          directory: nestedDirent ? nestedDirent.isDirectory() : false,
-        },
-      },
-      copyRenameAppend: {
-        copyText,
-        noOverwriteRejected,
-        truncated,
-      },
-      partial,
-      symlink: {
-        lstatType: linkStat.type,
-        symbolicLink: linkStat.isSymbolicLink(),
-        readlinkBasename: basename(readlinkTarget),
-        text: linkedText,
-      },
-      removed: {
-        link: await window.muon.fs.exists(linkPath),
-        emptyDirectory: await window.muon.fs.exists(emptyDirectory),
-        nested: await window.muon.fs.exists(rootPath + "/nested"),
-        missingForced: await window.muon.fs.exists(rootPath + "/missing-rm"),
-      },
-      watch: {
-        filenames: events.map((event) => event.filename),
-        afterCloseCount,
-      },
-      invalid,
+      link: await window.muon.fs.exists(linkPath),
+      emptyDirectory: await window.muon.fs.exists(emptyDirectory),
+      nested: await window.muon.fs.exists(rootPath + "/nested"),
+      missingForced: await window.muon.fs.exists(rootPath + "/missing-rm"),
     };
-  })()`);
+  })()`,
+  );
+
+  const rejectExpression = (operation: string): string => `(async () => {
+    const rejection = async (run) => {
+      try {
+        await run();
+        return "";
+      } catch (error) {
+        return String(error && error.message ? error.message : error);
+      }
+    };
+    return await rejection(() => ${operation});
+  })()`;
+
+  const missingStat = await evaluateStep<string>(
+    "additional invalid stat",
+    rejectExpression(
+      `window.muon.fs.stat(${JSON.stringify(rootPath + "/missing-stat")})`,
+    ),
+  );
+
+  const badOptions = await evaluateStep<string>(
+    "additional invalid read options",
+    rejectExpression(
+      `window.muon.fs.readFile(${JSON.stringify(
+        rootPath + "/file.txt",
+      )}, { position: 1.5 })`,
+    ),
+  );
+
+  const unlinkDirectory = await evaluateStep<string>(
+    "additional invalid unlink directory",
+    rejectExpression(
+      `window.muon.fs.unlink(${JSON.stringify(rootPath + "/watch")})`,
+    ),
+  );
+
+  const values: AdditionalOperationValues = {
+    ...setupValues,
+    copyRenameAppend,
+    invalid: {
+      badOptions,
+      missingStat,
+      unlinkDirectory,
+    },
+    partial,
+    readdir,
+    removed,
+    symlink,
+    watch,
+  };
 
   expect(values.stat).toMatchObject({
     type: "file",
@@ -2924,12 +4105,21 @@ export const runBuiltinFsAdditionalOperations = async (
     truncated: "alpha",
   });
   expect(values.partial).toEqual([0, 1, 9, 9, 4]);
-  expect(values.symlink).toEqual({
-    lstatType: "symlink",
-    symbolicLink: true,
-    readlinkBasename: "renamed.txt",
-    text: "alpha",
-  });
+  if (values.symlink.supported) {
+    expect(values.symlink).toEqual({
+      error: "",
+      lstatType: "symlink",
+      supported: true,
+      symbolicLink: true,
+      readlinkBasename: "renamed.txt",
+      text: "alpha",
+    });
+  } else {
+    expect(isWindowsRemoteE2e()).toBe(true);
+    expect(values.symlink.error).toContain("symlink failed");
+    expect(values.symlink.error).toContain("Windows error 1314");
+    expect(values.symlink.symbolicLink).toBe(false);
+  }
   expect(values.removed).toEqual({
     link: false,
     emptyDirectory: false,
@@ -2948,7 +4138,9 @@ export const runBuiltinFsFileUriOperations = async (
   directory: string,
 ): Promise<void> => {
   const rootPath = join(directory, "uri");
-  const rootUri = pathToFileURL(`${rootPath}/`).href;
+  const rootUri = pathToFileUrlHref(
+    isWindowsAbsolutePath(rootPath) ? `${rootPath}\\` : `${rootPath}/`,
+  );
   const renamedPath = join(rootPath, "renamed.txt");
 
   const values = await driver.evaluate<{
@@ -2972,7 +4164,9 @@ export const runBuiltinFsFileUriOperations = async (
     };
     partial: number[];
     symlink: {
+      error: string;
       lstatType: string;
+      supported: boolean;
       symbolicLink: boolean;
       readlinkTarget: string;
       realpath: string;
@@ -3081,11 +4275,34 @@ export const runBuiltinFsFileUriOperations = async (
     );
 
     const linkUri = uri("link.txt");
-    await window.muon.fs.symlink(renamedPath, linkUri, "file");
-    const linkStat = await window.muon.fs.lstat(linkUri);
-    const readlinkTarget = await window.muon.fs.readlink(linkUri);
-    const realpath = await window.muon.fs.realpath(linkUri);
-    const linkedText = await window.muon.fs.readTextFile(realpath, "utf8");
+    let symlink = {
+      error: "",
+      lstatType: "",
+      supported: false,
+      symbolicLink: false,
+      readlinkTarget: "",
+      realpath: "",
+      text: "",
+    };
+    const symlinkError = await rejection(async () => {
+      await window.muon.fs.symlink(renamedPath, linkUri, "file");
+      const linkStat = await window.muon.fs.lstat(linkUri);
+      const readlinkTarget = await window.muon.fs.readlink(linkUri);
+      const realpath = await window.muon.fs.realpath(linkUri);
+      const linkedText = await window.muon.fs.readTextFile(realpath, "utf8");
+      symlink = {
+        error: "",
+        lstatType: linkStat.type,
+        supported: true,
+        symbolicLink: linkStat.isSymbolicLink(),
+        readlinkTarget,
+        realpath,
+        text: linkedText,
+      };
+    });
+    if (symlinkError !== "") {
+      symlink.error = symlinkError;
+    }
 
     const watchUri = uri("watch/");
     await window.muon.fs.mkdir(watchUri);
@@ -3105,7 +4322,9 @@ export const runBuiltinFsFileUriOperations = async (
     await window.muon.fs.writeTextFile(uri("watch/after.txt"), "two", "utf8");
     await wait(250);
 
-    await window.muon.fs.unlink(linkUri);
+    if (symlink.supported) {
+      await window.muon.fs.unlink(linkUri);
+    }
     const emptyDirectoryUri = uri("empty/");
     await window.muon.fs.mkdir(emptyDirectoryUri);
     await window.muon.fs.rmdir(emptyDirectoryUri);
@@ -3140,13 +4359,7 @@ export const runBuiltinFsFileUriOperations = async (
         truncated,
       },
       partial,
-      symlink: {
-        lstatType: linkStat.type,
-        symbolicLink: linkStat.isSymbolicLink(),
-        readlinkTarget,
-        realpath,
-        text: linkedText,
-      },
+      symlink,
       removed: {
         link: await window.muon.fs.exists(linkUri),
         emptyDirectory: await window.muon.fs.exists(emptyDirectoryUri),
@@ -3188,13 +4401,22 @@ export const runBuiltinFsFileUriOperations = async (
     truncated: "alpha",
   });
   expect(values.partial).toEqual([0, 1, 9, 9, 4]);
-  expect(values.symlink).toEqual({
-    lstatType: "symlink",
-    symbolicLink: true,
-    readlinkTarget: renamedPath,
-    realpath: renamedPath,
-    text: "alpha",
-  });
+  if (values.symlink.supported) {
+    expect(values.symlink).toEqual({
+      error: "",
+      lstatType: "symlink",
+      supported: true,
+      symbolicLink: true,
+      readlinkTarget: renamedPath,
+      realpath: renamedPath,
+      text: "alpha",
+    });
+  } else {
+    expect(isWindowsRemoteE2e()).toBe(true);
+    expect(values.symlink.error).toContain("symlink failed");
+    expect(values.symlink.error).toContain("Windows error 1314");
+    expect(values.symlink.symbolicLink).toBe(false);
+  }
   expect(values.removed).toEqual({
     link: false,
     emptyDirectory: false,
@@ -3737,7 +4959,12 @@ export const configuredDevToolsShortcuts = [
   shiftF9DevToolsShortcut,
 ];
 
-afterEach(async () => {
+afterEach(async (context: TestContext) => {
+  if (context.task.result?.state === "fail") {
+    await saveWindowsRemoteFailureDiagnostics(
+      context.task.fullTestName ?? context.task.name,
+    );
+  }
   const running = runningProcesses.splice(0);
   for (const processInfo of running) {
     await stopMuon(processInfo, undefined);
@@ -3748,5 +4975,13 @@ export const describeMuonPluginBridge = (
   name: string,
   factory: () => void,
 ): void => {
-  (isWindows ? describe.skip : describe)(name, factory);
+  if (isWindows) {
+    describe.skip(name, factory);
+    return;
+  }
+  if (isWindowsRemoteE2e()) {
+    describe(name, { concurrent: false }, factory);
+    return;
+  }
+  describe(name, factory);
 };

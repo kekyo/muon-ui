@@ -39,3 +39,20 @@ export const createWindowsE2eMatrix = <T>(
     ...target,
     caseNames,
   }));
+
+export const resolveWindowsRuntimeTarget = (
+  targetName: string | undefined,
+): WindowsRuntimeTarget => {
+  const normalized = targetName?.trim();
+  const target =
+    normalized === undefined || normalized === "" ? "windows64" : normalized;
+  const runtimeTarget = windowsRuntimeTargets.find(
+    (entry) => entry.target === target || entry.platform === target,
+  );
+  if (runtimeTarget === undefined) {
+    throw new Error(
+      "MUON_E2E_WINDOWS_TARGET must be windows32, win32, windows64, or win64",
+    );
+  }
+  return runtimeTarget;
+};

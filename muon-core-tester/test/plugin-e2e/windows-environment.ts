@@ -8,6 +8,7 @@ export const DEFAULT_WINDOWS_E2E_WORK_DIR = String.raw`C:\muon-e2e`;
 
 export interface WindowsE2eEnvironment {
   host: string;
+  httpHost: string;
   port: number;
   token: string;
   workDir: string;
@@ -48,6 +49,25 @@ const readOptionalWorkDir = (
     return DEFAULT_WINDOWS_E2E_WORK_DIR;
   }
   return value;
+};
+
+const deriveDefaultHttpHost = (agentHost: string): string => {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(agentHost);
+  if (match === null) {
+    return agentHost;
+  }
+  return `${match[1]}.${match[2]}.${match[3]}.1`;
+};
+
+const readOptionalHttpHost = (
+  env: Readonly<Record<string, string | undefined>>,
+  agentHost: string,
+): string => {
+  const value = env.MUON_E2E_REMOTE_HTTP_HOST;
+  if (value === undefined || value.trim() === "") {
+    return deriveDefaultHttpHost(agentHost);
+  }
+  return value.trim();
 };
 
 const readOptionalPort = (
@@ -96,6 +116,7 @@ export const parseWindowsE2eEnvironment = (
   return {
     config: {
       host,
+      httpHost: readOptionalHttpHost(env, host),
       port: readOptionalPort(env),
       token,
       workDir: readOptionalWorkDir(env),

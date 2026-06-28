@@ -70,8 +70,8 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 ### 環境
 
 - CEF公式バイナリの対応アーキテクチャのうち、下記のアーキテクチャに対応:
-  - Linux: amd64, armv7l, arm64
-  - Windows: i686, amd64
+  - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
+  - Windowsターゲット: `windows-i686`, `windows-amd64`
 - ビルド環境
   - Node.js 20以降
   - Vite 5以降（オプション）
@@ -287,7 +287,7 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 
 配布された `dist-muon-*` ディレクトリは読み取り専用の元データとして扱われます。
 エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前に配布元dist全体をユーザーstate配下へステージングし、そのstate側へCEFを展開してから `muon-core` を起動します。
-Linuxでは `${XDG_STATE_HOME:-$HOME/.local/state}/<appId>/runtime/<target>/`、Windowsでは `%LOCALAPPDATA%\<appId>\runtime\<target>\` が使用されます。
+Linuxでは `${XDG_STATE_HOME:-$HOME/.local/state}/<appId>/runtime/<public-target>/`、Windowsでは `%LOCALAPPDATA%\<appId>\runtime\<public-target>\` が使用されます。
 
 起動時の準備では、state側runtimeディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
 配布元dist内の `muon-bootstrap.ini` は読み書きされません。
@@ -384,7 +384,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 
 ```bash
 muon embed-config \
-  --runtime-path ./dist/runtime/linux64 \
+  --runtime-path ./dist/runtime/linux-amd64 \
   --bootstrap-path ./myapp \
   --config ./muon.json
 ```
@@ -1037,7 +1037,7 @@ export default defineConfig({
 | :--------------- | :-------------------- | :-------------------------- | :------------------------------------------------------------------- |
 | `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
 | `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
-| `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
+| `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にMuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
@@ -1045,9 +1045,9 @@ export default defineConfig({
   `muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` だけを読み取り、 `open` は無視します。
   `vite build` ではこれらの開発起動用オプションは無視されます。
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
-- `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
+- `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<public-target>` を使用します。
 - `cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
-- `stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
+- `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
 
@@ -1059,7 +1059,7 @@ export default defineConfig({
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |
 | :----------------- | :------------------ | :----------------------------- | :------------------------------------------------------------------------------ |
-| `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象ターゲットの別名または内部名のリストです。                            |
+| `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
 | `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
 | `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
@@ -1069,7 +1069,7 @@ export default defineConfig({
 
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
-  `targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
+  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定できます。CEF由来の `linux64` や `windows64`、`x64` などの別名は受け付けません。
 - `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。

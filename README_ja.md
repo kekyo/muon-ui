@@ -203,7 +203,7 @@ npm run build
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
-既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリです。
+既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、出力先は `dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリです。
 アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
 実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
 
@@ -242,7 +242,8 @@ muon build
 
 配布用パッケージまで生成する場合は、Viteプラグインの自動ビルドではなく `muon pack` を明示的に実行します。
 `muon pack` は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
-その後、指定した形式ごとに `./artifacts/` へ成果物を出力します。
+その後、指定した形式ごとに `./artifacts/` へ最終配布物だけを出力します。
+`deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
 
 ```bash
 muon pack -t zip
@@ -253,9 +254,9 @@ muon pack -t nsis --target windows-amd64
 `-t, --type` は必須で、`zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
 ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
 `zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
-`deb` はLinuxホスト上のLinuxターゲットだけで使用でき、`dpkg-deb` が必要です。
+`deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
 インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
-`nsis` はWindowsホスト上のWindowsターゲットだけで使用でき、`makensis` が必要です。
+`nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
 既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
 `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
 
@@ -1058,15 +1059,15 @@ export default defineConfig({
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |
 | :----------------- | :------------------ | :----------------------------- | :------------------------------------------------------------------------------ |
-| `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
-| `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
+| `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象ターゲットの別名または内部名のリストです。                            |
+| `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
 | `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
-- `targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
+- `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
   `targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
 - `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。

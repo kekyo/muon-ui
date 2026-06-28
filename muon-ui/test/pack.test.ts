@@ -9,6 +9,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -307,6 +308,8 @@ describe("muon pack", () => {
     const binDirectory = join(root, "bin");
     const logPath = join(root, "dpkg-deb.log");
     await mkdir(binDirectory, { recursive: true });
+    await mkdir(join(root, "artifacts", "deb"), { recursive: true });
+    await writeFile(join(root, "artifacts", "deb", "stale"), "stale\n");
     await writeFakeTool(
       binDirectory,
       "dpkg-deb",
@@ -338,8 +341,12 @@ printf 'deb\\n' > "$output_path"
     );
     await expect(readFile(artifact?.path ?? "", "utf8")).resolves.toBe("deb\n");
     await expect(readFile(logPath, "utf8")).resolves.toBe(
-      `--build\n${join(root, "artifacts", "deb", "packed-sample-linux64")}\n${artifact?.path}\n`,
+      `--build\n${join(root, ".muon", "pack", "deb", "packed-sample-linux64")}\n${artifact?.path}\n`,
     );
+    await expect(readdir(join(root, "artifacts"))).resolves.toEqual([
+      "packed-sample_1.2.3_amd64.deb",
+    ]);
+    await expect(exists(join(root, "artifacts", "deb"))).resolves.toBe(false);
     await expect(
       readFile(join(root, "deb-files.txt"), "utf8"),
     ).resolves.toContain("/usr/bin/packed-sample");
@@ -358,6 +365,8 @@ printf 'deb\\n' > "$output_path"
     const binDirectory = join(root, "bin");
     const logPath = join(root, "makensis.log");
     await mkdir(binDirectory, { recursive: true });
+    await mkdir(join(root, "artifacts", "nsis"), { recursive: true });
+    await writeFile(join(root, "artifacts", "nsis", "stale.nsi"), "stale\n");
     await writeFakeTool(
       binDirectory,
       "makensis",
@@ -375,7 +384,6 @@ printf 'nsis\\n' > "$output_path"
     const result = await packMuonApp({
       root,
       types: ["nsis"],
-      platform: "win32",
       environment: {
         ...process.env,
         PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
@@ -391,11 +399,15 @@ printf 'nsis\\n' > "$output_path"
       "nsis\n",
     );
     await expect(readFile(logPath, "utf8")).resolves.toBe(
-      `${join(root, "artifacts", "nsis", "packed-sample-windows64.nsi")}\n`,
+      `${join(root, ".muon", "pack", "nsis", "packed-sample-windows64.nsi")}\n`,
     );
+    await expect(readdir(join(root, "artifacts"))).resolves.toEqual([
+      "packed-sample-1.2.3-windows64-setup.exe",
+    ]);
+    await expect(exists(join(root, "artifacts", "nsis"))).resolves.toBe(false);
     await expect(
       readFile(
-        join(root, "artifacts", "nsis", "packed-sample-windows64.nsi"),
+        join(root, ".muon", "pack", "nsis", "packed-sample-windows64.nsi"),
         "utf8",
       ),
     ).resolves.toContain("RequestExecutionLevel user");

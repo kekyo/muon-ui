@@ -44,6 +44,7 @@ import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
 
 const supportedPackTypes = ["zip", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
+const defaultPackageBuildDirectory = ".muon/pack";
 const suppressViteMuonBuildEnvironmentKey = "MUON_SUPPRESS_VITE_MUON_BUILD";
 
 type JsonObject = Record<string, unknown>;
@@ -109,10 +110,6 @@ export interface MuonPackOptions {
    * Package author/maintainer override.
    */
   author?: string;
-  /**
-   * Platform used for package type validation.
-   */
-  platform?: NodeJS.Platform;
   /**
    * Environment used for child processes.
    */
@@ -422,18 +419,6 @@ const assertPackTypeSupportsTarget = (
   }
 };
 
-const assertPackTypeSupportsPlatform = (
-  type: MuonPackType,
-  platform: NodeJS.Platform,
-): void => {
-  if (type === "deb" && platform !== "linux") {
-    throw new Error("deb packaging is supported only on Linux hosts.");
-  }
-  if (type === "nsis" && platform !== "win32") {
-    throw new Error("nsis packaging is supported only on Windows hosts.");
-  }
-};
-
 const runTool = async (
   executable: string,
   args: readonly string[],
@@ -533,6 +518,7 @@ const packageDeb = async (
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
   artifactsRoot: string,
+  packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<MuonPackArtifact> => {
   const architecture = debArchitectureByTarget[target.target];
@@ -540,7 +526,7 @@ const packageDeb = async (
     throw new Error(`Unsupported deb target: ${target.target}`);
   }
   const packageRoot = join(
-    artifactsRoot,
+    packageBuildRoot,
     "deb",
     `${metadata.packageName}-${target.target}`,
   );
@@ -601,10 +587,11 @@ const packageNsis = async (
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
   artifactsRoot: string,
+  packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<MuonPackArtifact> => {
   const scriptPath = join(
-    artifactsRoot,
+    packageBuildRoot,
     "nsis",
     `${metadata.packageName}-${target.target}.nsi`,
   );
@@ -659,11 +646,8 @@ export const packMuonApp = async (
     root,
     options.artifactsDir ?? defaultArtifactsDirectory,
   );
+  const packageBuildRoot = resolve(root, defaultPackageBuildDirectory);
   const types = normalizePackTypes(options.types);
-  const platform = options.platform ?? process.platform;
-  for (const type of types) {
-    assertPackTypeSupportsPlatform(type, platform);
-  }
   const viteOutputDirectory = await resolveBuildOutputDirectory(root);
   await runViteBuild(root, environment);
   const build = await buildMuonApp(
@@ -679,6 +663,9 @@ export const packMuonApp = async (
       assertPackTypeSupportsTarget(type, target.target);
     }
   }
+  await rm(packageBuildRoot, { recursive: true, force: true });
+  await rm(join(artifactsRoot, "deb"), { recursive: true, force: true });
+  await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
   const artifacts: MuonPackArtifact[] = [];
   for (const target of build.targets) {
@@ -687,11 +674,25 @@ export const packMuonApp = async (
         artifacts.push(await packageZip(target, metadata, artifactsRoot));
       } else if (type === "deb") {
         artifacts.push(
-          await packageDeb(root, target, metadata, artifactsRoot, environment),
+          await packageDeb(
+            root,
+            target,
+            metadata,
+            artifactsRoot,
+            packageBuildRoot,
+            environment,
+          ),
         );
       } else {
         artifacts.push(
-          await packageNsis(root, target, metadata, artifactsRoot, environment),
+          await packageNsis(
+            root,
+            target,
+            metadata,
+            artifactsRoot,
+            packageBuildRoot,
+            environment,
+          ),
         );
       }
     }

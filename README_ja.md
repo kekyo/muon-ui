@@ -70,8 +70,8 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 ### 環境
 
 - CEF公式バイナリの対応アーキテクチャのうち、下記のアーキテクチャに対応:
-  - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
-  - Windowsターゲット: `windows-i686`, `windows-amd64`
+  - Linux: amd64, armhf, arm64
+  - Windows: i686, amd64
 - ビルド環境
   - Node.js 20以降
   - Vite 5以降（オプション）
@@ -193,7 +193,7 @@ Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を�
 
 ---
 
-### 配布用ビルド
+### 配布用ビルド (Vite)
 
 Vite muonプラグインを設定した状態で `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
@@ -203,11 +203,9 @@ npm run build
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
-既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、出力先は `dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリです。
-アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
-実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
+既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、`dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリに出力されます。
 
-複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
+ターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
 ```ts
 import { defineConfig } from 'vite';
@@ -227,14 +225,24 @@ export default defineConfig({
 });
 ```
 
+既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
+実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
+
+指定可能なターゲット名は、以下のとおりです:
+
+- Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
+- Windowsターゲット: `windows-i686`, `windows-amd64`
+
+### 配布用ビルド (CLI)
+
 Viteを使用しないプロジェクトでは、任意の方法で先にアセットを生成してから `muon build` を実行します。
 `muon build` はコンテンツビルド用のnpm scriptなどを自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
 
 ```bash
-muon build
+npx muon build
 ```
 
-`muon build` のアセット元は、`--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
+`muon build` のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
 `asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
 
@@ -251,7 +259,7 @@ muon pack -t zip,deb --target linux-amd64
 muon pack -t nsis --target windows-amd64
 ```
 
-`-t, --type` は必須で、`zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+`-t`, `--type` は必須で、`zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
 ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
 `zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
 `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
@@ -286,117 +294,14 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 ```
 
 配布された `dist-muon-*` ディレクトリは読み取り専用の元データとして扱われます。
-エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前に配布元dist全体をユーザーstate配下へステージングし、そのstate側へCEFを展開してから `muon-core` を起動します。
-Linuxでは `${XDG_STATE_HOME:-$HOME/.local/state}/<appId>/runtime/<public-target>/`、Windowsでは `%LOCALAPPDATA%\<appId>\runtime\<public-target>\` が使用されます。
+エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下へステージングし、
+そこへCEFバイナリを展開してから `muon-core` を起動します:
 
-起動時の準備では、state側runtimeディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
-配布元dist内の `muon-bootstrap.ini` は読み書きされません。
+- Linux: `$XDG_STATE_HOME` または `$HOME` の `.local/state/<appId>/runtime/<public-target>/`
+- Windows: `%LOCALAPPDATA%\<appId>\runtime\<public-target>\`
 
-実行に使用するCEFバージョンは、事前に決められた規則（ポリシー・後述）で判定されます。
-
-以下は `muon-bootstrap.ini` の例です:
-
-```ini
-[cef]
-versionPolicy=tested
-exactVersion=
-catalogRefreshIntervalSeconds=604800
-lastCatalogUpdateUnix=0
-
-[update]
-requested=false
-requestedAtUnix=0
-```
-
-このファイルは手動で構成することは意図していません。
-muonアプリからは、後述の `window.muon.bootstrap` 名前空間のAPIを使用します。
-
-通常は、CEFのダウンロードと更新のプロセスを操作する必要はないと思われますが、
-特に細かくアップデートプロセスを制御したい場合は、これらのAPIを使用してください。
-例えば、muonアプリ内からアップデートトリガーを行うことが出来ます。
-
-詳しくは別章を参照してください。
-
----
-
-### CEFバージョンとCEF APIバージョン (Advanced topics)
-
-CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
-
-以下は概念図です。あるmuonバージョンは、固定されたCEF APIバージョンを使用します。
-そして、そのCEF APIバージョンをサポートする複数のCEFバイナリの範囲が、バージョンウインドウになります:
-
-```mermaid
-flowchart LR
-  subgraph muon_versions["muonパッケージ"]
-    muon_a["muon A<br/>CEF API 13301"]
-    muon_b["muon B<br/>CEF API 13301"]
-    muon_c["muon C<br/>CEF API 13600"]
-  end
-
-  subgraph cef_versions["CEFバイナリ"]
-    cef_133["CEF 133.x<br/>supports API 13301"]
-    cef_134["CEF 134.x<br/>supports API 13301"]
-    cef_135["CEF 135.x<br/>supports API 13301"]
-    cef_136["CEF 136.x<br/>supports API 13600"]
-    cef_137["CEF 137.x<br/>supports API 13600"]
-  end
-
-  muon_a --> cef_133
-  muon_a --> cef_134
-  muon_a --> cef_135
-  muon_b --> cef_133
-  muon_b --> cef_134
-  muon_b --> cef_135
-  muon_c --> cef_136
-  muon_c --> cef_137
-```
-
-muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバイナリが参照するCEFバージョン情報が埋め込まれています。
-`tested` 以外のpolicyでは、この `cefReference` とカタログファイル、さらに候補archive内の `include/cef_api_versions.h` に含まれるAPI hashから、使用可能なCEFバージョンを特定します。
-実行中にロードされたCEFの情報は `muon.environments.getRuntimeInfo()` の `cefRuntime` で確認できます。
-
-- 注意: CEF APIバージョンはABI互換を目的としていますが、CEF機能の挙動互換は必ずしも維持されない可能性があります。
-  つまり、API hashが一致していても、CEFのブラウザ機能としての差異は発生するかもしれません。
-  CEF APIバージョニングの詳細は、CEF公式の [API Versioning](https://chromiumembedded.github.io/cef/api_versioning.html) を参照して下さい。
-
-`compat-latest` や `same-major-latest` はABI互換を確認しますが、Chromium/CEFのブラウザ機能としての挙動差までは保証しません。アプリケーション側で対象CEFの検証を行ってから配布して下さい。
-
-### CEFバイナリ更新の詳細 (Advanced Topics)
-
-この情報は、CEFバイナリアップデート処理の詳細な情報ですが、
-問題が発生した場合の分析のために示しています。
-`muon-bootstrap.ini` は手動で構成することを想定していないため注意してください。
-
-`muon-bootstrap.ini` の `versionPolicy` には以下の値が指定されます:
-
-| 値                  | 動作                                                                                                                                             |
-| :------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
-| `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
-| `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
-| `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
-
-`catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
-`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
-
-`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`bootstrap.defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
-
-```bash
-muon embed-config \
-  --runtime-path ./dist/runtime/linux-amd64 \
-  --bootstrap-path ./myapp \
-  --config ./muon.json
-```
-
-このプロセスは大きく3段階あります:
-
-1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
-2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
-3. 実行時の準備では配布元distをユーザーstate配下へコピーしてからCEFを同じruntimeディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
-
-CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
-テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
+起動時の準備では、ユーザーステートディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+これらについての詳細は、別章を参照して下さい。
 
 ---
 
@@ -564,6 +469,137 @@ assets/
 
 ---
 
+## 外部ネットワークにアクセスする
+
+最初に解説したとおり、muonの様々な機能は「ホワイトリスト」形式で使用可能になります。
+そして、CEFで最も重要なネットワークアクセスも、ホワイトリストに従ってフィルタされています。
+
+`muon.json` に以下のように許可リストを追加することで、外部ネットワークにアクセスが可能になります:
+
+```json
+{
+  "network": {
+    "allow": [
+      "asset://main/**"
+    ]
+  },
+}
+```
+
+`network.allow` にURLのリストを追加すると、そのURLへのアクセスが可能になります。
+省略時は `"asset://**"` で、これはすべてのローカルアセット（muonビルドのためにあなたが配置したページ群）へのアクセスを可能にします。
+
+例えば、意図的に空リスト (`network.allow: []`) にすると、ローカルアセットを含むすべてのネットワークアクセスが無効となり、何も表示できなくなります。
+しかし、実際に空にしてみると、 `npm run dev` でViteサーバーとmuonを起動してみても正しく表示されるでしょう。
+これは、 `npm run dev` した時に、この `network.allow` リストにViteサーバーのURLが一時的に追加されるためです。
+`muon dev` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することはできません。
+空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
+
+- 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。
+  `data:` プロトコルを使用する場合は、 `network.allow` に `data:**` などの許可パターンを明示的に追加してください。
+
+あなたが実装しているページが、外部サーバを参照する場合、例えば `<img>` タグの画像データだけ外部の `https://img.example.com/images/...` を参照する場合は:
+
+```json
+{
+  "network": {
+    "allow": [
+      "asset://main/**",
+      "https://img.example.com/images/**"
+    ]
+  },
+}
+```
+
+のように、有効なURLを追加しておきます。これでローカルアセットと外部サーバーだけを参照することが出来ます。
+
+- 画像だけではなく、すべてのネットワークアクセス（CSSファイルへのアクセスや `iframe` タグや `fetch` APIを使用したアクセス、WebSocketなど）が対象となるため、
+  必要なURLをすべて追加する必要があります。
+- このURLでは、擬似的なglobフォーマットを使用できます。`*` は `:`, `/`, `?`, `#` の区切りを越えませんが、`**`は以降のすべての文字にマッチします。
+
+---
+
+### CEFバージョンとCEF APIバージョン (Advanced topics)
+
+CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
+
+以下は概念図です。あるmuonバージョンは、固定されたCEF APIバージョンを使用します。
+そして、そのCEF APIバージョンをサポートする複数のCEFバイナリの範囲が、バージョンウインドウになります:
+
+```mermaid
+flowchart LR
+  subgraph muon_versions["muonパッケージ"]
+    muon_a["muon A<br/>CEF API 13301"]
+    muon_b["muon B<br/>CEF API 13301"]
+    muon_c["muon C<br/>CEF API 13600"]
+  end
+
+  subgraph cef_versions["CEFバイナリ"]
+    cef_133["CEF 133.x<br/>supports API 13301"]
+    cef_134["CEF 134.x<br/>supports API 13301"]
+    cef_135["CEF 135.x<br/>supports API 13301"]
+    cef_136["CEF 136.x<br/>supports API 13600"]
+    cef_137["CEF 137.x<br/>supports API 13600"]
+  end
+
+  muon_a --> cef_133
+  muon_a --> cef_134
+  muon_a --> cef_135
+  muon_b --> cef_133
+  muon_b --> cef_134
+  muon_b --> cef_135
+  muon_c --> cef_136
+  muon_c --> cef_137
+```
+
+muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバイナリが参照するCEFバージョン情報が埋め込まれています。
+`tested` 以外のpolicyでは、この `cefReference` とカタログファイル、さらに候補archive内の `include/cef_api_versions.h` に含まれるAPI hashから、使用可能なCEFバージョンを特定します。
+実行中にロードされたCEFの情報は `muon.environments.getRuntimeInfo()` の `cefRuntime` で確認できます。
+
+- 注意: CEF APIバージョンはABI互換を目的としていますが、CEF機能の挙動互換は必ずしも維持されない可能性があります。
+  つまり、API hashが一致していても、CEFのブラウザ機能としての差異は発生するかもしれません。
+  CEF APIバージョニングの詳細は、CEF公式の [API Versioning](https://chromiumembedded.github.io/cef/api_versioning.html) を参照して下さい。
+
+`compat-latest` や `same-major-latest` はABI互換を確認しますが、Chromium/CEFのブラウザ機能としての挙動差までは保証しません。アプリケーション側で対象CEFの検証を行ってから配布して下さい。
+
+### CEFバイナリ更新の詳細 (Advanced Topics)
+
+この情報は、CEFバイナリアップデート処理の詳細な情報ですが、
+問題が発生した場合の分析のために示しています。
+`muon-bootstrap.ini` は手動で構成することを想定していないため注意してください。
+
+`muon-bootstrap.ini` の `versionPolicy` には以下の値が指定されます:
+
+| 値                  | 動作                                                                                                                                             |
+| :------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tested`            | muon-coreのビルド時に検証された埋め込みCEF artifactを使用します。既定値です。                                                                     |
+| `same-major-latest` | `cefReference.version` と同じCEF majorのstable/minimal候補から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。 |
+| `compat-latest`     | stable/minimal候補全体から、CEF API hashが一致する最新artifactを使用します。見つからない場合は `tested` です。                                    |
+| `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
+
+`catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
+`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+
+`muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`bootstrap.defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
+
+```bash
+muon embed-config \
+  --runtime-path ./dist/runtime/linux-amd64 \
+  --bootstrap-path ./myapp \
+  --config ./muon.json
+```
+
+このプロセスは大きく3段階あります:
+
+1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
+2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
+3. 実行時の準備では配布元distをユーザーstate配下へコピーしてからCEFを同じruntimeディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
+
+CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
+テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
+
+---
+
 ### ウインドウ間連携の制約 (Advanced topics)
 
 `browser.allowUnsafeJavaScriptParentAccess` は、ページから別のページを（別のウインドウで）開いた場合などに、
@@ -652,7 +688,7 @@ muon上でのページ権限を細かく調整することも可能です。以�
 
 ---
 
-### ローカルアセットのパッキング
+### ローカルアセットのパッキング (Advanced topics)
 
 ローカルアセットファイル群は、「パッキング」を行って、単一のファイルにまとめることが出来ます。
 ファイルが散在しないようにしたり、圧縮してストレージサイズを削減し、破損の検証を可能にします。
@@ -705,56 +741,6 @@ assets.zip
   攻撃からコンテンツを保護する必要がある場合は、muonの外部で担保する必要があります。
 
 この検証に失敗した場合は、muonアプリケーションを起動出来ません。
-
----
-
-## 外部ネットワークにアクセスする
-
-最初に解説したとおり、muonの様々な機能は「ホワイトリスト」形式で使用可能になります。
-そして、CEFで最も重要なネットワークアクセスも、ホワイトリストに従ってフィルタされています。
-
-`muon.json` に以下のように許可リストを追加することで、外部ネットワークにアクセスが可能になります:
-
-```json
-{
-  "network": {
-    "allow": [
-      "asset://main/**"
-    ]
-  },
-}
-```
-
-`network.allow` にURLのリストを追加すると、そのURLへのアクセスが可能になります。
-省略時は `"asset://**"` で、これはすべてのローカルアセット（muonビルドのためにあなたが配置したページ群）へのアクセスを可能にします。
-
-例えば、意図的に空リスト (`network.allow: []`) にすると、ローカルアセットを含むすべてのネットワークアクセスが無効となり、何も表示できなくなります。
-しかし、実際に空にしてみると、 `npm run dev` でViteサーバーとmuonを起動してみても正しく表示されるでしょう。
-これは、 `npm run dev` した時に、この `network.allow` リストにViteサーバーのURLが一時的に追加されるためです。
-`muon dev` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することはできません。
-空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
-
-- 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。
-  `data:` プロトコルを使用する場合は、 `network.allow` に `data:**` などの許可パターンを明示的に追加してください。
-
-あなたが実装しているページが、外部サーバを参照する場合、例えば `<img>` タグの画像データだけ外部の `https://img.example.com/images/...` を参照する場合は:
-
-```json
-{
-  "network": {
-    "allow": [
-      "asset://main/**",
-      "https://img.example.com/images/**"
-    ]
-  },
-}
-```
-
-のように、有効なURLを追加しておきます。これでローカルアセットと外部サーバーだけを参照することが出来ます。
-
-- 画像だけではなく、すべてのネットワークアクセス（CSSファイルへのアクセスや `iframe` タグや `fetch` APIを使用したアクセス、WebSocketなど）が対象となるため、
-  必要なURLをすべて追加する必要があります。
-- このURLでは、擬似的なglobフォーマットを使用できます。`*` は `:`, `/`, `?`, `#` の区切りを越えませんが、`**`は以降のすべての文字にマッチします。
 
 ---
 

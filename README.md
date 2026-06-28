@@ -74,8 +74,8 @@ you can develop modern local GUI applications using the web-based technology eco
 ### Environment
 
 - Supports the following architectures among those supported by the official CEF binaries:
-  - Linux targets: `linux-amd64`, `linux-armhf`, `linux-arm64`
-  - Windows targets: `windows-i686`, `windows-amd64`
+  - Linux: amd64, armv7l, arm64
+  - Windows: i686, amd64
 - Build Environment
   - Node.js 20 or later
   - Vite 5 or later (optional)

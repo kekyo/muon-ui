@@ -205,6 +205,7 @@ Viteの `build.outDir` に出力されたファイル群は `assets.zip` にま�
 
 既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリです。
 アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
+実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
 
 複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
@@ -219,6 +220,7 @@ export default defineConfig({
         targets: ['linux-amd64', 'windows-amd64'],
         outputRoot: 'release',
         appName: 'my-app',
+        appId: 'com.example.my-app',
       },
     }),
   ],
@@ -237,6 +239,25 @@ muon build
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
+
+配布用パッケージまで生成する場合は、Viteプラグインの自動ビルドではなく `muon pack` を明示的に実行します。
+`muon pack` は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
+その後、指定した形式ごとに `./artifacts/` へ成果物を出力します。
+
+```bash
+muon pack -t zip
+muon pack -t zip,deb --target linux-amd64
+muon pack -t nsis --target windows-amd64
+```
+
+`-t, --type` は必須で、`zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
+`zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
+`deb` はLinuxホスト上のLinuxターゲットだけで使用でき、`dpkg-deb` が必要です。
+インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
+`nsis` はWindowsホスト上のWindowsターゲットだけで使用でき、`makensis` が必要です。
+既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
+`packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
 
 ---
 
@@ -263,7 +284,12 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
     └── cef_binary_<version>_<target>_minimal.tar.bz2
 ```
 
-起動時の準備では、muonアプリが配置されているディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+配布された `dist-muon-*` ディレクトリは読み取り専用の元データとして扱われます。
+エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前に配布元dist全体をユーザーstate配下へステージングし、そのstate側へCEFを展開してから `muon-core` を起動します。
+Linuxでは `${XDG_STATE_HOME:-$HOME/.local/state}/<appId>/runtime/<target>/`、Windowsでは `%LOCALAPPDATA%\<appId>\runtime\<target>\` が使用されます。
+
+起動時の準備では、state側runtimeディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+配布元dist内の `muon-bootstrap.ini` は読み書きされません。
 
 実行に使用するCEFバージョンは、事前に決められた規則（ポリシー・後述）で判定されます。
 
@@ -366,7 +392,7 @@ muon embed-config \
 
 1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
 2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
-3. 実行時の準備ではCEFをプロジェクトの `.muon/` ディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
+3. 実行時の準備では配布元distをユーザーstate配下へコピーしてからCEFを同じruntimeディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
 
 CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
 テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
@@ -978,6 +1004,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 | キー                   | 型       | 既定値     | 概要                                                                                                  |
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
+| `appId`                | `string` | 自動生成   | portable runtime stateを識別する安定IDです。build時に自動埋め込みされます。                          |
 | `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 ---
@@ -1034,6 +1061,7 @@ export default defineConfig({
 | `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
 | `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
+| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
@@ -1045,6 +1073,9 @@ export default defineConfig({
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
   Windowsターゲットでは `.exe` が自動的に付与されます。
+- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` から生成します。
+  `@scope/name` は `scope.name` になり、その他の使用できない文字は `-` に正規化されます。
+  生成された値は `bootstrap.appId` として `muon-core` とランチャーに埋め込まれます。
 - `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
   `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
   設定ファイルが存在しない場合は `{}` 相当として扱います。

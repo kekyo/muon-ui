@@ -34,6 +34,9 @@ if ! grep -Fq 'Entry: ID: 0x000003' "${bootstrap_dump}.section" ||
   echo "muon-bootstrap.exe is missing Windows icon resources." >&2
   exit 1
 fi
+node "${SCRIPT_DIR}/scripts/assert-windows-icon.mjs" \
+  "${bootstrap_executable}" \
+  "${SCRIPT_DIR}/../images/muon-bootstrap.ico"
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT

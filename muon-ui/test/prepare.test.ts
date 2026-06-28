@@ -295,6 +295,28 @@ const writeBootstrapIni = async (
   await writeFile(join(runtimePath, "muon-bootstrap.ini"), content);
 };
 
+const writeEmbeddedBootstrap = async (
+  fixture: PrepareFixture,
+  config: Record<string, unknown>,
+  launcherName = "myapp",
+): Promise<string> => {
+  const configPath = join(fixture.projectPath, `${launcherName}.json`);
+  const appBootstrapPath = join(fixture.muonPath, launcherName);
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  await embedMuonConfigInBootstrapFile({
+    bootstrapPath: bootstrapExecutablePath,
+    configPath,
+    outputPath: appBootstrapPath,
+  });
+  await chmod(appBootstrapPath, 0o755);
+  return appBootstrapPath;
+};
+
+const getLinuxPortableStateRuntimePath = (
+  stateHome: string,
+  appId: string,
+): string => join(stateHome, appId, "runtime", "linux64");
+
 const findCachedFile = async (
   root: string,
   fileName: string,
@@ -1112,7 +1134,7 @@ lastCatalogUpdateUnix=0
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe(".muon/\ndist-muon-*/\n");
+    ).resolves.toBe(".muon/\ndist-muon-*/\nartifacts/\n");
   });
 
   it("appends a missing Muon dist gitignore entry without duplicating .muon", async () => {
@@ -1126,7 +1148,7 @@ lastCatalogUpdateUnix=0
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe("dist*/\n.muon/\ndist-muon-*/\n");
+    ).resolves.toBe("dist*/\n.muon/\ndist-muon-*/\nartifacts/\n");
   });
 
   it("stages a flat CEF cache directory", async () => {
@@ -1383,8 +1405,11 @@ lastCatalogUpdateUnix=0
     expect(stderr).toBe("");
   });
 
-  it("bootstraps an in-place portable runtime and forwards the core exit code", async () => {
+  it("bootstraps a portable runtime in the user state directory and forwards the core exit code", async () => {
     const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const appId = "scope.sample-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1399,9 +1424,9 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await copyFile(bootstrapExecutablePath, appBootstrapPath);
-    await chmod(appBootstrapPath, 0o755);
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId },
+    });
 
     await expect(
       execFileAsync(appBootstrapPath, ["--alpha", "two words"], {
@@ -1411,6 +1436,7 @@ exit 17
           ...process.env,
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
         },
       }),
     ).rejects.toMatchObject({ code: 17 });
@@ -1420,16 +1446,20 @@ exit 17
     ).resolves.toBe("--alpha\ntwo words\n");
     await expect(
       readFile(join(outputDirectory, "cwd.txt"), "utf8"),
-    ).resolves.toBe(`${fixture.muonPath}\n`);
+    ).resolves.toBe(`${stateRuntimePath}\n`);
     await expect(
-      access(join(fixture.muonPath, "libcef.so")),
-    ).resolves.toBeUndefined();
+      readFile(join(stateRuntimePath, "assets", "app.txt"), "utf8"),
+    ).resolves.toBe("app asset\n");
+    await expect(
+      readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
+    ).resolves.toBe("cef library\n");
+    await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
     await expect(
       access(join(fixture.muonPath, "icudtl.dat")),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
     await expect(
       access(join(fixture.muonPath, "locales", "en-US.pak")),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
   });
 
   it("hides bootstrap preparation diagnostics when a progress window is available", async () => {
@@ -1438,6 +1468,7 @@ exit 17
       return;
     }
     const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1451,9 +1482,9 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await copyFile(bootstrapExecutablePath, appBootstrapPath);
-    await chmod(appBootstrapPath, 0o755);
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId: "progress.sample" },
+    });
 
     await expect(
       execFileAsync(
@@ -1471,6 +1502,7 @@ exit 17
             ...process.env,
             MUON_CACHE_DIR: fixture.cacheDir,
             MUON_CEF_CATALOG_URL: fixture.catalogPath,
+            XDG_STATE_HOME: stateHome,
           },
         },
       ),
@@ -1505,11 +1537,9 @@ catalogRefreshIntervalSeconds=604800
 lastCatalogUpdateUnix=0
 `,
     );
-    const configPath = join(fixture.projectPath, "muon.json");
-    await writeFile(
-      configPath,
-      `{ "bootstrap": { "defaultVersionPolicy": "compat-latest" } }\n`,
-    );
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const appId = "compat.sample";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1523,13 +1553,12 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await embedMuonConfigInBootstrapFile({
-      bootstrapPath: bootstrapExecutablePath,
-      configPath,
-      outputPath: appBootstrapPath,
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: {
+        appId,
+        defaultVersionPolicy: "compat-latest",
+      },
     });
-    await chmod(appBootstrapPath, 0o755);
 
     await expect(
       execFileAsync(appBootstrapPath, [], {
@@ -1539,32 +1568,33 @@ exit 17
           ...process.env,
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
         },
       }),
     ).rejects.toMatchObject({ code: 17 });
 
     await expect(
-      readFile(join(fixture.muonPath, "libcef.so"), "utf8"),
+      readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
     ).resolves.toBe("bootstrap compatible cef library\n");
+    await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
     await expect(
-      readFile(join(fixture.muonPath, "muon-bootstrap.ini"), "utf8"),
+      readFile(join(stateRuntimePath, "muon-bootstrap.ini"), "utf8"),
     ).resolves.not.toContain("versionPolicy=");
   });
 
   it("rejects an invalid embedded defaultVersionPolicy during bootstrap", async () => {
     const fixture = await createPrepareFixture();
-    const configPath = join(fixture.projectPath, "muon.json");
-    await writeFile(
-      configPath,
-      `{ "bootstrap": { "defaultVersionPolicy": "invalid" } }\n`,
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const appBootstrapPath = await writeEmbeddedBootstrap(
+      fixture,
+      {
+        bootstrap: {
+          appId: "invalid-policy-app",
+          defaultVersionPolicy: "invalid",
+        },
+      },
+      "invalid-policy-app",
     );
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await embedMuonConfigInBootstrapFile({
-      bootstrapPath: bootstrapExecutablePath,
-      configPath,
-      outputPath: appBootstrapPath,
-    });
-    await chmod(appBootstrapPath, 0o755);
 
     await expect(
       execFileAsync(appBootstrapPath, [], {
@@ -1574,6 +1604,7 @@ exit 17
           ...process.env,
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
         },
       }),
     ).rejects.toThrow(/defaultVersionPolicy|CEF version policy/);

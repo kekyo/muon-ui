@@ -51,5 +51,12 @@ int muon_bootstrap_config_validate(const MuonBootstrapConfig *config);
  * The returned policy is heap-allocated and must be released with free().
  */
 int muon_bootstrap_get_embedded_default_version_policy(char **policy);
+/**
+ * Reads the embedded muon.json bootstrap.appId from this executable.
+ *
+ * The returned app ID is heap-allocated and must be released with free().
+ * When the embedded config has no appId, *app_id is set to NULL.
+ */
+int muon_bootstrap_get_embedded_app_id(char **app_id);
 
 #endif

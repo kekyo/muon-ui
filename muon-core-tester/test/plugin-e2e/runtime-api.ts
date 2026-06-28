@@ -728,16 +728,19 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   });
 
   it("manages bootstrap update settings through the internal bootstrap API", async () => {
-    const configPath = join(DEBUG_MUON_DIRECTORY, "muon-bootstrap.ini");
-    let originalConfig: string | undefined = undefined;
+    const stateHome = await mkdtemp(join(tmpdir(), "muon-bootstrap-state-"));
+    const configPath = join(
+      stateHome,
+      "muon-bootstrap",
+      "runtime",
+      expectedRuntimeTarget(),
+      "muon-bootstrap.ini",
+    );
+    const bootstrapEnvironment = isWindowsRemoteE2e()
+      ? { LOCALAPPDATA: stateHome }
+      : { XDG_STATE_HOME: stateHome };
     try {
-      try {
-        originalConfig = await readFile(configPath, "utf8");
-      } catch {
-        originalConfig = undefined;
-      }
-      await rm(configPath, { force: true });
-      await withMuonEnvironment([], {}, async (driver) => {
+      await withMuonEnvironment([], bootstrapEnvironment, async (driver) => {
         const values = await driver.evaluate<{
           keys: string[];
           initial: {
@@ -757,27 +760,27 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           };
           internalType: string;
         }>(`(async () => {
-          const initial = await window.muon.bootstrap.getSettings();
-          await window.muon.bootstrap.setSettings({
-            cefVersionPolicy: "compat-latest",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 123,
-          });
-          const updated = await window.muon.bootstrap.getSettings();
-          await window.muon.bootstrap.setSettings({
-            cefVersionPolicy: null,
-            catalogRefreshIntervalSeconds: null,
-          });
-          const reverted = await window.muon.bootstrap.getSettings();
-          await window.muon.bootstrap.triggerUpdate();
-          return {
-            keys: Object.keys(window.muon.bootstrap).sort(),
-            initial,
-            updated,
-            reverted,
-            internalType: typeof window.muon.bootstrap.__triggerUpdate,
-          };
-        })()`);
+            const initial = await window.muon.bootstrap.getSettings();
+            await window.muon.bootstrap.setSettings({
+              cefVersionPolicy: "compat-latest",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 123,
+            });
+            const updated = await window.muon.bootstrap.getSettings();
+            await window.muon.bootstrap.setSettings({
+              cefVersionPolicy: null,
+              catalogRefreshIntervalSeconds: null,
+            });
+            const reverted = await window.muon.bootstrap.getSettings();
+            await window.muon.bootstrap.triggerUpdate();
+            return {
+              keys: Object.keys(window.muon.bootstrap).sort(),
+              initial,
+              updated,
+              reverted,
+              internalType: typeof window.muon.bootstrap.__triggerUpdate,
+            };
+          })()`);
 
         expect(values).toEqual({
           keys: ["getSettings", "setSettings", "triggerUpdate"],
@@ -806,11 +809,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         "versionPolicy=",
       );
     } finally {
-      if (originalConfig === undefined) {
-        await rm(configPath, { force: true });
-      } else {
-        await writeFile(configPath, originalConfig);
-      }
+      await rm(stateHome, { force: true, recursive: true });
     }
   });
 

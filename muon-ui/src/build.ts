@@ -115,6 +115,7 @@ const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
 const defaultAppName = "muon-app";
+const defaultAppId = "muon-app";
 const muonLicenseFileName = "CREDITS.md";
 const directoryMode = 0o755;
 const executableMode = 0o755;
@@ -191,6 +192,10 @@ export interface MuonBuildOptions {
    * @remarks The .exe suffix is added automatically for Windows targets.
    */
   appName?: string;
+  /**
+   * Stable application identifier used for portable runtime state.
+   */
+  appId?: string;
   /**
    * Parent directory that receives dist-muon-linux-amd64/ style outputs.
    */
@@ -280,6 +285,10 @@ export interface MuonBuildResult {
    */
   appName: string;
   /**
+   * Stable application identifier embedded for portable runtime state.
+   */
+  appId: string;
+  /**
    * Generated target distributions.
    */
   targets: MuonBuildTargetResult[];
@@ -321,7 +330,9 @@ export const buildMuonApp = async (
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
   const targets = resolveBuildTargets(options);
   const outputRoot = resolve(root, options.outputRoot ?? ".");
-  const appName = await resolveAppName(root, options.appName);
+  const packageJson = await readPackageJson(root);
+  const appName = resolveAppName(packageJson, options.appName);
+  const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
   const assetInput = resolveAssetInput(
     root,
@@ -340,6 +351,7 @@ export const buildMuonApp = async (
       packageDirectory,
       outputRoot,
       appName,
+      appId,
       target,
       assetInput,
       sourceConfig: buildConfig.config,
@@ -351,6 +363,7 @@ export const buildMuonApp = async (
   return {
     root,
     appName,
+    appId,
     targets: results,
   };
 };
@@ -417,18 +430,29 @@ const normalizeZipPrefix = (prefix: string): string => {
   return normalized.length > 0 ? `${normalized}/` : "";
 };
 
-const resolveAppName = async (
-  root: string,
+const readPackageJson = async (root: string): Promise<JsonObject> => {
+  const packageJsonPath = join(root, "package.json");
+  if (!(await fileExists(packageJsonPath))) {
+    return {};
+  }
+  return await readJsonObjectFile(packageJsonPath, "package.json");
+};
+
+const resolvePackageName = (packageJson: JsonObject): string => {
+  return typeof packageJson.name === "string"
+    ? packageJson.name
+    : defaultAppName;
+};
+
+const resolveAppName = (
+  packageJson: JsonObject,
   appName: string | undefined,
-): Promise<string> => {
+): string => {
   if (appName !== undefined) {
     return sanitizeAppName(appName);
   }
 
-  const packageJsonPath = join(root, "package.json");
-  const packageJson = await readJsonObjectFile(packageJsonPath, "package.json");
-  const packageName =
-    typeof packageJson.name === "string" ? packageJson.name : defaultAppName;
+  const packageName = resolvePackageName(packageJson);
   const unscopedName = packageName.startsWith("@")
     ? packageName.slice(packageName.indexOf("/") + 1)
     : packageName;
@@ -445,6 +469,28 @@ const sanitizeAppName = (name: string): string => {
     .replace(/[.-]+$/g, "");
 
   return sanitized.length > 0 ? sanitized : defaultAppName;
+};
+
+const resolveAppId = (
+  packageJson: JsonObject,
+  appId: string | undefined,
+): string => {
+  if (appId !== undefined) {
+    return sanitizeAppId(appId);
+  }
+  return sanitizeAppId(resolvePackageName(packageJson));
+};
+
+const sanitizeAppId = (value: string): string => {
+  const unscoped = value.startsWith("@") ? value.slice(1) : value;
+  const sanitized = unscoped
+    .trim()
+    .toLowerCase()
+    .replace("/", ".")
+    .replace(/[^a-z0-9._-]+/g, ".")
+    .replace(/^[.]+/g, "")
+    .replace(/[.]+$/g, "");
+  return sanitized.length > 0 ? sanitized : defaultAppId;
 };
 
 const readBuildConfig = async (
@@ -545,6 +591,7 @@ const buildMuonTarget = async (input: {
   packageDirectory: string;
   outputRoot: string;
   appName: string;
+  appId: string;
   target: MuonBuildTarget;
   assetInput: AssetInput;
   sourceConfig: JsonObject;
@@ -594,7 +641,11 @@ const buildMuonTarget = async (input: {
     assetZipPath,
     input.salt,
   );
-  const embeddedConfig = createEmbeddedConfig(input.sourceConfig, asset);
+  const embeddedConfig = createEmbeddedConfig(
+    input.sourceConfig,
+    asset,
+    input.appId,
+  );
 
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
     await embedMuonConfigInRuntime({
@@ -811,10 +862,15 @@ const createZipArchive = (entries: readonly ZipEntry[]): Buffer => {
 const createEmbeddedConfig = (
   sourceConfig: JsonObject,
   asset: MuonBuildAssetResult,
+  appId: string,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
     throw new Error("muon.json asset must be an object when present.");
+  }
+  const sourceBootstrap = sourceConfig.bootstrap;
+  if (sourceBootstrap !== undefined && !isJsonObject(sourceBootstrap)) {
+    throw new Error("muon.json bootstrap must be an object when present.");
   }
 
   return {
@@ -824,6 +880,10 @@ const createEmbeddedConfig = (
       sourcePath: appConfigSourcePath,
       signature: asset.signature,
       salt: asset.salt,
+    },
+    bootstrap: {
+      ...(sourceBootstrap ?? {}),
+      appId,
     },
   };
 };

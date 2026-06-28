@@ -10,6 +10,8 @@ import { buildMuonApp, type MuonBuildOptions } from "./build.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
 
+const suppressViteMuonBuildEnvironmentKey = "MUON_SUPPRESS_VITE_MUON_BUILD";
+
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
 /**
@@ -35,6 +37,11 @@ export interface MuonViteBuildOptions {
    * @remarks The .exe suffix is added automatically for Windows targets.
    */
   appName?: string;
+
+  /**
+   * Stable application identifier used for portable runtime state.
+   */
+  appId?: string;
 
   /**
    * Parent directory that receives dist-muon-linux-amd64/ style outputs.
@@ -152,6 +159,9 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       if (resolvedConfig === undefined || resolvedConfig.command !== "build") {
         return;
       }
+      if (process.env[suppressViteMuonBuildEnvironmentKey] === "1") {
+        return;
+      }
       if (options.build === false) {
         return;
       }
@@ -215,6 +225,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.appName !== undefined) {
     options.appName = buildOptions.appName;
+  }
+  if (buildOptions.appId !== undefined) {
+    options.appId = buildOptions.appId;
   }
   if (buildOptions.outputRoot !== undefined) {
     options.outputRoot = buildOptions.outputRoot;

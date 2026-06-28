@@ -30,6 +30,11 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
+   * Stable application identifier used for portable runtime state.
+   */
+  appId?: string;
+
+  /**
    * Parent directory that receives dist-muon-linux-amd64/ style outputs.
    */
   outputRoot?: string;

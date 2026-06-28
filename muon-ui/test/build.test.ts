@@ -309,6 +309,9 @@ describe("muon build", () => {
       signature: target?.asset.signature,
       salt: "deadbeef",
     });
+    expect(target?.embeddedConfig.bootstrap).toEqual({
+      appId: "scope.muon-sample",
+    });
     const embeddedCore = await readFile(
       join(root, "dist-muon-linux-amd64", "muon-core"),
     );
@@ -475,6 +478,9 @@ describe("muon build", () => {
         sourcePath: "./assets.zip",
         signature: target?.asset.signature,
         salt: "1234",
+      },
+      bootstrap: {
+        appId: "missing-config-sample",
       },
     });
   });

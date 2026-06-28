@@ -8,11 +8,12 @@
 
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
+#include "muon_json_helpers.h"
+#include "muon_string_helpers.h"
 
 #include "yyjson.h"
 
 #include <array>
-#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -109,6 +110,14 @@ static constexpr uint8_t kMuonEmbeddedTlvObjectTag = 7;
 static constexpr char kMuonDefaultLocalProfileDirectoryName[] = ".profile";
 static constexpr char kMuonDefaultNormalProfileDirectoryName[] = "profile";
 static constexpr char kMuonFallbackApplicationName[] = "muon";
+
+using muon_internal::DecodeAsciiHexByte;
+using muon_internal::IsAsciiHexDigit;
+using muon_internal::MuonJsonDocument;
+using muon_internal::MuonMutableJsonDocument;
+using muon_internal::ReadJsonString;
+using muon_internal::ToLowerAscii;
+using muon_internal::TrimAscii;
 static constexpr int kVirtualKeyBackspace = 0x08;
 static constexpr int kVirtualKeyTab = 0x09;
 static constexpr int kVirtualKeyEnter = 0x0D;
@@ -276,72 +285,10 @@ static bool ReadTextFile(const std::filesystem::path& path,
   return true;
 }
 
-struct MuonJsonDocument final {
-  yyjson_doc* value = nullptr;
-
-  ~MuonJsonDocument() { yyjson_doc_free(value); }
-};
-
-struct MuonMutableJsonDocument final {
-  yyjson_mut_doc* value = nullptr;
-
-  ~MuonMutableJsonDocument() { yyjson_mut_doc_free(value); }
-};
-
 static std::string FormatJsonParseError(const yyjson_read_err& error) {
   const auto message = error.msg == nullptr ? "parse failed" : error.msg;
   return "Invalid muon.json: " + std::string(message) + " at byte " +
          std::to_string(error.pos);
-}
-
-static bool IsAsciiSpace(char value) {
-  return std::isspace(static_cast<unsigned char>(value)) != 0;
-}
-
-static std::string TrimAscii(const std::string& value) {
-  auto begin = size_t{0};
-  while (begin < value.size() && IsAsciiSpace(value[begin])) {
-    ++begin;
-  }
-
-  auto end = value.size();
-  while (end > begin && IsAsciiSpace(value[end - 1])) {
-    --end;
-  }
-  return value.substr(begin, end - begin);
-}
-
-static std::string ToLowerAscii(std::string value) {
-  for (auto& character : value) {
-    character = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(character)));
-  }
-  return value;
-}
-
-static bool IsAsciiHexDigit(char value) {
-  return (value >= '0' && value <= '9') ||
-         (value >= 'A' && value <= 'F') ||
-         (value >= 'a' && value <= 'f');
-}
-
-static uint8_t DecodeAsciiHexNibble(char value) {
-  if (value >= '0' && value <= '9') {
-    return static_cast<uint8_t>(value - '0');
-  }
-  if (value >= 'A' && value <= 'F') {
-    return static_cast<uint8_t>(value - 'A' + 10);
-  }
-  return static_cast<uint8_t>(value - 'a' + 10);
-}
-
-static uint8_t DecodeAsciiHexByte(char high, char low) {
-  return static_cast<uint8_t>((DecodeAsciiHexNibble(high) << 4) |
-                              DecodeAsciiHexNibble(low));
-}
-
-static std::string ReadJsonString(yyjson_val* value) {
-  return std::string(yyjson_get_str(value), yyjson_get_len(value));
 }
 
 static bool IsEmptyMuonEmbeddedConfigSlot(const uint8_t* slot,

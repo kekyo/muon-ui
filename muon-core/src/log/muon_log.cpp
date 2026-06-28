@@ -253,6 +253,30 @@ static cardio::promise<void> RunMuonCefLogForwarder(
   } catch (const cardio::canceled_exception&) {
   }
 }
+
+static void CloseMuonCefLogForwarderHandle(
+    MuonCefLogForwarderState* forwarder) {
+  if (forwarder != nullptr &&
+      forwarder->change_handle != INVALID_HANDLE_VALUE) {
+    FindCloseChangeNotification(forwarder->change_handle);
+    forwarder->change_handle = INVALID_HANDLE_VALUE;
+  }
+}
+
+static void FinishReadyMuonCefLogForwarderTask(
+    MuonCefLogForwarderState* forwarder) {
+  if (forwarder == nullptr || !forwarder->task) {
+    return;
+  }
+  try {
+    if (forwarder->task->is_ready()) {
+      forwarder->task->try_result();
+      forwarder->task.reset();
+    }
+  } catch (...) {
+    forwarder->task.reset();
+  }
+}
 #else
 static void OnMuonCefLogFileChanged(GFileMonitor* monitor,
                                     GFile* file,
@@ -520,11 +544,15 @@ void StopMuonCefLogForwarder() {
   }
 #if defined(_WIN32)
   (void)forwarder->cancellation_source.cancel();
-  forwarder->task.reset();
-  if (forwarder->change_handle != INVALID_HANDLE_VALUE) {
-    FindCloseChangeNotification(forwarder->change_handle);
-    forwarder->change_handle = INVALID_HANDLE_VALUE;
+  FinishReadyMuonCefLogForwarderTask(forwarder.get());
+  if (forwarder->task) {
+    // The cardio wait owns no handle, so the waited handle must remain valid
+    // until the dispatcher processes cancellation. Retain the small state
+    // instead of closing a handle that may still be registered.
+    (void)forwarder.release();
+    return;
   }
+  CloseMuonCefLogForwarderHandle(forwarder.get());
 #else
   if (forwarder->monitor != nullptr && forwarder->monitor_handler != 0) {
     g_signal_handler_disconnect(forwarder->monitor,

@@ -55,6 +55,13 @@ struct MuonTitleBarManifest {
   int controls_width = 0;
 
   /**
+   * Whether Muon may handle the standard right-side controls from native input.
+   *
+   * @remarks This is only set by the built-in Muon title bar manifest.
+   */
+  bool native_window_controls = false;
+
+  /**
    * HTML fragment rendered inside the internal title bar document.
    */
   std::string html;
@@ -100,16 +107,51 @@ struct MuonTitleBarBackgroundColor {
  */
 struct MuonTitleBarIcon {
   /**
-   * CEF image used by native title bars.
+   * PNG bytes used to create native title/app bar images.
    *
    * @remarks Non-PNG icons used by the Muon custom title bar leave this empty.
    */
-  CefRefPtr<CefImage> image;
+  std::vector<uint8_t> png_data;
 
   /**
    * Image data URL used by the Muon custom title bar.
    */
   std::string data_url;
+};
+
+/**
+ * Native window icon update action.
+ */
+enum class MuonWindowIconAction {
+  /**
+   * Keep the current native icon unchanged.
+   */
+  Keep,
+
+  /**
+   * Set the native icon from the loaded CefImage.
+   */
+  Set,
+
+  /**
+   * Clear the native icon by applying an empty CefImage.
+   */
+  Clear,
+};
+
+/**
+ * Native title/app icon update behavior derived from loaded icon data.
+ */
+struct MuonWindowIconUpdateBehavior {
+  /**
+   * Action for the native title bar icon.
+   */
+  MuonWindowIconAction window_icon_action = MuonWindowIconAction::Keep;
+
+  /**
+   * Action for the app icon shown by platform shell UI.
+   */
+  MuonWindowIconAction app_icon_action = MuonWindowIconAction::Keep;
 };
 
 /**
@@ -132,6 +174,16 @@ bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
                                       const std::string& source,
                                       MuonTitleBarIcon* icon,
                                       std::string* error_message);
+
+/**
+ * Returns PNG scale factors used for title bar icon native images.
+ *
+ * @param pixel_width PNG image width in pixels.
+ * @param pixel_height PNG image height in pixels.
+ * @return Ordered scale factors added to the CefImage.
+ */
+std::vector<float> GetMuonTitleBarIconPngScaleFactors(int pixel_width,
+                                                      int pixel_height);
 
 /**
  * Loads a title bar icon from asset storage.
@@ -183,9 +235,87 @@ bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
                                         std::string* error_message);
 
 /**
+ * Returns the native window icon update behavior for a loaded title bar icon.
+ *
+ * @param has_native_png_data Whether the icon has PNG data usable by native UI.
+ * @param icon_data_url Custom title bar icon data URL.
+ * @return Native window/app icon update behavior.
+ */
+MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
+    bool has_native_png_data,
+    const std::string& icon_data_url);
+
+/**
  * Returns whether the manifest requests a custom title bar.
  */
 bool IsCustomMuonTitleBar(const MuonTitleBarManifest& manifest);
+
+/**
+ * Resolves the effective browser id for a title bar controller registration.
+ *
+ * @param browser_id Browser id observed directly while registering.
+ * @param registered_browser_id Browser id previously associated with the same
+ * window.
+ * @return Effective positive browser id, or 0 when none is available.
+ */
+int GetMuonResolvedTitleBarBrowserId(int browser_id,
+                                     int registered_browser_id);
+
+/**
+ * Returns whether a browser-to-window registration should replace an existing
+ * registration.
+ *
+ * @param current_has_controller Whether the currently registered window owns a
+ * custom title bar controller.
+ * @param candidate_has_controller Whether the candidate window owns a custom
+ * title bar controller.
+ * @return true when the candidate should replace the current registration.
+ */
+bool ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(
+    bool current_has_controller,
+    bool candidate_has_controller);
+
+/**
+ * Standard Muon title bar control hit-test result.
+ */
+enum class MuonTitleBarControlAction {
+  /**
+   * No native title bar control was hit.
+   */
+  NoControl,
+
+  /**
+   * The minimize button was hit.
+   */
+  Minimize,
+
+  /**
+   * The maximize/restore button was hit.
+   */
+  Maximize,
+
+  /**
+   * The close button was hit.
+   */
+  Close,
+};
+
+/**
+ * Hit-tests a standard Muon title bar control at a window-relative point.
+ *
+ * @param native_window_controls Whether native controls are enabled.
+ * @param title_bar_height Title bar height in DIP.
+ * @param controls_width Right-side controls width in DIP.
+ * @param window_size Window size in DIP.
+ * @param window_point Point relative to the window top-left in DIP.
+ * @return Hit title bar control action, or NoControl.
+ */
+MuonTitleBarControlAction GetMuonTitleBarControlActionAtWindowPoint(
+    bool native_window_controls,
+    int title_bar_height,
+    int controls_width,
+    const CefSize& window_size,
+    const CefPoint& window_point);
 
 /**
  * Returns whether Linux native window-manager title bar decoration is available.
@@ -272,9 +402,9 @@ class MuonTitleBarController final : public CefClient,
   void SetVisible(bool visible);
 
   /**
-   * Recomputes draggable regions from the current window size.
+   * Recomputes draggable regions from the current or attached window size.
    */
-  void UpdateDraggableRegions();
+  void UpdateDraggableRegions(CefRefPtr<CefWindow> window = nullptr);
 
   /**
    * Returns the configured title bar height in DIP.
@@ -290,6 +420,11 @@ class MuonTitleBarController final : public CefClient,
    * Handles an action requested by the internal title bar document.
    */
   void HandleAction(const std::string& action);
+
+  /**
+   * Returns whether native input may handle the standard title bar controls.
+   */
+  bool CanHandleNativeWindowControls() const;
 
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override;
   CefRefPtr<CefLoadHandler> GetLoadHandler() override;
@@ -311,10 +446,12 @@ class MuonTitleBarController final : public CefClient,
   void SendTitle();
   void SendIcon();
   void ExecuteJavaScript(const std::string& source);
+  CefRefPtr<CefBrowserView> ResolveTitleBarView() const;
+  CefRefPtr<CefWindow> ResolveWindow() const;
 
   const MuonTitleBarManifest manifest_;
   const MuonTitleBarBackgroundColor background_color_;
-  CefWindow* window_ = nullptr;
+  CefWindowHandle window_handle_ = 0;
   CefRefPtr<CefBrowser> browser_;
   std::string title_ = "Muon";
   std::string icon_data_url_;
@@ -361,9 +498,34 @@ void RegisterMuonTitleBarBrowserViewBrowser(
     int browser_id);
 
 /**
+ * Returns whether a registered custom title bar controller entry should be
+ * removed by an unregister request.
+ *
+ * @param registered_window Window pointer stored when the controller was
+ * registered.
+ * @param requested_window Window pointer received by the unregister request.
+ * @param registered_controller Controller pointer stored when the controller
+ * was registered.
+ * @param requested_controller Controller pointer owned by the unregistering
+ * window delegate.
+ * @return true when the stored registration matches the unregister request.
+ */
+bool ShouldRemoveRegisteredMuonTitleBarController(
+    const CefWindow* registered_window,
+    const CefWindow* requested_window,
+    const MuonTitleBarController* registered_controller,
+    const MuonTitleBarController* requested_controller);
+
+/**
  * Removes a custom title bar controller registration for a window.
  */
 void UnregisterMuonTitleBarController(CefRefPtr<CefWindow> window);
+
+/**
+ * Removes a custom title bar controller registration by controller identity.
+ */
+void UnregisterMuonTitleBarController(
+    CefRefPtr<MuonTitleBarController> controller);
 
 /**
  * Clears all custom title bar registrations before CEF shutdown.
@@ -386,16 +548,14 @@ void SetRegisteredMuonTitleBarTitleForBrowser(int browser_id,
  * Updates the registered custom or native title bar icon, if any.
  */
 void SetRegisteredMuonTitleBarIcon(CefRefPtr<CefWindow> window,
-                                   CefRefPtr<CefImage> image,
-                                   const std::string& icon_data_url);
+                                   const MuonTitleBarIcon* icon);
 
 /**
  * Updates the registered custom or native title bar icon for a browser, if any.
  */
 void SetRegisteredMuonTitleBarIconForBrowser(
     int browser_id,
-    CefRefPtr<CefImage> image,
-    const std::string& icon_data_url);
+    const MuonTitleBarIcon* icon);
 
 /**
  * Updates the custom title bar view or native title bar visibility hint.
@@ -441,10 +601,21 @@ bool IsMuonPageDraggableRegionPoint(
     const CefPoint& point);
 
 /**
+ * Builds registered page draggable-region search keys for a native input event.
+ *
+ * @param window_key Native window key for the event target, or zero.
+ * @param registered_window_keys Registered page draggable-region window keys.
+ * @return Window keys to test, in search order.
+ */
+std::vector<std::uintptr_t> GetMuonPageDraggableRegionSearchKeys(
+    std::uintptr_t window_key,
+    const std::vector<std::uintptr_t>& registered_window_keys);
+
+/**
  * Returns whether a screen point hits registered page CSS draggable regions.
  *
- * @param window_handle Native window handle used to prefer one registered
- * window, or null to search all registered windows.
+ * @param window_handle Native window handle to search, or null to search all
+ * registered windows.
  * @param screen_point DIP screen point to test.
  * @return true when the point belongs to a registered page draggable region.
  */
@@ -470,6 +641,49 @@ bool ForwardRegisteredMuonPageDraggableRegionWheel(
     uint32_t modifiers);
 
 /**
- * Returns the registered custom-titlebar window for a browser, if any.
+ * Returns a registered standard title bar control hit by a screen point.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param screen_point DIP screen point to test.
+ * @param window_bounds_in_screen Native top-level window bounds in DIP screen
+ * coordinates.
+ * @return Hit title bar control action, or NoControl.
  */
-CefRefPtr<CefWindow> GetRegisteredMuonWindowForBrowser(int browser_id);
+MuonTitleBarControlAction GetRegisteredMuonTitleBarControlActionAtScreenPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    const CefRect& window_bounds_in_screen);
+
+/**
+ * Returns whether a screen point hits a registered draggable title bar area.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param screen_point DIP screen point to test.
+ * @param window_bounds_in_screen Native top-level window bounds in DIP screen
+ * coordinates.
+ * @return true when the point belongs to the title bar but not to a standard
+ * control.
+ */
+bool IsRegisteredMuonTitleBarDragRegionPoint(
+    CefWindowHandle window_handle,
+    const CefPoint& screen_point,
+    const CefRect& window_bounds_in_screen);
+
+/**
+ * Handles a registered standard title bar control action.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param action Control action to handle.
+ * @return true when a registered title bar handled the action.
+ */
+bool HandleRegisteredMuonTitleBarControlAction(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action);
+
+/**
+ * Returns whether a custom-titlebar window has been registered for a browser.
+ *
+ * @param browser_id Browser identifier to test.
+ * @return true when the browser has reached the window-created registration.
+ */
+bool HasRegisteredMuonWindowForBrowser(int browser_id);

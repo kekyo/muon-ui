@@ -28,6 +28,16 @@ cef_show_state_t GetMuonCefInitialShowState(
 void SetMuonWindowFullscreen(CefRefPtr<CefWindow> window, bool fullscreen);
 
 /**
+ * Returns initial top-level window bounds centered inside the display work area.
+ *
+ * @param work_area Display work area excluding OS panels and docks.
+ * @param preferred_size Preferred window size requested by the delegate.
+ * @return Window bounds clamped to fit inside the work area.
+ */
+CefRect GetMuonCenteredWindowBounds(const CefRect& work_area,
+                                    const CefSize& preferred_size);
+
+/**
  * Shows a CEF window and restores it from minimized/iconified state.
  *
  * @param window Window to show.

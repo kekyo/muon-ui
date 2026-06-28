@@ -8,9 +8,11 @@
 #include "browser/muon_native_wheel_forwarder.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
+#include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -33,6 +35,8 @@ static bool TestBrowserFunctionDefinitions() {
       "minimize",        "maximize",       "restore",
       "setTitleBarVisibility",
       "setTitleBarIcon",
+      "__getWindowBounds",
+      "__setWindowBounds",
       "__close",         "__shutdown",     "__recycle",
   };
   const auto expected_kinds = std::vector<MuonBuiltinBrowserFunctionKind>{
@@ -53,6 +57,8 @@ static bool TestBrowserFunctionDefinitions() {
       MuonBuiltinBrowserFunctionKind::Restore,
       MuonBuiltinBrowserFunctionKind::SetTitleBarVisibility,
       MuonBuiltinBrowserFunctionKind::SetTitleBarIcon,
+      MuonBuiltinBrowserFunctionKind::GetWindowBounds,
+      MuonBuiltinBrowserFunctionKind::SetWindowBounds,
       MuonBuiltinBrowserFunctionKind::Close,
       MuonBuiltinBrowserFunctionKind::Shutdown,
       MuonBuiltinBrowserFunctionKind::Recycle,
@@ -76,8 +82,10 @@ static bool TestBrowserFunctionDefinitions() {
       return false;
     }
   }
-  const auto set_title_bar_visibility = definitions[expected_names.size() - 5];
-  const auto set_title_bar_icon = definitions[expected_names.size() - 4];
+  const auto set_title_bar_visibility = definitions[15];
+  const auto set_title_bar_icon = definitions[16];
+  const auto get_window_bounds = definitions[17];
+  const auto set_window_bounds = definitions[18];
   const auto shutdown = definitions[expected_names.size() - 2];
   const auto recycle = definitions.back();
   if (!Expect(set_title_bar_visibility.arg_count == 1,
@@ -96,6 +104,32 @@ static bool TestBrowserFunctionDefinitions() {
               "unexpected title bar icon argument type") ||
       !Expect(set_title_bar_icon.return_type.type == MUON_TYPE_VOID,
               "unexpected title bar icon return type") ||
+      !Expect(get_window_bounds.filter_name != nullptr &&
+                  std::string(get_window_bounds.filter_name) ==
+                      "getWindowBounds",
+              "unexpected get window bounds filter name") ||
+      !Expect(get_window_bounds.arg_count == 0,
+              "unexpected get window bounds argument count") ||
+      !Expect(get_window_bounds.return_type.type == MUON_TYPE_STRING,
+              "unexpected get window bounds return type") ||
+      !Expect(set_window_bounds.filter_name != nullptr &&
+                  std::string(set_window_bounds.filter_name) ==
+                      "setWindowBounds",
+              "unexpected set window bounds filter name") ||
+      !Expect(set_window_bounds.arg_count == 4,
+              "unexpected set window bounds argument count") ||
+      !Expect(set_window_bounds.arg_types != nullptr,
+              "missing set window bounds argument metadata") ||
+      !Expect(set_window_bounds.arg_types[0].type == MUON_TYPE_I32,
+              "unexpected set window bounds x argument type") ||
+      !Expect(set_window_bounds.arg_types[1].type == MUON_TYPE_I32,
+              "unexpected set window bounds y argument type") ||
+      !Expect(set_window_bounds.arg_types[2].type == MUON_TYPE_I32,
+              "unexpected set window bounds width argument type") ||
+      !Expect(set_window_bounds.arg_types[3].type == MUON_TYPE_I32,
+              "unexpected set window bounds height argument type") ||
+      !Expect(set_window_bounds.return_type.type == MUON_TYPE_VOID,
+              "unexpected set window bounds return type") ||
       !Expect(shutdown.filter_name != nullptr &&
                   std::string(shutdown.filter_name) == "shutdown",
               "unexpected browser shutdown filter name") ||
@@ -161,6 +195,33 @@ static bool TestInitialWindowShowState() {
                 "state");
 }
 
+static bool BoundsAreInsideWorkArea(const CefRect& bounds,
+                                    const CefRect& work_area) {
+  return bounds.x >= work_area.x && bounds.y >= work_area.y &&
+         bounds.x + bounds.width <= work_area.x + work_area.width &&
+         bounds.y + bounds.height <= work_area.y + work_area.height;
+}
+
+static bool TestInitialWindowWorkAreaBounds() {
+  const auto offset_work_area = CefRect(67, 34, 1000, 700);
+  const auto centered =
+      GetMuonCenteredWindowBounds(offset_work_area, CefSize(400, 300));
+  const auto clamped =
+      GetMuonCenteredWindowBounds(offset_work_area, CefSize(1200, 900));
+  return Expect(BoundsAreInsideWorkArea(centered, offset_work_area),
+                "centered initial window bounds escaped the work area") &&
+         Expect(centered.x == 367 && centered.y == 234 &&
+                    centered.width == 400 && centered.height == 300,
+                "initial window bounds were not centered in offset work "
+                "area") &&
+         Expect(BoundsAreInsideWorkArea(clamped, offset_work_area),
+                "clamped initial window bounds escaped the work area") &&
+         Expect(clamped.x == 67 && clamped.y == 34 &&
+                    clamped.width == 1000 && clamped.height == 700,
+                "oversized initial window bounds were not clamped to work "
+                "area");
+}
+
 static MuonTitleBarManifest CreateTestCustomTitleBarManifest() {
   MuonTitleBarManifest manifest;
   manifest.mode = MuonTitleBarMode::Custom;
@@ -176,6 +237,8 @@ static bool TestTitleBarManifestParsing() {
   const auto native = ParseMuonTitleBarManifest(R"({"mode":"native"})");
   const auto custom = ParseMuonTitleBarManifest(
       R"({"mode":"custom","height":36,"controlsWidth":138,"html":"<div></div>","css":"body{}","js":"void 0;"})");
+  const auto native_controls = ParseMuonTitleBarManifest(
+      R"({"mode":"custom","height":36,"controlsWidth":138,"nativeWindowControls":true,"html":"<div></div>","css":"body{}","js":"void 0;"})");
   const auto invalid_json = ParseMuonTitleBarManifest("{");
   const auto unknown_mode = ParseMuonTitleBarManifest(R"({"mode":"other"})");
   const auto missing_fields =
@@ -190,6 +253,10 @@ static bool TestTitleBarManifestParsing() {
          Expect(custom.height == 36, "unexpected custom title bar height") &&
          Expect(custom.controls_width == 138,
                 "unexpected custom title bar controls width") &&
+         Expect(!custom.native_window_controls,
+                "custom title bar unexpectedly enabled native controls") &&
+         Expect(native_controls.native_window_controls,
+                "built-in title bar native controls flag was not accepted") &&
          Expect(!IsCustomMuonTitleBar(invalid_json),
                 "invalid JSON title bar manifest did not fall back") &&
          Expect(!IsCustomMuonTitleBar(unknown_mode),
@@ -242,6 +309,24 @@ static bool TestPageDraggableRegionHitTesting() {
                 "empty regions accepted a point");
 }
 
+static bool TestPageDraggableRegionSearchKeys() {
+  const auto registered_window_keys = std::vector<std::uintptr_t>{10, 20};
+  const auto specific =
+      GetMuonPageDraggableRegionSearchKeys(10, registered_window_keys);
+  const auto foreign =
+      GetMuonPageDraggableRegionSearchKeys(30, registered_window_keys);
+  const auto global =
+      GetMuonPageDraggableRegionSearchKeys(0, registered_window_keys);
+  return Expect(specific == std::vector<std::uintptr_t>{10},
+                "specific draggable-region search fell back to other windows") &&
+         Expect(foreign == std::vector<std::uintptr_t>{30},
+                "foreign draggable-region search fell back to registered "
+                "windows") &&
+         Expect(global == registered_window_keys,
+                "global draggable-region search did not use registered "
+                "windows");
+}
+
 static bool TestNativeForwarderRegistersChildWindows() {
   const auto handles = GetMuonNativeForwarderWindowHandlesForRegistration(
       10, std::vector<CefWindowHandle>{20, 30});
@@ -252,6 +337,196 @@ static bool TestNativeForwarderRegistersChildWindows() {
                 "native input forwarder omitted first child") &&
          Expect(handles[2] == 30,
                 "native input forwarder omitted second child");
+}
+
+static bool TestNativeWheelForwarderTargetWindowSelection() {
+  const auto event_registered =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 20, std::vector<CefWindowHandle>{10});
+  const auto child_registered =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 20, std::vector<CefWindowHandle>{20});
+  const auto fallback_child =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 20, std::vector<CefWindowHandle>{30});
+  const auto fallback_event =
+      GetMuonNativeWheelForwarderTargetWindowHandle(
+          10, 0, std::vector<CefWindowHandle>{30});
+  return Expect(event_registered == 10,
+                "native wheel forwarder ignored registered event window") &&
+         Expect(child_registered == 20,
+                "native wheel forwarder ignored registered child window") &&
+         Expect(fallback_child == 20,
+                "native wheel forwarder did not fall back to child window") &&
+         Expect(fallback_event == 10,
+                "native wheel forwarder did not fall back to event window");
+}
+
+static bool TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() {
+  const auto registered_window_handles = std::vector<CefWindowHandle>{10};
+  const auto registered =
+      MuonNativeWheelForwarderTopLevelWindow{10, 0, 0, 100, 100, true, false};
+  const auto hidden =
+      MuonNativeWheelForwarderTopLevelWindow{10, 0, 0, 100, 100, false, false};
+  const auto override_redirect =
+      MuonNativeWheelForwarderTopLevelWindow{20, 0, 0, 100, 100, true, true};
+  const auto foreign =
+      MuonNativeWheelForwarderTopLevelWindow{20, 0, 0, 100, 100, true, false};
+
+  const auto direct_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles, {registered});
+  const auto outside =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(120, 30), registered_window_handles, {registered});
+  const auto hidden_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles, {hidden});
+  const auto override_redirect_over_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles,
+          {registered, override_redirect});
+  const auto foreign_over_hit =
+      GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
+          CefPoint(20, 30), registered_window_handles, {registered, foreign});
+
+  return Expect(direct_hit == 10,
+                "native wheel forwarder did not select registered top-level "
+                "window at point") &&
+         Expect(outside == 0,
+                "native wheel forwarder selected window outside point") &&
+         Expect(hidden_hit == 0,
+                "native wheel forwarder selected hidden window") &&
+         Expect(override_redirect_over_hit == 10,
+                "native wheel forwarder did not ignore override-redirect "
+                "overlay") &&
+         Expect(foreign_over_hit == 0,
+                "native wheel forwarder crossed into covered foreign window");
+}
+
+static bool TestTitleBarControlHitTesting() {
+  const auto window_size = CefSize(300, 200);
+  return Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(170, 10)) ==
+                    MuonTitleBarControlAction::Minimize,
+                "minimize title bar control was not hit") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(220, 10)) ==
+                    MuonTitleBarControlAction::Maximize,
+                "maximize title bar control was not hit") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(280, 10)) ==
+                    MuonTitleBarControlAction::Close,
+                "close title bar control was not hit") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(120, 10)) ==
+                    MuonTitleBarControlAction::NoControl,
+                "left title bar area was treated as a control") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    true, 36, 138, window_size, CefPoint(280, 40)) ==
+                    MuonTitleBarControlAction::NoControl,
+                "point below title bar was treated as a control") &&
+         Expect(GetMuonTitleBarControlActionAtWindowPoint(
+                    false, 36, 138, window_size, CefPoint(280, 10)) ==
+                    MuonTitleBarControlAction::NoControl,
+                "custom title bar without native controls was hit");
+}
+
+static bool TestWindowIconUpdateBehavior() {
+  const auto native_icon =
+      GetMuonWindowIconUpdateBehavior(true, "data:image/png;base64,icon");
+  const auto data_url_only =
+      GetMuonWindowIconUpdateBehavior(false, "data:image/svg+xml;base64,icon");
+  const auto clear_icon = GetMuonWindowIconUpdateBehavior(false, "");
+
+  return Expect(native_icon.window_icon_action == MuonWindowIconAction::Set,
+                "native title bar icon image should update the window icon") &&
+         Expect(native_icon.app_icon_action == MuonWindowIconAction::Set,
+                "native title bar icon image should update the app icon") &&
+         Expect(data_url_only.window_icon_action == MuonWindowIconAction::Keep,
+                "data-url-only title bar icon should keep the window icon") &&
+         Expect(data_url_only.app_icon_action == MuonWindowIconAction::Keep,
+                "data-url-only title bar icon should keep the app icon") &&
+         Expect(clear_icon.window_icon_action == MuonWindowIconAction::Clear,
+                "clearing the title bar icon should clear the window icon") &&
+         Expect(clear_icon.app_icon_action == MuonWindowIconAction::Clear,
+                "clearing the title bar icon should clear the app icon");
+}
+
+static bool TestTitleBarBrowserIdResolution() {
+  return Expect(GetMuonResolvedTitleBarBrowserId(7, 42) == 7,
+                "direct title bar browser id was not preserved") &&
+         Expect(GetMuonResolvedTitleBarBrowserId(0, 42) == 42,
+                "registered title bar browser id was not reused") &&
+         Expect(GetMuonResolvedTitleBarBrowserId(0, 0) == 0,
+                "missing title bar browser id should remain missing");
+}
+
+static bool TestTitleBarBrowserWindowRegistrationResolution() {
+  return Expect(ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(false,
+                                                                    false),
+                "plain title bar window registration should remain last-wins") &&
+         Expect(ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(false,
+                                                                    true),
+                "custom title bar controller window should replace a plain "
+                "window") &&
+         Expect(ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(true,
+                                                                    true),
+                "custom title bar controller window should replace another "
+                "controller window") &&
+         Expect(!ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(true,
+                                                                     false),
+                "plain window should not replace a custom title bar "
+                "controller window");
+}
+
+static bool TestTitleBarControllerRegistrationRemoval() {
+  char registered_window_storage = 0;
+  char requested_window_storage = 0;
+  char registered_controller_storage = 0;
+  char requested_controller_storage = 0;
+  const auto registered_window =
+      reinterpret_cast<const CefWindow*>(&registered_window_storage);
+  const auto requested_window =
+      reinterpret_cast<const CefWindow*>(&requested_window_storage);
+  const auto registered_controller =
+      reinterpret_cast<const MuonTitleBarController*>(
+          &registered_controller_storage);
+  const auto requested_controller =
+      reinterpret_cast<const MuonTitleBarController*>(
+          &requested_controller_storage);
+
+  return Expect(ShouldRemoveRegisteredMuonTitleBarController(
+                    registered_window, registered_window,
+                    registered_controller, nullptr),
+                "same window should remove the title bar controller "
+                "registration") &&
+         Expect(ShouldRemoveRegisteredMuonTitleBarController(
+                    registered_window, requested_window,
+                    registered_controller, registered_controller),
+                "same controller should remove the title bar controller "
+                "registration even when CEF supplies another window wrapper") &&
+         Expect(!ShouldRemoveRegisteredMuonTitleBarController(
+                    registered_window, requested_window,
+                    registered_controller, requested_controller),
+                "unrelated window and controller should not remove the title "
+                "bar controller registration");
+}
+
+static bool TestTitleBarIconNativeScaleFactors() {
+  return Expect(GetMuonTitleBarIconPngScaleFactors(16, 16) ==
+                    std::vector<float>{1.0f},
+                "16px title bar icon should use the default scale only") &&
+         Expect(GetMuonTitleBarIconPngScaleFactors(32, 32) ==
+                    (std::vector<float>{1.0f, 2.0f}),
+                "32px title bar icon should include a 16 DIP scale") &&
+         Expect(GetMuonTitleBarIconPngScaleFactors(256, 256) ==
+                    (std::vector<float>{1.0f, 2.0f}),
+                "embedded default title bar icon should use physical 16 and "
+                "32px native bitmaps") &&
+         Expect(GetMuonTitleBarIconPngScaleFactors(32, 16) ==
+                    std::vector<float>{1.0f},
+                "non-square title bar icon should not add a native scale");
 }
 
 static bool TestCustomTitleBarWindowDelegate() {
@@ -295,9 +570,19 @@ static bool TestCustomTitleBarWindowDelegate() {
 int main() {
   return TestBrowserFunctionDefinitions() && TestWindowTitleFallback() &&
                  TestInitialWindowShowState() && TestTitleBarManifestParsing() &&
+                 TestInitialWindowWorkAreaBounds() &&
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&
+                 TestPageDraggableRegionSearchKeys() &&
                  TestNativeForwarderRegistersChildWindows() &&
+                 TestNativeWheelForwarderTargetWindowSelection() &&
+                 TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() &&
+                 TestTitleBarControlHitTesting() &&
+                 TestWindowIconUpdateBehavior() &&
+                 TestTitleBarBrowserIdResolution() &&
+                 TestTitleBarBrowserWindowRegistrationResolution() &&
+                 TestTitleBarControllerRegistrationRemoval() &&
+                 TestTitleBarIconNativeScaleFactors() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0
              : 1;

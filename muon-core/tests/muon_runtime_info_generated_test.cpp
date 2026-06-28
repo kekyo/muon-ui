@@ -16,6 +16,10 @@
 #define EXPECTED_TARGET_NAME ""
 #endif
 
+#ifndef EXPECTED_CEF_TARGET_NAME
+#define EXPECTED_CEF_TARGET_NAME ""
+#endif
+
 #ifndef EXPECTED_MUON_CORE_VERSION
 #ifdef MUON_CORE_VERSION
 #define EXPECTED_MUON_CORE_VERSION MUON_CORE_VERSION
@@ -57,6 +61,9 @@ int main() {
   }
   if (!StringEquals(kMuonRuntimeInfo.target, EXPECTED_TARGET_NAME)) {
     return 4;
+  }
+  if (!StringEquals(kMuonRuntimeInfo.cef_target, EXPECTED_CEF_TARGET_NAME)) {
+    return 14;
   }
   if (!StringEquals(kMuonRuntimeInfo.muon_core_version,
                     EXPECTED_MUON_CORE_VERSION)) {

@@ -28,6 +28,7 @@
 
 #define MUON_PROGRESS_WIDTH 360
 #define MUON_PROGRESS_HEIGHT 110
+#define MUON_PROGRESS_BAR_HEIGHT 6
 #define MUON_PROGRESS_FRAME_MILLISECONDS 33
 #define MUON_PROGRESS_FRAME_NANOSECONDS 33000000ULL
 #define MUON_PROGRESS_PULSE_PERIOD_NANOSECONDS 1600000000ULL
@@ -44,6 +45,7 @@ static unsigned long long progress_position(const MuonPrepareProgress *event,
   return (event->current * width) / event->total;
 }
 
+#if !defined(_WIN32) || defined(MUON_BOOTSTRAP_PROGRESS_TEST)
 static uint16_t pulse_position_from_elapsed(
     unsigned long long elapsed_nanoseconds, uint16_t range) {
   if (range == 0) {
@@ -59,6 +61,7 @@ static uint16_t pulse_position_from_elapsed(
   return (uint16_t)((forward * range) /
                     MUON_PROGRESS_PULSE_PERIOD_NANOSECONDS);
 }
+#endif
 
 #ifdef MUON_BOOTSTRAP_PROGRESS_TEST
 unsigned short muon_bootstrap_progress_test_pulse_position(
@@ -73,7 +76,8 @@ typedef struct {
   HINSTANCE instance;
   HWND window;
   HWND status_label;
-  HWND progress_bar;
+  HWND determinate_progress_bar;
+  HWND marquee_progress_bar;
   HANDLE update_event;
   HANDLE thread;
   DWORD thread_id;
@@ -83,12 +87,20 @@ typedef struct {
   int has_event;
   int stop_requested;
   int shown;
+  int marquee_running;
 } MuonBootstrapProgressBackend;
 
 static LRESULT CALLBACK progress_window_proc(HWND window, UINT message,
                                              WPARAM wparam, LPARAM lparam) {
-  if (message == WM_CLOSE) {
+  switch (message) {
+  case WM_CLOSE:
     return 0;
+  case WM_CTLCOLORSTATIC:
+    SetTextColor((HDC)wparam, GetSysColor(COLOR_WINDOWTEXT));
+    SetBkColor((HDC)wparam, GetSysColor(COLOR_BTNFACE));
+    return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+  default:
+    break;
   }
   return DefWindowProcA(window, message, wparam, lparam);
 }
@@ -98,14 +110,10 @@ static int register_progress_window_class(HINSTANCE instance) {
   memset(&window_class, 0, sizeof(window_class));
   window_class.lpfnWndProc = progress_window_proc;
   window_class.hInstance = instance;
-  window_class.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+  window_class.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
   window_class.lpszClassName = "MuonBootstrapProgressWindow";
   return RegisterClassA(&window_class) != 0 ||
          GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
-}
-
-static unsigned long long monotonic_nanoseconds(void) {
-  return GetTickCount64() * 1000000ULL;
 }
 
 static int ensure_window(MuonBootstrapProgressBackend *backend) {
@@ -117,10 +125,8 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
   }
   INITCOMMONCONTROLSEX controls;
   controls.dwSize = sizeof(controls);
-  controls.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES;
-  if (!InitCommonControlsEx(&controls)) {
-    return 0;
-  }
+  controls.dwICC = ICC_PROGRESS_CLASS;
+  const int has_progress_control = InitCommonControlsEx(&controls);
   const int x =
       (GetSystemMetrics(SM_CXSCREEN) - MUON_PROGRESS_WIDTH) / 2;
   const int y =
@@ -137,22 +143,82 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
       0, "STATIC", "", WS_CHILD | WS_VISIBLE, 20, 18,
       MUON_PROGRESS_WIDTH - 40, 22, backend->window, NULL, backend->instance,
       NULL);
-  backend->progress_bar = CreateWindowExA(
-      0, PROGRESS_CLASSA, "", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 20, 52,
-      MUON_PROGRESS_WIDTH - 40, 22, backend->window, NULL, backend->instance,
-      NULL);
-  if (backend->status_label == NULL || backend->progress_bar == NULL) {
+  if (has_progress_control) {
+    backend->determinate_progress_bar = CreateWindowExA(
+        0, PROGRESS_CLASSA, "", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 20, 52,
+        MUON_PROGRESS_WIDTH - 40, MUON_PROGRESS_BAR_HEIGHT, backend->window,
+        NULL, backend->instance, NULL);
+    backend->marquee_progress_bar = CreateWindowExA(
+        0, PROGRESS_CLASSA, "", WS_CHILD | PBS_MARQUEE, 20, 52,
+        MUON_PROGRESS_WIDTH - 40, MUON_PROGRESS_BAR_HEIGHT, backend->window,
+        NULL, backend->instance, NULL);
+    if (backend->determinate_progress_bar == NULL ||
+        backend->marquee_progress_bar == NULL) {
+      if (backend->determinate_progress_bar != NULL) {
+        DestroyWindow(backend->determinate_progress_bar);
+      }
+      if (backend->marquee_progress_bar != NULL) {
+        DestroyWindow(backend->marquee_progress_bar);
+      }
+      backend->determinate_progress_bar = NULL;
+      backend->marquee_progress_bar = NULL;
+    }
+  }
+  if (backend->status_label == NULL) {
     DestroyWindow(backend->window);
     backend->window = NULL;
     backend->status_label = NULL;
-    backend->progress_bar = NULL;
+    backend->determinate_progress_bar = NULL;
+    backend->marquee_progress_bar = NULL;
     return 0;
   }
-  SendMessageA(backend->progress_bar, PBM_SETRANGE, 0, MAKELPARAM(0, 1000));
+  if (backend->determinate_progress_bar != NULL) {
+    SendMessageA(backend->determinate_progress_bar, PBM_SETRANGE, 0,
+                 MAKELPARAM(0, 1000));
+  }
   ShowWindow(backend->window, SW_SHOWNORMAL);
   UpdateWindow(backend->window);
   backend->shown = 1;
   return 1;
+}
+
+static void set_progress_mode(MuonBootstrapProgressBackend *backend,
+                              int marquee) {
+  if (backend->determinate_progress_bar == NULL ||
+      backend->marquee_progress_bar == NULL) {
+    return;
+  }
+  if (marquee) {
+    ShowWindow(backend->determinate_progress_bar, SW_HIDE);
+    ShowWindow(backend->marquee_progress_bar, SW_SHOW);
+    if (!backend->marquee_running) {
+      SendMessageA(backend->marquee_progress_bar, PBM_SETMARQUEE, TRUE,
+                   MUON_PROGRESS_FRAME_MILLISECONDS);
+      backend->marquee_running = 1;
+    }
+  } else {
+    if (backend->marquee_running) {
+      SendMessageA(backend->marquee_progress_bar, PBM_SETMARQUEE, FALSE, 0);
+      backend->marquee_running = 0;
+    }
+    ShowWindow(backend->marquee_progress_bar, SW_HIDE);
+    ShowWindow(backend->determinate_progress_bar, SW_SHOW);
+  }
+}
+
+static void dispose_window(MuonBootstrapProgressBackend *backend) {
+  if (backend->marquee_progress_bar != NULL && backend->marquee_running) {
+    SendMessageA(backend->marquee_progress_bar, PBM_SETMARQUEE, FALSE, 0);
+  }
+  if (backend->window != NULL) {
+    DestroyWindow(backend->window);
+    backend->window = NULL;
+    backend->status_label = NULL;
+    backend->determinate_progress_bar = NULL;
+    backend->marquee_progress_bar = NULL;
+    backend->shown = 0;
+    backend->marquee_running = 0;
+  }
 }
 
 static void pump_messages(void) {
@@ -167,13 +233,17 @@ static void update_window_controls(MuonBootstrapProgressBackend *backend,
                                    const MuonPrepareProgress *event,
                                    const char *status) {
   SetWindowTextA(backend->status_label, status);
+  if (backend->determinate_progress_bar == NULL ||
+      backend->marquee_progress_bar == NULL) {
+    return;
+  }
   if (event->determinate && event->total != 0) {
     const unsigned long long position = progress_position(event, 1000);
-    SendMessageA(backend->progress_bar, PBM_SETPOS, (WPARAM)position, 0);
+    set_progress_mode(backend, 0);
+    SendMessageA(backend->determinate_progress_bar, PBM_SETPOS,
+                 (WPARAM)position, 0);
   } else {
-    const uint16_t position =
-        pulse_position_from_elapsed(monotonic_nanoseconds(), 1000);
-    SendMessageA(backend->progress_bar, PBM_SETPOS, (WPARAM)position, 0);
+    set_progress_mode(backend, 1);
   }
 }
 
@@ -215,13 +285,7 @@ static DWORD WINAPI progress_thread_main(LPVOID parameter) {
     }
     update_window_controls(backend, &event, status);
   }
-  if (backend->window != NULL) {
-    DestroyWindow(backend->window);
-    backend->window = NULL;
-    backend->status_label = NULL;
-    backend->progress_bar = NULL;
-    backend->shown = 0;
-  }
+  dispose_window(backend);
   return 0;
 }
 
@@ -369,7 +433,7 @@ static void draw_progress(MuonBootstrapProgressBackend *backend,
   const uint16_t bar_x = 24;
   const uint16_t bar_y = 68;
   const uint16_t bar_width = backend->width - 48;
-  const uint16_t bar_height = 6;
+  const uint16_t bar_height = MUON_PROGRESS_BAR_HEIGHT;
   fill_rect(backend, MUON_PROGRESS_BACKGROUND_COLOR, 0, 0, backend->width,
             backend->height);
   fill_rect(backend, 0x606060, bar_x, bar_y, bar_width, bar_height);

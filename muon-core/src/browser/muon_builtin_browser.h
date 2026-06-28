@@ -33,6 +33,8 @@ enum class MuonBuiltinBrowserFunctionKind {
   Restore,
   SetTitleBarVisibility,
   SetTitleBarIcon,
+  GetWindowBounds,
+  SetWindowBounds,
   Close,
   Shutdown,
   Recycle,

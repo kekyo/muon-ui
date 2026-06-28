@@ -384,9 +384,9 @@ exit 1
       stdout?: string;
     };
     const output = `${execError.stdout ?? ""}\n${execError.stderr ?? ""}`;
-    const logPath = join(root, ".deps", "package-logs", "linuxarm64.log");
+    const logPath = join(root, ".deps", "package-logs", "linux-arm64.log");
     expect(execError.code).toBe(1);
-    expect(output).toContain("Linux package target failed: linuxarm64");
+    expect(output).toContain("Linux package target failed: linux-arm64");
     expect(output).toContain("exit code 42");
     expect(output).toContain(logPath);
     await expect(readFile(logPath, "utf8")).resolves.toContain(
@@ -400,10 +400,10 @@ exit 1
     ) as { bin?: Record<string, string> };
     const cliStat = await stat(resolve("dist/cli.cjs"));
     const nativePrepareStat = await stat(
-      resolve("dist/native/linux64/muon-prepare"),
+      resolve("dist/native/linux-amd64/muon-prepare"),
     );
     const nativeBootstrapStat = await stat(
-      resolve("dist/native/linux64/muon-bootstrap"),
+      resolve("dist/native/linux-amd64/muon-bootstrap"),
     );
 
     expect(packageJson.bin?.muon).toBe("./dist/cli.cjs");
@@ -427,12 +427,13 @@ exit 1
     expect(stdout).toContain("Usage: muon [options] [command]");
     expect(stdout).toContain("build");
     expect(stdout).toContain("dev");
+    expect(stdout).toContain("pack");
     expect(stdout).toContain("init");
     expect(stdout).toContain("prepare");
     expect(stdout).toContain("embed-config");
   });
 
-  it("adds the Muon staging directory through the muon CLI init command", async () => {
+  it("adds Muon generated directories through the muon CLI init command", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-"));
     cleanupDirectories.push(root);
     const cliPath = resolve("dist", "cli.cjs");
@@ -448,11 +449,11 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain(".gitignore");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\nartifacts/\n",
     );
   });
 
-  it("keeps an existing Muon gitignore entry when the muon CLI init command is repeated", async () => {
+  it("appends a missing Muon dist gitignore entry when the muon CLI init command is repeated", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-existing-"));
     cleanupDirectories.push(root);
     await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\n");
@@ -464,7 +465,26 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\n",
+      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+    );
+  });
+
+  it("keeps existing Muon generated gitignore entries when the muon CLI init command is repeated", async () => {
+    const root = await mkdtemp(join(tmpdir(), "muon-init-generated-existing-"));
+    cleanupDirectories.push(root);
+    await writeFile(
+      join(root, ".gitignore"),
+      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+    );
+    const cliPath = resolve("dist", "cli.cjs");
+
+    await execFileAsync(process.execPath, [cliPath, "init"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
     );
   });
 
@@ -479,7 +499,7 @@ exit 1
     expect(files).not.toContain("dist/prepare.d.ts");
     expect(files).not.toContain("dist/vite-internals.d.ts");
     expect(files).not.toContain("dist/vite.d.ts");
-    expect(files).not.toContain("dist/runtime/linux64/muon-runtime.json");
+    expect(files).not.toContain("dist/runtime/linux-amd64/muon-runtime.json");
     expect(files.some((file) => file.endsWith(".d.ts.map"))).toBe(false);
     expect(files).not.toContain("dist/muon-prepare");
     expect(files).not.toContain("dist/muon-bootstrap");
@@ -495,12 +515,21 @@ exit 1
 const reloadResult: Promise<void> = window.muon.browser.reload();
 const resetZoomResult: Promise<void> = window.muon.browser.resetZoom();
 const recycleResult: Promise<void> = window.muon.browser.recycle();
+const windowBoundsResult: Promise<MuonWindowBounds> = window.muon.browser.getWindowBounds();
+const setWindowBoundsResult: Promise<void> = window.muon.browser.setWindowBounds({
+  x: 0,
+  y: 0,
+  width: 800,
+  height: 600,
+});
 const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(true);
 const titleBarIconResult: Promise<void> = window.muon.browser.setTitleBarIcon("icons/app.png");
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
 void recycleResult;
+void windowBoundsResult;
+void setWindowBoundsResult;
 void titleBarVisibilityResult;
 void titleBarIconResult;
 void existsResult;
@@ -512,12 +541,21 @@ void existsResult;
 const reloadResult: Promise<void> = window.muon.browser.reload();
 const resetZoomResult: Promise<void> = window.muon.browser.resetZoom();
 const recycleResult: Promise<void> = window.muon.browser.recycle();
+const windowBoundsResult: Promise<MuonWindowBounds> = window.muon.browser.getWindowBounds();
+const setWindowBoundsResult: Promise<void> = window.muon.browser.setWindowBounds({
+  x: 0,
+  y: 0,
+  width: 800,
+  height: 600,
+});
 const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(false);
 const clearTitleBarIconResult: Promise<void> = window.muon.browser.setTitleBarIcon(null);
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
 void recycleResult;
+void windowBoundsResult;
+void setWindowBoundsResult;
 void titleBarVisibilityResult;
 void clearTitleBarIconResult;
 void existsResult;
@@ -531,7 +569,7 @@ void existsResult;
 
 const defaultPlugin = muon();
 const plugin = muon({
-  muonPath: "../muon-core/.run/dev-linux64-debug",
+  muonPath: "../muon-core/.run/dev-linux-amd64-debug",
   cefPath: "../muon-core/.cef/cef_binary_fake_linux64_minimal",
   open: false,
   enableDebugger: false,

@@ -10,6 +10,7 @@ required_commands=(
   x86_64-w64-mingw32-gcc
   x86_64-w64-mingw32-ar
   x86_64-w64-mingw32-ranlib
+  x86_64-w64-mingw32-objdump
   node
   tar
 )
@@ -21,7 +22,21 @@ for command_name in "${required_commands[@]}"; do
   fi
 done
 
-bash "${SCRIPT_DIR}/build.sh" check Release windows64
+bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
+
+bootstrap_executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap.exe"
+bootstrap_dump="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap-resources.txt"
+x86_64-w64-mingw32-objdump -x "${bootstrap_executable}" > "${bootstrap_dump}"
+sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
+  "${bootstrap_dump}" > "${bootstrap_dump}.section"
+if ! grep -Fq 'Entry: ID: 0x000003' "${bootstrap_dump}.section" ||
+    ! grep -Fq 'Entry: ID: 0x00000e' "${bootstrap_dump}.section"; then
+  echo "muon-bootstrap.exe is missing Windows icon resources." >&2
+  exit 1
+fi
+node "${SCRIPT_DIR}/scripts/assert-windows-icon.mjs" \
+  "${bootstrap_executable}" \
+  "${SCRIPT_DIR}/../images/muon-bootstrap.ico"
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
@@ -38,7 +53,7 @@ wine_prefix="${temp_dir}/wineprefix"
 archive_root="${source_dir}/cef_binary_fake_windows64_minimal"
 archive_path="${source_dir}/cef.tar.bz2"
 catalog_path="${source_dir}/source-catalog.json"
-executable="${SCRIPT_DIR}/.run/check-windows64-release/muon-prepare.exe"
+executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-prepare.exe"
 
 cat > "${slow_writer_src}" <<'C_EOF'
 #define WIN32_LEAN_AND_MEAN
@@ -114,7 +129,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${progress_harness_exe}" \
   "${progress_harness_src}" \
-  "${SCRIPT_DIR}/.run/check-windows64-release/libmuon-prepare.a" \
+  "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-prepare.a" \
   "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
   "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a"
 
@@ -169,7 +184,7 @@ output_windows="$(winepath -w "${output_dir}")"
 WINEDEBUG=-all WINEPREFIX="${wine_prefix}" MUON_CEF_CATALOG_URL="${catalog_windows}" \
   wine "${executable}" buildtime \
     --version fake-cef \
-    --target windows64 \
+    --target windows-amd64 \
     --output-dir "${output_windows}" \
     --cache-dir "${cache_windows}" \
     --quiet \
@@ -182,7 +197,7 @@ const { join } = require("node:path");
 
 const [resultPath, outputDir] = process.argv.slice(2);
 const result = JSON.parse(readFileSync(resultPath, "utf8"));
-if (result.version !== "fake-cef" || result.target !== "windows64") {
+if (result.version !== "fake-cef" || result.target !== "windows-amd64") {
   throw new Error("Wine extraction result JSON did not contain the expected target.");
 }
 for (const relativePath of [

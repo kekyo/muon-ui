@@ -258,21 +258,6 @@ static bool GetV8BufferView(CefRefPtr<CefV8Value> value,
   return true;
 }
 
-static bool FindMuonSharedBufferEntryInList(
-    const std::vector<MuonSharedBufferEntry>& entries,
-    size_t value_index,
-    MuonSharedBufferEntry* entry) {
-  for (const auto& candidate : entries) {
-    if (candidate.value_index == value_index) {
-      if (entry != nullptr) {
-        *entry = candidate;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
 static bool ApplyMuonSharedBufferPlaceholders(
     CefRefPtr<CefListValue> values,
     const std::vector<MuonSharedBufferEntry>& entries,
@@ -1247,8 +1232,7 @@ bool MuonV8Handler::SendFunctionResult(int call_id,
         break;
       }
       MuonSharedBufferEntry entry;
-      if (!FindMuonSharedBufferEntryInList(shared_message.entries, 3,
-                                            &entry)) {
+      if (!FindMuonSharedBufferEntry(shared_message.entries, 3, &entry)) {
         args->SetBool(1, false);
         args->SetString(2, "Renderer function buffer_view payload is missing");
         args->SetNull(3);

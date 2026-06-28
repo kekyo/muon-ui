@@ -78,6 +78,18 @@ declare global {
     readonly triggerUpdate: () => Promise<void>;
   }
 
+  /** Top-level Muon window bounds in DIP screen coordinates. */
+  interface MuonWindowBounds {
+    /** Left edge of the window in screen coordinates. */
+    readonly x: number;
+    /** Top edge of the window in screen coordinates. */
+    readonly y: number;
+    /** Width of the top-level window. */
+    readonly width: number;
+    /** Height of the top-level window. */
+    readonly height: number;
+  }
+
   /** Browser and native window operations for the current Muon window. */
   interface MuonBrowserApi {
     /**
@@ -174,6 +186,25 @@ declare global {
      * @returns A promise that resolves when restoring the window is requested.
      */
     readonly restore: () => Promise<void>;
+    /**
+     * Return bounds for the current top-level Muon window.
+     *
+     * @returns A promise for window bounds in DIP screen coordinates.
+     * @remarks The bounds describe the top-level window, not just the browser
+     * content area, and therefore include Muon custom title bars or native
+     * window frames when present.
+     */
+    readonly getWindowBounds: () => Promise<MuonWindowBounds>;
+    /**
+     * Request new bounds for the current top-level Muon window.
+     *
+     * @param bounds - New window bounds in DIP screen coordinates.
+     * @returns A promise that resolves when the bounds change is requested.
+     * @remarks `x`, `y`, `width`, and `height` must be safe integers in the
+     * signed 32-bit range. `width` and `height` must be greater than zero.
+     * Wayland compositors may ignore or adjust requested position and size.
+     */
+    readonly setWindowBounds: (bounds: MuonWindowBounds) => Promise<void>;
     /**
      * Show or hide the current Muon custom title bar.
      *
@@ -901,6 +932,8 @@ declare global {
     readonly executableName: string;
     /** Muon runtime target name. */
     readonly target: string;
+    /** Internal CEF target name used for catalog lookup. */
+    readonly cefTarget: string;
     /** muon-core build identity. */
     readonly muonCore: MuonCoreRuntimeInfo;
     /** CEF build selected when muon-core was built. */

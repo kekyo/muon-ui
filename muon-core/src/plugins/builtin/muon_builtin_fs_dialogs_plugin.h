@@ -17,6 +17,13 @@ inline constexpr char kMuonFsDialogsOwnerBrowserIdOption[] =
     "__muonOwnerBrowserId";
 
 /**
+ * Internal options key used to associate a modal dialog with a native owner
+ * window handle.
+ */
+inline constexpr char kMuonFsDialogsOwnerWindowHandleOption[] =
+    "__muonOwnerWindowHandle";
+
+/**
  * Optional internal symbol exported by the built-in filesystem dialogs plugin.
  */
 inline constexpr char kMuonFsDialogsCancelOwnerBrowserSymbol[] =

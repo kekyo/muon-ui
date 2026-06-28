@@ -20,6 +20,7 @@ import {
 } from "./embed-config.js";
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
 import { runMuonDev, type MuonDevOptions } from "./dev.js";
+import { packMuonApp, type MuonPackOptions } from "./pack.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
 
 interface PrepareCommandOptions {
@@ -51,6 +52,23 @@ interface BuildCommandOptions {
   config: string | undefined;
   outDir: string | undefined;
   name: string | undefined;
+  appId: string | undefined;
+  json: boolean | undefined;
+}
+
+interface PackCommandOptions {
+  type: string[];
+  target: string[];
+  all: boolean | undefined;
+  config: string | undefined;
+  name: string | undefined;
+  appId: string | undefined;
+  packageDirectory: string | undefined;
+  artifactsDir: string | undefined;
+  packageName: string | undefined;
+  packageVersion: string | undefined;
+  description: string | undefined;
+  author: string | undefined;
   json: boolean | undefined;
 }
 
@@ -72,6 +90,10 @@ const readTargetValues = (value: string): string[] => {
 };
 
 const appendTargetValues = (value: string, previous: string[]): string[] => {
+  return [...previous, ...readTargetValues(value)];
+};
+
+const appendPackTypeValues = (value: string, previous: string[]): string[] => {
   return [...previous, ...readTargetValues(value)];
 };
 
@@ -135,6 +157,9 @@ const runBuildCommand = async (
   if (commandOptions.name !== undefined) {
     buildOptions.appName = commandOptions.name;
   }
+  if (commandOptions.appId !== undefined) {
+    buildOptions.appId = commandOptions.appId;
+  }
 
   const result = await buildMuonApp(buildOptions);
   if (commandOptions.json === true) {
@@ -142,6 +167,63 @@ const runBuildCommand = async (
   } else {
     for (const target of result.targets) {
       console.log(target.outputPath);
+    }
+  }
+};
+
+const runPackCommand = async (
+  commandOptions: PackCommandOptions,
+): Promise<void> => {
+  const targets = commandOptions.target;
+  if (commandOptions.all === true && targets.length > 0) {
+    throw new Error("Specify either --all or --target, not both.");
+  }
+
+  const packOptions: MuonPackOptions = {
+    root: process.cwd(),
+    types: commandOptions.type,
+    environment: process.env,
+  };
+  if (targets.length > 0) {
+    packOptions.targets = targets;
+  }
+  if (commandOptions.all !== undefined) {
+    packOptions.allTargets = commandOptions.all;
+  }
+  if (commandOptions.config !== undefined) {
+    packOptions.configPath = commandOptions.config;
+  }
+  if (commandOptions.name !== undefined) {
+    packOptions.appName = commandOptions.name;
+  }
+  if (commandOptions.appId !== undefined) {
+    packOptions.appId = commandOptions.appId;
+  }
+  if (commandOptions.packageDirectory !== undefined) {
+    packOptions.packageDirectory = commandOptions.packageDirectory;
+  }
+  if (commandOptions.artifactsDir !== undefined) {
+    packOptions.artifactsDir = commandOptions.artifactsDir;
+  }
+  if (commandOptions.packageName !== undefined) {
+    packOptions.packageName = commandOptions.packageName;
+  }
+  if (commandOptions.packageVersion !== undefined) {
+    packOptions.packageVersion = commandOptions.packageVersion;
+  }
+  if (commandOptions.description !== undefined) {
+    packOptions.description = commandOptions.description;
+  }
+  if (commandOptions.author !== undefined) {
+    packOptions.author = commandOptions.author;
+  }
+
+  const result = await packMuonApp(packOptions);
+  if (commandOptions.json === true) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    for (const artifact of result.artifacts) {
+      console.log(artifact.path);
     }
   }
 };
@@ -298,7 +380,7 @@ const createCliCommand = (): Command => {
     .description("Build CEF-free Muon app distribution directories")
     .option(
       "--target <target>",
-      "target alias or comma-separated target aliases",
+      "public target or comma-separated public targets",
       appendTargetValues,
       [],
     )
@@ -307,9 +389,40 @@ const createCliCommand = (): Command => {
     .option("--config <path>", "muon config path")
     .option("--out-dir <path>", "output root directory")
     .option("--name <name>", "launcher file name")
+    .option("--app-id <id>", "stable application identifier")
     .option("--json", "write result as JSON")
     .action(async (options: BuildCommandOptions) => {
       await runBuildCommand(options);
+    });
+
+  program
+    .command("pack")
+    .description("Build and package a Muon app")
+    .requiredOption(
+      "-t, --type <type>",
+      "package type or comma-separated package types: zip, deb, nsis",
+      appendPackTypeValues,
+      [],
+    )
+    .option(
+      "--target <target>",
+      "public target or comma-separated public targets",
+      appendTargetValues,
+      [],
+    )
+    .option("--all", "build all supported targets")
+    .option("--config <path>", "muon config path")
+    .option("--name <name>", "launcher file name")
+    .option("--app-id <id>", "stable application identifier")
+    .option("--package-directory <path>", "Muon package dist directory")
+    .option("--artifacts-dir <path>", "package artifact output directory")
+    .option("--package-name <name>", "package name override")
+    .option("--package-version <version>", "package version override")
+    .option("--description <text>", "package description override")
+    .option("--author <text>", "package author override")
+    .option("--json", "write result as JSON")
+    .action(async (options: PackCommandOptions) => {
+      await runPackCommand(options);
     });
 
   const devCommand = program

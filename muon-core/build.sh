@@ -16,19 +16,19 @@ host_prepare_target() {
   machine="$(uname -m)"
   case "${system}:${machine}" in
     Linux:x86_64|Linux:amd64)
-      printf '%s\n' linux64
+      printf '%s\n' linux-amd64
       ;;
     Linux:armv7l|Linux:armv7*|Linux:armhf)
-      printf '%s\n' linuxarm
+      printf '%s\n' linux-armhf
       ;;
     Linux:aarch64|Linux:arm64)
-      printf '%s\n' linuxarm64
+      printf '%s\n' linux-arm64
       ;;
     MINGW*:i686|MSYS*:i686|CYGWIN*:i686)
-      printf '%s\n' windows32
+      printf '%s\n' windows-i686
       ;;
     MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64)
-      printf '%s\n' windows64
+      printf '%s\n' windows-amd64
       ;;
     *)
       echo "Unsupported muon-prepare host: ${system} ${machine}" >&2
@@ -39,7 +39,7 @@ host_prepare_target() {
 
 prepare_executable_name() {
   case "$1" in
-    windows32|windows64)
+    windows-i686|windows-amd64)
       printf '%s\n' muon-prepare.exe
       ;;
     *)
@@ -50,7 +50,7 @@ prepare_executable_name() {
 
 bootstrap_executable_name() {
   case "$1" in
-    windows32|windows64)
+    windows-i686|windows-amd64)
       printf '%s\n' muon-bootstrap.exe
       ;;
     *)
@@ -105,8 +105,70 @@ generate_core_version_header() {
     "${output_path}" >/dev/null
 }
 
+verify_windows_icon_resources() {
+  local executable_path="$1"
+  local label="$2"
+  local dump_path
+  local resources_path
+  dump_path="$(mktemp)"
+  resources_path="$(mktemp)"
+  "${OBJDUMP}" -x "${executable_path}" >"${dump_path}"
+  sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
+    "${dump_path}" >"${resources_path}"
+  if ! grep -Fq 'Entry: ID: 0x000003' "${resources_path}" ||
+      ! grep -Fq 'Entry: ID: 0x00000e' "${resources_path}"; then
+    echo "${label} is missing Windows icon resources: ${executable_path}" >&2
+    rm -f "${dump_path}" "${resources_path}"
+    return 1
+  fi
+  rm -f "${dump_path}" "${resources_path}"
+}
+
+patch_windows_cef_popup_settings() {
+  if [[ "${TARGET_NAME}" != windows* ]]; then
+    return
+  fi
+
+  local life_span_source_path="${CEF_ROOT}/libcef_dll/cpptoc/life_span_handler_cpptoc.cc"
+  local browser_view_delegate_source_path="${CEF_ROOT}/libcef_dll/cpptoc/views/browser_view_delegate_cpptoc.cc"
+
+  node -e '
+const fs = require("fs");
+const patches = [
+  {
+    sourcePath: process.argv[1],
+    marker: "Muon: tolerate CEF Windows popup settings without size",
+  },
+  {
+    sourcePath: process.argv[2],
+    marker: "Muon: tolerate CEF Windows browser view settings without size",
+  },
+];
+const guardPattern = /  if \(!template_util::has_valid_size\(settings\)\) {\n    DCHECK\(false\) << "invalid settings->\[base\.\]size";\n    return(?: 0| NULL)?;\n  }/g;
+for (const patch of patches) {
+  if (!fs.existsSync(patch.sourcePath)) {
+    continue;
+  }
+  let source = fs.readFileSync(patch.sourcePath, "utf8");
+  const replacement = `  if (!template_util::has_valid_size(settings)) {
+    // ${patch.marker}.
+    const_cast<struct _cef_browser_settings_t*>(settings)->size = sizeof(*settings);
+  }`;
+  let replacementCount = 0;
+  source = source.replace(guardPattern, () => {
+    replacementCount += 1;
+    return replacement;
+  });
+  if (replacementCount === 0 && !source.includes(patch.marker)) {
+    throw new Error(`CEF settings guard was not found: ${patch.sourcePath}`);
+  }
+  fs.writeFileSync(patch.sourcePath, source);
+}
+' "${life_span_source_path}" "${browser_view_delegate_source_path}"
+}
+
 BUILD_USAGE="${1:-dev}"
-USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux64|linuxarm|linuxarm64|mingw32|mingw64|win32|win64|windows32|windows64]"
+USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux-amd64|linux-armhf|linux-arm64|windows-i686|windows-amd64]"
 case "${BUILD_USAGE}" in
   dev|test|check|dist)
     ;;
@@ -132,7 +194,7 @@ case "${BUILD_TYPE}" in
     ;;
 esac
 
-TARGET="${3:-linux64}"
+TARGET="${3:-linux-amd64}"
 EXTRA_CMAKE_ARGS=("${@:4}")
 TOOLCHAIN_ARGS=()
 PROJECT_ARCH_ARGS=()
@@ -143,33 +205,31 @@ YYJSON_ARGS=()
 MINIZ_VERSION="3.1.1"
 MINIZ_ARGS=()
 case "${TARGET}" in
-  linux64|amd64|x64)
+  linux-amd64)
     CEF_ARCH="linux64"
-    TARGET_NAME="linux64"
+    TARGET_NAME="linux-amd64"
     PROJECT_ARCH_ARGS=("-DPROJECT_ARCH=x86_64")
     ;;
-  linuxarm|armv7l|armv7|armhf|arm)
+  linux-armhf)
     CEF_ARCH="linuxarm"
-    TARGET_NAME="linuxarm"
+    TARGET_NAME="linux-armhf"
     PROJECT_ARCH_ARGS=("-DPROJECT_ARCH=arm")
     ;;
-  linuxarm64|arm64|aarch64)
+  linux-arm64)
     CEF_ARCH="linuxarm64"
-    TARGET_NAME="linuxarm64"
+    TARGET_NAME="linux-arm64"
     PROJECT_ARCH_ARGS=("-DPROJECT_ARCH=arm64")
     ;;
-  linux32|i686|i386|ia32|x86)
-    echo "Unsupported target: ${TARGET}. Linux 32-bit CEF builds are discontinued after CEF 101." >&2
-    exit 1
-    ;;
-  mingw32|win32|windows32)
+  windows-i686)
     CEF_ARCH="windows32"
-    TARGET_NAME="windows32"
+    TARGET_NAME="windows-i686"
+    OBJDUMP="${OBJDUMP:-i686-w64-mingw32-objdump}"
     TOOLCHAIN_ARGS=("-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_DIR}/cmake/toolchains/mingw32.cmake")
     ;;
-  mingw64|win64|windows64)
+  windows-amd64)
     CEF_ARCH="windows64"
-    TARGET_NAME="windows64"
+    TARGET_NAME="windows-amd64"
+    OBJDUMP="${OBJDUMP:-x86_64-w64-mingw32-objdump}"
     TOOLCHAIN_ARGS=("-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_DIR}/cmake/toolchains/mingw64.cmake")
     ;;
   *)
@@ -179,14 +239,16 @@ case "${TARGET}" in
 esac
 
 case "${TARGET_NAME}" in
-  windows32)
+  windows-i686)
     command -v i686-w64-mingw32-g++ >/dev/null || { echo "i686-w64-mingw32-g++ is required" >&2; exit 1; }
+    command -v "${OBJDUMP}" >/dev/null || { echo "${OBJDUMP} is required" >&2; exit 1; }
     "${SCRIPT_DIR}/build_libffi_mingw32.sh" mingw32
     LIBFFI_CACHE_ARGS=("-U" "LIBFFI_*" "-U" "pkgcfg_lib_LIBFFI_*")
     LIBFFI_ARGS=("-DLIBFFI_ROOT=${OUTPUT_ROOT}/.deps/libffi-mingw32")
     ;;
-  windows64)
+  windows-amd64)
     command -v x86_64-w64-mingw32-g++ >/dev/null || { echo "x86_64-w64-mingw32-g++ is required" >&2; exit 1; }
+    command -v "${OBJDUMP}" >/dev/null || { echo "${OBJDUMP} is required" >&2; exit 1; }
     "${SCRIPT_DIR}/build_libffi_mingw32.sh" mingw64
     LIBFFI_CACHE_ARGS=("-U" "LIBFFI_*" "-U" "pkgcfg_lib_LIBFFI_*")
     LIBFFI_ARGS=("-DLIBFFI_ROOT=${OUTPUT_ROOT}/.deps/libffi-mingw64")
@@ -221,13 +283,15 @@ CEF_PACKAGE="${CEF_PREPARE_METADATA[0]}"
 CEF_PACKAGE_URL="${CEF_PREPARE_METADATA[1]}"
 expected="${CEF_PREPARE_METADATA[2]}"
 CEF_ARCHIVE_SIZE="${CEF_PREPARE_METADATA[3]}"
+patch_windows_cef_popup_settings
 
 BUILD_TYPE_LOWER="${BUILD_TYPE,,}"
 BUILD_DIR="${OUTPUT_ROOT}/.build/${BUILD_USAGE}/${TARGET_NAME}/${BUILD_TYPE_LOWER}"
 MUON_CORE_VERSION_HEADER_PATH="${BUILD_DIR}/generated/muon_core_version_generated.h"
 generate_core_version_header "${MUON_CORE_VERSION_HEADER_PATH}"
+MUON_CEF_API_VERSION="${MUON_CEF_API_VERSION:-}"
 CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.json"
-if [[ "${TARGET_NAME}" == linux* ]]; then
+if [[ "${TARGET_NAME}" == linux-* ]]; then
   CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.linux.json"
 fi
 CONFIG_COPY_MODE="always"
@@ -268,11 +332,13 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DMUON_CONFIG_COPY_MODE="${CONFIG_COPY_MODE}" \
   -DMUON_RUNTIME_INCLUDE_APP_FILES="${RUNTIME_INCLUDE_APP_FILES}" \
   -DMUON_TARGET_NAME="${TARGET_NAME}" \
+  -DMUON_CEF_TARGET_NAME="${CEF_ARCH}" \
   -DMUON_CEF_VERSION="${CEF_VERSION}" \
   -DMUON_CEF_PACKAGE="${CEF_PACKAGE}" \
   -DMUON_CEF_PACKAGE_URL="${CEF_PACKAGE_URL}" \
   -DMUON_CEF_SHA1="${expected}" \
   -DMUON_CEF_SIZE="${CEF_ARCHIVE_SIZE}" \
+  -DMUON_CEF_API_VERSION="${MUON_CEF_API_VERSION}" \
   -DMUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_PATH}" \
   -DMUON_CORE_VERSION="${MUON_CORE_VERSION:-}" \
   -DMUON_CORE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH:-}" \
@@ -299,3 +365,10 @@ PREPARE_OUTPUT_DIR="$(prepare_output_dir "${BUILD_USAGE}" "${TARGET_NAME}" "${BU
 cp -f \
   "${PREPARE_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
   "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"
+
+if [[ "${TARGET_NAME}" == windows-* ]]; then
+  verify_windows_icon_resources "${RUNTIME_DIR}/muon-core.exe" "muon-core"
+  verify_windows_icon_resources \
+    "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
+    "muon-bootstrap"
+fi

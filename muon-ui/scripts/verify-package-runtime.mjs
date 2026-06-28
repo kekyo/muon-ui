@@ -7,35 +7,35 @@ import { access, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRuntimeTargets = {
-  linux64: {
+  "linux-amd64": {
     nativePrepare: "muon-prepare",
     nativeBootstrap: "muon-bootstrap",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
-  linuxarm: {
+  "linux-armhf": {
     nativePrepare: "muon-prepare",
     nativeBootstrap: "muon-bootstrap",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
-  linuxarm64: {
+  "linux-arm64": {
     nativePrepare: "muon-prepare",
     nativeBootstrap: "muon-bootstrap",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
-  windows32: {
+  "windows-i686": {
     nativePrepare: "muon-prepare.exe",
     nativeBootstrap: "muon-bootstrap.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
   },
-  windows64: {
+  "windows-amd64": {
     nativePrepare: "muon-prepare.exe",
     nativeBootstrap: "muon-bootstrap.exe",
     coreExecutable: "muon-core.exe",
@@ -92,7 +92,7 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
   }
-  if (target === "windows32" || target === "windows64") {
+  if (target.startsWith("windows-")) {
     await assertHasMatchingFile(runtimePath, /^libgcc_s_.*-1\.dll$/);
     await assertExists(join(runtimePath, "libstdc++-6.dll"));
   }

@@ -6,6 +6,8 @@
 
 #include "browser/muon_window_state.h"
 
+#include <algorithm>
+
 #if defined(OS_LINUX) && defined(CEF_X11)
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -73,6 +75,24 @@ void SetMuonWindowFullscreen(CefRefPtr<CefWindow> window, bool fullscreen) {
 #if defined(OS_LINUX) && defined(CEF_X11)
   SetX11FullscreenState(window->GetWindowHandle(), fullscreen);
 #endif
+}
+
+CefRect GetMuonCenteredWindowBounds(const CefRect& work_area,
+                                    const CefSize& preferred_size) {
+  if (work_area.width <= 0 || work_area.height <= 0) {
+    return CefRect(work_area.x, work_area.y, 0, 0);
+  }
+  const auto width =
+      preferred_size.width <= 0
+          ? work_area.width
+          : std::min(preferred_size.width, work_area.width);
+  const auto height =
+      preferred_size.height <= 0
+          ? work_area.height
+          : std::min(preferred_size.height, work_area.height);
+  const auto x = work_area.x + (work_area.width - width) / 2;
+  const auto y = work_area.y + (work_area.height - height) / 2;
+  return CefRect(x, y, width, height);
 }
 
 void ShowMuonWindow(CefRefPtr<CefWindow> window) {

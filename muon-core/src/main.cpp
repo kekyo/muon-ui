@@ -134,6 +134,7 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
 
   CefSettings settings;
   settings.no_sandbox = false;
+  settings.use_views_default_popup = true;
   if (config.cdp.enable) {
     settings.remote_debugging_port = config.cdp.port;
   }

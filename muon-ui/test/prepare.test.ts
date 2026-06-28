@@ -223,7 +223,7 @@ const createPrepareFixture = async (
   const cacheDir = await createTemporaryDirectory("muon-prepare-cache-");
   const sourceDir = await createTemporaryDirectory("muon-prepare-source-");
   const projectPath = await createTemporaryDirectory("muon-prepare-project-");
-  const stageDir = join(projectPath, ".muon", "linux64");
+  const stageDir = join(projectPath, ".muon", "linux-amd64");
   const cef = getEmbeddedCefArchive();
   const versions: readonly CatalogVersion[] = catalogVersions ?? [
     {
@@ -295,6 +295,28 @@ const writeBootstrapIni = async (
   await writeFile(join(runtimePath, "muon-bootstrap.ini"), content);
 };
 
+const writeEmbeddedBootstrap = async (
+  fixture: PrepareFixture,
+  config: Record<string, unknown>,
+  launcherName = "myapp",
+): Promise<string> => {
+  const configPath = join(fixture.projectPath, `${launcherName}.json`);
+  const appBootstrapPath = join(fixture.muonPath, launcherName);
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  await embedMuonConfigInBootstrapFile({
+    bootstrapPath: bootstrapExecutablePath,
+    configPath,
+    outputPath: appBootstrapPath,
+  });
+  await chmod(appBootstrapPath, 0o755);
+  return appBootstrapPath;
+};
+
+const getLinuxPortableStateRuntimePath = (
+  stateHome: string,
+  appId: string,
+): string => join(stateHome, appId, "runtime", "linux-amd64");
+
 const findCachedFile = async (
   root: string,
   fileName: string,
@@ -331,7 +353,7 @@ const prepareFixture = async (
     muonPath: fixture.muonPath,
     cefPath: options.cefPath,
     stageDir: options.stageDir,
-    target: "linux64",
+    target: "linux-amd64",
     cacheDir: fixture.cacheDir,
     force: options.force,
     quiet: options.quiet,
@@ -349,6 +371,9 @@ const requireStagePath = (
   expect(result.stagePath).toBeDefined();
   return result.stagePath ?? "";
 };
+
+const sanitizePrepareLockKey = (value: string): string =>
+  value.replace(/[^A-Za-z0-9._-]/g, "_");
 
 const buildProgressHarness = async (root: string): Promise<string> => {
   const harnessPath = join(root, "prepare-progress-harness.c");
@@ -435,7 +460,7 @@ const runProgressHarness = async (
 ): Promise<string[]> => {
   const { stdout } = await execFileAsync(
     harnessPath,
-    [fixture.muonPath, "linux64", fixture.cacheDir],
+    [fixture.muonPath, "linux-amd64", fixture.cacheDir],
     {
       encoding: "utf8",
       env: {
@@ -486,17 +511,34 @@ afterEach(async () => {
 
 describe("muon prepare target resolution", () => {
   it("resolves supported Node platforms to Muon runtime targets", () => {
-    expect(getDefaultMuonPrepareTarget("linux", "x64")).toBe("linux64");
-    expect(getDefaultMuonPrepareTarget("linux", "arm")).toBe("linuxarm");
-    expect(getDefaultMuonPrepareTarget("linux", "arm64")).toBe("linuxarm64");
-    expect(getDefaultMuonPrepareTarget("win32", "ia32")).toBe("windows32");
-    expect(getDefaultMuonPrepareTarget("win32", "x64")).toBe("windows64");
+    expect(getDefaultMuonPrepareTarget("linux", "x64")).toBe("linux-amd64");
+    expect(getDefaultMuonPrepareTarget("linux", "arm")).toBe("linux-armhf");
+    expect(getDefaultMuonPrepareTarget("linux", "arm64")).toBe("linux-arm64");
+    expect(getDefaultMuonPrepareTarget("win32", "ia32")).toBe("windows-i686");
+    expect(getDefaultMuonPrepareTarget("win32", "x64")).toBe("windows-amd64");
   });
 
   it("rejects unsupported Linux i686 targets", () => {
     expect(() => getDefaultMuonPrepareTarget("linux", "ia32")).toThrow(
       "Unsupported Muon prepare target: platform=linux, arch=ia32",
     );
+  });
+
+  it("rejects CEF-derived target IDs in public prepare options", async () => {
+    await expect(
+      runMuonPrepare({
+        muonPath: "/tmp/muon-runtime",
+        cefPath: undefined,
+        stageDir: undefined,
+        target: "linux64",
+        cacheDir: undefined,
+        force: false,
+        quiet: true,
+        prepareExecutablePath: "/tmp/muon-prepare",
+        environment: process.env,
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("Unsupported Muon prepare target: linux64");
   });
 });
 
@@ -739,7 +781,7 @@ lastCatalogUpdateUnix=0
       muonPath: fixture.muonPath,
       cefPath: undefined,
       stageDir: fixture.stageDir,
-      target: "linux64",
+      target: "linux-amd64",
       cacheDir: fixture.cacheDir,
       force: false,
       quiet: false,
@@ -773,7 +815,7 @@ lastCatalogUpdateUnix=0
         "--version",
         "fake-cef",
         "--target",
-        "linux64",
+        "linux-amd64",
         "--output-dir",
         outputDir,
         "--cache-dir",
@@ -794,6 +836,7 @@ lastCatalogUpdateUnix=0
       archivePath: string;
       version: string;
       target: string;
+      cefTarget: string;
       distribution: string;
       artifact: {
         fileName: string;
@@ -807,7 +850,8 @@ lastCatalogUpdateUnix=0
       join(fixture.cacheDir, "artifacts", fixture.archiveFileName),
     );
     expect(result.version).toBe("fake-cef");
-    expect(result.target).toBe("linux64");
+    expect(result.target).toBe("linux-amd64");
+    expect(result.cefTarget).toBe("linux64");
     expect(result.distribution).toBe("minimal");
     expect(result.artifact.fileName).toBe(fixture.archiveFileName);
     await expect(
@@ -845,7 +889,7 @@ lastCatalogUpdateUnix=0
         "--version",
         "fake-cef",
         "--target",
-        "linux64",
+        "linux-amd64",
         "--output-dir",
         outputDir,
         "--cache-dir",
@@ -886,7 +930,7 @@ lastCatalogUpdateUnix=0
             "--version",
             "fake-cef",
             "--target",
-            "linux64",
+            "linux-amd64",
             "--output-dir",
             outputDir,
             "--cache-dir",
@@ -952,7 +996,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--json",
@@ -971,15 +1015,17 @@ lastCatalogUpdateUnix=0
     expect(result.stagePath).toBe(fixture.stageDir);
     expect(lines[0]).toMatch(/^muon-prepare: .+-[0-9a-f]+: Started\.$/);
     expect(stderr).toContain(
-      "Downloading CEF binary: version=fake-cef target=linux64 distribution=minimal",
+      "Downloading CEF binary: version=fake-cef target=linux-amd64 distribution=minimal",
     );
     expect(stderr).toContain(
-      "CEF binary downloaded: version=fake-cef target=linux64 distribution=minimal",
+      "CEF binary downloaded: version=fake-cef target=linux-amd64 distribution=minimal",
     );
+    expect(stderr).toContain("Installing CEF runtime...");
     expect(stderr).toContain(
       "CEF files copied to staging: version=fake-cef files=3",
     );
     expect(stderr).toContain("Muon files copied to staging: files=4");
+    expect(stderr).toContain("Starting Muon...");
   });
 
   it("does not write progress messages when native quiet mode is enabled", async () => {
@@ -994,7 +1040,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "-q",
@@ -1038,9 +1084,11 @@ lastCatalogUpdateUnix=0
 
     const stderr = chunks.join("");
     expect(stderr).toContain(
-      "Downloading CEF binary: version=fake-cef target=linux64 distribution=minimal",
+      "Downloading CEF binary: version=fake-cef target=linux-amd64 distribution=minimal",
     );
+    expect(stderr).toContain("Installing CEF runtime...");
     expect(stderr).toContain("Muon files copied to staging: files=4");
+    expect(stderr).toContain("Starting Muon...");
   });
 
   it("reports structured progress for bootstrap in-place CEF preparation", async () => {
@@ -1098,17 +1146,17 @@ lastCatalogUpdateUnix=0
     expect(chunks).toEqual([]);
   });
 
-  it("adds .muon to gitignore when staging under the project .muon directory", async () => {
+  it("adds Muon generated directories to gitignore when staging under the project .muon directory", async () => {
     const fixture = await createPrepareFixture();
 
     await prepareFixture(fixture);
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe(".muon/\n");
+    ).resolves.toBe(".muon/\ndist-muon-*/\nartifacts/\n");
   });
 
-  it("does not duplicate an existing .muon gitignore entry", async () => {
+  it("appends a missing Muon dist gitignore entry without duplicating .muon", async () => {
     const fixture = await createPrepareFixture();
     await writeFile(
       join(fixture.projectPath, ".gitignore"),
@@ -1119,7 +1167,7 @@ lastCatalogUpdateUnix=0
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe("dist*/\n.muon/\n");
+    ).resolves.toBe("dist*/\n.muon/\ndist-muon-*/\nartifacts/\n");
   });
 
   it("stages a flat CEF cache directory", async () => {
@@ -1184,6 +1232,51 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(results[0]?.stagePath ?? "", ".muon-ready.json")),
     ).resolves.toBeUndefined();
+  });
+
+  it("recovers an abandoned staging lock from an interrupted prepare", async () => {
+    const fixture = await createPrepareFixture();
+    const lockPath = join(
+      dirname(fixture.stageDir),
+      `.muon-stage-${sanitizePrepareLockKey(fixture.stageDir)}.lock`,
+    );
+    await mkdir(lockPath, { recursive: true });
+    const staleTime = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleTime, staleTime);
+
+    const { stdout } = await execFileAsync(
+      prepareExecutablePath,
+      [
+        "runtime",
+        "--muon-path",
+        fixture.muonPath,
+        "--cef-path",
+        fixture.cefPath,
+        "--stage-dir",
+        fixture.stageDir,
+        "--target",
+        "linux-amd64",
+        "--cache-dir",
+        fixture.cacheDir,
+        "--quiet",
+        "--json",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+        },
+        timeout: 10_000,
+      },
+    );
+
+    const result = JSON.parse(stdout) as { stagePath: string };
+    expect(result.stagePath).toBe(fixture.stageDir);
+    await expect(
+      access(join(fixture.stageDir, "muon-core")),
+    ).resolves.toBeUndefined();
+    await expect(access(lockPath)).rejects.toThrow();
   });
 
   it("reuses the staged runtime while its ready marker matches", async () => {
@@ -1276,7 +1369,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--json",
@@ -1310,7 +1403,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--quiet",
@@ -1331,8 +1424,11 @@ lastCatalogUpdateUnix=0
     expect(stderr).toBe("");
   });
 
-  it("bootstraps an in-place portable runtime and forwards the core exit code", async () => {
+  it("bootstraps a portable runtime in the user state directory and forwards the core exit code", async () => {
     const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const appId = "scope.sample-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1347,9 +1443,9 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await copyFile(bootstrapExecutablePath, appBootstrapPath);
-    await chmod(appBootstrapPath, 0o755);
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId },
+    });
 
     await expect(
       execFileAsync(appBootstrapPath, ["--alpha", "two words"], {
@@ -1359,6 +1455,7 @@ exit 17
           ...process.env,
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
         },
       }),
     ).rejects.toMatchObject({ code: 17 });
@@ -1368,16 +1465,20 @@ exit 17
     ).resolves.toBe("--alpha\ntwo words\n");
     await expect(
       readFile(join(outputDirectory, "cwd.txt"), "utf8"),
-    ).resolves.toBe(`${fixture.muonPath}\n`);
+    ).resolves.toBe(`${stateRuntimePath}\n`);
     await expect(
-      access(join(fixture.muonPath, "libcef.so")),
-    ).resolves.toBeUndefined();
+      readFile(join(stateRuntimePath, "assets", "app.txt"), "utf8"),
+    ).resolves.toBe("app asset\n");
+    await expect(
+      readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
+    ).resolves.toBe("cef library\n");
+    await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
     await expect(
       access(join(fixture.muonPath, "icudtl.dat")),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
     await expect(
       access(join(fixture.muonPath, "locales", "en-US.pak")),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
   });
 
   it("hides bootstrap preparation diagnostics when a progress window is available", async () => {
@@ -1386,6 +1487,7 @@ exit 17
       return;
     }
     const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1399,9 +1501,9 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await copyFile(bootstrapExecutablePath, appBootstrapPath);
-    await chmod(appBootstrapPath, 0o755);
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId: "progress.sample" },
+    });
 
     await expect(
       execFileAsync(
@@ -1419,6 +1521,7 @@ exit 17
             ...process.env,
             MUON_CACHE_DIR: fixture.cacheDir,
             MUON_CEF_CATALOG_URL: fixture.catalogPath,
+            XDG_STATE_HOME: stateHome,
           },
         },
       ),
@@ -1453,11 +1556,9 @@ catalogRefreshIntervalSeconds=604800
 lastCatalogUpdateUnix=0
 `,
     );
-    const configPath = join(fixture.projectPath, "muon.json");
-    await writeFile(
-      configPath,
-      `{ "bootstrap": { "defaultVersionPolicy": "compat-latest" } }\n`,
-    );
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const appId = "compat.sample";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1471,13 +1572,12 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await embedMuonConfigInBootstrapFile({
-      bootstrapPath: bootstrapExecutablePath,
-      configPath,
-      outputPath: appBootstrapPath,
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: {
+        appId,
+        defaultVersionPolicy: "compat-latest",
+      },
     });
-    await chmod(appBootstrapPath, 0o755);
 
     await expect(
       execFileAsync(appBootstrapPath, [], {
@@ -1487,32 +1587,33 @@ exit 17
           ...process.env,
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
         },
       }),
     ).rejects.toMatchObject({ code: 17 });
 
     await expect(
-      readFile(join(fixture.muonPath, "libcef.so"), "utf8"),
+      readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
     ).resolves.toBe("bootstrap compatible cef library\n");
+    await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
     await expect(
-      readFile(join(fixture.muonPath, "muon-bootstrap.ini"), "utf8"),
+      readFile(join(stateRuntimePath, "muon-bootstrap.ini"), "utf8"),
     ).resolves.not.toContain("versionPolicy=");
   });
 
   it("rejects an invalid embedded defaultVersionPolicy during bootstrap", async () => {
     const fixture = await createPrepareFixture();
-    const configPath = join(fixture.projectPath, "muon.json");
-    await writeFile(
-      configPath,
-      `{ "bootstrap": { "defaultVersionPolicy": "invalid" } }\n`,
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const appBootstrapPath = await writeEmbeddedBootstrap(
+      fixture,
+      {
+        bootstrap: {
+          appId: "invalid-policy-app",
+          defaultVersionPolicy: "invalid",
+        },
+      },
+      "invalid-policy-app",
     );
-    const appBootstrapPath = join(fixture.muonPath, "myapp");
-    await embedMuonConfigInBootstrapFile({
-      bootstrapPath: bootstrapExecutablePath,
-      configPath,
-      outputPath: appBootstrapPath,
-    });
-    await chmod(appBootstrapPath, 0o755);
 
     await expect(
       execFileAsync(appBootstrapPath, [], {
@@ -1522,6 +1623,7 @@ exit 17
           ...process.env,
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
         },
       }),
     ).rejects.toThrow(/defaultVersionPolicy|CEF version policy/);

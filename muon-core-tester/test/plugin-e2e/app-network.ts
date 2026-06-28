@@ -16,11 +16,12 @@ import {
   TEST_NETWORK_ALLOW_PATTERNS,
   TEST_PLUGIN_ALLOW_PATTERNS,
   access,
+  addPopupSizeFeatures,
   appendFile,
   cdpCommandTimeoutMs,
+  cleanupWindowsRemoteTestProcesses,
   connectToMuonCdp,
   describeMuonPluginBridge,
-  expectNoNewPageTarget,
   getCurrentTargetIds,
   join,
   mkdir,
@@ -40,15 +41,68 @@ import {
   waitForNetworkResponse,
   waitForNewPageTarget,
   waitForPageTargetUrl,
+  waitForProcessExit,
   withMuon,
   writeFile,
 } from "./shared.js";
+import { isWindowsRemoteE2e } from "./windows-context.js";
 import type { CdpDriver, RuntimeEvaluateResponse } from "./shared.js";
 
 interface StoredZipEntry {
   name: string;
   content: string;
 }
+
+interface RuntimeConsoleAPICalledParams {
+  type?: string;
+  args?: Array<{
+    value?: unknown;
+  }>;
+}
+
+const waitForConsoleMessage = async (
+  driver: CdpDriver,
+  type: string,
+  messageFragment: string,
+  timeoutMs: number,
+): Promise<RuntimeConsoleAPICalledParams> =>
+  await new Promise<RuntimeConsoleAPICalledParams>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: (() => void) | undefined = undefined;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      unsubscribe?.();
+      reject(
+        new Error(
+          `Timed out waiting for ${type} console message containing ${messageFragment}`,
+        ),
+      );
+    }, timeoutMs);
+
+    unsubscribe = driver.on<RuntimeConsoleAPICalledParams>(
+      "Runtime.consoleAPICalled",
+      (params) => {
+        if (params.type !== type) {
+          return;
+        }
+        const matches = params.args?.some(
+          (argument) =>
+            typeof argument.value === "string" &&
+            argument.value.includes(messageFragment),
+        );
+        if (matches !== true || settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe?.();
+        resolve(params);
+      },
+    );
+  });
 
 const createCrc32Table = (): Uint32Array => {
   const table = new Uint32Array(256);
@@ -142,14 +196,17 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
     const running = await startDebugMuon([], ["asset://main/**"]);
     let driver: CdpDriver | undefined = undefined;
     try {
-      await expect(
-        waitForPageTargetUrl(MUON_APP_URL, targetTimeoutMs),
-      ).resolves.toMatchObject({
+      const appTarget = await waitForPageTargetUrl(
+        MUON_APP_URL,
+        targetTimeoutMs,
+      );
+      expect(appTarget).toMatchObject({
         type: "page",
         url: MUON_APP_URL,
       });
       driver = await connectToMuonCdp({
         port: MUON_PORT,
+        targetId: appTarget.id,
         timeoutMs: cdpCommandTimeoutMs,
       });
 
@@ -191,9 +248,13 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
 
   it("loads app assets from asset.sourcePath ZIP storage", async () => {
     const configDirectory = join(DEBUG_MUON_DIRECTORY, ".muon-test-config");
-    const archivePath = join(configDirectory, "assets.zip");
+    const archiveDirectory = isWindowsRemoteE2e()
+      ? await mkdtemp(join(tmpdir(), "muon-assets-"))
+      : configDirectory;
+    const archivePath = join(archiveDirectory, "assets.zip");
+    const assetSourcePath = isWindowsRemoteE2e() ? archivePath : "./assets.zip";
     const assetSalt = "deadbeef";
-    await mkdir(configDirectory, { recursive: true });
+    await mkdir(archiveDirectory, { recursive: true });
     const assetSignature = await writeStoredZipArchive(
       archivePath,
       [
@@ -218,7 +279,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
       null,
       true,
       undefined,
-      "./assets.zip",
+      assetSourcePath,
       assetSignature,
       assetSalt,
     );
@@ -251,60 +312,168 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
       await stopMuon(running, driver);
-      await rm(archivePath, { force: true });
+      await rm(isWindowsRemoteE2e() ? archiveDirectory : archivePath, {
+        force: true,
+        recursive: isWindowsRemoteE2e(),
+      });
     }
   });
 
   it("routes console, plugin, and CEF logs through the unified logger", async () => {
-    await withMuon(["muon_test_plugin_helpers"], async (driver, running) => {
+    const emitLogs = async (driver: CdpDriver): Promise<void> => {
       await driver.evaluate<void>(`
-        console.debug("muon e2e console debug");
-        console.info("muon e2e console info");
-        console.warn("muon e2e console warning");
-        console.error("muon e2e console error");
+        (async () => {
+          await new Promise((resolve) => {
+            const script = document.createElement("script");
+            script.textContent = ${JSON.stringify(`
+              console.debug("muon e2e console debug");
+              console.info("muon e2e console info");
+              console.warn("muon e2e console warning");
+              console.error("muon e2e console error");
+              window.dispatchEvent(new Event("muon-e2e-console-script-complete"));
+            `)};
+            window.addEventListener(
+              "muon-e2e-console-script-complete",
+              () => resolve(undefined),
+              { once: true },
+            );
+            document.documentElement.appendChild(script);
+            script.remove();
+          });
+        })()
       `);
       await driver.evaluate<void>(
         `globalThis.muon.test.helpers.helperLogInfo("muon e2e plugin helper")`,
       );
-      await appendFile(
-        join(
-          DEBUG_MUON_DIRECTORY,
-          ".muon-test-config",
-          ".profile",
-          "muon-cef.log",
-        ),
-        "[0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward\n",
-      );
+    };
 
-      await waitForMuonStderr(
-        running,
-        "muon e2e console debug",
-        targetTimeoutMs,
+    const assertLogs = async (
+      waitForLog: (expected: string) => Promise<void>,
+      injectCefLog: boolean,
+    ): Promise<void> => {
+      if (injectCefLog) {
+        await appendFile(
+          join(
+            DEBUG_MUON_DIRECTORY,
+            ".muon-test-config",
+            ".profile",
+            "muon-cef.log",
+          ),
+          "[0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward\n",
+        );
+      }
+
+      if (!isWindowsRemoteE2e()) {
+        await waitForLog("muon e2e console debug");
+      }
+      await waitForLog("muon e2e console info");
+      await waitForLog("muon e2e console warning");
+      await waitForLog("muon e2e console error");
+      await waitForLog("][info][plugin] muon e2e plugin helper");
+      if (injectCefLog) {
+        await waitForLog(
+          "][error][cef] [0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward",
+        );
+      }
+    };
+
+    if (isWindowsRemoteE2e()) {
+      const logPath = join(
+        DEBUG_MUON_DIRECTORY,
+        ".muon-test-config",
+        "muon-e2e.log",
       );
-      await waitForMuonStderr(
-        running,
-        "muon e2e console info",
-        targetTimeoutMs,
+      const readLogContent = async (): Promise<string> => {
+        const deadline = Date.now() + targetTimeoutMs;
+        let lastError: unknown = undefined;
+        while (Date.now() < deadline) {
+          try {
+            return (await readFile(logPath, "utf8")) as string;
+          } catch (error) {
+            lastError = error;
+          }
+          await wait(100);
+        }
+        throw lastError;
+      };
+      const configPath = join(
+        DEBUG_MUON_DIRECTORY,
+        ".muon-test-config",
+        "muon.json",
       );
-      await waitForMuonStderr(
-        running,
-        "muon e2e console warning",
-        targetTimeoutMs,
+      const running = await startDebugMuon(
+        ["muon_test_plugin_helpers"],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        undefined,
+        TEST_PLUGIN_ALLOW_PATTERNS,
+        ["muon_test_plugin_helpers"],
+        TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+        [],
+        null,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          output: { path: "muon-e2e.log", type: "file" },
+          sources: {
+            console: "debug",
+            plugin: "info",
+          },
+        },
       );
-      await waitForMuonStderr(
-        running,
-        "muon e2e console error",
-        targetTimeoutMs,
-      );
-      await waitForMuonStderr(
-        running,
-        "][info][plugin] muon e2e plugin helper",
-        targetTimeoutMs,
-      );
-      await waitForMuonStderr(
-        running,
-        "][error][cef] [0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward",
-        targetTimeoutMs,
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon test</title>",
+          cdpCommandTimeoutMs,
+        );
+        await emitLogs(driver);
+        await driver.send("Browser.close", undefined);
+        driver.close();
+        driver = undefined;
+        await waitForProcessExit(running, targetTimeoutMs);
+        await cleanupWindowsRemoteTestProcesses();
+        const logContent = await readLogContent();
+        await assertLogs(async (expected) => {
+          expect(logContent).toContain(expected);
+        }, false);
+      } catch (error) {
+        const configContent = await readFile(configPath, "utf8").catch(
+          (readError) => String(readError),
+        );
+        const logContent = await readFile(logPath, "utf8").catch((readError) =>
+          String(readError),
+        );
+        throw new Error(
+          `${String(error)}\nMuon config:\n${String(
+            configContent,
+          )}\nMuon log:\n${String(logContent)}\nMuon stderr:\n${
+            running.stderr
+          }`,
+        );
+      } finally {
+        await stopMuon(running, driver);
+      }
+      return;
+    }
+
+    await withMuon(["muon_test_plugin_helpers"], async (driver, running) => {
+      await emitLogs(driver);
+      await assertLogs(
+        async (expected) =>
+          await waitForMuonStderr(running, expected, targetTimeoutMs),
+        true,
       );
     });
   });
@@ -320,9 +489,12 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
       await expect(driver.evaluate("document.location.href")).resolves.toBe(
         MUON_APP_URL,
       );
-      await expect(driver.evaluate("document.body.innerText")).resolves.toBe(
-        "Forbidden",
-      );
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain(MUON_APP_URL);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
@@ -644,13 +816,77 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           status: 403,
         },
       });
-      await expect(driver.evaluate("document.body.innerText")).resolves.toBe(
-        "Forbidden",
-      );
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain(blockedUrl);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
       await stopMuon(running, driver);
+    }
+  });
+
+  it("warns the initiating page console for non-allowlisted fetch requests", async () => {
+    let allowedHits = 0;
+    let blockedHits = 0;
+    const server = await startHttpServer((request, response) => {
+      if (request.url === "/allowed.html") {
+        allowedHits += 1;
+        response.setHeader("Content-Type", "text/html");
+        response.end("<!doctype html><title>allowed fetch initiator</title>");
+        return;
+      }
+      if (request.url?.startsWith("/blocked-fetch.json") === true) {
+        blockedHits += 1;
+        response.statusCode = 500;
+        response.end("blocked fetch target should not reach the server");
+        return;
+      }
+      response.statusCode = 404;
+      response.end("missing");
+    });
+    const allowedUrl = `${server.origin}/allowed.html`;
+    const blockedUrl = `${server.origin}/blocked-fetch.json?quote=%22&tag=%3Cscript%3E`;
+    const running = await startDebugMuon([], ["asset://main/**", allowedUrl]);
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(allowedUrl, cdpCommandTimeoutMs);
+      expect(allowedHits).toBe(1);
+      await driver.send("Runtime.enable");
+      const consoleEvent = waitForConsoleMessage(
+        driver,
+        "warning",
+        blockedUrl,
+        cdpCommandTimeoutMs,
+      );
+      const fetchResult = await driver.evaluate(`(async () => {
+        const response = await fetch(${JSON.stringify(blockedUrl)});
+        return {
+          status: response.status,
+          text: await response.text(),
+        };
+      })()`);
+      expect(fetchResult).toEqual({
+        status: 403,
+        text: "Forbidden",
+      });
+      const consoleMessage = await consoleEvent;
+      expect(consoleMessage.type).toBe("warning");
+      expect(consoleMessage.args?.[0]?.value).toContain("Forbidden");
+      expect(consoleMessage.args?.[0]?.value).toContain(blockedUrl);
+      expect(blockedHits).toBe(0);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+      await stopHttpServer(server.server);
     }
   });
 
@@ -971,7 +1207,8 @@ try {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
-      for (const features of ["noopener", "noreferrer"]) {
+      for (const baseFeatures of ["noopener", "noreferrer"]) {
+        const features = addPopupSizeFeatures(baseFeatures);
         const previousTargetIds = await getCurrentTargetIds();
         const openResponse = await driver.send<RuntimeEvaluateResponse>(
           "Runtime.evaluate",
@@ -979,7 +1216,7 @@ try {
             expression: `(() => {
               const popup = window.open(
                 ${JSON.stringify(MUON_APP_URL)},
-                ${JSON.stringify(`muonNoOpenerPopup-${features}`)},
+                ${JSON.stringify(`muonNoOpenerPopup-${baseFeatures}`)},
                 ${JSON.stringify(features)}
               );
               return {
@@ -993,7 +1230,7 @@ try {
           },
         );
         if (openResponse.exceptionDetails !== undefined) {
-          throw new Error(`${features} popup open script failed`);
+          throw new Error(`${baseFeatures} popup open script failed`);
         }
         expect(openResponse.result?.value).toEqual({
           returnedNull: true,
@@ -1025,30 +1262,87 @@ try {
     }
   });
 
-  it("cancels popup creation for network-blocked target URLs", async () => {
-    const popupUrl = `data:text/html,${encodeURIComponent(
-      "<title>muon blocked popup</title>",
-    )}`;
+  it("opens blocked popup targets with a visible console-observable error page", async () => {
+    const server = await startHttpServer((request, response) => {
+      response.statusCode = 500;
+      response.end("blocked popup target should not reach the server");
+    });
+    const popupUrl = `${server.origin}/blocked-popup.html`;
     const running = await startDebugMuon([], ["asset://main/**"]);
     let driver: CdpDriver | undefined = undefined;
+    let popupDriver: CdpDriver | undefined = undefined;
     try {
       driver = await connectToMuonCdp({
         port: MUON_PORT,
         timeoutMs: cdpCommandTimeoutMs,
       });
       const previousTargetIds = await getCurrentTargetIds();
+      const popupFeatures = addPopupSizeFeatures("");
       await driver.send<RuntimeEvaluateResponse>("Runtime.evaluate", {
         expression: `window.open(${JSON.stringify(
           popupUrl,
-        )}, "_blank"); "opened"`,
+        )}, "_blank", ${JSON.stringify(popupFeatures)}); "opened"`,
         returnByValue: true,
         userGesture: true,
       });
-      await expectNoNewPageTarget(previousTargetIds, 1000);
+      const popupTarget = await waitForNewPageTarget(
+        previousTargetIds,
+        targetTimeoutMs,
+        (target) => target.url === popupUrl,
+      );
+      popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+        targetId: popupTarget.id,
+      });
+      await popupDriver.send("Runtime.enable");
+      await popupDriver.send("Network.enable");
+      const consoleEvent = waitForConsoleMessage(
+        popupDriver,
+        "error",
+        popupUrl,
+        cdpCommandTimeoutMs,
+      );
+      const responseEvent = waitForNetworkResponse(
+        popupDriver,
+        popupUrl,
+        cdpCommandTimeoutMs,
+      );
+      await popupDriver.send("Page.reload", { ignoreCache: true });
+      const response = await responseEvent;
+      expect(response.response?.url).toBe(popupUrl);
+      expect(response.response?.status).toBe(403);
+      const consoleMessage = await consoleEvent;
+      expect(consoleMessage.type).toBe("error");
+      expect(consoleMessage.args?.[0]?.value).toContain("Forbidden");
+      expect(consoleMessage.args?.[0]?.value).toContain(popupUrl);
+      await expect(
+        popupDriver.evaluate("document.body.textContent"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        popupDriver.evaluate("document.body.textContent"),
+      ).resolves.toContain(popupUrl);
+      await expect(
+        popupDriver.evaluate(`(() => {
+          const style = getComputedStyle(document.body);
+          return {
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+          };
+        })()`),
+      ).resolves.toEqual({
+        backgroundColor: "rgb(255, 255, 255)",
+        color: "rgb(17, 17, 17)",
+      });
+      await expect(
+        popupDriver.evaluate("window.opener === null"),
+      ).resolves.toBe(true);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
+      popupDriver?.close();
       await stopMuon(running, driver);
+      await stopHttpServer(server.server);
     }
   });
 
@@ -1234,7 +1528,13 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
       TEST_PLUGIN_ALLOW_PATTERNS,
       [],
       TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
-      [{ scheme: "http", domain: "127.0.0.1", port: pageServer.port }],
+      [
+        {
+          scheme: "http",
+          domain: new URL(pageServer.origin).hostname,
+          port: pageServer.port,
+        },
+      ],
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -1292,7 +1592,13 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
       TEST_PLUGIN_ALLOW_PATTERNS,
       [],
       TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
-      [{ scheme: "http", domain: "127.0.0.1", port: redirectServer.port }],
+      [
+        {
+          scheme: "http",
+          domain: new URL(redirectServer.origin).hostname,
+          port: redirectServer.port,
+        },
+      ],
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -1317,9 +1623,12 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
           status: 403,
         },
       });
-      await expect(driver.evaluate("document.body.innerText")).resolves.toBe(
-        "Forbidden",
-      );
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain("Forbidden");
+      await expect(
+        driver.evaluate("document.body.innerText"),
+      ).resolves.toContain(blockedUrl);
       expect(blockedHits).toBe(0);
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);

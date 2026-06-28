@@ -137,6 +137,13 @@ bool CefListValueHasMuonSharedBufferPlaceholders(
 /**
  * Finds a decoded shared buffer entry by value index.
  */
+bool FindMuonSharedBufferEntry(const std::vector<MuonSharedBufferEntry>& entries,
+                                size_t value_index,
+                                MuonSharedBufferEntry* entry);
+
+/**
+ * Finds a decoded shared buffer entry by value index.
+ */
 bool FindMuonSharedBufferEntry(const MuonSharedBufferPayload& payload,
                                 size_t value_index,
                                 MuonSharedBufferEntry* entry);

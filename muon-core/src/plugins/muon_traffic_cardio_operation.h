@@ -10,6 +10,7 @@
 
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -85,6 +86,25 @@ std::string MuonTrafficCardioOperationExceptionMessage(
     std::exception_ptr exception);
 
 /**
+ * Invokes a native completion adapter and waits for its optional async tail.
+ *
+ * @remarks
+ * Some adapters post completion back to the UI dispatcher. Returning a promise
+ * keeps the operation alive until that posted callback has actually run.
+ */
+template <typename Completion, typename... Args>
+cardio::promise<void> InvokeMuonTrafficCompletion(Completion& completion,
+                                                 Args&&... args) {
+  if constexpr (std::is_void_v<std::invoke_result_t<Completion&, Args...>>) {
+    completion(std::forward<Args>(args)...);
+    co_return;
+  } else {
+    auto completion_promise = completion(std::forward<Args>(args)...);
+    co_await completion_promise;
+  }
+}
+
+/**
  * Bridges a cardio operation to native completion callbacks.
  *
  * @tparam Result Coroutine result type.
@@ -106,25 +126,31 @@ cardio::promise<void> RunMuonTrafficCardioOperation(
     Start start,
     Complete complete,
     Fail fail) {
+  auto failure_message = std::optional<std::string>{};
   try {
     if (!cancellation) {
-      fail(std::move(generic_error));
+      co_await InvokeMuonTrafficCompletion(fail, std::move(generic_error));
       co_return;
     }
+    auto start_gate = cardio::resolved();
+    co_await start_gate;
     auto cancellation_signal = cancellation->GetCancellation();
     cancellation_signal.throw_if_cancellation_requested();
     auto body = start(cancellation_signal);
     if constexpr (std::is_void_v<Result>) {
       co_await body;
-      complete();
+      co_await InvokeMuonTrafficCompletion(complete);
     } else {
-      co_await body;
-      auto result = std::move(body).unsafe_result();
-      complete(std::move(result));
+      auto result = std::move(co_await body);
+      co_await InvokeMuonTrafficCompletion(complete, std::move(result));
     }
+    co_return;
   } catch (...) {
-    fail(MuonTrafficCardioOperationExceptionMessage(
-        cancellation, std::move(generic_error), std::current_exception()));
+    failure_message = MuonTrafficCardioOperationExceptionMessage(
+        cancellation, std::move(generic_error), std::current_exception());
+  }
+  if (failure_message) {
+    co_await InvokeMuonTrafficCompletion(fail, std::move(*failure_message));
   }
 }
 

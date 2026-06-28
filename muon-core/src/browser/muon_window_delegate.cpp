@@ -10,12 +10,15 @@
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
+#include "log/muon_close_debug_log.h"
 
 #include "include/cef_browser.h"
 #include "include/cef_task.h"
 #include "include/views/cef_box_layout.h"
+#include "include/views/cef_display.h"
 #include "include/views/cef_panel.h"
 
+#include <sstream>
 #include <utility>
 
 MuonWindowDelegate::MuonWindowDelegate(
@@ -25,9 +28,11 @@ MuonWindowDelegate::MuonWindowDelegate(
     bool initial_title_bar_visibility,
     MuonTitleBarManifest title_bar_manifest,
     MuonTitleBarBackgroundColor title_bar_background_color,
-    CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler)
+    CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler,
+    MuonWindowCloseHandler* close_handler)
     : browser_view_(browser_view),
       shortcut_handler_(shortcut_handler),
+      close_handler_(close_handler),
       is_devtools_(is_devtools),
       initial_window_state_(initial_window_state),
       initial_title_bar_visibility_(initial_title_bar_visibility),
@@ -86,9 +91,49 @@ static void ApplyInitialWindowState(
   }
 }
 
+static bool GetInitialWindowWorkArea(CefRefPtr<CefWindow> window,
+                                     CefRect* work_area) {
+  if (!window || work_area == nullptr) {
+    return false;
+  }
+  auto display = window->GetDisplay();
+  if (!display) {
+    display = CefDisplay::GetPrimaryDisplay();
+  }
+  if (display) {
+    const auto display_work_area = display->GetWorkArea();
+    if (display_work_area.width > 0 && display_work_area.height > 0) {
+      *work_area = display_work_area;
+      return true;
+    }
+  }
+  return false;
+}
+
+static int GetMuonWindowDelegateBrowserId(
+    CefRefPtr<CefBrowserView> browser_view) {
+  if (!browser_view) {
+    return 0;
+  }
+  const auto browser = browser_view->GetBrowser();
+  return browser ? browser->GetIdentifier() : 0;
+}
+
 void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
   const auto title = is_devtools_ ? GetMuonDevToolsWindowTitle()
                                   : GetMuonDefaultWindowTitle();
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowCreated begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " custom_titlebar=" << FormatMuonCloseDebugBool(UseCustomTitleBar())
+        << " is_devtools=" << FormatMuonCloseDebugBool(is_devtools_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   window->SetTitle(title);
   if (UseCustomTitleBar()) {
     title_bar_controller_ = new MuonTitleBarController(
@@ -129,24 +174,64 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
     }
   } else if (browser_view_) {
     window->AddChildView(browser_view_);
+    RegisterMuonTitleBarBrowserView(window, browser_view_);
     if (!is_devtools_) {
       SetRegisteredMuonTitleBarVisibility(
           window, initial_title_bar_visibility_);
     }
   }
+  if (!initial_bounds_provided_) {
+    window->CenterWindow(GetPreferredSize(nullptr));
+  }
   ApplyInitialWindowState(window, initial_window_state_);
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowCreated end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " titlebar_controller="
+        << FormatMuonCloseDebugPointer(title_bar_controller_.get())
+        << " titlebar_view="
+        << FormatMuonCloseDebugPointer(title_bar_view_.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowDestroyed begin this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " titlebar_controller="
+        << FormatMuonCloseDebugPointer(title_bar_controller_.get())
+        << " titlebar_view="
+        << FormatMuonCloseDebugPointer(title_bar_view_.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
   UnregisterMuonNativeWheelForwarder(window);
   UnregisterMuonTitleBarController(window);
   if (title_bar_controller_) {
+    UnregisterMuonTitleBarController(title_bar_controller_);
     title_bar_controller_->DetachWindow();
   }
   title_bar_controller_ = nullptr;
   title_bar_view_ = nullptr;
   browser_view_ = nullptr;
   shortcut_handler_ = nullptr;
+  {
+    std::ostringstream log;
+    log << "WindowDelegate OnWindowDestroyed end this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get());
+    AppendMuonCloseDebugLog(log.str());
+  }
 }
 
 void MuonWindowDelegate::OnWindowActivationChanged(CefRefPtr<CefWindow> window,
@@ -162,19 +247,62 @@ void MuonWindowDelegate::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
   (void)new_bounds;
   if (title_bar_controller_) {
     title_bar_controller_->SetMaximized(window && window->IsMaximized());
-    title_bar_controller_->UpdateDraggableRegions();
+    title_bar_controller_->UpdateDraggableRegions(window);
   }
 }
 
 bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
+  {
+    std::ostringstream log;
+    log << "WindowDelegate CanClose enter this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser_view="
+        << FormatMuonCloseDebugPointer(browser_view_.get())
+        << " browser_id=" << GetMuonWindowDelegateBrowserId(browser_view_)
+        << " is_devtools=" << FormatMuonCloseDebugBool(is_devtools_);
+    AppendMuonCloseDebugLog(log.str());
+  }
   if (!browser_view_) {
+    AppendMuonCloseDebugLog(
+        "WindowDelegate CanClose return true reason=no_browser_view");
     return true;
   }
 
   auto browser = browser_view_->GetBrowser();
   if (browser) {
-    return browser->GetHost()->TryCloseBrowser();
+    const auto host = browser->GetHost();
+    const auto ready_to_be_closed = host && host->IsReadyToBeClosed();
+    const auto valid = browser->IsValid();
+    const auto has_pending_fs_dialog =
+        close_handler_ != nullptr &&
+        close_handler_->HasPendingFsDialogCallForBrowser(
+            browser->GetIdentifier());
+    const auto result = host && host->TryCloseBrowser();
+    const auto pending_fs_dialog_close_requested =
+        !result && has_pending_fs_dialog &&
+        close_handler_->RequestCloseAfterPendingFsDialog(browser, window);
+    std::ostringstream log;
+    log << "WindowDelegate CanClose browser this="
+        << FormatMuonCloseDebugPointer(this)
+        << " window=" << FormatMuonCloseDebugPointer(window.get())
+        << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+        << " host=" << FormatMuonCloseDebugPointer(host.get())
+        << " browser_id=" << browser->GetIdentifier()
+        << " valid=" << FormatMuonCloseDebugBool(valid)
+        << " ready_before_try="
+        << FormatMuonCloseDebugBool(ready_to_be_closed)
+        << " try_close_result=" << FormatMuonCloseDebugBool(result)
+        << " pending_fs_dialog="
+        << FormatMuonCloseDebugBool(has_pending_fs_dialog)
+        << " pending_fs_dialog_close_requested="
+        << FormatMuonCloseDebugBool(pending_fs_dialog_close_requested)
+        << " return=" << FormatMuonCloseDebugBool(result);
+    AppendMuonCloseDebugLog(log.str());
+    return result;
   }
+  AppendMuonCloseDebugLog(
+      "WindowDelegate CanClose return true reason=no_browser");
   return true;
 }
 
@@ -185,6 +313,16 @@ CefSize MuonWindowDelegate::GetPreferredSize(CefRefPtr<CefView> view) {
           ? 768 + title_bar_manifest_.height
           : 768;
   return CefSize(1024, height);
+}
+
+CefRect MuonWindowDelegate::GetInitialBounds(CefRefPtr<CefWindow> window) {
+  CefRect work_area;
+  if (!GetInitialWindowWorkArea(window, &work_area)) {
+    initial_bounds_provided_ = false;
+    return CefRect();
+  }
+  initial_bounds_provided_ = true;
+  return GetMuonCenteredWindowBounds(work_area, GetPreferredSize(nullptr));
 }
 
 bool MuonWindowDelegate::IsFrameless(CefRefPtr<CefWindow> window) {

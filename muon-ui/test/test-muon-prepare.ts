@@ -53,6 +53,7 @@ typedef struct {
   const char *name;
   const char *executable_name;
   const char *target;
+  const char *cef_target;
   const char *muon_core_version;
   const char *muon_core_git_commit_hash;
   const char *cef_reference_version;
@@ -71,6 +72,7 @@ ${payload}
 static const MuonRuntimeInfo kMuonRuntimeInfo = {
     "muon-core",
     ${cString(executableName)},
+    "linux-amd64",
     "linux64",
     "fake-muon-core",
     "fake-git-commit",
@@ -177,7 +179,7 @@ export const buildTestMuonPrepare = async (
     `BOOTSTRAP_TARGET=${bootstrapExecutablePath}`,
     `VERSION_HEADER=${versionHeader}`,
     `RUNTIME_INFO_HEADER=${runtimeInfoHeaderPath}`,
-    `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux64\\"`,
+    `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux-amd64\\"`,
     "BOOTSTRAP_CPPFLAGS=",
     "CFLAGS=-std=c99 -O0 -g -Wall -Wextra -pedantic",
     "LDFLAGS=-static",

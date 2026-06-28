@@ -282,6 +282,33 @@ static int tlv_read_bootstrap_default_version_policy(
   return 0;
 }
 
+static int tlv_read_bootstrap_app_id(MuonBootstrapTlvReader *reader,
+                                     unsigned long long count,
+                                     char **app_id) {
+  for (unsigned long long index = 0; index < count; index += 1) {
+    const char *key = NULL;
+    size_t key_length = 0;
+    if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
+      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      return -1;
+    }
+    if (tlv_key_equals(key, key_length, "appId")) {
+      char *value = NULL;
+      if (tlv_read_string_value(reader, &value) != 0) {
+        muon_print_error("muon.json bootstrap.appId must be a string.\n");
+        return -1;
+      }
+      *app_id = value;
+      return 1;
+    }
+    if (tlv_skip_value(reader) != 0) {
+      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      return -1;
+    }
+  }
+  return 0;
+}
+
 int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
   if (policy == NULL) {
     return -1;
@@ -328,6 +355,52 @@ int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
   }
   *policy = muon_duplicate_string("tested");
   return *policy == NULL ? -1 : 0;
+}
+
+int muon_bootstrap_get_embedded_app_id(char **app_id) {
+  if (app_id == NULL) {
+    return -1;
+  }
+  *app_id = NULL;
+  if (embedded_slot_is_empty()) {
+    return 0;
+  }
+
+  MuonBootstrapTlvReader reader = {
+      kMuonBootstrapEmbeddedConfigSlot,
+      MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE,
+      0};
+  unsigned long long count = 0;
+  if (tlv_read_object_value_count(&reader, &count) != 0) {
+    muon_print_error("Invalid embedded muon bootstrap config.\n");
+    return -1;
+  }
+  for (unsigned long long index = 0; index < count; index += 1) {
+    const char *key = NULL;
+    size_t key_length = 0;
+    if (tlv_read_raw_key(&reader, &key, &key_length) != 0) {
+      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      return -1;
+    }
+    if (tlv_key_equals(key, key_length, "bootstrap")) {
+      unsigned long long bootstrap_count = 0;
+      if (tlv_read_object_value_count(&reader, &bootstrap_count) != 0) {
+        muon_print_error("muon.json bootstrap must be an object.\n");
+        return -1;
+      }
+      const int result =
+          tlv_read_bootstrap_app_id(&reader, bootstrap_count, app_id);
+      if (result != 0) {
+        return result < 0 ? -1 : 0;
+      }
+      continue;
+    }
+    if (tlv_skip_value(&reader) != 0) {
+      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      return -1;
+    }
+  }
+  return 0;
 }
 
 void muon_bootstrap_config_init_defaults(MuonBootstrapConfig *config) {

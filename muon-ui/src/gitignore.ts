@@ -6,10 +6,24 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const muonGitignoreEntry = ".muon/";
+const muonGitignoreEntries = [".muon/", "dist-muon-*/", "artifacts/"] as const;
+
+type MuonGitignoreEntry = (typeof muonGitignoreEntries)[number];
+
+const muonGitignoreEntryAliases: Record<MuonGitignoreEntry, readonly string[]> =
+  {
+    ".muon/": [".muon/", "/.muon/", ".muon", "/.muon"],
+    "dist-muon-*/": [
+      "dist-muon-*/",
+      "/dist-muon-*/",
+      "dist-muon-*",
+      "/dist-muon-*",
+    ],
+    "artifacts/": ["artifacts/", "/artifacts/", "artifacts", "/artifacts"],
+  };
 
 /**
- * Result of ensuring the Muon staging directory is ignored by Git.
+ * Result of ensuring Muon generated directories are ignored by Git.
  */
 export interface MuonGitignoreResult {
   /**
@@ -26,20 +40,17 @@ export interface MuonGitignoreResult {
 const isMissingFileError = (error: unknown): boolean =>
   error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
 
-const hasMuonGitignoreEntry = (content: string): boolean =>
+const hasMuonGitignoreEntry = (
+  content: string,
+  entry: MuonGitignoreEntry,
+): boolean =>
   content
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .some(
-      (line) =>
-        line === muonGitignoreEntry ||
-        line === `/${muonGitignoreEntry}` ||
-        line === ".muon" ||
-        line === "/.muon",
-    );
+    .some((line) => muonGitignoreEntryAliases[entry].includes(line));
 
 /**
- * Adds the Muon staging directory to a project .gitignore file.
+ * Adds Muon generated directories to a project .gitignore file.
  *
  * @param root Project root containing the .gitignore file.
  * @returns Gitignore update result.
@@ -57,7 +68,10 @@ export const ensureMuonGitignoreEntry = async (
     }
   }
 
-  if (hasMuonGitignoreEntry(content)) {
+  const missingEntries = muonGitignoreEntries.filter(
+    (entry) => !hasMuonGitignoreEntry(content, entry),
+  );
+  if (missingEntries.length === 0) {
     return {
       gitignorePath,
       changed: false,
@@ -67,7 +81,7 @@ export const ensureMuonGitignoreEntry = async (
   const separator = content.length > 0 && !content.endsWith("\n") ? "\n" : "";
   await writeFile(
     gitignorePath,
-    `${content}${separator}${muonGitignoreEntry}\n`,
+    `${content}${separator}${missingEntries.join("\n")}\n`,
   );
   return {
     gitignorePath,

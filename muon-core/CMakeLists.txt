@@ -19,8 +19,8 @@ set(MUON_CONFIG_TEMPLATE "" CACHE FILEPATH
 set(MUON_CONFIG_COPY_MODE "always" CACHE STRING
   "How to copy MUON_CONFIG_TEMPLATE into the runtime directory.")
 set_property(CACHE MUON_CONFIG_COPY_MODE PROPERTY STRINGS always if_missing none)
-set(MUON_CEF_API_VERSION "14700" CACHE STRING
-  "Explicit CEF C API version used by muon-core and libcef_dll_wrapper.")
+set(MUON_CEF_API_VERSION "" CACHE STRING
+  "CEF C API version used by muon-core and libcef_dll_wrapper.")
 set(MUON_CEF_VERSION "" CACHE STRING
   "CEF version used to generate muon runtime metadata.")
 set(MUON_CEF_PACKAGE "" CACHE STRING
@@ -32,7 +32,9 @@ set(MUON_CEF_SHA1 "" CACHE STRING
 set(MUON_CEF_SIZE "0" CACHE STRING
   "CEF binary package size used to generate muon runtime metadata.")
 set(MUON_TARGET_NAME "" CACHE STRING
-  "Muon runtime target name used to generate runtime metadata.")
+  "Public Muon runtime target name used to generate runtime metadata.")
+set(MUON_CEF_TARGET_NAME "" CACHE STRING
+  "Internal CEF target name used to generate runtime metadata.")
 set(MUON_CORE_VERSION "" CACHE STRING
   "muon-core version used to generate runtime metadata.")
 set(MUON_CORE_GIT_COMMIT_HASH "" CACHE STRING
@@ -125,31 +127,58 @@ endif()
 find_package(CEF REQUIRED)
 find_package(Threads REQUIRED)
 
-add_compile_definitions(CEF_API_VERSION=${MUON_CEF_API_VERSION})
-if(TARGET libcef_dll_wrapper)
-  target_compile_definitions(libcef_dll_wrapper PUBLIC
-    CEF_API_VERSION=${MUON_CEF_API_VERSION}
-    )
+if(NOT MUON_CEF_API_VERSION)
+  file(STRINGS "${CEF_ROOT}/include/cef_api_versions.h"
+    MUON_CEF_API_VERSION_LAST_LINES
+    REGEX "^#define CEF_API_VERSION_LAST CEF_API_VERSION_[0-9]+$")
+  list(GET MUON_CEF_API_VERSION_LAST_LINES 0
+    MUON_CEF_API_VERSION_LAST_LINE)
+  string(REGEX REPLACE ".*CEF_API_VERSION_([0-9]+).*" "\\1"
+    MUON_CEF_API_VERSION "${MUON_CEF_API_VERSION_LAST_LINE}")
+  if(NOT MUON_CEF_API_VERSION MATCHES "^[0-9]+$")
+    message(FATAL_ERROR
+      "Unable to resolve CEF_API_VERSION_LAST from ${CEF_ROOT}/include/cef_api_versions.h")
+  endif()
+  set(MUON_CEF_API_VERSION "${MUON_CEF_API_VERSION}" CACHE STRING
+    "CEF C API version used by muon-core and libcef_dll_wrapper." FORCE)
 endif()
+
+add_compile_definitions(CEF_API_VERSION=${MUON_CEF_API_VERSION})
 
 if(NOT MUON_TARGET_NAME)
   if(WIN32)
     if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-      set(MUON_TARGET_NAME "windows32")
+      set(MUON_TARGET_NAME "windows-i686")
     else()
-      set(MUON_TARGET_NAME "windows64")
+      set(MUON_TARGET_NAME "windows-amd64")
     endif()
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    set(MUON_TARGET_NAME "linux64")
+    set(MUON_TARGET_NAME "linux-amd64")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(MUON_TARGET_NAME "linuxarm64")
+    set(MUON_TARGET_NAME "linux-arm64")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
-    set(MUON_TARGET_NAME "linuxarm")
+    set(MUON_TARGET_NAME "linux-armhf")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i.86|x86")
     message(FATAL_ERROR
       "Linux 32-bit CEF builds are discontinued after CEF 101 and are not supported.")
   else()
-    set(MUON_TARGET_NAME "linux64")
+    set(MUON_TARGET_NAME "linux-amd64")
+  endif()
+endif()
+if(NOT MUON_CEF_TARGET_NAME)
+  if(MUON_TARGET_NAME STREQUAL "linux-amd64")
+    set(MUON_CEF_TARGET_NAME "linux64")
+  elseif(MUON_TARGET_NAME STREQUAL "linux-armhf")
+    set(MUON_CEF_TARGET_NAME "linuxarm")
+  elseif(MUON_TARGET_NAME STREQUAL "linux-arm64")
+    set(MUON_CEF_TARGET_NAME "linuxarm64")
+  elseif(MUON_TARGET_NAME STREQUAL "windows-i686")
+    set(MUON_CEF_TARGET_NAME "windows32")
+  elseif(MUON_TARGET_NAME STREQUAL "windows-amd64")
+    set(MUON_CEF_TARGET_NAME "windows64")
+  else()
+    message(FATAL_ERROR
+      "Unsupported MUON_TARGET_NAME: ${MUON_TARGET_NAME}")
   endif()
 endif()
 if(NOT MUON_CEF_VERSION)
@@ -159,7 +188,7 @@ if(NOT MUON_CEF_VERSION)
   endif()
 endif()
 if(NOT MUON_CEF_PACKAGE AND MUON_CEF_VERSION)
-  set(MUON_CEF_PACKAGE "cef_binary_${MUON_CEF_VERSION}_${MUON_TARGET_NAME}_minimal.tar.bz2")
+  set(MUON_CEF_PACKAGE "cef_binary_${MUON_CEF_VERSION}_${MUON_CEF_TARGET_NAME}_minimal.tar.bz2")
 endif()
 if(NOT MUON_CEF_PACKAGE_URL AND MUON_CEF_PACKAGE)
   string(REPLACE "+" "%2B" MUON_CEF_PACKAGE_URL_ESCAPED "${MUON_CEF_PACKAGE}")
@@ -308,6 +337,11 @@ if(MINGW)
     -Wno-unknown-pragmas
     -Wno-cast-function-type
     )
+  if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    list(APPEND CEF_COMPILER_FLAGS
+      -mms-bitfields
+      )
+  endif()
   set(CEF_C_COMPILER_FLAGS
     -std=c99
     )
@@ -451,6 +485,9 @@ endif()
 
 ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG_EFFECTIVE}" "${CEF_LIB_RELEASE}")
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" libcef_dll_wrapper)
+target_compile_definitions(libcef_dll_wrapper PUBLIC
+  CEF_API_VERSION=${MUON_CEF_API_VERSION}
+  )
 if(MINGW)
   get_target_property(LIBCEF_DLL_WRAPPER_SOURCES libcef_dll_wrapper SOURCES)
   foreach(WRAPPER_EXCLUDE_SOURCE IN ITEMS
@@ -607,6 +644,8 @@ target_link_libraries(muon_cardio INTERFACE
 
 set(APP_SOURCES
   src/main.cpp
+  src/muon_json_helpers.cpp
+  src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
   src/app/muon_app_storage.cpp
@@ -628,10 +667,12 @@ set(APP_SOURCES
   src/config/muon_paths.cpp
   src/config/muon_startup.cpp
   src/log/muon_log.cpp
+  src/log/muon_close_debug_log.cpp
   src/network/muon_network_policy.cpp
   src/network/muon_network_request_handler.cpp
   src/plugins/builtin/muon_builtin.cpp
   src/plugins/builtin/muon_builtin_bootstrap.cpp
+  src/plugins/builtin/muon_builtin_environment_helpers.cpp
   src/plugins/builtin/muon_builtin_environments.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
   src/plugins/builtin/muon_builtin_fs.cpp
@@ -646,6 +687,8 @@ set(APP_SOURCES
   src/plugins/muon_v8_handler.cpp
   )
 set(APP_HEADERS
+  src/muon_json_helpers.h
+  src/muon_string_helpers.h
   src/app/muon_app.h
   src/app/muon_app_scheme.h
   src/app/muon_app_storage.h
@@ -667,10 +710,13 @@ set(APP_HEADERS
   src/config/muon_paths.h
   src/config/muon_startup.h
   src/log/muon_log.h
+  src/log/muon_close_debug_log.h
   src/network/muon_network_policy.h
   src/network/muon_network_request_handler.h
   src/plugins/builtin/muon_builtin.h
   src/plugins/builtin/muon_builtin_bootstrap.h
+  src/plugins/builtin/muon_builtin_completion.h
+  src/plugins/builtin/muon_builtin_environment_helpers.h
   src/plugins/builtin/muon_builtin_environments.h
   src/plugins/builtin/muon_builtin_executor.h
   src/plugins/builtin/muon_builtin_fs.h
@@ -715,6 +761,8 @@ elseif(MSVC)
 endif()
 
 add_library(muon_ui SHARED
+  src/muon_json_helpers.cpp
+  src/muon_json_helpers.h
   src/plugins/builtin/muon_builtin_fs_dialogs.cpp
   src/plugins/builtin/muon_builtin_fs_dialogs.h
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
@@ -789,7 +837,41 @@ set(MUON_CORE_VERSION_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/muon_core_version_generated.h")
 set(MUON_RUNTIME_INFO_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/muon_runtime_info_generated.h")
+set(MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH
+  "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon-256.png")
+set(MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH
+  "${MUON_GENERATED_INCLUDE_DIR}/browser/muon_default_title_bar_icon_generated.h")
+set(MUON_WINDOWS_ICON_PATH
+  "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon.ico")
 file(MAKE_DIRECTORY "${MUON_GENERATED_INCLUDE_DIR}")
+add_custom_command(
+  OUTPUT "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
+  COMMAND ${CMAKE_COMMAND}
+    "-DINPUT=${MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH}"
+    "-DOUTPUT=${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_default_title_bar_icon_header.cmake"
+  DEPENDS
+    "${MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_default_title_bar_icon_header.cmake"
+  VERBATIM
+  )
+if(WIN32)
+  set(MUON_CORE_WINDOWS_RESOURCE_PATH
+    "${MUON_GENERATED_INCLUDE_DIR}/muon_core.rc")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/muon_core.rc.in"
+    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
+    @ONLY
+    )
+  set_source_files_properties(
+    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
+    PROPERTIES
+    OBJECT_DEPENDS "${MUON_WINDOWS_ICON_PATH}"
+    )
+  list(APPEND APP_SOURCES
+    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
+    )
+endif()
 if(MUON_CORE_VERSION_HEADER)
   get_filename_component(MUON_CORE_VERSION_HEADER_ABSOLUTE
     "${MUON_CORE_VERSION_HEADER}" ABSOLUTE)
@@ -818,6 +900,7 @@ configure_file(
   @ONLY
   )
 list(APPEND APP_HEADERS
+  "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
   "${MUON_CORE_VERSION_HEADER_PATH}"
   "${MUON_RUNTIME_INFO_HEADER_PATH}"
   )
@@ -1178,6 +1261,7 @@ if(MUON_BUILD_TESTS)
   target_compile_definitions(muon_runtime_info_generated_test PRIVATE
     EXPECTED_EXECUTABLE_NAME="${APP_EXECUTABLE_NAME}"
     EXPECTED_TARGET_NAME="${MUON_TARGET_NAME}"
+    EXPECTED_CEF_TARGET_NAME="${MUON_CEF_TARGET_NAME}"
     EXPECTED_CEF_VERSION="${MUON_CEF_VERSION}"
     EXPECTED_CEF_API_VERSION=${MUON_CEF_API_VERSION}
     )
@@ -1232,7 +1316,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_app_scheme_storage_test)
   add_executable(muon_builtin_browser_test
     tests/muon_builtin_browser_test.cpp
+    src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
+    src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
     src/plugins/muon_type_metadata.cpp
@@ -1257,6 +1343,23 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_builtin_browser_test)
+  add_executable(muon_default_title_bar_icon_generated_test
+    tests/muon_default_title_bar_icon_generated_test.cpp
+    "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
+    )
+  target_compile_features(muon_default_title_bar_icon_generated_test PRIVATE
+    cxx_std_20)
+  target_include_directories(muon_default_title_bar_icon_generated_test PRIVATE
+    "${MUON_GENERATED_INCLUDE_DIR}"
+    )
+  target_compile_definitions(muon_default_title_bar_icon_generated_test PRIVATE
+    EXPECTED_DEFAULT_TITLE_BAR_ICON_PNG="${MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH}"
+    )
+  MUON_APPLY_SANITIZERS(muon_default_title_bar_icon_generated_test)
+  add_test(
+    NAME default_title_bar_icon_generated
+    COMMAND muon_default_title_bar_icon_generated_test
+    )
   add_executable(muon_ui_title_bar_manifest_test
     tests/muon_ui_title_bar_manifest_test.cpp
     )
@@ -1274,8 +1377,33 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     yyjson
     )
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
+  add_executable(muon_internal_helpers_test
+    tests/muon_internal_helpers_test.cpp
+    src/muon_json_helpers.cpp
+    src/muon_string_helpers.cpp
+    src/plugins/builtin/muon_builtin_environment_helpers.cpp
+    src/plugins/builtin/muon_builtin_fs_helpers.cpp
+    src/plugins/muon_shared_buffer.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_internal_helpers_test)
+  target_compile_features(muon_internal_helpers_test PRIVATE cxx_std_20)
+  target_include_directories(muon_internal_helpers_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_internal_helpers_test PRIVATE
+    libcef_dll_wrapper
+    libcef_lib
+    muon_cardio
+    yyjson
+    ${CEF_STANDARD_LIBS}
+    ${CMAKE_DL_LIBS}
+    )
+  MUON_APPLY_SANITIZERS(muon_internal_helpers_test)
   add_executable(muon_config_network_test
     tests/muon_config_network_test.cpp
+    src/muon_json_helpers.cpp
+    src/muon_string_helpers.cpp
     src/browser/muon_browser_background_color.cpp
     src/config/muon_config.cpp
     src/config/muon_glob.cpp
@@ -1301,6 +1429,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_config_network_test)
   add_executable(muon_autostart_test
     tests/muon_autostart_test.cpp
+    src/muon_string_helpers.cpp
     src/config/muon_autostart.cpp
     src/config/muon_paths.cpp
     src/config/muon_startup.cpp
@@ -1375,6 +1504,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME muon_ui_title_bar_manifest
     COMMAND "${MUON_RUNTIME_DIR}/muon_ui_title_bar_manifest_test"
+    )
+  add_test(
+    NAME internal_helpers
+    COMMAND muon_internal_helpers_test
     )
   add_test(
     NAME config_network

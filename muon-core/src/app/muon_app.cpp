@@ -613,16 +613,19 @@ void MuonApp::OnContextInitialized() {
                      title_bar_background_color, has_initial_title_bar_icon,
                      initial_title_bar_icon));
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler(client.get());
+  auto* close_handler = static_cast<MuonWindowCloseHandler*>(client.get());
   auto browser_view = CefBrowserView::CreateBrowserView(
       client, config_.browser.start_page, browser_settings, extra_info, nullptr,
       new MuonBrowserViewDelegate(
           false, config_.browser.initial_title_bar_visibility,
-          title_bar_manifest, title_bar_background_color, shortcut_handler));
+          title_bar_manifest, title_bar_background_color, shortcut_handler,
+          close_handler));
 
   CefWindow::CreateTopLevelWindow(new MuonWindowDelegate(
       browser_view, false, config_.browser.initial_window_state,
       config_.browser.initial_title_bar_visibility,
-      title_bar_manifest, title_bar_background_color, shortcut_handler));
+      title_bar_manifest, title_bar_background_color, shortcut_handler,
+      close_handler));
 }
 
 void MuonApp::OnBrowserCreated(CefRefPtr<CefBrowser> browser,

@@ -3,20 +3,23 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import type { Plugin } from "vite";
-import type { ResolvedConfig } from "vite";
+import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";
 
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
 
+const suppressViteMuonBuildEnvironmentKey = "MUON_SUPPRESS_VITE_MUON_BUILD";
+
+type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
+
 /**
  * Options for generating Muon app distributions after Vite build.
  */
 export interface MuonViteBuildOptions {
   /**
-   * Target aliases or internal target names to build.
+   * Public target identifiers to build.
    */
   targets?: readonly string[];
 
@@ -36,7 +39,12 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
-   * Parent directory that receives dist-linux-amd64/ style outputs.
+   * Stable application identifier used for portable runtime state.
+   */
+  appId?: string;
+
+  /**
+   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
    */
   outputRoot?: string;
 
@@ -68,7 +76,7 @@ export interface MuonVitePluginOptions {
    * Directory containing muon-core runtime files such as muon-core and plugins.
    *
    * @remarks Relative paths are resolved from the Vite project root. When omitted,
-   * the packaged runtime at dist/runtime/<target> is used.
+   * the packaged runtime at dist/runtime/<public-target> is used.
    */
   muonPath?: string;
 
@@ -84,7 +92,7 @@ export interface MuonVitePluginOptions {
    * Runtime staging directory used for development startup.
    *
    * @remarks Relative paths are resolved from the Vite project root. Defaults to
-   * .muon/<target>.
+   * .muon/<public-target>.
    */
   stagePath?: string;
 
@@ -124,6 +132,17 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
   const plugin: Plugin = {
     name: "muon",
+    config: (config): Omit<UserConfig, "plugins"> | null => {
+      if (config.server?.watch === null) {
+        return null;
+      }
+
+      return {
+        server: {
+          watch: createMuonWatchOptions(config.server?.watch),
+        },
+      };
+    },
     configResolved: (config) => {
       resolvedConfig = config;
     },
@@ -140,6 +159,9 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       if (resolvedConfig === undefined || resolvedConfig.command !== "build") {
         return;
       }
+      if (process.env[suppressViteMuonBuildEnvironmentKey] === "1") {
+        return;
+      }
       if (options.build === false) {
         return;
       }
@@ -152,6 +174,35 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
   return attachMuonVitePluginOptions(plugin, options);
 };
+
+const isMuonStagingWatchPath = (path: string): boolean => {
+  const normalized = path.replaceAll("\\", "/");
+  return (
+    normalized === ".muon" ||
+    normalized.startsWith(".muon/") ||
+    normalized.endsWith("/.muon") ||
+    normalized.includes("/.muon/")
+  );
+};
+
+const mergeMuonWatchIgnored = (
+  ignored: WatchOptions["ignored"] | undefined,
+): MuonWatchIgnored => {
+  const muonIgnored = (path: string): boolean => isMuonStagingWatchPath(path);
+  if (ignored === undefined) {
+    return muonIgnored;
+  }
+  return Array.isArray(ignored)
+    ? [...ignored, muonIgnored]
+    : [ignored, muonIgnored];
+};
+
+const createMuonWatchOptions = (
+  watch: WatchOptions | undefined,
+): WatchOptions => ({
+  ...(watch ?? {}),
+  ignored: mergeMuonWatchIgnored(watch?.ignored),
+});
 
 const createMuonBuildOptions = (
   config: ResolvedConfig,
@@ -174,6 +225,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.appName !== undefined) {
     options.appName = buildOptions.appName;
+  }
+  if (buildOptions.appId !== undefined) {
+    options.appId = buildOptions.appId;
   }
   if (buildOptions.outputRoot !== undefined) {
     options.outputRoot = buildOptions.outputRoot;

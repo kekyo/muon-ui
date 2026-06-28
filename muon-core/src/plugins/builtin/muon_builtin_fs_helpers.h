@@ -87,7 +87,8 @@ bool ParseTruncateLength(const char* options_json,
                          uint64_t* length,
                          std::string* error_message);
 
-void AppendJsonString(std::string* target, std::string_view value);
+std::string NormalizeLocalPathOrFileUri(std::string_view value);
+std::filesystem::path CreateLocalFilesystemPath(std::string_view value);
 std::string PathToUtf8String(const std::filesystem::path& path);
 std::string CreateStatusJson(const std::filesystem::path& path,
                              bool follow_symlink);

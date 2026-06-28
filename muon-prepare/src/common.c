@@ -24,6 +24,7 @@
 #include <time.h>
 
 #ifndef _WIN32
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #else
@@ -52,6 +53,8 @@ typedef ssize_t MuonSSize;
 #endif
 
 static int g_quiet = 0;
+static const char kMuonLockOwnerFile[] = "owner.pid";
+static const unsigned long long kMuonOwnerlessLockStaleSeconds = 30;
 
 void muon_set_quiet(int quiet) { g_quiet = quiet; }
 
@@ -1511,6 +1514,156 @@ static void wait_for_lock(void) {
 #endif
 }
 
+static int muon_is_process_running(int pid) {
+  if (pid <= 0) {
+    return 0;
+  }
+#ifdef _WIN32
+  HANDLE process_handle = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+  if (process_handle == NULL) {
+    return GetLastError() == ERROR_ACCESS_DENIED;
+  }
+  const DWORD wait_result = WaitForSingleObject(process_handle, 0);
+  CloseHandle(process_handle);
+  return wait_result == WAIT_TIMEOUT;
+#else
+  if (kill((pid_t)pid, 0) == 0) {
+    return 1;
+  }
+  return errno == EPERM;
+#endif
+}
+
+static char *muon_lock_owner_path(const char *lock_path) {
+  return muon_path_join(lock_path, kMuonLockOwnerFile);
+}
+
+static int muon_write_lock_owner(const char *lock_path) {
+  char *owner_path = muon_lock_owner_path(lock_path);
+  if (owner_path == NULL) {
+    return -1;
+  }
+  const int size = snprintf(NULL, 0, "%d\n", muon_getpid());
+  if (size < 0) {
+    free(owner_path);
+    return -1;
+  }
+  char *content = (char *)malloc((size_t)size + 1);
+  if (content == NULL) {
+    free(owner_path);
+    return -1;
+  }
+  snprintf(content, (size_t)size + 1, "%d\n", muon_getpid());
+  const int result = muon_write_text_file(owner_path, content);
+  free(content);
+  free(owner_path);
+  return result;
+}
+
+static int muon_read_lock_owner_pid(const char *lock_path, int *pid) {
+  char *owner_path = muon_lock_owner_path(lock_path);
+  if (owner_path == NULL) {
+    return -1;
+  }
+  if (!muon_path_exists(owner_path)) {
+    free(owner_path);
+    return 0;
+  }
+  char *content = muon_read_text_file(owner_path);
+  free(owner_path);
+  if (content == NULL) {
+    return -1;
+  }
+  errno = 0;
+  char *end = NULL;
+  const long value = strtol(content, &end, 10);
+  if (end != NULL) {
+    while (*end != '\0' && isspace((unsigned char)*end)) {
+      end += 1;
+    }
+  }
+  if (end == content || end == NULL || *end != '\0' || errno == ERANGE ||
+      value <= 0 || value > INT_MAX) {
+    free(content);
+    return -1;
+  }
+  *pid = (int)value;
+  free(content);
+  return 1;
+}
+
+static int muon_directory_is_empty(const char *path, int *is_empty) {
+  DIR *directory = opendir(path);
+  if (directory == NULL) {
+    if (errno == ENOENT) {
+      *is_empty = 0;
+      return 0;
+    }
+    muon_print_errno(path);
+    return -1;
+  }
+  *is_empty = 1;
+  struct dirent *child;
+  while ((child = readdir(directory)) != NULL) {
+    if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+      continue;
+    }
+    *is_empty = 0;
+    break;
+  }
+  closedir(directory);
+  return 0;
+}
+
+static int muon_path_age_seconds(const char *path,
+                                 unsigned long long *age_seconds) {
+  struct stat entry;
+  if (muon_stat(path, &entry) != 0) {
+    if (errno == ENOENT) {
+      *age_seconds = 0;
+      return 0;
+    }
+    muon_print_errno(path);
+    return -1;
+  }
+  const unsigned long long now = muon_current_unix_time();
+  const unsigned long long modified =
+      entry.st_mtime < 0 ? 0 : (unsigned long long)entry.st_mtime;
+  *age_seconds = now > modified ? now - modified : 0;
+  return 0;
+}
+
+static int muon_try_reclaim_stale_lock(const char *lock_path) {
+  int owner_pid = 0;
+  const int owner_result = muon_read_lock_owner_pid(lock_path, &owner_pid);
+  if (owner_result > 0) {
+    if (muon_is_process_running(owner_pid)) {
+      return 0;
+    }
+    return muon_remove_recursive(lock_path) == 0 ? 1 : -1;
+  }
+
+  unsigned long long age_seconds = 0;
+  if (muon_path_age_seconds(lock_path, &age_seconds) != 0) {
+    return -1;
+  }
+  if (age_seconds < kMuonOwnerlessLockStaleSeconds) {
+    return 0;
+  }
+
+  if (owner_result == 0) {
+    int is_empty = 0;
+    if (muon_directory_is_empty(lock_path, &is_empty) != 0) {
+      return -1;
+    }
+    if (!is_empty) {
+      return 0;
+    }
+  }
+
+  return muon_remove_recursive(lock_path) == 0 ? 1 : -1;
+}
+
 int muon_acquire_lock_with_progress(
     const char *lock_path, MuonPrepareProgressCallback progress_callback,
     void *progress_user_data, MuonPrepareProgressPhase phase,
@@ -1529,9 +1682,20 @@ int muon_acquire_lock_with_progress(
       muon_print_errno(lock_path);
       return -1;
     }
+    const int reclaimed = muon_try_reclaim_stale_lock(lock_path);
+    if (reclaimed < 0) {
+      return -1;
+    }
+    if (reclaimed > 0) {
+      continue;
+    }
     muon_report_progress(progress_callback, progress_user_data, phase, status,
                          0, 0, 0);
     wait_for_lock();
+  }
+  if (muon_write_lock_owner(lock_path) != 0) {
+    muon_remove_recursive(lock_path);
+    return -1;
   }
   return 0;
 }
@@ -1541,7 +1705,16 @@ int muon_acquire_lock(const char *lock_path) {
       lock_path, NULL, NULL, MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
 }
 
-void muon_release_lock(const char *lock_path) { muon_rmdir(lock_path); }
+void muon_release_lock(const char *lock_path) {
+  char *owner_path = muon_lock_owner_path(lock_path);
+  if (owner_path != NULL) {
+    if (muon_path_exists(owner_path)) {
+      muon_unlink(owner_path);
+    }
+    free(owner_path);
+  }
+  muon_rmdir(lock_path);
+}
 
 char *muon_create_temporary_path(const char *parent, const char *key) {
   const int size = snprintf(NULL, 0, "%s/.%s.tmp.%ld.%ld", parent, key,

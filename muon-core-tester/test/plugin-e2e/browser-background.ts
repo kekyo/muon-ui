@@ -26,6 +26,7 @@ import {
   waitForDocumentTitle,
   writeFile,
 } from "./shared.js";
+import { isWindowsRemoteE2e } from "./windows-context.js";
 import type { CdpDriver, RunningMuon } from "./shared.js";
 
 interface RgbPixel {
@@ -143,7 +144,20 @@ const withBackgroundColorMuon = async (
   }
 };
 
-const backgroundIt = shouldUseValgrind ? it.skip : it;
+const backgroundIt = (
+  name: string,
+  testFunction: () => Promise<void>,
+): void => {
+  if (shouldUseValgrind) {
+    it.skip(name, testFunction);
+    return;
+  }
+  if (isWindowsRemoteE2e()) {
+    it(name, { concurrent: false }, testFunction);
+    return;
+  }
+  it(name, testFunction);
+};
 
 backgroundIt(
   "uses browser.backgroundColor for documents without a background",

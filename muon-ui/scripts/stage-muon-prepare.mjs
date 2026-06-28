@@ -15,12 +15,12 @@ import {
 import { dirname, resolve } from "node:path";
 
 const targetDescriptors = {
-  linux64: {
+  "linux-amd64": {
     prepareExecutableName: "muon-prepare",
     bootstrapExecutableName: "muon-bootstrap",
-    devSourceDirectory: ".run/dev-linux64-debug",
-    distSourceDirectory: "dist-linux64",
-    runtimeSourceDirectory: "dist-linux64",
+    devSourceDirectory: ".run/dev-linux-amd64-debug",
+    distSourceDirectory: "dist-linux-amd64",
+    runtimeSourceDirectory: "dist-linux-amd64",
     runtimePayload: [
       "muon-core",
       "libmuon-ui.so",
@@ -28,12 +28,12 @@ const targetDescriptors = {
       "CREDITS.md",
     ],
   },
-  linuxarm: {
+  "linux-armhf": {
     prepareExecutableName: "muon-prepare",
     bootstrapExecutableName: "muon-bootstrap",
-    devSourceDirectory: ".run/dev-linuxarm-debug",
-    distSourceDirectory: "dist-linuxarm",
-    runtimeSourceDirectory: "dist-linuxarm",
+    devSourceDirectory: ".run/dev-linux-armhf-debug",
+    distSourceDirectory: "dist-linux-armhf",
+    runtimeSourceDirectory: "dist-linux-armhf",
     runtimePayload: [
       "muon-core",
       "libmuon-ui.so",
@@ -41,12 +41,12 @@ const targetDescriptors = {
       "CREDITS.md",
     ],
   },
-  linuxarm64: {
+  "linux-arm64": {
     prepareExecutableName: "muon-prepare",
     bootstrapExecutableName: "muon-bootstrap",
-    devSourceDirectory: ".run/dev-linuxarm64-debug",
-    distSourceDirectory: "dist-linuxarm64",
-    runtimeSourceDirectory: "dist-linuxarm64",
+    devSourceDirectory: ".run/dev-linux-arm64-debug",
+    distSourceDirectory: "dist-linux-arm64",
+    runtimeSourceDirectory: "dist-linux-arm64",
     runtimePayload: [
       "muon-core",
       "libmuon-ui.so",
@@ -54,12 +54,12 @@ const targetDescriptors = {
       "CREDITS.md",
     ],
   },
-  windows32: {
+  "windows-i686": {
     prepareExecutableName: "muon-prepare.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
-    devSourceDirectory: ".run/dev-windows32-debug",
-    distSourceDirectory: "dist-windows32",
-    runtimeSourceDirectory: "dist-windows32",
+    devSourceDirectory: ".run/dev-windows-i686-debug",
+    distSourceDirectory: "dist-windows-i686",
+    runtimeSourceDirectory: "dist-windows-i686",
     runtimePayload: [
       "muon-core.exe",
       "libmuon-ui.dll",
@@ -72,12 +72,12 @@ const targetDescriptors = {
       /^libwinpthread-1\.dll$/,
     ],
   },
-  windows64: {
+  "windows-amd64": {
     prepareExecutableName: "muon-prepare.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
-    devSourceDirectory: ".run/dev-windows64-debug",
-    distSourceDirectory: "dist-windows64",
-    runtimeSourceDirectory: "dist-windows64",
+    devSourceDirectory: ".run/dev-windows-amd64-debug",
+    distSourceDirectory: "dist-windows-amd64",
+    runtimeSourceDirectory: "dist-windows-amd64",
     runtimePayload: [
       "muon-core.exe",
       "libmuon-ui.dll",
@@ -92,57 +92,37 @@ const targetDescriptors = {
   },
 };
 
+const allTargets = [
+  "linux-amd64",
+  "linux-armhf",
+  "linux-arm64",
+  "windows-i686",
+  "windows-amd64",
+];
+
 const normalizeTarget = (target) => {
-  if (target === "linux64" || target === "amd64" || target === "x64") {
-    return "linux64";
-  }
-  if (
-    target === "linuxarm" ||
-    target === "armv7l" ||
-    target === "armv7" ||
-    target === "armhf" ||
-    target === "arm"
-  ) {
-    return "linuxarm";
-  }
-  if (target === "linuxarm64" || target === "arm64" || target === "aarch64") {
-    return "linuxarm64";
-  }
-  if (
-    target === "linux32" ||
-    target === "i686" ||
-    target === "i386" ||
-    target === "ia32" ||
-    target === "x86"
-  ) {
-    throw new Error(
-      `Unsupported muon-prepare stage target: ${target}. Linux 32-bit CEF builds are discontinued after CEF 101.`,
-    );
-  }
-  if (target === "mingw32" || target === "win32" || target === "windows32") {
-    return "windows32";
-  }
-  if (target === "mingw64" || target === "win64" || target === "windows64") {
-    return "windows64";
+  const normalized = target.trim().toLowerCase();
+  if (allTargets.includes(normalized)) {
+    return normalized;
   }
   throw new Error(`Unsupported muon-prepare stage target: ${target}`);
 };
 
 const getDefaultTarget = () => {
   if (process.platform === "linux" && process.arch === "x64") {
-    return "linux64";
+    return "linux-amd64";
   }
   if (process.platform === "linux" && process.arch === "arm") {
-    return "linuxarm";
+    return "linux-armhf";
   }
   if (process.platform === "linux" && process.arch === "arm64") {
-    return "linuxarm64";
+    return "linux-arm64";
   }
   if (process.platform === "win32" && process.arch === "ia32") {
-    return "windows32";
+    return "windows-i686";
   }
   if (process.platform === "win32" && process.arch === "x64") {
-    return "windows64";
+    return "windows-amd64";
   }
   throw new Error(
     `Unsupported muon-prepare stage host: platform=${process.platform}, arch=${process.arch}`,
@@ -154,7 +134,7 @@ const parseTargets = () => {
   const source = args.includes("--dist") ? "dist" : "dev";
   if (args.includes("--all")) {
     return {
-      targets: ["linux64", "linuxarm", "linuxarm64", "windows32", "windows64"],
+      targets: allTargets,
       source: "dist",
     };
   }

@@ -9,7 +9,7 @@ run_dist_ctest() {
   local test_dir="muon-core/.build/dist/${target}/release"
   local test_file="${test_dir}/CTestTestfile.cmake"
 
-  if [[ "${target}" == "linux64" ]] &&
+  if [[ "${target}" == "linux-amd64" ]] &&
       [[ -f "${test_file}" ]] &&
       grep -Fq '/workspace/' "${test_file}"; then
     "${CONTAINER_ENGINE}" run --rm \
@@ -30,8 +30,8 @@ npm install
 npm run test
 npm run build:dist --workspace muon-ui
 
-run_dist_ctest linux64
+run_dist_ctest linux-amd64
 
-run_dist_ctest windows32
+run_dist_ctest windows-i686
 
-run_dist_ctest windows64
+run_dist_ctest windows-amd64

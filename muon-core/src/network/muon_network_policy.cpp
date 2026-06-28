@@ -7,6 +7,7 @@
 #include "network/muon_network_policy.h"
 
 #include "config/muon_glob.h"
+#include "muon_string_helpers.h"
 
 #include "include/cef_parser.h"
 
@@ -17,6 +18,8 @@ static const std::string kMuonNetworkGlobSeparators = ":/?#";
 static constexpr int kMuonNoPort = 0;
 static constexpr int kMuonHttpDefaultPort = 80;
 static constexpr int kMuonHttpsDefaultPort = 443;
+
+using muon_internal::ToLowerAscii;
 
 struct MuonNormalizedOrigin {
   std::string scheme;
@@ -81,14 +84,6 @@ bool MuonNetworkPolicy::IsAllowedRequest(
     return false;
   }
   return IsAuthorizedOriginUrl(request_initiator);
-}
-
-static std::string ToLowerAscii(std::string value) {
-  for (auto& character : value) {
-    character = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(character)));
-  }
-  return value;
 }
 
 static bool ParseMuonPortString(const std::string& value, int* port) {

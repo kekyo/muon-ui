@@ -31,6 +31,7 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
     (value.targets === undefined || isStringArray(value.targets)) &&
     (value.allTargets === undefined || typeof value.allTargets === "boolean") &&
     (value.appName === undefined || typeof value.appName === "string") &&
+    (value.appId === undefined || typeof value.appId === "string") &&
     (value.outputRoot === undefined || typeof value.outputRoot === "string") &&
     (value.configPath === undefined || typeof value.configPath === "string") &&
     (value.packageDirectory === undefined ||

@@ -21,7 +21,15 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { delay } from "async-primitives";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   createLogger as createViteLogger,
   createServer,
@@ -403,6 +411,9 @@ const readCapturedArguments = async (
   return content.trim().length === 0 ? [] : content.trim().split("\n");
 };
 
+const pathEndsWith = (value: string, suffix: string): boolean =>
+  value.replaceAll("\\", "/").endsWith(suffix);
+
 afterEach(async () => {
   for (const server of servers.splice(0)) {
     await server.close();
@@ -430,22 +441,74 @@ describe("muon Vite plugin", () => {
     expect(
       resolveMuonRuntimePath({
         root: "/project",
-        target: "linux64",
+        target: "linux-amd64",
         muonPath: undefined,
         packageDirectory: packageDistDirectory,
       }),
-    ).toBe(join(packageDistDirectory, "runtime", "linux64"));
+    ).toBe(join(packageDistDirectory, "runtime", "linux-amd64"));
   });
 
   it("keeps explicit muonPath for custom core builds", () => {
     expect(
       resolveMuonRuntimePath({
         root: "/project",
-        target: "linux64",
+        target: "linux-amd64",
         muonPath: "../custom-muon-core",
         packageDirectory: join("node_modules", "muon-ui", "dist"),
       }),
     ).toBe(resolve("/custom-muon-core"));
+  });
+
+  it("ignores generated .muon staging files while preserving custom watch ignores", async () => {
+    const root = await createTemporaryDirectory("muon-vite-watch-ignore-");
+    await writeBasicViteProject(root);
+    const watchChanges: string[] = [];
+    const customIgnoredPath = join(root, "custom.tmp");
+    const server = await createServer({
+      root,
+      logLevel: "silent",
+      server: {
+        host: "127.0.0.1",
+        port: 0,
+        watch: {
+          ignored: (path: string): boolean => path === customIgnoredPath,
+        },
+      },
+      plugins: [
+        muon({ open: false }),
+        {
+          name: "muon-watch-change-capture",
+          watchChange: (id): void => {
+            watchChanges.push(id);
+          },
+        },
+      ],
+    });
+    servers.push(server);
+    await server.listen();
+
+    watchChanges.length = 0;
+    await writeFile(
+      join(root, "index.html"),
+      "<!doctype html><title>changed</title>",
+    );
+    await wait(() =>
+      watchChanges.some((id) => pathEndsWith(id, "/index.html")),
+    );
+
+    watchChanges.length = 0;
+    await writeFile(customIgnoredPath, "ignored\n");
+    await delay(500);
+    expect(watchChanges.some((id) => pathEndsWith(id, "/custom.tmp"))).toBe(
+      false,
+    );
+
+    watchChanges.length = 0;
+    const stagingFilePath = join(root, ".muon", "linux-amd64", "CREDITS.html");
+    await mkdir(dirname(stagingFilePath), { recursive: true });
+    await writeFile(stagingFilePath, "ignored\n");
+    await delay(500);
+    expect(watchChanges.some((id) => id.includes("/.muon/"))).toBe(false);
   });
 
   it("launches Muon when server.open is false", async () => {
@@ -475,11 +538,52 @@ describe("muon Vite plugin", () => {
 
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\nartifacts/\n",
     );
     await expect(
-      access(join(root, ".muon", "linux64")),
+      access(join(root, ".muon", "linux-amd64")),
     ).resolves.toBeUndefined();
+  });
+
+  it("forwards native prepare phase progress while starting Muon", async () => {
+    const root = await createTemporaryDirectory("muon-vite-prepare-progress-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    const chunks: string[] = [];
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
+      );
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      await startServer(
+        root,
+        {
+          muonPath: muonDirectory,
+          cefPath: cefDirectory,
+          stagePath: undefined,
+          enableDebugger: undefined,
+          open: undefined,
+        },
+        false,
+      );
+      await wait(() => existsSync(join(outputDirectory, "override.json")));
+    } finally {
+      write.mockRestore();
+    }
+
+    const stderr = chunks.join("");
+    expect(stderr).toContain("Installing CEF runtime...");
+    expect(stderr).toContain("Starting Muon...");
   });
 
   it("does not launch Muon when the plugin open option is false", async () => {
@@ -502,7 +606,7 @@ describe("muon Vite plugin", () => {
 
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\nartifacts/\n",
     );
     await expect(access(join(root, ".muon"))).rejects.toThrow();
   });
@@ -532,7 +636,7 @@ describe("muon Vite plugin", () => {
     );
     await wait(() => existsSync(join(outputDirectory, "override.json")));
 
-    const stagePath = join(root, ".muon", "linux64");
+    const stagePath = join(root, ".muon", "linux-amd64");
     const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
       .trim()
       .split("\n");
@@ -829,12 +933,12 @@ describe("muon dev CLI", () => {
       devResult.overrideConfigPath,
     ]);
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\n",
+      ".muon/\ndist-muon-*/\nartifacts/\n",
     );
     expect(devResult.exitCode).toBe(0);
     expect(devResult.projectConfigPath).toBe(join(root, "muon.json"));
     expect(devResult.assetSourcePath).toBe(assetsPath);
-    expect(devResult.stagePath).toBe(join(root, ".muon", "linux64"));
+    expect(devResult.stagePath).toBe(join(root, ".muon", "linux-amd64"));
     expect(overrideConfig).toEqual({
       asset: {
         sourcePath: assetsPath,

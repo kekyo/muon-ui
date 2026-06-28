@@ -27,94 +27,18 @@ import {
   embedMuonConfigInRuntime,
 } from "./embed-config.js";
 import { getDefaultMuonPrepareTarget } from "./prepare.js";
-
-const allTargets = [
-  "linux64",
-  "linuxarm",
-  "linuxarm64",
-  "windows32",
-  "windows64",
-] as const;
-
-const targetAliases: Record<string, MuonBuildTarget> = {
-  linux64: "linux64",
-  "linux-amd64": "linux64",
-  "linux-x64": "linux64",
-  amd64: "linux64",
-  x64: "linux64",
-  linuxarm: "linuxarm",
-  "linux-arm": "linuxarm",
-  "linux-armv7l": "linuxarm",
-  arm: "linuxarm",
-  armv7l: "linuxarm",
-  linuxarm64: "linuxarm64",
-  "linux-arm64": "linuxarm64",
-  "linux-aarch64": "linuxarm64",
-  arm64: "linuxarm64",
-  aarch64: "linuxarm64",
-  windows32: "windows32",
-  "windows-i686": "windows32",
-  "windows-ia32": "windows32",
-  win32: "windows32",
-  i686: "windows32",
-  ia32: "windows32",
-  windows64: "windows64",
-  "windows-amd64": "windows64",
-  "windows-x64": "windows64",
-  win64: "windows64",
-};
-
-const targetDescriptors: Record<MuonBuildTarget, MuonBuildTargetDescriptor> = {
-  linux64: {
-    distributionDirectoryName: "dist-linux-amd64",
-    runtimeExecutableName: "muon-core",
-    bootstrapExecutableName: "muon-bootstrap",
-    launcherExtension: "",
-    runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
-  },
-  linuxarm: {
-    distributionDirectoryName: "dist-linux-armv7l",
-    runtimeExecutableName: "muon-core",
-    bootstrapExecutableName: "muon-bootstrap",
-    launcherExtension: "",
-    runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
-  },
-  linuxarm64: {
-    distributionDirectoryName: "dist-linux-arm64",
-    runtimeExecutableName: "muon-core",
-    bootstrapExecutableName: "muon-bootstrap",
-    launcherExtension: "",
-    runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
-  },
-  windows32: {
-    distributionDirectoryName: "dist-windows-i686",
-    runtimeExecutableName: "muon-core.exe",
-    bootstrapExecutableName: "muon-bootstrap.exe",
-    launcherExtension: ".exe",
-    runtimeFiles: ["muon-core.exe", "libmuon-ui.dll", "libcardio.dll"],
-    optionalRuntimeFilePatterns: [
-      /^libgcc_s_.*-1\.dll$/,
-      /^libstdc\+\+-6\.dll$/,
-      /^libwinpthread-1\.dll$/,
-    ],
-  },
-  windows64: {
-    distributionDirectoryName: "dist-windows-amd64",
-    runtimeExecutableName: "muon-core.exe",
-    bootstrapExecutableName: "muon-bootstrap.exe",
-    launcherExtension: ".exe",
-    runtimeFiles: ["muon-core.exe", "libmuon-ui.dll", "libcardio.dll"],
-    optionalRuntimeFilePatterns: [
-      /^libgcc_s_.*-1\.dll$/,
-      /^libstdc\+\+-6\.dll$/,
-      /^libwinpthread-1\.dll$/,
-    ],
-  },
-};
+import {
+  allMuonTargets,
+  getMuonTargetDescriptor,
+  normalizeMuonTarget,
+  type MuonTarget,
+  type MuonTargetDescriptor,
+} from "./targets.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
 const defaultAppName = "muon-app";
+const defaultAppId = "muon-app";
 const muonLicenseFileName = "CREDITS.md";
 const directoryMode = 0o755;
 const executableMode = 0o755;
@@ -125,15 +49,6 @@ const moduleDirectory =
     : dirname(fileURLToPath(import.meta.url));
 
 type JsonObject = Record<string, unknown>;
-
-type MuonBuildTargetDescriptor = {
-  distributionDirectoryName: string;
-  runtimeExecutableName: string;
-  bootstrapExecutableName: string;
-  launcherExtension: string;
-  runtimeFiles: readonly string[];
-  optionalRuntimeFilePatterns?: readonly RegExp[];
-};
 
 type AssetInput = {
   sourcePath: string;
@@ -151,14 +66,9 @@ type ZipEntry = {
 };
 
 /**
- * Muon runtime target used by the npm package layout.
+ * Public Muon runtime target used by CLI, Vite options, and package layout.
  */
-export type MuonBuildTarget =
-  | "linux64"
-  | "linuxarm"
-  | "linuxarm64"
-  | "windows32"
-  | "windows64";
+export type MuonBuildTarget = MuonTarget;
 
 /**
  * Options for creating redistributable Muon app directories.
@@ -175,7 +85,7 @@ export interface MuonBuildOptions {
    */
   packageDirectory?: string;
   /**
-   * Target aliases or internal target names to build.
+   * Public target identifiers to build.
    */
   targets?: readonly string[];
   /**
@@ -192,7 +102,11 @@ export interface MuonBuildOptions {
    */
   appName?: string;
   /**
-   * Parent directory that receives dist-linux-amd64/ style outputs.
+   * Stable application identifier used for portable runtime state.
+   */
+  appId?: string;
+  /**
+   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
    */
   outputRoot?: string;
   /**
@@ -242,7 +156,7 @@ export interface MuonBuildAssetResult {
  */
 export interface MuonBuildTargetResult {
   /**
-   * Internal target name used by the muon npm package.
+   * Public target identifier used by the muon npm package.
    */
   target: MuonBuildTarget;
   /**
@@ -280,6 +194,10 @@ export interface MuonBuildResult {
    */
   appName: string;
   /**
+   * Stable application identifier embedded for portable runtime state.
+   */
+  appId: string;
+  /**
    * Generated target distributions.
    */
   targets: MuonBuildTargetResult[];
@@ -289,26 +207,14 @@ export interface MuonBuildResult {
  * Returns the host target used by muon build when no explicit target is passed.
  */
 export const getDefaultMuonBuildTarget = (): MuonBuildTarget => {
-  return normalizeMuonBuildTarget(
-    getDefaultMuonPrepareTarget(process.platform, process.arch),
-  );
+  return getDefaultMuonPrepareTarget(process.platform, process.arch);
 };
 
 /**
- * Normalizes a user-facing target alias into the npm package target name.
+ * Normalizes a user-facing public target identifier.
  */
 export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
-  const normalized = target.trim().toLowerCase();
-  if (normalized === "linux-i686" || normalized === "linux-ia32") {
-    throw new Error("Linux i686 is not supported by muon build.");
-  }
-
-  const resolvedTarget = targetAliases[normalized];
-  if (resolvedTarget === undefined) {
-    throw new Error(`Unsupported muon build target: ${target}`);
-  }
-
-  return resolvedTarget;
+  return normalizeMuonTarget(target, "muon build target");
 };
 
 /**
@@ -321,7 +227,9 @@ export const buildMuonApp = async (
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
   const targets = resolveBuildTargets(options);
   const outputRoot = resolve(root, options.outputRoot ?? ".");
-  const appName = await resolveAppName(root, options.appName);
+  const packageJson = await readPackageJson(root);
+  const appName = resolveAppName(packageJson, options.appName);
+  const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
   const assetInput = resolveAssetInput(
     root,
@@ -340,6 +248,7 @@ export const buildMuonApp = async (
       packageDirectory,
       outputRoot,
       appName,
+      appId,
       target,
       assetInput,
       sourceConfig: buildConfig.config,
@@ -351,6 +260,7 @@ export const buildMuonApp = async (
   return {
     root,
     appName,
+    appId,
     targets: results,
   };
 };
@@ -367,7 +277,7 @@ const resolvePackageDirectory = (
 
 const resolveBuildTargets = (options: MuonBuildOptions): MuonBuildTarget[] => {
   if (options.allTargets === true) {
-    return [...allTargets];
+    return [...allMuonTargets];
   }
 
   if (options.targets !== undefined && options.targets.length > 0) {
@@ -379,7 +289,7 @@ const resolveBuildTargets = (options: MuonBuildOptions): MuonBuildTarget[] => {
   }
 
   if (options.allTargets !== false) {
-    return [...allTargets];
+    return [...allMuonTargets];
   }
 
   return [getDefaultMuonBuildTarget()];
@@ -417,18 +327,29 @@ const normalizeZipPrefix = (prefix: string): string => {
   return normalized.length > 0 ? `${normalized}/` : "";
 };
 
-const resolveAppName = async (
-  root: string,
+const readPackageJson = async (root: string): Promise<JsonObject> => {
+  const packageJsonPath = join(root, "package.json");
+  if (!(await fileExists(packageJsonPath))) {
+    return {};
+  }
+  return await readJsonObjectFile(packageJsonPath, "package.json");
+};
+
+const resolvePackageName = (packageJson: JsonObject): string => {
+  return typeof packageJson.name === "string"
+    ? packageJson.name
+    : defaultAppName;
+};
+
+const resolveAppName = (
+  packageJson: JsonObject,
   appName: string | undefined,
-): Promise<string> => {
+): string => {
   if (appName !== undefined) {
     return sanitizeAppName(appName);
   }
 
-  const packageJsonPath = join(root, "package.json");
-  const packageJson = await readJsonObjectFile(packageJsonPath, "package.json");
-  const packageName =
-    typeof packageJson.name === "string" ? packageJson.name : defaultAppName;
+  const packageName = resolvePackageName(packageJson);
   const unscopedName = packageName.startsWith("@")
     ? packageName.slice(packageName.indexOf("/") + 1)
     : packageName;
@@ -445,6 +366,28 @@ const sanitizeAppName = (name: string): string => {
     .replace(/[.-]+$/g, "");
 
   return sanitized.length > 0 ? sanitized : defaultAppName;
+};
+
+const resolveAppId = (
+  packageJson: JsonObject,
+  appId: string | undefined,
+): string => {
+  if (appId !== undefined) {
+    return sanitizeAppId(appId);
+  }
+  return sanitizeAppId(resolvePackageName(packageJson));
+};
+
+const sanitizeAppId = (value: string): string => {
+  const unscoped = value.startsWith("@") ? value.slice(1) : value;
+  const sanitized = unscoped
+    .trim()
+    .toLowerCase()
+    .replace("/", ".")
+    .replace(/[^a-z0-9._-]+/g, ".")
+    .replace(/^[.]+/g, "")
+    .replace(/[.]+$/g, "");
+  return sanitized.length > 0 ? sanitized : defaultAppId;
 };
 
 const readBuildConfig = async (
@@ -545,12 +488,13 @@ const buildMuonTarget = async (input: {
   packageDirectory: string;
   outputRoot: string;
   appName: string;
+  appId: string;
   target: MuonBuildTarget;
   assetInput: AssetInput;
   sourceConfig: JsonObject;
   salt: Buffer;
 }): Promise<MuonBuildTargetResult> => {
-  const descriptor = targetDescriptors[input.target];
+  const descriptor = getMuonTargetDescriptor(input.target);
   const sourceRuntimePath = join(
     input.packageDirectory,
     "runtime",
@@ -594,7 +538,11 @@ const buildMuonTarget = async (input: {
     assetZipPath,
     input.salt,
   );
-  const embeddedConfig = createEmbeddedConfig(input.sourceConfig, asset);
+  const embeddedConfig = createEmbeddedConfig(
+    input.sourceConfig,
+    asset,
+    input.appId,
+  );
 
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
     await embedMuonConfigInRuntime({
@@ -622,7 +570,7 @@ const buildMuonTarget = async (input: {
 const verifyTargetInputs = async (input: {
   sourceRuntimePath: string;
   sourceBootstrapPath: string;
-  descriptor: MuonBuildTargetDescriptor;
+  descriptor: MuonTargetDescriptor;
   target: MuonBuildTarget;
 }): Promise<void> => {
   await assertDirectory(
@@ -647,7 +595,7 @@ const verifyTargetInputs = async (input: {
 
 const getLauncherFileName = (
   appName: string,
-  descriptor: MuonBuildTargetDescriptor,
+  descriptor: MuonTargetDescriptor,
 ): string => {
   if (
     descriptor.launcherExtension.length > 0 &&
@@ -662,7 +610,7 @@ const getLauncherFileName = (
 const copyRuntimeFiles = async (
   sourceRuntimePath: string,
   outputPath: string,
-  descriptor: MuonBuildTargetDescriptor,
+  descriptor: MuonTargetDescriptor,
 ): Promise<void> => {
   for (const fileName of descriptor.runtimeFiles) {
     await copyFile(
@@ -811,10 +759,15 @@ const createZipArchive = (entries: readonly ZipEntry[]): Buffer => {
 const createEmbeddedConfig = (
   sourceConfig: JsonObject,
   asset: MuonBuildAssetResult,
+  appId: string,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
     throw new Error("muon.json asset must be an object when present.");
+  }
+  const sourceBootstrap = sourceConfig.bootstrap;
+  if (sourceBootstrap !== undefined && !isJsonObject(sourceBootstrap)) {
+    throw new Error("muon.json bootstrap must be an object when present.");
   }
 
   return {
@@ -824,6 +777,10 @@ const createEmbeddedConfig = (
       sourcePath: appConfigSourcePath,
       signature: asset.signature,
       salt: asset.salt,
+    },
+    bootstrap: {
+      ...(sourceBootstrap ?? {}),
+      appId,
     },
   };
 };

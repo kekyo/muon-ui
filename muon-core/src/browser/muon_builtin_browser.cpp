@@ -26,7 +26,55 @@ const abortModalFsDialogs = () => {
     abortDialogs();
   }
 };
+const int32Min = -2147483648;
+const int32Max = 2147483647;
+const isWindowBoundsInteger = (value) =>
+  typeof value === "number" &&
+  Number.isSafeInteger(value) &&
+  value >= int32Min &&
+  value <= int32Max;
+const normalizeWindowBounds = (bounds) => {
+  if (typeof bounds !== "object" || bounds === null) {
+    throw new TypeError("Invalid window bounds");
+  }
+  const { x, y, width, height } = bounds;
+  if (
+    !isWindowBoundsInteger(x) ||
+    !isWindowBoundsInteger(y) ||
+    !isWindowBoundsInteger(width) ||
+    !isWindowBoundsInteger(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new TypeError("Invalid window bounds");
+  }
+  return { x, y, width, height };
+};
 const properties = {};
+if (isAllowed("getWindowBounds")) {
+  properties.getWindowBounds = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async () => JSON.parse(await namespace.__getWindowBounds()),
+  };
+}
+if (isAllowed("setWindowBounds")) {
+  properties.setWindowBounds = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (bounds) => {
+      const normalized = normalizeWindowBounds(bounds);
+      return namespace.__setWindowBounds(
+        normalized.x,
+        normalized.y,
+        normalized.width,
+        normalized.height,
+      );
+    },
+  };
+}
 if (isAllowed("close")) {
   properties.close = {
     enumerable: true,
@@ -74,7 +122,15 @@ static const std::array<MuonTypeMetadata, 1> kMuonBuiltinBrowserTitleBarIconArgs
         {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
 };
 
-static const std::array<MuonBuiltinBrowserFunctionDefinition, 20>
+static const std::array<MuonTypeMetadata, 4> kMuonBuiltinBrowserWindowBoundsArgs =
+    {{
+        {CreateMuonPrimitiveType(MUON_TYPE_I32)},
+        {CreateMuonPrimitiveType(MUON_TYPE_I32)},
+        {CreateMuonPrimitiveType(MUON_TYPE_I32)},
+        {CreateMuonPrimitiveType(MUON_TYPE_I32)},
+    }};
+
+static const std::array<MuonBuiltinBrowserFunctionDefinition, 22>
     kMuonBuiltinBrowserFunctions = {{
         {"reload", MuonBuiltinBrowserFunctionKind::Reload},
         {"hardReload", MuonBuiltinBrowserFunctionKind::HardReload},
@@ -102,6 +158,18 @@ static const std::array<MuonBuiltinBrowserFunctionDefinition, 20>
          nullptr,
          kMuonBuiltinBrowserTitleBarIconArgs.data(),
          kMuonBuiltinBrowserTitleBarIconArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__getWindowBounds",
+         MuonBuiltinBrowserFunctionKind::GetWindowBounds,
+         "getWindowBounds",
+         nullptr,
+         0,
+         CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {"__setWindowBounds",
+         MuonBuiltinBrowserFunctionKind::SetWindowBounds,
+         "setWindowBounds",
+         kMuonBuiltinBrowserWindowBoundsArgs.data(),
+         kMuonBuiltinBrowserWindowBoundsArgs.size(),
          CreateMuonPrimitiveType(MUON_TYPE_VOID)},
         {"__close",
          MuonBuiltinBrowserFunctionKind::Close,

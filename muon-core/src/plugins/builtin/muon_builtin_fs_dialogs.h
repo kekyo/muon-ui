@@ -6,8 +6,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+
+namespace cardio {
+class dispatcher;
+}
 
 namespace muon_internal {
 
@@ -49,9 +55,11 @@ class MuonFsNativeDialogCancellation final {
    * Attaches a platform-native dialog pointer while it is active.
    *
    * @param native_dialog GtkWidget* on GTK, IFileDialog* on Win32.
+   * @param owner_window_handle Native owner window handle on Win32, or 0.
    * @return false when cancellation was already requested.
    */
-  bool AttachNativeDialog(void* native_dialog);
+  bool AttachNativeDialog(void* native_dialog,
+                          std::uintptr_t owner_window_handle);
 
   /**
    * Detaches the active native dialog pointer before it is destroyed.
@@ -61,6 +69,9 @@ class MuonFsNativeDialogCancellation final {
  private:
   bool canceled_ = false;
   void* native_dialog_ = nullptr;
+  std::uintptr_t owner_window_handle_ = 0;
+  cardio::dispatcher* native_dialog_dispatcher_ = nullptr;
+  mutable std::mutex mutex_;
 };
 
 /**

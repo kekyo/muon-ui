@@ -273,6 +273,60 @@ interface PageFrameStoppedLoadingParams {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+const formatUnknownJson = (value: unknown): string => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const readStringProperty = (
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined => {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+};
+
+const formatRuntimeExceptionDetails = (details: unknown): string => {
+  if (!isRecord(details)) {
+    return `Runtime evaluation failed: ${formatUnknownJson(details)}`;
+  }
+  const messages: string[] = [];
+  const text = readStringProperty(details, "text");
+  if (text !== undefined) {
+    messages.push(text);
+  }
+  const exception = details.exception;
+  if (isRecord(exception)) {
+    const description = readStringProperty(exception, "description");
+    if (description !== undefined) {
+      messages.push(description);
+    } else if ("value" in exception) {
+      messages.push(formatUnknownJson(exception.value));
+    }
+  }
+  const url = readStringProperty(details, "url");
+  const lineNumber = details.lineNumber;
+  const columnNumber = details.columnNumber;
+  if (
+    url !== undefined ||
+    typeof lineNumber === "number" ||
+    typeof columnNumber === "number"
+  ) {
+    messages.push(
+      `${url ?? "<anonymous>"}:${String(lineNumber ?? 0)}:${String(
+        columnNumber ?? 0,
+      )}`,
+    );
+  }
+  if (messages.length === 0) {
+    messages.push(formatUnknownJson(details));
+  }
+  return `Runtime evaluation failed: ${messages.join(" ")}`;
+};
+
 const createEndpointUrl = (options: ConnectOptions): string => {
   const host = options.host ?? DEFAULT_HOST;
   const port = options.port ?? DEFAULT_PORT;
@@ -286,7 +340,10 @@ const fetchJson = async (url: string, timeoutMs: number): Promise<unknown> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      headers: { Connection: "close" },
+      signal: controller.signal,
+    });
     if (!response.ok) {
       throw new Error(`CDP target discovery failed: HTTP ${response.status}`);
     }
@@ -321,6 +378,40 @@ const parseTarget = (value: unknown): CdpTarget => {
     target.webSocketDebuggerUrl = webSocketDebuggerUrl;
   }
   return target;
+};
+
+const isLoopbackCdpHost = (host: string): boolean =>
+  host === "127.0.0.1" ||
+  host === "localhost" ||
+  host === "::1" ||
+  host === "[::1]";
+
+/**
+ * Rewrites loopback CDP WebSocket URLs when tests connect through a remote host.
+ *
+ * @param webSocketDebuggerUrl WebSocket URL returned by the CDP `/json/list`
+ * endpoint.
+ * @param host Remote debugging HTTP host used for target discovery.
+ * @param port Remote debugging HTTP port used for target discovery.
+ * @returns A WebSocket URL reachable from the same host as target discovery.
+ */
+export const rewriteCdpWebSocketDebuggerUrl = (
+  webSocketDebuggerUrl: string,
+  host: string | undefined,
+  port: number | undefined = undefined,
+): string => {
+  if (host === undefined || host.trim() === "") {
+    return webSocketDebuggerUrl;
+  }
+
+  const url = new URL(webSocketDebuggerUrl);
+  if (isLoopbackCdpHost(url.hostname)) {
+    url.hostname = host;
+    if (port !== undefined) {
+      url.port = String(port);
+    }
+  }
+  return url.toString();
 };
 
 const selectTarget = (
@@ -677,12 +768,29 @@ export const createDriver = (
         timeoutMs,
         `frame '${frameId}' to navigate to ${url}`,
       );
-      await frameStoppedLoading.waitFor(
-        (params) => params.frameId === frameId,
-        navigatedEvent.sequence,
-        timeoutMs,
-        `frame '${frameId}' to stop loading`,
-      );
+      try {
+        await frameStoppedLoading.waitFor(
+          (params) => params.frameId === frameId,
+          navigatedEvent.sequence,
+          timeoutMs,
+          `frame '${frameId}' to stop loading`,
+        );
+      } catch (error) {
+        const location = await send<{
+          result?: { value?: unknown };
+          exceptionDetails?: unknown;
+        }>("Runtime.evaluate", {
+          expression: "document.location.href",
+          returnByValue: true,
+        });
+        if (
+          location.exceptionDetails === undefined &&
+          location.result?.value === url
+        ) {
+          return;
+        }
+        throw error;
+      }
     } finally {
       frameNavigated.dispose();
       frameStoppedLoading.dispose();
@@ -699,7 +807,7 @@ export const createDriver = (
       awaitPromise: true,
     });
     if (response.exceptionDetails !== undefined) {
-      throw new Error("Runtime evaluation failed");
+      throw new Error(formatRuntimeExceptionDetails(response.exceptionDetails));
     }
     return response.result?.value as T;
   };
@@ -763,7 +871,13 @@ export const connectToMuonCdp = async (
   }
 
   const timeoutMs = getTimeoutMs(options);
-  const socket = new WebSocketConstructor(target.webSocketDebuggerUrl);
+  const socket = new WebSocketConstructor(
+    rewriteCdpWebSocketDebuggerUrl(
+      target.webSocketDebuggerUrl,
+      options.host,
+      options.port,
+    ),
+  );
   await waitForSocketOpen(socket, timeoutMs);
   return createDriver(socket, timeoutMs);
 };

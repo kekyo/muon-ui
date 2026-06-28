@@ -90,13 +90,13 @@ esac
 target_name_for_arch() {
   case "$1" in
     amd64)
-      printf '%s\n' "linux64"
+      printf '%s\n' "linux-amd64"
       ;;
     armv7l)
-      printf '%s\n' "linuxarm"
+      printf '%s\n' "linux-armhf"
       ;;
     arm64)
-      printf '%s\n' "linuxarm64"
+      printf '%s\n' "linux-arm64"
       ;;
     *)
       fail "Unsupported architecture: $1"
@@ -264,10 +264,10 @@ build_linux_targets() {
 
 build_windows_targets() {
   printf 'Building Windows package targets\n'
-  npm run build:target --workspace muon-prepare -- dist Release windows32
-  npm run build:target --workspace muon-prepare -- dist Release windows64
-  npm run build:target --workspace muon-core -- dist Release windows32
-  npm run build:target --workspace muon-core -- dist Release windows64
+  npm run build:target --workspace muon-prepare -- dist Release windows-i686
+  npm run build:target --workspace muon-prepare -- dist Release windows-amd64
+  npm run build:target --workspace muon-core -- dist Release windows-i686
+  npm run build:target --workspace muon-core -- dist Release windows-amd64
 }
 
 stage_targets() {
@@ -284,8 +284,8 @@ stage_targets() {
       target_name="$(target_name_for_arch "${arch}")"
       (cd muon-ui && node scripts/stage-muon-prepare.mjs --target "${target_name}" --dist)
     done
-    (cd muon-ui && node scripts/stage-muon-prepare.mjs --target windows32 --dist)
-    (cd muon-ui && node scripts/stage-muon-prepare.mjs --target windows64 --dist)
+    (cd muon-ui && node scripts/stage-muon-prepare.mjs --target windows-i686 --dist)
+    (cd muon-ui && node scripts/stage-muon-prepare.mjs --target windows-amd64 --dist)
   fi
 }
 
@@ -427,29 +427,29 @@ verify_package_file_list() {
   require_pack_file "muon.d.ts"
   require_pack_file "vite.d.ts"
   require_pack_file "dist/cli.cjs"
-  require_pack_file "dist/native/linux64/muon-prepare"
-  require_pack_file "dist/native/linuxarm/muon-prepare"
-  require_pack_file "dist/native/linuxarm64/muon-prepare"
-  require_pack_file "dist/native/windows32/muon-prepare.exe"
-  require_pack_file "dist/native/windows64/muon-prepare.exe"
-  require_pack_file "dist/runtime/linux64/libcardio.so"
-  require_pack_file "dist/runtime/linuxarm/libcardio.so"
-  require_pack_file "dist/runtime/linuxarm64/libcardio.so"
-  require_pack_file "dist/runtime/windows32/libcardio.dll"
-  require_pack_file "dist/runtime/windows64/libcardio.dll"
-  require_pack_file_match '^dist/runtime/windows32/libgcc_s_.*-1\.dll$'
-  require_pack_file "dist/runtime/windows32/libstdc++-6.dll"
-  require_pack_file_match '^dist/runtime/windows64/libgcc_s_.*-1\.dll$'
-  require_pack_file "dist/runtime/windows64/libstdc++-6.dll"
+  require_pack_file "dist/native/linux-amd64/muon-prepare"
+  require_pack_file "dist/native/linux-armhf/muon-prepare"
+  require_pack_file "dist/native/linux-arm64/muon-prepare"
+  require_pack_file "dist/native/windows-i686/muon-prepare.exe"
+  require_pack_file "dist/native/windows-amd64/muon-prepare.exe"
+  require_pack_file "dist/runtime/linux-amd64/libcardio.so"
+  require_pack_file "dist/runtime/linux-armhf/libcardio.so"
+  require_pack_file "dist/runtime/linux-arm64/libcardio.so"
+  require_pack_file "dist/runtime/windows-i686/libcardio.dll"
+  require_pack_file "dist/runtime/windows-amd64/libcardio.dll"
+  require_pack_file_match '^dist/runtime/windows-i686/libgcc_s_.*-1\.dll$'
+  require_pack_file "dist/runtime/windows-i686/libstdc++-6.dll"
+  require_pack_file_match '^dist/runtime/windows-amd64/libgcc_s_.*-1\.dll$'
+  require_pack_file "dist/runtime/windows-amd64/libstdc++-6.dll"
 
   reject_pack_file "dist/cli.mjs"
   reject_pack_file "dist/vite.d.ts"
   reject_pack_file "dist/native/linux32/muon-prepare"
-  reject_pack_file "dist/runtime/linux64/muon-runtime.json"
-  reject_pack_file "dist/runtime/linuxarm/muon-runtime.json"
-  reject_pack_file "dist/runtime/linuxarm64/muon-runtime.json"
-  reject_pack_file "dist/runtime/windows32/muon-runtime.json"
-  reject_pack_file "dist/runtime/windows64/muon-runtime.json"
+  reject_pack_file "dist/runtime/linux-amd64/muon-runtime.json"
+  reject_pack_file "dist/runtime/linux-armhf/muon-runtime.json"
+  reject_pack_file "dist/runtime/linux-arm64/muon-runtime.json"
+  reject_pack_file "dist/runtime/windows-i686/muon-runtime.json"
+  reject_pack_file "dist/runtime/windows-amd64/muon-runtime.json"
   reject_pack_file "dist/runtime/linux32/muon-runtime.json"
 
   if grep -Eq '^dist/.*\.d\.ts$' <<< "${files}"; then

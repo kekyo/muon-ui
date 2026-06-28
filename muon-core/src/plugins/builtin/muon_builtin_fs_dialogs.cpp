@@ -8,6 +8,8 @@
 
 #include "muon_cardio_post.h"
 
+#include "muon_json_helpers.h"
+#include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "ui/muon_ui_fs_dialogs.h"
 
@@ -16,7 +18,9 @@
 #include <cardio.h>
 
 #include <algorithm>
-#include <cstring>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -38,10 +42,56 @@
 namespace muon_internal {
 
 #if defined(_WIN32)
-static void CancelNativeDialog(void* native_dialog) {
+static void CloseWin32NativeDialog(IFileDialog* dialog) {
+  if (dialog != nullptr) {
+    dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
+  }
+}
+
+struct MuonWin32OwnedWindowCloseState {
+  HWND owner = nullptr;
+};
+
+static BOOL CALLBACK PostCloseToMuonWin32OwnedWindow(HWND window,
+                                                     LPARAM raw_state) {
+  auto* state =
+      reinterpret_cast<MuonWin32OwnedWindowCloseState*>(raw_state);
+  if (state == nullptr || state->owner == nullptr || window == state->owner) {
+    return TRUE;
+  }
+  if (GetWindow(window, GW_OWNER) == state->owner) {
+    PostMessageW(window, WM_CLOSE, 0, 0);
+  }
+  return TRUE;
+}
+
+static void CloseWin32OwnedDialogWindows(std::uintptr_t owner_window_handle) {
+  auto* owner = reinterpret_cast<HWND>(owner_window_handle);
+  if (owner == nullptr) {
+    return;
+  }
+  auto state = MuonWin32OwnedWindowCloseState{owner};
+  EnumWindows(&PostCloseToMuonWin32OwnedWindow,
+              reinterpret_cast<LPARAM>(&state));
+}
+
+static void CancelNativeDialog(void* native_dialog,
+                               cardio::dispatcher* dispatcher,
+                               std::uintptr_t owner_window_handle) {
   if (native_dialog != nullptr) {
-    static_cast<IFileDialog*>(native_dialog)->Close(
-        HRESULT_FROM_WIN32(ERROR_CANCELLED));
+    auto* dialog = static_cast<IFileDialog*>(native_dialog);
+    if (dispatcher == nullptr ||
+        dispatcher == cardio::unsafe_get_current_dispatcher()) {
+      CloseWin32NativeDialog(dialog);
+      CloseWin32OwnedDialogWindows(owner_window_handle);
+      return;
+    }
+    dialog->AddRef();
+    FireAndForgetOnDispatcher(dispatcher, [dialog, owner_window_handle]() {
+      CloseWin32NativeDialog(dialog);
+      CloseWin32OwnedDialogWindows(owner_window_handle);
+      dialog->Release();
+    });
   }
 }
 #else
@@ -68,29 +118,52 @@ static void CancelNativeDialog(void* native_dialog) {
 
 void MuonFsNativeDialogCancellation::Cancel() {
   void* native_dialog = nullptr;
-  if (canceled_) {
-    return;
+  std::uintptr_t owner_window_handle = 0;
+  cardio::dispatcher* native_dialog_dispatcher = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (canceled_) {
+      return;
+    }
+    canceled_ = true;
+    native_dialog = native_dialog_;
+    owner_window_handle = owner_window_handle_;
+    native_dialog_dispatcher = native_dialog_dispatcher_;
   }
-  canceled_ = true;
-  native_dialog = native_dialog_;
+#if defined(_WIN32)
+  CancelNativeDialog(
+      native_dialog, native_dialog_dispatcher, owner_window_handle);
+#else
   CancelNativeDialog(native_dialog);
+#endif
 }
 
 bool MuonFsNativeDialogCancellation::IsCanceled() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return canceled_;
 }
 
-bool MuonFsNativeDialogCancellation::AttachNativeDialog(void* native_dialog) {
+bool MuonFsNativeDialogCancellation::AttachNativeDialog(
+    void* native_dialog,
+    std::uintptr_t owner_window_handle) {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (canceled_) {
     return false;
   }
   native_dialog_ = native_dialog;
+  owner_window_handle_ = owner_window_handle;
+#if defined(_WIN32)
+  native_dialog_dispatcher_ = cardio::unsafe_get_current_dispatcher();
+#endif
   return true;
 }
 
 void MuonFsNativeDialogCancellation::DetachNativeDialog(void* native_dialog) {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (native_dialog_ == native_dialog) {
     native_dialog_ = nullptr;
+    owner_window_handle_ = 0;
+    native_dialog_dispatcher_ = nullptr;
   }
 }
 
@@ -98,11 +171,13 @@ class MuonNativeDialogCancellationAttachment final {
  public:
   MuonNativeDialogCancellationAttachment(
       std::shared_ptr<MuonFsNativeDialogCancellation> cancellation,
-      void* native_dialog)
+      void* native_dialog,
+      std::uintptr_t owner_window_handle)
       : cancellation_(std::move(cancellation)),
         native_dialog_(native_dialog) {
     attached_ = cancellation_ == nullptr ||
-                cancellation_->AttachNativeDialog(native_dialog_);
+                cancellation_->AttachNativeDialog(
+                    native_dialog_, owner_window_handle);
   }
 
   ~MuonNativeDialogCancellationAttachment() {
@@ -166,77 +241,11 @@ struct MuonFsDialogOptions {
   bool has_show_hidden = false;
   bool modal = true;
   bool confirm_overwrite = true;
+  std::uintptr_t owner_window_handle = 0;
   std::vector<MuonFsDialogFilter> filters;
   MuonFsGtkDialogOptions gtk;
   MuonFsWin32DialogOptions win32;
 };
-
-class MuonJsonDocument final {
- public:
-  explicit MuonJsonDocument(yyjson_doc* source)
-      : document_(source) {}
-
-  ~MuonJsonDocument() {
-    if (document_ != nullptr) {
-      yyjson_doc_free(document_);
-    }
-  }
-
-  MuonJsonDocument(const MuonJsonDocument&) = delete;
-  MuonJsonDocument& operator=(const MuonJsonDocument&) = delete;
-
-  MuonJsonDocument(MuonJsonDocument&& other) noexcept
-      : document_(other.document_) {
-    other.document_ = nullptr;
-  }
-
-  MuonJsonDocument& operator=(MuonJsonDocument&& other) noexcept {
-    if (this != &other) {
-      if (document_ != nullptr) {
-        yyjson_doc_free(document_);
-      }
-      document_ = other.document_;
-      other.document_ = nullptr;
-    }
-    return *this;
-  }
-
-  yyjson_doc* get() const {
-    return document_;
-  }
-
- private:
-  yyjson_doc* document_ = nullptr;
-};
-
-static std::string ReadJsonString(yyjson_val* value) {
-  return std::string(yyjson_get_str(value), yyjson_get_len(value));
-}
-
-static bool ParseOptionsJson(const char* options_json,
-                             MuonJsonDocument* document,
-                             yyjson_val** root,
-                             std::string* error_message) {
-  if (options_json == nullptr) {
-    *error_message = "Options JSON is required";
-    return false;
-  }
-  yyjson_read_err read_error = {};
-  auto* raw_document = yyjson_read_opts(
-      const_cast<char*>(options_json), std::strlen(options_json),
-      YYJSON_READ_NOFLAG, nullptr, &read_error);
-  if (raw_document == nullptr) {
-    *error_message = "Options JSON is invalid";
-    return false;
-  }
-  *document = MuonJsonDocument(raw_document);
-  *root = yyjson_doc_get_root(document->get());
-  if (!yyjson_is_obj(*root)) {
-    *error_message = "Options JSON root must be an object";
-    return false;
-  }
-  return true;
-}
 
 static bool ReadOptionalString(yyjson_val* object,
                                const char* key,
@@ -416,12 +425,41 @@ static bool ParseWin32Options(yyjson_val* root,
                                 &options->file_must_exist, error_message);
 }
 
+static bool ParseOwnerWindowHandle(yyjson_val* root,
+                                   std::uintptr_t* owner_window_handle,
+                                   std::string* error_message) {
+  *owner_window_handle = 0;
+  const auto value = yyjson_obj_get(root, kMuonFsDialogsOwnerWindowHandleOption);
+  if (value == nullptr || yyjson_is_null(value)) {
+    return true;
+  }
+  if (!yyjson_is_str(value)) {
+    *error_message = std::string("options.") +
+                     kMuonFsDialogsOwnerWindowHandleOption +
+                     " must be a string";
+    return false;
+  }
+  const auto* text = yyjson_get_str(value);
+  char* end = nullptr;
+  errno = 0;
+  const auto parsed = std::strtoull(text, &end, 10);
+  if (errno != 0 || end == text || (end != nullptr && *end != '\0')) {
+    *error_message = std::string("options.") +
+                     kMuonFsDialogsOwnerWindowHandleOption +
+                     " is invalid";
+    return false;
+  }
+  *owner_window_handle = static_cast<std::uintptr_t>(parsed);
+  return true;
+}
+
 static bool ParseDialogOptions(const char* options_json,
                                MuonFsDialogOptions* options,
                                std::string* error_message) {
   MuonJsonDocument document(nullptr);
   yyjson_val* root = nullptr;
-  if (!ParseOptionsJson(options_json, &document, &root, error_message)) {
+  if (!ParseJsonObjectOptions(options_json, &document, &root,
+                              error_message)) {
     return false;
   }
   return ReadOptionalString(root, "title", &options->has_title,
@@ -440,7 +478,9 @@ static bool ParseDialogOptions(const char* options_json,
                           &options->confirm_overwrite, error_message) &&
          ParseFilters(root, &options->filters, error_message) &&
          ParseGtkOptions(root, &options->gtk, error_message) &&
-         ParseWin32Options(root, &options->win32, error_message);
+         ParseWin32Options(root, &options->win32, error_message) &&
+         ParseOwnerWindowHandle(root, &options->owner_window_handle,
+                                error_message);
 }
 
 static bool IsMultipleDialog(MuonFsDialogKind kind) {
@@ -729,11 +769,13 @@ static std::vector<std::string> RunWin32NativeDialog(
   ApplyWin32CommonOptions(dialog.get(), kind, options);
   ApplyWin32DefaultFolder(dialog.get(), options);
   auto cancellation_attachment = MuonNativeDialogCancellationAttachment(
-      std::move(cancellation), dialog.get());
+      std::move(cancellation), dialog.get(), options.owner_window_handle);
   if (!cancellation_attachment.attached()) {
     return {};
   }
-  const auto shown = dialog->Show(nullptr);
+  const auto owner_window =
+      reinterpret_cast<HWND>(options.owner_window_handle);
+  const auto shown = dialog->Show(owner_window);
   cancellation_attachment.Detach();
   if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
     return {};
@@ -987,7 +1029,7 @@ static std::vector<std::string> RunGtkNativeDialog(
   ApplyGtkDefaultPath(chooser, kind, options);
   gtk_widget_show_all(dialog);
   auto cancellation_attachment = MuonNativeDialogCancellationAttachment(
-      std::move(cancellation), dialog);
+      std::move(cancellation), dialog, 0);
   if (!cancellation_attachment.attached()) {
     return {};
   }

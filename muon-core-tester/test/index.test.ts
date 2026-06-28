@@ -9,7 +9,11 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { createXvfbCommandEnvironment } from "../../scripts/xvfb-environment.mjs";
-import { createDriver, type CdpDriver } from "../src/helper.js";
+import {
+  createDriver,
+  rewriteCdpWebSocketDebuggerUrl,
+  type CdpDriver,
+} from "../src/helper.js";
 
 interface MockSocket {
   readyState: number;
@@ -191,6 +195,29 @@ describe("CDP helper calls", () => {
     driver.close();
   });
 
+  it("includes Runtime.evaluate exception details in errors", async () => {
+    const { driver, socket } = createMockDriver();
+
+    const evaluatePromise = driver.evaluate<string>("missingControls()");
+    socket.message({
+      id: 1,
+      result: {
+        exceptionDetails: {
+          columnNumber: 3,
+          exception: { description: "Error: controls missing" },
+          lineNumber: 2,
+          text: "Uncaught",
+          url: "asset://main/index.html",
+        },
+      },
+    });
+
+    await expect(evaluatePromise).rejects.toThrow(
+      "Runtime evaluation failed: Uncaught Error: controls missing asset://main/index.html:2:3",
+    );
+    driver.close();
+  });
+
   it("captures screenshots with Page.captureScreenshot", async () => {
     const { driver, socket } = createMockDriver();
 
@@ -210,6 +237,37 @@ describe("CDP helper calls", () => {
       Uint8Array.from(Buffer.from("png")),
     );
     driver.close();
+  });
+
+  it("rewrites loopback WebSocket debugger URLs only for remote hosts", () => {
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://127.0.0.1:9222/devtools/page/1",
+        undefined,
+      ),
+    ).toBe("ws://127.0.0.1:9222/devtools/page/1");
+
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://127.0.0.1:9222/devtools/page/1",
+        "192.0.2.10",
+        39222,
+      ),
+    ).toBe("ws://192.0.2.10:39222/devtools/page/1");
+
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://localhost:9222/devtools/page/1",
+        "test-agent.local",
+      ),
+    ).toBe("ws://test-agent.local:9222/devtools/page/1");
+
+    expect(
+      rewriteCdpWebSocketDebuggerUrl(
+        "ws://192.0.2.20:9222/devtools/page/1",
+        "192.0.2.10",
+      ),
+    ).toBe("ws://192.0.2.20:9222/devtools/page/1");
   });
 });
 

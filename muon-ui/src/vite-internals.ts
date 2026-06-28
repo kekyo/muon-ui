@@ -78,7 +78,7 @@ export interface MuonRuntimePathOptions {
   root: string;
 
   /**
-   * Muon runtime target such as linux64, linuxarm, linuxarm64, windows32, or windows64.
+   * Public Muon runtime target such as linux-amd64 or windows-amd64.
    */
   target: string;
 

@@ -70,8 +70,8 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 ### 環境
 
 - CEF公式バイナリの対応アーキテクチャのうち、下記のアーキテクチャに対応:
-  - Linux: amd64, armv7l, arm64
-  - Windows: i686, amd64
+  - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
+  - Windowsターゲット: `windows-i686`, `windows-amd64`
 - ビルド環境
   - Node.js 20以降
   - Vite 5以降（オプション）
@@ -203,8 +203,9 @@ npm run build
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
-既定では実行中のホスト環境向けターゲットだけをビルドし、出力先は `dist-linux-amd64/` や `dist-windows-amd64/` のようなターゲット別ディレクトリです。
+既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、出力先は `dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリです。
 アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
+実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
 
 複数ターゲットや出力先を指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
@@ -219,6 +220,7 @@ export default defineConfig({
         targets: ['linux-amd64', 'windows-amd64'],
         outputRoot: 'release',
         appName: 'my-app',
+        appId: 'com.example.my-app',
       },
     }),
   ],
@@ -237,6 +239,26 @@ muon build
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
+
+配布用パッケージまで生成する場合は、Viteプラグインの自動ビルドではなく `muon pack` を明示的に実行します。
+`muon pack` は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
+その後、指定した形式ごとに `./artifacts/` へ最終配布物だけを出力します。
+`deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
+
+```bash
+muon pack -t zip
+muon pack -t zip,deb --target linux-amd64
+muon pack -t nsis --target windows-amd64
+```
+
+`-t, --type` は必須で、`zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
+`zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
+`deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
+インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
+`nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
+既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
+`packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
 
 ---
 
@@ -263,7 +285,12 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
     └── cef_binary_<version>_<target>_minimal.tar.bz2
 ```
 
-起動時の準備では、muonアプリが配置されているディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+配布された `dist-muon-*` ディレクトリは読み取り専用の元データとして扱われます。
+エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前に配布元dist全体をユーザーstate配下へステージングし、そのstate側へCEFを展開してから `muon-core` を起動します。
+Linuxでは `${XDG_STATE_HOME:-$HOME/.local/state}/<appId>/runtime/<public-target>/`、Windowsでは `%LOCALAPPDATA%\<appId>\runtime\<public-target>\` が使用されます。
+
+起動時の準備では、state側runtimeディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
+配布元dist内の `muon-bootstrap.ini` は読み書きされません。
 
 実行に使用するCEFバージョンは、事前に決められた規則（ポリシー・後述）で判定されます。
 
@@ -357,7 +384,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 
 ```bash
 muon embed-config \
-  --runtime-path ./dist/runtime/linux64 \
+  --runtime-path ./dist/runtime/linux-amd64 \
   --bootstrap-path ./myapp \
   --config ./muon.json
 ```
@@ -366,7 +393,7 @@ muon embed-config \
 
 1. policyや更新要求に応じてCEFカタログをダウンロードし、`catalog.json` に配置します。既存のカタログがある場合、更新に失敗しても既存の内容を使用します。
 2. 必要なCEF tarballを `artifacts/` にダウンロードします。既に存在する場合はSHA1とサイズを確認して使用します。
-3. 実行時の準備ではCEFをプロジェクトの `.muon/` ディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
+3. 実行時の準備では配布元distをユーザーstate配下へコピーしてからCEFを同じruntimeディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
 
 CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
 テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
@@ -861,6 +888,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
   このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
   ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
+  Windowsでは、PNGとして読み込めるタイトルバーアイコンは実行中ウインドウのタスクバー/Alt-Tab用アプリアイコンにも反映されます。
+  exeファイル自体のアイコンリソース差し替えは対象外です。
+  Windows用には32x32以上のPNGを推奨します。タイトルバーではCEFが必要なサイズへ縮小表示します。
   - ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
     ページ遷移時、faviconが存在しない場合や取得・変換できない場合は `initialTitleBarIcon`、または内蔵Muonアイコンへ戻ります。
     favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
@@ -975,6 +1005,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 | キー                   | 型       | 既定値     | 概要                                                                                                  |
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
+| `appId`                | `string` | 自動生成   | portable runtime stateを識別する安定IDです。build時に自動埋め込みされます。                          |
 | `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 ---
@@ -1006,7 +1037,7 @@ export default defineConfig({
 | :--------------- | :-------------------- | :-------------------------- | :------------------------------------------------------------------- |
 | `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
 | `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
-| `stagePath`      | `string`              | `".muon/<target>"`          | 開発起動用にMuonランタイムを配置するディレクトリです。               |
+| `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にMuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
@@ -1014,9 +1045,9 @@ export default defineConfig({
   `muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` だけを読み取り、 `open` は無視します。
   `vite build` ではこれらの開発起動用オプションは無視されます。
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
-- `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<target>` を使用します。
+- `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<public-target>` を使用します。
 - `cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
-- `stagePath` を省略した場合は、Vite project root配下の `.muon/<target>` が使用されます。
+- `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
 
@@ -1028,20 +1059,24 @@ export default defineConfig({
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |
 | :----------------- | :------------------ | :----------------------------- | :------------------------------------------------------------------------------ |
-| `targets`          | `readonly string[]` | ホスト環境向けターゲット       | ビルド対象ターゲットの別名または内部名のリストです。                            |
-| `allTargets`       | `boolean`           | `false`                        | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
+| `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
+| `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
-| `outputRoot`       | `string`            | `"."`                          | `dist-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
+| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
+| `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
-- `targets` と `allTargets` をどちらも省略した場合は、現在のホスト環境向けターゲットだけを生成します。
+- `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
-  `targets` には `linux64`, `linux-arm64`, `windows-amd64`, `win64`, `x64` など、muon buildが受け付けるターゲット別名を指定できます。
+  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定できます。CEF由来の `linux64` や `windows64`、`x64` などの別名は受け付けません。
 - `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
   Windowsターゲットでは `.exe` が自動的に付与されます。
+- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` から生成します。
+  `@scope/name` は `scope.name` になり、その他の使用できない文字は `-` に正規化されます。
+  生成された値は `bootstrap.appId` として `muon-core` とランチャーに埋め込まれます。
 - `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
   `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
   設定ファイルが存在しない場合は `{}` 相当として扱います。
@@ -1076,6 +1111,8 @@ export default defineConfig({
 | `minimize()`          | なし                | `Promise<void>` | 現在のウインドウを最小化します。                                 |
 | `maximize()`          | なし                | `Promise<void>` | 現在のウインドウを最大化します。                                 |
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
+| `getWindowBounds()`   | なし                | `Promise<MuonWindowBounds>` | 現在のトップレベルウインドウ領域を取得します。             |
+| `setWindowBounds(bounds)` | `bounds: MuonWindowBounds` | `Promise<void>` | 現在のトップレベルウインドウ領域の変更を要求します。     |
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
@@ -1085,6 +1122,11 @@ export default defineConfig({
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
 - `recycle()` は `muon-bootstrap` や `muon dev` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
 - `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
+- `getWindowBounds()` と `setWindowBounds()` の bounds はブラウザ表示領域ではなく、Muonカスタムタイトルバーやネイティブフレームを含むトップレベルウインドウ領域です。
+  座標とサイズの単位はCEF Viewsと同じDIP screen coordinatesです。
+  `setWindowBounds()` では `x`, `y`, `width`, `height` に32bit符号付き整数範囲のsafe integerを指定し、`width` と `height` は1以上である必要があります。
+  Waylandではトップレベルウインドウの配置がcompositorに管理されるため、位置やサイズの要求が無視または調整されることがあります。
+  厳密な位置制御が必要な場合はX11バックエンド（例: `--ozone-platform=x11`）を使用して下さい。
 - `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
@@ -1096,6 +1138,12 @@ export default defineConfig({
 ```js
 await window.muon.browser.zoomIn();
 await window.muon.browser.resetZoom();
+const bounds = await window.muon.browser.getWindowBounds();
+await window.muon.browser.setWindowBounds({
+  ...bounds,
+  width: 960,
+  height: 640,
+});
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);
@@ -1365,6 +1413,20 @@ muonをデバッグページで起動するには:
 ```bash
 npm run dev
 ```
+
+### Windowsバイナリのe2eテスト
+
+Windowsバイナリのe2eテストを実行するには、 [agent-rover](https://github.com/kekyo/agent-rover/) のリモートエージェントを起動した Windows 11 (amd64) のマシンが必要です。
+これは、仮想マシン上のインスタンスでも構いません。その上で、以下のようにテストを起動します:
+
+```bash
+export AGENT_ROVER_WIN11_HOST=<agent-host-address>
+export AGENT_ROVER_WIN11_TOKEN=<agent-token>
+
+npm run test:windows-e2e --workspace muon-core-tester
+```
+
+あるいは、環境変数が定義されていれば、 `npm run test` で一括テストにWindows e2eテストが含まれます。
 
 ### パッケージ生成
 

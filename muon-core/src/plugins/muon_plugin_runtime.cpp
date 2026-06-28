@@ -1467,21 +1467,6 @@ static void HandleMuonTrafficCallResult(void* user_data,
   state->completion(call_result);
 }
 
-static bool FindMuonSharedBufferEntryInList(
-    const std::vector<MuonSharedBufferEntry>& entries,
-    size_t value_index,
-    MuonSharedBufferEntry* entry) {
-  for (const auto& candidate : entries) {
-    if (candidate.value_index == value_index) {
-      if (entry != nullptr) {
-        *entry = candidate;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
 static bool SetMuonEncodedValue(
     CefRefPtr<CefListValue> list,
     size_t index,
@@ -1549,7 +1534,7 @@ static bool SetMuonEncodedValue(
       return true;
     case MUON_TYPE_BUFFER_VIEW: {
       MuonSharedBufferEntry entry;
-      if (!FindMuonSharedBufferEntryInList(shared_entries, index, &entry)) {
+      if (!FindMuonSharedBufferEntry(shared_entries, index, &entry)) {
         *error_message = "Missing shared buffer payload entry";
         return false;
       }

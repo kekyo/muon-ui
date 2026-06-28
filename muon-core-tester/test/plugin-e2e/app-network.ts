@@ -60,6 +60,50 @@ interface RuntimeConsoleAPICalledParams {
   }>;
 }
 
+const waitForConsoleMessage = async (
+  driver: CdpDriver,
+  type: string,
+  messageFragment: string,
+  timeoutMs: number,
+): Promise<RuntimeConsoleAPICalledParams> =>
+  await new Promise<RuntimeConsoleAPICalledParams>((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: (() => void) | undefined = undefined;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      unsubscribe?.();
+      reject(
+        new Error(
+          `Timed out waiting for ${type} console message containing ${messageFragment}`,
+        ),
+      );
+    }, timeoutMs);
+
+    unsubscribe = driver.on<RuntimeConsoleAPICalledParams>(
+      "Runtime.consoleAPICalled",
+      (params) => {
+        if (params.type !== type) {
+          return;
+        }
+        const matches = params.args?.some(
+          (argument) =>
+            typeof argument.value === "string" &&
+            argument.value.includes(messageFragment),
+        );
+        if (matches !== true || settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe?.();
+        resolve(params);
+      },
+    );
+  });
+
 const createCrc32Table = (): Uint32Array => {
   const table = new Uint32Array(256);
   for (let index = 0; index < table.length; index += 1) {
@@ -785,6 +829,67 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
     }
   });
 
+  it("warns the initiating page console for non-allowlisted fetch requests", async () => {
+    let allowedHits = 0;
+    let blockedHits = 0;
+    const server = await startHttpServer((request, response) => {
+      if (request.url === "/allowed.html") {
+        allowedHits += 1;
+        response.setHeader("Content-Type", "text/html");
+        response.end("<!doctype html><title>allowed fetch initiator</title>");
+        return;
+      }
+      if (request.url?.startsWith("/blocked-fetch.json") === true) {
+        blockedHits += 1;
+        response.statusCode = 500;
+        response.end("blocked fetch target should not reach the server");
+        return;
+      }
+      response.statusCode = 404;
+      response.end("missing");
+    });
+    const allowedUrl = `${server.origin}/allowed.html`;
+    const blockedUrl = `${server.origin}/blocked-fetch.json?quote=%22&tag=%3Cscript%3E`;
+    const running = await startDebugMuon([], ["asset://main/**", allowedUrl]);
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(allowedUrl, cdpCommandTimeoutMs);
+      expect(allowedHits).toBe(1);
+      await driver.send("Runtime.enable");
+      const consoleEvent = waitForConsoleMessage(
+        driver,
+        "warning",
+        blockedUrl,
+        cdpCommandTimeoutMs,
+      );
+      const fetchResult = await driver.evaluate(`(async () => {
+        const response = await fetch(${JSON.stringify(blockedUrl)});
+        return {
+          status: response.status,
+          text: await response.text(),
+        };
+      })()`);
+      expect(fetchResult).toEqual({
+        status: 403,
+        text: "Forbidden",
+      });
+      const consoleMessage = await consoleEvent;
+      expect(consoleMessage.type).toBe("warning");
+      expect(consoleMessage.args?.[0]?.value).toContain("Forbidden");
+      expect(consoleMessage.args?.[0]?.value).toContain(blockedUrl);
+      expect(blockedHits).toBe(0);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+      await stopHttpServer(server.server);
+    }
+  });
+
   it("allows non-asset URLs matching network.allow", async () => {
     const running = await startDebugMuon([], TEST_NETWORK_ALLOW_PATTERNS);
     let driver: CdpDriver | undefined = undefined;
@@ -1192,11 +1297,12 @@ try {
       });
       await popupDriver.send("Runtime.enable");
       await popupDriver.send("Network.enable");
-      const consoleEvent =
-        popupDriver.waitForEvent<RuntimeConsoleAPICalledParams>(
-          "Runtime.consoleAPICalled",
-          cdpCommandTimeoutMs,
-        );
+      const consoleEvent = waitForConsoleMessage(
+        popupDriver,
+        "error",
+        popupUrl,
+        cdpCommandTimeoutMs,
+      );
       const responseEvent = waitForNetworkResponse(
         popupDriver,
         popupUrl,

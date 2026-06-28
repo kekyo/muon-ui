@@ -6,6 +6,10 @@
 
 #include "network/muon_network_request_handler.h"
 
+#include "include/cef_frame.h"
+#include "include/cef_task.h"
+#include "include/wrapper/cef_helpers.h"
+
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -97,9 +101,21 @@ static void AppendJavaScriptStringLiteral(std::string* target,
   target->push_back('"');
 }
 
+static std::string CreateForbiddenMessage(const std::string& url) {
+  return std::string("Forbidden: blocked by Muon network policy: ") + url;
+}
+
+static std::string CreateConsoleWarnScript(const std::string& message) {
+  std::string script;
+  script.reserve(message.size() + 32);
+  script.append("console.warn(");
+  AppendJavaScriptStringLiteral(&script, message);
+  script.append(");");
+  return script;
+}
+
 static std::string CreateForbiddenHtmlDocument(const std::string& url) {
-  const auto message =
-      std::string("Forbidden: blocked by Muon network policy: ") + url;
+  const auto message = CreateForbiddenMessage(url);
   std::string document;
   document.reserve(url.size() * 2 + message.size() + 512);
   document.append(R"HTML(<!doctype html>
@@ -148,6 +164,29 @@ console.error()HTML");
 )HTML");
   return document;
 }
+
+class MuonNetworkPolicyWarningTask final : public CefTask {
+ public:
+  MuonNetworkPolicyWarningTask(CefRefPtr<CefFrame> frame, std::string message)
+      : frame_(frame), message_(std::move(message)) {}
+
+  void Execute() override {
+    CEF_REQUIRE_UI_THREAD();
+
+    if (!frame_ || !frame_->IsValid()) {
+      return;
+    }
+    frame_->ExecuteJavaScript(CreateConsoleWarnScript(message_),
+                              "muon://network-policy", 0);
+  }
+
+ private:
+  CefRefPtr<CefFrame> frame_;
+  std::string message_;
+
+  IMPLEMENT_REFCOUNTING(MuonNetworkPolicyWarningTask);
+  DISALLOW_COPY_AND_ASSIGN(MuonNetworkPolicyWarningTask);
+};
 
 class MuonForbiddenResourceHandler final : public CefResourceHandler {
  public:
@@ -231,9 +270,14 @@ class MuonNetworkResourceRequestHandler final
       return nullptr;
     }
 
+    const auto url = request->GetURL().ToString();
+    if (!is_top_level_navigation_ && frame) {
+      CefPostTask(TID_UI, new MuonNetworkPolicyWarningTask(
+                              frame, CreateForbiddenMessage(url)));
+    }
+
     const auto method = request->GetMethod().ToString();
-    return new MuonForbiddenResourceHandler(request->GetURL().ToString(),
-                                            is_top_level_navigation_,
+    return new MuonForbiddenResourceHandler(url, is_top_level_navigation_,
                                             method == "HEAD");
   }
 

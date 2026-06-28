@@ -427,6 +427,7 @@ exit 1
     expect(stdout).toContain("Usage: muon [options] [command]");
     expect(stdout).toContain("build");
     expect(stdout).toContain("dev");
+    expect(stdout).toContain("pack");
     expect(stdout).toContain("init");
     expect(stdout).toContain("prepare");
     expect(stdout).toContain("embed-config");
@@ -448,7 +449,7 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain(".gitignore");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\ndist-muon-*/\n",
+      ".muon/\ndist-muon-*/\nartifacts/\n",
     );
   });
 
@@ -464,14 +465,17 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\ndist-muon-*/\n",
+      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
     );
   });
 
   it("keeps existing Muon generated gitignore entries when the muon CLI init command is repeated", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-generated-existing-"));
     cleanupDirectories.push(root);
-    await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\ndist-muon-*/\n");
+    await writeFile(
+      join(root, ".gitignore"),
+      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+    );
     const cliPath = resolve("dist", "cli.cjs");
 
     await execFileAsync(process.execPath, [cliPath, "init"], {
@@ -480,7 +484,7 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\ndist-muon-*/\n",
+      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
     );
   });
 

@@ -17,7 +17,9 @@ const signalExitCodes = {
   SIGTERM: 143,
 };
 
-const runtimeDirectory = resolve(process.argv[2] ?? ".run/dev-linux64-debug");
+const runtimeDirectory = resolve(
+  process.argv[2] ?? ".run/dev-linux-amd64-debug",
+);
 const executableName =
   process.argv[3] ??
   (process.platform === "win32" ? "muon-core.exe" : "muon-core");

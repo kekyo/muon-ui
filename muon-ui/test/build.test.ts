@@ -73,28 +73,28 @@ const fakePackageTargetDescriptors: Record<
     mingwRuntimeFiles: readonly string[];
   }
 > = {
-  linux64: {
+  "linux-amd64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
     mingwRuntimeFiles: [],
   },
-  linuxarm: {
+  "linux-armhf": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
     mingwRuntimeFiles: [],
   },
-  linuxarm64: {
+  "linux-arm64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
     mingwRuntimeFiles: [],
   },
-  windows32: {
+  "windows-i686": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
@@ -105,7 +105,7 @@ const fakePackageTargetDescriptors: Record<
       "libwinpthread-1.dll",
     ],
   },
-  windows64: {
+  "windows-amd64": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
@@ -160,7 +160,7 @@ const createFakeMuonPackageDistForTargets = async (
 };
 
 const createFakeMuonPackageDist = async (root: string): Promise<string> =>
-  await createFakeMuonPackageDistForTargets(root, ["linux64"]);
+  await createFakeMuonPackageDistForTargets(root, ["linux-amd64"]);
 
 const readZipEntries = async (
   archivePath: string,
@@ -261,7 +261,7 @@ describe("muon build", () => {
     });
 
     const [target] = result.targets;
-    expect(target?.target).toBe("linux64");
+    expect(target?.target).toBe("linux-amd64");
     expect(target?.outputPath).toBe(join(root, "dist-muon-linux-amd64"));
     expect(target?.launcherPath).toBe(
       join(root, "dist-muon-linux-amd64", "muon-sample"),
@@ -327,11 +327,11 @@ describe("muon build", () => {
   it("builds every supported target by default when targets are omitted", async () => {
     const root = await createTemporaryDirectory("muon-build-default-all-");
     const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
-      "linux64",
-      "linuxarm",
-      "linuxarm64",
-      "windows32",
-      "windows64",
+      "linux-amd64",
+      "linux-armhf",
+      "linux-arm64",
+      "windows-i686",
+      "windows-amd64",
     ]);
     await writeFile(
       join(root, "package.json"),
@@ -347,11 +347,11 @@ describe("muon build", () => {
     });
 
     expect(result.targets.map((target) => target.target)).toEqual([
-      "linux64",
-      "linuxarm",
-      "linuxarm64",
-      "windows32",
-      "windows64",
+      "linux-amd64",
+      "linux-armhf",
+      "linux-arm64",
+      "windows-i686",
+      "windows-amd64",
     ]);
     await expect(
       exists(
@@ -368,7 +368,7 @@ describe("muon build", () => {
   it("copies MinGW runtime DLLs into Windows target distributions", async () => {
     const root = await createTemporaryDirectory("muon-build-windows-runtime-");
     const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
-      "windows64",
+      "windows-amd64",
     ]);
     await writeFile(
       join(root, "package.json"),
@@ -380,20 +380,39 @@ describe("muon build", () => {
     await buildMuonApp({
       root,
       packageDirectory,
-      targets: ["windows-x64"],
+      targets: ["windows-amd64"],
       assetSalt: Buffer.from([0x0b, 0x22]),
     });
 
     const outputPath = join(root, "dist-muon-windows-amd64");
     await expect(
       readFile(join(outputPath, "libgcc_s_seh-1.dll"), "utf8"),
-    ).resolves.toBe("windows64 libgcc_s_seh-1.dll\n");
+    ).resolves.toBe("windows-amd64 libgcc_s_seh-1.dll\n");
     await expect(
       readFile(join(outputPath, "libstdc++-6.dll"), "utf8"),
-    ).resolves.toBe("windows64 libstdc++-6.dll\n");
+    ).resolves.toBe("windows-amd64 libstdc++-6.dll\n");
     await expect(
       readFile(join(outputPath, "libwinpthread-1.dll"), "utf8"),
-    ).resolves.toBe("windows64 libwinpthread-1.dll\n");
+    ).resolves.toBe("windows-amd64 libwinpthread-1.dll\n");
+  });
+
+  it("rejects CEF-derived target IDs in public build options", async () => {
+    const root = await createTemporaryDirectory("muon-build-old-target-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "old-target-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux64"],
+      }),
+    ).rejects.toThrow("Unsupported muon build target: linux64");
   });
 
   it("packages Vite output under asset://main/ during vite build", async () => {

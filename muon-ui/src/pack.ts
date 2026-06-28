@@ -41,6 +41,7 @@ import {
   getMuonVitePluginOptions,
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
+import { getMuonTargetDescriptor } from "./targets.js";
 
 const supportedPackTypes = ["zip", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
@@ -67,7 +68,7 @@ export interface MuonPackOptions {
    */
   types: readonly string[];
   /**
-   * Target aliases or internal target names to build.
+   * Public target identifiers to build.
    */
   targets?: readonly string[];
   /**
@@ -411,10 +412,11 @@ const assertPackTypeSupportsTarget = (
   type: MuonPackType,
   target: MuonBuildTarget,
 ): void => {
-  if (type === "deb" && !target.startsWith("linux")) {
+  const descriptor = getMuonTargetDescriptor(target);
+  if (type === "deb" && descriptor.os !== "linux") {
     throw new Error("deb packaging supports only Linux targets.");
   }
-  if (type === "nsis" && !target.startsWith("windows")) {
+  if (type === "nsis" && descriptor.os !== "windows") {
     throw new Error("nsis packaging supports only Windows targets.");
   }
 };
@@ -496,7 +498,7 @@ const packageZip = async (
   );
   const outputPath = join(
     artifactsRoot,
-    `${metadata.packageName}-${target.target}.zip`,
+    `${metadata.packageName}-${metadata.version}-${target.target}.zip`,
   );
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, zip.toBuffer());
@@ -507,12 +509,6 @@ const packageZip = async (
   };
 };
 
-const debArchitectureByTarget: Partial<Record<MuonBuildTarget, string>> = {
-  linux64: "amd64",
-  linuxarm64: "arm64",
-  linuxarm: "armhf",
-};
-
 const packageDeb = async (
   root: string,
   target: MuonBuildTargetResult,
@@ -521,10 +517,11 @@ const packageDeb = async (
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<MuonPackArtifact> => {
-  const architecture = debArchitectureByTarget[target.target];
-  if (architecture === undefined) {
+  const descriptor = getMuonTargetDescriptor(target.target);
+  if (descriptor.os !== "linux") {
     throw new Error(`Unsupported deb target: ${target.target}`);
   }
+  const architecture = descriptor.arch;
   const packageRoot = join(
     packageBuildRoot,
     "deb",
@@ -563,7 +560,7 @@ const packageDeb = async (
   );
   const outputPath = join(
     artifactsRoot,
-    `${metadata.packageName}_${metadata.version}_${architecture}.deb`,
+    `${metadata.packageName}-${metadata.version}-${architecture}.deb`,
   );
   await mkdir(dirname(outputPath), { recursive: true });
   await runTool(
@@ -590,6 +587,10 @@ const packageNsis = async (
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<MuonPackArtifact> => {
+  const descriptor = getMuonTargetDescriptor(target.target);
+  if (descriptor.os !== "windows") {
+    throw new Error(`Unsupported nsis target: ${target.target}`);
+  }
   const scriptPath = join(
     packageBuildRoot,
     "nsis",
@@ -597,7 +598,7 @@ const packageNsis = async (
   );
   const outputPath = join(
     artifactsRoot,
-    `${metadata.packageName}-${metadata.version}-${target.target}-setup.exe`,
+    `${metadata.packageName}-${metadata.version}-${descriptor.arch}-setup.exe`,
   );
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });

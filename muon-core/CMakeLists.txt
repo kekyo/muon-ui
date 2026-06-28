@@ -32,7 +32,9 @@ set(MUON_CEF_SHA1 "" CACHE STRING
 set(MUON_CEF_SIZE "0" CACHE STRING
   "CEF binary package size used to generate muon runtime metadata.")
 set(MUON_TARGET_NAME "" CACHE STRING
-  "Muon runtime target name used to generate runtime metadata.")
+  "Public Muon runtime target name used to generate runtime metadata.")
+set(MUON_CEF_TARGET_NAME "" CACHE STRING
+  "Internal CEF target name used to generate runtime metadata.")
 set(MUON_CORE_VERSION "" CACHE STRING
   "muon-core version used to generate runtime metadata.")
 set(MUON_CORE_GIT_COMMIT_HASH "" CACHE STRING
@@ -146,21 +148,37 @@ add_compile_definitions(CEF_API_VERSION=${MUON_CEF_API_VERSION})
 if(NOT MUON_TARGET_NAME)
   if(WIN32)
     if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-      set(MUON_TARGET_NAME "windows32")
+      set(MUON_TARGET_NAME "windows-i686")
     else()
-      set(MUON_TARGET_NAME "windows64")
+      set(MUON_TARGET_NAME "windows-amd64")
     endif()
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    set(MUON_TARGET_NAME "linux64")
+    set(MUON_TARGET_NAME "linux-amd64")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(MUON_TARGET_NAME "linuxarm64")
+    set(MUON_TARGET_NAME "linux-arm64")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
-    set(MUON_TARGET_NAME "linuxarm")
+    set(MUON_TARGET_NAME "linux-armhf")
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i.86|x86")
     message(FATAL_ERROR
       "Linux 32-bit CEF builds are discontinued after CEF 101 and are not supported.")
   else()
-    set(MUON_TARGET_NAME "linux64")
+    set(MUON_TARGET_NAME "linux-amd64")
+  endif()
+endif()
+if(NOT MUON_CEF_TARGET_NAME)
+  if(MUON_TARGET_NAME STREQUAL "linux-amd64")
+    set(MUON_CEF_TARGET_NAME "linux64")
+  elseif(MUON_TARGET_NAME STREQUAL "linux-armhf")
+    set(MUON_CEF_TARGET_NAME "linuxarm")
+  elseif(MUON_TARGET_NAME STREQUAL "linux-arm64")
+    set(MUON_CEF_TARGET_NAME "linuxarm64")
+  elseif(MUON_TARGET_NAME STREQUAL "windows-i686")
+    set(MUON_CEF_TARGET_NAME "windows32")
+  elseif(MUON_TARGET_NAME STREQUAL "windows-amd64")
+    set(MUON_CEF_TARGET_NAME "windows64")
+  else()
+    message(FATAL_ERROR
+      "Unsupported MUON_TARGET_NAME: ${MUON_TARGET_NAME}")
   endif()
 endif()
 if(NOT MUON_CEF_VERSION)
@@ -170,7 +188,7 @@ if(NOT MUON_CEF_VERSION)
   endif()
 endif()
 if(NOT MUON_CEF_PACKAGE AND MUON_CEF_VERSION)
-  set(MUON_CEF_PACKAGE "cef_binary_${MUON_CEF_VERSION}_${MUON_TARGET_NAME}_minimal.tar.bz2")
+  set(MUON_CEF_PACKAGE "cef_binary_${MUON_CEF_VERSION}_${MUON_CEF_TARGET_NAME}_minimal.tar.bz2")
 endif()
 if(NOT MUON_CEF_PACKAGE_URL AND MUON_CEF_PACKAGE)
   string(REPLACE "+" "%2B" MUON_CEF_PACKAGE_URL_ESCAPED "${MUON_CEF_PACKAGE}")
@@ -1243,6 +1261,7 @@ if(MUON_BUILD_TESTS)
   target_compile_definitions(muon_runtime_info_generated_test PRIVATE
     EXPECTED_EXECUTABLE_NAME="${APP_EXECUTABLE_NAME}"
     EXPECTED_TARGET_NAME="${MUON_TARGET_NAME}"
+    EXPECTED_CEF_TARGET_NAME="${MUON_CEF_TARGET_NAME}"
     EXPECTED_CEF_VERSION="${MUON_CEF_VERSION}"
     EXPECTED_CEF_API_VERSION=${MUON_CEF_API_VERSION}
     )

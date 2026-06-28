@@ -932,6 +932,8 @@ declare global {
     readonly executableName: string;
     /** Muon runtime target name. */
     readonly target: string;
+    /** Internal CEF target name used for catalog lookup. */
+    readonly cefTarget: string;
     /** muon-core build identity. */
     readonly muonCore: MuonCoreRuntimeInfo;
     /** CEF build selected when muon-core was built. */

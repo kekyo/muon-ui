@@ -111,12 +111,12 @@ const createFakeWindowsRemoteContext = (
   },
   httpHost: "192.0.2.1",
   runtime: {
-    debugRuntimeDirectory: String.raw`C:\muon-e2e\windows64\debug`,
-    releaseRuntimeDirectory: String.raw`C:\muon-e2e\windows64\release`,
-    relayExecutablePath: String.raw`C:\muon-e2e\windows64\muon-cdp-relay.exe`,
-    target: "windows64",
+    debugRuntimeDirectory: String.raw`C:\muon-e2e\windows-amd64\debug`,
+    releaseRuntimeDirectory: String.raw`C:\muon-e2e\windows-amd64\release`,
+    relayExecutablePath: String.raw`C:\muon-e2e\windows-amd64\muon-cdp-relay.exe`,
+    target: "windows-amd64",
   },
-  tempDirectory: String.raw`C:\muon-e2e\windows64\tmp`,
+  tempDirectory: String.raw`C:\muon-e2e\windows-amd64\tmp`,
 });
 
 describe("Windows e2e environment", () => {
@@ -197,8 +197,8 @@ describe("Windows e2e matrix", () => {
     const matrix = createWindowsE2eMatrix(caseNames);
 
     expect(windowsRuntimeTargets.map((target) => target.target)).toEqual([
-      "windows32",
-      "windows64",
+      "windows-i686",
+      "windows-amd64",
     ]);
     expect(windowsRuntimeTargets.map((target) => target.platform)).toEqual([
       "win32",
@@ -207,35 +207,35 @@ describe("Windows e2e matrix", () => {
     expect(matrix).toEqual([
       {
         caseNames,
-        debugRuntimeDirectory: "muon-core/.run/test-windows32-debug",
+        debugRuntimeDirectory: "muon-core/.run/test-windows-i686-debug",
         platform: "win32",
-        releaseRuntimeDirectory: "muon-core/.run/test-windows32-release",
-        target: "windows32",
+        releaseRuntimeDirectory: "muon-core/.run/test-windows-i686-release",
+        target: "windows-i686",
       },
       {
         caseNames,
-        debugRuntimeDirectory: "muon-core/.run/test-windows64-debug",
+        debugRuntimeDirectory: "muon-core/.run/test-windows-amd64-debug",
         platform: "win64",
-        releaseRuntimeDirectory: "muon-core/.run/test-windows64-release",
-        target: "windows64",
+        releaseRuntimeDirectory: "muon-core/.run/test-windows-amd64-release",
+        target: "windows-amd64",
       },
     ]);
     expect(matrix[0]?.caseNames).toBe(matrix[1]?.caseNames);
   });
 
   it("defaults to the 64-bit Windows runtime target", () => {
-    expect(resolveWindowsRuntimeTarget(undefined).target).toBe("windows64");
-    expect(resolveWindowsRuntimeTarget("").target).toBe("windows64");
+    expect(resolveWindowsRuntimeTarget(undefined).target).toBe("windows-amd64");
+    expect(resolveWindowsRuntimeTarget("").target).toBe("windows-amd64");
   });
 
   it("accepts target and platform aliases", () => {
-    expect(resolveWindowsRuntimeTarget("windows32").platform).toBe("win32");
-    expect(resolveWindowsRuntimeTarget("win64").target).toBe("windows64");
+    expect(resolveWindowsRuntimeTarget("windows-i686").platform).toBe("win32");
+    expect(resolveWindowsRuntimeTarget("win64").target).toBe("windows-amd64");
   });
 
   it("rejects unknown target aliases", () => {
-    expect(() => resolveWindowsRuntimeTarget("linux64")).toThrow(
-      "MUON_E2E_WINDOWS_TARGET must be windows32, win32, windows64, or win64",
+    expect(() => resolveWindowsRuntimeTarget("linux-amd64")).toThrow(
+      "MUON_E2E_WINDOWS_TARGET must be windows-i686, win32, windows-amd64, or win64",
     );
   });
 });
@@ -243,8 +243,8 @@ describe("Windows e2e matrix", () => {
 describe("Windows e2e paths", () => {
   it("creates file URLs from Windows drive paths on the Linux host", () => {
     expect(
-      pathToWindowsFileUrlHref("C:\\muon-e2e\\windows32\\debug\\uri\\"),
-    ).toBe("file:///C:/muon-e2e/windows32/debug/uri/");
+      pathToWindowsFileUrlHref("C:\\muon-e2e\\windows-i686\\debug\\uri\\"),
+    ).toBe("file:///C:/muon-e2e/windows-i686/debug/uri/");
   });
 
   it("escapes Windows file URL path characters without treating them as POSIX paths", () => {
@@ -267,9 +267,9 @@ describe("Windows e2e CDP ports", () => {
 });
 
 describe("Windows e2e staging", () => {
-  const debugRuntimeDirectory = String.raw`C:\muon-e2e\windows32\debug`;
-  const releaseRuntimeDirectory = String.raw`C:\muon-e2e\windows32\release`;
-  const relayExecutablePath = String.raw`C:\muon-e2e\windows32\muon-cdp-relay.exe`;
+  const debugRuntimeDirectory = String.raw`C:\muon-e2e\windows-i686\debug`;
+  const releaseRuntimeDirectory = String.raw`C:\muon-e2e\windows-i686\release`;
+  const relayExecutablePath = String.raw`C:\muon-e2e\windows-i686\muon-cdp-relay.exe`;
   const runtimeDirectories = [
     debugRuntimeDirectory,
     releaseRuntimeDirectory,
@@ -281,13 +281,13 @@ describe("Windows e2e staging", () => {
         createProcessSnapshot(
           10,
           "muon-core.exe",
-          String.raw`C:\muon-e2e\windows32\debug\muon-core.exe`,
+          String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
           true,
         ),
         createProcessSnapshot(
           11,
           "bootstrap.exe",
-          String.raw`C:\muon-e2e\windows32\release\bootstrap.exe`,
+          String.raw`C:\muon-e2e\windows-i686\release\bootstrap.exe`,
           true,
         ),
         createProcessSnapshot(12, "muon-cdp-relay.exe", "", true),
@@ -300,7 +300,7 @@ describe("Windows e2e staging", () => {
         createProcessSnapshot(
           14,
           "muon-core.exe",
-          String.raw`C:\muon-e2e\windows32\debug\muon-core.exe`,
+          String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
           false,
         ),
       ],
@@ -323,7 +323,7 @@ describe("Windows e2e staging", () => {
         createProcessSnapshot(
           20,
           "muon-core.exe",
-          String.raw`C:\muon-e2e\windows32\debug\muon-core.exe`,
+          String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
           true,
         ),
       ],

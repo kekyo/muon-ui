@@ -49,5 +49,5 @@ const buildRelay = async (target, compiler) => {
   ]);
 };
 
-await buildRelay("windows32", "i686-w64-mingw32-gcc");
-await buildRelay("windows64", "x86_64-w64-mingw32-gcc");
+await buildRelay("windows-i686", "i686-w64-mingw32-gcc");
+await buildRelay("windows-amd64", "x86_64-w64-mingw32-gcc");

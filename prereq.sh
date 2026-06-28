@@ -72,13 +72,13 @@ require_command "${CONTAINER_ENGINE}"
 target_name_for_arch() {
   case "$1" in
     amd64)
-      printf '%s\n' "linux64"
+      printf '%s\n' "linux-amd64"
       ;;
     armv7l)
-      printf '%s\n' "linuxarm"
+      printf '%s\n' "linux-armhf"
       ;;
     arm64)
-      printf '%s\n' "linuxarm64"
+      printf '%s\n' "linux-arm64"
       ;;
     *)
       fail "Unsupported architecture: $1"

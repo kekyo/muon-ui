@@ -66,31 +66,31 @@ const fakeTargetDescriptors: Record<
     bootstrapExecutableName: string;
   }
 > = {
-  linux64: {
+  "linux-amd64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
   },
-  linuxarm: {
+  "linux-armhf": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
   },
-  linuxarm64: {
+  "linux-arm64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
   },
-  windows32: {
+  "windows-i686": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
     bootstrapExecutableName: "muon-bootstrap.exe",
   },
-  windows64: {
+  "windows-amd64": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
@@ -273,7 +273,9 @@ afterEach(async () => {
 describe("muon pack", () => {
   it("builds Vite output once and packages the configured target as a ZIP", async () => {
     const root = await createTemporaryDirectory("muon-pack-zip-");
-    const packageDirectory = await createFakeMuonPackageDist(root, ["linux64"]);
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
     await writeViteProject(root, packageDirectory, ["linux-amd64"]);
 
     const result = await packMuonApp({
@@ -282,11 +284,13 @@ describe("muon pack", () => {
     });
 
     const [artifact] = result.artifacts;
-    expect(result.targets.map((target) => target.target)).toEqual(["linux64"]);
+    expect(result.targets.map((target) => target.target)).toEqual([
+      "linux-amd64",
+    ]);
     expect(artifact?.type).toBe("zip");
-    expect(artifact?.target).toBe("linux64");
+    expect(artifact?.target).toBe("linux-amd64");
     expect(artifact?.path).toBe(
-      join(root, "artifacts", "packed-sample-linux64.zip"),
+      join(root, "artifacts", "packed-sample-1.2.3-linux-amd64.zip"),
     );
     await expect(exists(join(root, "dist-muon-linux-amd64"))).resolves.toBe(
       true,
@@ -304,7 +308,9 @@ describe("muon pack", () => {
 
   it("creates a deb package tree and invokes dpkg-deb for Linux targets", async () => {
     const root = await createTemporaryDirectory("muon-pack-deb-");
-    const packageDirectory = await createFakeMuonPackageDist(root, ["linux64"]);
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
     const binDirectory = join(root, "bin");
     const logPath = join(root, "dpkg-deb.log");
     await mkdir(binDirectory, { recursive: true });
@@ -337,14 +343,14 @@ printf 'deb\\n' > "$output_path"
     const [artifact] = result.artifacts;
     expect(artifact?.type).toBe("deb");
     expect(artifact?.path).toBe(
-      join(root, "artifacts", "packed-sample_1.2.3_amd64.deb"),
+      join(root, "artifacts", "packed-sample-1.2.3-amd64.deb"),
     );
     await expect(readFile(artifact?.path ?? "", "utf8")).resolves.toBe("deb\n");
     await expect(readFile(logPath, "utf8")).resolves.toBe(
-      `--build\n${join(root, ".muon", "pack", "deb", "packed-sample-linux64")}\n${artifact?.path}\n`,
+      `--build\n${join(root, ".muon", "pack", "deb", "packed-sample-linux-amd64")}\n${artifact?.path}\n`,
     );
     await expect(readdir(join(root, "artifacts"))).resolves.toEqual([
-      "packed-sample_1.2.3_amd64.deb",
+      "packed-sample-1.2.3-amd64.deb",
     ]);
     await expect(exists(join(root, "artifacts", "deb"))).resolves.toBe(false);
     await expect(
@@ -360,7 +366,7 @@ printf 'deb\\n' > "$output_path"
   it("creates an NSIS script and invokes makensis for Windows targets", async () => {
     const root = await createTemporaryDirectory("muon-pack-nsis-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
-      "windows64",
+      "windows-amd64",
     ]);
     const binDirectory = join(root, "bin");
     const logPath = join(root, "makensis.log");
@@ -393,21 +399,21 @@ printf 'nsis\\n' > "$output_path"
     const [artifact] = result.artifacts;
     expect(artifact?.type).toBe("nsis");
     expect(artifact?.path).toBe(
-      join(root, "artifacts", "packed-sample-1.2.3-windows64-setup.exe"),
+      join(root, "artifacts", "packed-sample-1.2.3-amd64-setup.exe"),
     );
     await expect(readFile(artifact?.path ?? "", "utf8")).resolves.toBe(
       "nsis\n",
     );
     await expect(readFile(logPath, "utf8")).resolves.toBe(
-      `${join(root, ".muon", "pack", "nsis", "packed-sample-windows64.nsi")}\n`,
+      `${join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi")}\n`,
     );
     await expect(readdir(join(root, "artifacts"))).resolves.toEqual([
-      "packed-sample-1.2.3-windows64-setup.exe",
+      "packed-sample-1.2.3-amd64-setup.exe",
     ]);
     await expect(exists(join(root, "artifacts", "nsis"))).resolves.toBe(false);
     await expect(
       readFile(
-        join(root, ".muon", "pack", "nsis", "packed-sample-windows64.nsi"),
+        join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
         "utf8",
       ),
     ).resolves.toContain("RequestExecutionLevel user");
@@ -416,7 +422,7 @@ printf 'nsis\\n' > "$output_path"
   it("rejects package types that do not support the resolved target", async () => {
     const root = await createTemporaryDirectory("muon-pack-invalid-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
-      "windows64",
+      "windows-amd64",
     ]);
     await writeViteProject(root, packageDirectory, ["windows-amd64"]);
 
@@ -430,7 +436,9 @@ printf 'nsis\\n' > "$output_path"
 
   it("requires package version metadata", async () => {
     const root = await createTemporaryDirectory("muon-pack-metadata-");
-    const packageDirectory = await createFakeMuonPackageDist(root, ["linux64"]);
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
     await writeViteProject(root, packageDirectory, ["linux-amd64"]);
     const packageJson = JSON.parse(
       await readFile(join(root, "package.json"), "utf8"),

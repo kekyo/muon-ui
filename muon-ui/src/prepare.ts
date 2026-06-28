@@ -8,6 +8,11 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import {
+  getDefaultMuonTarget,
+  normalizeMuonTarget,
+  type MuonTarget,
+} from "./targets.js";
 
 /**
  * Options used to invoke the native Muon prepare helper.
@@ -29,7 +34,7 @@ export interface MuonPrepareOptions {
   stageDir: string | undefined;
 
   /**
-   * Target runtime platform such as linux64, linuxarm, linuxarm64, or windows64.
+   * Public target runtime platform such as linux-amd64 or windows-amd64.
    */
   target: string | undefined;
 
@@ -99,29 +104,14 @@ export interface MuonPrepareResult {
 export const getDefaultMuonPrepareTarget = (
   platform: NodeJS.Platform,
   architecture: NodeJS.Architecture,
-): string => {
-  if (platform === "win32") {
-    if (architecture === "ia32") {
-      return "windows32";
-    }
-    if (architecture === "x64") {
-      return "windows64";
-    }
+): MuonTarget => {
+  try {
+    return getDefaultMuonTarget(platform, architecture);
+  } catch {
+    throw new Error(
+      `Unsupported Muon prepare target: platform=${platform}, arch=${architecture}`,
+    );
   }
-  if (platform === "linux") {
-    if (architecture === "x64") {
-      return "linux64";
-    }
-    if (architecture === "arm") {
-      return "linuxarm";
-    }
-    if (architecture === "arm64") {
-      return "linuxarm64";
-    }
-  }
-  throw new Error(
-    `Unsupported Muon prepare target: platform=${platform}, arch=${architecture}`,
-  );
 };
 
 const getPrepareExecutableName = (platform: NodeJS.Platform): string =>
@@ -172,7 +162,10 @@ const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
     args.push("--stage-dir", options.stageDir);
   }
   if (options.target !== undefined) {
-    args.push("--target", options.target);
+    args.push(
+      "--target",
+      normalizeMuonTarget(options.target, "Muon prepare target"),
+    );
   }
   if (options.cacheDir !== undefined) {
     args.push("--cache-dir", options.cacheDir);

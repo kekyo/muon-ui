@@ -23,7 +23,7 @@ const windowsRuntimeTarget = resolveWindowsRuntimeTarget(
   process.env.MUON_E2E_WINDOWS_TARGET,
 );
 const windowsCdpRelayBasePort =
-  windowsRuntimeTarget.target === "windows32" ? 39220 : 39320;
+  windowsRuntimeTarget.target === "windows-i686" ? 39220 : 39320;
 const describeWindowsE2e =
   windowsE2eEnvironment.status === "configured" ? describe : describe.skip;
 const suiteName =

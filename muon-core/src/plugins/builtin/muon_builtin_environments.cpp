@@ -167,6 +167,8 @@ static bool CreateRuntimeInfoJson(std::string* result,
       !AddRuntimeString(document, root, "executableName",
                         kMuonRuntimeInfo.executable_name) ||
       !AddRuntimeString(document, root, "target", kMuonRuntimeInfo.target) ||
+      !AddRuntimeString(document, root, "cefTarget",
+                        kMuonRuntimeInfo.cef_target) ||
       !yyjson_mut_obj_add_val(document, root, "muonCore", muon_core) ||
       !yyjson_mut_obj_add_val(document, root, "cefReference",
                               cef_reference) ||

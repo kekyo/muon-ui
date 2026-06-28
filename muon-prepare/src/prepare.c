@@ -74,6 +74,37 @@ typedef struct {
 
 static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
 
+static const char *muon_cef_target_from_public_target(const char *target) {
+  if (target == NULL) {
+    return NULL;
+  }
+  if (strcmp(target, "linux-amd64") == 0) {
+    return "linux64";
+  }
+  if (strcmp(target, "linux-armhf") == 0) {
+    return "linuxarm";
+  }
+  if (strcmp(target, "linux-arm64") == 0) {
+    return "linuxarm64";
+  }
+  if (strcmp(target, "windows-i686") == 0) {
+    return "windows32";
+  }
+  if (strcmp(target, "windows-amd64") == 0) {
+    return "windows64";
+  }
+  return NULL;
+}
+
+static int validate_public_target(const char *target) {
+  if (muon_cef_target_from_public_target(target) != NULL) {
+    return 0;
+  }
+  muon_print_error("Unsupported Muon prepare target: %s\n",
+                   target == NULL ? "(null)" : target);
+  return -1;
+}
+
 static void prepare_report_progress(const PrepareOptions *options,
                                     MuonPrepareProgressPhase phase,
                                     const char *status,
@@ -280,6 +311,7 @@ static int ensure_muon_gitignore_entry(const char *stage_dir) {
 static const MuonRuntimeInfo *get_embedded_runtime_info(void) {
 #if MUON_RUNTIME_INFO_AVAILABLE
   if (kMuonRuntimeInfo.name == NULL || kMuonRuntimeInfo.target == NULL ||
+      kMuonRuntimeInfo.cef_target == NULL ||
       kMuonRuntimeInfo.cef_reference_version == NULL ||
       kMuonRuntimeInfo.cef_reference_distribution == NULL ||
       kMuonRuntimeInfo.cef_reference_artifact.file_name == NULL ||
@@ -600,7 +632,7 @@ static MuonCefReference create_cef_reference(
   MuonCefReference reference;
   memset(&reference, 0, sizeof(reference));
   reference.version = runtime_info->cef_reference_version;
-  reference.target = runtime_info->target;
+  reference.target = runtime_info->cef_target;
   reference.distribution = runtime_info->cef_reference_distribution;
   reference.api_version = runtime_info->cef_reference_api_version;
   reference.api_hash = runtime_info->cef_reference_api_hash;
@@ -1356,6 +1388,7 @@ static void print_result_json(const PrepareResult *result) {
 }
 
 static void print_cef_result_json(const char *cef_path, const char *archive_path,
+                                  const char *public_target,
                                   const MuonCefArtifact *artifact) {
   yyjson_mut_doc *document = yyjson_mut_doc_new(NULL);
   yyjson_mut_val *root = document == NULL ? NULL : yyjson_mut_obj(document);
@@ -1371,7 +1404,9 @@ static void print_cef_result_json(const char *cef_path, const char *archive_path
       yyjson_mut_obj_add_strcpy(document, root, "cefPath", cef_path) &&
       yyjson_mut_obj_add_strcpy(document, root, "archivePath", archive_path) &&
       yyjson_mut_obj_add_strcpy(document, root, "version", artifact->version) &&
-      yyjson_mut_obj_add_strcpy(document, root, "target", artifact->target) &&
+      yyjson_mut_obj_add_strcpy(document, root, "target", public_target) &&
+      yyjson_mut_obj_add_strcpy(document, root, "cefTarget",
+                                artifact->target) &&
       yyjson_mut_obj_add_strcpy(document, root, "distribution",
                                 artifact->distribution) &&
       yyjson_mut_obj_add_strcpy(document, artifact_object, "fileName",
@@ -1438,6 +1473,9 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
   if (options->target == NULL) {
     options->target = MUON_PREPARE_TARGET_NAME;
   }
+  if (validate_public_target(options->target) != 0) {
+    return -1;
+  }
   muon_normalize_path_separators(options->muon_path);
   muon_normalize_path_separators(options->cef_path);
   muon_normalize_path_separators(options->stage_dir);
@@ -1491,6 +1529,9 @@ static int parse_buildtime_arguments(int argc, char **argv, int start_index,
   if (options->target == NULL) {
     options->target = MUON_PREPARE_TARGET_NAME;
   }
+  if (validate_public_target(options->target) != 0) {
+    return -1;
+  }
   muon_normalize_path_separators(options->output_dir);
   muon_normalize_path_separators(options->cache_dir);
   return options->cache_dir == NULL || options->cef_version_policy == NULL ||
@@ -1523,7 +1564,8 @@ int muon_prepare_in_place_with_progress(
   set_default_bootstrap_options(&options);
   if (options.muon_path == NULL || options.target == NULL ||
       options.cache_dir == NULL || options.cef_version_policy == NULL ||
-      options.cef_exact_version == NULL) {
+      options.cef_exact_version == NULL ||
+      validate_public_target(options.target) != 0) {
     free(options.muon_path);
     free(options.target);
     free(options.cache_dir);
@@ -1641,6 +1683,7 @@ int muon_prepare_staged_with_progress(
   if (options.muon_path == NULL || options.stage_dir == NULL ||
       options.target == NULL || options.cache_dir == NULL ||
       options.cef_version_policy == NULL || options.cef_exact_version == NULL ||
+      validate_public_target(options.target) != 0 ||
       load_bootstrap_config_if_present(&options) != 0) {
     free(options.muon_path);
     free(options.stage_dir);
@@ -1801,6 +1844,10 @@ static int run_buildtime_command(int argc, char **argv, int start_index) {
   MuonCefArtifact artifact;
   memset(&artifact, 0, sizeof(artifact));
   char *archive_path = NULL;
+  const char *cef_target = muon_cef_target_from_public_target(options.target);
+  if (cef_target == NULL) {
+    goto cleanup_artifact;
+  }
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_artifact;
   }
@@ -1808,7 +1855,7 @@ static int run_buildtime_command(int argc, char **argv, int start_index) {
     goto cleanup_artifact;
   }
   if (muon_prepare_resolve_cef_artifact(options.cache_dir,
-                                        options.cef_version, options.target,
+                                        options.cef_version, cef_target,
                                         "minimal", &artifact) != 0) {
     goto cleanup_artifact;
   }
@@ -1824,10 +1871,11 @@ static int run_buildtime_command(int argc, char **argv, int start_index) {
     goto cleanup_artifact;
   }
   muon_log_message("CEF files extracted: version=%s target=%s files=%llu",
-              artifact.version, artifact.target,
+              artifact.version, options.target,
               (unsigned long long)cef_file_count);
   if (options.json) {
-    print_cef_result_json(options.output_dir, archive_path, &artifact);
+    print_cef_result_json(options.output_dir, archive_path, options.target,
+                          &artifact);
   } else {
     printf("%s\n", options.output_dir);
   }

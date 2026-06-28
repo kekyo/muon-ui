@@ -563,13 +563,19 @@ const isWindowsRemoteAtLoad =
   process.env.MUON_E2E_REMOTE_WINDOWS === "1";
 export const DEBUG_MUON_DIRECTORY =
   windowsRemoteContextAtLoad?.runtime.debugRuntimeDirectory ??
-  resolve("..", "muon-core", ".run", "test-linux64-debug");
+  resolve("..", "muon-core", ".run", "test-linux-amd64-debug");
 export const RELEASE_MUON_DIRECTORY =
   windowsRemoteContextAtLoad?.runtime.releaseRuntimeDirectory ??
-  resolve("..", "muon-core", ".run", "test-linux64-release");
+  resolve("..", "muon-core", ".run", "test-linux-amd64-release");
 export const TEST_PLUGIN_DIRECTORY =
   windowsRemoteContextAtLoad === undefined
-    ? resolve("..", "muon-core", ".run", "test-linux64-debug", "test-plugins")
+    ? resolve(
+        "..",
+        "muon-core",
+        ".run",
+        "test-linux-amd64-debug",
+        "test-plugins",
+      )
     : join(
         windowsRemoteContextAtLoad.runtime.debugRuntimeDirectory,
         "test-plugins",

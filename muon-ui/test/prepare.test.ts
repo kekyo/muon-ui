@@ -223,7 +223,7 @@ const createPrepareFixture = async (
   const cacheDir = await createTemporaryDirectory("muon-prepare-cache-");
   const sourceDir = await createTemporaryDirectory("muon-prepare-source-");
   const projectPath = await createTemporaryDirectory("muon-prepare-project-");
-  const stageDir = join(projectPath, ".muon", "linux64");
+  const stageDir = join(projectPath, ".muon", "linux-amd64");
   const cef = getEmbeddedCefArchive();
   const versions: readonly CatalogVersion[] = catalogVersions ?? [
     {
@@ -315,7 +315,7 @@ const writeEmbeddedBootstrap = async (
 const getLinuxPortableStateRuntimePath = (
   stateHome: string,
   appId: string,
-): string => join(stateHome, appId, "runtime", "linux64");
+): string => join(stateHome, appId, "runtime", "linux-amd64");
 
 const findCachedFile = async (
   root: string,
@@ -353,7 +353,7 @@ const prepareFixture = async (
     muonPath: fixture.muonPath,
     cefPath: options.cefPath,
     stageDir: options.stageDir,
-    target: "linux64",
+    target: "linux-amd64",
     cacheDir: fixture.cacheDir,
     force: options.force,
     quiet: options.quiet,
@@ -460,7 +460,7 @@ const runProgressHarness = async (
 ): Promise<string[]> => {
   const { stdout } = await execFileAsync(
     harnessPath,
-    [fixture.muonPath, "linux64", fixture.cacheDir],
+    [fixture.muonPath, "linux-amd64", fixture.cacheDir],
     {
       encoding: "utf8",
       env: {
@@ -511,17 +511,34 @@ afterEach(async () => {
 
 describe("muon prepare target resolution", () => {
   it("resolves supported Node platforms to Muon runtime targets", () => {
-    expect(getDefaultMuonPrepareTarget("linux", "x64")).toBe("linux64");
-    expect(getDefaultMuonPrepareTarget("linux", "arm")).toBe("linuxarm");
-    expect(getDefaultMuonPrepareTarget("linux", "arm64")).toBe("linuxarm64");
-    expect(getDefaultMuonPrepareTarget("win32", "ia32")).toBe("windows32");
-    expect(getDefaultMuonPrepareTarget("win32", "x64")).toBe("windows64");
+    expect(getDefaultMuonPrepareTarget("linux", "x64")).toBe("linux-amd64");
+    expect(getDefaultMuonPrepareTarget("linux", "arm")).toBe("linux-armhf");
+    expect(getDefaultMuonPrepareTarget("linux", "arm64")).toBe("linux-arm64");
+    expect(getDefaultMuonPrepareTarget("win32", "ia32")).toBe("windows-i686");
+    expect(getDefaultMuonPrepareTarget("win32", "x64")).toBe("windows-amd64");
   });
 
   it("rejects unsupported Linux i686 targets", () => {
     expect(() => getDefaultMuonPrepareTarget("linux", "ia32")).toThrow(
       "Unsupported Muon prepare target: platform=linux, arch=ia32",
     );
+  });
+
+  it("rejects CEF-derived target IDs in public prepare options", async () => {
+    await expect(
+      runMuonPrepare({
+        muonPath: "/tmp/muon-runtime",
+        cefPath: undefined,
+        stageDir: undefined,
+        target: "linux64",
+        cacheDir: undefined,
+        force: false,
+        quiet: true,
+        prepareExecutablePath: "/tmp/muon-prepare",
+        environment: process.env,
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("Unsupported Muon prepare target: linux64");
   });
 });
 
@@ -764,7 +781,7 @@ lastCatalogUpdateUnix=0
       muonPath: fixture.muonPath,
       cefPath: undefined,
       stageDir: fixture.stageDir,
-      target: "linux64",
+      target: "linux-amd64",
       cacheDir: fixture.cacheDir,
       force: false,
       quiet: false,
@@ -798,7 +815,7 @@ lastCatalogUpdateUnix=0
         "--version",
         "fake-cef",
         "--target",
-        "linux64",
+        "linux-amd64",
         "--output-dir",
         outputDir,
         "--cache-dir",
@@ -819,6 +836,7 @@ lastCatalogUpdateUnix=0
       archivePath: string;
       version: string;
       target: string;
+      cefTarget: string;
       distribution: string;
       artifact: {
         fileName: string;
@@ -832,7 +850,8 @@ lastCatalogUpdateUnix=0
       join(fixture.cacheDir, "artifacts", fixture.archiveFileName),
     );
     expect(result.version).toBe("fake-cef");
-    expect(result.target).toBe("linux64");
+    expect(result.target).toBe("linux-amd64");
+    expect(result.cefTarget).toBe("linux64");
     expect(result.distribution).toBe("minimal");
     expect(result.artifact.fileName).toBe(fixture.archiveFileName);
     await expect(
@@ -870,7 +889,7 @@ lastCatalogUpdateUnix=0
         "--version",
         "fake-cef",
         "--target",
-        "linux64",
+        "linux-amd64",
         "--output-dir",
         outputDir,
         "--cache-dir",
@@ -911,7 +930,7 @@ lastCatalogUpdateUnix=0
             "--version",
             "fake-cef",
             "--target",
-            "linux64",
+            "linux-amd64",
             "--output-dir",
             outputDir,
             "--cache-dir",
@@ -977,7 +996,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--json",
@@ -996,10 +1015,10 @@ lastCatalogUpdateUnix=0
     expect(result.stagePath).toBe(fixture.stageDir);
     expect(lines[0]).toMatch(/^muon-prepare: .+-[0-9a-f]+: Started\.$/);
     expect(stderr).toContain(
-      "Downloading CEF binary: version=fake-cef target=linux64 distribution=minimal",
+      "Downloading CEF binary: version=fake-cef target=linux-amd64 distribution=minimal",
     );
     expect(stderr).toContain(
-      "CEF binary downloaded: version=fake-cef target=linux64 distribution=minimal",
+      "CEF binary downloaded: version=fake-cef target=linux-amd64 distribution=minimal",
     );
     expect(stderr).toContain("Installing CEF runtime...");
     expect(stderr).toContain(
@@ -1021,7 +1040,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "-q",
@@ -1065,7 +1084,7 @@ lastCatalogUpdateUnix=0
 
     const stderr = chunks.join("");
     expect(stderr).toContain(
-      "Downloading CEF binary: version=fake-cef target=linux64 distribution=minimal",
+      "Downloading CEF binary: version=fake-cef target=linux-amd64 distribution=minimal",
     );
     expect(stderr).toContain("Installing CEF runtime...");
     expect(stderr).toContain("Muon files copied to staging: files=4");
@@ -1236,7 +1255,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--quiet",
@@ -1350,7 +1369,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--json",
@@ -1384,7 +1403,7 @@ lastCatalogUpdateUnix=0
         "--stage-dir",
         fixture.stageDir,
         "--target",
-        "linux64",
+        "linux-amd64",
         "--cache-dir",
         fixture.cacheDir,
         "--quiet",

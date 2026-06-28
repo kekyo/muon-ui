@@ -9,12 +9,12 @@
 #ifndef MUON_PREPARE_TARGET_NAME
 #ifdef _WIN32
 #ifdef _WIN64
-#define MUON_PREPARE_TARGET_NAME "windows64"
+#define MUON_PREPARE_TARGET_NAME "windows-amd64"
 #else
-#define MUON_PREPARE_TARGET_NAME "windows32"
+#define MUON_PREPARE_TARGET_NAME "windows-i686"
 #endif
 #else
-#define MUON_PREPARE_TARGET_NAME "linux64"
+#define MUON_PREPARE_TARGET_NAME "linux-amd64"
 #endif
 #endif
 
@@ -33,8 +33,8 @@ int muon_prepare_main(int argc, char **argv);
  * Prepares CEF files inside an existing portable Muon runtime directory.
  *
  * @param muon_path Directory containing muon-core runtime files.
- * @param target Runtime target such as linux64, linuxarm, linuxarm64,
- * windows32, or windows64.
+ * @param target Public runtime target such as linux-amd64, linux-armhf,
+ * linux-arm64, windows-i686, or windows-amd64.
  * @param cache_dir Cache directory. Pass NULL to use the default cache.
  * @param force Non-zero to rebuild cached CEF files and runtime placement.
  * @param quiet Non-zero to suppress progress messages.
@@ -48,8 +48,8 @@ int muon_prepare_in_place(const char *muon_path, const char *target,
  * reports progress events to the caller.
  *
  * @param muon_path Directory containing muon-core runtime files.
- * @param target Runtime target such as linux64, linuxarm, linuxarm64,
- * windows32, or windows64.
+ * @param target Public runtime target such as linux-amd64, linux-armhf,
+ * linux-arm64, windows-i686, or windows-amd64.
  * @param cache_dir Cache directory. Pass NULL to use the default cache.
  * @param force Non-zero to rebuild cached CEF files and runtime placement.
  * @param quiet Non-zero to suppress diagnostic text output.
@@ -68,8 +68,8 @@ int muon_prepare_in_place_with_progress(
  *
  * @param muon_path Directory containing source muon-core runtime files.
  * @param stage_dir Directory where executable runtime files are staged.
- * @param target Runtime target such as linux64, linuxarm, linuxarm64,
- * windows32, or windows64.
+ * @param target Public runtime target such as linux-amd64, linux-armhf,
+ * linux-arm64, windows-i686, or windows-amd64.
  * @param cache_dir Cache directory. Pass NULL to use the default cache.
  * @param force Non-zero to rebuild cached CEF files and runtime placement.
  * @param quiet Non-zero to suppress diagnostic text output.

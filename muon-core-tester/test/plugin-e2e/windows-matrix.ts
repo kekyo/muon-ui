@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-export type WindowsE2eTargetName = "windows32" | "windows64";
+export type WindowsE2eTargetName = "windows-i686" | "windows-amd64";
 export type WindowsE2ePlatform = "win32" | "win64";
 
 export interface WindowsRuntimeTarget {
@@ -19,16 +19,16 @@ export interface WindowsE2eMatrixEntry<T> extends WindowsRuntimeTarget {
 
 export const windowsRuntimeTargets = [
   {
-    debugRuntimeDirectory: "muon-core/.run/test-windows32-debug",
+    debugRuntimeDirectory: "muon-core/.run/test-windows-i686-debug",
     platform: "win32",
-    releaseRuntimeDirectory: "muon-core/.run/test-windows32-release",
-    target: "windows32",
+    releaseRuntimeDirectory: "muon-core/.run/test-windows-i686-release",
+    target: "windows-i686",
   },
   {
-    debugRuntimeDirectory: "muon-core/.run/test-windows64-debug",
+    debugRuntimeDirectory: "muon-core/.run/test-windows-amd64-debug",
     platform: "win64",
-    releaseRuntimeDirectory: "muon-core/.run/test-windows64-release",
-    target: "windows64",
+    releaseRuntimeDirectory: "muon-core/.run/test-windows-amd64-release",
+    target: "windows-amd64",
   },
 ] as const satisfies readonly WindowsRuntimeTarget[];
 
@@ -45,13 +45,15 @@ export const resolveWindowsRuntimeTarget = (
 ): WindowsRuntimeTarget => {
   const normalized = targetName?.trim();
   const target =
-    normalized === undefined || normalized === "" ? "windows64" : normalized;
+    normalized === undefined || normalized === ""
+      ? "windows-amd64"
+      : normalized;
   const runtimeTarget = windowsRuntimeTargets.find(
     (entry) => entry.target === target || entry.platform === target,
   );
   if (runtimeTarget === undefined) {
     throw new Error(
-      "MUON_E2E_WINDOWS_TARGET must be windows32, win32, windows64, or win64",
+      "MUON_E2E_WINDOWS_TARGET must be windows-i686, win32, windows-amd64, or win64",
     );
   }
   return runtimeTarget;

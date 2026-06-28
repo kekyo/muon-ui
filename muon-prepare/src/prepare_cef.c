@@ -21,6 +21,28 @@ static const char *kDefaultCefCatalogUrl =
     "https://cef-builds.spotifycdn.com/index.json";
 static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
 
+static const char *display_target_from_cef_target(const char *target) {
+  if (target == NULL) {
+    return "(null)";
+  }
+  if (strcmp(target, "linux64") == 0) {
+    return "linux-amd64";
+  }
+  if (strcmp(target, "linuxarm") == 0) {
+    return "linux-armhf";
+  }
+  if (strcmp(target, "linuxarm64") == 0) {
+    return "linux-arm64";
+  }
+  if (strcmp(target, "windows32") == 0) {
+    return "windows-i686";
+  }
+  if (strcmp(target, "windows64") == 0) {
+    return "windows-amd64";
+  }
+  return target;
+}
+
 void muon_prepare_set_cef_quiet(int quiet) { muon_set_quiet(quiet); }
 
 static int verify_sha1(const char *path, const char *expected) {
@@ -280,7 +302,8 @@ int muon_prepare_resolve_cef_artifact(const char *cache_dir,
       target_object == NULL ? NULL : yyjson_obj_get(target_object, "versions");
   if (catalog_path == NULL || catalog == NULL || target_object == NULL ||
       versions == NULL || !yyjson_is_arr(versions)) {
-    muon_print_error("CEF catalog does not contain target: %s\n", target);
+    muon_print_error("CEF catalog does not contain target: %s\n",
+                     display_target_from_cef_target(target));
     free(catalog_path);
     yyjson_doc_free(catalog);
     return -1;
@@ -316,8 +339,9 @@ int muon_prepare_resolve_cef_artifact(const char *cache_dir,
     }
   }
   if (result != 0) {
-    muon_print_error("CEF catalog does not contain %s %s %s artifact.\n", version,
-                target, distribution);
+    muon_print_error("CEF catalog does not contain %s %s %s artifact.\n",
+                     version, display_target_from_cef_target(target),
+                     distribution);
   }
   free(catalog_path);
   yyjson_doc_free(catalog);
@@ -764,7 +788,9 @@ int muon_prepare_ensure_cef_artifact_cache_progress(
     return 0;
   }
   muon_print_error("Downloading CEF binary: version=%s target=%s distribution=%s\n",
-              artifact->version, artifact->target, artifact->distribution);
+              artifact->version,
+              display_target_from_cef_target(artifact->target),
+              artifact->distribution);
   int result = -1;
   const int copy_result =
       progress_callback == NULL
@@ -781,7 +807,9 @@ int muon_prepare_ensure_cef_artifact_cache_progress(
       verify_size(temporary_path, artifact->size) == 0 &&
       muon_atomic_replace(temporary_path, final_path) == 0) {
     muon_print_error("CEF binary downloaded: version=%s target=%s distribution=%s\n",
-                artifact->version, artifact->target, artifact->distribution);
+                artifact->version,
+                display_target_from_cef_target(artifact->target),
+                artifact->distribution);
     *archive_path = final_path;
     result = 0;
   } else {

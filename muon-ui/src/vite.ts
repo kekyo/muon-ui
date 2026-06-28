@@ -19,7 +19,7 @@ type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
  */
 export interface MuonViteBuildOptions {
   /**
-   * Target aliases or internal target names to build.
+   * Public target identifiers to build.
    */
   targets?: readonly string[];
 
@@ -76,7 +76,7 @@ export interface MuonVitePluginOptions {
    * Directory containing muon-core runtime files such as muon-core and plugins.
    *
    * @remarks Relative paths are resolved from the Vite project root. When omitted,
-   * the packaged runtime at dist/runtime/<target> is used.
+   * the packaged runtime at dist/runtime/<public-target> is used.
    */
   muonPath?: string;
 
@@ -92,7 +92,7 @@ export interface MuonVitePluginOptions {
    * Runtime staging directory used for development startup.
    *
    * @remarks Relative paths are resolved from the Vite project root. Defaults to
-   * .muon/<target>.
+   * .muon/<public-target>.
    */
   stagePath?: string;
 

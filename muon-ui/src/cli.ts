@@ -380,7 +380,7 @@ const createCliCommand = (): Command => {
     .description("Build CEF-free Muon app distribution directories")
     .option(
       "--target <target>",
-      "target alias or comma-separated target aliases",
+      "public target or comma-separated public targets",
       appendTargetValues,
       [],
     )
@@ -406,7 +406,7 @@ const createCliCommand = (): Command => {
     )
     .option(
       "--target <target>",
-      "target alias or comma-separated target aliases",
+      "public target or comma-separated public targets",
       appendTargetValues,
       [],
     )

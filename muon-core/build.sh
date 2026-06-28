@@ -16,19 +16,19 @@ host_prepare_target() {
   machine="$(uname -m)"
   case "${system}:${machine}" in
     Linux:x86_64|Linux:amd64)
-      printf '%s\n' linux64
+      printf '%s\n' linux-amd64
       ;;
     Linux:armv7l|Linux:armv7*|Linux:armhf)
-      printf '%s\n' linuxarm
+      printf '%s\n' linux-armhf
       ;;
     Linux:aarch64|Linux:arm64)
-      printf '%s\n' linuxarm64
+      printf '%s\n' linux-arm64
       ;;
     MINGW*:i686|MSYS*:i686|CYGWIN*:i686)
-      printf '%s\n' windows32
+      printf '%s\n' windows-i686
       ;;
     MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64)
-      printf '%s\n' windows64
+      printf '%s\n' windows-amd64
       ;;
     *)
       echo "Unsupported muon-prepare host: ${system} ${machine}" >&2
@@ -39,7 +39,7 @@ host_prepare_target() {
 
 prepare_executable_name() {
   case "$1" in
-    windows32|windows64)
+    windows-i686|windows-amd64)
       printf '%s\n' muon-prepare.exe
       ;;
     *)
@@ -50,7 +50,7 @@ prepare_executable_name() {
 
 bootstrap_executable_name() {
   case "$1" in
-    windows32|windows64)
+    windows-i686|windows-amd64)
       printf '%s\n' muon-bootstrap.exe
       ;;
     *)
@@ -168,7 +168,7 @@ for (const patch of patches) {
 }
 
 BUILD_USAGE="${1:-dev}"
-USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux64|linuxarm|linuxarm64|mingw32|mingw64|win32|win64|windows32|windows64]"
+USAGE="Usage: $0 [dev|test|check|dist] [Debug|Release] [linux-amd64|linux-armhf|linux-arm64|windows-i686|windows-amd64]"
 case "${BUILD_USAGE}" in
   dev|test|check|dist)
     ;;
@@ -194,7 +194,7 @@ case "${BUILD_TYPE}" in
     ;;
 esac
 
-TARGET="${3:-linux64}"
+TARGET="${3:-linux-amd64}"
 EXTRA_CMAKE_ARGS=("${@:4}")
 TOOLCHAIN_ARGS=()
 PROJECT_ARCH_ARGS=()
@@ -205,34 +205,30 @@ YYJSON_ARGS=()
 MINIZ_VERSION="3.1.1"
 MINIZ_ARGS=()
 case "${TARGET}" in
-  linux64|amd64|x64)
+  linux-amd64)
     CEF_ARCH="linux64"
-    TARGET_NAME="linux64"
+    TARGET_NAME="linux-amd64"
     PROJECT_ARCH_ARGS=("-DPROJECT_ARCH=x86_64")
     ;;
-  linuxarm|armv7l|armv7|armhf|arm)
+  linux-armhf)
     CEF_ARCH="linuxarm"
-    TARGET_NAME="linuxarm"
+    TARGET_NAME="linux-armhf"
     PROJECT_ARCH_ARGS=("-DPROJECT_ARCH=arm")
     ;;
-  linuxarm64|arm64|aarch64)
+  linux-arm64)
     CEF_ARCH="linuxarm64"
-    TARGET_NAME="linuxarm64"
+    TARGET_NAME="linux-arm64"
     PROJECT_ARCH_ARGS=("-DPROJECT_ARCH=arm64")
     ;;
-  linux32|i686|i386|ia32|x86)
-    echo "Unsupported target: ${TARGET}. Linux 32-bit CEF builds are discontinued after CEF 101." >&2
-    exit 1
-    ;;
-  mingw32|win32|windows32)
+  windows-i686)
     CEF_ARCH="windows32"
-    TARGET_NAME="windows32"
+    TARGET_NAME="windows-i686"
     OBJDUMP="${OBJDUMP:-i686-w64-mingw32-objdump}"
     TOOLCHAIN_ARGS=("-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_DIR}/cmake/toolchains/mingw32.cmake")
     ;;
-  mingw64|win64|windows64)
+  windows-amd64)
     CEF_ARCH="windows64"
-    TARGET_NAME="windows64"
+    TARGET_NAME="windows-amd64"
     OBJDUMP="${OBJDUMP:-x86_64-w64-mingw32-objdump}"
     TOOLCHAIN_ARGS=("-DCMAKE_TOOLCHAIN_FILE=${SCRIPT_DIR}/cmake/toolchains/mingw64.cmake")
     ;;
@@ -243,14 +239,14 @@ case "${TARGET}" in
 esac
 
 case "${TARGET_NAME}" in
-  windows32)
+  windows-i686)
     command -v i686-w64-mingw32-g++ >/dev/null || { echo "i686-w64-mingw32-g++ is required" >&2; exit 1; }
     command -v "${OBJDUMP}" >/dev/null || { echo "${OBJDUMP} is required" >&2; exit 1; }
     "${SCRIPT_DIR}/build_libffi_mingw32.sh" mingw32
     LIBFFI_CACHE_ARGS=("-U" "LIBFFI_*" "-U" "pkgcfg_lib_LIBFFI_*")
     LIBFFI_ARGS=("-DLIBFFI_ROOT=${OUTPUT_ROOT}/.deps/libffi-mingw32")
     ;;
-  windows64)
+  windows-amd64)
     command -v x86_64-w64-mingw32-g++ >/dev/null || { echo "x86_64-w64-mingw32-g++ is required" >&2; exit 1; }
     command -v "${OBJDUMP}" >/dev/null || { echo "${OBJDUMP} is required" >&2; exit 1; }
     "${SCRIPT_DIR}/build_libffi_mingw32.sh" mingw64
@@ -295,7 +291,7 @@ MUON_CORE_VERSION_HEADER_PATH="${BUILD_DIR}/generated/muon_core_version_generate
 generate_core_version_header "${MUON_CORE_VERSION_HEADER_PATH}"
 MUON_CEF_API_VERSION="${MUON_CEF_API_VERSION:-}"
 CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.json"
-if [[ "${TARGET_NAME}" == linux* ]]; then
+if [[ "${TARGET_NAME}" == linux-* ]]; then
   CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.linux.json"
 fi
 CONFIG_COPY_MODE="always"
@@ -336,6 +332,7 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DMUON_CONFIG_COPY_MODE="${CONFIG_COPY_MODE}" \
   -DMUON_RUNTIME_INCLUDE_APP_FILES="${RUNTIME_INCLUDE_APP_FILES}" \
   -DMUON_TARGET_NAME="${TARGET_NAME}" \
+  -DMUON_CEF_TARGET_NAME="${CEF_ARCH}" \
   -DMUON_CEF_VERSION="${CEF_VERSION}" \
   -DMUON_CEF_PACKAGE="${CEF_PACKAGE}" \
   -DMUON_CEF_PACKAGE_URL="${CEF_PACKAGE_URL}" \
@@ -369,7 +366,7 @@ cp -f \
   "${PREPARE_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
   "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"
 
-if [[ "${TARGET_NAME}" == windows* ]]; then
+if [[ "${TARGET_NAME}" == windows-* ]]; then
   verify_windows_icon_resources "${RUNTIME_DIR}/muon-core.exe" "muon-core"
   verify_windows_icon_resources \
     "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \

@@ -384,9 +384,9 @@ exit 1
       stdout?: string;
     };
     const output = `${execError.stdout ?? ""}\n${execError.stderr ?? ""}`;
-    const logPath = join(root, ".deps", "package-logs", "linuxarm64.log");
+    const logPath = join(root, ".deps", "package-logs", "linux-arm64.log");
     expect(execError.code).toBe(1);
-    expect(output).toContain("Linux package target failed: linuxarm64");
+    expect(output).toContain("Linux package target failed: linux-arm64");
     expect(output).toContain("exit code 42");
     expect(output).toContain(logPath);
     await expect(readFile(logPath, "utf8")).resolves.toContain(
@@ -400,10 +400,10 @@ exit 1
     ) as { bin?: Record<string, string> };
     const cliStat = await stat(resolve("dist/cli.cjs"));
     const nativePrepareStat = await stat(
-      resolve("dist/native/linux64/muon-prepare"),
+      resolve("dist/native/linux-amd64/muon-prepare"),
     );
     const nativeBootstrapStat = await stat(
-      resolve("dist/native/linux64/muon-bootstrap"),
+      resolve("dist/native/linux-amd64/muon-bootstrap"),
     );
 
     expect(packageJson.bin?.muon).toBe("./dist/cli.cjs");
@@ -499,7 +499,7 @@ exit 1
     expect(files).not.toContain("dist/prepare.d.ts");
     expect(files).not.toContain("dist/vite-internals.d.ts");
     expect(files).not.toContain("dist/vite.d.ts");
-    expect(files).not.toContain("dist/runtime/linux64/muon-runtime.json");
+    expect(files).not.toContain("dist/runtime/linux-amd64/muon-runtime.json");
     expect(files.some((file) => file.endsWith(".d.ts.map"))).toBe(false);
     expect(files).not.toContain("dist/muon-prepare");
     expect(files).not.toContain("dist/muon-bootstrap");
@@ -569,7 +569,7 @@ void existsResult;
 
 const defaultPlugin = muon();
 const plugin = muon({
-  muonPath: "../muon-core/.run/dev-linux64-debug",
+  muonPath: "../muon-core/.run/dev-linux-amd64-debug",
   cefPath: "../muon-core/.cef/cef_binary_fake_linux64_minimal",
   open: false,
   enableDebugger: false,

@@ -105,7 +105,28 @@ const isLocalLinuxE2e = process.platform === "linux" && !isWindowsRemoteE2e();
 const windowsRemoteTarget = (): string | undefined =>
   getWindowsRemoteContext()?.runtime.target;
 
-const expectedRuntimeTarget = (): string => windowsRemoteTarget() ?? "linux64";
+const expectedRuntimeTarget = (): string =>
+  windowsRemoteTarget() ?? "linux-amd64";
+
+const expectedCefTarget = (): string => {
+  const target = expectedRuntimeTarget();
+  if (target === "linux-amd64") {
+    return "linux64";
+  }
+  if (target === "linux-armhf") {
+    return "linuxarm";
+  }
+  if (target === "linux-arm64") {
+    return "linuxarm64";
+  }
+  if (target === "windows-i686") {
+    return "windows32";
+  }
+  if (target === "windows-amd64") {
+    return "windows64";
+  }
+  return target;
+};
 
 const expectedRuntimeExecutableName = (): string =>
   isWindowsRemoteE2e()
@@ -115,7 +136,7 @@ const expectedRuntimeExecutableName = (): string =>
       : "muon-core";
 
 const expectedCefArtifactNamePart = (): string =>
-  `_${expectedRuntimeTarget()}_minimal.tar.bz2`;
+  `_${expectedCefTarget()}_minimal.tar.bz2`;
 
 const isCdpWebSocketFailure = (error: unknown): boolean =>
   error instanceof Error &&
@@ -588,6 +609,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             name: string;
             executableName: string;
             target: string;
+            cefTarget: string;
             muonCore: {
               version: string;
               gitCommitHash: string;
@@ -635,6 +657,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           name: "muon-core",
           executableName: expectedRuntimeExecutableName(),
           target: expectedRuntimeTarget(),
+          cefTarget: expectedCefTarget(),
           muonCore: {
             version: expect.any(String),
             gitCommitHash: expect.any(String),

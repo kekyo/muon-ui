@@ -16,7 +16,7 @@
 typedef struct {
   /** CEF version requested by the caller. */
   char *version;
-  /** Muon target name such as linux64, windows32, or windows64. */
+  /** Internal CEF target name such as linux64, windows32, or windows64. */
   char *target;
   /** CEF distribution name. Currently always minimal. */
   char *distribution;
@@ -36,7 +36,7 @@ typedef struct {
 typedef struct {
   /** Tested CEF binary distribution version. */
   const char *version;
-  /** Muon target name such as linux64, windows32, or windows64. */
+  /** Internal CEF target name such as linux64, windows32, or windows64. */
   const char *target;
   /** Tested CEF binary distribution kind. */
   const char *distribution;

@@ -441,18 +441,18 @@ describe("muon Vite plugin", () => {
     expect(
       resolveMuonRuntimePath({
         root: "/project",
-        target: "linux64",
+        target: "linux-amd64",
         muonPath: undefined,
         packageDirectory: packageDistDirectory,
       }),
-    ).toBe(join(packageDistDirectory, "runtime", "linux64"));
+    ).toBe(join(packageDistDirectory, "runtime", "linux-amd64"));
   });
 
   it("keeps explicit muonPath for custom core builds", () => {
     expect(
       resolveMuonRuntimePath({
         root: "/project",
-        target: "linux64",
+        target: "linux-amd64",
         muonPath: "../custom-muon-core",
         packageDirectory: join("node_modules", "muon-ui", "dist"),
       }),
@@ -504,7 +504,7 @@ describe("muon Vite plugin", () => {
     );
 
     watchChanges.length = 0;
-    const stagingFilePath = join(root, ".muon", "linux64", "CREDITS.html");
+    const stagingFilePath = join(root, ".muon", "linux-amd64", "CREDITS.html");
     await mkdir(dirname(stagingFilePath), { recursive: true });
     await writeFile(stagingFilePath, "ignored\n");
     await delay(500);
@@ -541,7 +541,7 @@ describe("muon Vite plugin", () => {
       ".muon/\ndist-muon-*/\nartifacts/\n",
     );
     await expect(
-      access(join(root, ".muon", "linux64")),
+      access(join(root, ".muon", "linux-amd64")),
     ).resolves.toBeUndefined();
   });
 
@@ -636,7 +636,7 @@ describe("muon Vite plugin", () => {
     );
     await wait(() => existsSync(join(outputDirectory, "override.json")));
 
-    const stagePath = join(root, ".muon", "linux64");
+    const stagePath = join(root, ".muon", "linux-amd64");
     const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
       .trim()
       .split("\n");
@@ -938,7 +938,7 @@ describe("muon dev CLI", () => {
     expect(devResult.exitCode).toBe(0);
     expect(devResult.projectConfigPath).toBe(join(root, "muon.json"));
     expect(devResult.assetSourcePath).toBe(assetsPath);
-    expect(devResult.stagePath).toBe(join(root, ".muon", "linux64"));
+    expect(devResult.stagePath).toBe(join(root, ".muon", "linux-amd64"));
     expect(overrideConfig).toEqual({
       asset: {
         sourcePath: assetsPath,

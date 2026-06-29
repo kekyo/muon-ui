@@ -680,10 +680,17 @@ const packageDeb = async (
 const escapeNsis = (value: string): string =>
   value.replaceAll("\\", "\\\\").replaceAll('"', '$\\"');
 
+const nsisUninstallRegistryRoot =
+  "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+
+const createNsisUninstallRegistryKey = (appId: string): string =>
+  `${nsisUninstallRegistryRoot}\\${appId}`;
+
 const packageNsis = async (
   root: string,
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
+  appId: string,
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
@@ -701,6 +708,8 @@ const packageNsis = async (
     artifactsRoot,
     `${metadata.packageName}-${metadata.version}-${descriptor.arch}-setup.exe`,
   );
+  const launcherFileName = basename(target.launcherPath);
+  const uninstallRegistryKey = createNsisUninstallRegistryKey(appId);
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(
@@ -714,7 +723,23 @@ const packageNsis = async (
       "Section",
       '  SetOutPath "$INSTDIR"',
       `  File /r "${escapeNsis(target.outputPath)}\\*"`,
-      `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk" "$INSTDIR\\${escapeNsis(basename(target.launcherPath))}"`,
+      `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk" "$INSTDIR\\${escapeNsis(launcherFileName)}"`,
+      '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayName" "${escapeNsis(metadata.packageName)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayVersion" "${escapeNsis(metadata.version)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "Publisher" "${escapeNsis(metadata.author)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "InstallLocation" "$INSTDIR"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayIcon" "$\\"$INSTDIR\\${escapeNsis(launcherFileName)}$\\""`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "UninstallString" "$\\"$INSTDIR\\Uninstall.exe$\\" /S"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "QuietUninstallString" "$\\"$INSTDIR\\Uninstall.exe$\\" /S"`,
+      `  WriteRegDWORD HKCU "${escapeNsis(uninstallRegistryKey)}" "NoModify" 1`,
+      `  WriteRegDWORD HKCU "${escapeNsis(uninstallRegistryKey)}" "NoRepair" 1`,
+      "SectionEnd",
+      "",
+      'Section "Uninstall"',
+      `  Delete "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk"`,
+      `  DeleteRegKey HKCU "${escapeNsis(uninstallRegistryKey)}"`,
+      '  RMDir /r "$INSTDIR"',
       "SectionEnd",
       "",
     ].join("\n"),
@@ -795,6 +820,7 @@ export const packMuonApp = async (
             root,
             target,
             metadata,
+            build.appId,
             artifactsRoot,
             packageBuildRoot,
             environment,

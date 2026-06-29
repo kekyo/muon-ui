@@ -29,6 +29,7 @@
     "build:js": "vite build --mode cjs && vite build --mode esm",
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
+    "test:windows-nsis-e2e": "npm run build && MUON_E2E_REMOTE_WINDOWS=1 vitest run test/nsis-windows-e2e.test.ts",
     "verify:package-runtime": "node scripts/verify-package-runtime.mjs",
     "pack": "bash ../build_package.sh",
     "dependencies": "reskill"
@@ -49,6 +50,7 @@
   "devDependencies": {
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
+    "agent-rover": "^0.1.0",
     "async-primitives": ">=1.7.0",
     "prettier-max": ">=1.16.0",
     "screw-up": ">=1.34.0",

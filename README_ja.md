@@ -233,9 +233,10 @@ export default defineConfig({
 - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windowsターゲット: `windows-i686`, `windows-amd64`
 
-### 配布用ビルド (CLI)
+### 配布用ビルドとパッケージ生成
 
-Viteを使用しないプロジェクトでは、任意の方法で先にアセットを生成してから `muon build` を実行します。
+Viteを使わずに配布用ビルドを行う場合や、配布用のパッケージ生成は、 `muon` CLIを使用します。
+
 `muon build` はコンテンツビルド用のnpm scriptなどを自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
 
 ```bash
@@ -248,19 +249,19 @@ npx muon build
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
 
-配布用パッケージまで生成する場合は、Viteプラグインの自動ビルドではなく `muon pack` を明示的に実行します。
+配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します。
 `muon pack` は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
 その後、指定した形式ごとに `./artifacts/` へ最終配布物だけを出力します。
 `deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
 
 ```bash
-muon pack
-muon pack --type zip
-muon pack --type nsis
-muon pack --target windows
-muon pack --target amd64
-muon pack --type zip,deb --target linux-amd64
-muon pack --type nsis --target windows-amd64
+npx muon pack
+npx muon pack --type zip
+npx muon pack --type nsis
+npx muon pack --target windows
+npx muon pack --target amd64
+npx muon pack --type zip,deb --target linux-amd64
+npx muon pack --type nsis --target windows-amd64
 ```
 
 - `--type` は `zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。

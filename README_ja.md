@@ -318,8 +318,8 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下へステージングし、
 そこへCEFバイナリを展開してから `muon-core` を起動します:
 
-- Linux: `$XDG_STATE_HOME` または `$HOME` の `.local/state/<appId>/runtime/<public-target>/`
-- Windows: `%LOCALAPPDATA%\<appId>\runtime\<public-target>\`
+- Linux: `$XDG_STATE_HOME` または `$HOME` の `.local/state/<appId>/<public-target>/`
+- Windows: `%LOCALAPPDATA%\<appId>\<public-target>\`
 
 起動時の準備では、ユーザーステートディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
 これらについての詳細は、別章を参照して下さい。

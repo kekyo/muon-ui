@@ -241,13 +241,9 @@ static char *create_state_runtime_dir(const char *app_id,
                                       const char *target) {
   char *state_home = get_default_state_home();
   char *app_root = state_home == NULL ? NULL : muon_path_join(state_home, app_id);
-  char *runtime_root =
-      app_root == NULL ? NULL : muon_path_join(app_root, "runtime");
-  char *runtime_dir =
-      runtime_root == NULL ? NULL : muon_path_join(runtime_root, target);
+  char *runtime_dir = app_root == NULL ? NULL : muon_path_join(app_root, target);
   free(state_home);
   free(app_root);
-  free(runtime_root);
   return runtime_dir;
 }
 

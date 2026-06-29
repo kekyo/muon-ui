@@ -779,7 +779,6 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     const configPath = join(
       stateHome,
       "muon-bootstrap",
-      "runtime",
       expectedRuntimeTarget(),
       "muon-bootstrap.ini",
     );

@@ -4,3 +4,6 @@
 [submodule "deps/tra-ffic"]
 	path = deps/tra-ffic
 	url = https://github.com/kekyo/tra-ffic.git
+[submodule "deps/engraver"]
+	path = deps/engraver
+	url = https://github.com/kekyo/engraver.git

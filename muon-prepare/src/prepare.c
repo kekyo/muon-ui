@@ -1425,12 +1425,15 @@ static void print_cef_result_json(const char *cef_path, const char *archive_path
 
 static void print_usage(void) {
   muon_print_error(
-      "Usage: muon-prepare runtime --muon-path <path> [--cef-path <path>] "
+      "Usage: muon-prepare <command> [options]\n"
+      "       muon-prepare runtime --muon-path <path> [--cef-path <path>] "
       "[--stage-dir <path>] [--target <target>] [--cache-dir <path>] "
       "[--force] [--quiet|-q] [--json]\n"
       "       muon-prepare buildtime --version <cefVersion> --target <target> "
       "--output-dir <path> [--cache-dir <path>] [--force] [--quiet|-q] "
-      "[--json]\n");
+      "[--json]\n"
+      "       muon-prepare resource --input <pe> --updates-json <json> "
+      "--output <pe> [--quiet|-q]\n");
 }
 
 static int parse_runtime_arguments(int argc, char **argv, int start_index,

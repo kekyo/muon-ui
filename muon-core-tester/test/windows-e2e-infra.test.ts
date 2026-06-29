@@ -11,7 +11,10 @@ import {
   resolveWindowsRuntimeTarget,
   windowsRuntimeTargets,
 } from "./plugin-e2e/windows-matrix.js";
-import { parseWindowsE2eEnvironment } from "./plugin-e2e/windows-environment.js";
+import {
+  parseWindowsE2eEnvironment,
+  resolveWindowsE2eEnvironment,
+} from "./plugin-e2e/windows-environment.js";
 import {
   allocateWindowsRemoteCdpPort,
   clearWindowsRemoteContext,
@@ -120,6 +123,37 @@ const createFakeWindowsRemoteContext = (
 });
 
 describe("Windows e2e environment", () => {
+  it("skips remote execution when the Windows e2e flag is missing", () => {
+    expect(
+      resolveWindowsE2eEnvironment({
+        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
+        AGENT_ROVER_WIN11_TOKEN: "token",
+      }),
+    ).toEqual({
+      reason: "MUON_E2E_REMOTE_WINDOWS is not set",
+      status: "skip",
+    });
+  });
+
+  it("uses the Windows agent configuration when remote execution is enabled", () => {
+    expect(
+      resolveWindowsE2eEnvironment({
+        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
+        AGENT_ROVER_WIN11_TOKEN: "token",
+        MUON_E2E_REMOTE_WINDOWS: "1",
+      }),
+    ).toEqual({
+      config: {
+        host: "192.0.2.10",
+        httpHost: "192.0.2.1",
+        port: 39397,
+        token: "token",
+        workDir: String.raw`C:\muon-e2e`,
+      },
+      status: "configured",
+    });
+  });
+
   it("skips when the Windows agent host is missing", () => {
     expect(
       parseWindowsE2eEnvironment({

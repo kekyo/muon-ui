@@ -14,11 +14,11 @@ import {
   joinWindowsPath,
   setWindowsRemoteContext,
 } from "./plugin-e2e/windows-context.js";
-import { parseWindowsE2eEnvironment } from "./plugin-e2e/windows-environment.js";
+import { resolveWindowsE2eEnvironment } from "./plugin-e2e/windows-environment.js";
 import { resolveWindowsRuntimeTarget } from "./plugin-e2e/windows-matrix.js";
 import { stageWindowsRuntime } from "./plugin-e2e/windows-staging.js";
 
-const windowsE2eEnvironment = parseWindowsE2eEnvironment(process.env);
+const windowsE2eEnvironment = resolveWindowsE2eEnvironment(process.env);
 const windowsRuntimeTarget = resolveWindowsRuntimeTarget(
   process.env.MUON_E2E_WINDOWS_TARGET,
 );
@@ -75,9 +75,9 @@ if (
   });
 }
 
-afterAll(() => {
+afterAll(async () => {
   clearWindowsRemoteContext();
-  windowsAgent?.release();
+  await windowsAgent?.release();
 });
 
 describeWindowsE2e(suiteName, { concurrent: false }, () => {

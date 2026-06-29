@@ -268,6 +268,7 @@ npx muon pack --target windows
 npx muon pack --target amd64
 npx muon pack --type zip,deb --target linux-amd64
 npx muon pack --type nsis --target windows-amd64
+npx muon build --windows-icon icons/app.ico --windows-version 1.2.3
 ```
 
 - `--type` は `zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
@@ -285,6 +286,8 @@ npx muon pack --type nsis --target windows-amd64
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
 - `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
+- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
+  同じ値は `muon.json` の `windows.resource` でも指定できます。
 
 ---
 
@@ -893,7 +896,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
   ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
   Windowsでは、PNGとして読み込めるタイトルバーアイコンは実行中ウインドウのタスクバー/Alt-Tab用アプリアイコンにも反映されます。
-  exeファイル自体のアイコンリソース差し替えは対象外です。
+  exeファイル自体のアイコンリソースを配布ビルド時に差し替える場合は、`windows.resource.iconPath` に `.ico` ファイルを指定します。
   Windows用には32x32以上のPNGを推奨します。タイトルバーではCEFが必要なサイズへ縮小表示します。
   - ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
     ページ遷移時、faviconが存在しない場合や取得・変換できない場合は `initialTitleBarIcon`、または内蔵Muonアイコンへ戻ります。
@@ -911,6 +914,48 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   未指定または空配列の場合、popupから親ページへのJavaScriptアクセスは許可されません。
   この場合のpopupは `noopener` 相当の独立ウインドウとして開かれ、 `window.open()` は `null` を返します。
   ページ側で `noopener` または `noreferrer` を指定した場合も、許可リストの内容に関係なく `window.opener` は `null` になります。
+
+### windowsキー
+
+`windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
+この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
+
+```json
+{
+  "windows": {
+    "resource": {
+      "iconPath": "icons/app.ico",
+      "productName": "My App",
+      "fileDescription": "My App",
+      "companyName": "Example Inc.",
+      "version": "1.2.3",
+      "copyright": "Copyright Example Inc."
+    }
+  }
+}
+```
+
+| キー                   | 型       | 既定値                     | 概要                                                                     |
+| :--------------------- | :------- | :------------------------- | :----------------------------------------------------------------------- |
+| `resource.iconPath`    | `string` | Muon既定アイコン           | Windows launcherとNSIS installer/uninstallerに使用する`.ico`ファイルです。 |
+| `resource.productName` | `string` | `package.json`名           | Windows version resourceの`ProductName`です。                            |
+| `resource.fileDescription` | `string` | `package.json.description` | Windows version resourceの`FileDescription`です。                  |
+| `resource.companyName` | `string` | `package.json.author`      | Windows version resourceの`CompanyName`です。                            |
+| `resource.version`     | `string` | `package.json.version`     | `FileVersion`/`ProductVersion`です。固定値は4要素に正規化されます。      |
+| `resource.copyright`   | `string` | `package.json.copyright`   | Windows version resourceの`LegalCopyright`です。                         |
+| `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
+| `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
+
+- `iconPath` は `.ico` のみ対応します。PNGやSVGはPE/NSISのアイコンリソースとしては使用できません。
+- 相対パスは、値を定義したファイルのディレクトリから解決されます。
+  CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
+- 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
+- `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
+  文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
+- `muon build` はlauncherのconfig埋め込み後に `muon-prepare resource` でPE resourceを更新します。
+  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
+- `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
+  setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
 
 ### assetキー
 
@@ -1070,6 +1115,7 @@ export default defineConfig({
 | `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
+| `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
@@ -1087,6 +1133,7 @@ export default defineConfig({
   設定ファイルが存在しない場合は `{}` 相当として扱います。
 - Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
   そのため、ビルド後のアセットは `asset://main/` から参照できます。
+- `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
 - `packageDirectory` は通常指定しません。
   muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
   相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。

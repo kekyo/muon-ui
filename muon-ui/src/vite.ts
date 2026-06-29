@@ -19,14 +19,17 @@ type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 export interface MuonViteBuildOptions {
   /**
    * Public target identifiers to build.
+   *
+   * @defaultValue Uses every supported target unless `allTargets` is `false`,
+   * then the host target is used.
    */
   targets?: readonly string[];
 
   /**
    * Build every supported target from the installed package.
    *
-   * @remarks Defaults to true when targets is omitted. Set false to build only
-   * the host target.
+   * @remarks Set false to build only the host target when `targets` is omitted.
+   * @defaultValue `true` when `targets` is omitted.
    */
   allTargets?: boolean;
 
@@ -34,28 +37,36 @@ export interface MuonViteBuildOptions {
    * File name used for the app launcher.
    *
    * @remarks The .exe suffix is added automatically for Windows targets.
+   * @defaultValue The sanitized package name, or `"muon-app"` when unavailable.
    */
   appName?: string;
 
   /**
    * Stable application identifier used for portable runtime state.
+   *
+   * @defaultValue The sanitized package name, or `"muon-app"` when unavailable.
    */
   appId?: string;
 
   /**
    * Parent directory that receives dist-muon-linux-amd64/ style outputs.
+   *
+   * @defaultValue The Vite project root.
    */
   outputRoot?: string;
 
   /**
    * Muon config path to embed.
+   *
+   * @defaultValue Auto-detects `muon.json5`, `muon.jsonc`, then `muon.json`;
+   * uses an empty config when none exists.
    */
   configPath?: string;
 
   /**
    * Directory containing package runtime/ and native/ folders.
    *
-   * @remarks This defaults to the installed muon package dist directory.
+   * @defaultValue The installed muon package dist directory.
    */
   packageDirectory?: string;
 
@@ -63,6 +74,7 @@ export interface MuonViteBuildOptions {
    * Asset salt override for deterministic tests.
    *
    * @remarks Production builds should omit this option.
+   * @defaultValue A random 16-byte salt.
    */
   assetSalt?: Uint8Array;
 }
@@ -76,6 +88,7 @@ export interface MuonVitePluginOptions {
    *
    * @remarks Relative paths are resolved from the Vite project root. When omitted,
    * the packaged runtime at dist/runtime/<public-target> is used.
+   * @defaultValue The packaged runtime at `dist/runtime/<public-target>`.
    */
   muonPath?: string;
 
@@ -84,38 +97,42 @@ export interface MuonVitePluginOptions {
    *
    * @remarks Relative paths are resolved from the Vite project root. When omitted,
    * muon-prepare downloads and caches the tested CEF artifact from muonPath.
+   * @defaultValue The tested CEF artifact downloaded and cached by muon-prepare.
    */
   cefPath?: string;
 
   /**
    * Runtime staging directory used for development startup.
    *
-   * @remarks Relative paths are resolved from the Vite project root. Defaults to
-   * .muon/<public-target>.
+   * @remarks Relative paths are resolved from the Vite project root.
+   * @defaultValue `.muon/<public-target>`.
    */
   stagePath?: string;
 
   /**
    * Launch Muon automatically during Vite dev startup.
    *
-   * @remarks Defaults to true. This is independent from Vite's server.open
-   * browser startup option. Vite build ignores this option.
+   * @remarks This is independent from Vite's server.open browser startup
+   * option. Vite build ignores this option.
+   * @defaultValue `true`
    */
   open?: boolean;
 
   /**
    * Enable the Muon debugger defaults during Vite dev startup.
    *
-   * @remarks Defaults to true. When enabled, the generated development config
-   * enables CDP and binds DevTools to F12. Vite build ignores this option.
+   * @remarks When enabled, the generated development config enables CDP and
+   * binds DevTools to F12. Vite build ignores this option.
+   * @defaultValue `true`
    */
   enableDebugger?: boolean;
 
   /**
    * Build app distributions from Vite output.
    *
-   * @remarks Defaults to true during Vite build. Set false to disable the build
-   * hook while keeping the development bridge enabled.
+   * @remarks Set false to disable the build hook while keeping the development
+   * bridge enabled.
+   * @defaultValue `true` during Vite build.
    */
   build?: boolean | MuonViteBuildOptions;
 }
@@ -125,6 +142,7 @@ export interface MuonVitePluginOptions {
  *
  * @param options Muon plugin options used for development startup and build.
  * @returns Vite plugin instance.
+ * @defaultValue `options` defaults to `{}`.
  */
 const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   let resolvedConfig: ResolvedConfig | undefined = undefined;

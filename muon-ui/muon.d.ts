@@ -35,21 +35,48 @@ declare global {
 
   /** Bootstrap settings used on the next muon-bootstrap startup. */
   interface MuonBootstrapSettings {
-    /** CEF version selection policy. */
+    /**
+     * CEF version selection policy.
+     *
+     * @defaultValue The configured bootstrap default version policy, normally `"tested"`.
+     */
     readonly cefVersionPolicy?: MuonCefVersionPolicy;
-    /** Exact CEF version used when cefVersionPolicy is exact. */
+    /**
+     * Exact CEF version used when cefVersionPolicy is exact.
+     *
+     * @defaultValue `""`
+     */
     readonly cefExactVersion?: string;
-    /** Minimum seconds between automatic CEF catalog refresh attempts. */
+    /**
+     * Minimum seconds between automatic CEF catalog refresh attempts.
+     *
+     * @defaultValue `604800`
+     */
     readonly catalogRefreshIntervalSeconds?: number;
   }
 
   /** Partial bootstrap settings update. */
   interface MuonBootstrapSettingsPatch {
-    /** CEF version selection policy, or null to use defaultVersionPolicy. */
+    /**
+     * CEF version selection policy.
+     *
+     * @remarks Set `null` to restore the default version policy.
+     * @defaultValue Omit to keep the current setting.
+     */
     readonly cefVersionPolicy?: MuonCefVersionPolicy | null;
-    /** Exact CEF version used when cefVersionPolicy is exact, or null to clear. */
+    /**
+     * Exact CEF version used when cefVersionPolicy is exact.
+     *
+     * @remarks Set `null` to restore the default empty value.
+     * @defaultValue Omit to keep the current setting.
+     */
     readonly cefExactVersion?: string | null;
-    /** Minimum seconds between automatic CEF catalog refresh attempts, or null to use the default. */
+    /**
+     * Minimum seconds between automatic CEF catalog refresh attempts.
+     *
+     * @remarks Set `null` to restore the default interval.
+     * @defaultValue Omit to keep the current setting.
+     */
     readonly catalogRefreshIntervalSeconds?: number | null;
   }
 
@@ -662,6 +689,7 @@ declare global {
      * @remarks If the signal is already aborted, the operation rejects with the
      * signal reason or an `AbortError`. If it aborts while the operation is
      * pending, Muon requests native cancellation when possible.
+     * @defaultValue No abort signal.
      */
     readonly signal?: AbortSignal;
   }
@@ -671,7 +699,8 @@ declare global {
     /**
      * Byte offset where reading starts.
      *
-     * @remarks Must be a non-negative safe integer. Defaults to `0`.
+     * @remarks Must be a non-negative safe integer.
+     * @defaultValue `0`
      */
     readonly position?: number;
     /**
@@ -679,6 +708,7 @@ declare global {
      *
      * @remarks Must be a non-negative safe integer. Omit to read through the end
      * of the file.
+     * @defaultValue Reads through the end of the file.
      */
     readonly length?: number;
   }
@@ -689,6 +719,7 @@ declare global {
      * Byte offset where writing starts.
      *
      * @remarks Must be a non-negative safe integer. Omit to replace the whole file.
+     * @defaultValue Replaces the whole file.
      */
     readonly position?: number;
   }
@@ -703,6 +734,7 @@ declare global {
      *
      * @remarks Omit to check only existence. Every listed mode must be allowed
      * for `access()` to return true.
+     * @defaultValue Checks existence only.
      */
     readonly mode?: readonly MuonFsAccessMode[];
   }
@@ -713,6 +745,7 @@ declare global {
      * Return entries with metadata helpers instead of names.
      *
      * @remarks Use `true` to select the `MuonFsDirent[]` overload.
+     * @defaultValue `false`
      */
     readonly withFileTypes?: boolean;
   }
@@ -722,7 +755,7 @@ declare global {
     /**
      * Create parent directories as needed.
      *
-     * @remarks Defaults to false.
+     * @defaultValue `false`
      */
     readonly recursive?: boolean;
   }
@@ -732,20 +765,24 @@ declare global {
     /**
      * Remove directory trees recursively.
      *
-     * @remarks Defaults to false.
+     * @defaultValue `false`
      */
     readonly recursive?: boolean;
     /**
      * Do not fail when the path is missing.
      *
-     * @remarks Defaults to false.
+     * @defaultValue `false`
      */
     readonly force?: boolean;
   }
 
   /** Options for copying a regular file. */
   interface MuonFsCopyFileOptions extends MuonFsOperationOptions {
-    /** Replace an existing destination file. Defaults to true. */
+    /**
+     * Replace an existing destination file.
+     *
+     * @defaultValue `true`
+     */
     readonly overwrite?: boolean;
   }
 
@@ -767,70 +804,123 @@ declare global {
     /**
      * Restrict selection to local files.
      *
-     * @remarks Defaults to false so GTK/GVfs locations can return URI values.
+     * @remarks GTK/GVfs locations can return URI values when this is false.
+     * @defaultValue `false`
      */
     readonly localOnly?: boolean;
     /**
      * Allow creating folders from save and folder chooser dialogs.
      *
      * @remarks Applies only when supported by the GTK backend.
+     * @defaultValue `true`
      */
     readonly createFolders?: boolean;
     /**
      * Additional GTK MIME type filters.
      *
      * @remarks Entries must be non-empty strings.
+     * @defaultValue No additional MIME type filters.
      */
     readonly mimeTypes?: readonly string[];
   }
 
   /** Win32-specific native dialog options. */
   interface MuonFsWin32DialogOptions {
-    /** Force selections to filesystem-backed shell items. */
+    /**
+     * Force selections to filesystem-backed shell items.
+     *
+     * @defaultValue `true`
+     */
     readonly forceFilesystem?: boolean;
-    /** Return shortcut/link items themselves instead of their targets. */
+    /**
+     * Return shortcut/link items themselves instead of their targets.
+     *
+     * @defaultValue `false`
+     */
     readonly noDereferenceLinks?: boolean;
-    /** Do not add selected locations to the recent documents list. */
+    /**
+     * Do not add selected locations to the recent documents list.
+     *
+     * @defaultValue `false`
+     */
     readonly dontAddToRecent?: boolean;
-    /** Allow paths that do not pass normal shell validation. */
+    /**
+     * Allow paths that do not pass normal shell validation.
+     *
+     * @defaultValue `false`
+     */
     readonly noValidate?: boolean;
-    /** Restrict typed filenames to the configured file types. */
+    /**
+     * Restrict typed filenames to the configured file types.
+     *
+     * @defaultValue `false`
+     */
     readonly strictFileTypes?: boolean;
-    /** Require selected paths to exist. */
+    /**
+     * Require selected paths to exist.
+     *
+     * @defaultValue `false`
+     */
     readonly pathMustExist?: boolean;
-    /** Require selected files to exist. */
+    /**
+     * Require selected files to exist.
+     *
+     * @defaultValue `false`
+     */
     readonly fileMustExist?: boolean;
   }
 
   /** Common options for native filesystem dialogs. */
   interface MuonFsDialogOptions extends MuonFsOperationOptions {
-    /** Dialog title. */
+    /**
+     * Dialog title.
+     *
+     * @defaultValue The native backend default title.
+     */
     readonly title?: string;
     /**
      * Initial path or URI shown by the dialog.
      *
      * @remarks GTK accepts GVfs URI values when gtk.localOnly is false.
+     * @defaultValue No explicit initial path.
      */
     readonly defaultPath?: string;
-    /** Accept button label. */
+    /**
+     * Accept button label.
+     *
+     * @defaultValue The native backend default button label.
+     */
     readonly buttonLabel?: string;
     /**
      * Whether to disable the calling browser view while the dialog is open.
      *
-     * @remarks Defaults to true.
+     * @defaultValue `true`
      */
     readonly modal?: boolean;
-    /** Show hidden files when supported by the backend. */
+    /**
+     * Show hidden files when supported by the backend.
+     *
+     * @defaultValue `false`
+     */
     readonly showHidden?: boolean;
     /**
      * File filters shown by the dialog.
      *
      * @remarks Every filter requires a non-empty name and at least one extension.
+     * @defaultValue No file filters.
      */
     readonly filters?: readonly MuonFsDialogFilter[];
-    /** GTK-specific dialog flags. */
+    /**
+     * GTK-specific dialog flags.
+     *
+     * @defaultValue GTK option defaults.
+     */
     readonly gtk?: MuonFsGtkDialogOptions;
-    /** Win32-specific dialog flags. */
+    /**
+     * Win32-specific dialog flags.
+     *
+     * @defaultValue Win32 option defaults.
+     */
     readonly win32?: MuonFsWin32DialogOptions;
   }
 
@@ -839,9 +929,17 @@ declare global {
 
   /** Options for save file dialogs. */
   interface MuonFsSaveDialogOptions extends MuonFsDialogOptions {
-    /** Initial file name shown by the save dialog. */
+    /**
+     * Initial file name shown by the save dialog.
+     *
+     * @defaultValue No explicit initial file name.
+     */
     readonly defaultName?: string;
-    /** Ask before replacing an existing file. Defaults to true. */
+    /**
+     * Ask before replacing an existing file.
+     *
+     * @defaultValue `true`
+     */
     readonly confirmOverwrite?: boolean;
   }
 
@@ -1060,12 +1158,14 @@ declare global {
      * Command line arguments passed as separate values.
      *
      * @remarks Values are not interpreted by a shell and must not contain NUL.
+     * @defaultValue `[]`
      */
     readonly args?: readonly string[];
     /**
      * UTF-8 text written to the child process stdin.
      *
      * @remarks Omit or use an empty string to close stdin without writing data.
+     * @defaultValue `""`
      */
     readonly stdin?: string;
     /**
@@ -1073,6 +1173,7 @@ declare global {
      *
      * @remarks Must not contain NUL. On POSIX, failure to change directory makes
      * the child exit with code `126`.
+     * @defaultValue The current process working directory.
      */
     readonly cwd?: string;
     /**
@@ -1081,6 +1182,7 @@ declare global {
      * @remarks Entries are merged with the current process environment. Keys
      * must be non-empty and must not contain `=` or NUL; values must not contain
      * NUL.
+     * @defaultValue No environment overrides.
      */
     readonly env?: Record<string, string>;
   }

@@ -404,7 +404,7 @@ const createCliCommand = (): Command => {
     .command("pack")
     .description("Build and package a Muon app")
     .option(
-      "-t, --type <type>",
+      "--type <type>",
       "package type or comma-separated package types: zip, deb, nsis (default: all)",
       appendPackTypeValues,
     )

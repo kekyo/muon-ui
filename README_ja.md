@@ -263,20 +263,24 @@ muon Viteプラグインが無い場合は `vite build` を実行せず、既に
 ```bash
 npx muon pack
 npx muon pack --type zip
+npx muon pack --type tar.gz
+npx muon pack --type tgz
 npx muon pack --type nsis
 npx muon pack --target windows
 npx muon pack --target amd64
-npx muon pack --type zip,deb --target linux-amd64
+npx muon pack --type tar.gz,deb --target linux-amd64
 npx muon pack --type nsis --target windows-amd64
 npx muon build --windows-icon icons/app.ico --windows-version 1.2.3
 ```
 
-- `--type` は `zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
-  省略時は `zip`, `deb`, `nsis` のすべてを対象にします。
+- `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+  `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
+  省略時は `zip`, `tar.gz`, `deb`, `nsis` のすべてを対象にします。
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
   muon Viteプラグインが無い場合、未指定時はすべての対応ターゲットをパッケージ候補にします。
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定できます。
-- `zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
+- `zip` はWindowsターゲットだけで使用でき、各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
+- `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon-*` ディレクトリをトップレベルに含むgzip圧縮tarです。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。

@@ -19,6 +19,13 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import AdmZip from "adm-zip";
 import { parse } from "json5";
+import {
+  createDirectoryItem,
+  createReadFileItem,
+  createTarPacker,
+  storeReaderToFile,
+  type EntryItem,
+} from "tar-vern";
 
 import {
   getDefaultMuonBuildTarget,
@@ -47,7 +54,7 @@ import {
   type ResolvedMuonWindowsResource,
 } from "./windows-resource.js";
 
-const supportedPackTypes = ["zip", "deb", "nsis"] as const;
+const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
 const defaultPackageBuildDirectory = ".muon/pack";
 
@@ -69,7 +76,7 @@ export interface MuonPackOptions {
   /**
    * Package artifact types to generate.
    *
-   * @remarks Defaults to zip, deb, and nsis when omitted.
+   * @remarks Defaults to zip, tar.gz, deb, and nsis when omitted.
    */
   types?: readonly string[];
   /**
@@ -277,6 +284,7 @@ const normalizePackTypes = (
   const normalized = types
     .flatMap((value) => value.split(","))
     .map((value) => value.trim().toLowerCase())
+    .map((value) => (value === "tgz" ? "tar.gz" : value))
     .filter((value) => value.length > 0);
   if (normalized.length === 0) {
     throw new Error("Specify at least one package type with --type.");
@@ -367,7 +375,8 @@ const packTypeSupportsTarget = (
 ): boolean => {
   const descriptor = getMuonTargetDescriptor(target);
   return (
-    type === "zip" ||
+    (type === "zip" && descriptor.os === "windows") ||
+    (type === "tar.gz" && descriptor.os === "linux") ||
     (type === "deb" && descriptor.os === "linux") ||
     (type === "nsis" && descriptor.os === "windows")
   );
@@ -472,6 +481,64 @@ const packageZip = async (
   await writeFile(outputPath, zip.toBuffer());
   return {
     type: "zip",
+    target: target.target,
+    path: outputPath,
+  };
+};
+
+const toArchivePath = (path: string): string => path.split(sep).join("/");
+
+const createTarGzEntryGenerator = async function* (
+  directory: string,
+  entryRoot: string,
+): AsyncGenerator<EntryItem, void, unknown> {
+  yield await createDirectoryItem(entryRoot, "exceptName", {
+    directoryPath: directory,
+  });
+
+  const walk = async function* (
+    currentDirectory: string,
+  ): AsyncGenerator<EntryItem, void, unknown> {
+    const entries = await readdir(currentDirectory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const path = join(currentDirectory, entry.name);
+      const relativePath = toArchivePath(relative(directory, path));
+      const entryName = `${entryRoot}/${relativePath}`;
+      if (entry.isDirectory()) {
+        yield await createDirectoryItem(entryName, "exceptName", {
+          directoryPath: path,
+        });
+        yield* walk(path);
+      } else if (entry.isFile()) {
+        yield await createReadFileItem(entryName, path, "exceptName");
+      }
+    }
+  };
+
+  yield* walk(directory);
+};
+
+const packageTarGz = async (
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+  artifactsRoot: string,
+): Promise<MuonPackArtifact> => {
+  const outputPath = join(
+    artifactsRoot,
+    `${metadata.packageName}-${metadata.version}-${target.target}.tar.gz`,
+  );
+  await mkdir(dirname(outputPath), { recursive: true });
+  const packer = createTarPacker(
+    createTarGzEntryGenerator(
+      target.outputPath,
+      target.distributionDirectoryName,
+    ),
+    "gzip",
+  );
+  await storeReaderToFile(packer, outputPath);
+  return {
+    type: "tar.gz",
     target: target.target,
     path: outputPath,
   };
@@ -749,6 +816,8 @@ export const packMuonApp = async (
     for (const type of typesByTarget.get(target.target) ?? []) {
       if (type === "zip") {
         artifacts.push(await packageZip(target, metadata, artifactsRoot));
+      } else if (type === "tar.gz") {
+        artifacts.push(await packageTarGz(target, metadata, artifactsRoot));
       } else if (type === "deb") {
         artifacts.push(
           await packageDeb(

@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon
 
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
 import {
   access,
   chmod,
@@ -22,6 +23,7 @@ import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createTarExtractor } from "tar-vern";
 
 import {
   createMuonBootstrapEmbeddedConfigSlot,
@@ -343,6 +345,32 @@ const readZipTextEntry = async (
   throw new Error(`ZIP entry was not found: ${entryName}`);
 };
 
+const readTarGzEntryNames = async (archivePath: string): Promise<string[]> => {
+  const names: string[] = [];
+  for await (const entry of createTarExtractor(
+    createReadStream(archivePath),
+    "gzip",
+  )) {
+    names.push(entry.path);
+  }
+  return names.sort();
+};
+
+const readTarGzTextEntry = async (
+  archivePath: string,
+  entryName: string,
+): Promise<string> => {
+  for await (const entry of createTarExtractor(
+    createReadStream(archivePath),
+    "gzip",
+  )) {
+    if (entry.kind === "file" && entry.path === entryName) {
+      return await entry.getContent("string");
+    }
+  }
+  throw new Error(`tar.gz entry was not found: ${entryName}`);
+};
+
 const writeFakeTool = async (
   binDirectory: string,
   name: string,
@@ -424,8 +452,8 @@ afterEach(async () => {
 });
 
 describe("muon pack", () => {
-  it("builds Vite output once and packages the configured target as a ZIP", async () => {
-    const root = await createTemporaryDirectory("muon-pack-zip-");
+  it("builds Vite output once and packages the configured Linux target as a tar.gz archive", async () => {
+    const root = await createTemporaryDirectory("muon-pack-tar-gz-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
       "linux-amd64",
     ]);
@@ -433,26 +461,26 @@ describe("muon pack", () => {
 
     const result = await packMuonApp({
       root,
-      types: ["zip"],
+      types: ["tar.gz"],
     });
 
     const [artifact] = result.artifacts;
     expect(result.targets.map((target) => target.target)).toEqual([
       "linux-amd64",
     ]);
-    expect(artifact?.type).toBe("zip");
+    expect(artifact?.type).toBe("tar.gz");
     expect(artifact?.target).toBe("linux-amd64");
     expect(artifact?.path).toBe(
-      join(root, "artifacts", "packed-sample-1.2.3-linux-amd64.zip"),
+      join(root, "artifacts", "packed-sample-1.2.3-linux-amd64.tar.gz"),
     );
     await expect(exists(join(root, "dist-muon-linux-amd64"))).resolves.toBe(
       true,
     );
-    await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
+    await expect(readTarGzEntryNames(artifact?.path ?? "")).resolves.toContain(
       "dist-muon-linux-amd64/assets.zip",
     );
     await expect(
-      readZipTextEntry(
+      readTarGzTextEntry(
         artifact?.path ?? "",
         "dist-muon-linux-amd64/CREDITS.md",
       ),
@@ -470,11 +498,11 @@ describe("muon pack", () => {
       root,
       packageDirectory,
       targets: ["linux-amd64"],
-      types: ["zip"],
+      types: ["tar.gz"],
     });
 
     const [artifact] = result.artifacts;
-    expect(artifact?.type).toBe("zip");
+    expect(artifact?.type).toBe("tar.gz");
     await expect(exists(join(root, "vite-build-marker.txt"))).resolves.toBe(
       false,
     );
@@ -484,6 +512,57 @@ describe("muon pack", () => {
         "index.html",
       ),
     ).resolves.toBe("<!doctype html><title>plain assets</title>");
+  });
+
+  it("normalizes the tgz package type alias to tar.gz", async () => {
+    const root = await createTemporaryDirectory("muon-pack-tgz-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    const result = await packMuonApp({
+      root,
+      types: ["tgz"],
+    });
+
+    const [artifact] = result.artifacts;
+    expect(artifact?.type).toBe("tar.gz");
+    expect(artifact?.path).toBe(
+      join(root, "artifacts", "packed-sample-1.2.3-linux-amd64.tar.gz"),
+    );
+  });
+
+  it("packages the configured Windows target as a ZIP", async () => {
+    const root = await createTemporaryDirectory("muon-pack-zip-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "windows-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+
+    const result = await packMuonApp({
+      root,
+      types: ["zip"],
+    });
+
+    const [artifact] = result.artifacts;
+    expect(result.targets.map((target) => target.target)).toEqual([
+      "windows-amd64",
+    ]);
+    expect(artifact?.type).toBe("zip");
+    expect(artifact?.target).toBe("windows-amd64");
+    expect(artifact?.path).toBe(
+      join(root, "artifacts", "packed-sample-1.2.3-windows-amd64.zip"),
+    );
+    await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
+      "dist-muon-windows-amd64/assets.zip",
+    );
+    await expect(
+      readZipTextEntry(
+        artifact?.path ?? "",
+        "dist-muon-windows-amd64/CREDITS.md",
+      ),
+    ).resolves.toBe("notices\n");
   });
 
   it("rejects package builds when the Vite Muon plugin disables Muon builds", async () => {
@@ -498,7 +577,7 @@ describe("muon pack", () => {
         root,
         packageDirectory,
         targets: ["linux-amd64"],
-        types: ["zip"],
+        types: ["tar.gz"],
       }),
     ).rejects.toThrow("Muon build is disabled by muon({ build: false })");
   });
@@ -747,9 +826,9 @@ printf 'nsis\\n' > "$output_path"
       "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
       "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
       "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
-      "zip:linux-amd64:packed-sample-1.2.3-linux-amd64.zip",
-      "zip:linux-arm64:packed-sample-1.2.3-linux-arm64.zip",
-      "zip:linux-armhf:packed-sample-1.2.3-linux-armhf.zip",
+      "tar.gz:linux-amd64:packed-sample-1.2.3-linux-amd64.tar.gz",
+      "tar.gz:linux-arm64:packed-sample-1.2.3-linux-arm64.tar.gz",
+      "tar.gz:linux-armhf:packed-sample-1.2.3-linux-armhf.tar.gz",
       "zip:windows-amd64:packed-sample-1.2.3-windows-amd64.zip",
       "zip:windows-i686:packed-sample-1.2.3-windows-i686.zip",
     ]);
@@ -786,9 +865,9 @@ printf 'nsis\\n' > "$output_path"
           "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
           "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
           "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
-          "zip:linux-amd64:packed-sample-1.2.3-linux-amd64.zip",
-          "zip:linux-arm64:packed-sample-1.2.3-linux-arm64.zip",
-          "zip:linux-armhf:packed-sample-1.2.3-linux-armhf.zip",
+          "tar.gz:linux-amd64:packed-sample-1.2.3-linux-amd64.tar.gz",
+          "tar.gz:linux-arm64:packed-sample-1.2.3-linux-arm64.tar.gz",
+          "tar.gz:linux-armhf:packed-sample-1.2.3-linux-armhf.tar.gz",
         ],
       },
       {
@@ -797,7 +876,7 @@ printf 'nsis\\n' > "$output_path"
         expectedArtifacts: [
           "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
           "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
-          "zip:linux-amd64:packed-sample-1.2.3-linux-amd64.zip",
+          "tar.gz:linux-amd64:packed-sample-1.2.3-linux-amd64.tar.gz",
           "zip:windows-amd64:packed-sample-1.2.3-windows-amd64.zip",
         ],
       },
@@ -806,7 +885,7 @@ printf 'nsis\\n' > "$output_path"
         expectedTargets: ["linux-arm64"],
         expectedArtifacts: [
           "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
-          "zip:linux-arm64:packed-sample-1.2.3-linux-arm64.zip",
+          "tar.gz:linux-arm64:packed-sample-1.2.3-linux-arm64.tar.gz",
         ],
       },
     ];
@@ -848,6 +927,38 @@ printf 'nsis\\n' > "$output_path"
         root,
         types: ["nsis"],
         targets: ["linux"],
+      }),
+    ).rejects.toThrow("No valid muon pack target and type combinations");
+  });
+
+  it("rejects zip packages for Linux targets", async () => {
+    const root = await createTemporaryDirectory("muon-pack-linux-zip-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["zip"],
+        targets: ["linux"],
+      }),
+    ).rejects.toThrow("No valid muon pack target and type combinations");
+  });
+
+  it("rejects tar.gz packages for Windows targets", async () => {
+    const root = await createTemporaryDirectory("muon-pack-windows-tar-gz-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "windows-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["tar.gz"],
+        targets: ["windows"],
       }),
     ).rejects.toThrow("No valid muon pack target and type combinations");
   });

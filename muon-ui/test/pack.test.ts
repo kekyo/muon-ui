@@ -592,12 +592,24 @@ printf 'nsis\\n' > "$output_path"
       "packed-sample-1.2.3-amd64-setup.exe",
     ]);
     await expect(exists(join(root, "artifacts", "nsis"))).resolves.toBe(false);
-    await expect(
-      readFile(
-        join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
-        "utf8",
-      ),
-    ).resolves.toContain("RequestExecutionLevel user");
+    const nsisScript = await readFile(
+      join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
+      "utf8",
+    );
+    expect(nsisScript).toContain("RequestExecutionLevel user");
+    expect(nsisScript).toContain("ShowInstDetails nevershow");
+    expect(nsisScript).toContain("AutoCloseWindow true");
+    expect(nsisScript).toContain("Page instfiles");
+    expect(
+      nsisScript.split("\n").filter((line) => line.startsWith("Page ")),
+    ).toEqual(["Page instfiles"]);
+    expect(nsisScript).toContain("Function .onInstSuccess");
+    expect(nsisScript).toContain("  IfSilent +3");
+    expect(nsisScript).toContain('  SetOutPath "$INSTDIR"');
+    expect(nsisScript).toContain(
+      '  Exec "$\\"$INSTDIR\\packed-sample.exe$\\""',
+    );
+    expect(nsisScript).toContain("FunctionEnd");
   });
 
   it("packages only Windows targets when NSIS is requested without explicit targets", async () => {

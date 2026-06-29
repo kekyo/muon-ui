@@ -221,6 +221,125 @@ const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
   return args;
 };
 
+interface MuonPrepareStderrForwarder {
+  write(chunk: string): void;
+  flush(): void;
+}
+
+const spinnerFrames = ["-", "\\", "|", "/"] as const;
+const spinnerIntervalMilliseconds = 100;
+const terminalLineStart = "\r";
+const terminalClearLine = "\x1b[K";
+
+const isMuonPrepareStatusLine = (line: string): boolean => {
+  const trimmed = line.trimEnd();
+  return (
+    trimmed.endsWith("...") ||
+    trimmed === "Failed to prepare CEF." ||
+    trimmed.startsWith("Downloading CEF binary:")
+  );
+};
+
+const createPlainStderrForwarder = (): MuonPrepareStderrForwarder => ({
+  write: (chunk): void => {
+    process.stderr.write(chunk);
+  },
+  flush: (): void => {},
+});
+
+const createSpinnerStderrForwarder = (): MuonPrepareStderrForwarder => {
+  let pending = "";
+  let activeStatus: string | undefined = undefined;
+  let frameIndex = 0;
+  let timer: NodeJS.Timeout | undefined = undefined;
+
+  const writeRaw = (chunk: string): void => {
+    process.stderr.write(chunk);
+  };
+
+  const stopTimer = (): void => {
+    if (timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+
+  const renderStatus = (): void => {
+    if (activeStatus === undefined) {
+      return;
+    }
+    const frame = spinnerFrames[frameIndex] ?? spinnerFrames[0];
+    writeRaw(
+      `${terminalLineStart}${frame} ${activeStatus}${terminalClearLine}`,
+    );
+    frameIndex = (frameIndex + 1) % spinnerFrames.length;
+  };
+
+  const ensureTimer = (): void => {
+    if (timer === undefined) {
+      timer = setInterval(renderStatus, spinnerIntervalMilliseconds);
+    }
+  };
+
+  const finishStatus = (): void => {
+    if (activeStatus === undefined) {
+      return;
+    }
+    const status = activeStatus;
+    activeStatus = undefined;
+    stopTimer();
+    frameIndex = 0;
+    writeRaw(`${terminalLineStart}${status}${terminalClearLine}\n`);
+  };
+
+  const startStatus = (status: string): void => {
+    if (activeStatus !== undefined && activeStatus !== status) {
+      finishStatus();
+    }
+    activeStatus = status;
+    renderStatus();
+    ensureTimer();
+  };
+
+  const writeLine = (line: string): void => {
+    const text = line.replace(/\r?\n$/, "");
+    if (isMuonPrepareStatusLine(text)) {
+      startStatus(text.trimEnd());
+      return;
+    }
+    finishStatus();
+    writeRaw(line);
+  };
+
+  return {
+    write: (chunk): void => {
+      pending += chunk;
+      for (;;) {
+        const newlineIndex = pending.indexOf("\n");
+        if (newlineIndex < 0) {
+          break;
+        }
+        const line = pending.slice(0, newlineIndex + 1);
+        pending = pending.slice(newlineIndex + 1);
+        writeLine(line);
+      }
+    },
+    flush: (): void => {
+      if (pending.length > 0) {
+        const line = pending;
+        pending = "";
+        writeLine(line);
+      }
+      finishStatus();
+    },
+  };
+};
+
+const createMuonPrepareStderrForwarder = (): MuonPrepareStderrForwarder =>
+  process.stderr.isTTY === true
+    ? createSpinnerStderrForwarder()
+    : createPlainStderrForwarder();
+
 const runMuonPrepareCommand = async (
   options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment"> & {
     args: readonly string[];
@@ -238,21 +357,28 @@ const runMuonPrepareCommand = async (
   let stderr = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
+  const stderrForwarder = options.quiet
+    ? undefined
+    : createMuonPrepareStderrForwarder();
   child.stdout.on("data", (chunk: string) => {
     stdout += chunk;
   });
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
-    if (!options.quiet) {
-      process.stderr.write(chunk);
+    stderrForwarder?.write(chunk);
+  });
+  const exitCode = await (async (): Promise<number> => {
+    try {
+      return await new Promise<number>((resolvePromise, reject) => {
+        child.on("error", reject);
+        child.on("close", (code) => {
+          resolvePromise(code ?? 1);
+        });
+      });
+    } finally {
+      stderrForwarder?.flush();
     }
-  });
-  const exitCode = await new Promise<number>((resolvePromise, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => {
-      resolvePromise(code ?? 1);
-    });
-  });
+  })();
   if (exitCode !== 0) {
     throw new Error(
       `muon-prepare failed with exit code ${exitCode}.\n${stderr.trim()}`,

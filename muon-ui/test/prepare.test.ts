@@ -1091,6 +1091,47 @@ lastCatalogUpdateUnix=0
     expect(stderr).toContain("Starting Muon...");
   });
 
+  it("renders TypeScript wrapper status messages with a spinner on TTY", async () => {
+    const fixture = await createPrepareFixture();
+    const chunks: string[] = [];
+    const isTtyDescriptor = Object.getOwnPropertyDescriptor(
+      process.stderr,
+      "isTTY",
+    );
+    Object.defineProperty(process.stderr, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
+      );
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      await prepareFixture(fixture, {
+        cefPath: undefined,
+        stageDir: fixture.stageDir,
+        force: false,
+        quiet: false,
+      });
+    } finally {
+      write.mockRestore();
+      if (isTtyDescriptor === undefined) {
+        delete (process.stderr as { isTTY?: boolean }).isTTY;
+      } else {
+        Object.defineProperty(process.stderr, "isTTY", isTtyDescriptor);
+      }
+    }
+
+    const stderr = chunks.join("");
+    expect(stderr).toContain("\r- Downloading CEF binary:");
+    expect(stderr).toContain("\r- Installing CEF runtime...");
+    expect(stderr).toContain("Starting Muon...");
+  });
+
   it("reports structured progress for bootstrap in-place CEF preparation", async () => {
     const fixture = await createPrepareFixture();
     const harnessPath = await buildProgressHarness(fixture.projectPath);

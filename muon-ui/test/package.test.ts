@@ -281,6 +281,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonViteBuildOptions",
+      memberName: "windowsResource",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
       memberName: "packageDirectory",
     },
     {
@@ -496,11 +501,18 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
   );
   await mkdir(join(root, "deps", "tra-ffic", "include"), { recursive: true });
   await mkdir(join(root, "deps", "cardio", "include"), { recursive: true });
+  await mkdir(join(root, "deps", "engraver", "libengraver", "include"), {
+    recursive: true,
+  });
   await mkdir(join(root, "muon-prepare"), { recursive: true });
   await mkdir(join(root, "muon-core"), { recursive: true });
   await mkdir(join(root, "muon-ui", "scripts"), { recursive: true });
   await writeFile(join(root, "deps", "tra-ffic", "include", "tra_ffic.h"), "");
   await writeFile(join(root, "deps", "cardio", "include", "cardio.h"), "");
+  await writeFile(
+    join(root, "deps", "engraver", "libengraver", "include", "engraver.h"),
+    "",
+  );
   await writeFile(
     join(root, "muon-prepare", "package.json"),
     `${JSON.stringify({ version: "0.0.0" }, null, 2)}\n`,
@@ -987,6 +999,16 @@ const plugin = muon({
   enableDebugger: false,
   build: {
     targets: ["linux-amd64"],
+    windowsResource: {
+      iconPath: "icons/app.ico",
+      productName: "Package Test App",
+      fileDescription: "Package test app",
+      companyName: "Muon Tester",
+      version: "1.2.3",
+      copyright: "Copyright Muon Tester",
+      language: 1033,
+      codePage: 1200,
+    },
   },
 });
 const explicitOpenPlugin = muon({ open: true });

@@ -14,6 +14,77 @@ import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequen
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
 /**
+ * Windows PE and NSIS resource metadata options.
+ */
+export interface MuonWindowsResourceOptions {
+  /**
+   * Windows icon file path.
+   *
+   * @remarks Only `.ico` files are supported. Relative paths are resolved from
+   * the source that supplied the option.
+   * @defaultValue Uses `windows.resource.iconPath`, then the packaged Muon
+   * bootstrap icon when available.
+   */
+  iconPath?: string;
+
+  /**
+   * Product name written to the Windows version resource.
+   *
+   * @defaultValue Uses `windows.resource.productName`, `project.json`,
+   * `package.json`, then the Muon launcher name.
+   */
+  productName?: string;
+
+  /**
+   * File description written to the Windows version resource.
+   *
+   * @defaultValue Uses `windows.resource.fileDescription`, `project.json`,
+   * `package.json.description`, then the product name.
+   */
+  fileDescription?: string;
+
+  /**
+   * Company name written to the Windows version resource.
+   *
+   * @defaultValue Uses `windows.resource.companyName`, `project.json`,
+   * `package.json.author`, then `"Unknown"`.
+   */
+  companyName?: string;
+
+  /**
+   * Product and file version string.
+   *
+   * @remarks PE fixed version fields are normalized to four numeric parts, so
+   * `1.2.3` becomes `1.2.3.0`. String fields keep the original value.
+   * @defaultValue Uses `windows.resource.version`, `project.json.version`,
+   * `package.json.version`, then `"0.0.0"`.
+   */
+  version?: string;
+
+  /**
+   * Legal copyright written to the Windows version resource.
+   *
+   * @defaultValue Uses `windows.resource.copyright`, `project.json`, then
+   * `package.json.copyright` when available.
+   */
+  copyright?: string;
+
+  /**
+   * Windows resource language identifier.
+   *
+   * @defaultValue `1033` (`en-US`).
+   */
+  language?: number;
+
+  /**
+   * Windows version resource code page.
+   *
+   * @defaultValue `1200` (`UTF-16LE`).
+   */
+  codePage?: number;
+}
+
+/**
  * Options for generating Muon app distributions after Vite build.
  */
 export interface MuonViteBuildOptions {
@@ -62,6 +133,14 @@ export interface MuonViteBuildOptions {
    * uses an empty config when none exists.
    */
   configPath?: string;
+
+  /**
+   * Windows PE and NSIS resource metadata.
+   *
+   * @defaultValue Uses CLI options, `muon.json` `windows.resource`,
+   * `project.json`, `package.json`, then Muon defaults.
+   */
+  windowsResource?: MuonWindowsResourceOptions;
 
   /**
    * Directory containing package runtime/ and native/ folders.
@@ -253,6 +332,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.configPath !== undefined) {
     options.configPath = buildOptions.configPath;
+  }
+  if (buildOptions.windowsResource !== undefined) {
+    options.windowsResource = buildOptions.windowsResource;
   }
   if (buildOptions.packageDirectory !== undefined) {
     options.packageDirectory = buildOptions.packageDirectory;

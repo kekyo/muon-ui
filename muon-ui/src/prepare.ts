@@ -70,6 +70,48 @@ export interface MuonPrepareOptions {
 }
 
 /**
+ * Options used to update Windows PE resources through the native Muon helper.
+ */
+export interface MuonPrepareResourceUpdateOptions {
+  /**
+   * Input PE executable path.
+   */
+  inputPath: string;
+
+  /**
+   * Engraver update JSON path.
+   */
+  updatesJsonPath: string;
+
+  /**
+   * Output PE executable path.
+   *
+   * @remarks This must be different from `inputPath`.
+   */
+  outputPath: string;
+
+  /**
+   * Suppress progress messages from the native prepare process.
+   */
+  quiet: boolean;
+
+  /**
+   * Explicit native muon-prepare executable path.
+   */
+  prepareExecutablePath: string | undefined;
+
+  /**
+   * Environment used for the child process.
+   */
+  environment: NodeJS.ProcessEnv;
+
+  /**
+   * Working directory used for the child process.
+   */
+  cwd: string | undefined;
+}
+
+/**
  * Result returned by native muon-prepare.
  */
 export interface MuonPrepareResult {
@@ -132,7 +174,7 @@ const canExecute = async (path: string): Promise<boolean> => {
 };
 
 const resolveMuonPrepareExecutable = async (
-  options: MuonPrepareOptions,
+  options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment">,
 ): Promise<string> => {
   const explicit =
     options.prepareExecutablePath ?? options.environment.MUON_PREPARE_PATH;
@@ -179,18 +221,15 @@ const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
   return args;
 };
 
-/**
- * Invokes the native muon-prepare executable and returns the prepared runtime.
- *
- * @param options Native prepare invocation options.
- * @returns Prepared runtime location.
- */
-export const runMuonPrepare = async (
-  options: MuonPrepareOptions,
-): Promise<MuonPrepareResult> => {
+const runMuonPrepareCommand = async (
+  options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment"> & {
+    args: readonly string[];
+    cwd: string | undefined;
+    quiet: boolean;
+  },
+): Promise<string> => {
   const executable = await resolveMuonPrepareExecutable(options);
-  const args = createMuonPrepareArguments(options);
-  const child = spawn(executable, args, {
+  const child = spawn(executable, [...options.args], {
     cwd: options.cwd,
     env: options.environment,
     stdio: ["ignore", "pipe", "pipe"],
@@ -219,6 +258,26 @@ export const runMuonPrepare = async (
       `muon-prepare failed with exit code ${exitCode}.\n${stderr.trim()}`,
     );
   }
+  return stdout;
+};
+
+/**
+ * Invokes the native muon-prepare executable and returns the prepared runtime.
+ *
+ * @param options Native prepare invocation options.
+ * @returns Prepared runtime location.
+ */
+export const runMuonPrepare = async (
+  options: MuonPrepareOptions,
+): Promise<MuonPrepareResult> => {
+  const args = createMuonPrepareArguments(options);
+  const stdout = await runMuonPrepareCommand({
+    prepareExecutablePath: options.prepareExecutablePath,
+    environment: options.environment,
+    cwd: options.cwd,
+    quiet: options.quiet,
+    args,
+  });
   const result = JSON.parse(stdout) as Partial<MuonPrepareResult>;
   if (
     (result.stagePath !== undefined && typeof result.stagePath !== "string") ||
@@ -234,4 +293,30 @@ export const runMuonPrepare = async (
     cefPath: result.cefPath,
     cacheHit: result.cacheHit,
   };
+};
+
+/**
+ * Invokes the native muon-prepare executable to write Windows PE resources.
+ *
+ * @param options Resource update invocation options.
+ */
+export const runMuonPrepareResourceUpdate = async (
+  options: MuonPrepareResourceUpdateOptions,
+): Promise<void> => {
+  await runMuonPrepareCommand({
+    prepareExecutablePath: options.prepareExecutablePath,
+    environment: options.environment,
+    cwd: options.cwd,
+    quiet: options.quiet,
+    args: [
+      "resource",
+      "--input",
+      options.inputPath,
+      "--updates-json",
+      options.updatesJsonPath,
+      "--output",
+      options.outputPath,
+      ...(options.quiet ? ["--quiet"] : []),
+    ],
+  });
 };

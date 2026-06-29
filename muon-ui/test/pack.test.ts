@@ -351,6 +351,22 @@ const writeFakeTool = async (
   await writeExecutable(join(binDirectory, name), script);
 };
 
+const createWindowsIconFixture = async (
+  root: string,
+  iconPath: string,
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve(
+      "..",
+      "muon-prepare",
+      "scripts",
+      "create-windows-resource-fixture.mjs",
+    ),
+    join(root, "fixture.exe"),
+    iconPath,
+  ]);
+};
+
 const createFakePackagingToolEnvironment = async (
   root: string,
 ): Promise<NodeJS.ProcessEnv> => {
@@ -566,7 +582,28 @@ mkdir -p "$(dirname "$output_path")"
 printf 'nsis\\n' > "$output_path"
 `,
     );
+    const iconPath = join(root, "icons", "setup.ico");
+    await createWindowsIconFixture(root, iconPath);
     await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            resource: {
+              iconPath: "icons/setup.ico",
+              productName: "NSIS Product",
+              fileDescription: "NSIS Installer",
+              companyName: "NSIS Company",
+              version: "9.8.7",
+              copyright: "Copyright NSIS",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
 
     const result = await packMuonApp({
       root,
@@ -597,6 +634,22 @@ printf 'nsis\\n' > "$output_path"
       "utf8",
     );
     expect(nsisScript).toContain("RequestExecutionLevel user");
+    expect(nsisScript).toContain(`Icon "${iconPath}"`);
+    expect(nsisScript).toContain(`UninstallIcon "${iconPath}"`);
+    expect(nsisScript).toContain('VIProductVersion "9.8.7.0"');
+    expect(nsisScript).toContain('VIFileVersion "9.8.7.0"');
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "CompanyName" "NSIS Company"',
+    );
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "FileDescription" "NSIS Installer"',
+    );
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "ProductName" "NSIS Product"',
+    );
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright NSIS"',
+    );
     expect(nsisScript).toContain("ShowInstDetails nevershow");
     expect(nsisScript).toContain("AutoCloseWindow true");
     expect(nsisScript).toContain("Page instfiles");

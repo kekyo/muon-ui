@@ -34,6 +34,13 @@ import {
   type MuonTarget,
   type MuonTargetDescriptor,
 } from "./targets.js";
+import {
+  resolveMuonWindowsResource,
+  stripBuildOnlyWindowsResourceConfig,
+  updateWindowsPeResources,
+  type MuonWindowsResourceOptions,
+  type ResolvedMuonWindowsResource,
+} from "./windows-resource.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -121,6 +128,13 @@ export interface MuonBuildOptions {
    * Muon config path to embed.
    */
   configPath?: string;
+  /**
+   * Windows PE and NSIS resource metadata.
+   *
+   * @defaultValue Uses `muon.json` `windows.resource`, `project.json`,
+   * `package.json`, then Muon defaults.
+   */
+  windowsResource?: MuonWindowsResourceOptions;
   /**
    * Asset salt override for deterministic tests.
    *
@@ -237,6 +251,21 @@ export const buildMuonApp = async (
     options.assetPrefix,
     buildConfig,
   );
+  const windowsResource = await resolveMuonWindowsResource({
+    root,
+    packageDirectory,
+    packageJson,
+    muonConfig: buildConfig.config,
+    muonConfigDirectory: buildConfig.directory,
+    options: options.windowsResource,
+    defaults: {
+      productName: appName,
+      fileDescription: appName,
+      companyName: "Unknown",
+      version: "0.0.0",
+      copyright: undefined,
+    },
+  });
   const salt = Buffer.from(
     options.assetSalt ?? randomBytes(assetSaltByteLength),
   );
@@ -246,12 +275,14 @@ export const buildMuonApp = async (
   for (const target of targets) {
     const result = await buildMuonTarget({
       packageDirectory,
+      root,
       outputRoot,
       appName,
       appId,
       target,
       assetInput,
       sourceConfig: buildConfig.config,
+      windowsResource,
       salt,
     });
     results.push(result);
@@ -486,12 +517,14 @@ const readJsonObjectFile = async (
 
 const buildMuonTarget = async (input: {
   packageDirectory: string;
+  root: string;
   outputRoot: string;
   appName: string;
   appId: string;
   target: MuonBuildTarget;
   assetInput: AssetInput;
   sourceConfig: JsonObject;
+  windowsResource: ResolvedMuonWindowsResource;
   salt: Buffer;
 }): Promise<MuonBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
@@ -556,6 +589,15 @@ const buildMuonTarget = async (input: {
       outputPath: undefined,
     });
   });
+
+  if (descriptor.os === "windows") {
+    await updateWindowsPeResources({
+      executablePath: launcherPath,
+      resource: input.windowsResource,
+      environment: process.env,
+      cwd: input.root,
+    });
+  }
 
   return {
     target: input.target,
@@ -770,8 +812,10 @@ const createEmbeddedConfig = (
     throw new Error("muon.json bootstrap must be an object when present.");
   }
 
+  const runtimeConfig = stripBuildOnlyWindowsResourceConfig(sourceConfig);
+
   return {
-    ...sourceConfig,
+    ...runtimeConfig,
     asset: {
       ...(sourceAsset ?? {}),
       sourcePath: appConfigSourcePath,

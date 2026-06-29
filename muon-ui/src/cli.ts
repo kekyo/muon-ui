@@ -24,6 +24,7 @@ import {
 } from "./build-sequence.js";
 import { runMuonDev, type MuonDevOptions } from "./dev.js";
 import { packMuonApp, type MuonPackOptions } from "./pack.js";
+import type { MuonWindowsResourceOptions } from "./windows-resource.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
 
 interface PrepareCommandOptions {
@@ -53,6 +54,12 @@ interface BuildCommandOptions {
   all: boolean | undefined;
   assets: string | undefined;
   config: string | undefined;
+  windowsIcon: string | undefined;
+  windowsProductName: string | undefined;
+  windowsFileDescription: string | undefined;
+  windowsCompanyName: string | undefined;
+  windowsVersion: string | undefined;
+  windowsCopyright: string | undefined;
   outDir: string | undefined;
   name: string | undefined;
   appId: string | undefined;
@@ -65,6 +72,12 @@ interface PackCommandOptions {
   target: string[];
   all: boolean | undefined;
   config: string | undefined;
+  windowsIcon: string | undefined;
+  windowsProductName: string | undefined;
+  windowsFileDescription: string | undefined;
+  windowsCompanyName: string | undefined;
+  windowsVersion: string | undefined;
+  windowsCopyright: string | undefined;
   name: string | undefined;
   appId: string | undefined;
   packageDirectory: string | undefined;
@@ -136,6 +149,36 @@ const validateEmbedConfigOptions = (
   }
 };
 
+const createWindowsResourceOptions = (commandOptions: {
+  windowsIcon: string | undefined;
+  windowsProductName: string | undefined;
+  windowsFileDescription: string | undefined;
+  windowsCompanyName: string | undefined;
+  windowsVersion: string | undefined;
+  windowsCopyright: string | undefined;
+}): MuonWindowsResourceOptions | undefined => {
+  const options: MuonWindowsResourceOptions = {};
+  if (commandOptions.windowsIcon !== undefined) {
+    options.iconPath = commandOptions.windowsIcon;
+  }
+  if (commandOptions.windowsProductName !== undefined) {
+    options.productName = commandOptions.windowsProductName;
+  }
+  if (commandOptions.windowsFileDescription !== undefined) {
+    options.fileDescription = commandOptions.windowsFileDescription;
+  }
+  if (commandOptions.windowsCompanyName !== undefined) {
+    options.companyName = commandOptions.windowsCompanyName;
+  }
+  if (commandOptions.windowsVersion !== undefined) {
+    options.version = commandOptions.windowsVersion;
+  }
+  if (commandOptions.windowsCopyright !== undefined) {
+    options.copyright = commandOptions.windowsCopyright;
+  }
+  return Object.keys(options).length === 0 ? undefined : options;
+};
+
 const runBuildCommand = async (
   commandOptions: BuildCommandOptions,
 ): Promise<void> => {
@@ -160,6 +203,10 @@ const runBuildCommand = async (
   }
   if (commandOptions.config !== undefined) {
     buildOptions.configPath = commandOptions.config;
+  }
+  const windowsResource = createWindowsResourceOptions(commandOptions);
+  if (windowsResource !== undefined) {
+    buildOptions.windowsResource = windowsResource;
   }
   if (commandOptions.outDir !== undefined) {
     buildOptions.outputRoot = commandOptions.outDir;
@@ -207,6 +254,10 @@ const runPackCommand = async (
   }
   if (commandOptions.config !== undefined) {
     packOptions.configPath = commandOptions.config;
+  }
+  const windowsResource = createWindowsResourceOptions(commandOptions);
+  if (windowsResource !== undefined) {
+    packOptions.windowsResource = windowsResource;
   }
   if (commandOptions.name !== undefined) {
     packOptions.appName = commandOptions.name;
@@ -402,6 +453,12 @@ const createCliCommand = (): Command => {
     .option("--all", "build all supported targets")
     .option("--assets <path>", "asset root path")
     .option("--config <path>", "muon config path")
+    .option("--windows-icon <path>", "Windows .ico resource path")
+    .option("--windows-product-name <name>", "Windows product name")
+    .option("--windows-file-description <text>", "Windows file description")
+    .option("--windows-company-name <name>", "Windows company name")
+    .option("--windows-version <version>", "Windows resource version")
+    .option("--windows-copyright <text>", "Windows legal copyright")
     .option("--out-dir <path>", "output root directory")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
@@ -427,6 +484,12 @@ const createCliCommand = (): Command => {
     )
     .option("--all", "build all supported targets")
     .option("--config <path>", "muon config path")
+    .option("--windows-icon <path>", "Windows .ico resource path")
+    .option("--windows-product-name <name>", "Windows product name")
+    .option("--windows-file-description <text>", "Windows file description")
+    .option("--windows-company-name <name>", "Windows company name")
+    .option("--windows-version <version>", "Windows resource version")
+    .option("--windows-copyright <text>", "Windows legal copyright")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
     .option("--package-directory <path>", "Muon package dist directory")

@@ -188,6 +188,8 @@ assert_native_dependency_checkouts() {
     fail "Missing tra-ffic checkout: ${TRA_FFIC_ROOT_HOST}"
   [[ -f "${CARDIO_ROOT_HOST}/include/cardio.h" ]] ||
     fail "Missing cardio checkout: ${CARDIO_ROOT_HOST}"
+  [[ -f "${SCRIPT_DIR}/deps/engraver/libengraver/include/engraver.h" ]] ||
+    fail "Missing engraver checkout: ${SCRIPT_DIR}/deps/engraver"
 }
 
 build_linux_target() {
@@ -427,6 +429,7 @@ verify_package_file_list() {
   require_pack_file "muon.d.ts"
   require_pack_file "vite.d.ts"
   require_pack_file "dist/cli.cjs"
+  require_pack_file "dist/native/muon-bootstrap.ico"
   require_pack_file "dist/native/linux-amd64/muon-prepare"
   require_pack_file "dist/native/linux-armhf/muon-prepare"
   require_pack_file "dist/native/linux-arm64/muon-prepare"

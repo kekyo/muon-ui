@@ -39,6 +39,13 @@ import {
   getMuonTargetDescriptor,
   normalizeMuonTarget,
 } from "./targets.js";
+import {
+  mergeMuonWindowsResourceOptions,
+  readMuonConfigForWindowsResource,
+  resolveMuonWindowsResource,
+  type MuonWindowsResourceOptions,
+  type ResolvedMuonWindowsResource,
+} from "./windows-resource.js";
 
 const supportedPackTypes = ["zip", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
@@ -85,6 +92,13 @@ export interface MuonPackOptions {
    * Stable application identifier used for portable runtime state.
    */
   appId?: string;
+  /**
+   * Windows PE and NSIS resource metadata.
+   *
+   * @defaultValue Uses Vite build options, `muon.json` `windows.resource`,
+   * `project.json`, `package.json`, then Muon defaults.
+   */
+  windowsResource?: MuonWindowsResourceOptions;
   /**
    * Directory containing package runtime/ and native/ folders.
    */
@@ -544,6 +558,7 @@ const packageNsis = async (
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
   appId: string,
+  windowsResource: ResolvedMuonWindowsResource,
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
@@ -575,6 +590,7 @@ const packageNsis = async (
       "RequestExecutionLevel user",
       "ShowInstDetails nevershow",
       "AutoCloseWindow true",
+      ...createNsisResourceDirectives(windowsResource),
       "Page instfiles",
       "Section",
       '  SetOutPath "$INSTDIR"',
@@ -617,6 +633,39 @@ const packageNsis = async (
   };
 };
 
+const createNsisResourceDirectives = (
+  resource: ResolvedMuonWindowsResource,
+): string[] => {
+  const lines: string[] = [];
+  if (resource.iconPath !== undefined) {
+    lines.push(`Icon "${escapeNsis(resource.iconPath)}"`);
+    lines.push(`UninstallIcon "${escapeNsis(resource.iconPath)}"`);
+  }
+  lines.push(`VIProductVersion "${escapeNsis(resource.fixedVersion)}"`);
+  lines.push(`VIFileVersion "${escapeNsis(resource.fixedVersion)}"`);
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "CompanyName" "${escapeNsis(resource.companyName)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "FileDescription" "${escapeNsis(resource.fileDescription)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "FileVersion" "${escapeNsis(resource.version)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "ProductName" "${escapeNsis(resource.productName)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "ProductVersion" "${escapeNsis(resource.version)}"`,
+  );
+  if (resource.copyright !== undefined) {
+    lines.push(
+      `VIAddVersionKey /LANG=${resource.language} "LegalCopyright" "${escapeNsis(resource.copyright)}"`,
+    );
+  }
+  return lines;
+};
+
 /**
  * Runs the Muon build sequence and creates redistributable packages.
  *
@@ -630,7 +679,8 @@ export const packMuonApp = async (
   const environment = options.environment ?? process.env;
   const project = await loadMuonBuildSequenceProject(cwd);
   const root = project.root;
-  const metadata = resolveMetadata(await readPackageJson(root), options);
+  const packageJson = await readPackageJson(root);
+  const metadata = resolveMetadata(packageJson, options);
   const artifactsRoot = resolve(
     root,
     options.artifactsDir ?? defaultArtifactsDirectory,
@@ -647,6 +697,10 @@ export const packMuonApp = async (
     targets: targetPlan.map((entry) => entry.target),
     allTargets: false,
   };
+  const windowsResourceOptions = mergeMuonWindowsResourceOptions(
+    options.windowsResource,
+    pluginBuildOptions.windowsResource,
+  );
   if (options.configPath !== undefined) {
     buildOptions.configPath = options.configPath;
   }
@@ -659,6 +713,29 @@ export const packMuonApp = async (
   if (options.packageDirectory !== undefined) {
     buildOptions.packageDirectory = options.packageDirectory;
   }
+  if (windowsResourceOptions !== undefined) {
+    buildOptions.windowsResource = windowsResourceOptions;
+  }
+  const windowsResourceConfig = await readMuonConfigForWindowsResource(
+    root,
+    options.configPath,
+  );
+  const windowsResource = await resolveMuonWindowsResource({
+    root,
+    packageDirectory:
+      options.packageDirectory ?? pluginBuildOptions.packageDirectory ?? "",
+    packageJson,
+    muonConfig: windowsResourceConfig.config,
+    muonConfigDirectory: windowsResourceConfig.directory,
+    options: windowsResourceOptions,
+    defaults: {
+      productName: metadata.packageName,
+      fileDescription: metadata.description,
+      companyName: metadata.author,
+      version: metadata.version,
+      copyright: undefined,
+    },
+  });
   const build = await runMuonBuildSequence(buildOptions, project);
   const typesByTarget = new Map(
     targetPlan.map((entry) => [entry.target, entry.types] as const),
@@ -690,6 +767,7 @@ export const packMuonApp = async (
             target,
             metadata,
             build.appId,
+            windowsResource,
             artifactsRoot,
             packageBuildRoot,
             environment,

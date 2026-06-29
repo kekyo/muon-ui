@@ -17,6 +17,7 @@ import {
   getMuonVitePluginOptions,
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
+import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
@@ -196,6 +197,15 @@ const copyDefinedBuildOptions = (
   }
   if (input.configPath !== undefined) {
     output.configPath = input.configPath;
+  }
+  if (input.windowsResource !== undefined) {
+    const windowsResource = mergeMuonWindowsResourceOptions(
+      input.windowsResource,
+      output.windowsResource,
+    );
+    if (windowsResource !== undefined) {
+      output.windowsResource = windowsResource;
+    }
   }
   if (input.packageDirectory !== undefined) {
     output.packageDirectory = input.packageDirectory;

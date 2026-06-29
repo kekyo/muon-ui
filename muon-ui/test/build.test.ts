@@ -166,6 +166,46 @@ const createFakeMuonPackageDistForTargets = async (
 const createFakeMuonPackageDist = async (root: string): Promise<string> =>
   await createFakeMuonPackageDistForTargets(root, ["linux-amd64"]);
 
+const createWindowsResourceFixture = async (
+  pePath: string,
+  icoPath: string,
+  overlayPath: string | undefined = undefined,
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve(
+      "..",
+      "muon-prepare",
+      "scripts",
+      "create-windows-resource-fixture.mjs",
+    ),
+    pePath,
+    icoPath,
+    ...(overlayPath === undefined ? [] : [overlayPath]),
+  ]);
+};
+
+const assertWindowsIcon = async (
+  executablePath: string,
+  iconPath: string,
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve("..", "muon-prepare", "scripts", "assert-windows-icon.mjs"),
+    executablePath,
+    iconPath,
+  ]);
+};
+
+const assertWindowsVersion = async (
+  executablePath: string,
+  expectations: readonly string[],
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve("..", "muon-prepare", "scripts", "assert-windows-version.mjs"),
+    executablePath,
+    ...expectations,
+  ]);
+};
+
 const getCliPath = (): string => resolve("dist", "cli.cjs");
 
 const getVitePluginUrl = (): string =>
@@ -464,6 +504,104 @@ describe("muon build", () => {
     await expect(
       readFile(join(outputPath, "libwinpthread-1.dll"), "utf8"),
     ).resolves.toBe("windows-amd64 libwinpthread-1.dll\n");
+  });
+
+  it("updates Windows launcher icon and version resources from muon config metadata", async () => {
+    const root = await createTemporaryDirectory("muon-build-windows-resource-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const iconPath = join(root, "icons", "app.ico");
+    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await createWindowsResourceFixture(
+      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      iconPath,
+      bootstrapSlotPath,
+    );
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "windows-resource-sample",
+          version: "1.2.3",
+          description: "Package description",
+          author: "Package Author",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            resource: {
+              iconPath: "icons/app.ico",
+              productName: "Muon Config Product",
+              fileDescription: "Muon Config Description",
+              companyName: "Muon Config Company",
+              version: "7.8.9",
+              copyright: "Copyright Muon Config",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const previousPreparePath = process.env.MUON_PREPARE_PATH;
+    process.env.MUON_PREPARE_PATH = resolve(
+      "dist",
+      "native",
+      "linux-amd64",
+      "muon-prepare",
+    );
+    let result: Awaited<ReturnType<typeof buildMuonApp>> | undefined =
+      undefined;
+    try {
+      result = await buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["windows-amd64"],
+        assetSalt: Buffer.from([0x0c, 0x33]),
+      });
+    } finally {
+      if (previousPreparePath === undefined) {
+        delete process.env.MUON_PREPARE_PATH;
+      } else {
+        process.env.MUON_PREPARE_PATH = previousPreparePath;
+      }
+    }
+
+    expect(result).toBeDefined();
+    const [target] = result?.targets ?? [];
+    const launcherPath = join(
+      root,
+      "dist-muon-windows-amd64",
+      "windows-resource-sample.exe",
+    );
+    expect(target?.launcherPath).toBe(launcherPath);
+    expect(
+      (target?.embeddedConfig as Record<string, unknown> | undefined)?.windows,
+    ).toBeUndefined();
+    await assertWindowsIcon(launcherPath, iconPath);
+    await assertWindowsVersion(launcherPath, [
+      "--file-version",
+      "7.8.9.0",
+      "--product-version",
+      "7.8.9.0",
+      "CompanyName=Muon Config Company",
+      "FileDescription=Muon Config Description",
+      "FileVersion=7.8.9",
+      "ProductName=Muon Config Product",
+      "ProductVersion=7.8.9",
+      "LegalCopyright=Copyright Muon Config",
+    ]);
   });
 
   it("rejects CEF-derived target IDs in public build options", async () => {

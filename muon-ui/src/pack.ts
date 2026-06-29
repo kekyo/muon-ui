@@ -31,6 +31,7 @@ import type { InlineConfig, UserConfig } from "vite";
 
 import {
   buildMuonApp,
+  getDefaultMuonBuildTarget,
   type MuonBuildOptions,
   type MuonBuildResult,
   type MuonBuildTarget,
@@ -41,7 +42,11 @@ import {
   getMuonVitePluginOptions,
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
-import { getMuonTargetDescriptor } from "./targets.js";
+import {
+  allMuonTargets,
+  getMuonTargetDescriptor,
+  normalizeMuonTarget,
+} from "./targets.js";
 
 const supportedPackTypes = ["zip", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
@@ -65,8 +70,10 @@ export interface MuonPackOptions {
   root?: string;
   /**
    * Package artifact types to generate.
+   *
+   * @remarks Defaults to zip, deb, and nsis when omitted.
    */
-  types: readonly string[];
+  types?: readonly string[];
   /**
    * Public target identifiers to build.
    */
@@ -183,6 +190,11 @@ interface PackageMetadata {
   version: string;
   description: string;
   author: string;
+}
+
+interface MuonPackTargetPlan {
+  target: MuonBuildTarget;
+  types: MuonPackType[];
 }
 
 const isJsonObject = (value: unknown): value is JsonObject =>
@@ -322,7 +334,12 @@ const resolveMetadata = (
   };
 };
 
-const normalizePackTypes = (types: readonly string[]): MuonPackType[] => {
+const normalizePackTypes = (
+  types: readonly string[] | undefined,
+): MuonPackType[] => {
+  if (types === undefined) {
+    return [...supportedPackTypes];
+  }
   const normalized = types
     .flatMap((value) => value.split(","))
     .map((value) => value.trim().toLowerCase())
@@ -342,6 +359,106 @@ const getPluginBuildOptions = (
   pluginOptions: MuonVitePluginOptions | undefined,
 ): MuonViteBuildOptions => {
   return typeof pluginOptions?.build === "object" ? pluginOptions.build : {};
+};
+
+const packTargetSelectorTargets: Record<string, readonly MuonBuildTarget[]> = {
+  linux: ["linux-amd64", "linux-armhf", "linux-arm64"],
+  windows: ["windows-i686", "windows-amd64"],
+  amd64: ["linux-amd64", "windows-amd64"],
+  arm64: ["linux-arm64"],
+  armhf: ["linux-armhf"],
+  i686: ["windows-i686"],
+};
+
+const normalizePackTargetSelector = (
+  selector: string,
+): readonly MuonBuildTarget[] => {
+  const normalized = selector.trim().toLowerCase();
+  if (allMuonTargets.includes(normalized as MuonBuildTarget)) {
+    return [normalized as MuonBuildTarget];
+  }
+  const targets = packTargetSelectorTargets[normalized];
+  if (targets !== undefined) {
+    return targets;
+  }
+  throw new Error(`Unsupported muon pack target selector: ${selector}`);
+};
+
+const normalizePackTargetSelectors = (
+  selectors: readonly string[],
+): MuonBuildTarget[] => {
+  const targets = selectors
+    .flatMap((selector) => selector.split(","))
+    .map((selector) => selector.trim())
+    .filter((selector) => selector.length > 0)
+    .flatMap((selector) => normalizePackTargetSelector(selector));
+  return [...new Set(targets)];
+};
+
+const normalizePluginBuildTargets = (
+  targets: readonly string[],
+): MuonBuildTarget[] => {
+  return [
+    ...new Set(
+      targets.map((target) => normalizeMuonTarget(target, "muon pack target")),
+    ),
+  ];
+};
+
+const resolvePackTargetCandidates = (
+  options: MuonPackOptions,
+  pluginBuildOptions: MuonViteBuildOptions,
+): MuonBuildTarget[] => {
+  if (options.allTargets === true) {
+    return [...allMuonTargets];
+  }
+  if (options.targets !== undefined && options.targets.length > 0) {
+    return normalizePackTargetSelectors(options.targets);
+  }
+  if (options.allTargets === false) {
+    return [getDefaultMuonBuildTarget()];
+  }
+  if (pluginBuildOptions.allTargets === true) {
+    return [...allMuonTargets];
+  }
+  if (
+    pluginBuildOptions.targets !== undefined &&
+    pluginBuildOptions.targets.length > 0
+  ) {
+    return normalizePluginBuildTargets(pluginBuildOptions.targets);
+  }
+  if (pluginBuildOptions.allTargets === false) {
+    return [getDefaultMuonBuildTarget()];
+  }
+  return [...allMuonTargets];
+};
+
+const packTypeSupportsTarget = (
+  type: MuonPackType,
+  target: MuonBuildTarget,
+): boolean => {
+  const descriptor = getMuonTargetDescriptor(target);
+  return (
+    type === "zip" ||
+    (type === "deb" && descriptor.os === "linux") ||
+    (type === "nsis" && descriptor.os === "windows")
+  );
+};
+
+const createPackTargetPlan = (
+  types: readonly MuonPackType[],
+  targets: readonly MuonBuildTarget[],
+): MuonPackTargetPlan[] => {
+  const plan = targets
+    .map((target) => ({
+      target,
+      types: types.filter((type) => packTypeSupportsTarget(type, target)),
+    }))
+    .filter((entry) => entry.types.length > 0);
+  if (plan.length === 0) {
+    throw new Error("No valid muon pack target and type combinations.");
+  }
+  return plan;
 };
 
 const resolveBuildOutputDirectory = async (root: string): Promise<string> => {
@@ -380,6 +497,7 @@ const createBuildOptions = (
   assetSourcePath: string,
   pluginBuildOptions: MuonViteBuildOptions,
   options: MuonPackOptions,
+  targets: readonly MuonBuildTarget[],
 ): MuonBuildOptions => {
   const buildOptions: MuonBuildOptions = {
     root,
@@ -387,12 +505,8 @@ const createBuildOptions = (
     assetPrefix: "main",
   };
   Object.assign(buildOptions, pluginBuildOptions);
-  if (options.targets !== undefined && options.targets.length > 0) {
-    buildOptions.targets = options.targets;
-    buildOptions.allTargets = false;
-  } else if (options.allTargets !== undefined) {
-    buildOptions.allTargets = options.allTargets;
-  }
+  buildOptions.targets = targets;
+  buildOptions.allTargets = false;
   if (options.configPath !== undefined) {
     buildOptions.configPath = options.configPath;
   }
@@ -406,19 +520,6 @@ const createBuildOptions = (
     buildOptions.packageDirectory = options.packageDirectory;
   }
   return buildOptions;
-};
-
-const assertPackTypeSupportsTarget = (
-  type: MuonPackType,
-  target: MuonBuildTarget,
-): void => {
-  const descriptor = getMuonTargetDescriptor(target);
-  if (type === "deb" && descriptor.os !== "linux") {
-    throw new Error("deb packaging supports only Linux targets.");
-  }
-  if (type === "nsis" && descriptor.os !== "windows") {
-    throw new Error("nsis packaging supports only Windows targets.");
-  }
 };
 
 const runTool = async (
@@ -649,28 +750,32 @@ export const packMuonApp = async (
   );
   const packageBuildRoot = resolve(root, defaultPackageBuildDirectory);
   const types = normalizePackTypes(options.types);
+  const pluginBuildOptions = getPluginBuildOptions(loadedOptions.pluginOptions);
+  const targetPlan = createPackTargetPlan(
+    types,
+    resolvePackTargetCandidates(options, pluginBuildOptions),
+  );
   const viteOutputDirectory = await resolveBuildOutputDirectory(root);
   await runViteBuild(root, environment);
   const build = await buildMuonApp(
     createBuildOptions(
       root,
       viteOutputDirectory,
-      getPluginBuildOptions(loadedOptions.pluginOptions),
+      pluginBuildOptions,
       options,
+      targetPlan.map((entry) => entry.target),
     ),
   );
-  for (const type of types) {
-    for (const target of build.targets) {
-      assertPackTypeSupportsTarget(type, target.target);
-    }
-  }
+  const typesByTarget = new Map(
+    targetPlan.map((entry) => [entry.target, entry.types] as const),
+  );
   await rm(packageBuildRoot, { recursive: true, force: true });
   await rm(join(artifactsRoot, "deb"), { recursive: true, force: true });
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
   const artifacts: MuonPackArtifact[] = [];
   for (const target of build.targets) {
-    for (const type of types) {
+    for (const type of typesByTarget.get(target.target) ?? []) {
       if (type === "zip") {
         artifacts.push(await packageZip(target, metadata, artifactsRoot));
       } else if (type === "deb") {

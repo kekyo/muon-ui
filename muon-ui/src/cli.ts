@@ -57,7 +57,7 @@ interface BuildCommandOptions {
 }
 
 interface PackCommandOptions {
-  type: string[];
+  type: string[] | undefined;
   target: string[];
   all: boolean | undefined;
   config: string | undefined;
@@ -93,8 +93,11 @@ const appendTargetValues = (value: string, previous: string[]): string[] => {
   return [...previous, ...readTargetValues(value)];
 };
 
-const appendPackTypeValues = (value: string, previous: string[]): string[] => {
-  return [...previous, ...readTargetValues(value)];
+const appendPackTypeValues = (
+  value: string,
+  previous: string[] | undefined,
+): string[] => {
+  return [...(previous ?? []), ...readTargetValues(value)];
 };
 
 const validateEmbedConfigOptions = (
@@ -181,9 +184,11 @@ const runPackCommand = async (
 
   const packOptions: MuonPackOptions = {
     root: process.cwd(),
-    types: commandOptions.type,
     environment: process.env,
   };
+  if (commandOptions.type !== undefined) {
+    packOptions.types = commandOptions.type;
+  }
   if (targets.length > 0) {
     packOptions.targets = targets;
   }
@@ -398,15 +403,14 @@ const createCliCommand = (): Command => {
   program
     .command("pack")
     .description("Build and package a Muon app")
-    .requiredOption(
+    .option(
       "-t, --type <type>",
-      "package type or comma-separated package types: zip, deb, nsis",
+      "package type or comma-separated package types: zip, deb, nsis (default: all)",
       appendPackTypeValues,
-      [],
     )
     .option(
       "--target <target>",
-      "public target or comma-separated public targets",
+      "public target, platform, arch, or comma-separated selectors",
       appendTargetValues,
       [],
     )

@@ -254,18 +254,26 @@ npx muon build
 `deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
 
 ```bash
+muon pack
 muon pack -t zip
+muon pack -t nsis
+muon pack --target windows
+muon pack --target amd64
 muon pack -t zip,deb --target linux-amd64
 muon pack -t nsis --target windows-amd64
 ```
 
-`-t`, `--type` は必須で、`zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+`-t`, `--type` は `zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+省略時は `zip`, `deb`, `nsis` のすべてを対象にします。
 ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
+`muon pack` の `--target` は完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定できます。
 `zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
 `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
 インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
 `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
 既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
+指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
+例えば `muon pack -t nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
 `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
 
 ---

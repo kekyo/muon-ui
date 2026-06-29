@@ -16,7 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
@@ -264,6 +264,56 @@ const writeFakeTool = async (
   await writeExecutable(join(binDirectory, name), script);
 };
 
+const createFakePackagingToolEnvironment = async (
+  root: string,
+): Promise<NodeJS.ProcessEnv> => {
+  const binDirectory = join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  await writeFakeTool(
+    binDirectory,
+    "dpkg-deb",
+    `#!/usr/bin/env bash
+set -euo pipefail
+output_path="\${3:?}"
+mkdir -p "$(dirname "$output_path")"
+printf 'deb\\n' > "$output_path"
+`,
+  );
+  await writeFakeTool(
+    binDirectory,
+    "makensis",
+    `#!/usr/bin/env bash
+set -euo pipefail
+script_path="\${1:?}"
+output_path="$(sed -n 's/^OutFile "\\(.*\\)"$/\\1/p' "$script_path")"
+mkdir -p "$(dirname "$output_path")"
+printf 'nsis\\n' > "$output_path"
+`,
+  );
+  return {
+    ...process.env,
+    PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+  };
+};
+
+const allFakePackageTargets = [
+  "linux-amd64",
+  "linux-armhf",
+  "linux-arm64",
+  "windows-i686",
+  "windows-amd64",
+] as const satisfies readonly MuonBuildTarget[];
+
+const getArtifactSummary = (
+  artifacts: readonly { type: string; target: string; path: string }[],
+): string[] =>
+  artifacts
+    .map(
+      (artifact) =>
+        `${artifact.type}:${artifact.target}:${basename(artifact.path)}`,
+    )
+    .sort();
+
 afterEach(async () => {
   for (const directory of cleanupDirectories.splice(0)) {
     await rm(directory, { recursive: true, force: true });
@@ -419,19 +469,222 @@ printf 'nsis\\n' > "$output_path"
     ).resolves.toContain("RequestExecutionLevel user");
   });
 
-  it("rejects package types that do not support the resolved target", async () => {
-    const root = await createTemporaryDirectory("muon-pack-invalid-");
-    const packageDirectory = await createFakeMuonPackageDist(root, [
+  it("packages only Windows targets when NSIS is requested without explicit targets", async () => {
+    const root = await createTemporaryDirectory("muon-pack-nsis-targets-");
+    const packageDirectory = await createFakeMuonPackageDist(
+      root,
+      allFakePackageTargets,
+    );
+    await writeViteProject(root, packageDirectory, allFakePackageTargets);
+
+    const result = await packMuonApp({
+      root,
+      types: ["nsis"],
+      environment: await createFakePackagingToolEnvironment(root),
+    });
+
+    expect(result.targets.map((target) => target.target)).toEqual([
+      "windows-i686",
       "windows-amd64",
     ]);
-    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+    expect(getArtifactSummary(result.artifacts)).toEqual([
+      "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
+      "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
+    ]);
+    await expect(exists(join(root, "dist-muon-linux-amd64"))).resolves.toBe(
+      false,
+    );
+  });
+
+  it("packages only Linux targets when deb is requested without explicit targets", async () => {
+    const root = await createTemporaryDirectory("muon-pack-deb-targets-");
+    const packageDirectory = await createFakeMuonPackageDist(
+      root,
+      allFakePackageTargets,
+    );
+    await writeViteProject(root, packageDirectory, allFakePackageTargets);
+
+    const result = await packMuonApp({
+      root,
+      types: ["deb"],
+      environment: await createFakePackagingToolEnvironment(root),
+    });
+
+    expect(result.targets.map((target) => target.target)).toEqual([
+      "linux-amd64",
+      "linux-armhf",
+      "linux-arm64",
+    ]);
+    expect(getArtifactSummary(result.artifacts)).toEqual([
+      "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
+      "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
+      "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
+    ]);
+    await expect(exists(join(root, "dist-muon-windows-amd64"))).resolves.toBe(
+      false,
+    );
+  });
+
+  it("uses every valid target and package type combination by default", async () => {
+    const root = await createTemporaryDirectory("muon-pack-default-");
+    const packageDirectory = await createFakeMuonPackageDist(
+      root,
+      allFakePackageTargets,
+    );
+    await writeViteProject(root, packageDirectory, allFakePackageTargets);
+
+    const result = await packMuonApp({
+      root,
+      environment: await createFakePackagingToolEnvironment(root),
+    });
+
+    expect(result.targets.map((target) => target.target)).toEqual([
+      "linux-amd64",
+      "linux-armhf",
+      "linux-arm64",
+      "windows-i686",
+      "windows-amd64",
+    ]);
+    expect(getArtifactSummary(result.artifacts)).toEqual([
+      "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
+      "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
+      "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
+      "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
+      "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
+      "zip:linux-amd64:packed-sample-1.2.3-linux-amd64.zip",
+      "zip:linux-arm64:packed-sample-1.2.3-linux-arm64.zip",
+      "zip:linux-armhf:packed-sample-1.2.3-linux-armhf.zip",
+      "zip:windows-amd64:packed-sample-1.2.3-windows-amd64.zip",
+      "zip:windows-i686:packed-sample-1.2.3-windows-i686.zip",
+    ]);
+  });
+
+  it("packages valid combinations for complete and partial target selectors", async () => {
+    const cases: {
+      selector: string;
+      expectedTargets: readonly MuonBuildTarget[];
+      expectedArtifacts: readonly string[];
+    }[] = [
+      {
+        selector: "windows-i686",
+        expectedTargets: ["windows-i686"],
+        expectedArtifacts: [
+          "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
+          "zip:windows-i686:packed-sample-1.2.3-windows-i686.zip",
+        ],
+      },
+      {
+        selector: "windows",
+        expectedTargets: ["windows-i686", "windows-amd64"],
+        expectedArtifacts: [
+          "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
+          "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
+          "zip:windows-amd64:packed-sample-1.2.3-windows-amd64.zip",
+          "zip:windows-i686:packed-sample-1.2.3-windows-i686.zip",
+        ],
+      },
+      {
+        selector: "linux",
+        expectedTargets: ["linux-amd64", "linux-armhf", "linux-arm64"],
+        expectedArtifacts: [
+          "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
+          "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
+          "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
+          "zip:linux-amd64:packed-sample-1.2.3-linux-amd64.zip",
+          "zip:linux-arm64:packed-sample-1.2.3-linux-arm64.zip",
+          "zip:linux-armhf:packed-sample-1.2.3-linux-armhf.zip",
+        ],
+      },
+      {
+        selector: "amd64",
+        expectedTargets: ["linux-amd64", "windows-amd64"],
+        expectedArtifacts: [
+          "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
+          "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
+          "zip:linux-amd64:packed-sample-1.2.3-linux-amd64.zip",
+          "zip:windows-amd64:packed-sample-1.2.3-windows-amd64.zip",
+        ],
+      },
+      {
+        selector: "arm64",
+        expectedTargets: ["linux-arm64"],
+        expectedArtifacts: [
+          "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
+          "zip:linux-arm64:packed-sample-1.2.3-linux-arm64.zip",
+        ],
+      },
+    ];
+
+    for (const entry of cases) {
+      const root = await createTemporaryDirectory(
+        `muon-pack-target-${entry.selector}-`,
+      );
+      const packageDirectory = await createFakeMuonPackageDist(
+        root,
+        allFakePackageTargets,
+      );
+      await writeViteProject(root, packageDirectory, allFakePackageTargets);
+
+      const result = await packMuonApp({
+        root,
+        targets: [entry.selector],
+        environment: await createFakePackagingToolEnvironment(root),
+      });
+
+      expect(result.targets.map((target) => target.target)).toEqual(
+        entry.expectedTargets,
+      );
+      expect(getArtifactSummary(result.artifacts)).toEqual([
+        ...entry.expectedArtifacts,
+      ]);
+    }
+  });
+
+  it("rejects package requests with no valid type and target combination", async () => {
+    const root = await createTemporaryDirectory("muon-pack-invalid-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
 
     await expect(
       packMuonApp({
         root,
-        types: ["deb"],
+        types: ["nsis"],
+        targets: ["linux"],
       }),
-    ).rejects.toThrow("deb packaging supports only Linux targets");
+    ).rejects.toThrow("No valid muon pack target and type combinations");
+  });
+
+  it("rejects unknown pack target selectors", async () => {
+    const root = await createTemporaryDirectory("muon-pack-unknown-target-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["zip"],
+        targets: ["linux64"],
+      }),
+    ).rejects.toThrow("Unsupported muon pack target selector: linux64");
+  });
+
+  it("rejects empty explicit package types", async () => {
+    const root = await createTemporaryDirectory("muon-pack-empty-type-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    await expect(
+      packMuonApp({
+        root,
+        types: [],
+      }),
+    ).rejects.toThrow("Specify at least one package type with --type");
   });
 
   it("requires package version metadata", async () => {

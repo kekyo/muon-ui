@@ -9,8 +9,7 @@ import { isAbsolute, resolve } from "node:path";
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
-
-const suppressViteMuonBuildEnvironmentKey = "MUON_SUPPRESS_VITE_MUON_BUILD";
+import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
 
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
@@ -159,7 +158,9 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       if (resolvedConfig === undefined || resolvedConfig.command !== "build") {
         return;
       }
-      if (process.env[suppressViteMuonBuildEnvironmentKey] === "1") {
+      if (
+        process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] === "1"
+      ) {
         return;
       }
       if (options.build === false) {

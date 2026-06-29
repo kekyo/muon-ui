@@ -18,7 +18,10 @@ import {
   embedMuonConfigInRuntime,
   type EmbedMuonConfigResult,
 } from "./embed-config.js";
-import { buildMuonApp, type MuonBuildOptions } from "./build.js";
+import {
+  runMuonBuildSequence,
+  type MuonBuildSequenceOptions,
+} from "./build-sequence.js";
 import { runMuonDev, type MuonDevOptions } from "./dev.js";
 import { packMuonApp, type MuonPackOptions } from "./pack.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
@@ -53,6 +56,7 @@ interface BuildCommandOptions {
   outDir: string | undefined;
   name: string | undefined;
   appId: string | undefined;
+  packageDirectory: string | undefined;
   json: boolean | undefined;
 }
 
@@ -140,13 +144,16 @@ const runBuildCommand = async (
     throw new Error("Specify either --all or --target, not both.");
   }
 
-  const buildOptions: MuonBuildOptions = {
+  const buildOptions: MuonBuildSequenceOptions = {
     root: process.cwd(),
-    allTargets: commandOptions.all === true,
+    defaultAllTargets: false,
   };
 
   if (targets.length > 0) {
     buildOptions.targets = targets;
+  }
+  if (commandOptions.all === true) {
+    buildOptions.allTargets = true;
   }
   if (commandOptions.assets !== undefined) {
     buildOptions.assetSourcePath = commandOptions.assets;
@@ -163,8 +170,11 @@ const runBuildCommand = async (
   if (commandOptions.appId !== undefined) {
     buildOptions.appId = commandOptions.appId;
   }
+  if (commandOptions.packageDirectory !== undefined) {
+    buildOptions.packageDirectory = commandOptions.packageDirectory;
+  }
 
-  const result = await buildMuonApp(buildOptions);
+  const result = await runMuonBuildSequence(buildOptions);
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -395,6 +405,7 @@ const createCliCommand = (): Command => {
     .option("--out-dir <path>", "output root directory")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
+    .option("--package-directory <path>", "Muon package dist directory")
     .option("--json", "write result as JSON")
     .action(async (options: BuildCommandOptions) => {
       await runBuildCommand(options);

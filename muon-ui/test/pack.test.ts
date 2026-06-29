@@ -182,6 +182,93 @@ const writeViteProject = async (
   );
 };
 
+const writeViteProjectWithoutMuonPlugin = async (
+  root: string,
+): Promise<void> => {
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "plain-vite-packed-sample",
+        version: "1.2.3",
+        description: "Plain Vite packed sample",
+        author: "Muon Tester",
+        type: "module",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await mkdir(join(root, "assets"), { recursive: true });
+  await writeFile(
+    join(root, "assets", "index.html"),
+    "<!doctype html><title>plain assets</title>",
+  );
+  await writeFile(
+    join(root, "index.html"),
+    '<!doctype html><title>plain vite</title><script type="module" src="/src/main.ts"></script>',
+  );
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(
+    join(root, "src", "main.ts"),
+    "document.body.textContent = 'plain vite';\n",
+  );
+  await writeFile(
+    join(root, "vite.config.mjs"),
+    [
+      "import { writeFileSync } from 'node:fs';",
+      "export default {",
+      "  build: { outDir: 'web-dist' },",
+      "  plugins: [{",
+      "    name: 'vite-build-marker',",
+      "    closeBundle() {",
+      "      writeFileSync(new URL('vite-build-marker.txt', import.meta.url), 'built\\n');",
+      "    },",
+      "  }],",
+      "};",
+    ].join("\n"),
+  );
+};
+
+const writeViteProjectWithMuonBuildDisabled = async (
+  root: string,
+): Promise<void> => {
+  const vitePluginUrl = pathToFileURL(resolve("dist", "vite.mjs")).href;
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "disabled-packed-sample",
+        version: "1.2.3",
+        description: "Disabled packed sample",
+        author: "Muon Tester",
+        type: "module",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(
+    join(root, "index.html"),
+    '<!doctype html><title>disabled vite</title><script type="module" src="/src/main.ts"></script>',
+  );
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(
+    join(root, "src", "main.ts"),
+    "document.body.textContent = 'disabled vite';\n",
+  );
+  await writeFile(
+    join(root, "vite.config.mjs"),
+    [
+      `import muon from ${JSON.stringify(vitePluginUrl)};`,
+      "export default {",
+      "  build: { outDir: 'web-dist' },",
+      "  plugins: [muon({ build: false })],",
+      "};",
+    ].join("\n"),
+  );
+};
+
 const readZipEntryNames = async (archivePath: string): Promise<string[]> => {
   const content = await readFile(archivePath);
   const endSignature = 0x06054b50;
@@ -354,6 +441,50 @@ describe("muon pack", () => {
         "dist-muon-linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
+  });
+
+  it("packages non-Vite assets without running Vite when no Muon plugin is configured", async () => {
+    const root = await createTemporaryDirectory("muon-pack-no-muon-plugin-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProjectWithoutMuonPlugin(root);
+
+    const result = await packMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      types: ["zip"],
+    });
+
+    const [artifact] = result.artifacts;
+    expect(artifact?.type).toBe("zip");
+    await expect(exists(join(root, "vite-build-marker.txt"))).resolves.toBe(
+      false,
+    );
+    await expect(
+      readZipTextEntry(
+        join(root, "dist-muon-linux-amd64", "assets.zip"),
+        "index.html",
+      ),
+    ).resolves.toBe("<!doctype html><title>plain assets</title>");
+  });
+
+  it("rejects package builds when the Vite Muon plugin disables Muon builds", async () => {
+    const root = await createTemporaryDirectory("muon-pack-disabled-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProjectWithMuonBuildDisabled(root);
+
+    await expect(
+      packMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        types: ["zip"],
+      }),
+    ).rejects.toThrow("Muon build is disabled by muon({ build: false })");
   });
 
   it("creates a deb package tree and invokes dpkg-deb for Linux targets", async () => {

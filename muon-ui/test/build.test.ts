@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
@@ -14,7 +15,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +32,7 @@ import {
 import { buildMuonApp, type MuonBuildTarget } from "../src/build.js";
 import muon from "../src/vite.js";
 
+const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
@@ -161,6 +165,72 @@ const createFakeMuonPackageDistForTargets = async (
 
 const createFakeMuonPackageDist = async (root: string): Promise<string> =>
   await createFakeMuonPackageDistForTargets(root, ["linux-amd64"]);
+
+const getCliPath = (): string => resolve("dist", "cli.cjs");
+
+const getVitePluginUrl = (): string =>
+  pathToFileURL(resolve("dist", "vite.mjs")).href;
+
+const runMuonCli = async (
+  root: string,
+  args: readonly string[],
+): Promise<{ stderr: string; stdout: string }> => {
+  const result = await execFileAsync(
+    process.execPath,
+    [getCliPath(), ...args],
+    {
+      cwd: root,
+      env: process.env,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  return {
+    stderr: result.stderr,
+    stdout: result.stdout,
+  };
+};
+
+const writeViteMuonBuildProject = async (
+  root: string,
+  buildExpression: string,
+): Promise<void> => {
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "vite-cli-build-sample",
+        type: "module",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(
+    join(root, "index.html"),
+    '<!doctype html><title>vite cli app</title><script type="module" src="/src/main.ts"></script>',
+  );
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(
+    join(root, "src", "main.ts"),
+    'document.body.textContent = "vite cli build";\n',
+  );
+  await writeFile(
+    join(root, "muon.json"),
+    `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
+  );
+  await writeFile(
+    join(root, "vite.config.mjs"),
+    [
+      `import muon from ${JSON.stringify(getVitePluginUrl())};`,
+      "export default {",
+      "  build: { outDir: 'web-dist' },",
+      "  plugins: [",
+      `    muon({ build: ${buildExpression} }),`,
+      "  ],",
+      "};",
+    ].join("\n"),
+  );
+};
 
 const readZipEntries = async (
   archivePath: string,
@@ -413,6 +483,120 @@ describe("muon build", () => {
         targets: ["linux64"],
       }),
     ).rejects.toThrow("Unsupported muon build target: linux64");
+  });
+
+  it("runs the Vite-backed build sequence from the muon build CLI", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-vite-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeViteMuonBuildProject(
+      root,
+      `{
+        packageDirectory: ${JSON.stringify(packageDirectory)},
+        targets: ['linux-amd64'],
+        outputRoot: 'release',
+        appName: 'plugin-app',
+        appId: 'com.example.plugin-app'
+      }`,
+    );
+
+    const result = await runMuonCli(root, ["build", "--json"]);
+    const parsed = JSON.parse(result.stdout) as {
+      appId: string;
+      appName: string;
+      targets: readonly { outputPath: string; target: string }[];
+    };
+
+    expect(parsed.appName).toBe("plugin-app");
+    expect(parsed.appId).toBe("com.example.plugin-app");
+    expect(
+      parsed.targets.map((target) => ({
+        outputPath: target.outputPath,
+        target: target.target,
+      })),
+    ).toEqual([
+      {
+        outputPath: join(root, "release", "dist-muon-linux-amd64"),
+        target: "linux-amd64",
+      },
+    ]);
+    const entries = await readZipEntries(
+      join(root, "release", "dist-muon-linux-amd64", "assets.zip"),
+    );
+    expect(entries.has("main/index.html")).toBe(true);
+    expect(
+      [...entries.keys()].some((entry) => entry.startsWith("main/assets/")),
+    ).toBe(true);
+  });
+
+  it("lets muon build CLI options override Vite plugin build options", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-override-");
+    const pluginPackageDirectory = await createFakeMuonPackageDistForTargets(
+      root,
+      ["windows-amd64"],
+    );
+    const cliPackageDirectory = await createFakeMuonPackageDistForTargets(
+      root,
+      ["linux-amd64"],
+    );
+    await writeViteMuonBuildProject(
+      root,
+      `{
+        packageDirectory: ${JSON.stringify(pluginPackageDirectory)},
+        targets: ['windows-amd64'],
+        outputRoot: 'plugin-release',
+        appName: 'plugin-app',
+        appId: 'com.example.plugin-app'
+      }`,
+    );
+
+    const result = await runMuonCli(root, [
+      "build",
+      "--json",
+      "--target",
+      "linux-amd64",
+      "--out-dir",
+      "cli-release",
+      "--name",
+      "cli-app",
+      "--app-id",
+      "com.example.cli-app",
+      "--package-directory",
+      cliPackageDirectory,
+    ]);
+    const parsed = JSON.parse(result.stdout) as {
+      appId: string;
+      appName: string;
+      targets: readonly { outputPath: string; target: string }[];
+    };
+
+    expect(parsed.appName).toBe("cli-app");
+    expect(parsed.appId).toBe("com.example.cli-app");
+    expect(
+      parsed.targets.map((target) => ({
+        outputPath: target.outputPath,
+        target: target.target,
+      })),
+    ).toEqual([
+      {
+        outputPath: join(root, "cli-release", "dist-muon-linux-amd64"),
+        target: "linux-amd64",
+      },
+    ]);
+    await expect(
+      exists(join(root, "plugin-release", "dist-muon-windows-amd64")),
+    ).resolves.toBe(false);
+    await expect(
+      exists(join(root, "cli-release", "dist-muon-linux-amd64", "cli-app")),
+    ).resolves.toBe(true);
+  });
+
+  it("rejects muon build when the Vite plugin disables Muon builds", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-disabled-");
+    await writeViteMuonBuildProject(root, "false");
+
+    await expect(runMuonCli(root, ["build"])).rejects.toThrow(
+      "Muon build is disabled by muon({ build: false })",
+    );
   });
 
   it("packages Vite output under asset://main/ during vite build", async () => {

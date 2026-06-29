@@ -15,33 +15,25 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import AdmZip from "adm-zip";
 import { parse } from "json5";
-import type { InlineConfig, UserConfig } from "vite";
 
 import {
-  buildMuonApp,
   getDefaultMuonBuildTarget,
-  type MuonBuildOptions,
   type MuonBuildResult,
   type MuonBuildTarget,
   type MuonBuildTargetResult,
 } from "./build.js";
 import {
-  flattenVitePluginOptions,
-  getMuonVitePluginOptions,
-} from "./vite-options.js";
-import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
+  loadMuonBuildSequenceProject,
+  muonBuildSequenceSuppressViteBuildEnvironmentKey,
+  resolveMuonViteBuildOptions,
+  runMuonBuildSequence,
+  type MuonBuildSequenceOptions,
+} from "./build-sequence.js";
+import type { MuonViteBuildOptions } from "./vite.js";
 import {
   allMuonTargets,
   getMuonTargetDescriptor,
@@ -51,7 +43,6 @@ import {
 const supportedPackTypes = ["zip", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
 const defaultPackageBuildDirectory = ".muon/pack";
-const suppressViteMuonBuildEnvironmentKey = "MUON_SUPPRESS_VITE_MUON_BUILD";
 
 type JsonObject = Record<string, unknown>;
 
@@ -180,11 +171,6 @@ export interface MuonPackResult {
   artifacts: MuonPackArtifact[];
 }
 
-interface LoadedViteMuonOptions {
-  root: string;
-  pluginOptions: MuonVitePluginOptions | undefined;
-}
-
 interface PackageMetadata {
   packageName: string;
   version: string;
@@ -199,72 +185,6 @@ interface MuonPackTargetPlan {
 
 const isJsonObject = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isMissingVitePackageError = (error: unknown): boolean => {
-  const candidate = error as { code?: unknown; message?: unknown };
-  return (
-    candidate.code === "ERR_MODULE_NOT_FOUND" &&
-    typeof candidate.message === "string" &&
-    candidate.message.includes("vite")
-  );
-};
-
-const loadViteMuonOptions = async (
-  cwd: string,
-): Promise<LoadedViteMuonOptions> => {
-  let vite: typeof import("vite");
-  try {
-    vite = await import("vite");
-  } catch (error) {
-    if (isMissingVitePackageError(error)) {
-      return {
-        root: resolve(cwd),
-        pluginOptions: undefined,
-      };
-    }
-    throw error;
-  }
-
-  const loaded = await vite.loadConfigFromFile(
-    {
-      command: "build",
-      mode: "production",
-      isPreview: false,
-      isSsrBuild: false,
-    },
-    undefined,
-    cwd,
-    "silent",
-  );
-  if (loaded === null) {
-    return {
-      root: resolve(cwd),
-      pluginOptions: undefined,
-    };
-  }
-
-  const config = loaded.config as UserConfig;
-  const root =
-    typeof config.root === "string" ? resolve(cwd, config.root) : resolve(cwd);
-  const plugins = await flattenVitePluginOptions(config.plugins);
-  const muonPlugins = plugins
-    .map((plugin) => getMuonVitePluginOptions(plugin))
-    .filter(
-      (pluginOptions): pluginOptions is MuonVitePluginOptions =>
-        pluginOptions !== undefined,
-    );
-
-  if (muonPlugins.length > 1) {
-    throw new Error(
-      "Multiple muon() plugin definitions were found in vite.config.*.",
-    );
-  }
-
-  return {
-    root,
-    pluginOptions: muonPlugins[0],
-  };
-};
 
 const readJsonObjectFile = async (path: string): Promise<JsonObject> => {
   const parsed = parse(await readFile(path, "utf8"));
@@ -353,12 +273,6 @@ const normalizePackTypes = (
     }
   }
   return [...new Set(normalized)] as MuonPackType[];
-};
-
-const getPluginBuildOptions = (
-  pluginOptions: MuonVitePluginOptions | undefined,
-): MuonViteBuildOptions => {
-  return typeof pluginOptions?.build === "object" ? pluginOptions.build : {};
 };
 
 const packTargetSelectorTargets: Record<string, readonly MuonBuildTarget[]> = {
@@ -459,67 +373,6 @@ const createPackTargetPlan = (
     throw new Error("No valid muon pack target and type combinations.");
   }
   return plan;
-};
-
-const resolveBuildOutputDirectory = async (root: string): Promise<string> => {
-  const vite = await import("vite");
-  const resolved = await vite.resolveConfig(
-    { root } satisfies InlineConfig,
-    "build",
-    "production",
-    "production",
-  );
-  return isAbsolute(resolved.build.outDir)
-    ? resolved.build.outDir
-    : resolve(resolved.root, resolved.build.outDir);
-};
-
-const runViteBuild = async (
-  root: string,
-  _environment: NodeJS.ProcessEnv,
-): Promise<void> => {
-  const vite = await import("vite");
-  const previous = process.env[suppressViteMuonBuildEnvironmentKey];
-  process.env[suppressViteMuonBuildEnvironmentKey] = "1";
-  try {
-    await vite.build({ root } satisfies InlineConfig);
-  } finally {
-    if (previous === undefined) {
-      delete process.env[suppressViteMuonBuildEnvironmentKey];
-    } else {
-      process.env[suppressViteMuonBuildEnvironmentKey] = previous;
-    }
-  }
-};
-
-const createBuildOptions = (
-  root: string,
-  assetSourcePath: string,
-  pluginBuildOptions: MuonViteBuildOptions,
-  options: MuonPackOptions,
-  targets: readonly MuonBuildTarget[],
-): MuonBuildOptions => {
-  const buildOptions: MuonBuildOptions = {
-    root,
-    assetSourcePath,
-    assetPrefix: "main",
-  };
-  Object.assign(buildOptions, pluginBuildOptions);
-  buildOptions.targets = targets;
-  buildOptions.allTargets = false;
-  if (options.configPath !== undefined) {
-    buildOptions.configPath = options.configPath;
-  }
-  if (options.appName !== undefined) {
-    buildOptions.appName = options.appName;
-  }
-  if (options.appId !== undefined) {
-    buildOptions.appId = options.appId;
-  }
-  if (options.packageDirectory !== undefined) {
-    buildOptions.packageDirectory = options.packageDirectory;
-  }
-  return buildOptions;
 };
 
 const runTool = async (
@@ -756,7 +609,7 @@ const packageNsis = async (
 };
 
 /**
- * Builds a Vite app, creates Muon dist directories, and packages them.
+ * Runs the Muon build sequence and creates redistributable packages.
  *
  * @param options Pack options.
  * @returns Generated package artifacts.
@@ -766,8 +619,8 @@ export const packMuonApp = async (
 ): Promise<MuonPackResult> => {
   const cwd = resolve(options.root ?? process.cwd());
   const environment = options.environment ?? process.env;
-  const loadedOptions = await loadViteMuonOptions(cwd);
-  const root = loadedOptions.root;
+  const project = await loadMuonBuildSequenceProject(cwd);
+  const root = project.root;
   const metadata = resolveMetadata(await readPackageJson(root), options);
   const artifactsRoot = resolve(
     root,
@@ -775,22 +628,29 @@ export const packMuonApp = async (
   );
   const packageBuildRoot = resolve(root, defaultPackageBuildDirectory);
   const types = normalizePackTypes(options.types);
-  const pluginBuildOptions = getPluginBuildOptions(loadedOptions.pluginOptions);
+  const pluginBuildOptions = resolveMuonViteBuildOptions(project.pluginOptions);
   const targetPlan = createPackTargetPlan(
     types,
     resolvePackTargetCandidates(options, pluginBuildOptions),
   );
-  const viteOutputDirectory = await resolveBuildOutputDirectory(root);
-  await runViteBuild(root, environment);
-  const build = await buildMuonApp(
-    createBuildOptions(
-      root,
-      viteOutputDirectory,
-      pluginBuildOptions,
-      options,
-      targetPlan.map((entry) => entry.target),
-    ),
-  );
+  const buildOptions: MuonBuildSequenceOptions = {
+    root: cwd,
+    targets: targetPlan.map((entry) => entry.target),
+    allTargets: false,
+  };
+  if (options.configPath !== undefined) {
+    buildOptions.configPath = options.configPath;
+  }
+  if (options.appName !== undefined) {
+    buildOptions.appName = options.appName;
+  }
+  if (options.appId !== undefined) {
+    buildOptions.appId = options.appId;
+  }
+  if (options.packageDirectory !== undefined) {
+    buildOptions.packageDirectory = options.packageDirectory;
+  }
+  const build = await runMuonBuildSequence(buildOptions, project);
   const typesByTarget = new Map(
     targetPlan.map((entry) => [entry.target, entry.types] as const),
   );
@@ -842,4 +702,4 @@ export const packMuonApp = async (
 };
 
 export const muonPackSuppressViteBuildEnvironmentKey =
-  suppressViteMuonBuildEnvironmentKey;
+  muonBuildSequenceSuppressViteBuildEnvironmentKey;

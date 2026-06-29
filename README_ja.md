@@ -235,22 +235,28 @@ export default defineConfig({
 
 ### 配布用ビルドとパッケージ生成
 
-Viteを使わずに配布用ビルドを行う場合や、配布用のパッケージ生成は、 `muon` CLIを使用します。
+配布用ビルドや配布用パッケージ生成は、 `muon` CLIからも実行できます。
 
-`muon build` はコンテンツビルド用のnpm scriptなどを自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
+`vite.config.*` にmuon Viteプラグインが含まれている場合、 `muon build` は `vite build` と同じビルドシーケンスを使用します。
+つまり、Viteプラグインの `build` オプションを既定値として使い、Viteの `build.outDir` を `asset://main/` として配布用ディレクトリにまとめます。
+同じ項目をCLIオプションで指定した場合はCLI側が優先されます。
 
 ```bash
 npx muon build
 ```
 
-`muon build` のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
+muon Viteプラグインが無い場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
+この場合のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
 `asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
+muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
 
 配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します。
-`muon pack` は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
+`muon pack` は `muon build` と同じビルドシーケンスで配布用ディレクトリを生成してから、指定した形式にパッケージ化します。
+muon Viteプラグインがある場合は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
+muon Viteプラグインが無い場合は `vite build` を実行せず、既に存在するアセットを使用します。
 その後、指定した形式ごとに `./artifacts/` へ最終配布物だけを出力します。
 `deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
 
@@ -267,6 +273,7 @@ npx muon pack --type nsis --target windows-amd64
 - `--type` は `zip`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
   省略時は `zip`, `deb`, `nsis` のすべてを対象にします。
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
+  muon Viteプラグインが無い場合、未指定時はすべての対応ターゲットをパッケージ候補にします。
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定できます。
 - `zip` は各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
@@ -1051,6 +1058,7 @@ export default defineConfig({
 ### buildキー
 
 `build` に `false` を指定すると、Viteの通常ビルドだけを実行し、muon配布用ディレクトリの生成を無効化します。
+この状態では `muon build` と `muon pack` もエラーになり、配布用ビルドは行われません。
 `build` にオブジェクトを指定すると、 `vite build` 後のmuon配布用ビルドに追加オプションを渡せます。
 `build` に `true` を指定した場合、または省略した場合は、 `{}` 相当として扱われます。
 

@@ -1000,7 +1000,7 @@ const plugin = muon({
   build: {
     targets: ["linux-amd64"],
     windowsResource: {
-      iconPath: "icons/app.ico",
+      iconPath: "icons/app.png",
       productName: "Package Test App",
       fileDescription: "Package test app",
       companyName: "Muon Tester",

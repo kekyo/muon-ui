@@ -17,7 +17,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
@@ -30,6 +30,7 @@ import {
   createMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { packMuonApp } from "../src/pack.js";
+import { createWindowsIconBufferFromPngData } from "../src/windows-icon.js";
 import type { MuonBuildTarget } from "../src/build.js";
 
 const execFileAsync = promisify(execFile);
@@ -379,20 +380,15 @@ const writeFakeTool = async (
   await writeExecutable(join(binDirectory, name), script);
 };
 
-const createWindowsIconFixture = async (
-  root: string,
-  iconPath: string,
-): Promise<void> => {
-  await execFileAsync(process.execPath, [
-    resolve(
-      "..",
-      "muon-prepare",
-      "scripts",
-      "create-windows-resource-fixture.mjs",
-    ),
-    join(root, "fixture.exe"),
+const createWindowsIconFixture = async (iconPath: string): Promise<void> => {
+  await mkdir(dirname(iconPath), { recursive: true });
+  await writeFile(
     iconPath,
-  ]);
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
 };
 
 const createFakePackagingToolEnvironment = async (
@@ -661,8 +657,15 @@ mkdir -p "$(dirname "$output_path")"
 printf 'nsis\\n' > "$output_path"
 `,
     );
-    const iconPath = join(root, "icons", "setup.ico");
-    await createWindowsIconFixture(root, iconPath);
+    const iconPath = join(root, "icons", "setup.png");
+    const generatedIconPath = join(
+      root,
+      ".muon",
+      "pack",
+      "nsis",
+      "packed-sample-windows-amd64.ico",
+    );
+    await createWindowsIconFixture(iconPath);
     await writeViteProject(root, packageDirectory, ["windows-amd64"]);
     await writeFile(
       join(root, "muon.json"),
@@ -670,7 +673,7 @@ printf 'nsis\\n' > "$output_path"
         {
           windows: {
             resource: {
-              iconPath: "icons/setup.ico",
+              iconPath: "icons/setup.png",
               productName: "NSIS Product",
               fileDescription: "NSIS Installer",
               companyName: "NSIS Company",
@@ -713,8 +716,14 @@ printf 'nsis\\n' > "$output_path"
       "utf8",
     );
     expect(nsisScript).toContain("RequestExecutionLevel user");
-    expect(nsisScript).toContain(`Icon "${iconPath}"`);
-    expect(nsisScript).toContain(`UninstallIcon "${iconPath}"`);
+    expect(nsisScript).toContain(`Icon "${generatedIconPath}"`);
+    expect(nsisScript).toContain(`UninstallIcon "${generatedIconPath}"`);
+    await expect(readFile(generatedIconPath)).resolves.toEqual(
+      await createWindowsIconBufferFromPngData(
+        await readFile(iconPath),
+        iconPath,
+      ),
+    );
     expect(nsisScript).toContain('VIProductVersion "9.8.7.0"');
     expect(nsisScript).toContain('VIFileVersion "9.8.7.0"');
     expect(nsisScript).toContain(

@@ -10,12 +10,14 @@ import type { Plugin } from "vite";
  */
 export interface MuonWindowsResourceOptions {
   /**
-   * Windows icon file path.
+   * Windows icon PNG file path.
    *
-   * @remarks Only `.ico` files are supported. Relative paths are resolved from
-   * the source that supplied the option.
+   * @remarks Only `.png` files are accepted as app inputs. Muon generates the
+   * required Windows `.ico` file automatically when updating PE resources or
+   * creating NSIS installers. Relative paths are resolved from the source that
+   * supplied the option.
    * @defaultValue Uses `windows.resource.iconPath`, then the packaged Muon
-   * bootstrap icon when available.
+   * bootstrap PNG icon when available.
    */
   iconPath?: string;
 

@@ -22,6 +22,10 @@ import { parse } from "json5";
 
 import { runMuonPrepareResourceUpdate } from "./prepare.js";
 import type { MuonWindowsResourceOptions } from "./vite.js";
+import {
+  createNormalizedMuonIconPngData,
+  createWindowsIconFromPngFile,
+} from "./windows-icon.js";
 
 export type { MuonWindowsResourceOptions } from "./vite.js";
 
@@ -62,7 +66,7 @@ interface ResolveWindowsResourceInput {
  * Resolved Windows resource metadata used by build and pack outputs.
  */
 export interface ResolvedMuonWindowsResource {
-  /** Resolved `.ico` file path, if one is available. */
+  /** Resolved `.png` icon file path, if one is available. */
   iconPath: string | undefined;
   /** Product name. */
   productName: string;
@@ -286,7 +290,7 @@ export const updateWindowsPeResources = async (input: {
       : join(tempDirectory, "icon.ico");
   try {
     if (input.resource.iconPath !== undefined && iconPath !== undefined) {
-      await copyFile(input.resource.iconPath, iconPath);
+      await createWindowsIconFromPngFile(input.resource.iconPath, iconPath);
     }
     await writeFile(
       updatesJsonPath,
@@ -634,11 +638,14 @@ const assertIconPath = async (
   iconPath: string,
   required: boolean,
 ): Promise<void> => {
-  if (extname(iconPath).toLowerCase() !== ".ico") {
-    throw new Error(`Windows resource icon must be an .ico file: ${iconPath}`);
+  if (extname(iconPath).toLowerCase() !== ".png") {
+    throw new Error(`Windows resource icon must be a .png file: ${iconPath}`);
   }
   if (required && !(await fileExists(iconPath))) {
     throw new Error(`Windows resource icon does not exist: ${iconPath}`);
+  }
+  if (await fileExists(iconPath)) {
+    await createNormalizedMuonIconPngData(await readFile(iconPath), iconPath);
   }
 };
 
@@ -646,10 +653,10 @@ const resolveDefaultWindowsIcon = async (
   packageDirectory: string,
 ): Promise<string | undefined> => {
   const candidates = [
-    join(resolve(packageDirectory), "native", "muon-bootstrap.ico"),
-    join(moduleDirectory, "native", "muon-bootstrap.ico"),
-    join(moduleDirectory, "..", "dist", "native", "muon-bootstrap.ico"),
-    join(moduleDirectory, "..", "..", "images", "muon-bootstrap.ico"),
+    join(resolve(packageDirectory), "native", "muon-bootstrap.png"),
+    join(moduleDirectory, "native", "muon-bootstrap.png"),
+    join(moduleDirectory, "..", "dist", "native", "muon-bootstrap.png"),
+    join(moduleDirectory, "..", "..", "images", "muon-bootstrap-256.png"),
   ];
   for (const candidate of candidates) {
     if (await fileExists(candidate)) {

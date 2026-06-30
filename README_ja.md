@@ -270,7 +270,7 @@ npx muon pack --target windows
 npx muon pack --target amd64
 npx muon pack --type tar.gz,deb --target linux-amd64
 npx muon pack --type nsis --target windows-amd64
-npx muon build --windows-icon icons/app.ico --windows-version 1.2.3
+npx muon build --windows-icon icons/app.png --windows-version 1.2.3
 ```
 
 - `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
@@ -900,8 +900,8 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
   ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
   Windowsでは、PNGとして読み込めるタイトルバーアイコンは実行中ウインドウのタスクバー/Alt-Tab用アプリアイコンにも反映されます。
-  exeファイル自体のアイコンリソースを配布ビルド時に差し替える場合は、`windows.resource.iconPath` に `.ico` ファイルを指定します。
-  Windows用には32x32以上のPNGを推奨します。タイトルバーではCEFが必要なサイズへ縮小表示します。
+  exeファイル自体のアイコンリソースを配布ビルド時に差し替える場合は、`windows.resource.iconPath` にPNGファイルを指定します。
+  Windows用には256x256以上の正方形PNGを推奨します。非正方形のPNGは透明余白付きで正方形へ収められます。
   - ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
     ページ遷移時、faviconが存在しない場合や取得・変換できない場合は `initialTitleBarIcon`、または内蔵Muonアイコンへ戻ります。
     favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
@@ -928,7 +928,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 {
   "windows": {
     "resource": {
-      "iconPath": "icons/app.ico",
+      "iconPath": "icons/app.png",
       "productName": "My App",
       "fileDescription": "My App",
       "companyName": "Example Inc.",
@@ -941,7 +941,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 | キー                   | 型       | 既定値                     | 概要                                                                     |
 | :--------------------- | :------- | :------------------------- | :----------------------------------------------------------------------- |
-| `resource.iconPath`    | `string` | Muon既定アイコン           | Windows launcherとNSIS installer/uninstallerに使用する`.ico`ファイルです。 |
+| `resource.iconPath`    | `string` | Muon既定アイコン           | Windows launcherとNSIS installer/uninstallerに使用するPNGアイコンファイルです。 |
 | `resource.productName` | `string` | `package.json`名           | Windows version resourceの`ProductName`です。                            |
 | `resource.fileDescription` | `string` | `package.json.description` | Windows version resourceの`FileDescription`です。                  |
 | `resource.companyName` | `string` | `package.json.author`      | Windows version resourceの`CompanyName`です。                            |
@@ -950,7 +950,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
 | `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
 
-- `iconPath` は `.ico` のみ対応します。PNGやSVGはPE/NSISのアイコンリソースとしては使用できません。
+- `iconPath` は `.png` のみ受け付けます。MuonはWindows PE/NSISが必要とする`.ico`をビルド時に自動生成します。
+  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
+  Microsoftの[Windowsアイコン資料](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-icons)と[アイコンリソース仕様](https://learn.microsoft.com/en-us/windows/win32/menurc/about-icons)に合わせ、生成ICOでは256x256のみPNG圧縮し、それ以外は32bit DIBとして格納します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
 - 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。

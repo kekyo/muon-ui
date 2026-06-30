@@ -53,6 +53,7 @@ import {
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
 } from "./windows-resource.js";
+import { createWindowsIconFromPngFile } from "./windows-icon.js";
 
 const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
@@ -647,6 +648,16 @@ const packageNsis = async (
   const uninstallRegistryKey = createNsisUninstallRegistryKey(appId);
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });
+  const iconPath =
+    windowsResource.iconPath === undefined
+      ? undefined
+      : join(
+          dirname(scriptPath),
+          `${metadata.packageName}-${target.target}.ico`,
+        );
+  if (windowsResource.iconPath !== undefined && iconPath !== undefined) {
+    await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
+  }
   await writeFile(
     scriptPath,
     [
@@ -657,7 +668,7 @@ const packageNsis = async (
       "RequestExecutionLevel user",
       "ShowInstDetails nevershow",
       "AutoCloseWindow true",
-      ...createNsisResourceDirectives(windowsResource),
+      ...createNsisResourceDirectives(windowsResource, iconPath),
       "Page instfiles",
       "Section",
       '  SetOutPath "$INSTDIR"',
@@ -702,11 +713,12 @@ const packageNsis = async (
 
 const createNsisResourceDirectives = (
   resource: ResolvedMuonWindowsResource,
+  iconPath: string | undefined,
 ): string[] => {
   const lines: string[] = [];
-  if (resource.iconPath !== undefined) {
-    lines.push(`Icon "${escapeNsis(resource.iconPath)}"`);
-    lines.push(`UninstallIcon "${escapeNsis(resource.iconPath)}"`);
+  if (iconPath !== undefined) {
+    lines.push(`Icon "${escapeNsis(iconPath)}"`);
+    lines.push(`UninstallIcon "${escapeNsis(iconPath)}"`);
   }
   lines.push(`VIProductVersion "${escapeNsis(resource.fixedVersion)}"`);
   lines.push(`VIFileVersion "${escapeNsis(resource.fixedVersion)}"`);

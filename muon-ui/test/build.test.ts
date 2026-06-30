@@ -15,7 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
@@ -30,6 +30,7 @@ import {
   findMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { buildMuonApp, type MuonBuildTarget } from "../src/build.js";
+import { createWindowsIconBufferFromPngData } from "../src/windows-icon.js";
 import muon from "../src/vite.js";
 
 const execFileAsync = promisify(execFile);
@@ -165,6 +166,37 @@ const createFakeMuonPackageDistForTargets = async (
 
 const createFakeMuonPackageDist = async (root: string): Promise<string> =>
   await createFakeMuonPackageDistForTargets(root, ["linux-amd64"]);
+
+interface WindowsIconBuildProject {
+  root: string;
+  packageDirectory: string;
+}
+
+const createWindowsIconBuildProject = async (
+  prefix: string,
+  packageName: string,
+): Promise<WindowsIconBuildProject> => {
+  const root = await createTemporaryDirectory(prefix);
+  const packageDirectory = await createFakeMuonPackageDist(root);
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify({ name: packageName }, null, 2)}\n`,
+  );
+  await mkdir(join(root, "assets"), { recursive: true });
+  await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+  return { root, packageDirectory };
+};
+
+const writeWindowsIconPngFixture = async (iconPath: string): Promise<void> => {
+  await mkdir(dirname(iconPath), { recursive: true });
+  await writeFile(
+    iconPath,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+};
 
 const createWindowsResourceFixture = async (
   pePath: string,
@@ -511,14 +543,17 @@ describe("muon build", () => {
     const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
       "windows-amd64",
     ]);
-    const iconPath = join(root, "icons", "app.ico");
+    const iconPath = join(root, "icons", "app.png");
+    const seedIconPath = join(root, "icons", "seed.ico");
+    const expectedIconPath = join(root, "icons", "expected.ico");
     const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
     await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
     await createWindowsResourceFixture(
       join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
-      iconPath,
+      seedIconPath,
       bootstrapSlotPath,
     );
+    await writeWindowsIconPngFixture(iconPath);
     await writeFile(
       join(root, "package.json"),
       `${JSON.stringify(
@@ -538,7 +573,7 @@ describe("muon build", () => {
         {
           windows: {
             resource: {
-              iconPath: "icons/app.ico",
+              iconPath: "icons/app.png",
               productName: "Muon Config Product",
               fileDescription: "Muon Config Description",
               companyName: "Muon Config Company",
@@ -589,7 +624,14 @@ describe("muon build", () => {
     expect(
       (target?.embeddedConfig as Record<string, unknown> | undefined)?.windows,
     ).toBeUndefined();
-    await assertWindowsIcon(launcherPath, iconPath);
+    await writeFile(
+      expectedIconPath,
+      await createWindowsIconBufferFromPngData(
+        await readFile(iconPath),
+        iconPath,
+      ),
+    );
+    await assertWindowsIcon(launcherPath, expectedIconPath);
     await assertWindowsVersion(launcherPath, [
       "--file-version",
       "7.8.9.0",
@@ -602,6 +644,68 @@ describe("muon build", () => {
       "ProductVersion=7.8.9",
       "LegalCopyright=Copyright Muon Config",
     ]);
+  });
+
+  it("rejects Windows resource icon paths that are not PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-windows-icon-",
+      "windows-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(join(root, "icons", "app.ico"), "ico\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        windowsResource: {
+          iconPath: "icons/app.ico",
+        },
+      }),
+    ).rejects.toThrow("Windows resource icon must be a .png file");
+  });
+
+  it("rejects missing Windows resource icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-missing-windows-icon-",
+      "missing-windows-icon-sample",
+    );
+    const iconPath = join(root, "icons", "missing.png");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        windowsResource: {
+          iconPath: "icons/missing.png",
+        },
+      }),
+    ).rejects.toThrow(`Windows resource icon does not exist: ${iconPath}`);
+  });
+
+  it("rejects invalid Windows resource icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-invalid-windows-icon-",
+      "invalid-windows-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(
+      join(root, "icons", "app.png"),
+      Buffer.from("89504e470d0a1a0a00000000", "hex"),
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        windowsResource: {
+          iconPath: "icons/app.png",
+        },
+      }),
+    ).rejects.toThrow("Windows resource icon must be a valid PNG");
   });
 
   it("rejects CEF-derived target IDs in public build options", async () => {

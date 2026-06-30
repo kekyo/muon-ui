@@ -611,7 +611,7 @@ void MuonApp::OnContextInitialized() {
                      },
                      app_storage, config_.browser, title_bar_manifest,
                      title_bar_background_color, has_initial_title_bar_icon,
-                     initial_title_bar_icon));
+                     initial_title_bar_icon, config_.desktop_id));
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler(client.get());
   auto* close_handler = static_cast<MuonWindowCloseHandler*>(client.get());
   auto browser_view = CefBrowserView::CreateBrowserView(
@@ -619,13 +619,13 @@ void MuonApp::OnContextInitialized() {
       new MuonBrowserViewDelegate(
           false, config_.browser.initial_title_bar_visibility,
           title_bar_manifest, title_bar_background_color, shortcut_handler,
-          close_handler));
+          close_handler, config_.desktop_id));
 
   CefWindow::CreateTopLevelWindow(new MuonWindowDelegate(
       browser_view, false, config_.browser.initial_window_state,
       config_.browser.initial_title_bar_visibility,
       title_bar_manifest, title_bar_background_color, shortcut_handler,
-      close_handler));
+      close_handler, config_.desktop_id));
 }
 
 void MuonApp::OnBrowserCreated(CefRefPtr<CefBrowser> browser,

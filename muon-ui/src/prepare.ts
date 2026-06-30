@@ -240,6 +240,9 @@ const isMuonPrepareStatusLine = (line: string): boolean => {
   );
 };
 
+const shouldKeepMuonPrepareStatusAfterLine = (line: string): boolean =>
+  line.startsWith("Muon files copied to staging:");
+
 const createPlainStderrForwarder = (): MuonPrepareStderrForwarder => ({
   write: (chunk): void => {
     process.stderr.write(chunk);
@@ -305,6 +308,18 @@ const createSpinnerStderrForwarder = (): MuonPrepareStderrForwarder => {
     const text = line.replace(/\r?\n$/, "");
     if (isMuonPrepareStatusLine(text)) {
       startStatus(text.trimEnd());
+      return;
+    }
+    if (
+      activeStatus !== undefined &&
+      shouldKeepMuonPrepareStatusAfterLine(text)
+    ) {
+      writeRaw(
+        `${terminalLineStart}${terminalClearLine}${
+          line.endsWith("\n") ? line : `${line}\n`
+        }`,
+      );
+      renderStatus();
       return;
     }
     finishStatus();

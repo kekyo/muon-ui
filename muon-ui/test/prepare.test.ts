@@ -1129,6 +1129,15 @@ lastCatalogUpdateUnix=0
     const stderr = chunks.join("");
     expect(stderr).toContain("\r- Downloading CEF binary:");
     expect(stderr).toContain("\r- Installing CEF runtime...");
+    const muonCopiedIndex = stderr.indexOf(
+      "Muon files copied to staging: files=4",
+    );
+    const cefCopiedIndex = stderr.indexOf("CEF files copied to staging:");
+    expect(muonCopiedIndex).toBeGreaterThanOrEqual(0);
+    expect(cefCopiedIndex).toBeGreaterThan(muonCopiedIndex);
+    expect(stderr.slice(muonCopiedIndex, cefCopiedIndex)).toMatch(
+      /\r[-\\|/] Installing CEF runtime\.\.\./u,
+    );
     expect(stderr).toContain("Starting Muon...");
   });
 

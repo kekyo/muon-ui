@@ -352,6 +352,7 @@ $ErrorActionPreference = 'Stop'
 $packageName = ${quotePowerShellString(packageName)}
 $appId = ${quotePowerShellString(appId)}
 $installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $packageName)
+$stateDir = Join-Path $env:LOCALAPPDATA $appId
 $shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $packageName + '.lnk')
 $registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $appId
 $uninstaller = Join-Path $installDir 'Uninstall.exe'
@@ -365,6 +366,7 @@ if (Test-Path -LiteralPath $uninstaller) {
 Remove-Item -LiteralPath $registryPath -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $stateDir -Recurse -Force -ErrorAction SilentlyContinue
 `;
 
 const createInstallStateAssertionScript = (packageName: string): string => `
@@ -405,6 +407,7 @@ $ErrorActionPreference = 'Stop'
 $packageName = ${quotePowerShellString(packageName)}
 $appId = ${quotePowerShellString(appId)}
 $installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $packageName)
+$stateDir = Join-Path $env:LOCALAPPDATA $appId
 $shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $packageName + '.lnk')
 $registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $appId
 $errors = New-Object System.Collections.Generic.List[string]
@@ -417,11 +420,24 @@ if (Test-Path -LiteralPath $shortcutPath) {
 if (Test-Path -LiteralPath $registryPath) {
   $errors.Add('registry key still exists: ' + $registryPath)
 }
+if (Test-Path -LiteralPath $stateDir) {
+  $errors.Add('runtime state directory still exists: ' + $stateDir)
+}
 if ($errors.Count -gt 0) {
   $errors | ForEach-Object { Write-Error $_ }
   exit 1
 }
 Write-Output 'removed'
+`;
+
+const createRuntimeStateFixtureScript = (appId: string): string => `
+$ErrorActionPreference = 'Stop'
+$appId = ${quotePowerShellString(appId)}
+$stateDir = Join-Path $env:LOCALAPPDATA $appId
+$targetStateDir = Join-Path $stateDir 'windows-amd64'
+New-Item -ItemType Directory -Force -Path $targetStateDir | Out-Null
+Set-Content -LiteralPath (Join-Path $targetStateDir 'state.txt') -Value 'state' -Encoding UTF8
+Write-Output 'runtime state fixture created'
 `;
 
 const createSettingsUninstallScript = (packageName: string): string => `
@@ -791,6 +807,18 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
       expectWindowsCommandSucceeded(
         installStateResult,
         "installed state assertion",
+      );
+
+      const runtimeStateFixtureResult = await runWindowsPowerShell(
+        windowsAgent,
+        remoteDirectory,
+        "create-runtime-state-fixture",
+        createRuntimeStateFixtureScript(appId),
+        120000,
+      );
+      expectWindowsCommandSucceeded(
+        runtimeStateFixtureResult,
+        "runtime state fixture",
       );
 
       const uninstallResult = await runWindowsPowerShell(

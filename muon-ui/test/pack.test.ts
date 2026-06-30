@@ -744,6 +744,9 @@ printf 'nsis\\n' > "$output_path"
     expect(
       nsisScript.split("\n").filter((line) => line.startsWith("Page ")),
     ).toEqual(["Page instfiles"]);
+    expect(nsisScript).toContain(
+      '  RMDir /r "$LOCALAPPDATA\\scope.packed-sample"',
+    );
     expect(nsisScript).toContain("Function .onInstSuccess");
     expect(nsisScript).toContain("  IfSilent +3");
     expect(nsisScript).toContain('  SetOutPath "$INSTDIR"');

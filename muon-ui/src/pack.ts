@@ -690,6 +690,7 @@ const packageNsis = async (
       `  Delete "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk"`,
       `  DeleteRegKey HKCU "${escapeNsis(uninstallRegistryKey)}"`,
       '  RMDir /r "$INSTDIR"',
+      `  RMDir /r "$LOCALAPPDATA\\${escapeNsis(appId)}"`,
       "SectionEnd",
       "",
       "Function .onInstSuccess",

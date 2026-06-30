@@ -287,6 +287,7 @@ npx muon build --windows-icon icons/app.png --windows-version 1.2.3
   Debian/Ubuntuでは、単に `sudo apt install nsis` でインストール出来ます。
   Windows環境では [Nullsoft Scriptable Install System](https://nsis.sourceforge.io/Main_Page) からダウンロード出来ます。
 - NSISの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
+  アンインストール時には `%LOCALAPPDATA%\<appId>` のruntime stateも削除します。
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
 - `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。

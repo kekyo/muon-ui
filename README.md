@@ -66,6 +66,7 @@ you can develop modern local GUI applications using the web-based technology eco
   This means that, from the perspective of your web application, it is virtually equivalent to using Chromium or Chrome.
 - Supports Vite plugins (optional). With support for Vite’s HMR, you can update previews in real time during development.
 - Provides `muon dev` for launching local development assets directly without starting an HTTP server.
+- Linux desktop launcher and icon metadata can be bundled at distribution build time.
 - Windows launcher and NSIS installer resources use app-provided PNG icons and version metadata.
   Muon converts the PNG to an ICO at build/pack time; use a high-resolution square PNG, preferably 256x256 or larger.
   Non-square PNGs are fitted with transparent padding.

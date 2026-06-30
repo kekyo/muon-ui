@@ -60,6 +60,7 @@ you can develop modern local GUI applications using the web-based technology eco
   This means that, from the perspective of your web application, it is virtually equivalent to using Chromium or Chrome.
 - Supports Vite plugins (optional). With support for Vite’s HMR, you can update previews in real time during development.
 - Provides `muon dev` for launching local development assets directly without starting an HTTP server.
+- Linux desktop launcher and icon metadata can be bundled at distribution build time.
 - You can use Chromium DevTools. Furthermore, because it supports CDP (Chromium DevTools Protocol), you can perform remote debugging from an external source.
 - You can display multiple browser windows. Browser windows can also be organized into a parent-child hierarchy.
 - It features a plugin system. Additionally, plugin functionality can be restricted using a whitelist filter.

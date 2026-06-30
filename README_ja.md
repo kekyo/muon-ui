@@ -62,6 +62,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 - レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、Chromiumやchromeを使用しているのとほぼ同等です。
 - Viteプラグインに対応しています（オプション）。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
 - `muon dev` で、HTTPサーバーを起動せずにローカルアセットを直接使った開発起動ができます。
+- Linux desktop launcherとアイコンのmetadataを配布ビルド時に同梱できます。
 - Chromium DevToolsを使用できます。更にCDP (Chromium DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
 - 複数のブラウザウインドウを表示できます。ブラウザウインドウは親子関係をもたせることも出来ます。
 - プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限できます。
@@ -219,6 +220,11 @@ export default defineConfig({
         outputRoot: 'release',
         appName: 'my-app',
         appId: 'com.example.my-app',
+        linuxDesktop: {
+          name: 'My App',
+          iconPath: 'icons/app.png',
+          categories: ['Utility'],
+        },
       },
     }),
   ],
@@ -271,6 +277,7 @@ npx muon pack --target amd64
 npx muon pack --type tar.gz,deb --target linux-amd64
 npx muon pack --type nsis --target windows-amd64
 npx muon build --windows-icon icons/app.png --windows-version 1.2.3
+npx muon build --linux-icon icons/app.png --linux-name "My App"
 ```
 
 - `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
@@ -283,6 +290,8 @@ npx muon build --windows-icon icons/app.png --windows-version 1.2.3
 - `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon-*` ディレクトリをトップレベルに含むgzip圧縮tarです。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
+  ランチャー表示用に `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` もpackage-owned fileとして配置します。
+  アンインストール時にユーザーのstate directoryは削除しませんが、system desktop entryとiconはdpkgにより削除されるため、ランチャー表示は消えます。
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
   Debian/Ubuntuでは、単に `sudo apt install nsis` でインストール出来ます。
   Windows環境では [Nullsoft Scriptable Install System](https://nsis.sourceforge.io/Main_Page) からダウンロード出来ます。
@@ -293,6 +302,8 @@ npx muon build --windows-icon icons/app.png --windows-version 1.2.3
 - `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
 - Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
   同じ値は `muon.json` の `windows.resource` でも指定できます。
+- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
+  同じ値は `muon.json` の `linux.desktop` でも指定できます。
 
 ---
 
@@ -964,6 +975,49 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
   setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
 
+### linuxキー
+
+`linux.desktop` は配布ビルド用のLinux desktop entry metadataです。
+この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
+
+```json
+{
+  "linux": {
+    "desktop": {
+      "desktopId": "com.example.my-app",
+      "name": "My App",
+      "comment": "Example app",
+      "iconPath": "icons/app.png",
+      "categories": ["Utility"],
+      "startupNotify": true
+    }
+  }
+}
+```
+
+| キー                      | 型         | 既定値                     | 概要                                                                       |
+| :------------------------ | :--------- | :------------------------- | :------------------------------------------------------------------------- |
+| `desktop.desktopId`       | `string`   | `appId`                    | `.desktop` ファイル名、`StartupWMClass`、Wayland app ID、X11 WM_CLASSです。 |
+| `desktop.name`            | `string`   | `package.json`名           | ランチャーに表示されるアプリ名です。                                       |
+| `desktop.comment`         | `string`   | `package.json.description` | desktop entryの`Comment`です。                                             |
+| `desktop.iconPath`        | `string`   | Muon既定アイコン           | desktop entry用PNGアイコンファイルです。                                   |
+| `desktop.categories`      | `string[]` | `["Utility"]`              | desktop menu categoryです。                                                |
+| `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
+
+- `iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
+- `muon build` はLinuxターゲットの `dist-muon-linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
+  `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
+- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/<target>/` へstagingし、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+  このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
+- 新しいportable配布物から起動した場合、fingerprintの差分によりstate directory側のアプリファイル群が更新され、desktop entryも更新されます。
+  state directory配下のlauncherから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
+- `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
+  debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-bootstrap` はユーザーhomeへ新規desktop entryを作成しません。
+  既存のMuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
+- 相対パスは、値を定義したファイルのディレクトリから解決されます。
+  CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリです。
+- 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `linux.desktop`、`package.json`、既定値です。
+
 ### assetキー
 
 | キー        | 型       | 既定値   | 概要                                                                 |
@@ -1123,6 +1177,7 @@ export default defineConfig({
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
+| `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
@@ -1141,6 +1196,7 @@ export default defineConfig({
 - Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
   そのため、ビルド後のアセットは `asset://main/` から参照できます。
 - `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
+- `linuxDesktop` は `muon.json` の `linux.desktop` と同じキーを受け付け、CLIの `--linux-*` オプションと同じ優先度で扱われます。
 - `packageDirectory` は通常指定しません。
   muonパッケージとは別の場所にある `runtime/` と `native/` をビルド元として使用するテストやパッケージ検証向けの引数です。
   相対パスを指定した場合は、実行中のプロセスのcurrent working directoryから解決されます。

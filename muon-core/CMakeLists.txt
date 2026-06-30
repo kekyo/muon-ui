@@ -844,6 +844,44 @@ set(MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH
 set(MUON_WINDOWS_ICON_PATH
   "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon.ico")
 file(MAKE_DIRECTORY "${MUON_GENERATED_INCLUDE_DIR}")
+
+function(muon_normalize_windows_version input output_dot output_comma)
+  if(NOT "${input}" MATCHES
+      "^([0-9]+)(\\.([0-9]+))?(\\.([0-9]+))?(\\.([0-9]+))?")
+    message(FATAL_ERROR
+      "Windows resource version must start with numeric parts: ${input}")
+  endif()
+  set(value_0 "${CMAKE_MATCH_1}")
+  set(value_1 "${CMAKE_MATCH_3}")
+  set(value_2 "${CMAKE_MATCH_5}")
+  set(value_3 "${CMAKE_MATCH_7}")
+  set(normalized_values)
+  foreach(value IN ITEMS
+      "${value_0}"
+      "${value_1}"
+      "${value_2}"
+      "${value_3}")
+    if("${value}" STREQUAL "")
+      set(value 0)
+    endif()
+    if(value LESS 0 OR value GREATER 65535)
+      message(FATAL_ERROR
+        "Windows resource version part must be from 0 to 65535: ${input}")
+    endif()
+    list(APPEND normalized_values "${value}")
+  endforeach()
+  list(JOIN normalized_values "." normalized_dot)
+  list(JOIN normalized_values "," normalized_comma)
+  set(${output_dot} "${normalized_dot}" PARENT_SCOPE)
+  set(${output_comma} "${normalized_comma}" PARENT_SCOPE)
+endfunction()
+
+function(muon_escape_windows_resource_string input output)
+  string(REPLACE "\\" "\\\\" escaped "${input}")
+  string(REPLACE "\"" "\\\"" escaped "${escaped}")
+  set(${output} "${escaped}" PARENT_SCOPE)
+endfunction()
+
 add_custom_command(
   OUTPUT "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
   COMMAND ${CMAKE_COMMAND}
@@ -856,6 +894,25 @@ add_custom_command(
   VERBATIM
   )
 if(WIN32)
+  muon_normalize_windows_version("${MUON_CORE_VERSION}"
+    MUON_WINDOWS_VERSION_DOT
+    MUON_WINDOWS_VERSION_COMMA)
+  set(MUON_WINDOWS_COMMENTS
+    "https://muon-ui.com/ target=${MUON_TARGET_NAME}; cef=${MUON_CEF_VERSION}; cefTarget=${MUON_CEF_TARGET_NAME}; cefApi=${MUON_CEF_API_VERSION}")
+  set(MUON_WINDOWS_SPECIAL_BUILD
+    "cefArtifact=${MUON_CEF_PACKAGE}; distribution=minimal; apiHash=${MUON_CEF_API_HASH}")
+  muon_escape_windows_resource_string(
+    "Kouji Matsui. (@kekyo@mi.kekyo.net)" MUON_WINDOWS_COMPANY_NAME)
+  muon_escape_windows_resource_string(
+    "Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)" MUON_WINDOWS_LEGAL_COPYRIGHT)
+  muon_escape_windows_resource_string(
+    "${MUON_CORE_VERSION}" MUON_WINDOWS_STRING_VERSION)
+  muon_escape_windows_resource_string(
+    "${MUON_CORE_GIT_COMMIT_HASH}" MUON_WINDOWS_GIT_COMMIT_HASH)
+  muon_escape_windows_resource_string(
+    "${MUON_WINDOWS_COMMENTS}" MUON_WINDOWS_COMMENTS)
+  muon_escape_windows_resource_string(
+    "${MUON_WINDOWS_SPECIAL_BUILD}" MUON_WINDOWS_SPECIAL_BUILD)
   set(MUON_CORE_WINDOWS_RESOURCE_PATH
     "${MUON_GENERATED_INCLUDE_DIR}/muon_core.rc")
   configure_file(

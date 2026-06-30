@@ -22,7 +22,9 @@ for command_name in "${required_commands[@]}"; do
   fi
 done
 
-bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
+MUON_PREPARE_VERSION=1.2.3-beta \
+  MUON_PREPARE_GIT_COMMIT_HASH=prepare-test-hash \
+  bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
 
 bootstrap_executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap.exe"
 bootstrap_dump="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap-resources.txt"
@@ -37,6 +39,22 @@ fi
 node "${SCRIPT_DIR}/scripts/assert-windows-icon.mjs" \
   "${bootstrap_executable}" \
   "${SCRIPT_DIR}/../images/muon-bootstrap.ico"
+node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
+  "${bootstrap_executable}" \
+  --file-version \
+  1.2.3.0 \
+  --product-version \
+  1.2.3.0 \
+  "ProductName=Muon" \
+  "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
+  "FileDescription=Muon Bootstrap" \
+  "FileVersion=1.2.3-beta" \
+  "ProductVersion=1.2.3-beta" \
+  "InternalName=muon-bootstrap" \
+  "OriginalFilename=muon-bootstrap.exe" \
+  "PrivateBuild=prepare-test-hash" \
+  "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
+  "SpecialBuild=cefArtifact=; distribution=; apiHash="
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
@@ -54,6 +72,22 @@ archive_root="${source_dir}/cef_binary_fake_windows64_minimal"
 archive_path="${source_dir}/cef.tar.bz2"
 catalog_path="${source_dir}/source-catalog.json"
 executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-prepare.exe"
+node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
+  "${executable}" \
+  --file-version \
+  1.2.3.0 \
+  --product-version \
+  1.2.3.0 \
+  "ProductName=Muon" \
+  "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
+  "FileDescription=Muon Prepare Tool" \
+  "FileVersion=1.2.3-beta" \
+  "ProductVersion=1.2.3-beta" \
+  "InternalName=muon-prepare" \
+  "OriginalFilename=muon-prepare.exe" \
+  "PrivateBuild=prepare-test-hash" \
+  "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
+  "SpecialBuild=cefArtifact=; distribution=; apiHash="
 
 cat > "${slow_writer_src}" <<'C_EOF'
 #define WIN32_LEAN_AND_MEAN

@@ -8,6 +8,7 @@ LDFLAGS ?= -s -static
 BOOTSTRAP_CPPFLAGS ?=
 BOOTSTRAP_LDFLAGS ?= $(LDFLAGS)
 BOOTSTRAP_LDLIBS ?=
+PREPARE_WINDOWS_RESOURCE_OBJECTS ?=
 BOOTSTRAP_RESOURCE_OBJECTS ?=
 VERSION_HEADER ?=
 RUNTIME_INFO_HEADER ?=
@@ -64,13 +65,13 @@ $(LIB_TARGET): $(PREPARE_OBJECTS)
 	rm -f "$@"
 	$(AR) rcs "$@" $(PREPARE_OBJECTS)
 
-$(PREPARE_TARGET): src/muon_prepare.c src/prepare.h src/prepare_progress.h src/muon_prepare_resource.h $(LIB_TARGET) $(PREPARE_RESOURCE_OBJECTS)
+$(PREPARE_TARGET): src/muon_prepare.c src/prepare.h src/prepare_progress.h src/muon_prepare_resource.h $(LIB_TARGET) $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o "$@" src/muon_prepare.c $(PREPARE_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o "$@" src/muon_prepare.c $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
 
 $(BOOTSTRAP_TARGET): src/muon_bootstrap.c src/bootstrap_progress.h src/prepare.h src/prepare_progress.h $(OUT_DIR)/bootstrap_progress.o $(LIB_TARGET) $(BOOTSTRAP_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(BOOTSTRAP_CPPFLAGS) $(CFLAGS) $(BOOTSTRAP_LDFLAGS) -o "$@" src/muon_bootstrap.c "$(OUT_DIR)/bootstrap_progress.o" $(BOOTSTRAP_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(BOOTSTRAP_LDLIBS)
 
 clean:
-	rm -f "$(PREPARE_TARGET)" "$(BOOTSTRAP_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/bootstrap_progress.o" $(BOOTSTRAP_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)
+	rm -f "$(PREPARE_TARGET)" "$(BOOTSTRAP_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/bootstrap_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(BOOTSTRAP_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)

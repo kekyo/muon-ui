@@ -124,6 +124,98 @@ case "${BUILD_TYPE}" in
     ;;
 esac
 
+read_c_string_define() {
+  local header_path="$1"
+  local define_name="$2"
+  sed -n "s/^#define ${define_name} \"\\(.*\\)\"/\\1/p" "${header_path}" | head -n 1
+}
+
+normalize_windows_version() {
+  node -e '
+const version = process.argv[1] ?? "";
+const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?/.exec(version);
+if (match === null) {
+  console.error(`Invalid Windows version: ${version}`);
+  process.exit(1);
+}
+const values = [match[1], match[2], match[3], match[4]]
+  .map((value) => value === undefined ? 0 : Number.parseInt(value, 10));
+for (const value of values) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    console.error(`Invalid Windows version: ${version}`);
+    process.exit(1);
+  }
+}
+console.log(values.join("."));
+' "$1"
+}
+
+escape_rc_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "${value}"
+}
+
+write_windows_version_resource_script() {
+  local output_path="$1"
+  local icon_path="$2"
+  local manifest_path="$3"
+  local file_description="$4"
+  local internal_name="$5"
+  local original_filename="$6"
+  local version="$7"
+  local fixed_version="$8"
+  local git_commit_hash="$9"
+  local comments="${10}"
+  local special_build="${11}"
+  local fixed_version_comma="${fixed_version//./,}"
+
+  {
+    printf '#include <windows.h>\n\n'
+    if [[ -n "${icon_path}" ]]; then
+      printf '1 ICON "%s"\n\n' "$(escape_rc_string "${icon_path}")"
+    fi
+    if [[ -n "${manifest_path}" ]]; then
+      printf 'CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "%s"\n\n' \
+        "$(escape_rc_string "${manifest_path}")"
+    fi
+    cat <<EOF
+1 VERSIONINFO
+FILEVERSION ${fixed_version_comma}
+PRODUCTVERSION ${fixed_version_comma}
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x28L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "Kouji Matsui. (@kekyo@mi.kekyo.net)\0"
+      VALUE "FileDescription", "$(escape_rc_string "${file_description}")\0"
+      VALUE "FileVersion", "$(escape_rc_string "${version}")\0"
+      VALUE "InternalName", "$(escape_rc_string "${internal_name}")\0"
+      VALUE "LegalCopyright", "Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)\0"
+      VALUE "OriginalFilename", "$(escape_rc_string "${original_filename}")\0"
+      VALUE "ProductName", "Muon\0"
+      VALUE "ProductVersion", "$(escape_rc_string "${version}")\0"
+      VALUE "Comments", "$(escape_rc_string "${comments}")\0"
+      VALUE "PrivateBuild", "$(escape_rc_string "${git_commit_hash}")\0"
+      VALUE "SpecialBuild", "$(escape_rc_string "${special_build}")\0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END
+EOF
+  } > "${output_path}"
+}
+
 YYJSON_VERSION="0.12.0"
 BZIP2_VERSION="1.0.8"
 LIBARCHIVE_VERSION="3.8.7"
@@ -206,11 +298,68 @@ else
   cp "${SCRIPT_DIR}/src/muon_runtime_info_fallback.h" "${RUNTIME_INFO_HEADER}"
 fi
 
+PREPARE_WINDOWS_RESOURCE_OBJECTS_VALUE=""
 BOOTSTRAP_RESOURCE_OBJECTS_VALUE=""
 if [[ "${TARGET_NAME}" == windows-* ]]; then
-  BOOTSTRAP_RESOURCE_OBJECTS_VALUE="${OUT_DIR}/muon_bootstrap_resource.o"
+  WINDOWS_RESOURCE_VERSION="${MUON_WINDOWS_RESOURCE_VERSION:-}"
+  WINDOWS_RESOURCE_GIT_COMMIT_HASH="${MUON_WINDOWS_RESOURCE_GIT_COMMIT_HASH:-}"
+  if [[ -z "${WINDOWS_RESOURCE_VERSION}" ]]; then
+    if [[ -n "${MUON_CORE_VERSION_HEADER:-}" && -f "${MUON_CORE_VERSION_HEADER}" ]]; then
+      WINDOWS_RESOURCE_VERSION="$(read_c_string_define "${MUON_CORE_VERSION_HEADER}" MUON_CORE_VERSION)"
+      WINDOWS_RESOURCE_GIT_COMMIT_HASH="$(read_c_string_define "${MUON_CORE_VERSION_HEADER}" MUON_CORE_GIT_COMMIT_HASH)"
+    else
+      WINDOWS_RESOURCE_VERSION="$(read_c_string_define "${VERSION_HEADER}" MUON_PREPARE_VERSION)"
+      WINDOWS_RESOURCE_GIT_COMMIT_HASH="$(read_c_string_define "${VERSION_HEADER}" MUON_PREPARE_GIT_COMMIT_HASH)"
+    fi
+  fi
+  if [[ -z "${WINDOWS_RESOURCE_GIT_COMMIT_HASH}" ]]; then
+    WINDOWS_RESOURCE_GIT_COMMIT_HASH="unknown"
+  fi
+  WINDOWS_RESOURCE_FIXED_VERSION="$(normalize_windows_version "${WINDOWS_RESOURCE_VERSION}")"
+  WINDOWS_RESOURCE_TARGET="${MUON_WINDOWS_RESOURCE_TARGET:-${TARGET_NAME}}"
+  WINDOWS_RESOURCE_CEF_VERSION="${MUON_WINDOWS_RESOURCE_CEF_VERSION:-}"
+  WINDOWS_RESOURCE_CEF_TARGET="${MUON_WINDOWS_RESOURCE_CEF_TARGET:-}"
+  WINDOWS_RESOURCE_CEF_API_VERSION="${MUON_WINDOWS_RESOURCE_CEF_API_VERSION:-}"
+  WINDOWS_RESOURCE_CEF_ARTIFACT="${MUON_WINDOWS_RESOURCE_CEF_ARTIFACT:-}"
+  WINDOWS_RESOURCE_CEF_DISTRIBUTION="${MUON_WINDOWS_RESOURCE_CEF_DISTRIBUTION:-}"
+  WINDOWS_RESOURCE_CEF_API_HASH="${MUON_WINDOWS_RESOURCE_CEF_API_HASH:-}"
+  WINDOWS_RESOURCE_COMMENTS="https://muon-ui.com/ target=${WINDOWS_RESOURCE_TARGET}; cef=${WINDOWS_RESOURCE_CEF_VERSION}; cefTarget=${WINDOWS_RESOURCE_CEF_TARGET}; cefApi=${WINDOWS_RESOURCE_CEF_API_VERSION}"
+  WINDOWS_RESOURCE_SPECIAL_BUILD="cefArtifact=${WINDOWS_RESOURCE_CEF_ARTIFACT}; distribution=${WINDOWS_RESOURCE_CEF_DISTRIBUTION}; apiHash=${WINDOWS_RESOURCE_CEF_API_HASH}"
+
+  PREPARE_RESOURCE_SCRIPT="${OUT_DIR}/muon_prepare.rc"
+  PREPARE_WINDOWS_RESOURCE_OBJECTS_VALUE="${OUT_DIR}/muon_prepare_windows_resource.o"
+  write_windows_version_resource_script \
+    "${PREPARE_RESOURCE_SCRIPT}" \
+    "" \
+    "" \
+    "Muon Prepare Tool" \
+    "muon-prepare" \
+    "${EXECUTABLE_NAME}" \
+    "${WINDOWS_RESOURCE_VERSION}" \
+    "${WINDOWS_RESOURCE_FIXED_VERSION}" \
+    "${WINDOWS_RESOURCE_GIT_COMMIT_HASH}" \
+    "${WINDOWS_RESOURCE_COMMENTS}" \
+    "${WINDOWS_RESOURCE_SPECIAL_BUILD}"
   "${WINDRES}" -I "${SCRIPT_DIR}/src" -I "${PROJECT_ROOT}/images" \
-    "${SCRIPT_DIR}/src/muon_bootstrap.rc" \
+    "${PREPARE_RESOURCE_SCRIPT}" \
+    "${PREPARE_WINDOWS_RESOURCE_OBJECTS_VALUE}"
+
+  BOOTSTRAP_RESOURCE_SCRIPT="${OUT_DIR}/muon_bootstrap.rc"
+  BOOTSTRAP_RESOURCE_OBJECTS_VALUE="${OUT_DIR}/muon_bootstrap_resource.o"
+  write_windows_version_resource_script \
+    "${BOOTSTRAP_RESOURCE_SCRIPT}" \
+    "muon-bootstrap.ico" \
+    "muon_bootstrap.manifest" \
+    "Muon Bootstrap" \
+    "muon-bootstrap" \
+    "${BOOTSTRAP_EXECUTABLE_NAME}" \
+    "${WINDOWS_RESOURCE_VERSION}" \
+    "${WINDOWS_RESOURCE_FIXED_VERSION}" \
+    "${WINDOWS_RESOURCE_GIT_COMMIT_HASH}" \
+    "${WINDOWS_RESOURCE_COMMENTS}" \
+    "${WINDOWS_RESOURCE_SPECIAL_BUILD}"
+  "${WINDRES}" -I "${SCRIPT_DIR}/src" -I "${PROJECT_ROOT}/images" \
+    "${BOOTSTRAP_RESOURCE_SCRIPT}" \
     "${BOOTSTRAP_RESOURCE_OBJECTS_VALUE}"
 fi
 
@@ -246,6 +395,7 @@ make -j -C "${SCRIPT_DIR}" -B \
   CFLAGS="${CFLAGS_VALUE}" \
   LDFLAGS="${LDFLAGS_VALUE}" \
   BOOTSTRAP_LDFLAGS="${BOOTSTRAP_LDFLAGS_VALUE}" \
+  PREPARE_WINDOWS_RESOURCE_OBJECTS="${PREPARE_WINDOWS_RESOURCE_OBJECTS_VALUE}" \
   BOOTSTRAP_RESOURCE_OBJECTS="${BOOTSTRAP_RESOURCE_OBJECTS_VALUE}" \
   LDLIBS="${LDLIBS_VALUE}" \
   BOOTSTRAP_LDLIBS="${BOOTSTRAP_LDLIBS_VALUE}"

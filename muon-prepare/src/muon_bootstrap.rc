@@ -1,5 +1,0 @@
-#include <windows.h>
-
-1 ICON "muon-bootstrap.ico"
-
-CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "muon_bootstrap.manifest"

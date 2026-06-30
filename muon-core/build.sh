@@ -124,6 +124,77 @@ verify_windows_icon_resources() {
   rm -f "${dump_path}" "${resources_path}"
 }
 
+read_c_string_define() {
+  local header_path="$1"
+  local define_name="$2"
+  sed -n "s/^#define ${define_name} \"\\(.*\\)\"/\\1/p" "${header_path}" | head -n 1
+}
+
+normalize_windows_version() {
+  node -e '
+const version = process.argv[1] ?? "";
+const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?/.exec(version);
+if (match === null) {
+  console.error(`Invalid Windows version: ${version}`);
+  process.exit(1);
+}
+const values = [match[1], match[2], match[3], match[4]]
+  .map((value) => value === undefined ? 0 : Number.parseInt(value, 10));
+for (const value of values) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    console.error(`Invalid Windows version: ${version}`);
+    process.exit(1);
+  }
+}
+console.log(values.join("."));
+' "$1"
+}
+
+resolve_cef_api_version() {
+  if [[ -n "${MUON_CEF_API_VERSION:-}" ]]; then
+    printf '%s\n' "${MUON_CEF_API_VERSION}"
+    return
+  fi
+  sed -n 's/^#define CEF_API_VERSION_LAST CEF_API_VERSION_\([0-9][0-9]*\)$/\1/p' \
+    "${CEF_ROOT}/include/cef_api_versions.h" | head -n 1
+}
+
+resolve_cef_api_hash() {
+  local api_version="$1"
+  sed -n "s/^#define CEF_API_HASH_${api_version} \"\\([^\"]*\\)\".*$/\\1/p" \
+    "${CEF_ROOT}/include/cef_api_versions.h" | head -n 1
+}
+
+verify_windows_version_resource() {
+  local executable_path="$1"
+  local file_description="$2"
+  local internal_name="$3"
+  local original_filename="$4"
+  local version
+  local fixed_version
+  local git_commit_hash
+
+  version="$(read_c_string_define "${MUON_CORE_VERSION_HEADER_PATH}" MUON_CORE_VERSION)"
+  fixed_version="$(normalize_windows_version "${version}")"
+  git_commit_hash="$(read_c_string_define "${MUON_CORE_VERSION_HEADER_PATH}" MUON_CORE_GIT_COMMIT_HASH)"
+  node "${PROJECT_ROOT}/muon-prepare/scripts/assert-windows-version.mjs" \
+    "${executable_path}" \
+    --file-version \
+    "${fixed_version}" \
+    --product-version \
+    "${fixed_version}" \
+    "ProductName=Muon" \
+    "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
+    "FileDescription=${file_description}" \
+    "FileVersion=${version}" \
+    "ProductVersion=${version}" \
+    "InternalName=${internal_name}" \
+    "OriginalFilename=${original_filename}" \
+    "PrivateBuild=${git_commit_hash}" \
+    "Comments=https://muon-ui.com/ target=${TARGET_NAME}; cef=${CEF_VERSION}; cefTarget=${CEF_ARCH}; cefApi=${MUON_CEF_API_VERSION}" \
+    "SpecialBuild=cefArtifact=${CEF_PACKAGE}; distribution=minimal; apiHash=${MUON_CEF_API_HASH}"
+}
+
 patch_windows_cef_popup_settings() {
   if [[ "${TARGET_NAME}" != windows* ]]; then
     return
@@ -289,7 +360,10 @@ BUILD_TYPE_LOWER="${BUILD_TYPE,,}"
 BUILD_DIR="${OUTPUT_ROOT}/.build/${BUILD_USAGE}/${TARGET_NAME}/${BUILD_TYPE_LOWER}"
 MUON_CORE_VERSION_HEADER_PATH="${BUILD_DIR}/generated/muon_core_version_generated.h"
 generate_core_version_header "${MUON_CORE_VERSION_HEADER_PATH}"
-MUON_CEF_API_VERSION="${MUON_CEF_API_VERSION:-}"
+MUON_CORE_VERSION_VALUE="$(read_c_string_define "${MUON_CORE_VERSION_HEADER_PATH}" MUON_CORE_VERSION)"
+MUON_CORE_GIT_COMMIT_HASH_VALUE="$(read_c_string_define "${MUON_CORE_VERSION_HEADER_PATH}" MUON_CORE_GIT_COMMIT_HASH)"
+MUON_CEF_API_VERSION="$(resolve_cef_api_version)"
+MUON_CEF_API_HASH="$(resolve_cef_api_hash "${MUON_CEF_API_VERSION}")"
 CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.json"
 if [[ "${TARGET_NAME}" == linux-* ]]; then
   CONFIG_TEMPLATE="${SCRIPT_DIR}/config/muon.dev.linux.json"
@@ -340,8 +414,8 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G Ninja \
   -DMUON_CEF_SIZE="${CEF_ARCHIVE_SIZE}" \
   -DMUON_CEF_API_VERSION="${MUON_CEF_API_VERSION}" \
   -DMUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_PATH}" \
-  -DMUON_CORE_VERSION="${MUON_CORE_VERSION:-}" \
-  -DMUON_CORE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH:-}" \
+  -DMUON_CORE_VERSION="${MUON_CORE_VERSION_VALUE}" \
+  -DMUON_CORE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH_VALUE}" \
   -DMUON_BUILD_TESTS="${BUILD_TESTS}" \
   -DMUON_ENABLE_SANITIZERS=OFF \
   -DMUON_TRACK_FFI_CLOSURES=OFF \
@@ -355,6 +429,15 @@ cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
 
 MUON_RUNTIME_INFO_HEADER="${BUILD_DIR}/generated/muon_runtime_info_generated.h" \
   MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_PATH}" \
+  MUON_WINDOWS_RESOURCE_VERSION="${MUON_CORE_VERSION_VALUE}" \
+  MUON_WINDOWS_RESOURCE_GIT_COMMIT_HASH="${MUON_CORE_GIT_COMMIT_HASH_VALUE}" \
+  MUON_WINDOWS_RESOURCE_TARGET="${TARGET_NAME}" \
+  MUON_WINDOWS_RESOURCE_CEF_VERSION="${CEF_VERSION}" \
+  MUON_WINDOWS_RESOURCE_CEF_TARGET="${CEF_ARCH}" \
+  MUON_WINDOWS_RESOURCE_CEF_API_VERSION="${MUON_CEF_API_VERSION}" \
+  MUON_WINDOWS_RESOURCE_CEF_ARTIFACT="${CEF_PACKAGE}" \
+  MUON_WINDOWS_RESOURCE_CEF_DISTRIBUTION="minimal" \
+  MUON_WINDOWS_RESOURCE_CEF_API_HASH="${MUON_CEF_API_HASH}" \
   bash "${PROJECT_ROOT}/muon-prepare/build.sh" \
     "${BUILD_USAGE}" \
     "${BUILD_TYPE}" \
@@ -368,7 +451,17 @@ cp -f \
 
 if [[ "${TARGET_NAME}" == windows-* ]]; then
   verify_windows_icon_resources "${RUNTIME_DIR}/muon-core.exe" "muon-core"
+  verify_windows_version_resource \
+    "${RUNTIME_DIR}/muon-core.exe" \
+    "Muon Core Runtime" \
+    "muon-core" \
+    "muon-core.exe"
   verify_windows_icon_resources \
     "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
     "muon-bootstrap"
+  verify_windows_version_resource \
+    "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
+    "Muon Bootstrap" \
+    "muon-bootstrap" \
+    "${BOOTSTRAP_EXECUTABLE_NAME}"
 fi

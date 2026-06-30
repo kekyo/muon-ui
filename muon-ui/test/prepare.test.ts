@@ -317,6 +317,39 @@ const getLinuxPortableStateRuntimePath = (
   appId: string,
 ): string => join(stateHome, appId, "linux-amd64");
 
+const getUserDesktopEntryPath = (dataHome: string, desktopId: string): string =>
+  join(dataHome, "applications", `${desktopId}.desktop`);
+
+const writeLinuxDesktopFiles = async (
+  runtimePath: string,
+  desktop: {
+    desktopId: string;
+    name: string;
+    comment: string;
+    categories: readonly string[];
+    startupNotify: boolean;
+    iconFileName?: string;
+  },
+): Promise<void> => {
+  const iconFileName = desktop.iconFileName ?? "muon-desktop-icon.png";
+  await writeFile(
+    join(runtimePath, "muon-desktop.json"),
+    `${JSON.stringify(
+      {
+        desktopId: desktop.desktopId,
+        name: desktop.name,
+        comment: desktop.comment,
+        categories: desktop.categories,
+        startupNotify: desktop.startupNotify,
+        iconFileName,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(join(runtimePath, iconFileName), "desktop icon\n");
+};
+
 const findCachedFile = async (
   root: string,
   fileName: string,
@@ -1477,8 +1510,10 @@ lastCatalogUpdateUnix=0
   it("bootstraps a portable runtime in the user state directory and forwards the core exit code", async () => {
     const fixture = await createPrepareFixture();
     const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const dataHome = await createTemporaryDirectory("muon-bootstrap-data-");
     const appId = "scope.sample-app";
     const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
+    const desktopEntryPath = getUserDesktopEntryPath(dataHome, appId);
     const outputDirectory = await createTemporaryDirectory(
       "muon-bootstrap-output-",
     );
@@ -1493,6 +1528,13 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeLinuxDesktopFiles(fixture.muonPath, {
+      desktopId: appId,
+      name: "Sample App",
+      comment: "Sample comment",
+      categories: ["Utility", "Development"],
+      startupNotify: false,
+    });
     const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
       bootstrap: { appId },
     });
@@ -1506,6 +1548,7 @@ exit 17
           MUON_CACHE_DIR: fixture.cacheDir,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
           XDG_STATE_HOME: stateHome,
+          XDG_DATA_HOME: dataHome,
         },
       }),
     ).rejects.toMatchObject({ code: 17 });
@@ -1529,6 +1572,247 @@ exit 17
     await expect(
       access(join(fixture.muonPath, "locales", "en-US.pak")),
     ).rejects.toThrow();
+    await expect(readFile(desktopEntryPath, "utf8")).resolves.toBe(
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Sample App",
+        "Comment=Sample comment",
+        `Exec="${stateRuntimePath}/myapp" --muon-launch-from=normal`,
+        `TryExec=${stateRuntimePath}/myapp`,
+        `Icon=${stateRuntimePath}/muon-desktop-icon.png`,
+        "Terminal=false",
+        "Categories=Utility;Development;",
+        "StartupNotify=false",
+        "StartupWMClass=scope.sample-app",
+        "X-Muon-Managed=true",
+        "",
+      ].join("\n"),
+    );
+
+    await writeFile(
+      join(stateRuntimePath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'state launcher\\n' > '${escapedOutput}/state-launcher.txt'
+exit 19
+`,
+    );
+    await chmod(join(stateRuntimePath, "muon-core"), 0o755);
+    await expect(
+      execFileAsync(join(stateRuntimePath, "myapp"), [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          XDG_STATE_HOME: stateHome,
+          XDG_DATA_HOME: dataHome,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 19 });
+    await expect(
+      readFile(join(outputDirectory, "state-launcher.txt"), "utf8"),
+    ).resolves.toBe("state launcher\n");
+  });
+
+  it("updates the staged runtime and desktop entry from a newer portable distribution", async () => {
+    const firstFixture = await createPrepareFixture();
+    const secondFixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const dataHome = await createTemporaryDirectory("muon-bootstrap-data-");
+    const appId = "scope.update-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
+    const desktopEntryPath = getUserDesktopEntryPath(dataHome, appId);
+    const outputDirectory = await createTemporaryDirectory(
+      "muon-bootstrap-output-",
+    );
+    const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
+    await writeFile(
+      join(firstFixture.muonPath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'v1\\n' > '${escapedOutput}/version.txt'
+exit 17
+`,
+    );
+    await chmod(join(firstFixture.muonPath, "muon-core"), 0o755);
+    await writeLinuxDesktopFiles(firstFixture.muonPath, {
+      desktopId: appId,
+      name: "Update App v1",
+      comment: "",
+      categories: ["Utility"],
+      startupNotify: true,
+    });
+    const firstBootstrapPath = await writeEmbeddedBootstrap(firstFixture, {
+      bootstrap: { appId },
+    });
+
+    await expect(
+      execFileAsync(firstBootstrapPath, [], {
+        cwd: firstFixture.projectPath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CACHE_DIR: firstFixture.cacheDir,
+          MUON_CEF_CATALOG_URL: firstFixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
+          XDG_DATA_HOME: dataHome,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 17 });
+    await expect(
+      readFile(join(outputDirectory, "version.txt"), "utf8"),
+    ).resolves.toBe("v1\n");
+
+    await writeFile(
+      join(secondFixture.muonPath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'v2\\n' > '${escapedOutput}/version.txt'
+exit 23
+`,
+    );
+    await chmod(join(secondFixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(secondFixture.muonPath, "assets", "app.txt"),
+      "app asset v2\n",
+    );
+    await writeLinuxDesktopFiles(secondFixture.muonPath, {
+      desktopId: appId,
+      name: "Update App v2",
+      comment: "",
+      categories: ["Utility", "Development"],
+      startupNotify: true,
+    });
+    const secondBootstrapPath = await writeEmbeddedBootstrap(secondFixture, {
+      bootstrap: { appId },
+    });
+
+    await expect(
+      execFileAsync(secondBootstrapPath, [], {
+        cwd: secondFixture.projectPath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CACHE_DIR: secondFixture.cacheDir,
+          MUON_CEF_CATALOG_URL: secondFixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
+          XDG_DATA_HOME: dataHome,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 23 });
+    await expect(
+      readFile(join(outputDirectory, "version.txt"), "utf8"),
+    ).resolves.toBe("v2\n");
+    await expect(
+      readFile(join(stateRuntimePath, "assets", "app.txt"), "utf8"),
+    ).resolves.toBe("app asset v2\n");
+    await expect(readFile(desktopEntryPath, "utf8")).resolves.toContain(
+      "Name=Update App v2\n",
+    );
+    await expect(readFile(desktopEntryPath, "utf8")).resolves.toContain(
+      "Categories=Utility;Development;\n",
+    );
+  });
+
+  it("does not create user desktop entries for deb installs and updates existing managed entries", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const dataHome = await createTemporaryDirectory("muon-bootstrap-data-");
+    const appId = "scope.deb-app";
+    const desktopId = "scope.deb-app";
+    const desktopEntryPath = getUserDesktopEntryPath(dataHome, desktopId);
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+exit 17
+`,
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeLinuxDesktopFiles(fixture.muonPath, {
+      desktopId,
+      name: "Deb App",
+      comment: "Deb comment",
+      categories: ["Utility"],
+      startupNotify: true,
+    });
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "deb",
+          packageName: "deb-app",
+          launcherPath: "/usr/bin/deb-app",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId },
+    });
+    const env = {
+      ...process.env,
+      MUON_CACHE_DIR: fixture.cacheDir,
+      MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      XDG_STATE_HOME: stateHome,
+      XDG_DATA_HOME: dataHome,
+    };
+
+    await expect(
+      execFileAsync(appBootstrapPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env,
+      }),
+    ).rejects.toMatchObject({ code: 17 });
+    await expect(access(desktopEntryPath)).rejects.toThrow();
+
+    await mkdir(dirname(desktopEntryPath), { recursive: true });
+    await writeFile(
+      desktopEntryPath,
+      "[Desktop Entry]\nName=Unmanaged\nExec=/tmp/old\n",
+    );
+    await expect(
+      execFileAsync(appBootstrapPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env,
+      }),
+    ).rejects.toMatchObject({ code: 17 });
+    await expect(readFile(desktopEntryPath, "utf8")).resolves.toBe(
+      "[Desktop Entry]\nName=Unmanaged\nExec=/tmp/old\n",
+    );
+
+    await writeFile(
+      desktopEntryPath,
+      "[Desktop Entry]\nName=Managed\nExec=/tmp/old\nX-Muon-Managed=true\n",
+    );
+    await expect(
+      execFileAsync(appBootstrapPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env,
+      }),
+    ).rejects.toMatchObject({ code: 17 });
+    await expect(readFile(desktopEntryPath, "utf8")).resolves.toBe(
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Deb App",
+        "Comment=Deb comment",
+        'Exec="/usr/bin/deb-app" --muon-launch-from=normal',
+        "TryExec=/usr/bin/deb-app",
+        "Icon=scope.deb-app",
+        "Terminal=false",
+        "Categories=Utility;",
+        "StartupNotify=true",
+        "StartupWMClass=scope.deb-app",
+        "X-Muon-Managed=true",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("hides bootstrap preparation diagnostics when a progress window is available", async () => {

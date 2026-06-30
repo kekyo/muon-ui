@@ -125,6 +125,37 @@ char *muon_path_join3(const char *first, const char *second,
   return result;
 }
 
+void muon_free_string_array(char **values, size_t count) {
+  if (values == NULL) {
+    return;
+  }
+  for (size_t index = 0; index < count; index += 1) {
+    free(values[index]);
+  }
+  free(values);
+}
+
+int muon_path_exists(const char *path) {
+  (void)path;
+  return 0;
+}
+
+char *muon_read_text_file(const char *path) {
+  (void)path;
+  return NULL;
+}
+
+int muon_write_text_file(const char *path, const char *content) {
+  (void)path;
+  (void)content;
+  return -1;
+}
+
+yyjson_doc *muon_json_read_file(const char *path) {
+  (void)path;
+  return NULL;
+}
+
 int muon_bootstrap_get_embedded_app_id(char **app_id) {
   *app_id = NULL;
   return 0;
@@ -209,19 +240,28 @@ int main(void) {
   failed |= assert_stage_dir("XDG_STATE_HOME", "com.example.app", "linux-amd64",
                              "/tmp/muon-state/com.example.app/linux-amd64");
   failed |= clear_environment("XDG_STATE_HOME");
-  failed |= set_environment("HOME", "/home/alice");
-  failed |= assert_stage_dir("HOME", "com.example.app", "linux-arm64",
-                             "/home/alice/.local/state/com.example.app/linux-arm64");
+	  failed |= set_environment("HOME", "/home/alice");
+	  failed |= assert_stage_dir("HOME", "com.example.app", "linux-arm64",
+	                             "/home/alice/.local/state/com.example.app/linux-arm64");
 #endif
-  return failed;
-}
+  if (!should_prepare_staged_runtime("/tmp/source", "/tmp/state")) {
+    fprintf(stderr, "different runtime directories should be staged\n");
+    failed = 1;
+  }
+  if (should_prepare_staged_runtime("/tmp/state", "/tmp/state")) {
+    fprintf(stderr, "state runtime directory should not be staged again\n");
+    failed = 1;
+  }
+	  return failed;
+	}
 HARNESS_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
-  -I"${SCRIPT_DIR}/src" \
-  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
-  -o "${OUT_DIR}/bootstrap_state_directory_harness" \
-  "${BOOTSTRAP_STATE_HARNESS}"
+	  -I"${SCRIPT_DIR}/src" \
+	  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
+	  -o "${OUT_DIR}/bootstrap_state_directory_harness" \
+	  "${BOOTSTRAP_STATE_HARNESS}" \
+	  "${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src/yyjson.c"
 "${OUT_DIR}/bootstrap_state_directory_harness"
 
 cat >"${WIN_FALLBACK_HARNESS}" <<'HARNESS_EOF'

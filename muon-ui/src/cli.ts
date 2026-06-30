@@ -25,6 +25,7 @@ import {
 import { runMuonDev, type MuonDevOptions } from "./dev.js";
 import { packMuonApp, type MuonPackOptions } from "./pack.js";
 import type { MuonWindowsResourceOptions } from "./windows-resource.js";
+import type { MuonLinuxDesktopOptions } from "./linux-desktop.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
 
 interface PrepareCommandOptions {
@@ -60,6 +61,12 @@ interface BuildCommandOptions {
   windowsCompanyName: string | undefined;
   windowsVersion: string | undefined;
   windowsCopyright: string | undefined;
+  linuxDesktopId: string | undefined;
+  linuxName: string | undefined;
+  linuxComment: string | undefined;
+  linuxIcon: string | undefined;
+  linuxCategories: string | undefined;
+  linuxStartupNotify: string | undefined;
   outDir: string | undefined;
   name: string | undefined;
   appId: string | undefined;
@@ -78,6 +85,12 @@ interface PackCommandOptions {
   windowsCompanyName: string | undefined;
   windowsVersion: string | undefined;
   windowsCopyright: string | undefined;
+  linuxDesktopId: string | undefined;
+  linuxName: string | undefined;
+  linuxComment: string | undefined;
+  linuxIcon: string | undefined;
+  linuxCategories: string | undefined;
+  linuxStartupNotify: string | undefined;
   name: string | undefined;
   appId: string | undefined;
   packageDirectory: string | undefined;
@@ -115,6 +128,23 @@ const appendPackTypeValues = (
   previous: string[] | undefined,
 ): string[] => {
   return [...(previous ?? []), ...readTargetValues(value)];
+};
+
+const readCommaSeparatedValues = (value: string): string[] =>
+  value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+const readBooleanValue = (value: string, label: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  throw new Error(`${label} must be true or false.`);
 };
 
 const validateEmbedConfigOptions = (
@@ -179,6 +209,41 @@ const createWindowsResourceOptions = (commandOptions: {
   return Object.keys(options).length === 0 ? undefined : options;
 };
 
+const createLinuxDesktopOptions = (commandOptions: {
+  linuxDesktopId: string | undefined;
+  linuxName: string | undefined;
+  linuxComment: string | undefined;
+  linuxIcon: string | undefined;
+  linuxCategories: string | undefined;
+  linuxStartupNotify: string | undefined;
+}): MuonLinuxDesktopOptions | undefined => {
+  const options: MuonLinuxDesktopOptions = {};
+  if (commandOptions.linuxDesktopId !== undefined) {
+    options.desktopId = commandOptions.linuxDesktopId;
+  }
+  if (commandOptions.linuxName !== undefined) {
+    options.name = commandOptions.linuxName;
+  }
+  if (commandOptions.linuxComment !== undefined) {
+    options.comment = commandOptions.linuxComment;
+  }
+  if (commandOptions.linuxIcon !== undefined) {
+    options.iconPath = commandOptions.linuxIcon;
+  }
+  if (commandOptions.linuxCategories !== undefined) {
+    options.categories = readCommaSeparatedValues(
+      commandOptions.linuxCategories,
+    );
+  }
+  if (commandOptions.linuxStartupNotify !== undefined) {
+    options.startupNotify = readBooleanValue(
+      commandOptions.linuxStartupNotify,
+      "--linux-startup-notify",
+    );
+  }
+  return Object.keys(options).length === 0 ? undefined : options;
+};
+
 const runBuildCommand = async (
   commandOptions: BuildCommandOptions,
 ): Promise<void> => {
@@ -207,6 +272,10 @@ const runBuildCommand = async (
   const windowsResource = createWindowsResourceOptions(commandOptions);
   if (windowsResource !== undefined) {
     buildOptions.windowsResource = windowsResource;
+  }
+  const linuxDesktop = createLinuxDesktopOptions(commandOptions);
+  if (linuxDesktop !== undefined) {
+    buildOptions.linuxDesktop = linuxDesktop;
   }
   if (commandOptions.outDir !== undefined) {
     buildOptions.outputRoot = commandOptions.outDir;
@@ -258,6 +327,10 @@ const runPackCommand = async (
   const windowsResource = createWindowsResourceOptions(commandOptions);
   if (windowsResource !== undefined) {
     packOptions.windowsResource = windowsResource;
+  }
+  const linuxDesktop = createLinuxDesktopOptions(commandOptions);
+  if (linuxDesktop !== undefined) {
+    packOptions.linuxDesktop = linuxDesktop;
   }
   if (commandOptions.name !== undefined) {
     packOptions.appName = commandOptions.name;
@@ -459,6 +532,12 @@ const createCliCommand = (): Command => {
     .option("--windows-company-name <name>", "Windows company name")
     .option("--windows-version <version>", "Windows resource version")
     .option("--windows-copyright <text>", "Windows legal copyright")
+    .option("--linux-desktop-id <id>", "Linux desktop entry identifier")
+    .option("--linux-name <name>", "Linux desktop display name")
+    .option("--linux-comment <text>", "Linux desktop comment")
+    .option("--linux-icon <path>", "Linux desktop PNG icon path")
+    .option("--linux-categories <list>", "Linux desktop categories")
+    .option("--linux-startup-notify <boolean>", "Linux startup notification")
     .option("--out-dir <path>", "output root directory")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
@@ -490,6 +569,12 @@ const createCliCommand = (): Command => {
     .option("--windows-company-name <name>", "Windows company name")
     .option("--windows-version <version>", "Windows resource version")
     .option("--windows-copyright <text>", "Windows legal copyright")
+    .option("--linux-desktop-id <id>", "Linux desktop entry identifier")
+    .option("--linux-name <name>", "Linux desktop display name")
+    .option("--linux-comment <text>", "Linux desktop comment")
+    .option("--linux-icon <path>", "Linux desktop PNG icon path")
+    .option("--linux-categories <list>", "Linux desktop categories")
+    .option("--linux-startup-notify <boolean>", "Linux startup notification")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
     .option("--package-directory <path>", "Muon package dist directory")

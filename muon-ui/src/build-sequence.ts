@@ -18,6 +18,7 @@ import {
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
 import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
+import { mergeMuonLinuxDesktopOptions } from "./linux-desktop.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
@@ -205,6 +206,15 @@ const copyDefinedBuildOptions = (
     );
     if (windowsResource !== undefined) {
       output.windowsResource = windowsResource;
+    }
+  }
+  if (input.linuxDesktop !== undefined) {
+    const linuxDesktop = mergeMuonLinuxDesktopOptions(
+      input.linuxDesktop,
+      output.linuxDesktop,
+    );
+    if (linuxDesktop !== undefined) {
+      output.linuxDesktop = linuxDesktop;
     }
   }
   if (input.packageDirectory !== undefined) {

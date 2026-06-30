@@ -87,6 +87,56 @@ export interface MuonWindowsResourceOptions {
 }
 
 /**
+ * Linux desktop entry metadata options.
+ */
+export interface MuonLinuxDesktopOptions {
+  /**
+   * Desktop entry identifier without the `.desktop` suffix.
+   *
+   * @defaultValue Uses the resolved Muon `appId`.
+   */
+  desktopId?: string;
+
+  /**
+   * Application display name.
+   *
+   * @defaultValue Uses `linux.desktop.name`, then `package.json` name.
+   */
+  name?: string;
+
+  /**
+   * Desktop entry comment.
+   *
+   * @defaultValue Uses `linux.desktop.comment`, then `package.json`
+   * description.
+   */
+  comment?: string;
+
+  /**
+   * Linux desktop icon PNG file path.
+   *
+   * @remarks Only `.png` files are accepted as app inputs. Relative paths are
+   * resolved from the source that supplied the option.
+   * @defaultValue Uses the packaged Muon bootstrap PNG icon when available.
+   */
+  iconPath?: string;
+
+  /**
+   * Desktop menu categories.
+   *
+   * @defaultValue `["Utility"]`.
+   */
+  categories?: readonly string[];
+
+  /**
+   * Whether desktop startup notification is requested.
+   *
+   * @defaultValue `true`.
+   */
+  startupNotify?: boolean;
+}
+
+/**
  * Options for generating Muon app distributions after Vite build.
  */
 export interface MuonViteBuildOptions {
@@ -143,6 +193,14 @@ export interface MuonViteBuildOptions {
    * `project.json`, `package.json`, then Muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
+
+  /**
+   * Linux desktop entry metadata.
+   *
+   * @defaultValue Uses CLI options, `muon.json` `linux.desktop`, package
+   * metadata, then Muon defaults.
+   */
+  linuxDesktop?: MuonLinuxDesktopOptions;
 
   /**
    * Directory containing package runtime/ and native/ folders.
@@ -337,6 +395,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.windowsResource !== undefined) {
     options.windowsResource = buildOptions.windowsResource;
+  }
+  if (buildOptions.linuxDesktop !== undefined) {
+    options.linuxDesktop = buildOptions.linuxDesktop;
   }
   if (buildOptions.packageDirectory !== undefined) {
     options.packageDirectory = buildOptions.packageDirectory;

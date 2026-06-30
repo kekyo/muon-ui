@@ -286,6 +286,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonViteBuildOptions",
+      memberName: "linuxDesktop",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
       memberName: "packageDirectory",
     },
     {
@@ -1012,6 +1017,14 @@ const plugin = muon({
       copyright: "Copyright Muon Tester",
       language: 1033,
       codePage: 1200,
+    },
+    linuxDesktop: {
+      desktopId: "com.example.PackageTest",
+      name: "Package Test App",
+      comment: "Package test app",
+      iconPath: "icons/app.png",
+      categories: ["Utility", "Development"],
+      startupNotify: true,
     },
   },
 });

@@ -54,6 +54,12 @@ import {
   type ResolvedMuonWindowsResource,
 } from "./windows-resource.js";
 import { createWindowsIconFromPngFile } from "./windows-icon.js";
+import {
+  createLinuxDesktopEntry,
+  mergeMuonLinuxDesktopOptions,
+  quoteDesktopExecArgument,
+  type MuonLinuxDesktopOptions,
+} from "./linux-desktop.js";
 
 const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
@@ -107,6 +113,13 @@ export interface MuonPackOptions {
    * `project.json`, `package.json`, then Muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
+  /**
+   * Linux desktop entry metadata.
+   *
+   * @defaultValue Uses Vite build options, `muon.json` `linux.desktop`,
+   * package metadata, then Muon defaults.
+   */
+  linuxDesktop?: MuonLinuxDesktopOptions;
   /**
    * Directory containing package runtime/ and native/ folders.
    */
@@ -568,6 +581,18 @@ const packageDeb = async (
   const installedDist = join(installRoot, target.distributionDirectoryName);
   await mkdir(installedDist, { recursive: true });
   await cp(target.outputPath, installedDist, { recursive: true });
+  await writeFile(
+    join(installedDist, "muon-install.json"),
+    `${JSON.stringify(
+      {
+        type: "deb",
+        packageName: metadata.packageName,
+        launcherPath: `/usr/bin/${metadata.packageName}`,
+      },
+      undefined,
+      2,
+    )}\n`,
+  );
   const binPath = join(packageRoot, "usr", "bin", metadata.packageName);
   const launcherName = basename(target.launcherPath);
   await mkdir(dirname(binPath), { recursive: true });
@@ -581,6 +606,38 @@ const packageDeb = async (
     ].join("\n"),
   );
   await chmod(binPath, 0o755);
+  if (target.linuxDesktop === undefined) {
+    throw new Error(`Linux desktop metadata is unavailable: ${target.target}`);
+  }
+  const applicationsPath = join(
+    packageRoot,
+    "usr",
+    "share",
+    "applications",
+    `${target.linuxDesktop.desktopId}.desktop`,
+  );
+  await mkdir(dirname(applicationsPath), { recursive: true });
+  await writeFile(
+    applicationsPath,
+    createLinuxDesktopEntry({
+      desktop: target.linuxDesktop,
+      exec: `${quoteDesktopExecArgument(`/usr/bin/${metadata.packageName}`)} --muon-launch-from=normal`,
+      tryExec: `/usr/bin/${metadata.packageName}`,
+      icon: target.linuxDesktop.desktopId,
+    }),
+  );
+  const iconPath = join(
+    packageRoot,
+    "usr",
+    "share",
+    "icons",
+    "hicolor",
+    "256x256",
+    "apps",
+    `${target.linuxDesktop.desktopId}.png`,
+  );
+  await mkdir(dirname(iconPath), { recursive: true });
+  await cp(join(target.outputPath, target.linuxDesktop.iconFileName), iconPath);
   const controlPath = join(packageRoot, "DEBIAN", "control");
   await mkdir(dirname(controlPath), { recursive: true });
   await writeFile(
@@ -781,6 +838,10 @@ export const packMuonApp = async (
     options.windowsResource,
     pluginBuildOptions.windowsResource,
   );
+  const linuxDesktopOptions = mergeMuonLinuxDesktopOptions(
+    options.linuxDesktop,
+    pluginBuildOptions.linuxDesktop,
+  );
   if (options.configPath !== undefined) {
     buildOptions.configPath = options.configPath;
   }
@@ -795,6 +856,9 @@ export const packMuonApp = async (
   }
   if (windowsResourceOptions !== undefined) {
     buildOptions.windowsResource = windowsResourceOptions;
+  }
+  if (linuxDesktopOptions !== undefined) {
+    buildOptions.linuxDesktop = linuxDesktopOptions;
   }
   const windowsResourceConfig = await readMuonConfigForWindowsResource(
     root,

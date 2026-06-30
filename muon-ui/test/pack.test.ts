@@ -633,6 +633,77 @@ printf 'deb\\n' > "$output_path"
     ).resolves.toContain(
       "/usr/lib/packed-sample/dist-muon-linux-amd64/packed-sample",
     );
+    await expect(
+      readFile(join(root, "deb-files.txt"), "utf8"),
+    ).resolves.toContain(
+      "/usr/lib/packed-sample/dist-muon-linux-amd64/muon-install.json",
+    );
+    await expect(
+      readFile(join(root, "deb-files.txt"), "utf8"),
+    ).resolves.toContain("/usr/share/applications/scope.packed-sample.desktop");
+    await expect(
+      readFile(join(root, "deb-files.txt"), "utf8"),
+    ).resolves.toContain(
+      "/usr/share/icons/hicolor/256x256/apps/scope.packed-sample.png",
+    );
+    const packageRoot = join(
+      root,
+      ".muon",
+      "pack",
+      "deb",
+      "packed-sample-linux-amd64",
+    );
+    await expect(
+      readFile(
+        join(
+          packageRoot,
+          "usr",
+          "share",
+          "applications",
+          "scope.packed-sample.desktop",
+        ),
+        "utf8",
+      ),
+    ).resolves.toBe(
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=@scope/packed-sample",
+        "Comment=Packed sample",
+        'Exec="/usr/bin/packed-sample" --muon-launch-from=normal',
+        "TryExec=/usr/bin/packed-sample",
+        "Icon=scope.packed-sample",
+        "Terminal=false",
+        "Categories=Utility;",
+        "StartupNotify=true",
+        "StartupWMClass=scope.packed-sample",
+        "X-Muon-Managed=true",
+        "",
+      ].join("\n"),
+    );
+    await expect(
+      readFile(
+        join(
+          packageRoot,
+          "usr",
+          "lib",
+          "packed-sample",
+          "dist-muon-linux-amd64",
+          "muon-install.json",
+        ),
+        "utf8",
+      ),
+    ).resolves.toBe(
+      `${JSON.stringify(
+        {
+          type: "deb",
+          packageName: "packed-sample",
+          launcherPath: "/usr/bin/packed-sample",
+        },
+        undefined,
+        2,
+      )}\n`,
+    );
   });
 
   it("creates an NSIS script and invokes makensis for Windows targets", async () => {

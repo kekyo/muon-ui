@@ -453,7 +453,20 @@ describe("muon build", () => {
     });
     expect(target?.embeddedConfig.bootstrap).toEqual({
       appId: "scope.muon-sample",
+      desktopId: "scope.muon-sample",
     });
+    await expect(
+      readFile(join(root, "dist-muon-linux-amd64", "muon-desktop-icon.png")),
+    ).resolves.toBeDefined();
+    const defaultDesktop = JSON.parse(
+      await readFile(
+        join(root, "dist-muon-linux-amd64", "muon-desktop.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(defaultDesktop.desktopId).toBe("scope.muon-sample");
+    expect(defaultDesktop.name).toBe("@scope/muon-sample");
+    expect(defaultDesktop.iconFileName).toBe("muon-desktop-icon.png");
     const embeddedCore = await readFile(
       join(root, "dist-muon-linux-amd64", "muon-core"),
     );
@@ -646,6 +659,90 @@ describe("muon build", () => {
     ]);
   });
 
+  it("creates Linux desktop metadata from options and muon config", async () => {
+    const root = await createTemporaryDirectory("muon-build-linux-desktop-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "linux-amd64",
+    ]);
+    const iconPath = join(root, "icons", "app.png");
+    await writeWindowsIconPngFixture(iconPath);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "linux-desktop-sample",
+          description: "Package description",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          linux: {
+            desktop: {
+              desktopId: "com.example.Config App",
+              name: "Config Name",
+              comment: "Config Comment",
+              iconPath: "icons/app.png",
+              categories: ["Game"],
+              startupNotify: false,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      linuxDesktop: {
+        name: "Option Name",
+        categories: ["Development"],
+        startupNotify: true,
+      },
+      assetSalt: Buffer.from([0x0d, 0x44]),
+    });
+
+    const [target] = result.targets;
+    expect(target?.linuxDesktop?.desktopId).toBe("com.example.config-app");
+    expect(target?.linuxDesktop?.name).toBe("Option Name");
+    expect(target?.linuxDesktop?.comment).toBe("Config Comment");
+    expect(target?.linuxDesktop?.categories).toEqual(["Development"]);
+    expect(target?.linuxDesktop?.startupNotify).toBe(true);
+    expect(target?.embeddedConfig.bootstrap).toEqual({
+      appId: "linux-desktop-sample",
+      desktopId: "com.example.config-app",
+    });
+    expect(
+      (target?.embeddedConfig as Record<string, unknown> | undefined)?.linux,
+    ).toBeUndefined();
+    const desktop = JSON.parse(
+      await readFile(
+        join(root, "dist-muon-linux-amd64", "muon-desktop.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(desktop).toEqual({
+      desktopId: "com.example.config-app",
+      name: "Option Name",
+      comment: "Config Comment",
+      categories: ["Development"],
+      startupNotify: true,
+      iconFileName: "muon-desktop-icon.png",
+    });
+    await expect(
+      readFile(join(root, "dist-muon-linux-amd64", "muon-desktop-icon.png")),
+    ).resolves.toBeDefined();
+  });
+
   it("rejects Windows resource icon paths that are not PNG files", async () => {
     const { root, packageDirectory } = await createWindowsIconBuildProject(
       "muon-build-windows-icon-",
@@ -706,6 +803,68 @@ describe("muon build", () => {
         },
       }),
     ).rejects.toThrow("Windows resource icon must be a valid PNG");
+  });
+
+  it("rejects Linux desktop icon paths that are not PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-linux-icon-",
+      "linux-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(join(root, "icons", "app.ico"), "ico\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        linuxDesktop: {
+          iconPath: "icons/app.ico",
+        },
+      }),
+    ).rejects.toThrow("Linux desktop icon must be a .png file");
+  });
+
+  it("rejects missing Linux desktop icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-missing-linux-icon-",
+      "missing-linux-icon-sample",
+    );
+    const iconPath = join(root, "icons", "missing.png");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        linuxDesktop: {
+          iconPath: "icons/missing.png",
+        },
+      }),
+    ).rejects.toThrow(`Linux desktop icon does not exist: ${iconPath}`);
+  });
+
+  it("rejects invalid Linux desktop icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-invalid-linux-icon-",
+      "invalid-linux-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(
+      join(root, "icons", "app.png"),
+      Buffer.from("89504e470d0a1a0a00000000", "hex"),
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        linuxDesktop: {
+          iconPath: "icons/app.png",
+        },
+      }),
+    ).rejects.toThrow("Linux desktop icon must be a valid PNG");
   });
 
   it("rejects CEF-derived target IDs in public build options", async () => {
@@ -926,6 +1085,7 @@ describe("muon build", () => {
       },
       bootstrap: {
         appId: "missing-config-sample",
+        desktopId: "missing-config-sample",
       },
     });
   });

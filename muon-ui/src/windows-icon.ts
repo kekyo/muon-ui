@@ -31,16 +31,18 @@ interface WindowsIconImage {
  *
  * @param pngData Source PNG bytes.
  * @param source Diagnostic source label used in errors.
+ * @param label User-facing diagnostic label.
  * @returns PNG bytes normalized to the Muon base icon size.
  * @remarks Non-square images are fitted into transparent padding without
  * stretching. The normalized PNG is the source for all platform-specific icon
  * derivatives.
  */
-export const createNormalizedMuonIconPngData = async (
+export const createNormalizedIconPngData = async (
   pngData: Buffer,
   source: string,
+  label: string,
 ): Promise<Buffer> => {
-  await assertPngData(pngData, source);
+  await assertPngData(pngData, source, label);
   try {
     return await sharp(pngData)
       .resize(normalizedIconSize, normalizedIconSize, {
@@ -51,9 +53,22 @@ export const createNormalizedMuonIconPngData = async (
       .png()
       .toBuffer();
   } catch {
-    throw new Error(`Windows resource icon must be a valid PNG: ${source}`);
+    throw new Error(`${label} must be a valid PNG: ${source}`);
   }
 };
+
+/**
+ * Creates a normalized square PNG icon image for Windows resources.
+ *
+ * @param pngData Source PNG bytes.
+ * @param source Diagnostic source label used in errors.
+ * @returns PNG bytes normalized to the Muon base icon size.
+ */
+export const createNormalizedMuonIconPngData = async (
+  pngData: Buffer,
+  source: string,
+): Promise<Buffer> =>
+  await createNormalizedIconPngData(pngData, source, "Windows resource icon");
 
 /**
  * Creates a Windows ICO file from PNG bytes.
@@ -105,12 +120,16 @@ export const createWindowsIconFromPngFile = async (
   await writeFile(outputPath, icon);
 };
 
-const assertPngData = async (data: Buffer, source: string): Promise<void> => {
+const assertPngData = async (
+  data: Buffer,
+  source: string,
+  label: string,
+): Promise<void> => {
   if (data.length === 0) {
-    throw new Error(`Windows resource icon PNG must not be empty: ${source}`);
+    throw new Error(`${label} PNG must not be empty: ${source}`);
   }
   if (!data.subarray(0, pngSignature.length).equals(pngSignature)) {
-    throw new Error(`Windows resource icon must be a valid PNG: ${source}`);
+    throw new Error(`${label} must be a valid PNG: ${source}`);
   }
   try {
     const metadata = await sharp(data).metadata();
@@ -118,7 +137,7 @@ const assertPngData = async (data: Buffer, source: string): Promise<void> => {
       throw new Error();
     }
   } catch {
-    throw new Error(`Windows resource icon must be a valid PNG: ${source}`);
+    throw new Error(`${label} must be a valid PNG: ${source}`);
   }
 };
 

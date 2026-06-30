@@ -45,6 +45,22 @@ const isWindowsResourceOptions = (value: unknown): boolean => {
   );
 };
 
+const isLinuxDesktopOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.desktopId === undefined || typeof value.desktopId === "string") &&
+    (value.name === undefined || typeof value.name === "string") &&
+    (value.comment === undefined || typeof value.comment === "string") &&
+    (value.iconPath === undefined || typeof value.iconPath === "string") &&
+    (value.categories === undefined || isStringArray(value.categories)) &&
+    (value.startupNotify === undefined ||
+      typeof value.startupNotify === "boolean")
+  );
+};
+
 const isMuonViteBuildOptions = (value: unknown): boolean => {
   if (!isRecord(value)) {
     return false;
@@ -59,6 +75,8 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
     (value.configPath === undefined || typeof value.configPath === "string") &&
     (value.windowsResource === undefined ||
       isWindowsResourceOptions(value.windowsResource)) &&
+    (value.linuxDesktop === undefined ||
+      isLinuxDesktopOptions(value.linuxDesktop)) &&
     (value.packageDirectory === undefined ||
       typeof value.packageDirectory === "string") &&
     (value.assetSalt === undefined || value.assetSalt instanceof Uint8Array)

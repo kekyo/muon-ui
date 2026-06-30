@@ -9,6 +9,8 @@ WIN_FALLBACK_HARNESS="${OUT_DIR}/bootstrap_progress_windows_fallback_harness.c"
 WIN_UI_HARNESS="${OUT_DIR}/bootstrap_progress_windows_ui_harness.c"
 mkdir -p "${OUT_DIR}"
 
+bash "${SCRIPT_DIR}/build_yyjson.sh"
+
 cat >"${HARNESS}" <<'HARNESS_EOF'
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L

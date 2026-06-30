@@ -20,7 +20,7 @@ typedef struct {
 
 static void print_resource_usage(void) {
   fprintf(stderr,
-          "Usage: muon-prepare resource --input <pe> --updates-json <json> "
+          "Usage: muon-builder resource --input <pe> --updates-json <json> "
           "--output <pe> [options]\n"
           "\n"
           "Options:\n"

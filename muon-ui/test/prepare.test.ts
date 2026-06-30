@@ -35,9 +35,9 @@ import {
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "../src/prepare.js";
 import { embedMuonConfigInBootstrapFile } from "../src/embed-config.js";
 import {
-  buildTestMuonPrepare,
+  buildTestMuonBuilder,
   createRuntimeInfoHeader,
-} from "./test-muon-prepare.js";
+} from "./test-muon-builder.js";
 
 const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
@@ -108,7 +108,7 @@ const createFakeCefArchive = async (
   sha1: string;
   size: number;
 }> => {
-  const root = await createDirectory("muon-prepare-cef-");
+  const root = await createDirectory("muon-builder-cef-");
   const entry = join(
     root,
     options.archiveRootName ?? "cef_binary_fake_linux64_minimal",
@@ -170,8 +170,8 @@ beforeAll(async () => {
   );
   const executableName =
     process.platform === "win32" ? "muon-core.exe" : "muon-core";
-  const buildRoot = await createSuiteTemporaryDirectory("muon-prepare-native-");
-  const binaries = await buildTestMuonPrepare(
+  const buildRoot = await createSuiteTemporaryDirectory("muon-builder-native-");
+  const binaries = await buildTestMuonBuilder(
     buildRoot,
     createRuntimeInfoHeader({
       archiveFileName: embeddedCefArchive.fileName,
@@ -195,7 +195,7 @@ afterAll(async () => {
 const createFakeCefDirectory = async (
   shape: "releaseResources" | "flat",
 ): Promise<string> => {
-  const cefPath = await createTemporaryDirectory("muon-prepare-cef-dir-");
+  const cefPath = await createTemporaryDirectory("muon-builder-cef-dir-");
   if (shape === "releaseResources") {
     await mkdir(join(cefPath, "Release"), { recursive: true });
     await mkdir(join(cefPath, "Resources", "locales"), { recursive: true });
@@ -218,11 +218,11 @@ const createPrepareFixture = async (
   sha1Override: string | undefined = undefined,
   catalogVersions: readonly CatalogVersion[] | undefined = undefined,
 ): Promise<PrepareFixture> => {
-  const muonPath = await createTemporaryDirectory("muon-prepare-muon-");
+  const muonPath = await createTemporaryDirectory("muon-builder-muon-");
   const cefPath = await createFakeCefDirectory("releaseResources");
-  const cacheDir = await createTemporaryDirectory("muon-prepare-cache-");
-  const sourceDir = await createTemporaryDirectory("muon-prepare-source-");
-  const projectPath = await createTemporaryDirectory("muon-prepare-project-");
+  const cacheDir = await createTemporaryDirectory("muon-builder-cache-");
+  const sourceDir = await createTemporaryDirectory("muon-builder-source-");
+  const projectPath = await createTemporaryDirectory("muon-builder-project-");
   const stageDir = join(projectPath, ".muon", "linux-amd64");
   const cef = getEmbeddedCefArchive();
   const versions: readonly CatalogVersion[] = catalogVersions ?? [
@@ -378,7 +378,7 @@ const sanitizePrepareLockKey = (value: string): string =>
 const buildProgressHarness = async (root: string): Promise<string> => {
   const harnessPath = join(root, "prepare-progress-harness.c");
   const executablePath = join(root, "prepare-progress-harness");
-  const prepareRoot = resolve("..", "muon-prepare");
+  const prepareRoot = resolve("..", "muon-builder");
   const bzip2Lib = join(
     prepareRoot,
     ".deps",
@@ -447,7 +447,7 @@ int main(int argc, char **argv) {
     join(prepareRoot, "src"),
     "-o",
     executablePath,
-    join(dirname(prepareExecutablePath), "libmuon-prepare.a"),
+    join(dirname(prepareExecutablePath), "libmuon-builder.a"),
     libarchiveLib,
     bzip2Lib,
   ]);
@@ -534,7 +534,7 @@ describe("muon prepare target resolution", () => {
         cacheDir: undefined,
         force: false,
         quiet: true,
-        prepareExecutablePath: "/tmp/muon-prepare",
+        prepareExecutablePath: "/tmp/muon-builder",
         environment: process.env,
         cwd: process.cwd(),
       }),
@@ -542,7 +542,7 @@ describe("muon prepare target resolution", () => {
   });
 });
 
-describe("muon-prepare", () => {
+describe("muon-builder", () => {
   it("stages explicit CEF Release/Resources files and the whole muon directory", async () => {
     const fixture = await createPrepareFixture();
 
@@ -980,7 +980,7 @@ lastCatalogUpdateUnix=0
         },
       ),
     ).rejects.toMatchObject({
-      stderr: expect.stringContaining("Usage: muon-prepare"),
+      stderr: expect.stringContaining("Usage: muon-builder"),
     });
   });
 
@@ -1013,7 +1013,7 @@ lastCatalogUpdateUnix=0
     const result = JSON.parse(stdout) as { stagePath: string };
     const lines = stderr.trim().split(/\r?\n/);
     expect(result.stagePath).toBe(fixture.stageDir);
-    expect(lines[0]).toMatch(/^muon-prepare: .+-[0-9a-f]+: Started\.$/);
+    expect(lines[0]).toMatch(/^muon-builder: .+-[0-9a-f]+: Started\.$/);
     expect(stderr).toContain(
       "Downloading CEF binary: version=fake-cef target=linux-amd64 distribution=minimal",
     );
@@ -1429,7 +1429,7 @@ lastCatalogUpdateUnix=0
         env: {
           ...process.env,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
-          MUON_PREPARE_PATH: prepareExecutablePath,
+          MUON_BUILDER_PATH: prepareExecutablePath,
         },
       },
     );
@@ -1464,7 +1464,7 @@ lastCatalogUpdateUnix=0
         env: {
           ...process.env,
           MUON_CEF_CATALOG_URL: fixture.catalogPath,
-          MUON_PREPARE_PATH: prepareExecutablePath,
+          MUON_BUILDER_PATH: prepareExecutablePath,
         },
       },
     );

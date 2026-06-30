@@ -8,35 +8,35 @@ import { join } from "node:path";
 
 const packageRuntimeTargets = {
   "linux-amd64": {
-    nativePrepare: "muon-prepare",
+    nativePrepare: "muon-builder",
     nativeBootstrap: "muon-bootstrap",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
   "linux-armhf": {
-    nativePrepare: "muon-prepare",
+    nativePrepare: "muon-builder",
     nativeBootstrap: "muon-bootstrap",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
   "linux-arm64": {
-    nativePrepare: "muon-prepare",
+    nativePrepare: "muon-builder",
     nativeBootstrap: "muon-bootstrap",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
   "windows-i686": {
-    nativePrepare: "muon-prepare.exe",
+    nativePrepare: "muon-builder.exe",
     nativeBootstrap: "muon-bootstrap.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
   },
   "windows-amd64": {
-    nativePrepare: "muon-prepare.exe",
+    nativePrepare: "muon-builder.exe",
     nativeBootstrap: "muon-bootstrap.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
@@ -70,10 +70,12 @@ const assertHasMatchingFile = async (directory, pattern) => {
   }
 };
 
-await assertMissing(join("dist", "muon-prepare"));
+await assertMissing(join("dist", "muon-builder"));
 await assertMissing(join("dist", "muon-bootstrap"));
-await assertMissing(join("dist", "muon-prepare.exe"));
+await assertMissing(join("dist", "muon-builder.exe"));
 await assertMissing(join("dist", "muon-bootstrap.exe"));
+await assertMissing(join("dist", ["muon", "prepare"].join("-")));
+await assertMissing(join("dist", `${["muon", "prepare"].join("-")}.exe`));
 await assertMissing(join("dist", "native", "linux32"));
 await assertMissing(join("dist", "runtime", "linux32"));
 await assertMissing(join("dist", "native", "muon-bootstrap.ico"));

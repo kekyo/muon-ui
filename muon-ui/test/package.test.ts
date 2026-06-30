@@ -504,7 +504,7 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
   await mkdir(join(root, "deps", "engraver", "libengraver", "include"), {
     recursive: true,
   });
-  await mkdir(join(root, "muon-prepare"), { recursive: true });
+  await mkdir(join(root, "muon-builder"), { recursive: true });
   await mkdir(join(root, "muon-core"), { recursive: true });
   await mkdir(join(root, "muon-ui", "scripts"), { recursive: true });
   await writeFile(join(root, "deps", "tra-ffic", "include", "tra_ffic.h"), "");
@@ -514,7 +514,7 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
     "",
   );
   await writeFile(
-    join(root, "muon-prepare", "package.json"),
+    join(root, "muon-builder", "package.json"),
     `${JSON.stringify({ version: "0.0.0" }, null, 2)}\n`,
   );
   await writeFile(
@@ -526,7 +526,7 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
     `${JSON.stringify({ version: "1.2.3" }, null, 2)}\n`,
   );
   await writeFile(
-    join(root, "muon-ui", "scripts", "stage-muon-prepare.mjs"),
+    join(root, "muon-ui", "scripts", "stage-muon-builder.mjs"),
     "process.exit(0);\n",
   );
   await writeExecutableScript(
@@ -780,8 +780,8 @@ exit 1
       await readFile(resolve("package.json"), "utf8"),
     ) as { bin?: Record<string, string> };
     const cliStat = await stat(resolve("dist/cli.cjs"));
-    const nativePrepareStat = await stat(
-      resolve("dist/native/linux-amd64/muon-prepare"),
+    const nativeBuilderStat = await stat(
+      resolve("dist/native/linux-amd64/muon-builder"),
     );
     const nativeBootstrapStat = await stat(
       resolve("dist/native/linux-amd64/muon-bootstrap"),
@@ -789,11 +789,14 @@ exit 1
 
     expect(packageJson.bin?.muon).toBe("./dist/cli.cjs");
     expect(cliStat.mode & 0o111).not.toBe(0);
-    expect(nativePrepareStat.mode & 0o111).not.toBe(0);
+    expect(nativeBuilderStat.mode & 0o111).not.toBe(0);
     expect(nativeBootstrapStat.mode & 0o111).not.toBe(0);
     await expect(exists(resolve("dist/cli.mjs"))).resolves.toBe(false);
     await expect(exists(resolve("dist/vite.d.ts"))).resolves.toBe(false);
-    await expect(exists(resolve("dist/muon-prepare"))).resolves.toBe(false);
+    await expect(exists(resolve("dist/muon-builder"))).resolves.toBe(false);
+    await expect(
+      exists(resolve("dist", ["muon", "prepare"].join("-"))),
+    ).resolves.toBe(false);
     await expect(exists(resolve("dist/muon-bootstrap"))).resolves.toBe(false);
   });
 
@@ -882,7 +885,8 @@ exit 1
     expect(files).not.toContain("dist/vite.d.ts");
     expect(files).not.toContain("dist/runtime/linux-amd64/muon-runtime.json");
     expect(files.some((file) => file.endsWith(".d.ts.map"))).toBe(false);
-    expect(files).not.toContain("dist/muon-prepare");
+    expect(files).not.toContain("dist/muon-builder");
+    expect(files).not.toContain(`dist/${["muon", "prepare"].join("-")}`);
     expect(files).not.toContain("dist/muon-bootstrap");
     await expect(readFile(resolve("vite.d.ts"), "utf8")).resolves.not.toContain(
       "sourceMappingURL",

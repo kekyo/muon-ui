@@ -25,7 +25,7 @@
     "vite.d.ts"
   ],
   "scripts": {
-    "build": "npm run build:js && npm run build --workspace muon-prepare && node scripts/stage-muon-prepare.mjs",
+    "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs",
     "build:js": "vite build --mode cjs && vite build --mode esm",
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",

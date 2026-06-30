@@ -206,7 +206,7 @@ const createWindowsResourceFixture = async (
   await execFileAsync(process.execPath, [
     resolve(
       "..",
-      "muon-prepare",
+      "muon-builder",
       "scripts",
       "create-windows-resource-fixture.mjs",
     ),
@@ -221,7 +221,7 @@ const assertWindowsIcon = async (
   iconPath: string,
 ): Promise<void> => {
   await execFileAsync(process.execPath, [
-    resolve("..", "muon-prepare", "scripts", "assert-windows-icon.mjs"),
+    resolve("..", "muon-builder", "scripts", "assert-windows-icon.mjs"),
     executablePath,
     iconPath,
   ]);
@@ -232,7 +232,7 @@ const assertWindowsVersion = async (
   expectations: readonly string[],
 ): Promise<void> => {
   await execFileAsync(process.execPath, [
-    resolve("..", "muon-prepare", "scripts", "assert-windows-version.mjs"),
+    resolve("..", "muon-builder", "scripts", "assert-windows-version.mjs"),
     executablePath,
     ...expectations,
   ]);
@@ -430,7 +430,7 @@ describe("muon build", () => {
       exists(join(root, "dist-muon-linux-amd64", "assets")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-muon-linux-amd64", "muon-prepare")),
+      exists(join(root, "dist-muon-linux-amd64", "muon-builder")),
     ).resolves.toBe(false);
     await expect(
       exists(join(root, "dist-muon-linux-amd64", "libcef.so")),
@@ -589,12 +589,12 @@ describe("muon build", () => {
     await mkdir(join(root, "assets"), { recursive: true });
     await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
 
-    const previousPreparePath = process.env.MUON_PREPARE_PATH;
-    process.env.MUON_PREPARE_PATH = resolve(
+    const previousPreparePath = process.env.MUON_BUILDER_PATH;
+    process.env.MUON_BUILDER_PATH = resolve(
       "dist",
       "native",
       "linux-amd64",
-      "muon-prepare",
+      "muon-builder",
     );
     let result: Awaited<ReturnType<typeof buildMuonApp>> | undefined =
       undefined;
@@ -607,9 +607,9 @@ describe("muon build", () => {
       });
     } finally {
       if (previousPreparePath === undefined) {
-        delete process.env.MUON_PREPARE_PATH;
+        delete process.env.MUON_BUILDER_PATH;
       } else {
-        process.env.MUON_PREPARE_PATH = previousPreparePath;
+        process.env.MUON_BUILDER_PATH = previousPreparePath;
       }
     }
 

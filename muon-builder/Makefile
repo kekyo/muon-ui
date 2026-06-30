@@ -1,7 +1,7 @@
 OUT_DIR ?= ./dist
-PREPARE_TARGET ?= $(OUT_DIR)/muon-prepare
+PREPARE_TARGET ?= $(OUT_DIR)/muon-builder
 BOOTSTRAP_TARGET ?= $(OUT_DIR)/muon-bootstrap
-LIB_TARGET ?= $(OUT_DIR)/libmuon-prepare.a
+LIB_TARGET ?= $(OUT_DIR)/libmuon-builder.a
 CPPFLAGS ?=
 CFLAGS ?= -std=c99 -Os -DNDEBUG -Wall -Wextra -pedantic
 LDFLAGS ?= -s -static

@@ -111,7 +111,7 @@ export interface MuonDevOptions {
   environment?: NodeJS.ProcessEnv;
 
   /**
-   * Suppress native prepare progress messages.
+   * Suppress native builder progress messages.
    */
   quietPrepare?: boolean;
 }
@@ -542,7 +542,7 @@ export const runMuonDev = async (
     cwd: root,
   });
   if (preparedRuntime.stagePath === undefined) {
-    throw new Error("muon-prepare did not return a staged runtime path.");
+    throw new Error("muon-builder did not return a staged runtime path.");
   }
 
   await writeMuonDevOverrideConfig(

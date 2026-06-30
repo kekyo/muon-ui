@@ -958,7 +958,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
 - `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
   文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
-- `muon build` はlauncherのconfig埋め込み後に `muon-prepare resource` でPE resourceを更新します。
+- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
   そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
 - `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
   setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
@@ -1091,7 +1091,7 @@ export default defineConfig({
 | キー             | 型                    | 既定値                      | 概要                                                                 |
 | :--------------- | :-------------------- | :-------------------------- | :------------------------------------------------------------------- |
 | `muonPath`       | `string`              | 同梱Muonランタイム          | 開発起動で使用するmuon-coreランタイムディレクトリです。              |
-| `cefPath`        | `string`              | muon-prepareの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
+| `cefPath`        | `string`              | muon-builderの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にMuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
@@ -1101,7 +1101,7 @@ export default defineConfig({
   `vite build` ではこれらの開発起動用オプションは無視されます。
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
 - `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<public-target>` を使用します。
-- `cefPath` を省略した場合は、muon-prepareが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
+- `cefPath` を省略した場合は、muon-builderが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。

@@ -22,8 +22,8 @@ for command_name in "${required_commands[@]}"; do
   fi
 done
 
-MUON_PREPARE_VERSION=1.2.3-beta \
-  MUON_PREPARE_GIT_COMMIT_HASH=prepare-test-hash \
+MUON_BUILDER_VERSION=1.2.3-beta \
+  MUON_BUILDER_GIT_COMMIT_HASH=builder-test-hash \
   bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
 
 bootstrap_executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap.exe"
@@ -52,7 +52,7 @@ node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
   "ProductVersion=1.2.3-beta" \
   "InternalName=muon-bootstrap" \
   "OriginalFilename=muon-bootstrap.exe" \
-  "PrivateBuild=prepare-test-hash" \
+  "PrivateBuild=builder-test-hash" \
   "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
   "SpecialBuild=cefArtifact=; distribution=; apiHash="
 
@@ -71,7 +71,7 @@ wine_prefix="${temp_dir}/wineprefix"
 archive_root="${source_dir}/cef_binary_fake_windows64_minimal"
 archive_path="${source_dir}/cef.tar.bz2"
 catalog_path="${source_dir}/source-catalog.json"
-executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-prepare.exe"
+executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-builder.exe"
 node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
   "${executable}" \
   --file-version \
@@ -80,12 +80,12 @@ node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
   1.2.3.0 \
   "ProductName=Muon" \
   "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
-  "FileDescription=Muon Prepare Tool" \
+  "FileDescription=Muon Builder Tool" \
   "FileVersion=1.2.3-beta" \
   "ProductVersion=1.2.3-beta" \
-  "InternalName=muon-prepare" \
-  "OriginalFilename=muon-prepare.exe" \
-  "PrivateBuild=prepare-test-hash" \
+  "InternalName=muon-builder" \
+  "OriginalFilename=muon-builder.exe" \
+  "PrivateBuild=builder-test-hash" \
   "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
   "SpecialBuild=cefArtifact=; distribution=; apiHash="
 
@@ -163,7 +163,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${progress_harness_exe}" \
   "${progress_harness_src}" \
-  "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-prepare.a" \
+  "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-builder.a" \
   "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
   "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a"
 

@@ -39,7 +39,7 @@ case "${TARGET}" in
     CC="${CC:-gcc}"
     AR="${AR:-ar}"
     RANLIB="${RANLIB:-ranlib}"
-    EXECUTABLE_NAME="muon-prepare"
+    EXECUTABLE_NAME="muon-builder"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
@@ -50,7 +50,7 @@ case "${TARGET}" in
     CC="${CC:-gcc}"
     AR="${AR:-ar}"
     RANLIB="${RANLIB:-ranlib}"
-    EXECUTABLE_NAME="muon-prepare"
+    EXECUTABLE_NAME="muon-builder"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
@@ -61,7 +61,7 @@ case "${TARGET}" in
     CC="${CC:-gcc}"
     AR="${AR:-ar}"
     RANLIB="${RANLIB:-ranlib}"
-    EXECUTABLE_NAME="muon-prepare"
+    EXECUTABLE_NAME="muon-builder"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
@@ -73,7 +73,7 @@ case "${TARGET}" in
     AR="${AR:-i686-w64-mingw32-ar}"
     RANLIB="${RANLIB:-i686-w64-mingw32-ranlib}"
     WINDRES="${WINDRES:-i686-w64-mingw32-windres}"
-    EXECUTABLE_NAME="muon-prepare.exe"
+    EXECUTABLE_NAME="muon-builder.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-${LDFLAGS_VALUE} -mwindows}"
@@ -85,7 +85,7 @@ case "${TARGET}" in
     AR="${AR:-x86_64-w64-mingw32-ar}"
     RANLIB="${RANLIB:-x86_64-w64-mingw32-ranlib}"
     WINDRES="${WINDRES:-x86_64-w64-mingw32-windres}"
-    EXECUTABLE_NAME="muon-prepare.exe"
+    EXECUTABLE_NAME="muon-builder.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-${LDFLAGS_VALUE} -mwindows}"
@@ -259,13 +259,13 @@ VERSION_TEMPLATE="${VERSION_DIR}/version.h.in"
 VERSION_HEADER="${VERSION_DIR}/version.h"
 RUNTIME_INFO_HEADER="${VERSION_DIR}/muon_runtime_info_generated.h"
 mkdir -p "${VERSION_DIR}"
-if [[ -n "${MUON_PREPARE_VERSION:-}" && -n "${MUON_PREPARE_GIT_COMMIT_HASH:-}" ]]; then
+if [[ -n "${MUON_BUILDER_VERSION:-}" && -n "${MUON_BUILDER_GIT_COMMIT_HASH:-}" ]]; then
   cat > "${VERSION_HEADER}" <<EOF
-#ifndef MUON_PREPARE_VERSION_H
-#define MUON_PREPARE_VERSION_H
+#ifndef MUON_BUILDER_VERSION_H
+#define MUON_BUILDER_VERSION_H
 
-#define MUON_PREPARE_VERSION "${MUON_PREPARE_VERSION}"
-#define MUON_PREPARE_GIT_COMMIT_HASH "${MUON_PREPARE_GIT_COMMIT_HASH}"
+#define MUON_BUILDER_VERSION "${MUON_BUILDER_VERSION}"
+#define MUON_BUILDER_GIT_COMMIT_HASH "${MUON_BUILDER_GIT_COMMIT_HASH}"
 
 #endif
 EOF
@@ -279,11 +279,11 @@ else
     exit 1
   fi
   cat > "${VERSION_TEMPLATE}" <<'EOF'
-#ifndef MUON_PREPARE_VERSION_H
-#define MUON_PREPARE_VERSION_H
+#ifndef MUON_BUILDER_VERSION_H
+#define MUON_BUILDER_VERSION_H
 
-#define MUON_PREPARE_VERSION "{version}"
-#define MUON_PREPARE_GIT_COMMIT_HASH "{git.commit.hash}"
+#define MUON_BUILDER_VERSION "{version}"
+#define MUON_BUILDER_GIT_COMMIT_HASH "{git.commit.hash}"
 
 #endif
 EOF
@@ -308,8 +308,8 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
       WINDOWS_RESOURCE_VERSION="$(read_c_string_define "${MUON_CORE_VERSION_HEADER}" MUON_CORE_VERSION)"
       WINDOWS_RESOURCE_GIT_COMMIT_HASH="$(read_c_string_define "${MUON_CORE_VERSION_HEADER}" MUON_CORE_GIT_COMMIT_HASH)"
     else
-      WINDOWS_RESOURCE_VERSION="$(read_c_string_define "${VERSION_HEADER}" MUON_PREPARE_VERSION)"
-      WINDOWS_RESOURCE_GIT_COMMIT_HASH="$(read_c_string_define "${VERSION_HEADER}" MUON_PREPARE_GIT_COMMIT_HASH)"
+      WINDOWS_RESOURCE_VERSION="$(read_c_string_define "${VERSION_HEADER}" MUON_BUILDER_VERSION)"
+      WINDOWS_RESOURCE_GIT_COMMIT_HASH="$(read_c_string_define "${VERSION_HEADER}" MUON_BUILDER_GIT_COMMIT_HASH)"
     fi
   fi
   if [[ -z "${WINDOWS_RESOURCE_GIT_COMMIT_HASH}" ]]; then
@@ -332,8 +332,8 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
     "${PREPARE_RESOURCE_SCRIPT}" \
     "" \
     "" \
-    "Muon Prepare Tool" \
-    "muon-prepare" \
+    "Muon Builder Tool" \
+    "muon-builder" \
     "${EXECUTABLE_NAME}" \
     "${WINDOWS_RESOURCE_VERSION}" \
     "${WINDOWS_RESOURCE_FIXED_VERSION}" \

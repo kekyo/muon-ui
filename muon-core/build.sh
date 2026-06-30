@@ -9,7 +9,7 @@ cd "${PROJECT_ROOT}"
 command -v cmake >/dev/null || { echo "cmake is required" >&2; exit 1; }
 command -v ninja >/dev/null || { echo "ninja is required" >&2; exit 1; }
 
-host_prepare_target() {
+host_builder_target() {
   local system
   local machine
   system="$(uname -s)"
@@ -31,19 +31,19 @@ host_prepare_target() {
       printf '%s\n' windows-amd64
       ;;
     *)
-      echo "Unsupported muon-prepare host: ${system} ${machine}" >&2
+      echo "Unsupported muon-builder host: ${system} ${machine}" >&2
       return 1
       ;;
   esac
 }
 
-prepare_executable_name() {
+builder_executable_name() {
   case "$1" in
     windows-i686|windows-amd64)
-      printf '%s\n' muon-prepare.exe
+      printf '%s\n' muon-builder.exe
       ;;
     *)
-      printf '%s\n' muon-prepare
+      printf '%s\n' muon-builder
       ;;
   esac
 }
@@ -59,36 +59,36 @@ bootstrap_executable_name() {
   esac
 }
 
-prepare_output_dir() {
+builder_output_dir() {
   local usage="$1"
   local target_name="$2"
   local build_type="$3"
   local build_type_lower="${build_type,,}"
   case "${usage}" in
     dev|test|check)
-      printf '%s\n' "${PROJECT_ROOT}/muon-prepare/.run/${usage}-${target_name}-${build_type_lower}"
+      printf '%s\n' "${PROJECT_ROOT}/muon-builder/.run/${usage}-${target_name}-${build_type_lower}"
       ;;
     dist)
       if [[ "${build_type}" == "Debug" ]]; then
-        printf '%s\n' "${PROJECT_ROOT}/muon-prepare/dist-${target_name}-debug"
+        printf '%s\n' "${PROJECT_ROOT}/muon-builder/dist-${target_name}-debug"
       else
-        printf '%s\n' "${PROJECT_ROOT}/muon-prepare/dist-${target_name}"
+        printf '%s\n' "${PROJECT_ROOT}/muon-builder/dist-${target_name}"
       fi
       ;;
   esac
 }
 
-ensure_host_muon_prepare() {
-  if [[ -n "${MUON_PREPARE_PATH:-}" ]]; then
-    printf '%s\n' "${MUON_PREPARE_PATH}"
+ensure_host_muon_builder() {
+  if [[ -n "${MUON_BUILDER_PATH:-}" ]]; then
+    printf '%s\n' "${MUON_BUILDER_PATH}"
     return
   fi
   local host_target
-  host_target="${MUON_HOST_PREPARE_TARGET:-$(host_prepare_target)}"
+  host_target="${MUON_HOST_BUILDER_TARGET:-$(host_builder_target)}"
   local executable_name
-  executable_name="$(prepare_executable_name "${host_target}")"
-  bash "${PROJECT_ROOT}/muon-prepare/build.sh" dev Debug "${host_target}" >&2
-  printf '%s\n' "${PROJECT_ROOT}/muon-prepare/.run/dev-${host_target}-debug/${executable_name}"
+  executable_name="$(builder_executable_name "${host_target}")"
+  bash "${PROJECT_ROOT}/muon-builder/build.sh" dev Debug "${host_target}" >&2
+  printf '%s\n' "${PROJECT_ROOT}/muon-builder/.run/dev-${host_target}-debug/${executable_name}"
 }
 
 generate_core_version_header() {
@@ -177,7 +177,7 @@ verify_windows_version_resource() {
   version="$(read_c_string_define "${MUON_CORE_VERSION_HEADER_PATH}" MUON_CORE_VERSION)"
   fixed_version="$(normalize_windows_version "${version}")"
   git_commit_hash="$(read_c_string_define "${MUON_CORE_VERSION_HEADER_PATH}" MUON_CORE_GIT_COMMIT_HASH)"
-  node "${PROJECT_ROOT}/muon-prepare/scripts/assert-windows-version.mjs" \
+  node "${PROJECT_ROOT}/muon-builder/scripts/assert-windows-version.mjs" \
     "${executable_path}" \
     --file-version \
     "${fixed_version}" \
@@ -336,10 +336,10 @@ CEF_DIST_SUFFIX="${CEF_ARCH}_minimal"
 CEF_PACKAGE="cef_binary_${CEF_VERSION}_${CEF_DIST_SUFFIX}.tar.bz2"
 CEF_CACHE_DIR="${OUTPUT_ROOT}/.cef"
 CEF_ROOT="${CEF_CACHE_DIR}/cef_binary_${CEF_VERSION}_${CEF_DIST_SUFFIX}"
-HOST_MUON_PREPARE="$(ensure_host_muon_prepare)"
+HOST_MUON_BUILDER="$(ensure_host_muon_builder)"
 CEF_PREPARE_JSON_FILE="$(mktemp)"
 CEF_PREPARE_METADATA_FILE="$(mktemp)"
-"${HOST_MUON_PREPARE}" buildtime \
+"${HOST_MUON_BUILDER}" buildtime \
   --version "${CEF_VERSION}" \
   --target "${TARGET_NAME}" \
   --output-dir "${CEF_ROOT}" \
@@ -438,15 +438,15 @@ MUON_RUNTIME_INFO_HEADER="${BUILD_DIR}/generated/muon_runtime_info_generated.h" 
   MUON_WINDOWS_RESOURCE_CEF_ARTIFACT="${CEF_PACKAGE}" \
   MUON_WINDOWS_RESOURCE_CEF_DISTRIBUTION="minimal" \
   MUON_WINDOWS_RESOURCE_CEF_API_HASH="${MUON_CEF_API_HASH}" \
-  bash "${PROJECT_ROOT}/muon-prepare/build.sh" \
+  bash "${PROJECT_ROOT}/muon-builder/build.sh" \
     "${BUILD_USAGE}" \
     "${BUILD_TYPE}" \
     "${TARGET_NAME}"
 
 BOOTSTRAP_EXECUTABLE_NAME="$(bootstrap_executable_name "${TARGET_NAME}")"
-PREPARE_OUTPUT_DIR="$(prepare_output_dir "${BUILD_USAGE}" "${TARGET_NAME}" "${BUILD_TYPE}")"
+BUILDER_OUTPUT_DIR="$(builder_output_dir "${BUILD_USAGE}" "${TARGET_NAME}" "${BUILD_TYPE}")"
 cp -f \
-  "${PREPARE_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
+  "${BUILDER_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
   "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"
 
 if [[ "${TARGET_NAME}" == windows-* ]]; then

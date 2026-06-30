@@ -533,7 +533,7 @@ const createCliCommand = (): Command => {
     .option("--target <target>", "prepare target")
     .option("--cache-dir <path>", "CEF artifact cache directory")
     .option("--force", "rebuild an existing prepared runtime")
-    .option("-q, --quiet", "suppress native prepare progress messages")
+    .option("-q, --quiet", "suppress native builder progress messages")
     .option("--json", "write result as JSON")
     .action(async (options: PrepareCommandOptions) => {
       await runPrepareCommand(options);

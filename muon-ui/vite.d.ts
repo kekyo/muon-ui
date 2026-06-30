@@ -169,8 +169,8 @@ export interface MuonVitePluginOptions {
    * Directory containing CEF files, or a CEF archive root with Release/Resources.
    *
    * @remarks Relative paths are resolved from the Vite project root. When omitted,
-   * muon-prepare downloads and caches the tested CEF artifact from muonPath.
-   * @defaultValue The tested CEF artifact downloaded and cached by muon-prepare.
+   * muon-builder downloads and caches the tested CEF artifact from muonPath.
+   * @defaultValue The tested CEF artifact downloaded and cached by muon-builder.
    */
   cefPath?: string;
 

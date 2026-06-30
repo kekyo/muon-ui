@@ -36,8 +36,8 @@ expected_dpkg_architecture() {
 
 require_env MUON_PACKAGE_ARCH
 require_env MUON_PACKAGE_TARGET
-require_env MUON_PREPARE_VERSION
-require_env MUON_PREPARE_GIT_COMMIT_HASH
+require_env MUON_BUILDER_VERSION
+require_env MUON_BUILDER_GIT_COMMIT_HASH
 require_env MUON_CORE_VERSION_HEADER
 require_env MUON_TRA_FFIC_ROOT
 require_env MUON_CARDIO_ROOT
@@ -60,17 +60,17 @@ require_command readelf
 
 cd /workspace
 
-export MUON_PREPARE_VERSION
-export MUON_PREPARE_GIT_COMMIT_HASH
+export MUON_BUILDER_VERSION
+export MUON_BUILDER_GIT_COMMIT_HASH
 export MUON_CORE_VERSION_HEADER
 
-bash muon-prepare/build.sh dist Release "${MUON_PACKAGE_TARGET}"
+bash muon-builder/build.sh dist Release "${MUON_PACKAGE_TARGET}"
 rm -rf "muon-core/.build/dist/${MUON_PACKAGE_TARGET}"
 bash muon-core/build.sh dist Release "${MUON_PACKAGE_TARGET}" \
   "-DTRA_FFIC_ROOT=${MUON_TRA_FFIC_ROOT}" \
   "-DCARDIO_ROOT=${MUON_CARDIO_ROOT}"
 
-file "muon-prepare/dist-${MUON_PACKAGE_TARGET}/muon-prepare"
-readelf -h "muon-prepare/dist-${MUON_PACKAGE_TARGET}/muon-prepare" >/dev/null
+file "muon-builder/dist-${MUON_PACKAGE_TARGET}/muon-builder"
+readelf -h "muon-builder/dist-${MUON_PACKAGE_TARGET}/muon-builder" >/dev/null
 file "muon-core/dist-${MUON_PACKAGE_TARGET}/muon-core"
 readelf -h "muon-core/dist-${MUON_PACKAGE_TARGET}/muon-core" >/dev/null

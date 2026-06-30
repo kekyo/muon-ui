@@ -15,7 +15,7 @@ import {
 } from "./targets.js";
 
 /**
- * Options used to invoke the native Muon prepare helper.
+ * Options used to invoke the native Muon builder helper.
  */
 export interface MuonPrepareOptions {
   /**
@@ -39,7 +39,7 @@ export interface MuonPrepareOptions {
   target: string | undefined;
 
   /**
-   * Cache directory passed to muon-prepare.
+   * Cache directory passed to muon-builder.
    */
   cacheDir: string | undefined;
 
@@ -49,12 +49,12 @@ export interface MuonPrepareOptions {
   force: boolean;
 
   /**
-   * Suppress progress messages from the native prepare process.
+   * Suppress progress messages from the native builder process.
    */
   quiet: boolean;
 
   /**
-   * Explicit native muon-prepare executable path.
+   * Explicit native muon-builder executable path.
    */
   prepareExecutablePath: string | undefined;
 
@@ -91,12 +91,12 @@ export interface MuonPrepareResourceUpdateOptions {
   outputPath: string;
 
   /**
-   * Suppress progress messages from the native prepare process.
+   * Suppress progress messages from the native builder process.
    */
   quiet: boolean;
 
   /**
-   * Explicit native muon-prepare executable path.
+   * Explicit native muon-builder executable path.
    */
   prepareExecutablePath: string | undefined;
 
@@ -112,7 +112,7 @@ export interface MuonPrepareResourceUpdateOptions {
 }
 
 /**
- * Result returned by native muon-prepare.
+ * Result returned by native muon-builder.
  */
 export interface MuonPrepareResult {
   /**
@@ -156,8 +156,8 @@ export const getDefaultMuonPrepareTarget = (
   }
 };
 
-const getPrepareExecutableName = (platform: NodeJS.Platform): string =>
-  platform === "win32" ? "muon-prepare.exe" : "muon-prepare";
+const getBuilderExecutableName = (platform: NodeJS.Platform): string =>
+  platform === "win32" ? "muon-builder.exe" : "muon-builder";
 
 const moduleDirectory =
   typeof __dirname === "string"
@@ -173,15 +173,15 @@ const canExecute = async (path: string): Promise<boolean> => {
   }
 };
 
-const resolveMuonPrepareExecutable = async (
+const resolveMuonBuilderExecutable = async (
   options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment">,
 ): Promise<string> => {
   const explicit =
-    options.prepareExecutablePath ?? options.environment.MUON_PREPARE_PATH;
+    options.prepareExecutablePath ?? options.environment.MUON_BUILDER_PATH;
   if (explicit !== undefined && explicit !== "") {
     return explicit;
   }
-  const executableName = getPrepareExecutableName(process.platform);
+  const executableName = getBuilderExecutableName(process.platform);
   const target = getDefaultMuonPrepareTarget(process.platform, process.arch);
   const candidates = [
     join(moduleDirectory, "native", target, executableName),
@@ -362,7 +362,7 @@ const runMuonPrepareCommand = async (
     quiet: boolean;
   },
 ): Promise<string> => {
-  const executable = await resolveMuonPrepareExecutable(options);
+  const executable = await resolveMuonBuilderExecutable(options);
   const child = spawn(executable, [...options.args], {
     cwd: options.cwd,
     env: options.environment,
@@ -396,14 +396,14 @@ const runMuonPrepareCommand = async (
   })();
   if (exitCode !== 0) {
     throw new Error(
-      `muon-prepare failed with exit code ${exitCode}.\n${stderr.trim()}`,
+      `muon-builder failed with exit code ${exitCode}.\n${stderr.trim()}`,
     );
   }
   return stdout;
 };
 
 /**
- * Invokes the native muon-prepare executable and returns the prepared runtime.
+ * Invokes the native muon-builder executable and returns the prepared runtime.
  *
  * @param options Native prepare invocation options.
  * @returns Prepared runtime location.
@@ -426,7 +426,7 @@ export const runMuonPrepare = async (
     typeof result.cefPath !== "string" ||
     typeof result.cacheHit !== "boolean"
   ) {
-    throw new Error(`muon-prepare returned invalid JSON: ${stdout}`);
+    throw new Error(`muon-builder returned invalid JSON: ${stdout}`);
   }
   return {
     ...(result.stagePath === undefined ? {} : { stagePath: result.stagePath }),
@@ -437,7 +437,7 @@ export const runMuonPrepare = async (
 };
 
 /**
- * Invokes the native muon-prepare executable to write Windows PE resources.
+ * Invokes the native muon-builder executable to write Windows PE resources.
  *
  * @param options Resource update invocation options.
  */

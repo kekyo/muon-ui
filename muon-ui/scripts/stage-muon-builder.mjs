@@ -16,7 +16,7 @@ import { dirname, resolve } from "node:path";
 
 const targetDescriptors = {
   "linux-amd64": {
-    prepareExecutableName: "muon-prepare",
+    prepareExecutableName: "muon-builder",
     bootstrapExecutableName: "muon-bootstrap",
     devSourceDirectory: ".run/dev-linux-amd64-debug",
     distSourceDirectory: "dist-linux-amd64",
@@ -29,7 +29,7 @@ const targetDescriptors = {
     ],
   },
   "linux-armhf": {
-    prepareExecutableName: "muon-prepare",
+    prepareExecutableName: "muon-builder",
     bootstrapExecutableName: "muon-bootstrap",
     devSourceDirectory: ".run/dev-linux-armhf-debug",
     distSourceDirectory: "dist-linux-armhf",
@@ -42,7 +42,7 @@ const targetDescriptors = {
     ],
   },
   "linux-arm64": {
-    prepareExecutableName: "muon-prepare",
+    prepareExecutableName: "muon-builder",
     bootstrapExecutableName: "muon-bootstrap",
     devSourceDirectory: ".run/dev-linux-arm64-debug",
     distSourceDirectory: "dist-linux-arm64",
@@ -55,7 +55,7 @@ const targetDescriptors = {
     ],
   },
   "windows-i686": {
-    prepareExecutableName: "muon-prepare.exe",
+    prepareExecutableName: "muon-builder.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
     devSourceDirectory: ".run/dev-windows-i686-debug",
     distSourceDirectory: "dist-windows-i686",
@@ -73,7 +73,7 @@ const targetDescriptors = {
     ],
   },
   "windows-amd64": {
-    prepareExecutableName: "muon-prepare.exe",
+    prepareExecutableName: "muon-builder.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
     devSourceDirectory: ".run/dev-windows-amd64-debug",
     distSourceDirectory: "dist-windows-amd64",
@@ -105,7 +105,7 @@ const normalizeTarget = (target) => {
   if (allTargets.includes(normalized)) {
     return normalized;
   }
-  throw new Error(`Unsupported muon-prepare stage target: ${target}`);
+  throw new Error(`Unsupported muon-builder stage target: ${target}`);
 };
 
 const getDefaultTarget = () => {
@@ -125,7 +125,7 @@ const getDefaultTarget = () => {
     return "windows-amd64";
   }
   throw new Error(
-    `Unsupported muon-prepare stage host: platform=${process.platform}, arch=${process.arch}`,
+    `Unsupported muon-builder stage host: platform=${process.platform}, arch=${process.arch}`,
   );
 };
 
@@ -166,13 +166,13 @@ const stageTarget = async (target, source) => {
   const descriptor = targetDescriptors[target];
   const prepareSourcePath = resolve(
     "..",
-    "muon-prepare",
+    "muon-builder",
     getSourceDirectory(target, source),
     descriptor.prepareExecutableName,
   );
   const bootstrapSourcePath = resolve(
     "..",
-    "muon-prepare",
+    "muon-builder",
     getSourceDirectory(target, source),
     descriptor.bootstrapExecutableName,
   );
@@ -194,8 +194,8 @@ const stageTarget = async (target, source) => {
   } catch {
     const buildCommand =
       source === "dist"
-        ? `npm run build:target --workspace muon-prepare -- dist Release ${target}`
-        : `npm run build:target --workspace muon-prepare -- dev Debug ${target}`;
+        ? `npm run build:target --workspace muon-builder -- dist Release ${target}`
+        : `npm run build:target --workspace muon-builder -- dev Debug ${target}`;
     throw new Error(
       `Missing native binaries for ${target}. Run "${buildCommand}" first.`,
     );

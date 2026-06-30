@@ -7,7 +7,7 @@
 #define MUON_PREPARE_RESOURCE_H
 
 /**
- * Runs the muon-prepare resource update subcommand.
+ * Runs the muon-builder resource update subcommand.
  *
  * @param argc Process argument count.
  * @param argv Process argument values.

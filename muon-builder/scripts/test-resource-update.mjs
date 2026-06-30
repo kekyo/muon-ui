@@ -10,11 +10,11 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 
 const prepareExecutablePath = process.argv[2];
 if (prepareExecutablePath === undefined) {
-  console.error("Usage: node test-resource-update.mjs <muon-prepare>");
+  console.error("Usage: node test-resource-update.mjs <muon-builder>");
   process.exit(1);
 }
 
-const root = await mkdtemp(join(tmpdir(), "muon-prepare-resource-"));
+const root = await mkdtemp(join(tmpdir(), "muon-builder-resource-"));
 try {
   const inputPath = join(root, "input.exe");
   const outputPath = join(root, "output.exe");
@@ -97,7 +97,7 @@ try {
     failed = true;
   }
   if (!failed) {
-    throw new Error("muon-prepare resource accepted a non-PE input.");
+    throw new Error("muon-builder resource accepted a non-PE input.");
   }
 } finally {
   await rm(root, { recursive: true, force: true });

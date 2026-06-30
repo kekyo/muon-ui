@@ -23,12 +23,12 @@
 #endif
 #endif
 
-#ifndef MUON_PREPARE_VERSION
-#define MUON_PREPARE_VERSION "0.0.0"
+#ifndef MUON_BUILDER_VERSION
+#define MUON_BUILDER_VERSION "0.0.0"
 #endif
 
-#ifndef MUON_PREPARE_GIT_COMMIT_HASH
-#define MUON_PREPARE_GIT_COMMIT_HASH "unknown"
+#ifndef MUON_BUILDER_GIT_COMMIT_HASH
+#define MUON_BUILDER_GIT_COMMIT_HASH "unknown"
 #endif
 
 typedef struct {
@@ -324,7 +324,7 @@ static const MuonRuntimeInfo *get_embedded_runtime_info(void) {
   return &kMuonRuntimeInfo;
 #else
   muon_print_error(
-      "Muon runtime metadata is not embedded in this muon-prepare build.\n");
+      "Muon runtime metadata is not embedded in this muon-builder build.\n");
   return NULL;
 #endif
 }
@@ -1425,14 +1425,14 @@ static void print_cef_result_json(const char *cef_path, const char *archive_path
 
 static void print_usage(void) {
   muon_print_error(
-      "Usage: muon-prepare <command> [options]\n"
-      "       muon-prepare runtime --muon-path <path> [--cef-path <path>] "
+      "Usage: muon-builder <command> [options]\n"
+      "       muon-builder runtime --muon-path <path> [--cef-path <path>] "
       "[--stage-dir <path>] [--target <target>] [--cache-dir <path>] "
       "[--force] [--quiet|-q] [--json]\n"
-      "       muon-prepare buildtime --version <cefVersion> --target <target> "
+      "       muon-builder buildtime --version <cefVersion> --target <target> "
       "--output-dir <path> [--cache-dir <path>] [--force] [--quiet|-q] "
       "[--json]\n"
-      "       muon-prepare resource --input <pe> --updates-json <json> "
+      "       muon-builder resource --input <pe> --updates-json <json> "
       "--output <pe> [--quiet|-q]\n");
 }
 
@@ -1894,8 +1894,8 @@ cleanup_artifact:
 int muon_prepare_main(int argc, char **argv) {
   setvbuf(stderr, NULL, _IONBF, 0);
   muon_set_quiet(is_quiet_requested(argc, argv));
-  muon_log_message("muon-prepare: %s-%s: Started.", MUON_PREPARE_VERSION,
-              MUON_PREPARE_GIT_COMMIT_HASH);
+  muon_log_message("muon-builder: %s-%s: Started.", MUON_BUILDER_VERSION,
+              MUON_BUILDER_GIT_COMMIT_HASH);
   if (argc < 2 || strcmp(argv[1], "--help") == 0) {
     print_usage();
     return argc < 2 ? 1 : 0;

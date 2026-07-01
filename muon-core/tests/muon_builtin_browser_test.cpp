@@ -440,6 +440,50 @@ static bool TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() {
                 "native wheel forwarder crossed into covered foreign window");
 }
 
+static bool TestWindowsNonClientDragHitTesting() {
+  constexpr int kWindowsHitTestCaption = 2;
+  constexpr int kWindowsHitTestLeft = 10;
+  constexpr int kWindowsHitTestRight = 11;
+  constexpr int kWindowsHitTestTop = 12;
+  constexpr int kWindowsHitTestTopLeft = 13;
+  constexpr int kWindowsHitTestTopRight = 14;
+  constexpr int kWindowsHitTestBottom = 15;
+  constexpr int kWindowsHitTestBottomLeft = 16;
+  constexpr int kWindowsHitTestBottomRight = 17;
+
+  return Expect(ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestCaption),
+                "caption hit-test should start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestTop),
+                "top resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestLeft),
+                "left resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestRight),
+                "right resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestTopLeft),
+                "top-left resize hit-test should not start custom window "
+                "drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestTopRight),
+                "top-right resize hit-test should not start custom window "
+                "drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestBottom),
+                "bottom resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestBottomLeft),
+                "bottom-left resize hit-test should not start custom window "
+                "drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestBottomRight),
+                "bottom-right resize hit-test should not start custom window "
+                "drag");
+}
+
 static bool TestTitleBarControlHitTesting() {
   const auto window_size = CefSize(300, 200);
   return Expect(GetMuonTitleBarControlActionAtWindowPoint(
@@ -617,6 +661,7 @@ int main() {
                  TestNativeForwarderRegistersChildWindows() &&
                  TestNativeWheelForwarderTargetWindowSelection() &&
                  TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() &&
+                 TestWindowsNonClientDragHitTesting() &&
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
                  TestTitleBarBrowserIdResolution() &&

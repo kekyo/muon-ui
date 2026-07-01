@@ -950,6 +950,109 @@ const dragWindowsMouse = async (
   await wait(300);
 };
 
+const getWindowsTitleBarButtonPoint = (
+  window: AppWindow,
+  action: "minimize" | "maximize" | "close",
+): { x: number; y: number } => {
+  const controlIndex =
+    action === "minimize" ? 0 : action === "maximize" ? 1 : 2;
+  return {
+    x:
+      window.bounds.x +
+      window.bounds.width -
+      windowsTitleBarControlsWidth +
+      windowsTitleBarControlWidth * (controlIndex + 0.5),
+    y: window.bounds.y + titleBarHeight / 2,
+  };
+};
+
+const clickWindowsTitleBarButton = async (
+  action: "minimize" | "maximize" | "close",
+): Promise<void> => {
+  const context = requireWindowsRemoteContext();
+  const window = await waitForWindowsTitleBarWindow();
+  await window.activate();
+  await context.agent.mouse.click(
+    getWindowsTitleBarButtonPoint(window, action),
+    {
+      button: "left",
+    },
+  );
+  await wait(150);
+};
+
+const doubleClickWindowsTitleBar = async (): Promise<void> => {
+  const context = requireWindowsRemoteContext();
+  const window = await waitForWindowsTitleBarWindow();
+  const point = {
+    x: window.bounds.x + Math.min(220, Math.floor(window.bounds.width / 2)),
+    y: window.bounds.y + Math.round(titleBarHeight / 2),
+  };
+  await window.activate();
+  await context.agent.mouse.click(point, { button: "left" });
+  await wait(80);
+  await context.agent.mouse.click(point, { button: "left" });
+  await wait(150);
+};
+
+const waitForWindowsCloseButtonHover = async (): Promise<void> => {
+  const context = requireWindowsRemoteContext();
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastPixel: RgbaPixel | undefined = undefined;
+  while (Date.now() < deadline) {
+    const window = await waitForWindowsTitleBarWindow();
+    const hoverPoint = getWindowsTitleBarButtonPoint(window, "close");
+    await context.agent.mouse.move({
+      x: Math.round(hoverPoint.x),
+      y: Math.round(hoverPoint.y),
+    });
+    await wait(100);
+    const capture = await captureWindowsWindow(window);
+    lastPixel = getWindowsWindowPixel(
+      capture,
+      window.bounds.width - 8,
+      Math.round(titleBarHeight / 2),
+    );
+    if (
+      isPixelNear(
+        lastPixel,
+        { red: 0xc8, green: 0x10, blue: 0x10, alpha: 255 },
+        12,
+      )
+    ) {
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows close button hover. Last pixel: ${JSON.stringify(lastPixel)}`,
+  );
+};
+
+const waitForWindowsWindowTopResize = async (
+  initialBounds: ScreenRect,
+): Promise<AppWindow> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastWindow = await waitForWindowsTitleBarWindow();
+  while (Date.now() < deadline) {
+    lastWindow = await waitForWindowsTitleBarWindow();
+    const initialBottom = initialBounds.y + initialBounds.height;
+    const lastBottom = lastWindow.bounds.y + lastWindow.bounds.height;
+    if (
+      lastWindow.bounds.height < initialBounds.height - 20 &&
+      Math.abs(lastBottom - initialBottom) <= 16
+    ) {
+      return lastWindow;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for Windows top-edge resize. Initial: ${JSON.stringify(
+      initialBounds,
+    )}, last: ${JSON.stringify(lastWindow.bounds)}`,
+  );
+};
+
 const clickWindowsPagePoint = async (
   driver: CdpDriver,
   clickX: number,
@@ -1334,6 +1437,65 @@ windowsTitleBarIt(
       await runTitleBarStep("close through browser API", async () => {
         await closeWindowsBrowserAndWait(driver, running);
       });
+    });
+  },
+);
+
+windowsTitleBarIt(
+  "keeps Windows custom title bar mouse controls responsive across maximize cycles",
+  async () => {
+    await withWindowsTitleBarMuon(async () => {
+      for (let iteration = 0; iteration < 4; iteration += 1) {
+        await runTitleBarStep("maximize from title bar button", async () => {
+          await clickWindowsTitleBarButton("maximize");
+          await waitForWindowsWindowMaximized(true);
+        });
+        await runTitleBarStep("restore from title bar button", async () => {
+          await clickWindowsTitleBarButton("maximize");
+          await waitForWindowsWindowMaximized(false);
+        });
+      }
+
+      await runTitleBarStep(
+        "maximize from title bar double click",
+        async () => {
+          await doubleClickWindowsTitleBar();
+          await waitForWindowsWindowMaximized(true);
+        },
+      );
+      await runTitleBarStep("restore from title bar double click", async () => {
+        await doubleClickWindowsTitleBar();
+        await waitForWindowsWindowMaximized(false);
+      });
+      await runTitleBarStep(
+        "verify close button hover remains responsive",
+        async () => await waitForWindowsCloseButtonHover(),
+      );
+    }, configuredTitleBarBackgroundColor);
+  },
+);
+
+windowsTitleBarIt(
+  "resizes the Windows custom window from the title bar top edge",
+  async () => {
+    await withWindowsTitleBarMuon(async () => {
+      let window = await waitForWindowsTitleBarWindow();
+      window = await window.setBounds({
+        x: 160,
+        y: 160,
+        width: 900,
+        height: 640,
+      });
+      window = await window.waitForStableBounds({
+        intervalMs: 100,
+        stableIterations: 2,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      const initialBounds = window.bounds;
+      const startX = initialBounds.x + Math.round(initialBounds.width / 2);
+      const startY = initialBounds.y + 1;
+      await dragWindowsMouse(startX, startY, startX, startY + 80);
+      await waitForWindowsWindowTopResize(initialBounds);
     });
   },
 );

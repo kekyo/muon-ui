@@ -979,7 +979,6 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 - `iconPath` は `.png` のみ受け付けます。MuonはWindows PE/NSISが必要とする`.ico`をビルド時に自動生成します。
   入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
-  Microsoftの[Windowsアイコン資料](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-icons)と[アイコンリソース仕様](https://learn.microsoft.com/en-us/windows/win32/menurc/about-icons)に合わせ、生成ICOでは256x256のみPNG圧縮し、それ以外は32bit DIBとして格納します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
 - 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。

@@ -838,7 +838,7 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain(".gitignore");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\ndist-muon-*/\nartifacts/\n",
+      ".muon/\ndist-muon/\nartifacts/\n",
     );
   });
 
@@ -854,7 +854,23 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+      "dist*/\n.muon/\ndist-muon/\nartifacts/\n",
+    );
+  });
+
+  it("adds the current Muon dist gitignore entry when a legacy entry exists", async () => {
+    const root = await mkdtemp(join(tmpdir(), "muon-init-legacy-existing-"));
+    cleanupDirectories.push(root);
+    await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\ndist-muon-*/\n");
+    const cliPath = resolve("dist", "cli.cjs");
+
+    await execFileAsync(process.execPath, [cliPath, "init"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      "dist*/\n.muon/\ndist-muon-*/\ndist-muon/\nartifacts/\n",
     );
   });
 
@@ -863,7 +879,7 @@ exit 1
     cleanupDirectories.push(root);
     await writeFile(
       join(root, ".gitignore"),
-      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+      "dist*/\n.muon/\ndist-muon/\nartifacts/\n",
     );
     const cliPath = resolve("dist", "cli.cjs");
 
@@ -873,7 +889,7 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+      "dist*/\n.muon/\ndist-muon/\nartifacts/\n",
     );
   });
 

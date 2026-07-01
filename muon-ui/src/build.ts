@@ -120,7 +120,7 @@ export interface MuonBuildOptions {
    */
   appId?: string;
   /**
-   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
+   * Parent directory that receives dist-muon/linux-amd64/ style outputs.
    */
   outputRoot?: string;
   /**
@@ -188,7 +188,7 @@ export interface MuonBuildTargetResult {
    */
   target: MuonBuildTarget;
   /**
-   * Fixed output directory name for the target.
+   * Fixed output directory path for the target.
    */
   distributionDirectoryName: string;
   /**

@@ -469,16 +469,16 @@ describe("muon pack", () => {
     expect(artifact?.path).toBe(
       join(root, "artifacts", "packed-sample-1.2.3-linux-amd64.tar.gz"),
     );
-    await expect(exists(join(root, "dist-muon-linux-amd64"))).resolves.toBe(
+    await expect(exists(join(root, "dist-muon/linux-amd64"))).resolves.toBe(
       true,
     );
     await expect(readTarGzEntryNames(artifact?.path ?? "")).resolves.toContain(
-      "dist-muon-linux-amd64/assets.zip",
+      "dist-muon/linux-amd64/assets.zip",
     );
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",
-        "dist-muon-linux-amd64/CREDITS.md",
+        "dist-muon/linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
   });
@@ -504,7 +504,7 @@ describe("muon pack", () => {
     );
     await expect(
       readZipTextEntry(
-        join(root, "dist-muon-linux-amd64", "assets.zip"),
+        join(root, "dist-muon/linux-amd64", "assets.zip"),
         "index.html",
       ),
     ).resolves.toBe("<!doctype html><title>plain assets</title>");
@@ -551,12 +551,12 @@ describe("muon pack", () => {
       join(root, "artifacts", "packed-sample-1.2.3-windows-amd64.zip"),
     );
     await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
-      "dist-muon-windows-amd64/assets.zip",
+      "dist-muon/windows-amd64/assets.zip",
     );
     await expect(
       readZipTextEntry(
         artifact?.path ?? "",
-        "dist-muon-windows-amd64/CREDITS.md",
+        "dist-muon/windows-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
   });
@@ -631,12 +631,12 @@ printf 'deb\\n' > "$output_path"
     await expect(
       readFile(join(root, "deb-files.txt"), "utf8"),
     ).resolves.toContain(
-      "/usr/lib/packed-sample/dist-muon-linux-amd64/packed-sample",
+      "/usr/lib/packed-sample/dist-muon/linux-amd64/packed-sample",
     );
     await expect(
       readFile(join(root, "deb-files.txt"), "utf8"),
     ).resolves.toContain(
-      "/usr/lib/packed-sample/dist-muon-linux-amd64/muon-install.json",
+      "/usr/lib/packed-sample/dist-muon/linux-amd64/muon-install.json",
     );
     await expect(
       readFile(join(root, "deb-files.txt"), "utf8"),
@@ -688,7 +688,7 @@ printf 'deb\\n' > "$output_path"
           "usr",
           "lib",
           "packed-sample",
-          "dist-muon-linux-amd64",
+          "dist-muon/linux-amd64",
           "muon-install.json",
         ),
         "utf8",
@@ -849,7 +849,7 @@ printf 'nsis\\n' > "$output_path"
       "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
       "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
     ]);
-    await expect(exists(join(root, "dist-muon-linux-amd64"))).resolves.toBe(
+    await expect(exists(join(root, "dist-muon/linux-amd64"))).resolves.toBe(
       false,
     );
   });
@@ -878,7 +878,7 @@ printf 'nsis\\n' > "$output_path"
       "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
       "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
     ]);
-    await expect(exists(join(root, "dist-muon-windows-amd64"))).resolves.toBe(
+    await expect(exists(join(root, "dist-muon/windows-amd64"))).resolves.toBe(
       false,
     );
   });

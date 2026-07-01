@@ -204,7 +204,7 @@ npm run build
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
 
-既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、`dist-muon-linux-amd64/` や `dist-muon-windows-amd64/` のようなターゲット別ディレクトリに出力されます。
+既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、`dist-muon/linux-amd64/` や `dist-muon/windows-amd64/` のようなターゲット別ディレクトリに出力されます。
 
 ターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定できます:
 
@@ -286,8 +286,8 @@ npx muon build --linux-icon icons/app.png --linux-name "My App"
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
   muon Viteプラグインが無い場合、未指定時はすべての対応ターゲットをパッケージ候補にします。
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定できます。
-- `zip` はWindowsターゲットだけで使用でき、各 `dist-muon-*` ディレクトリをトップレベルに含むZIPです。
-- `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon-*` ディレクトリをトップレベルに含むgzip圧縮tarです。
+- `zip` はWindowsターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むZIPです。
+- `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むgzip圧縮tarです。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
   ランチャー表示用に `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` もpackage-owned fileとして配置します。
@@ -330,7 +330,7 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
     └── cef_binary_<version>_<target>_minimal.tar.bz2
 ```
 
-配布された `dist-muon-*` ディレクトリは読み取り専用の元データとして扱われます。
+配布された `dist-muon/<target>` ディレクトリは読み取り専用の元データとして扱われます。
 エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下へステージングし、
 そこへCEFバイナリを展開してから `muon-core` を起動します:
 
@@ -1005,7 +1005,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- `muon build` はLinuxターゲットの `dist-muon-linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
+- `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
   `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
 - portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/<target>/` へstagingし、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
@@ -1174,7 +1174,7 @@ export default defineConfig({
 | `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
 | `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
-| `outputRoot`       | `string`            | `"."`                          | `dist-muon-linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
+| `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
 | `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |

@@ -179,7 +179,7 @@ static char *find_muon_stage_project_root(const char *stage_dir) {
 
 static const char *const k_muon_gitignore_entries[] = {
     ".muon/",
-    "dist-muon-*/",
+    "dist-muon/",
     "artifacts/",
 };
 
@@ -201,11 +201,13 @@ static int gitignore_line_matches_entry(const char *line_start,
            gitignore_line_equals(line_start, line_end, ".muon") ||
            gitignore_line_equals(line_start, line_end, "/.muon");
   }
-  if (strcmp(entry, "dist-muon-*/") == 0) {
-    return gitignore_line_equals(line_start, line_end, "dist-muon-*/") ||
-           gitignore_line_equals(line_start, line_end, "/dist-muon-*/") ||
-           gitignore_line_equals(line_start, line_end, "dist-muon-*") ||
-           gitignore_line_equals(line_start, line_end, "/dist-muon-*");
+  if (strcmp(entry, "dist-muon/") == 0) {
+    return gitignore_line_equals(line_start, line_end, "dist-muon/") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon/") ||
+           gitignore_line_equals(line_start, line_end, "dist-muon") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon") ||
+           gitignore_line_equals(line_start, line_end, "dist-muon/*") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon/*");
   }
   if (strcmp(entry, "artifacts/") == 0) {
     return gitignore_line_equals(line_start, line_end, "artifacts/") ||

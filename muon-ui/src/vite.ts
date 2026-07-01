@@ -172,7 +172,7 @@ export interface MuonViteBuildOptions {
   appId?: string;
 
   /**
-   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
+   * Parent directory that receives dist-muon/linux-amd64/ style outputs.
    *
    * @defaultValue The Vite project root.
    */

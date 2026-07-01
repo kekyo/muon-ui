@@ -6,18 +6,20 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const muonGitignoreEntries = [".muon/", "dist-muon-*/", "artifacts/"] as const;
+const muonGitignoreEntries = [".muon/", "dist-muon/", "artifacts/"] as const;
 
 type MuonGitignoreEntry = (typeof muonGitignoreEntries)[number];
 
 const muonGitignoreEntryAliases: Record<MuonGitignoreEntry, readonly string[]> =
   {
     ".muon/": [".muon/", "/.muon/", ".muon", "/.muon"],
-    "dist-muon-*/": [
-      "dist-muon-*/",
-      "/dist-muon-*/",
-      "dist-muon-*",
-      "/dist-muon-*",
+    "dist-muon/": [
+      "dist-muon/",
+      "/dist-muon/",
+      "dist-muon",
+      "/dist-muon",
+      "dist-muon/*",
+      "/dist-muon/*",
     ],
     "artifacts/": ["artifacts/", "/artifacts/", "artifacts", "/artifacts"],
   };

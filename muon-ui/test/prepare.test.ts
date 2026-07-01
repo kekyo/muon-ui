@@ -1236,7 +1236,7 @@ lastCatalogUpdateUnix=0
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe(".muon/\ndist-muon-*/\nartifacts/\n");
+    ).resolves.toBe(".muon/\ndist-muon/\nartifacts/\n");
   });
 
   it("appends a missing Muon dist gitignore entry without duplicating .muon", async () => {
@@ -1250,7 +1250,21 @@ lastCatalogUpdateUnix=0
 
     await expect(
       readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
-    ).resolves.toBe("dist*/\n.muon/\ndist-muon-*/\nartifacts/\n");
+    ).resolves.toBe("dist*/\n.muon/\ndist-muon/\nartifacts/\n");
+  });
+
+  it("adds the current Muon dist gitignore entry when a legacy entry exists", async () => {
+    const fixture = await createPrepareFixture();
+    await writeFile(
+      join(fixture.projectPath, ".gitignore"),
+      "dist*/\n.muon/\ndist-muon-*/\n",
+    );
+
+    await prepareFixture(fixture);
+
+    await expect(
+      readFile(join(fixture.projectPath, ".gitignore"), "utf8"),
+    ).resolves.toBe("dist*/\n.muon/\ndist-muon-*/\ndist-muon/\nartifacts/\n");
   });
 
   it("stages a flat CEF cache directory", async () => {

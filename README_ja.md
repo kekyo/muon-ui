@@ -259,15 +259,33 @@ muon Viteプラグインが無い場合、 `muon build` はコンテンツビル
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
 muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
 
-配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します。
+ビルド時に生成されるmuonアプリバイナリに指定する名称やアイコンなどのオプション指定例を示します:
+
+```bash
+npx muon build --windows-icon icons/app.png --windows-version 1.2.3
+npx muon build --linux-icon icons/app.png --linux-name "My App"
+```
+
+- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
+  同じ値は `muon.json` の `windows.resource` でも指定できます。
+- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
+  同じ値は `muon.json` の `linux.desktop` でも指定できます。
+
+インストーラーやアーカイブなどの配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します:
+
+```bash
+npx muon pack
+```
+
 `muon pack` は `muon build` と同じビルドシーケンスで配布用ディレクトリを生成してから、指定した形式にパッケージ化します。
 muon Viteプラグインがある場合は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
 muon Viteプラグインが無い場合は `vite build` を実行せず、既に存在するアセットを使用します。
 その後、指定した形式ごとに `./artifacts/` へ最終配布物だけを出力します。
 `deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
 
+以下にオプション指定の例を示します:
+
 ```bash
-npx muon pack
 npx muon pack --type zip
 npx muon pack --type tar.gz
 npx muon pack --type tgz
@@ -276,8 +294,6 @@ npx muon pack --target windows
 npx muon pack --target amd64
 npx muon pack --type tar.gz,deb --target linux-amd64
 npx muon pack --type nsis --target windows-amd64
-npx muon build --windows-icon icons/app.png --windows-version 1.2.3
-npx muon build --linux-icon icons/app.png --linux-name "My App"
 ```
 
 - `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
@@ -299,11 +315,8 @@ npx muon build --linux-icon icons/app.png --linux-name "My App"
   アンインストール時には `%LOCALAPPDATA%\<appId>` のruntime stateも削除します。
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
-- `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
-- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
-  同じ値は `muon.json` の `windows.resource` でも指定できます。
-- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
-  同じ値は `muon.json` の `linux.desktop` でも指定できます。
+- CLIオプションは、 `muon build` で指定できる `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
+  `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
 
 ---
 

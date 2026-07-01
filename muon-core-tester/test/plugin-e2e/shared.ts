@@ -1823,7 +1823,7 @@ export const dispatchDevToolsShortcut = async (
   event: KeyboardShortcutEvent,
 ): Promise<CdpTarget> => {
   const previousTargetIds = await getCurrentTargetIds();
-  await driver.send("Input.dispatchKeyEvent", event);
+  await dispatchKeyboardShortcut(driver, event);
   return await waitForDevToolsTarget(previousTargetIds, targetTimeoutMs);
 };
 
@@ -1832,17 +1832,28 @@ export const expectNoDevTools = async (
   event: KeyboardShortcutEvent,
 ): Promise<void> => {
   const previousTargetIds = await getCurrentTargetIds();
-  await driver.send("Input.dispatchKeyEvent", event);
+  await dispatchKeyboardShortcut(driver, event);
   await expect(waitForDevToolsTarget(previousTargetIds, 1000)).rejects.toThrow(
     "Timed out waiting for DevTools target",
   );
 };
+
+const createKeyboardShortcutKeyUpEvent = (
+  event: KeyboardShortcutEvent,
+): KeyboardShortcutEvent => ({
+  ...event,
+  type: "keyUp",
+});
 
 export const dispatchKeyboardShortcut = async (
   driver: CdpDriver,
   event: KeyboardShortcutEvent,
 ): Promise<void> => {
   await driver.send("Input.dispatchKeyEvent", event);
+  await driver.send(
+    "Input.dispatchKeyEvent",
+    createKeyboardShortcutKeyUpEvent(event),
+  );
 };
 
 export const expectNoPageLoad = async (

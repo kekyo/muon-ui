@@ -104,6 +104,33 @@ const waitForConsoleMessage = async (
     );
   });
 
+const waitForDocumentLocation = async (
+  driver: CdpDriver,
+  expectedHref: string,
+  timeoutMs: number,
+): Promise<{ href: string; origin: string }> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const location = await driver.evaluate<{ href: string; origin: string }>(
+        `({
+          href: document.location.href,
+          origin: document.location.origin,
+        })`,
+      );
+      if (location.href === expectedHref) {
+        return location;
+      }
+    } catch (error) {
+      if (!String(error).includes("Cannot find default execution context")) {
+        throw error;
+      }
+    }
+    await wait(100);
+  }
+  throw new Error(`Timed out waiting for document location: ${expectedHref}`);
+};
+
 const createCrc32Table = (): Uint32Array => {
   const table = new Uint32Array(256);
   for (let index = 0; index < table.length; index += 1) {
@@ -210,12 +237,15 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
-      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+      const location = await waitForDocumentLocation(
+        driver,
         MUON_APP_URL,
+        targetTimeoutMs,
       );
-      await expect(driver.evaluate("document.location.origin")).resolves.toBe(
-        "asset://main",
-      );
+      expect(location).toEqual({
+        href: MUON_APP_URL,
+        origin: "asset://main",
+      });
       await expect(driver.evaluate("window.isSecureContext")).resolves.toBe(
         true,
       );

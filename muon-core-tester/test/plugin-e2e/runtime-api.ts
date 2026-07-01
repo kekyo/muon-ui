@@ -92,6 +92,7 @@ import type {
   BrowserWindowBounds,
   CdpDriver,
   CdpTarget,
+  KeyboardShortcutEvent,
 } from "./shared.js";
 
 interface ExecutorSpawnOptions {
@@ -352,6 +353,22 @@ const waitForRecycledMuon = async (
     await wait(200);
   }
   throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
+};
+
+const dispatchRecycleKeyboardShortcut = async (
+  driver: CdpDriver,
+  event: KeyboardShortcutEvent,
+): Promise<CdpDriver | undefined> => {
+  try {
+    await dispatchKeyboardShortcut(driver, event);
+    return driver;
+  } catch (error) {
+    if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
+      throw error;
+    }
+    driver.close();
+    return undefined;
+  }
 };
 
 const waitForTextFileContent = async (
@@ -782,30 +799,42 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       expectedRuntimeTarget(),
       "muon-bootstrap.ini",
     );
+    let bootstrapConfigPath = configPath;
     const bootstrapEnvironment = isWindowsRemoteE2e()
       ? { LOCALAPPDATA: stateHome }
       : { XDG_STATE_HOME: stateHome };
     try {
-      await withMuonEnvironment([], bootstrapEnvironment, async (driver) => {
-        const values = await driver.evaluate<{
-          keys: string[];
-          initial: {
-            cefVersionPolicy: string;
-            cefExactVersion: string;
-            catalogRefreshIntervalSeconds: number;
-          };
-          updated: {
-            cefVersionPolicy: string;
-            cefExactVersion: string;
-            catalogRefreshIntervalSeconds: number;
-          };
-          reverted: {
-            cefVersionPolicy: string;
-            cefExactVersion: string;
-            catalogRefreshIntervalSeconds: number;
-          };
-          internalType: string;
-        }>(`(async () => {
+      await withMuonEnvironment(
+        [],
+        bootstrapEnvironment,
+        async (driver, running) => {
+          if (running.remoteWindows !== undefined) {
+            bootstrapConfigPath = join(
+              running.remoteWindows.configDirectory,
+              "..",
+              "muon-bootstrap.ini",
+            );
+            await rm(bootstrapConfigPath, { force: true });
+          }
+          const values = await driver.evaluate<{
+            keys: string[];
+            initial: {
+              cefVersionPolicy: string;
+              cefExactVersion: string;
+              catalogRefreshIntervalSeconds: number;
+            };
+            updated: {
+              cefVersionPolicy: string;
+              cefExactVersion: string;
+              catalogRefreshIntervalSeconds: number;
+            };
+            reverted: {
+              cefVersionPolicy: string;
+              cefExactVersion: string;
+              catalogRefreshIntervalSeconds: number;
+            };
+            internalType: string;
+          }>(`(async () => {
             const initial = await window.muon.bootstrap.getSettings();
             await window.muon.bootstrap.setSettings({
               cefVersionPolicy: "compat-latest",
@@ -828,28 +857,29 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             };
           })()`);
 
-        expect(values).toEqual({
-          keys: ["getSettings", "setSettings", "triggerUpdate"],
-          initial: {
-            cefVersionPolicy: "tested",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 604800,
-          },
-          updated: {
-            cefVersionPolicy: "compat-latest",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 123,
-          },
-          reverted: {
-            cefVersionPolicy: "tested",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 604800,
-          },
-          internalType: "function",
-        });
-      });
+          expect(values).toEqual({
+            keys: ["getSettings", "setSettings", "triggerUpdate"],
+            initial: {
+              cefVersionPolicy: "tested",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 604800,
+            },
+            updated: {
+              cefVersionPolicy: "compat-latest",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 123,
+            },
+            reverted: {
+              cefVersionPolicy: "tested",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 604800,
+            },
+            internalType: "function",
+          });
+        },
+      );
       const bootstrapConfig = await waitForTextFileContent(
-        configPath,
+        bootstrapConfigPath,
         (content) => content.includes("requested=true"),
         "bootstrap update request settings",
       );
@@ -2183,8 +2213,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       const firstProcessId = await driver.evaluate<number>(
         "window.muon.environments.getProcessId()",
       );
-      await dispatchKeyboardShortcut(driver, ctrlShiftF10RecycleShortcut);
-      driver.close();
+      driver = await dispatchRecycleKeyboardShortcut(
+        driver,
+        ctrlShiftF10RecycleShortcut,
+      );
+      driver?.close();
       driver = undefined;
       const recycled = await waitForRecycledMuon(firstProcessId);
       driver = recycled.driver;
@@ -2219,8 +2252,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       const firstProcessId = await driver.evaluate<number>(
         "window.muon.environments.getProcessId()",
       );
-      await dispatchKeyboardShortcut(driver, ctrlF12RecycleShortcut);
-      driver.close();
+      driver = await dispatchRecycleKeyboardShortcut(
+        driver,
+        ctrlF12RecycleShortcut,
+      );
+      driver?.close();
       driver = undefined;
       const recycled = await waitForRecycledMuon(firstProcessId);
       driver = recycled.driver;

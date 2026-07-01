@@ -18,6 +18,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -505,6 +506,96 @@ const runProgressHarness = async (
   return stdout.trim() === "" ? [] : stdout.trim().split(/\r?\n/);
 };
 
+const closeServer = async (server: Server): Promise<void> => {
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => {
+      if (error !== undefined) {
+        rejectClose(error);
+        return;
+      }
+      resolveClose();
+    });
+  });
+};
+
+const startInterruptingArchiveServer = async (
+  catalogPath: string,
+  archiveFileName: string,
+  archivePath: string,
+): Promise<{
+  baseUrl: string;
+  server: Server;
+  getArchiveRequestCount: () => number;
+  getRangeRequestCount: () => number;
+}> => {
+  const catalogContent = await readFile(catalogPath);
+  const archiveContent = await readFile(archivePath);
+  const interruptSize = Math.max(1, Math.floor(archiveContent.length / 2));
+  let archiveRequestCount = 0;
+  let rangeRequestCount = 0;
+  const server = createServer((request, response) => {
+    const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (path === "/source-catalog.json") {
+      response.writeHead(200, {
+        "Content-Length": catalogContent.length,
+        "Content-Type": "application/json",
+      });
+      response.end(catalogContent);
+      return;
+    }
+    if (path !== `/${encodeURIComponent(archiveFileName)}`) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    archiveRequestCount += 1;
+    const rangeHeader = request.headers.range;
+    if (rangeHeader !== undefined) {
+      rangeRequestCount += 1;
+    }
+    if (archiveRequestCount === 1) {
+      response.writeHead(200, {
+        "Accept-Ranges": "bytes",
+        "Content-Length": archiveContent.length,
+        "Content-Type": "application/x-bzip2",
+      });
+      response.write(archiveContent.subarray(0, interruptSize), () => {
+        response.destroy();
+      });
+      return;
+    }
+    const rangeMatch =
+      rangeHeader === undefined ? null : /^bytes=(\d+)-$/.exec(rangeHeader);
+    const start = rangeMatch === null ? 0 : Number(rangeMatch[1]);
+    const body = archiveContent.subarray(start);
+    response.writeHead(rangeMatch === null ? 200 : 206, {
+      "Accept-Ranges": "bytes",
+      "Content-Length": body.length,
+      "Content-Range": `bytes ${start}-${archiveContent.length - 1}/${archiveContent.length}`,
+      "Content-Type": "application/x-bzip2",
+    });
+    response.end(body);
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await closeServer(server);
+    throw new Error("Expected a TCP test server address.");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    server,
+    getArchiveRequestCount: () => archiveRequestCount,
+    getRangeRequestCount: () => rangeRequestCount,
+  };
+};
+
 const findCommand = async (name: string): Promise<string | undefined> => {
   try {
     const { stdout } = await execFileAsync(
@@ -637,6 +728,60 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
+  });
+
+  it("resumes an interrupted HTTP CEF archive download", async () => {
+    const archive = await createFakeCefArchive(createTemporaryDirectory, {
+      archiveFileName: "cef-http-retry.tar.bz2",
+      archiveRootName: "cef_binary_http_retry_linux64_minimal",
+      libcefContent: "http retry cef library\n",
+    });
+    const fixture = await createPrepareFixture(undefined, [
+      {
+        version: "http-retry-cef",
+        chromiumVersion: "150.0.0.0",
+        archive,
+      },
+    ]);
+    await writeBootstrapIni(
+      fixture.muonPath,
+      `[cef]
+versionPolicy=exact
+exactVersion=http-retry-cef
+catalogRefreshIntervalSeconds=0
+`,
+    );
+    const server = await startInterruptingArchiveServer(
+      fixture.catalogPath,
+      archive.fileName,
+      archive.archivePath,
+    );
+    try {
+      const result = await runMuonPrepare({
+        muonPath: fixture.muonPath,
+        cefPath: undefined,
+        stageDir: fixture.stageDir,
+        target: "linux-amd64",
+        cacheDir: fixture.cacheDir,
+        force: false,
+        quiet: false,
+        prepareExecutablePath,
+        environment: {
+          ...process.env,
+          MUON_CEF_CATALOG_URL: `${server.baseUrl}/source-catalog.json`,
+        },
+        cwd: process.cwd(),
+      });
+      const stagePath = requireStagePath(result);
+
+      await expect(
+        readFile(join(stagePath, "libcef.so"), "utf8"),
+      ).resolves.toBe("http retry cef library\n");
+      expect(server.getArchiveRequestCount()).toBeGreaterThanOrEqual(2);
+      expect(server.getRangeRequestCount()).toBeGreaterThanOrEqual(1);
+    } finally {
+      await closeServer(server.server);
+    }
   });
 
   it("uses the embedded tested CEF artifact without refreshing the catalog", async () => {

@@ -20,6 +20,7 @@
 static const char *kDefaultCefCatalogUrl =
     "https://cef-builds.spotifycdn.com/index.json";
 static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
+static const int kCurlDownloadAttemptCount = 4;
 
 static const char *display_target_from_cef_target(const char *target) {
   if (target == NULL) {
@@ -71,11 +72,67 @@ static int verify_size(const char *path, unsigned long long expected) {
   return 0;
 }
 
+static int file_size_equals(const char *path, unsigned long long expected) {
+  if (!muon_path_exists(path)) {
+    return 0;
+  }
+  unsigned long long actual = 0;
+  return muon_get_file_size(path, &actual) == 0 && actual == expected;
+}
+
+static int file_has_download_progress(const char *path) {
+  if (!muon_path_exists(path)) {
+    return 0;
+  }
+  unsigned long long size = 0;
+  return muon_get_file_size(path, &size) == 0 && size > 0;
+}
+
+static int run_curl_download(const char *url, const char *destination,
+                             const char *curl_flags,
+                             unsigned long long expected_size,
+                             const char *status,
+                             MuonPrepareProgressCallback progress_callback,
+                             void *progress_user_data) {
+  for (int attempt = 0; attempt < kCurlDownloadAttemptCount; attempt += 1) {
+    const int final_attempt = attempt + 1 == kCurlDownloadAttemptCount;
+    const int resume = attempt > 0 && file_has_download_progress(destination);
+    char *fresh_argv[] = {"curl", (char *)curl_flags, "-o",
+                          (char *)destination, (char *)url, NULL};
+    char *resume_argv[] = {"curl", (char *)curl_flags, "-C", "-",
+                           "-o",   (char *)destination, (char *)url, NULL};
+    char **argv = resume ? resume_argv : fresh_argv;
+    if (attempt > 0) {
+      muon_print_error("Retrying download: attempt %d/%d\n", attempt + 1,
+                       kCurlDownloadAttemptCount);
+    }
+    const int result =
+        progress_callback == NULL
+            ? (final_attempt ? muon_run_process(argv)
+                             : muon_run_process_allow_failure(argv))
+            : (final_attempt
+                   ? muon_run_process_with_file_progress(
+                         argv, destination, expected_size, progress_callback,
+                         progress_user_data,
+                         MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status)
+                   : muon_run_process_with_file_progress_allow_failure(
+                         argv, destination, expected_size, progress_callback,
+                         progress_user_data,
+                         MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status));
+    if (result == 0 ||
+        (expected_size != 0 && file_size_equals(destination, expected_size))) {
+      return 0;
+    }
+    if (resume) {
+      muon_remove_recursive(destination);
+    }
+  }
+  return -1;
+}
+
 static int copy_url_to_file(const char *url, const char *destination) {
   if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
-    char *argv[] = {"curl", "-fL", "-o", (char *)destination, (char *)url,
-                    NULL};
-    return muon_run_process(argv);
+    return run_curl_download(url, destination, "-fL", 0, NULL, NULL, NULL);
   }
   const char *source = url;
   if (strncmp(url, "file://", 7) == 0) {
@@ -89,11 +146,8 @@ static int copy_url_to_file_progress(
     const char *status,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
-    char *argv[] = {"curl", "-fsSL", "-o", (char *)destination, (char *)url,
-                    NULL};
-    return muon_run_process_with_file_progress(
-        argv, destination, size, progress_callback, progress_user_data,
-        MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status);
+    return run_curl_download(url, destination, "-fsSL", size, status,
+                             progress_callback, progress_user_data);
   }
   const char *source = url;
   if (strncmp(url, "file://", 7) == 0) {

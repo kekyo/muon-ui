@@ -15,38 +15,56 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import AdmZip from "adm-zip";
 import { parse } from "json5";
-import type { InlineConfig, UserConfig } from "vite";
+import {
+  createDirectoryItem,
+  createReadFileItem,
+  createTarPacker,
+  storeReaderToFile,
+  type EntryItem,
+} from "tar-vern";
 
 import {
-  buildMuonApp,
-  type MuonBuildOptions,
+  getDefaultMuonBuildTarget,
   type MuonBuildResult,
   type MuonBuildTarget,
   type MuonBuildTargetResult,
 } from "./build.js";
 import {
-  flattenVitePluginOptions,
-  getMuonVitePluginOptions,
-} from "./vite-options.js";
-import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
-import { getMuonTargetDescriptor } from "./targets.js";
+  loadMuonBuildSequenceProject,
+  muonBuildSequenceSuppressViteBuildEnvironmentKey,
+  resolveMuonViteBuildOptions,
+  runMuonBuildSequence,
+  type MuonBuildSequenceOptions,
+} from "./build-sequence.js";
+import type { MuonViteBuildOptions } from "./vite.js";
+import {
+  allMuonTargets,
+  getMuonTargetDescriptor,
+  normalizeMuonTarget,
+} from "./targets.js";
+import {
+  mergeMuonWindowsResourceOptions,
+  readMuonConfigForWindowsResource,
+  resolveMuonWindowsResource,
+  updateWindowsPeResources,
+  type MuonWindowsResourceOptions,
+  type ResolvedMuonWindowsResource,
+} from "./windows-resource.js";
+import { createWindowsIconFromPngFile } from "./windows-icon.js";
+import {
+  createLinuxDesktopEntry,
+  mergeMuonLinuxDesktopOptions,
+  quoteDesktopExecArgument,
+  type MuonLinuxDesktopOptions,
+} from "./linux-desktop.js";
 
-const supportedPackTypes = ["zip", "deb", "nsis"] as const;
+const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
 const defaultArtifactsDirectory = "artifacts";
 const defaultPackageBuildDirectory = ".muon/pack";
-const suppressViteMuonBuildEnvironmentKey = "MUON_SUPPRESS_VITE_MUON_BUILD";
 
 type JsonObject = Record<string, unknown>;
 
@@ -65,8 +83,10 @@ export interface MuonPackOptions {
   root?: string;
   /**
    * Package artifact types to generate.
+   *
+   * @remarks Defaults to zip, tar.gz, deb, and nsis when omitted.
    */
-  types: readonly string[];
+  types?: readonly string[];
   /**
    * Public target identifiers to build.
    */
@@ -87,6 +107,20 @@ export interface MuonPackOptions {
    * Stable application identifier used for portable runtime state.
    */
   appId?: string;
+  /**
+   * Windows PE and NSIS resource metadata.
+   *
+   * @defaultValue Uses Vite build options, `muon.json` `windows.resource`,
+   * `project.json`, `package.json`, then Muon defaults.
+   */
+  windowsResource?: MuonWindowsResourceOptions;
+  /**
+   * Linux desktop entry metadata.
+   *
+   * @defaultValue Uses Vite build options, `muon.json` `linux.desktop`,
+   * package metadata, then Muon defaults.
+   */
+  linuxDesktop?: MuonLinuxDesktopOptions;
   /**
    * Directory containing package runtime/ and native/ folders.
    */
@@ -173,11 +207,6 @@ export interface MuonPackResult {
   artifacts: MuonPackArtifact[];
 }
 
-interface LoadedViteMuonOptions {
-  root: string;
-  pluginOptions: MuonVitePluginOptions | undefined;
-}
-
 interface PackageMetadata {
   packageName: string;
   version: string;
@@ -185,74 +214,13 @@ interface PackageMetadata {
   author: string;
 }
 
+interface MuonPackTargetPlan {
+  target: MuonBuildTarget;
+  types: MuonPackType[];
+}
+
 const isJsonObject = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isMissingVitePackageError = (error: unknown): boolean => {
-  const candidate = error as { code?: unknown; message?: unknown };
-  return (
-    candidate.code === "ERR_MODULE_NOT_FOUND" &&
-    typeof candidate.message === "string" &&
-    candidate.message.includes("vite")
-  );
-};
-
-const loadViteMuonOptions = async (
-  cwd: string,
-): Promise<LoadedViteMuonOptions> => {
-  let vite: typeof import("vite");
-  try {
-    vite = await import("vite");
-  } catch (error) {
-    if (isMissingVitePackageError(error)) {
-      return {
-        root: resolve(cwd),
-        pluginOptions: undefined,
-      };
-    }
-    throw error;
-  }
-
-  const loaded = await vite.loadConfigFromFile(
-    {
-      command: "build",
-      mode: "production",
-      isPreview: false,
-      isSsrBuild: false,
-    },
-    undefined,
-    cwd,
-    "silent",
-  );
-  if (loaded === null) {
-    return {
-      root: resolve(cwd),
-      pluginOptions: undefined,
-    };
-  }
-
-  const config = loaded.config as UserConfig;
-  const root =
-    typeof config.root === "string" ? resolve(cwd, config.root) : resolve(cwd);
-  const plugins = await flattenVitePluginOptions(config.plugins);
-  const muonPlugins = plugins
-    .map((plugin) => getMuonVitePluginOptions(plugin))
-    .filter(
-      (pluginOptions): pluginOptions is MuonVitePluginOptions =>
-        pluginOptions !== undefined,
-    );
-
-  if (muonPlugins.length > 1) {
-    throw new Error(
-      "Multiple muon() plugin definitions were found in vite.config.*.",
-    );
-  }
-
-  return {
-    root,
-    pluginOptions: muonPlugins[0],
-  };
-};
 
 const readJsonObjectFile = async (path: string): Promise<JsonObject> => {
   const parsed = parse(await readFile(path, "utf8"));
@@ -322,10 +290,24 @@ const resolveMetadata = (
   };
 };
 
-const normalizePackTypes = (types: readonly string[]): MuonPackType[] => {
+const createPackMetadataPackageJson = (
+  packageJson: JsonObject,
+  metadata: PackageMetadata,
+): JsonObject => ({
+  ...packageJson,
+  version: metadata.version,
+});
+
+const normalizePackTypes = (
+  types: readonly string[] | undefined,
+): MuonPackType[] => {
+  if (types === undefined) {
+    return [...supportedPackTypes];
+  }
   const normalized = types
     .flatMap((value) => value.split(","))
     .map((value) => value.trim().toLowerCase())
+    .map((value) => (value === "tgz" ? "tar.gz" : value))
     .filter((value) => value.length > 0);
   if (normalized.length === 0) {
     throw new Error("Specify at least one package type with --type.");
@@ -338,87 +320,105 @@ const normalizePackTypes = (types: readonly string[]): MuonPackType[] => {
   return [...new Set(normalized)] as MuonPackType[];
 };
 
-const getPluginBuildOptions = (
-  pluginOptions: MuonVitePluginOptions | undefined,
-): MuonViteBuildOptions => {
-  return typeof pluginOptions?.build === "object" ? pluginOptions.build : {};
+const packTargetSelectorTargets: Record<string, readonly MuonBuildTarget[]> = {
+  linux: ["linux-amd64", "linux-armhf", "linux-arm64"],
+  windows: ["windows-i686", "windows-amd64"],
+  amd64: ["linux-amd64", "windows-amd64"],
+  arm64: ["linux-arm64"],
+  armhf: ["linux-armhf"],
+  i686: ["windows-i686"],
 };
 
-const resolveBuildOutputDirectory = async (root: string): Promise<string> => {
-  const vite = await import("vite");
-  const resolved = await vite.resolveConfig(
-    { root } satisfies InlineConfig,
-    "build",
-    "production",
-    "production",
-  );
-  return isAbsolute(resolved.build.outDir)
-    ? resolved.build.outDir
-    : resolve(resolved.root, resolved.build.outDir);
-};
-
-const runViteBuild = async (
-  root: string,
-  _environment: NodeJS.ProcessEnv,
-): Promise<void> => {
-  const vite = await import("vite");
-  const previous = process.env[suppressViteMuonBuildEnvironmentKey];
-  process.env[suppressViteMuonBuildEnvironmentKey] = "1";
-  try {
-    await vite.build({ root } satisfies InlineConfig);
-  } finally {
-    if (previous === undefined) {
-      delete process.env[suppressViteMuonBuildEnvironmentKey];
-    } else {
-      process.env[suppressViteMuonBuildEnvironmentKey] = previous;
-    }
+const normalizePackTargetSelector = (
+  selector: string,
+): readonly MuonBuildTarget[] => {
+  const normalized = selector.trim().toLowerCase();
+  if (allMuonTargets.includes(normalized as MuonBuildTarget)) {
+    return [normalized as MuonBuildTarget];
   }
+  const targets = packTargetSelectorTargets[normalized];
+  if (targets !== undefined) {
+    return targets;
+  }
+  throw new Error(`Unsupported muon pack target selector: ${selector}`);
 };
 
-const createBuildOptions = (
-  root: string,
-  assetSourcePath: string,
-  pluginBuildOptions: MuonViteBuildOptions,
+const normalizePackTargetSelectors = (
+  selectors: readonly string[],
+): MuonBuildTarget[] => {
+  const targets = selectors
+    .flatMap((selector) => selector.split(","))
+    .map((selector) => selector.trim())
+    .filter((selector) => selector.length > 0)
+    .flatMap((selector) => normalizePackTargetSelector(selector));
+  return [...new Set(targets)];
+};
+
+const normalizePluginBuildTargets = (
+  targets: readonly string[],
+): MuonBuildTarget[] => {
+  return [
+    ...new Set(
+      targets.map((target) => normalizeMuonTarget(target, "muon pack target")),
+    ),
+  ];
+};
+
+const resolvePackTargetCandidates = (
   options: MuonPackOptions,
-): MuonBuildOptions => {
-  const buildOptions: MuonBuildOptions = {
-    root,
-    assetSourcePath,
-    assetPrefix: "main",
-  };
-  Object.assign(buildOptions, pluginBuildOptions);
+  pluginBuildOptions: MuonViteBuildOptions,
+): MuonBuildTarget[] => {
+  if (options.allTargets === true) {
+    return [...allMuonTargets];
+  }
   if (options.targets !== undefined && options.targets.length > 0) {
-    buildOptions.targets = options.targets;
-    buildOptions.allTargets = false;
-  } else if (options.allTargets !== undefined) {
-    buildOptions.allTargets = options.allTargets;
+    return normalizePackTargetSelectors(options.targets);
   }
-  if (options.configPath !== undefined) {
-    buildOptions.configPath = options.configPath;
+  if (options.allTargets === false) {
+    return [getDefaultMuonBuildTarget()];
   }
-  if (options.appName !== undefined) {
-    buildOptions.appName = options.appName;
+  if (pluginBuildOptions.allTargets === true) {
+    return [...allMuonTargets];
   }
-  if (options.appId !== undefined) {
-    buildOptions.appId = options.appId;
+  if (
+    pluginBuildOptions.targets !== undefined &&
+    pluginBuildOptions.targets.length > 0
+  ) {
+    return normalizePluginBuildTargets(pluginBuildOptions.targets);
   }
-  if (options.packageDirectory !== undefined) {
-    buildOptions.packageDirectory = options.packageDirectory;
+  if (pluginBuildOptions.allTargets === false) {
+    return [getDefaultMuonBuildTarget()];
   }
-  return buildOptions;
+  return [...allMuonTargets];
 };
 
-const assertPackTypeSupportsTarget = (
+const packTypeSupportsTarget = (
   type: MuonPackType,
   target: MuonBuildTarget,
-): void => {
+): boolean => {
   const descriptor = getMuonTargetDescriptor(target);
-  if (type === "deb" && descriptor.os !== "linux") {
-    throw new Error("deb packaging supports only Linux targets.");
+  return (
+    (type === "zip" && descriptor.os === "windows") ||
+    (type === "tar.gz" && descriptor.os === "linux") ||
+    (type === "deb" && descriptor.os === "linux") ||
+    (type === "nsis" && descriptor.os === "windows")
+  );
+};
+
+const createPackTargetPlan = (
+  types: readonly MuonPackType[],
+  targets: readonly MuonBuildTarget[],
+): MuonPackTargetPlan[] => {
+  const plan = targets
+    .map((target) => ({
+      target,
+      types: types.filter((type) => packTypeSupportsTarget(type, target)),
+    }))
+    .filter((entry) => entry.types.length > 0);
+  if (plan.length === 0) {
+    throw new Error("No valid muon pack target and type combinations.");
   }
-  if (type === "nsis" && descriptor.os !== "windows") {
-    throw new Error("nsis packaging supports only Windows targets.");
-  }
+  return plan;
 };
 
 const runTool = async (
@@ -509,6 +509,64 @@ const packageZip = async (
   };
 };
 
+const toArchivePath = (path: string): string => path.split(sep).join("/");
+
+const createTarGzEntryGenerator = async function* (
+  directory: string,
+  entryRoot: string,
+): AsyncGenerator<EntryItem, void, unknown> {
+  yield await createDirectoryItem(entryRoot, "exceptName", {
+    directoryPath: directory,
+  });
+
+  const walk = async function* (
+    currentDirectory: string,
+  ): AsyncGenerator<EntryItem, void, unknown> {
+    const entries = await readdir(currentDirectory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const path = join(currentDirectory, entry.name);
+      const relativePath = toArchivePath(relative(directory, path));
+      const entryName = `${entryRoot}/${relativePath}`;
+      if (entry.isDirectory()) {
+        yield await createDirectoryItem(entryName, "exceptName", {
+          directoryPath: path,
+        });
+        yield* walk(path);
+      } else if (entry.isFile()) {
+        yield await createReadFileItem(entryName, path, "exceptName");
+      }
+    }
+  };
+
+  yield* walk(directory);
+};
+
+const packageTarGz = async (
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+  artifactsRoot: string,
+): Promise<MuonPackArtifact> => {
+  const outputPath = join(
+    artifactsRoot,
+    `${metadata.packageName}-${metadata.version}-${target.target}.tar.gz`,
+  );
+  await mkdir(dirname(outputPath), { recursive: true });
+  const packer = createTarPacker(
+    createTarGzEntryGenerator(
+      target.outputPath,
+      target.distributionDirectoryName,
+    ),
+    "gzip",
+  );
+  await storeReaderToFile(packer, outputPath);
+  return {
+    type: "tar.gz",
+    target: target.target,
+    path: outputPath,
+  };
+};
+
 const packageDeb = async (
   root: string,
   target: MuonBuildTargetResult,
@@ -532,6 +590,18 @@ const packageDeb = async (
   const installedDist = join(installRoot, target.distributionDirectoryName);
   await mkdir(installedDist, { recursive: true });
   await cp(target.outputPath, installedDist, { recursive: true });
+  await writeFile(
+    join(installedDist, "muon-install.json"),
+    `${JSON.stringify(
+      {
+        type: "deb",
+        packageName: metadata.packageName,
+        launcherPath: `/usr/bin/${metadata.packageName}`,
+      },
+      undefined,
+      2,
+    )}\n`,
+  );
   const binPath = join(packageRoot, "usr", "bin", metadata.packageName);
   const launcherName = basename(target.launcherPath);
   await mkdir(dirname(binPath), { recursive: true });
@@ -545,6 +615,38 @@ const packageDeb = async (
     ].join("\n"),
   );
   await chmod(binPath, 0o755);
+  if (target.linuxDesktop === undefined) {
+    throw new Error(`Linux desktop metadata is unavailable: ${target.target}`);
+  }
+  const applicationsPath = join(
+    packageRoot,
+    "usr",
+    "share",
+    "applications",
+    `${target.linuxDesktop.desktopId}.desktop`,
+  );
+  await mkdir(dirname(applicationsPath), { recursive: true });
+  await writeFile(
+    applicationsPath,
+    createLinuxDesktopEntry({
+      desktop: target.linuxDesktop,
+      exec: `${quoteDesktopExecArgument(`/usr/bin/${metadata.packageName}`)} --muon-launch-from=normal`,
+      tryExec: `/usr/bin/${metadata.packageName}`,
+      icon: target.linuxDesktop.desktopId,
+    }),
+  );
+  const iconPath = join(
+    packageRoot,
+    "usr",
+    "share",
+    "icons",
+    "hicolor",
+    "256x256",
+    "apps",
+    `${target.linuxDesktop.desktopId}.png`,
+  );
+  await mkdir(dirname(iconPath), { recursive: true });
+  await cp(join(target.outputPath, target.linuxDesktop.iconFileName), iconPath);
   const controlPath = join(packageRoot, "DEBIAN", "control");
   await mkdir(dirname(controlPath), { recursive: true });
   await writeFile(
@@ -579,10 +681,18 @@ const packageDeb = async (
 const escapeNsis = (value: string): string =>
   value.replaceAll("\\", "\\\\").replaceAll('"', '$\\"');
 
+const nsisUninstallRegistryRoot =
+  "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+
+const createNsisUninstallRegistryKey = (appId: string): string =>
+  `${nsisUninstallRegistryRoot}\\${appId}`;
+
 const packageNsis = async (
   root: string,
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
+  appId: string,
+  windowsResource: ResolvedMuonWindowsResource,
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
@@ -600,8 +710,20 @@ const packageNsis = async (
     artifactsRoot,
     `${metadata.packageName}-${metadata.version}-${descriptor.arch}-setup.exe`,
   );
+  const launcherFileName = basename(target.launcherPath);
+  const uninstallRegistryKey = createNsisUninstallRegistryKey(appId);
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });
+  const iconPath =
+    windowsResource.iconPath === undefined
+      ? undefined
+      : join(
+          dirname(scriptPath),
+          `${metadata.packageName}-${target.target}.ico`,
+        );
+  if (windowsResource.iconPath !== undefined && iconPath !== undefined) {
+    await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
+  }
   await writeFile(
     scriptPath,
     [
@@ -610,11 +732,38 @@ const packageNsis = async (
       `OutFile "${escapeNsis(outputPath)}"`,
       `InstallDir "$LOCALAPPDATA\\Programs\\${escapeNsis(metadata.packageName)}"`,
       "RequestExecutionLevel user",
+      "ShowInstDetails nevershow",
+      "AutoCloseWindow true",
+      ...createNsisResourceDirectives(windowsResource, iconPath),
+      "Page instfiles",
       "Section",
       '  SetOutPath "$INSTDIR"',
       `  File /r "${escapeNsis(target.outputPath)}\\*"`,
-      `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk" "$INSTDIR\\${escapeNsis(basename(target.launcherPath))}"`,
+      `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk" "$INSTDIR\\${escapeNsis(launcherFileName)}"`,
+      '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayName" "${escapeNsis(metadata.packageName)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayVersion" "${escapeNsis(metadata.version)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "Publisher" "${escapeNsis(metadata.author)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "InstallLocation" "$INSTDIR"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayIcon" "$\\"$INSTDIR\\${escapeNsis(launcherFileName)}$\\""`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "UninstallString" "$\\"$INSTDIR\\Uninstall.exe$\\" /S"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "QuietUninstallString" "$\\"$INSTDIR\\Uninstall.exe$\\" /S"`,
+      `  WriteRegDWORD HKCU "${escapeNsis(uninstallRegistryKey)}" "NoModify" 1`,
+      `  WriteRegDWORD HKCU "${escapeNsis(uninstallRegistryKey)}" "NoRepair" 1`,
       "SectionEnd",
+      "",
+      'Section "Uninstall"',
+      `  Delete "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk"`,
+      `  DeleteRegKey HKCU "${escapeNsis(uninstallRegistryKey)}"`,
+      '  RMDir /r "$INSTDIR"',
+      `  RMDir /r "$LOCALAPPDATA\\${escapeNsis(appId)}"`,
+      "SectionEnd",
+      "",
+      "Function .onInstSuccess",
+      "  IfSilent +3",
+      '  SetOutPath "$INSTDIR"',
+      `  Exec "$\\"$INSTDIR\\${escapeNsis(launcherFileName)}$\\""`,
+      "FunctionEnd",
       "",
     ].join("\n"),
   );
@@ -629,8 +778,60 @@ const packageNsis = async (
   };
 };
 
+const createNsisResourceDirectives = (
+  resource: ResolvedMuonWindowsResource,
+  iconPath: string | undefined,
+): string[] => {
+  const lines: string[] = [];
+  if (iconPath !== undefined) {
+    lines.push(`Icon "${escapeNsis(iconPath)}"`);
+    lines.push(`UninstallIcon "${escapeNsis(iconPath)}"`);
+  }
+  lines.push(`VIProductVersion "${escapeNsis(resource.fixedVersion)}"`);
+  lines.push(`VIFileVersion "${escapeNsis(resource.fixedVersion)}"`);
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "CompanyName" "${escapeNsis(resource.companyName)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "FileDescription" "${escapeNsis(resource.fileDescription)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "FileVersion" "${escapeNsis(resource.version)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "ProductName" "${escapeNsis(resource.productName)}"`,
+  );
+  lines.push(
+    `VIAddVersionKey /LANG=${resource.language} "ProductVersion" "${escapeNsis(resource.version)}"`,
+  );
+  if (resource.copyright !== undefined) {
+    lines.push(
+      `VIAddVersionKey /LANG=${resource.language} "LegalCopyright" "${escapeNsis(resource.copyright)}"`,
+    );
+  }
+  return lines;
+};
+
+const reapplyPackWindowsResources = async (
+  targets: readonly MuonBuildTargetResult[],
+  resource: ResolvedMuonWindowsResource,
+  root: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> => {
+  for (const target of targets) {
+    if (getMuonTargetDescriptor(target.target).os === "windows") {
+      await updateWindowsPeResources({
+        executablePath: target.launcherPath,
+        resource,
+        environment,
+        cwd: root,
+      });
+    }
+  }
+};
+
 /**
- * Builds a Vite app, creates Muon dist directories, and packages them.
+ * Runs the Muon build sequence and creates redistributable packages.
  *
  * @param options Pack options.
  * @returns Generated package artifacts.
@@ -640,39 +841,95 @@ export const packMuonApp = async (
 ): Promise<MuonPackResult> => {
   const cwd = resolve(options.root ?? process.cwd());
   const environment = options.environment ?? process.env;
-  const loadedOptions = await loadViteMuonOptions(cwd);
-  const root = loadedOptions.root;
-  const metadata = resolveMetadata(await readPackageJson(root), options);
+  const project = await loadMuonBuildSequenceProject(cwd);
+  const root = project.root;
+  const packageJson = await readPackageJson(root);
+  const metadata = resolveMetadata(packageJson, options);
   const artifactsRoot = resolve(
     root,
     options.artifactsDir ?? defaultArtifactsDirectory,
   );
   const packageBuildRoot = resolve(root, defaultPackageBuildDirectory);
   const types = normalizePackTypes(options.types);
-  const viteOutputDirectory = await resolveBuildOutputDirectory(root);
-  await runViteBuild(root, environment);
-  const build = await buildMuonApp(
-    createBuildOptions(
-      root,
-      viteOutputDirectory,
-      getPluginBuildOptions(loadedOptions.pluginOptions),
-      options,
-    ),
+  const pluginBuildOptions = resolveMuonViteBuildOptions(project.pluginOptions);
+  const targetPlan = createPackTargetPlan(
+    types,
+    resolvePackTargetCandidates(options, pluginBuildOptions),
   );
-  for (const type of types) {
-    for (const target of build.targets) {
-      assertPackTypeSupportsTarget(type, target.target);
-    }
+  const buildOptions: MuonBuildSequenceOptions = {
+    root: cwd,
+    targets: targetPlan.map((entry) => entry.target),
+    allTargets: false,
+  };
+  const windowsResourceOptions = mergeMuonWindowsResourceOptions(
+    options.windowsResource,
+    pluginBuildOptions.windowsResource,
+  );
+  const linuxDesktopOptions = mergeMuonLinuxDesktopOptions(
+    options.linuxDesktop,
+    pluginBuildOptions.linuxDesktop,
+  );
+  if (options.configPath !== undefined) {
+    buildOptions.configPath = options.configPath;
   }
+  if (options.appName !== undefined) {
+    buildOptions.appName = options.appName;
+  }
+  if (options.appId !== undefined) {
+    buildOptions.appId = options.appId;
+  }
+  if (options.packageDirectory !== undefined) {
+    buildOptions.packageDirectory = options.packageDirectory;
+  }
+  if (windowsResourceOptions !== undefined) {
+    buildOptions.windowsResource = windowsResourceOptions;
+  }
+  if (linuxDesktopOptions !== undefined) {
+    buildOptions.linuxDesktop = linuxDesktopOptions;
+  }
+  const windowsResourceConfig = await readMuonConfigForWindowsResource(
+    root,
+    options.configPath,
+  );
+  const windowsResource = await resolveMuonWindowsResource({
+    root,
+    packageDirectory:
+      options.packageDirectory ?? pluginBuildOptions.packageDirectory ?? "",
+    packageJson: createPackMetadataPackageJson(packageJson, metadata),
+    muonConfig: windowsResourceConfig.config,
+    muonConfigDirectory: windowsResourceConfig.directory,
+    options: windowsResourceOptions,
+    defaults: {
+      productName: metadata.packageName,
+      fileDescription: metadata.description,
+      companyName: metadata.author,
+      version: metadata.version,
+      copyright: undefined,
+    },
+  });
+  const build = await runMuonBuildSequence(buildOptions, project);
+  if (options.packageVersion !== undefined) {
+    await reapplyPackWindowsResources(
+      build.targets,
+      windowsResource,
+      root,
+      environment,
+    );
+  }
+  const typesByTarget = new Map(
+    targetPlan.map((entry) => [entry.target, entry.types] as const),
+  );
   await rm(packageBuildRoot, { recursive: true, force: true });
   await rm(join(artifactsRoot, "deb"), { recursive: true, force: true });
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
   const artifacts: MuonPackArtifact[] = [];
   for (const target of build.targets) {
-    for (const type of types) {
+    for (const type of typesByTarget.get(target.target) ?? []) {
       if (type === "zip") {
         artifacts.push(await packageZip(target, metadata, artifactsRoot));
+      } else if (type === "tar.gz") {
+        artifacts.push(await packageTarGz(target, metadata, artifactsRoot));
       } else if (type === "deb") {
         artifacts.push(
           await packageDeb(
@@ -690,6 +947,8 @@ export const packMuonApp = async (
             root,
             target,
             metadata,
+            build.appId,
+            windowsResource,
             artifactsRoot,
             packageBuildRoot,
             environment,
@@ -711,4 +970,4 @@ export const packMuonApp = async (
 };
 
 export const muonPackSuppressViteBuildEnvironmentKey =
-  suppressViteMuonBuildEnvironmentKey;
+  muonBuildSequenceSuppressViteBuildEnvironmentKey;

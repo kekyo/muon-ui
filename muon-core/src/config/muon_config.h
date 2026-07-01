@@ -419,6 +419,10 @@ struct MuonConfig {
    */
   std::string default_version_policy = "tested";
   /**
+   * Linux desktop identifier used for Wayland app ID and X11 WM_CLASS.
+   */
+  std::string desktop_id = "muon";
+  /**
    * Browser asset storage configuration.
    */
   MuonAssetConfig asset;

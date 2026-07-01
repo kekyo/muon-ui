@@ -15,7 +15,7 @@ import {
 } from "./targets.js";
 
 /**
- * Options used to invoke the native Muon prepare helper.
+ * Options used to invoke the native Muon builder helper.
  */
 export interface MuonPrepareOptions {
   /**
@@ -39,7 +39,7 @@ export interface MuonPrepareOptions {
   target: string | undefined;
 
   /**
-   * Cache directory passed to muon-prepare.
+   * Cache directory passed to muon-builder.
    */
   cacheDir: string | undefined;
 
@@ -49,12 +49,12 @@ export interface MuonPrepareOptions {
   force: boolean;
 
   /**
-   * Suppress progress messages from the native prepare process.
+   * Suppress progress messages from the native builder process.
    */
   quiet: boolean;
 
   /**
-   * Explicit native muon-prepare executable path.
+   * Explicit native muon-builder executable path.
    */
   prepareExecutablePath: string | undefined;
 
@@ -70,7 +70,49 @@ export interface MuonPrepareOptions {
 }
 
 /**
- * Result returned by native muon-prepare.
+ * Options used to update Windows PE resources through the native Muon helper.
+ */
+export interface MuonPrepareResourceUpdateOptions {
+  /**
+   * Input PE executable path.
+   */
+  inputPath: string;
+
+  /**
+   * Engraver update JSON path.
+   */
+  updatesJsonPath: string;
+
+  /**
+   * Output PE executable path.
+   *
+   * @remarks This must be different from `inputPath`.
+   */
+  outputPath: string;
+
+  /**
+   * Suppress progress messages from the native builder process.
+   */
+  quiet: boolean;
+
+  /**
+   * Explicit native muon-builder executable path.
+   */
+  prepareExecutablePath: string | undefined;
+
+  /**
+   * Environment used for the child process.
+   */
+  environment: NodeJS.ProcessEnv;
+
+  /**
+   * Working directory used for the child process.
+   */
+  cwd: string | undefined;
+}
+
+/**
+ * Result returned by native muon-builder.
  */
 export interface MuonPrepareResult {
   /**
@@ -114,8 +156,8 @@ export const getDefaultMuonPrepareTarget = (
   }
 };
 
-const getPrepareExecutableName = (platform: NodeJS.Platform): string =>
-  platform === "win32" ? "muon-prepare.exe" : "muon-prepare";
+const getBuilderExecutableName = (platform: NodeJS.Platform): string =>
+  platform === "win32" ? "muon-builder.exe" : "muon-builder";
 
 const moduleDirectory =
   typeof __dirname === "string"
@@ -131,15 +173,15 @@ const canExecute = async (path: string): Promise<boolean> => {
   }
 };
 
-const resolveMuonPrepareExecutable = async (
-  options: MuonPrepareOptions,
+const resolveMuonBuilderExecutable = async (
+  options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment">,
 ): Promise<string> => {
   const explicit =
-    options.prepareExecutablePath ?? options.environment.MUON_PREPARE_PATH;
+    options.prepareExecutablePath ?? options.environment.MUON_BUILDER_PATH;
   if (explicit !== undefined && explicit !== "") {
     return explicit;
   }
-  const executableName = getPrepareExecutableName(process.platform);
+  const executableName = getBuilderExecutableName(process.platform);
   const target = getDefaultMuonPrepareTarget(process.platform, process.arch);
   const candidates = [
     join(moduleDirectory, "native", target, executableName),
@@ -179,18 +221,149 @@ const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
   return args;
 };
 
-/**
- * Invokes the native muon-prepare executable and returns the prepared runtime.
- *
- * @param options Native prepare invocation options.
- * @returns Prepared runtime location.
- */
-export const runMuonPrepare = async (
-  options: MuonPrepareOptions,
-): Promise<MuonPrepareResult> => {
-  const executable = await resolveMuonPrepareExecutable(options);
-  const args = createMuonPrepareArguments(options);
-  const child = spawn(executable, args, {
+interface MuonPrepareStderrForwarder {
+  write(chunk: string): void;
+  flush(): void;
+}
+
+const spinnerFrames = ["-", "\\", "|", "/"] as const;
+const spinnerIntervalMilliseconds = 100;
+const terminalLineStart = "\r";
+const terminalClearLine = "\x1b[K";
+
+const isMuonPrepareStatusLine = (line: string): boolean => {
+  const trimmed = line.trimEnd();
+  return (
+    trimmed.endsWith("...") ||
+    trimmed === "Failed to prepare CEF." ||
+    trimmed.startsWith("Downloading CEF binary:")
+  );
+};
+
+const shouldKeepMuonPrepareStatusAfterLine = (line: string): boolean =>
+  line.startsWith("Muon files copied to staging:");
+
+const createPlainStderrForwarder = (): MuonPrepareStderrForwarder => ({
+  write: (chunk): void => {
+    process.stderr.write(chunk);
+  },
+  flush: (): void => {},
+});
+
+const createSpinnerStderrForwarder = (): MuonPrepareStderrForwarder => {
+  let pending = "";
+  let activeStatus: string | undefined = undefined;
+  let frameIndex = 0;
+  let timer: NodeJS.Timeout | undefined = undefined;
+
+  const writeRaw = (chunk: string): void => {
+    process.stderr.write(chunk);
+  };
+
+  const stopTimer = (): void => {
+    if (timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+
+  const renderStatus = (): void => {
+    if (activeStatus === undefined) {
+      return;
+    }
+    const frame = spinnerFrames[frameIndex] ?? spinnerFrames[0];
+    writeRaw(
+      `${terminalLineStart}${frame} ${activeStatus}${terminalClearLine}`,
+    );
+    frameIndex = (frameIndex + 1) % spinnerFrames.length;
+  };
+
+  const ensureTimer = (): void => {
+    if (timer === undefined) {
+      timer = setInterval(renderStatus, spinnerIntervalMilliseconds);
+    }
+  };
+
+  const finishStatus = (): void => {
+    if (activeStatus === undefined) {
+      return;
+    }
+    const status = activeStatus;
+    activeStatus = undefined;
+    stopTimer();
+    frameIndex = 0;
+    writeRaw(`${terminalLineStart}${status}${terminalClearLine}\n`);
+  };
+
+  const startStatus = (status: string): void => {
+    if (activeStatus !== undefined && activeStatus !== status) {
+      finishStatus();
+    }
+    activeStatus = status;
+    renderStatus();
+    ensureTimer();
+  };
+
+  const writeLine = (line: string): void => {
+    const text = line.replace(/\r?\n$/, "");
+    if (isMuonPrepareStatusLine(text)) {
+      startStatus(text.trimEnd());
+      return;
+    }
+    if (
+      activeStatus !== undefined &&
+      shouldKeepMuonPrepareStatusAfterLine(text)
+    ) {
+      writeRaw(
+        `${terminalLineStart}${terminalClearLine}${
+          line.endsWith("\n") ? line : `${line}\n`
+        }`,
+      );
+      renderStatus();
+      return;
+    }
+    finishStatus();
+    writeRaw(line);
+  };
+
+  return {
+    write: (chunk): void => {
+      pending += chunk;
+      for (;;) {
+        const newlineIndex = pending.indexOf("\n");
+        if (newlineIndex < 0) {
+          break;
+        }
+        const line = pending.slice(0, newlineIndex + 1);
+        pending = pending.slice(newlineIndex + 1);
+        writeLine(line);
+      }
+    },
+    flush: (): void => {
+      if (pending.length > 0) {
+        const line = pending;
+        pending = "";
+        writeLine(line);
+      }
+      finishStatus();
+    },
+  };
+};
+
+const createMuonPrepareStderrForwarder = (): MuonPrepareStderrForwarder =>
+  process.stderr.isTTY === true
+    ? createSpinnerStderrForwarder()
+    : createPlainStderrForwarder();
+
+const runMuonPrepareCommand = async (
+  options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment"> & {
+    args: readonly string[];
+    cwd: string | undefined;
+    quiet: boolean;
+  },
+): Promise<string> => {
+  const executable = await resolveMuonBuilderExecutable(options);
+  const child = spawn(executable, [...options.args], {
     cwd: options.cwd,
     env: options.environment,
     stdio: ["ignore", "pipe", "pipe"],
@@ -199,26 +372,53 @@ export const runMuonPrepare = async (
   let stderr = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
+  const stderrForwarder = options.quiet
+    ? undefined
+    : createMuonPrepareStderrForwarder();
   child.stdout.on("data", (chunk: string) => {
     stdout += chunk;
   });
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
-    if (!options.quiet) {
-      process.stderr.write(chunk);
+    stderrForwarder?.write(chunk);
+  });
+  const exitCode = await (async (): Promise<number> => {
+    try {
+      return await new Promise<number>((resolvePromise, reject) => {
+        child.on("error", reject);
+        child.on("close", (code) => {
+          resolvePromise(code ?? 1);
+        });
+      });
+    } finally {
+      stderrForwarder?.flush();
     }
-  });
-  const exitCode = await new Promise<number>((resolvePromise, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => {
-      resolvePromise(code ?? 1);
-    });
-  });
+  })();
   if (exitCode !== 0) {
     throw new Error(
-      `muon-prepare failed with exit code ${exitCode}.\n${stderr.trim()}`,
+      `muon-builder failed with exit code ${exitCode}.\n${stderr.trim()}`,
     );
   }
+  return stdout;
+};
+
+/**
+ * Invokes the native muon-builder executable and returns the prepared runtime.
+ *
+ * @param options Native prepare invocation options.
+ * @returns Prepared runtime location.
+ */
+export const runMuonPrepare = async (
+  options: MuonPrepareOptions,
+): Promise<MuonPrepareResult> => {
+  const args = createMuonPrepareArguments(options);
+  const stdout = await runMuonPrepareCommand({
+    prepareExecutablePath: options.prepareExecutablePath,
+    environment: options.environment,
+    cwd: options.cwd,
+    quiet: options.quiet,
+    args,
+  });
   const result = JSON.parse(stdout) as Partial<MuonPrepareResult>;
   if (
     (result.stagePath !== undefined && typeof result.stagePath !== "string") ||
@@ -226,7 +426,7 @@ export const runMuonPrepare = async (
     typeof result.cefPath !== "string" ||
     typeof result.cacheHit !== "boolean"
   ) {
-    throw new Error(`muon-prepare returned invalid JSON: ${stdout}`);
+    throw new Error(`muon-builder returned invalid JSON: ${stdout}`);
   }
   return {
     ...(result.stagePath === undefined ? {} : { stagePath: result.stagePath }),
@@ -234,4 +434,30 @@ export const runMuonPrepare = async (
     cefPath: result.cefPath,
     cacheHit: result.cacheHit,
   };
+};
+
+/**
+ * Invokes the native muon-builder executable to write Windows PE resources.
+ *
+ * @param options Resource update invocation options.
+ */
+export const runMuonPrepareResourceUpdate = async (
+  options: MuonPrepareResourceUpdateOptions,
+): Promise<void> => {
+  await runMuonPrepareCommand({
+    prepareExecutablePath: options.prepareExecutablePath,
+    environment: options.environment,
+    cwd: options.cwd,
+    quiet: options.quiet,
+    args: [
+      "resource",
+      "--input",
+      options.inputPath,
+      "--updates-json",
+      options.updatesJsonPath,
+      "--output",
+      options.outputPath,
+      ...(options.quiet ? ["--quiet"] : []),
+    ],
+  });
 };

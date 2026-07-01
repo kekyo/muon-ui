@@ -188,6 +188,8 @@ assert_native_dependency_checkouts() {
     fail "Missing tra-ffic checkout: ${TRA_FFIC_ROOT_HOST}"
   [[ -f "${CARDIO_ROOT_HOST}/include/cardio.h" ]] ||
     fail "Missing cardio checkout: ${CARDIO_ROOT_HOST}"
+  [[ -f "${SCRIPT_DIR}/deps/engraver/libengraver/include/engraver.h" ]] ||
+    fail "Missing engraver checkout: ${SCRIPT_DIR}/deps/engraver"
 }
 
 build_linux_target() {
@@ -213,8 +215,8 @@ build_linux_target() {
     -e "HOME=/tmp" \
     -e "MUON_PACKAGE_ARCH=${arch}" \
     -e "MUON_PACKAGE_TARGET=${target_name}" \
-    -e "MUON_PREPARE_VERSION=${MUON_PREPARE_VERSION}" \
-    -e "MUON_PREPARE_GIT_COMMIT_HASH=${MUON_PREPARE_GIT_COMMIT_HASH}" \
+    -e "MUON_BUILDER_VERSION=${MUON_BUILDER_VERSION}" \
+    -e "MUON_BUILDER_GIT_COMMIT_HASH=${MUON_BUILDER_GIT_COMMIT_HASH}" \
     -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
@@ -264,8 +266,8 @@ build_linux_targets() {
 
 build_windows_targets() {
   printf 'Building Windows package targets\n'
-  npm run build:target --workspace muon-prepare -- dist Release windows-i686
-  npm run build:target --workspace muon-prepare -- dist Release windows-amd64
+  npm run build:target --workspace muon-builder -- dist Release windows-i686
+  npm run build:target --workspace muon-builder -- dist Release windows-amd64
   npm run build:target --workspace muon-core -- dist Release windows-i686
   npm run build:target --workspace muon-core -- dist Release windows-amd64
 }
@@ -277,15 +279,15 @@ stage_targets() {
 
   printf 'Staging package targets\n'
   if is_full_arch_matrix "${arches[@]}"; then
-    (cd muon-ui && node scripts/stage-muon-prepare.mjs --all)
+    (cd muon-ui && node scripts/stage-muon-builder.mjs --all)
   else
     for arch in "${arches[@]}"; do
       local target_name
       target_name="$(target_name_for_arch "${arch}")"
-      (cd muon-ui && node scripts/stage-muon-prepare.mjs --target "${target_name}" --dist)
+      (cd muon-ui && node scripts/stage-muon-builder.mjs --target "${target_name}" --dist)
     done
-    (cd muon-ui && node scripts/stage-muon-prepare.mjs --target windows-i686 --dist)
-    (cd muon-ui && node scripts/stage-muon-prepare.mjs --target windows-amd64 --dist)
+    (cd muon-ui && node scripts/stage-muon-builder.mjs --target windows-i686 --dist)
+    (cd muon-ui && node scripts/stage-muon-builder.mjs --target windows-amd64 --dist)
   fi
 }
 
@@ -331,7 +333,7 @@ validate_linux_artifacts() {
     esac
 
     validate_readelf_header \
-      "muon-ui/dist/native/${target_name}/muon-prepare" \
+      "muon-ui/dist/native/${target_name}/muon-builder" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
@@ -368,11 +370,11 @@ build_dist() {
   require_command npm
   require_command node
 
-  export MUON_PREPARE_VERSION
-  export MUON_PREPARE_GIT_COMMIT_HASH
+  export MUON_BUILDER_VERSION
+  export MUON_BUILDER_GIT_COMMIT_HASH
   export MUON_CORE_VERSION_HEADER
-  MUON_PREPARE_VERSION="$(package_version "muon-prepare/package.json")"
-  MUON_PREPARE_GIT_COMMIT_HASH="$(git_commit_hash)"
+  MUON_BUILDER_VERSION="$(package_version "muon-builder/package.json")"
+  MUON_BUILDER_GIT_COMMIT_HASH="$(git_commit_hash)"
   generate_core_version_header
   MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_HOST}"
 
@@ -427,11 +429,13 @@ verify_package_file_list() {
   require_pack_file "muon.d.ts"
   require_pack_file "vite.d.ts"
   require_pack_file "dist/cli.cjs"
-  require_pack_file "dist/native/linux-amd64/muon-prepare"
-  require_pack_file "dist/native/linux-armhf/muon-prepare"
-  require_pack_file "dist/native/linux-arm64/muon-prepare"
-  require_pack_file "dist/native/windows-i686/muon-prepare.exe"
-  require_pack_file "dist/native/windows-amd64/muon-prepare.exe"
+  require_pack_file "dist/native/muon-bootstrap.png"
+  reject_pack_file "dist/native/muon-bootstrap.ico"
+  require_pack_file "dist/native/linux-amd64/muon-builder"
+  require_pack_file "dist/native/linux-armhf/muon-builder"
+  require_pack_file "dist/native/linux-arm64/muon-builder"
+  require_pack_file "dist/native/windows-i686/muon-builder.exe"
+  require_pack_file "dist/native/windows-amd64/muon-builder.exe"
   require_pack_file "dist/runtime/linux-amd64/libcardio.so"
   require_pack_file "dist/runtime/linux-armhf/libcardio.so"
   require_pack_file "dist/runtime/linux-arm64/libcardio.so"
@@ -444,7 +448,7 @@ verify_package_file_list() {
 
   reject_pack_file "dist/cli.mjs"
   reject_pack_file "dist/vite.d.ts"
-  reject_pack_file "dist/native/linux32/muon-prepare"
+  reject_pack_file "dist/native/linux32/muon-builder"
   reject_pack_file "dist/runtime/linux-amd64/muon-runtime.json"
   reject_pack_file "dist/runtime/linux-armhf/muon-runtime.json"
   reject_pack_file "dist/runtime/linux-arm64/muon-runtime.json"

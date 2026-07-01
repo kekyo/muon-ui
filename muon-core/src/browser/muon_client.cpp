@@ -277,7 +277,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
       CefRefPtr<CefDictionaryValue> extra_info,
       bool initial_title_bar_visibility,
       MuonTitleBarManifest title_bar_manifest,
-      MuonTitleBarBackgroundColor title_bar_background_color)
+      MuonTitleBarBackgroundColor title_bar_background_color,
+      std::string linux_desktop_id)
       : client_(client),
         shortcut_handler_(shortcut_handler),
         close_handler_(close_handler),
@@ -286,7 +287,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
         extra_info_(extra_info),
         initial_title_bar_visibility_(initial_title_bar_visibility),
         title_bar_manifest_(std::move(title_bar_manifest)),
-        title_bar_background_color_(title_bar_background_color) {}
+        title_bar_background_color_(title_bar_background_color),
+        linux_desktop_id_(std::move(linux_desktop_id)) {}
 
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
@@ -309,7 +311,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
         extra_info_, nullptr,
         new MuonBrowserViewDelegate(
             false, initial_title_bar_visibility_, title_bar_manifest_,
-            title_bar_background_color_, shortcut_handler_, close_handler_));
+            title_bar_background_color_, shortcut_handler_, close_handler_,
+            linux_desktop_id_));
     if (!browser_view) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "Failed to create detached popup browser view");
@@ -330,7 +333,8 @@ class OpenMuonDetachedPopupTask final : public CefTask {
                                title_bar_manifest_,
                                title_bar_background_color_,
                                shortcut_handler_,
-                               close_handler_));
+                               close_handler_,
+                               linux_desktop_id_));
   }
 
  private:
@@ -343,6 +347,7 @@ class OpenMuonDetachedPopupTask final : public CefTask {
   const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
+  const std::string linux_desktop_id_;
 
   IMPLEMENT_REFCOUNTING(OpenMuonDetachedPopupTask);
   DISALLOW_COPY_AND_ASSIGN(OpenMuonDetachedPopupTask);
@@ -832,10 +837,12 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
                        MuonTitleBarManifest title_bar_manifest,
                        MuonTitleBarBackgroundColor title_bar_background_color,
                        bool has_initial_title_bar_icon,
-                       MuonTitleBarIcon initial_title_bar_icon)
+                       MuonTitleBarIcon initial_title_bar_icon,
+                       std::string linux_desktop_id)
     : browser_config_(browser_config),
       title_bar_manifest_(std::move(title_bar_manifest)),
       title_bar_background_color_(title_bar_background_color),
+      linux_desktop_id_(std::move(linux_desktop_id)),
       has_initial_title_bar_icon_(has_initial_title_bar_icon),
       initial_title_bar_icon_(std::move(initial_title_bar_icon)),
       shutdown_requester_(std::move(shutdown_requester)),
@@ -1005,7 +1012,8 @@ bool MuonClient::OnBeforePopup(
                           browser_config_.background_color,
                           detached_extra_info,
                           browser_config_.initial_title_bar_visibility,
-                          title_bar_manifest_, title_bar_background_color_));
+                          title_bar_manifest_, title_bar_background_color_,
+                          linux_desktop_id_));
   return true;
 }
 

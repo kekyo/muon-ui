@@ -3,6 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-#include "prepare.h"
+#ifndef MUON_PREPARE_ENGRAVE_COMPAT_H
+#define MUON_PREPARE_ENGRAVE_COMPAT_H
 
-int main(int argc, char **argv) { return muon_prepare_main(argc, argv); }
+#include "engraver.h"
+
+#endif

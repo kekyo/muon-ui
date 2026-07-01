@@ -44,15 +44,15 @@ import {
 } from "../src/vite-internals.js";
 import muon from "../src/vite.js";
 import {
-  buildTestMuonPrepare,
+  buildTestMuonBuilder,
   createRuntimeInfoHeader,
-} from "./test-muon-prepare.js";
+} from "./test-muon-builder.js";
 
 const execFileAsync = promisify(execFile);
 
 const originalBrowser = process.env.BROWSER;
 const originalCacheDir = process.env.MUON_CACHE_DIR;
-const originalPreparePath = process.env.MUON_PREPARE_PATH;
+const originalPreparePath = process.env.MUON_BUILDER_PATH;
 const cleanupDirectories: string[] = [];
 const suiteCleanupDirectories: string[] = [];
 const servers: ViteDevServer[] = [];
@@ -97,7 +97,7 @@ beforeAll(async () => {
   const buildRoot = await createSuiteTemporaryDirectory("muon-vite-native-");
   const executableName =
     process.platform === "win32" ? "muon-core.exe" : "muon-core";
-  const binaries = await buildTestMuonPrepare(
+  const binaries = await buildTestMuonBuilder(
     buildRoot,
     createRuntimeInfoHeader({
       archiveFileName: "cef.tar.bz2",
@@ -108,14 +108,14 @@ beforeAll(async () => {
       corePayload: [executableName, "plugins"],
     }),
   );
-  process.env.MUON_PREPARE_PATH = binaries.prepareExecutablePath;
+  process.env.MUON_BUILDER_PATH = binaries.prepareExecutablePath;
 });
 
 afterAll(async () => {
   if (originalPreparePath === undefined) {
-    delete process.env.MUON_PREPARE_PATH;
+    delete process.env.MUON_BUILDER_PATH;
   } else {
-    process.env.MUON_PREPARE_PATH = originalPreparePath;
+    process.env.MUON_BUILDER_PATH = originalPreparePath;
   }
   for (const directory of suiteCleanupDirectories.splice(0)) {
     await rm(directory, { recursive: true, force: true });
@@ -538,7 +538,7 @@ describe("muon Vite plugin", () => {
 
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\ndist-muon-*/\nartifacts/\n",
+      ".muon/\ndist-muon/\nartifacts/\n",
     );
     await expect(
       access(join(root, ".muon", "linux-amd64")),
@@ -606,7 +606,7 @@ describe("muon Vite plugin", () => {
 
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\ndist-muon-*/\nartifacts/\n",
+      ".muon/\ndist-muon/\nartifacts/\n",
     );
     await expect(access(join(root, ".muon"))).rejects.toThrow();
   });
@@ -933,7 +933,7 @@ describe("muon dev CLI", () => {
       devResult.overrideConfigPath,
     ]);
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\ndist-muon-*/\nartifacts/\n",
+      ".muon/\ndist-muon/\nartifacts/\n",
     );
     expect(devResult.exitCode).toBe(0);
     expect(devResult.projectConfigPath).toBe(join(root, "muon.json"));

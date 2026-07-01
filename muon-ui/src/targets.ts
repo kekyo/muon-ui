@@ -49,7 +49,7 @@ export interface MuonTargetDescriptor {
    */
   arch: "amd64" | "armhf" | "arm64" | "i686";
   /**
-   * Fixed dist directory name for generated app distributions.
+   * Fixed dist directory path for generated app distributions.
    */
   distributionDirectoryName: string;
   /**
@@ -91,7 +91,7 @@ const targetDescriptors = {
     cefTarget: "linux64",
     os: "linux",
     arch: "amd64",
-    distributionDirectoryName: "dist-muon-linux-amd64",
+    distributionDirectoryName: "dist-muon/linux-amd64",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
     launcherExtension: "",
@@ -102,7 +102,7 @@ const targetDescriptors = {
     cefTarget: "linuxarm",
     os: "linux",
     arch: "armhf",
-    distributionDirectoryName: "dist-muon-linux-armhf",
+    distributionDirectoryName: "dist-muon/linux-armhf",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
     launcherExtension: "",
@@ -113,7 +113,7 @@ const targetDescriptors = {
     cefTarget: "linuxarm64",
     os: "linux",
     arch: "arm64",
-    distributionDirectoryName: "dist-muon-linux-arm64",
+    distributionDirectoryName: "dist-muon/linux-arm64",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
     launcherExtension: "",
@@ -124,7 +124,7 @@ const targetDescriptors = {
     cefTarget: "windows32",
     os: "windows",
     arch: "i686",
-    distributionDirectoryName: "dist-muon-windows-i686",
+    distributionDirectoryName: "dist-muon/windows-i686",
     runtimeExecutableName: "muon-core.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
     launcherExtension: ".exe",
@@ -140,7 +140,7 @@ const targetDescriptors = {
     cefTarget: "windows64",
     os: "windows",
     arch: "amd64",
-    distributionDirectoryName: "dist-muon-windows-amd64",
+    distributionDirectoryName: "dist-muon/windows-amd64",
     runtimeExecutableName: "muon-core.exe",
     bootstrapExecutableName: "muon-bootstrap.exe",
     launcherExtension: ".exe",

@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import * as ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
@@ -33,6 +34,384 @@ interface NpmPackEntry {
     path: string;
   }[];
 }
+
+interface PublicDeclarationDefaultValueTarget {
+  filePath: string;
+  parentName: string;
+  memberName: string;
+}
+
+interface PublicDeclarationCallableDefaultValueTarget {
+  filePath: string;
+  callableName: string;
+}
+
+const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[] =
+  [
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonBootstrapSettings",
+      memberName: "cefVersionPolicy",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonBootstrapSettings",
+      memberName: "cefExactVersion",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonBootstrapSettings",
+      memberName: "catalogRefreshIntervalSeconds",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonBootstrapSettingsPatch",
+      memberName: "cefVersionPolicy",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonBootstrapSettingsPatch",
+      memberName: "cefExactVersion",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonBootstrapSettingsPatch",
+      memberName: "catalogRefreshIntervalSeconds",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsOperationOptions",
+      memberName: "signal",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsReadFileOptions",
+      memberName: "position",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsReadFileOptions",
+      memberName: "length",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWriteFileOptions",
+      memberName: "position",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsAccessOptions",
+      memberName: "mode",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsReadDirectoryOptions",
+      memberName: "withFileTypes",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsMakeDirectoryOptions",
+      memberName: "recursive",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsRemoveOptions",
+      memberName: "recursive",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsRemoveOptions",
+      memberName: "force",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsCopyFileOptions",
+      memberName: "overwrite",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsGtkDialogOptions",
+      memberName: "localOnly",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsGtkDialogOptions",
+      memberName: "createFolders",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsGtkDialogOptions",
+      memberName: "mimeTypes",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "forceFilesystem",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "noDereferenceLinks",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "dontAddToRecent",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "noValidate",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "strictFileTypes",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "pathMustExist",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsWin32DialogOptions",
+      memberName: "fileMustExist",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "title",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "defaultPath",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "buttonLabel",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "modal",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "showHidden",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "filters",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "gtk",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsDialogOptions",
+      memberName: "win32",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsSaveDialogOptions",
+      memberName: "defaultName",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonFsSaveDialogOptions",
+      memberName: "confirmOverwrite",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonExecutorSpawnOptions",
+      memberName: "args",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonExecutorSpawnOptions",
+      memberName: "stdin",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonExecutorSpawnOptions",
+      memberName: "cwd",
+    },
+    {
+      filePath: "muon.d.ts",
+      parentName: "MuonExecutorSpawnOptions",
+      memberName: "env",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "targets",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "allTargets",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "appName",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "appId",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "outputRoot",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "configPath",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "windowsResource",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "linuxDesktop",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "packageDirectory",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
+      memberName: "assetSalt",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
+      memberName: "muonPath",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
+      memberName: "cefPath",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
+      memberName: "stagePath",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
+      memberName: "open",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
+      memberName: "enableDebugger",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
+      memberName: "build",
+    },
+  ];
+
+const publicDeclarationCallableDefaultValueTargets: PublicDeclarationCallableDefaultValueTarget[] =
+  [
+    {
+      filePath: "vite.d.ts",
+      callableName: "muon",
+    },
+  ];
+
+const readDeclarationSourceFile = async (
+  filePath: string,
+): Promise<ts.SourceFile> => {
+  const declarationPath = resolve(filePath);
+  const source = await readFile(declarationPath, "utf8");
+  return ts.createSourceFile(
+    declarationPath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+};
+
+const getMemberName = (member: ts.TypeElement): string | undefined =>
+  member.name === undefined ? undefined : member.name.getText();
+
+const hasDefaultValueTag = (node: ts.Node): boolean =>
+  ts.getJSDocTags(node).some((tag) => tag.tagName.getText() === "defaultValue");
+
+const hasDefaultValueTagOnNodeOrParents = (node: ts.Node): boolean => {
+  let current: ts.Node | undefined = node;
+  while (current !== undefined) {
+    if (hasDefaultValueTag(current)) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+};
+
+const findInterfaceMember = (
+  sourceFile: ts.SourceFile,
+  parentName: string,
+  memberName: string,
+): ts.TypeElement | undefined => {
+  let found: ts.TypeElement | undefined = undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) {
+      return;
+    }
+    if (ts.isInterfaceDeclaration(node) && node.name.text === parentName) {
+      found = node.members.find(
+        (member) => getMemberName(member) === memberName,
+      );
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+};
+
+const findCallableDeclaration = (
+  sourceFile: ts.SourceFile,
+  callableName: string,
+): ts.Node | undefined => {
+  let found: ts.Node | undefined = undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) {
+      return;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === callableName
+    ) {
+      found = node;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+};
 
 const createConsumerProject = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "muon-consumer-"));
@@ -127,13 +506,20 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
   );
   await mkdir(join(root, "deps", "tra-ffic", "include"), { recursive: true });
   await mkdir(join(root, "deps", "cardio", "include"), { recursive: true });
-  await mkdir(join(root, "muon-prepare"), { recursive: true });
+  await mkdir(join(root, "deps", "engraver", "libengraver", "include"), {
+    recursive: true,
+  });
+  await mkdir(join(root, "muon-builder"), { recursive: true });
   await mkdir(join(root, "muon-core"), { recursive: true });
   await mkdir(join(root, "muon-ui", "scripts"), { recursive: true });
   await writeFile(join(root, "deps", "tra-ffic", "include", "tra_ffic.h"), "");
   await writeFile(join(root, "deps", "cardio", "include", "cardio.h"), "");
   await writeFile(
-    join(root, "muon-prepare", "package.json"),
+    join(root, "deps", "engraver", "libengraver", "include", "engraver.h"),
+    "",
+  );
+  await writeFile(
+    join(root, "muon-builder", "package.json"),
     `${JSON.stringify({ version: "0.0.0" }, null, 2)}\n`,
   );
   await writeFile(
@@ -145,7 +531,7 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
     `${JSON.stringify({ version: "1.2.3" }, null, 2)}\n`,
   );
   await writeFile(
-    join(root, "muon-ui", "scripts", "stage-muon-prepare.mjs"),
+    join(root, "muon-ui", "scripts", "stage-muon-builder.mjs"),
     "process.exit(0);\n",
   );
   await writeExecutableScript(
@@ -399,8 +785,8 @@ exit 1
       await readFile(resolve("package.json"), "utf8"),
     ) as { bin?: Record<string, string> };
     const cliStat = await stat(resolve("dist/cli.cjs"));
-    const nativePrepareStat = await stat(
-      resolve("dist/native/linux-amd64/muon-prepare"),
+    const nativeBuilderStat = await stat(
+      resolve("dist/native/linux-amd64/muon-builder"),
     );
     const nativeBootstrapStat = await stat(
       resolve("dist/native/linux-amd64/muon-bootstrap"),
@@ -408,11 +794,14 @@ exit 1
 
     expect(packageJson.bin?.muon).toBe("./dist/cli.cjs");
     expect(cliStat.mode & 0o111).not.toBe(0);
-    expect(nativePrepareStat.mode & 0o111).not.toBe(0);
+    expect(nativeBuilderStat.mode & 0o111).not.toBe(0);
     expect(nativeBootstrapStat.mode & 0o111).not.toBe(0);
     await expect(exists(resolve("dist/cli.mjs"))).resolves.toBe(false);
     await expect(exists(resolve("dist/vite.d.ts"))).resolves.toBe(false);
-    await expect(exists(resolve("dist/muon-prepare"))).resolves.toBe(false);
+    await expect(exists(resolve("dist/muon-builder"))).resolves.toBe(false);
+    await expect(
+      exists(resolve("dist", ["muon", "prepare"].join("-"))),
+    ).resolves.toBe(false);
     await expect(exists(resolve("dist/muon-bootstrap"))).resolves.toBe(false);
   });
 
@@ -449,7 +838,7 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain(".gitignore");
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      ".muon/\ndist-muon-*/\nartifacts/\n",
+      ".muon/\ndist-muon/\nartifacts/\n",
     );
   });
 
@@ -465,7 +854,23 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+      "dist*/\n.muon/\ndist-muon/\nartifacts/\n",
+    );
+  });
+
+  it("adds the current Muon dist gitignore entry when a legacy entry exists", async () => {
+    const root = await mkdtemp(join(tmpdir(), "muon-init-legacy-existing-"));
+    cleanupDirectories.push(root);
+    await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\ndist-muon-*/\n");
+    const cliPath = resolve("dist", "cli.cjs");
+
+    await execFileAsync(process.execPath, [cliPath, "init"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      "dist*/\n.muon/\ndist-muon-*/\ndist-muon/\nartifacts/\n",
     );
   });
 
@@ -474,7 +879,7 @@ exit 1
     cleanupDirectories.push(root);
     await writeFile(
       join(root, ".gitignore"),
-      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+      "dist*/\n.muon/\ndist-muon/\nartifacts/\n",
     );
     const cliPath = resolve("dist", "cli.cjs");
 
@@ -484,7 +889,7 @@ exit 1
     });
 
     await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
-      "dist*/\n.muon/\ndist-muon-*/\nartifacts/\n",
+      "dist*/\n.muon/\ndist-muon/\nartifacts/\n",
     );
   });
 
@@ -501,11 +906,55 @@ exit 1
     expect(files).not.toContain("dist/vite.d.ts");
     expect(files).not.toContain("dist/runtime/linux-amd64/muon-runtime.json");
     expect(files.some((file) => file.endsWith(".d.ts.map"))).toBe(false);
-    expect(files).not.toContain("dist/muon-prepare");
+    expect(files).not.toContain("dist/muon-builder");
+    expect(files).not.toContain(`dist/${["muon", "prepare"].join("-")}`);
     expect(files).not.toContain("dist/muon-bootstrap");
     await expect(readFile(resolve("vite.d.ts"), "utf8")).resolves.not.toContain(
       "sourceMappingURL",
     );
+  });
+
+  it("documents default values in public TypeScript declarations", async () => {
+    const sourceFiles = new Map<string, ts.SourceFile>();
+    const getSourceFile = async (filePath: string): Promise<ts.SourceFile> => {
+      const cached = sourceFiles.get(filePath);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const sourceFile = await readDeclarationSourceFile(filePath);
+      sourceFiles.set(filePath, sourceFile);
+      return sourceFile;
+    };
+    const missingTargets: string[] = [];
+
+    for (const target of publicDeclarationDefaultValueTargets) {
+      const sourceFile = await getSourceFile(target.filePath);
+      const member = findInterfaceMember(
+        sourceFile,
+        target.parentName,
+        target.memberName,
+      );
+      if (member === undefined || !hasDefaultValueTag(member)) {
+        missingTargets.push(
+          `${target.filePath}:${target.parentName}.${target.memberName}`,
+        );
+      }
+    }
+    for (const target of publicDeclarationCallableDefaultValueTargets) {
+      const sourceFile = await getSourceFile(target.filePath);
+      const declaration = findCallableDeclaration(
+        sourceFile,
+        target.callableName,
+      );
+      if (
+        declaration === undefined ||
+        !hasDefaultValueTagOnNodeOrParents(declaration)
+      ) {
+        missingTargets.push(`${target.filePath}:${target.callableName}()`);
+      }
+    }
+
+    expect(missingTargets).toEqual([]);
   });
 
   it("provides Muon globals through root TypeScript imports", async () => {
@@ -575,6 +1024,24 @@ const plugin = muon({
   enableDebugger: false,
   build: {
     targets: ["linux-amd64"],
+    windowsResource: {
+      iconPath: "icons/app.png",
+      productName: "Package Test App",
+      fileDescription: "Package test app",
+      companyName: "Muon Tester",
+      version: "1.2.3",
+      copyright: "Copyright Muon Tester",
+      language: 1033,
+      codePage: 1200,
+    },
+    linuxDesktop: {
+      desktopId: "com.example.PackageTest",
+      name: "Package Test App",
+      comment: "Package test app",
+      iconPath: "icons/app.png",
+      categories: ["Utility", "Development"],
+      startupNotify: true,
+    },
   },
 });
 const explicitOpenPlugin = muon({ open: true });

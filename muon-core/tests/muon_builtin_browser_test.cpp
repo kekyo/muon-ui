@@ -195,6 +195,42 @@ static bool TestInitialWindowShowState() {
                 "state");
 }
 
+#if defined(OS_LINUX)
+static std::string ReadCefStructString(cef_string_t* value) {
+  return CefString(value).ToString();
+}
+
+static void ClearLinuxWindowProperties(CefLinuxWindowProperties* properties) {
+  cef_string_clear(&properties->wayland_app_id);
+  cef_string_clear(&properties->wm_class_class);
+  cef_string_clear(&properties->wm_class_name);
+  cef_string_clear(&properties->wm_role_name);
+}
+
+static bool TestLinuxWindowPropertiesUseDesktopId() {
+  auto browser =
+      MuonWindowDelegate(nullptr, false, kMuonBrowserInitialWindowStateNormal,
+                         true, CreateNativeMuonTitleBarManifest(), {}, nullptr,
+                         nullptr, "com.example.App");
+  CefLinuxWindowProperties properties = {};
+  const auto populated = browser.GetLinuxWindowProperties(nullptr, properties);
+  const auto wayland_app_id = ReadCefStructString(&properties.wayland_app_id);
+  const auto wm_class_class = ReadCefStructString(&properties.wm_class_class);
+  const auto wm_class_name = ReadCefStructString(&properties.wm_class_name);
+  const auto wm_role_name = ReadCefStructString(&properties.wm_role_name);
+  ClearLinuxWindowProperties(&properties);
+  return Expect(populated, "Linux window properties were not populated") &&
+         Expect(wayland_app_id == "com.example.App",
+                "Wayland app ID did not use desktopId") &&
+         Expect(wm_class_class == "com.example.App",
+                "WM_CLASS class did not use desktopId") &&
+         Expect(wm_class_name == "com.example.App",
+                "WM_CLASS name did not use desktopId") &&
+         Expect(wm_role_name == "browser",
+                "browser window role name changed");
+}
+#endif
+
 static bool BoundsAreInsideWorkArea(const CefRect& bounds,
                                     const CefRect& work_area) {
   return bounds.x >= work_area.x && bounds.y >= work_area.y &&
@@ -569,7 +605,11 @@ static bool TestCustomTitleBarWindowDelegate() {
 
 int main() {
   return TestBrowserFunctionDefinitions() && TestWindowTitleFallback() &&
-                 TestInitialWindowShowState() && TestTitleBarManifestParsing() &&
+                 TestInitialWindowShowState() &&
+#if defined(OS_LINUX)
+                 TestLinuxWindowPropertiesUseDesktopId() &&
+#endif
+                 TestTitleBarManifestParsing() &&
                  TestInitialWindowWorkAreaBounds() &&
                  TestNativeTitleBarSupportDetection() &&
                  TestPageDraggableRegionHitTesting() &&

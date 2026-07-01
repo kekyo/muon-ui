@@ -22,7 +22,9 @@ for command_name in "${required_commands[@]}"; do
   fi
 done
 
-bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
+MUON_BUILDER_VERSION=1.2.3-beta \
+  MUON_BUILDER_GIT_COMMIT_HASH=builder-test-hash \
+  bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
 
 bootstrap_executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap.exe"
 bootstrap_dump="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap-resources.txt"
@@ -37,6 +39,22 @@ fi
 node "${SCRIPT_DIR}/scripts/assert-windows-icon.mjs" \
   "${bootstrap_executable}" \
   "${SCRIPT_DIR}/../images/muon-bootstrap.ico"
+node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
+  "${bootstrap_executable}" \
+  --file-version \
+  1.2.3.0 \
+  --product-version \
+  1.2.3.0 \
+  "ProductName=Muon" \
+  "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
+  "FileDescription=Muon Bootstrap" \
+  "FileVersion=1.2.3-beta" \
+  "ProductVersion=1.2.3-beta" \
+  "InternalName=muon-bootstrap" \
+  "OriginalFilename=muon-bootstrap.exe" \
+  "PrivateBuild=builder-test-hash" \
+  "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
+  "SpecialBuild=cefArtifact=; distribution=; apiHash="
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
@@ -53,7 +71,23 @@ wine_prefix="${temp_dir}/wineprefix"
 archive_root="${source_dir}/cef_binary_fake_windows64_minimal"
 archive_path="${source_dir}/cef.tar.bz2"
 catalog_path="${source_dir}/source-catalog.json"
-executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-prepare.exe"
+executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-builder.exe"
+node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
+  "${executable}" \
+  --file-version \
+  1.2.3.0 \
+  --product-version \
+  1.2.3.0 \
+  "ProductName=Muon" \
+  "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
+  "FileDescription=Muon Builder Tool" \
+  "FileVersion=1.2.3-beta" \
+  "ProductVersion=1.2.3-beta" \
+  "InternalName=muon-builder" \
+  "OriginalFilename=muon-builder.exe" \
+  "PrivateBuild=builder-test-hash" \
+  "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
+  "SpecialBuild=cefArtifact=; distribution=; apiHash="
 
 cat > "${slow_writer_src}" <<'C_EOF'
 #define WIN32_LEAN_AND_MEAN
@@ -129,7 +163,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${progress_harness_exe}" \
   "${progress_harness_src}" \
-  "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-prepare.a" \
+  "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-builder.a" \
   "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
   "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a"
 

@@ -19,7 +19,7 @@ interface RuntimeInfoHeaderOptions {
   corePayload: readonly string[];
 }
 
-export interface TestMuonPrepareBinaries {
+export interface TestMuonBuilderBinaries {
   prepareExecutablePath: string;
   bootstrapExecutablePath: string;
 }
@@ -94,12 +94,12 @@ static const MuonRuntimeInfo kMuonRuntimeInfo = {
 `;
 };
 
-export const buildTestMuonPrepare = async (
+export const buildTestMuonBuilder = async (
   root: string,
   runtimeInfoHeader: string,
-): Promise<TestMuonPrepareBinaries> => {
-  const prepareRoot = resolve("..", "muon-prepare");
-  const outDir = join(root, "muon-prepare-build");
+): Promise<TestMuonBuilderBinaries> => {
+  const prepareRoot = resolve("..", "muon-builder");
+  const outDir = join(root, "muon-builder-build");
   const generatedDir = join(outDir, "generated");
   const versionHeader = join(generatedDir, "version.h");
   const runtimeInfoHeaderPath = join(
@@ -109,10 +109,10 @@ export const buildTestMuonPrepare = async (
   await mkdir(generatedDir, { recursive: true });
   await writeFile(
     versionHeader,
-    `#ifndef MUON_PREPARE_VERSION_H
-#define MUON_PREPARE_VERSION_H
-#define MUON_PREPARE_VERSION "test"
-#define MUON_PREPARE_GIT_COMMIT_HASH "00000000"
+    `#ifndef MUON_BUILDER_VERSION_H
+#define MUON_BUILDER_VERSION_H
+#define MUON_BUILDER_VERSION "test"
+#define MUON_BUILDER_GIT_COMMIT_HASH "00000000"
 #endif
 `,
   );
@@ -165,7 +165,7 @@ export const buildTestMuonPrepare = async (
     bzip2Lib,
   ]);
 
-  const prepareExecutablePath = join(outDir, "muon-prepare");
+  const prepareExecutablePath = join(outDir, "muon-builder");
   const bootstrapExecutablePath = join(outDir, "muon-bootstrap");
   await execFileAsync("make", [
     "-C",

@@ -28,6 +28,13 @@ export type WindowsE2eEnvironmentResult =
   | ConfiguredWindowsE2eEnvironment
   | SkippedWindowsE2eEnvironment;
 
+/**
+ * Returns true when the Windows remote e2e suite is explicitly enabled.
+ */
+export const shouldRunWindowsRemoteE2e = (
+  env: Readonly<Record<string, string | undefined>>,
+): boolean => env.MUON_E2E_REMOTE_WINDOWS === "1";
+
 const readRequiredValue = (
   env: Readonly<Record<string, string | undefined>>,
   name: string,
@@ -123,4 +130,20 @@ export const parseWindowsE2eEnvironment = (
     },
     status: "configured",
   };
+};
+
+/**
+ * Resolves the Windows remote e2e environment used by the test entry point.
+ */
+export const resolveWindowsE2eEnvironment = (
+  env: Readonly<Record<string, string | undefined>>,
+): WindowsE2eEnvironmentResult => {
+  if (!shouldRunWindowsRemoteE2e(env)) {
+    return {
+      reason: "MUON_E2E_REMOTE_WINDOWS is not set",
+      status: "skip",
+    };
+  }
+
+  return parseWindowsE2eEnvironment(env);
 };

@@ -22,6 +22,45 @@ const isRecord = (value: unknown): value is Record<string | symbol, unknown> =>
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
+const isWindowsResourceOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.iconPath === undefined || typeof value.iconPath === "string") &&
+    (value.productName === undefined ||
+      typeof value.productName === "string") &&
+    (value.fileDescription === undefined ||
+      typeof value.fileDescription === "string") &&
+    (value.companyName === undefined ||
+      typeof value.companyName === "string") &&
+    (value.version === undefined || typeof value.version === "string") &&
+    (value.copyright === undefined || typeof value.copyright === "string") &&
+    (value.language === undefined ||
+      (typeof value.language === "number" &&
+        Number.isInteger(value.language))) &&
+    (value.codePage === undefined ||
+      (typeof value.codePage === "number" && Number.isInteger(value.codePage)))
+  );
+};
+
+const isLinuxDesktopOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.desktopId === undefined || typeof value.desktopId === "string") &&
+    (value.name === undefined || typeof value.name === "string") &&
+    (value.comment === undefined || typeof value.comment === "string") &&
+    (value.iconPath === undefined || typeof value.iconPath === "string") &&
+    (value.categories === undefined || isStringArray(value.categories)) &&
+    (value.startupNotify === undefined ||
+      typeof value.startupNotify === "boolean")
+  );
+};
+
 const isMuonViteBuildOptions = (value: unknown): boolean => {
   if (!isRecord(value)) {
     return false;
@@ -34,6 +73,10 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
     (value.appId === undefined || typeof value.appId === "string") &&
     (value.outputRoot === undefined || typeof value.outputRoot === "string") &&
     (value.configPath === undefined || typeof value.configPath === "string") &&
+    (value.windowsResource === undefined ||
+      isWindowsResourceOptions(value.windowsResource)) &&
+    (value.linuxDesktop === undefined ||
+      isLinuxDesktopOptions(value.linuxDesktop)) &&
     (value.packageDirectory === undefined ||
       typeof value.packageDirectory === "string") &&
     (value.assetSalt === undefined || value.assetSalt instanceof Uint8Array)

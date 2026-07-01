@@ -1373,7 +1373,7 @@ static void wait_for_progress_poll(void) {
 }
 #endif
 
-int muon_run_process(char *const argv[]) {
+static int run_process(char *const argv[], int report_command_failure) {
 #ifdef _WIN32
   const intptr_t status =
       _spawnvp(_P_WAIT, argv[0], (const char *const *)argv);
@@ -1382,7 +1382,9 @@ int muon_run_process(char *const argv[]) {
     return -1;
   }
   if (status != 0) {
-    muon_print_error("Command failed: %s\n", argv[0]);
+    if (report_command_failure) {
+      muon_print_error("Command failed: %s\n", argv[0]);
+    }
     return -1;
   }
   return 0;
@@ -1413,17 +1415,28 @@ int muon_run_process(char *const argv[]) {
     return -1;
   }
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-    muon_print_error("Command failed: %s\n", argv[0]);
+    if (report_command_failure) {
+      muon_print_error("Command failed: %s\n", argv[0]);
+    }
     return -1;
   }
   return 0;
 #endif
 }
 
-int muon_run_process_with_file_progress(
+int muon_run_process(char *const argv[]) {
+  return run_process(argv, 1);
+}
+
+int muon_run_process_allow_failure(char *const argv[]) {
+  return run_process(argv, 0);
+}
+
+static int run_process_with_file_progress(
     char *const argv[], const char *progress_path, unsigned long long total,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data,
-    MuonPrepareProgressPhase phase, const char *status) {
+    MuonPrepareProgressPhase phase, const char *status,
+    int report_command_failure) {
   muon_report_progress(progress_callback, progress_user_data, phase, status, 0,
                        total, total != 0);
 #ifdef _WIN32
@@ -1456,7 +1469,9 @@ int muon_run_process_with_file_progress(
   }
   CloseHandle(process_handle);
   if (exit_code != 0) {
-    muon_print_error("Command failed: %s\n", argv[0]);
+    if (report_command_failure) {
+      muon_print_error("Command failed: %s\n", argv[0]);
+    }
     return -1;
   }
   return 0;
@@ -1496,11 +1511,31 @@ int muon_run_process_with_file_progress(
   report_file_progress(progress_path, total, progress_callback,
                        progress_user_data, phase, status);
   if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {
-    muon_print_error("Command failed: %s\n", argv[0]);
+    if (report_command_failure) {
+      muon_print_error("Command failed: %s\n", argv[0]);
+    }
     return -1;
   }
   return 0;
 #endif
+}
+
+int muon_run_process_with_file_progress(
+    char *const argv[], const char *progress_path, unsigned long long total,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
+  return run_process_with_file_progress(
+      argv, progress_path, total, progress_callback, progress_user_data, phase,
+      status, 1);
+}
+
+int muon_run_process_with_file_progress_allow_failure(
+    char *const argv[], const char *progress_path, unsigned long long total,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status) {
+  return run_process_with_file_progress(
+      argv, progress_path, total, progress_callback, progress_user_data, phase,
+      status, 0);
 }
 
 static void wait_for_lock(void) {

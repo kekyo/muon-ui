@@ -11,6 +11,8 @@
 
 #include "include/views/cef_browser_view.h"
 
+#include <string>
+
 class MuonWindowCloseHandler;
 
 /**
@@ -28,6 +30,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
    * @param title_bar_background_color Explicit title bar background color.
    * @param shortcut_handler Browser shortcut handler for window-level events.
    * @param close_handler Browser close handler for pending owner work.
+   * @param linux_desktop_id Desktop identifier for Linux window metadata.
    */
   explicit MuonBrowserViewDelegate(
       bool is_devtools,
@@ -36,7 +39,8 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
           CreateNativeMuonTitleBarManifest(),
       MuonTitleBarBackgroundColor title_bar_background_color = {},
       CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler = nullptr,
-      MuonWindowCloseHandler* close_handler = nullptr);
+      MuonWindowCloseHandler* close_handler = nullptr,
+      std::string linux_desktop_id = "muon");
 
   /**
    * Creates delegates for popup browser views.
@@ -76,6 +80,7 @@ class MuonBrowserViewDelegate final : public CefBrowserViewDelegate {
   const bool initial_title_bar_visibility_;
   const MuonTitleBarManifest title_bar_manifest_;
   const MuonTitleBarBackgroundColor title_bar_background_color_;
+  const std::string linux_desktop_id_;
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler_;
   MuonWindowCloseHandler* close_handler_;
 

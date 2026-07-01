@@ -18,9 +18,14 @@ import {
   embedMuonConfigInRuntime,
   type EmbedMuonConfigResult,
 } from "./embed-config.js";
-import { buildMuonApp, type MuonBuildOptions } from "./build.js";
+import {
+  runMuonBuildSequence,
+  type MuonBuildSequenceOptions,
+} from "./build-sequence.js";
 import { runMuonDev, type MuonDevOptions } from "./dev.js";
 import { packMuonApp, type MuonPackOptions } from "./pack.js";
+import type { MuonWindowsResourceOptions } from "./windows-resource.js";
+import type { MuonLinuxDesktopOptions } from "./linux-desktop.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
 
 interface PrepareCommandOptions {
@@ -50,17 +55,42 @@ interface BuildCommandOptions {
   all: boolean | undefined;
   assets: string | undefined;
   config: string | undefined;
+  windowsIcon: string | undefined;
+  windowsProductName: string | undefined;
+  windowsFileDescription: string | undefined;
+  windowsCompanyName: string | undefined;
+  windowsVersion: string | undefined;
+  windowsCopyright: string | undefined;
+  linuxDesktopId: string | undefined;
+  linuxName: string | undefined;
+  linuxComment: string | undefined;
+  linuxIcon: string | undefined;
+  linuxCategories: string | undefined;
+  linuxStartupNotify: string | undefined;
   outDir: string | undefined;
   name: string | undefined;
   appId: string | undefined;
+  packageDirectory: string | undefined;
   json: boolean | undefined;
 }
 
 interface PackCommandOptions {
-  type: string[];
+  type: string[] | undefined;
   target: string[];
   all: boolean | undefined;
   config: string | undefined;
+  windowsIcon: string | undefined;
+  windowsProductName: string | undefined;
+  windowsFileDescription: string | undefined;
+  windowsCompanyName: string | undefined;
+  windowsVersion: string | undefined;
+  windowsCopyright: string | undefined;
+  linuxDesktopId: string | undefined;
+  linuxName: string | undefined;
+  linuxComment: string | undefined;
+  linuxIcon: string | undefined;
+  linuxCategories: string | undefined;
+  linuxStartupNotify: string | undefined;
   name: string | undefined;
   appId: string | undefined;
   packageDirectory: string | undefined;
@@ -93,8 +123,28 @@ const appendTargetValues = (value: string, previous: string[]): string[] => {
   return [...previous, ...readTargetValues(value)];
 };
 
-const appendPackTypeValues = (value: string, previous: string[]): string[] => {
-  return [...previous, ...readTargetValues(value)];
+const appendPackTypeValues = (
+  value: string,
+  previous: string[] | undefined,
+): string[] => {
+  return [...(previous ?? []), ...readTargetValues(value)];
+};
+
+const readCommaSeparatedValues = (value: string): string[] =>
+  value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+const readBooleanValue = (value: string, label: string): boolean => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  throw new Error(`${label} must be true or false.`);
 };
 
 const validateEmbedConfigOptions = (
@@ -129,6 +179,71 @@ const validateEmbedConfigOptions = (
   }
 };
 
+const createWindowsResourceOptions = (commandOptions: {
+  windowsIcon: string | undefined;
+  windowsProductName: string | undefined;
+  windowsFileDescription: string | undefined;
+  windowsCompanyName: string | undefined;
+  windowsVersion: string | undefined;
+  windowsCopyright: string | undefined;
+}): MuonWindowsResourceOptions | undefined => {
+  const options: MuonWindowsResourceOptions = {};
+  if (commandOptions.windowsIcon !== undefined) {
+    options.iconPath = commandOptions.windowsIcon;
+  }
+  if (commandOptions.windowsProductName !== undefined) {
+    options.productName = commandOptions.windowsProductName;
+  }
+  if (commandOptions.windowsFileDescription !== undefined) {
+    options.fileDescription = commandOptions.windowsFileDescription;
+  }
+  if (commandOptions.windowsCompanyName !== undefined) {
+    options.companyName = commandOptions.windowsCompanyName;
+  }
+  if (commandOptions.windowsVersion !== undefined) {
+    options.version = commandOptions.windowsVersion;
+  }
+  if (commandOptions.windowsCopyright !== undefined) {
+    options.copyright = commandOptions.windowsCopyright;
+  }
+  return Object.keys(options).length === 0 ? undefined : options;
+};
+
+const createLinuxDesktopOptions = (commandOptions: {
+  linuxDesktopId: string | undefined;
+  linuxName: string | undefined;
+  linuxComment: string | undefined;
+  linuxIcon: string | undefined;
+  linuxCategories: string | undefined;
+  linuxStartupNotify: string | undefined;
+}): MuonLinuxDesktopOptions | undefined => {
+  const options: MuonLinuxDesktopOptions = {};
+  if (commandOptions.linuxDesktopId !== undefined) {
+    options.desktopId = commandOptions.linuxDesktopId;
+  }
+  if (commandOptions.linuxName !== undefined) {
+    options.name = commandOptions.linuxName;
+  }
+  if (commandOptions.linuxComment !== undefined) {
+    options.comment = commandOptions.linuxComment;
+  }
+  if (commandOptions.linuxIcon !== undefined) {
+    options.iconPath = commandOptions.linuxIcon;
+  }
+  if (commandOptions.linuxCategories !== undefined) {
+    options.categories = readCommaSeparatedValues(
+      commandOptions.linuxCategories,
+    );
+  }
+  if (commandOptions.linuxStartupNotify !== undefined) {
+    options.startupNotify = readBooleanValue(
+      commandOptions.linuxStartupNotify,
+      "--linux-startup-notify",
+    );
+  }
+  return Object.keys(options).length === 0 ? undefined : options;
+};
+
 const runBuildCommand = async (
   commandOptions: BuildCommandOptions,
 ): Promise<void> => {
@@ -137,19 +252,30 @@ const runBuildCommand = async (
     throw new Error("Specify either --all or --target, not both.");
   }
 
-  const buildOptions: MuonBuildOptions = {
+  const buildOptions: MuonBuildSequenceOptions = {
     root: process.cwd(),
-    allTargets: commandOptions.all === true,
+    defaultAllTargets: false,
   };
 
   if (targets.length > 0) {
     buildOptions.targets = targets;
+  }
+  if (commandOptions.all === true) {
+    buildOptions.allTargets = true;
   }
   if (commandOptions.assets !== undefined) {
     buildOptions.assetSourcePath = commandOptions.assets;
   }
   if (commandOptions.config !== undefined) {
     buildOptions.configPath = commandOptions.config;
+  }
+  const windowsResource = createWindowsResourceOptions(commandOptions);
+  if (windowsResource !== undefined) {
+    buildOptions.windowsResource = windowsResource;
+  }
+  const linuxDesktop = createLinuxDesktopOptions(commandOptions);
+  if (linuxDesktop !== undefined) {
+    buildOptions.linuxDesktop = linuxDesktop;
   }
   if (commandOptions.outDir !== undefined) {
     buildOptions.outputRoot = commandOptions.outDir;
@@ -160,8 +286,11 @@ const runBuildCommand = async (
   if (commandOptions.appId !== undefined) {
     buildOptions.appId = commandOptions.appId;
   }
+  if (commandOptions.packageDirectory !== undefined) {
+    buildOptions.packageDirectory = commandOptions.packageDirectory;
+  }
 
-  const result = await buildMuonApp(buildOptions);
+  const result = await runMuonBuildSequence(buildOptions);
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -181,9 +310,11 @@ const runPackCommand = async (
 
   const packOptions: MuonPackOptions = {
     root: process.cwd(),
-    types: commandOptions.type,
     environment: process.env,
   };
+  if (commandOptions.type !== undefined) {
+    packOptions.types = commandOptions.type;
+  }
   if (targets.length > 0) {
     packOptions.targets = targets;
   }
@@ -192,6 +323,14 @@ const runPackCommand = async (
   }
   if (commandOptions.config !== undefined) {
     packOptions.configPath = commandOptions.config;
+  }
+  const windowsResource = createWindowsResourceOptions(commandOptions);
+  if (windowsResource !== undefined) {
+    packOptions.windowsResource = windowsResource;
+  }
+  const linuxDesktop = createLinuxDesktopOptions(commandOptions);
+  if (linuxDesktop !== undefined) {
+    packOptions.linuxDesktop = linuxDesktop;
   }
   if (commandOptions.name !== undefined) {
     packOptions.appName = commandOptions.name;
@@ -387,9 +526,22 @@ const createCliCommand = (): Command => {
     .option("--all", "build all supported targets")
     .option("--assets <path>", "asset root path")
     .option("--config <path>", "muon config path")
+    .option("--windows-icon <path>", "Windows PNG icon resource path")
+    .option("--windows-product-name <name>", "Windows product name")
+    .option("--windows-file-description <text>", "Windows file description")
+    .option("--windows-company-name <name>", "Windows company name")
+    .option("--windows-version <version>", "Windows resource version")
+    .option("--windows-copyright <text>", "Windows legal copyright")
+    .option("--linux-desktop-id <id>", "Linux desktop entry identifier")
+    .option("--linux-name <name>", "Linux desktop display name")
+    .option("--linux-comment <text>", "Linux desktop comment")
+    .option("--linux-icon <path>", "Linux desktop PNG icon path")
+    .option("--linux-categories <list>", "Linux desktop categories")
+    .option("--linux-startup-notify <boolean>", "Linux startup notification")
     .option("--out-dir <path>", "output root directory")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
+    .option("--package-directory <path>", "Muon package dist directory")
     .option("--json", "write result as JSON")
     .action(async (options: BuildCommandOptions) => {
       await runBuildCommand(options);
@@ -398,20 +550,31 @@ const createCliCommand = (): Command => {
   program
     .command("pack")
     .description("Build and package a Muon app")
-    .requiredOption(
-      "-t, --type <type>",
-      "package type or comma-separated package types: zip, deb, nsis",
+    .option(
+      "--type <type>",
+      "package type or comma-separated package types: zip, tar.gz, tgz, deb, nsis (default: all)",
       appendPackTypeValues,
-      [],
     )
     .option(
       "--target <target>",
-      "public target or comma-separated public targets",
+      "public target, platform, arch, or comma-separated selectors",
       appendTargetValues,
       [],
     )
     .option("--all", "build all supported targets")
     .option("--config <path>", "muon config path")
+    .option("--windows-icon <path>", "Windows PNG icon resource path")
+    .option("--windows-product-name <name>", "Windows product name")
+    .option("--windows-file-description <text>", "Windows file description")
+    .option("--windows-company-name <name>", "Windows company name")
+    .option("--windows-version <version>", "Windows resource version")
+    .option("--windows-copyright <text>", "Windows legal copyright")
+    .option("--linux-desktop-id <id>", "Linux desktop entry identifier")
+    .option("--linux-name <name>", "Linux desktop display name")
+    .option("--linux-comment <text>", "Linux desktop comment")
+    .option("--linux-icon <path>", "Linux desktop PNG icon path")
+    .option("--linux-categories <list>", "Linux desktop categories")
+    .option("--linux-startup-notify <boolean>", "Linux startup notification")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
     .option("--package-directory <path>", "Muon package dist directory")
@@ -455,7 +618,7 @@ const createCliCommand = (): Command => {
     .option("--target <target>", "prepare target")
     .option("--cache-dir <path>", "CEF artifact cache directory")
     .option("--force", "rebuild an existing prepared runtime")
-    .option("-q, --quiet", "suppress native prepare progress messages")
+    .option("-q, --quiet", "suppress native builder progress messages")
     .option("--json", "write result as JSON")
     .action(async (options: PrepareCommandOptions) => {
       await runPrepareCommand(options);

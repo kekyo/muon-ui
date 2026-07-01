@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
@@ -14,7 +15,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,8 +30,10 @@ import {
   findMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { buildMuonApp, type MuonBuildTarget } from "../src/build.js";
+import { createWindowsIconBufferFromPngData } from "../src/windows-icon.js";
 import muon from "../src/vite.js";
 
+const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
@@ -162,6 +167,143 @@ const createFakeMuonPackageDistForTargets = async (
 const createFakeMuonPackageDist = async (root: string): Promise<string> =>
   await createFakeMuonPackageDistForTargets(root, ["linux-amd64"]);
 
+interface WindowsIconBuildProject {
+  root: string;
+  packageDirectory: string;
+}
+
+const createWindowsIconBuildProject = async (
+  prefix: string,
+  packageName: string,
+): Promise<WindowsIconBuildProject> => {
+  const root = await createTemporaryDirectory(prefix);
+  const packageDirectory = await createFakeMuonPackageDist(root);
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify({ name: packageName }, null, 2)}\n`,
+  );
+  await mkdir(join(root, "assets"), { recursive: true });
+  await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+  return { root, packageDirectory };
+};
+
+const writeWindowsIconPngFixture = async (iconPath: string): Promise<void> => {
+  await mkdir(dirname(iconPath), { recursive: true });
+  await writeFile(
+    iconPath,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+};
+
+const createWindowsResourceFixture = async (
+  pePath: string,
+  icoPath: string,
+  overlayPath: string | undefined = undefined,
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve(
+      "..",
+      "muon-builder",
+      "scripts",
+      "create-windows-resource-fixture.mjs",
+    ),
+    pePath,
+    icoPath,
+    ...(overlayPath === undefined ? [] : [overlayPath]),
+  ]);
+};
+
+const assertWindowsIcon = async (
+  executablePath: string,
+  iconPath: string,
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve("..", "muon-builder", "scripts", "assert-windows-icon.mjs"),
+    executablePath,
+    iconPath,
+  ]);
+};
+
+const assertWindowsVersion = async (
+  executablePath: string,
+  expectations: readonly string[],
+): Promise<void> => {
+  await execFileAsync(process.execPath, [
+    resolve("..", "muon-builder", "scripts", "assert-windows-version.mjs"),
+    executablePath,
+    ...expectations,
+  ]);
+};
+
+const getCliPath = (): string => resolve("dist", "cli.cjs");
+
+const getVitePluginUrl = (): string =>
+  pathToFileURL(resolve("dist", "vite.mjs")).href;
+
+const runMuonCli = async (
+  root: string,
+  args: readonly string[],
+): Promise<{ stderr: string; stdout: string }> => {
+  const result = await execFileAsync(
+    process.execPath,
+    [getCliPath(), ...args],
+    {
+      cwd: root,
+      env: process.env,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  return {
+    stderr: result.stderr,
+    stdout: result.stdout,
+  };
+};
+
+const writeViteMuonBuildProject = async (
+  root: string,
+  buildExpression: string,
+): Promise<void> => {
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "vite-cli-build-sample",
+        type: "module",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(
+    join(root, "index.html"),
+    '<!doctype html><title>vite cli app</title><script type="module" src="/src/main.ts"></script>',
+  );
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(
+    join(root, "src", "main.ts"),
+    'document.body.textContent = "vite cli build";\n',
+  );
+  await writeFile(
+    join(root, "muon.json"),
+    `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
+  );
+  await writeFile(
+    join(root, "vite.config.mjs"),
+    [
+      `import muon from ${JSON.stringify(getVitePluginUrl())};`,
+      "export default {",
+      "  build: { outDir: 'web-dist' },",
+      "  plugins: [",
+      `    muon({ build: ${buildExpression} }),`,
+      "  ],",
+      "};",
+    ].join("\n"),
+  );
+};
+
 const readZipEntries = async (
   archivePath: string,
 ): Promise<Map<string, Buffer>> => {
@@ -262,39 +404,39 @@ describe("muon build", () => {
 
     const [target] = result.targets;
     expect(target?.target).toBe("linux-amd64");
-    expect(target?.outputPath).toBe(join(root, "dist-muon-linux-amd64"));
+    expect(target?.outputPath).toBe(join(root, "dist-muon/linux-amd64"));
     expect(target?.launcherPath).toBe(
-      join(root, "dist-muon-linux-amd64", "muon-sample"),
+      join(root, "dist-muon/linux-amd64", "muon-sample"),
     );
     await expect(
-      readFile(join(root, "dist-muon-linux-amd64", "muon-core")),
+      readFile(join(root, "dist-muon/linux-amd64", "muon-core")),
     ).resolves.toBeDefined();
     await expect(
-      readFile(join(root, "dist-muon-linux-amd64", "libmuon-ui.so"), "utf8"),
+      readFile(join(root, "dist-muon/linux-amd64", "libmuon-ui.so"), "utf8"),
     ).resolves.toBe("ui\n");
     await expect(
-      readFile(join(root, "dist-muon-linux-amd64", "libcardio.so"), "utf8"),
+      readFile(join(root, "dist-muon/linux-amd64", "libcardio.so"), "utf8"),
     ).resolves.toBe("cardio\n");
     await expect(
-      readFile(join(root, "dist-muon-linux-amd64", "CREDITS.md"), "utf8"),
+      readFile(join(root, "dist-muon/linux-amd64", "CREDITS.md"), "utf8"),
     ).resolves.toBe("notices\n");
     await expect(
-      exists(join(root, "dist-muon-linux-amd64", "THIRD_PARTY_NOTICES.md")),
+      exists(join(root, "dist-muon/linux-amd64", "THIRD_PARTY_NOTICES.md")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-muon-linux-amd64", "muon.json")),
+      exists(join(root, "dist-muon/linux-amd64", "muon.json")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-muon-linux-amd64", "assets")),
+      exists(join(root, "dist-muon/linux-amd64", "assets")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-muon-linux-amd64", "muon-prepare")),
+      exists(join(root, "dist-muon/linux-amd64", "muon-builder")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-muon-linux-amd64", "libcef.so")),
+      exists(join(root, "dist-muon/linux-amd64", "libcef.so")),
     ).resolves.toBe(false);
 
-    const archivePath = join(root, "dist-muon-linux-amd64", "assets.zip");
+    const archivePath = join(root, "dist-muon/linux-amd64", "assets.zip");
     const archiveContent = await readFile(archivePath);
     const entries = await readZipEntries(archivePath);
     expect(entries.get("main/index.html")?.toString("utf8")).toBe(
@@ -311,12 +453,25 @@ describe("muon build", () => {
     });
     expect(target?.embeddedConfig.bootstrap).toEqual({
       appId: "scope.muon-sample",
+      desktopId: "scope.muon-sample",
     });
+    await expect(
+      readFile(join(root, "dist-muon/linux-amd64", "muon-desktop-icon.png")),
+    ).resolves.toBeDefined();
+    const defaultDesktop = JSON.parse(
+      await readFile(
+        join(root, "dist-muon/linux-amd64", "muon-desktop.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(defaultDesktop.desktopId).toBe("scope.muon-sample");
+    expect(defaultDesktop.name).toBe("@scope/muon-sample");
+    expect(defaultDesktop.iconFileName).toBe("muon-desktop-icon.png");
     const embeddedCore = await readFile(
-      join(root, "dist-muon-linux-amd64", "muon-core"),
+      join(root, "dist-muon/linux-amd64", "muon-core"),
     );
     const embeddedLauncher = await readFile(
-      join(root, "dist-muon-linux-amd64", "muon-sample"),
+      join(root, "dist-muon/linux-amd64", "muon-sample"),
     );
     expect(() => findMuonEmbeddedConfigSlot(embeddedCore)).toThrow("found 0");
     expect(() => findMuonBootstrapEmbeddedConfigSlot(embeddedLauncher)).toThrow(
@@ -355,12 +510,12 @@ describe("muon build", () => {
     ]);
     await expect(
       exists(
-        join(root, "dist-muon-windows-i686", "default-targets-sample.exe"),
+        join(root, "dist-muon/windows-i686", "default-targets-sample.exe"),
       ),
     ).resolves.toBe(true);
     await expect(
       exists(
-        join(root, "dist-muon-windows-amd64", "default-targets-sample.exe"),
+        join(root, "dist-muon/windows-amd64", "default-targets-sample.exe"),
       ),
     ).resolves.toBe(true);
   });
@@ -384,7 +539,7 @@ describe("muon build", () => {
       assetSalt: Buffer.from([0x0b, 0x22]),
     });
 
-    const outputPath = join(root, "dist-muon-windows-amd64");
+    const outputPath = join(root, "dist-muon/windows-amd64");
     await expect(
       readFile(join(outputPath, "libgcc_s_seh-1.dll"), "utf8"),
     ).resolves.toBe("windows-amd64 libgcc_s_seh-1.dll\n");
@@ -394,6 +549,322 @@ describe("muon build", () => {
     await expect(
       readFile(join(outputPath, "libwinpthread-1.dll"), "utf8"),
     ).resolves.toBe("windows-amd64 libwinpthread-1.dll\n");
+  });
+
+  it("updates Windows launcher icon and version resources from muon config metadata", async () => {
+    const root = await createTemporaryDirectory("muon-build-windows-resource-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const iconPath = join(root, "icons", "app.png");
+    const seedIconPath = join(root, "icons", "seed.ico");
+    const expectedIconPath = join(root, "icons", "expected.ico");
+    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await createWindowsResourceFixture(
+      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      seedIconPath,
+      bootstrapSlotPath,
+    );
+    await writeWindowsIconPngFixture(iconPath);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "windows-resource-sample",
+          version: "1.2.3",
+          description: "Package description",
+          author: "Package Author",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            resource: {
+              iconPath: "icons/app.png",
+              productName: "Muon Config Product",
+              fileDescription: "Muon Config Description",
+              companyName: "Muon Config Company",
+              version: "7.8.9",
+              copyright: "Copyright Muon Config",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const previousPreparePath = process.env.MUON_BUILDER_PATH;
+    process.env.MUON_BUILDER_PATH = resolve(
+      "dist",
+      "native",
+      "linux-amd64",
+      "muon-builder",
+    );
+    let result: Awaited<ReturnType<typeof buildMuonApp>> | undefined =
+      undefined;
+    try {
+      result = await buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["windows-amd64"],
+        assetSalt: Buffer.from([0x0c, 0x33]),
+      });
+    } finally {
+      if (previousPreparePath === undefined) {
+        delete process.env.MUON_BUILDER_PATH;
+      } else {
+        process.env.MUON_BUILDER_PATH = previousPreparePath;
+      }
+    }
+
+    expect(result).toBeDefined();
+    const [target] = result?.targets ?? [];
+    const launcherPath = join(
+      root,
+      "dist-muon/windows-amd64",
+      "windows-resource-sample.exe",
+    );
+    expect(target?.launcherPath).toBe(launcherPath);
+    expect(
+      (target?.embeddedConfig as Record<string, unknown> | undefined)?.windows,
+    ).toBeUndefined();
+    await writeFile(
+      expectedIconPath,
+      await createWindowsIconBufferFromPngData(
+        await readFile(iconPath),
+        iconPath,
+      ),
+    );
+    await assertWindowsIcon(launcherPath, expectedIconPath);
+    await assertWindowsVersion(launcherPath, [
+      "--file-version",
+      "7.8.9.0",
+      "--product-version",
+      "7.8.9.0",
+      "CompanyName=Muon Config Company",
+      "FileDescription=Muon Config Description",
+      "FileVersion=7.8.9",
+      "ProductName=Muon Config Product",
+      "ProductVersion=7.8.9",
+      "LegalCopyright=Copyright Muon Config",
+    ]);
+  });
+
+  it("creates Linux desktop metadata from options and muon config", async () => {
+    const root = await createTemporaryDirectory("muon-build-linux-desktop-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "linux-amd64",
+    ]);
+    const iconPath = join(root, "icons", "app.png");
+    await writeWindowsIconPngFixture(iconPath);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "linux-desktop-sample",
+          description: "Package description",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          linux: {
+            desktop: {
+              desktopId: "com.example.Config App",
+              name: "Config Name",
+              comment: "Config Comment",
+              iconPath: "icons/app.png",
+              categories: ["Game"],
+              startupNotify: false,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      linuxDesktop: {
+        name: "Option Name",
+        categories: ["Development"],
+        startupNotify: true,
+      },
+      assetSalt: Buffer.from([0x0d, 0x44]),
+    });
+
+    const [target] = result.targets;
+    expect(target?.linuxDesktop?.desktopId).toBe("com.example.config-app");
+    expect(target?.linuxDesktop?.name).toBe("Option Name");
+    expect(target?.linuxDesktop?.comment).toBe("Config Comment");
+    expect(target?.linuxDesktop?.categories).toEqual(["Development"]);
+    expect(target?.linuxDesktop?.startupNotify).toBe(true);
+    expect(target?.embeddedConfig.bootstrap).toEqual({
+      appId: "linux-desktop-sample",
+      desktopId: "com.example.config-app",
+    });
+    expect(
+      (target?.embeddedConfig as Record<string, unknown> | undefined)?.linux,
+    ).toBeUndefined();
+    const desktop = JSON.parse(
+      await readFile(
+        join(root, "dist-muon/linux-amd64", "muon-desktop.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect(desktop).toEqual({
+      desktopId: "com.example.config-app",
+      name: "Option Name",
+      comment: "Config Comment",
+      categories: ["Development"],
+      startupNotify: true,
+      iconFileName: "muon-desktop-icon.png",
+    });
+    await expect(
+      readFile(join(root, "dist-muon/linux-amd64", "muon-desktop-icon.png")),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects Windows resource icon paths that are not PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-windows-icon-",
+      "windows-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(join(root, "icons", "app.ico"), "ico\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        windowsResource: {
+          iconPath: "icons/app.ico",
+        },
+      }),
+    ).rejects.toThrow("Windows resource icon must be a .png file");
+  });
+
+  it("rejects missing Windows resource icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-missing-windows-icon-",
+      "missing-windows-icon-sample",
+    );
+    const iconPath = join(root, "icons", "missing.png");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        windowsResource: {
+          iconPath: "icons/missing.png",
+        },
+      }),
+    ).rejects.toThrow(`Windows resource icon does not exist: ${iconPath}`);
+  });
+
+  it("rejects invalid Windows resource icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-invalid-windows-icon-",
+      "invalid-windows-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(
+      join(root, "icons", "app.png"),
+      Buffer.from("89504e470d0a1a0a00000000", "hex"),
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        windowsResource: {
+          iconPath: "icons/app.png",
+        },
+      }),
+    ).rejects.toThrow("Windows resource icon must be a valid PNG");
+  });
+
+  it("rejects Linux desktop icon paths that are not PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-linux-icon-",
+      "linux-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(join(root, "icons", "app.ico"), "ico\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        linuxDesktop: {
+          iconPath: "icons/app.ico",
+        },
+      }),
+    ).rejects.toThrow("Linux desktop icon must be a .png file");
+  });
+
+  it("rejects missing Linux desktop icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-missing-linux-icon-",
+      "missing-linux-icon-sample",
+    );
+    const iconPath = join(root, "icons", "missing.png");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        linuxDesktop: {
+          iconPath: "icons/missing.png",
+        },
+      }),
+    ).rejects.toThrow(`Linux desktop icon does not exist: ${iconPath}`);
+  });
+
+  it("rejects invalid Linux desktop icon PNG files", async () => {
+    const { root, packageDirectory } = await createWindowsIconBuildProject(
+      "muon-build-invalid-linux-icon-",
+      "invalid-linux-icon-sample",
+    );
+    await mkdir(join(root, "icons"), { recursive: true });
+    await writeFile(
+      join(root, "icons", "app.png"),
+      Buffer.from("89504e470d0a1a0a00000000", "hex"),
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        linuxDesktop: {
+          iconPath: "icons/app.png",
+        },
+      }),
+    ).rejects.toThrow("Linux desktop icon must be a valid PNG");
   });
 
   it("rejects CEF-derived target IDs in public build options", async () => {
@@ -413,6 +884,120 @@ describe("muon build", () => {
         targets: ["linux64"],
       }),
     ).rejects.toThrow("Unsupported muon build target: linux64");
+  });
+
+  it("runs the Vite-backed build sequence from the muon build CLI", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-vite-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeViteMuonBuildProject(
+      root,
+      `{
+        packageDirectory: ${JSON.stringify(packageDirectory)},
+        targets: ['linux-amd64'],
+        outputRoot: 'release',
+        appName: 'plugin-app',
+        appId: 'com.example.plugin-app'
+      }`,
+    );
+
+    const result = await runMuonCli(root, ["build", "--json"]);
+    const parsed = JSON.parse(result.stdout) as {
+      appId: string;
+      appName: string;
+      targets: readonly { outputPath: string; target: string }[];
+    };
+
+    expect(parsed.appName).toBe("plugin-app");
+    expect(parsed.appId).toBe("com.example.plugin-app");
+    expect(
+      parsed.targets.map((target) => ({
+        outputPath: target.outputPath,
+        target: target.target,
+      })),
+    ).toEqual([
+      {
+        outputPath: join(root, "release", "dist-muon/linux-amd64"),
+        target: "linux-amd64",
+      },
+    ]);
+    const entries = await readZipEntries(
+      join(root, "release", "dist-muon/linux-amd64", "assets.zip"),
+    );
+    expect(entries.has("main/index.html")).toBe(true);
+    expect(
+      [...entries.keys()].some((entry) => entry.startsWith("main/assets/")),
+    ).toBe(true);
+  });
+
+  it("lets muon build CLI options override Vite plugin build options", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-override-");
+    const pluginPackageDirectory = await createFakeMuonPackageDistForTargets(
+      root,
+      ["windows-amd64"],
+    );
+    const cliPackageDirectory = await createFakeMuonPackageDistForTargets(
+      root,
+      ["linux-amd64"],
+    );
+    await writeViteMuonBuildProject(
+      root,
+      `{
+        packageDirectory: ${JSON.stringify(pluginPackageDirectory)},
+        targets: ['windows-amd64'],
+        outputRoot: 'plugin-release',
+        appName: 'plugin-app',
+        appId: 'com.example.plugin-app'
+      }`,
+    );
+
+    const result = await runMuonCli(root, [
+      "build",
+      "--json",
+      "--target",
+      "linux-amd64",
+      "--out-dir",
+      "cli-release",
+      "--name",
+      "cli-app",
+      "--app-id",
+      "com.example.cli-app",
+      "--package-directory",
+      cliPackageDirectory,
+    ]);
+    const parsed = JSON.parse(result.stdout) as {
+      appId: string;
+      appName: string;
+      targets: readonly { outputPath: string; target: string }[];
+    };
+
+    expect(parsed.appName).toBe("cli-app");
+    expect(parsed.appId).toBe("com.example.cli-app");
+    expect(
+      parsed.targets.map((target) => ({
+        outputPath: target.outputPath,
+        target: target.target,
+      })),
+    ).toEqual([
+      {
+        outputPath: join(root, "cli-release", "dist-muon/linux-amd64"),
+        target: "linux-amd64",
+      },
+    ]);
+    await expect(
+      exists(join(root, "plugin-release", "dist-muon/windows-amd64")),
+    ).resolves.toBe(false);
+    await expect(
+      exists(join(root, "cli-release", "dist-muon/linux-amd64", "cli-app")),
+    ).resolves.toBe(true);
+  });
+
+  it("rejects muon build when the Vite plugin disables Muon builds", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-disabled-");
+    await writeViteMuonBuildProject(root, "false");
+
+    await expect(runMuonCli(root, ["build"])).rejects.toThrow(
+      "Muon build is disabled by muon({ build: false })",
+    );
   });
 
   it("packages Vite output under asset://main/ during vite build", async () => {
@@ -462,7 +1047,7 @@ describe("muon build", () => {
       ],
     });
 
-    const outputPath = join(root, "dist-muon-linux-amd64");
+    const outputPath = join(root, "dist-muon/linux-amd64");
     const entries = await readZipEntries(join(outputPath, "assets.zip"));
     expect(entries.has("main/index.html")).toBe(true);
     expect(
@@ -500,6 +1085,7 @@ describe("muon build", () => {
       },
       bootstrap: {
         appId: "missing-config-sample",
+        desktopId: "missing-config-sample",
       },
     });
   });
@@ -537,7 +1123,7 @@ describe("muon build", () => {
     });
 
     const [target] = result.targets;
-    const archivePath = join(root, "dist-muon-linux-amd64", "assets.zip");
+    const archivePath = join(root, "dist-muon/linux-amd64", "assets.zip");
     const archiveContent = await readFile(archivePath);
     const entries = await readZipEntries(archivePath);
     expect(entries.get("main/index.html")?.toString("utf8")).toBe(
@@ -590,7 +1176,7 @@ describe("muon build", () => {
     });
 
     const [target] = result.targets;
-    const archivePath = join(root, "dist-muon-linux-amd64", "assets.zip");
+    const archivePath = join(root, "dist-muon/linux-amd64", "assets.zip");
     await expect(readFile(archivePath)).resolves.toEqual(sourceZip);
     expect(target?.asset.entryCount).toBe(0);
     expect(target?.asset.signature).toBe(

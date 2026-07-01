@@ -23,7 +23,7 @@
     "images/vscode.png"
   ],
   "workspaces": [
-    "muon-prepare",
+    "muon-builder",
     "muon-ui",
     "muon-core",
     "muon-core-tester"

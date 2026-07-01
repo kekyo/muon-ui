@@ -66,6 +66,13 @@ you can develop modern local GUI applications using the web-based technology eco
   This means that, from the perspective of your web application, it is virtually equivalent to using Chromium or Chrome.
 - Supports Vite plugins (optional). With support for Vite’s HMR, you can update previews in real time during development.
 - Provides `muon dev` for launching local development assets directly without starting an HTTP server.
+- Linux desktop launcher and icon metadata can be bundled at distribution build time.
+- Windows launcher and NSIS installer resources use app-provided PNG icons and version metadata.
+  Muon converts the PNG to an ICO at build/pack time; use a high-resolution square PNG, preferably 256x256 or larger.
+  Non-square PNGs are fitted with transparent padding.
+  The generated ICO follows Microsoft [icon design guidance](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-icons)
+  and [icon resource format](https://learn.microsoft.com/en-us/windows/win32/menurc/about-icons)
+  by storing the 256px image as PNG and smaller images as 32-bit DIB entries.
 - You can use Chromium DevTools. Furthermore, because it supports CDP (Chromium DevTools Protocol), you can perform remote debugging from an external source.
 - You can display multiple browser windows. Browser windows can also be organized into a parent-child hierarchy.
 - It features a plugin system. Additionally, plugin functionality can be restricted using a whitelist filter.

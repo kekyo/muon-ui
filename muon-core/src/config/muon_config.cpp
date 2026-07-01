@@ -30,6 +30,7 @@ static constexpr char kMuonConfigFileName[] = "muon.json";
 static constexpr char kMuonConfigBootstrapKey[] = "bootstrap";
 static constexpr char kMuonConfigDefaultVersionPolicyKey[] =
     "defaultVersionPolicy";
+static constexpr char kMuonConfigDesktopIdKey[] = "desktopId";
 static constexpr const char* kMuonConfigSearchFileNames[] = {
     kMuonConfigJson5FileName,
     kMuonConfigJsoncFileName,
@@ -2337,6 +2338,7 @@ static bool ReadBootstrapConfig(yyjson_val* root,
                                 MuonConfig* config,
                                 std::string* error_message) {
   config->default_version_policy = "tested";
+  config->desktop_id = "muon";
   const auto bootstrap = yyjson_obj_get(root, kMuonConfigBootstrapKey);
   if (bootstrap == nullptr) {
     return true;
@@ -2345,6 +2347,21 @@ static bool ReadBootstrapConfig(yyjson_val* root,
     *error_message = "muon.json bootstrap must be an object";
     return false;
   }
+  const auto desktop_id_value =
+      yyjson_obj_get(bootstrap, kMuonConfigDesktopIdKey);
+  if (desktop_id_value != nullptr) {
+    if (!yyjson_is_str(desktop_id_value)) {
+      *error_message = "muon.json bootstrap.desktopId must be a string";
+      return false;
+    }
+    const auto desktop_id = TrimAscii(yyjson_get_str(desktop_id_value));
+    if (desktop_id.empty()) {
+      *error_message = "muon.json bootstrap.desktopId must not be empty";
+      return false;
+    }
+    config->desktop_id = desktop_id;
+  }
+
   const auto value =
       yyjson_obj_get(bootstrap, kMuonConfigDefaultVersionPolicyKey);
   if (value == nullptr) {

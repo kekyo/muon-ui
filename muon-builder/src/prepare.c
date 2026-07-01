@@ -23,12 +23,12 @@
 #endif
 #endif
 
-#ifndef MUON_PREPARE_VERSION
-#define MUON_PREPARE_VERSION "0.0.0"
+#ifndef MUON_BUILDER_VERSION
+#define MUON_BUILDER_VERSION "0.0.0"
 #endif
 
-#ifndef MUON_PREPARE_GIT_COMMIT_HASH
-#define MUON_PREPARE_GIT_COMMIT_HASH "unknown"
+#ifndef MUON_BUILDER_GIT_COMMIT_HASH
+#define MUON_BUILDER_GIT_COMMIT_HASH "unknown"
 #endif
 
 typedef struct {
@@ -179,7 +179,7 @@ static char *find_muon_stage_project_root(const char *stage_dir) {
 
 static const char *const k_muon_gitignore_entries[] = {
     ".muon/",
-    "dist-muon-*/",
+    "dist-muon/",
     "artifacts/",
 };
 
@@ -201,11 +201,13 @@ static int gitignore_line_matches_entry(const char *line_start,
            gitignore_line_equals(line_start, line_end, ".muon") ||
            gitignore_line_equals(line_start, line_end, "/.muon");
   }
-  if (strcmp(entry, "dist-muon-*/") == 0) {
-    return gitignore_line_equals(line_start, line_end, "dist-muon-*/") ||
-           gitignore_line_equals(line_start, line_end, "/dist-muon-*/") ||
-           gitignore_line_equals(line_start, line_end, "dist-muon-*") ||
-           gitignore_line_equals(line_start, line_end, "/dist-muon-*");
+  if (strcmp(entry, "dist-muon/") == 0) {
+    return gitignore_line_equals(line_start, line_end, "dist-muon/") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon/") ||
+           gitignore_line_equals(line_start, line_end, "dist-muon") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon") ||
+           gitignore_line_equals(line_start, line_end, "dist-muon/*") ||
+           gitignore_line_equals(line_start, line_end, "/dist-muon/*");
   }
   if (strcmp(entry, "artifacts/") == 0) {
     return gitignore_line_equals(line_start, line_end, "artifacts/") ||
@@ -324,7 +326,7 @@ static const MuonRuntimeInfo *get_embedded_runtime_info(void) {
   return &kMuonRuntimeInfo;
 #else
   muon_print_error(
-      "Muon runtime metadata is not embedded in this muon-prepare build.\n");
+      "Muon runtime metadata is not embedded in this muon-builder build.\n");
   return NULL;
 #endif
 }
@@ -1425,12 +1427,15 @@ static void print_cef_result_json(const char *cef_path, const char *archive_path
 
 static void print_usage(void) {
   muon_print_error(
-      "Usage: muon-prepare runtime --muon-path <path> [--cef-path <path>] "
+      "Usage: muon-builder <command> [options]\n"
+      "       muon-builder runtime --muon-path <path> [--cef-path <path>] "
       "[--stage-dir <path>] [--target <target>] [--cache-dir <path>] "
       "[--force] [--quiet|-q] [--json]\n"
-      "       muon-prepare buildtime --version <cefVersion> --target <target> "
+      "       muon-builder buildtime --version <cefVersion> --target <target> "
       "--output-dir <path> [--cache-dir <path>] [--force] [--quiet|-q] "
-      "[--json]\n");
+      "[--json]\n"
+      "       muon-builder resource --input <pe> --updates-json <json> "
+      "--output <pe> [--quiet|-q]\n");
 }
 
 static int parse_runtime_arguments(int argc, char **argv, int start_index,
@@ -1891,8 +1896,8 @@ cleanup_artifact:
 int muon_prepare_main(int argc, char **argv) {
   setvbuf(stderr, NULL, _IONBF, 0);
   muon_set_quiet(is_quiet_requested(argc, argv));
-  muon_log_message("muon-prepare: %s-%s: Started.", MUON_PREPARE_VERSION,
-              MUON_PREPARE_GIT_COMMIT_HASH);
+  muon_log_message("muon-builder: %s-%s: Started.", MUON_BUILDER_VERSION,
+              MUON_BUILDER_GIT_COMMIT_HASH);
   if (argc < 2 || strcmp(argv[1], "--help") == 0) {
     print_usage();
     return argc < 2 ? 1 : 0;

@@ -446,7 +446,7 @@ export const startMuonViteBrowserBridge = async ({
     cwd: server.config.root,
   });
   if (preparedRuntime.stagePath === undefined) {
-    throw new Error("muon-prepare did not return a staged runtime path.");
+    throw new Error("muon-builder did not return a staged runtime path.");
   }
   const paths = await createRuntimePaths(
     server,

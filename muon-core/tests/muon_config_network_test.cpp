@@ -356,7 +356,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !ExpectDebuggerConfig(config.cdp, false, 9222,
                             "missing cdp config") ||
       !Expect(config.default_version_policy == "tested",
-              "missing muon.json defaultVersionPolicy is wrong")) {
+              "missing muon.json defaultVersionPolicy is wrong") ||
+      !Expect(config.desktop_id == "muon",
+              "missing muon.json desktopId is wrong")) {
     return false;
   }
 
@@ -382,20 +384,23 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !ExpectDebuggerConfig(config.cdp, false, 9222,
                             "default cdp config") ||
       !Expect(config.default_version_policy == "tested",
-              "default defaultVersionPolicy is wrong")) {
+              "default defaultVersionPolicy is wrong") ||
+      !Expect(config.desktop_id == "muon", "default desktopId is wrong")) {
     return false;
   }
 
   const auto default_policy_path =
       test_directory / "default-version-policy.json";
   if (!Expect(WriteFile(default_policy_path,
-                        R"({"bootstrap":{"defaultVersionPolicy":"compat-latest"}})"),
+                        R"({"bootstrap":{"defaultVersionPolicy":"compat-latest","desktopId":"com.example.App"}})"),
               "failed to write defaultVersionPolicy config") ||
       !LoadConfigExpectSuccess(default_policy_path, &config)) {
     return false;
   }
   if (!Expect(config.default_version_policy == "compat-latest",
-              "defaultVersionPolicy was not parsed")) {
+              "defaultVersionPolicy was not parsed") ||
+      !Expect(config.desktop_id == "com.example.App",
+              "desktopId was not parsed")) {
     return false;
   }
 
@@ -408,7 +413,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
     return false;
   }
   if (!Expect(config.default_version_policy == "tested",
-              "root defaultVersionPolicy should be ignored")) {
+              "root defaultVersionPolicy should be ignored") ||
+      !Expect(config.desktop_id == "muon",
+              "root config should keep default desktopId")) {
     return false;
   }
 
@@ -1203,6 +1210,10 @@ static bool RunConfigValidationTest(
       test_directory / "invalid-default-version-policy-type.json";
   const auto invalid_default_version_policy_path =
       test_directory / "invalid-default-version-policy.json";
+  const auto invalid_desktop_id_type_path =
+      test_directory / "invalid-desktop-id-type.json";
+  const auto empty_desktop_id_path =
+      test_directory / "empty-desktop-id.json";
   const auto invalid_authorized_origin_path =
       test_directory / "invalid-authorized-origin.json";
   const auto invalid_authorized_origin_entry_path =
@@ -1279,6 +1290,12 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(invalid_default_version_policy_path,
                           R"({"bootstrap":{"defaultVersionPolicy":"invalid"}})"),
                 "failed to write invalid defaultVersionPolicy config") &&
+         Expect(WriteFile(invalid_desktop_id_type_path,
+                          R"({"bootstrap":{"desktopId":42}})"),
+                "failed to write invalid desktopId type config") &&
+         Expect(WriteFile(empty_desktop_id_path,
+                          R"({"bootstrap":{"desktopId":"   "}})"),
+                "failed to write empty desktopId config") &&
          Expect(WriteFile(invalid_authorized_origin_path,
                           R"({"network":{"authorizedOrigin":true}})"),
                 "failed to write invalid authorizedOrigin config") &&
@@ -1384,6 +1401,10 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_default_version_policy_path,
                                  "bootstrap.defaultVersionPolicy has unknown "
                                  "value") &&
+         LoadConfigExpectFailure(invalid_desktop_id_type_path,
+                                 "bootstrap.desktopId must be a string") &&
+         LoadConfigExpectFailure(empty_desktop_id_path,
+                                 "bootstrap.desktopId must not be empty") &&
          LoadConfigExpectFailure(invalid_authorized_origin_path,
                                  "network.authorizedOrigin must be an array") &&
          LoadConfigExpectFailure(invalid_authorized_origin_entry_path,

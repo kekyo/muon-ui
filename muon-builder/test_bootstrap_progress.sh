@@ -4,9 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${SCRIPT_DIR}/.run/test-bootstrap-progress"
 HARNESS="${OUT_DIR}/bootstrap_progress_harness.c"
+BOOTSTRAP_STATE_HARNESS="${OUT_DIR}/bootstrap_state_directory_harness.c"
 WIN_FALLBACK_HARNESS="${OUT_DIR}/bootstrap_progress_windows_fallback_harness.c"
 WIN_UI_HARNESS="${OUT_DIR}/bootstrap_progress_windows_ui_harness.c"
 mkdir -p "${OUT_DIR}"
+
+bash "${SCRIPT_DIR}/build_yyjson.sh"
 
 cat >"${HARNESS}" <<'HARNESS_EOF'
 #ifndef _POSIX_C_SOURCE
@@ -64,6 +67,202 @@ gcc -std=c99 -Wall -Wextra -pedantic \
   $(pkg-config --cflags --libs xcb) \
   -pthread
 "${OUT_DIR}/bootstrap_progress_harness"
+
+cat >"${BOOTSTRAP_STATE_HARNESS}" <<'HARNESS_EOF'
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define main muon_bootstrap_original_main
+#include "../../src/muon_bootstrap.c"
+#undef main
+
+char *muon_substring(const char *start, size_t length) {
+  char *result = (char *)malloc(length + 1);
+  if (result == NULL) {
+    return NULL;
+  }
+  memcpy(result, start, length);
+  result[length] = '\0';
+  return result;
+}
+
+char *muon_duplicate_path_string(const char *value) {
+  char *result = muon_substring(value, strlen(value));
+  normalize_path_separators(result);
+  return result;
+}
+
+char *muon_path_join(const char *left, const char *right) {
+  if (left == NULL || left[0] == '\0') {
+    return muon_substring(right, strlen(right));
+  }
+  if (right == NULL || right[0] == '\0') {
+    return muon_substring(left, strlen(left));
+  }
+  const int needs_separator = !is_path_separator(left[strlen(left) - 1]);
+  const size_t size = strlen(left) + strlen(right) + (needs_separator ? 2 : 1);
+  char *result = (char *)malloc(size);
+  if (result == NULL) {
+    return NULL;
+  }
+  snprintf(result, size, needs_separator ? "%s/%s" : "%s%s", left, right);
+  return result;
+}
+
+char *muon_path_join3(const char *first, const char *second,
+                      const char *third) {
+  char *left = muon_path_join(first, second);
+  if (left == NULL) {
+    return NULL;
+  }
+  char *result = muon_path_join(left, third);
+  free(left);
+  return result;
+}
+
+void muon_free_string_array(char **values, size_t count) {
+  if (values == NULL) {
+    return;
+  }
+  for (size_t index = 0; index < count; index += 1) {
+    free(values[index]);
+  }
+  free(values);
+}
+
+int muon_path_exists(const char *path) {
+  (void)path;
+  return 0;
+}
+
+char *muon_read_text_file(const char *path) {
+  (void)path;
+  return NULL;
+}
+
+int muon_write_text_file(const char *path, const char *content) {
+  (void)path;
+  (void)content;
+  return -1;
+}
+
+yyjson_doc *muon_json_read_file(const char *path) {
+  (void)path;
+  return NULL;
+}
+
+int muon_bootstrap_get_embedded_app_id(char **app_id) {
+  *app_id = NULL;
+  return 0;
+}
+
+void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
+  progress->backend = NULL;
+}
+
+int muon_bootstrap_progress_is_available(const MuonBootstrapProgress *progress) {
+  (void)progress;
+  return 0;
+}
+
+void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
+                                    const MuonPrepareProgress *event) {
+  (void)progress;
+  (void)event;
+}
+
+void muon_bootstrap_progress_fail(MuonBootstrapProgress *progress) {
+  (void)progress;
+}
+
+void muon_bootstrap_progress_dispose(MuonBootstrapProgress *progress) {
+  (void)progress;
+}
+
+int muon_prepare_staged_with_progress(
+    const char *muon_path, const char *stage_dir, const char *target,
+    const char *cache_dir, int force, int quiet,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
+  (void)muon_path;
+  (void)stage_dir;
+  (void)target;
+  (void)cache_dir;
+  (void)force;
+  (void)quiet;
+  (void)progress_callback;
+  (void)progress_user_data;
+  return 1;
+}
+
+static int set_environment(const char *name, const char *value) {
+#ifdef _WIN32
+  return _putenv_s(name, value);
+#else
+  return setenv(name, value, 1);
+#endif
+}
+
+#ifndef _WIN32
+static int clear_environment(const char *name) {
+  return unsetenv(name);
+}
+#endif
+
+static int assert_stage_dir(const char *name, const char *app_id,
+                            const char *target, const char *expected) {
+  char *actual = create_state_runtime_dir(app_id, target);
+  if (actual == NULL) {
+    fprintf(stderr, "%s: failed to create stage directory\n", name);
+    return 1;
+  }
+  const int failed = strcmp(actual, expected) != 0;
+  if (failed) {
+    fprintf(stderr, "%s: expected %s, got %s\n", name, expected, actual);
+  }
+  free(actual);
+  return failed;
+}
+
+int main(void) {
+  int failed = 0;
+#ifdef _WIN32
+  failed |= set_environment("LOCALAPPDATA", "C:\\Users\\alice\\AppData\\Local");
+  failed |= assert_stage_dir(
+      "LOCALAPPDATA", "com.example.app", "windows-amd64",
+      "C:/Users/alice/AppData/Local/com.example.app/windows-amd64");
+#else
+  failed |= set_environment("XDG_STATE_HOME", "/tmp/muon-state");
+  failed |= assert_stage_dir("XDG_STATE_HOME", "com.example.app", "linux-amd64",
+                             "/tmp/muon-state/com.example.app/linux-amd64");
+  failed |= clear_environment("XDG_STATE_HOME");
+	  failed |= set_environment("HOME", "/home/alice");
+	  failed |= assert_stage_dir("HOME", "com.example.app", "linux-arm64",
+	                             "/home/alice/.local/state/com.example.app/linux-arm64");
+#endif
+  if (!should_prepare_staged_runtime("/tmp/source", "/tmp/state")) {
+    fprintf(stderr, "different runtime directories should be staged\n");
+    failed = 1;
+  }
+  if (should_prepare_staged_runtime("/tmp/state", "/tmp/state")) {
+    fprintf(stderr, "state runtime directory should not be staged again\n");
+    failed = 1;
+  }
+	  return failed;
+	}
+HARNESS_EOF
+
+gcc -std=c99 -Wall -Wextra -pedantic \
+	  -I"${SCRIPT_DIR}/src" \
+	  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
+	  -o "${OUT_DIR}/bootstrap_state_directory_harness" \
+	  "${BOOTSTRAP_STATE_HARNESS}" \
+	  "${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src/yyjson.c"
+"${OUT_DIR}/bootstrap_state_directory_harness"
 
 cat >"${WIN_FALLBACK_HARNESS}" <<'HARNESS_EOF'
 #define WIN32_LEAN_AND_MEAN
@@ -295,6 +494,15 @@ HARNESS_EOF
 
 wine_prefix="${OUT_DIR}/wineprefix"
 rm -rf "${wine_prefix}"
+
+x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
+  -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
+  -o "${OUT_DIR}/bootstrap_state_directory_windows64_harness.exe" \
+  "${BOOTSTRAP_STATE_HARNESS}"
+xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
+  wine "${OUT_DIR}/bootstrap_state_directory_windows64_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \

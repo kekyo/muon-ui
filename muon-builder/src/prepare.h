@@ -21,7 +21,7 @@
 #include "prepare_progress.h"
 
 /**
- * Runs the muon-prepare command-line entry point.
+ * Runs the muon-builder command-line entry point.
  *
  * @param argc Number of command-line arguments.
  * @param argv Command-line argument values.

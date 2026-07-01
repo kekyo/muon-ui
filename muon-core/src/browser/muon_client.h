@@ -62,6 +62,7 @@ class MuonClient final : public CefClient,
    * @param title_bar_background_color Explicit title bar background color.
    * @param has_initial_title_bar_icon Whether initial_title_bar_icon is valid.
    * @param initial_title_bar_icon Initial title bar icon data.
+   * @param linux_desktop_id Desktop identifier for Linux window metadata.
    */
   MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
              std::shared_ptr<MuonNetworkPolicy> network_policy,
@@ -74,7 +75,8 @@ class MuonClient final : public CefClient,
                  CreateNativeMuonTitleBarManifest(),
              MuonTitleBarBackgroundColor title_bar_background_color = {},
              bool has_initial_title_bar_icon = false,
-             MuonTitleBarIcon initial_title_bar_icon = {});
+             MuonTitleBarIcon initial_title_bar_icon = {},
+             std::string linux_desktop_id = "muon");
 
   /**
    * Returns this object as the browser lifetime handler.
@@ -451,6 +453,7 @@ class MuonClient final : public CefClient,
   MuonBrowserConfig browser_config_;
   MuonTitleBarManifest title_bar_manifest_;
   MuonTitleBarBackgroundColor title_bar_background_color_;
+  std::string linux_desktop_id_;
   bool has_initial_title_bar_icon_ = false;
   MuonTitleBarIcon initial_title_bar_icon_;
   std::function<bool(int32_t)> shutdown_requester_;

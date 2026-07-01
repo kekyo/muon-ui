@@ -40,7 +40,14 @@ export default defineConfig(({ mode }) => {
       sourcemap: true,
       target: "node20",
       rolldownOptions: {
-        external: [/^node:/, "adm-zip", "commander", "vite"],
+        external: [
+          /^node:/,
+          "adm-zip",
+          "commander",
+          "sharp",
+          "tar-vern",
+          "vite",
+        ],
         output: {
           preserveModules: false,
         },

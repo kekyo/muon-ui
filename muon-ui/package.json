@@ -25,10 +25,11 @@
     "vite.d.ts"
   ],
   "scripts": {
-    "build": "npm run build:js && npm run build --workspace muon-prepare && node scripts/stage-muon-prepare.mjs",
+    "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs",
     "build:js": "vite build --mode cjs && vite build --mode esm",
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
+    "test:windows-nsis-e2e": "npm run build && MUON_E2E_REMOTE_WINDOWS=1 vitest run test/nsis-windows-e2e.test.ts",
     "verify:package-runtime": "node scripts/verify-package-runtime.mjs",
     "pack": "bash ../build_package.sh",
     "dependencies": "reskill"
@@ -36,7 +37,9 @@
   "dependencies": {
     "adm-zip": ">=0.5.0",
     "commander": ">=14.0.0",
-    "json5": ">=2.2.0"
+    "json5": ">=2.2.0",
+    "sharp": "^0.35.2",
+    "tar-vern": ">=1.3.0"
   },
   "peerDependencies": {
     "vite": ">=5.0.0"
@@ -49,9 +52,10 @@
   "devDependencies": {
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
+    "agent-rover": "^0.1.0",
     "async-primitives": ">=1.7.0",
     "prettier-max": ">=1.16.0",
-    "screw-up": ">=1.34.0",
+    "screw-up": ">=1.35.0",
     "typescript": ">=5.9.0",
     "vite": ">=7.0.0",
     "vitest": ">=2.0.0"

@@ -354,6 +354,30 @@ const waitForRecycledMuon = async (
   throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
 };
 
+const waitForTextFileContent = async (
+  path: string,
+  predicate: (content: string) => boolean,
+  description: string,
+): Promise<string> => {
+  const deadline = Date.now() + targetTimeoutMs;
+  let lastContent: string | undefined = undefined;
+  let lastError: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      lastContent = await readFile(path, "utf8");
+      if (predicate(lastContent)) {
+        return lastContent;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out waiting for ${description}: ${lastContent ?? String(lastError)}`,
+  );
+};
+
 const expectWindowBoundsShape = (bounds: BrowserWindowBounds): void => {
   expect(Number.isSafeInteger(bounds.x)).toBe(true);
   expect(Number.isSafeInteger(bounds.y)).toBe(true);
@@ -755,7 +779,6 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     const configPath = join(
       stateHome,
       "muon-bootstrap",
-      "runtime",
       expectedRuntimeTarget(),
       "muon-bootstrap.ini",
     );
@@ -825,12 +848,12 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           internalType: "function",
         });
       });
-      await expect(readFile(configPath, "utf8")).resolves.toContain(
-        "requested=true",
+      const bootstrapConfig = await waitForTextFileContent(
+        configPath,
+        (content) => content.includes("requested=true"),
+        "bootstrap update request settings",
       );
-      await expect(readFile(configPath, "utf8")).resolves.not.toContain(
-        "versionPolicy=",
-      );
+      expect(bootstrapConfig).not.toContain("versionPolicy=");
     } finally {
       await rm(stateHome, { force: true, recursive: true });
     }

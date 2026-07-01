@@ -34,6 +34,20 @@ import {
   type MuonTarget,
   type MuonTargetDescriptor,
 } from "./targets.js";
+import {
+  resolveMuonWindowsResource,
+  stripBuildOnlyWindowsResourceConfig,
+  updateWindowsPeResources,
+  type MuonWindowsResourceOptions,
+  type ResolvedMuonWindowsResource,
+} from "./windows-resource.js";
+import {
+  resolveMuonLinuxDesktop,
+  stripBuildOnlyLinuxDesktopConfig,
+  writeLinuxDesktopDistributionFiles,
+  type MuonLinuxDesktopOptions,
+  type ResolvedMuonLinuxDesktop,
+} from "./linux-desktop.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -106,7 +120,7 @@ export interface MuonBuildOptions {
    */
   appId?: string;
   /**
-   * Parent directory that receives dist-muon-linux-amd64/ style outputs.
+   * Parent directory that receives dist-muon/linux-amd64/ style outputs.
    */
   outputRoot?: string;
   /**
@@ -121,6 +135,20 @@ export interface MuonBuildOptions {
    * Muon config path to embed.
    */
   configPath?: string;
+  /**
+   * Windows PE and NSIS resource metadata.
+   *
+   * @defaultValue Uses `muon.json` `windows.resource`, `project.json`,
+   * `package.json`, then Muon defaults.
+   */
+  windowsResource?: MuonWindowsResourceOptions;
+  /**
+   * Linux desktop entry metadata.
+   *
+   * @defaultValue Uses `muon.json` `linux.desktop`, package metadata, then
+   * Muon defaults.
+   */
+  linuxDesktop?: MuonLinuxDesktopOptions;
   /**
    * Asset salt override for deterministic tests.
    *
@@ -160,7 +188,7 @@ export interface MuonBuildTargetResult {
    */
   target: MuonBuildTarget;
   /**
-   * Fixed output directory name for the target.
+   * Fixed output directory path for the target.
    */
   distributionDirectoryName: string;
   /**
@@ -179,6 +207,10 @@ export interface MuonBuildTargetResult {
    * Config object embedded into muon-core and the app launcher.
    */
   embeddedConfig: JsonObject;
+  /**
+   * Linux desktop integration metadata when the target is Linux.
+   */
+  linuxDesktop?: ResolvedMuonLinuxDesktop;
 }
 
 /**
@@ -237,6 +269,35 @@ export const buildMuonApp = async (
     options.assetPrefix,
     buildConfig,
   );
+  const windowsResource = await resolveMuonWindowsResource({
+    root,
+    packageDirectory,
+    packageJson,
+    muonConfig: buildConfig.config,
+    muonConfigDirectory: buildConfig.directory,
+    options: options.windowsResource,
+    defaults: {
+      productName: appName,
+      fileDescription: appName,
+      companyName: "Unknown",
+      version: "0.0.0",
+      copyright: undefined,
+    },
+  });
+  const linuxDesktop = await resolveMuonLinuxDesktop({
+    root,
+    packageDirectory,
+    muonConfig: buildConfig.config,
+    muonConfigDirectory: buildConfig.directory,
+    options: options.linuxDesktop,
+    defaults: {
+      desktopId: appId,
+      name: resolveLinuxDesktopDefaultName(packageJson, appName),
+      comment: resolvePackageDescription(packageJson),
+      categories: ["Utility"],
+      startupNotify: true,
+    },
+  });
   const salt = Buffer.from(
     options.assetSalt ?? randomBytes(assetSaltByteLength),
   );
@@ -246,12 +307,15 @@ export const buildMuonApp = async (
   for (const target of targets) {
     const result = await buildMuonTarget({
       packageDirectory,
+      root,
       outputRoot,
       appName,
       appId,
       target,
       assetInput,
       sourceConfig: buildConfig.config,
+      windowsResource,
+      linuxDesktop,
       salt,
     });
     results.push(result);
@@ -390,6 +454,19 @@ const sanitizeAppId = (value: string): string => {
   return sanitized.length > 0 ? sanitized : defaultAppId;
 };
 
+const resolveLinuxDesktopDefaultName = (
+  packageJson: JsonObject,
+  appName: string,
+): string =>
+  typeof packageJson.name === "string" && packageJson.name.trim() !== ""
+    ? packageJson.name.trim()
+    : appName;
+
+const resolvePackageDescription = (packageJson: JsonObject): string =>
+  typeof packageJson.description === "string"
+    ? packageJson.description.trim()
+    : "";
+
 const readBuildConfig = async (
   root: string,
   configPath: string | undefined,
@@ -486,12 +563,15 @@ const readJsonObjectFile = async (
 
 const buildMuonTarget = async (input: {
   packageDirectory: string;
+  root: string;
   outputRoot: string;
   appName: string;
   appId: string;
   target: MuonBuildTarget;
   assetInput: AssetInput;
   sourceConfig: JsonObject;
+  windowsResource: ResolvedMuonWindowsResource;
+  linuxDesktop: ResolvedMuonLinuxDesktop;
   salt: Buffer;
 }): Promise<MuonBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
@@ -542,6 +622,7 @@ const buildMuonTarget = async (input: {
     input.sourceConfig,
     asset,
     input.appId,
+    input.linuxDesktop.desktopId,
   );
 
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
@@ -557,6 +638,17 @@ const buildMuonTarget = async (input: {
     });
   });
 
+  if (descriptor.os === "windows") {
+    await updateWindowsPeResources({
+      executablePath: launcherPath,
+      resource: input.windowsResource,
+      environment: process.env,
+      cwd: input.root,
+    });
+  } else if (descriptor.os === "linux") {
+    await writeLinuxDesktopDistributionFiles(outputPath, input.linuxDesktop);
+  }
+
   return {
     target: input.target,
     distributionDirectoryName: descriptor.distributionDirectoryName,
@@ -564,6 +656,7 @@ const buildMuonTarget = async (input: {
     launcherPath,
     asset,
     embeddedConfig,
+    ...(descriptor.os === "linux" ? { linuxDesktop: input.linuxDesktop } : {}),
   };
 };
 
@@ -760,6 +853,7 @@ const createEmbeddedConfig = (
   sourceConfig: JsonObject,
   asset: MuonBuildAssetResult,
   appId: string,
+  desktopId: string,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -770,8 +864,12 @@ const createEmbeddedConfig = (
     throw new Error("muon.json bootstrap must be an object when present.");
   }
 
+  const runtimeConfig = stripBuildOnlyLinuxDesktopConfig(
+    stripBuildOnlyWindowsResourceConfig(sourceConfig),
+  );
+
   return {
-    ...sourceConfig,
+    ...runtimeConfig,
     asset: {
       ...(sourceAsset ?? {}),
       sourcePath: appConfigSourcePath,
@@ -781,6 +879,7 @@ const createEmbeddedConfig = (
     bootstrap: {
       ...(sourceBootstrap ?? {}),
       appId,
+      desktopId,
     },
   };
 };

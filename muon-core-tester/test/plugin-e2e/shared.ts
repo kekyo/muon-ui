@@ -285,6 +285,36 @@ export const listCdpTargets = async (
 ): Promise<CdpTarget[]> =>
   await baseListCdpTargets(applyRemoteCdpOptions(options));
 
+const activeCdpDrivers = new Set<CdpDriver>();
+
+const trackCdpDriver = (driver: CdpDriver): CdpDriver => {
+  let closed = false;
+  const trackedDriver: CdpDriver = {
+    ...driver,
+    close: (): void => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      activeCdpDrivers.delete(trackedDriver);
+      driver.close();
+    },
+  };
+  activeCdpDrivers.add(trackedDriver);
+  return trackedDriver;
+};
+
+const closeActiveCdpDrivers = (): void => {
+  for (const driver of Array.from(activeCdpDrivers)) {
+    try {
+      driver.close();
+    } catch {
+      // The connection may already be closing.
+    }
+  }
+  activeCdpDrivers.clear();
+};
+
 const isMuonTitleBarUrl = (url: string): boolean =>
   url.includes("Muon%20Title%20Bar") ||
   url.includes("Muon Title Bar") ||
@@ -309,7 +339,7 @@ export const connectToMuonCdp = async (
 ): Promise<CdpDriver> => {
   const cdpOptions = applyRemoteCdpOptions(options);
   if (!isWindowsRemoteE2e()) {
-    return await baseConnectToMuonCdp(cdpOptions);
+    return trackCdpDriver(await baseConnectToMuonCdp(cdpOptions));
   }
 
   const timeoutMs = options.timeoutMs ?? cdpCommandTimeoutMs;
@@ -318,10 +348,12 @@ export const connectToMuonCdp = async (
   if (cdpOptions.targetId !== undefined) {
     while (Date.now() < deadline) {
       try {
-        return await baseConnectToMuonCdp({
-          ...cdpOptions,
-          timeoutMs: Math.max(1, deadline - Date.now()),
-        });
+        return trackCdpDriver(
+          await baseConnectToMuonCdp({
+            ...cdpOptions,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+          }),
+        );
       } catch (error) {
         lastError = error;
       }
@@ -364,7 +396,7 @@ export const connectToMuonCdp = async (
             "document.location.href",
           );
           if (isUsableWindowsRemotePageUrl(currentUrl)) {
-            return driver;
+            return trackCdpDriver(driver);
           }
           throw new Error(
             `CDP target is not the main page: listed=${candidate.url} runtime=${currentUrl}`,
@@ -4975,6 +5007,7 @@ afterEach(async (context: TestContext) => {
   for (const processInfo of running) {
     await stopMuon(processInfo, undefined);
   }
+  closeActiveCdpDrivers();
 });
 
 export const describeMuonPluginBridge = (

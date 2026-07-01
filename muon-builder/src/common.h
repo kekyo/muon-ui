@@ -94,7 +94,12 @@ char *muon_read_tar_bz2_text_file(const char *archive_path,
                                   int strip_components);
 
 int muon_run_process(char *const argv[]);
+int muon_run_process_allow_failure(char *const argv[]);
 int muon_run_process_with_file_progress(
+    char *const argv[], const char *progress_path, unsigned long long total,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data,
+    MuonPrepareProgressPhase phase, const char *status);
+int muon_run_process_with_file_progress_allow_failure(
     char *const argv[], const char *progress_path, unsigned long long total,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data,
     MuonPrepareProgressPhase phase, const char *status);

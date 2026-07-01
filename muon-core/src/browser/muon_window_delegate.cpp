@@ -29,7 +29,8 @@ MuonWindowDelegate::MuonWindowDelegate(
     MuonTitleBarManifest title_bar_manifest,
     MuonTitleBarBackgroundColor title_bar_background_color,
     CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler,
-    MuonWindowCloseHandler* close_handler)
+    MuonWindowCloseHandler* close_handler,
+    std::string linux_desktop_id)
     : browser_view_(browser_view),
       shortcut_handler_(shortcut_handler),
       close_handler_(close_handler),
@@ -37,7 +38,8 @@ MuonWindowDelegate::MuonWindowDelegate(
       initial_window_state_(initial_window_state),
       initial_title_bar_visibility_(initial_title_bar_visibility),
       title_bar_manifest_(std::move(title_bar_manifest)),
-      title_bar_background_color_(title_bar_background_color) {}
+      title_bar_background_color_(title_bar_background_color),
+      linux_desktop_id_(std::move(linux_desktop_id)) {}
 
 class ApplyInitialWindowStateTask final : public CefTask {
  public:
@@ -360,9 +362,12 @@ bool MuonWindowDelegate::UseCustomTitleBar() const {
 bool MuonWindowDelegate::GetLinuxWindowProperties(
     CefRefPtr<CefWindow> window,
     CefLinuxWindowProperties& properties) {
-  CefString(&properties.wayland_app_id).FromASCII("muon");
-  CefString(&properties.wm_class_class).FromASCII("muon");
-  CefString(&properties.wm_class_name).FromASCII("muon");
+  (void)window;
+  const auto desktop_id =
+      linux_desktop_id_.empty() ? std::string("muon") : linux_desktop_id_;
+  CefString(&properties.wayland_app_id).FromString(desktop_id);
+  CefString(&properties.wm_class_class).FromString(desktop_id);
+  CefString(&properties.wm_class_name).FromString(desktop_id);
   CefString(&properties.wm_role_name)
       .FromASCII(is_devtools_ ? "devtools" : "browser");
   return true;

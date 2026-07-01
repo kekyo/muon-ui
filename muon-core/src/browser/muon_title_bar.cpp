@@ -1507,8 +1507,23 @@ void MuonTitleBarController::SetMaximized(bool maximized) {
   SendState();
 }
 
+void MuonTitleBarController::SetNativeHoveredControl(
+    MuonTitleBarControlAction action) {
+  if (native_hovered_control_ == action) {
+    if (action != MuonTitleBarControlAction::NoControl) {
+      SendNativeHover();
+    }
+    return;
+  }
+  native_hovered_control_ = action;
+  SendNativeHover();
+}
+
 void MuonTitleBarController::SetVisible(bool visible) {
   visible_ = visible;
+  if (!visible_) {
+    SetNativeHoveredControl(MuonTitleBarControlAction::NoControl);
+  }
   const auto title_bar_view = ResolveTitleBarView();
   auto window = CefRefPtr<CefWindow>();
   if (title_bar_view) {
@@ -1628,6 +1643,7 @@ void MuonTitleBarController::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   SendTitle();
   SendState();
   SendIcon();
+  SendNativeHover();
 }
 
 bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -1720,6 +1736,17 @@ void MuonTitleBarController::SendIcon() {
       (icon_data_url_.empty() ? std::string("null")
                               : CreateJavaScriptStringLiteral(
                                     icon_data_url_)) +
+      ");");
+}
+
+void MuonTitleBarController::SendNativeHover() {
+  const auto* action_name =
+      GetMuonTitleBarControlActionName(native_hovered_control_);
+  ExecuteJavaScript(
+      std::string("window.__muonTitleBar && "
+                  "window.__muonTitleBar.setNativeHover(") +
+      (action_name == nullptr ? std::string("null")
+                              : CreateJavaScriptStringLiteral(action_name)) +
       ");");
 }
 
@@ -2255,6 +2282,24 @@ bool HandleRegisteredMuonTitleBarControlAction(
     return false;
   }
   controller->HandleAction(action_name);
+  return true;
+}
+
+bool SetRegisteredMuonTitleBarHoveredControl(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action) {
+  CEF_REQUIRE_UI_THREAD();
+
+  const auto controller =
+      FindMuonTitleBarControllerByWindowHandle(window_handle);
+  if (controller == nullptr) {
+    return false;
+  }
+  if (action != MuonTitleBarControlAction::NoControl &&
+      !controller->CanHandleNativeWindowControls()) {
+    return false;
+  }
+  controller->SetNativeHoveredControl(action);
   return true;
 }
 

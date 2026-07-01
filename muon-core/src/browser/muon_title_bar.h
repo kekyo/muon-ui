@@ -397,6 +397,11 @@ class MuonTitleBarController final : public CefClient,
   void SetMaximized(bool maximized);
 
   /**
+   * Updates the standard control hover state detected by native input.
+   */
+  void SetNativeHoveredControl(MuonTitleBarControlAction action);
+
+  /**
    * Updates title bar visibility state used for draggable regions.
    */
   void SetVisible(bool visible);
@@ -445,6 +450,7 @@ class MuonTitleBarController final : public CefClient,
   void SendState();
   void SendTitle();
   void SendIcon();
+  void SendNativeHover();
   void ExecuteJavaScript(const std::string& source);
   CefRefPtr<CefBrowserView> ResolveTitleBarView() const;
   CefRefPtr<CefWindow> ResolveWindow() const;
@@ -459,6 +465,8 @@ class MuonTitleBarController final : public CefClient,
   bool maximized_ = false;
   bool visible_ = true;
   bool loaded_ = false;
+  MuonTitleBarControlAction native_hovered_control_ =
+      MuonTitleBarControlAction::NoControl;
 
   IMPLEMENT_REFCOUNTING(MuonTitleBarController);
   DISALLOW_COPY_AND_ASSIGN(MuonTitleBarController);
@@ -677,6 +685,17 @@ bool IsRegisteredMuonTitleBarDragRegionPoint(
  * @return true when a registered title bar handled the action.
  */
 bool HandleRegisteredMuonTitleBarControlAction(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action);
+
+/**
+ * Updates a registered title bar control hover state from native input.
+ *
+ * @param window_handle Native top-level window handle.
+ * @param action Hovered control action, or NoControl to clear hover.
+ * @return true when a registered title bar accepted the hover update.
+ */
+bool SetRegisteredMuonTitleBarHoveredControl(
     CefWindowHandle window_handle,
     MuonTitleBarControlAction action);
 

@@ -45,7 +45,7 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
   --muon-titlebar-fg-inactive: #77767b;
   --muon-titlebar-border: #b9b7b3;
   --muon-titlebar-button-hover: rgba(0, 0, 0, 0.08);
-  --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);"
+  --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);
   --muon-titlebar-close-hover: #c81010;
   --muon-titlebar-close-active: #ff2020;
   --muon-titlebar-close-fg: #ffffff;
@@ -164,6 +164,16 @@ body {
 }
 
 .control.close:hover {
+  background: var(--muon-titlebar-close-hover);
+  color: var(--muon-titlebar-close-fg);
+}
+
+.title-bar.native-hover-minimize .control[data-action="minimize"],
+.title-bar.native-hover-maximize .control[data-action="maximize"] {
+  background: var(--muon-titlebar-button-hover);
+}
+
+.title-bar.native-hover-close .control.close {
   background: var(--muon-titlebar-close-hover);
   color: var(--muon-titlebar-close-fg);
 }
@@ -301,9 +311,18 @@ constexpr char kMuonTitleBarJs[] = R"JS(
   const bar = document.getElementById("muon-title-bar");
   const icon = document.getElementById("muon-icon");
   const title = document.getElementById("muon-title");
+  const nativeHoverActions = new Set(["minimize", "maximize", "close"]);
+  const nativeHoverClasses = [...nativeHoverActions]
+    .map((action) => `native-hover-${action}`);
   const sendAction = (action) => {
     globalThis.location.href =
       `https://muon.internal/title-bar/${action}?t=${Date.now()}`;
+  };
+  const setNativeHover = (action) => {
+    bar.classList.remove(...nativeHoverClasses);
+    if (nativeHoverActions.has(action)) {
+      bar.classList.add(`native-hover-${action}`);
+    }
   };
 
   for (const button of document.querySelectorAll("[data-action]")) {
@@ -332,6 +351,7 @@ constexpr char kMuonTitleBarJs[] = R"JS(
       bar.classList.toggle("inactive", state?.active === false);
       bar.classList.toggle("maximized", state?.maximized === true);
     },
+    setNativeHover,
   };
 })();
 )JS";

@@ -183,6 +183,37 @@ static MuonTitleBarControlAction GetMuonWindowsTitleBarControlAction(
       root_window_handle, dip_screen_point, window_bounds);
 }
 
+static void SetMuonWindowsTitleBarControlHover(
+    HWND root_window_handle,
+    MuonTitleBarControlAction action) {
+  if (root_window_handle == nullptr) {
+    return;
+  }
+  SetRegisteredMuonTitleBarHoveredControl(root_window_handle, action);
+}
+
+static MuonTitleBarControlAction UpdateMuonWindowsTitleBarControlHover(
+    HWND root_window_handle,
+    CefPoint screen_point_pixels) {
+  const auto action =
+      GetMuonWindowsTitleBarControlAction(root_window_handle,
+                                          screen_point_pixels);
+  SetMuonWindowsTitleBarControlHover(root_window_handle, action);
+  return action;
+}
+
+static void RefreshMuonWindowsTitleBarControlHoverFromCursor(
+    HWND root_window_handle) {
+  POINT cursor_point;
+  if (!GetCursorPos(&cursor_point)) {
+    SetMuonWindowsTitleBarControlHover(
+        root_window_handle, MuonTitleBarControlAction::NoControl);
+    return;
+  }
+  UpdateMuonWindowsTitleBarControlHover(
+      root_window_handle, CefPoint(cursor_point.x, cursor_point.y));
+}
+
 static bool IsMuonWindowsTitleBarDragRegion(
     HWND root_window_handle,
     CefPoint screen_point_pixels) {
@@ -480,6 +511,23 @@ static bool ContinueMuonWindowsWindowDragAtScreenPoint(
   return true;
 }
 
+static bool MoveMuonWindowsPendingWindowDrag(
+    const MuonWindowsPendingWindowDrag& pending,
+    CefPoint screen_point) {
+  const auto delta_x = screen_point.x - pending.start_screen_point.x;
+  const auto delta_y = screen_point.y - pending.start_screen_point.y;
+  if (delta_x == 0 && delta_y == 0) {
+    return false;
+  }
+  SetWindowPos(
+      pending.root_window_handle, nullptr,
+      pending.start_window_rect.left + delta_x,
+      pending.start_window_rect.top + delta_y,
+      0, 0,
+      SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
+  return true;
+}
+
 static bool ContinueMuonWindowsWindowDrag(HWND window_handle,
                                           HWND root_window_handle,
                                           WPARAM wparam,
@@ -494,15 +542,46 @@ static bool ContinueMuonWindowsWindowDrag(HWND window_handle,
       (wparam & MK_LBUTTON) != 0);
 }
 
-static bool CompleteMuonWindowsWindowDrag(HWND root_window_handle,
-                                          HWND window_handle) {
+static bool CompleteMuonWindowsWindowDragAtScreenPoint(
+    HWND root_window_handle,
+    HWND window_handle,
+    CefPoint screen_point) {
   MuonWindowsPendingWindowDrag pending;
   if (!FindMuonWindowsPendingWindowDrag(
           root_window_handle, window_handle, &pending)) {
     return false;
   }
+  MoveMuonWindowsPendingWindowDrag(pending, screen_point);
   ClearMuonWindowsPendingWindowDrag(root_window_handle, window_handle, true);
   return true;
+}
+
+static bool CompleteMuonWindowsWindowDragFromClientPoint(
+    HWND root_window_handle,
+    HWND window_handle,
+    LPARAM lparam) {
+  CefPoint screen_point;
+  if (!GetMuonWindowsScreenPointFromClientPoint(
+          window_handle, lparam, &screen_point)) {
+    MuonWindowsPendingWindowDrag pending;
+    if (!FindMuonWindowsPendingWindowDrag(
+            root_window_handle, window_handle, &pending)) {
+      return false;
+    }
+    ClearMuonWindowsPendingWindowDrag(root_window_handle, window_handle, true);
+    return true;
+  }
+  return CompleteMuonWindowsWindowDragAtScreenPoint(
+      root_window_handle, window_handle, screen_point);
+}
+
+static bool CompleteMuonWindowsWindowDragFromScreenPoint(
+    HWND root_window_handle,
+    HWND window_handle,
+    LPARAM lparam) {
+  return CompleteMuonWindowsWindowDragAtScreenPoint(
+      root_window_handle, window_handle,
+      CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)));
 }
 
 static bool StartMuonWindowsPageDrag(HWND root_window_handle,
@@ -656,23 +735,31 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     case WM_NCHITTEST: {
       const auto native_hit_test =
           DefSubclassProc(window_handle, message, wparam, lparam);
-      if (IsMuonWindowsResizeHitTest(static_cast<int>(native_hit_test))) {
-        return native_hit_test;
-      }
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+      if (IsMuonWindowsResizeHitTest(static_cast<int>(native_hit_test))) {
+        SetMuonWindowsTitleBarControlHover(
+            root_window_handle, MuonTitleBarControlAction::NoControl);
+        return native_hit_test;
+      }
       const auto title_hit =
           IsMuonWindowsTitleBarDragRegion(root_window_handle, screen_point);
       const auto page_hit =
           IsNativePageDraggableRegionScreenPixels(
               root_window_handle, screen_point);
-      if (title_hit || page_hit) {
+      const auto control_action =
+          UpdateMuonWindowsTitleBarControlHover(root_window_handle,
+                                                screen_point);
+      const auto control_hit =
+          control_action != MuonTitleBarControlAction::NoControl;
+      if (title_hit || page_hit || control_hit) {
         std::ostringstream log;
         log << "NCHITTEST window=" << FormatMuonWindowsHandle(window_handle)
             << " root=" << FormatMuonWindowsHandle(root_window_handle)
             << " x=" << screen_point.x << " y=" << screen_point.y
             << " title=" << FormatMuonCloseDebugBool(title_hit)
-            << " page=" << FormatMuonCloseDebugBool(page_hit);
+            << " page=" << FormatMuonCloseDebugBool(page_hit)
+            << " control=" << FormatMuonCloseDebugBool(control_hit);
         AppendMuonWindowsDragDebugLog(log.str());
         return HTCLIENT;
       }
@@ -735,6 +822,14 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
     }
     case WM_MOUSEMOVE:
       AppendMuonWindowsDragDebugLog("MOUSEMOVE");
+      {
+        CefPoint screen_point;
+        if (GetMuonWindowsScreenPointFromClientPoint(
+                window_handle, lparam, &screen_point)) {
+          UpdateMuonWindowsTitleBarControlHover(
+              root_window_handle, screen_point);
+        }
+      }
       if (ContinueMuonWindowsWindowDrag(
               window_handle, root_window_handle, wparam, lparam)) {
         return 0;
@@ -744,6 +839,7 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       AppendMuonWindowsDragDebugLog("NCMOUSEMOVE");
       const auto screen_point =
           CefPoint(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+      UpdateMuonWindowsTitleBarControlHover(root_window_handle, screen_point);
       if (ContinueMuonWindowsWindowDragAtScreenPoint(
               root_window_handle, window_handle, screen_point,
               (GetKeyState(VK_LBUTTON) & 0x8000) != 0)) {
@@ -751,9 +847,14 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       }
       break;
     }
+    case WM_MOUSELEAVE:
+    case WM_NCMOUSELEAVE:
+      RefreshMuonWindowsTitleBarControlHoverFromCursor(root_window_handle);
+      break;
     case WM_LBUTTONUP:
       AppendMuonWindowsDragDebugLog("LBUTTONUP");
-      if (CompleteMuonWindowsWindowDrag(root_window_handle, window_handle)) {
+      if (CompleteMuonWindowsWindowDragFromClientPoint(
+              root_window_handle, window_handle, lparam)) {
         return 0;
       }
       if (CompleteMuonWindowsTitleBarControl(window_handle, lparam)) {
@@ -762,16 +863,21 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       break;
     case WM_NCLBUTTONUP:
       AppendMuonWindowsDragDebugLog("NCLBUTTONUP");
-      if (CompleteMuonWindowsWindowDrag(root_window_handle, window_handle)) {
+      if (CompleteMuonWindowsWindowDragFromScreenPoint(
+              root_window_handle, window_handle, lparam)) {
         return 0;
       }
       break;
     case WM_CAPTURECHANGED:
+      SetMuonWindowsTitleBarControlHover(
+          root_window_handle, MuonTitleBarControlAction::NoControl);
       ClearMuonWindowsPendingTitleBarControl(window_handle, false);
       ClearMuonWindowsPendingWindowDrag(
           root_window_handle, window_handle, false);
       break;
     case WM_CANCELMODE:
+      SetMuonWindowsTitleBarControlHover(
+          root_window_handle, MuonTitleBarControlAction::NoControl);
       ClearMuonWindowsPendingTitleBarControl(window_handle, true);
       ClearMuonWindowsPendingWindowDrag(
           root_window_handle, window_handle, true);
@@ -804,6 +910,8 @@ static LRESULT CALLBACK MuonWheelForwarderSubclassProc(
       break;
     }
     case WM_NCDESTROY:
+      SetMuonWindowsTitleBarControlHover(
+          root_window_handle, MuonTitleBarControlAction::NoControl);
       ClearMuonWindowsPendingTitleBarControl(window_handle, true);
       ClearMuonWindowsPendingWindowDrag(
           root_window_handle, window_handle, true);

@@ -1001,6 +1001,7 @@ const waitForWindowsCloseButtonHover = async (): Promise<void> => {
   let lastPixel: RgbaPixel | undefined = undefined;
   while (Date.now() < deadline) {
     const window = await waitForWindowsTitleBarWindow();
+    await window.activate();
     const hoverPoint = getWindowsTitleBarButtonPoint(window, "close");
     await context.agent.mouse.move({
       x: Math.round(hoverPoint.x),

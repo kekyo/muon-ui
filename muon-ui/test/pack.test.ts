@@ -827,6 +827,90 @@ printf 'nsis\\n' > "$output_path"
     expect(nsisScript).toContain("FunctionEnd");
   });
 
+  it("uses the package version override as the NSIS Windows resource version fallback", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-pack-nsis-package-version-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "windows-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+
+    const result = await packMuonApp({
+      root,
+      types: ["nsis"],
+      packageVersion: "4.5.6",
+      environment: await createFakePackagingToolEnvironment(root),
+    });
+
+    const [artifact] = result.artifacts;
+    expect(artifact?.path).toBe(
+      join(root, "artifacts", "packed-sample-4.5.6-amd64-setup.exe"),
+    );
+    const nsisScript = await readFile(
+      join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
+      "utf8",
+    );
+    expect(nsisScript).toContain('"DisplayVersion" "4.5.6"');
+    expect(nsisScript).toContain('VIProductVersion "4.5.6.0"');
+    expect(nsisScript).toContain('VIFileVersion "4.5.6.0"');
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "FileVersion" "4.5.6"',
+    );
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "ProductVersion" "4.5.6"',
+    );
+  });
+
+  it("keeps explicit Windows resource versions ahead of the package version override", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-pack-nsis-windows-version-precedence-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "windows-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            resource: {
+              version: "9.8.7",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await packMuonApp({
+      root,
+      types: ["nsis"],
+      packageVersion: "4.5.6",
+      environment: await createFakePackagingToolEnvironment(root),
+    });
+
+    const [artifact] = result.artifacts;
+    expect(artifact?.path).toBe(
+      join(root, "artifacts", "packed-sample-4.5.6-amd64-setup.exe"),
+    );
+    const nsisScript = await readFile(
+      join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
+      "utf8",
+    );
+    expect(nsisScript).toContain('"DisplayVersion" "4.5.6"');
+    expect(nsisScript).toContain('VIProductVersion "9.8.7.0"');
+    expect(nsisScript).toContain('VIFileVersion "9.8.7.0"');
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "FileVersion" "9.8.7"',
+    );
+    expect(nsisScript).toContain(
+      'VIAddVersionKey /LANG=1033 "ProductVersion" "9.8.7"',
+    );
+  });
+
   it("packages only Windows targets when NSIS is requested without explicit targets", async () => {
     const root = await createTemporaryDirectory("muon-pack-nsis-targets-");
     const packageDirectory = await createFakeMuonPackageDist(

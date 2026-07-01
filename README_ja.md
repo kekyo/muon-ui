@@ -317,6 +317,8 @@ npx muon pack --type nsis --target windows-amd64
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
 - CLIオプションは、 `muon build` で指定できる `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
   `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
+  `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
+  例えば screw-up 1.35.0以降でGit由来のversionを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定できます。
 
 ---
 
@@ -981,6 +983,8 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
 - 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
+  ただし `muon pack` で `--package-version` を指定した場合、`resource.version` では `package.json.version` の位置に `--package-version` の値を使用します。
+  `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
 - `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
   文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
 - `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。

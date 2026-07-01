@@ -50,6 +50,7 @@ import {
   mergeMuonWindowsResourceOptions,
   readMuonConfigForWindowsResource,
   resolveMuonWindowsResource,
+  updateWindowsPeResources,
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
 } from "./windows-resource.js";
@@ -288,6 +289,14 @@ const resolveMetadata = (
     author,
   };
 };
+
+const createPackMetadataPackageJson = (
+  packageJson: JsonObject,
+  metadata: PackageMetadata,
+): JsonObject => ({
+  ...packageJson,
+  version: metadata.version,
+});
 
 const normalizePackTypes = (
   types: readonly string[] | undefined,
@@ -803,6 +812,24 @@ const createNsisResourceDirectives = (
   return lines;
 };
 
+const reapplyPackWindowsResources = async (
+  targets: readonly MuonBuildTargetResult[],
+  resource: ResolvedMuonWindowsResource,
+  root: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> => {
+  for (const target of targets) {
+    if (getMuonTargetDescriptor(target.target).os === "windows") {
+      await updateWindowsPeResources({
+        executablePath: target.launcherPath,
+        resource,
+        environment,
+        cwd: root,
+      });
+    }
+  }
+};
+
 /**
  * Runs the Muon build sequence and creates redistributable packages.
  *
@@ -868,7 +895,7 @@ export const packMuonApp = async (
     root,
     packageDirectory:
       options.packageDirectory ?? pluginBuildOptions.packageDirectory ?? "",
-    packageJson,
+    packageJson: createPackMetadataPackageJson(packageJson, metadata),
     muonConfig: windowsResourceConfig.config,
     muonConfigDirectory: windowsResourceConfig.directory,
     options: windowsResourceOptions,
@@ -881,6 +908,14 @@ export const packMuonApp = async (
     },
   });
   const build = await runMuonBuildSequence(buildOptions, project);
+  if (options.packageVersion !== undefined) {
+    await reapplyPackWindowsResources(
+      build.targets,
+      windowsResource,
+      root,
+      environment,
+    );
+  }
   const typesByTarget = new Map(
     targetPlan.map((entry) => [entry.target, entry.types] as const),
   );

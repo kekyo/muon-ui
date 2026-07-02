@@ -1083,6 +1083,11 @@ static bool PrepareMuonPluginNamespaces(
       return FailMuonPluginStartup(
           impl, "Plugin namespace is invalid: " + plugin_namespace);
     }
+    if (namespace_segments.size() < 2) {
+      return FailMuonPluginStartup(
+          impl, "Plugin namespace must contain at least two segments: " +
+                    plugin_namespace);
+    }
     const auto namespace_paths =
         CreateMuonNamespacePaths(namespace_segments);
 
@@ -2266,6 +2271,7 @@ static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
       registered_function->metadata.plugin_namespace =
           prepared_namespace.plugin_namespace;
       registered_function->metadata.js_name = js_name;
+      registered_function->metadata.public_name = filter_name;
       if (!ConvertMuonFunctionSignature(
               source->signature, &registered_function->metadata.arg_types,
               &registered_function->metadata.return_type, &error_message)) {
@@ -2407,6 +2413,7 @@ static bool RegisterMuonBuiltinBrowserFunctions(
     function.id = id;
     function.plugin_namespace = plugin_namespace;
     function.js_name = js_name;
+    function.public_name = filter_name;
     if (definition->arg_types != nullptr && definition->arg_count > 0) {
       function.arg_types.assign(definition->arg_types,
                                 definition->arg_types + definition->arg_count);

@@ -59,6 +59,7 @@ import {
   shouldUseValgrind,
   startDebugMuon,
   startDebugMuonBootstrap,
+  startMuon,
   startReleaseMuon,
   stopMuon,
   targetTimeoutMs,
@@ -573,6 +574,27 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     } finally {
       await stopMuon(running, driver);
       await rm(markerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects plugin namespaces with a single segment during startup", async () => {
+    const running = await startMuon(
+      DEBUG_MUON_DIRECTORY,
+      ["muon_test_plugin_single_namespace"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      false,
+      shouldUseValgrind,
+      undefined,
+    );
+    try {
+      await waitForProcessExit(running, processExitTimeoutMs);
+      expect(running.process.exitCode).toBe(1);
+      expect(running.stderr).toContain(
+        "Plugin namespace must contain at least two segments: single",
+      );
+    } finally {
+      await stopMuon(running, undefined);
     }
   });
 

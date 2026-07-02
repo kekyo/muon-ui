@@ -1022,6 +1022,7 @@ if(MUON_BUILD_TESTS)
       muon_test_plugin_recursive_functions
       muon_test_plugin_same_name_alpha
       muon_test_plugin_same_name_beta
+      muon_test_plugin_single_namespace
       muon_test_plugin_types
       )
     add_library(${TEST_PLUGIN_TARGET} MODULE
@@ -1332,7 +1333,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME runtime_contains_test_plugins
     COMMAND bash -c
-      "test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_browser_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_fs_dialogs_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_cardio.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_path_namespace_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_lifetime.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_helpers.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_invalid_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_load_marker.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_multi_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_namespace_path_conflict_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_recursive_functions.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_types.so'"
+      "test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_browser_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_fs_dialogs_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_cardio.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_path_namespace_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_lifetime.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_helpers.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_invalid_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_load_marker.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_multi_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_namespace_path_conflict_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_recursive_functions.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_single_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_types.so'"
     )
 elseif(NOT MUON_BUILD_TESTS)
   add_test(

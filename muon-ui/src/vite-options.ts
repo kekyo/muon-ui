@@ -83,6 +83,26 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
   );
 };
 
+const isMuonVitePluginAccessImportOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return isStringArray(value.from) && isStringArray(value.allow);
+};
+
+const isMuonVitePluginAccessOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    value.imports === undefined ||
+    (Array.isArray(value.imports) &&
+      value.imports.every(isMuonVitePluginAccessImportOptions))
+  );
+};
+
 const isMuonVitePluginOptions = (
   value: unknown,
 ): value is MuonVitePluginOptions => {
@@ -97,6 +117,8 @@ const isMuonVitePluginOptions = (
     (value.open === undefined || typeof value.open === "boolean") &&
     (value.enableDebugger === undefined ||
       typeof value.enableDebugger === "boolean") &&
+    (value.pluginAccess === undefined ||
+      isMuonVitePluginAccessOptions(value.pluginAccess)) &&
     (value.build === undefined ||
       typeof value.build === "boolean" ||
       isMuonViteBuildOptions(value.build))

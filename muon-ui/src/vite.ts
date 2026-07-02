@@ -7,6 +7,13 @@ import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";
 
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
+import {
+  createMuonCapabilityModuleResolver,
+  type MuonCapabilityImportOptions,
+  type MuonCapabilityModuleResolver,
+  type MuonCapabilityOptions,
+  type MuonCapabilityRuntimePluginConfig,
+} from "./capability.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
 import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
@@ -219,6 +226,21 @@ export interface MuonViteBuildOptions {
 }
 
 /**
+ * Import-side capability rule for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessImportOptions extends MuonCapabilityImportOptions {}
+
+/**
+ * Capability import configuration for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessOptions extends MuonCapabilityOptions {
+  /**
+   * Capability imports allowed by importer path.
+   */
+  imports?: readonly MuonVitePluginAccessImportOptions[];
+}
+
+/**
  * Options for the Muon Vite development plugin.
  */
 export interface MuonVitePluginOptions {
@@ -267,6 +289,15 @@ export interface MuonVitePluginOptions {
   enableDebugger?: boolean;
 
   /**
+   * Virtual module capability imports for validate plugin mode.
+   *
+   * @remarks When configured, imports such as `muon:executor` are resolved by
+   * the Vite plugin and the generated Muon runtime config uses
+   * `browser.plugin.mode: "validate"`.
+   */
+  pluginAccess?: MuonVitePluginAccessOptions;
+
+  /**
    * Build app distributions from Vite output.
    *
    * @remarks Set false to disable the build hook while keeping the development
@@ -285,6 +316,7 @@ export interface MuonVitePluginOptions {
  */
 const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   let resolvedConfig: ResolvedConfig | undefined = undefined;
+  let capabilityResolver: MuonCapabilityModuleResolver | undefined = undefined;
 
   const plugin: Plugin = {
     name: "muon",
@@ -301,7 +333,14 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     },
     configResolved: (config) => {
       resolvedConfig = config;
+      capabilityResolver = createMuonCapabilityModuleResolver(
+        config.root,
+        options.pluginAccess,
+      );
     },
+    resolveId: (source, importer) =>
+      capabilityResolver?.resolveId(source, importer)?.id,
+    load: (id) => capabilityResolver?.load(id),
     configureServer: async (server) => {
       await startMuonViteBrowserBridge({
         server,
@@ -326,7 +365,13 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
       const buildOptions =
         typeof options.build === "object" ? options.build : {};
-      await buildMuonApp(createMuonBuildOptions(resolvedConfig, buildOptions));
+      await buildMuonApp(
+        createMuonBuildOptions(
+          resolvedConfig,
+          buildOptions,
+          capabilityResolver?.getRuntimePluginConfig(),
+        ),
+      );
     },
   };
 
@@ -365,6 +410,7 @@ const createMuonWatchOptions = (
 const createMuonBuildOptions = (
   config: ResolvedConfig,
   buildOptions: MuonViteBuildOptions,
+  runtimePluginConfig: MuonCapabilityRuntimePluginConfig | undefined,
 ): MuonBuildOptions => {
   const outDir = isAbsolute(config.build.outDir)
     ? config.build.outDir
@@ -404,6 +450,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.assetSalt !== undefined) {
     options.assetSalt = buildOptions.assetSalt;
+  }
+  if (runtimePluginConfig !== undefined) {
+    options.runtimePluginConfig = runtimePluginConfig;
   }
 
   return options;

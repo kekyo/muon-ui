@@ -63,7 +63,11 @@ static constexpr char kMuonConfigBrowserZoomOutKey[] = "zoomOut";
 static constexpr char kMuonConfigBrowserResetZoomKey[] = "resetZoom";
 static constexpr char kMuonConfigBrowserRecycleKey[] = "recycle";
 static constexpr char kMuonConfigBrowserPluginKey[] = "plugin";
+static constexpr char kMuonConfigBrowserPluginModeKey[] = "mode";
 static constexpr char kMuonConfigBrowserPluginAllowKey[] = "allow";
+static constexpr char kMuonConfigBrowserPluginCapabilitiesKey[] =
+    "capabilities";
+static constexpr char kMuonConfigBrowserPluginCapabilityIdKey[] = "id";
 static constexpr char kMuonConfigBrowserAllowUnsafeJavaScriptParentAccessKey[] =
     "allowUnsafeJavaScriptParentAccess";
 static constexpr char kMuonConfigNetworkKey[] = "network";
@@ -1559,6 +1563,97 @@ static bool ReadBrowserKeybindsConfig(yyjson_val* browser,
                                             error_message);
 }
 
+static bool ParseBrowserPluginMode(const std::string& raw_mode,
+                                   MuonBrowserPluginMode* mode) {
+  if (mode == nullptr) {
+    return false;
+  }
+  if (raw_mode == "simple") {
+    *mode = kMuonBrowserPluginModeSimple;
+    return true;
+  }
+  if (raw_mode == "validate") {
+    *mode = kMuonBrowserPluginModeValidate;
+    return true;
+  }
+  return false;
+}
+
+static bool ReadBrowserPluginModeConfig(yyjson_val* plugin,
+                                        MuonConfig* config,
+                                        std::string* error_message) {
+  const auto mode = yyjson_obj_get(plugin, kMuonConfigBrowserPluginModeKey);
+  if (mode == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(mode)) {
+    *error_message = "muon.json browser.plugin.mode must be a string";
+    return false;
+  }
+  const auto raw_mode = TrimAscii(ReadJsonString(mode));
+  if (raw_mode.empty()) {
+    *error_message = "muon.json browser.plugin.mode must not be empty";
+    return false;
+  }
+  if (!ParseBrowserPluginMode(raw_mode, &config->browser.plugin.mode)) {
+    *error_message =
+        "muon.json browser.plugin.mode has unknown value: " + raw_mode;
+    return false;
+  }
+  return true;
+}
+
+static bool ReadBrowserPluginCapabilitiesConfig(
+    yyjson_val* plugin,
+    MuonConfig* config,
+    std::string* error_message) {
+  const auto capabilities =
+      yyjson_obj_get(plugin, kMuonConfigBrowserPluginCapabilitiesKey);
+  if (capabilities == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_arr(capabilities)) {
+    *error_message =
+        "muon.json browser.plugin.capabilities must be an array";
+    return false;
+  }
+
+  config->browser.plugin.capabilities.clear();
+  const auto capability_count = yyjson_arr_size(capabilities);
+  for (auto index = size_t{0}; index < capability_count; ++index) {
+    const auto capability = yyjson_arr_get(capabilities, index);
+    if (!yyjson_is_obj(capability)) {
+      *error_message =
+          "muon.json browser.plugin.capabilities entries must be objects";
+      return false;
+    }
+
+    const auto id =
+        yyjson_obj_get(capability, kMuonConfigBrowserPluginCapabilityIdKey);
+    if (!yyjson_is_str(id)) {
+      *error_message =
+          "muon.json browser.plugin.capabilities.id must be a string";
+      return false;
+    }
+
+    MuonBrowserPluginCapabilityConfig capability_config;
+    capability_config.id = ReadJsonString(id);
+    if (capability_config.id.empty()) {
+      *error_message =
+          "muon.json browser.plugin.capabilities.id must not be empty";
+      return false;
+    }
+    if (!ReadStringArray(capability, kMuonConfigBrowserPluginAllowKey,
+                         "browser.plugin.capabilities.allow",
+                         &capability_config.allow, error_message)) {
+      return false;
+    }
+    config->browser.plugin.capabilities.push_back(
+        std::move(capability_config));
+  }
+  return true;
+}
+
 static bool ReadBrowserPluginConfig(yyjson_val* browser,
                                     MuonConfig* config,
                                     std::string* error_message) {
@@ -1570,9 +1665,11 @@ static bool ReadBrowserPluginConfig(yyjson_val* browser,
     *error_message = "muon.json browser.plugin must be an object";
     return false;
   }
-  return ReadStringArray(plugin, kMuonConfigBrowserPluginAllowKey,
+  return ReadBrowserPluginModeConfig(plugin, config, error_message) &&
+         ReadStringArray(plugin, kMuonConfigBrowserPluginAllowKey,
                          "browser.plugin.allow",
-                         &config->browser.plugin.allow, error_message);
+                         &config->browser.plugin.allow, error_message) &&
+         ReadBrowserPluginCapabilitiesConfig(plugin, config, error_message);
 }
 
 static bool ReadBrowserConfig(yyjson_val* root,

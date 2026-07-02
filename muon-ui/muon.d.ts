@@ -1199,3 +1199,15 @@ declare global {
     readonly stderr: string;
   }
 }
+
+declare module "muon:executor" {
+  /**
+   * Spawn a child process without invoking a shell.
+   *
+   * @param options - Process launch options.
+   * @returns A promise for the completed child process result.
+   */
+  export const spawn: (
+    options: MuonExecutorSpawnOptions,
+  ) => Promise<MuonExecutorSpawnResult>;
+}

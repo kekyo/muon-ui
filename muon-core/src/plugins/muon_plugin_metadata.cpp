@@ -18,6 +18,7 @@ static constexpr char kMuonNamespaceAllowedFunctionsKey[] =
 static constexpr char kMuonFunctionIdKey[] = "id";
 static constexpr char kMuonFunctionNamespaceKey[] = "namespace";
 static constexpr char kMuonFunctionNameKey[] = "name";
+static constexpr char kMuonFunctionPublicNameKey[] = "public_name";
 static constexpr char kMuonFunctionArgumentsKey[] = "args";
 static constexpr char kMuonFunctionReturnTypeKey[] = "return_type";
 static constexpr char kMuonTypeDescriptorTypeKey[] = "type";
@@ -90,8 +91,9 @@ std::string CreateMuonFunctionPublicPath(
 
 std::string CreateMuonFunctionPublicPath(
     const MuonFunctionMetadata& function) {
-  return CreateMuonFunctionPublicPath(function.plugin_namespace,
-                                       function.js_name);
+  return CreateMuonFunctionPublicPath(
+      function.plugin_namespace,
+      function.public_name.empty() ? function.js_name : function.public_name);
 }
 
 CefRefPtr<CefDictionaryValue> CreateMuonTypeMetadataDictionary(
@@ -195,6 +197,10 @@ CefRefPtr<CefDictionaryValue> CreateMuonRendererMetadata(
     function_dictionary->SetString(kMuonFunctionNamespaceKey,
                                    function.plugin_namespace);
     function_dictionary->SetString(kMuonFunctionNameKey, function.js_name);
+    function_dictionary->SetString(
+        kMuonFunctionPublicNameKey,
+        function.public_name.empty() ? function.js_name
+                                     : function.public_name);
     function_dictionary->SetDictionary(
         kMuonFunctionReturnTypeKey,
         CreateMuonTypeMetadataDictionary(function.return_type));
@@ -282,8 +288,14 @@ MuonRendererMetadata ReadMuonRendererMetadata(
         function_dictionary->GetString(kMuonFunctionNamespaceKey).ToString();
     function.js_name =
         function_dictionary->GetString(kMuonFunctionNameKey).ToString();
+    function.public_name =
+        function_dictionary->HasKey(kMuonFunctionPublicNameKey)
+            ? function_dictionary->GetString(
+                  kMuonFunctionPublicNameKey).ToString()
+            : function.js_name;
     if (!IsValidMuonPluginNamespace(function.plugin_namespace) ||
         !IsValidMuonJsIdentifier(function.js_name) ||
+        !IsValidMuonJsIdentifier(function.public_name) ||
         !ReadMuonTypeMetadataDictionary(
             function_dictionary->GetDictionary(kMuonFunctionReturnTypeKey),
             true, &function.return_type)) {

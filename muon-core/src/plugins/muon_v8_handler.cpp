@@ -315,6 +315,8 @@ MuonV8Handler::MuonV8Handler(std::vector<MuonFunctionMetadata> functions,
   for (auto index = size_t{0}; index < functions_.size(); ++index) {
     function_indexes_by_v8_name_[CreateMuonV8FunctionName(
         functions_[index].id)] = index;
+    function_indexes_by_public_path_[CreateMuonFunctionPublicPath(
+        functions_[index])] = index;
   }
 }
 
@@ -325,10 +327,11 @@ bool MuonV8Handler::Execute(const CefString& name,
                              CefString& exception) {
   CEF_REQUIRE_RENDERER_THREAD();
   const auto v8_name = name.ToString();
-  const auto function_iterator =
-      function_indexes_by_v8_name_.find(v8_name);
-  const auto proxy_iterator = proxy_functions_by_name_.find(v8_name);
-  if (function_iterator == function_indexes_by_v8_name_.end() &&
+  auto is_capability_call = v8_name == kMuonV8CapabilityCallFunctionName;
+  auto function_iterator = function_indexes_by_v8_name_.find(v8_name);
+  auto proxy_iterator = proxy_functions_by_name_.find(v8_name);
+  if (!is_capability_call &&
+      function_iterator == function_indexes_by_v8_name_.end() &&
       proxy_iterator == proxy_functions_by_name_.end()) {
     return false;
   }
@@ -337,10 +340,49 @@ bool MuonV8Handler::Execute(const CefString& name,
   retval = promise;
 
   auto function_name = v8_name;
+  auto capability_id = std::string{};
+  auto capability_function_path = std::string{};
+  CefV8ValueList call_arguments = arguments;
   std::vector<MuonTypeMetadata> arg_types;
   auto return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
   auto function_id = uint32_t{0};
   auto is_proxy_call = false;
+  if (is_capability_call) {
+    if (arguments.size() != 3 || !arguments[0] || !arguments[0]->IsString() ||
+        !arguments[1] || !arguments[1]->IsString() || !arguments[2] ||
+        !arguments[2]->IsArray()) {
+      RejectPromise(promise, "Invalid Muon capability call");
+      return true;
+    }
+    capability_id = arguments[0]->GetStringValue().ToString();
+    capability_function_path = arguments[1]->GetStringValue().ToString();
+    if (capability_id.empty() || capability_function_path.empty()) {
+      RejectPromise(promise, "Invalid Muon capability call");
+      return true;
+    }
+    const auto public_function_iterator =
+        function_indexes_by_public_path_.find(capability_function_path);
+    if (public_function_iterator == function_indexes_by_public_path_.end()) {
+      RejectPromise(promise,
+                    "Unknown Muon capability function: " +
+                        capability_function_path);
+      return true;
+    }
+    function_iterator =
+        function_indexes_by_v8_name_.find(CreateMuonV8FunctionName(
+            functions_[public_function_iterator->second].id));
+    if (function_iterator == function_indexes_by_v8_name_.end()) {
+      RejectPromise(promise,
+                    "Unknown Muon capability function: " +
+                        capability_function_path);
+      return true;
+    }
+    call_arguments.clear();
+    const auto argument_count = arguments[2]->GetArrayLength();
+    for (auto index = 0; index < argument_count; ++index) {
+      call_arguments.push_back(arguments[2]->GetValue(index));
+    }
+  }
   if (function_iterator != function_indexes_by_v8_name_.end()) {
     const auto& function = functions_[function_iterator->second];
     function_name = CreateMuonFunctionPublicPath(function);
@@ -365,7 +407,7 @@ bool MuonV8Handler::Execute(const CefString& name,
   const auto encoded_args = CefListValue::Create();
   std::vector<MuonSharedBufferSource> shared_sources;
   std::string error_message;
-  if (!ValidateAndEncodeArguments(function_name, arg_types, arguments,
+  if (!ValidateAndEncodeArguments(function_name, arg_types, call_arguments,
                                   encoded_args, &shared_sources,
                                   &error_message)) {
     RejectPromise(promise, error_message);
@@ -405,11 +447,15 @@ bool MuonV8Handler::Execute(const CefString& name,
       is_proxy_call ? kMuonPluginProxyCallMessageName
                     : kMuonPluginCallMessageName);
   const auto message_args = message->GetArgumentList();
-  message_args->SetSize(4);
+  message_args->SetSize(is_capability_call ? 6 : 4);
   message_args->SetInt(0, call_id);
   message_args->SetInt(1, static_cast<int>(function_id));
   message_args->SetList(2, encoded_args);
   message_args->SetInt(3, context_id_);
+  if (is_capability_call) {
+    message_args->SetString(4, capability_id);
+    message_args->SetString(5, capability_function_path);
+  }
   if (shared_message.message) {
     frame->SendProcessMessage(PID_BROWSER, shared_message.message);
   }

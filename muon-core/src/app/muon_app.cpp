@@ -439,6 +439,24 @@ MuonApp::MuonApp(const MuonConfig& config,
           &unsafe_parent_access_policy_error_)) {
     unsafe_parent_access_policy_.reset();
   }
+  for (const auto& capability : config_.browser.plugin.capabilities) {
+    if (plugin_capability_policies_.find(capability.id) !=
+        plugin_capability_policies_.end()) {
+      plugin_capability_policy_error_ =
+          "Duplicate browser.plugin.capabilities id: " + capability.id;
+      break;
+    }
+    std::shared_ptr<MuonPluginPolicy> capability_policy;
+    std::string capability_error;
+    if (!CreateMuonPluginPolicy(capability.allow, &capability_policy,
+                                &capability_error)) {
+      plugin_capability_policy_error_ =
+          "Invalid browser.plugin.capabilities '" + capability.id + "': " +
+          capability_error;
+      break;
+    }
+    plugin_capability_policies_[capability.id] = capability_policy;
+  }
 }
 
 CefRefPtr<CefBrowserProcessHandler> MuonApp::GetBrowserProcessHandler() {
@@ -506,6 +524,13 @@ void MuonApp::OnContextInitialized() {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                    "Muon startup failed: " + unsafe_parent_access_policy_error_);
+    CefQuitMessageLoop();
+    return;
+  }
+  if (!plugin_capability_policy_error_.empty()) {
+    exit_code_ = 1;
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                   "Muon startup failed: " + plugin_capability_policy_error_);
     CefQuitMessageLoop();
     return;
   }
@@ -605,6 +630,7 @@ void MuonApp::OnContextInitialized() {
       CreateMuonTitleBarBackgroundColor(config_.browser.background_color);
   CefRefPtr<MuonClient> client(
       new MuonClient(plugin_runtime, network_policy, plugin_page_policy_,
+                     plugin_capability_policies_,
                      unsafe_parent_access_policy_,
                      [this](int32_t exit_code) {
                        return RequestShutdown(exit_code);
@@ -684,6 +710,17 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
       new MuonV8Handler(renderer_metadata_.functions, context));
   const auto readonly_attribute = static_cast<CefV8Value::PropertyAttribute>(
       V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE);
+  if (config_.browser.plugin.mode == kMuonBrowserPluginModeValidate) {
+    const auto bridge_attribute = static_cast<CefV8Value::PropertyAttribute>(
+        V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE |
+        V8_PROPERTY_ATTRIBUTE_DONTENUM);
+    global->SetValue(
+        kMuonV8CapabilityCallFunctionName,
+        CefV8Value::CreateFunction(kMuonV8CapabilityCallFunctionName, handler),
+        bridge_attribute);
+    v8_handlers_by_context_[handler->GetContextId()] = handler;
+    return;
+  }
   for (const auto& plugin_namespace : renderer_metadata_.namespaces) {
     CefRefPtr<CefV8Value> namespace_object;
     std::string error_message;

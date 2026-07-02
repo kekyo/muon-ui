@@ -206,6 +206,30 @@ export interface MuonViteBuildOptions {
 }
 
 /**
+ * Import-side capability rule for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessImportOptions {
+  /**
+   * Importer path globs relative to the Vite project root.
+   */
+  from: readonly string[];
+  /**
+   * Plugin function path globs allowed for matching importers.
+   */
+  allow: readonly string[];
+}
+
+/**
+ * Capability import configuration for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessOptions {
+  /**
+   * Capability imports allowed by importer path.
+   */
+  imports?: readonly MuonVitePluginAccessImportOptions[];
+}
+
+/**
  * Options for the Muon Vite development plugin.
  */
 export interface MuonVitePluginOptions {
@@ -252,6 +276,15 @@ export interface MuonVitePluginOptions {
    * @defaultValue `true`
    */
   enableDebugger?: boolean;
+
+  /**
+   * Virtual module capability imports for validate plugin mode.
+   *
+   * @remarks When configured, imports such as `muon:executor` are resolved by
+   * the Vite plugin and the generated Muon runtime config uses
+   * `browser.plugin.mode: "validate"`.
+   */
+  pluginAccess?: MuonVitePluginAccessOptions;
 
   /**
    * Build app distributions from Vite output.

@@ -21,7 +21,14 @@
 struct MuonFunctionMetadata {
   uint32_t id = 0;
   std::string plugin_namespace;
+  /**
+   * Internal JavaScript function name injected in simple mode.
+   */
   std::string js_name;
+  /**
+   * Public function name used by filters and capability imports.
+   */
+  std::string public_name;
   std::vector<MuonTypeMetadata> arg_types;
   MuonTypeMetadata return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
 };

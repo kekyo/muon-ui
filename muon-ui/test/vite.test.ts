@@ -31,6 +31,7 @@ import {
   vi,
 } from "vitest";
 import {
+  build as viteBuild,
   createLogger as createViteLogger,
   createServer,
   type Logger,
@@ -609,6 +610,85 @@ describe("muon Vite plugin", () => {
       ".muon/\ndist-muon/\nartifacts/\n",
     );
     await expect(access(join(root, ".muon"))).rejects.toThrow();
+  });
+
+  it("resolves validate-mode executor virtual modules from allowed importers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-capability-");
+    await mkdir(join(root, "src", "native"), { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<script type="module" src="/src/main.ts"></script>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      'import { runNode } from "./native/executor";\nvoid runNode;\n',
+    );
+    await writeFile(
+      join(root, "src", "native", "executor.ts"),
+      [
+        'import { spawn } from "muon:executor";',
+        "export const runNode = async () =>",
+        "  await spawn({ command: 'node', args: ['script.js'] });",
+        "",
+      ].join("\n"),
+    );
+
+    await viteBuild({
+      root,
+      logLevel: "silent",
+      plugins: [
+        muon({
+          open: false,
+          build: false,
+          pluginAccess: {
+            imports: [
+              {
+                from: ["src/native/**"],
+                allow: ["muon.executor.spawn"],
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    await expect(
+      access(join(root, "dist", "index.html")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects validate-mode executor virtual modules from disallowed importers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-capability-deny-");
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<script type="module" src="/src/main.ts"></script>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      ['import { spawn } from "muon:executor";', "void spawn;", ""].join("\n"),
+    );
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              imports: [
+                {
+                  from: ["src/native/**"],
+                  allow: ["muon.executor.spawn"],
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow("Muon capability import is not allowed");
   });
 
   it("launches Muon without server.open", async () => {

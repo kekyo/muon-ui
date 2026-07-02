@@ -829,6 +829,9 @@ static const char* GetMuonBuiltinBrowserFunctionKindName(
 MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
                        std::shared_ptr<MuonNetworkPolicy> network_policy,
                        std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
+                       std::map<std::string,
+                                std::shared_ptr<MuonPluginPolicy>>
+                           plugin_capability_policies,
                        std::shared_ptr<MuonNetworkPolicy>
                            unsafe_parent_access_policy,
                        std::function<bool(int32_t)> shutdown_requester,
@@ -850,6 +853,7 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       plugin_runtime_(std::move(plugin_runtime)),
       network_policy_(std::move(network_policy)),
       plugin_page_policy_(std::move(plugin_page_policy)),
+      plugin_capability_policies_(std::move(plugin_capability_policies)),
       unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {
   std::ostringstream log;
   log << "MuonClient ctor this=" << FormatMuonCloseDebugPointer(this)
@@ -1814,13 +1818,36 @@ bool MuonClient::OnProcessMessageReceived(
     pending_call.call_id = call_id;
     pending_call.function_id = function_id;
     pending_call.proxy_call = false;
-    if (CefListValueHasMuonSharedBufferPlaceholders(encoded_args)) {
-      const auto key =
-          CreatePendingSharedKey(kMuonPluginCallSharedMessageName,
-                                 renderer_context_id, call_id);
-      const auto payload_iterator = pending_plugin_call_payloads_.find(key);
+    const auto has_shared_placeholders =
+        CefListValueHasMuonSharedBufferPlaceholders(encoded_args);
+    const auto shared_key =
+        has_shared_placeholders
+            ? CreatePendingSharedKey(kMuonPluginCallSharedMessageName,
+                                     renderer_context_id, call_id)
+            : std::string{};
+    if (browser_config_.plugin.mode == kMuonBrowserPluginModeValidate) {
+      std::string error_message;
+      if (args->GetSize() < 6 ||
+          !IsPluginCapabilityAllowed(function_id,
+                                     args->GetString(4).ToString(),
+                                     args->GetString(5).ToString(),
+                                     &error_message)) {
+        if (has_shared_placeholders) {
+          pending_plugin_call_payloads_.erase(shared_key);
+        }
+        RejectPluginCall(
+            pending_call,
+            error_message.empty()
+                ? "Muon plugin capability is required for validate mode"
+                : error_message);
+        return true;
+      }
+    }
+    if (has_shared_placeholders) {
+      const auto payload_iterator =
+          pending_plugin_call_payloads_.find(shared_key);
       if (payload_iterator == pending_plugin_call_payloads_.end()) {
-        pending_plugin_calls_[key] = pending_call;
+        pending_plugin_calls_[shared_key] = pending_call;
         return true;
       }
       const auto pending_payload = payload_iterator->second;
@@ -2314,6 +2341,55 @@ bool MuonClient::IsPluginPageAllowed(
 
 bool MuonClient::IsPopupTargetUrlKnown(const std::string& url) {
   return IsMuonKnownPopupTargetUrl(url);
+}
+
+bool MuonClient::IsPluginCapabilityAllowed(
+    uint32_t function_id,
+    const std::string& capability_id,
+    const std::string& function_path,
+    std::string* error_message) const {
+  if (error_message == nullptr) {
+    return false;
+  }
+  if (browser_config_.plugin.mode != kMuonBrowserPluginModeValidate) {
+    return true;
+  }
+  if (capability_id.empty() || function_path.empty()) {
+    *error_message = "Muon plugin capability is required for validate mode";
+    return false;
+  }
+  const auto capability_iterator =
+      plugin_capability_policies_.find(capability_id);
+  if (capability_iterator == plugin_capability_policies_.end() ||
+      !capability_iterator->second) {
+    *error_message = "Muon plugin capability is unknown: " + capability_id;
+    return false;
+  }
+  if (!capability_iterator->second->IsAllowedFunctionPath(function_path)) {
+    *error_message =
+        "Muon plugin capability is not allowed for " + function_path;
+    return false;
+  }
+  if (!plugin_runtime_) {
+    *error_message = "Muon plugin runtime is unavailable";
+    return false;
+  }
+  for (const auto& function : plugin_runtime_->GetFunctions()) {
+    if (function.id != function_id) {
+      continue;
+    }
+    const auto expected_function_path = CreateMuonFunctionPublicPath(function);
+    if (expected_function_path != function_path) {
+      *error_message =
+          "Muon plugin capability function path does not match the requested "
+          "function";
+      return false;
+    }
+    return true;
+  }
+
+  *error_message = "Unknown Muon plugin function";
+  return false;
 }
 
 void MuonClient::DispatchPluginCall(

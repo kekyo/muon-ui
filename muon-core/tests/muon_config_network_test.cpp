@@ -200,10 +200,14 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
                 message + " initial title bar visibility changed") &&
          ExpectBrowserBackgroundSystem(browser.background_color,
                                        message + " background color") &&
+         Expect(browser.plugin.mode == kMuonBrowserPluginModeSimple,
+                message + " plugin mode changed") &&
          Expect(browser.plugin.allow.size() == 1,
                 message + " plugin page allowlist count changed") &&
          Expect(browser.plugin.allow[0] == "asset://main/**",
                 message + " plugin page pattern changed") &&
+         Expect(browser.plugin.capabilities.empty(),
+                message + " plugin capabilities changed") &&
          Expect(browser.allow_unsafe_javascript_parent_access.empty(),
                 message + " unsafe parent access allowlist count changed") &&
          ExpectShortcut(browser.devtools, false, 0, 0,
@@ -545,7 +549,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"mode":"validate","allow":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -584,10 +588,21 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                 "browser.initialTitleBarIcon was not parsed") &&
          Expect(config.browser.plugin.allow.size() == 2,
                 "browser.plugin.allow pattern count is wrong") &&
+         Expect(config.browser.plugin.mode == kMuonBrowserPluginModeValidate,
+                "browser.plugin.mode was not parsed") &&
          Expect(config.browser.plugin.allow[0] == "asset://main/**",
                 "first browser.plugin.allow pattern changed") &&
          Expect(config.browser.plugin.allow[1] == "data:**",
                 "second browser.plugin.allow pattern changed") &&
+         Expect(config.browser.plugin.capabilities.size() == 1,
+                "browser.plugin.capabilities count is wrong") &&
+         Expect(config.browser.plugin.capabilities[0].id == "cap-1",
+                "browser.plugin.capabilities id changed") &&
+         Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
+                "browser.plugin.capabilities allow count is wrong") &&
+         Expect(config.browser.plugin.capabilities[0].allow[0] ==
+                    "muon.executor.spawn",
+                "browser.plugin.capabilities allow changed") &&
          Expect(config.browser.allow_unsafe_javascript_parent_access.size() ==
                     2,
                 "browser.allowUnsafeJavaScriptParentAccess pattern count is "
@@ -1625,6 +1640,12 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "invalid-browser-plugin-allow.json";
   const auto invalid_browser_plugin_entry_path =
       test_directory / "invalid-browser-plugin-entry.json";
+  const auto invalid_browser_plugin_mode_path =
+      test_directory / "invalid-browser-plugin-mode.json";
+  const auto empty_browser_plugin_mode_path =
+      test_directory / "empty-browser-plugin-mode.json";
+  const auto unknown_browser_plugin_mode_path =
+      test_directory / "unknown-browser-plugin-mode.json";
   const auto invalid_unsafe_parent_access_path =
       test_directory / "invalid-unsafe-parent-access.json";
   const auto invalid_unsafe_parent_access_entry_path =
@@ -1765,6 +1786,15 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(invalid_browser_plugin_entry_path,
                           R"({"browser":{"plugin":{"allow":["asset://main/**",42]}}})"),
                 "failed to write invalid browser plugin allow entry config") &&
+         Expect(WriteFile(invalid_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":42}}})"),
+                "failed to write invalid browser plugin mode config") &&
+         Expect(WriteFile(empty_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":""}}})"),
+                "failed to write empty browser plugin mode config") &&
+         Expect(WriteFile(unknown_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":"strict"}}})"),
+                "failed to write unknown browser plugin mode config") &&
          Expect(WriteFile(invalid_unsafe_parent_access_path,
                           R"({"browser":{"allowUnsafeJavaScriptParentAccess":"asset://main/**"}})"),
                 "failed to write invalid unsafe parent access config") &&
@@ -1840,6 +1870,12 @@ static bool RunBrowserConfigValidationTest(
                                  "browser.plugin.allow must be an array") &&
          LoadConfigExpectFailure(invalid_browser_plugin_entry_path,
                                  "browser.plugin.allow entries must be strings") &&
+         LoadConfigExpectFailure(invalid_browser_plugin_mode_path,
+                                 "browser.plugin.mode must be a string") &&
+         LoadConfigExpectFailure(empty_browser_plugin_mode_path,
+                                 "browser.plugin.mode must not be empty") &&
+         LoadConfigExpectFailure(unknown_browser_plugin_mode_path,
+                                 "browser.plugin.mode has unknown value") &&
          LoadConfigExpectFailure(
              invalid_unsafe_parent_access_path,
              "browser.allowUnsafeJavaScriptParentAccess must be an array") &&

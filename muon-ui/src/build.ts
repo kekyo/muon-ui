@@ -48,6 +48,7 @@ import {
   type MuonLinuxDesktopOptions,
   type ResolvedMuonLinuxDesktop,
 } from "./linux-desktop.js";
+import type { MuonCapabilityRuntimePluginConfig } from "./capability.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -155,6 +156,12 @@ export interface MuonBuildOptions {
    * @remarks Production builds should omit this option.
    */
   assetSalt?: Uint8Array;
+  /**
+   * Runtime plugin configuration supplied by a bundler integration.
+   *
+   * @internal
+   */
+  runtimePluginConfig?: MuonCapabilityRuntimePluginConfig;
 }
 
 /**
@@ -263,17 +270,26 @@ export const buildMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
+  assertSupportedPluginMode(buildConfig.config, options.runtimePluginConfig);
+  const sourceConfig = applyRuntimePluginConfig(
+    buildConfig.config,
+    options.runtimePluginConfig,
+  );
+  const resolvedBuildConfig: BuildConfig = {
+    ...buildConfig,
+    config: sourceConfig,
+  };
   const assetInput = resolveAssetInput(
     root,
     options.assetSourcePath,
     options.assetPrefix,
-    buildConfig,
+    resolvedBuildConfig,
   );
   const windowsResource = await resolveMuonWindowsResource({
     root,
     packageDirectory,
     packageJson,
-    muonConfig: buildConfig.config,
+    muonConfig: sourceConfig,
     muonConfigDirectory: buildConfig.directory,
     options: options.windowsResource,
     defaults: {
@@ -287,7 +303,7 @@ export const buildMuonApp = async (
   const linuxDesktop = await resolveMuonLinuxDesktop({
     root,
     packageDirectory,
-    muonConfig: buildConfig.config,
+    muonConfig: sourceConfig,
     muonConfigDirectory: buildConfig.directory,
     options: options.linuxDesktop,
     defaults: {
@@ -313,7 +329,7 @@ export const buildMuonApp = async (
       appId,
       target,
       assetInput,
-      sourceConfig: buildConfig.config,
+      sourceConfig,
       windowsResource,
       linuxDesktop,
       salt,
@@ -482,6 +498,69 @@ const readBuildConfig = async (
   return {
     config: await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
     directory: dirname(resolvedConfigPath),
+  };
+};
+
+const readConfiguredPluginMode = (
+  sourceConfig: JsonObject,
+): string | undefined => {
+  const browser = sourceConfig.browser;
+  if (!isJsonObject(browser)) {
+    return undefined;
+  }
+  const plugin = browser.plugin;
+  if (!isJsonObject(plugin)) {
+    return undefined;
+  }
+  return typeof plugin.mode === "string" ? plugin.mode : undefined;
+};
+
+const assertSupportedPluginMode = (
+  sourceConfig: JsonObject,
+  runtimePluginConfig: MuonCapabilityRuntimePluginConfig | undefined,
+): void => {
+  if (
+    readConfiguredPluginMode(sourceConfig) === "validate" &&
+    runtimePluginConfig === undefined
+  ) {
+    throw new Error(
+      "browser.plugin.mode validate requires a bundler capability manifest; muon build direct assets support simple mode only.",
+    );
+  }
+};
+
+const applyRuntimePluginConfig = (
+  sourceConfig: JsonObject,
+  runtimePluginConfig: MuonCapabilityRuntimePluginConfig | undefined,
+): JsonObject => {
+  if (runtimePluginConfig === undefined) {
+    return sourceConfig;
+  }
+
+  const sourceBrowser = sourceConfig.browser;
+  if (sourceBrowser !== undefined && !isJsonObject(sourceBrowser)) {
+    throw new Error(
+      "muon.json browser must be an object when runtime plugin config is applied.",
+    );
+  }
+  const browser: JsonObject = sourceBrowser ?? {};
+  const sourcePlugin = browser.plugin;
+  if (sourcePlugin !== undefined && !isJsonObject(sourcePlugin)) {
+    throw new Error(
+      "muon.json browser.plugin must be an object when runtime plugin config is applied.",
+    );
+  }
+  const plugin: JsonObject = sourcePlugin ?? {};
+
+  return {
+    ...sourceConfig,
+    browser: {
+      ...browser,
+      plugin: {
+        ...plugin,
+        ...runtimePluginConfig,
+      },
+    },
   };
 };
 

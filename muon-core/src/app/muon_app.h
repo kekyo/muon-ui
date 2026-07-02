@@ -13,6 +13,7 @@
 #include "config/muon_config.h"
 #include "network/muon_network_policy.h"
 #include "plugins/muon_plugin_metadata.h"
+#include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_v8_handler.h"
 
 #include <cstdint>
@@ -155,8 +156,11 @@ class MuonApp final : public CefApp,
   cardio::dispatcher* dispatcher_ = nullptr;
   std::shared_ptr<MuonNetworkPolicy> plugin_page_policy_;
   std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy_;
+  std::map<std::string, std::shared_ptr<MuonPluginPolicy>>
+      plugin_capability_policies_;
   std::string plugin_page_policy_error_;
   std::string unsafe_parent_access_policy_error_;
+  std::string plugin_capability_policy_error_;
   MuonRendererMetadata renderer_metadata_;
   std::map<int, std::string> renderer_url_hints_by_browser_;
   std::set<int> renderer_title_bar_browsers_;

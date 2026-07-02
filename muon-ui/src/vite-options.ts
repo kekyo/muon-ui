@@ -118,6 +118,7 @@ const isMuonVitePluginOptions = (
     (value.enableDebugger === undefined ||
       typeof value.enableDebugger === "boolean") &&
     (value.pluginAccess === undefined ||
+      value.pluginAccess === false ||
       isMuonVitePluginAccessOptions(value.pluginAccess)) &&
     (value.build === undefined ||
       typeof value.build === "boolean" ||

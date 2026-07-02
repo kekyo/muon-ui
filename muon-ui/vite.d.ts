@@ -278,13 +278,14 @@ export interface MuonVitePluginOptions {
   enableDebugger?: boolean;
 
   /**
-   * Virtual module capability imports for validate plugin mode.
+   * Plugin access mode and virtual module capability imports.
    *
-   * @remarks When configured, imports such as `muon:executor` are resolved by
-   * the Vite plugin and the generated Muon runtime config uses
-   * `browser.plugin.mode: "validate"`.
+   * @remarks Omit this option to use validate mode without plugin
+   * capabilities. Pass import rules to allow virtual modules such as
+   * `muon:executor`. Pass `false` to use simple window-global exposure.
+   * @defaultValue validate mode with no capability imports.
    */
-  pluginAccess?: MuonVitePluginAccessOptions;
+  pluginAccess?: false | MuonVitePluginAccessOptions;
 
   /**
    * Build app distributions from Vite output.

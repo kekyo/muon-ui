@@ -1212,7 +1212,7 @@ describe("muon build", () => {
     ).rejects.toThrow(join(root, "muon.json"));
   });
 
-  it("rejects validate plugin mode in direct muon builds", async () => {
+  it("preserves explicit validate plugin mode in direct muon builds", async () => {
     const root = await createTemporaryDirectory("muon-build-plugin-validate-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     await writeFile(
@@ -1236,15 +1236,58 @@ describe("muon build", () => {
       )}\n`,
     );
 
-    await expect(
-      buildMuonApp({
-        root,
-        packageDirectory,
-        targets: ["linux-amd64"],
-      }),
-    ).rejects.toThrow(
-      "browser.plugin.mode validate requires a bundler capability manifest",
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+    });
+
+    expect(result.targets[0]?.embeddedConfig).toMatchObject({
+      browser: {
+        plugin: {
+          mode: "validate",
+        },
+      },
+    });
+  });
+
+  it("preserves explicit simple plugin mode in direct muon builds", async () => {
+    const root = await createTemporaryDirectory("muon-build-plugin-simple-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "plugin-simple-sample" }, null, 2)}\n`,
     );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          browser: {
+            plugin: {
+              mode: "simple",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+    });
+
+    expect(result.targets[0]?.embeddedConfig).toMatchObject({
+      browser: {
+        plugin: {
+          mode: "simple",
+        },
+      },
+    });
   });
 
   it("reports the explicit config path when --config input is missing", async () => {

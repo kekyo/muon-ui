@@ -200,7 +200,7 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
                 message + " initial title bar visibility changed") &&
          ExpectBrowserBackgroundSystem(browser.background_color,
                                        message + " background color") &&
-         Expect(browser.plugin.mode == kMuonBrowserPluginModeSimple,
+         Expect(browser.plugin.mode == kMuonBrowserPluginModeValidate,
                 message + " plugin mode changed") &&
          Expect(browser.plugin.allow.size() == 1,
                 message + " plugin page allowlist count changed") &&

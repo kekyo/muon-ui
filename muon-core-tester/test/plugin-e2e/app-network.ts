@@ -1677,7 +1677,7 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
       undefined,
       TEST_PLUGIN_ALLOW_PATTERNS,
       [],
-      null,
+      ["asset://main/**"],
     );
     let driver: CdpDriver | undefined = undefined;
     try {

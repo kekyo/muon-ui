@@ -169,7 +169,7 @@ struct MuonBrowserPluginConfig {
   /**
    * Plugin exposure mode.
    */
-  MuonBrowserPluginMode mode = kMuonBrowserPluginModeSimple;
+  MuonBrowserPluginMode mode = kMuonBrowserPluginModeValidate;
   /**
    * Glob patterns that allow Muon plugin APIs for full page URLs.
    */

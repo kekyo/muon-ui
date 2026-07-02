@@ -293,6 +293,7 @@ interface StartServerPluginOptions {
   stagePath: string | undefined;
   enableDebugger: boolean | undefined;
   open: boolean | undefined;
+  pluginAccess?: false;
 }
 
 const startServer = async (
@@ -323,6 +324,9 @@ const startServer = async (
       ? {}
       : { enableDebugger: pluginOptions.enableDebugger }),
     ...(pluginOptions.open === undefined ? {} : { open: pluginOptions.open }),
+    ...(pluginOptions.pluginAccess === undefined
+      ? {}
+      : { pluginAccess: pluginOptions.pluginAccess }),
   };
   const server = await createServer({
     root,
@@ -729,7 +733,11 @@ describe("muon Vite plugin", () => {
       browser: {
         startPage: string;
         keybind: { devtools: string; recycle: string };
-        plugin: { allow: string[] };
+        plugin: {
+          allow: string[];
+          capabilities: unknown[];
+          mode: string;
+        };
       };
       network: { allow: string[] };
     };
@@ -762,7 +770,11 @@ describe("muon Vite plugin", () => {
           devtools: "f12",
           recycle: "ctrl+f12",
         },
-        plugin: { allow: [`${new URL(baseUrl ?? "").origin}/**`] },
+        plugin: {
+          allow: [`${new URL(baseUrl ?? "").origin}/**`],
+          capabilities: [],
+          mode: "validate",
+        },
       },
       network: {
         allow: [
@@ -815,6 +827,50 @@ describe("muon Vite plugin", () => {
     const baseUrl = server.resolvedUrls?.local[0];
     expect(baseUrl).toBeDefined();
     expect(browserArgs).toContain(baseUrl);
+  });
+
+  it("uses simple plugin mode when pluginAccess is false", async () => {
+    const root = await createTemporaryDirectory("muon-vite-simple-mode-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.BROWSER = "existing-browser";
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+        pluginAccess: false,
+      },
+      undefined,
+    );
+    try {
+      await wait(() => existsSync(join(outputDirectory, "override.json")));
+
+      const overrideConfig = JSON.parse(
+        await readFile(join(outputDirectory, "override.json"), "utf8"),
+      ) as {
+        browser: {
+          plugin: {
+            capabilities?: unknown[];
+            mode: string;
+          };
+        };
+      };
+      expect(overrideConfig.browser.plugin.mode).toBe("simple");
+      expect(overrideConfig.browser.plugin.capabilities).toBeUndefined();
+    } finally {
+      await server.close();
+    }
   });
 
   it("omits the debugger override when enableDebugger is false", async () => {

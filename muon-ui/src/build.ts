@@ -48,7 +48,7 @@ import {
   type MuonLinuxDesktopOptions,
   type ResolvedMuonLinuxDesktop,
 } from "./linux-desktop.js";
-import type { MuonCapabilityRuntimePluginConfig } from "./capability.js";
+import type { MuonRuntimePluginConfig } from "./capability.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -161,7 +161,7 @@ export interface MuonBuildOptions {
    *
    * @internal
    */
-  runtimePluginConfig?: MuonCapabilityRuntimePluginConfig;
+  runtimePluginConfig?: MuonRuntimePluginConfig;
 }
 
 /**
@@ -270,7 +270,6 @@ export const buildMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
-  assertSupportedPluginMode(buildConfig.config, options.runtimePluginConfig);
   const sourceConfig = applyRuntimePluginConfig(
     buildConfig.config,
     options.runtimePluginConfig,
@@ -501,37 +500,9 @@ const readBuildConfig = async (
   };
 };
 
-const readConfiguredPluginMode = (
-  sourceConfig: JsonObject,
-): string | undefined => {
-  const browser = sourceConfig.browser;
-  if (!isJsonObject(browser)) {
-    return undefined;
-  }
-  const plugin = browser.plugin;
-  if (!isJsonObject(plugin)) {
-    return undefined;
-  }
-  return typeof plugin.mode === "string" ? plugin.mode : undefined;
-};
-
-const assertSupportedPluginMode = (
-  sourceConfig: JsonObject,
-  runtimePluginConfig: MuonCapabilityRuntimePluginConfig | undefined,
-): void => {
-  if (
-    readConfiguredPluginMode(sourceConfig) === "validate" &&
-    runtimePluginConfig === undefined
-  ) {
-    throw new Error(
-      "browser.plugin.mode validate requires a bundler capability manifest; muon build direct assets support simple mode only.",
-    );
-  }
-};
-
 const applyRuntimePluginConfig = (
   sourceConfig: JsonObject,
-  runtimePluginConfig: MuonCapabilityRuntimePluginConfig | undefined,
+  runtimePluginConfig: MuonRuntimePluginConfig | undefined,
 ): JsonObject => {
   if (runtimePluginConfig === undefined) {
     return sourceConfig;

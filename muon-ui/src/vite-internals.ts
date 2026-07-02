@@ -24,7 +24,7 @@ import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import {
   createMuonCapabilityModuleResolver,
-  type MuonCapabilityRuntimePluginConfig,
+  type MuonRuntimePluginConfig,
 } from "./capability.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
@@ -64,9 +64,12 @@ interface MuonOverrideConfig {
       recycle: "ctrl+f12";
     };
     plugin: {
-      mode?: "validate";
+      mode: "simple" | "validate";
       allow: string[];
-      capabilities?: MuonCapabilityRuntimePluginConfig["capabilities"];
+      capabilities?: Extract<
+        MuonRuntimePluginConfig,
+        { mode: "validate" }
+      >["capabilities"];
     };
   };
   network: {
@@ -260,7 +263,7 @@ const getWebSocketOrigin = (startUrl: string): string => {
 const createMuonOverrideConfig = (
   startUrl: string,
   enableDebugger: boolean,
-  runtimePluginConfig: MuonCapabilityRuntimePluginConfig | undefined,
+  runtimePluginConfig: MuonRuntimePluginConfig,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
@@ -282,7 +285,7 @@ const createMuonOverrideConfig = (
           }
         : {}),
       plugin: {
-        ...(runtimePluginConfig ?? {}),
+        ...runtimePluginConfig,
         allow: [`${origin}/**`],
       },
     },
@@ -308,10 +311,12 @@ const writeMuonOverrideConfig = (
       createMuonOverrideConfig(
         startUrl,
         pluginOptions.enableDebugger !== false,
-        createMuonCapabilityModuleResolver(
-          server.config.root,
-          pluginOptions.pluginAccess,
-        ).getRuntimePluginConfig(),
+        pluginOptions.pluginAccess === false
+          ? { mode: "simple" }
+          : createMuonCapabilityModuleResolver(
+              server.config.root,
+              pluginOptions.pluginAccess,
+            ).getRuntimePluginConfig(),
       ),
       null,
       2,

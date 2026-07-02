@@ -2175,7 +2175,7 @@ export const writeMuonConfig = async (
     }
   }
   if (browserPluginAllowPatterns !== null) {
-    browser.plugin = { allow: browserPluginAllowPatterns };
+    browser.plugin = { mode: "simple", allow: browserPluginAllowPatterns };
   }
   if (browserAllowUnsafeJavaScriptParentAccess !== null) {
     browser.allowUnsafeJavaScriptParentAccess =

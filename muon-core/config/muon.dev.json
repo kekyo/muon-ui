@@ -6,6 +6,10 @@
   },
   "plugin": {
     "path": "./plugins",
+    "pages": [
+      "asset://main/**",
+      "data:**"
+    ],
     "plugins": [
       {
         "name": "internal",
@@ -25,12 +29,6 @@
     "keybind": {
       "devtools": "f12",
       "recycle": "ctrl+f12"
-    },
-    "plugin": {
-      "allow": [
-        "asset://main/**",
-        "data:**"
-      ]
     }
   }
 }

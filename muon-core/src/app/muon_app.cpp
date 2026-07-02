@@ -428,7 +428,7 @@ MuonApp::MuonApp(const MuonConfig& config,
       config_paths_(std::move(config_paths)),
       dispatcher_(dispatcher) {
   if (!CreateMuonUrlPolicy(config_.browser.plugin.allow,
-                           "browser.plugin.allow", &plugin_page_policy_,
+                           "plugin.pages", &plugin_page_policy_,
                            &plugin_page_policy_error_)) {
     plugin_page_policy_.reset();
   }
@@ -443,7 +443,7 @@ MuonApp::MuonApp(const MuonConfig& config,
     if (plugin_capability_policies_.find(capability.id) !=
         plugin_capability_policies_.end()) {
       plugin_capability_policy_error_ =
-          "Duplicate browser.plugin.capabilities id: " + capability.id;
+          "Duplicate plugin.capabilities id: " + capability.id;
       break;
     }
     std::shared_ptr<MuonPluginPolicy> capability_policy;
@@ -451,7 +451,7 @@ MuonApp::MuonApp(const MuonConfig& config,
     if (!CreateMuonPluginPolicy(capability.allow, &capability_policy,
                                 &capability_error)) {
       plugin_capability_policy_error_ =
-          "Invalid browser.plugin.capabilities '" + capability.id + "': " +
+          "Invalid plugin.capabilities '" + capability.id + "': " +
           capability_error;
       break;
     }

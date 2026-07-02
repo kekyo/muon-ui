@@ -88,7 +88,25 @@ const isMuonVitePluginAccessImportOptions = (value: unknown): boolean => {
     return false;
   }
 
-  return isStringArray(value.from) && isStringArray(value.allow);
+  return (
+    (value.sources === undefined || isStringArray(value.sources)) &&
+    (value.packages === undefined || isStringArray(value.packages)) &&
+    (value.allow === undefined || isStringArray(value.allow))
+  );
+};
+
+const isMuonVitePluginAccessEntryOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.name === "string" &&
+    isStringArray(value.allow) &&
+    (value.imports === undefined ||
+      (Array.isArray(value.imports) &&
+        value.imports.every(isMuonVitePluginAccessImportOptions)))
+  );
 };
 
 const isMuonVitePluginAccessOptions = (value: unknown): boolean => {
@@ -97,9 +115,14 @@ const isMuonVitePluginAccessOptions = (value: unknown): boolean => {
   }
 
   return (
-    value.imports === undefined ||
-    (Array.isArray(value.imports) &&
-      value.imports.every(isMuonVitePluginAccessImportOptions))
+    (value.path === undefined || typeof value.path === "string") &&
+    (value.mode === undefined ||
+      value.mode === "simple" ||
+      value.mode === "validate") &&
+    (value.pages === undefined || isStringArray(value.pages)) &&
+    (value.plugins === undefined ||
+      (Array.isArray(value.plugins) &&
+        value.plugins.every(isMuonVitePluginAccessEntryOptions)))
   );
 };
 

@@ -210,23 +210,59 @@ export interface MuonViteBuildOptions {
  */
 export interface MuonVitePluginAccessImportOptions {
   /**
-   * Importer path globs relative to the Vite project root.
+   * Importer source globs relative to the Vite project root.
    */
-  from: readonly string[];
+  sources?: readonly string[];
+  /**
+   * NPM package names allowed to import the virtual module.
+   */
+  packages?: readonly string[];
   /**
    * Plugin function path globs allowed for matching importers.
+   *
+   * @remarks When omitted, the parent plugin entry `allow` list is inherited.
    */
-  allow: readonly string[];
+  allow?: readonly string[];
 }
 
 /**
- * Capability import configuration for Muon plugin virtual modules.
+ * Plugin entry and capability import configuration for Muon virtual modules.
+ */
+export interface MuonVitePluginAccessEntryOptions {
+  /**
+   * Plugin entry name.
+   */
+  name: string;
+  /**
+   * Plugin function path globs allowed by the runtime plugin policy.
+   */
+  allow: readonly string[];
+  /**
+   * Validate-mode import rules for this plugin entry.
+   */
+  imports?: readonly MuonVitePluginAccessImportOptions[];
+}
+
+/**
+ * Plugin access configuration for Muon plugin virtual modules.
  */
 export interface MuonVitePluginAccessOptions {
   /**
-   * Capability imports allowed by importer path.
+   * External plugin directory override.
    */
-  imports?: readonly MuonVitePluginAccessImportOptions[];
+  path?: string;
+  /**
+   * Plugin exposure mode.
+   */
+  mode?: "simple" | "validate";
+  /**
+   * Page URL patterns where the plugin bridge is exposed.
+   */
+  pages?: readonly string[];
+  /**
+   * Runtime plugin entries and validate-mode import rules.
+   */
+  plugins?: readonly MuonVitePluginAccessEntryOptions[];
 }
 
 /**
@@ -280,10 +316,12 @@ export interface MuonVitePluginOptions {
   /**
    * Plugin access mode and virtual module capability imports.
    *
-   * @remarks Omit this option to use validate mode without plugin
-   * capabilities. Pass import rules to allow virtual modules such as
-   * `muon:executor`. Pass `false` to use simple window-global exposure.
-   * @defaultValue validate mode with no capability imports.
+   * @remarks Omit this option to use the `plugin` section from `muon.json`.
+   * Pass plugin entries with import rules to override `muon.json` and allow
+   * virtual modules such as `muon:executor`. Pass `false` to use simple
+   * window-global exposure.
+   * @defaultValue `muon.json` plugin config, or validate mode with no
+   * capability imports.
    */
   pluginAccess?: false | MuonVitePluginAccessOptions;
 

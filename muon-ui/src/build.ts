@@ -272,7 +272,7 @@ export const buildMuonApp = async (
   const buildConfig = await readBuildConfig(root, options.configPath);
   const sourceConfig = applyRuntimePluginConfig(
     buildConfig.config,
-    options.runtimePluginConfig,
+    options.runtimePluginConfig ?? { mode: "simple" },
   );
   const resolvedBuildConfig: BuildConfig = {
     ...buildConfig,
@@ -508,29 +508,19 @@ const applyRuntimePluginConfig = (
     return sourceConfig;
   }
 
-  const sourceBrowser = sourceConfig.browser;
-  if (sourceBrowser !== undefined && !isJsonObject(sourceBrowser)) {
-    throw new Error(
-      "muon.json browser must be an object when runtime plugin config is applied.",
-    );
-  }
-  const browser: JsonObject = sourceBrowser ?? {};
-  const sourcePlugin = browser.plugin;
+  const sourcePlugin = sourceConfig.plugin;
   if (sourcePlugin !== undefined && !isJsonObject(sourcePlugin)) {
     throw new Error(
-      "muon.json browser.plugin must be an object when runtime plugin config is applied.",
+      "muon.json plugin must be an object when runtime plugin config is applied.",
     );
   }
   const plugin: JsonObject = sourcePlugin ?? {};
 
   return {
     ...sourceConfig,
-    browser: {
-      ...browser,
-      plugin: {
-        ...plugin,
-        ...runtimePluginConfig,
-      },
+    plugin: {
+      ...plugin,
+      ...runtimePluginConfig,
     },
   };
 };

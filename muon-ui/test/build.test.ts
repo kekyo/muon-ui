@@ -1087,6 +1087,9 @@ describe("muon build", () => {
         appId: "missing-config-sample",
         desktopId: "missing-config-sample",
       },
+      plugin: {
+        mode: "simple",
+      },
     });
   });
 
@@ -1212,7 +1215,7 @@ describe("muon build", () => {
     ).rejects.toThrow(join(root, "muon.json"));
   });
 
-  it("preserves explicit validate plugin mode in direct muon builds", async () => {
+  it("forces simple plugin mode in direct muon builds", async () => {
     const root = await createTemporaryDirectory("muon-build-plugin-validate-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     await writeFile(
@@ -1225,10 +1228,8 @@ describe("muon build", () => {
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          browser: {
-            plugin: {
-              mode: "validate",
-            },
+          plugin: {
+            mode: "validate",
           },
         },
         null,
@@ -1243,10 +1244,8 @@ describe("muon build", () => {
     });
 
     expect(result.targets[0]?.embeddedConfig).toMatchObject({
-      browser: {
-        plugin: {
-          mode: "validate",
-        },
+      plugin: {
+        mode: "simple",
       },
     });
   });
@@ -1264,10 +1263,8 @@ describe("muon build", () => {
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          browser: {
-            plugin: {
-              mode: "simple",
-            },
+          plugin: {
+            mode: "simple",
           },
         },
         null,
@@ -1282,10 +1279,8 @@ describe("muon build", () => {
     });
 
     expect(result.targets[0]?.embeddedConfig).toMatchObject({
-      browser: {
-        plugin: {
-          mode: "simple",
-        },
+      plugin: {
+        mode: "simple",
       },
     });
   });

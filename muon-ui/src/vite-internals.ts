@@ -22,10 +22,7 @@ import type { ViteDevServer } from "vite";
 
 import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
-import {
-  createMuonCapabilityModuleResolver,
-  type MuonRuntimePluginConfig,
-} from "./capability.js";
+import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
 export interface MuonLaunchScriptOptions {
@@ -38,6 +35,7 @@ export interface MuonLaunchScriptOptions {
 interface MuonViteSessionOptions {
   server: ViteDevServer;
   pluginOptions: MuonVitePluginOptions;
+  getRuntimePluginConfig: () => MuonRuntimePluginConfig;
   platform: NodeJS.Platform;
   architecture: NodeJS.Architecture;
   environment: NodeJS.ProcessEnv;
@@ -63,14 +61,9 @@ interface MuonOverrideConfig {
       devtools: "f12";
       recycle: "ctrl+f12";
     };
-    plugin: {
-      mode: "simple" | "validate";
-      allow: string[];
-      capabilities?: Extract<
-        MuonRuntimePluginConfig,
-        { mode: "validate" }
-      >["capabilities"];
-    };
+  };
+  plugin: MuonRuntimePluginConfig & {
+    pages: string[];
   };
   network: {
     allow: string[];
@@ -284,10 +277,10 @@ const createMuonOverrideConfig = (
             },
           }
         : {}),
-      plugin: {
-        ...runtimePluginConfig,
-        allow: [`${origin}/**`],
-      },
+    },
+    plugin: {
+      ...runtimePluginConfig,
+      pages: [`${origin}/**`],
     },
     network: {
       allow: [`${origin}/**`, `${getWebSocketOrigin(startUrl)}/**`],
@@ -299,6 +292,7 @@ const writeMuonOverrideConfig = (
   server: ViteDevServer,
   overrideConfigPath: string,
   pluginOptions: MuonVitePluginOptions,
+  getRuntimePluginConfig: () => MuonRuntimePluginConfig,
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
@@ -311,12 +305,7 @@ const writeMuonOverrideConfig = (
       createMuonOverrideConfig(
         startUrl,
         pluginOptions.enableDebugger !== false,
-        pluginOptions.pluginAccess === false
-          ? { mode: "simple" }
-          : createMuonCapabilityModuleResolver(
-              server.config.root,
-              pluginOptions.pluginAccess,
-            ).getRuntimePluginConfig(),
+        getRuntimePluginConfig(),
       ),
       null,
       2,
@@ -433,6 +422,7 @@ const launchMuon = (
 export const startMuonViteBrowserBridge = async ({
   server,
   pluginOptions,
+  getRuntimePluginConfig,
   platform,
   architecture,
   environment,
@@ -507,6 +497,7 @@ export const startMuonViteBrowserBridge = async ({
       server,
       paths.overrideConfigPath,
       pluginOptions,
+      getRuntimePluginConfig,
     );
     if (configWritten) {
       launchMuon(paths, platform, server);

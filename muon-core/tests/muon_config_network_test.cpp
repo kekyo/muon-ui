@@ -455,6 +455,43 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
     return false;
   }
 
+  const auto plugin_access_path = test_directory / "plugin-access.json";
+  if (!Expect(
+          WriteFile(
+              plugin_access_path,
+              R"({"plugin":{"mode":"simple","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.executor.*"],"imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+          "failed to write plugin access config") ||
+      !LoadConfigExpectSuccess(plugin_access_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.plugin.mode == kMuonBrowserPluginModeSimple,
+              "plugin.mode was not parsed") ||
+      !Expect(config.browser.plugin.allow.size() == 2,
+              "plugin.pages pattern count is wrong") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "first plugin.pages pattern changed") ||
+      !Expect(config.browser.plugin.allow[1] == "data:**",
+              "second plugin.pages pattern changed") ||
+      !Expect(config.browser.plugin.capabilities.size() == 1,
+              "plugin.capabilities count is wrong") ||
+      !Expect(config.browser.plugin.capabilities[0].id == "cap-1",
+              "plugin.capabilities id changed") ||
+      !Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
+              "plugin.capabilities allow count is wrong") ||
+      !Expect(config.browser.plugin.capabilities[0].allow[0] ==
+                  "muon.executor.spawn",
+              "plugin.capabilities allow changed") ||
+      !Expect(config.plugin.plugins.size() == 1,
+              "plugin.plugins entry count changed") ||
+      !Expect(config.plugin.plugins[0].name == "internal",
+              "plugin.plugins entry name changed") ||
+      !Expect(config.plugin.plugins[0].allow.size() == 1,
+              "plugin.plugins allow count changed") ||
+      !Expect(config.plugin.plugins[0].allow[0] == "muon.executor.*",
+              "plugin.plugins allow value changed")) {
+    return false;
+  }
+
   const auto empty_network_allow_path =
       test_directory / "empty-network-allow.json";
   if (!Expect(WriteFile(empty_network_allow_path,
@@ -476,21 +513,21 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
     return false;
   }
 
-  const auto empty_browser_plugin_allow_path =
-      test_directory / "empty-browser-plugin-allow.json";
-  if (!Expect(WriteFile(empty_browser_plugin_allow_path,
-                        R"({"browser":{"plugin":{"allow":[]}}})"),
-              "failed to write empty browser plugin allow config") ||
-      !LoadConfigExpectSuccess(empty_browser_plugin_allow_path, &config)) {
+  const auto empty_plugin_pages_path =
+      test_directory / "empty-plugin-pages.json";
+  if (!Expect(WriteFile(empty_plugin_pages_path,
+                        R"({"plugin":{"pages":[]}})"),
+              "failed to write empty plugin pages config") ||
+      !LoadConfigExpectSuccess(empty_plugin_pages_path, &config)) {
     return false;
   }
   if (!Expect(config.browser.plugin.allow.empty(),
-              "explicit empty browser.plugin.allow did not override the "
+              "explicit empty plugin.pages did not override the "
               "default") ||
       !Expect(config.network.allow.size() == 1,
-              "explicit empty browser.plugin.allow changed network allowlist") ||
+              "explicit empty plugin.pages changed network allowlist") ||
       !Expect(config.network.allow[0] == "asset://**",
-              "explicit empty browser.plugin.allow changed network pattern")) {
+              "explicit empty plugin.pages changed network pattern")) {
     return false;
   }
 
@@ -549,7 +586,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"mode":"validate","allow":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -587,22 +624,22 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.browser.initial_title_bar_icon == "icons/app.png",
                 "browser.initialTitleBarIcon was not parsed") &&
          Expect(config.browser.plugin.allow.size() == 2,
-                "browser.plugin.allow pattern count is wrong") &&
+                "plugin.pages pattern count is wrong") &&
          Expect(config.browser.plugin.mode == kMuonBrowserPluginModeValidate,
-                "browser.plugin.mode was not parsed") &&
+                "plugin.mode was not parsed") &&
          Expect(config.browser.plugin.allow[0] == "asset://main/**",
-                "first browser.plugin.allow pattern changed") &&
+                "first plugin.pages pattern changed") &&
          Expect(config.browser.plugin.allow[1] == "data:**",
-                "second browser.plugin.allow pattern changed") &&
+                "second plugin.pages pattern changed") &&
          Expect(config.browser.plugin.capabilities.size() == 1,
-                "browser.plugin.capabilities count is wrong") &&
+                "plugin.capabilities count is wrong") &&
          Expect(config.browser.plugin.capabilities[0].id == "cap-1",
-                "browser.plugin.capabilities id changed") &&
+                "plugin.capabilities id changed") &&
          Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
-                "browser.plugin.capabilities allow count is wrong") &&
+                "plugin.capabilities allow count is wrong") &&
          Expect(config.browser.plugin.capabilities[0].allow[0] ==
                     "muon.executor.spawn",
-                "browser.plugin.capabilities allow changed") &&
+                "plugin.capabilities allow changed") &&
          Expect(config.browser.allow_unsafe_javascript_parent_access.size() ==
                     2,
                 "browser.allowUnsafeJavaScriptParentAccess pattern count is "
@@ -917,11 +954,11 @@ static bool RunConfigOverrideLoadingTest(
   const auto second_path = second_directory / "override.json";
   if (!Expect(WriteFile(
                   first_path,
-                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","pages":["asset://first/**"],"plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
               "failed to write first override config") ||
       !Expect(WriteFile(
                   second_path,
-                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon"},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","pages":["asset://first/**","asset://second/**"],"plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write second override config")) {
     return false;
   }
@@ -944,11 +981,11 @@ static bool RunConfigOverrideLoadingTest(
       !Expect(config.browser.title_bar == kMuonBrowserTitleBarMuon,
               "later scalar browser.titleBarType did not override") ||
       !Expect(config.browser.plugin.allow.size() == 2,
-              "browser.plugin.allow array was not merged by equality") ||
+              "plugin.pages array was not replaced by later config") ||
       !Expect(config.browser.plugin.allow[0] == "asset://first/**",
-              "browser.plugin.allow existing value changed") ||
+              "plugin.pages first value changed") ||
       !Expect(config.browser.plugin.allow[1] == "asset://second/**",
-              "browser.plugin.allow unique value was not appended") ||
+              "plugin.pages second value changed") ||
       !ExpectShortcut(config.browser.devtools, true, 0x7B, 0,
                       "merged devtools shortcut") ||
       !Expect(config.network.allow.size() == 3,
@@ -979,7 +1016,7 @@ static bool RunConfigOverrideLoadingTest(
       !Expect(config.plugin.path == second_directory / "plugins-second",
               "plugin.path was not resolved from the later config directory") ||
       !Expect(config.plugin.plugins.size() == 2,
-              "plugin.plugins array was not merged by equality") ||
+              "plugin.plugins array was not replaced by later config") ||
       !Expect(config.plugin.plugins[0].name == "internal",
               "plugin.plugins duplicate entry changed") ||
       !Expect(config.plugin.plugins[0].allow.size() == 1,
@@ -1246,6 +1283,26 @@ static bool RunConfigValidationTest(
   const auto out_of_range_authorized_origin_port_path =
       test_directory / "out-of-range-authorized-origin-port.json";
   const auto invalid_plugin_path = test_directory / "invalid-plugin.json";
+  const auto invalid_plugin_pages_path =
+      test_directory / "invalid-plugin-pages.json";
+  const auto invalid_plugin_page_entry_path =
+      test_directory / "invalid-plugin-page-entry.json";
+  const auto invalid_plugin_mode_type_path =
+      test_directory / "invalid-plugin-mode-type.json";
+  const auto empty_plugin_mode_path =
+      test_directory / "empty-plugin-mode.json";
+  const auto unknown_plugin_mode_path =
+      test_directory / "unknown-plugin-mode.json";
+  const auto invalid_plugin_capabilities_path =
+      test_directory / "invalid-plugin-capabilities.json";
+  const auto invalid_plugin_capability_entry_path =
+      test_directory / "invalid-plugin-capability-entry.json";
+  const auto invalid_plugin_capability_id_path =
+      test_directory / "invalid-plugin-capability-id.json";
+  const auto empty_plugin_capability_id_path =
+      test_directory / "empty-plugin-capability-id.json";
+  const auto invalid_plugin_capability_allow_path =
+      test_directory / "invalid-plugin-capability-allow.json";
   const auto legacy_plugins_path = test_directory / "legacy-plugins.json";
   const auto invalid_plugin_path_type_path =
       test_directory / "invalid-plugin-path-type.json";
@@ -1337,6 +1394,36 @@ static bool RunConfigValidationTest(
                 "failed to write out-of-range authorizedOrigin port config") &&
          Expect(WriteFile(invalid_plugin_path, R"({"plugin":true})"),
                 "failed to write invalid plugin config") &&
+         Expect(WriteFile(invalid_plugin_pages_path,
+                          R"({"plugin":{"pages":"asset://main/**"}})"),
+                "failed to write invalid plugin pages config") &&
+         Expect(WriteFile(invalid_plugin_page_entry_path,
+                          R"({"plugin":{"pages":["asset://main/**",42]}})"),
+                "failed to write invalid plugin pages entry config") &&
+         Expect(WriteFile(invalid_plugin_mode_type_path,
+                          R"({"plugin":{"mode":42}})"),
+                "failed to write invalid plugin mode type config") &&
+         Expect(WriteFile(empty_plugin_mode_path,
+                          R"({"plugin":{"mode":""}})"),
+                "failed to write empty plugin mode config") &&
+         Expect(WriteFile(unknown_plugin_mode_path,
+                          R"({"plugin":{"mode":"strict"}})"),
+                "failed to write unknown plugin mode config") &&
+         Expect(WriteFile(invalid_plugin_capabilities_path,
+                          R"({"plugin":{"capabilities":true}})"),
+                "failed to write invalid plugin capabilities config") &&
+         Expect(WriteFile(invalid_plugin_capability_entry_path,
+                          R"({"plugin":{"capabilities":[true]}})"),
+                "failed to write invalid plugin capability entry config") &&
+         Expect(WriteFile(invalid_plugin_capability_id_path,
+                          R"({"plugin":{"capabilities":[{"id":42,"allow":["muon.executor.spawn"]}]}})"),
+                "failed to write invalid plugin capability id config") &&
+         Expect(WriteFile(empty_plugin_capability_id_path,
+                          R"({"plugin":{"capabilities":[{"id":"","allow":["muon.executor.spawn"]}]}})"),
+                "failed to write empty plugin capability id config") &&
+         Expect(WriteFile(invalid_plugin_capability_allow_path,
+                          R"({"plugin":{"capabilities":[{"id":"cap-1","allow":"muon.executor.spawn"}]}})"),
+                "failed to write invalid plugin capability allow config") &&
          Expect(WriteFile(legacy_plugins_path, R"({"plugins":[]})"),
                 "failed to write legacy plugins config") &&
          Expect(WriteFile(invalid_plugin_path_type_path,
@@ -1444,6 +1531,26 @@ static bool RunConfigValidationTest(
                                  "integer") &&
          LoadConfigExpectFailure(invalid_plugin_path,
                                  "plugin must be an object") &&
+         LoadConfigExpectFailure(invalid_plugin_pages_path,
+                                 "plugin.pages must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_page_entry_path,
+                                 "plugin.pages entries must be strings") &&
+         LoadConfigExpectFailure(invalid_plugin_mode_type_path,
+                                 "plugin.mode must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_mode_path,
+                                 "plugin.mode must not be empty") &&
+         LoadConfigExpectFailure(unknown_plugin_mode_path,
+                                 "plugin.mode has unknown value") &&
+         LoadConfigExpectFailure(invalid_plugin_capabilities_path,
+                                 "plugin.capabilities must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_entry_path,
+                                 "plugin.capabilities entries must be objects") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_id_path,
+                                 "plugin.capabilities.id must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_capability_id_path,
+                                 "plugin.capabilities.id must not be empty") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_allow_path,
+                                 "plugin.capabilities.allow must be an array") &&
          LoadConfigExpectFailure(legacy_plugins_path,
                                  "plugins is no longer supported") &&
          LoadConfigExpectFailure(invalid_plugin_path_type_path,
@@ -1865,17 +1972,17 @@ static bool RunBrowserConfigValidationTest(
          LoadConfigExpectFailure(overlapping_assignment_path,
                                  "must not use overlapping shortcuts") &&
          LoadConfigExpectFailure(invalid_browser_plugin_path,
-                                 "browser.plugin must be an object") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(invalid_browser_plugin_allow_path,
-                                 "browser.plugin.allow must be an array") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(invalid_browser_plugin_entry_path,
-                                 "browser.plugin.allow entries must be strings") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(invalid_browser_plugin_mode_path,
-                                 "browser.plugin.mode must be a string") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(empty_browser_plugin_mode_path,
-                                 "browser.plugin.mode must not be empty") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(unknown_browser_plugin_mode_path,
-                                 "browser.plugin.mode has unknown value") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(
              invalid_unsafe_parent_access_path,
              "browser.allowUnsafeJavaScriptParentAccess must be an array") &&
@@ -2072,24 +2179,24 @@ static bool RunInvalidNetworkGlobTest() {
          ExpectInvalidNetworkGlob({"https://example.com**"});
 }
 
-static bool ExpectInvalidBrowserPluginAllowGlob(
+static bool ExpectInvalidPluginPagesGlob(
     const std::vector<std::string>& allow_patterns) {
   std::shared_ptr<MuonNetworkPolicy> policy;
   std::string error_message;
-  return Expect(!CreateMuonUrlPolicy(allow_patterns, "browser.plugin.allow",
+  return Expect(!CreateMuonUrlPolicy(allow_patterns, "plugin.pages",
                                      &policy, &error_message),
-                "invalid browser.plugin.allow glob was accepted") &&
-         Expect(error_message.find("Invalid browser.plugin.allow glob") !=
+                "invalid plugin.pages glob was accepted") &&
+         Expect(error_message.find("Invalid plugin.pages glob") !=
                     std::string::npos,
-                "invalid browser.plugin.allow glob error message is missing "
+                "invalid plugin.pages glob error message is missing "
                 "context");
 }
 
-static bool RunInvalidBrowserPluginAllowGlobTest() {
-  return ExpectInvalidBrowserPluginAllowGlob({""}) &&
-         ExpectInvalidBrowserPluginAllowGlob({"data:\\"}) &&
-         ExpectInvalidBrowserPluginAllowGlob({"https://example.com/***"}) &&
-         ExpectInvalidBrowserPluginAllowGlob({"https://example.com**"});
+static bool RunInvalidPluginPagesGlobTest() {
+  return ExpectInvalidPluginPagesGlob({""}) &&
+         ExpectInvalidPluginPagesGlob({"data:\\"}) &&
+         ExpectInvalidPluginPagesGlob({"https://example.com/***"}) &&
+         ExpectInvalidPluginPagesGlob({"https://example.com**"});
 }
 
 static bool ExpectInvalidUnsafeParentAccessGlob(
@@ -2225,7 +2332,7 @@ int main() {
                       RunNetworkPolicyEmptyTest() &&
                       RunNetworkAuthorizedOriginPolicyTest() &&
                       RunInvalidNetworkGlobTest() &&
-                      RunInvalidBrowserPluginAllowGlobTest() &&
+                      RunInvalidPluginPagesGlobTest() &&
                       RunInvalidUnsafeParentAccessGlobTest() &&
                       RunPluginPolicyTest() &&
                       RunPluginPolicyDeepWildcardTest() &&

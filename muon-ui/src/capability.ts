@@ -4,7 +4,8 @@
 // https://github.com/kekyo/muon
 
 import { createHash } from "node:crypto";
-import { relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
 /**
  * Import-side capability rule for Muon plugin virtual modules.
@@ -13,11 +14,21 @@ export interface MuonCapabilityImportOptions {
   /**
    * Importer path globs relative to the bundler project root.
    */
-  from: readonly string[];
+  sources?: readonly string[];
+  /**
+   * NPM package names allowed to import the virtual module.
+   */
+  packages?: readonly string[];
   /**
    * Plugin function path globs allowed for matching importers.
    */
   allow: readonly string[];
+  /**
+   * Plugin entry name that supplied this rule.
+   *
+   * @internal
+   */
+  pluginName?: string;
 }
 
 /**
@@ -45,6 +56,20 @@ export interface MuonCapabilityRuntimeEntry {
 }
 
 /**
+ * Runtime plugin entry generated for muon-core config overlays.
+ */
+export interface MuonRuntimePluginEntryConfig {
+  /**
+   * Plugin entry name.
+   */
+  name: string;
+  /**
+   * Plugin function path globs allowed for this plugin entry.
+   */
+  allow: readonly string[];
+}
+
+/**
  * Runtime plugin configuration generated for validate mode.
  */
 export interface MuonCapabilityRuntimePluginConfig {
@@ -52,6 +77,18 @@ export interface MuonCapabilityRuntimePluginConfig {
    * Plugin exposure mode.
    */
   mode: "validate";
+  /**
+   * Plugin bridge page URL allowlist.
+   */
+  pages?: readonly string[];
+  /**
+   * External plugin path override.
+   */
+  path?: string;
+  /**
+   * Plugin loading allowlist override.
+   */
+  plugins?: readonly MuonRuntimePluginEntryConfig[];
   /**
    * Capability policies consumed by muon-core.
    */
@@ -66,6 +103,18 @@ export interface MuonSimpleRuntimePluginConfig {
    * Plugin exposure mode.
    */
   mode: "simple";
+  /**
+   * Plugin bridge page URL allowlist.
+   */
+  pages?: readonly string[];
+  /**
+   * External plugin path override.
+   */
+  path?: string;
+  /**
+   * Plugin loading allowlist override.
+   */
+  plugins?: readonly MuonRuntimePluginEntryConfig[];
 }
 
 /**
@@ -135,7 +184,9 @@ const hashCapabilityRule = (
     .update(
       JSON.stringify({
         index,
-        from: [...rule.from],
+        pluginName: rule.pluginName,
+        sources: [...(rule.sources ?? [])],
+        packages: [...(rule.packages ?? [])],
         allow: [...rule.allow],
       }),
     )
@@ -185,6 +236,66 @@ const isGlobMatch = (glob: string, value: string, separator: string): boolean =>
 const toRootRelativeImporter = (root: string, importer: string): string =>
   normalizePath(relative(root, importer));
 
+const readPackageName = (packageJsonPath: string): string | undefined => {
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as unknown;
+    return typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as { name?: unknown }).name === "string"
+      ? (parsed as { name: string }).name
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const getImporterPackageName = (
+  root: string,
+  importer: string,
+): string | undefined => {
+  const normalizedRoot = normalizePath(root);
+  const rootPackageJsonPath = join(root, "package.json");
+  let directory = dirname(normalizePath(importer));
+  for (;;) {
+    const packageJsonPath = join(directory, "package.json");
+    if (
+      packageJsonPath !== rootPackageJsonPath &&
+      existsSync(packageJsonPath)
+    ) {
+      return readPackageName(packageJsonPath);
+    }
+    if (normalizePath(directory) === normalizedRoot) {
+      return undefined;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      return undefined;
+    }
+    directory = parent;
+  }
+};
+
+const matchesCapabilityRuleImporter = (
+  rule: MuonCapabilityImportOptions,
+  root: string,
+  importer: string,
+): boolean => {
+  const relativeImporter = toRootRelativeImporter(root, importer);
+  const sourceMatched =
+    rule.sources?.some((pattern) =>
+      isGlobMatch(normalizePath(pattern), relativeImporter, "/"),
+    ) ?? false;
+  if (sourceMatched) {
+    return true;
+  }
+
+  const packageName = getImporterPackageName(root, importer);
+  return packageName === undefined
+    ? false
+    : (rule.packages?.includes(packageName) ?? false);
+};
+
 const hasNamespaceFunctionAllow = (
   namespace: string,
   allow: readonly string[],
@@ -227,6 +338,17 @@ const createRuleRuntimeEntry = (
   id: hashCapabilityRule(index, rule),
   allow: [...rule.allow],
 });
+
+const validateCapabilityRule = (rule: MuonCapabilityImportOptions): void => {
+  if (
+    (rule.sources === undefined || rule.sources.length === 0) &&
+    (rule.packages === undefined || rule.packages.length === 0)
+  ) {
+    throw new Error(
+      "Muon capability import rule requires sources or packages.",
+    );
+  }
+};
 
 const createModuleVirtualId = (rule: ResolvedRule): string =>
   `${virtualModulePrefix}${rule.index}:${rule.moduleName}`;
@@ -303,6 +425,9 @@ export const createMuonCapabilityModuleResolver = (
   options: MuonCapabilityOptions | undefined,
 ): MuonCapabilityModuleResolver => {
   const rules = [...(options?.imports ?? [])];
+  for (const rule of rules) {
+    validateCapabilityRule(rule);
+  }
   const runtimeEntries = rules.map((rule, index) =>
     createRuleRuntimeEntry(rule, index),
   );
@@ -332,9 +457,7 @@ export const createMuonCapabilityModuleResolver = (
       const rule = rules[index];
       if (
         rule === undefined ||
-        !rule.from.some((pattern) =>
-          isGlobMatch(normalizePath(pattern), relativeImporter, "/"),
-        ) ||
+        !matchesCapabilityRuleImporter(rule, root, importer) ||
         !hasNamespaceFunctionAllow(parsed.namespace, rule.allow)
       ) {
         continue;

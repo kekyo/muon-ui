@@ -1376,7 +1376,7 @@ try {
     }
   });
 
-  it("exposes plugin APIs in popup pages matching browser.plugin.allow", async () => {
+  it("exposes plugin APIs in popup pages matching plugin.pages", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -1422,7 +1422,7 @@ try {
     }
   });
 
-  it("does not expose plugin APIs in popup pages outside browser.plugin.allow", async () => {
+  it("does not expose plugin APIs in popup pages outside plugin.pages", async () => {
     const server = await startHttpServer((request, response) => {
       response.setHeader("Content-Type", "text/html");
       if (request.url === "/popup.html") {
@@ -1669,7 +1669,7 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
     }
   });
 
-  it("does not expose plugin APIs outside the default browser.plugin.allow", async () => {
+  it("does not expose plugin APIs outside the default plugin.pages", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -1705,7 +1705,7 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
     }
   });
 
-  it("exposes plugin APIs on pages matching browser.plugin.allow", async () => {
+  it("exposes plugin APIs on pages matching plugin.pages", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,

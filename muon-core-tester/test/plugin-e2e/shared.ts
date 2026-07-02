@@ -2139,12 +2139,13 @@ export const writeMuonConfig = async (
   if (networkAuthorizedOrigins.length > 0) {
     network.authorizedOrigin = networkAuthorizedOrigins;
   }
+  const plugin: Record<string, unknown> = {
+    path: pluginPath,
+    plugins,
+  };
   const config: Record<string, unknown> = {
     network,
-    plugin: {
-      path: pluginPath,
-      plugins,
-    },
+    plugin,
   };
   if (logConfig !== undefined) {
     config.log = logConfig;
@@ -2175,7 +2176,8 @@ export const writeMuonConfig = async (
     }
   }
   if (browserPluginAllowPatterns !== null) {
-    browser.plugin = { mode: "simple", allow: browserPluginAllowPatterns };
+    plugin.mode = "simple";
+    plugin.pages = browserPluginAllowPatterns;
   }
   if (browserAllowUnsafeJavaScriptParentAccess !== null) {
     browser.allowUnsafeJavaScriptParentAccess =

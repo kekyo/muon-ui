@@ -17,9 +17,6 @@ A multi-platform GUI application framework that uses CEF as its backend.
 
 ## What is This?
 
-WIP: This project is still in a very early prototype phase.
-I intend to complete it, but please note that it is not yet at the stage of active implementation.
-
 Have you ever thought about how to update an outdated native GUI application into a modern one?
 Replacing applications is extremely complex and has always been a challenge for us.
 

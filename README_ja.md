@@ -14,9 +14,6 @@ CEFをバックエンドで使用する、マルチプラットフォームGUI�
 
 ## これは何?
 
-WIP: このプロジェクトはまだ非常に初期の検証段階です。
-私はこれを完成させるつもりで居ますが、本格的に検証を行う前の段階であることに注意して下さい。
-
 あなたは、古くなってしまったネイティブGUIアプリケーションを、どうにかして最新のモダン化されたアプリケーションに更新したいと考えたことはありますか？
 アプリケーションのリプレースメントは非常に複雑で、私達をいつも悩ませて来ました。
 
@@ -115,8 +112,6 @@ npm run dev
 
 だけです。しかも、それぞれ非常に簡単です。
 
----
-
 ### muonパッケージをインストール
 
 muonパッケージ(正式名: `muon-ui`)は、 `devDependencies` にインストールします:
@@ -136,13 +131,13 @@ CEF本体バイナリは、NPMパッケージに含まれません。
 
 ### muon Viteプラグインを構成
 
-実はmuonパッケージを導入しただけでほぼ準備は整っていますが、このプロジェクトではViteを使っているので、
-ぜひViteのHMR (Hot Module Replacement)を使用出来るようにすることをお勧めします。
+muonパッケージを導入しただけでほぼ準備は整っていますが、muonのViteプラグインを有効化して、
+HMR (Hot Module Replacement) とmuonアプリのビルドを使用出来るようにします。
 
 HMRを知らない人に簡単に説明すると、開発中にViteが擬似的なサーバーとなって、ブラウザにページを表示可能にし、かつ、ページを編集した時にほぼリアルタイムで表示を更新してくれます。
 つまり、編集結果を自動的にプレビュー表示する、非常に便利な機能です。
 
-muonはHMRに対応していて、ブラウザの代わりにmuonを起動して、muonアプリ上でHMRを機能させます。
+muonのViteプラグインはHMRに対応していて、ブラウザの代わりにmuonを起動して、muonアプリ上でHMRを機能させます。
 これを有効化するために、`vite.config.ts` に以下のコードを追加します:
 
 ```ts
@@ -158,7 +153,7 @@ export default defineConfig({
 })
 ```
 
-`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。これで準備は完了です!
+`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuon Viteプラグインが有効化されます。これで準備は完了です。
 
 いよいよmuonを起動します:
 
@@ -170,10 +165,9 @@ npm run dev
 
 ![Get started](./images/get-started.png)
 
-ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。例えば、 `src/App.tsx` 内の `<h1>Get started</h1>` の行を `<h1>Get started with Muon!</h1>` に書き換えて保存すれば、瞬時にmuonウインドウ側の表示も書き換わるはずです。
-
-`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動でき、`Ctrl+F12` キーでmuonをリサイクル再起動できます。
-また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
+例えば、 `src/App.tsx` 内の `<h1>Get started</h1>` の行を `<h1>Get started with Muon!</h1>` に書き換えて保存すれば、
+再起動すること無く瞬時にmuonウインドウ側の表示も書き換わるはずです。
 
 そして、このページの中央に配置されてるカウンタボタン "Count is 0" をクリックすると、カウント値が増加することが確認できるはずです。
 これで、ViteテンプレートのReactが正しく動作していることが確認できます。
@@ -182,28 +176,20 @@ npm run dev
 
 ![Forbidden](./images/forbidden.png)
 
-これこそが、muonの特徴である、ネットワークアクセスのフィルタが機能している証拠です。
-このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonのデフォルトでは、ローカルのアセットにのみアクセスが許可されているので、それ以外のサイトコンテンツへのアクセスが遮断されているのです。
+そして、これこそが、muonの特徴である、ネットワークアクセスのホワイトリストフィルタが機能している証拠です。
+このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonのデフォルトでは「ローカルのアセットのみ」アクセスが許可されているので、
+それ以外のサイトコンテンツへのアクセスが遮断されているのです。
+このホワイトリストの指定方法は別章で詳しく示します。
 
-このホワイトリストの指定方法は後で章で詳しく示します。
+また、`F12` キーでMuon DevToolsを起動出来ます:
 
-### muon runで直接起動
+![Muon DevTools](./images/devtools.png)
 
-Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon run` を使用できます。
+CDP (Chromium DevTools Protocol) も有効化されているので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
 
-```bash
-npx muon run
-```
+`Ctrl+F12` キーでmuonをリサイクル再起動できます。リサイクル再起動は、 `muon.json` の変更など、HMRで反映できない更新を行った場合に使用できます。
 
-- `muon run` はHTTPサーバーを起動せず、アセットディレクトリの内容をそのまま参照可能にします。そのため、`muon run`ではHMRは動作しません。
-- アセットディレクトリは、カレントディレクトリの `assets/` 配下か、あるいは `--assets` で指定されたディレクトリを参照します。
-- `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
-- CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon run` では無視されます。
-- Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
-
----
-
-### 配布用ビルド (Vite)
+### 配布用ビルド
 
 Vite muonプラグインを設定した状態で `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
@@ -211,8 +197,7 @@ Vite muonプラグインを設定した状態で `vite build` を実行すると
 npm run build
 ```
 
-Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
-
+Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
 既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、`dist-muon/linux-amd64/` や `dist-muon/windows-amd64/` のようなターゲット別ディレクトリに出力されます。
 
 ターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定できます:
@@ -248,37 +233,8 @@ export default defineConfig({
 - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windowsターゲット: `windows-i686`, `windows-amd64`
 
-### 配布用ビルド (CLI)
-
-配布用ビルドや配布用パッケージ生成は、 `muon` CLIからも実行できます。
-
-`vite.config.*` にmuon Viteプラグインが含まれている場合、 `muon build` は `vite build` と同じビルドシーケンスを使用します。
-つまり、Viteプラグインの `build` オプションを既定値として使い、Viteの `build.outDir` を `asset://main/` として配布用ディレクトリにまとめます。
-同じ項目をCLIオプションで指定した場合はCLI側が優先されます。
-
-```bash
-npx muon build
-```
-
-muon Viteプラグインが無い場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
-この場合のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
-`asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
-アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
-
-ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
-muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
-
-ビルド時に生成されるmuonアプリバイナリに指定する名称やアイコンなどのオプション指定例を示します:
-
-```bash
-npx muon build --windows-icon icons/app.png --windows-version 1.2.3
-npx muon build --linux-icon icons/app.png --linux-name "My App"
-```
-
-- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
-  同じ値は `muon.json` の `windows.resource` でも指定できます。
-- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
-  同じ値は `muon.json` の `linux.desktop` でも指定できます。
+> 注釈: muonはViteプラグインを使わなくてもビルドできますが、その場合はいくつかの制約があります。
+> 詳細については別章を参照して下さい。
 
 ### パッケージ生成
 
@@ -333,7 +289,7 @@ npx muon pack --type nsis --target windows-amd64
 
 ---
 
-### CEFのダウンロードと更新
+## CEFのダウンロードと更新
 
 CEFのバイナリアセットファイルは非常にサイズが大きことで有名です。
 また、CEFに脆弱性が発見された場合はCEFバイナリが更新されることになり、muonアプリをそのまま配布しているとCEFバイナリの更新のためにmuonアプリ全体の更新に見舞われます。
@@ -368,11 +324,9 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 
 ---
 
-### Muon DevToolsを表示
+## Muon DevTools
 
 muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのDevToolsと同じ機能を持ち、アドボックな簡易デバッグや、パフォーマンスの測定、診断などを行うことが出来ます。
-
-![Muon DevTools](./images/devtools.png)
 
 Viteの開発起動 `vite dev` では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、既定では配布ビルドでMuon DevToolsを開くことは出来ません。
 `muon.json` に明示的に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
@@ -440,17 +394,50 @@ muonアプリがネイティブアプリケーションとして振る舞うた�
 例えば、muonウインドウ自身の細かい制御・ローカルファイルの読み書き・プロセスの環境情報の参照・プロセス起動、などの操作は、標準的なブラウザのJavaScript環境では公開されていません。
 muonはこのようなネイティブ機能へアクセスするための拡張可能なプラグイン構造を備えています。これを "muonプラグイン" と呼びます。
 
-以下の例では、muon内蔵プラグインを使用して、muonプロセスの環境変数のリストを取得します:
+> 注釈: muon Viteプラグインのことではありません。
 
-```javascript
-// 環境変数のリストを取得する
-var args = await window.muon.environments.getVariables();
+muonプラグインの基本的な機能は、muon内蔵プラグインが提供します。
+また、muonプラグインAPIを実装してmuonにロードさせることで、内蔵プラグイン同様に機能を拡張することも出来ます。
+
+以下の例では、muon内蔵プラグインを使用して、子プロセスを起動します。
+
+```ts
+// muon.executor名前空間のspawnを参照
+import { spawn } from "muon:executor";
+
+// spawn関数を使用
+const result = await spawn({
+  command: "node",
+  args: ["script.js"],
+});
 ```
 
 「確かにこれは簡単だ、早速試してみよう！」と思っても、これはそのままでは動作しません。
-理由は、すべてのプラグイン機能は、ホワイトリスト方式のフィルターで制御され、既定ではすべて無効となっているからです。
+理由は、すべてのプラグイン機能はホワイトリスト方式のフィルターで制御され、プラグイン自体の公開許可と、import元JavaScriptへのcapability許可の両方が必要だからです。
 
-ホワイトリストは `muon.json` で定義できます:
+まず、Viteプラグイン側で、どのソースファイルからどのプラグイン関数をimportできるかを指定します:
+
+```ts
+import { defineConfig } from 'vite';
+import muon from 'muon-ui/vite';
+
+export default defineConfig({
+  plugins: [
+    muon({
+      pluginAccess: {
+        imports: [
+          {
+            from: ["src/native/**"],
+            allow: ["muon.executor.spawn"],
+          },
+        ],
+      },
+    }),
+  ],
+});
+```
+
+次に、`muon.json` でプラグイン関数自体を公開します:
 
 ```json
 {
@@ -459,7 +446,7 @@ var args = await window.muon.environments.getVariables();
       {
         "name": "internal",
         "allow": [
-          "muon.environments.getVariables"
+          "muon.executor.spawn"
         ]
       }
     ]
@@ -467,24 +454,56 @@ var args = await window.muon.environments.getVariables();
 }
 ```
 
-`getVariables()` は、`muon.environments` 名前空間に配置されている、muon内蔵プラグインによる関数です。
-これを呼び出し可能にするには、`name` に `"internal"`を、`allow` に `"muon.environments.getVariables"` と指定します。
-これでmuonを起動し、DevToolsを開いてコンソールで試せば、結果が得られるでしょう:
+`spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
+これを呼び出し可能にするには、`name` に `"internal"`を、`allow` に `"muon.executor.spawn"` と指定します。
+
+上記の方法でmuonプラグインを参照することは `validate` モードと呼びますが、
+手動構成することによる `simple` モードも存在します:
+
+```json
+{
+  "browser": {
+    "plugin": {
+      "mode": "simple",
+      "allow": ["asset://main/**"]
+    }
+  }
+}
+```
+
+`simple` モードでは、 `window` オブジェクトから名前空間オブジェクトを辿ることで、muonプラグインの関数群にアクセスできます:
+
+```javascript
+// 子プロセスを起動する
+var result = await window.muon.executor.spawn({
+  command: "node",
+  args: ["script.js"],
+});
+```
+
+この方法であれば、muon Viteプラグインによるビルドプロセスを適用する必要がないため、
+Muon DevToolsを開いてコンソールで直接試すことが出来ます:
 
 ![muon API](./images/muon-api.png)
 
-- `muon.json` の変更はHMRで追従出来ません。リサイクル (`Ctrl+F12`) するか、muonアプリを終わらせて再度起動して下さい。
+> 注釈: muonでは `validate` モードを使用することを強く推奨します。
+> 理由は、 `validate` モードであれば、muonプラグイン関数へのアクセスをホワイトリストフィルタで制限することが出来るからです。
+> 例えば、muonプラグインの関数を呼び出せるのは、あなたが書いた `myfoobar.ts` ファイルと `foobar` NPMパッケージのみ、
+> のように制約させることが出来て、その他のJavaScriptコードからmuonプラグイン関数を呼び出すことが難しくなります。
+> これにより、NPMのサプライチェーン攻撃に対する耐性を向上させることが出来ます。
 
 muonプラグインで公開されるすべての関数は、`Promise` を返却する関数として定義されていることに注意して下さい。
 一般的に、 `Promise` を返す非同期関数の結果を得るには、 `await` する、と覚えておけば良いでしょう。
 
 muonの内蔵プラグインから提供されるAPIは、 `muon.d.ts` によるTypeScriptの型定義が提供されています。
 これはmuonプラグインをインストールした時点で参照可能となっているため、
-TypeScriptを使用してコードを記述する場合は、型チェックによる恩恵を得られます:
+TypeScriptを使用してコードを記述する場合は、 `muon:executor` などのvirtual module importや、`window.muon` 階層に対して型チェックによる恩恵を得られます:
 
 ![intellisense](./images/intellisense.png)
 
-- 注意: すべてのプラグイン関数は、ホワイトリストで指定された関数のみが使用可能となるため、フィルタされた関数は未定義となります。
+- 注意: すべてのプラグイン関数は、ホワイトリストで指定された関数のみが使用可能となります。
+  `validate` モードでは、許可されていないimportはバンドル時に解決できず、capabilityが一致しない呼び出しは実行時に拒否されます。
+  `simple` モードでは、フィルタされた関数は未定義となります。
   しかし、`muon.d.ts` の型定義は、それらのAPIが存在するものと仮定して定義されているため、
   ホワイトリストへの指定が漏れていると実行時エラーとなることに注意が必要です。
 
@@ -582,7 +601,62 @@ assets/
 
 ---
 
-### CEFバージョンとCEF APIバージョン (Advanced topics)
+## muon CLI
+
+muonは基本的にViteプラグインと共に使用することを想定していますが、Viteプラグインを使用しないで開発することも出来ます。その場合は、 `muon` CLIコマンドを使用します。
+
+### muon runで直接起動
+
+Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon run` を使用できます。
+
+```bash
+npx muon run
+```
+
+- `muon run` はHTTPサーバーを起動せず、アセットディレクトリの内容をそのまま参照可能にします。そのため、`muon run`ではHMRは動作しません。
+- アセットディレクトリは、カレントディレクトリの `assets/` 配下か、あるいは `--assets` で指定されたディレクトリを参照します。
+- `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
+- CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon run` では無視されます。
+- Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
+
+### 配布用ビルド
+
+配布用ビルド生成は、 `muon` CLIからも実行できます。
+
+`vite.config.*` にmuon Viteプラグインが含まれている場合、 `muon build` は `vite build` と同じビルドシーケンスを使用します。
+つまり、Viteプラグインの `build` オプションを既定値として使い、Viteの `build.outDir` を `asset://main/` として配布用ディレクトリにまとめます。
+
+同じ項目をCLIオプションで指定した場合はCLI側が優先されます。
+
+```bash
+npx muon build
+```
+
+muon Viteプラグインが無い場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
+この場合、Viteプラグインによるvirtual module解決は行われないため、Vite連携の `validate` モードと同等には扱われません（後述）。
+
+この場合のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
+`asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
+アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
+
+ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
+muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
+
+ビルド時に生成されるmuonアプリバイナリに指定する名称やアイコンなどのオプション指定例を示します:
+
+```bash
+npx muon build --windows-icon icons/app.png --windows-version 1.2.3
+npx muon build --linux-icon icons/app.png --linux-name "My App"
+```
+
+- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
+  同じ値は `muon.json` の `windows.resource` でも指定できます。
+- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
+  同じ値は `muon.json` の `linux.desktop` でも指定できます。
+
+---
+
+## CEFバージョンとCEF APIバージョン (Advanced topics)
 
 CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
 
@@ -625,7 +699,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 
 `compat-latest` や `same-major-latest` はABI互換を確認しますが、Chromium/CEFのブラウザ機能としての挙動差までは保証しません。アプリケーション側で対象CEFの検証を行ってから配布して下さい。
 
-### CEFバイナリ更新の詳細 (Advanced Topics)
+## CEFバイナリ更新の詳細 (Advanced Topics)
 
 この情報は、CEFバイナリアップデート処理の詳細な情報ですが、
 問題が発生した場合の分析のために示しています。
@@ -641,7 +715,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 | `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
 
 `catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
-`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+bootstrapプラグインの `triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
 
 `muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`bootstrap.defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
 
@@ -663,7 +737,7 @@ CEFのバイナリは公式のカタログファイルをダウンロードし�
 
 ---
 
-### ウインドウ間連携の制約 (Advanced topics)
+## ウインドウ間連携の制約 (Advanced topics)
 
 `browser.allowUnsafeJavaScriptParentAccess` は、ページから別のページを（別のウインドウで）開いた場合などに、
 子孫のページから親のページのオブジェクトにアクセス出来るかどうかをフィルタします。
@@ -722,7 +796,7 @@ await window.opener.muon.fs.writeTextFile(
 
 ---
 
-### ローカルアセットの権限 (Advanced topics)
+## ローカルアセットの権限 (Advanced topics)
 
 `asset://` URLスキームは、証明書が存在しないことを除き、 `https://` と同様に独立した信頼性のあるオリジンとして扱われます。
 このことは、CORSやCSRFに影響を与える可能性があるため、厳密な設計を行う場合は考慮が必要です。
@@ -741,8 +815,10 @@ muon上でのページ権限を細かく調整することも可能です。以�
 {
   "browser": {
     "plugin": {
-      // muonプラグインは `asset://main/` のページでのみ使用可能にする
-      // 例えば、 `asset://sub/` のページではmuonプラグインを参照できない
+      // 既定では、capability import経由のvalidateモードで使用する
+      "mode": "validate",
+      // muonプラグインブリッジは `asset://main/` のページでのみ使用可能にする
+      // 例えば、 `asset://sub/` のページではmuonプラグインブリッジを参照できない
       "allow": ["asset://main/**"]
     }
   }
@@ -751,7 +827,7 @@ muon上でのページ権限を細かく調整することも可能です。以�
 
 ---
 
-### ローカルアセットのパッキング (Advanced topics)
+## ローカルアセットのパッキング (Advanced topics)
 
 ローカルアセットファイル群は、「パッキング」を行って、単一のファイルにまとめることが出来ます。
 ファイルが散在しないようにしたり、圧縮してストレージサイズを削減し、破損の検証を可能にします。
@@ -807,7 +883,7 @@ assets.zip
 
 ---
 
-### オリジンベースのアクセス許可 (Advanced Topics)
+## オリジンベースのアクセス許可 (Advanced Topics)
 
 `network.allow` リストを使えば、任意のクラウドサービスも使えるようになると考えられますが、注意点があります。
 
@@ -837,10 +913,11 @@ assets.zip
 
 - これは、一種の権限移譲であり、このリストに追加するサーバーは、無条件に信頼するという前提であることに注意して下さい。
   例えば、 `authorizedOrigin` で指定した外部サーバーが参照する別のサーバーのアセットが、悪意ある第三者にクラックされた場合は、その影響を受ける可能性があります。
-- `browser.plugin.allow` によるフィルタが正しく指定されていることも重要です。
+- `browser.plugin.allow` と `browser.plugin.mode` によるフィルタが正しく指定されていることも重要です。
   仮にここで許可されたオリジンのページであっても、それはネットワークアクセスが許可されるだけです。
-  `browser.plugin.allow` でフィルタされていれば、muonのプラグインの関数群にはアクセスできなくなります。
-  既定では `browser.plugin.allow` はローカルアセットのみ参照 (`asset://main/**`) するため、muonプラグイン関数は外部サーバーが提供するページに露出しません。
+  `browser.plugin.allow` でフィルタされていれば、muonのプラグインブリッジにはアクセスできなくなります。
+  さらに既定の `browser.plugin.mode` は `"validate"` であるため、許可されたページであっても、バンドラーが生成したcapability importなしにプラグイン関数を呼び出すことはできません。
+  既定では `browser.plugin.allow` はローカルアセットのみ参照 (`asset://main/**`) するため、muonプラグインブリッジは外部サーバーが提供するページに露出しません。
 
 ---
 
@@ -913,7 +990,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
 | `initialTitleBarIcon`                 | `string`                                  | 内蔵Muonアイコン          | 起動時にタイトルバーへ表示するPNGアイコンのアセットパスです。                            |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
-| `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
+| `plugin.mode`                         | `"validate" \| "simple"`                  | `"validate"`              | プラグインAPIの露出方式です。                                                            |
+| `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | プラグインAPIブリッジをページへ注入するURLの許可リストです。                              |
+| `plugin.capabilities`                 | `readonly object[]`                       | `[]`                      | `validate` モードで使用するcapabilityポリシーです。通常はViteプラグインが生成します。      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
 
 - `profile` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
@@ -950,8 +1029,15 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用できます。
   キーには `f1` から `f24`, `a` から `z`, `0` から `9`, `plus`, `equal`, `minus`, `backspace`, `tab`, `enter`/`return`, `escape`/`esc`, `space`, `insert`, `delete`/`del`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` を使用できます。
   空文字列、修飾キーだけの指定、同一ショートカットの重複は設定エラーになります。
-- `browser.plugin.allow` は、ページにプラグインAPIを注入するかどうかだけを制御します。
+- `browser.plugin.mode` は、プラグインAPIのページ側露出方式を指定します。
+  `"validate"` では、Viteなどのバンドラーが生成したcapability付きvirtual module importからだけプラグイン関数を呼び出せます。
+  `"simple"` では、従来通り `window.muon` とその下の名前空間オブジェクトをページに公開します。
+- `browser.plugin.allow` は、ページにプラグインAPIブリッジを注入するかどうかだけを制御します。
+  `"validate"` ではcapability呼び出し用の非列挙ブリッジ、`"simple"` では `window.muon` 階層が注入対象です。
   ページやサブリソースを実際に読み込めるかどうかは、別途 `network.allow` で許可する必要があります。
+- `browser.plugin.capabilities` は、`"validate"` モードでcapability IDごとに呼び出せるプラグイン関数パスを制限します。
+  Viteプラグインを使う場合は `pluginAccess.imports` から自動生成されるため、通常は手で書く必要はありません。
+  Viteプラグインを使わない直接 `muon build` では、このcapability生成は行われません。
 - `allowUnsafeJavaScriptParentAccess` は安全性を下げる互換設定です。通常、この項目を指定する必要はありません。
   未指定または空配列の場合、popupから親ページへのJavaScriptアクセスは許可されません。
   この場合のpopupは `noopener` 相当の独立ウインドウとして開かれ、 `window.open()` は `null` を返します。
@@ -1099,7 +1185,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   `muon.fs.*` のようなパターンを指定できます。
   `*` は `.` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
   パターンの大文字小文字は区別されます。
-  ページ側で関数を呼び出せるようにするには、 `plugin.plugins[].allow` に加えて、 `browser.plugin.allow` で対象ページへのAPI注入も許可する必要があります。
+  ページ側で関数を呼び出せるようにするには、 `plugin.plugins[].allow` に加えて、 `browser.plugin.allow` で対象ページへのAPIブリッジ注入も許可する必要があります。
+  `browser.plugin.mode` が `"validate"` の場合は、Viteプラグインなどのバンドラー連携で `pluginAccess.imports` からcapabilityを生成し、対象JavaScriptからvirtual moduleをimportします。
+  `"simple"` の場合は、従来通り `window.muon` 階層から呼び出します。
 
 ### logキー
 
@@ -1176,6 +1264,7 @@ export default defineConfig({
 | `cefPath`        | `string`              | muon-builderの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にMuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
+| `pluginAccess`   | `false \| object`     | `validate` (`imports: []`)  | プラグインAPIの露出方式とvirtual module importの許可設定です。       |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
 - `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` に影響します。
@@ -1187,6 +1276,42 @@ export default defineConfig({
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
+
+### pluginAccessキー
+
+`pluginAccess` を省略した場合、Viteプラグインは `browser.plugin.mode` を `"validate"` として扱います。
+この場合、`window.muon` は公開されません。
+プラグイン関数は、`pluginAccess.imports` に一致するvirtual module importからだけ呼び出せます。
+`pluginAccess` 省略時は `imports: []` 相当です。
+
+```ts
+muon({
+  pluginAccess: {
+    imports: [
+      {
+        from: ["src/native/**"],
+        allow: ["muon.executor.spawn"],
+      },
+    ],
+  },
+});
+```
+
+| キー                  | 型                  | 既定値 | 概要                                                               |
+| :-------------------- | :------------------ | :----- | :----------------------------------------------------------------- |
+| `imports`             | `readonly object[]` | `[]`   | importerごとのcapability import許可リストです。                    |
+| `imports[].from`      | `readonly string[]` | なし   | Vite project rootからの相対importerパスglobです。                  |
+| `imports[].allow`     | `readonly string[]` | なし   | そのimporterに許可するプラグイン関数パスglobです。                 |
+
+- virtual module名は、プラグイン名前空間の最初の要素だけを `:` で区切った名前です。
+  例えば `muon.executor` は `muon:executor`、`muon.fs.dialogs` は `muon:fs.dialogs`、`foobar.baz` は `foobar:baz` です。
+- `imports[].from` と `imports[].allow` はどちらもホワイトリストです。
+  import元ファイルと関数パスの両方に一致した場合だけ、Viteがvirtual moduleを解決します。
+- `pluginAccess.imports` はimport元JavaScriptへの許可であり、実際にプラグイン関数を公開するには、別途 `muon.json` の `plugin.plugins[].allow` で同じ関数を許可する必要があります。
+- Viteプラグイン経由の `vite dev` と `vite build` では、`pluginAccess.imports` から `browser.plugin.capabilities` が生成されます。
+  Viteプラグインを使わない直接 `muon build` では、このcapability生成は行われません。
+- 従来の `window.muon` 階層を使う場合は、`pluginAccess: false` を指定します。
+  この場合、Viteプラグインが生成する実行時設定は `browser.plugin.mode: "simple"` になります。
 
 ### buildキー
 
@@ -1231,6 +1356,15 @@ export default defineConfig({
 ---
 
 ## muon内蔵プラグインリファレンス
+
+この章では、プラグイン名前空間と関数パスを分かりやすく示すため、`window.muon.*` 形式でAPIを表記しています。
+これは `browser.plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
+既定の `validate` モードでは、対応するvirtual moduleから関数をimportして使用します。
+例えば `window.muon.executor.spawn` は、`pluginAccess.imports` で `muon.executor.spawn` を許可したうえで、`muon:executor` から `spawn` をimportします。
+
+```ts
+import { spawn } from "muon:executor";
+```
 
 ### muon.browser名前空間
 

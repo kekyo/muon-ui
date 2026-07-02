@@ -170,27 +170,36 @@ npm run dev
 
 ![Get started](./images/get-started.png)
 
-ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
+ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。例えば、 `src/App.tsx` 内の `<h1>Get started</h1>` の行を `<h1>Get started with Muon!</h1>` に書き換えて保存すれば、瞬時にmuonウインドウ側の表示も書き換わるはずです。
 
 `npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動でき、`Ctrl+F12` キーでmuonをリサイクル再起動できます。
 また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
 
+そして、このページの中央に配置されてるカウンタボタン "Count is 0" をクリックすると、カウント値が増加することが確認できるはずです。
+これで、ViteテンプレートのReactが正しく動作していることが確認できます。
+
+また、 "Explore Vite" のようなボタンをクリックした場合、新たなウインドウが開いて、以下のような「がっかり」するページが表示されます:
+
+![Forbidden](./images/forbidden.png)
+
+これこそが、muonの特徴である、ネットワークアクセスのフィルタが機能している証拠です。
+このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonのデフォルトでは、ローカルのアセットにのみアクセスが許可されているので、それ以外のサイトコンテンツへのアクセスが遮断されているのです。
+
+このホワイトリストの指定方法は後で章で詳しく示します。
+
 ### muon devで直接起動
 
 Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon dev` を使用できます。
-`muon dev` はHTTPサーバーを起動せず、`asset.sourcePath` を開発用に上書きしてmuonをフォアグラウンド起動します。
-そのため、ViteのHMRは動作しません。
 
 ```bash
-muon dev
+npx muon dev
 ```
 
-開発アセットは `--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
-`--assets` はローカルディレクトリを指定し、相対パスはproject rootから解決されます。
-
-`vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
-CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon dev` では無視されます。
-Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
+- `muon dev` はHTTPサーバーを起動せず、アセットディレクトリの内容をそのまま参照可能にします。そのため、`muon dev`ではHMRは動作しません。
+- アセットディレクトリは、カレントディレクトリの `assets/` 配下か、あるいは `--assets` で指定されたディレクトリを参照します。
+- `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
+- CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon dev` では無視されます。
+- Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
 
 ---
 
@@ -239,7 +248,7 @@ export default defineConfig({
 - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windowsターゲット: `windows-i686`, `windows-amd64`
 
-### 配布用ビルドとパッケージ生成
+### 配布用ビルド (CLI)
 
 配布用ビルドや配布用パッケージ生成は、 `muon` CLIからも実行できます。
 
@@ -270,6 +279,8 @@ npx muon build --linux-icon icons/app.png --linux-name "My App"
   同じ値は `muon.json` の `windows.resource` でも指定できます。
 - Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
   同じ値は `muon.json` の `linux.desktop` でも指定できます。
+
+### パッケージ生成
 
 インストーラーやアーカイブなどの配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します:
 
@@ -363,8 +374,8 @@ muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのD
 
 ![Muon DevTools](./images/devtools.png)
 
-Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
-`muon.json` に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
+Viteの開発起動 `vite dev` では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、既定では配布ビルドでMuon DevToolsを開くことは出来ません。
+`muon.json` に明示的に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
 
 ```json
 {
@@ -376,7 +387,7 @@ Viteの開発起動では、muonプラグインが開発補助として `F12` �
 }
 ```
 
-これは、`F12` キーをDevTools表示に割り当てた例です。他のキーを指定することや、`ctrl+f12` のように組み合わせることも出来ます。
+これは、`F12` キーをDevTools表示に割り当てた例です。他のキーを指定することや、`shift+f12` のように組み合わせることも出来ます。
 
 DevToolsは他の方法でも表示できます。
 CDP (Chromium DevTools Protocol)というリモートデバック機能を使用すれば、ChromiumやChromeを使用して、リモートでDevToolsを表示できます。
@@ -426,7 +437,7 @@ CDPが使用できると他のデバッガも使用できるようになりま�
 ここまでで、muonアプリを開発するための開発ライフサイクルを説明しましたが、
 muonアプリがネイティブアプリケーションとして振る舞うためには、少し機能が足りません。
 
-例えば、muonウインドウ自身の制御・ローカルファイルの読み書き・プロセスの環境情報の参照・プロセス起動、などの操作は、標準的なブラウザのJavaScript環境では公開されていません。
+例えば、muonウインドウ自身の細かい制御・ローカルファイルの読み書き・プロセスの環境情報の参照・プロセス起動、などの操作は、標準的なブラウザのJavaScript環境では公開されていません。
 muonはこのようなネイティブ機能へアクセスするための拡張可能なプラグイン構造を備えています。これを "muonプラグイン" と呼びます。
 
 以下の例では、muon内蔵プラグインを使用して、muonプロセスの環境変数のリストを取得します:
@@ -462,7 +473,7 @@ var args = await window.muon.environments.getVariables();
 
 ![muon API](./images/muon-api.png)
 
-- `muon.json` の変更はHMRで追従出来ません。muonアプリを終わらせて再度起動して下さい。
+- `muon.json` の変更はHMRで追従出来ません。リサイクル (`Ctrl+F12`) するか、muonアプリを終わらせて再度起動して下さい。
 
 muonプラグインで公開されるすべての関数は、`Promise` を返却する関数として定義されていることに注意して下さい。
 一般的に、 `Promise` を返す非同期関数の結果を得るには、 `await` する、と覚えておけば良いでしょう。

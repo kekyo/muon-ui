@@ -589,7 +589,7 @@ const createCliCommand = (): Command => {
     });
 
   const devCommand = program
-    .command("dev")
+    .command("run")
     .description("Launch Muon directly with local development assets")
     .option("--muon-path <path>", "Muon runtime file root")
     .option("--cef-path <path>", "CEF file root")

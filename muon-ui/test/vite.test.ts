@@ -388,7 +388,7 @@ const writeDevAssets = async (root: string): Promise<string> => {
   await mkdir(join(assetsPath, "main"), { recursive: true });
   await writeFile(
     join(assetsPath, "main", "index.html"),
-    "<!doctype html><title>muon dev test</title>",
+    "<!doctype html><title>muon run test</title>",
   );
   return assetsPath;
 };
@@ -886,7 +886,7 @@ describe("muon Vite plugin", () => {
   });
 });
 
-describe("muon dev CLI", () => {
+describe("muon run CLI", () => {
   it("launches Muon directly without a Vite config", async () => {
     const root = await createTemporaryDirectory("muon-dev-direct-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
@@ -899,7 +899,7 @@ describe("muon dev CLI", () => {
       await createTemporaryDirectory("muon-dev-cache-");
 
     const result = await runMuonCli(root, [
-      "dev",
+      "run",
       "--muon-path",
       muonDirectory,
       "--cef-path",
@@ -955,7 +955,7 @@ describe("muon dev CLI", () => {
     });
   });
 
-  it("restarts Muon when the direct dev process requests recycle", async () => {
+  it("restarts Muon when the direct run process requests recycle", async () => {
     const root = await createTemporaryDirectory("muon-dev-recycle-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
@@ -967,7 +967,7 @@ describe("muon dev CLI", () => {
       await createTemporaryDirectory("muon-dev-cache-");
 
     const result = await runMuonCli(root, [
-      "dev",
+      "run",
       "--muon-path",
       muonDirectory,
       "--cef-path",
@@ -1050,7 +1050,7 @@ describe("muon dev CLI", () => {
       await createTemporaryDirectory("muon-dev-cache-");
 
     const result = await runMuonCli(root, [
-      "dev",
+      "run",
       "--assets",
       assetsPath,
       "--json",
@@ -1114,7 +1114,7 @@ describe("muon dev CLI", () => {
       await createTemporaryDirectory("muon-dev-cache-");
 
     const result = await runMuonCli(root, [
-      "dev",
+      "run",
       "--muon-path",
       cliMuonDirectory,
       "--cef-path",
@@ -1164,7 +1164,7 @@ describe("muon dev CLI", () => {
       await createTemporaryDirectory("muon-dev-cache-");
 
     const result = await runMuonCli(root, [
-      "dev",
+      "run",
       "--muon-path",
       muonDirectory,
       "--cef-path",
@@ -1194,7 +1194,7 @@ describe("muon dev CLI", () => {
       ].join("\n"),
     );
 
-    const result = await runMuonCli(root, ["dev", "--json"]);
+    const result = await runMuonCli(root, ["run", "--json"]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain(
@@ -1210,7 +1210,7 @@ describe("muon dev CLI", () => {
     await writeFakeMuonSource(muonDirectory, outputDirectory);
 
     const result = await runMuonCli(root, [
-      "dev",
+      "run",
       "--muon-path",
       muonDirectory,
       "--cef-path",
@@ -1221,7 +1221,7 @@ describe("muon dev CLI", () => {
     ]);
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Muon dev asset source does not exist");
+    expect(result.stderr).toContain("Muon run asset source does not exist");
     await expect(
       access(join(outputDirectory, "override.json")),
     ).rejects.toThrow();

@@ -815,7 +815,8 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain("Usage: muon [options] [command]");
     expect(stdout).toContain("build");
-    expect(stdout).toContain("dev");
+    expect(stdout).toMatch(/\n\s+run\s+/);
+    expect(stdout).not.toMatch(/\n\s+dev\s+/);
     expect(stdout).toContain("pack");
     expect(stdout).toContain("init");
     expect(stdout).toContain("prepare");

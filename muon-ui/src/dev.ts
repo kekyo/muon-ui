@@ -373,11 +373,11 @@ const assertDevelopmentAssetDirectory = async (
   try {
     await access(assetSourcePath, constants.F_OK);
   } catch {
-    throw new Error(`Muon dev asset source does not exist: ${assetSourcePath}`);
+    throw new Error(`Muon run asset source does not exist: ${assetSourcePath}`);
   }
 
   throw new Error(
-    `Muon dev asset source must be a directory: ${assetSourcePath}`,
+    `Muon run asset source must be a directory: ${assetSourcePath}`,
   );
 };
 
@@ -525,7 +525,7 @@ export const runMuonDev = async (
     options.assetSourcePath,
     projectConfig,
   );
-  const overrideConfigPath = join(root, ".muon", "dev", "muon.dev.json");
+  const overrideConfigPath = join(root, ".muon", "run", "muon.run.json");
 
   await ensureMuonGitignoreEntry(root);
 

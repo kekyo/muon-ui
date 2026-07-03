@@ -22,7 +22,7 @@ CEFをバックエンドで使用する、マルチプラットフォームGUI�
 
 muon (ミューオン, /ˈmjuːɒn/) は、CEF (Chromium Embedded Framework) を使用する、マルチプラットフォームGUIアプリケーション基盤です。
 あなたは恐らく、 [Electron](https://www.electronjs.org/) に代表される同種のプロジェクトをいくつか聞いたことがあるかもしれません。
-
+ 
 乱暴に言えば、muonはそれらと同じポジションの基盤ソフトウェアです。
 つまり、ローカルで動作するGUIアプリケーションを、ウェブアプリケーションとして実装出来るソフトウェアです。
 
@@ -177,7 +177,7 @@ npm run dev
 ![Forbidden](./images/forbidden.png)
 
 そして、これこそが、muonの特徴である、ネットワークアクセスのホワイトリストフィルタが機能している証拠です。
-このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonのデフォルトでは「ローカルのアセットのみ」アクセスが許可されているので、
+このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonの既定では「ローカルのアセットのみ」アクセスが許可されているので、
 それ以外のサイトコンテンツへのアクセスが遮断されているのです。
 このホワイトリストの指定方法は別章で詳しく示します。
 
@@ -211,30 +211,26 @@ export default defineConfig({
     muon({
       build: {  // ビルドオプションの指定
         targets: ['linux-amd64', 'windows-amd64'],
-        outputRoot: 'release',
-        appName: 'my-app',
-        appId: 'com.example.my-app',
+        iconPath: 'icons/app.png',
         linuxDesktop: {
           name: 'My App',
-          iconPath: 'icons/app.png',
-          categories: ['Utility'],
         },
+        windowsResource: {
+          productName: 'My App',
+        }
       },
     }),
   ],
 });
 ```
 
-既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
-実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
-
-指定可能なターゲット名は、以下のとおりです:
+`build.targets` に指定可能なターゲット名は、以下のとおりです:
 
 - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windowsターゲット: `windows-i686`, `windows-amd64`
 
-> 注釈: muonはViteプラグインを使わなくてもビルド出来ますが、その場合はいくつかの制約があります。
-> 詳細については別章を参照して下さい。
+既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、スコープ付きパッケージ名の場合はスコープを除いた名前を使用します。
+また、`build.iconPath` にアイコンとなるPNGフォーマットの画像を配置しておけば、muonアプリのアイコンとして機能するようになります。
 
 ### パッケージ生成
 
@@ -282,7 +278,7 @@ npx muon pack --type nsis --target windows-amd64
   アンインストール時には `%LOCALAPPDATA%\<appId>` のruntime stateも削除します。
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
-- CLIオプションは、 `muon build` で指定できる `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
+- CLIオプションは、 `muon build` で指定できる `--icon`, `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
   `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書き出来ます。
   `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
   例えば screw-up 1.35.0以降でGit由来のversionを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。
@@ -328,8 +324,10 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 
 muonは、Muon DevToolsを表示出来ます。これは、ChromiumやChromeのDevToolsと同じ機能を持ち、アドボックな簡易デバッグや、パフォーマンスの測定、診断などを行うことが出来ます。
 
-Viteの開発起動 `vite dev` では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、既定では配布ビルドでMuon DevToolsを開くことは出来ません。
-`muon.json` に明示的に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
+`vite dev` でViteから起動した場合は、`F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドが自動的に有効化されますが、
+配布ビルド後のmuonアプリは、既定ではMuon DevToolsを開くことは出来ません。
+
+`muon.json` に明示的に以下の定義を加えることで、ビルド後のmuonアプリでもMuon DevToolsを表示させることが出来ます:
 
 ```json
 {
@@ -440,12 +438,12 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
 }
 ```
 
-- `mode` は、プラグインアクセスの方式を決定します。省略可能で、デフォルトは `validate` です。
+- `mode` は、プラグインアクセスの方式を決定します。省略可能で、既定は `validate` です。
 - `pages` は、muonプラグインへのアクセスを可能にするページのURLです。
-  デフォルトでは、 `asset://main/**` にのみ許可されます。これ以外のページからは、muonプラグイン関数にアクセス出来ません。
+  既定では、 `asset://main/**` にのみ許可されます。これ以外のページからは、muonプラグイン関数にアクセス出来ません。
 - `name` は、プラグイン名です。内蔵プラグインに限り、特別な `"internal"` を使用します。
   その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
-  外部プラグインでは、任意で `sha1` に40桁の16進SHA-1を指定すると、ライブラリ読み込み前にファイル内容が検証されます。
+  外部プラグインでは、任意で `SHA1` に40桁の16進SHA-1を指定すると、ライブラリ読み込み前にファイル内容が検証されます。
   `spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
   これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
@@ -487,7 +485,7 @@ Muon DevToolsを開いてコンソールで直接試すことが出来ます:
 
 |モード|Viteプラグイン|ページフィルタ|アクセス元フィルタ|詳細|
 |:----|:----|:----|:----|:----|
-|`validate`|必要|可能|可能|デフォルトです。指定省略時はこのモードが使用されます。このモードは、muonプラグインの関数をインポートできるコードを、明示的に指定したソースファイルまたはNPMパッケージでフィルタすることが出来ます|
+|`validate`|必要|可能|可能|既定です。指定省略時はこのモードが使用されます。このモードは、muonプラグインの関数をインポートできるコードを、明示的に指定したソースファイルまたはNPMパッケージでフィルタすることが出来ます|
 |`simple`|不要|可能|不可|このモードは、muonプラグインの名前空間オブジェクトと関数を `window` オブジェクト下に直接挿入します。単純ですが、 `validate` モードのように、参照元のコードからのアクセスでフィルタすることは出来ません|
 
 > 注釈: muonでは `validate` モードを使用することを強く推奨します。
@@ -624,7 +622,7 @@ Viteプラグインを使用する場合と異なり、アセットホスト名�
 詳しくはローカルアセットの権限の章を参照して下さい。
 
 > 注釈: Viteプラグインを使用した場合でもアセットホスト名分離は機能しますが、
-> デフォルトでViteが出力したコンテンツファイル群はすべて `main/` 配下に配置されるため、
+> 既定でViteが出力したコンテンツファイル群はすべて `main/` 配下に配置されるため、
 > 異なるアセットホスト名を使用する場合は、Viteのビルドプロセスまたは手動で適切な構成を行う必要があります。
 
 ### 配布用ビルド
@@ -650,13 +648,16 @@ muon Viteプラグインが無い場合、 `muon build` の未指定ターゲッ
 ビルド時に生成されるmuonアプリバイナリに指定する名称やアイコンなどのオプション指定例を示します:
 
 ```bash
-npx muon build --windows-icon icons/app.png --windows-version 1.2.3
-npx muon build --linux-icon icons/app.png --linux-name "My App"
+npx muon build --icon icons/app.png --windows-version 1.2.3
+npx muon build --icon icons/app.png --linux-name "My App"
 ```
 
+- `--icon` はmuonアプリの静的アイコン指定です。Windows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースになります。
 - Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書き出来ます。
+  `--windows-icon` はWindowsターゲット専用のアイコンoverrideです。
   同じ値は `muon.json` の `windows.resource` でも指定出来ます。
 - Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書き出来ます。
+  `--linux-icon` はLinuxターゲット専用のアイコンoverrideです。
   同じ値は `muon.json` の `linux.desktop` でも指定出来ます。
 
 > 注釈: muon CLIを使用してビルドを行う場合は、virtual moduleの解決 (`import`によるmuonプラグインの参照) が出来ません。
@@ -880,9 +881,9 @@ assets.zip
 }
 ```
 
-- `asset.signature` はzipファイルのsha1ダイジェストを任意で固定する設定で、40桁の16進数文字列だけを指定出来ます。
+- `asset.signature` はzipファイルのSHA1ダイジェストを任意で固定する設定で、40桁の16進数文字列だけを指定出来ます。
   この値を指定した場合、`asset.salt` も16進数のバイト列として指定する必要があります。
-  muonは、zipファイルのバイト列にsaltのバイト列を追加したバイトストリームから、sha1ダイジェストを計算して比較します。
+  muonは、zipファイルのバイト列にsaltのバイト列を追加したバイトストリームから、SHA1ダイジェストを計算して比較します。
 - この機能は、クラッキングに対する耐タンパー性を保証するものではありません。
   攻撃からコンテンツを保護する必要がある場合は、muonの外部で担保する必要があります。
 
@@ -939,16 +940,16 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 一方で `muon build` では、設定ファイルが存在しない場合は `{}` 相当として扱いますが、存在するファイルが読み取れない場合やパースできない場合はビルドエラーになります。
 `--config` で明示した設定ファイルが存在しない場合もエラーです。
 
-以下は一例ですが、ファイルが存在しないか、全く何も定義しない `{ }` であっても、すべてデフォルト値として動作します:
+以下は一例ですが、ファイルが存在しないか、全く何も定義しない `{ }` であっても、すべて既定値として動作します:
 
 ```json
 {
+  "iconPath": "icons/app.png",
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
     "titleBarType": "muon",
     "initialTitleBarVisibility": true,
-    "initialTitleBarIcon": "icons/app.png",
     "keybinds": {
       "devtools": "f12",
       "zoomIn": "ctrl+plus",
@@ -996,6 +997,19 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 }
 ```
 
+### トップレベルキー
+
+| キー       | 型       | 既定値           | 概要                                                                 |
+| :--------- | :------- | :--------------- | :------------------------------------------------------------------- |
+| `iconPath` | `string` | Muon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                        |
+
+- `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
+- `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
+  `muon build` / Vite build / `muon pack` は解決済みPNGを `assets.zip` の `main/.muon/app-icon.png` に追加し、runtime内部設定として `browser.initialTitleBarIcon: "asset://main/.muon/app-icon.png"` を生成します。
+  既存アセットに同じエントリがある場合はビルドエラーになります。
+- Windowsだけ、またはLinuxだけ別アイコンにしたい場合は、それぞれ `windows.resource.iconPath`、`linux.desktop.iconPath` をoverrideとして指定します。
+- 実行中に通常ブラウザウインドウのタイトルバーアイコンだけを変更する場合は、`window.muon.browser.setTitleBarIcon()` を使用します。
+
 ### browserキー
 
 | キー                                  | 型                                        | 既定値                    | 概要                                                                                     |
@@ -1006,7 +1020,6 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
-| `initialTitleBarIcon`                 | `string`                                  | 内蔵Muonアイコン          | 起動時にタイトルバーへ表示するPNGアイコンのアセットパスです。                            |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
 
@@ -1025,19 +1038,13 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   リンク、ボタン、入力欄など通常のページ操作を受け取る要素には `-webkit-app-region: no-drag` を指定してください。
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
-- `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
-  省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
-  `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定出来ます。
-  このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
-  ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
-  Windowsでは、PNGとして読み込めるタイトルバーアイコンは実行中ウインドウのタスクバー/Alt-Tab用アプリアイコンにも反映されます。
-  exeファイル自体のアイコンリソースを配布ビルド時に差し替える場合は、`windows.resource.iconPath` にPNGファイルを指定します。
-  Windows用には256x256以上の正方形PNGを推奨します。非正方形のPNGは透明余白付きで正方形へ収められます。
-  - ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
-    ページ遷移時、faviconが存在しない場合や取得・変換できない場合は `initialTitleBarIcon`、または内蔵Muonアイコンへ戻ります。
-    favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
-    `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用出来ますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
-  - 注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
+- 起動時のタイトルバーアイコンは、配布ビルド時に `iconPath` から生成されます。
+  `muon build` / Vite build / `muon pack` の入力 `muon.json` に `browser.initialTitleBarIcon` を書くことは出来ません。
+  ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
+  ページ遷移時、faviconが存在しない場合や取得・変換できない場合は、生成済みの初期タイトルバーアイコン、または内蔵Muonアイコンへ戻ります。
+  favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
+  `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用出来ますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
+  Linuxでの`"native"`の場合は、タイトルバーに関する指定が正しく反映されない場合があります。
 - `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom`, `recycle` を指定出来ます。
   値は `"ctrl+shift+i"` のように、修飾キーとキーを `+` で連結した文字列です。
   修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用出来ます。
@@ -1047,51 +1054,6 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   未指定または空配列の場合、popupから親ページへのJavaScriptアクセスは許可されません。
   この場合のpopupは `noopener` 相当の独立ウインドウとして開かれ、 `window.open()` は `null` を返します。
   ページ側で `noopener` または `noreferrer` を指定した場合も、許可リストの内容に関係なく `window.opener` は `null` になります。
-
-### windowsキー
-
-`windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
-この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
-
-```json
-{
-  "windows": {
-    "resource": {
-      "iconPath": "icons/app.png",
-      "productName": "My App",
-      "fileDescription": "My App",
-      "companyName": "Example Inc.",
-      "version": "1.2.3",
-      "copyright": "Copyright Example Inc."
-    }
-  }
-}
-```
-
-| キー                   | 型       | 既定値                     | 概要                                                                     |
-| :--------------------- | :------- | :------------------------- | :----------------------------------------------------------------------- |
-| `resource.iconPath`    | `string` | Muon既定アイコン           | Windows launcherとNSIS installer/uninstallerに使用するPNGアイコンファイルです。 |
-| `resource.productName` | `string` | `package.json`名           | Windows version resourceの`ProductName`です。                            |
-| `resource.fileDescription` | `string` | `package.json.description` | Windows version resourceの`FileDescription`です。                  |
-| `resource.companyName` | `string` | `package.json.author`      | Windows version resourceの`CompanyName`です。                            |
-| `resource.version`     | `string` | `package.json.version`     | `FileVersion`/`ProductVersion`です。固定値は4要素に正規化されます。      |
-| `resource.copyright`   | `string` | `package.json.copyright`   | Windows version resourceの`LegalCopyright`です。                         |
-| `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
-| `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
-
-- `iconPath` は `.png` のみ受け付けます。MuonはWindows PE/NSISが必要とする`.ico`をビルド時に自動生成します。
-  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
-- 相対パスは、値を定義したファイルのディレクトリから解決されます。
-  CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
-- 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
-  ただし `muon pack` で `--package-version` を指定した場合、`resource.version` では `package.json.version` の位置に `--package-version` の値を使用します。
-  `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
-- `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
-  文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
-- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
-  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
-- `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
-  setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
 
 ### linuxキー
 
@@ -1118,11 +1080,11 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `desktop.desktopId`       | `string`   | `appId`                    | `.desktop` ファイル名、`StartupWMClass`、Wayland app ID、X11 WM_CLASSです。 |
 | `desktop.name`            | `string`   | `package.json`名           | ランチャーに表示されるアプリ名です。                                       |
 | `desktop.comment`         | `string`   | `package.json.description` | desktop entryの`Comment`です。                                             |
-| `desktop.iconPath`        | `string`   | Muon既定アイコン           | desktop entry用PNGアイコンファイルです。                                   |
+| `desktop.iconPath`        | `string`   | `iconPath`またはMuon既定アイコン | Linuxターゲットだけで使用するPNGアイコンoverrideです。                    |
 | `desktop.categories`      | `string[]` | `["Utility"]`              | desktop menu categoryです。                                                |
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
-- `iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
+- `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
 - `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
   `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
 - portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/<target>/` へstagingし、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
@@ -1134,7 +1096,54 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   既存のMuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリです。
-- 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `linux.desktop`、`package.json`、既定値です。
+- Linuxアイコンの解決順は、CLI/Vite optionの `linuxDesktop.iconPath` または `--linux-icon`、`muon.json` の `linux.desktop.iconPath`、統一 `iconPath`、`project.json.iconPath`、Muon既定アイコンです。
+- Linux desktop metadataの解決順はフィールドごとに、CLI/Vite option、`muon.json` の `linux.desktop`、`package.json`、既定値です。
+
+### windowsキー
+
+`windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
+この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
+
+```json
+{
+  "windows": {
+    "resource": {
+      "iconPath": "icons/app.png",
+      "productName": "My App",
+      "fileDescription": "My App",
+      "companyName": "Example Inc.",
+      "version": "1.2.3",
+      "copyright": "Copyright Example Inc."
+    }
+  }
+}
+```
+
+| キー                   | 型       | 既定値                     | 概要                                                                     |
+| :--------------------- | :------- | :------------------------- | :----------------------------------------------------------------------- |
+| `resource.iconPath`    | `string` | `iconPath`またはMuon既定アイコン | Windowsターゲットだけで使用するPNGアイコンoverrideです。                 |
+| `resource.productName` | `string` | `package.json`名           | Windows version resourceの`ProductName`です。                            |
+| `resource.fileDescription` | `string` | `package.json.description` | Windows version resourceの`FileDescription`です。                  |
+| `resource.companyName` | `string` | `package.json.author`      | Windows version resourceの`CompanyName`です。                            |
+| `resource.version`     | `string` | `package.json.version`     | `FileVersion`/`ProductVersion`です。固定値は4要素に正規化されます。      |
+| `resource.copyright`   | `string` | `package.json.copyright`   | Windows version resourceの`LegalCopyright`です。                         |
+| `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
+| `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
+
+- `resource.iconPath` は `.png` のみ受け付けます。MuonはWindows PE/NSISが必要とする`.ico`をビルド時に自動生成します。
+  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
+- 相対パスは、値を定義したファイルのディレクトリから解決されます。
+  CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
+- Windowsアイコンの解決順は、CLI/Vite optionの `windowsResource.iconPath` または `--windows-icon`、`muon.json` の `windows.resource.iconPath`、統一 `iconPath`、`project.json.iconPath`、Muon既定アイコンです。
+- Windows resource metadataの解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
+  ただし `muon pack` で `--package-version` を指定した場合、`resource.version` では `package.json.version` の位置に `--package-version` の値を使用します。
+  `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
+- `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
+  文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
+- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
+  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
+- `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
+  setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
 
 ### assetキー
 
@@ -1180,7 +1189,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `capabilities`               | `readonly object[]`           | `[]`                   | `validate` モードで使用するcapabilityポリシーです。通常はViteプラグインが生成します。 |
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
-| `plugins[].sha1`             | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1です。                           |
+| `plugins[].SHA1`             | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1です。                           |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -1188,7 +1197,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `plugins[].imports[].allow`    | `readonly string[]`         | なし                   | そのimportルールで許可するプラグイン関数パスglobです。                            |
 
 - `path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
-- `plugins[].sha1` は40桁の16進数文字列です。`internal` プラグインには指定できません。
+- `plugins[].SHA1` は40桁の16進数文字列です。`internal` プラグインには指定できません。
   指定された場合、muonは `.so` / `.dll` を読み込む前にファイルのSHA-1を計算し、一致しなければ起動に失敗します。
 - `mode` に `"validate"` を指定した場合、Viteなどのバンドラーが生成したcapability付きvirtual module importからだけプラグイン関数を呼び出せます。
   `"simple"` では、従来通り `window.muon` とその下の名前空間オブジェクトをページに公開します。
@@ -1346,7 +1355,7 @@ muon({
 | `pages`                      | `readonly string[]`           | `plugin.pages`         | プラグインAPIブリッジをページへ注入するURLの許可リストです。                      |
 | `plugins`                    | `readonly object[]`           | `plugin.plugins`       | 有効化するプラグインとimport許可のリストです。                                    |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
-| `plugins[].sha1`             | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1です。                           |
+| `plugins[].SHA1`             | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1です。                           |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimporterごとのcapability import許可リストです。        |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | Vite project rootからの相対importerパスglobです。                                  |
@@ -1382,6 +1391,7 @@ muon({
 | `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
+| `iconPath`         | `string`            | `muon.json`またはMuon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                                |
 | `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
 | `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
@@ -1399,6 +1409,8 @@ muon({
 - `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
   `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
   設定ファイルが存在しない場合は `{}` 相当として扱います。
+- `iconPath` は Vite project rootからの相対パスとして解決されます。
+  `windowsResource.iconPath` と `linuxDesktop.iconPath` は、それぞれのターゲットだけに適用されるoverrideです。
 - Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
   そのため、ビルド後のアセットは `asset://main/` から参照出来ます。
 - `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
@@ -1461,7 +1473,7 @@ import { spawn } from "muon:executor";
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
 - `setTitleBarIcon()` はアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
-  `path` には `initialTitleBarIcon` と同じ形式を指定します。
+  `path` には `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定します。
   `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を指定出来ます。
   `"native"` タイトルバーではPNG以外を指定するとPromiseが拒否されます。
 

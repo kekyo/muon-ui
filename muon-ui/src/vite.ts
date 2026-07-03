@@ -33,14 +33,15 @@ const getErrorMessage = (error: unknown): string =>
  */
 export interface MuonWindowsResourceOptions {
   /**
-   * Windows icon PNG file path.
+   * Windows-specific icon PNG file path override.
    *
    * @remarks Only `.png` files are accepted as app inputs. Muon generates the
    * required Windows `.ico` file automatically when updating PE resources or
-   * creating NSIS installers. Relative paths are resolved from the source that
-   * supplied the option.
-   * @defaultValue Uses `windows.resource.iconPath`, then the packaged
-   * `muon-256.png` icon.
+   * creating NSIS installers. Use top-level `iconPath` for a shared static
+   * application icon. Relative paths are resolved from the source that supplied
+   * the option.
+   * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
+   * icon.
    */
   iconPath?: string;
 
@@ -128,11 +129,13 @@ export interface MuonLinuxDesktopOptions {
   comment?: string;
 
   /**
-   * Linux desktop icon PNG file path.
+   * Linux-specific desktop icon PNG file path override.
    *
    * @remarks Only `.png` files are accepted as app inputs. Relative paths are
-   * resolved from the source that supplied the option.
-   * @defaultValue Uses the packaged `muon-256.png` icon when available.
+   * resolved from the source that supplied the option. Use top-level
+   * `iconPath` for a shared static application icon.
+   * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
+   * icon when available.
    */
   iconPath?: string;
 
@@ -200,6 +203,18 @@ export interface MuonViteBuildOptions {
    * uses an empty config when none exists.
    */
   configPath?: string;
+
+  /**
+   * Static application icon PNG file path.
+   *
+   * @remarks The icon is used for Windows PE/NSIS resources, Linux desktop
+   * entries, and the generated initial title bar icon asset. Target-specific
+   * icon paths in `windowsResource` or `linuxDesktop` override this value for
+   * that target.
+   * @defaultValue Uses top-level `muon.json` `iconPath`, `project.json`, then
+   * the packaged `muon-256.png` icon.
+   */
+  iconPath?: string;
 
   /**
    * Windows PE and NSIS resource metadata.
@@ -481,6 +496,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.configPath !== undefined) {
     options.configPath = buildOptions.configPath;
+  }
+  if (buildOptions.iconPath !== undefined) {
+    options.iconPath = buildOptions.iconPath;
   }
   if (buildOptions.windowsResource !== undefined) {
     options.windowsResource = buildOptions.windowsResource;

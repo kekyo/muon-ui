@@ -101,6 +101,14 @@ export interface MuonPackOptions {
    */
   configPath?: string;
   /**
+   * Static application icon PNG file path.
+   *
+   * @remarks Used for Windows PE/NSIS resources, Linux desktop entries, and
+   * the generated initial title bar icon asset unless a target-specific icon
+   * override is supplied.
+   */
+  iconPath?: string;
+  /**
    * File name used for the app launcher.
    */
   appName?: string;
@@ -873,8 +881,12 @@ export const packMuonApp = async (
     options.linuxDesktop,
     pluginBuildOptions.linuxDesktop,
   );
+  const iconPath = options.iconPath ?? pluginBuildOptions.iconPath;
   if (options.configPath !== undefined) {
     buildOptions.configPath = options.configPath;
+  }
+  if (iconPath !== undefined) {
+    buildOptions.iconPath = iconPath;
   }
   if (options.appName !== undefined) {
     buildOptions.appName = options.appName;
@@ -903,6 +915,7 @@ export const packMuonApp = async (
     muonConfig: windowsResourceConfig.config,
     muonConfigDirectory: windowsResourceConfig.directory,
     options: windowsResourceOptions,
+    appIconPath: iconPath,
     defaults: {
       productName: metadata.packageName,
       fileDescription: metadata.description,

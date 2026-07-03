@@ -49,6 +49,7 @@ import {
   type MuonLinuxDesktopOptions,
   type ResolvedMuonLinuxDesktop,
 } from "./linux-desktop.js";
+import { appIconAssetEntryName, appIconAssetUrl } from "./app-icon.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
@@ -137,6 +138,14 @@ export interface MuonBuildOptions {
    * Muon config path to embed.
    */
   configPath?: string;
+  /**
+   * Static application icon PNG file path.
+   *
+   * @remarks This icon is used as the shared source for Windows PE/NSIS,
+   * Linux desktop entries, and the generated initial title bar icon asset.
+   * Platform-specific icon paths override it for their target.
+   */
+  iconPath?: string;
   /**
    * Windows PE and NSIS resource metadata.
    *
@@ -275,6 +284,7 @@ export const buildMuonApp = async (
     buildConfig.config,
     options.runtimePluginConfig ?? { mode: "simple" },
   );
+  assertNoUserInitialTitleBarIcon(sourceConfig);
   const resolvedBuildConfig: BuildConfig = {
     ...buildConfig,
     config: sourceConfig,
@@ -292,6 +302,7 @@ export const buildMuonApp = async (
     muonConfig: sourceConfig,
     muonConfigDirectory: buildConfig.directory,
     options: options.windowsResource,
+    appIconPath: options.iconPath,
     defaults: {
       productName: appName,
       fileDescription: appName,
@@ -306,6 +317,7 @@ export const buildMuonApp = async (
     muonConfig: sourceConfig,
     muonConfigDirectory: buildConfig.directory,
     options: options.linuxDesktop,
+    appIconPath: options.iconPath,
     defaults: {
       desktopId: appId,
       name: resolveLinuxDesktopDefaultName(packageJson, appName),
@@ -636,6 +648,10 @@ const buildMuonTarget = async (input: {
     getLauncherFileName(input.appName, descriptor),
   );
   const assetZipPath = join(outputPath, "assets.zip");
+  const appIconPath =
+    descriptor.os === "windows"
+      ? input.windowsResource.iconPath
+      : input.linuxDesktop.iconPath;
 
   await verifyTargetInputs({
     sourceRuntimePath,
@@ -658,12 +674,14 @@ const buildMuonTarget = async (input: {
     input.assetInput,
     assetZipPath,
     input.salt,
+    [{ name: appIconAssetEntryName, data: await readFile(appIconPath) }],
   );
   const embeddedConfig = createEmbeddedConfig(
     input.sourceConfig,
     asset,
     input.appId,
     input.linuxDesktop.desktopId,
+    appIconAssetUrl,
   );
 
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
@@ -783,6 +801,7 @@ const writeAssetArchive = async (
   input: AssetInput,
   outputPath: string,
   salt: Buffer,
+  extraEntries: readonly ZipEntry[],
 ): Promise<MuonBuildAssetResult> => {
   const sourceStats = await statOrUndefined(input.sourcePath);
   if (sourceStats === undefined) {
@@ -790,9 +809,9 @@ const writeAssetArchive = async (
   }
 
   const archive = sourceStats.isDirectory()
-    ? await createAssetArchiveFromDirectory(input)
+    ? await createAssetArchiveFromDirectory(input, extraEntries)
     : sourceStats.isFile()
-      ? await readFile(input.sourcePath)
+      ? await createAssetArchiveFromZipFile(input.sourcePath, extraEntries)
       : undefined;
   if (archive === undefined) {
     throw new Error(
@@ -817,13 +836,50 @@ const writeAssetArchive = async (
 
 const createAssetArchiveFromDirectory = async (
   input: AssetInput,
+  extraEntries: readonly ZipEntry[],
 ): Promise<Buffer> => {
   const entries = await collectZipEntries(input.sourcePath, input.prefix);
   if (entries.length === 0) {
     throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
   }
 
-  return createZipArchive(entries);
+  return createZipArchive(appendZipEntries(entries, extraEntries));
+};
+
+const createAssetArchiveFromZipFile = async (
+  sourcePath: string,
+  extraEntries: readonly ZipEntry[],
+): Promise<Buffer> => {
+  const zip = new AdmZip(await readFile(sourcePath));
+  for (const entry of extraEntries) {
+    assertSafeZipEntryName(entry.name);
+    if (zip.getEntry(entry.name) !== null) {
+      throw new Error(
+        `Muon app icon asset entry already exists: ${entry.name}`,
+      );
+    }
+    zip.addFile(entry.name, entry.data);
+  }
+  return zip.toBuffer();
+};
+
+const appendZipEntries = (
+  entries: readonly ZipEntry[],
+  extraEntries: readonly ZipEntry[],
+): ZipEntry[] => {
+  const output = [...entries];
+  const names = new Set(entries.map((entry) => entry.name));
+  for (const entry of extraEntries) {
+    assertSafeZipEntryName(entry.name);
+    if (names.has(entry.name)) {
+      throw new Error(
+        `Muon app icon asset entry already exists: ${entry.name}`,
+      );
+    }
+    names.add(entry.name);
+    output.push(entry);
+  }
+  return output;
 };
 
 const readZipEntryCount = (archive: Buffer, sourcePath: string): number => {
@@ -901,6 +957,7 @@ const createEmbeddedConfig = (
   asset: MuonBuildAssetResult,
   appId: string,
   desktopId: string,
+  initialTitleBarIcon: string,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -911,12 +968,22 @@ const createEmbeddedConfig = (
     throw new Error("muon.json bootstrap must be an object when present.");
   }
 
-  const runtimeConfig = stripBuildOnlyLinuxDesktopConfig(
-    stripBuildOnlyWindowsResourceConfig(sourceConfig),
+  const runtimeConfig = stripBuildOnlyAppIconConfig(
+    stripBuildOnlyLinuxDesktopConfig(
+      stripBuildOnlyWindowsResourceConfig(sourceConfig),
+    ),
   );
+  const sourceBrowser = runtimeConfig.browser;
+  if (sourceBrowser !== undefined && !isJsonObject(sourceBrowser)) {
+    throw new Error("muon.json browser must be an object when present.");
+  }
 
   return {
     ...runtimeConfig,
+    browser: {
+      ...(sourceBrowser ?? {}),
+      initialTitleBarIcon,
+    },
     asset: {
       ...(sourceAsset ?? {}),
       sourcePath: appConfigSourcePath,
@@ -929,6 +996,31 @@ const createEmbeddedConfig = (
       desktopId,
     },
   };
+};
+
+const assertNoUserInitialTitleBarIcon = (sourceConfig: JsonObject): void => {
+  const sourceBrowser = sourceConfig.browser;
+  if (sourceBrowser === undefined) {
+    return;
+  }
+  if (!isJsonObject(sourceBrowser)) {
+    throw new Error("muon.json browser must be an object when present.");
+  }
+  if (sourceBrowser.initialTitleBarIcon !== undefined) {
+    throw new Error(
+      "muon.json browser.initialTitleBarIcon is generated by muon build; use top-level iconPath instead.",
+    );
+  }
+};
+
+const stripBuildOnlyAppIconConfig = (sourceConfig: JsonObject): JsonObject => {
+  const output: JsonObject = {};
+  for (const [key, value] of Object.entries(sourceConfig)) {
+    if (key !== "iconPath") {
+      output[key] = value;
+    }
+  }
+  return output;
 };
 
 const withTemporaryConfig = async (

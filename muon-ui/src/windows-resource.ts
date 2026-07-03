@@ -26,6 +26,13 @@ import {
   createNormalizedMuonIconPngData,
   createWindowsIconFromPngFile,
 } from "./windows-icon.js";
+import {
+  createAppIconOptionsSource,
+  readConfigAppIconSource,
+  readProjectAppIconSource,
+  resolveMuonAppIconPath,
+  type MuonAppIconSource,
+} from "./app-icon.js";
 
 export type { MuonWindowsResourceOptions } from "./vite.js";
 
@@ -59,6 +66,7 @@ interface ResolveWindowsResourceInput {
   muonConfig: JsonObject;
   muonConfigDirectory: string;
   options: MuonWindowsResourceOptions | undefined;
+  appIconPath: string | undefined;
   defaults: WindowsResourceDefaults;
 }
 
@@ -165,16 +173,29 @@ export const resolveMuonWindowsResource = async (
   input: ResolveWindowsResourceInput,
 ): Promise<ResolvedMuonWindowsResource> => {
   const projectJson = await readProjectJson(input.root);
-  const sources = [
+  const windowsSources = [
     createOptionsSource(input.options, input.root, "windowsResource"),
     readConfigWindowsResourceSource(
       input.muonConfig,
       input.muonConfigDirectory,
       "muon.json",
     ),
+    readConfigWindowsResourceSource(projectJson, input.root, "project.json"),
+  ].filter((source): source is WindowsResourceSource => source !== undefined);
+  const sources = [
+    ...windowsSources,
     createProjectSource(projectJson, input.root),
     createPackageSource(input.packageJson, input.root),
   ].filter((source): source is WindowsResourceSource => source !== undefined);
+  const appIconSources = [
+    createAppIconOptionsSource(input.appIconPath, input.root),
+    readConfigAppIconSource(
+      input.muonConfig,
+      input.muonConfigDirectory,
+      "muon.json",
+    ),
+    readProjectAppIconSource(projectJson, input.root),
+  ].filter((source): source is MuonAppIconSource => source !== undefined);
 
   const productName = resolveStringField(
     sources,
@@ -204,8 +225,9 @@ export const resolveMuonWindowsResource = async (
   const language = resolveNumericField(sources, "language", defaultLanguage);
   const codePage = resolveNumericField(sources, "codePage", defaultCodePage);
   const fixedVersion = normalizeWindowsVersion(version);
-  const iconPath = await resolveIconPath(
-    sources,
+  const iconPath = await resolveWindowsIconPath(
+    windowsSources,
+    appIconSources,
     await resolveDefaultWindowsIcon(input.packageDirectory),
   );
 
@@ -466,7 +488,6 @@ const createProjectSource = (
   directory: string,
 ): WindowsResourceSource | undefined => {
   const topLevel: MuonWindowsResourceOptions = {};
-  copyStringField(projectJson, "iconPath", topLevel, "iconPath");
   copyStringField(projectJson, "productName", topLevel, "productName");
   copyStringField(projectJson, "name", topLevel, "productName");
   copyStringField(projectJson, "fileDescription", topLevel, "fileDescription");
@@ -524,12 +545,7 @@ const copyStringField = (
   target: MuonWindowsResourceOptions,
   targetKey: keyof Pick<
     MuonWindowsResourceOptions,
-    | "iconPath"
-    | "productName"
-    | "fileDescription"
-    | "companyName"
-    | "version"
-    | "copyright"
+    "productName" | "fileDescription" | "companyName" | "version" | "copyright"
   >,
 ): void => {
   const value = source[sourceKey];
@@ -646,17 +662,22 @@ const resolveNumericField = (
   return fallback;
 };
 
-const resolveIconPath = async (
-  sources: readonly WindowsResourceSource[],
+const resolveWindowsIconPath = async (
+  windowsSources: readonly WindowsResourceSource[],
+  appIconSources: readonly MuonAppIconSource[],
   defaultIconPath: string,
 ): Promise<string> => {
-  for (const source of sources) {
+  for (const source of windowsSources) {
     const value = source.options.iconPath;
     if (value !== undefined && value.trim() !== "") {
       const iconPath = resolveResourcePath(source.directory, value);
       await assertIconPath(iconPath);
       return iconPath;
     }
+  }
+  const appIconPath = await resolveMuonAppIconPath(appIconSources);
+  if (appIconPath !== undefined) {
+    return appIconPath;
   }
   await assertIconPath(defaultIconPath);
   return defaultIconPath;

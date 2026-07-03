@@ -73,6 +73,7 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
     (value.appId === undefined || typeof value.appId === "string") &&
     (value.outputRoot === undefined || typeof value.outputRoot === "string") &&
     (value.configPath === undefined || typeof value.configPath === "string") &&
+    (value.iconPath === undefined || typeof value.iconPath === "string") &&
     (value.windowsResource === undefined ||
       isWindowsResourceOptions(value.windowsResource)) &&
     (value.linuxDesktop === undefined ||

@@ -281,6 +281,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonViteBuildOptions",
+      memberName: "iconPath",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
       memberName: "windowsResource",
     },
     {
@@ -1032,6 +1037,7 @@ const plugin = muon({
   enableDebugger: false,
   build: {
     targets: ["linux-amd64"],
+    iconPath: "icons/app.png",
     windowsResource: {
       iconPath: "icons/app.png",
       productName: "Package Test App",

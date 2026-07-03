@@ -55,6 +55,7 @@ interface BuildCommandOptions {
   all: boolean | undefined;
   assets: string | undefined;
   config: string | undefined;
+  icon: string | undefined;
   windowsIcon: string | undefined;
   windowsProductName: string | undefined;
   windowsFileDescription: string | undefined;
@@ -79,6 +80,7 @@ interface PackCommandOptions {
   target: string[];
   all: boolean | undefined;
   config: string | undefined;
+  icon: string | undefined;
   windowsIcon: string | undefined;
   windowsProductName: string | undefined;
   windowsFileDescription: string | undefined;
@@ -269,6 +271,9 @@ const runBuildCommand = async (
   if (commandOptions.config !== undefined) {
     buildOptions.configPath = commandOptions.config;
   }
+  if (commandOptions.icon !== undefined) {
+    buildOptions.iconPath = commandOptions.icon;
+  }
   const windowsResource = createWindowsResourceOptions(commandOptions);
   if (windowsResource !== undefined) {
     buildOptions.windowsResource = windowsResource;
@@ -323,6 +328,9 @@ const runPackCommand = async (
   }
   if (commandOptions.config !== undefined) {
     packOptions.configPath = commandOptions.config;
+  }
+  if (commandOptions.icon !== undefined) {
+    packOptions.iconPath = commandOptions.icon;
   }
   const windowsResource = createWindowsResourceOptions(commandOptions);
   if (windowsResource !== undefined) {
@@ -526,6 +534,7 @@ const createCliCommand = (): Command => {
     .option("--all", "build all supported targets")
     .option("--assets <path>", "asset root path")
     .option("--config <path>", "muon config path")
+    .option("--icon <path>", "static application PNG icon path")
     .option("--windows-icon <path>", "Windows PNG icon resource path")
     .option("--windows-product-name <name>", "Windows product name")
     .option("--windows-file-description <text>", "Windows file description")
@@ -563,6 +572,7 @@ const createCliCommand = (): Command => {
     )
     .option("--all", "build all supported targets")
     .option("--config <path>", "muon config path")
+    .option("--icon <path>", "static application PNG icon path")
     .option("--windows-icon <path>", "Windows PNG icon resource path")
     .option("--windows-product-name <name>", "Windows product name")
     .option("--windows-file-description <text>", "Windows file description")

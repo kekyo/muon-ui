@@ -742,9 +742,9 @@ printf 'nsis\\n' > "$output_path"
       join(root, "muon.json"),
       `${JSON.stringify(
         {
+          iconPath: "icons/setup.png",
           windows: {
             resource: {
-              iconPath: "icons/setup.png",
               productName: "NSIS Product",
               fileDescription: "NSIS Installer",
               companyName: "NSIS Company",

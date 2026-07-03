@@ -417,7 +417,7 @@ const result = await spawn({
 
 ### muonプラグイン関数へのアクセス許可
 
-まず、`muon.json` の `"plugin"` でプラグイン関数自体の公開許可と、どのJavaScriptからimportできるかを指定します。
+まず、`muon.json` の `"plugin"` で、どのJavaScriptからどのプラグイン関数をインポートできるかを指定します。
 muon Viteプラグインはこの設定を読み取り、muonプラグインへのアクセスを許可します:
 
 ```json
@@ -428,7 +428,6 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
     "plugins": [
       {
         "name": "internal",
-        "allow": ["muon.executor.spawn"],
         "imports": [
           {
             "sources": ["src/native/**"],
@@ -447,10 +446,10 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
 - `name` は、プラグイン名です。内蔵プラグインに限り、特別な `"internal"` を使用します。
   その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
   `spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
-  これを呼び出し可能にするには、`name` に `"internal"`を、`allow` に `"muon.executor.spawn"` と指定します。
+  これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
 
-なお、Viteプラグイン引数の `pluginAccess` でも同じ設定を上書き出来ますが、通常は `muon.json` にまとめておくと実行時設定とimport許可の対応が読みやすくなります。
+なお、Viteプラグイン引数の `pluginAccess` でも同じ設定を上書き出来ますが、通常は `muon.json` にまとめておくと実行時設定とインポート許可の対応が読みやすくなります。
 
 上記の方法でmuonプラグインを参照することは `validate` モードと呼びます。
 他には `simple` モードも存在します:
@@ -503,7 +502,7 @@ muonプラグインで公開されるすべての関数は、`Promise` を返却
 
 muonの内蔵プラグインから提供されるAPIは、 `muon.d.ts` によるTypeScriptの型定義が提供されています。
 これはmuonプラグインをインストールした時点で参照可能となっているため、
-TypeScriptを使用してコードを記述する場合は、 `muon:executor` などのvirtual module importや、`window.muon` 階層に対して型チェックによる恩恵を得られます:
+TypeScriptを使用してコードを記述する場合は、 `muon:executor` などのvirtual moduleインポートや、`window.muon` 階層に対して型チェックによる恩恵を得られます:
 
 ![intellisense](./images/intellisense.png)
 
@@ -621,6 +620,7 @@ npx muon run
 Viteプラグインを使用する場合と異なり、アセットホスト名部分によるページ管理の分割を自然に行うことが出来ます。
 例えば、 `asset://main/index.html` と `asset://sub/index.html` は、CEFが異なるオリジンとして扱います。
 高度なセキュリティ分離を行いたい場合や、muonのホワイトリストによるフィルタの分離にも応用できます。
+詳しくはローカルアセットの権限の章を参照して下さい。
 
 > 注釈: Viteプラグインを使用した場合でもアセットホスト名分離は機能しますが、
 > デフォルトでViteが出力したコンテンツファイル群はすべて `main/` 配下に配置されるため、
@@ -658,7 +658,7 @@ npx muon build --linux-icon icons/app.png --linux-name "My App"
 - Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書き出来ます。
   同じ値は `muon.json` の `linux.desktop` でも指定出来ます。
 
-> 注釈: muon CLIを使用してビルドを行う場合は、"virtual module"の解決(`import`によるmuonプラグインの参照)が出来ません。
+> 注釈: muon CLIを使用してビルドを行う場合は、virtual moduleの解決 (`import`によるmuonプラグインの参照) が出来ません。
 > 従って、muonプラグインの参照モード `validate` は使用できず、常に `simple` モードを使用する必要があります。
 
 ---
@@ -821,9 +821,9 @@ muon上でのページ権限を細かく調整することも可能です。以�
 ```json
 {
   "plugin": {
-    // 既定では、capability import経由のvalidateモードで使用する
+    // 既定ではvalidateモードで使用する
     "mode": "validate",
-    // muonプラグインブリッジは `asset://main/` のページでのみ使用可能にする
+    // muonプラグイン関数は `asset://main/` のページでのみ使用可能にする
     // 例えば、 `asset://sub/` のページではmuonプラグインブリッジを参照できない
     "pages": ["asset://main/**"]
   }
@@ -836,6 +836,7 @@ muon上でのページ権限を細かく調整することも可能です。以�
 
 ローカルアセットファイル群は、「パッキング」を行って、単一のファイルにまとめることが出来ます。
 ファイルが散在しないようにしたり、圧縮してストレージサイズを削減し、破損の検証を可能にします。
+既定では、パッケージ生成を行う時に、自動的にローカルアセットをパックします。
 
 パッキングフォーマットはzipファイルであり、任意のzip圧縮ツールを用いてパッキングを行えます。
 zipファイル内の構造は、`assets/` ディレクトリ内の構造をそのまま踏襲して下さい。
@@ -965,10 +966,6 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
     "plugins": [
       {
         "name": "internal",
-        "allow": [
-          "muon.environments.getCommandLine",
-          "muon.fs.readTextFile"
-        ],
         "imports": [
           {
             "sources": ["src/native/**"],
@@ -982,8 +979,11 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
       },
       {
         "name": "muon_fs_dialogs_gtk3",
-        "allow": [
-          "muon.fs.dialogs.*"
+        "imports": [
+          {
+            "sources": ["src/native/**"],
+            "allow": ["muon.fs.dialogs.openFile"]
+          }
         ]
       }
     ]
@@ -1180,11 +1180,11 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `capabilities`               | `readonly object[]`           | `[]`                   | `validate` モードで使用するcapabilityポリシーです。通常はViteプラグインが生成します。 |
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
-| `plugins[].allow`            | `readonly string[]`           | なし                   | そのプラグインから公開する関数パスの許可リストです。                              |
-| `plugins[].imports`          | `readonly object[]`           | `[]`                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
+| `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
+| `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
 | `plugins[].imports[].packages` | `readonly string[]`         | なし                   | importerが属するNPMパッケージ名の完全一致リストです。                             |
-| `plugins[].imports[].allow`    | `readonly string[]`         | 親の `plugins[].allow` | そのimportルールで許可するプラグイン関数パスglobです。                            |
+| `plugins[].imports[].allow`    | `readonly string[]`         | なし                   | そのimportルールで許可するプラグイン関数パスglobです。                            |
 
 - `path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
 - `mode` に `"validate"` を指定した場合、Viteなどのバンドラーが生成したcapability付きvirtual module importからだけプラグイン関数を呼び出せます。
@@ -1201,20 +1201,20 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   例えば `muon_fs_dialogs_gtk3.so` を使う場合の `name` は `"muon_fs_dialogs_gtk3"` です。
   `"internal"` は予約名であり、外部プラグイン名としては使用出来ません。
   同じ `name` を複数回指定することは出来ません。
-- `plugins[].allow` は、プラグインが持つ関数パスに対するホワイトリストです。
+- `plugins[].allow` は、`simple` モードでプラグインが持つ関数パスを `window` 階層に公開するためのホワイトリストです。
+  `simple` モードでは必須で、`validate` モードでは指定できません。
   `muon.fs.*` のようなパターンを指定出来ます。
   `*` は `.` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
   パターンの大文字小文字は区別されます。
-  ページ側で関数を呼び出せるようにするには、 `plugin.plugins[].allow` に加えて、 `plugin.pages` で対象ページへのAPIブリッジ注入も許可する必要があります。
-  `plugin.mode` が `"validate"` の場合は、Viteプラグインなどのバンドラー連携で `plugins[].imports` からcapabilityを生成し、対象JavaScriptからvirtual moduleをimportします。
-  `"simple"` の場合は、従来通り `window.muon` 階層から呼び出します。
+  ページ側で関数を呼び出せるようにするには、 `plugin.pages` で対象ページへのAPIブリッジ注入も許可する必要があります。
 - `plugins[].imports` は `validate` モード用のimport許可です。
+  `validate` モードでプラグインエントリを指定する場合は必須かつ空配列不可で、`simple` モードでは指定できません。
   `sources` はVite project rootからの相対importerパスに対するglobで、`packages` はimporterから最寄りの `package.json` を探索して得た `name` との完全一致です。
   プロジェクトルート自身の `package.json` は `packages` 判定対象ではなく、通常のソースファイルとして扱われます。
   `sources` と `packages` は片方または両方を指定でき、両方指定した場合はいずれかに一致すれば許可されます。
   どちらも指定しないimportルールは設定エラーです。
-- `plugins[].imports[].allow` を省略した場合は、親の `plugins[].allow` を継承します。
-  親の `plugins[].allow` を超える関数パスを指定した場合は設定エラーです。
+- `plugins[].imports[].allow` は `validate` モードでそのimport元に許可する関数パスです。
+  必須かつ空配列不可です。
   virtual moduleがexportできるのは具体的な関数名のみです。`muon.executor.*` のようなwildcardだけで許可しても、具体的なexportを作れないためVite側でエラーになります。
 - 旧 `browser.plugin.mode`、`browser.plugin.allow`、`browser.plugin.capabilities` は公開設定として廃止されています。
   指定した場合は、`plugin.mode` や `plugin.pages` を使うよう促す設定エラーになります。
@@ -1321,7 +1321,6 @@ muon({
     plugins: [
       {
         name: "internal",
-        allow: ["muon.executor.*"],
         imports: [
           {
             sources: ["src/native/**"],
@@ -1344,11 +1343,11 @@ muon({
 | `pages`                      | `readonly string[]`           | `plugin.pages`         | プラグインAPIブリッジをページへ注入するURLの許可リストです。                      |
 | `plugins`                    | `readonly object[]`           | `plugin.plugins`       | 有効化するプラグインとimport許可のリストです。                                    |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
-| `plugins[].allow`            | `readonly string[]`           | なし                   | そのプラグインから公開する関数パスの許可リストです。                              |
-| `plugins[].imports`          | `readonly object[]`           | `[]`                   | importerごとのcapability import許可リストです。                                   |
+| `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
+| `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimporterごとのcapability import許可リストです。        |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | Vite project rootからの相対importerパスglobです。                                  |
 | `plugins[].imports[].packages` | `readonly string[]`         | なし                   | importerが属するNPMパッケージ名の完全一致リストです。                             |
-| `plugins[].imports[].allow`    | `readonly string[]`         | 親の `plugins[].allow` | そのimporterに許可するプラグイン関数パスglobです。                                |
+| `plugins[].imports[].allow`    | `readonly string[]`         | なし                   | そのimporterに許可するプラグイン関数パスglobです。                                |
 
 - virtual module名は、プラグイン名前空間の最初の要素だけを `:` で区切った名前です。
   例えば `muon.executor` は `muon:executor`、`muon.fs.dialogs` は `muon:fs.dialogs`、`foobar.baz` は `foobar:baz` です。
@@ -1356,12 +1355,13 @@ muon({
   `plugins` と `pages` は配列全体の置き換えで、要素単位のマージは行いません。
 - `plugins[].imports[].sources` と `plugins[].imports[].packages` はimport元のホワイトリストで、両方指定した場合はいずれかに一致すれば許可されます。
   これに `plugins[].imports[].allow` の関数パス制限が一致した場合だけ、Viteがvirtual moduleを解決します。
-- `plugins[].imports[].allow` を省略した場合は、親の `plugins[].allow` を継承します。
-  親の `plugins[].allow` を超える関数パスを指定した場合は設定エラーです。
-- Viteプラグイン経由の `vite dev` と `vite build` では、正規化された `plugins[].imports` から `plugin.capabilities` が生成されます。
+- `validate` モードでは `plugins[].allow` を指定できず、`plugins[].imports` と `plugins[].imports[].allow` が必須です。
+  `simple` モードでは `plugins[].allow` が必須で、`plugins[].imports` は指定できません。
+- Viteプラグイン経由の `vite dev` と `vite build` では、正規化された `plugins[].imports` から `plugin.plugins[].allow` と `plugin.capabilities` が生成されます。
   Viteプラグインを使わない直接 `muon build` では、このcapability生成は行われず、`simple` 相当として扱われます。
 - 従来の `window.muon` 階層を使う場合は、`pluginAccess: false` を指定します。
   この場合、Viteプラグインが生成する実行時設定は `plugin.mode: "simple"` になります。
+  `muon.json` の `plugin.plugins` がvalidate形の `imports` だけで構成されている場合は、simple用の `plugins[].allow` が無いため設定エラーになります。
 
 ### buildキー
 
@@ -1409,8 +1409,8 @@ muon({
 
 この章では、プラグイン名前空間と関数パスを分かりやすく示すため、`window.muon.*` 形式でAPIを表記しています。
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
-既定の `validate` モードでは、対応するvirtual moduleから関数をimportして使用します。
-例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、`muon:executor` から `spawn` をimportします。
+既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
+例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、`muon:executor` から `spawn` をインポートします。
 
 ```ts
 import { spawn } from "muon:executor";

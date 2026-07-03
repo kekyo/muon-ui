@@ -46,8 +46,8 @@ CEFを使うのに、世界中のウェブサイトにアクセス出来ない�
 これらも事前構成に基づいて使用可能になるため、使われない機能を野放しにすることはありません。
 
 CEFベースなので、Chromiumで想定されるWebGL, WebGPU, WebAssembly, Web worker, Local storageなども当然使用出来ます。
-Chromium DevToolsを表示させることも可能です。CDP (Chrome DevTools Protocol) も使用できるため、vscodeなどでデバッグしたり、playwrightを接続して操ることも可能です。
-Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用することも可能です。
+DevToolsを表示させることも可能です。CDP (Chrome DevTools Protocol) も使用できるため、vscodeなどでデバッグしたり、Playwrightを接続して操ることも可能です。
+Chromium/Chromeから、 `chrome://inspect/` でリモートDevToolsを使用することも可能です。
 
 つまり、GTK/Qt/Windowsのネイティブアプリケーションをウェブアプリケーションに移行する際に発生する、大きな問題点の一つをわかりやすく除外することで、
 ウェブベース技術のエコシステムを使って現代的なローカルGUIアプリケーションを開発出来ます。
@@ -56,14 +56,15 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 
 - すべてのネットワークアクセスをホワイトリストフィルターで制限することで、問題を起こすコンテンツを完全に除外出来ます。
 - 扱いやすいNPMパッケージとして提供され、あなたのウェブアプリケーションプロジェクトを簡単にネイティブGUIアプリケーション化出来ます。複雑な構成や変更は不要です。
-- レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、Chromiumやchromeを使用しているのとほぼ同等です。
-- Viteプラグインに対応しています（オプション）。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
+- レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、ChromiumやChromeを使用しているのとほぼ同等です。
+- Viteプラグインに対応しています。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
 - `muon run` で、HTTPサーバーを起動せずにローカルアセットを直接使った開発起動が出来ます。
 - Linux desktop launcherとアイコンのmetadataを配布ビルド時に同梱出来ます。
-- Chromium DevToolsを使用出来ます。更にCDP (Chromium DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
+- DevToolsを使用出来ます。更にCDP (Chrome DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
 - 複数のブラウザウインドウを表示出来ます。ブラウザウインドウは親子関係をもたせることも出来ます。
 - プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限出来ます。
 - 内蔵プラグインを使用して、ローカルファイルへのアクセス・オープンダイアログ・子プロセス起動・ウインドウ操作が可能です。
+- Linux (deb) とWindows (NSIS) のパッケージ生成、あるいはポータブル運用に対応しています。
 
 ### 環境
 
@@ -81,8 +82,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 早速muonでアプリケーション（muonアプリ）を作ってみましょう。
 
 muonは開発体験を直交的なものに感じられるように、開発ライフサイクルとランタイムを可能な限り分離しています。
-新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するために、
-再現可能な最小の手順で実現出来るような開発ライフサイクルが重要だと考えています。
+新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するのも非常に簡単です。
 
 これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトを用意する事から始めましょう。
 例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を作りましょう:
@@ -125,9 +125,9 @@ muonパッケージには、以下の要素を含みます:
 - muon CLI
 - muon Viteプラグイン
 - muon内蔵プラグインのTypeScript型定義
-- platform別のmuonバイナリアセット
+- プラットフォーム別のmuonバイナリアセット
 
-CEF本体バイナリは、NPMパッケージに含まれません。
+CEF本体バイナリは、NPMパッケージに含まれません。CEFは必要になった時点で、公式CDNからダウンロードされます。
 
 ### muon Viteプラグインを構成
 
@@ -185,7 +185,7 @@ npm run dev
 
 ![Muon DevTools](./images/devtools.png)
 
-CDP (Chromium DevTools Protocol) も有効化されているので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+CDP (Chrome DevTools Protocol) も有効化されているので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
 
 `Ctrl+F12` キーでmuonをリサイクル再起動出来ます。リサイクル再起動は、 `muon.json` の変更など、HMRで反映できない更新を行った場合に使用出来ます。
 
@@ -342,7 +342,7 @@ muonは、Muon DevToolsを表示出来ます。これは、ChromiumやChromeのD
 これは、`F12` キーをDevTools表示に割り当てた例です。他のキーを指定することや、`shift+f12` のように組み合わせることも出来ます。
 
 DevToolsは他の方法でも表示出来ます。
-CDP (Chromium DevTools Protocol)というリモートデバック機能を使用すれば、ChromiumやChromeを使用して、リモートでDevToolsを表示出来ます。
+CDP (Chrome DevTools Protocol)というリモートデバック機能を使用すれば、ChromiumやChromeを使用して、リモートでDevToolsを表示出来ます。
 
 但し、この機能も既定では無効化されています。同じく`muon.json`に以下の定義を加えます:
 

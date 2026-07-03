@@ -220,7 +220,7 @@ export interface MuonVitePluginAccessImportOptions {
   /**
    * Plugin function path globs allowed for matching importers.
    *
-   * @remarks When omitted, the parent plugin entry `allow` list is inherited.
+   * @remarks Required in validate mode. Simple mode does not use import rules.
    */
   allow?: readonly string[];
 }
@@ -235,8 +235,11 @@ export interface MuonVitePluginAccessEntryOptions {
   name: string;
   /**
    * Plugin function path globs allowed by the runtime plugin policy.
+   *
+   * @remarks Required in simple mode. Validate mode derives the runtime
+   * allowlist from `imports[].allow` and rejects this field in public config.
    */
-  allow: readonly string[];
+  allow?: readonly string[];
   /**
    * Validate-mode import rules for this plugin entry.
    */

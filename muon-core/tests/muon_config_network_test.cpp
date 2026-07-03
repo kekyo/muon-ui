@@ -1321,6 +1321,8 @@ static bool RunConfigValidationTest(
       test_directory / "duplicate-plugin.json";
   const auto missing_plugin_allow_path =
       test_directory / "missing-plugin-allow.json";
+  const auto runtime_imports_without_allow_path =
+      test_directory / "runtime-imports-without-allow.json";
   const auto invalid_plugin_allow_path =
       test_directory / "invalid-plugin-allow.json";
   const auto invalid_plugin_entry_path =
@@ -1453,6 +1455,9 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(missing_plugin_allow_path,
                           R"({"plugin":{"plugins":[{"name":"internal"}]}})"),
                 "failed to write missing plugin allow config") &&
+         Expect(WriteFile(runtime_imports_without_allow_path,
+                          R"({"plugin":{"mode":"validate","plugins":[{"name":"internal","imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+                "failed to write runtime imports without allow config") &&
          Expect(WriteFile(invalid_plugin_allow_path,
                           R"({"plugin":{"plugins":[{"name":"internal","allow":"muon.**"}]}})"),
                 "failed to write invalid plugin allow config") &&
@@ -1572,6 +1577,9 @@ static bool RunConfigValidationTest(
                                  "duplicate plugin entry") &&
          LoadConfigExpectFailure(missing_plugin_allow_path,
                                  "plugin.plugins[0].allow is required") &&
+         LoadConfigExpectFailure(runtime_imports_without_allow_path,
+                                 "validate imports require Vite capability "
+                                 "generation") &&
          LoadConfigExpectFailure(invalid_plugin_allow_path,
                                  "plugin.plugins[0].allow must be an array") &&
          LoadConfigExpectFailure(invalid_plugin_entry_path,

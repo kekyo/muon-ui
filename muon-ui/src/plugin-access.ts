@@ -35,7 +35,7 @@ export interface MuonPluginAccessImportOptions {
   /**
    * Plugin function paths allowed for this import rule.
    *
-   * @remarks When omitted, the parent plugin entry `allow` list is inherited.
+   * @remarks Required in validate mode. Simple mode does not use import rules.
    */
   allow?: readonly string[];
 }
@@ -50,8 +50,11 @@ export interface MuonPluginAccessEntryOptions {
   name: string;
   /**
    * Plugin function path globs allowed by the runtime plugin policy.
+   *
+   * @remarks Required in simple mode. Validate mode derives the runtime
+   * allowlist from `imports[].allow` and rejects this field in public config.
    */
-  allow: readonly string[];
+  allow?: readonly string[];
   /**
    * Validate-mode import rules for this plugin entry.
    */
@@ -271,9 +274,6 @@ const readPluginAccessEntryOptions = (
     throw new Error(`muon.json ${configPath}.name must be a string.`);
   }
   const allow = readOptionalStringArray(value, "allow", `${configPath}.allow`);
-  if (allow === undefined) {
-    throw new Error(`muon.json ${configPath}.allow is required.`);
-  }
 
   const rawImports = value.imports;
   if (rawImports !== undefined && !Array.isArray(rawImports)) {
@@ -290,8 +290,10 @@ const readPluginAccessEntryOptions = (
         );
   const options: MuonPluginAccessEntryOptions = {
     name: value.name,
-    allow,
   };
+  if (allow !== undefined) {
+    options.allow = allow;
+  }
   if (imports !== undefined) {
     options.imports = imports;
   }
@@ -355,66 +357,112 @@ const readPluginAccessOptions = (
   return options;
 };
 
-const escapeRegExp = (source: string): string =>
-  source.replace(/[\\^$+?.()|[\]{}]/gu, "\\$&");
+type EffectivePluginAccessOptions = Required<
+  Pick<MuonPluginAccessOptions, "mode" | "pages" | "plugins">
+> &
+  Pick<MuonPluginAccessOptions, "path">;
 
-const globToRegExp = (glob: string, separator: string): RegExp => {
-  let source = "^";
-  for (let index = 0; index < glob.length; index += 1) {
-    const current = glob[index] ?? "";
-    const next = glob[index + 1];
-    if (current === "*" && next === "*") {
-      source += ".*";
-      index += 1;
+const hasImportSourceSelector = (
+  entry: MuonPluginAccessImportOptions,
+): boolean =>
+  (entry.sources !== undefined && entry.sources.length > 0) ||
+  (entry.packages !== undefined && entry.packages.length > 0);
+
+const validatePluginAccessOptions = (
+  resolved: EffectivePluginAccessOptions,
+): EffectivePluginAccessOptions => {
+  for (const [pluginIndex, plugin] of resolved.plugins.entries()) {
+    const pluginPath = `plugin.plugins[${pluginIndex}]`;
+    if (resolved.mode === "validate") {
+      if (plugin.allow !== undefined) {
+        throw new Error(
+          `muon.json ${pluginPath}.allow is only supported in simple mode; use ${pluginPath}.imports[].allow in validate mode.`,
+        );
+      }
+      if (plugin.imports === undefined) {
+        throw new Error(
+          `muon.json ${pluginPath}.imports is required in validate mode.`,
+        );
+      }
+      if (plugin.imports.length === 0) {
+        throw new Error(
+          `muon.json ${pluginPath}.imports must not be empty in validate mode.`,
+        );
+      }
+
+      for (const [importIndex, entry] of plugin.imports.entries()) {
+        const importPath = `${pluginPath}.imports[${importIndex}]`;
+        if (!hasImportSourceSelector(entry)) {
+          throw new Error(
+            `muon.json ${importPath} requires sources or packages.`,
+          );
+        }
+        if (entry.allow === undefined) {
+          throw new Error(
+            `muon.json ${importPath}.allow is required in validate mode.`,
+          );
+        }
+        if (entry.allow.length === 0) {
+          throw new Error(
+            `muon.json ${importPath}.allow must not be empty in validate mode.`,
+          );
+        }
+      }
       continue;
     }
-    if (current === "*") {
-      source += `[^${escapeRegExp(separator)}]*`;
-      continue;
+
+    if (plugin.allow === undefined) {
+      throw new Error(
+        `muon.json ${pluginPath}.allow is required in simple mode.`,
+      );
     }
-    source += escapeRegExp(current);
+    if (plugin.imports !== undefined) {
+      throw new Error(
+        `muon.json ${pluginPath}.imports is only supported in validate mode.`,
+      );
+    }
   }
-  source += "$";
-  return new RegExp(source, "u");
+  return resolved;
 };
 
-const isGlobMatch = (glob: string, value: string, separator: string): boolean =>
-  globToRegExp(glob, separator).test(value);
+const getValidateImportAllow = (
+  entry: MuonPluginAccessImportOptions,
+  pluginIndex: number,
+  importIndex: number,
+): readonly string[] => {
+  if (entry.allow === undefined || entry.allow.length === 0) {
+    throw new Error(
+      `muon.json plugin.plugins[${pluginIndex}].imports[${importIndex}].allow is required in validate mode.`,
+    );
+  }
+  return entry.allow;
+};
 
-const isAllowCoveredByParent = (
-  allow: string,
-  parentAllow: readonly string[],
-): boolean =>
-  parentAllow.some((parent) =>
-    allow.includes("*") ? parent === allow : isGlobMatch(parent, allow, "."),
-  );
+const getSimplePluginAllow = (
+  plugin: MuonPluginAccessEntryOptions,
+  pluginIndex: number,
+): readonly string[] => {
+  if (plugin.allow === undefined) {
+    throw new Error(
+      `muon.json plugin.plugins[${pluginIndex}].allow is required in simple mode.`,
+    );
+  }
+  return plugin.allow;
+};
 
 const toCapabilityImports = (
   plugins: readonly MuonPluginAccessEntryOptions[],
 ): readonly MuonCapabilityImportOptions[] =>
   plugins.flatMap((plugin, pluginIndex) =>
     (plugin.imports ?? []).map((entry, importIndex) => {
-      if (
-        (entry.sources === undefined || entry.sources.length === 0) &&
-        (entry.packages === undefined || entry.packages.length === 0)
-      ) {
+      if (!hasImportSourceSelector(entry)) {
         throw new Error(
           `muon.json plugin.plugins[${pluginIndex}].imports[${importIndex}] requires sources or packages.`,
         );
       }
 
-      const allow = entry.allow ?? plugin.allow;
-      const uncoveredAllow = allow.find(
-        (functionPath) => !isAllowCoveredByParent(functionPath, plugin.allow),
-      );
-      if (uncoveredAllow !== undefined) {
-        throw new Error(
-          `muon.json plugin.plugins[${pluginIndex}].imports[${importIndex}].allow exceeds plugin.plugins[${pluginIndex}].allow: ${uncoveredAllow}`,
-        );
-      }
-
       const rule: MuonCapabilityImportOptions = {
-        allow,
+        allow: getValidateImportAllow(entry, pluginIndex, importIndex),
         pluginName: plugin.name,
       };
       if (entry.sources !== undefined) {
@@ -427,19 +475,57 @@ const toCapabilityImports = (
     }),
   );
 
-const toRuntimePluginEntries = (
+const toValidateRuntimePluginEntries = (
   plugins: readonly MuonPluginAccessEntryOptions[],
 ): readonly MuonRuntimePluginEntryConfig[] =>
-  plugins.map((plugin) => ({
+  plugins.map((plugin, pluginIndex) => {
+    const allow: string[] = [];
+    const seenAllow = new Set<string>();
+    for (const [importIndex, entry] of (plugin.imports ?? []).entries()) {
+      for (const functionPath of getValidateImportAllow(
+        entry,
+        pluginIndex,
+        importIndex,
+      )) {
+        if (!seenAllow.has(functionPath)) {
+          seenAllow.add(functionPath);
+          allow.push(functionPath);
+        }
+      }
+    }
+    return {
+      name: plugin.name,
+      allow,
+    };
+  });
+
+const toSimpleRuntimePluginEntries = (
+  plugins: readonly MuonPluginAccessEntryOptions[],
+): readonly MuonRuntimePluginEntryConfig[] =>
+  plugins.map((plugin, pluginIndex) => ({
     name: plugin.name,
-    allow: [...plugin.allow],
+    allow: [...getSimplePluginAllow(plugin, pluginIndex)],
   }));
+
+const shouldOverlayRuntimePlugins = (
+  resolved: EffectivePluginAccessOptions,
+  override: false | MuonPluginAccessOptions | undefined,
+): boolean =>
+  override !== false &&
+  (override?.plugins !== undefined ||
+    (resolved.mode === "validate" && resolved.plugins.length > 0));
+
+const toRuntimePluginEntries = (
+  resolved: EffectivePluginAccessOptions,
+): readonly MuonRuntimePluginEntryConfig[] =>
+  resolved.mode === "validate"
+    ? toValidateRuntimePluginEntries(resolved.plugins)
+    : toSimpleRuntimePluginEntries(resolved.plugins);
 
 const mergePluginAccessOptions = (
   base: MuonPluginAccessOptions,
   override: MuonPluginAccessOptions | undefined,
-): Required<Pick<MuonPluginAccessOptions, "mode" | "pages" | "plugins">> &
-  Pick<MuonPluginAccessOptions, "path"> => ({
+): EffectivePluginAccessOptions => ({
   ...(override?.path === undefined ? {} : { path: override.path }),
   mode: override?.mode ?? base.mode ?? "validate",
   pages: override?.pages ?? base.pages ?? defaultPluginPages,
@@ -448,20 +534,18 @@ const mergePluginAccessOptions = (
 
 const createRuntimeOverlay = (
   root: string,
-  resolved: Required<
-    Pick<MuonPluginAccessOptions, "mode" | "pages" | "plugins">
-  > &
-    Pick<MuonPluginAccessOptions, "path">,
+  resolved: EffectivePluginAccessOptions,
   override: false | MuonPluginAccessOptions | undefined,
 ): MuonPluginAccessRuntimeOverlay => {
+  if (override === false) {
+    return {};
+  }
+
   const path =
-    override !== false && override?.path !== undefined
-      ? resolve(root, override.path)
-      : undefined;
-  const plugins =
-    override !== false && override?.plugins !== undefined
-      ? toRuntimePluginEntries(resolved.plugins)
-      : undefined;
+    override?.path !== undefined ? resolve(root, override.path) : undefined;
+  const plugins = shouldOverlayRuntimePlugins(resolved, override)
+    ? toRuntimePluginEntries(resolved)
+    : undefined;
 
   return {
     pages: resolved.pages,
@@ -498,15 +582,20 @@ export const resolveMuonPluginAccessOptions = async ({
   }
 
   if (pluginAccess === false) {
+    const resolved = validatePluginAccessOptions(
+      mergePluginAccessOptions(base, { mode: "simple" }),
+    );
     return {
       mode: "simple",
-      pages: base.pages ?? defaultPluginPages,
+      pages: resolved.pages,
       capabilityOptions: { imports: [] },
-      runtimeOverlay: {},
+      runtimeOverlay: createRuntimeOverlay(root, resolved, pluginAccess),
     };
   }
 
-  const resolved = mergePluginAccessOptions(base, pluginAccess);
+  const resolved = validatePluginAccessOptions(
+    mergePluginAccessOptions(base, pluginAccess),
+  );
   const capabilityOptions: MuonCapabilityOptions = {
     imports:
       resolved.mode === "validate" ? toCapabilityImports(resolved.plugins) : [],

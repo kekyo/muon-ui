@@ -82,6 +82,7 @@ static constexpr char kMuonConfigPluginPluginsKey[] = "plugins";
 static constexpr char kMuonConfigLegacyPluginsKey[] = "plugins";
 static constexpr char kMuonConfigPluginEntryNameKey[] = "name";
 static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
+static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
 static constexpr char kMuonInternalPluginName[] = "internal";
 static constexpr char kMuonConfigLogKey[] = "log";
 static constexpr char kMuonConfigLogLevelKey[] = "level";
@@ -2272,6 +2273,14 @@ static bool ReadPluginConfig(yyjson_val* root,
     }
     plugin_names.insert(plugin_config.name);
 
+    if (yyjson_obj_get(entry, kMuonConfigPluginEntryAllowKey) == nullptr &&
+        yyjson_obj_get(entry, kMuonConfigPluginEntryImportsKey) != nullptr) {
+      *error_message =
+          "muon.json " + config_path +
+          ".allow is required in runtime config; validate imports require "
+          "Vite capability generation";
+      return false;
+    }
     if (!ReadRequiredStringArray(entry, kMuonConfigPluginEntryAllowKey,
                                  config_path + ".allow",
                                  &plugin_config.allow, error_message)) {

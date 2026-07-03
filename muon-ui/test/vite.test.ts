@@ -648,7 +648,6 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
-                allow: ["muon.executor.*"],
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -678,7 +677,6 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
-                allow: ["muon.executor.*"],
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -747,7 +745,6 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
-                allow: ["muon.executor.*"],
                 imports: [
                   {
                     sources: ["src/not-used/**"],
@@ -809,56 +806,227 @@ describe("muon Vite plugin", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("inherits validate-mode import allow from the plugin entry", async () => {
-    const root = await createTemporaryDirectory(
-      "muon-vite-inherit-capability-",
-    );
-    await mkdir(join(root, "src", "native"), { recursive: true });
+  it("generates runtime plugin allow from validate-mode import rules", async () => {
+    const root = await createTemporaryDirectory("muon-vite-runtime-allow-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
     await writeFile(
-      join(root, "index.html"),
-      '<script type="module" src="/src/main.ts"></script>',
-    );
-    await writeFile(
-      join(root, "src", "main.ts"),
-      'import { runNode } from "./native/executor";\nvoid runNode;\n',
-    );
-    await writeFile(
-      join(root, "src", "native", "executor.ts"),
-      [
-        'import { spawn } from "muon:executor";',
-        "export const runNode = async () =>",
-        "  await spawn({ command: 'node', args: ['script.js'] });",
-        "",
-      ].join("\n"),
-    );
-
-    await viteBuild({
-      root,
-      logLevel: "silent",
-      plugins: [
-        muon({
-          open: false,
-          build: false,
-          pluginAccess: {
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          network: { allow: ["asset://main/**"] },
+          plugin: {
             plugins: [
               {
                 name: "internal",
-                allow: ["muon.executor.spawn"],
                 imports: [
                   {
                     sources: ["src/native/**"],
+                    allow: ["muon.executor.spawn"],
+                  },
+                  {
+                    sources: ["src/browser/**"],
+                    allow: ["muon.executor.spawn", "muon.browser.reload"],
                   },
                 ],
               },
             ],
           },
-        }),
-      ],
-    });
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+      },
+      undefined,
+    );
+    try {
+      await wait(() => existsSync(join(outputDirectory, "override.json")));
+      const overrideConfig = JSON.parse(
+        await readFile(join(outputDirectory, "override.json"), "utf8"),
+      ) as {
+        plugin: {
+          capabilities: { allow: string[] }[];
+          plugins: { name: string; allow: string[] }[];
+        };
+      };
+      expect(overrideConfig.plugin.plugins).toEqual([
+        {
+          name: "internal",
+          allow: ["muon.executor.spawn", "muon.browser.reload"],
+        },
+      ]);
+      expect(
+        overrideConfig.plugin.capabilities.map((entry) => entry.allow),
+      ).toEqual([
+        ["muon.executor.spawn"],
+        ["muon.executor.spawn", "muon.browser.reload"],
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects validate-mode plugin entry allow", async () => {
+    const root = await createTemporaryDirectory("muon-vite-parent-allow-");
+    await writeBasicViteProject(root);
 
     await expect(
-      access(join(root, "dist", "index.html")),
-    ).resolves.toBeUndefined();
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                  allow: ["muon.executor.spawn"],
+                  imports: [
+                    {
+                      sources: ["src/native/**"],
+                      allow: ["muon.executor.spawn"],
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow(
+      "plugin.plugins[0].allow is only supported in simple mode",
+    );
+  });
+
+  it("rejects validate-mode plugin entries without import rules", async () => {
+    const root = await createTemporaryDirectory("muon-vite-missing-imports-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow("plugin.plugins[0].imports is required in validate mode");
+  });
+
+  it("rejects validate-mode plugin entries with empty import rules", async () => {
+    const root = await createTemporaryDirectory("muon-vite-empty-imports-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                  imports: [],
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow("plugin.plugins[0].imports must not be empty");
+  });
+
+  it("rejects validate-mode imports without allow", async () => {
+    const root = await createTemporaryDirectory("muon-vite-missing-allow-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                  imports: [
+                    {
+                      sources: ["src/native/**"],
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow(
+      "plugin.plugins[0].imports[0].allow is required in validate mode",
+    );
+  });
+
+  it("rejects validate-mode imports with empty allow", async () => {
+    const root = await createTemporaryDirectory("muon-vite-empty-allow-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                  imports: [
+                    {
+                      sources: ["src/native/**"],
+                      allow: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow("plugin.plugins[0].imports[0].allow must not be empty");
   });
 
   it("rejects validate-mode imports without sources or packages", async () => {
@@ -877,8 +1045,11 @@ describe("muon Vite plugin", () => {
               plugins: [
                 {
                   name: "internal",
-                  allow: ["muon.executor.spawn"],
-                  imports: [{}],
+                  imports: [
+                    {
+                      allow: ["muon.executor.spawn"],
+                    },
+                  ],
                 },
               ],
             },
@@ -888,8 +1059,8 @@ describe("muon Vite plugin", () => {
     ).rejects.toThrow("requires sources or packages");
   });
 
-  it("rejects validate-mode import allow beyond the plugin entry allowlist", async () => {
-    const root = await createTemporaryDirectory("muon-vite-excess-import-");
+  it("rejects simple-mode plugin entries without allow", async () => {
+    const root = await createTemporaryDirectory("muon-vite-simple-no-allow-");
     await writeBasicViteProject(root);
 
     await expect(
@@ -901,10 +1072,37 @@ describe("muon Vite plugin", () => {
             open: false,
             build: false,
             pluginAccess: {
+              mode: "simple",
               plugins: [
                 {
                   name: "internal",
-                  allow: ["muon.fs.*"],
+                },
+              ],
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow("plugin.plugins[0].allow is required in simple mode");
+  });
+
+  it("rejects simple-mode plugin entries with imports", async () => {
+    const root = await createTemporaryDirectory("muon-vite-simple-imports-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              mode: "simple",
+              plugins: [
+                {
+                  name: "internal",
+                  allow: ["muon.executor.spawn"],
                   imports: [
                     {
                       sources: ["src/native/**"],
@@ -917,7 +1115,50 @@ describe("muon Vite plugin", () => {
           }),
         ],
       }),
-    ).rejects.toThrow("exceeds plugin.plugins");
+    ).rejects.toThrow(
+      "plugin.plugins[0].imports is only supported in validate mode",
+    );
+  });
+
+  it("rejects pluginAccess false when muon.json only has validate imports", async () => {
+    const root = await createTemporaryDirectory("muon-vite-false-validate-");
+    await writeBasicViteProject(root);
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          plugin: {
+            plugins: [
+              {
+                name: "internal",
+                imports: [
+                  {
+                    sources: ["src/native/**"],
+                    allow: ["muon.executor.spawn"],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: false,
+          }),
+        ],
+      }),
+    ).rejects.toThrow("plugin.plugins[0].allow is required in simple mode");
   });
 
   it("uses Vite pluginAccess plugins instead of muon.json plugin imports", async () => {
@@ -933,7 +1174,6 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
-                allow: ["muon.executor.*"],
                 imports: [
                   {
                     sources: ["src/blocked/**"],
@@ -977,7 +1217,6 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
-                allow: ["muon.executor.*"],
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -1020,7 +1259,6 @@ describe("muon Vite plugin", () => {
               plugins: [
                 {
                   name: "internal",
-                  allow: ["muon.executor.*"],
                   imports: [
                     {
                       sources: ["src/native/**"],

@@ -79,7 +79,8 @@ await assertMissing(join("dist", `${["muon", "prepare"].join("-")}.exe`));
 await assertMissing(join("dist", "native", "linux32"));
 await assertMissing(join("dist", "runtime", "linux32"));
 await assertMissing(join("dist", "native", "muon-bootstrap.ico"));
-await assertExists(join("dist", "native", "muon-bootstrap.png"));
+await assertMissing(join("dist", "native", "muon-bootstrap.png"));
+await assertExists(join("dist", "native", "muon-256.png"));
 
 for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   const nativePath = join("dist", "native", target);

@@ -216,6 +216,83 @@ const createWindowsResourceFixture = async (
   ]);
 };
 
+const applyWindowsResourceUpdate = async (
+  executablePath: string,
+  update: Record<string, unknown>,
+): Promise<void> => {
+  const updateDirectory = await createTemporaryDirectory(
+    "muon-build-resource-update-",
+  );
+  const updatesJsonPath = join(updateDirectory, "updates.json");
+  const outputPath = join(updateDirectory, "output.exe");
+  await writeFile(updatesJsonPath, `${JSON.stringify(update, null, 2)}\n`);
+  await execFileAsync(
+    resolve("dist", "native", "linux-amd64", "muon-builder"),
+    [
+      "resource",
+      "--input",
+      executablePath,
+      "--updates-json",
+      updatesJsonPath,
+      "--output",
+      outputPath,
+      "--quiet",
+    ],
+  );
+  await writeFile(executablePath, await readFile(outputPath));
+  await chmod(executablePath, 0o755);
+};
+
+const createWindowsCoreResourceFixture = async (
+  pePath: string,
+  icoPath: string,
+  overlayPath: string,
+): Promise<void> => {
+  await createWindowsResourceFixture(pePath, icoPath, overlayPath);
+  await applyWindowsResourceUpdate(pePath, {
+    version: {
+      language: 1033,
+      codePage: 1200,
+      fixed: {
+        fileVersion: "9.9.9.9",
+        productVersion: "9.9.9.9",
+        fileOS: "windows32",
+        fileType: "app",
+      },
+      strings: {
+        CompanyName: "Muon Core Company",
+        FileDescription: "Muon Core Runtime",
+        FileVersion: "9.9.9-core",
+        InternalName: "muon-core",
+        OriginalFilename: "muon-core.exe",
+        ProductName: "Muon Core",
+        ProductVersion: "9.9.9-core",
+      },
+    },
+  });
+};
+
+const withNativeResourceUpdater = async <T>(
+  action: () => Promise<T>,
+): Promise<T> => {
+  const previousPreparePath = process.env.MUON_BUILDER_PATH;
+  process.env.MUON_BUILDER_PATH = resolve(
+    "dist",
+    "native",
+    "linux-amd64",
+    "muon-builder",
+  );
+  try {
+    return await action();
+  } finally {
+    if (previousPreparePath === undefined) {
+      delete process.env.MUON_BUILDER_PATH;
+    } else {
+      process.env.MUON_BUILDER_PATH = previousPreparePath;
+    }
+  }
+};
+
 const assertWindowsIcon = async (
   executablePath: string,
   iconPath: string,
@@ -551,7 +628,7 @@ describe("muon build", () => {
     ).resolves.toBe("windows-amd64 libwinpthread-1.dll\n");
   });
 
-  it("updates Windows launcher icon and version resources from muon config metadata", async () => {
+  it("updates Windows core and launcher icon resources from muon config metadata", async () => {
     const root = await createTemporaryDirectory("muon-build-windows-resource-");
     const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
       "windows-amd64",
@@ -559,8 +636,15 @@ describe("muon build", () => {
     const iconPath = join(root, "icons", "app.png");
     const seedIconPath = join(root, "icons", "seed.ico");
     const expectedIconPath = join(root, "icons", "expected.ico");
+    const coreSlotPath = join(root, "core-slot.bin");
     const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    await writeFile(coreSlotPath, createMuonEmbeddedConfigSlot());
     await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await createWindowsCoreResourceFixture(
+      join(packageDirectory, "runtime", "windows-amd64", "muon-core.exe"),
+      seedIconPath,
+      coreSlotPath,
+    );
     await createWindowsResourceFixture(
       join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
       seedIconPath,
@@ -602,37 +686,20 @@ describe("muon build", () => {
     await mkdir(join(root, "assets"), { recursive: true });
     await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
 
-    const previousPreparePath = process.env.MUON_BUILDER_PATH;
-    process.env.MUON_BUILDER_PATH = resolve(
-      "dist",
-      "native",
-      "linux-amd64",
-      "muon-builder",
+    const result = await withNativeResourceUpdater(
+      async () =>
+        await buildMuonApp({
+          root,
+          packageDirectory,
+          targets: ["windows-amd64"],
+          assetSalt: Buffer.from([0x0c, 0x33]),
+        }),
     );
-    let result: Awaited<ReturnType<typeof buildMuonApp>> | undefined =
-      undefined;
-    try {
-      result = await buildMuonApp({
-        root,
-        packageDirectory,
-        targets: ["windows-amd64"],
-        assetSalt: Buffer.from([0x0c, 0x33]),
-      });
-    } finally {
-      if (previousPreparePath === undefined) {
-        delete process.env.MUON_BUILDER_PATH;
-      } else {
-        process.env.MUON_BUILDER_PATH = previousPreparePath;
-      }
-    }
 
-    expect(result).toBeDefined();
-    const [target] = result?.targets ?? [];
-    const launcherPath = join(
-      root,
-      "dist-muon/windows-amd64",
-      "windows-resource-sample.exe",
-    );
+    const [target] = result.targets;
+    const outputPath = join(root, "dist-muon/windows-amd64");
+    const launcherPath = join(outputPath, "windows-resource-sample.exe");
+    const corePath = join(outputPath, "muon-core.exe");
     expect(target?.launcherPath).toBe(launcherPath);
     expect(
       (target?.embeddedConfig as Record<string, unknown> | undefined)?.windows,
@@ -645,6 +712,20 @@ describe("muon build", () => {
       ),
     );
     await assertWindowsIcon(launcherPath, expectedIconPath);
+    await assertWindowsIcon(corePath, expectedIconPath);
+    await assertWindowsVersion(corePath, [
+      "--file-version",
+      "9.9.9.9",
+      "--product-version",
+      "9.9.9.9",
+      "CompanyName=Muon Core Company",
+      "FileDescription=Muon Core Runtime",
+      "FileVersion=9.9.9-core",
+      "ProductName=Muon Core",
+      "ProductVersion=9.9.9-core",
+      "InternalName=muon-core",
+      "OriginalFilename=muon-core.exe",
+    ]);
     await assertWindowsVersion(launcherPath, [
       "--file-version",
       "7.8.9.0",
@@ -656,6 +737,80 @@ describe("muon build", () => {
       "ProductName=Muon Config Product",
       "ProductVersion=7.8.9",
       "LegalCopyright=Copyright Muon Config",
+    ]);
+  });
+
+  it("embeds the default Windows icon into core and launcher resources", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-default-windows-resource-",
+    );
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const defaultIconPath = resolve("..", "images", "muon-256.png");
+    const stagedDefaultIconPath = join(
+      packageDirectory,
+      "native",
+      "muon-256.png",
+    );
+    const seedIconPath = join(root, "icons", "seed.ico");
+    const expectedIconPath = join(root, "icons", "expected-default.ico");
+    const coreSlotPath = join(root, "core-slot.bin");
+    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    await writeFile(stagedDefaultIconPath, await readFile(defaultIconPath));
+    await writeFile(coreSlotPath, createMuonEmbeddedConfigSlot());
+    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await createWindowsCoreResourceFixture(
+      join(packageDirectory, "runtime", "windows-amd64", "muon-core.exe"),
+      seedIconPath,
+      coreSlotPath,
+    );
+    await createWindowsResourceFixture(
+      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      seedIconPath,
+      bootstrapSlotPath,
+    );
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "windows-default-icon-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    await withNativeResourceUpdater(
+      async () =>
+        await buildMuonApp({
+          root,
+          packageDirectory,
+          targets: ["windows-amd64"],
+          assetSalt: Buffer.from([0x0e, 0x55]),
+        }),
+    );
+
+    const outputPath = join(root, "dist-muon/windows-amd64");
+    await writeFile(
+      expectedIconPath,
+      await createWindowsIconBufferFromPngData(
+        await readFile(defaultIconPath),
+        defaultIconPath,
+      ),
+    );
+    await assertWindowsIcon(
+      join(outputPath, "windows-default-icon-sample.exe"),
+      expectedIconPath,
+    );
+    await assertWindowsIcon(
+      join(outputPath, "muon-core.exe"),
+      expectedIconPath,
+    );
+    await assertWindowsVersion(join(outputPath, "muon-core.exe"), [
+      "--file-version",
+      "9.9.9.9",
+      "--product-version",
+      "9.9.9.9",
+      "CompanyName=Muon Core Company",
+      "FileDescription=Muon Core Runtime",
+      "ProductName=Muon Core",
     ]);
   });
 

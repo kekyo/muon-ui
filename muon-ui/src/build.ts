@@ -37,6 +37,7 @@ import {
 import {
   resolveMuonWindowsResource,
   stripBuildOnlyWindowsResourceConfig,
+  updateWindowsPeIconResource,
   updateWindowsPeResources,
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
@@ -679,6 +680,12 @@ const buildMuonTarget = async (input: {
   });
 
   if (descriptor.os === "windows") {
+    await updateWindowsPeIconResource({
+      executablePath: join(outputPath, descriptor.runtimeExecutableName),
+      resource: input.windowsResource,
+      environment: process.env,
+      cwd: input.root,
+    });
     await updateWindowsPeResources({
       executablePath: launcherPath,
       resource: input.windowsResource,

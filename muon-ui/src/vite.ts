@@ -39,8 +39,8 @@ export interface MuonWindowsResourceOptions {
    * required Windows `.ico` file automatically when updating PE resources or
    * creating NSIS installers. Relative paths are resolved from the source that
    * supplied the option.
-   * @defaultValue Uses `windows.resource.iconPath`, then the packaged Muon
-   * bootstrap PNG icon when available.
+   * @defaultValue Uses `windows.resource.iconPath`, then the packaged
+   * `muon-256.png` icon.
    */
   iconPath?: string;
 
@@ -132,7 +132,7 @@ export interface MuonLinuxDesktopOptions {
    *
    * @remarks Only `.png` files are accepted as app inputs. Relative paths are
    * resolved from the source that supplied the option.
-   * @defaultValue Uses the packaged Muon bootstrap PNG icon when available.
+   * @defaultValue Uses the packaged `muon-256.png` icon when available.
    */
   iconPath?: string;
 

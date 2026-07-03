@@ -843,8 +843,6 @@ set(MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH
   "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon-256.png")
 set(MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/browser/muon_default_title_bar_icon_generated.h")
-set(MUON_WINDOWS_ICON_PATH
-  "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon.ico")
 file(MAKE_DIRECTORY "${MUON_GENERATED_INCLUDE_DIR}")
 
 function(muon_normalize_windows_version input output_dot output_comma)
@@ -921,11 +919,6 @@ if(WIN32)
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/muon_core.rc.in"
     "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
     @ONLY
-    )
-  set_source_files_properties(
-    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
-    PROPERTIES
-    OBJECT_DEPENDS "${MUON_WINDOWS_ICON_PATH}"
     )
   list(APPEND APP_SOURCES
     "${MUON_CORE_WINDOWS_RESOURCE_PATH}"

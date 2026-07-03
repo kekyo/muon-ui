@@ -526,10 +526,10 @@ const resolveDefaultLinuxDesktopIcon = async (
   packageDirectory: string,
 ): Promise<string | undefined> => {
   const candidates = [
-    join(resolve(packageDirectory), "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "..", "dist", "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "..", "..", "images", "muon-bootstrap-256.png"),
+    join(resolve(packageDirectory), "native", "muon-256.png"),
+    join(moduleDirectory, "native", "muon-256.png"),
+    join(moduleDirectory, "..", "dist", "native", "muon-256.png"),
+    join(moduleDirectory, "..", "..", "images", "muon-256.png"),
   ];
   for (const candidate of candidates) {
     if (await fileExists(candidate)) {

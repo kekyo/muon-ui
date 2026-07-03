@@ -979,11 +979,11 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
         ]
       },
       {
-        "name": "muon_fs_dialogs_gtk3",
+        "name": "foobar",
         "imports": [
           {
             "sources": ["src/native/**"],
-            "allow": ["muon.fs.dialogs.openFile"]
+            "allow": ["foobar.native.*"]
           }
         ]
       }
@@ -1027,7 +1027,6 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
 - `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
   省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
-  内蔵アイコンはコード中に埋め込まれているため、アプリ側のアセットファイルとして用意する必要はありません。
   `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定出来ます。
   このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
   ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。

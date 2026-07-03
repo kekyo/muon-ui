@@ -50,6 +50,7 @@ import {
   mergeMuonWindowsResourceOptions,
   readMuonConfigForWindowsResource,
   resolveMuonWindowsResource,
+  updateWindowsPeIconResource,
   updateWindowsPeResources,
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
@@ -714,16 +715,11 @@ const packageNsis = async (
   const uninstallRegistryKey = createNsisUninstallRegistryKey(appId);
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });
-  const iconPath =
-    windowsResource.iconPath === undefined
-      ? undefined
-      : join(
-          dirname(scriptPath),
-          `${metadata.packageName}-${target.target}.ico`,
-        );
-  if (windowsResource.iconPath !== undefined && iconPath !== undefined) {
-    await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
-  }
+  const iconPath = join(
+    dirname(scriptPath),
+    `${metadata.packageName}-${target.target}.ico`,
+  );
+  await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
   await writeFile(
     scriptPath,
     [
@@ -780,13 +776,11 @@ const packageNsis = async (
 
 const createNsisResourceDirectives = (
   resource: ResolvedMuonWindowsResource,
-  iconPath: string | undefined,
+  iconPath: string,
 ): string[] => {
   const lines: string[] = [];
-  if (iconPath !== undefined) {
-    lines.push(`Icon "${escapeNsis(iconPath)}"`);
-    lines.push(`UninstallIcon "${escapeNsis(iconPath)}"`);
-  }
+  lines.push(`Icon "${escapeNsis(iconPath)}"`);
+  lines.push(`UninstallIcon "${escapeNsis(iconPath)}"`);
   lines.push(`VIProductVersion "${escapeNsis(resource.fixedVersion)}"`);
   lines.push(`VIFileVersion "${escapeNsis(resource.fixedVersion)}"`);
   lines.push(
@@ -819,7 +813,17 @@ const reapplyPackWindowsResources = async (
   environment: NodeJS.ProcessEnv,
 ): Promise<void> => {
   for (const target of targets) {
-    if (getMuonTargetDescriptor(target.target).os === "windows") {
+    const descriptor = getMuonTargetDescriptor(target.target);
+    if (descriptor.os === "windows") {
+      await updateWindowsPeIconResource({
+        executablePath: join(
+          target.outputPath,
+          descriptor.runtimeExecutableName,
+        ),
+        resource,
+        environment,
+        cwd: root,
+      });
       await updateWindowsPeResources({
         executablePath: target.launcherPath,
         resource,

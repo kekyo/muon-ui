@@ -31,14 +31,16 @@ bootstrap_dump="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap-re
 x86_64-w64-mingw32-objdump -x "${bootstrap_executable}" > "${bootstrap_dump}"
 sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
   "${bootstrap_dump}" > "${bootstrap_dump}.section"
-if ! grep -Fq 'Entry: ID: 0x000003' "${bootstrap_dump}.section" ||
-    ! grep -Fq 'Entry: ID: 0x00000e' "${bootstrap_dump}.section"; then
-  echo "muon-bootstrap.exe is missing Windows icon resources." >&2
+if grep -Fq 'Entry: ID: 0x000003' "${bootstrap_dump}.section" ||
+    grep -Fq 'Entry: ID: 0x00000e' "${bootstrap_dump}.section"; then
+  echo "muon-bootstrap.exe contains deprecated windres icon resources." >&2
   exit 1
 fi
-node "${SCRIPT_DIR}/scripts/assert-windows-icon.mjs" \
-  "${bootstrap_executable}" \
-  "${SCRIPT_DIR}/../images/muon-bootstrap.ico"
+if ! grep -Fq 'Entry: ID: 0x000010' "${bootstrap_dump}.section" ||
+    ! grep -Fq 'Entry: ID: 0x000018' "${bootstrap_dump}.section"; then
+  echo "muon-bootstrap.exe is missing Windows version or manifest resources." >&2
+  exit 1
+fi
 node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
   "${bootstrap_executable}" \
   --file-version \

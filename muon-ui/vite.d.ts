@@ -253,10 +253,18 @@ export interface MuonVitePluginAccessEntryOptions {
   /**
    * Optional expected SHA-1 signature for the external plugin library.
    *
-   * @remarks This is a 40-character hexadecimal SHA-1 digest checked before
-   * Muon loads the native plugin library. It is not supported for `internal`.
+   * @remarks This is a 40-character hexadecimal SHA-1 digest of the native
+   * plugin library bytes followed by `salt`. It is not supported for
+   * `internal`.
    */
   signature?: string;
+  /**
+   * Optional hexadecimal salt appended before checking the plugin signature.
+   *
+   * @remarks Required when `signature` is specified. It is not supported for
+   * `internal`.
+   */
+  salt?: string;
   /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *

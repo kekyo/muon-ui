@@ -379,9 +379,22 @@ struct MuonPluginEntryConfig {
    */
   bool has_signature = false;
   /**
-   * Expected lowercase SHA-1 signature for the external plugin library.
+   * Whether a plugin library signature salt was explicitly configured.
+   */
+  bool has_salt = false;
+  /**
+   * Expected lowercase SHA-1 signature for the salted external plugin library.
    */
   std::string signature;
+  /**
+   * Additional bytes appended to the plugin library before signature
+   * comparison.
+   *
+   * @remarks This value is decoded from the hexadecimal plugin.plugins[].salt
+   * string while reading muon.json. An explicitly empty string is represented
+   * as an empty vector with has_salt set.
+   */
+  std::vector<uint8_t> salt;
   /**
    * Glob patterns that allow full plugin function paths.
    */

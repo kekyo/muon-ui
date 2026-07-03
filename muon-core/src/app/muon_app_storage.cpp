@@ -164,7 +164,7 @@ static std::string JoinZipEntryPath(const std::string& host,
   return entry_path;
 }
 
-using muon_internal::CalculateSha1Hex;
+using muon_internal::CalculateFileSha1Hex;
 
 static bool ReadBinaryFile(const std::filesystem::path& path,
                            std::vector<uint8_t>* data) {
@@ -407,13 +407,18 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
   error.clear();
   if (std::filesystem::is_regular_file(asset_from, error) && !error) {
     if (has_asset_signature) {
+      std::string actual_signature;
+      if (!CalculateFileSha1Hex(asset_from, asset_salt, &actual_signature)) {
+        *error_message = "Failed to read muon.json asset.sourcePath: " +
+                         asset_from.string();
+        return nullptr;
+      }
       std::vector<uint8_t> archive_data;
       if (!ReadBinaryFile(asset_from, &archive_data)) {
         *error_message = "Failed to read muon.json asset.sourcePath: " +
                          asset_from.string();
         return nullptr;
       }
-      const auto actual_signature = CalculateSha1Hex(archive_data, asset_salt);
       if (actual_signature != normalized_asset_signature) {
         *error_message =
             "muon.json asset.signature does not match asset.sourcePath salted "

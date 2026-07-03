@@ -327,7 +327,7 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteTlvString(&bytes, "plugins");
   WriteRawString(&bytes, "plugins");
   BeginTlvArray(&bytes, 1);
-  BeginTlvObject(&bytes, 3);
+  BeginTlvObject(&bytes, 4);
   WriteRawString(&bytes, "name");
   WriteTlvString(&bytes, "embedded_plugin");
   WriteRawString(&bytes, "allow");
@@ -338,6 +338,8 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
       &bytes,
       {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
        0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13});
+  WriteRawString(&bytes, "salt");
+  WriteTlvBinary(&bytes, {0xde, 0xad, 0xbe, 0xef});
 
   return bytes;
 }
@@ -604,7 +606,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"A9993E364706816ABA3E25717850C26C9CD0D89D"}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"DEADBEEF"}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -695,6 +697,15 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.plugin.plugins[1].signature ==
                     "a9993e364706816aba3e25717850c26c9cd0d89d",
                 "external plugin signature was not normalized") &&
+         Expect(config.plugin.plugins[1].has_salt,
+                "external plugin salt was not marked present") &&
+         Expect(config.plugin.plugins[1].salt.size() == 4,
+                "external plugin salt byte count changed") &&
+         Expect(config.plugin.plugins[1].salt[0] == 0xde &&
+                    config.plugin.plugins[1].salt[1] == 0xad &&
+                    config.plugin.plugins[1].salt[2] == 0xbe &&
+                    config.plugin.plugins[1].salt[3] == 0xef,
+                "external plugin salt bytes changed") &&
          Expect(config.asset.has_from, "asset.sourcePath was not parsed") &&
          Expect(config.asset.from == test_directory / "packed/assets.zip",
                 "asset.sourcePath was not resolved from config directory") &&
@@ -920,6 +931,15 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.plugin.plugins[0].signature ==
                     "000102030405060708090a0b0c0d0e0f10111213",
                 "embedded binary plugin signature was not restored") &&
+         Expect(config.plugin.plugins[0].has_salt,
+                "embedded plugin salt was not marked present") &&
+         Expect(config.plugin.plugins[0].salt.size() == 4,
+                "embedded plugin salt byte count changed") &&
+         Expect(config.plugin.plugins[0].salt[0] == 0xde &&
+                    config.plugin.plugins[0].salt[1] == 0xad &&
+                    config.plugin.plugins[0].salt[2] == 0xbe &&
+                    config.plugin.plugins[0].salt[3] == 0xef,
+                "embedded binary plugin salt was not restored") &&
          Expect(config.asset.has_from,
                 "embedded asset.sourcePath was not parsed") &&
          Expect(config.asset.from == runtime_directory / "assets.zip",
@@ -1367,6 +1387,16 @@ static bool RunConfigValidationTest(
       test_directory / "non-hex-plugin-signature.json";
   const auto internal_plugin_signature_path =
       test_directory / "internal-plugin-signature.json";
+  const auto missing_plugin_salt_path =
+      test_directory / "missing-plugin-salt.json";
+  const auto invalid_plugin_salt_type_path =
+      test_directory / "invalid-plugin-salt-type.json";
+  const auto odd_plugin_salt_path =
+      test_directory / "odd-plugin-salt.json";
+  const auto non_hex_plugin_salt_path =
+      test_directory / "non-hex-plugin-salt.json";
+  const auto internal_plugin_salt_path =
+      test_directory / "internal-plugin-salt.json";
   const auto invalid_plugin_allow_path =
       test_directory / "invalid-plugin-allow.json";
   const auto invalid_plugin_entry_path =
@@ -1514,6 +1544,21 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(internal_plugin_signature_path,
                           R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
                 "failed to write internal plugin signature config") &&
+         Expect(WriteFile(missing_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
+                "failed to write missing plugin salt config") &&
+         Expect(WriteFile(invalid_plugin_salt_type_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":42}]}})"),
+                "failed to write invalid plugin salt type config") &&
+         Expect(WriteFile(odd_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":"abc"}]}})"),
+                "failed to write odd plugin salt config") &&
+         Expect(WriteFile(non_hex_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":"0x"}]}})"),
+                "failed to write non-hex plugin salt config") &&
+         Expect(WriteFile(internal_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"salt":"deadbeef"}]}})"),
+                "failed to write internal plugin salt config") &&
          Expect(WriteFile(invalid_plugin_allow_path,
                           R"({"plugin":{"plugins":[{"name":"internal","allow":"muon.**"}]}})"),
                 "failed to write invalid plugin allow config") &&
@@ -1646,6 +1691,20 @@ static bool RunConfigValidationTest(
                                  "40-character SHA-1 hex string") &&
          LoadConfigExpectFailure(internal_plugin_signature_path,
                                  "plugin.plugins[0].signature is not supported "
+                                 "for internal") &&
+         LoadConfigExpectFailure(missing_plugin_salt_path,
+                                 "plugin.plugins[0].signature requires "
+                                 "plugin.plugins[0].salt") &&
+         LoadConfigExpectFailure(invalid_plugin_salt_type_path,
+                                 "plugin.plugins[0].salt must be a string") &&
+         LoadConfigExpectFailure(odd_plugin_salt_path,
+                                 "plugin.plugins[0].salt must be a "
+                                 "hexadecimal byte string") &&
+         LoadConfigExpectFailure(non_hex_plugin_salt_path,
+                                 "plugin.plugins[0].salt must be a "
+                                 "hexadecimal byte string") &&
+         LoadConfigExpectFailure(internal_plugin_salt_path,
+                                 "plugin.plugins[0].salt is not supported "
                                  "for internal") &&
          LoadConfigExpectFailure(invalid_plugin_allow_path,
                                  "plugin.plugins[0].allow must be an array") &&

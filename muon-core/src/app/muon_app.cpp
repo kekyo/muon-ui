@@ -563,6 +563,8 @@ void MuonApp::OnContextInitialized() {
     plugins.push_back({plugin_config.name,
                        plugin_config.has_signature,
                        plugin_config.signature,
+                       plugin_config.has_salt,
+                       plugin_config.salt,
                        plugin_policy});
   }
 

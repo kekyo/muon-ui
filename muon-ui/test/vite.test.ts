@@ -909,6 +909,7 @@ describe("muon Vite plugin", () => {
             {
               name: "foobar",
               signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+              salt: "deadbeef",
               imports: [
                 {
                   sources: ["src/native/**"],
@@ -927,7 +928,12 @@ describe("muon Vite plugin", () => {
         await readFile(join(outputDirectory, "override.json"), "utf8"),
       ) as {
         plugin: {
-          plugins: { name: string; allow: string[]; signature?: string }[];
+          plugins: {
+            name: string;
+            allow: string[];
+            signature?: string;
+            salt?: string;
+          }[];
         };
       };
       expect(overrideConfig.plugin.plugins).toEqual([
@@ -935,6 +941,7 @@ describe("muon Vite plugin", () => {
           name: "foobar",
           allow: ["foobar.run"],
           signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+          salt: "deadbeef",
         },
       ]);
     } finally {

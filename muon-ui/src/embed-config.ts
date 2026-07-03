@@ -184,6 +184,12 @@ const isPluginSignaturePath = (path: readonly string[]): boolean =>
   path[1] === "plugins" &&
   path[2] === "signature";
 
+const isPluginSaltPath = (path: readonly string[]): boolean =>
+  path.length === 3 &&
+  path[0] === "plugin" &&
+  path[1] === "plugins" &&
+  path[2] === "salt";
+
 const isHexString = (value: string): boolean =>
   value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value);
 
@@ -211,6 +217,9 @@ const encodeKnownBinaryString = (
     return value.length === 40 && isHexString(value)
       ? decodeHexString(value)
       : undefined;
+  }
+  if (isPluginSaltPath(path)) {
+    return isHexString(value) ? decodeHexString(value) : undefined;
   }
   if (isPath(path, "browser", "backgroundColor")) {
     const hex = value.startsWith("#") ? value.slice(1) : value;

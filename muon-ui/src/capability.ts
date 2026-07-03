@@ -68,6 +68,10 @@ export interface MuonRuntimePluginEntryConfig {
    */
   signature?: string;
   /**
+   * Optional hexadecimal salt appended before checking the plugin signature.
+   */
+  salt?: string;
+  /**
    * Plugin function path globs allowed for this plugin entry.
    */
   allow: readonly string[];

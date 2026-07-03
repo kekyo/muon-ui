@@ -1190,6 +1190,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
 | `plugins[].signature`        | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1署名です。                       |
+| `plugins[].salt`             | `string`                      | なし                   | `plugins[].signature` の計算に使うsaltを16進文字列で指定します。                  |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -1198,7 +1199,9 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 - `path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
 - `plugins[].signature` は40桁の16進数文字列です。`internal` プラグインには指定できません。
-  指定された場合、muonは `.so` / `.dll` を読み込む前にファイルのSHA-1を計算し、一致しなければ起動に失敗します。
+  指定する場合は `plugins[].salt` も指定してください。
+  指定された場合、muonは `.so` / `.dll` を読み込む前にファイル内容とsaltのSHA-1を計算し、一致しなければ起動に失敗します。
+- `plugins[].salt` は偶数桁の16進数文字列です。空文字は明示的な空saltとして扱われます。`internal` プラグインには指定できません。
 - `mode` に `"validate"` を指定した場合、Viteなどのバンドラーが生成したcapability付きvirtual module importからだけプラグイン関数を呼び出せます。
   `"simple"` では、従来通り `window.muon` とその下の名前空間オブジェクトをページに公開します。
 - `pages` は、ページにプラグインAPIブリッジを注入するかどうかだけを制御します。
@@ -1356,6 +1359,7 @@ muon({
 | `plugins`                    | `readonly object[]`           | `plugin.plugins`       | 有効化するプラグインとimport許可のリストです。                                    |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
 | `plugins[].signature`        | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1署名です。                       |
+| `plugins[].salt`             | `string`                      | なし                   | `plugins[].signature` の計算に使うsaltを16進文字列で指定します。                  |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimporterごとのcapability import許可リストです。        |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | Vite project rootからの相対importerパスglobです。                                  |

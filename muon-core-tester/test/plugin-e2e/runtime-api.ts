@@ -135,6 +135,7 @@ const expectedCefTarget = (): string => {
 
 const calculatePluginSignature = async (
   pluginName: string,
+  salt: string,
 ): Promise<string> => {
   const pluginPath = join(
     TEST_PLUGIN_DIRECTORY,
@@ -142,6 +143,7 @@ const calculatePluginSignature = async (
   );
   return createHash("sha1")
     .update(await readFile(pluginPath))
+    .update(Buffer.from(salt, "hex"))
     .digest("hex");
 };
 
@@ -594,6 +596,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
 
   it("loads an external plugin when its signature matches", async () => {
     const pluginName = "muon_test_plugin_alpha";
+    const pluginSalt = "deadbeef";
     const running = await startDebugMuon(
       [pluginName],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -614,7 +617,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       undefined,
       undefined,
       {},
-      { [pluginName]: await calculatePluginSignature(pluginName) },
+      { [pluginName]: await calculatePluginSignature(pluginName, pluginSalt) },
+      { [pluginName]: pluginSalt },
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -642,6 +646,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     );
     const markerPath = join(markerDirectory, "marker.txt");
     const pluginName = "muon_test_plugin_load_marker";
+    const pluginSalt = "deadbeef";
     const running = await startMuon(
       DEBUG_MUON_DIRECTORY,
       [pluginName],
@@ -668,6 +673,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       cdpCommandTimeoutMs,
       undefined,
       { [pluginName]: "0000000000000000000000000000000000000000" },
+      { [pluginName]: pluginSalt },
     );
     try {
       await waitForProcessExit(running, processExitTimeoutMs);

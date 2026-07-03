@@ -53,6 +53,10 @@ export interface MuonPluginAccessEntryOptions {
    */
   signature?: string;
   /**
+   * Optional hexadecimal salt appended before checking the plugin signature.
+   */
+  salt?: string;
+  /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *
    * @remarks Required in simple mode. Validate mode derives the runtime
@@ -160,6 +164,9 @@ const isStringArray = (value: unknown): value is readonly string[] =>
 
 const isSha1HexString = (value: string): boolean =>
   value.length === 40 && /^[0-9a-fA-F]+$/.test(value);
+
+const isHexByteString = (value: string): boolean =>
+  value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value);
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -290,6 +297,16 @@ const readPluginAccessEntryOptions = (
       );
     }
   }
+  if (value.salt !== undefined) {
+    if (typeof value.salt !== "string") {
+      throw new Error(`muon.json ${configPath}.salt must be a string.`);
+    }
+    if (!isHexByteString(value.salt)) {
+      throw new Error(
+        `muon.json ${configPath}.salt must be a hexadecimal byte string.`,
+      );
+    }
+  }
   const allow = readOptionalStringArray(value, "allow", `${configPath}.allow`);
 
   const rawImports = value.imports;
@@ -310,6 +327,9 @@ const readPluginAccessEntryOptions = (
   };
   if (value.signature !== undefined) {
     options.signature = value.signature;
+  }
+  if (value.salt !== undefined) {
+    options.salt = value.salt;
   }
   if (allow !== undefined) {
     options.allow = allow;
@@ -396,6 +416,16 @@ const validatePluginAccessOptions = (
     if (plugin.name === "internal" && plugin.signature !== undefined) {
       throw new Error(
         `muon.json ${pluginPath}.signature is not supported for internal plugins.`,
+      );
+    }
+    if (plugin.name === "internal" && plugin.salt !== undefined) {
+      throw new Error(
+        `muon.json ${pluginPath}.salt is not supported for internal plugins.`,
+      );
+    }
+    if (plugin.signature !== undefined && plugin.salt === undefined) {
+      throw new Error(
+        `muon.json ${pluginPath}.signature requires ${pluginPath}.salt.`,
       );
     }
     if (resolved.mode === "validate") {
@@ -523,6 +553,7 @@ const toValidateRuntimePluginEntries = (
       ...(plugin.signature === undefined
         ? {}
         : { signature: plugin.signature }),
+      ...(plugin.salt === undefined ? {} : { salt: plugin.salt }),
       allow,
     };
   });
@@ -533,6 +564,7 @@ const toSimpleRuntimePluginEntries = (
   plugins.map((plugin, pluginIndex) => ({
     name: plugin.name,
     ...(plugin.signature === undefined ? {} : { signature: plugin.signature }),
+    ...(plugin.salt === undefined ? {} : { salt: plugin.salt }),
     allow: [...getSimplePluginAllow(plugin, pluginIndex)],
   }));
 

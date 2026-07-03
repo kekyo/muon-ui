@@ -82,6 +82,7 @@ static constexpr char kMuonConfigPluginPluginsKey[] = "plugins";
 static constexpr char kMuonConfigLegacyPluginsKey[] = "plugins";
 static constexpr char kMuonConfigPluginEntryNameKey[] = "name";
 static constexpr char kMuonConfigPluginEntrySignatureKey[] = "signature";
+static constexpr char kMuonConfigPluginEntrySaltKey[] = "salt";
 static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
 static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
 static constexpr char kMuonInternalPluginName[] = "internal";
@@ -446,6 +447,8 @@ static bool CreateEmbeddedBinaryJsonValue(
           "Embedded muon config plugin.plugins[].signature must be 20 bytes";
       return false;
     }
+    string_value = EncodeLowerHex(bytes, size);
+  } else if (IsEmbeddedPluginEntryPath(path, kMuonConfigPluginEntrySaltKey)) {
     string_value = EncodeLowerHex(bytes, size);
   } else if (IsEmbeddedPath(path, kMuonConfigBrowserKey,
                             kMuonConfigBrowserBackgroundColorKey)) {
@@ -2067,6 +2070,62 @@ static bool ReadLogConfig(yyjson_val* root,
          ReadLogSourcesConfig(log, config, level_was_set, error_message);
 }
 
+static bool ReadSha1SignatureString(yyjson_val* value,
+                                    const std::string& config_path,
+                                    std::string* signature,
+                                    std::string* error_message) {
+  if (!yyjson_is_str(value)) {
+    *error_message = "muon.json " + config_path + " must be a string";
+    return false;
+  }
+  auto normalized_signature = ToLowerAscii(ReadJsonString(value));
+  if (normalized_signature.size() != 40) {
+    *error_message =
+        "muon.json " + config_path +
+        " must be a 40-character SHA-1 hex string";
+    return false;
+  }
+  for (const auto character : normalized_signature) {
+    if (!IsAsciiHexDigit(character)) {
+      *error_message =
+          "muon.json " + config_path +
+          " must be a 40-character SHA-1 hex string";
+      return false;
+    }
+  }
+  *signature = std::move(normalized_signature);
+  return true;
+}
+
+static bool ReadHexByteString(yyjson_val* value,
+                              const std::string& config_path,
+                              std::vector<uint8_t>* bytes,
+                              std::string* error_message) {
+  if (!yyjson_is_str(value)) {
+    *error_message = "muon.json " + config_path + " must be a string";
+    return false;
+  }
+  const auto hex = ReadJsonString(value);
+  if (hex.size() % 2 != 0) {
+    *error_message =
+        "muon.json " + config_path + " must be a hexadecimal byte string";
+    return false;
+  }
+  std::vector<uint8_t> decoded;
+  decoded.reserve(hex.size() / 2);
+  for (auto index = size_t{0}; index < hex.size(); index += 2) {
+    if (!IsAsciiHexDigit(hex[index]) ||
+        !IsAsciiHexDigit(hex[index + 1])) {
+      *error_message =
+          "muon.json " + config_path + " must be a hexadecimal byte string";
+      return false;
+    }
+    decoded.push_back(DecodeAsciiHexByte(hex[index], hex[index + 1]));
+  }
+  *bytes = std::move(decoded);
+  return true;
+}
+
 static bool ReadAssetConfig(yyjson_val* root,
                             MuonConfig* config,
                             std::string* error_message) {
@@ -2095,24 +2154,10 @@ static bool ReadAssetConfig(yyjson_val* root,
 
   const auto signature = yyjson_obj_get(asset, kMuonConfigAssetSignatureKey);
   if (signature != nullptr) {
-    if (!yyjson_is_str(signature)) {
-      *error_message = "muon.json asset.signature must be a string";
+    if (!ReadSha1SignatureString(signature, "asset.signature",
+                                 &config->asset.signature, error_message)) {
       return false;
     }
-    auto normalized_signature = ToLowerAscii(ReadJsonString(signature));
-    if (normalized_signature.size() != 40) {
-      *error_message =
-          "muon.json asset.signature must be a 40-character SHA-1 hex string";
-      return false;
-    }
-    for (const auto character : normalized_signature) {
-      if (!IsAsciiHexDigit(character)) {
-        *error_message =
-            "muon.json asset.signature must be a 40-character SHA-1 hex string";
-        return false;
-      }
-    }
-    config->asset.signature = std::move(normalized_signature);
     config->asset.has_signature = true;
   }
 
@@ -2120,28 +2165,10 @@ static bool ReadAssetConfig(yyjson_val* root,
   if (salt == nullptr) {
     return true;
   }
-  if (!yyjson_is_str(salt)) {
-    *error_message = "muon.json asset.salt must be a string";
+  if (!ReadHexByteString(salt, "asset.salt", &config->asset.salt,
+                         error_message)) {
     return false;
   }
-  const auto salt_hex = ReadJsonString(salt);
-  if (salt_hex.size() % 2 != 0) {
-    *error_message = "muon.json asset.salt must be a hexadecimal byte string";
-    return false;
-  }
-  std::vector<uint8_t> salt_bytes;
-  salt_bytes.reserve(salt_hex.size() / 2);
-  for (auto index = size_t{0}; index < salt_hex.size(); index += 2) {
-    if (!IsAsciiHexDigit(salt_hex[index]) ||
-        !IsAsciiHexDigit(salt_hex[index + 1])) {
-      *error_message =
-          "muon.json asset.salt must be a hexadecimal byte string";
-      return false;
-    }
-    salt_bytes.push_back(DecodeAsciiHexByte(salt_hex[index],
-                                            salt_hex[index + 1]));
-  }
-  config->asset.salt = std::move(salt_bytes);
   config->asset.has_salt = true;
   return true;
 }
@@ -2291,34 +2318,39 @@ static bool ReadPluginConfig(yyjson_val* root,
     const auto signature_value =
         yyjson_obj_get(entry, kMuonConfigPluginEntrySignatureKey);
     if (signature_value != nullptr) {
-      if (!yyjson_is_str(signature_value)) {
-        *error_message =
-            "muon.json " + config_path + ".signature must be a string";
-        return false;
-      }
       if (plugin_config.name == kMuonInternalPluginName) {
         *error_message =
             "muon.json " + config_path +
             ".signature is not supported for internal plugins";
         return false;
       }
-      auto normalized_signature = ToLowerAscii(ReadJsonString(signature_value));
-      if (normalized_signature.size() != 40) {
-        *error_message =
-            "muon.json " + config_path +
-            ".signature must be a 40-character SHA-1 hex string";
+      if (!ReadSha1SignatureString(signature_value, config_path + ".signature",
+                                   &plugin_config.signature, error_message)) {
         return false;
       }
-      for (const auto character : normalized_signature) {
-        if (!IsAsciiHexDigit(character)) {
-          *error_message =
-              "muon.json " + config_path +
-              ".signature must be a 40-character SHA-1 hex string";
-          return false;
-        }
-      }
-      plugin_config.signature = std::move(normalized_signature);
       plugin_config.has_signature = true;
+    }
+
+    const auto salt_value =
+        yyjson_obj_get(entry, kMuonConfigPluginEntrySaltKey);
+    if (salt_value != nullptr) {
+      if (plugin_config.name == kMuonInternalPluginName) {
+        *error_message =
+            "muon.json " + config_path +
+            ".salt is not supported for internal plugins";
+        return false;
+      }
+      if (!ReadHexByteString(salt_value, config_path + ".salt",
+                             &plugin_config.salt, error_message)) {
+        return false;
+      }
+      plugin_config.has_salt = true;
+    }
+    if (plugin_config.has_signature && !plugin_config.has_salt) {
+      *error_message =
+          "muon.json " + config_path + ".signature requires " + config_path +
+          ".salt";
+      return false;
     }
 
     if (yyjson_obj_get(entry, kMuonConfigPluginEntryAllowKey) == nullptr &&

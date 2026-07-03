@@ -515,6 +515,7 @@ export interface PluginConfigEntry {
   name: string;
   allow: string[];
   signature?: string;
+  salt?: string;
 }
 
 export interface NetworkAuthorizedOriginConfig {
@@ -2092,6 +2093,7 @@ export const createPluginConfigEntries = (
   allowPatterns: string[],
   includeStandardPlugins = true,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
+  pluginSaltByName: Readonly<Record<string, string>> = {},
 ): PluginConfigEntry[] => {
   const standardPluginEntries = includeStandardPlugins
     ? STANDARD_PLUGIN_NAMES.flatMap((pluginName) => {
@@ -2108,6 +2110,9 @@ export const createPluginConfigEntries = (
                 ...(pluginSignatureByName[pluginName] === undefined
                   ? {}
                   : { signature: pluginSignatureByName[pluginName] }),
+                ...(pluginSaltByName[pluginName] === undefined
+                  ? {}
+                  : { salt: pluginSaltByName[pluginName] }),
               },
             ];
       })
@@ -2121,6 +2126,9 @@ export const createPluginConfigEntries = (
       ...(pluginSignatureByName[pluginName] === undefined
         ? {}
         : { signature: pluginSignatureByName[pluginName] }),
+      ...(pluginSaltByName[pluginName] === undefined
+        ? {}
+        : { salt: pluginSaltByName[pluginName] }),
     })),
   ];
 };
@@ -2258,7 +2266,8 @@ interface StartWindowsRemoteMuonOptions {
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
   pluginAllowPatterns: string[];
-  pluginSha1ByName: Readonly<Record<string, string>>;
+  pluginSaltByName: Readonly<Record<string, string>>;
+  pluginSignatureByName: Readonly<Record<string, string>>;
   pluginNames: string[];
   waitForDebugPort: boolean;
 }
@@ -2564,7 +2573,8 @@ const startWindowsRemoteMuon = async (
     options.configuredPluginNames,
     options.pluginAllowPatterns,
     options.includeStandardPlugins,
-    options.pluginSha1ByName,
+    options.pluginSignatureByName,
+    options.pluginSaltByName,
   );
   const configDirectory = join(directory, ".muon-test-config");
   const pluginDirectory = join(directory, "test-plugins");
@@ -2683,7 +2693,8 @@ export const startMuon = async (
   executablePath: string | undefined = undefined,
   cdpTimeoutMs = cdpStartupTimeoutMs,
   logConfig: Record<string, unknown> | undefined = undefined,
-  pluginSha1ByName: Readonly<Record<string, string>> = {},
+  pluginSignatureByName: Readonly<Record<string, string>> = {},
+  pluginSaltByName: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -2707,8 +2718,9 @@ export const startMuon = async (
         logConfig,
         networkAllowPatterns,
         networkAuthorizedOrigins,
-        pluginSha1ByName,
         pluginAllowPatterns,
+        pluginSaltByName,
+        pluginSignatureByName,
         pluginNames,
         waitForDebugPort,
       },
@@ -2722,7 +2734,8 @@ export const startMuon = async (
     configuredPluginNames,
     pluginAllowPatterns,
     includeStandardPlugins,
-    pluginSha1ByName,
+    pluginSignatureByName,
+    pluginSaltByName,
   );
   const pluginDirectory = await createPluginDirectory(
     directory,
@@ -2825,7 +2838,8 @@ export const startDebugMuon = async (
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   logConfig: Record<string, unknown> | undefined = undefined,
-  pluginSha1ByName: Readonly<Record<string, string>> = {},
+  pluginSignatureByName: Readonly<Record<string, string>> = {},
+  pluginSaltByName: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -2854,7 +2868,8 @@ export const startDebugMuon = async (
       : getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
     isWindowsRemoteE2e() ? cdpStartupTimeoutMs : bootstrapCdpStartupTimeoutMs,
     logConfig,
-    pluginSha1ByName,
+    pluginSignatureByName,
+    pluginSaltByName,
   );
 
 export const startDebugMuonBootstrap = async (

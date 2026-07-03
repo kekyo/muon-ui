@@ -14,10 +14,11 @@
 namespace muon_internal {
 
 /**
- * Calculates a lowercase SHA-1 hexadecimal digest for byte data and a suffix.
+ * Calculates a lowercase SHA-1 hexadecimal digest for a file and a suffix.
  */
-std::string CalculateSha1Hex(const std::vector<uint8_t>& data,
-                             const std::vector<uint8_t>& suffix);
+bool CalculateFileSha1Hex(const std::filesystem::path& path,
+                          const std::vector<uint8_t>& suffix,
+                          std::string* digest);
 
 /**
  * Calculates a lowercase SHA-1 hexadecimal digest for a file.

@@ -163,15 +163,8 @@ static void UpdateSha1(MuonSha1* sha1, const std::vector<uint8_t>& data) {
   }
 }
 
-std::string CalculateSha1Hex(const std::vector<uint8_t>& data,
-                             const std::vector<uint8_t>& suffix) {
-  MuonSha1 sha1;
-  UpdateSha1(&sha1, data);
-  UpdateSha1(&sha1, suffix);
-  return ToLowerHex(sha1.Finalize());
-}
-
 bool CalculateFileSha1Hex(const std::filesystem::path& path,
+                          const std::vector<uint8_t>& suffix,
                           std::string* digest) {
   if (digest == nullptr) {
     return false;
@@ -198,8 +191,14 @@ bool CalculateFileSha1Hex(const std::filesystem::path& path,
     }
   }
 
+  UpdateSha1(&sha1, suffix);
   *digest = ToLowerHex(sha1.Finalize());
   return true;
+}
+
+bool CalculateFileSha1Hex(const std::filesystem::path& path,
+                          std::string* digest) {
+  return CalculateFileSha1Hex(path, {}, digest);
 }
 
 }  // namespace muon_internal

@@ -2446,16 +2446,22 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
         impl, "Plugin file not found: " + path.string());
   }
 
-  if (plugin.has_expected_sha1) {
-    std::string actual_sha1;
-    if (!muon_internal::CalculateFileSha1Hex(path, &actual_sha1)) {
+  if (plugin.has_expected_signature) {
+    if (!plugin.has_signature_salt) {
+      return FailMuonPluginStartup(
+          impl, "Plugin signature requires plugin salt: " + plugin.plugin);
+    }
+    std::string actual_signature;
+    if (!muon_internal::CalculateFileSha1Hex(
+            path, plugin.signature_salt, &actual_signature)) {
       return FailMuonPluginStartup(
           impl, "Failed to calculate plugin signature: " + path.string());
     }
-    if (actual_sha1 != plugin.expected_sha1) {
+    if (actual_signature != plugin.expected_signature) {
       return FailMuonPluginStartup(
           impl, "Plugin signature mismatch: " + path.string() + " expected " +
-                    plugin.expected_sha1 + " actual " + actual_sha1);
+                    plugin.expected_signature + " actual " +
+                    actual_signature);
     }
   }
 

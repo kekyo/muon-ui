@@ -96,6 +96,7 @@ describe("muon embedded config", () => {
               name: 'foobar',
               allow: ['foobar.*'],
               signature: '000102030405060708090a0b0c0d0e0f10111213',
+              salt: 'deadbeef',
             },
           ],
         },
@@ -121,6 +122,7 @@ describe("muon embedded config", () => {
     expect(payload.indexOf(Buffer.from("A9993E364706816ABA3E257"))).toBe(-1);
     expect(payload.indexOf(Buffer.from("0A10ff"))).toBe(-1);
     expect(payload.indexOf(Buffer.from("00010203040506070809"))).toBe(-1);
+    expect(payload.indexOf(Buffer.from("deadbeef"))).toBe(-1);
     expect(
       payload.indexOf(Buffer.from([0x0a, 0x10, 0xff])),
     ).toBeGreaterThanOrEqual(0);
@@ -131,6 +133,9 @@ describe("muon embedded config", () => {
           0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
         ]),
       ),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      payload.indexOf(Buffer.from([0xde, 0xad, 0xbe, 0xef])),
     ).toBeGreaterThanOrEqual(0);
     const emptySlot = createMuonEmbeddedConfigSlot();
     const tail = content.subarray(

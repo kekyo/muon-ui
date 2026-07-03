@@ -30,6 +30,7 @@ import { getDefaultMuonPrepareTarget } from "./prepare.js";
 import {
   allMuonTargets,
   getMuonTargetDescriptor,
+  getMuonTargetRuntimeAppId,
   normalizeMuonTarget,
   type MuonTarget,
   type MuonTargetDescriptor,
@@ -119,7 +120,10 @@ export interface MuonBuildOptions {
    */
   appName?: string;
   /**
-   * Stable application identifier used for portable runtime state.
+   * Stable base application identifier used for portable runtime state.
+   *
+   * @remarks Windows target distributions embed `<appId>.<arch>` as their
+   * runtime app identifier. Linux targets embed this value unchanged.
    */
   appId?: string;
   /**
@@ -221,6 +225,13 @@ export interface MuonBuildTargetResult {
    */
   asset: MuonBuildAssetResult;
   /**
+   * Application identifier embedded into this target distribution.
+   *
+   * @remarks Windows targets append the target architecture to the base
+   * `appId`; Linux targets use the base `appId` unchanged.
+   */
+  runtimeAppId: string;
+  /**
    * Config object embedded into muon-core and the app launcher.
    */
   embeddedConfig: JsonObject;
@@ -243,7 +254,10 @@ export interface MuonBuildResult {
    */
   appName: string;
   /**
-   * Stable application identifier embedded for portable runtime state.
+   * Stable base application identifier used to derive target runtime state.
+   *
+   * @remarks See each target's `runtimeAppId` for the identifier embedded into
+   * that target distribution.
    */
   appId: string;
   /**
@@ -648,6 +662,7 @@ const buildMuonTarget = async (input: {
     getLauncherFileName(input.appName, descriptor),
   );
   const assetZipPath = join(outputPath, "assets.zip");
+  const runtimeAppId = getMuonTargetRuntimeAppId(input.appId, input.target);
   const appIconPath =
     descriptor.os === "windows"
       ? input.windowsResource.iconPath
@@ -679,7 +694,7 @@ const buildMuonTarget = async (input: {
   const embeddedConfig = createEmbeddedConfig(
     input.sourceConfig,
     asset,
-    input.appId,
+    runtimeAppId,
     input.linuxDesktop.desktopId,
     appIconAssetUrl,
   );
@@ -720,6 +735,7 @@ const buildMuonTarget = async (input: {
     outputPath,
     launcherPath,
     asset,
+    runtimeAppId,
     embeddedConfig,
     ...(descriptor.os === "linux" ? { linuxDesktop: input.linuxDesktop } : {}),
   };

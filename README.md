@@ -67,6 +67,7 @@ you can develop modern local GUI applications using the web-based technology eco
 - It features a plugin system. Plugin functionality can be restricted using a whitelist filter.
 - Using built-in plugins, you can access local files, open dialogs, launch child processes, and manipulate windows.
 - It supports packages for Linux (deb) and Windows (NSIS), as well as portable operation.
+- Windows NSIS packages keep `windows-amd64` and `windows-i686` installs separate by embedding runtime app IDs such as `<appId>.amd64` and `<appId>.i686`.
 
 ### Environment
 

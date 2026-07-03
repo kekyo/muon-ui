@@ -503,6 +503,7 @@ describe("muon build", () => {
 
     const [target] = result.targets;
     expect(target?.target).toBe("linux-amd64");
+    expect(target?.runtimeAppId).toBe("scope.muon-sample");
     expect(target?.outputPath).toBe(join(root, "dist-muon/linux-amd64"));
     expect(target?.launcherPath).toBe(
       join(root, "dist-muon/linux-amd64", "muon-sample"),
@@ -654,6 +655,47 @@ describe("muon build", () => {
     await expect(
       readFile(join(outputPath, "libwinpthread-1.dll"), "utf8"),
     ).resolves.toBe("windows-amd64 libwinpthread-1.dll\n");
+  });
+
+  it("uses architecture-specific runtime app IDs for Windows target distributions", async () => {
+    const root = await createTemporaryDirectory("muon-build-windows-app-id-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-i686",
+      "windows-amd64",
+    ]);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "@scope/windows-app-id-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["windows-i686", "windows-amd64"],
+      assetSalt: Buffer.from([0xa1, 0xd5]),
+    });
+
+    const windowsI686 = result.targets.find(
+      (target) => target.target === "windows-i686",
+    );
+    const windowsAmd64 = result.targets.find(
+      (target) => target.target === "windows-amd64",
+    );
+    expect(result.appId).toBe("scope.windows-app-id-sample");
+    expect(windowsI686?.runtimeAppId).toBe("scope.windows-app-id-sample.i686");
+    expect(windowsI686?.embeddedConfig.bootstrap).toEqual({
+      appId: "scope.windows-app-id-sample.i686",
+      desktopId: "scope.windows-app-id-sample",
+    });
+    expect(windowsAmd64?.runtimeAppId).toBe(
+      "scope.windows-app-id-sample.amd64",
+    );
+    expect(windowsAmd64?.embeddedConfig.bootstrap).toEqual({
+      appId: "scope.windows-app-id-sample.amd64",
+      desktopId: "scope.windows-app-id-sample",
+    });
   });
 
   it("updates Windows core and launcher icon resources from muon config metadata", async () => {

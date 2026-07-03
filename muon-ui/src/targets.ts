@@ -168,6 +168,24 @@ export const getMuonTargetDescriptor = (
 ): MuonTargetDescriptor => targetDescriptors[target];
 
 /**
+ * Returns the runtime app identifier embedded for one target distribution.
+ *
+ * @param appId Base sanitized application identifier.
+ * @param target Public Muon target.
+ * @returns Target runtime application identifier.
+ *
+ * @remarks Windows targets append their public architecture name so 32-bit and
+ * 64-bit packages do not share runtime state or installer identities.
+ */
+export const getMuonTargetRuntimeAppId = (
+  appId: string,
+  target: MuonTarget,
+): string => {
+  const descriptor = getMuonTargetDescriptor(target);
+  return descriptor.os === "windows" ? `${appId}.${descriptor.arch}` : appId;
+};
+
+/**
  * Normalizes a user supplied public Muon target.
  *
  * @param target Target value supplied by the user.

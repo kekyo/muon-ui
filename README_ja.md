@@ -274,8 +274,10 @@ npx muon pack --type nsis --target windows-amd64
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
   Debian/Ubuntuでは、単に `sudo apt install nsis` でインストール出来ます。
   Windows環境では [Nullsoft Scriptable Install System](https://nsis.sourceforge.io/Main_Page) からダウンロード出来ます。
-- NSISの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
-  アンインストール時には `%LOCALAPPDATA%\<appId>` のruntime stateも削除します。
+- NSISの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>-<arch>` です。
+  表示名、Start Menu shortcut、アンインストールentryには `<packageName> (<arch>)` を使用します。
+  アンインストール時には `%LOCALAPPDATA%\<appId>.<arch>` のruntime stateも削除します。
+  `<arch>` は `amd64` または `i686` です。
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
 - CLIオプションは、 `muon build` で指定できる `--icon`, `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
@@ -314,7 +316,7 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 CEFプロファイルは同じアプリケーションステートルートの `profile/` に配置されます:
 
 - Linux: `$XDG_STATE_HOME/<appId>/runtime/` と `$XDG_STATE_HOME/<appId>/profile/`、または `$HOME/.local/state/<appId>/runtime/` と `$HOME/.local/state/<appId>/profile/`
-- Windows: `%LOCALAPPDATA%\<appId>\runtime\` と `%LOCALAPPDATA%\<appId>\profile\`
+- Windows: `%LOCALAPPDATA%\<appId>.<arch>\runtime\` と `%LOCALAPPDATA%\<appId>.<arch>\profile\`。`<arch>` は `amd64` または `i686` です。
 
 起動時の準備では、ユーザーステートディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
 これらについての詳細は、別章を参照して下さい。
@@ -1088,6 +1090,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
   `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
 - portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へstagingし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+  Windows portable配布物では、runtime state用IDとして `<appId>.<arch>` を使用します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
 - 新しいportable配布物から起動した場合、fingerprintの差分によりstate directory側のアプリファイル群が更新され、desktop entryも更新されます。
   state directory配下のlauncherから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
@@ -1144,6 +1147,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
 - `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
   setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
+  NSISの `Name` / `DisplayName` / installer path / uninstall registry key / state削除先はWindows architecture別になりますが、`ProductName` などのWindows resource metadataと成果物ファイル名は同じmetadata規則を維持します。
 
 ### assetキー
 
@@ -1275,7 +1279,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 | キー                   | 型       | 既定値     | 概要                                                                                                  |
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
-| `appId`                | `string` | 自動生成   | portable runtime stateを識別する安定IDです。build時に自動埋め込みされます。                          |
+| `appId`                | `string` | 自動生成   | portable runtime stateを識別するbase IDです。build時に自動埋め込みされます。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
 | `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 ---
@@ -1392,7 +1396,7 @@ muon({
 | `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
 | `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
-| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
+| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別するbase IDです。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
 | `iconPath`         | `string`            | `muon.json`またはMuon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                                |
@@ -1407,9 +1411,10 @@ muon({
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
   Windowsターゲットでは `.exe` が自動的に付与されます。
-- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` から生成します。
+- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` からbase IDを生成します。
   `@scope/name` は `scope.name` になり、その他の使用できない文字は `-` に正規化されます。
-  生成された値は `bootstrap.appId` として `muon-core` とランチャーに埋め込まれます。
+  Linuxターゲットでは生成された値をそのまま `bootstrap.appId` として `muon-core` とランチャーに埋め込みます。
+  Windowsターゲットでは `windows-amd64` に `<appId>.amd64`、`windows-i686` に `<appId>.i686` を埋め込みます。
 - `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
   `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
   設定ファイルが存在しない場合は `{}` 相当として扱います。

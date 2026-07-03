@@ -645,6 +645,7 @@ target_link_libraries(muon_cardio INTERFACE
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
+  src/muon_sha1.cpp
   src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
@@ -688,6 +689,7 @@ set(APP_SOURCES
   )
 set(APP_HEADERS
   src/muon_json_helpers.h
+  src/muon_sha1.h
   src/muon_string_helpers.h
   src/app/muon_app.h
   src/app/muon_app_scheme.h
@@ -1353,6 +1355,7 @@ endif()
 if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_app_scheme_storage_test
     tests/muon_app_scheme_storage_test.cpp
+    src/muon_sha1.cpp
     src/app/muon_app_scheme.cpp
     src/app/muon_app_storage.cpp
     src/config/muon_paths.cpp

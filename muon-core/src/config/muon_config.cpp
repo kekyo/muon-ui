@@ -81,6 +81,7 @@ static constexpr char kMuonConfigPluginCapabilityIdKey[] = "id";
 static constexpr char kMuonConfigPluginPluginsKey[] = "plugins";
 static constexpr char kMuonConfigLegacyPluginsKey[] = "plugins";
 static constexpr char kMuonConfigPluginEntryNameKey[] = "name";
+static constexpr char kMuonConfigPluginEntrySha1Key[] = "sha1";
 static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
 static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
 static constexpr char kMuonInternalPluginName[] = "internal";
@@ -400,6 +401,12 @@ static bool IsEmbeddedPath(const std::vector<std::string>& path,
   return path.size() == 2 && path[0] == first && path[1] == second;
 }
 
+static bool IsEmbeddedPluginEntryPath(const std::vector<std::string>& path,
+                                      const char* key) {
+  return path.size() == 3 && path[0] == kMuonConfigPluginKey &&
+         path[1] == kMuonConfigPluginPluginsKey && path[2] == key;
+}
+
 static char EncodeLowerHexNibble(uint8_t value) {
   return static_cast<char>(value < 10 ? '0' + value : 'a' + (value - 10));
 }
@@ -431,6 +438,14 @@ static bool CreateEmbeddedBinaryJsonValue(
     string_value = EncodeLowerHex(bytes, size);
   } else if (IsEmbeddedPath(path, kMuonConfigAssetKey,
                             kMuonConfigAssetSaltKey)) {
+    string_value = EncodeLowerHex(bytes, size);
+  } else if (IsEmbeddedPluginEntryPath(path,
+                                       kMuonConfigPluginEntrySha1Key)) {
+    if (size != 20) {
+      *error_message = "Embedded muon config plugin.plugins[].sha1 must be "
+                       "20 bytes";
+      return false;
+    }
     string_value = EncodeLowerHex(bytes, size);
   } else if (IsEmbeddedPath(path, kMuonConfigBrowserKey,
                             kMuonConfigBrowserBackgroundColorKey)) {
@@ -2272,6 +2287,39 @@ static bool ReadPluginConfig(yyjson_val* root,
       return false;
     }
     plugin_names.insert(plugin_config.name);
+
+    const auto sha1_value =
+        yyjson_obj_get(entry, kMuonConfigPluginEntrySha1Key);
+    if (sha1_value != nullptr) {
+      if (!yyjson_is_str(sha1_value)) {
+        *error_message =
+            "muon.json " + config_path + ".sha1 must be a string";
+        return false;
+      }
+      if (plugin_config.name == kMuonInternalPluginName) {
+        *error_message =
+            "muon.json " + config_path +
+            ".sha1 is not supported for internal plugins";
+        return false;
+      }
+      auto normalized_sha1 = ToLowerAscii(ReadJsonString(sha1_value));
+      if (normalized_sha1.size() != 40) {
+        *error_message =
+            "muon.json " + config_path +
+            ".sha1 must be a 40-character SHA-1 hex string";
+        return false;
+      }
+      for (const auto character : normalized_sha1) {
+        if (!IsAsciiHexDigit(character)) {
+          *error_message =
+              "muon.json " + config_path +
+              ".sha1 must be a 40-character SHA-1 hex string";
+          return false;
+        }
+      }
+      plugin_config.sha1 = std::move(normalized_sha1);
+      plugin_config.has_sha1 = true;
+    }
 
     if (yyjson_obj_get(entry, kMuonConfigPluginEntryAllowKey) == nullptr &&
         yyjson_obj_get(entry, kMuonConfigPluginEntryImportsKey) != nullptr) {

@@ -64,6 +64,10 @@ export interface MuonRuntimePluginEntryConfig {
    */
   name: string;
   /**
+   * Optional expected SHA-1 digest for the external plugin library.
+   */
+  sha1?: string;
+  /**
    * Plugin function path globs allowed for this plugin entry.
    */
   allow: readonly string[];

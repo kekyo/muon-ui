@@ -3,14 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 
 import {
   MUON_PORT,
   MUON_APP_URL,
   DEBUG_MUON_DIRECTORY,
+  PLUGIN_SUFFIX,
   TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   TEST_NETWORK_ALLOW_PATTERNS,
+  TEST_PLUGIN_DIRECTORY,
   TEST_PLUGIN_ALLOW_PATTERNS,
   access,
   browserFunctionNames,
@@ -128,6 +131,16 @@ const expectedCefTarget = (): string => {
     return "windows64";
   }
   return target;
+};
+
+const calculatePluginSha1 = async (pluginName: string): Promise<string> => {
+  const pluginPath = join(
+    TEST_PLUGIN_DIRECTORY,
+    `${pluginName}${PLUGIN_SUFFIX}`,
+  );
+  return createHash("sha1")
+    .update(await readFile(pluginPath))
+    .digest("hex");
 };
 
 const expectedRuntimeExecutableName = (): string =>
@@ -573,6 +586,94 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
       await stopMuon(running, driver);
+      await rm(markerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads an external plugin when its SHA1 matches", async () => {
+    const pluginName = "muon_test_plugin_alpha";
+    const running = await startDebugMuon(
+      [pluginName],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      [pluginName],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      { [pluginName]: await calculatePluginSha1(pluginName) },
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin sha1 match</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate("window.muon.test.alpha.alphaName()"),
+      ).resolves.toBe("alpha");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("rejects an external plugin before loading when its SHA1 mismatches", async () => {
+    const markerDirectory = await mkdtemp(
+      join(tmpdir(), "muon-plugin-sha1-marker-"),
+    );
+    const markerPath = join(markerDirectory, "marker.txt");
+    const pluginName = "muon_test_plugin_load_marker";
+    const running = await startMuon(
+      DEBUG_MUON_DIRECTORY,
+      [pluginName],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      false,
+      shouldUseValgrind,
+      undefined,
+      { MUON_TEST_PLUGIN_LOAD_MARKER: markerPath },
+      [pluginName],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      cdpCommandTimeoutMs,
+      undefined,
+      { [pluginName]: "0000000000000000000000000000000000000000" },
+    );
+    try {
+      await waitForProcessExit(running, processExitTimeoutMs);
+      expect(running.process.exitCode).toBe(1);
+      expect(running.stderr).toContain("Plugin SHA1 mismatch");
+      await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
+    } finally {
+      await stopMuon(running, undefined);
       await rm(markerDirectory, { recursive: true, force: true });
     }
   });

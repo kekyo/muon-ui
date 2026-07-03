@@ -49,6 +49,10 @@ export interface MuonPluginAccessEntryOptions {
    */
   name: string;
   /**
+   * Optional expected SHA-1 digest for the external plugin library.
+   */
+  sha1?: string;
+  /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *
    * @remarks Required in simple mode. Validate mode derives the runtime
@@ -153,6 +157,9 @@ const isJsonObject = (value: unknown): value is JsonObject =>
 
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string");
+
+const isSha1HexString = (value: string): boolean =>
+  value.length === 40 && /^[0-9a-fA-F]+$/.test(value);
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -273,6 +280,16 @@ const readPluginAccessEntryOptions = (
   if (typeof value.name !== "string") {
     throw new Error(`muon.json ${configPath}.name must be a string.`);
   }
+  if (value.sha1 !== undefined) {
+    if (typeof value.sha1 !== "string") {
+      throw new Error(`muon.json ${configPath}.sha1 must be a string.`);
+    }
+    if (!isSha1HexString(value.sha1)) {
+      throw new Error(
+        `muon.json ${configPath}.sha1 must be a 40-character SHA-1 hex string.`,
+      );
+    }
+  }
   const allow = readOptionalStringArray(value, "allow", `${configPath}.allow`);
 
   const rawImports = value.imports;
@@ -291,6 +308,9 @@ const readPluginAccessEntryOptions = (
   const options: MuonPluginAccessEntryOptions = {
     name: value.name,
   };
+  if (value.sha1 !== undefined) {
+    options.sha1 = value.sha1;
+  }
   if (allow !== undefined) {
     options.allow = allow;
   }
@@ -373,6 +393,11 @@ const validatePluginAccessOptions = (
 ): EffectivePluginAccessOptions => {
   for (const [pluginIndex, plugin] of resolved.plugins.entries()) {
     const pluginPath = `plugin.plugins[${pluginIndex}]`;
+    if (plugin.name === "internal" && plugin.sha1 !== undefined) {
+      throw new Error(
+        `muon.json ${pluginPath}.sha1 is not supported for internal plugins.`,
+      );
+    }
     if (resolved.mode === "validate") {
       if (plugin.allow !== undefined) {
         throw new Error(
@@ -495,6 +520,7 @@ const toValidateRuntimePluginEntries = (
     }
     return {
       name: plugin.name,
+      ...(plugin.sha1 === undefined ? {} : { sha1: plugin.sha1 }),
       allow,
     };
   });
@@ -504,6 +530,7 @@ const toSimpleRuntimePluginEntries = (
 ): readonly MuonRuntimePluginEntryConfig[] =>
   plugins.map((plugin, pluginIndex) => ({
     name: plugin.name,
+    ...(plugin.sha1 === undefined ? {} : { sha1: plugin.sha1 }),
     allow: [...getSimplePluginAllow(plugin, pluginIndex)],
   }));
 

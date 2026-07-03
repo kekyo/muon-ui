@@ -881,6 +881,67 @@ describe("muon Vite plugin", () => {
     }
   });
 
+  it("preserves plugin SHA1 in generated plugin runtime config", async () => {
+    const root = await createTemporaryDirectory("muon-vite-plugin-sha1-");
+    const muonDirectory = await createTemporaryDirectory(
+      "muon-vite-plugin-sha1-runtime-",
+    );
+    const outputDirectory = await createTemporaryDirectory(
+      "muon-vite-plugin-sha1-output-",
+    );
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+        pluginAccess: {
+          plugins: [
+            {
+              name: "foobar",
+              sha1: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+              imports: [
+                {
+                  sources: ["src/native/**"],
+                  allow: ["foobar.run"],
+                },
+              ],
+            },
+          ],
+        },
+      },
+      undefined,
+    );
+    try {
+      await wait(() => existsSync(join(outputDirectory, "override.json")));
+      const overrideConfig = JSON.parse(
+        await readFile(join(outputDirectory, "override.json"), "utf8"),
+      ) as {
+        plugin: {
+          plugins: { name: string; allow: string[]; sha1?: string }[];
+        };
+      };
+      expect(overrideConfig.plugin.plugins).toEqual([
+        {
+          name: "foobar",
+          allow: ["foobar.run"],
+          sha1: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+        },
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects validate-mode plugin entry allow", async () => {
     const root = await createTemporaryDirectory("muon-vite-parent-allow-");
     await writeBasicViteProject(root);

@@ -560,7 +560,10 @@ void MuonApp::OnContextInitialized() {
       CefQuitMessageLoop();
       return;
     }
-    plugins.push_back({plugin_config.name, plugin_policy});
+    plugins.push_back({plugin_config.name,
+                       plugin_config.has_sha1,
+                       plugin_config.sha1,
+                       plugin_policy});
   }
 
   InitializeMuonBuiltinBootstrap(config_.default_version_policy);

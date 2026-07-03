@@ -7,6 +7,7 @@
 #include "plugins/muon_plugin_runtime.h"
 
 #include "muon_cardio_post.h"
+#include "muon_sha1.h"
 
 #include "plugins/builtin/muon_builtin.h"
 #include "browser/muon_builtin_browser.h"
@@ -2435,6 +2436,7 @@ static bool RegisterMuonBuiltinBrowserFunctions(
 
 static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
                                    const std::filesystem::path& path,
+                                   const MuonPluginRuntimeLoadEntry& plugin,
                                    const MuonPluginPolicy& plugin_policy) {
   std::error_code filesystem_error;
   if (!std::filesystem::exists(path, filesystem_error) || filesystem_error ||
@@ -2442,6 +2444,19 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
       filesystem_error) {
     return FailMuonPluginStartup(
         impl, "Plugin file not found: " + path.string());
+  }
+
+  if (plugin.has_expected_sha1) {
+    std::string actual_sha1;
+    if (!muon_internal::CalculateFileSha1Hex(path, &actual_sha1)) {
+      return FailMuonPluginStartup(
+          impl, "Failed to calculate plugin SHA1: " + path.string());
+    }
+    if (actual_sha1 != plugin.expected_sha1) {
+      return FailMuonPluginStartup(
+          impl, "Plugin SHA1 mismatch: " + path.string() + " expected " +
+                    plugin.expected_sha1 + " actual " + actual_sha1);
+    }
   }
 
   auto* handle = OpenMuonDynamicLibrary(path);
@@ -2555,7 +2570,7 @@ static bool LoadConfiguredMuonPluginLibraries(MuonPluginRuntimeImpl* impl) {
     }
     const auto path =
         ResolveMuonPluginLibraryPath(impl->plugin_directory, plugin.plugin);
-    if (!LoadMuonPluginLibrary(impl, path, *plugin.plugin_policy)) {
+    if (!LoadMuonPluginLibrary(impl, path, plugin, *plugin.plugin_policy)) {
       return false;
     }
   }

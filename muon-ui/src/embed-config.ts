@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon
 
 import { access, cp, readFile, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
 import { parse } from "json5";
@@ -177,6 +178,12 @@ const isPath = (
   second: string,
 ): boolean => path.length === 2 && path[0] === first && path[1] === second;
 
+const isPluginSha1Path = (path: readonly string[]): boolean =>
+  path.length === 3 &&
+  path[0] === "plugin" &&
+  path[1] === "plugins" &&
+  path[2] === "sha1";
+
 const isHexString = (value: string): boolean =>
   value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value);
 
@@ -199,6 +206,11 @@ const encodeKnownBinaryString = (
   }
   if (isPath(path, "asset", "salt")) {
     return isHexString(value) ? decodeHexString(value) : undefined;
+  }
+  if (isPluginSha1Path(path)) {
+    return value.length === 40 && isHexString(value)
+      ? decodeHexString(value)
+      : undefined;
   }
   if (isPath(path, "browser", "backgroundColor")) {
     const hex = value.startsWith("#") ? value.slice(1) : value;
@@ -280,11 +292,11 @@ export const createMuonEmbeddedConfigSlot = (
     );
   }
 
-  const slot = createEmptySlot();
   if (payload === undefined) {
-    return slot;
+    return createEmptySlot();
   }
 
+  const slot = randomBytes(muonEmbeddedConfigSlotSize);
   Buffer.from(payload).copy(slot, 0);
   return slot;
 };
@@ -307,12 +319,13 @@ export const createMuonBootstrapEmbeddedConfigSlot = (
     );
   }
 
-  const slot = Buffer.alloc(muonBootstrapEmbeddedConfigSlotSize, 0);
-  muonBootstrapEmbeddedConfigEmptySlotMarker.copy(slot, 0);
   if (payload === undefined) {
+    const slot = Buffer.alloc(muonBootstrapEmbeddedConfigSlotSize, 0);
+    muonBootstrapEmbeddedConfigEmptySlotMarker.copy(slot, 0);
     return slot;
   }
 
+  const slot = randomBytes(muonBootstrapEmbeddedConfigSlotSize);
   Buffer.from(payload).copy(slot, 0);
   return slot;
 };

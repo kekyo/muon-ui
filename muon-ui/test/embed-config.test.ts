@@ -90,6 +90,15 @@ describe("muon embedded config", () => {
           startPage: 'https://example.com/app',
           backgroundColor: '#123abc',
         },
+        plugin: {
+          plugins: [
+            {
+              name: 'foobar',
+              allow: ['foobar.*'],
+              sha1: '000102030405060708090a0b0c0d0e0f10111213',
+            },
+          ],
+        },
       }\n`,
     );
 
@@ -111,9 +120,25 @@ describe("muon embedded config", () => {
     expect(() => findMuonEmbeddedConfigSlot(content)).toThrow("found 0");
     expect(payload.indexOf(Buffer.from("A9993E364706816ABA3E257"))).toBe(-1);
     expect(payload.indexOf(Buffer.from("0A10ff"))).toBe(-1);
+    expect(payload.indexOf(Buffer.from("00010203040506070809"))).toBe(-1);
     expect(
       payload.indexOf(Buffer.from([0x0a, 0x10, 0xff])),
     ).toBeGreaterThanOrEqual(0);
+    expect(
+      payload.indexOf(
+        Buffer.from([
+          0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+          0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
+        ]),
+      ),
+    ).toBeGreaterThanOrEqual(0);
+    const emptySlot = createMuonEmbeddedConfigSlot();
+    const tail = content.subarray(
+      result.slotOffset + result.payloadSize,
+      result.slotOffset + muonEmbeddedConfigSlotSize,
+    );
+    const emptyTail = emptySlot.subarray(result.payloadSize);
+    expect(tail.equals(emptyTail)).toBe(false);
     expect(content.length).toBe(
       "fake executable prefix\n".length +
         muonEmbeddedConfigSlotSize +
@@ -232,6 +257,11 @@ describe("muon embedded config", () => {
     expect(
       payload.indexOf(Buffer.from("compat-latest")),
     ).toBeGreaterThanOrEqual(0);
+    const tail = content.subarray(
+      result.slotOffset + result.payloadSize,
+      result.slotOffset + muonEmbeddedConfigSlotSize,
+    );
+    expect(tail.equals(Buffer.alloc(tail.length, 0))).toBe(false);
   });
 
   it("writes an embedded bootstrap config to a separate output path", async () => {

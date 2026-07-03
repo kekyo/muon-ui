@@ -286,6 +286,11 @@ static void BeginTlvObject(std::vector<uint8_t>* bytes, size_t entry_count) {
   WriteVarUint(bytes, entry_count);
 }
 
+static void BeginTlvArray(std::vector<uint8_t>* bytes, size_t entry_count) {
+  bytes->push_back(6);
+  WriteVarUint(bytes, entry_count);
+}
+
 static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   std::vector<uint8_t> bytes;
   BeginTlvObject(&bytes, 4);
@@ -317,9 +322,22 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteTlvBool(&bytes, true);
 
   WriteRawString(&bytes, "plugin");
-  BeginTlvObject(&bytes, 1);
+  BeginTlvObject(&bytes, 2);
   WriteRawString(&bytes, "path");
   WriteTlvString(&bytes, "plugins");
+  WriteRawString(&bytes, "plugins");
+  BeginTlvArray(&bytes, 1);
+  BeginTlvObject(&bytes, 3);
+  WriteRawString(&bytes, "name");
+  WriteTlvString(&bytes, "embedded_plugin");
+  WriteRawString(&bytes, "allow");
+  BeginTlvArray(&bytes, 1);
+  WriteTlvString(&bytes, "embedded.*");
+  WriteRawString(&bytes, "sha1");
+  WriteTlvBinary(
+      &bytes,
+      {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13});
 
   return bytes;
 }
@@ -586,7 +604,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"sha1":"A9993E364706816ABA3E25717850C26C9CD0D89D"}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -672,6 +690,11 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                 "external plugin allow pattern count is wrong") &&
          Expect(config.plugin.plugins[1].allow[0] == "foobar.*",
                 "external plugin allow pattern changed") &&
+         Expect(config.plugin.plugins[1].has_sha1,
+                "external plugin sha1 was not marked present") &&
+         Expect(config.plugin.plugins[1].sha1 ==
+                    "a9993e364706816aba3e25717850c26c9cd0d89d",
+                "external plugin sha1 was not normalized") &&
          Expect(config.asset.has_from, "asset.sourcePath was not parsed") &&
          Expect(config.asset.from == test_directory / "packed/assets.zip",
                 "asset.sourcePath was not resolved from config directory") &&
@@ -884,6 +907,19 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.plugin.path == runtime_directory / "plugins",
                 "embedded plugin.path was not resolved from executable "
                 "directory") &&
+         Expect(config.plugin.plugins.size() == 1,
+                "embedded plugin entry count changed") &&
+         Expect(config.plugin.plugins[0].name == "embedded_plugin",
+                "embedded plugin name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 1,
+                "embedded plugin allow count changed") &&
+         Expect(config.plugin.plugins[0].allow[0] == "embedded.*",
+                "embedded plugin allow changed") &&
+         Expect(config.plugin.plugins[0].has_sha1,
+                "embedded plugin sha1 was not marked present") &&
+         Expect(config.plugin.plugins[0].sha1 ==
+                    "000102030405060708090a0b0c0d0e0f10111213",
+                "embedded binary plugin sha1 was not restored") &&
          Expect(config.asset.has_from,
                 "embedded asset.sourcePath was not parsed") &&
          Expect(config.asset.from == runtime_directory / "assets.zip",
@@ -1323,6 +1359,14 @@ static bool RunConfigValidationTest(
       test_directory / "missing-plugin-allow.json";
   const auto runtime_imports_without_allow_path =
       test_directory / "runtime-imports-without-allow.json";
+  const auto invalid_plugin_sha1_type_path =
+      test_directory / "invalid-plugin-sha1-type.json";
+  const auto short_plugin_sha1_path =
+      test_directory / "short-plugin-sha1.json";
+  const auto non_hex_plugin_sha1_path =
+      test_directory / "non-hex-plugin-sha1.json";
+  const auto internal_plugin_sha1_path =
+      test_directory / "internal-plugin-sha1.json";
   const auto invalid_plugin_allow_path =
       test_directory / "invalid-plugin-allow.json";
   const auto invalid_plugin_entry_path =
@@ -1458,6 +1502,18 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(runtime_imports_without_allow_path,
                           R"({"plugin":{"mode":"validate","plugins":[{"name":"internal","imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
                 "failed to write runtime imports without allow config") &&
+         Expect(WriteFile(invalid_plugin_sha1_type_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"sha1":42}]}})"),
+                "failed to write invalid plugin sha1 type config") &&
+         Expect(WriteFile(short_plugin_sha1_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"sha1":"a9993e364706816aba3e25717850c26c9cd0d89"}]}})"),
+                "failed to write short plugin sha1 config") &&
+         Expect(WriteFile(non_hex_plugin_sha1_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"sha1":"a9993e364706816aba3e25717850c26c9cd0d89x"}]}})"),
+                "failed to write non-hex plugin sha1 config") &&
+         Expect(WriteFile(internal_plugin_sha1_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"sha1":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
+                "failed to write internal plugin sha1 config") &&
          Expect(WriteFile(invalid_plugin_allow_path,
                           R"({"plugin":{"plugins":[{"name":"internal","allow":"muon.**"}]}})"),
                 "failed to write invalid plugin allow config") &&
@@ -1580,6 +1636,17 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(runtime_imports_without_allow_path,
                                  "validate imports require Vite capability "
                                  "generation") &&
+         LoadConfigExpectFailure(invalid_plugin_sha1_type_path,
+                                 "plugin.plugins[0].sha1 must be a string") &&
+         LoadConfigExpectFailure(short_plugin_sha1_path,
+                                 "plugin.plugins[0].sha1 must be a "
+                                 "40-character SHA-1 hex string") &&
+         LoadConfigExpectFailure(non_hex_plugin_sha1_path,
+                                 "plugin.plugins[0].sha1 must be a "
+                                 "40-character SHA-1 hex string") &&
+         LoadConfigExpectFailure(internal_plugin_sha1_path,
+                                 "plugin.plugins[0].sha1 is not supported "
+                                 "for internal") &&
          LoadConfigExpectFailure(invalid_plugin_allow_path,
                                  "plugin.plugins[0].allow must be an array") &&
          LoadConfigExpectFailure(invalid_plugin_entry_path,

@@ -32,6 +32,14 @@ struct MuonPluginRuntimeLoadEntry {
    */
   std::string plugin;
   /**
+   * Whether expected_sha1 is configured for this external plugin.
+   */
+  bool has_expected_sha1 = false;
+  /**
+   * Expected lowercase SHA-1 digest for this external plugin library.
+   */
+  std::string expected_sha1;
+  /**
    * Function allow policy for this plugin entry.
    */
   std::shared_ptr<MuonPluginPolicy> plugin_policy;

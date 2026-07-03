@@ -178,11 +178,11 @@ const isPath = (
   second: string,
 ): boolean => path.length === 2 && path[0] === first && path[1] === second;
 
-const isPluginSha1Path = (path: readonly string[]): boolean =>
+const isPluginSignaturePath = (path: readonly string[]): boolean =>
   path.length === 3 &&
   path[0] === "plugin" &&
   path[1] === "plugins" &&
-  path[2] === "sha1";
+  path[2] === "signature";
 
 const isHexString = (value: string): boolean =>
   value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value);
@@ -207,7 +207,7 @@ const encodeKnownBinaryString = (
   if (isPath(path, "asset", "salt")) {
     return isHexString(value) ? decodeHexString(value) : undefined;
   }
-  if (isPluginSha1Path(path)) {
+  if (isPluginSignaturePath(path)) {
     return value.length === 40 && isHexString(value)
       ? decodeHexString(value)
       : undefined;

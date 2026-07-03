@@ -103,6 +103,7 @@ const isMuonVitePluginAccessEntryOptions = (value: unknown): boolean => {
 
   return (
     typeof value.name === "string" &&
+    (value.signature === undefined || typeof value.signature === "string") &&
     (value.allow === undefined || isStringArray(value.allow)) &&
     (value.imports === undefined ||
       (Array.isArray(value.imports) &&

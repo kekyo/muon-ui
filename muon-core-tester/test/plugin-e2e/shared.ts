@@ -514,7 +514,7 @@ export interface BrowserWindowBounds {
 export interface PluginConfigEntry {
   name: string;
   allow: string[];
-  sha1?: string;
+  signature?: string;
 }
 
 export interface NetworkAuthorizedOriginConfig {
@@ -2091,7 +2091,7 @@ export const createPluginConfigEntries = (
   pluginNames: string[],
   allowPatterns: string[],
   includeStandardPlugins = true,
-  pluginSha1ByName: Readonly<Record<string, string>> = {},
+  pluginSignatureByName: Readonly<Record<string, string>> = {},
 ): PluginConfigEntry[] => {
   const standardPluginEntries = includeStandardPlugins
     ? STANDARD_PLUGIN_NAMES.flatMap((pluginName) => {
@@ -2105,9 +2105,9 @@ export const createPluginConfigEntries = (
               {
                 name: pluginName,
                 allow: pluginAllowPatterns,
-                ...(pluginSha1ByName[pluginName] === undefined
+                ...(pluginSignatureByName[pluginName] === undefined
                   ? {}
-                  : { sha1: pluginSha1ByName[pluginName] }),
+                  : { signature: pluginSignatureByName[pluginName] }),
               },
             ];
       })
@@ -2118,9 +2118,9 @@ export const createPluginConfigEntries = (
     ...pluginNames.map((pluginName) => ({
       name: pluginName,
       allow: allowPatterns,
-      ...(pluginSha1ByName[pluginName] === undefined
+      ...(pluginSignatureByName[pluginName] === undefined
         ? {}
-        : { sha1: pluginSha1ByName[pluginName] }),
+        : { signature: pluginSignatureByName[pluginName] }),
     })),
   ];
 };

@@ -133,7 +133,9 @@ const expectedCefTarget = (): string => {
   return target;
 };
 
-const calculatePluginSha1 = async (pluginName: string): Promise<string> => {
+const calculatePluginSignature = async (
+  pluginName: string,
+): Promise<string> => {
   const pluginPath = join(
     TEST_PLUGIN_DIRECTORY,
     `${pluginName}${PLUGIN_SUFFIX}`,
@@ -590,7 +592,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
-  it("loads an external plugin when its SHA1 matches", async () => {
+  it("loads an external plugin when its signature matches", async () => {
     const pluginName = "muon_test_plugin_alpha";
     const running = await startDebugMuon(
       [pluginName],
@@ -612,7 +614,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       undefined,
       undefined,
       {},
-      { [pluginName]: await calculatePluginSha1(pluginName) },
+      { [pluginName]: await calculatePluginSignature(pluginName) },
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -621,7 +623,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
       await driver.navigate(
-        "data:text/html,<title>muon plugin sha1 match</title>",
+        "data:text/html,<title>muon plugin signature match</title>",
         cdpCommandTimeoutMs,
       );
       await expect(
@@ -634,9 +636,9 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
-  it("rejects an external plugin before loading when its SHA1 mismatches", async () => {
+  it("rejects an external plugin before loading when its signature mismatches", async () => {
     const markerDirectory = await mkdtemp(
-      join(tmpdir(), "muon-plugin-sha1-marker-"),
+      join(tmpdir(), "muon-plugin-signature-marker-"),
     );
     const markerPath = join(markerDirectory, "marker.txt");
     const pluginName = "muon_test_plugin_load_marker";
@@ -670,7 +672,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     try {
       await waitForProcessExit(running, processExitTimeoutMs);
       expect(running.process.exitCode).toBe(1);
-      expect(running.stderr).toContain("Plugin SHA1 mismatch");
+      expect(running.stderr).toContain("Plugin signature mismatch");
       await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
     } finally {
       await stopMuon(running, undefined);

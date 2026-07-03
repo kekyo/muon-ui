@@ -2450,11 +2450,11 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
     std::string actual_sha1;
     if (!muon_internal::CalculateFileSha1Hex(path, &actual_sha1)) {
       return FailMuonPluginStartup(
-          impl, "Failed to calculate plugin SHA1: " + path.string());
+          impl, "Failed to calculate plugin signature: " + path.string());
     }
     if (actual_sha1 != plugin.expected_sha1) {
       return FailMuonPluginStartup(
-          impl, "Plugin SHA1 mismatch: " + path.string() + " expected " +
+          impl, "Plugin signature mismatch: " + path.string() + " expected " +
                     plugin.expected_sha1 + " actual " + actual_sha1);
     }
   }

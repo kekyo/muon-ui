@@ -561,8 +561,8 @@ void MuonApp::OnContextInitialized() {
       return;
     }
     plugins.push_back({plugin_config.name,
-                       plugin_config.has_sha1,
-                       plugin_config.sha1,
+                       plugin_config.has_signature,
+                       plugin_config.signature,
                        plugin_policy});
   }
 

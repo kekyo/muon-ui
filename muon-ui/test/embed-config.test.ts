@@ -95,7 +95,7 @@ describe("muon embedded config", () => {
             {
               name: 'foobar',
               allow: ['foobar.*'],
-              sha1: '000102030405060708090a0b0c0d0e0f10111213',
+              signature: '000102030405060708090a0b0c0d0e0f10111213',
             },
           ],
         },

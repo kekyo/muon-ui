@@ -881,13 +881,13 @@ describe("muon Vite plugin", () => {
     }
   });
 
-  it("preserves plugin SHA1 in generated plugin runtime config", async () => {
-    const root = await createTemporaryDirectory("muon-vite-plugin-sha1-");
+  it("preserves plugin signature in generated plugin runtime config", async () => {
+    const root = await createTemporaryDirectory("muon-vite-plugin-signature-");
     const muonDirectory = await createTemporaryDirectory(
-      "muon-vite-plugin-sha1-runtime-",
+      "muon-vite-plugin-signature-runtime-",
     );
     const outputDirectory = await createTemporaryDirectory(
-      "muon-vite-plugin-sha1-output-",
+      "muon-vite-plugin-signature-output-",
     );
     const cefDirectory = await writeFakeCefDirectory();
     await writeBasicViteProject(root);
@@ -908,7 +908,7 @@ describe("muon Vite plugin", () => {
           plugins: [
             {
               name: "foobar",
-              sha1: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+              signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
               imports: [
                 {
                   sources: ["src/native/**"],
@@ -927,14 +927,14 @@ describe("muon Vite plugin", () => {
         await readFile(join(outputDirectory, "override.json"), "utf8"),
       ) as {
         plugin: {
-          plugins: { name: string; allow: string[]; sha1?: string }[];
+          plugins: { name: string; allow: string[]; signature?: string }[];
         };
       };
       expect(overrideConfig.plugin.plugins).toEqual([
         {
           name: "foobar",
           allow: ["foobar.run"],
-          sha1: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+          signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
         },
       ]);
     } finally {

@@ -251,12 +251,12 @@ export interface MuonVitePluginAccessEntryOptions {
    */
   name: string;
   /**
-   * Optional expected SHA-1 digest for the external plugin library.
+   * Optional expected SHA-1 signature for the external plugin library.
    *
    * @remarks This is a 40-character hexadecimal SHA-1 digest checked before
    * Muon loads the native plugin library. It is not supported for `internal`.
    */
-  sha1?: string;
+  signature?: string;
   /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *

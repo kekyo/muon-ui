@@ -375,13 +375,13 @@ struct MuonPluginEntryConfig {
    */
   std::string name;
   /**
-   * Whether a plugin library SHA-1 digest was explicitly configured.
+   * Whether a plugin library signature was explicitly configured.
    */
-  bool has_sha1 = false;
+  bool has_signature = false;
   /**
-   * Expected lowercase SHA-1 digest for the external plugin library.
+   * Expected lowercase SHA-1 signature for the external plugin library.
    */
-  std::string sha1;
+  std::string signature;
   /**
    * Glob patterns that allow full plugin function paths.
    */

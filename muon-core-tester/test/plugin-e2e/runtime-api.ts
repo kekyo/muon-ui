@@ -3,14 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 
 import {
   MUON_PORT,
   MUON_APP_URL,
   DEBUG_MUON_DIRECTORY,
+  PLUGIN_SUFFIX,
   TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   TEST_NETWORK_ALLOW_PATTERNS,
+  TEST_PLUGIN_DIRECTORY,
   TEST_PLUGIN_ALLOW_PATTERNS,
   access,
   browserFunctionNames,
@@ -59,6 +62,7 @@ import {
   shouldUseValgrind,
   startDebugMuon,
   startDebugMuonBootstrap,
+  startMuon,
   startReleaseMuon,
   stopMuon,
   targetTimeoutMs,
@@ -92,6 +96,7 @@ import type {
   BrowserWindowBounds,
   CdpDriver,
   CdpTarget,
+  KeyboardShortcutEvent,
 } from "./shared.js";
 
 interface ExecutorSpawnOptions {
@@ -126,6 +131,20 @@ const expectedCefTarget = (): string => {
     return "windows64";
   }
   return target;
+};
+
+const calculatePluginSignature = async (
+  pluginName: string,
+  salt: string,
+): Promise<string> => {
+  const pluginPath = join(
+    TEST_PLUGIN_DIRECTORY,
+    `${pluginName}${PLUGIN_SUFFIX}`,
+  );
+  return createHash("sha1")
+    .update(await readFile(pluginPath))
+    .update(Buffer.from(salt, "hex"))
+    .digest("hex");
 };
 
 const expectedRuntimeExecutableName = (): string =>
@@ -354,6 +373,22 @@ const waitForRecycledMuon = async (
   throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
 };
 
+const dispatchRecycleKeyboardShortcut = async (
+  driver: CdpDriver,
+  event: KeyboardShortcutEvent,
+): Promise<CdpDriver | undefined> => {
+  try {
+    await dispatchKeyboardShortcut(driver, event);
+    return driver;
+  } catch (error) {
+    if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
+      throw error;
+    }
+    driver.close();
+    return undefined;
+  }
+};
+
 const waitForTextFileContent = async (
   path: string,
   predicate: (content: string) => boolean,
@@ -556,6 +591,119 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     } finally {
       await stopMuon(running, driver);
       await rm(markerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads an external plugin when its signature matches", async () => {
+    const pluginName = "muon_test_plugin_alpha";
+    const pluginSalt = "deadbeef";
+    const running = await startDebugMuon(
+      [pluginName],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      [pluginName],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      { [pluginName]: await calculatePluginSignature(pluginName, pluginSalt) },
+      { [pluginName]: pluginSalt },
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin signature match</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate("window.muon.test.alpha.alphaName()"),
+      ).resolves.toBe("alpha");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("rejects an external plugin before loading when its signature mismatches", async () => {
+    const markerDirectory = await mkdtemp(
+      join(tmpdir(), "muon-plugin-signature-marker-"),
+    );
+    const markerPath = join(markerDirectory, "marker.txt");
+    const pluginName = "muon_test_plugin_load_marker";
+    const pluginSalt = "deadbeef";
+    const running = await startMuon(
+      DEBUG_MUON_DIRECTORY,
+      [pluginName],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      false,
+      shouldUseValgrind,
+      undefined,
+      { MUON_TEST_PLUGIN_LOAD_MARKER: markerPath },
+      [pluginName],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      cdpCommandTimeoutMs,
+      undefined,
+      { [pluginName]: "0000000000000000000000000000000000000000" },
+      { [pluginName]: pluginSalt },
+    );
+    try {
+      await waitForProcessExit(running, processExitTimeoutMs);
+      expect(running.process.exitCode).toBe(1);
+      expect(running.stderr).toContain("Plugin signature mismatch");
+      await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
+    } finally {
+      await stopMuon(running, undefined);
+      await rm(markerDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects plugin namespaces with a single segment during startup", async () => {
+    const running = await startMuon(
+      DEBUG_MUON_DIRECTORY,
+      ["muon_test_plugin_single_namespace"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      false,
+      shouldUseValgrind,
+      undefined,
+    );
+    try {
+      await waitForProcessExit(running, processExitTimeoutMs);
+      expect(running.process.exitCode).toBe(1);
+      expect(running.stderr).toContain(
+        "Plugin namespace must contain at least two segments: single",
+      );
+    } finally {
+      await stopMuon(running, undefined);
     }
   });
 
@@ -779,33 +927,45 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     const configPath = join(
       stateHome,
       "muon-bootstrap",
-      expectedRuntimeTarget(),
+      "runtime",
       "muon-bootstrap.ini",
     );
+    let bootstrapConfigPath = configPath;
     const bootstrapEnvironment = isWindowsRemoteE2e()
       ? { LOCALAPPDATA: stateHome }
       : { XDG_STATE_HOME: stateHome };
     try {
-      await withMuonEnvironment([], bootstrapEnvironment, async (driver) => {
-        const values = await driver.evaluate<{
-          keys: string[];
-          initial: {
-            cefVersionPolicy: string;
-            cefExactVersion: string;
-            catalogRefreshIntervalSeconds: number;
-          };
-          updated: {
-            cefVersionPolicy: string;
-            cefExactVersion: string;
-            catalogRefreshIntervalSeconds: number;
-          };
-          reverted: {
-            cefVersionPolicy: string;
-            cefExactVersion: string;
-            catalogRefreshIntervalSeconds: number;
-          };
-          internalType: string;
-        }>(`(async () => {
+      await withMuonEnvironment(
+        [],
+        bootstrapEnvironment,
+        async (driver, running) => {
+          if (running.remoteWindows !== undefined) {
+            bootstrapConfigPath = join(
+              running.remoteWindows.configDirectory,
+              "..",
+              "muon-bootstrap.ini",
+            );
+            await rm(bootstrapConfigPath, { force: true });
+          }
+          const values = await driver.evaluate<{
+            keys: string[];
+            initial: {
+              cefVersionPolicy: string;
+              cefExactVersion: string;
+              catalogRefreshIntervalSeconds: number;
+            };
+            updated: {
+              cefVersionPolicy: string;
+              cefExactVersion: string;
+              catalogRefreshIntervalSeconds: number;
+            };
+            reverted: {
+              cefVersionPolicy: string;
+              cefExactVersion: string;
+              catalogRefreshIntervalSeconds: number;
+            };
+            internalType: string;
+          }>(`(async () => {
             const initial = await window.muon.bootstrap.getSettings();
             await window.muon.bootstrap.setSettings({
               cefVersionPolicy: "compat-latest",
@@ -828,28 +988,29 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             };
           })()`);
 
-        expect(values).toEqual({
-          keys: ["getSettings", "setSettings", "triggerUpdate"],
-          initial: {
-            cefVersionPolicy: "tested",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 604800,
-          },
-          updated: {
-            cefVersionPolicy: "compat-latest",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 123,
-          },
-          reverted: {
-            cefVersionPolicy: "tested",
-            cefExactVersion: "",
-            catalogRefreshIntervalSeconds: 604800,
-          },
-          internalType: "function",
-        });
-      });
+          expect(values).toEqual({
+            keys: ["getSettings", "setSettings", "triggerUpdate"],
+            initial: {
+              cefVersionPolicy: "tested",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 604800,
+            },
+            updated: {
+              cefVersionPolicy: "compat-latest",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 123,
+            },
+            reverted: {
+              cefVersionPolicy: "tested",
+              cefExactVersion: "",
+              catalogRefreshIntervalSeconds: 604800,
+            },
+            internalType: "function",
+          });
+        },
+      );
       const bootstrapConfig = await waitForTextFileContent(
-        configPath,
+        bootstrapConfigPath,
         (content) => content.includes("requested=true"),
         "bootstrap update request settings",
       );
@@ -2183,8 +2344,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       const firstProcessId = await driver.evaluate<number>(
         "window.muon.environments.getProcessId()",
       );
-      await dispatchKeyboardShortcut(driver, ctrlShiftF10RecycleShortcut);
-      driver.close();
+      driver = await dispatchRecycleKeyboardShortcut(
+        driver,
+        ctrlShiftF10RecycleShortcut,
+      );
+      driver?.close();
       driver = undefined;
       const recycled = await waitForRecycledMuon(firstProcessId);
       driver = recycled.driver;
@@ -2219,8 +2383,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       const firstProcessId = await driver.evaluate<number>(
         "window.muon.environments.getProcessId()",
       );
-      await dispatchKeyboardShortcut(driver, ctrlF12RecycleShortcut);
-      driver.close();
+      driver = await dispatchRecycleKeyboardShortcut(
+        driver,
+        ctrlF12RecycleShortcut,
+      );
+      driver?.close();
       driver = undefined;
       const recycled = await waitForRecycledMuon(firstProcessId);
       driver = recycled.driver;

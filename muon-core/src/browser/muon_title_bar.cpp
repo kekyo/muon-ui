@@ -6,8 +6,8 @@
 
 #include "browser/muon_title_bar.h"
 
+#include "config/muon_linux_display_backend.h"
 #include "log/muon_close_debug_log.h"
-#include "muon_string_helpers.h"
 #include "yyjson.h"
 
 #include "include/cef_browser.h"
@@ -36,8 +36,6 @@
 #include <vector>
 
 namespace {
-
-using muon_internal::ToLowerAscii;
 
 constexpr char kMuonTitleBarTitle[] = "Muon Title Bar";
 constexpr char kMuonTitleBarActionPrefix[] =
@@ -488,36 +486,6 @@ static std::string ExtractTitleBarAction(const std::string& url) {
   }
   return url.substr(action_start, action_end - action_start);
 }
-
-#if defined(OS_LINUX)
-static std::string GetCommandLineSwitchValue(
-    const std::vector<std::string>& command_line,
-    const char* name) {
-  const auto switch_name = std::string("--") + name;
-  const auto switch_prefix = switch_name + "=";
-  std::string value;
-  for (auto index = size_t{1}; index < command_line.size(); ++index) {
-    if (command_line[index] == switch_name && index + 1 < command_line.size()) {
-      value = command_line[index + 1];
-      ++index;
-    } else if (command_line[index].rfind(switch_prefix, 0) == 0) {
-      value = command_line[index].substr(switch_prefix.size());
-    }
-  }
-  return ToLowerAscii(value);
-}
-
-static bool StringEqualsIgnoreCase(const char* value, const char* expected) {
-  if (value == nullptr) {
-    return false;
-  }
-  return ToLowerAscii(value) == expected;
-}
-
-static bool IsNonEmptyString(const char* value) {
-  return value != nullptr && value[0] != '\0';
-}
-#endif
 
 template <typename TWindowHandle>
 static MuonWindowDraggableRegionKey GetWindowHandleDraggableRegionKey(
@@ -1363,32 +1331,9 @@ bool IsMuonNativeTitleBarSupported(
     const char* wayland_display,
     const char* display) {
 #if defined(OS_LINUX)
-  const auto ozone_platform =
-      GetCommandLineSwitchValue(command_line, "ozone-platform");
-  if (ozone_platform == "x11") {
-    return true;
-  }
-  if (ozone_platform == "wayland") {
-    return false;
-  }
-
-  const auto ozone_platform_hint =
-      GetCommandLineSwitchValue(command_line, "ozone-platform-hint");
-  if (ozone_platform_hint == "x11") {
-    return true;
-  }
-  if (ozone_platform_hint == "wayland") {
-    return false;
-  }
-
-  if (StringEqualsIgnoreCase(xdg_session_type, "x11")) {
-    return true;
-  }
-  if (StringEqualsIgnoreCase(xdg_session_type, "wayland") ||
-      IsNonEmptyString(wayland_display)) {
-    return false;
-  }
-  return IsNonEmptyString(display);
+  return ResolveMuonLinuxDisplayBackend(command_line, xdg_session_type,
+                                        wayland_display, display) ==
+         kMuonLinuxDisplayBackendX11;
 #else
   (void)command_line;
   (void)xdg_session_type;
@@ -1507,8 +1452,23 @@ void MuonTitleBarController::SetMaximized(bool maximized) {
   SendState();
 }
 
+void MuonTitleBarController::SetNativeHoveredControl(
+    MuonTitleBarControlAction action) {
+  if (native_hovered_control_ == action) {
+    if (action != MuonTitleBarControlAction::NoControl) {
+      SendNativeHover();
+    }
+    return;
+  }
+  native_hovered_control_ = action;
+  SendNativeHover();
+}
+
 void MuonTitleBarController::SetVisible(bool visible) {
   visible_ = visible;
+  if (!visible_) {
+    SetNativeHoveredControl(MuonTitleBarControlAction::NoControl);
+  }
   const auto title_bar_view = ResolveTitleBarView();
   auto window = CefRefPtr<CefWindow>();
   if (title_bar_view) {
@@ -1628,6 +1588,7 @@ void MuonTitleBarController::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   SendTitle();
   SendState();
   SendIcon();
+  SendNativeHover();
 }
 
 bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -1720,6 +1681,17 @@ void MuonTitleBarController::SendIcon() {
       (icon_data_url_.empty() ? std::string("null")
                               : CreateJavaScriptStringLiteral(
                                     icon_data_url_)) +
+      ");");
+}
+
+void MuonTitleBarController::SendNativeHover() {
+  const auto* action_name =
+      GetMuonTitleBarControlActionName(native_hovered_control_);
+  ExecuteJavaScript(
+      std::string("window.__muonTitleBar && "
+                  "window.__muonTitleBar.setNativeHover(") +
+      (action_name == nullptr ? std::string("null")
+                              : CreateJavaScriptStringLiteral(action_name)) +
       ");");
 }
 
@@ -2255,6 +2227,24 @@ bool HandleRegisteredMuonTitleBarControlAction(
     return false;
   }
   controller->HandleAction(action_name);
+  return true;
+}
+
+bool SetRegisteredMuonTitleBarHoveredControl(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action) {
+  CEF_REQUIRE_UI_THREAD();
+
+  const auto controller =
+      FindMuonTitleBarControllerByWindowHandle(window_handle);
+  if (controller == nullptr) {
+    return false;
+  }
+  if (action != MuonTitleBarControlAction::NoControl &&
+      !controller->CanHandleNativeWindowControls()) {
+    return false;
+  }
+  controller->SetNativeHoveredControl(action);
   return true;
 }
 

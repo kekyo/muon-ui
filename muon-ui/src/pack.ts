@@ -50,6 +50,7 @@ import {
   mergeMuonWindowsResourceOptions,
   readMuonConfigForWindowsResource,
   resolveMuonWindowsResource,
+  updateWindowsPeIconResource,
   updateWindowsPeResources,
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
@@ -100,11 +101,22 @@ export interface MuonPackOptions {
    */
   configPath?: string;
   /**
+   * Static application icon PNG file path.
+   *
+   * @remarks Used for Windows PE/NSIS resources, Linux desktop entries, and
+   * the generated initial title bar icon asset unless a target-specific icon
+   * override is supplied.
+   */
+  iconPath?: string;
+  /**
    * File name used for the app launcher.
    */
   appName?: string;
   /**
-   * Stable application identifier used for portable runtime state.
+   * Stable base application identifier used for portable runtime state.
+   *
+   * @remarks Windows target distributions embed `<appId>.<arch>` as their
+   * runtime app identifier. Linux targets embed this value unchanged.
    */
   appId?: string;
   /**
@@ -190,7 +202,7 @@ export interface MuonPackResult {
    */
   appName: string;
   /**
-   * Stable app identifier embedded in launcher/runtime config.
+   * Stable base app identifier used to derive target runtime app identifiers.
    */
   appId: string;
   /**
@@ -691,7 +703,6 @@ const packageNsis = async (
   root: string,
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
-  appId: string,
   windowsResource: ResolvedMuonWindowsResource,
   artifactsRoot: string,
   packageBuildRoot: string,
@@ -711,26 +722,25 @@ const packageNsis = async (
     `${metadata.packageName}-${metadata.version}-${descriptor.arch}-setup.exe`,
   );
   const launcherFileName = basename(target.launcherPath);
-  const uninstallRegistryKey = createNsisUninstallRegistryKey(appId);
+  const nsisDisplayName = `${metadata.packageName} (${descriptor.arch})`;
+  const nsisInstallDirectoryName = `${metadata.packageName}-${descriptor.arch}`;
+  const uninstallRegistryKey = createNsisUninstallRegistryKey(
+    target.runtimeAppId,
+  );
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });
-  const iconPath =
-    windowsResource.iconPath === undefined
-      ? undefined
-      : join(
-          dirname(scriptPath),
-          `${metadata.packageName}-${target.target}.ico`,
-        );
-  if (windowsResource.iconPath !== undefined && iconPath !== undefined) {
-    await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
-  }
+  const iconPath = join(
+    dirname(scriptPath),
+    `${metadata.packageName}-${target.target}.ico`,
+  );
+  await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
   await writeFile(
     scriptPath,
     [
       "Unicode true",
-      `Name "${escapeNsis(metadata.packageName)}"`,
+      `Name "${escapeNsis(nsisDisplayName)}"`,
       `OutFile "${escapeNsis(outputPath)}"`,
-      `InstallDir "$LOCALAPPDATA\\Programs\\${escapeNsis(metadata.packageName)}"`,
+      `InstallDir "$LOCALAPPDATA\\Programs\\${escapeNsis(nsisInstallDirectoryName)}"`,
       "RequestExecutionLevel user",
       "ShowInstDetails nevershow",
       "AutoCloseWindow true",
@@ -739,9 +749,9 @@ const packageNsis = async (
       "Section",
       '  SetOutPath "$INSTDIR"',
       `  File /r "${escapeNsis(target.outputPath)}\\*"`,
-      `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk" "$INSTDIR\\${escapeNsis(launcherFileName)}"`,
+      `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(nsisDisplayName)}.lnk" "$INSTDIR\\${escapeNsis(launcherFileName)}"`,
       '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
-      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayName" "${escapeNsis(metadata.packageName)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayName" "${escapeNsis(nsisDisplayName)}"`,
       `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayVersion" "${escapeNsis(metadata.version)}"`,
       `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "Publisher" "${escapeNsis(metadata.author)}"`,
       `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "InstallLocation" "$INSTDIR"`,
@@ -753,10 +763,10 @@ const packageNsis = async (
       "SectionEnd",
       "",
       'Section "Uninstall"',
-      `  Delete "$SMPROGRAMS\\${escapeNsis(metadata.packageName)}.lnk"`,
+      `  Delete "$SMPROGRAMS\\${escapeNsis(nsisDisplayName)}.lnk"`,
       `  DeleteRegKey HKCU "${escapeNsis(uninstallRegistryKey)}"`,
       '  RMDir /r "$INSTDIR"',
-      `  RMDir /r "$LOCALAPPDATA\\${escapeNsis(appId)}"`,
+      `  RMDir /r "$LOCALAPPDATA\\${escapeNsis(target.runtimeAppId)}"`,
       "SectionEnd",
       "",
       "Function .onInstSuccess",
@@ -780,13 +790,11 @@ const packageNsis = async (
 
 const createNsisResourceDirectives = (
   resource: ResolvedMuonWindowsResource,
-  iconPath: string | undefined,
+  iconPath: string,
 ): string[] => {
   const lines: string[] = [];
-  if (iconPath !== undefined) {
-    lines.push(`Icon "${escapeNsis(iconPath)}"`);
-    lines.push(`UninstallIcon "${escapeNsis(iconPath)}"`);
-  }
+  lines.push(`Icon "${escapeNsis(iconPath)}"`);
+  lines.push(`UninstallIcon "${escapeNsis(iconPath)}"`);
   lines.push(`VIProductVersion "${escapeNsis(resource.fixedVersion)}"`);
   lines.push(`VIFileVersion "${escapeNsis(resource.fixedVersion)}"`);
   lines.push(
@@ -819,7 +827,17 @@ const reapplyPackWindowsResources = async (
   environment: NodeJS.ProcessEnv,
 ): Promise<void> => {
   for (const target of targets) {
-    if (getMuonTargetDescriptor(target.target).os === "windows") {
+    const descriptor = getMuonTargetDescriptor(target.target);
+    if (descriptor.os === "windows") {
+      await updateWindowsPeIconResource({
+        executablePath: join(
+          target.outputPath,
+          descriptor.runtimeExecutableName,
+        ),
+        resource,
+        environment,
+        cwd: root,
+      });
       await updateWindowsPeResources({
         executablePath: target.launcherPath,
         resource,
@@ -869,8 +887,12 @@ export const packMuonApp = async (
     options.linuxDesktop,
     pluginBuildOptions.linuxDesktop,
   );
+  const iconPath = options.iconPath ?? pluginBuildOptions.iconPath;
   if (options.configPath !== undefined) {
     buildOptions.configPath = options.configPath;
+  }
+  if (iconPath !== undefined) {
+    buildOptions.iconPath = iconPath;
   }
   if (options.appName !== undefined) {
     buildOptions.appName = options.appName;
@@ -899,6 +921,7 @@ export const packMuonApp = async (
     muonConfig: windowsResourceConfig.config,
     muonConfigDirectory: windowsResourceConfig.directory,
     options: windowsResourceOptions,
+    appIconPath: iconPath,
     defaults: {
       productName: metadata.packageName,
       fileDescription: metadata.description,
@@ -947,7 +970,6 @@ export const packMuonApp = async (
             root,
             target,
             metadata,
-            build.appId,
             windowsResource,
             artifactsRoot,
             packageBuildRoot,

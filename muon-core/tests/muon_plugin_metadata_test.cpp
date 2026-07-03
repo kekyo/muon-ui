@@ -31,6 +31,7 @@ static bool RunNamespaceSetupScriptRoundtripTest() {
   function.id = 42;
   function.plugin_namespace = "muon.test.setup";
   function.js_name = "__raw";
+  function.public_name = "publicRaw";
   function.arg_types.push_back(CreateMuonPrimitiveType(MUON_TYPE_STRING));
   function.return_type = CreateMuonPrimitiveType(MUON_TYPE_STRING);
 
@@ -51,7 +52,9 @@ static bool RunNamespaceSetupScriptRoundtripTest() {
          Expect(decoded.functions[0].plugin_namespace == "muon.test.setup",
                 "function namespace changed during metadata roundtrip") &&
          Expect(decoded.functions[0].js_name == "__raw",
-                "function name changed during metadata roundtrip");
+                "function name changed during metadata roundtrip") &&
+         Expect(decoded.functions[0].public_name == "publicRaw",
+                "function public name changed during metadata roundtrip");
 }
 
 int main(int argc, char* argv[]) {

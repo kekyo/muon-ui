@@ -742,9 +742,9 @@ printf 'nsis\\n' > "$output_path"
       join(root, "muon.json"),
       `${JSON.stringify(
         {
+          iconPath: "icons/setup.png",
           windows: {
             resource: {
-              iconPath: "icons/setup.png",
               productName: "NSIS Product",
               fileDescription: "NSIS Installer",
               companyName: "NSIS Company",
@@ -786,6 +786,10 @@ printf 'nsis\\n' > "$output_path"
       join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
       "utf8",
     );
+    expect(nsisScript).toContain('Name "packed-sample (amd64)"');
+    expect(nsisScript).toContain(
+      'InstallDir "$LOCALAPPDATA\\Programs\\packed-sample-amd64"',
+    );
     expect(nsisScript).toContain("RequestExecutionLevel user");
     expect(nsisScript).toContain(`Icon "${generatedIconPath}"`);
     expect(nsisScript).toContain(`UninstallIcon "${generatedIconPath}"`);
@@ -816,7 +820,19 @@ printf 'nsis\\n' > "$output_path"
       nsisScript.split("\n").filter((line) => line.startsWith("Page ")),
     ).toEqual(["Page instfiles"]);
     expect(nsisScript).toContain(
-      '  RMDir /r "$LOCALAPPDATA\\scope.packed-sample"',
+      '  CreateShortCut "$SMPROGRAMS\\packed-sample (amd64).lnk" "$INSTDIR\\packed-sample.exe"',
+    );
+    expect(nsisScript).toContain(
+      '  WriteRegStr HKCU "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\scope.packed-sample.amd64" "DisplayName" "packed-sample (amd64)"',
+    );
+    expect(nsisScript).toContain(
+      '  Delete "$SMPROGRAMS\\packed-sample (amd64).lnk"',
+    );
+    expect(nsisScript).toContain(
+      '  DeleteRegKey HKCU "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\scope.packed-sample.amd64"',
+    );
+    expect(nsisScript).toContain(
+      '  RMDir /r "$LOCALAPPDATA\\scope.packed-sample.amd64"',
     );
     expect(nsisScript).toContain("Function .onInstSuccess");
     expect(nsisScript).toContain("  IfSilent +3");
@@ -933,6 +949,34 @@ printf 'nsis\\n' > "$output_path"
       "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
       "nsis:windows-i686:packed-sample-1.2.3-i686-setup.exe",
     ]);
+    const i686Script = await readFile(
+      join(root, ".muon", "pack", "nsis", "packed-sample-windows-i686.nsi"),
+      "utf8",
+    );
+    const amd64Script = await readFile(
+      join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
+      "utf8",
+    );
+    expect(i686Script).toContain('Name "packed-sample (i686)"');
+    expect(i686Script).toContain(
+      'InstallDir "$LOCALAPPDATA\\Programs\\packed-sample-i686"',
+    );
+    expect(i686Script).toContain(
+      "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\scope.packed-sample.i686",
+    );
+    expect(i686Script).toContain(
+      '  RMDir /r "$LOCALAPPDATA\\scope.packed-sample.i686"',
+    );
+    expect(amd64Script).toContain('Name "packed-sample (amd64)"');
+    expect(amd64Script).toContain(
+      'InstallDir "$LOCALAPPDATA\\Programs\\packed-sample-amd64"',
+    );
+    expect(amd64Script).toContain(
+      "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\scope.packed-sample.amd64",
+    );
+    expect(amd64Script).toContain(
+      '  RMDir /r "$LOCALAPPDATA\\scope.packed-sample.amd64"',
+    );
     await expect(exists(join(root, "dist-muon/linux-amd64"))).resolves.toBe(
       false,
     );

@@ -19,6 +19,10 @@
 #include <string>
 #include <vector>
 
+#ifndef MUON_CORE_SOURCE_DIR
+#define MUON_CORE_SOURCE_DIR "."
+#endif
+
 static bool Expect(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << message << "\n";
@@ -103,12 +107,42 @@ static void SetTestDefaultLaunchSource() {
   SetMuonStartupCommandLine(1, argv);
 }
 
-static void SetEnvironment(const char* name, const std::filesystem::path& path) {
+static void SetEnvironmentValue(const char* name, const std::string& value) {
 #if defined(_WIN32)
-  _putenv_s(name, path.string().c_str());
+  _putenv_s(name, value.c_str());
 #else
-  setenv(name, path.string().c_str(), 1);
+  setenv(name, value.c_str(), 1);
 #endif
+}
+
+static void ClearEnvironment(const char* name) {
+#if defined(_WIN32)
+  _putenv_s(name, "");
+#else
+  unsetenv(name);
+#endif
+}
+
+static void SetEnvironment(const char* name, const std::filesystem::path& path) {
+  SetEnvironmentValue(name, path.string());
+}
+
+static std::filesystem::path SetTestStateHome(
+    const std::filesystem::path& test_directory,
+    const std::string& name) {
+  const auto state_home = test_directory / name;
+#if defined(_WIN32)
+  SetEnvironment("LOCALAPPDATA", state_home);
+#else
+  SetEnvironment("XDG_STATE_HOME", state_home);
+#endif
+  return state_home;
+}
+
+static std::filesystem::path GetTestDefaultProfilePath(
+    const std::filesystem::path& state_home,
+    const std::string& app_id) {
+  return state_home / app_id / "profile";
 }
 
 static bool ExpectShortcut(const MuonKeyboardShortcut& shortcut,
@@ -200,10 +234,14 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
                 message + " initial title bar visibility changed") &&
          ExpectBrowserBackgroundSystem(browser.background_color,
                                        message + " background color") &&
+         Expect(browser.plugin.mode == kMuonBrowserPluginModeValidate,
+                message + " plugin mode changed") &&
          Expect(browser.plugin.allow.size() == 1,
                 message + " plugin page allowlist count changed") &&
          Expect(browser.plugin.allow[0] == "asset://main/**",
                 message + " plugin page pattern changed") &&
+         Expect(browser.plugin.capabilities.empty(),
+                message + " plugin capabilities changed") &&
          Expect(browser.allow_unsafe_javascript_parent_access.empty(),
                 message + " unsafe parent access allowlist count changed") &&
          ExpectShortcut(browser.devtools, false, 0, 0,
@@ -282,6 +320,11 @@ static void BeginTlvObject(std::vector<uint8_t>* bytes, size_t entry_count) {
   WriteVarUint(bytes, entry_count);
 }
 
+static void BeginTlvArray(std::vector<uint8_t>* bytes, size_t entry_count) {
+  bytes->push_back(6);
+  WriteVarUint(bytes, entry_count);
+}
+
 static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   std::vector<uint8_t> bytes;
   BeginTlvObject(&bytes, 4);
@@ -313,9 +356,24 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteTlvBool(&bytes, true);
 
   WriteRawString(&bytes, "plugin");
-  BeginTlvObject(&bytes, 1);
+  BeginTlvObject(&bytes, 2);
   WriteRawString(&bytes, "path");
   WriteTlvString(&bytes, "plugins");
+  WriteRawString(&bytes, "plugins");
+  BeginTlvArray(&bytes, 1);
+  BeginTlvObject(&bytes, 4);
+  WriteRawString(&bytes, "name");
+  WriteTlvString(&bytes, "embedded_plugin");
+  WriteRawString(&bytes, "allow");
+  BeginTlvArray(&bytes, 1);
+  WriteTlvString(&bytes, "embedded.*");
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(
+      &bytes,
+      {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13});
+  WriteRawString(&bytes, "salt");
+  WriteTlvBinary(&bytes, {0xde, 0xad, 0xbe, 0xef});
 
   return bytes;
 }
@@ -323,14 +381,10 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
 static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   MuonConfig config;
   SetTestDefaultLaunchSource();
+  const auto state_home =
+      SetTestStateHome(test_directory, "config-loading-state");
+  const auto default_profile = GetTestDefaultProfilePath(state_home, "muon");
   if (!LoadConfigExpectSuccess(test_directory / "missing.json", &config)) {
-    return false;
-  }
-  std::error_code error;
-  const auto current_profile =
-      (std::filesystem::current_path(error) / ".profile").lexically_normal();
-  if (error) {
-    std::cerr << "failed to resolve current directory\n";
     return false;
   }
   if (!Expect(config.network.allow.size() == 1,
@@ -346,7 +400,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.network.authorized_origin.empty(),
               "missing muon.json did not produce an empty authorized origin "
               "list") ||
-      !ExpectBrowserDefaults(config.browser, current_profile,
+      !ExpectBrowserDefaults(config.browser, default_profile,
                              "missing browser config") ||
       !Expect(config.plugin.plugins.empty(),
               "missing muon.json did not produce an empty plugin list") ||
@@ -358,7 +412,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.default_version_policy == "tested",
               "missing muon.json defaultVersionPolicy is wrong") ||
       !Expect(config.desktop_id == "muon",
-              "missing muon.json desktopId is wrong")) {
+              "missing muon.json desktopId is wrong") ||
+      !Expect(config.app_id == "muon",
+              "missing muon.json appId is wrong")) {
     return false;
   }
 
@@ -374,7 +430,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
               "missing network.allow default pattern is wrong") ||
       !Expect(config.network.authorized_origin.empty(),
               "missing network.authorizedOrigin default list is not empty") ||
-      !ExpectBrowserDefaults(config.browser, test_directory / ".profile",
+      !ExpectBrowserDefaults(config.browser, default_profile,
                              "default browser config") ||
       !Expect(config.plugin.plugins.empty(),
               "missing plugins did not produce an empty plugin list") ||
@@ -385,7 +441,8 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                             "default cdp config") ||
       !Expect(config.default_version_policy == "tested",
               "default defaultVersionPolicy is wrong") ||
-      !Expect(config.desktop_id == "muon", "default desktopId is wrong")) {
+      !Expect(config.desktop_id == "muon", "default desktopId is wrong") ||
+      !Expect(config.app_id == "muon", "default appId is wrong")) {
     return false;
   }
 
@@ -451,6 +508,43 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
     return false;
   }
 
+  const auto plugin_access_path = test_directory / "plugin-access.json";
+  if (!Expect(
+          WriteFile(
+              plugin_access_path,
+              R"({"plugin":{"mode":"simple","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.executor.*"],"imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+          "failed to write plugin access config") ||
+      !LoadConfigExpectSuccess(plugin_access_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.plugin.mode == kMuonBrowserPluginModeSimple,
+              "plugin.mode was not parsed") ||
+      !Expect(config.browser.plugin.allow.size() == 2,
+              "plugin.pages pattern count is wrong") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "first plugin.pages pattern changed") ||
+      !Expect(config.browser.plugin.allow[1] == "data:**",
+              "second plugin.pages pattern changed") ||
+      !Expect(config.browser.plugin.capabilities.size() == 1,
+              "plugin.capabilities count is wrong") ||
+      !Expect(config.browser.plugin.capabilities[0].id == "cap-1",
+              "plugin.capabilities id changed") ||
+      !Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
+              "plugin.capabilities allow count is wrong") ||
+      !Expect(config.browser.plugin.capabilities[0].allow[0] ==
+                  "muon.executor.spawn",
+              "plugin.capabilities allow changed") ||
+      !Expect(config.plugin.plugins.size() == 1,
+              "plugin.plugins entry count changed") ||
+      !Expect(config.plugin.plugins[0].name == "internal",
+              "plugin.plugins entry name changed") ||
+      !Expect(config.plugin.plugins[0].allow.size() == 1,
+              "plugin.plugins allow count changed") ||
+      !Expect(config.plugin.plugins[0].allow[0] == "muon.executor.*",
+              "plugin.plugins allow value changed")) {
+    return false;
+  }
+
   const auto empty_network_allow_path =
       test_directory / "empty-network-allow.json";
   if (!Expect(WriteFile(empty_network_allow_path,
@@ -472,21 +566,21 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
     return false;
   }
 
-  const auto empty_browser_plugin_allow_path =
-      test_directory / "empty-browser-plugin-allow.json";
-  if (!Expect(WriteFile(empty_browser_plugin_allow_path,
-                        R"({"browser":{"plugin":{"allow":[]}}})"),
-              "failed to write empty browser plugin allow config") ||
-      !LoadConfigExpectSuccess(empty_browser_plugin_allow_path, &config)) {
+  const auto empty_plugin_pages_path =
+      test_directory / "empty-plugin-pages.json";
+  if (!Expect(WriteFile(empty_plugin_pages_path,
+                        R"({"plugin":{"pages":[]}})"),
+              "failed to write empty plugin pages config") ||
+      !LoadConfigExpectSuccess(empty_plugin_pages_path, &config)) {
     return false;
   }
   if (!Expect(config.browser.plugin.allow.empty(),
-              "explicit empty browser.plugin.allow did not override the "
+              "explicit empty plugin.pages did not override the "
               "default") ||
       !Expect(config.network.allow.size() == 1,
-              "explicit empty browser.plugin.allow changed network allowlist") ||
+              "explicit empty plugin.pages changed network allowlist") ||
       !Expect(config.network.allow[0] == "asset://**",
-              "explicit empty browser.plugin.allow changed network pattern")) {
+              "explicit empty plugin.pages changed network pattern")) {
     return false;
   }
 
@@ -545,7 +639,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"],"plugin":{"allow":["asset://main/**","data:**"]}},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"DEADBEEF"}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -583,11 +677,22 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.browser.initial_title_bar_icon == "icons/app.png",
                 "browser.initialTitleBarIcon was not parsed") &&
          Expect(config.browser.plugin.allow.size() == 2,
-                "browser.plugin.allow pattern count is wrong") &&
+                "plugin.pages pattern count is wrong") &&
+         Expect(config.browser.plugin.mode == kMuonBrowserPluginModeValidate,
+                "plugin.mode was not parsed") &&
          Expect(config.browser.plugin.allow[0] == "asset://main/**",
-                "first browser.plugin.allow pattern changed") &&
+                "first plugin.pages pattern changed") &&
          Expect(config.browser.plugin.allow[1] == "data:**",
-                "second browser.plugin.allow pattern changed") &&
+                "second plugin.pages pattern changed") &&
+         Expect(config.browser.plugin.capabilities.size() == 1,
+                "plugin.capabilities count is wrong") &&
+         Expect(config.browser.plugin.capabilities[0].id == "cap-1",
+                "plugin.capabilities id changed") &&
+         Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
+                "plugin.capabilities allow count is wrong") &&
+         Expect(config.browser.plugin.capabilities[0].allow[0] ==
+                    "muon.executor.spawn",
+                "plugin.capabilities allow changed") &&
          Expect(config.browser.allow_unsafe_javascript_parent_access.size() ==
                     2,
                 "browser.allowUnsafeJavaScriptParentAccess pattern count is "
@@ -620,6 +725,20 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                 "external plugin allow pattern count is wrong") &&
          Expect(config.plugin.plugins[1].allow[0] == "foobar.*",
                 "external plugin allow pattern changed") &&
+         Expect(config.plugin.plugins[1].has_signature,
+                "external plugin signature was not marked present") &&
+         Expect(config.plugin.plugins[1].signature ==
+                    "a9993e364706816aba3e25717850c26c9cd0d89d",
+                "external plugin signature was not normalized") &&
+         Expect(config.plugin.plugins[1].has_salt,
+                "external plugin salt was not marked present") &&
+         Expect(config.plugin.plugins[1].salt.size() == 4,
+                "external plugin salt byte count changed") &&
+         Expect(config.plugin.plugins[1].salt[0] == 0xde &&
+                    config.plugin.plugins[1].salt[1] == 0xad &&
+                    config.plugin.plugins[1].salt[2] == 0xbe &&
+                    config.plugin.plugins[1].salt[3] == 0xef,
+                "external plugin salt bytes changed") &&
          Expect(config.asset.has_from, "asset.sourcePath was not parsed") &&
          Expect(config.asset.from == test_directory / "packed/assets.zip",
                 "asset.sourcePath was not resolved from config directory") &&
@@ -664,38 +783,85 @@ static bool RunConfigJson5LoadingTest(
                 "JSON5 network.allow pattern changed");
 }
 
+static bool ExpectDebugConfig(const std::filesystem::path& path,
+                              const std::string& message) {
+  MuonConfig config;
+  return LoadConfigExpectSuccess(path, &config) &&
+         Expect(config.browser.plugin.mode == kMuonBrowserPluginModeSimple,
+                message + " plugin.mode is not simple") &&
+         Expect(config.browser.plugin.allow.size() == 2,
+                message + " plugin.pages pattern count is wrong") &&
+         Expect(config.browser.plugin.allow[0] == "asset://main/**",
+                message + " first plugin.pages pattern changed") &&
+         Expect(config.browser.plugin.allow[1] == "data:**",
+                message + " second plugin.pages pattern changed") &&
+         Expect(config.plugin.plugins.size() == 1,
+                message + " plugin.plugins entry count changed") &&
+         Expect(config.plugin.plugins[0].name == "internal",
+                message + " plugin.plugins entry name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 1,
+                message + " plugin.plugins allow count changed") &&
+         Expect(config.plugin.plugins[0].allow[0] == "muon.**",
+                message + " plugin.plugins allow value changed");
+}
+
+static bool RunDebugConfigLoadingTest() {
+  const auto config_directory =
+      std::filesystem::path(MUON_CORE_SOURCE_DIR) / "config";
+  return ExpectDebugConfig(config_directory / "muon.dev.json",
+                           "muon.dev.json") &&
+         ExpectDebugConfig(config_directory / "muon.dev.linux.json",
+                           "muon.dev.linux.json");
+}
+
 static bool RunLaunchSourceProfilePathTest(
     const std::filesystem::path& test_directory) {
   MuonConfig config;
 
   SetTestLaunchSource("none");
+  const auto state_home = SetTestStateHome(test_directory, "profile-state");
+  SetEnvironmentValue("MUON_BOOTSTRAP_APP_ID", "com.example Bootstrap");
+  const auto env_path = test_directory / "profile-env.json";
+  if (!Expect(WriteFile(env_path, "{}"),
+              "failed to write environment appId profile config") ||
+      !LoadConfigExpectSuccess(env_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.app_id == "com.example.Bootstrap",
+              "environment appId was not used") ||
+      !Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Bootstrap"),
+              "environment appId should select state default profile")) {
+    return false;
+  }
+
   const auto none_path = test_directory / "profile-none.json";
-  if (!Expect(WriteFile(none_path, "{}"),
+  if (!Expect(WriteFile(none_path,
+                        R"({"bootstrap":{"appId":"com.example.Profile"}})"),
               "failed to write none profile config") ||
       !LoadConfigExpectSuccess(none_path, &config)) {
     return false;
   }
-  if (!Expect(config.browser.profile == test_directory / ".profile",
-              "none launch source should use config-relative default profile")) {
+  if (!Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Profile"),
+              "none launch source should use state default profile")) {
     return false;
   }
 
   SetTestLaunchSource("normal");
   const auto normal_path = test_directory / "profile-normal.json";
-#if defined(_WIN32)
-  const auto user_data_home = test_directory / "local-app-data";
-  SetEnvironment("LOCALAPPDATA", user_data_home);
-#else
-  const auto user_data_home = test_directory / "xdg-data";
-  SetEnvironment("XDG_DATA_HOME", user_data_home);
-#endif
-  if (!Expect(WriteFile(normal_path, "{}"),
+  if (!Expect(WriteFile(normal_path,
+                        R"({"bootstrap":{"appId":"com.example.Profile"}})"),
               "failed to write normal profile config") ||
       !LoadConfigExpectSuccess(normal_path, &config)) {
     return false;
   }
-  if (!Expect(config.browser.profile == user_data_home / "muon" / "profile",
-              "normal launch source should use user data default profile")) {
+  if (!Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Profile"),
+              "normal launch source should use state default profile")) {
     return false;
   }
 
@@ -706,8 +872,13 @@ static bool RunLaunchSourceProfilePathTest(
       !LoadConfigExpectSuccess(explicit_path, &config)) {
     return false;
   }
-  return Expect(config.browser.profile == test_directory / "profiles/custom",
-                "explicit browser.profilePath should override launch source");
+  if (!Expect(config.browser.profile == test_directory / "profiles/custom",
+              "explicit browser.profilePath should override launch source")) {
+    return false;
+  }
+
+  ClearEnvironment("MUON_BOOTSTRAP_APP_ID");
+  return true;
 }
 
 static bool ExpectDefaultConfigStart(
@@ -832,6 +1003,28 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.plugin.path == runtime_directory / "plugins",
                 "embedded plugin.path was not resolved from executable "
                 "directory") &&
+         Expect(config.plugin.plugins.size() == 1,
+                "embedded plugin entry count changed") &&
+         Expect(config.plugin.plugins[0].name == "embedded_plugin",
+                "embedded plugin name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 1,
+                "embedded plugin allow count changed") &&
+         Expect(config.plugin.plugins[0].allow[0] == "embedded.*",
+                "embedded plugin allow changed") &&
+         Expect(config.plugin.plugins[0].has_signature,
+                "embedded plugin signature was not marked present") &&
+         Expect(config.plugin.plugins[0].signature ==
+                    "000102030405060708090a0b0c0d0e0f10111213",
+                "embedded binary plugin signature was not restored") &&
+         Expect(config.plugin.plugins[0].has_salt,
+                "embedded plugin salt was not marked present") &&
+         Expect(config.plugin.plugins[0].salt.size() == 4,
+                "embedded plugin salt byte count changed") &&
+         Expect(config.plugin.plugins[0].salt[0] == 0xde &&
+                    config.plugin.plugins[0].salt[1] == 0xad &&
+                    config.plugin.plugins[0].salt[2] == 0xbe &&
+                    config.plugin.plugins[0].salt[3] == 0xef,
+                "embedded binary plugin salt was not restored") &&
          Expect(config.asset.has_from,
                 "embedded asset.sourcePath was not parsed") &&
          Expect(config.asset.from == runtime_directory / "assets.zip",
@@ -902,11 +1095,11 @@ static bool RunConfigOverrideLoadingTest(
   const auto second_path = second_directory / "override.json";
   if (!Expect(WriteFile(
                   first_path,
-                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","plugin":{"allow":["asset://first/**"]},"keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","pages":["asset://first/**"],"plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
               "failed to write first override config") ||
       !Expect(WriteFile(
                   second_path,
-                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon","plugin":{"allow":["asset://first/**","asset://second/**"]}},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon"},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","pages":["asset://first/**","asset://second/**"],"plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write second override config")) {
     return false;
   }
@@ -929,11 +1122,11 @@ static bool RunConfigOverrideLoadingTest(
       !Expect(config.browser.title_bar == kMuonBrowserTitleBarMuon,
               "later scalar browser.titleBarType did not override") ||
       !Expect(config.browser.plugin.allow.size() == 2,
-              "browser.plugin.allow array was not merged by equality") ||
+              "plugin.pages array was not replaced by later config") ||
       !Expect(config.browser.plugin.allow[0] == "asset://first/**",
-              "browser.plugin.allow existing value changed") ||
+              "plugin.pages first value changed") ||
       !Expect(config.browser.plugin.allow[1] == "asset://second/**",
-              "browser.plugin.allow unique value was not appended") ||
+              "plugin.pages second value changed") ||
       !ExpectShortcut(config.browser.devtools, true, 0x7B, 0,
                       "merged devtools shortcut") ||
       !Expect(config.network.allow.size() == 3,
@@ -964,7 +1157,7 @@ static bool RunConfigOverrideLoadingTest(
       !Expect(config.plugin.path == second_directory / "plugins-second",
               "plugin.path was not resolved from the later config directory") ||
       !Expect(config.plugin.plugins.size() == 2,
-              "plugin.plugins array was not merged by equality") ||
+              "plugin.plugins array was not replaced by later config") ||
       !Expect(config.plugin.plugins[0].name == "internal",
               "plugin.plugins duplicate entry changed") ||
       !Expect(config.plugin.plugins[0].allow.size() == 1,
@@ -1038,6 +1231,8 @@ static bool RunBrowserConfigLoadingTest(
     const std::filesystem::path& test_directory) {
   MuonConfig config;
   SetTestDefaultLaunchSource();
+  const auto state_home = SetTestStateHome(test_directory, "browser-state");
+  const auto default_profile = GetTestDefaultProfilePath(state_home, "muon");
   const auto browser_path = test_directory / "browser.json";
   if (!Expect(WriteFile(
                   browser_path,
@@ -1071,7 +1266,7 @@ static bool RunBrowserConfigLoadingTest(
                       "ctrl+shift+f10 recycle shortcut") ||
       !Expect(config.browser.start_page == "asset://main/index.html",
               "browser shortcut config changed default start URL") ||
-      !Expect(config.browser.profile == test_directory / ".profile",
+      !Expect(config.browser.profile == default_profile,
               "browser shortcut config changed default profile path") ||
       !Expect(config.browser.plugin.allow.size() == 1,
               "browser shortcut config changed default plugin page allowlist") ||
@@ -1231,6 +1426,26 @@ static bool RunConfigValidationTest(
   const auto out_of_range_authorized_origin_port_path =
       test_directory / "out-of-range-authorized-origin-port.json";
   const auto invalid_plugin_path = test_directory / "invalid-plugin.json";
+  const auto invalid_plugin_pages_path =
+      test_directory / "invalid-plugin-pages.json";
+  const auto invalid_plugin_page_entry_path =
+      test_directory / "invalid-plugin-page-entry.json";
+  const auto invalid_plugin_mode_type_path =
+      test_directory / "invalid-plugin-mode-type.json";
+  const auto empty_plugin_mode_path =
+      test_directory / "empty-plugin-mode.json";
+  const auto unknown_plugin_mode_path =
+      test_directory / "unknown-plugin-mode.json";
+  const auto invalid_plugin_capabilities_path =
+      test_directory / "invalid-plugin-capabilities.json";
+  const auto invalid_plugin_capability_entry_path =
+      test_directory / "invalid-plugin-capability-entry.json";
+  const auto invalid_plugin_capability_id_path =
+      test_directory / "invalid-plugin-capability-id.json";
+  const auto empty_plugin_capability_id_path =
+      test_directory / "empty-plugin-capability-id.json";
+  const auto invalid_plugin_capability_allow_path =
+      test_directory / "invalid-plugin-capability-allow.json";
   const auto legacy_plugins_path = test_directory / "legacy-plugins.json";
   const auto invalid_plugin_path_type_path =
       test_directory / "invalid-plugin-path-type.json";
@@ -1249,6 +1464,26 @@ static bool RunConfigValidationTest(
       test_directory / "duplicate-plugin.json";
   const auto missing_plugin_allow_path =
       test_directory / "missing-plugin-allow.json";
+  const auto runtime_imports_without_allow_path =
+      test_directory / "runtime-imports-without-allow.json";
+  const auto invalid_plugin_signature_type_path =
+      test_directory / "invalid-plugin-signature-type.json";
+  const auto short_plugin_signature_path =
+      test_directory / "short-plugin-signature.json";
+  const auto non_hex_plugin_signature_path =
+      test_directory / "non-hex-plugin-signature.json";
+  const auto internal_plugin_signature_path =
+      test_directory / "internal-plugin-signature.json";
+  const auto missing_plugin_salt_path =
+      test_directory / "missing-plugin-salt.json";
+  const auto invalid_plugin_salt_type_path =
+      test_directory / "invalid-plugin-salt-type.json";
+  const auto odd_plugin_salt_path =
+      test_directory / "odd-plugin-salt.json";
+  const auto non_hex_plugin_salt_path =
+      test_directory / "non-hex-plugin-salt.json";
+  const auto internal_plugin_salt_path =
+      test_directory / "internal-plugin-salt.json";
   const auto invalid_plugin_allow_path =
       test_directory / "invalid-plugin-allow.json";
   const auto invalid_plugin_entry_path =
@@ -1322,6 +1557,36 @@ static bool RunConfigValidationTest(
                 "failed to write out-of-range authorizedOrigin port config") &&
          Expect(WriteFile(invalid_plugin_path, R"({"plugin":true})"),
                 "failed to write invalid plugin config") &&
+         Expect(WriteFile(invalid_plugin_pages_path,
+                          R"({"plugin":{"pages":"asset://main/**"}})"),
+                "failed to write invalid plugin pages config") &&
+         Expect(WriteFile(invalid_plugin_page_entry_path,
+                          R"({"plugin":{"pages":["asset://main/**",42]}})"),
+                "failed to write invalid plugin pages entry config") &&
+         Expect(WriteFile(invalid_plugin_mode_type_path,
+                          R"({"plugin":{"mode":42}})"),
+                "failed to write invalid plugin mode type config") &&
+         Expect(WriteFile(empty_plugin_mode_path,
+                          R"({"plugin":{"mode":""}})"),
+                "failed to write empty plugin mode config") &&
+         Expect(WriteFile(unknown_plugin_mode_path,
+                          R"({"plugin":{"mode":"strict"}})"),
+                "failed to write unknown plugin mode config") &&
+         Expect(WriteFile(invalid_plugin_capabilities_path,
+                          R"({"plugin":{"capabilities":true}})"),
+                "failed to write invalid plugin capabilities config") &&
+         Expect(WriteFile(invalid_plugin_capability_entry_path,
+                          R"({"plugin":{"capabilities":[true]}})"),
+                "failed to write invalid plugin capability entry config") &&
+         Expect(WriteFile(invalid_plugin_capability_id_path,
+                          R"({"plugin":{"capabilities":[{"id":42,"allow":["muon.executor.spawn"]}]}})"),
+                "failed to write invalid plugin capability id config") &&
+         Expect(WriteFile(empty_plugin_capability_id_path,
+                          R"({"plugin":{"capabilities":[{"id":"","allow":["muon.executor.spawn"]}]}})"),
+                "failed to write empty plugin capability id config") &&
+         Expect(WriteFile(invalid_plugin_capability_allow_path,
+                          R"({"plugin":{"capabilities":[{"id":"cap-1","allow":"muon.executor.spawn"}]}})"),
+                "failed to write invalid plugin capability allow config") &&
          Expect(WriteFile(legacy_plugins_path, R"({"plugins":[]})"),
                 "failed to write legacy plugins config") &&
          Expect(WriteFile(invalid_plugin_path_type_path,
@@ -1351,6 +1616,36 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(missing_plugin_allow_path,
                           R"({"plugin":{"plugins":[{"name":"internal"}]}})"),
                 "failed to write missing plugin allow config") &&
+         Expect(WriteFile(runtime_imports_without_allow_path,
+                          R"({"plugin":{"mode":"validate","plugins":[{"name":"internal","imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+                "failed to write runtime imports without allow config") &&
+         Expect(WriteFile(invalid_plugin_signature_type_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":42}]}})"),
+                "failed to write invalid plugin signature type config") &&
+         Expect(WriteFile(short_plugin_signature_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89"}]}})"),
+                "failed to write short plugin signature config") &&
+         Expect(WriteFile(non_hex_plugin_signature_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89x"}]}})"),
+                "failed to write non-hex plugin signature config") &&
+         Expect(WriteFile(internal_plugin_signature_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
+                "failed to write internal plugin signature config") &&
+         Expect(WriteFile(missing_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
+                "failed to write missing plugin salt config") &&
+         Expect(WriteFile(invalid_plugin_salt_type_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":42}]}})"),
+                "failed to write invalid plugin salt type config") &&
+         Expect(WriteFile(odd_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":"abc"}]}})"),
+                "failed to write odd plugin salt config") &&
+         Expect(WriteFile(non_hex_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":"0x"}]}})"),
+                "failed to write non-hex plugin salt config") &&
+         Expect(WriteFile(internal_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"salt":"deadbeef"}]}})"),
+                "failed to write internal plugin salt config") &&
          Expect(WriteFile(invalid_plugin_allow_path,
                           R"({"plugin":{"plugins":[{"name":"internal","allow":"muon.**"}]}})"),
                 "failed to write invalid plugin allow config") &&
@@ -1429,6 +1724,26 @@ static bool RunConfigValidationTest(
                                  "integer") &&
          LoadConfigExpectFailure(invalid_plugin_path,
                                  "plugin must be an object") &&
+         LoadConfigExpectFailure(invalid_plugin_pages_path,
+                                 "plugin.pages must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_page_entry_path,
+                                 "plugin.pages entries must be strings") &&
+         LoadConfigExpectFailure(invalid_plugin_mode_type_path,
+                                 "plugin.mode must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_mode_path,
+                                 "plugin.mode must not be empty") &&
+         LoadConfigExpectFailure(unknown_plugin_mode_path,
+                                 "plugin.mode has unknown value") &&
+         LoadConfigExpectFailure(invalid_plugin_capabilities_path,
+                                 "plugin.capabilities must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_entry_path,
+                                 "plugin.capabilities entries must be objects") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_id_path,
+                                 "plugin.capabilities.id must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_capability_id_path,
+                                 "plugin.capabilities.id must not be empty") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_allow_path,
+                                 "plugin.capabilities.allow must be an array") &&
          LoadConfigExpectFailure(legacy_plugins_path,
                                  "plugins is no longer supported") &&
          LoadConfigExpectFailure(invalid_plugin_path_type_path,
@@ -1450,6 +1765,34 @@ static bool RunConfigValidationTest(
                                  "duplicate plugin entry") &&
          LoadConfigExpectFailure(missing_plugin_allow_path,
                                  "plugin.plugins[0].allow is required") &&
+         LoadConfigExpectFailure(runtime_imports_without_allow_path,
+                                 "validate imports require Vite capability "
+                                 "generation") &&
+         LoadConfigExpectFailure(invalid_plugin_signature_type_path,
+                                 "plugin.plugins[0].signature must be a string") &&
+         LoadConfigExpectFailure(short_plugin_signature_path,
+                                 "plugin.plugins[0].signature must be a "
+                                 "40-character SHA-1 hex string") &&
+         LoadConfigExpectFailure(non_hex_plugin_signature_path,
+                                 "plugin.plugins[0].signature must be a "
+                                 "40-character SHA-1 hex string") &&
+         LoadConfigExpectFailure(internal_plugin_signature_path,
+                                 "plugin.plugins[0].signature is not supported "
+                                 "for internal") &&
+         LoadConfigExpectFailure(missing_plugin_salt_path,
+                                 "plugin.plugins[0].signature requires "
+                                 "plugin.plugins[0].salt") &&
+         LoadConfigExpectFailure(invalid_plugin_salt_type_path,
+                                 "plugin.plugins[0].salt must be a string") &&
+         LoadConfigExpectFailure(odd_plugin_salt_path,
+                                 "plugin.plugins[0].salt must be a "
+                                 "hexadecimal byte string") &&
+         LoadConfigExpectFailure(non_hex_plugin_salt_path,
+                                 "plugin.plugins[0].salt must be a "
+                                 "hexadecimal byte string") &&
+         LoadConfigExpectFailure(internal_plugin_salt_path,
+                                 "plugin.plugins[0].salt is not supported "
+                                 "for internal") &&
          LoadConfigExpectFailure(invalid_plugin_allow_path,
                                  "plugin.plugins[0].allow must be an array") &&
          LoadConfigExpectFailure(invalid_plugin_entry_path,
@@ -1625,6 +1968,12 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "invalid-browser-plugin-allow.json";
   const auto invalid_browser_plugin_entry_path =
       test_directory / "invalid-browser-plugin-entry.json";
+  const auto invalid_browser_plugin_mode_path =
+      test_directory / "invalid-browser-plugin-mode.json";
+  const auto empty_browser_plugin_mode_path =
+      test_directory / "empty-browser-plugin-mode.json";
+  const auto unknown_browser_plugin_mode_path =
+      test_directory / "unknown-browser-plugin-mode.json";
   const auto invalid_unsafe_parent_access_path =
       test_directory / "invalid-unsafe-parent-access.json";
   const auto invalid_unsafe_parent_access_entry_path =
@@ -1765,6 +2114,15 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(invalid_browser_plugin_entry_path,
                           R"({"browser":{"plugin":{"allow":["asset://main/**",42]}}})"),
                 "failed to write invalid browser plugin allow entry config") &&
+         Expect(WriteFile(invalid_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":42}}})"),
+                "failed to write invalid browser plugin mode config") &&
+         Expect(WriteFile(empty_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":""}}})"),
+                "failed to write empty browser plugin mode config") &&
+         Expect(WriteFile(unknown_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":"strict"}}})"),
+                "failed to write unknown browser plugin mode config") &&
          Expect(WriteFile(invalid_unsafe_parent_access_path,
                           R"({"browser":{"allowUnsafeJavaScriptParentAccess":"asset://main/**"}})"),
                 "failed to write invalid unsafe parent access config") &&
@@ -1835,11 +2193,17 @@ static bool RunBrowserConfigValidationTest(
          LoadConfigExpectFailure(overlapping_assignment_path,
                                  "must not use overlapping shortcuts") &&
          LoadConfigExpectFailure(invalid_browser_plugin_path,
-                                 "browser.plugin must be an object") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(invalid_browser_plugin_allow_path,
-                                 "browser.plugin.allow must be an array") &&
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(invalid_browser_plugin_entry_path,
-                                 "browser.plugin.allow entries must be strings") &&
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(invalid_browser_plugin_mode_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(empty_browser_plugin_mode_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(unknown_browser_plugin_mode_path,
+                                 "browser.plugin is no longer supported") &&
          LoadConfigExpectFailure(
              invalid_unsafe_parent_access_path,
              "browser.allowUnsafeJavaScriptParentAccess must be an array") &&
@@ -2036,24 +2400,24 @@ static bool RunInvalidNetworkGlobTest() {
          ExpectInvalidNetworkGlob({"https://example.com**"});
 }
 
-static bool ExpectInvalidBrowserPluginAllowGlob(
+static bool ExpectInvalidPluginPagesGlob(
     const std::vector<std::string>& allow_patterns) {
   std::shared_ptr<MuonNetworkPolicy> policy;
   std::string error_message;
-  return Expect(!CreateMuonUrlPolicy(allow_patterns, "browser.plugin.allow",
+  return Expect(!CreateMuonUrlPolicy(allow_patterns, "plugin.pages",
                                      &policy, &error_message),
-                "invalid browser.plugin.allow glob was accepted") &&
-         Expect(error_message.find("Invalid browser.plugin.allow glob") !=
+                "invalid plugin.pages glob was accepted") &&
+         Expect(error_message.find("Invalid plugin.pages glob") !=
                     std::string::npos,
-                "invalid browser.plugin.allow glob error message is missing "
+                "invalid plugin.pages glob error message is missing "
                 "context");
 }
 
-static bool RunInvalidBrowserPluginAllowGlobTest() {
-  return ExpectInvalidBrowserPluginAllowGlob({""}) &&
-         ExpectInvalidBrowserPluginAllowGlob({"data:\\"}) &&
-         ExpectInvalidBrowserPluginAllowGlob({"https://example.com/***"}) &&
-         ExpectInvalidBrowserPluginAllowGlob({"https://example.com**"});
+static bool RunInvalidPluginPagesGlobTest() {
+  return ExpectInvalidPluginPagesGlob({""}) &&
+         ExpectInvalidPluginPagesGlob({"data:\\"}) &&
+         ExpectInvalidPluginPagesGlob({"https://example.com/***"}) &&
+         ExpectInvalidPluginPagesGlob({"https://example.com**"});
 }
 
 static bool ExpectInvalidUnsafeParentAccessGlob(
@@ -2171,6 +2535,7 @@ int main() {
 
   const auto passed = RunConfigLoadingTest(test_directory) &&
                       RunConfigJson5LoadingTest(test_directory) &&
+                      RunDebugConfigLoadingTest() &&
                       RunLaunchSourceProfilePathTest(test_directory) &&
                       RunDefaultConfigSearchOrderTest(test_directory) &&
                       RunCommandLineConfigPathTest(test_directory) &&
@@ -2189,7 +2554,7 @@ int main() {
                       RunNetworkPolicyEmptyTest() &&
                       RunNetworkAuthorizedOriginPolicyTest() &&
                       RunInvalidNetworkGlobTest() &&
-                      RunInvalidBrowserPluginAllowGlobTest() &&
+                      RunInvalidPluginPagesGlobTest() &&
                       RunInvalidUnsafeParentAccessGlobTest() &&
                       RunPluginPolicyTest() &&
                       RunPluginPolicyDeepWildcardTest() &&

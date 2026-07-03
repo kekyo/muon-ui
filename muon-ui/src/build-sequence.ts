@@ -199,6 +199,9 @@ const copyDefinedBuildOptions = (
   if (input.configPath !== undefined) {
     output.configPath = input.configPath;
   }
+  if (input.iconPath !== undefined) {
+    output.iconPath = input.iconPath;
+  }
   if (input.windowsResource !== undefined) {
     const windowsResource = mergeMuonWindowsResourceOptions(
       input.windowsResource,

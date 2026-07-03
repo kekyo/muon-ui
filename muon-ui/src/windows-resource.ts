@@ -26,6 +26,13 @@ import {
   createNormalizedMuonIconPngData,
   createWindowsIconFromPngFile,
 } from "./windows-icon.js";
+import {
+  createAppIconOptionsSource,
+  readConfigAppIconSource,
+  readProjectAppIconSource,
+  resolveMuonAppIconPath,
+  type MuonAppIconSource,
+} from "./app-icon.js";
 
 export type { MuonWindowsResourceOptions } from "./vite.js";
 
@@ -59,6 +66,7 @@ interface ResolveWindowsResourceInput {
   muonConfig: JsonObject;
   muonConfigDirectory: string;
   options: MuonWindowsResourceOptions | undefined;
+  appIconPath: string | undefined;
   defaults: WindowsResourceDefaults;
 }
 
@@ -66,8 +74,8 @@ interface ResolveWindowsResourceInput {
  * Resolved Windows resource metadata used by build and pack outputs.
  */
 export interface ResolvedMuonWindowsResource {
-  /** Resolved `.png` icon file path, if one is available. */
-  iconPath: string | undefined;
+  /** Resolved `.png` icon file path. */
+  iconPath: string;
   /** Product name. */
   productName: string;
   /** File description. */
@@ -165,16 +173,29 @@ export const resolveMuonWindowsResource = async (
   input: ResolveWindowsResourceInput,
 ): Promise<ResolvedMuonWindowsResource> => {
   const projectJson = await readProjectJson(input.root);
-  const sources = [
+  const windowsSources = [
     createOptionsSource(input.options, input.root, "windowsResource"),
     readConfigWindowsResourceSource(
       input.muonConfig,
       input.muonConfigDirectory,
       "muon.json",
     ),
+    readConfigWindowsResourceSource(projectJson, input.root, "project.json"),
+  ].filter((source): source is WindowsResourceSource => source !== undefined);
+  const sources = [
+    ...windowsSources,
     createProjectSource(projectJson, input.root),
     createPackageSource(input.packageJson, input.root),
   ].filter((source): source is WindowsResourceSource => source !== undefined);
+  const appIconSources = [
+    createAppIconOptionsSource(input.appIconPath, input.root),
+    readConfigAppIconSource(
+      input.muonConfig,
+      input.muonConfigDirectory,
+      "muon.json",
+    ),
+    readProjectAppIconSource(projectJson, input.root),
+  ].filter((source): source is MuonAppIconSource => source !== undefined);
 
   const productName = resolveStringField(
     sources,
@@ -204,8 +225,9 @@ export const resolveMuonWindowsResource = async (
   const language = resolveNumericField(sources, "language", defaultLanguage);
   const codePage = resolveNumericField(sources, "codePage", defaultCodePage);
   const fixedVersion = normalizeWindowsVersion(version);
-  const iconPath = await resolveIconPath(
-    sources,
+  const iconPath = await resolveWindowsIconPath(
+    windowsSources,
+    appIconSources,
     await resolveDefaultWindowsIcon(input.packageDirectory),
   );
 
@@ -276,6 +298,33 @@ export const updateWindowsPeResources = async (input: {
   environment: NodeJS.ProcessEnv;
   cwd: string;
 }): Promise<boolean> => {
+  return await updateWindowsPeResourceFile(input, createEngraverUpdate);
+};
+
+/**
+ * Applies only resolved icon metadata to a Windows PE executable in place.
+ */
+export const updateWindowsPeIconResource = async (input: {
+  executablePath: string;
+  resource: ResolvedMuonWindowsResource;
+  environment: NodeJS.ProcessEnv;
+  cwd: string;
+}): Promise<boolean> => {
+  return await updateWindowsPeResourceFile(input, createEngraverIconUpdate);
+};
+
+const updateWindowsPeResourceFile = async (
+  input: {
+    executablePath: string;
+    resource: ResolvedMuonWindowsResource;
+    environment: NodeJS.ProcessEnv;
+    cwd: string;
+  },
+  createUpdate: (
+    resource: ResolvedMuonWindowsResource,
+    iconPath: string,
+  ) => JsonObject,
+): Promise<boolean> => {
   if (!(await isWindowsPeExecutable(input.executablePath))) {
     return false;
   }
@@ -284,17 +333,12 @@ export const updateWindowsPeResources = async (input: {
   const tempDirectory = await mkdtemp(join(tmpdir(), "muon-windows-resource-"));
   const updatesJsonPath = join(tempDirectory, "updates.json");
   const outputPath = join(tempDirectory, "output.exe");
-  const iconPath =
-    input.resource.iconPath === undefined
-      ? undefined
-      : join(tempDirectory, "icon.ico");
+  const iconPath = join(tempDirectory, "icon.ico");
   try {
-    if (input.resource.iconPath !== undefined && iconPath !== undefined) {
-      await createWindowsIconFromPngFile(input.resource.iconPath, iconPath);
-    }
+    await createWindowsIconFromPngFile(input.resource.iconPath, iconPath);
     await writeFile(
       updatesJsonPath,
-      `${JSON.stringify(createEngraverUpdate(input.resource, iconPath), null, 2)}\n`,
+      `${JSON.stringify(createUpdate(input.resource, iconPath), null, 2)}\n`,
     );
     await runMuonPrepareResourceUpdate({
       inputPath: input.executablePath,
@@ -315,7 +359,7 @@ export const updateWindowsPeResources = async (input: {
 
 const createEngraverUpdate = (
   resource: ResolvedMuonWindowsResource,
-  iconPath: string | undefined,
+  iconPath: string,
 ): JsonObject => {
   const strings: JsonObject = {
     CompanyName: resource.companyName,
@@ -340,18 +384,27 @@ const createEngraverUpdate = (
       },
       strings,
     },
-    icons:
-      iconPath === undefined
-        ? []
-        : [
-            {
-              id: 1,
-              language: resource.language,
-              path: iconPath,
-            },
-          ],
+    icons: createEngraverIcons(resource, iconPath),
   };
 };
+
+const createEngraverIconUpdate = (
+  resource: ResolvedMuonWindowsResource,
+  iconPath: string,
+): JsonObject => ({
+  icons: createEngraverIcons(resource, iconPath),
+});
+
+const createEngraverIcons = (
+  resource: ResolvedMuonWindowsResource,
+  iconPath: string,
+): JsonObject[] => [
+  {
+    id: 1,
+    language: resource.language,
+    path: iconPath,
+  },
+];
 
 const resolveConfigPath = async (
   root: string,
@@ -435,7 +488,6 @@ const createProjectSource = (
   directory: string,
 ): WindowsResourceSource | undefined => {
   const topLevel: MuonWindowsResourceOptions = {};
-  copyStringField(projectJson, "iconPath", topLevel, "iconPath");
   copyStringField(projectJson, "productName", topLevel, "productName");
   copyStringField(projectJson, "name", topLevel, "productName");
   copyStringField(projectJson, "fileDescription", topLevel, "fileDescription");
@@ -493,12 +545,7 @@ const copyStringField = (
   target: MuonWindowsResourceOptions,
   targetKey: keyof Pick<
     MuonWindowsResourceOptions,
-    | "iconPath"
-    | "productName"
-    | "fileDescription"
-    | "companyName"
-    | "version"
-    | "copyright"
+    "productName" | "fileDescription" | "companyName" | "version" | "copyright"
   >,
 ): void => {
   const value = source[sourceKey];
@@ -615,55 +662,59 @@ const resolveNumericField = (
   return fallback;
 };
 
-const resolveIconPath = async (
-  sources: readonly WindowsResourceSource[],
-  defaultIconPath: string | undefined,
-): Promise<string | undefined> => {
-  for (const source of sources) {
+const resolveWindowsIconPath = async (
+  windowsSources: readonly WindowsResourceSource[],
+  appIconSources: readonly MuonAppIconSource[],
+  defaultIconPath: string,
+): Promise<string> => {
+  for (const source of windowsSources) {
     const value = source.options.iconPath;
     if (value !== undefined && value.trim() !== "") {
       const iconPath = resolveResourcePath(source.directory, value);
-      await assertIconPath(iconPath, true);
+      await assertIconPath(iconPath);
       return iconPath;
     }
   }
-  if (defaultIconPath !== undefined && (await fileExists(defaultIconPath))) {
-    await assertIconPath(defaultIconPath, false);
-    return defaultIconPath;
+  const appIconPath = await resolveMuonAppIconPath(appIconSources);
+  if (appIconPath !== undefined) {
+    return appIconPath;
   }
-  return undefined;
+  await assertIconPath(defaultIconPath);
+  return defaultIconPath;
 };
 
-const assertIconPath = async (
-  iconPath: string,
-  required: boolean,
-): Promise<void> => {
+const assertIconPath = async (iconPath: string): Promise<void> => {
   if (extname(iconPath).toLowerCase() !== ".png") {
     throw new Error(`Windows resource icon must be a .png file: ${iconPath}`);
   }
-  if (required && !(await fileExists(iconPath))) {
+  if (!(await fileExists(iconPath))) {
     throw new Error(`Windows resource icon does not exist: ${iconPath}`);
   }
-  if (await fileExists(iconPath)) {
-    await createNormalizedMuonIconPngData(await readFile(iconPath), iconPath);
-  }
+  await createNormalizedMuonIconPngData(await readFile(iconPath), iconPath);
 };
 
 const resolveDefaultWindowsIcon = async (
   packageDirectory: string,
-): Promise<string | undefined> => {
+): Promise<string> => {
+  const sourceIconPath = join(
+    moduleDirectory,
+    "..",
+    "..",
+    "images",
+    "muon-256.png",
+  );
   const candidates = [
-    join(resolve(packageDirectory), "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "..", "dist", "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "..", "..", "images", "muon-bootstrap-256.png"),
+    join(resolve(packageDirectory), "native", "muon-256.png"),
+    join(moduleDirectory, "native", "muon-256.png"),
+    join(moduleDirectory, "..", "dist", "native", "muon-256.png"),
+    sourceIconPath,
   ];
   for (const candidate of candidates) {
     if (await fileExists(candidate)) {
       return candidate;
     }
   }
-  return undefined;
+  return sourceIconPath;
 };
 
 const resolveResourcePath = (directory: string, path: string): string => {

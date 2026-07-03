@@ -316,7 +316,7 @@ const writeEmbeddedBootstrap = async (
 const getLinuxPortableStateRuntimePath = (
   stateHome: string,
   appId: string,
-): string => join(stateHome, appId, "linux-amd64");
+): string => join(stateHome, appId, "runtime");
 
 const getUserDesktopEntryPath = (dataHome: string, desktopId: string): string =>
   join(dataHome, "applications", `${desktopId}.desktop`);

@@ -14,9 +14,6 @@ CEFをバックエンドで使用する、マルチプラットフォームGUI�
 
 ## これは何?
 
-WIP: このプロジェクトはまだ非常に初期の検証段階です。
-私はこれを完成させるつもりで居ますが、本格的に検証を行う前の段階であることに注意して下さい。
-
 あなたは、古くなってしまったネイティブGUIアプリケーションを、どうにかして最新のモダン化されたアプリケーションに更新したいと考えたことはありますか？
 アプリケーションのリプレースメントは非常に複雑で、私達をいつも悩ませて来ました。
 
@@ -25,7 +22,7 @@ WIP: このプロジェクトはまだ非常に初期の検証段階です。
 
 muon (ミューオン, /ˈmjuːɒn/) は、CEF (Chromium Embedded Framework) を使用する、マルチプラットフォームGUIアプリケーション基盤です。
 あなたは恐らく、 [Electron](https://www.electronjs.org/) に代表される同種のプロジェクトをいくつか聞いたことがあるかもしれません。
-
+ 
 乱暴に言えば、muonはそれらと同じポジションの基盤ソフトウェアです。
 つまり、ローカルで動作するGUIアプリケーションを、ウェブアプリケーションとして実装出来るソフトウェアです。
 
@@ -48,25 +45,26 @@ CEFを使うのに、世界中のウェブサイトにアクセス出来ない�
 そして、ネイティブライブラリとの相互運用を実現する、完全に非同期処理に対応したプラグインシステムも搭載しています。
 これらも事前構成に基づいて使用可能になるため、使われない機能を野放しにすることはありません。
 
-CEFベースなので、Chromiumで想定されるWebGL, WebGPU, WebAssembly, Web worker, Local storageなども当然使用できます。
-Chromium DevToolsを表示させることも可能です。CDP (Chrome DevTools Protocol) も使用できるため、vscodeなどでデバッグしたり、playwrightを接続して操ることも可能です。
-Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用することも可能です。
+CEFベースなので、Chromiumで想定されるWebGL, WebGPU, WebAssembly, Web worker, Local storageなども当然使用出来ます。
+DevToolsを表示させることも可能です。CDP (Chrome DevTools Protocol) も使用できるため、vscodeなどでデバッグしたり、Playwrightを接続して操ることも可能です。
+Chromium/Chromeから、 `chrome://inspect/` でリモートDevToolsを使用することも可能です。
 
 つまり、GTK/Qt/Windowsのネイティブアプリケーションをウェブアプリケーションに移行する際に発生する、大きな問題点の一つをわかりやすく除外することで、
 ウェブベース技術のエコシステムを使って現代的なローカルGUIアプリケーションを開発出来ます。
 
 ### 特徴
 
-- すべてのネットワークアクセスをホワイトリストフィルターで制限することで、問題を起こすコンテンツを完全に除外できます。
-- 扱いやすいNPMパッケージとして提供され、あなたのウェブアプリケーションプロジェクトを簡単にネイティブGUIアプリケーション化できます。複雑な構成や変更は不要です。
-- レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、Chromiumやchromeを使用しているのとほぼ同等です。
-- Viteプラグインに対応しています（オプション）。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
-- `muon dev` で、HTTPサーバーを起動せずにローカルアセットを直接使った開発起動ができます。
-- Linux desktop launcherとアイコンのmetadataを配布ビルド時に同梱できます。
-- Chromium DevToolsを使用できます。更にCDP (Chromium DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
-- 複数のブラウザウインドウを表示できます。ブラウザウインドウは親子関係をもたせることも出来ます。
-- プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限できます。
+- すべてのネットワークアクセスをホワイトリストフィルターで制限することで、問題を起こすコンテンツを完全に除外出来ます。
+- 扱いやすいNPMパッケージとして提供され、あなたのウェブアプリケーションプロジェクトを簡単にネイティブGUIアプリケーション化出来ます。複雑な構成や変更は不要です。
+- レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、ChromiumやChromeを使用しているのとほぼ同等です。
+- Viteプラグインに対応しています。ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
+- `muon run` で、HTTPサーバーを起動せずにローカルアセットを直接使った開発起動が出来ます。
+- Linux desktop launcherとアイコンのmetadataを配布ビルド時に同梱出来ます。
+- DevToolsを使用出来ます。更にCDP (Chrome DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
+- 複数のブラウザウインドウを表示出来ます。ブラウザウインドウは親子関係をもたせることも出来ます。
+- プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限出来ます。
 - 内蔵プラグインを使用して、ローカルファイルへのアクセス・オープンダイアログ・子プロセス起動・ウインドウ操作が可能です。
+- Linux (deb) とWindows (NSIS) のパッケージ生成、あるいはポータブル運用に対応しています。
 
 ### 環境
 
@@ -84,8 +82,7 @@ Chromium/chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 早速muonでアプリケーション（muonアプリ）を作ってみましょう。
 
 muonは開発体験を直交的なものに感じられるように、開発ライフサイクルとランタイムを可能な限り分離しています。
-新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するために、
-再現可能な最小の手順で実現出来るような開発ライフサイクルが重要だと考えています。
+新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するのも非常に簡単です。
 
 これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトを用意する事から始めましょう。
 例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を作りましょう:
@@ -105,7 +102,7 @@ npm install
 npm run dev
 ```
 
-これで、Viteの開発サーバーが起動するので、リンクをクリックしてブラウザでページを表示できます。
+これで、Viteの開発サーバーが起動するので、リンクをクリックしてブラウザでページを表示出来ます。
 まだmuonは導入していません。素のViteプロジェクトです。
 
 このプロジェクトにmuonを導入します。必要な作業は:
@@ -114,8 +111,6 @@ npm run dev
 2. muon Viteプラグインを構成
 
 だけです。しかも、それぞれ非常に簡単です。
-
----
 
 ### muonパッケージをインストール
 
@@ -130,19 +125,19 @@ muonパッケージには、以下の要素を含みます:
 - muon CLI
 - muon Viteプラグイン
 - muon内蔵プラグインのTypeScript型定義
-- platform別のmuonバイナリアセット
+- プラットフォーム別のmuonバイナリアセット
 
-CEF本体バイナリは、NPMパッケージに含まれません。
+CEF本体バイナリは、NPMパッケージに含まれません。CEFは必要になった時点で、公式CDNからダウンロードされます。
 
 ### muon Viteプラグインを構成
 
-実はmuonパッケージを導入しただけでほぼ準備は整っていますが、このプロジェクトではViteを使っているので、
-ぜひViteのHMR (Hot Module Replacement)を使用出来るようにすることをお勧めします。
+muonパッケージを導入しただけでほぼ準備は整っていますが、muonのViteプラグインを有効化して、
+HMR (Hot Module Replacement) とmuonアプリのビルドを使用出来るようにします。
 
 HMRを知らない人に簡単に説明すると、開発中にViteが擬似的なサーバーとなって、ブラウザにページを表示可能にし、かつ、ページを編集した時にほぼリアルタイムで表示を更新してくれます。
 つまり、編集結果を自動的にプレビュー表示する、非常に便利な機能です。
 
-muonはHMRに対応していて、ブラウザの代わりにmuonを起動して、muonアプリ上でHMRを機能させます。
+muonのViteプラグインはHMRに対応していて、ブラウザの代わりにmuonを起動して、muonアプリ上でHMRを機能させます。
 これを有効化するために、`vite.config.ts` に以下のコードを追加します:
 
 ```ts
@@ -158,7 +153,7 @@ export default defineConfig({
 })
 ```
 
-`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuonプラグインが有効化されます。これで準備は完了です!
+`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuon Viteプラグインが有効化されます。これで準備は完了です。
 
 いよいよmuonを起動します:
 
@@ -171,30 +166,30 @@ npm run dev
 ![Get started](./images/get-started.png)
 
 ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
+例えば、 `src/App.tsx` 内の `<h1>Get started</h1>` の行を `<h1>Get started with Muon!</h1>` に書き換えて保存すれば、
+再起動すること無く瞬時にmuonウインドウ側の表示も書き換わるはずです。
 
-`npm run dev` でmuonを起動すると、`F12` キーでMuon DevToolsを起動でき、`Ctrl+F12` キーでmuonをリサイクル再起動できます。
-また、CDP (Chromium DevTools Protocol) が有効化されるので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
+そして、このページの中央に配置されてるカウンタボタン "Count is 0" をクリックすると、カウント値が増加することが確認できるはずです。
+これで、ViteテンプレートのReactが正しく動作していることが確認出来ます。
 
-### muon devで直接起動
+また、 "Explore Vite" のようなボタンをクリックした場合、新たなウインドウが開いて、以下のような「がっかり」するページが表示されます:
 
-Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon dev` を使用できます。
-`muon dev` はHTTPサーバーを起動せず、`asset.sourcePath` を開発用に上書きしてmuonをフォアグラウンド起動します。
-そのため、ViteのHMRは動作しません。
+![Forbidden](./images/forbidden.png)
 
-```bash
-muon dev
-```
+そして、これこそが、muonの特徴である、ネットワークアクセスのホワイトリストフィルタが機能している証拠です。
+このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonの既定では「ローカルのアセットのみ」アクセスが許可されているので、
+それ以外のサイトコンテンツへのアクセスが遮断されているのです。
+このホワイトリストの指定方法は別章で詳しく示します。
 
-開発アセットは `--assets`、`muon.json` の `asset.sourcePath`、`assets/` の順に解決されます。
-`--assets` はローカルディレクトリを指定し、相対パスはproject rootから解決されます。
+また、`F12` キーでMuon DevToolsを起動出来ます:
 
-`vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
-CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon dev` では無視されます。
-Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
+![Muon DevTools](./images/devtools.png)
 
----
+CDP (Chrome DevTools Protocol) も有効化されているので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
 
-### 配布用ビルド (Vite)
+`Ctrl+F12` キーでmuonをリサイクル再起動出来ます。リサイクル再起動は、 `muon.json` の変更など、HMRで反映できない更新を行った場合に使用出来ます。
+
+### 配布用ビルド
 
 Vite muonプラグインを設定した状態で `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
@@ -202,11 +197,10 @@ Vite muonプラグインを設定した状態で `vite build` を実行すると
 npm run build
 ```
 
-Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられ、ZIP内では `asset://main/` として参照できるように `main/` プレフィックスが付きます。
-
+Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
 既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、`dist-muon/linux-amd64/` や `dist-muon/windows-amd64/` のようなターゲット別ディレクトリに出力されます。
 
-ターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定できます:
+ターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定出来ます:
 
 ```ts
 import { defineConfig } from 'vite';
@@ -217,59 +211,28 @@ export default defineConfig({
     muon({
       build: {  // ビルドオプションの指定
         targets: ['linux-amd64', 'windows-amd64'],
-        outputRoot: 'release',
-        appName: 'my-app',
-        appId: 'com.example.my-app',
+        iconPath: 'icons/app.png',
         linuxDesktop: {
           name: 'My App',
-          iconPath: 'icons/app.png',
-          categories: ['Utility'],
         },
+        windowsResource: {
+          productName: 'My App',
+        }
       },
     }),
   ],
 });
 ```
 
-既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、scope付きパッケージ名の場合はscopeを除いた名前を使用します。
-実行時のstate領域を識別するapp idは同じ `name` から生成されますが、scopeを含めた安定IDとして扱うため、`@scope/name` は `scope.name` になります。
-
-指定可能なターゲット名は、以下のとおりです:
+`build.targets` に指定可能なターゲット名は、以下のとおりです:
 
 - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windowsターゲット: `windows-i686`, `windows-amd64`
 
-### 配布用ビルドとパッケージ生成
+既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、スコープ付きパッケージ名の場合はスコープを除いた名前を使用します。
+また、`build.iconPath` にアイコンとなるPNGフォーマットの画像を配置しておけば、muonアプリのアイコンとして機能するようになります。
 
-配布用ビルドや配布用パッケージ生成は、 `muon` CLIからも実行できます。
-
-`vite.config.*` にmuon Viteプラグインが含まれている場合、 `muon build` は `vite build` と同じビルドシーケンスを使用します。
-つまり、Viteプラグインの `build` オプションを既定値として使い、Viteの `build.outDir` を `asset://main/` として配布用ディレクトリにまとめます。
-同じ項目をCLIオプションで指定した場合はCLI側が優先されます。
-
-```bash
-npx muon build
-```
-
-muon Viteプラグインが無い場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
-この場合のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
-`asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
-アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
-
-ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
-muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
-
-ビルド時に生成されるmuonアプリバイナリに指定する名称やアイコンなどのオプション指定例を示します:
-
-```bash
-npx muon build --windows-icon icons/app.png --windows-version 1.2.3
-npx muon build --linux-icon icons/app.png --linux-name "My App"
-```
-
-- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書きできます。
-  同じ値は `muon.json` の `windows.resource` でも指定できます。
-- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書きできます。
-  同じ値は `muon.json` の `linux.desktop` でも指定できます。
+### パッケージ生成
 
 インストーラーやアーカイブなどの配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します:
 
@@ -296,12 +259,12 @@ npx muon pack --type tar.gz,deb --target linux-amd64
 npx muon pack --type nsis --target windows-amd64
 ```
 
-- `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定できます。
+- `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定出来ます。
   `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
   省略時は `zip`, `tar.gz`, `deb`, `nsis` のすべてを対象にします。
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
   muon Viteプラグインが無い場合、未指定時はすべての対応ターゲットをパッケージ候補にします。
-  完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定できます。
+  完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定出来ます。
 - `zip` はWindowsターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むZIPです。
 - `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むgzip圧縮tarです。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
@@ -311,18 +274,20 @@ npx muon pack --type nsis --target windows-amd64
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
   Debian/Ubuntuでは、単に `sudo apt install nsis` でインストール出来ます。
   Windows環境では [Nullsoft Scriptable Install System](https://nsis.sourceforge.io/Main_Page) からダウンロード出来ます。
-- NSISの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>` です。
-  アンインストール時には `%LOCALAPPDATA%\<appId>` のruntime stateも削除します。
+- NSISの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>-<arch>` です。
+  表示名、Start Menu shortcut、アンインストールentryには `<packageName> (<arch>)` を使用します。
+  アンインストール時には `%LOCALAPPDATA%\<appId>.<arch>` のruntime stateも削除します。
+  `<arch>` は `amd64` または `i686` です。
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
-- CLIオプションは、 `muon build` で指定できる `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
-  `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書きできます。
+- CLIオプションは、 `muon build` で指定できる `--icon`, `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
+  `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書き出来ます。
   `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
-  例えば screw-up 1.35.0以降でGit由来のversionを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定できます。
+  例えば screw-up 1.35.0以降でGit由来のversionを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。
 
 ---
 
-### CEFのダウンロードと更新
+## CEFのダウンロードと更新
 
 CEFのバイナリアセットファイルは非常にサイズが大きことで有名です。
 また、CEFに脆弱性が発見された場合はCEFバイナリが更新されることになり、muonアプリをそのまま配布しているとCEFバイナリの更新のためにmuonアプリ全体の更新に見舞われます。
@@ -334,7 +299,7 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 これには少し時間がかかりますが、ダウンロードされたCEF tarballはローカルにキャッシュされるので、次回以降はキャッシュを使用します。
 
 - ローカルのキャッシュは、Linuxでは `~/.cache/muon/` ディレクトリ内に、Windowsでは `$HOME\.cache\muon\` ディレクトリ内に配置されます。
-- `MUON_CACHE_DIR` 環境変数を指定すると、キャッシュディレクトリを上書きできます。
+- `MUON_CACHE_DIR` 環境変数を指定すると、キャッシュディレクトリを上書き出来ます。
 
 キャッシュディレクトリには、カタログとダウンロード済みのCEF tarballだけが配置されます:
 
@@ -346,25 +311,26 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 ```
 
 配布された `dist-muon/<target>` ディレクトリは読み取り専用の元データとして扱われます。
-エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下へステージングし、
-そこへCEFバイナリを展開してから `muon-core` を起動します:
+エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下の `runtime/` へステージングし、
+そこへCEFバイナリを展開してから `muon-core` を起動します。
+CEFプロファイルは同じアプリケーションステートルートの `profile/` に配置されます:
 
-- Linux: `$XDG_STATE_HOME` または `$HOME` の `.local/state/<appId>/<public-target>/`
-- Windows: `%LOCALAPPDATA%\<appId>\<public-target>\`
+- Linux: `$XDG_STATE_HOME/<appId>/runtime/` と `$XDG_STATE_HOME/<appId>/profile/`、または `$HOME/.local/state/<appId>/runtime/` と `$HOME/.local/state/<appId>/profile/`
+- Windows: `%LOCALAPPDATA%\<appId>.<arch>\runtime\` と `%LOCALAPPDATA%\<appId>.<arch>\profile\`。`<arch>` は `amd64` または `i686` です。
 
 起動時の準備では、ユーザーステートディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
 これらについての詳細は、別章を参照して下さい。
 
 ---
 
-### Muon DevToolsを表示
+## Muon DevTools
 
-muonは、Muon DevToolsを表示できます。これは、ChromiumやChromeのDevToolsと同じ機能を持ち、アドボックな簡易デバッグや、パフォーマンスの測定、診断などを行うことが出来ます。
+muonは、Muon DevToolsを表示出来ます。これは、ChromiumやChromeのDevToolsと同じ機能を持ち、アドボックな簡易デバッグや、パフォーマンスの測定、診断などを行うことが出来ます。
 
-![Muon DevTools](./images/devtools.png)
+`vite dev` でViteから起動した場合は、`F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドが自動的に有効化されますが、
+配布ビルド後のmuonアプリは、既定ではMuon DevToolsを開くことは出来ません。
 
-Viteの開発起動では、muonプラグインが開発補助として `F12` のMuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドを有効化しますが、配布ビルドの既定ではMuon DevToolsを開くことは出来ません。
-`muon.json` に以下の定義を加えることで、ホットキーでMuon DevToolsを表示させることが出来ます:
+`muon.json` に明示的に以下の定義を加えることで、ビルド後のmuonアプリでもMuon DevToolsを表示させることが出来ます:
 
 ```json
 {
@@ -376,10 +342,10 @@ Viteの開発起動では、muonプラグインが開発補助として `F12` �
 }
 ```
 
-これは、`F12` キーをDevTools表示に割り当てた例です。他のキーを指定することや、`ctrl+f12` のように組み合わせることも出来ます。
+これは、`F12` キーをDevTools表示に割り当てた例です。他のキーを指定することや、`shift+f12` のように組み合わせることも出来ます。
 
-DevToolsは他の方法でも表示できます。
-CDP (Chromium DevTools Protocol)というリモートデバック機能を使用すれば、ChromiumやChromeを使用して、リモートでDevToolsを表示できます。
+DevToolsは他の方法でも表示出来ます。
+CDP (Chrome DevTools Protocol)というリモートデバック機能を使用すれば、ChromiumやChromeを使用して、リモートでDevToolsを表示出来ます。
 
 但し、この機能も既定では無効化されています。同じく`muon.json`に以下の定義を加えます:
 
@@ -395,12 +361,12 @@ CDP (Chromium DevTools Protocol)というリモートデバック機能を使用
 
 ![chrome://inspect/](./images/inspect.png)
 
-ここで、"Remote Target" に表示されたmuonのインスタンスの `inspect` リンクをクリックすれば、そのmuonとCDPで接続してリモートDevToolsを表示できます。
+ここで、"Remote Target" に表示されたmuonのインスタンスの `inspect` リンクをクリックすれば、そのmuonとCDPで接続してリモートDevToolsを表示出来ます。
 
 muonは自力でDevToolsを表示できるので、わざわざCDPを使ってリモートDevToolsを表示させる必要性は薄いのですが、
 CDPが使用できると他のデバッガも使用できるようになります。
 
-例えば、vscodeの構成ファイルである `.vscode/launch.json` に以下の定義を加えることで、デバッグセッションを開始できます:
+例えば、vscodeの構成ファイルである `.vscode/launch.json` に以下の定義を加えることで、デバッグセッションを開始出来ます:
 
 ```json
 {
@@ -426,29 +392,48 @@ CDPが使用できると他のデバッガも使用できるようになりま�
 ここまでで、muonアプリを開発するための開発ライフサイクルを説明しましたが、
 muonアプリがネイティブアプリケーションとして振る舞うためには、少し機能が足りません。
 
-例えば、muonウインドウ自身の制御・ローカルファイルの読み書き・プロセスの環境情報の参照・プロセス起動、などの操作は、標準的なブラウザのJavaScript環境では公開されていません。
+例えば、muonウインドウ自身の細かい制御・ローカルファイルの読み書き・プロセスの環境情報の参照・プロセス起動、などの操作は、標準的なブラウザのJavaScript環境では公開されていません。
 muonはこのようなネイティブ機能へアクセスするための拡張可能なプラグイン構造を備えています。これを "muonプラグイン" と呼びます。
 
-以下の例では、muon内蔵プラグインを使用して、muonプロセスの環境変数のリストを取得します:
+> 注釈: muon Viteプラグインのことではありません。
 
-```javascript
-// 環境変数のリストを取得する
-var args = await window.muon.environments.getVariables();
+muonプラグインの基本的な機能は、muon内蔵プラグインが提供します。
+また、muonプラグインAPIを実装してmuonにロードさせることで、内蔵プラグイン同様に機能を拡張することも出来ます。
+
+以下の例では、muon内蔵プラグインを使用して、子プロセスを起動します。
+
+```ts
+// muon.executor名前空間のspawnを参照
+import { spawn } from "muon:executor";
+
+// spawn関数を使用
+const result = await spawn({
+  command: "node",
+  args: ["script.js"],
+});
 ```
 
 「確かにこれは簡単だ、早速試してみよう！」と思っても、これはそのままでは動作しません。
-理由は、すべてのプラグイン機能は、ホワイトリスト方式のフィルターで制御され、既定ではすべて無効となっているからです。
+理由は、すべてのmuonプラグインはホワイトリスト方式のフィルターで制御されるからです。
 
-ホワイトリストは `muon.json` で定義できます:
+### muonプラグイン関数へのアクセス許可
+
+まず、`muon.json` の `"plugin"` で、どのJavaScriptからどのプラグイン関数をインポートできるかを指定します。
+muon Viteプラグインはこの設定を読み取り、muonプラグインへのアクセスを許可します:
 
 ```json
 {
   "plugin": {
+    "mode": "validate",
+    "pages": ["asset://main/**"],
     "plugins": [
       {
         "name": "internal",
-        "allow": [
-          "muon.environments.getVariables"
+        "imports": [
+          {
+            "sources": ["src/native/**"],
+            "allow": ["muon.executor.spawn"]
+          }
         ]
       }
     ]
@@ -456,32 +441,76 @@ var args = await window.muon.environments.getVariables();
 }
 ```
 
-`getVariables()` は、`muon.environments` 名前空間に配置されている、muon内蔵プラグインによる関数です。
-これを呼び出し可能にするには、`name` に `"internal"`を、`allow` に `"muon.environments.getVariables"` と指定します。
-これでmuonを起動し、DevToolsを開いてコンソールで試せば、結果が得られるでしょう:
+- `mode` は、プラグインアクセスの方式を決定します。省略可能で、既定は `validate` です。
+- `pages` は、muonプラグインへのアクセスを可能にするページのURLです。
+  既定では、 `asset://main/**` にのみ許可されます。これ以外のページからは、muonプラグイン関数にアクセス出来ません。
+- `name` は、プラグイン名です。内蔵プラグインに限り、特別な `"internal"` を使用します。
+  その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
+  外部プラグインでは、任意で `SHA1` に40桁の16進SHA-1を指定すると、ライブラリ読み込み前にファイル内容が検証されます。
+  `spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
+  これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
+- `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
+
+なお、Viteプラグイン引数の `pluginAccess` でも同じ設定を上書き出来ますが、通常は `muon.json` にまとめておくと実行時設定とインポート許可の対応が読みやすくなります。
+
+上記の方法でmuonプラグインを参照することは `validate` モードと呼びます。
+他には `simple` モードも存在します:
+
+```json
+{
+  "plugin": {
+    "mode": "simple",
+    "pages": ["asset://main/**"],
+    "plugins": [
+      {
+        "name": "internal",
+        "allow": ["muon.executor.spawn"]
+      }
+    ]
+  }
+}
+```
+
+`simple` モードでは、 `window` オブジェクトから名前空間オブジェクトを辿ることで、muonプラグインの関数群にアクセス出来ます:
+
+```javascript
+// 子プロセスを起動する
+var result = await window.muon.executor.spawn({
+  command: "node",
+  args: ["script.js"],
+});
+```
+
+この方法であれば、muon Viteプラグインによるビルドプロセスを適用する必要がありません。
+Muon DevToolsを開いてコンソールで直接試すことが出来ます:
 
 ![muon API](./images/muon-api.png)
 
-- `muon.json` の変更はHMRで追従出来ません。muonアプリを終わらせて再度起動して下さい。
+|モード|Viteプラグイン|ページフィルタ|アクセス元フィルタ|詳細|
+|:----|:----|:----|:----|:----|
+|`validate`|必要|可能|可能|既定です。指定省略時はこのモードが使用されます。このモードは、muonプラグインの関数をインポートできるコードを、明示的に指定したソースファイルまたはNPMパッケージでフィルタすることが出来ます|
+|`simple`|不要|可能|不可|このモードは、muonプラグインの名前空間オブジェクトと関数を `window` オブジェクト下に直接挿入します。単純ですが、 `validate` モードのように、参照元のコードからのアクセスでフィルタすることは出来ません|
+
+> 注釈: muonでは `validate` モードを使用することを強く推奨します。
+> 理由は、 `validate` モードであれば、muonプラグイン関数へのアクセスをホワイトリストフィルタで制限することが出来るからです。
+> 例えば、muonプラグインの関数を呼び出せるのは、あなたが書いた `myfoobar.ts` ファイルと `foobar` NPMパッケージのみ、
+> のように制限させることが出来て、その他のJavaScriptコードからmuonプラグイン関数を呼び出すことが難しくなります。
+> これにより、NPMのサプライチェーン攻撃に対する耐性を向上させることが出来ます。
+
+### muonプラグイン関数のシグネチャ
 
 muonプラグインで公開されるすべての関数は、`Promise` を返却する関数として定義されていることに注意して下さい。
 一般的に、 `Promise` を返す非同期関数の結果を得るには、 `await` する、と覚えておけば良いでしょう。
 
 muonの内蔵プラグインから提供されるAPIは、 `muon.d.ts` によるTypeScriptの型定義が提供されています。
 これはmuonプラグインをインストールした時点で参照可能となっているため、
-TypeScriptを使用してコードを記述する場合は、型チェックによる恩恵を得られます:
+TypeScriptを使用してコードを記述する場合は、 `muon:executor` などのvirtual moduleインポートや、`window.muon` 階層に対して型チェックによる恩恵を得られます:
 
 ![intellisense](./images/intellisense.png)
 
-- 注意: すべてのプラグイン関数は、ホワイトリストで指定された関数のみが使用可能となるため、フィルタされた関数は未定義となります。
-  しかし、`muon.d.ts` の型定義は、それらのAPIが存在するものと仮定して定義されているため、
-  ホワイトリストへの指定が漏れていると実行時エラーとなることに注意が必要です。
-
-`muon.json` に指定する `plugin.plugins.name` は、プラグイン名です。
-内蔵プラグインに限り、特別な `"internal"` を使用します。
-その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `plugin.plugins.name` に指定します。
-
-内蔵プラグインの詳細は別章を参照して下さい。
+> 注釈: すべてのプラグイン関数は、前節のホワイトリストで指定された関数のみが使用可能となります。
+> しかし、`muon.d.ts` の型定義は、それらのAPIが存在するものと仮定して定義されているため、
+> ホワイトリストへの指定が漏れていると実行時エラーとなることに注意が必要です。
 
 ---
 
@@ -505,7 +534,7 @@ assets/
     └── child.js
 ```
 
-ローカルアセットディレクトリは、 `muon.json` の `asset.sourcePath` で位置を指定できます。
+ローカルアセットディレクトリは、 `muon.json` の `asset.sourcePath` で位置を指定出来ます。
 既定では `muon.json` が存在するディレクトリからの相対パス、または絶対パス指定です。
 
 ```json
@@ -517,7 +546,7 @@ assets/
 ```
 
 `asset://main/index.html` にアクセスすると、 `./assets/main/index.html` ファイルがページに渡されて描画されます。
-もちろん、同様に画像ファイルなどの付随アセットファイルも参照できます。
+もちろん、同様に画像ファイルなどの付随アセットファイルも参照出来ます。
 
 ---
 
@@ -544,7 +573,7 @@ assets/
 例えば、意図的に空リスト (`network.allow: []`) にすると、ローカルアセットを含むすべてのネットワークアクセスが無効となり、何も表示できなくなります。
 しかし、実際に空にしてみると、 `npm run dev` でViteサーバーとmuonを起動してみても正しく表示されるでしょう。
 これは、 `npm run dev` した時に、この `network.allow` リストにViteサーバーのURLが一時的に追加されるためです。
-`muon dev` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することはできません。
+`muon run` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することは出来ません。
 空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
 
 - 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。
@@ -567,11 +596,79 @@ assets/
 
 - 画像だけではなく、すべてのネットワークアクセス（CSSファイルへのアクセスや `iframe` タグや `fetch` APIを使用したアクセス、WebSocketなど）が対象となるため、
   必要なURLをすべて追加する必要があります。
-- このURLでは、擬似的なglobフォーマットを使用できます。`*` は `:`, `/`, `?`, `#` の区切りを越えませんが、`**`は以降のすべての文字にマッチします。
+- このURLでは、擬似的なglobフォーマットを使用出来ます。`*` は `:`, `/`, `?`, `#` の区切りを越えませんが、`**`は以降のすべての文字にマッチします。
 
 ---
 
-### CEFバージョンとCEF APIバージョン (Advanced topics)
+## muon CLI (Advanced topics)
+
+muonは基本的にViteプラグインと共に使用することを想定していますが、Viteプラグインを使用しないで開発することも出来ます。その場合は、 `muon` CLIコマンドを使用します。
+
+### muon runで直接起動
+
+Viteの開発サーバーを使わず、ローカルに生成済みのアセットディレクトリをそのままmuonで開きたい場合は、`muon run` を使用出来ます:
+
+```bash
+npx muon run
+```
+
+- `muon run` はHTTPサーバーを起動せず、アセットディレクトリの内容をそのまま参照可能にします。そのため、`muon run`ではHMRは動作しません。
+- アセットディレクトリは、`--assets` オプション、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
+  `asset://main/index.html` の場合は、 `assets/main/index.html` を参照することに注意して下さい。URLのホスト名部分がサブディレクトリとして扱われます。
+- `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` を読み取ります。
+- CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` と `build` は `muon run` では無視されます。
+- Muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
+
+Viteプラグインを使用する場合と異なり、アセットホスト名部分によるページ管理の分割を自然に行うことが出来ます。
+例えば、 `asset://main/index.html` と `asset://sub/index.html` は、CEFが異なるオリジンとして扱います。
+高度なセキュリティ分離を行いたい場合や、muonのホワイトリストによるフィルタの分離にも応用できます。
+詳しくはローカルアセットの権限の章を参照して下さい。
+
+> 注釈: Viteプラグインを使用した場合でもアセットホスト名分離は機能しますが、
+> 既定でViteが出力したコンテンツファイル群はすべて `main/` 配下に配置されるため、
+> 異なるアセットホスト名を使用する場合は、Viteのビルドプロセスまたは手動で適切な構成を行う必要があります。
+
+### 配布用ビルド
+
+配布用ビルド生成は、 `muon` CLIからも実行出来ます。
+
+```bash
+npx muon build
+```
+
+`vite.config.*` にmuon Viteプラグインが含まれている場合、 `muon build` は `muon({ ... })` の引数を読み取り、 `vite build` と同じビルド設定を使用します。
+但し、CLIオプションを指定した場合は、そのパラメータはオーバーライドされます。
+
+muon Viteプラグインが無い場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
+この場合のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます（`muon run` 同様）。
+
+`asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
+アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
+
+ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
+muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
+
+ビルド時に生成されるmuonアプリバイナリに指定する名称やアイコンなどのオプション指定例を示します:
+
+```bash
+npx muon build --icon icons/app.png --windows-version 1.2.3
+npx muon build --icon icons/app.png --linux-name "My App"
+```
+
+- `--icon` はmuonアプリの静的アイコン指定です。Windows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースになります。
+- Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書き出来ます。
+  `--windows-icon` はWindowsターゲット専用のアイコンoverrideです。
+  同じ値は `muon.json` の `windows.resource` でも指定出来ます。
+- Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書き出来ます。
+  `--linux-icon` はLinuxターゲット専用のアイコンoverrideです。
+  同じ値は `muon.json` の `linux.desktop` でも指定出来ます。
+
+> 注釈: muon CLIを使用してビルドを行う場合は、virtual moduleの解決 (`import`によるmuonプラグインの参照) が出来ません。
+> 従って、muonプラグインの参照モード `validate` は使用できず、常に `simple` モードを使用する必要があります。
+
+---
+
+## CEFバージョンとCEF APIバージョン (Advanced topics)
 
 CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
 
@@ -606,7 +703,7 @@ flowchart LR
 
 muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバイナリが参照するCEFバージョン情報が埋め込まれています。
 `tested` 以外のpolicyでは、この `cefReference` とカタログファイル、さらに候補archive内の `include/cef_api_versions.h` に含まれるAPI hashから、使用可能なCEFバージョンを特定します。
-実行中にロードされたCEFの情報は `muon.environments.getRuntimeInfo()` の `cefRuntime` で確認できます。
+実行中にロードされたCEFの情報は `muon.environments.getRuntimeInfo()` の `cefRuntime` で確認出来ます。
 
 - 注意: CEF APIバージョンはABI互換を目的としていますが、CEF機能の挙動互換は必ずしも維持されない可能性があります。
   つまり、API hashが一致していても、CEFのブラウザ機能としての差異は発生するかもしれません。
@@ -614,7 +711,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 
 `compat-latest` や `same-major-latest` はABI互換を確認しますが、Chromium/CEFのブラウザ機能としての挙動差までは保証しません。アプリケーション側で対象CEFの検証を行ってから配布して下さい。
 
-### CEFバイナリ更新の詳細 (Advanced Topics)
+## CEFバイナリ更新の詳細 (Advanced Topics)
 
 この情報は、CEFバイナリアップデート処理の詳細な情報ですが、
 問題が発生した場合の分析のために示しています。
@@ -630,7 +727,7 @@ muon-coreと起動ヘルパーには、muon-coreのビルド情報と、muonバ�
 | `exact`             | `exactVersion` に指定したCEF versionを使用します。`tested` と異なるversionではCEF API hash一致が必須です。                                         |
 
 `catalogRefreshIntervalSeconds` はカタログ自動更新間隔です。既定値は7日間 (`604800`) で、`0` を指定すると自動更新を行いません。
-`window.muon.bootstrap.triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
+bootstrapプラグインの `triggerUpdate()` を呼ぶと `requested=true` が保存され、次回 `muon-bootstrap` 起動時にカタログ更新を試行します。更新に成功した場合だけ `requested=false` に戻ります。
 
 `muon.json` を `muon embed-config` で実行ファイルに埋め込む場合、`bootstrap.defaultVersionPolicy` を `muon-bootstrap` 起動時にも有効にするには、`muon-core` だけでなく最終的に起動する `muon-bootstrap` 実行ファイルも指定して下さい:
 
@@ -648,11 +745,11 @@ muon embed-config \
 3. 実行時の準備では配布元distをユーザーstate配下へコピーしてからCEFを同じruntimeディレクトリへ展開し、`muon-core` のビルド時には同じpreparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
 
 CEFのバイナリは公式のカタログファイルをダウンロードして、必要なバージョンを確認します。
-テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書きできます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
+テストやミラー運用では、`MUON_CEF_CATALOG_URL` 環境変数でカタログファイルのURLを上書き出来ます。artifactのURLはカタログURLと同じディレクトリを基準に解決されます。
 
 ---
 
-### ウインドウ間連携の制約 (Advanced topics)
+## ウインドウ間連携の制約 (Advanced topics)
 
 `browser.allowUnsafeJavaScriptParentAccess` は、ページから別のページを（別のウインドウで）開いた場合などに、
 子孫のページから親のページのオブジェクトにアクセス出来るかどうかをフィルタします。
@@ -711,7 +808,7 @@ await window.opener.muon.fs.writeTextFile(
 
 ---
 
-### ローカルアセットの権限 (Advanced topics)
+## ローカルアセットの権限 (Advanced topics)
 
 `asset://` URLスキームは、証明書が存在しないことを除き、 `https://` と同様に独立した信頼性のあるオリジンとして扱われます。
 このことは、CORSやCSRFに影響を与える可能性があるため、厳密な設計を行う場合は考慮が必要です。
@@ -723,27 +820,28 @@ await window.opener.muon.fs.writeTextFile(
 `assets/sub/` のようにディレクトリを分けた場合は、異なるオリジンとして振る舞わせることが可能です。
 （注意: `main` という単語自体には意味はありません）
 
-この機能と、先程のCORS,CSRF制御や `browser.plugin.allow` や `browser.allowUnsafeJavaScriptParentAccess` を組み合わせて、
+この機能と、先程のCORS,CSRF制御や `plugin.pages` や `browser.allowUnsafeJavaScriptParentAccess` を組み合わせて、
 muon上でのページ権限を細かく調整することも可能です。以下は既定の定義です:
 
 ```json
 {
-  "browser": {
-    "plugin": {
-      // muonプラグインは `asset://main/` のページでのみ使用可能にする
-      // 例えば、 `asset://sub/` のページではmuonプラグインを参照できない
-      "allow": ["asset://main/**"]
-    }
+  "plugin": {
+    // 既定ではvalidateモードで使用する
+    "mode": "validate",
+    // muonプラグイン関数は `asset://main/` のページでのみ使用可能にする
+    // 例えば、 `asset://sub/` のページではmuonプラグインブリッジを参照できない
+    "pages": ["asset://main/**"]
   }
 }
 ```
 
 ---
 
-### ローカルアセットのパッキング (Advanced topics)
+## ローカルアセットのパッキング (Advanced topics)
 
 ローカルアセットファイル群は、「パッキング」を行って、単一のファイルにまとめることが出来ます。
 ファイルが散在しないようにしたり、圧縮してストレージサイズを削減し、破損の検証を可能にします。
+既定では、パッケージ生成を行う時に、自動的にローカルアセットをパックします。
 
 パッキングフォーマットはzipファイルであり、任意のzip圧縮ツールを用いてパッキングを行えます。
 zipファイル内の構造は、`assets/` ディレクトリ内の構造をそのまま踏襲して下さい。
@@ -786,9 +884,9 @@ assets.zip
 }
 ```
 
-- `asset.signature` はzipファイルのsha1ダイジェストを任意で固定する設定で、40桁の16進数文字列だけを指定できます。
+- `asset.signature` はzipファイルのSHA1ダイジェストを任意で固定する設定で、40桁の16進数文字列だけを指定出来ます。
   この値を指定した場合、`asset.salt` も16進数のバイト列として指定する必要があります。
-  muonは、zipファイルのバイト列にsaltのバイト列を追加したバイトストリームから、sha1ダイジェストを計算して比較します。
+  muonは、zipファイルのバイト列にsaltのバイト列を追加したバイトストリームから、SHA1ダイジェストを計算して比較します。
 - この機能は、クラッキングに対する耐タンパー性を保証するものではありません。
   攻撃からコンテンツを保護する必要がある場合は、muonの外部で担保する必要があります。
 
@@ -796,14 +894,14 @@ assets.zip
 
 ---
 
-### オリジンベースのアクセス許可 (Advanced Topics)
+## オリジンベースのアクセス許可 (Advanced Topics)
 
 `network.allow` リストを使えば、任意のクラウドサービスも使えるようになると考えられますが、注意点があります。
 
 例えば、 `https://auth.example.com/**` が、ある認証プロバイダーのログインページを表している場合に、これを `network.allow` に加えて許可させる場合、
 認証プロバイダーのログインページがこのURLとは異なるオリジンの要素を参照していると、それらのURLも漏れなくリストに加えないとアクセスが失敗します。しかし、外部のコンテンツでこれを特定するのは容易ではありません。
 
-この問題を緩和するため、指定したオリジンサーバーを信頼出来るかどうかを示す `network.authorizedOrigin` リストを使用できます。
+この問題を緩和するため、指定したオリジンサーバーを信頼出来るかどうかを示す `network.authorizedOrigin` リストを使用出来ます。
 ここに指定されたサーバーがオリジンとして扱われる場合に限り、`network.allow` に指定されていないURLであっても、アクセスを可能にします。
 
 以下に指定例を示します:
@@ -826,34 +924,35 @@ assets.zip
 
 - これは、一種の権限移譲であり、このリストに追加するサーバーは、無条件に信頼するという前提であることに注意して下さい。
   例えば、 `authorizedOrigin` で指定した外部サーバーが参照する別のサーバーのアセットが、悪意ある第三者にクラックされた場合は、その影響を受ける可能性があります。
-- `browser.plugin.allow` によるフィルタが正しく指定されていることも重要です。
+- `plugin.pages` と `plugin.mode` によるフィルタが正しく指定されていることも重要です。
   仮にここで許可されたオリジンのページであっても、それはネットワークアクセスが許可されるだけです。
-  `browser.plugin.allow` でフィルタされていれば、muonのプラグインの関数群にはアクセスできなくなります。
-  既定では `browser.plugin.allow` はローカルアセットのみ参照 (`asset://main/**`) するため、muonプラグイン関数は外部サーバーが提供するページに露出しません。
+  `plugin.pages` でフィルタされていれば、muonのプラグインブリッジにはアクセスできなくなります。
+  さらに既定の `plugin.mode` は `"validate"` であるため、許可されたページであっても、バンドラーが生成したcapability importなしにプラグイン関数を呼び出すことは出来ません。
+  既定では `plugin.pages` はローカルアセットのみ参照 (`asset://main/**`) するため、muonプラグインブリッジは外部サーバーが提供するページに露出しません。
 
 ---
 
 ## muon.jsonリファレンス
 
-`muon.json` は、muonの動作を決定し、いくつかの機能はこのファイルでのみ決定できます。
-特に、動作を許可するホワイトリストは、プログラマブルに変更できません。
+`muon.json` は、muonの動作を決定し、いくつかの機能はこのファイルでのみ決定出来ます。
+特に、動作を許可するホワイトリストは、プログラマブルに変更出来ません。
 
 設定ファイルは `muon.json5`、`muon.jsonc`、`muon.json` の順に探索されます。
 Viteの開発起動では、設定ファイルが存在しない場合や不正な場合でも警告を表示し、プロジェクト設定を `{}` 相当として扱ってViteが生成する設定だけで起動します。
-`muon dev` では、設定ファイルが存在しない場合は開発用の生成設定だけで起動しますが、存在するファイルが読み取れない場合やパースできない場合はエラーになります。
+`muon run` では、設定ファイルが存在しない場合は開発用の生成設定だけで起動しますが、存在するファイルが読み取れない場合やパースできない場合はエラーになります。
 一方で `muon build` では、設定ファイルが存在しない場合は `{}` 相当として扱いますが、存在するファイルが読み取れない場合やパースできない場合はビルドエラーになります。
 `--config` で明示した設定ファイルが存在しない場合もエラーです。
 
-以下は一例ですが、ファイルが存在しないか、全く何も定義しない `{ }` であっても、すべてデフォルト値として動作します:
+以下は一例ですが、ファイルが存在しないか、全く何も定義しない `{ }` であっても、すべて既定値として動作します:
 
 ```json
 {
+  "iconPath": "icons/app.png",
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
     "titleBarType": "muon",
     "initialTitleBarVisibility": true,
-    "initialTitleBarIcon": "icons/app.png",
     "keybinds": {
       "devtools": "f12",
       "zoomIn": "ctrl+plus",
@@ -867,18 +966,29 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
     ]
   },
   "plugin": {
+    "mode": "validate",
+    "pages": ["asset://main/**"],
     "plugins": [
       {
         "name": "internal",
-        "allow": [
-          "muon.environments.getCommandLine",
-          "muon.fs.readTextFile"
+        "imports": [
+          {
+            "sources": ["src/native/**"],
+            "allow": ["muon.environments.getCommandLine"]
+          },
+          {
+            "packages": ["@example/trusted-muon-helper"],
+            "allow": ["muon.fs.readTextFile"]
+          }
         ]
       },
       {
-        "name": "muon_fs_dialogs_gtk3",
-        "allow": [
-          "muon.fs.dialogs.*"
+        "name": "foobar",
+        "imports": [
+          {
+            "sources": ["src/native/**"],
+            "allow": ["foobar.native.*"]
+          }
         ]
       }
     ]
@@ -890,106 +1000,62 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 }
 ```
 
+### トップレベルキー
+
+| キー       | 型       | 既定値           | 概要                                                                 |
+| :--------- | :------- | :--------------- | :------------------------------------------------------------------- |
+| `iconPath` | `string` | Muon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                        |
+
+- `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
+- `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
+  `muon build` / Vite build / `muon pack` は解決済みPNGを `assets.zip` の `main/.muon/app-icon.png` に追加し、runtime内部設定として `browser.initialTitleBarIcon: "asset://main/.muon/app-icon.png"` を生成します。
+  既存アセットに同じエントリがある場合はビルドエラーになります。
+- Windowsだけ、またはLinuxだけ別アイコンにしたい場合は、それぞれ `windows.resource.iconPath`、`linux.desktop.iconPath` をoverrideとして指定します。
+- 実行中に通常ブラウザウインドウのタイトルバーアイコンだけを変更する場合は、`window.muon.browser.setTitleBarIcon()` を使用します。
+
 ### browserキー
 
 | キー                                  | 型                                        | 既定値                    | 概要                                                                                     |
 | :------------------------------------ | :---------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------- |
 | `startPage`                           | `string`                                  | `"asset://main/index.html"` | 起動時に最初に読み込むURLです。                                                          |
-| `profile`                             | `string`                                  | `"./.profile"`            | Chromiumプロファイルを保存するディレクトリです。                                         |
+| `profile`                             | `string`                                  | state profile             | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
-| `initialTitleBarIcon`                 | `string`                                  | 内蔵Muonアイコン          | 起動時にタイトルバーへ表示するPNGアイコンのアセットパスです。                            |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
-| `plugin.allow`                        | `readonly string[]`                       | `["asset://main/**"]`     | `window.muon` を注入するページURLの許可リストです。                                      |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
 
 - `profile` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
-  通常起動時に `profile` を明示しない場合は、OS標準のユーザーデータ領域にアプリケーション用プロファイルが作成されます。
-  開発・テスト向けの直接起動では、既定値の `./.profile` が使われます。
-- `initialWindowState` には `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, `"fullscreen"` を指定できます。
+  `profile` を明示しない場合は、ユーザーステートディレクトリの `<appId>/profile/` が使用されます。
+- `initialWindowState` には `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, `"fullscreen"` を指定出来ます。
   ただし、最終的な表示状態はOSやウインドウマネージャーによって調整される場合があります。
-- `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定できます。
+- `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定出来ます。
   `"system"` はOSの明暗設定が取得できる場合に黒または白として反映し、取得できない場合はCEFの既定値を使用します。
-- `titleBarType` には `"muon"` または `"native"` を指定できます。
+- `titleBarType` には `"muon"` または `"native"` を指定出来ます。
   `"muon"` はlibmuon-uiが提供するテーマ追従のタイトルバーを使用し、`"native"` はOS/ウインドウマネージャのネイティブ装飾を使用します。
   Linuxで`"native"`を指定した場合、X11ではウインドウマネージャーの装飾に任せますが、
   Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
-  `"muon"` タイトルバーでは、ページ内の任意の要素へCSSで `-webkit-app-region: drag` を指定すると、その領域をドラッグしてウインドウを移動できます。
+  `"muon"` タイトルバーでは、ページ内の任意の要素へCSSで `-webkit-app-region: drag` を指定すると、その領域をドラッグしてウインドウを移動出来ます。
   リンク、ボタン、入力欄など通常のページ操作を受け取る要素には `-webkit-app-region: no-drag` を指定してください。
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
-- `initialTitleBarIcon` は、通常ブラウザウインドウのタイトルバーに表示するPNGアイコンを指定します。
-  省略した場合は、Muonに内蔵された既定PNGアイコンを表示します。
-  内蔵アイコンはコード中に埋め込まれているため、アプリ側のアセットファイルとして用意する必要はありません。
-  `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定できます。
-  このパスは `asset.sourcePath` のアセットストレージから読み込まれるため、アセットがディレクトリでもZIPでも同じ指定になります。
-  ローカルファイルパス、HTTP URL、PNG以外の画像形式、GNOME Dockやデスクトップランチャーのアイコン変更は対象外です。
-  Windowsでは、PNGとして読み込めるタイトルバーアイコンは実行中ウインドウのタスクバー/Alt-Tab用アプリアイコンにも反映されます。
-  exeファイル自体のアイコンリソースを配布ビルド時に差し替える場合は、`windows.resource.iconPath` にPNGファイルを指定します。
-  Windows用には256x256以上の正方形PNGを推奨します。非正方形のPNGは透明余白付きで正方形へ収められます。
-  - ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
-    ページ遷移時、faviconが存在しない場合や取得・変換できない場合は `initialTitleBarIcon`、または内蔵Muonアイコンへ戻ります。
-    favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
-    `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用できますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
-  - 注意: タイトルバーに関する指定は、Linuxでの`"native"`の場合に、正しく反映されない場合があります。
-- `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom`, `recycle` を指定できます。
+- 起動時のタイトルバーアイコンは、配布ビルド時に `iconPath` から生成されます。
+  `muon build` / Vite build / `muon pack` の入力 `muon.json` に `browser.initialTitleBarIcon` を書くことは出来ません。
+  ページがfaviconを指定した場合、MuonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
+  ページ遷移時、faviconが存在しない場合や取得・変換できない場合は、生成済みの初期タイトルバーアイコン、または内蔵Muonアイコンへ戻ります。
+  favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
+  `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用出来ますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
+  Linuxでの`"native"`の場合は、タイトルバーに関する指定が正しく反映されない場合があります。
+- `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom`, `recycle` を指定出来ます。
   値は `"ctrl+shift+i"` のように、修飾キーとキーを `+` で連結した文字列です。
-  修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用できます。
-  キーには `f1` から `f24`, `a` から `z`, `0` から `9`, `plus`, `equal`, `minus`, `backspace`, `tab`, `enter`/`return`, `escape`/`esc`, `space`, `insert`, `delete`/`del`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` を使用できます。
+  修飾キーには `shift`, `ctrl`/`control`, `alt`, `meta`/`cmd`/`command`/`super` を使用出来ます。
+  キーには `f1` から `f24`, `a` から `z`, `0` から `9`, `plus`, `equal`, `minus`, `backspace`, `tab`, `enter`/`return`, `escape`/`esc`, `space`, `insert`, `delete`/`del`, `home`, `end`, `pageup`, `pagedown`, `left`, `right`, `up`, `down` を使用出来ます。
   空文字列、修飾キーだけの指定、同一ショートカットの重複は設定エラーになります。
-- `browser.plugin.allow` は、ページにプラグインAPIを注入するかどうかだけを制御します。
-  ページやサブリソースを実際に読み込めるかどうかは、別途 `network.allow` で許可する必要があります。
 - `allowUnsafeJavaScriptParentAccess` は安全性を下げる互換設定です。通常、この項目を指定する必要はありません。
   未指定または空配列の場合、popupから親ページへのJavaScriptアクセスは許可されません。
   この場合のpopupは `noopener` 相当の独立ウインドウとして開かれ、 `window.open()` は `null` を返します。
   ページ側で `noopener` または `noreferrer` を指定した場合も、許可リストの内容に関係なく `window.opener` は `null` になります。
-
-### windowsキー
-
-`windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
-この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
-
-```json
-{
-  "windows": {
-    "resource": {
-      "iconPath": "icons/app.png",
-      "productName": "My App",
-      "fileDescription": "My App",
-      "companyName": "Example Inc.",
-      "version": "1.2.3",
-      "copyright": "Copyright Example Inc."
-    }
-  }
-}
-```
-
-| キー                   | 型       | 既定値                     | 概要                                                                     |
-| :--------------------- | :------- | :------------------------- | :----------------------------------------------------------------------- |
-| `resource.iconPath`    | `string` | Muon既定アイコン           | Windows launcherとNSIS installer/uninstallerに使用するPNGアイコンファイルです。 |
-| `resource.productName` | `string` | `package.json`名           | Windows version resourceの`ProductName`です。                            |
-| `resource.fileDescription` | `string` | `package.json.description` | Windows version resourceの`FileDescription`です。                  |
-| `resource.companyName` | `string` | `package.json.author`      | Windows version resourceの`CompanyName`です。                            |
-| `resource.version`     | `string` | `package.json.version`     | `FileVersion`/`ProductVersion`です。固定値は4要素に正規化されます。      |
-| `resource.copyright`   | `string` | `package.json.copyright`   | Windows version resourceの`LegalCopyright`です。                         |
-| `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
-| `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
-
-- `iconPath` は `.png` のみ受け付けます。MuonはWindows PE/NSISが必要とする`.ico`をビルド時に自動生成します。
-  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
-- 相対パスは、値を定義したファイルのディレクトリから解決されます。
-  CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
-- 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
-  ただし `muon pack` で `--package-version` を指定した場合、`resource.version` では `package.json.version` の位置に `--package-version` の値を使用します。
-  `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
-- `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
-  文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
-- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
-  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
-- `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
-  setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
 
 ### linuxキー
 
@@ -1016,14 +1082,15 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `desktop.desktopId`       | `string`   | `appId`                    | `.desktop` ファイル名、`StartupWMClass`、Wayland app ID、X11 WM_CLASSです。 |
 | `desktop.name`            | `string`   | `package.json`名           | ランチャーに表示されるアプリ名です。                                       |
 | `desktop.comment`         | `string`   | `package.json.description` | desktop entryの`Comment`です。                                             |
-| `desktop.iconPath`        | `string`   | Muon既定アイコン           | desktop entry用PNGアイコンファイルです。                                   |
+| `desktop.iconPath`        | `string`   | `iconPath`またはMuon既定アイコン | Linuxターゲットだけで使用するPNGアイコンoverrideです。                    |
 | `desktop.categories`      | `string[]` | `["Utility"]`              | desktop menu categoryです。                                                |
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
-- `iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
+- `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
 - `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
   `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
-- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/<target>/` へstagingし、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へstagingし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+  Windows portable配布物では、runtime state用IDとして `<appId>.<arch>` を使用します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
 - 新しいportable配布物から起動した場合、fingerprintの差分によりstate directory側のアプリファイル群が更新され、desktop entryも更新されます。
   state directory配下のlauncherから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
@@ -1032,7 +1099,55 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   既存のMuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリです。
-- 解決順はフィールドごとに、CLI/Vite option、`muon.json` の `linux.desktop`、`package.json`、既定値です。
+- Linuxアイコンの解決順は、CLI/Vite optionの `linuxDesktop.iconPath` または `--linux-icon`、`muon.json` の `linux.desktop.iconPath`、統一 `iconPath`、`project.json.iconPath`、Muon既定アイコンです。
+- Linux desktop metadataの解決順はフィールドごとに、CLI/Vite option、`muon.json` の `linux.desktop`、`package.json`、既定値です。
+
+### windowsキー
+
+`windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
+この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
+
+```json
+{
+  "windows": {
+    "resource": {
+      "iconPath": "icons/app.png",
+      "productName": "My App",
+      "fileDescription": "My App",
+      "companyName": "Example Inc.",
+      "version": "1.2.3",
+      "copyright": "Copyright Example Inc."
+    }
+  }
+}
+```
+
+| キー                   | 型       | 既定値                     | 概要                                                                     |
+| :--------------------- | :------- | :------------------------- | :----------------------------------------------------------------------- |
+| `resource.iconPath`    | `string` | `iconPath`またはMuon既定アイコン | Windowsターゲットだけで使用するPNGアイコンoverrideです。                 |
+| `resource.productName` | `string` | `package.json`名           | Windows version resourceの`ProductName`です。                            |
+| `resource.fileDescription` | `string` | `package.json.description` | Windows version resourceの`FileDescription`です。                  |
+| `resource.companyName` | `string` | `package.json.author`      | Windows version resourceの`CompanyName`です。                            |
+| `resource.version`     | `string` | `package.json.version`     | `FileVersion`/`ProductVersion`です。固定値は4要素に正規化されます。      |
+| `resource.copyright`   | `string` | `package.json.copyright`   | Windows version resourceの`LegalCopyright`です。                         |
+| `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
+| `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
+
+- `resource.iconPath` は `.png` のみ受け付けます。MuonはWindows PE/NSISが必要とする`.ico`をビルド時に自動生成します。
+  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
+- 相対パスは、値を定義したファイルのディレクトリから解決されます。
+  CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
+- Windowsアイコンの解決順は、CLI/Vite optionの `windowsResource.iconPath` または `--windows-icon`、`muon.json` の `windows.resource.iconPath`、統一 `iconPath`、`project.json.iconPath`、Muon既定アイコンです。
+- Windows resource metadataの解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
+  ただし `muon pack` で `--package-version` を指定した場合、`resource.version` では `package.json.version` の位置に `--package-version` の値を使用します。
+  `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
+- `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
+  文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
+- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
+  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
+- `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
+  setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
+  NSISの `Name` / `DisplayName` / installer path / uninstall registry key / state削除先はWindows architecture別になりますが、`ProductName` などのWindows resource metadataと成果物ファイル名は同じmetadata規則を維持します。
 
 ### assetキー
 
@@ -1044,7 +1159,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 - `sourcePath` を省略した場合は、実行ファイルと同じディレクトリにある `assets` が使用されます。
   相対パスは `muon.json` からの相対パスとして解決されます。
-  ディレクトリを指定した場合はその内容が、ZIPファイルを指定した場合はZIP内の内容が `asset://main/...` として参照できます。
+  ディレクトリを指定した場合はその内容が、ZIPファイルを指定した場合はZIP内の内容が `asset://main/...` として参照出来ます。
 - `signature` は、アセットをZIPファイルとして配布する場合の整合性検証に使います。
   `signature` を指定する場合は `salt` も指定してください。
   検証に失敗した場合、muonアプリケーションは起動しません。
@@ -1059,7 +1174,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - `allow` はホワイトリストです。
   空配列を指定すると、ローカルアセットを含むすべてのネットワークアクセスが許可されなくなります。
   `data:` プロトコルのURLも例外ではないため、インラインデータURLを読み込む場合は `data:**` などを明示的に追加してください。
-  URLパターンでは `*` と `**` を使用できます。
+  URLパターンでは `*` と `**` を使用出来ます。
   `*` は `:`, `/`, `?`, `#` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
   パターンの大文字小文字は区別されます。
 - `authorizedOrigin` の各要素には `scheme` と `domain` を必ず指定し、必要な場合だけ `port` を指定します。
@@ -1070,25 +1185,58 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 ### pluginキー
 
-| キー                 | 型                 | 既定値      | 概要                                                                       |
-| :------------------- | :----------------- | :---------- | :------------------------------------------------------------------------- |
-| `path`               | `string`           | `"./plugins"` | 外部プラグインファイルを探索するディレクトリです。                         |
-| `plugins`            | `readonly object[]` | `[]`        | 有効化するプラグインのリストです。                                         |
-| `plugins[].name`     | `string`           | なし        | 有効化するプラグイン名です。                                               |
-| `plugins[].allow`    | `readonly string[]` | なし        | そのプラグインから公開する関数パスの許可リストです。                       |
+| キー                         | 型                            | 既定値                 | 概要                                                                              |
+| :--------------------------- | :---------------------------- | :--------------------- | :-------------------------------------------------------------------------------- |
+| `path`                       | `string`                      | `"./plugins"`          | 外部プラグインファイルを探索するディレクトリです。                                |
+| `mode`                       | `"validate" \| "simple"`      | `"validate"`           | プラグインAPIの露出方式です。                                                     |
+| `pages`                      | `readonly string[]`           | `["asset://main/**"]`  | プラグインAPIブリッジをページへ注入するURLの許可リストです。                      |
+| `capabilities`               | `readonly object[]`           | `[]`                   | `validate` モードで使用するcapabilityポリシーです。通常はViteプラグインが生成します。 |
+| `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
+| `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
+| `plugins[].signature`        | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1署名です。                       |
+| `plugins[].salt`             | `string`                      | なし                   | `plugins[].signature` の計算に使うsaltを16進文字列で指定します。                  |
+| `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
+| `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
+| `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
+| `plugins[].imports[].packages` | `readonly string[]`         | なし                   | importerが属するNPMパッケージ名の完全一致リストです。                             |
+| `plugins[].imports[].allow`    | `readonly string[]`         | なし                   | そのimportルールで許可するプラグイン関数パスglobです。                            |
 
 - `path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
+- `plugins[].signature` は40桁の16進数文字列です。`internal` プラグインには指定できません。
+  指定する場合は `plugins[].salt` も指定してください。
+  指定された場合、muonは `.so` / `.dll` を読み込む前にファイル内容とsaltのSHA-1を計算し、一致しなければ起動に失敗します。
+- `plugins[].salt` は偶数桁の16進数文字列です。空文字は明示的な空saltとして扱われます。`internal` プラグインには指定できません。
+- `mode` に `"validate"` を指定した場合、Viteなどのバンドラーが生成したcapability付きvirtual module importからだけプラグイン関数を呼び出せます。
+  `"simple"` では、従来通り `window.muon` とその下の名前空間オブジェクトをページに公開します。
+- `pages` は、ページにプラグインAPIブリッジを注入するかどうかだけを制御します。
+  `"validate"` ではcapability呼び出し用の非列挙ブリッジ、`"simple"` では `window.muon` 階層が注入対象です。
+  ページやサブリソースを実際に読み込めるかどうかは、別途 `network.allow` で許可する必要があります。
+- `capabilities` は `validate` モードの実行時ポリシーです。
+  Viteプラグインを使う場合は `plugins[].imports` から自動生成されるため、通常は手で書く必要はありません。
+  Viteプラグインを使わない直接 `muon build` では、このcapability生成は行われず、`simple` 相当として扱われます。
 - `plugins` を省略した場合、プラグイン関数は公開されません。
   内蔵プラグインを有効化する場合は `name` に `"internal"` を指定します。
   外部プラグインを有効化する場合は、拡張子を除いたファイル名を `name` に指定します。
   例えば `muon_fs_dialogs_gtk3.so` を使う場合の `name` は `"muon_fs_dialogs_gtk3"` です。
-  `"internal"` は予約名であり、外部プラグイン名としては使用できません。
-  同じ `name` を複数回指定することはできません。
-- `plugins[].allow` は、プラグインが持つ関数パスに対するホワイトリストです。
-  `muon.fs.*` のようなパターンを指定できます。
+  `"internal"` は予約名であり、外部プラグイン名としては使用出来ません。
+  同じ `name` を複数回指定することは出来ません。
+- `plugins[].allow` は、`simple` モードでプラグインが持つ関数パスを `window` 階層に公開するためのホワイトリストです。
+  `simple` モードでは必須で、`validate` モードでは指定できません。
+  `muon.fs.*` のようなパターンを指定出来ます。
   `*` は `.` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
   パターンの大文字小文字は区別されます。
-  ページ側で関数を呼び出せるようにするには、 `plugin.plugins[].allow` に加えて、 `browser.plugin.allow` で対象ページへのAPI注入も許可する必要があります。
+  ページ側で関数を呼び出せるようにするには、 `plugin.pages` で対象ページへのAPIブリッジ注入も許可する必要があります。
+- `plugins[].imports` は `validate` モード用のimport許可です。
+  `validate` モードでプラグインエントリを指定する場合は必須かつ空配列不可で、`simple` モードでは指定できません。
+  `sources` はVite project rootからの相対importerパスに対するglobで、`packages` はimporterから最寄りの `package.json` を探索して得た `name` との完全一致です。
+  プロジェクトルート自身の `package.json` は `packages` 判定対象ではなく、通常のソースファイルとして扱われます。
+  `sources` と `packages` は片方または両方を指定でき、両方指定した場合はいずれかに一致すれば許可されます。
+  どちらも指定しないimportルールは設定エラーです。
+- `plugins[].imports[].allow` は `validate` モードでそのimport元に許可する関数パスです。
+  必須かつ空配列不可です。
+  virtual moduleがexportできるのは具体的な関数名のみです。`muon.executor.*` のようなwildcardだけで許可しても、具体的なexportを作れないためVite側でエラーになります。
+- 旧 `browser.plugin.mode`、`browser.plugin.allow`、`browser.plugin.capabilities` は公開設定として廃止されています。
+  指定した場合は、`plugin.mode` や `plugin.pages` を使うよう促す設定エラーになります。
 
 ### logキー
 
@@ -1102,15 +1250,15 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `sources.console`    | `string` | `"debug"`  | JavaScript console出力のログレベルです。                         |
 | `sources.plugin`     | `string` | `"info"`   | ネイティブプラグイン出力のログレベルです。                       |
 
-- ログレベルには `"debug"`, `"info"`, `"warning"`/`"warn"`, `"error"`, `"fatal"`, `"off"` を指定できます。
+- ログレベルには `"debug"`, `"info"`, `"warning"`/`"warn"`, `"error"`, `"fatal"`, `"off"` を指定出来ます。
 `off` を指定したソースのログは出力されません。
 - `level` を指定すると、すべてのログソースの基準レベルがその値に揃います。
-  そのうえで `sources` に `muon`, `cef`, `console`, `plugin` を指定すると、対象ソースだけを個別に上書きできます。
+  そのうえで `sources` に `muon`, `cef`, `console`, `plugin` を指定すると、対象ソースだけを個別に上書き出来ます。
   `sources` だけを指定した場合も、未指定ソースは現在の `level` に揃えられてから個別上書きされます。
   そのため、既定値の `cef: "warning"` や `console: "debug"` を維持したい場合は、必要に応じて `sources` に明示してください。
-- `output.type` には `"stdout"`, `"stderr"`, `"file"` を指定できます。
-  POSIX環境では `"syslog"` も使用できます。
-  Windows環境では `"debug"` と `"eventlog"` も使用できます。
+- `output.type` には `"stdout"`, `"stderr"`, `"file"` を指定出来ます。
+  POSIX環境では `"syslog"` も使用出来ます。
+  Windows環境では `"debug"` と `"eventlog"` も使用出来ます。
 - `output.type` が `"file"` の場合、 `output.path` は必須です。
 - 相対パスは `muon.json` からの相対パスとして解決され、親ディレクトリは必要に応じて作成されます。
   ファイル出力は追記で行われます。
@@ -1131,7 +1279,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 | キー                   | 型       | 既定値     | 概要                                                                                                  |
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
-| `appId`                | `string` | 自動生成   | portable runtime stateを識別する安定IDです。build時に自動埋め込みされます。                          |
+| `appId`                | `string` | 自動生成   | portable runtime stateを識別するbase IDです。build時に自動埋め込みされます。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
 | `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 ---
@@ -1165,10 +1313,11 @@ export default defineConfig({
 | `cefPath`        | `string`              | muon-builderの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にMuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のMuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
+| `pluginAccess`   | `false \| object`     | `muon.json` の `plugin` 設定 | プラグインAPIの露出方式とvirtual module importの上書き設定です。     |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
 - `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` に影響します。
-  `muon dev` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` だけを読み取り、 `open` は無視します。
+  `muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` だけを読み取り、 `open` は無視します。
   `vite build` ではこれらの開発起動用オプションは無視されます。
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
 - `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<public-target>` を使用します。
@@ -1176,6 +1325,64 @@ export default defineConfig({
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、Muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでMuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
+
+### pluginAccessキー
+
+`pluginAccess` は、`muon.json` の `plugin` 設定と同じ形で、Vite側から一部を上書きするための設定です。
+省略した場合は `muon.json` の `plugin` 設定をそのまま使用し、`plugin.mode` の省略時は `"validate"` として扱います。
+`validate` モードでは `window.muon` は公開されず、プラグイン関数は許可されたvirtual module importからだけ呼び出せます。
+
+```ts
+muon({
+  pluginAccess: {
+    mode: "validate",
+    pages: ["asset://main/**"],
+    plugins: [
+      {
+        name: "internal",
+        imports: [
+          {
+            sources: ["src/native/**"],
+            allow: ["muon.executor.spawn"],
+          },
+          {
+            packages: ["@example/trusted-muon-helper"],
+            allow: ["muon.executor.spawn"],
+          },
+        ],
+      },
+    ],
+  },
+});
+```
+
+| キー                         | 型                            | 既定値                 | 概要                                                                              |
+| :--------------------------- | :---------------------------- | :--------------------- | :-------------------------------------------------------------------------------- |
+| `mode`                       | `"validate" \| "simple"`      | `plugin.mode`          | プラグインAPIの露出方式です。                                                     |
+| `pages`                      | `readonly string[]`           | `plugin.pages`         | プラグインAPIブリッジをページへ注入するURLの許可リストです。                      |
+| `plugins`                    | `readonly object[]`           | `plugin.plugins`       | 有効化するプラグインとimport許可のリストです。                                    |
+| `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
+| `plugins[].signature`        | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1署名です。                       |
+| `plugins[].salt`             | `string`                      | なし                   | `plugins[].signature` の計算に使うsaltを16進文字列で指定します。                  |
+| `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
+| `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimporterごとのcapability import許可リストです。        |
+| `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | Vite project rootからの相対importerパスglobです。                                  |
+| `plugins[].imports[].packages` | `readonly string[]`         | なし                   | importerが属するNPMパッケージ名の完全一致リストです。                             |
+| `plugins[].imports[].allow`    | `readonly string[]`         | なし                   | そのimporterに許可するプラグイン関数パスglobです。                                |
+
+- virtual module名は、プラグイン名前空間の最初の要素だけを `:` で区切った名前です。
+  例えば `muon.executor` は `muon:executor`、`muon.fs.dialogs` は `muon:fs.dialogs`、`foobar.baz` は `foobar:baz` です。
+- `mode`、`pages`、`plugins` を指定した場合、それぞれ `muon.json` の `plugin.mode`、`plugin.pages`、`plugin.plugins` を置き換えます。
+  `plugins` と `pages` は配列全体の置き換えで、要素単位のマージは行いません。
+- `plugins[].imports[].sources` と `plugins[].imports[].packages` はimport元のホワイトリストで、両方指定した場合はいずれかに一致すれば許可されます。
+  これに `plugins[].imports[].allow` の関数パス制限が一致した場合だけ、Viteがvirtual moduleを解決します。
+- `validate` モードでは `plugins[].allow` を指定できず、`plugins[].imports` と `plugins[].imports[].allow` が必須です。
+  `simple` モードでは `plugins[].allow` が必須で、`plugins[].imports` は指定できません。
+- Viteプラグイン経由の `vite dev` と `vite build` では、正規化された `plugins[].imports` から `plugin.plugins[].allow` と `plugin.capabilities` が生成されます。
+  Viteプラグインを使わない直接 `muon build` では、このcapability生成は行われず、`simple` 相当として扱われます。
+- 従来の `window.muon` 階層を使う場合は、`pluginAccess: false` を指定します。
+  この場合、Viteプラグインが生成する実行時設定は `plugin.mode: "simple"` になります。
+  `muon.json` の `plugin.plugins` がvalidate形の `imports` だけで構成されている場合は、simple用の `plugins[].allow` が無いため設定エラーになります。
 
 ### buildキー
 
@@ -1189,28 +1396,32 @@ export default defineConfig({
 | `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
 | `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
-| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別する安定IDです。                                    |
+| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別するbase IDです。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むMuon設定ファイルです。                          |
+| `iconPath`         | `string`            | `muon.json`またはMuon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                                |
 | `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
 | `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
-  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定できます。CEF由来の `linux64` や `windows64`、`x64` などの別名は受け付けません。
+  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。CEF由来の `linux64` や `windows64`、`x64` などの別名は受け付けません。
 - `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
   Windowsターゲットでは `.exe` が自動的に付与されます。
-- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` から生成します。
+- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` からbase IDを生成します。
   `@scope/name` は `scope.name` になり、その他の使用できない文字は `-` に正規化されます。
-  生成された値は `bootstrap.appId` として `muon-core` とランチャーに埋め込まれます。
+  Linuxターゲットでは生成された値をそのまま `bootstrap.appId` として `muon-core` とランチャーに埋め込みます。
+  Windowsターゲットでは `windows-amd64` に `<appId>.amd64`、`windows-i686` に `<appId>.i686` を埋め込みます。
 - `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
   `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。
   設定ファイルが存在しない場合は `{}` 相当として扱います。
+- `iconPath` は Vite project rootからの相対パスとして解決されます。
+  `windowsResource.iconPath` と `linuxDesktop.iconPath` は、それぞれのターゲットだけに適用されるoverrideです。
 - Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
-  そのため、ビルド後のアセットは `asset://main/` から参照できます。
+  そのため、ビルド後のアセットは `asset://main/` から参照出来ます。
 - `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
 - `linuxDesktop` は `muon.json` の `linux.desktop` と同じキーを受け付け、CLIの `--linux-*` オプションと同じ優先度で扱われます。
 - `packageDirectory` は通常指定しません。
@@ -1220,6 +1431,15 @@ export default defineConfig({
 ---
 
 ## muon内蔵プラグインリファレンス
+
+この章では、プラグイン名前空間と関数パスを分かりやすく示すため、`window.muon.*` 形式でAPIを表記しています。
+これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
+既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
+例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、`muon:executor` から `spawn` をインポートします。
+
+```ts
+import { spawn } from "muon:executor";
+```
 
 ### muon.browser名前空間
 
@@ -1251,7 +1471,7 @@ export default defineConfig({
 | `recycle()`           | なし                | `Promise<void>` | Muonプロセスを終了し、起動元が対応している場合は自動再起動します。 |
 
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
-- `recycle()` は `muon-bootstrap` や `muon dev` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
+- `recycle()` は `muon-bootstrap` や `muon run` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
 - `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
 - `getWindowBounds()` と `setWindowBounds()` の bounds はブラウザ表示領域ではなく、Muonカスタムタイトルバーやネイティブフレームを含むトップレベルウインドウ領域です。
   座標とサイズの単位はCEF Viewsと同じDIP screen coordinatesです。
@@ -1262,8 +1482,8 @@ export default defineConfig({
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
 - `setTitleBarIcon()` はアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
-  `path` には `initialTitleBarIcon` と同じ形式を指定します。
-  `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を指定できます。
+  `path` には `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定します。
+  `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を指定出来ます。
   `"native"` タイトルバーではPNG以外を指定するとPromiseが拒否されます。
 
 ```js
@@ -1340,7 +1560,7 @@ if (autostart !== true) {
 
 | プロパティ | 型                       | 説明                                                                                                          |
 | :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------ |
-| `command`  | `string`                 | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用できません。 |
+| `command`  | `string`                 | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用出来ません。 |
 | `args`     | `readonly string[]`      | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
 | `stdin`    | `string`                 | 子プロセスの標準入力へ書き込むUTF-8テキストです。省略時は何も書き込みません。                                 |
 | `cwd`      | `string`                 | 子プロセスの作業ディレクトリです。                                                                            |
@@ -1369,10 +1589,10 @@ console.log(result.exitCode, result.stdout, result.stderr);
 
 `window.muon.fs` は、ローカルファイルシステムを操作します。
 各関数の `path`, `source`, `destination`, `target` は、ファイル位置を表す文字列です。
-多くの関数は最後の引数に `{ signal?: AbortSignal }` を指定できます。
+多くの関数は最後の引数に `{ signal?: AbortSignal }` を指定出来ます。
 すでにabort済みのsignalを渡した場合は即座にrejectされ、処理中にabortされた場合は可能な範囲でネイティブ処理のキャンセルを要求します。
 
-Linux環境ではGIO/GVfsを利用するため、通常の `muon.fs` 関数に渡すファイル位置引数にはローカルパスまたはURIを指定できます。
+Linux環境ではGIO/GVfsを利用するため、通常の `muon.fs` 関数に渡すファイル位置引数にはローカルパスまたはURIを指定出来ます。
 GTKファイルダイアログで `gtk.localOnly: false` の場合にGVfs上のURIが選択結果として返ったときも、そのURIを通常の `muon.fs` 関数へ渡せます。
 Linux以外の環境では、通常の `muon.fs` 関数はローカルファイルシステム上のパスを扱います。
 
@@ -1470,11 +1690,11 @@ await watcher.close();
 | `buttonLabel` | `string`                                                     | 決定ボタンのラベルです。                                                                                                                                         |
 | `modal`       | `boolean`                                                    | 呼び出し元ブラウザビューをダイアログ表示中に無効化するかどうかです。省略時は `true` です。`true` の場合、所有ウインドウが閉じられるとダイアログはabortされます。 |
 | `showHidden`  | `boolean`                                                    | バックエンドが対応している場合、隠しファイルを表示します。                                                                                                       |
-| `filters`     | `readonly { name: string, extensions: readonly string[] }[]` | ファイル種別フィルタです。`extensions` は `"png"`, `".png"`, `"*.png"`, `"*"` のように指定できます。各filterには空ではない `name` と1つ以上の拡張子が必要です。  |
+| `filters`     | `readonly { name: string, extensions: readonly string[] }[]` | ファイル種別フィルタです。`extensions` は `"png"`, `".png"`, `"*.png"`, `"*"` のように指定出来ます。各filterには空ではない `name` と1つ以上の拡張子が必要です。  |
 | `gtk`         | `MuonFsGtkDialogOptions`                                     | GTK固有オプションです。                                                                                                                                          |
 | `win32`       | `MuonFsWin32DialogOptions`                                   | Win32固有オプションです。                                                                                                                                        |
 
-`MuonFsSaveDialogOptions` では、共通オプションに加えて以下を指定できます。
+`MuonFsSaveDialogOptions` では、共通オプションに加えて以下を指定出来ます。
 
 | プロパティ         | 型        | 説明                                                           |
 | :----------------- | :-------- | :------------------------------------------------------------- |
@@ -1573,7 +1793,7 @@ podman run --rm --platform linux/arm64 docker.io/library/debian:trixie-slim unam
 
 パッケージ生成前に、ビルド用のコンテナイメージを準備します。この手順でネイティブビルドと
 プラットフォーム検証に必要な依存関係をターゲット別のPodmanイメージに導入するため、パッケージ生成のたびに
-各コンテナ内でaptパッケージをインストールする時間を削減できます。
+各コンテナ内でaptパッケージをインストールする時間を削減出来ます。
 
 ```bash
 # Build prerequisite images
@@ -1586,7 +1806,7 @@ podman run --rm --platform linux/arm64 docker.io/library/debian:trixie-slim unam
 npm run pack
 ```
 
-このパッケージスクリプトは `./build_package.sh` に委譲します。パッケージ生成オプションを直接渡したい場合は、`./build_package.sh` を直接実行することもできます。
+このパッケージスクリプトは `./build_package.sh` に委譲します。パッケージ生成オプションを直接渡したい場合は、`./build_package.sh` を直接実行することも出来ます。
 
 - サポートされているすべてのアーキテクチャ向けにネイティブコードをビルドおよびテストするため、非常に長い時間がかかります（30分以上かかる可能性があります）。
 

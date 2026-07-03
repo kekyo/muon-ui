@@ -645,6 +645,7 @@ target_link_libraries(muon_cardio INTERFACE
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
+  src/muon_sha1.cpp
   src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
@@ -664,6 +665,7 @@ set(APP_SOURCES
   src/config/muon_autostart.cpp
   src/config/muon_config.cpp
   src/config/muon_glob.cpp
+  src/config/muon_linux_display_backend.cpp
   src/config/muon_paths.cpp
   src/config/muon_startup.cpp
   src/log/muon_log.cpp
@@ -688,6 +690,7 @@ set(APP_SOURCES
   )
 set(APP_HEADERS
   src/muon_json_helpers.h
+  src/muon_sha1.h
   src/muon_string_helpers.h
   src/app/muon_app.h
   src/app/muon_app_scheme.h
@@ -707,6 +710,7 @@ set(APP_HEADERS
   src/config/muon_autostart.h
   src/config/muon_config.h
   src/config/muon_glob.h
+  src/config/muon_linux_display_backend.h
   src/config/muon_paths.h
   src/config/muon_startup.h
   src/log/muon_log.h
@@ -841,8 +845,6 @@ set(MUON_DEFAULT_TITLE_BAR_ICON_PNG_PATH
   "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon-256.png")
 set(MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH
   "${MUON_GENERATED_INCLUDE_DIR}/browser/muon_default_title_bar_icon_generated.h")
-set(MUON_WINDOWS_ICON_PATH
-  "${CMAKE_CURRENT_SOURCE_DIR}/../images/muon.ico")
 file(MAKE_DIRECTORY "${MUON_GENERATED_INCLUDE_DIR}")
 
 function(muon_normalize_windows_version input output_dot output_comma)
@@ -919,11 +921,6 @@ if(WIN32)
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/muon_core.rc.in"
     "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
     @ONLY
-    )
-  set_source_files_properties(
-    "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
-    PROPERTIES
-    OBJECT_DEPENDS "${MUON_WINDOWS_ICON_PATH}"
     )
   list(APPEND APP_SOURCES
     "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
@@ -1022,6 +1019,7 @@ if(MUON_BUILD_TESTS)
       muon_test_plugin_recursive_functions
       muon_test_plugin_same_name_alpha
       muon_test_plugin_same_name_beta
+      muon_test_plugin_single_namespace
       muon_test_plugin_types
       )
     add_library(${TEST_PLUGIN_TARGET} MODULE
@@ -1332,7 +1330,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME runtime_contains_test_plugins
     COMMAND bash -c
-      "test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_browser_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_fs_dialogs_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_cardio.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_path_namespace_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_lifetime.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_helpers.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_invalid_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_load_marker.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_multi_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_namespace_path_conflict_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_recursive_functions.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_types.so'"
+      "test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_browser_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_builtin_fs_dialogs_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_cardio.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_duplicate_namespace_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_path_namespace_conflict.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_function_lifetime.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_helpers.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_invalid_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_load_marker.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_multi_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_namespace_path_conflict_in_plugin.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_recursive_functions.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_alpha.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_same_name_beta.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_single_namespace.so' && test -f '${TEST_PLUGIN_OUTPUT_DIR}/muon_test_plugin_types.so'"
     )
 elseif(NOT MUON_BUILD_TESTS)
   add_test(
@@ -1352,6 +1350,7 @@ endif()
 if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_app_scheme_storage_test
     tests/muon_app_scheme_storage_test.cpp
+    src/muon_sha1.cpp
     src/app/muon_app_scheme.cpp
     src/app/muon_app_storage.cpp
     src/config/muon_paths.cpp
@@ -1378,6 +1377,8 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
+    src/config/muon_linux_display_backend.cpp
+    src/config/muon_startup.cpp
     src/plugins/muon_type_metadata.cpp
     src/browser/muon_window_delegate.cpp
     src/browser/muon_window_state.cpp
@@ -1471,6 +1472,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_config_network_test)
   target_compile_features(muon_config_network_test PRIVATE cxx_std_20)
+  target_compile_definitions(muon_config_network_test PRIVATE
+    MUON_CORE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
   target_include_directories(muon_config_network_test PRIVATE
     include
     src

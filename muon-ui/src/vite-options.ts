@@ -73,6 +73,7 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
     (value.appId === undefined || typeof value.appId === "string") &&
     (value.outputRoot === undefined || typeof value.outputRoot === "string") &&
     (value.configPath === undefined || typeof value.configPath === "string") &&
+    (value.iconPath === undefined || typeof value.iconPath === "string") &&
     (value.windowsResource === undefined ||
       isWindowsResourceOptions(value.windowsResource)) &&
     (value.linuxDesktop === undefined ||
@@ -80,6 +81,51 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
     (value.packageDirectory === undefined ||
       typeof value.packageDirectory === "string") &&
     (value.assetSalt === undefined || value.assetSalt instanceof Uint8Array)
+  );
+};
+
+const isMuonVitePluginAccessImportOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.sources === undefined || isStringArray(value.sources)) &&
+    (value.packages === undefined || isStringArray(value.packages)) &&
+    (value.allow === undefined || isStringArray(value.allow))
+  );
+};
+
+const isMuonVitePluginAccessEntryOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.name === "string" &&
+    (value.signature === undefined || typeof value.signature === "string") &&
+    (value.salt === undefined || typeof value.salt === "string") &&
+    (value.allow === undefined || isStringArray(value.allow)) &&
+    (value.imports === undefined ||
+      (Array.isArray(value.imports) &&
+        value.imports.every(isMuonVitePluginAccessImportOptions)))
+  );
+};
+
+const isMuonVitePluginAccessOptions = (value: unknown): boolean => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.path === undefined || typeof value.path === "string") &&
+    (value.mode === undefined ||
+      value.mode === "simple" ||
+      value.mode === "validate") &&
+    (value.pages === undefined || isStringArray(value.pages)) &&
+    (value.plugins === undefined ||
+      (Array.isArray(value.plugins) &&
+        value.plugins.every(isMuonVitePluginAccessEntryOptions)))
   );
 };
 
@@ -97,6 +143,9 @@ const isMuonVitePluginOptions = (
     (value.open === undefined || typeof value.open === "boolean") &&
     (value.enableDebugger === undefined ||
       typeof value.enableDebugger === "boolean") &&
+    (value.pluginAccess === undefined ||
+      value.pluginAccess === false ||
+      isMuonVitePluginAccessOptions(value.pluginAccess)) &&
     (value.build === undefined ||
       typeof value.build === "boolean" ||
       isMuonViteBuildOptions(value.build))

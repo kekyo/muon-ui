@@ -12,6 +12,13 @@ import { parse } from "json5";
 
 import type { MuonLinuxDesktopOptions } from "./vite.js";
 import { createNormalizedIconPngData } from "./windows-icon.js";
+import {
+  createAppIconOptionsSource,
+  readConfigAppIconSource,
+  readProjectAppIconSource,
+  resolveMuonAppIconPath,
+  type MuonAppIconSource,
+} from "./app-icon.js";
 
 export type { MuonLinuxDesktopOptions } from "./vite.js";
 
@@ -44,6 +51,7 @@ interface ResolveLinuxDesktopInput {
   muonConfig: JsonObject;
   muonConfigDirectory: string;
   options: MuonLinuxDesktopOptions | undefined;
+  appIconPath: string | undefined;
   defaults: LinuxDesktopDefaults;
 }
 
@@ -143,6 +151,7 @@ export const mergeMuonLinuxDesktopOptions = (
 export const resolveMuonLinuxDesktop = async (
   input: ResolveLinuxDesktopInput,
 ): Promise<ResolvedMuonLinuxDesktop> => {
+  const projectJson = await readProjectJson(input.root);
   const sources = [
     createOptionsSource(input.options, input.root, "linuxDesktop"),
     readConfigLinuxDesktopSource(
@@ -151,6 +160,15 @@ export const resolveMuonLinuxDesktop = async (
       "muon.json",
     ),
   ].filter((source): source is LinuxDesktopSource => source !== undefined);
+  const appIconSources = [
+    createAppIconOptionsSource(input.appIconPath, input.root),
+    readConfigAppIconSource(
+      input.muonConfig,
+      input.muonConfigDirectory,
+      "muon.json",
+    ),
+    readProjectAppIconSource(projectJson, input.root),
+  ].filter((source): source is MuonAppIconSource => source !== undefined);
 
   const desktopId = sanitizeDesktopId(
     resolveStringField(sources, "desktopId", input.defaults.desktopId),
@@ -167,8 +185,9 @@ export const resolveMuonLinuxDesktop = async (
     "startupNotify",
     input.defaults.startupNotify,
   );
-  const iconPath = await resolveIconPath(
+  const iconPath = await resolveLinuxIconPath(
     sources,
+    appIconSources,
     await resolveDefaultLinuxDesktopIcon(input.packageDirectory),
   );
 
@@ -324,6 +343,14 @@ const readJsonObjectFile = async (
     throw new Error(`${label} must contain a JSON object: ${filePath}`);
   }
   return parsed;
+};
+
+const readProjectJson = async (root: string): Promise<JsonObject> => {
+  const projectJsonPath = join(root, "project.json");
+  if (!(await fileExists(projectJsonPath))) {
+    return {};
+  }
+  return await readJsonObjectFile(projectJsonPath, "project.json");
 };
 
 const createOptionsSource = (
@@ -484,8 +511,9 @@ const resolveBooleanField = (
   return fallback;
 };
 
-const resolveIconPath = async (
+const resolveLinuxIconPath = async (
   sources: readonly LinuxDesktopSource[],
+  appIconSources: readonly MuonAppIconSource[],
   defaultIconPath: string | undefined,
 ): Promise<string> => {
   for (const source of sources) {
@@ -495,6 +523,10 @@ const resolveIconPath = async (
       await assertIconPath(iconPath, true);
       return iconPath;
     }
+  }
+  const appIconPath = await resolveMuonAppIconPath(appIconSources);
+  if (appIconPath !== undefined) {
+    return appIconPath;
   }
   if (defaultIconPath !== undefined && (await fileExists(defaultIconPath))) {
     await assertIconPath(defaultIconPath, false);
@@ -526,10 +558,10 @@ const resolveDefaultLinuxDesktopIcon = async (
   packageDirectory: string,
 ): Promise<string | undefined> => {
   const candidates = [
-    join(resolve(packageDirectory), "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "..", "dist", "native", "muon-bootstrap.png"),
-    join(moduleDirectory, "..", "..", "images", "muon-bootstrap-256.png"),
+    join(resolve(packageDirectory), "native", "muon-256.png"),
+    join(moduleDirectory, "native", "muon-256.png"),
+    join(moduleDirectory, "..", "dist", "native", "muon-256.png"),
+    join(moduleDirectory, "..", "..", "images", "muon-256.png"),
   ];
   for (const candidate of candidates) {
     if (await fileExists(candidate)) {

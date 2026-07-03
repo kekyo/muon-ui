@@ -15,6 +15,7 @@
 #include "browser/muon_title_bar.h"
 #include "browser/muon_title_bar_loader.h"
 #include "config/muon_config.h"
+#include "config/muon_linux_display_backend.h"
 #include "config/muon_startup.h"
 #include "log/muon_log.h"
 #include "plugins/muon_js_bridge.h"
@@ -134,6 +135,78 @@ static void AppendMuonConfigPathArguments(
     command_line->AppendArgument("-c");
     command_line->AppendArgument(CreateCefPathString(config_path));
   }
+}
+
+static std::string TrimAsciiWhitespace(std::string value) {
+  auto begin = size_t{0};
+  while (begin < value.size() &&
+         (value[begin] == ' ' || value[begin] == '\t' ||
+          value[begin] == '\r' || value[begin] == '\n')) {
+    ++begin;
+  }
+  auto end = value.size();
+  while (end > begin &&
+         (value[end - 1] == ' ' || value[end - 1] == '\t' ||
+          value[end - 1] == '\r' || value[end - 1] == '\n')) {
+    --end;
+  }
+  return value.substr(begin, end - begin);
+}
+
+static bool ContainsCommaSeparatedValue(const std::string& values,
+                                        const std::string& expected) {
+  auto start = size_t{0};
+  while (start <= values.size()) {
+    auto end = values.find(',', start);
+    if (end == std::string::npos) {
+      end = values.size();
+    }
+    if (TrimAsciiWhitespace(values.substr(start, end - start)) == expected) {
+      return true;
+    }
+    if (end == values.size()) {
+      break;
+    }
+    start = end + 1;
+  }
+  return false;
+}
+
+static void AppendCommaSeparatedSwitchValues(
+    CefRefPtr<CefCommandLine> command_line,
+    const char* switch_name,
+    const std::vector<std::string>& added_values) {
+  auto value = command_line->GetSwitchValue(switch_name).ToString();
+  for (const auto& added_value : added_values) {
+    if (ContainsCommaSeparatedValue(value, added_value)) {
+      continue;
+    }
+    if (!value.empty()) {
+      value += ",";
+    }
+    value += added_value;
+  }
+
+  CefString cef_value;
+  cef_value.FromString(value);
+  command_line->AppendSwitchWithValue(switch_name, cef_value);
+}
+
+static void ConfigureMuonCefLinuxDisplayCommandLine(
+    CefRefPtr<CefCommandLine> command_line) {
+#if defined(OS_LINUX)
+  if (!ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+          GetMuonStartupCommandLine(), std::getenv("XDG_SESSION_TYPE"),
+          std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"))) {
+    return;
+  }
+  command_line->AppendSwitch("disable-vulkan-surface");
+  AppendCommaSeparatedSwitchValues(
+      command_line, "disable-features",
+      {"Vulkan", "VulkanFromANGLE", "DefaultANGLEVulkan"});
+#else
+  (void)command_line;
+#endif
 }
 
 static bool IsMuonNamespaceObject(CefRefPtr<CefV8Value> value) {
@@ -428,7 +501,7 @@ MuonApp::MuonApp(const MuonConfig& config,
       config_paths_(std::move(config_paths)),
       dispatcher_(dispatcher) {
   if (!CreateMuonUrlPolicy(config_.browser.plugin.allow,
-                           "browser.plugin.allow", &plugin_page_policy_,
+                           "plugin.pages", &plugin_page_policy_,
                            &plugin_page_policy_error_)) {
     plugin_page_policy_.reset();
   }
@@ -438,6 +511,24 @@ MuonApp::MuonApp(const MuonConfig& config,
           &unsafe_parent_access_policy_,
           &unsafe_parent_access_policy_error_)) {
     unsafe_parent_access_policy_.reset();
+  }
+  for (const auto& capability : config_.browser.plugin.capabilities) {
+    if (plugin_capability_policies_.find(capability.id) !=
+        plugin_capability_policies_.end()) {
+      plugin_capability_policy_error_ =
+          "Duplicate plugin.capabilities id: " + capability.id;
+      break;
+    }
+    std::shared_ptr<MuonPluginPolicy> capability_policy;
+    std::string capability_error;
+    if (!CreateMuonPluginPolicy(capability.allow, &capability_policy,
+                                &capability_error)) {
+      plugin_capability_policy_error_ =
+          "Invalid plugin.capabilities '" + capability.id + "': " +
+          capability_error;
+      break;
+    }
+    plugin_capability_policies_[capability.id] = capability_policy;
   }
 }
 
@@ -461,6 +552,7 @@ void MuonApp::OnBeforeCommandLineProcessing(
   if (!command_line) {
     return;
   }
+  ConfigureMuonCefLinuxDisplayCommandLine(command_line);
   CefString cef_log_path;
 #if defined(_WIN32)
   cef_log_path.FromWString(cef_log_path_.wstring());
@@ -509,6 +601,13 @@ void MuonApp::OnContextInitialized() {
     CefQuitMessageLoop();
     return;
   }
+  if (!plugin_capability_policy_error_.empty()) {
+    exit_code_ = 1;
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                   "Muon startup failed: " + plugin_capability_policy_error_);
+    CefQuitMessageLoop();
+    return;
+  }
 
   std::shared_ptr<MuonNetworkPolicy> network_policy;
   std::string error_message;
@@ -535,7 +634,12 @@ void MuonApp::OnContextInitialized() {
       CefQuitMessageLoop();
       return;
     }
-    plugins.push_back({plugin_config.name, plugin_policy});
+    plugins.push_back({plugin_config.name,
+                       plugin_config.has_signature,
+                       plugin_config.signature,
+                       plugin_config.has_salt,
+                       plugin_config.salt,
+                       plugin_policy});
   }
 
   InitializeMuonBuiltinBootstrap(config_.default_version_policy);
@@ -605,6 +709,7 @@ void MuonApp::OnContextInitialized() {
       CreateMuonTitleBarBackgroundColor(config_.browser.background_color);
   CefRefPtr<MuonClient> client(
       new MuonClient(plugin_runtime, network_policy, plugin_page_policy_,
+                     plugin_capability_policies_,
                      unsafe_parent_access_policy_,
                      [this](int32_t exit_code) {
                        return RequestShutdown(exit_code);
@@ -684,6 +789,17 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
       new MuonV8Handler(renderer_metadata_.functions, context));
   const auto readonly_attribute = static_cast<CefV8Value::PropertyAttribute>(
       V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE);
+  if (config_.browser.plugin.mode == kMuonBrowserPluginModeValidate) {
+    const auto bridge_attribute = static_cast<CefV8Value::PropertyAttribute>(
+        V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE |
+        V8_PROPERTY_ATTRIBUTE_DONTENUM);
+    global->SetValue(
+        kMuonV8CapabilityCallFunctionName,
+        CefV8Value::CreateFunction(kMuonV8CapabilityCallFunctionName, handler),
+        bridge_attribute);
+    v8_handlers_by_context_[handler->GetContextId()] = handler;
+    return;
+  }
   for (const auto& plugin_namespace : renderer_metadata_.namespaces) {
     CefRefPtr<CefV8Value> namespace_object;
     std::string error_message;

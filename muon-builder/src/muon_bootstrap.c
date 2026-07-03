@@ -37,6 +37,7 @@
 #define MUON_DESKTOP_CONFIG_FILE_NAME "muon-desktop.json"
 #define MUON_DESKTOP_ICON_FILE_NAME "muon-desktop-icon.png"
 #define MUON_INSTALL_CONFIG_FILE_NAME "muon-install.json"
+#define MUON_BOOTSTRAP_APP_ID_ENVIRONMENT "MUON_BOOTSTRAP_APP_ID"
 #define MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT "--muon-launch-from=normal"
 
 static int is_path_separator(char value) {
@@ -244,9 +245,10 @@ static char *get_default_state_home(void) {
 
 static char *create_state_runtime_dir(const char *app_id,
                                       const char *target) {
+  (void)target;
   char *state_home = get_default_state_home();
   char *app_root = state_home == NULL ? NULL : muon_path_join(state_home, app_id);
-  char *runtime_dir = app_root == NULL ? NULL : muon_path_join(app_root, target);
+  char *runtime_dir = app_root == NULL ? NULL : muon_path_join(app_root, "runtime");
   free(state_home);
   free(app_root);
   return runtime_dir;
@@ -844,8 +846,8 @@ static char **create_core_argv(const char *core_path, int argc, char **argv) {
   return core_argv;
 }
 
-static int launch_core(const char *runtime_dir, const char *core_path, int argc,
-                       char **argv) {
+static int launch_core(const char *runtime_dir, const char *core_path,
+                       const char *app_id, int argc, char **argv) {
   char **core_argv = create_core_argv(core_path, argc, argv);
   if (core_argv == NULL) {
     fprintf(stderr, "muon-bootstrap: failed to allocate arguments.\n");
@@ -854,6 +856,12 @@ static int launch_core(const char *runtime_dir, const char *core_path, int argc,
 #ifdef _WIN32
   if (_chdir(runtime_dir) != 0) {
     perror(runtime_dir);
+    free(core_argv);
+    return 1;
+  }
+  if (_putenv_s(MUON_BOOTSTRAP_APP_ID_ENVIRONMENT, app_id) != 0) {
+    fprintf(stderr, "muon-bootstrap: failed to set %s.\n",
+            MUON_BOOTSTRAP_APP_ID_ENVIRONMENT);
     free(core_argv);
     return 1;
   }
@@ -879,6 +887,10 @@ static int launch_core(const char *runtime_dir, const char *core_path, int argc,
     return 1;
   }
   if (child == 0) {
+    if (setenv(MUON_BOOTSTRAP_APP_ID_ENVIRONMENT, app_id, 1) != 0) {
+      perror("setenv");
+      _exit(1);
+    }
     execv(core_path, core_argv);
     const int error_code = errno;
     perror(core_path);
@@ -955,7 +967,7 @@ int main(int argc, char **argv) {
     if (update_linux_desktop_entry(runtime_dir, bootstrap_path, app_id) != 0) {
       fprintf(stderr, "muon-bootstrap: failed to update desktop entry.\n");
     }
-    exit_code = launch_core(runtime_dir, core_path, argc, argv);
+    exit_code = launch_core(runtime_dir, core_path, app_id, argc, argv);
   } while (exit_code == MUON_RECYCLE_EXIT_CODE);
   free(bootstrap_path);
   free(source_runtime_dir);

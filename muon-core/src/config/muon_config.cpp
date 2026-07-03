@@ -28,6 +28,7 @@ static constexpr char kMuonConfigJson5FileName[] = "muon.json5";
 static constexpr char kMuonConfigJsoncFileName[] = "muon.jsonc";
 static constexpr char kMuonConfigFileName[] = "muon.json";
 static constexpr char kMuonConfigBootstrapKey[] = "bootstrap";
+static constexpr char kMuonConfigAppIdKey[] = "appId";
 static constexpr char kMuonConfigDefaultVersionPolicyKey[] =
     "defaultVersionPolicy";
 static constexpr char kMuonConfigDesktopIdKey[] = "desktopId";
@@ -63,7 +64,6 @@ static constexpr char kMuonConfigBrowserZoomOutKey[] = "zoomOut";
 static constexpr char kMuonConfigBrowserResetZoomKey[] = "resetZoom";
 static constexpr char kMuonConfigBrowserRecycleKey[] = "recycle";
 static constexpr char kMuonConfigBrowserPluginKey[] = "plugin";
-static constexpr char kMuonConfigBrowserPluginAllowKey[] = "allow";
 static constexpr char kMuonConfigBrowserAllowUnsafeJavaScriptParentAccessKey[] =
     "allowUnsafeJavaScriptParentAccess";
 static constexpr char kMuonConfigNetworkKey[] = "network";
@@ -75,10 +75,17 @@ static constexpr char kMuonConfigNetworkAuthorizedOriginDomainKey[] = "domain";
 static constexpr char kMuonConfigNetworkAuthorizedOriginPortKey[] = "port";
 static constexpr char kMuonConfigPluginKey[] = "plugin";
 static constexpr char kMuonConfigPluginPathKey[] = "path";
+static constexpr char kMuonConfigPluginModeKey[] = "mode";
+static constexpr char kMuonConfigPluginPagesKey[] = "pages";
+static constexpr char kMuonConfigPluginCapabilitiesKey[] = "capabilities";
+static constexpr char kMuonConfigPluginCapabilityIdKey[] = "id";
 static constexpr char kMuonConfigPluginPluginsKey[] = "plugins";
 static constexpr char kMuonConfigLegacyPluginsKey[] = "plugins";
 static constexpr char kMuonConfigPluginEntryNameKey[] = "name";
+static constexpr char kMuonConfigPluginEntrySignatureKey[] = "signature";
+static constexpr char kMuonConfigPluginEntrySaltKey[] = "salt";
 static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
+static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
 static constexpr char kMuonInternalPluginName[] = "internal";
 static constexpr char kMuonConfigLogKey[] = "log";
 static constexpr char kMuonConfigLogLevelKey[] = "level";
@@ -108,8 +115,9 @@ static constexpr uint8_t kMuonEmbeddedTlvStringTag = 4;
 static constexpr uint8_t kMuonEmbeddedTlvBinaryTag = 5;
 static constexpr uint8_t kMuonEmbeddedTlvArrayTag = 6;
 static constexpr uint8_t kMuonEmbeddedTlvObjectTag = 7;
-static constexpr char kMuonDefaultLocalProfileDirectoryName[] = ".profile";
-static constexpr char kMuonDefaultNormalProfileDirectoryName[] = "profile";
+static constexpr char kMuonDefaultProfileDirectoryName[] = "profile";
+static constexpr char kMuonBootstrapAppIdEnvironmentName[] =
+    "MUON_BOOTSTRAP_APP_ID";
 static constexpr char kMuonFallbackApplicationName[] = "muon";
 
 using muon_internal::DecodeAsciiHexByte;
@@ -201,8 +209,6 @@ struct MuonConfigPathResolution final {
 struct MuonConfigPathBases final {
   std::filesystem::path browser_profile;
   bool has_browser_profile = false;
-  std::filesystem::path default_browser_profile;
-  bool has_default_browser_profile = false;
   std::filesystem::path log_output_path;
   bool has_log_output_path = false;
   std::filesystem::path plugin_path;
@@ -396,6 +402,12 @@ static bool IsEmbeddedPath(const std::vector<std::string>& path,
   return path.size() == 2 && path[0] == first && path[1] == second;
 }
 
+static bool IsEmbeddedPluginEntryPath(const std::vector<std::string>& path,
+                                      const char* key) {
+  return path.size() == 3 && path[0] == kMuonConfigPluginKey &&
+         path[1] == kMuonConfigPluginPluginsKey && path[2] == key;
+}
+
 static char EncodeLowerHexNibble(uint8_t value) {
   return static_cast<char>(value < 10 ? '0' + value : 'a' + (value - 10));
 }
@@ -427,6 +439,16 @@ static bool CreateEmbeddedBinaryJsonValue(
     string_value = EncodeLowerHex(bytes, size);
   } else if (IsEmbeddedPath(path, kMuonConfigAssetKey,
                             kMuonConfigAssetSaltKey)) {
+    string_value = EncodeLowerHex(bytes, size);
+  } else if (IsEmbeddedPluginEntryPath(path,
+                                       kMuonConfigPluginEntrySignatureKey)) {
+    if (size != 20) {
+      *error_message =
+          "Embedded muon config plugin.plugins[].signature must be 20 bytes";
+      return false;
+    }
+    string_value = EncodeLowerHex(bytes, size);
+  } else if (IsEmbeddedPluginEntryPath(path, kMuonConfigPluginEntrySaltKey)) {
     string_value = EncodeLowerHex(bytes, size);
   } else if (IsEmbeddedPath(path, kMuonConfigBrowserKey,
                             kMuonConfigBrowserBackgroundColorKey)) {
@@ -637,8 +659,50 @@ static std::string GetStartupApplicationName() {
   return kMuonFallbackApplicationName;
 }
 
-static bool GetNormalUserDataDirectory(std::filesystem::path* directory,
-                                       std::string* error_message) {
+static std::string GetStartupAppId() {
+  const auto* bootstrap_app_id =
+      std::getenv(kMuonBootstrapAppIdEnvironmentName);
+  if (bootstrap_app_id != nullptr) {
+    const auto app_id = TrimAscii(bootstrap_app_id);
+    if (!app_id.empty()) {
+      return app_id;
+    }
+  }
+  return GetStartupApplicationName();
+}
+
+static bool IsAppIdCharacter(char value) {
+  const auto is_digit = value >= '0' && value <= '9';
+  const auto is_lower = value >= 'a' && value <= 'z';
+  const auto is_upper = value >= 'A' && value <= 'Z';
+  return is_digit || is_lower || is_upper || value == '.' || value == '_' ||
+         value == '-';
+}
+
+static std::string SanitizeAppId(const std::string& value) {
+  std::string result = value;
+  for (auto& character : result) {
+    if (!IsAppIdCharacter(character)) {
+      character = '.';
+    }
+  }
+
+  auto start = size_t{0};
+  while (start < result.size() && result[start] == '.') {
+    start += 1;
+  }
+  auto end = result.size();
+  while (end > start && result[end - 1] == '.') {
+    end -= 1;
+  }
+  if (end == start) {
+    return "muon-app";
+  }
+  return result.substr(start, end - start);
+}
+
+static bool GetDefaultStateHomeDirectory(std::filesystem::path* directory,
+                                         std::string* error_message) {
 #if defined(_WIN32)
   if (GetEnvironmentPath("LOCALAPPDATA", directory)) {
     return true;
@@ -651,43 +715,32 @@ static bool GetNormalUserDataDirectory(std::filesystem::path* directory,
   *error_message = "LOCALAPPDATA and USERPROFILE are unavailable";
   return false;
 #else
-  if (GetEnvironmentPath("XDG_DATA_HOME", directory)) {
+  if (GetEnvironmentPath("XDG_STATE_HOME", directory)) {
     return true;
   }
   std::filesystem::path home;
   if (!GetEnvironmentPath("HOME", &home)) {
-    *error_message = "XDG_DATA_HOME and HOME are unavailable";
+    *error_message = "XDG_STATE_HOME and HOME are unavailable";
     return false;
   }
-  *directory = home / ".local" / "share";
+  *directory = home / ".local" / "state";
   return true;
 #endif
 }
 
 static bool ResolveDefaultBrowserProfilePath(
-    const MuonConfigPathBases& path_bases,
+    const std::string& app_id,
     std::filesystem::path* profile,
     std::string* error_message) {
   const auto launch_source = GetMuonStartupLaunchSource();
-  if (launch_source == kMuonLaunchSourceNone) {
-    std::filesystem::path base_directory;
-    if (path_bases.has_default_browser_profile) {
-      base_directory = path_bases.default_browser_profile;
-    } else if (!ResolveCurrentDirectory(&base_directory, error_message)) {
+  if (launch_source == kMuonLaunchSourceNone ||
+      launch_source == kMuonLaunchSourceNormal) {
+    std::filesystem::path state_home;
+    if (!GetDefaultStateHomeDirectory(&state_home, error_message)) {
       return false;
     }
-    *profile =
-        (base_directory / kMuonDefaultLocalProfileDirectoryName)
-            .lexically_normal();
-    return true;
-  }
-  if (launch_source == kMuonLaunchSourceNormal) {
-    std::filesystem::path user_data_directory;
-    if (!GetNormalUserDataDirectory(&user_data_directory, error_message)) {
-      return false;
-    }
-    *profile = (user_data_directory / GetStartupApplicationName() /
-                kMuonDefaultNormalProfileDirectoryName)
+    *profile = (state_home / SanitizeAppId(app_id) /
+                kMuonDefaultProfileDirectoryName)
                    .lexically_normal();
     return true;
   }
@@ -836,14 +889,13 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
 
 static bool ResolveDefaultConfigPathsFromBases(
     yyjson_val* root,
-    const MuonConfigPathBases& path_bases,
     MuonConfig* config,
     std::string* error_message) {
   if (config == nullptr || error_message == nullptr) {
     return false;
   }
   if (!HasBrowserProfilePath(root)) {
-    return ResolveDefaultBrowserProfilePath(path_bases,
+    return ResolveDefaultBrowserProfilePath(config->app_id,
                                             &config->browser.profile,
                                             error_message);
   }
@@ -1559,20 +1611,103 @@ static bool ReadBrowserKeybindsConfig(yyjson_val* browser,
                                             error_message);
 }
 
-static bool ReadBrowserPluginConfig(yyjson_val* browser,
-                                    MuonConfig* config,
-                                    std::string* error_message) {
+static bool ParseBrowserPluginMode(const std::string& raw_mode,
+                                   MuonBrowserPluginMode* mode) {
+  if (mode == nullptr) {
+    return false;
+  }
+  if (raw_mode == "simple") {
+    *mode = kMuonBrowserPluginModeSimple;
+    return true;
+  }
+  if (raw_mode == "validate") {
+    *mode = kMuonBrowserPluginModeValidate;
+    return true;
+  }
+  return false;
+}
+
+static bool ReadPluginModeConfig(yyjson_val* plugin,
+                                 MuonConfig* config,
+                                 std::string* error_message) {
+  const auto mode = yyjson_obj_get(plugin, kMuonConfigPluginModeKey);
+  if (mode == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(mode)) {
+    *error_message = "muon.json plugin.mode must be a string";
+    return false;
+  }
+  const auto raw_mode = TrimAscii(ReadJsonString(mode));
+  if (raw_mode.empty()) {
+    *error_message = "muon.json plugin.mode must not be empty";
+    return false;
+  }
+  if (!ParseBrowserPluginMode(raw_mode, &config->browser.plugin.mode)) {
+    *error_message = "muon.json plugin.mode has unknown value: " + raw_mode;
+    return false;
+  }
+  return true;
+}
+
+static bool ReadPluginCapabilitiesConfig(yyjson_val* plugin,
+                                         MuonConfig* config,
+                                         std::string* error_message) {
+  const auto capabilities =
+      yyjson_obj_get(plugin, kMuonConfigPluginCapabilitiesKey);
+  if (capabilities == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_arr(capabilities)) {
+    *error_message = "muon.json plugin.capabilities must be an array";
+    return false;
+  }
+
+  config->browser.plugin.capabilities.clear();
+  const auto capability_count = yyjson_arr_size(capabilities);
+  for (auto index = size_t{0}; index < capability_count; ++index) {
+    const auto capability = yyjson_arr_get(capabilities, index);
+    if (!yyjson_is_obj(capability)) {
+      *error_message =
+          "muon.json plugin.capabilities entries must be objects";
+      return false;
+    }
+
+    const auto id =
+        yyjson_obj_get(capability, kMuonConfigPluginCapabilityIdKey);
+    if (!yyjson_is_str(id)) {
+      *error_message = "muon.json plugin.capabilities.id must be a string";
+      return false;
+    }
+
+    MuonBrowserPluginCapabilityConfig capability_config;
+    capability_config.id = ReadJsonString(id);
+    if (capability_config.id.empty()) {
+      *error_message =
+          "muon.json plugin.capabilities.id must not be empty";
+      return false;
+    }
+    if (!ReadStringArray(capability, kMuonConfigPluginEntryAllowKey,
+                         "plugin.capabilities.allow",
+                         &capability_config.allow, error_message)) {
+      return false;
+    }
+    config->browser.plugin.capabilities.push_back(
+        std::move(capability_config));
+  }
+  return true;
+}
+
+static bool RejectLegacyBrowserPluginConfig(yyjson_val* browser,
+                                           std::string* error_message) {
   const auto plugin = yyjson_obj_get(browser, kMuonConfigBrowserPluginKey);
   if (plugin == nullptr) {
     return true;
   }
-  if (!yyjson_is_obj(plugin)) {
-    *error_message = "muon.json browser.plugin must be an object";
-    return false;
-  }
-  return ReadStringArray(plugin, kMuonConfigBrowserPluginAllowKey,
-                         "browser.plugin.allow",
-                         &config->browser.plugin.allow, error_message);
+  *error_message =
+      "muon.json browser.plugin is no longer supported; use plugin.mode and "
+      "plugin.pages instead";
+  return false;
 }
 
 static bool ReadBrowserConfig(yyjson_val* root,
@@ -1602,7 +1737,7 @@ static bool ReadBrowserConfig(yyjson_val* root,
              "browser.allowUnsafeJavaScriptParentAccess",
              &config->browser.allow_unsafe_javascript_parent_access,
              error_message) &&
-         ReadBrowserPluginConfig(browser, config, error_message);
+         RejectLegacyBrowserPluginConfig(browser, error_message);
 }
 
 static bool ReadStringArray(yyjson_val* object,
@@ -1965,6 +2100,62 @@ static bool ReadLogConfig(yyjson_val* root,
          ReadLogSourcesConfig(log, config, level_was_set, error_message);
 }
 
+static bool ReadSha1SignatureString(yyjson_val* value,
+                                    const std::string& config_path,
+                                    std::string* signature,
+                                    std::string* error_message) {
+  if (!yyjson_is_str(value)) {
+    *error_message = "muon.json " + config_path + " must be a string";
+    return false;
+  }
+  auto normalized_signature = ToLowerAscii(ReadJsonString(value));
+  if (normalized_signature.size() != 40) {
+    *error_message =
+        "muon.json " + config_path +
+        " must be a 40-character SHA-1 hex string";
+    return false;
+  }
+  for (const auto character : normalized_signature) {
+    if (!IsAsciiHexDigit(character)) {
+      *error_message =
+          "muon.json " + config_path +
+          " must be a 40-character SHA-1 hex string";
+      return false;
+    }
+  }
+  *signature = std::move(normalized_signature);
+  return true;
+}
+
+static bool ReadHexByteString(yyjson_val* value,
+                              const std::string& config_path,
+                              std::vector<uint8_t>* bytes,
+                              std::string* error_message) {
+  if (!yyjson_is_str(value)) {
+    *error_message = "muon.json " + config_path + " must be a string";
+    return false;
+  }
+  const auto hex = ReadJsonString(value);
+  if (hex.size() % 2 != 0) {
+    *error_message =
+        "muon.json " + config_path + " must be a hexadecimal byte string";
+    return false;
+  }
+  std::vector<uint8_t> decoded;
+  decoded.reserve(hex.size() / 2);
+  for (auto index = size_t{0}; index < hex.size(); index += 2) {
+    if (!IsAsciiHexDigit(hex[index]) ||
+        !IsAsciiHexDigit(hex[index + 1])) {
+      *error_message =
+          "muon.json " + config_path + " must be a hexadecimal byte string";
+      return false;
+    }
+    decoded.push_back(DecodeAsciiHexByte(hex[index], hex[index + 1]));
+  }
+  *bytes = std::move(decoded);
+  return true;
+}
+
 static bool ReadAssetConfig(yyjson_val* root,
                             MuonConfig* config,
                             std::string* error_message) {
@@ -1993,24 +2184,10 @@ static bool ReadAssetConfig(yyjson_val* root,
 
   const auto signature = yyjson_obj_get(asset, kMuonConfigAssetSignatureKey);
   if (signature != nullptr) {
-    if (!yyjson_is_str(signature)) {
-      *error_message = "muon.json asset.signature must be a string";
+    if (!ReadSha1SignatureString(signature, "asset.signature",
+                                 &config->asset.signature, error_message)) {
       return false;
     }
-    auto normalized_signature = ToLowerAscii(ReadJsonString(signature));
-    if (normalized_signature.size() != 40) {
-      *error_message =
-          "muon.json asset.signature must be a 40-character SHA-1 hex string";
-      return false;
-    }
-    for (const auto character : normalized_signature) {
-      if (!IsAsciiHexDigit(character)) {
-        *error_message =
-            "muon.json asset.signature must be a 40-character SHA-1 hex string";
-        return false;
-      }
-    }
-    config->asset.signature = std::move(normalized_signature);
     config->asset.has_signature = true;
   }
 
@@ -2018,28 +2195,10 @@ static bool ReadAssetConfig(yyjson_val* root,
   if (salt == nullptr) {
     return true;
   }
-  if (!yyjson_is_str(salt)) {
-    *error_message = "muon.json asset.salt must be a string";
+  if (!ReadHexByteString(salt, "asset.salt", &config->asset.salt,
+                         error_message)) {
     return false;
   }
-  const auto salt_hex = ReadJsonString(salt);
-  if (salt_hex.size() % 2 != 0) {
-    *error_message = "muon.json asset.salt must be a hexadecimal byte string";
-    return false;
-  }
-  std::vector<uint8_t> salt_bytes;
-  salt_bytes.reserve(salt_hex.size() / 2);
-  for (auto index = size_t{0}; index < salt_hex.size(); index += 2) {
-    if (!IsAsciiHexDigit(salt_hex[index]) ||
-        !IsAsciiHexDigit(salt_hex[index + 1])) {
-      *error_message =
-          "muon.json asset.salt must be a hexadecimal byte string";
-      return false;
-    }
-    salt_bytes.push_back(DecodeAsciiHexByte(salt_hex[index],
-                                            salt_hex[index + 1]));
-  }
-  config->asset.salt = std::move(salt_bytes);
   config->asset.has_salt = true;
   return true;
 }
@@ -2121,6 +2280,13 @@ static bool ReadPluginConfig(yyjson_val* root,
     return false;
   }
 
+  if (!ReadPluginModeConfig(plugin, config, error_message) ||
+      !ReadStringArray(plugin, kMuonConfigPluginPagesKey, "plugin.pages",
+                       &config->browser.plugin.allow, error_message) ||
+      !ReadPluginCapabilitiesConfig(plugin, config, error_message)) {
+    return false;
+  }
+
   const auto plugin_path = yyjson_obj_get(plugin, kMuonConfigPluginPathKey);
   if (plugin_path != nullptr) {
     if (!yyjson_is_str(plugin_path)) {
@@ -2179,6 +2345,52 @@ static bool ReadPluginConfig(yyjson_val* root,
     }
     plugin_names.insert(plugin_config.name);
 
+    const auto signature_value =
+        yyjson_obj_get(entry, kMuonConfigPluginEntrySignatureKey);
+    if (signature_value != nullptr) {
+      if (plugin_config.name == kMuonInternalPluginName) {
+        *error_message =
+            "muon.json " + config_path +
+            ".signature is not supported for internal plugins";
+        return false;
+      }
+      if (!ReadSha1SignatureString(signature_value, config_path + ".signature",
+                                   &plugin_config.signature, error_message)) {
+        return false;
+      }
+      plugin_config.has_signature = true;
+    }
+
+    const auto salt_value =
+        yyjson_obj_get(entry, kMuonConfigPluginEntrySaltKey);
+    if (salt_value != nullptr) {
+      if (plugin_config.name == kMuonInternalPluginName) {
+        *error_message =
+            "muon.json " + config_path +
+            ".salt is not supported for internal plugins";
+        return false;
+      }
+      if (!ReadHexByteString(salt_value, config_path + ".salt",
+                             &plugin_config.salt, error_message)) {
+        return false;
+      }
+      plugin_config.has_salt = true;
+    }
+    if (plugin_config.has_signature && !plugin_config.has_salt) {
+      *error_message =
+          "muon.json " + config_path + ".signature requires " + config_path +
+          ".salt";
+      return false;
+    }
+
+    if (yyjson_obj_get(entry, kMuonConfigPluginEntryAllowKey) == nullptr &&
+        yyjson_obj_get(entry, kMuonConfigPluginEntryImportsKey) != nullptr) {
+      *error_message =
+          "muon.json " + config_path +
+          ".allow is required in runtime config; validate imports require "
+          "Vite capability generation";
+      return false;
+    }
     if (!ReadRequiredStringArray(entry, kMuonConfigPluginEntryAllowKey,
                                  config_path + ".allow",
                                  &plugin_config.allow, error_message)) {
@@ -2302,6 +2514,7 @@ static bool MergeJsonArray(yyjson_mut_doc* target_document,
 static bool MergeJsonObject(yyjson_mut_doc* target_document,
                             yyjson_mut_val* target_object,
                             yyjson_val* source_object,
+                            const std::string& config_path,
                             std::string* error_message) {
   size_t index;
   size_t max;
@@ -2310,16 +2523,28 @@ static bool MergeJsonObject(yyjson_mut_doc* target_document,
   yyjson_obj_foreach(source_object, index, max, key, value) {
     const auto key_string = yyjson_get_str(key);
     const auto key_size = yyjson_get_len(key);
+    const auto next_config_path =
+        config_path.empty() ? std::string(key_string)
+                            : config_path + "." + key_string;
     const auto target_value =
         yyjson_mut_obj_getn(target_object, key_string, key_size);
     if (yyjson_mut_is_obj(target_value) && yyjson_is_obj(value)) {
       if (!MergeJsonObject(target_document, target_value, value,
-                           error_message)) {
+                           next_config_path, error_message)) {
         return false;
       }
       continue;
     }
     if (yyjson_mut_is_arr(target_value) && yyjson_is_arr(value)) {
+      if (next_config_path == "plugin.pages" ||
+          next_config_path == "plugin.plugins" ||
+          next_config_path == "plugin.capabilities") {
+        if (!PutMergedJsonValue(target_document, target_object, key, value,
+                                error_message)) {
+          return false;
+        }
+        continue;
+      }
       if (!MergeJsonArray(target_document, target_value, value,
                           error_message)) {
         return false;
@@ -2339,6 +2564,7 @@ static bool ReadBootstrapConfig(yyjson_val* root,
                                 std::string* error_message) {
   config->default_version_policy = "tested";
   config->desktop_id = "muon";
+  config->app_id = SanitizeAppId(GetStartupAppId());
   const auto bootstrap = yyjson_obj_get(root, kMuonConfigBootstrapKey);
   if (bootstrap == nullptr) {
     return true;
@@ -2360,6 +2586,18 @@ static bool ReadBootstrapConfig(yyjson_val* root,
       return false;
     }
     config->desktop_id = desktop_id;
+  }
+
+  const auto app_id_value = yyjson_obj_get(bootstrap, kMuonConfigAppIdKey);
+  if (app_id_value != nullptr) {
+    if (!yyjson_is_str(app_id_value)) {
+      *error_message = "muon.json bootstrap.appId must be a string";
+      return false;
+    }
+    const auto app_id = TrimAscii(yyjson_get_str(app_id_value));
+    if (!app_id.empty()) {
+      config->app_id = SanitizeAppId(app_id);
+    }
   }
 
   const auto value =
@@ -2440,12 +2678,9 @@ static bool LoadMuonConfigFromEmbeddedPayload(
   }
 
   MuonConfigPathBases path_bases;
-  path_bases.default_browser_profile = embedded_base_directory;
-  path_bases.has_default_browser_profile = true;
   UpdateConfigPathBases(root, embedded_base_directory, &path_bases);
   ResolveConfigPathsFromBases(root, path_bases, config);
-  return ResolveDefaultConfigPathsFromBases(root, path_bases, config,
-                                            error_message);
+  return ResolveDefaultConfigPathsFromBases(root, config, error_message);
 }
 
 static bool LoadMuonConfigPathSequence(
@@ -2483,16 +2718,13 @@ static bool LoadMuonConfigPathSequence(
     if (document.value == nullptr) {
       continue;
     }
-    path_bases.default_browser_profile = base_directory;
-    path_bases.has_default_browser_profile = true;
-
     const auto root = yyjson_doc_get_root(document.value);
     if (!yyjson_is_obj(root)) {
       *error_message = "muon.json root must be an object";
       return false;
     }
     UpdateConfigPathBases(root, base_directory, &path_bases);
-    if (!MergeJsonObject(merged_document.value, merged_root, root,
+    if (!MergeJsonObject(merged_document.value, merged_root, root, "",
                          error_message)) {
       return false;
     }
@@ -2510,8 +2742,7 @@ static bool LoadMuonConfigPathSequence(
     return false;
   }
   ResolveConfigPathsFromBases(root, path_bases, config);
-  return ResolveDefaultConfigPathsFromBases(root, path_bases, config,
-                                            error_message);
+  return ResolveDefaultConfigPathsFromBases(root, config, error_message);
 }
 
 std::filesystem::path GetDefaultMuonConfigPath() {

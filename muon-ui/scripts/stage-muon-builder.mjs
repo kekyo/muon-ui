@@ -211,8 +211,8 @@ const stageTarget = async (target, source) => {
 };
 
 const stageDefaultWindowsIcon = async () => {
-  const sourcePath = resolve("..", "images", "muon-bootstrap-256.png");
-  const destinationPath = resolve("dist", "native", "muon-bootstrap.png");
+  const sourcePath = resolve("..", "images", "muon-256.png");
+  const destinationPath = resolve("dist", "native", "muon-256.png");
   await mkdir(dirname(destinationPath), { recursive: true });
   await copyFile(sourcePath, destinationPath);
 };

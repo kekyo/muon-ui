@@ -31,6 +31,10 @@ import {
   createMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { packMuonApp } from "../src/pack.js";
+import {
+  getMuonTargetDescriptor,
+  getMuonTargetRuntimeAppId,
+} from "../src/targets.js";
 
 const execFileAsync = promisify(execFile);
 const defaultWindowsE2ePort = 39397;
@@ -49,6 +53,12 @@ interface WindowsCommandResult {
   exitCode: number | null;
   stderr: string;
   stdout: string;
+}
+
+interface WindowsNsisInstallIdentity {
+  displayName: string;
+  installDirectoryName: string;
+  runtimeAppId: string;
 }
 
 const readRequiredEnvironmentValue = (
@@ -244,39 +254,67 @@ const expectWindowsCommandSucceeded = (
 
 const createFakeMuonPackageDist = async (
   root: string,
-  target: MuonBuildTarget,
+  targets: readonly MuonBuildTarget[],
 ): Promise<string> => {
   const packageDirectory = join(root, "package-dist");
-  const runtimeDirectory = join(packageDirectory, "runtime", target);
-  const nativeDirectory = join(packageDirectory, "native", target);
-  await mkdir(runtimeDirectory, { recursive: true });
-  await mkdir(nativeDirectory, { recursive: true });
-  await writeExecutable(
-    join(runtimeDirectory, "muon-core.exe"),
-    Buffer.concat([
-      Buffer.from("core prefix\n"),
-      createMuonEmbeddedConfigSlot(),
-      Buffer.from("\ncore suffix\n"),
-    ]),
-  );
-  await writeFile(join(runtimeDirectory, "libmuon-ui.dll"), "ui\n");
-  await writeFile(join(runtimeDirectory, "libcardio.dll"), "cardio\n");
-  await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
-  await writeExecutable(
-    join(nativeDirectory, "muon-bootstrap.exe"),
-    Buffer.concat([
-      Buffer.from("bootstrap prefix\n"),
-      createMuonBootstrapEmbeddedConfigSlot(),
-      Buffer.from("\nbootstrap suffix\n"),
-    ]),
-  );
+  for (const target of targets) {
+    const runtimeDirectory = join(packageDirectory, "runtime", target);
+    const nativeDirectory = join(packageDirectory, "native", target);
+    await mkdir(runtimeDirectory, { recursive: true });
+    await mkdir(nativeDirectory, { recursive: true });
+    await writeExecutable(
+      join(runtimeDirectory, "muon-core.exe"),
+      Buffer.concat([
+        Buffer.from("core prefix\n"),
+        createMuonEmbeddedConfigSlot(),
+        Buffer.from("\ncore suffix\n"),
+      ]),
+    );
+    await writeFile(join(runtimeDirectory, "libmuon-ui.dll"), "ui\n");
+    await writeFile(join(runtimeDirectory, "libcardio.dll"), "cardio\n");
+    await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
+    await writeExecutable(
+      join(nativeDirectory, "muon-bootstrap.exe"),
+      Buffer.concat([
+        Buffer.from("bootstrap prefix\n"),
+        createMuonBootstrapEmbeddedConfigSlot(),
+        Buffer.from("\nbootstrap suffix\n"),
+      ]),
+    );
+  }
   return packageDirectory;
 };
+
+const createWindowsNsisInstallIdentity = (
+  packageName: string,
+  appId: string,
+  target: MuonBuildTarget,
+): WindowsNsisInstallIdentity => {
+  const descriptor = getMuonTargetDescriptor(target);
+  if (descriptor.os !== "windows") {
+    throw new Error(`Unsupported NSIS e2e target: ${target}`);
+  }
+  return {
+    displayName: `${packageName} (${descriptor.arch})`,
+    installDirectoryName: `${packageName}-${descriptor.arch}`,
+    runtimeAppId: getMuonTargetRuntimeAppId(appId, target),
+  };
+};
+
+const createPowerShellIdentityObjects = (
+  identities: readonly WindowsNsisInstallIdentity[],
+): string =>
+  identities
+    .map(
+      (identity) =>
+        `[pscustomobject]@{ DisplayName = ${quotePowerShellString(identity.displayName)}; InstallDirectoryName = ${quotePowerShellString(identity.installDirectoryName)}; RuntimeAppId = ${quotePowerShellString(identity.runtimeAppId)} }`,
+    )
+    .join(",\n");
 
 const writeViteProject = async (
   root: string,
   packageDirectory: string,
-  target: MuonBuildTarget,
+  targets: readonly MuonBuildTarget[],
   packageName: string,
 ): Promise<void> => {
   const vitePluginUrl = pathToFileURL(resolve("dist", "vite.mjs")).href;
@@ -314,7 +352,7 @@ const writeViteProject = async (
       "export default {",
       "  build: { outDir: 'web-dist' },",
       "  plugins: [",
-      `    muon({ build: { targets: [${JSON.stringify(target)}], packageDirectory: ${JSON.stringify(packageDirectory)} } }),`,
+      `    muon({ build: { targets: ${JSON.stringify(targets)}, packageDirectory: ${JSON.stringify(packageDirectory)} } }),`,
       "  ],",
       "};",
     ].join("\n"),
@@ -347,39 +385,59 @@ const removeRemoteDirectoryIfExists = async (
   }
 };
 
-const createCleanupScript = (packageName: string, appId: string): string => `
+const createCleanupScript = (
+  identities: readonly WindowsNsisInstallIdentity[],
+): string => `
 $ErrorActionPreference = 'Stop'
-$packageName = ${quotePowerShellString(packageName)}
-$appId = ${quotePowerShellString(appId)}
-$installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $packageName)
-$stateDir = Join-Path $env:LOCALAPPDATA $appId
-$shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $packageName + '.lnk')
-$registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $appId
-$uninstaller = Join-Path $installDir 'Uninstall.exe'
 Stop-Process -Name SystemSettings -Force -ErrorAction SilentlyContinue
-if (Test-Path -LiteralPath $uninstaller) {
-  $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
-  if ($process.ExitCode -ne 0) {
-    Write-Output ('cleanup uninstaller exited with ' + $process.ExitCode)
+$identities = @(
+${createPowerShellIdentityObjects(identities)}
+)
+foreach ($identity in $identities) {
+  $installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $identity.InstallDirectoryName)
+  $stateDir = Join-Path $env:LOCALAPPDATA $identity.RuntimeAppId
+  $shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $identity.DisplayName + '.lnk')
+  $registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $identity.RuntimeAppId
+  $uninstaller = Join-Path $installDir 'Uninstall.exe'
+  if (Test-Path -LiteralPath $uninstaller) {
+    $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+      Write-Output ('cleanup uninstaller exited with ' + $process.ExitCode)
+    }
   }
+  Remove-Item -LiteralPath $registryPath -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $stateDir -Recurse -Force -ErrorAction SilentlyContinue
 }
-Remove-Item -LiteralPath $registryPath -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $stateDir -Recurse -Force -ErrorAction SilentlyContinue
 `;
 
-const createInstallStateAssertionScript = (packageName: string): string => `
+const createInstallStateAssertionScript = (
+  identities: readonly WindowsNsisInstallIdentity[],
+): string => `
 $ErrorActionPreference = 'Stop'
-$packageName = ${quotePowerShellString(packageName)}
-$installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $packageName)
-$shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $packageName + '.lnk')
+$identities = @(
+${createPowerShellIdentityObjects(identities)}
+)
 $errors = New-Object System.Collections.Generic.List[string]
-if (-not (Test-Path -LiteralPath $installDir)) {
-  $errors.Add('install directory is missing: ' + $installDir)
-}
-if (-not (Test-Path -LiteralPath $shortcutPath)) {
-  $errors.Add('start menu shortcut is missing: ' + $shortcutPath)
+foreach ($identity in $identities) {
+  $installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $identity.InstallDirectoryName)
+  $shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $identity.DisplayName + '.lnk')
+  $registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $identity.RuntimeAppId
+  if (-not (Test-Path -LiteralPath $installDir)) {
+    $errors.Add('install directory is missing: ' + $installDir)
+  }
+  if (-not (Test-Path -LiteralPath $shortcutPath)) {
+    $errors.Add('start menu shortcut is missing: ' + $shortcutPath)
+  }
+  if (-not (Test-Path -LiteralPath $registryPath)) {
+    $errors.Add('registry key is missing: ' + $registryPath)
+  } else {
+    $displayName = (Get-ItemProperty -LiteralPath $registryPath).DisplayName
+    if ($displayName -ne $identity.DisplayName) {
+      $errors.Add('registry DisplayName mismatch: ' + $displayName)
+    }
+  }
 }
 if ($errors.Count -gt 0) {
   $errors | ForEach-Object { Write-Error $_ }
@@ -400,16 +458,18 @@ Write-Output 'installer completed'
 `;
 
 const createRemovalStateAssertionScript = (
-  packageName: string,
-  appId: string,
+  removed: WindowsNsisInstallIdentity,
+  remaining: WindowsNsisInstallIdentity,
 ): string => `
 $ErrorActionPreference = 'Stop'
-$packageName = ${quotePowerShellString(packageName)}
-$appId = ${quotePowerShellString(appId)}
-$installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $packageName)
-$stateDir = Join-Path $env:LOCALAPPDATA $appId
-$shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $packageName + '.lnk')
-$registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $appId
+$removed = ${createPowerShellIdentityObjects([removed])}
+$remaining = ${createPowerShellIdentityObjects([remaining])}
+$installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $removed.InstallDirectoryName)
+$stateDir = Join-Path $env:LOCALAPPDATA $removed.RuntimeAppId
+$shortcutPath = Join-Path $env:APPDATA ('Microsoft\\Windows\\Start Menu\\Programs\\' + $removed.DisplayName + '.lnk')
+$registryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $removed.RuntimeAppId
+$remainingInstallDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $remaining.InstallDirectoryName)
+$remainingRegistryPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + $remaining.RuntimeAppId
 $errors = New-Object System.Collections.Generic.List[string]
 if (Test-Path -LiteralPath $installDir) {
   $errors.Add('install directory still exists: ' + $installDir)
@@ -423,6 +483,12 @@ if (Test-Path -LiteralPath $registryPath) {
 if (Test-Path -LiteralPath $stateDir) {
   $errors.Add('runtime state directory still exists: ' + $stateDir)
 }
+if (-not (Test-Path -LiteralPath $remainingInstallDir)) {
+  $errors.Add('remaining install directory is missing: ' + $remainingInstallDir)
+}
+if (-not (Test-Path -LiteralPath $remainingRegistryPath)) {
+  $errors.Add('remaining registry key is missing: ' + $remainingRegistryPath)
+}
 if ($errors.Count -gt 0) {
   $errors | ForEach-Object { Write-Error $_ }
   exit 1
@@ -434,15 +500,18 @@ const createRuntimeStateFixtureScript = (appId: string): string => `
 $ErrorActionPreference = 'Stop'
 $appId = ${quotePowerShellString(appId)}
 $stateDir = Join-Path $env:LOCALAPPDATA $appId
-$targetStateDir = Join-Path $stateDir 'windows-amd64'
+$targetStateDir = Join-Path $stateDir 'runtime'
 New-Item -ItemType Directory -Force -Path $targetStateDir | Out-Null
 Set-Content -LiteralPath (Join-Path $targetStateDir 'state.txt') -Value 'state' -Encoding UTF8
 Write-Output 'runtime state fixture created'
 `;
 
-const createSettingsUninstallScript = (packageName: string): string => `
+const createSettingsUninstallScript = (
+  identity: WindowsNsisInstallIdentity,
+): string => `
 $ErrorActionPreference = 'Stop'
-$packageName = ${quotePowerShellString(packageName)}
+$displayName = ${quotePowerShellString(identity.displayName)}
+$installDirectoryName = ${quotePowerShellString(identity.installDirectoryName)}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
@@ -589,11 +658,11 @@ function Set-EditValue($edit, [string] $value) {
 
 function Find-AppNameElement($window) {
   $items = Get-VisibleDescendants $window
-  $exact = @($items | Where-Object { $_.Current.Name -eq $packageName })
+  $exact = @($items | Where-Object { $_.Current.Name -eq $displayName })
   if ($exact.Count -gt 0) {
     return $exact[0]
   }
-  $contains = @($items | Where-Object { $_.Current.Name -like ('*' + $packageName + '*') })
+  $contains = @($items | Where-Object { $_.Current.Name -like ('*' + $displayName + '*') })
   if ($contains.Count -gt 0) {
     return $contains[0]
   }
@@ -642,9 +711,9 @@ try {
 }
 Start-Sleep -Milliseconds 1200
 $search = Wait-Until { Find-SearchAppsEdit $window } 30000 'Timed out waiting for the Installed apps search field.'
-Set-EditValue $search $packageName
+Set-EditValue $search $displayName
 Start-Sleep -Milliseconds 1200
-$appElement = Wait-Until { Find-AppNameElement $window } 30000 ('Timed out waiting for installed app in Settings: ' + $packageName)
+$appElement = Wait-Until { Find-AppNameElement $window } 30000 ('Timed out waiting for installed app in Settings: ' + $displayName)
 $moreOptions = Wait-Until { Find-MoreOptionsButton $window $appElement } 30000 'Timed out waiting for the app options button.'
 Click-Element $moreOptions
 Start-Sleep -Milliseconds 500
@@ -657,7 +726,7 @@ $confirmButton = Wait-Until {
   Find-NamedControl @('^Uninstall$', '^アンインストール$') @($controlTypeButton)
 } 15000 'Timed out waiting for the Settings uninstall confirmation button.'
 Click-Element $confirmButton
-$installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $packageName)
+$installDir = Join-Path $env:LOCALAPPDATA ('Programs\\' + $installDirectoryName)
 $null = Wait-Until { -not (Test-Path -LiteralPath $installDir) } 90000 'Timed out waiting for the app to be removed.'
 Stop-Process -Name SystemSettings -Force -ErrorAction SilentlyContinue
 [ordered] @{
@@ -739,20 +808,31 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
     const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
     const packageName = `muon-nsis-e2e-${suffix}`;
     const appId = `muon.nsis.e2e.${suffix}`;
+    const windowsI686Identity = createWindowsNsisInstallIdentity(
+      packageName,
+      appId,
+      "windows-i686",
+    );
+    const windowsAmd64Identity = createWindowsNsisInstallIdentity(
+      packageName,
+      appId,
+      "windows-amd64",
+    );
+    const identities = [windowsI686Identity, windowsAmd64Identity] as const;
     const localRoot = await createTemporaryDirectory("muon-nsis-e2e-");
     const remoteDirectory = await createRemoteTestDirectory(
       windowsAgent,
       windowsE2eEnvironment.environment,
       packageName,
     );
-    const packageDirectory = await createFakeMuonPackageDist(
-      localRoot,
+    const packageDirectory = await createFakeMuonPackageDist(localRoot, [
+      "windows-i686",
       "windows-amd64",
-    );
+    ]);
     await writeViteProject(
       localRoot,
       packageDirectory,
-      "windows-amd64",
+      ["windows-i686", "windows-amd64"],
       packageName,
     );
 
@@ -760,7 +840,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
       windowsAgent,
       remoteDirectory,
       "cleanup-before",
-      createCleanupScript(packageName, appId),
+      createCleanupScript(identities),
       120000,
     );
 
@@ -773,35 +853,44 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
         packageName,
         packageVersion: "1.2.3",
         root: localRoot,
-        targets: ["windows-amd64"],
+        targets: ["windows-i686", "windows-amd64"],
         types: ["nsis"],
       });
-      const artifact = result.artifacts.find((entry) => entry.type === "nsis");
-      expect(artifact).toBeDefined();
-
-      const remoteInstallerPath = joinWindowsPath(
-        remoteDirectory,
-        basename(artifact?.path ?? "setup.exe"),
-      );
-      await windowsAgent.files.writeFile(
-        remoteInstallerPath,
-        await readFile(artifact?.path ?? ""),
+      const artifacts = (["windows-i686", "windows-amd64"] as const).map(
+        (target) => {
+          const artifact = result.artifacts.find(
+            (entry) => entry.type === "nsis" && entry.target === target,
+          );
+          expect(artifact).toBeDefined();
+          return artifact;
+        },
       );
 
-      const installResult = await runWindowsPowerShell(
-        windowsAgent,
-        remoteDirectory,
-        "installer",
-        createInstallerScript(remoteInstallerPath),
-        180000,
-      );
-      expectWindowsCommandSucceeded(installResult, "NSIS installer");
+      for (const artifact of artifacts) {
+        const remoteInstallerPath = joinWindowsPath(
+          remoteDirectory,
+          basename(artifact?.path ?? "setup.exe"),
+        );
+        await windowsAgent.files.writeFile(
+          remoteInstallerPath,
+          await readFile(artifact?.path ?? ""),
+        );
+
+        const installResult = await runWindowsPowerShell(
+          windowsAgent,
+          remoteDirectory,
+          `installer-${basename(artifact?.path ?? "setup.exe")}`,
+          createInstallerScript(remoteInstallerPath),
+          180000,
+        );
+        expectWindowsCommandSucceeded(installResult, "NSIS installer");
+      }
 
       const installStateResult = await runWindowsPowerShell(
         windowsAgent,
         remoteDirectory,
         "assert-installed",
-        createInstallStateAssertionScript(packageName),
+        createInstallStateAssertionScript(identities),
         120000,
       );
       expectWindowsCommandSucceeded(
@@ -813,7 +902,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
         windowsAgent,
         remoteDirectory,
         "create-runtime-state-fixture",
-        createRuntimeStateFixtureScript(appId),
+        createRuntimeStateFixtureScript(windowsAmd64Identity.runtimeAppId),
         120000,
       );
       expectWindowsCommandSucceeded(
@@ -825,11 +914,14 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
         windowsAgent,
         remoteDirectory,
         "settings-uninstall",
-        createSettingsUninstallScript(packageName),
+        createSettingsUninstallScript(windowsAmd64Identity),
         180000,
       );
       if (!isWindowsCommandSucceeded(uninstallResult)) {
-        await saveWindowsDiagnostics(windowsAgent, packageName);
+        await saveWindowsDiagnostics(
+          windowsAgent,
+          windowsAmd64Identity.displayName,
+        );
       }
       expectWindowsCommandSucceeded(
         uninstallResult,
@@ -852,7 +944,10 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
         windowsAgent,
         remoteDirectory,
         "assert-removed",
-        createRemovalStateAssertionScript(packageName, appId),
+        createRemovalStateAssertionScript(
+          windowsAmd64Identity,
+          windowsI686Identity,
+        ),
         120000,
       );
       expectWindowsCommandSucceeded(
@@ -864,7 +959,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
         windowsAgent,
         remoteDirectory,
         "cleanup-after",
-        createCleanupScript(packageName, appId),
+        createCleanupScript(identities),
         120000,
       );
       await removeRemoteDirectoryIfExists(windowsAgent, remoteDirectory);

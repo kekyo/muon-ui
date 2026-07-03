@@ -7,25 +7,41 @@ import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";
 
 import { buildMuonApp, type MuonBuildOptions } from "./build.js";
+import {
+  createMuonCapabilityModuleResolver,
+  type MuonCapabilityModuleResolver,
+  type MuonRuntimePluginConfig,
+} from "./capability.js";
+import {
+  resolveMuonPluginAccessOptions,
+  type MuonPluginAccessEntryOptions,
+  type MuonPluginAccessImportOptions,
+  type MuonPluginAccessOptions,
+  type MuonResolvedPluginAccessOptions,
+} from "./plugin-access.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
 import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
 
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 /**
  * Windows PE and NSIS resource metadata options.
  */
 export interface MuonWindowsResourceOptions {
   /**
-   * Windows icon PNG file path.
+   * Windows-specific icon PNG file path override.
    *
    * @remarks Only `.png` files are accepted as app inputs. Muon generates the
    * required Windows `.ico` file automatically when updating PE resources or
-   * creating NSIS installers. Relative paths are resolved from the source that
-   * supplied the option.
-   * @defaultValue Uses `windows.resource.iconPath`, then the packaged Muon
-   * bootstrap PNG icon when available.
+   * creating NSIS installers. Use top-level `iconPath` for a shared static
+   * application icon. Relative paths are resolved from the source that supplied
+   * the option.
+   * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
+   * icon.
    */
   iconPath?: string;
 
@@ -113,11 +129,13 @@ export interface MuonLinuxDesktopOptions {
   comment?: string;
 
   /**
-   * Linux desktop icon PNG file path.
+   * Linux-specific desktop icon PNG file path override.
    *
    * @remarks Only `.png` files are accepted as app inputs. Relative paths are
-   * resolved from the source that supplied the option.
-   * @defaultValue Uses the packaged Muon bootstrap PNG icon when available.
+   * resolved from the source that supplied the option. Use top-level
+   * `iconPath` for a shared static application icon.
+   * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
+   * icon when available.
    */
   iconPath?: string;
 
@@ -165,7 +183,10 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
-   * Stable application identifier used for portable runtime state.
+   * Stable base application identifier used for portable runtime state.
+   *
+   * @remarks Windows target distributions embed `<appId>.<arch>` as their
+   * runtime app identifier. Linux targets embed this value unchanged.
    *
    * @defaultValue The sanitized package name, or `"muon-app"` when unavailable.
    */
@@ -185,6 +206,18 @@ export interface MuonViteBuildOptions {
    * uses an empty config when none exists.
    */
   configPath?: string;
+
+  /**
+   * Static application icon PNG file path.
+   *
+   * @remarks The icon is used for Windows PE/NSIS resources, Linux desktop
+   * entries, and the generated initial title bar icon asset. Target-specific
+   * icon paths in `windowsResource` or `linuxDesktop` override this value for
+   * that target.
+   * @defaultValue Uses top-level `muon.json` `iconPath`, `project.json`, then
+   * the packaged `muon-256.png` icon.
+   */
+  iconPath?: string;
 
   /**
    * Windows PE and NSIS resource metadata.
@@ -216,6 +249,26 @@ export interface MuonViteBuildOptions {
    * @defaultValue A random 16-byte salt.
    */
   assetSalt?: Uint8Array;
+}
+
+/**
+ * Import-side capability rule for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessImportOptions extends MuonPluginAccessImportOptions {}
+
+/**
+ * Plugin entry and capability import configuration for Muon virtual modules.
+ */
+export interface MuonVitePluginAccessEntryOptions extends MuonPluginAccessEntryOptions {}
+
+/**
+ * Plugin access configuration for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessOptions extends MuonPluginAccessOptions {
+  /**
+   * Runtime plugin entries and validate-mode import rules.
+   */
+  plugins?: readonly MuonVitePluginAccessEntryOptions[];
 }
 
 /**
@@ -267,6 +320,18 @@ export interface MuonVitePluginOptions {
   enableDebugger?: boolean;
 
   /**
+   * Plugin access mode and virtual module capability imports.
+   *
+   * @remarks Omit this option to use the `plugin` section from `muon.json`.
+   * Pass plugin entries with import rules to override `muon.json` and allow
+   * virtual modules such as `muon:executor`. Pass `false` to use simple
+   * window-global exposure.
+   * @defaultValue `muon.json` plugin config, or validate mode with no
+   * capability imports.
+   */
+  pluginAccess?: false | MuonVitePluginAccessOptions;
+
+  /**
    * Build app distributions from Vite output.
    *
    * @remarks Set false to disable the build hook while keeping the development
@@ -285,6 +350,9 @@ export interface MuonVitePluginOptions {
  */
 const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   let resolvedConfig: ResolvedConfig | undefined = undefined;
+  let capabilityResolver: MuonCapabilityModuleResolver | undefined = undefined;
+  let resolvedPluginAccess: MuonResolvedPluginAccessOptions | undefined =
+    undefined;
 
   const plugin: Plugin = {
     name: "muon",
@@ -299,13 +367,42 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
         },
       };
     },
-    configResolved: (config) => {
+    configResolved: async (config): Promise<void> => {
       resolvedConfig = config;
+      resolvedPluginAccess = await resolveMuonPluginAccessOptions({
+        root: config.root,
+        configPath: resolveMuonConfigPathForViteCommand(config, options),
+        pluginAccess: options.pluginAccess,
+        ...(config.command === "serve"
+          ? {
+              onConfigReadError: (error: unknown): void => {
+                config.logger.warn(
+                  `Muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
+                );
+              },
+            }
+          : {}),
+      });
+      capabilityResolver =
+        resolvedPluginAccess.mode === "validate"
+          ? createMuonCapabilityModuleResolver(
+              config.root,
+              resolvedPluginAccess.capabilityOptions,
+            )
+          : undefined;
     },
+    resolveId: (source, importer) =>
+      capabilityResolver?.resolveId(source, importer)?.id,
+    load: (id) => capabilityResolver?.load(id),
     configureServer: async (server) => {
       await startMuonViteBrowserBridge({
         server,
         pluginOptions: options,
+        getRuntimePluginConfig: () =>
+          resolveMuonRuntimePluginConfig(
+            capabilityResolver,
+            resolvedPluginAccess,
+          ),
         platform: process.platform,
         architecture: process.arch,
         environment: process.env,
@@ -326,7 +423,16 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
       const buildOptions =
         typeof options.build === "object" ? options.build : {};
-      await buildMuonApp(createMuonBuildOptions(resolvedConfig, buildOptions));
+      await buildMuonApp(
+        createMuonBuildOptions(
+          resolvedConfig,
+          buildOptions,
+          resolveMuonRuntimePluginConfig(
+            capabilityResolver,
+            resolvedPluginAccess,
+          ),
+        ),
+      );
     },
   };
 
@@ -365,6 +471,7 @@ const createMuonWatchOptions = (
 const createMuonBuildOptions = (
   config: ResolvedConfig,
   buildOptions: MuonViteBuildOptions,
+  runtimePluginConfig: MuonRuntimePluginConfig,
 ): MuonBuildOptions => {
   const outDir = isAbsolute(config.build.outDir)
     ? config.build.outDir
@@ -393,6 +500,9 @@ const createMuonBuildOptions = (
   if (buildOptions.configPath !== undefined) {
     options.configPath = buildOptions.configPath;
   }
+  if (buildOptions.iconPath !== undefined) {
+    options.iconPath = buildOptions.iconPath;
+  }
   if (buildOptions.windowsResource !== undefined) {
     options.windowsResource = buildOptions.windowsResource;
   }
@@ -405,8 +515,33 @@ const createMuonBuildOptions = (
   if (buildOptions.assetSalt !== undefined) {
     options.assetSalt = buildOptions.assetSalt;
   }
+  options.runtimePluginConfig = runtimePluginConfig;
 
   return options;
 };
+
+const resolveMuonConfigPathForViteCommand = (
+  config: ResolvedConfig,
+  options: MuonVitePluginOptions,
+): string | undefined => {
+  if (config.command !== "build" || typeof options.build !== "object") {
+    return undefined;
+  }
+  return options.build.configPath;
+};
+
+const resolveMuonRuntimePluginConfig = (
+  capabilityResolver: MuonCapabilityModuleResolver | undefined,
+  pluginAccess: MuonResolvedPluginAccessOptions | undefined,
+): MuonRuntimePluginConfig =>
+  pluginAccess?.mode === "simple"
+    ? { mode: "simple", ...pluginAccess.runtimeOverlay }
+    : {
+        ...(capabilityResolver?.getRuntimePluginConfig() ?? {
+          mode: "validate",
+          capabilities: [],
+        }),
+        ...(pluginAccess?.runtimeOverlay ?? {}),
+      };
 
 export default muon;

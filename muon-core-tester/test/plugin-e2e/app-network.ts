@@ -5,6 +5,7 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 
 import { expect, it } from "vitest";
 
@@ -60,6 +61,17 @@ interface RuntimeConsoleAPICalledParams {
   }>;
 }
 
+const getLocalBootstrapCefLogPath = (
+  localStateHome: string | undefined,
+): string => {
+  const stateHome =
+    localStateHome ??
+    (process.env.XDG_STATE_HOME?.length
+      ? process.env.XDG_STATE_HOME
+      : join(homedir(), ".local", "state"));
+  return join(stateHome, "muon-bootstrap", "profile", "muon-cef.log");
+};
+
 const waitForConsoleMessage = async (
   driver: CdpDriver,
   type: string,
@@ -103,6 +115,33 @@ const waitForConsoleMessage = async (
       },
     );
   });
+
+const waitForDocumentLocation = async (
+  driver: CdpDriver,
+  expectedHref: string,
+  timeoutMs: number,
+): Promise<{ href: string; origin: string }> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const location = await driver.evaluate<{ href: string; origin: string }>(
+        `({
+          href: document.location.href,
+          origin: document.location.origin,
+        })`,
+      );
+      if (location.href === expectedHref) {
+        return location;
+      }
+    } catch (error) {
+      if (!String(error).includes("Cannot find default execution context")) {
+        throw error;
+      }
+    }
+    await wait(100);
+  }
+  throw new Error(`Timed out waiting for document location: ${expectedHref}`);
+};
 
 const createCrc32Table = (): Uint32Array => {
   const table = new Uint32Array(256);
@@ -210,12 +249,15 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
-      await expect(driver.evaluate("document.location.href")).resolves.toBe(
+      const location = await waitForDocumentLocation(
+        driver,
         MUON_APP_URL,
+        targetTimeoutMs,
       );
-      await expect(driver.evaluate("document.location.origin")).resolves.toBe(
-        "asset://main",
-      );
+      expect(location).toEqual({
+        href: MUON_APP_URL,
+        origin: "asset://main",
+      });
       await expect(driver.evaluate("window.isSecureContext")).resolves.toBe(
         true,
       );
@@ -350,15 +392,11 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
     const assertLogs = async (
       waitForLog: (expected: string) => Promise<void>,
       injectCefLog: boolean,
+      localStateHome: string | undefined = undefined,
     ): Promise<void> => {
       if (injectCefLog) {
         await appendFile(
-          join(
-            DEBUG_MUON_DIRECTORY,
-            ".muon-test-config",
-            ".profile",
-            "muon-cef.log",
-          ),
+          getLocalBootstrapCefLogPath(localStateHome),
           "[0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward\n",
         );
       }
@@ -474,6 +512,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         async (expected) =>
           await waitForMuonStderr(running, expected, targetTimeoutMs),
         true,
+        running.stateDirectory,
       );
     });
   });
@@ -1346,7 +1385,7 @@ try {
     }
   });
 
-  it("exposes plugin APIs in popup pages matching browser.plugin.allow", async () => {
+  it("exposes plugin APIs in popup pages matching plugin.pages", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -1392,7 +1431,7 @@ try {
     }
   });
 
-  it("does not expose plugin APIs in popup pages outside browser.plugin.allow", async () => {
+  it("does not expose plugin APIs in popup pages outside plugin.pages", async () => {
     const server = await startHttpServer((request, response) => {
       response.setHeader("Content-Type", "text/html");
       if (request.url === "/popup.html") {
@@ -1639,7 +1678,7 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
     }
   });
 
-  it("does not expose plugin APIs outside the default browser.plugin.allow", async () => {
+  it("does not expose plugin APIs outside the default plugin.pages", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -1647,7 +1686,7 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
       undefined,
       TEST_PLUGIN_ALLOW_PATTERNS,
       [],
-      null,
+      ["asset://main/**"],
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -1675,7 +1714,7 @@ const waitForImage = (image) => new Promise((resolve, reject) => {
     }
   });
 
-  it("exposes plugin APIs on pages matching browser.plugin.allow", async () => {
+  it("exposes plugin APIs on pages matching plugin.pages", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,

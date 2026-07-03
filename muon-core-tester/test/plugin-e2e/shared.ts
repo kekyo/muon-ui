@@ -47,7 +47,13 @@ import {
   type KeyboardModifier,
   type RemoteAgent,
 } from "agent-rover";
-import { afterEach, describe, expect, type TestContext } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  describe,
+  expect,
+  type TestContext,
+} from "vitest";
 
 import {
   connectToMuonCdp as baseConnectToMuonCdp,
@@ -443,6 +449,7 @@ export interface RunningMuon {
   process: MuonProcessHandle;
   pluginDirectory: string;
   remoteWindows?: RunningWindowsRemoteMuon;
+  stateDirectory?: string;
   stderr: string;
   usesValgrind: boolean;
 }
@@ -514,6 +521,8 @@ export interface BrowserWindowBounds {
 export interface PluginConfigEntry {
   name: string;
   allow: string[];
+  signature?: string;
+  salt?: string;
 }
 
 export interface NetworkAuthorizedOriginConfig {
@@ -649,6 +658,7 @@ export const processExitTimeoutMs = shouldUseValgrind
     ? 30000
     : 5000;
 export const runningProcesses: RunningMuon[] = [];
+let sharedLocalStateDirectory: string | undefined = undefined;
 export const execFileAsync = promisify(execFile);
 const nativeInputSenderCacheDirectory = resolve(
   "..",
@@ -935,6 +945,33 @@ export const getMuonBootstrapExecutable = (directory: string): string =>
       ? "muon-bootstrap.exe"
       : "muon-bootstrap",
   );
+
+const getLocalFallbackAppIdForExecutable = (executable: string): string => {
+  const executableName = executable.split(/[\\/]+/u).at(-1) ?? executable;
+  return executableName.toLowerCase().includes("bootstrap")
+    ? "muon-bootstrap"
+    : "muon-core";
+};
+
+const getLocalDefaultProfilePath = (
+  stateHome: string,
+  executable: string,
+): string =>
+  join(stateHome, getLocalFallbackAppIdForExecutable(executable), "profile");
+
+const getSharedLocalStateDirectory = async (): Promise<string> => {
+  sharedLocalStateDirectory ??= await mkdtemp(
+    join(tmpdir(), "muon-local-state-"),
+  );
+  return sharedLocalStateDirectory;
+};
+
+afterAll(async () => {
+  if (sharedLocalStateDirectory !== undefined) {
+    await rm(sharedLocalStateDirectory, { recursive: true, force: true });
+    sharedLocalStateDirectory = undefined;
+  }
+});
 
 export const createBrowserShortcutConfig = (
   overrides: Partial<BrowserShortcutConfig>,
@@ -1823,7 +1860,7 @@ export const dispatchDevToolsShortcut = async (
   event: KeyboardShortcutEvent,
 ): Promise<CdpTarget> => {
   const previousTargetIds = await getCurrentTargetIds();
-  await driver.send("Input.dispatchKeyEvent", event);
+  await dispatchKeyboardShortcut(driver, event);
   return await waitForDevToolsTarget(previousTargetIds, targetTimeoutMs);
 };
 
@@ -1832,17 +1869,28 @@ export const expectNoDevTools = async (
   event: KeyboardShortcutEvent,
 ): Promise<void> => {
   const previousTargetIds = await getCurrentTargetIds();
-  await driver.send("Input.dispatchKeyEvent", event);
+  await dispatchKeyboardShortcut(driver, event);
   await expect(waitForDevToolsTarget(previousTargetIds, 1000)).rejects.toThrow(
     "Timed out waiting for DevTools target",
   );
 };
+
+const createKeyboardShortcutKeyUpEvent = (
+  event: KeyboardShortcutEvent,
+): KeyboardShortcutEvent => ({
+  ...event,
+  type: "keyUp",
+});
 
 export const dispatchKeyboardShortcut = async (
   driver: CdpDriver,
   event: KeyboardShortcutEvent,
 ): Promise<void> => {
   await driver.send("Input.dispatchKeyEvent", event);
+  await driver.send(
+    "Input.dispatchKeyEvent",
+    createKeyboardShortcutKeyUpEvent(event),
+  );
 };
 
 export const expectNoPageLoad = async (
@@ -2079,6 +2127,8 @@ export const createPluginConfigEntries = (
   pluginNames: string[],
   allowPatterns: string[],
   includeStandardPlugins = true,
+  pluginSignatureByName: Readonly<Record<string, string>> = {},
+  pluginSaltByName: Readonly<Record<string, string>> = {},
 ): PluginConfigEntry[] => {
   const standardPluginEntries = includeStandardPlugins
     ? STANDARD_PLUGIN_NAMES.flatMap((pluginName) => {
@@ -2088,7 +2138,18 @@ export const createPluginConfigEntries = (
         );
         return pluginAllowPatterns.length === 0
           ? []
-          : [{ name: pluginName, allow: pluginAllowPatterns }];
+          : [
+              {
+                name: pluginName,
+                allow: pluginAllowPatterns,
+                ...(pluginSignatureByName[pluginName] === undefined
+                  ? {}
+                  : { signature: pluginSignatureByName[pluginName] }),
+                ...(pluginSaltByName[pluginName] === undefined
+                  ? {}
+                  : { salt: pluginSaltByName[pluginName] }),
+              },
+            ];
       })
     : [];
   return [
@@ -2097,6 +2158,12 @@ export const createPluginConfigEntries = (
     ...pluginNames.map((pluginName) => ({
       name: pluginName,
       allow: allowPatterns,
+      ...(pluginSignatureByName[pluginName] === undefined
+        ? {}
+        : { signature: pluginSignatureByName[pluginName] }),
+      ...(pluginSaltByName[pluginName] === undefined
+        ? {}
+        : { salt: pluginSaltByName[pluginName] }),
     })),
   ];
 };
@@ -2128,12 +2195,13 @@ export const writeMuonConfig = async (
   if (networkAuthorizedOrigins.length > 0) {
     network.authorizedOrigin = networkAuthorizedOrigins;
   }
+  const plugin: Record<string, unknown> = {
+    path: pluginPath,
+    plugins,
+  };
   const config: Record<string, unknown> = {
     network,
-    plugin: {
-      path: pluginPath,
-      plugins,
-    },
+    plugin,
   };
   if (logConfig !== undefined) {
     config.log = logConfig;
@@ -2164,7 +2232,8 @@ export const writeMuonConfig = async (
     }
   }
   if (browserPluginAllowPatterns !== null) {
-    browser.plugin = { allow: browserPluginAllowPatterns };
+    plugin.mode = "simple";
+    plugin.pages = browserPluginAllowPatterns;
   }
   if (browserAllowUnsafeJavaScriptParentAccess !== null) {
     browser.allowUnsafeJavaScriptParentAccess =
@@ -2232,6 +2301,8 @@ interface StartWindowsRemoteMuonOptions {
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
   pluginAllowPatterns: string[];
+  pluginSaltByName: Readonly<Record<string, string>>;
+  pluginSignatureByName: Readonly<Record<string, string>>;
   pluginNames: string[];
   waitForDebugPort: boolean;
 }
@@ -2537,6 +2608,8 @@ const startWindowsRemoteMuon = async (
     options.configuredPluginNames,
     options.pluginAllowPatterns,
     options.includeStandardPlugins,
+    options.pluginSignatureByName,
+    options.pluginSaltByName,
   );
   const configDirectory = join(directory, ".muon-test-config");
   const pluginDirectory = join(directory, "test-plugins");
@@ -2655,6 +2728,8 @@ export const startMuon = async (
   executablePath: string | undefined = undefined,
   cdpTimeoutMs = cdpStartupTimeoutMs,
   logConfig: Record<string, unknown> | undefined = undefined,
+  pluginSignatureByName: Readonly<Record<string, string>> = {},
+  pluginSaltByName: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -2679,6 +2754,8 @@ export const startMuon = async (
         networkAllowPatterns,
         networkAuthorizedOrigins,
         pluginAllowPatterns,
+        pluginSaltByName,
+        pluginSignatureByName,
         pluginNames,
         waitForDebugPort,
       },
@@ -2688,10 +2765,24 @@ export const startMuon = async (
 
   const executable = executablePath ?? getMuonExecutable(directory);
   await requireFile(executable);
+  const hasExplicitStateHome = Object.prototype.hasOwnProperty.call(
+    environment,
+    "XDG_STATE_HOME",
+  );
+  let stateDirectory = environment.XDG_STATE_HOME;
+  if (!hasExplicitStateHome) {
+    stateDirectory = await getSharedLocalStateDirectory();
+    await rm(getLocalDefaultProfilePath(stateDirectory, executable), {
+      recursive: true,
+      force: true,
+    });
+  }
   const pluginConfig = createPluginConfigEntries(
     configuredPluginNames,
     pluginAllowPatterns,
     includeStandardPlugins,
+    pluginSignatureByName,
+    pluginSaltByName,
   );
   const pluginDirectory = await createPluginDirectory(
     directory,
@@ -2737,15 +2828,22 @@ export const startMuon = async (
   const child = spawn(command, commandArgs, {
     cwd: directory,
     detached: true,
-    env: { ...process.env, ...environment },
+    env: {
+      ...process.env,
+      ...(hasExplicitStateHome ? {} : { XDG_STATE_HOME: stateDirectory }),
+      ...environment,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const running = {
+  const running: RunningMuon = {
     process: child,
     pluginDirectory,
     stderr: "",
     usesValgrind: useValgrind,
   };
+  if (stateDirectory !== undefined && stateDirectory !== "") {
+    running.stateDirectory = stateDirectory;
+  }
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {
     running.stderr += chunk;
@@ -2794,6 +2892,8 @@ export const startDebugMuon = async (
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   logConfig: Record<string, unknown> | undefined = undefined,
+  pluginSignatureByName: Readonly<Record<string, string>> = {},
+  pluginSaltByName: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -2822,6 +2922,8 @@ export const startDebugMuon = async (
       : getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
     isWindowsRemoteE2e() ? cdpStartupTimeoutMs : bootstrapCdpStartupTimeoutMs,
     logConfig,
+    pluginSignatureByName,
+    pluginSaltByName,
   );
 
 export const startDebugMuonBootstrap = async (

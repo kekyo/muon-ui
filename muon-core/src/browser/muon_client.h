@@ -14,6 +14,7 @@
 #include "config/muon_config.h"
 #include "network/muon_network_policy.h"
 #include "plugins/muon_plugin_runtime.h"
+#include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_shared_buffer.h"
 
 #include "include/cef_client.h"
@@ -53,6 +54,8 @@ class MuonClient final : public CefClient,
    * @param plugin_runtime Browser-process plugin runtime.
    * @param network_policy Browser network access policy.
    * @param plugin_page_policy Page URL policy for plugin API calls.
+   * @param plugin_capability_policies Capability policies keyed by bundler
+   * generated capability ids.
    * @param unsafe_parent_access_policy Popup URL policy for JavaScript parent
    * access.
    * @param shutdown_requester Callback that records a process shutdown request.
@@ -67,6 +70,8 @@ class MuonClient final : public CefClient,
   MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
              std::shared_ptr<MuonNetworkPolicy> network_policy,
              std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
+             std::map<std::string, std::shared_ptr<MuonPluginPolicy>>
+                 plugin_capability_policies,
              std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy,
              std::function<bool(int32_t)> shutdown_requester,
              std::shared_ptr<MuonAppStorage> app_storage,
@@ -442,6 +447,10 @@ class MuonClient final : public CefClient,
                                  std::string* error_message);
   void DispatchPluginCall(const PendingPluginCall& call,
                           std::shared_ptr<MuonSharedBufferPayload> payload);
+  bool IsPluginCapabilityAllowed(uint32_t function_id,
+                                 const std::string& capability_id,
+                                 const std::string& function_path,
+                                 std::string* error_message) const;
   void RejectPluginCall(const PendingPluginCall& call,
                         const std::string& error_message);
   void SendPluginResult(const MuonPluginInvocationContext& context,
@@ -461,6 +470,8 @@ class MuonClient final : public CefClient,
   std::shared_ptr<MuonPluginRuntime> plugin_runtime_;
   std::shared_ptr<MuonNetworkPolicy> network_policy_;
   std::shared_ptr<MuonNetworkPolicy> plugin_page_policy_;
+  std::map<std::string, std::shared_ptr<MuonPluginPolicy>>
+      plugin_capability_policies_;
   std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy_;
   std::map<int, CefRefPtr<CefBrowser>> browsers_by_id_;
   int pending_fs_dialog_calls_ = 0;

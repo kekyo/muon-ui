@@ -10,6 +10,7 @@
 #include "browser/muon_window_delegate.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
+#include "config/muon_linux_display_backend.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -330,6 +331,58 @@ static bool TestNativeTitleBarSupportDetection() {
 #endif
 }
 
+static bool TestLinuxDisplayBackendDetection() {
+#if defined(OS_LINUX)
+  return Expect(ResolveMuonLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=x11"}, "wayland",
+                    "wayland-0", ":0") == kMuonLinuxDisplayBackendX11,
+                "explicit X11 ozone platform should select X11") &&
+         Expect(ResolveMuonLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=wayland"}, "x11", nullptr,
+                    ":0") == kMuonLinuxDisplayBackendWayland,
+                "explicit Wayland ozone platform should select Wayland") &&
+         Expect(ResolveMuonLinuxDisplayBackend(
+                    {"muon", "--ozone-platform-hint=x11"}, "wayland",
+                    "wayland-0", ":0") == kMuonLinuxDisplayBackendX11,
+                "explicit X11 ozone platform hint should select X11") &&
+         Expect(ResolveMuonLinuxDisplayBackend({"muon"}, "wayland",
+                                               "wayland-0", ":0") ==
+                    kMuonLinuxDisplayBackendWayland,
+                "Wayland session should select Wayland") &&
+         Expect(ResolveMuonLinuxDisplayBackend({"muon"}, "x11", nullptr,
+                                               ":0") ==
+                    kMuonLinuxDisplayBackendX11,
+                "X11 session should select X11") &&
+         Expect(ResolveMuonLinuxDisplayBackend({"muon"}, nullptr, nullptr,
+                                               nullptr) ==
+                    kMuonLinuxDisplayBackendUnknown,
+                "missing Linux display signals should remain unknown");
+#else
+  return true;
+#endif
+}
+
+static bool TestLinuxWaylandVulkanMitigationDetection() {
+#if defined(OS_LINUX)
+  return Expect(ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=wayland"}, "x11", nullptr,
+                    ":0"),
+                "explicit Wayland ozone platform should disable CEF Vulkan") &&
+         Expect(ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon"}, "wayland", "wayland-0", ":0"),
+                "Wayland session should disable CEF Vulkan") &&
+         Expect(!ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=x11"}, "wayland",
+                    "wayland-0", ":0"),
+                "explicit X11 ozone platform should keep CEF Vulkan") &&
+         Expect(!ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon"}, "x11", nullptr, ":0"),
+                "X11 session should keep CEF Vulkan");
+#else
+  return true;
+#endif
+}
+
 static bool TestPageDraggableRegionHitTesting() {
   const auto regions = std::vector<CefDraggableRegion>{
       CefDraggableRegion(CefRect(10, 20, 200, 120), true),
@@ -438,6 +491,50 @@ static bool TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() {
                 "overlay") &&
          Expect(foreign_over_hit == 0,
                 "native wheel forwarder crossed into covered foreign window");
+}
+
+static bool TestWindowsNonClientDragHitTesting() {
+  constexpr int kWindowsHitTestCaption = 2;
+  constexpr int kWindowsHitTestLeft = 10;
+  constexpr int kWindowsHitTestRight = 11;
+  constexpr int kWindowsHitTestTop = 12;
+  constexpr int kWindowsHitTestTopLeft = 13;
+  constexpr int kWindowsHitTestTopRight = 14;
+  constexpr int kWindowsHitTestBottom = 15;
+  constexpr int kWindowsHitTestBottomLeft = 16;
+  constexpr int kWindowsHitTestBottomRight = 17;
+
+  return Expect(ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestCaption),
+                "caption hit-test should start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestTop),
+                "top resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestLeft),
+                "left resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestRight),
+                "right resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestTopLeft),
+                "top-left resize hit-test should not start custom window "
+                "drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestTopRight),
+                "top-right resize hit-test should not start custom window "
+                "drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestBottom),
+                "bottom resize hit-test should not start custom window drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestBottomLeft),
+                "bottom-left resize hit-test should not start custom window "
+                "drag") &&
+         Expect(!ShouldHandleMuonWindowsNonClientDragHitTest(
+                    kWindowsHitTestBottomRight),
+                "bottom-right resize hit-test should not start custom window "
+                "drag");
 }
 
 static bool TestTitleBarControlHitTesting() {
@@ -612,11 +709,14 @@ int main() {
                  TestTitleBarManifestParsing() &&
                  TestInitialWindowWorkAreaBounds() &&
                  TestNativeTitleBarSupportDetection() &&
+                 TestLinuxDisplayBackendDetection() &&
+                 TestLinuxWaylandVulkanMitigationDetection() &&
                  TestPageDraggableRegionHitTesting() &&
                  TestPageDraggableRegionSearchKeys() &&
                  TestNativeForwarderRegistersChildWindows() &&
                  TestNativeWheelForwarderTargetWindowSelection() &&
                  TestNativeWheelForwarderTopmostRegisteredWindowAtPoint() &&
+                 TestWindowsNonClientDragHitTesting() &&
                  TestTitleBarControlHitTesting() &&
                  TestWindowIconUpdateBehavior() &&
                  TestTitleBarBrowserIdResolution() &&

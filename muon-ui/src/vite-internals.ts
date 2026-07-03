@@ -22,6 +22,7 @@ import type { ViteDevServer } from "vite";
 
 import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
+import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
 export interface MuonLaunchScriptOptions {
@@ -34,6 +35,7 @@ export interface MuonLaunchScriptOptions {
 interface MuonViteSessionOptions {
   server: ViteDevServer;
   pluginOptions: MuonVitePluginOptions;
+  getRuntimePluginConfig: () => MuonRuntimePluginConfig;
   platform: NodeJS.Platform;
   architecture: NodeJS.Architecture;
   environment: NodeJS.ProcessEnv;
@@ -59,9 +61,9 @@ interface MuonOverrideConfig {
       devtools: "f12";
       recycle: "ctrl+f12";
     };
-    plugin: {
-      allow: string[];
-    };
+  };
+  plugin: MuonRuntimePluginConfig & {
+    pages: string[];
   };
   network: {
     allow: string[];
@@ -254,6 +256,7 @@ const getWebSocketOrigin = (startUrl: string): string => {
 const createMuonOverrideConfig = (
   startUrl: string,
   enableDebugger: boolean,
+  runtimePluginConfig: MuonRuntimePluginConfig,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
@@ -274,9 +277,10 @@ const createMuonOverrideConfig = (
             },
           }
         : {}),
-      plugin: {
-        allow: [`${origin}/**`],
-      },
+    },
+    plugin: {
+      ...runtimePluginConfig,
+      pages: [`${origin}/**`],
     },
     network: {
       allow: [`${origin}/**`, `${getWebSocketOrigin(startUrl)}/**`],
@@ -287,7 +291,8 @@ const createMuonOverrideConfig = (
 const writeMuonOverrideConfig = (
   server: ViteDevServer,
   overrideConfigPath: string,
-  enableDebugger: boolean,
+  pluginOptions: MuonVitePluginOptions,
+  getRuntimePluginConfig: () => MuonRuntimePluginConfig,
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
@@ -296,7 +301,15 @@ const writeMuonOverrideConfig = (
   }
   writeFileSync(
     overrideConfigPath,
-    `${JSON.stringify(createMuonOverrideConfig(startUrl, enableDebugger), null, 2)}\n`,
+    `${JSON.stringify(
+      createMuonOverrideConfig(
+        startUrl,
+        pluginOptions.enableDebugger !== false,
+        getRuntimePluginConfig(),
+      ),
+      null,
+      2,
+    )}\n`,
   );
   return true;
 };
@@ -409,6 +422,7 @@ const launchMuon = (
 export const startMuonViteBrowserBridge = async ({
   server,
   pluginOptions,
+  getRuntimePluginConfig,
   platform,
   architecture,
   environment,
@@ -482,7 +496,8 @@ export const startMuonViteBrowserBridge = async ({
     const configWritten = writeMuonOverrideConfig(
       server,
       paths.overrideConfigPath,
-      pluginOptions.enableDebugger !== false,
+      pluginOptions,
+      getRuntimePluginConfig,
     );
     if (configWritten) {
       launchMuon(paths, platform, server);

@@ -17,9 +17,6 @@ A multi-platform GUI application framework that uses CEF as its backend.
 
 ## What is This?
 
-WIP: This project is still in a very early prototype phase.
-I intend to complete it, but please note that it is not yet at the stage of active implementation.
-
 Have you ever thought about how to update an outdated native GUI application into a modern one?
 Replacing applications is extremely complex and has always been a challenge for us.
 
@@ -51,7 +48,7 @@ It also features a plugin system that supports fully asynchronous processing, en
 Since these features become available based on pre-configured settings, there's no risk of unused functionality running unchecked.
 
 Since it's CEF-based, you can naturally use features expected in Chromium, such as WebGL, WebGPU, WebAssembly, Web Workers, and Local Storage.
-You can also display Chromium DevTools. Because it supports CDP (Chrome DevTools Protocol), you can debug using tools like VS Code or connect and control it via Playwright.
+You can also display DevTools. Because it supports CDP (Chromium DevTools Protocol), you can debug using tools like VS Code or connect and control it via Playwright.
 You can also use remote DevTools from Chromium/Chrome via `chrome://inspect/`.
 
 In short, by clearly eliminating one of the major issues that arise when migrating native GTK/Qt/Windows applications to web applications,
@@ -60,23 +57,17 @@ you can develop modern local GUI applications using the web-based technology eco
 ### Features
 
 - By restricting all network access with a whitelist filter, you can completely block problematic content.
-- It is provided as an easy-to-use NPM package, allowing you to easily turn your web application project into a native GUI application.
-  No complex configuration or modifications are required.
-- The browser responsible for rendering is CEF (Chromium Embedded Framework).
-  This means that, from the perspective of your web application, it is virtually equivalent to using Chromium or Chrome.
-- Supports Vite plugins (optional). With support for Vite’s HMR, you can update previews in real time during development.
-- Provides `muon dev` for launching local development assets directly without starting an HTTP server.
-- Linux desktop launcher and icon metadata can be bundled at distribution build time.
-- Windows launcher and NSIS installer resources use app-provided PNG icons and version metadata.
-  Muon converts the PNG to an ICO at build/pack time; use a high-resolution square PNG, preferably 256x256 or larger.
-  Non-square PNGs are fitted with transparent padding.
-  The generated ICO follows Microsoft [icon design guidance](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-icons)
-  and [icon resource format](https://learn.microsoft.com/en-us/windows/win32/menurc/about-icons)
-  by storing the 256px image as PNG and smaller images as 32-bit DIB entries.
-- You can use Chromium DevTools. Furthermore, because it supports CDP (Chromium DevTools Protocol), you can perform remote debugging from an external source.
+- It is provided as an easy-to-use NPM package, allowing you to easily turn your web application project into a native GUI application. No complex configuration or modifications are required.
+- The browser responsible for rendering is CEF (Chromium Embedded Framework). This means that, from the perspective of the web application, it is virtually equivalent to using Chromium or Chrome.
+- It supports Vite plugins. Since it supports Vite’s HMR, you can preview real-time updates during development.
+- With `muon run`, you can launch a development environment that uses local assets directly without starting an HTTP server.
+- You can include the Linux desktop launcher and icon metadata in your distribution build.
+- You can use DevTools. Furthermore, since it supports CDP (Chromium DevTools Protocol), you can perform remote debugging from an external source.
 - You can display multiple browser windows. Browser windows can also be organized into a parent-child hierarchy.
-- It features a plugin system. Additionally, plugin functionality can be restricted using a whitelist filter.
+- It features a plugin system. Plugin functionality can be restricted using a whitelist filter.
 - Using built-in plugins, you can access local files, open dialogs, launch child processes, and manipulate windows.
+- It supports packages for Linux (deb) and Windows (NSIS), as well as portable operation.
+- Windows NSIS packages keep `windows-amd64` and `windows-i686` installs separate by embedding runtime app IDs such as `<appId>.amd64` and `<appId>.i686`.
 
 ### Environment
 

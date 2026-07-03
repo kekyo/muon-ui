@@ -7,6 +7,7 @@
 #include "plugins/muon_plugin_runtime.h"
 
 #include "muon_cardio_post.h"
+#include "muon_sha1.h"
 
 #include "plugins/builtin/muon_builtin.h"
 #include "browser/muon_builtin_browser.h"
@@ -1082,6 +1083,11 @@ static bool PrepareMuonPluginNamespaces(
     if (!SplitMuonPluginNamespace(plugin_namespace, &namespace_segments)) {
       return FailMuonPluginStartup(
           impl, "Plugin namespace is invalid: " + plugin_namespace);
+    }
+    if (namespace_segments.size() < 2) {
+      return FailMuonPluginStartup(
+          impl, "Plugin namespace must contain at least two segments: " +
+                    plugin_namespace);
     }
     const auto namespace_paths =
         CreateMuonNamespacePaths(namespace_segments);
@@ -2266,6 +2272,7 @@ static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
       registered_function->metadata.plugin_namespace =
           prepared_namespace.plugin_namespace;
       registered_function->metadata.js_name = js_name;
+      registered_function->metadata.public_name = filter_name;
       if (!ConvertMuonFunctionSignature(
               source->signature, &registered_function->metadata.arg_types,
               &registered_function->metadata.return_type, &error_message)) {
@@ -2407,6 +2414,7 @@ static bool RegisterMuonBuiltinBrowserFunctions(
     function.id = id;
     function.plugin_namespace = plugin_namespace;
     function.js_name = js_name;
+    function.public_name = filter_name;
     if (definition->arg_types != nullptr && definition->arg_count > 0) {
       function.arg_types.assign(definition->arg_types,
                                 definition->arg_types + definition->arg_count);
@@ -2428,6 +2436,7 @@ static bool RegisterMuonBuiltinBrowserFunctions(
 
 static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
                                    const std::filesystem::path& path,
+                                   const MuonPluginRuntimeLoadEntry& plugin,
                                    const MuonPluginPolicy& plugin_policy) {
   std::error_code filesystem_error;
   if (!std::filesystem::exists(path, filesystem_error) || filesystem_error ||
@@ -2435,6 +2444,25 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
       filesystem_error) {
     return FailMuonPluginStartup(
         impl, "Plugin file not found: " + path.string());
+  }
+
+  if (plugin.has_expected_signature) {
+    if (!plugin.has_signature_salt) {
+      return FailMuonPluginStartup(
+          impl, "Plugin signature requires plugin salt: " + plugin.plugin);
+    }
+    std::string actual_signature;
+    if (!muon_internal::CalculateFileSha1Hex(
+            path, plugin.signature_salt, &actual_signature)) {
+      return FailMuonPluginStartup(
+          impl, "Failed to calculate plugin signature: " + path.string());
+    }
+    if (actual_signature != plugin.expected_signature) {
+      return FailMuonPluginStartup(
+          impl, "Plugin signature mismatch: " + path.string() + " expected " +
+                    plugin.expected_signature + " actual " +
+                    actual_signature);
+    }
   }
 
   auto* handle = OpenMuonDynamicLibrary(path);
@@ -2548,7 +2576,7 @@ static bool LoadConfiguredMuonPluginLibraries(MuonPluginRuntimeImpl* impl) {
     }
     const auto path =
         ResolveMuonPluginLibraryPath(impl->plugin_directory, plugin.plugin);
-    if (!LoadMuonPluginLibrary(impl, path, *plugin.plugin_policy)) {
+    if (!LoadMuonPluginLibrary(impl, path, plugin, *plugin.plugin_policy)) {
       return false;
     }
   }

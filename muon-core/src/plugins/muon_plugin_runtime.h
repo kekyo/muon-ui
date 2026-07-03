@@ -32,6 +32,22 @@ struct MuonPluginRuntimeLoadEntry {
    */
   std::string plugin;
   /**
+   * Whether expected_signature is configured for this external plugin.
+   */
+  bool has_expected_signature = false;
+  /**
+   * Expected lowercase SHA-1 signature for this external plugin library.
+   */
+  std::string expected_signature;
+  /**
+   * Whether signature_salt is configured for this external plugin.
+   */
+  bool has_signature_salt = false;
+  /**
+   * Bytes appended to the plugin library before signature comparison.
+   */
+  std::vector<uint8_t> signature_salt;
+  /**
    * Function allow policy for this plugin entry.
    */
   std::shared_ptr<MuonPluginPolicy> plugin_policy;

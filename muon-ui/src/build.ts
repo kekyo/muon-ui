@@ -30,6 +30,7 @@ import { getDefaultMuonPrepareTarget } from "./prepare.js";
 import {
   allMuonTargets,
   getMuonTargetDescriptor,
+  getMuonTargetRuntimeAppId,
   normalizeMuonTarget,
   type MuonTarget,
   type MuonTargetDescriptor,
@@ -37,6 +38,7 @@ import {
 import {
   resolveMuonWindowsResource,
   stripBuildOnlyWindowsResourceConfig,
+  updateWindowsPeIconResource,
   updateWindowsPeResources,
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
@@ -48,6 +50,8 @@ import {
   type MuonLinuxDesktopOptions,
   type ResolvedMuonLinuxDesktop,
 } from "./linux-desktop.js";
+import { appIconAssetEntryName, appIconAssetUrl } from "./app-icon.js";
+import type { MuonRuntimePluginConfig } from "./capability.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -116,7 +120,10 @@ export interface MuonBuildOptions {
    */
   appName?: string;
   /**
-   * Stable application identifier used for portable runtime state.
+   * Stable base application identifier used for portable runtime state.
+   *
+   * @remarks Windows target distributions embed `<appId>.<arch>` as their
+   * runtime app identifier. Linux targets embed this value unchanged.
    */
   appId?: string;
   /**
@@ -135,6 +142,14 @@ export interface MuonBuildOptions {
    * Muon config path to embed.
    */
   configPath?: string;
+  /**
+   * Static application icon PNG file path.
+   *
+   * @remarks This icon is used as the shared source for Windows PE/NSIS,
+   * Linux desktop entries, and the generated initial title bar icon asset.
+   * Platform-specific icon paths override it for their target.
+   */
+  iconPath?: string;
   /**
    * Windows PE and NSIS resource metadata.
    *
@@ -155,6 +170,12 @@ export interface MuonBuildOptions {
    * @remarks Production builds should omit this option.
    */
   assetSalt?: Uint8Array;
+  /**
+   * Runtime plugin configuration supplied by a bundler integration.
+   *
+   * @internal
+   */
+  runtimePluginConfig?: MuonRuntimePluginConfig;
 }
 
 /**
@@ -204,6 +225,13 @@ export interface MuonBuildTargetResult {
    */
   asset: MuonBuildAssetResult;
   /**
+   * Application identifier embedded into this target distribution.
+   *
+   * @remarks Windows targets append the target architecture to the base
+   * `appId`; Linux targets use the base `appId` unchanged.
+   */
+  runtimeAppId: string;
+  /**
    * Config object embedded into muon-core and the app launcher.
    */
   embeddedConfig: JsonObject;
@@ -226,7 +254,10 @@ export interface MuonBuildResult {
    */
   appName: string;
   /**
-   * Stable application identifier embedded for portable runtime state.
+   * Stable base application identifier used to derive target runtime state.
+   *
+   * @remarks See each target's `runtimeAppId` for the identifier embedded into
+   * that target distribution.
    */
   appId: string;
   /**
@@ -263,19 +294,29 @@ export const buildMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
+  const sourceConfig = applyRuntimePluginConfig(
+    buildConfig.config,
+    options.runtimePluginConfig ?? { mode: "simple" },
+  );
+  assertNoUserInitialTitleBarIcon(sourceConfig);
+  const resolvedBuildConfig: BuildConfig = {
+    ...buildConfig,
+    config: sourceConfig,
+  };
   const assetInput = resolveAssetInput(
     root,
     options.assetSourcePath,
     options.assetPrefix,
-    buildConfig,
+    resolvedBuildConfig,
   );
   const windowsResource = await resolveMuonWindowsResource({
     root,
     packageDirectory,
     packageJson,
-    muonConfig: buildConfig.config,
+    muonConfig: sourceConfig,
     muonConfigDirectory: buildConfig.directory,
     options: options.windowsResource,
+    appIconPath: options.iconPath,
     defaults: {
       productName: appName,
       fileDescription: appName,
@@ -287,9 +328,10 @@ export const buildMuonApp = async (
   const linuxDesktop = await resolveMuonLinuxDesktop({
     root,
     packageDirectory,
-    muonConfig: buildConfig.config,
+    muonConfig: sourceConfig,
     muonConfigDirectory: buildConfig.directory,
     options: options.linuxDesktop,
+    appIconPath: options.iconPath,
     defaults: {
       desktopId: appId,
       name: resolveLinuxDesktopDefaultName(packageJson, appName),
@@ -313,7 +355,7 @@ export const buildMuonApp = async (
       appId,
       target,
       assetInput,
-      sourceConfig: buildConfig.config,
+      sourceConfig,
       windowsResource,
       linuxDesktop,
       salt,
@@ -485,6 +527,31 @@ const readBuildConfig = async (
   };
 };
 
+const applyRuntimePluginConfig = (
+  sourceConfig: JsonObject,
+  runtimePluginConfig: MuonRuntimePluginConfig | undefined,
+): JsonObject => {
+  if (runtimePluginConfig === undefined) {
+    return sourceConfig;
+  }
+
+  const sourcePlugin = sourceConfig.plugin;
+  if (sourcePlugin !== undefined && !isJsonObject(sourcePlugin)) {
+    throw new Error(
+      "muon.json plugin must be an object when runtime plugin config is applied.",
+    );
+  }
+  const plugin: JsonObject = sourcePlugin ?? {};
+
+  return {
+    ...sourceConfig,
+    plugin: {
+      ...plugin,
+      ...runtimePluginConfig,
+    },
+  };
+};
+
 const readConfigAssetSourcePath = (
   sourceConfig: JsonObject,
 ): string | undefined => {
@@ -595,6 +662,11 @@ const buildMuonTarget = async (input: {
     getLauncherFileName(input.appName, descriptor),
   );
   const assetZipPath = join(outputPath, "assets.zip");
+  const runtimeAppId = getMuonTargetRuntimeAppId(input.appId, input.target);
+  const appIconPath =
+    descriptor.os === "windows"
+      ? input.windowsResource.iconPath
+      : input.linuxDesktop.iconPath;
 
   await verifyTargetInputs({
     sourceRuntimePath,
@@ -617,12 +689,14 @@ const buildMuonTarget = async (input: {
     input.assetInput,
     assetZipPath,
     input.salt,
+    [{ name: appIconAssetEntryName, data: await readFile(appIconPath) }],
   );
   const embeddedConfig = createEmbeddedConfig(
     input.sourceConfig,
     asset,
-    input.appId,
+    runtimeAppId,
     input.linuxDesktop.desktopId,
+    appIconAssetUrl,
   );
 
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
@@ -639,6 +713,12 @@ const buildMuonTarget = async (input: {
   });
 
   if (descriptor.os === "windows") {
+    await updateWindowsPeIconResource({
+      executablePath: join(outputPath, descriptor.runtimeExecutableName),
+      resource: input.windowsResource,
+      environment: process.env,
+      cwd: input.root,
+    });
     await updateWindowsPeResources({
       executablePath: launcherPath,
       resource: input.windowsResource,
@@ -655,6 +735,7 @@ const buildMuonTarget = async (input: {
     outputPath,
     launcherPath,
     asset,
+    runtimeAppId,
     embeddedConfig,
     ...(descriptor.os === "linux" ? { linuxDesktop: input.linuxDesktop } : {}),
   };
@@ -736,6 +817,7 @@ const writeAssetArchive = async (
   input: AssetInput,
   outputPath: string,
   salt: Buffer,
+  extraEntries: readonly ZipEntry[],
 ): Promise<MuonBuildAssetResult> => {
   const sourceStats = await statOrUndefined(input.sourcePath);
   if (sourceStats === undefined) {
@@ -743,9 +825,9 @@ const writeAssetArchive = async (
   }
 
   const archive = sourceStats.isDirectory()
-    ? await createAssetArchiveFromDirectory(input)
+    ? await createAssetArchiveFromDirectory(input, extraEntries)
     : sourceStats.isFile()
-      ? await readFile(input.sourcePath)
+      ? await createAssetArchiveFromZipFile(input.sourcePath, extraEntries)
       : undefined;
   if (archive === undefined) {
     throw new Error(
@@ -770,13 +852,50 @@ const writeAssetArchive = async (
 
 const createAssetArchiveFromDirectory = async (
   input: AssetInput,
+  extraEntries: readonly ZipEntry[],
 ): Promise<Buffer> => {
   const entries = await collectZipEntries(input.sourcePath, input.prefix);
   if (entries.length === 0) {
     throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
   }
 
-  return createZipArchive(entries);
+  return createZipArchive(appendZipEntries(entries, extraEntries));
+};
+
+const createAssetArchiveFromZipFile = async (
+  sourcePath: string,
+  extraEntries: readonly ZipEntry[],
+): Promise<Buffer> => {
+  const zip = new AdmZip(await readFile(sourcePath));
+  for (const entry of extraEntries) {
+    assertSafeZipEntryName(entry.name);
+    if (zip.getEntry(entry.name) !== null) {
+      throw new Error(
+        `Muon app icon asset entry already exists: ${entry.name}`,
+      );
+    }
+    zip.addFile(entry.name, entry.data);
+  }
+  return zip.toBuffer();
+};
+
+const appendZipEntries = (
+  entries: readonly ZipEntry[],
+  extraEntries: readonly ZipEntry[],
+): ZipEntry[] => {
+  const output = [...entries];
+  const names = new Set(entries.map((entry) => entry.name));
+  for (const entry of extraEntries) {
+    assertSafeZipEntryName(entry.name);
+    if (names.has(entry.name)) {
+      throw new Error(
+        `Muon app icon asset entry already exists: ${entry.name}`,
+      );
+    }
+    names.add(entry.name);
+    output.push(entry);
+  }
+  return output;
 };
 
 const readZipEntryCount = (archive: Buffer, sourcePath: string): number => {
@@ -854,6 +973,7 @@ const createEmbeddedConfig = (
   asset: MuonBuildAssetResult,
   appId: string,
   desktopId: string,
+  initialTitleBarIcon: string,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -864,12 +984,22 @@ const createEmbeddedConfig = (
     throw new Error("muon.json bootstrap must be an object when present.");
   }
 
-  const runtimeConfig = stripBuildOnlyLinuxDesktopConfig(
-    stripBuildOnlyWindowsResourceConfig(sourceConfig),
+  const runtimeConfig = stripBuildOnlyAppIconConfig(
+    stripBuildOnlyLinuxDesktopConfig(
+      stripBuildOnlyWindowsResourceConfig(sourceConfig),
+    ),
   );
+  const sourceBrowser = runtimeConfig.browser;
+  if (sourceBrowser !== undefined && !isJsonObject(sourceBrowser)) {
+    throw new Error("muon.json browser must be an object when present.");
+  }
 
   return {
     ...runtimeConfig,
+    browser: {
+      ...(sourceBrowser ?? {}),
+      initialTitleBarIcon,
+    },
     asset: {
       ...(sourceAsset ?? {}),
       sourcePath: appConfigSourcePath,
@@ -882,6 +1012,31 @@ const createEmbeddedConfig = (
       desktopId,
     },
   };
+};
+
+const assertNoUserInitialTitleBarIcon = (sourceConfig: JsonObject): void => {
+  const sourceBrowser = sourceConfig.browser;
+  if (sourceBrowser === undefined) {
+    return;
+  }
+  if (!isJsonObject(sourceBrowser)) {
+    throw new Error("muon.json browser must be an object when present.");
+  }
+  if (sourceBrowser.initialTitleBarIcon !== undefined) {
+    throw new Error(
+      "muon.json browser.initialTitleBarIcon is generated by muon build; use top-level iconPath instead.",
+    );
+  }
+};
+
+const stripBuildOnlyAppIconConfig = (sourceConfig: JsonObject): JsonObject => {
+  const output: JsonObject = {};
+  for (const [key, value] of Object.entries(sourceConfig)) {
+    if (key !== "iconPath") {
+      output[key] = value;
+    }
+  }
+  return output;
 };
 
 const withTemporaryConfig = async (

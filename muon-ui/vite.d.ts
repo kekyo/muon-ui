@@ -10,14 +10,16 @@ import type { Plugin } from "vite";
  */
 export interface MuonWindowsResourceOptions {
   /**
-   * Windows icon PNG file path.
+   * Windows-specific static application icon PNG file path.
    *
    * @remarks Only `.png` files are accepted as app inputs. Muon generates the
    * required Windows `.ico` file automatically when updating PE resources or
    * creating NSIS installers. Relative paths are resolved from the source that
-   * supplied the option.
-   * @defaultValue Uses `windows.resource.iconPath`, then the packaged Muon
-   * bootstrap PNG icon when available.
+   * supplied the option. This overrides top-level `iconPath` on Windows when
+   * updating PE resources or creating NSIS installers. Use top-level
+   * `iconPath` for a shared static application icon.
+   * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
+   * icon.
    */
   iconPath?: string;
 
@@ -102,11 +104,14 @@ export interface MuonLinuxDesktopOptions {
    */
   comment?: string;
   /**
-   * Linux desktop icon PNG file path.
+   * Linux-specific static application icon PNG file path.
    *
    * @remarks Only `.png` files are accepted as app inputs. Relative paths are
-   * resolved from the source that supplied the option.
-   * @defaultValue Uses the packaged Muon bootstrap PNG icon when available.
+   * resolved from the source that supplied the option. This overrides
+   * top-level `iconPath` for Linux desktop entries. Use top-level `iconPath`
+   * for a shared static application icon.
+   * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
+   * icon.
    */
   iconPath?: string;
   /**
@@ -152,7 +157,10 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
-   * Stable application identifier used for portable runtime state.
+   * Stable base application identifier used for portable runtime state.
+   *
+   * @remarks Windows target distributions embed `<appId>.<arch>` as their
+   * runtime app identifier. Linux targets embed this value unchanged.
    *
    * @defaultValue The sanitized package name, or `"muon-app"` when unavailable.
    */
@@ -172,6 +180,18 @@ export interface MuonViteBuildOptions {
    * uses an empty config when none exists.
    */
   configPath?: string;
+
+  /**
+   * Static application icon PNG file path.
+   *
+   * @remarks The icon is used for Windows PE/NSIS resources, Linux desktop
+   * entries, and the generated initial title bar icon asset. Target-specific
+   * icon paths in `windowsResource` or `linuxDesktop` override this value for
+   * that target.
+   * @defaultValue Uses top-level `muon.json` `iconPath`, `project.json`, then
+   * the packaged `muon-256.png` icon.
+   */
+  iconPath?: string;
 
   /**
    * Windows PE and NSIS resource metadata.
@@ -203,6 +223,84 @@ export interface MuonViteBuildOptions {
    * @defaultValue A random 16-byte salt.
    */
   assetSalt?: Uint8Array;
+}
+
+/**
+ * Import-side capability rule for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessImportOptions {
+  /**
+   * Importer source globs relative to the Vite project root.
+   */
+  sources?: readonly string[];
+  /**
+   * NPM package names allowed to import the virtual module.
+   */
+  packages?: readonly string[];
+  /**
+   * Plugin function path globs allowed for matching importers.
+   *
+   * @remarks Required in validate mode. Simple mode does not use import rules.
+   */
+  allow?: readonly string[];
+}
+
+/**
+ * Plugin entry and capability import configuration for Muon virtual modules.
+ */
+export interface MuonVitePluginAccessEntryOptions {
+  /**
+   * Plugin entry name.
+   */
+  name: string;
+  /**
+   * Optional expected SHA-1 signature for the external plugin library.
+   *
+   * @remarks This is a 40-character hexadecimal SHA-1 digest of the native
+   * plugin library bytes followed by `salt`. It is not supported for
+   * `internal`.
+   */
+  signature?: string;
+  /**
+   * Optional hexadecimal salt appended before checking the plugin signature.
+   *
+   * @remarks Required when `signature` is specified. It is not supported for
+   * `internal`.
+   */
+  salt?: string;
+  /**
+   * Plugin function path globs allowed by the runtime plugin policy.
+   *
+   * @remarks Required in simple mode. Validate mode derives the runtime
+   * allowlist from `imports[].allow` and rejects this field in public config.
+   */
+  allow?: readonly string[];
+  /**
+   * Validate-mode import rules for this plugin entry.
+   */
+  imports?: readonly MuonVitePluginAccessImportOptions[];
+}
+
+/**
+ * Plugin access configuration for Muon plugin virtual modules.
+ */
+export interface MuonVitePluginAccessOptions {
+  /**
+   * External plugin directory override.
+   */
+  path?: string;
+  /**
+   * Plugin exposure mode.
+   */
+  mode?: "simple" | "validate";
+  /**
+   * Page URL patterns where the plugin bridge is exposed.
+   */
+  pages?: readonly string[];
+  /**
+   * Runtime plugin entries and validate-mode import rules.
+   */
+  plugins?: readonly MuonVitePluginAccessEntryOptions[];
 }
 
 /**
@@ -252,6 +350,18 @@ export interface MuonVitePluginOptions {
    * @defaultValue `true`
    */
   enableDebugger?: boolean;
+
+  /**
+   * Plugin access mode and virtual module capability imports.
+   *
+   * @remarks Omit this option to use the `plugin` section from `muon.json`.
+   * Pass plugin entries with import rules to override `muon.json` and allow
+   * virtual modules such as `muon:executor`. Pass `false` to use simple
+   * window-global exposure.
+   * @defaultValue `muon.json` plugin config, or validate mode with no
+   * capability imports.
+   */
+  pluginAccess?: false | MuonVitePluginAccessOptions;
 
   /**
    * Build app distributions from Vite output.

@@ -281,6 +281,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonViteBuildOptions",
+      memberName: "iconPath",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
       memberName: "windowsResource",
     },
     {
@@ -791,11 +796,15 @@ exit 1
     const nativeBootstrapStat = await stat(
       resolve("dist/native/linux-amd64/muon-bootstrap"),
     );
+    const nativeDefaultIconStat = await stat(
+      resolve("dist/native/muon-256.png"),
+    );
 
     expect(packageJson.bin?.muon).toBe("./dist/cli.cjs");
     expect(cliStat.mode & 0o111).not.toBe(0);
     expect(nativeBuilderStat.mode & 0o111).not.toBe(0);
     expect(nativeBootstrapStat.mode & 0o111).not.toBe(0);
+    expect(nativeDefaultIconStat.size).toBeGreaterThan(0);
     await expect(exists(resolve("dist/cli.mjs"))).resolves.toBe(false);
     await expect(exists(resolve("dist/vite.d.ts"))).resolves.toBe(false);
     await expect(exists(resolve("dist/muon-builder"))).resolves.toBe(false);
@@ -803,6 +812,9 @@ exit 1
       exists(resolve("dist", ["muon", "prepare"].join("-"))),
     ).resolves.toBe(false);
     await expect(exists(resolve("dist/muon-bootstrap"))).resolves.toBe(false);
+    await expect(
+      exists(resolve("dist/native/muon-bootstrap.png")),
+    ).resolves.toBe(false);
   });
 
   it("shows help from the muon CLI bin", async () => {
@@ -815,7 +827,8 @@ exit 1
     expect(stderr).toBe("");
     expect(stdout).toContain("Usage: muon [options] [command]");
     expect(stdout).toContain("build");
-    expect(stdout).toContain("dev");
+    expect(stdout).toMatch(/\n\s+run\s+/);
+    expect(stdout).not.toMatch(/\n\s+dev\s+/);
     expect(stdout).toContain("pack");
     expect(stdout).toContain("init");
     expect(stdout).toContain("prepare");
@@ -1024,6 +1037,7 @@ const plugin = muon({
   enableDebugger: false,
   build: {
     targets: ["linux-amd64"],
+    iconPath: "icons/app.png",
     windowsResource: {
       iconPath: "icons/app.png",
       productName: "Package Test App",

@@ -18,6 +18,12 @@
 #include <vector>
 
 /**
+ * Internal global function name used by capability virtual modules.
+ */
+inline constexpr char kMuonV8CapabilityCallFunctionName[] =
+    "__muon_plugin_call";
+
+/**
  * V8 handler for functions exposed under plugin namespace objects.
  */
 class MuonV8Handler final : public CefV8Handler {
@@ -155,6 +161,7 @@ class MuonV8Handler final : public CefV8Handler {
 
   std::vector<MuonFunctionMetadata> functions_;
   std::map<std::string, size_t> function_indexes_by_v8_name_;
+  std::map<std::string, size_t> function_indexes_by_public_path_;
   std::map<std::string, ProxyFunction> proxy_functions_by_name_;
   std::map<int, PendingPromise> pending_promises_;
   std::map<int, CefRefPtr<CefProcessMessage>> pending_result_messages_;

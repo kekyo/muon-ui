@@ -348,7 +348,7 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
   BOOTSTRAP_RESOURCE_OBJECTS_VALUE="${OUT_DIR}/muon_bootstrap_resource.o"
   write_windows_version_resource_script \
     "${BOOTSTRAP_RESOURCE_SCRIPT}" \
-    "muon-bootstrap.ico" \
+    "" \
     "muon_bootstrap.manifest" \
     "Muon Bootstrap" \
     "muon-bootstrap" \

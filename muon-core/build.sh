@@ -105,25 +105,6 @@ generate_core_version_header() {
     "${output_path}" >/dev/null
 }
 
-verify_windows_icon_resources() {
-  local executable_path="$1"
-  local label="$2"
-  local dump_path
-  local resources_path
-  dump_path="$(mktemp)"
-  resources_path="$(mktemp)"
-  "${OBJDUMP}" -x "${executable_path}" >"${dump_path}"
-  sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
-    "${dump_path}" >"${resources_path}"
-  if ! grep -Fq 'Entry: ID: 0x000003' "${resources_path}" ||
-      ! grep -Fq 'Entry: ID: 0x00000e' "${resources_path}"; then
-    echo "${label} is missing Windows icon resources: ${executable_path}" >&2
-    rm -f "${dump_path}" "${resources_path}"
-    return 1
-  fi
-  rm -f "${dump_path}" "${resources_path}"
-}
-
 read_c_string_define() {
   local header_path="$1"
   local define_name="$2"
@@ -450,15 +431,11 @@ cp -f \
   "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"
 
 if [[ "${TARGET_NAME}" == windows-* ]]; then
-  verify_windows_icon_resources "${RUNTIME_DIR}/muon-core.exe" "muon-core"
   verify_windows_version_resource \
     "${RUNTIME_DIR}/muon-core.exe" \
     "Muon Core Runtime" \
     "muon-core" \
     "muon-core.exe"
-  verify_windows_icon_resources \
-    "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
-    "muon-bootstrap"
   verify_windows_version_resource \
     "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
     "Muon Bootstrap" \

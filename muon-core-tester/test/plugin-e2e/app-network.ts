@@ -5,6 +5,7 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 
 import { expect, it } from "vitest";
 
@@ -59,6 +60,17 @@ interface RuntimeConsoleAPICalledParams {
     value?: unknown;
   }>;
 }
+
+const getLocalBootstrapCefLogPath = (
+  localStateHome: string | undefined,
+): string => {
+  const stateHome =
+    localStateHome ??
+    (process.env.XDG_STATE_HOME?.length
+      ? process.env.XDG_STATE_HOME
+      : join(homedir(), ".local", "state"));
+  return join(stateHome, "muon-bootstrap", "profile", "muon-cef.log");
+};
 
 const waitForConsoleMessage = async (
   driver: CdpDriver,
@@ -380,15 +392,11 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
     const assertLogs = async (
       waitForLog: (expected: string) => Promise<void>,
       injectCefLog: boolean,
+      localStateHome: string | undefined = undefined,
     ): Promise<void> => {
       if (injectCefLog) {
         await appendFile(
-          join(
-            DEBUG_MUON_DIRECTORY,
-            ".muon-test-config",
-            ".profile",
-            "muon-cef.log",
-          ),
+          getLocalBootstrapCefLogPath(localStateHome),
           "[0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward\n",
         );
       }
@@ -504,6 +512,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         async (expected) =>
           await waitForMuonStderr(running, expected, targetTimeoutMs),
         true,
+        running.stateDirectory,
       );
     });
   });

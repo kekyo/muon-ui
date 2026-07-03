@@ -234,15 +234,15 @@ int main(void) {
   failed |= set_environment("LOCALAPPDATA", "C:\\Users\\alice\\AppData\\Local");
   failed |= assert_stage_dir(
       "LOCALAPPDATA", "com.example.app", "windows-amd64",
-      "C:/Users/alice/AppData/Local/com.example.app/windows-amd64");
+      "C:/Users/alice/AppData/Local/com.example.app/runtime");
 #else
   failed |= set_environment("XDG_STATE_HOME", "/tmp/muon-state");
   failed |= assert_stage_dir("XDG_STATE_HOME", "com.example.app", "linux-amd64",
-                             "/tmp/muon-state/com.example.app/linux-amd64");
+                             "/tmp/muon-state/com.example.app/runtime");
   failed |= clear_environment("XDG_STATE_HOME");
 	  failed |= set_environment("HOME", "/home/alice");
 	  failed |= assert_stage_dir("HOME", "com.example.app", "linux-arm64",
-	                             "/home/alice/.local/state/com.example.app/linux-arm64");
+	                             "/home/alice/.local/state/com.example.app/runtime");
 #endif
   if (!should_prepare_staged_runtime("/tmp/source", "/tmp/state")) {
     fprintf(stderr, "different runtime directories should be staged\n");

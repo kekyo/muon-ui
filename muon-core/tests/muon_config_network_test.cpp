@@ -103,12 +103,42 @@ static void SetTestDefaultLaunchSource() {
   SetMuonStartupCommandLine(1, argv);
 }
 
-static void SetEnvironment(const char* name, const std::filesystem::path& path) {
+static void SetEnvironmentValue(const char* name, const std::string& value) {
 #if defined(_WIN32)
-  _putenv_s(name, path.string().c_str());
+  _putenv_s(name, value.c_str());
 #else
-  setenv(name, path.string().c_str(), 1);
+  setenv(name, value.c_str(), 1);
 #endif
+}
+
+static void ClearEnvironment(const char* name) {
+#if defined(_WIN32)
+  _putenv_s(name, "");
+#else
+  unsetenv(name);
+#endif
+}
+
+static void SetEnvironment(const char* name, const std::filesystem::path& path) {
+  SetEnvironmentValue(name, path.string());
+}
+
+static std::filesystem::path SetTestStateHome(
+    const std::filesystem::path& test_directory,
+    const std::string& name) {
+  const auto state_home = test_directory / name;
+#if defined(_WIN32)
+  SetEnvironment("LOCALAPPDATA", state_home);
+#else
+  SetEnvironment("XDG_STATE_HOME", state_home);
+#endif
+  return state_home;
+}
+
+static std::filesystem::path GetTestDefaultProfilePath(
+    const std::filesystem::path& state_home,
+    const std::string& app_id) {
+  return state_home / app_id / "profile";
 }
 
 static bool ExpectShortcut(const MuonKeyboardShortcut& shortcut,
@@ -347,14 +377,10 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
 static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   MuonConfig config;
   SetTestDefaultLaunchSource();
+  const auto state_home =
+      SetTestStateHome(test_directory, "config-loading-state");
+  const auto default_profile = GetTestDefaultProfilePath(state_home, "muon");
   if (!LoadConfigExpectSuccess(test_directory / "missing.json", &config)) {
-    return false;
-  }
-  std::error_code error;
-  const auto current_profile =
-      (std::filesystem::current_path(error) / ".profile").lexically_normal();
-  if (error) {
-    std::cerr << "failed to resolve current directory\n";
     return false;
   }
   if (!Expect(config.network.allow.size() == 1,
@@ -370,7 +396,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.network.authorized_origin.empty(),
               "missing muon.json did not produce an empty authorized origin "
               "list") ||
-      !ExpectBrowserDefaults(config.browser, current_profile,
+      !ExpectBrowserDefaults(config.browser, default_profile,
                              "missing browser config") ||
       !Expect(config.plugin.plugins.empty(),
               "missing muon.json did not produce an empty plugin list") ||
@@ -382,7 +408,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.default_version_policy == "tested",
               "missing muon.json defaultVersionPolicy is wrong") ||
       !Expect(config.desktop_id == "muon",
-              "missing muon.json desktopId is wrong")) {
+              "missing muon.json desktopId is wrong") ||
+      !Expect(config.app_id == "muon",
+              "missing muon.json appId is wrong")) {
     return false;
   }
 
@@ -398,7 +426,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
               "missing network.allow default pattern is wrong") ||
       !Expect(config.network.authorized_origin.empty(),
               "missing network.authorizedOrigin default list is not empty") ||
-      !ExpectBrowserDefaults(config.browser, test_directory / ".profile",
+      !ExpectBrowserDefaults(config.browser, default_profile,
                              "default browser config") ||
       !Expect(config.plugin.plugins.empty(),
               "missing plugins did not produce an empty plugin list") ||
@@ -409,7 +437,8 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
                             "default cdp config") ||
       !Expect(config.default_version_policy == "tested",
               "default defaultVersionPolicy is wrong") ||
-      !Expect(config.desktop_id == "muon", "default desktopId is wrong")) {
+      !Expect(config.desktop_id == "muon", "default desktopId is wrong") ||
+      !Expect(config.app_id == "muon", "default appId is wrong")) {
     return false;
   }
 
@@ -755,33 +784,49 @@ static bool RunLaunchSourceProfilePathTest(
   MuonConfig config;
 
   SetTestLaunchSource("none");
+  const auto state_home = SetTestStateHome(test_directory, "profile-state");
+  SetEnvironmentValue("MUON_BOOTSTRAP_APP_ID", "com.example Bootstrap");
+  const auto env_path = test_directory / "profile-env.json";
+  if (!Expect(WriteFile(env_path, "{}"),
+              "failed to write environment appId profile config") ||
+      !LoadConfigExpectSuccess(env_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.app_id == "com.example.Bootstrap",
+              "environment appId was not used") ||
+      !Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Bootstrap"),
+              "environment appId should select state default profile")) {
+    return false;
+  }
+
   const auto none_path = test_directory / "profile-none.json";
-  if (!Expect(WriteFile(none_path, "{}"),
+  if (!Expect(WriteFile(none_path,
+                        R"({"bootstrap":{"appId":"com.example.Profile"}})"),
               "failed to write none profile config") ||
       !LoadConfigExpectSuccess(none_path, &config)) {
     return false;
   }
-  if (!Expect(config.browser.profile == test_directory / ".profile",
-              "none launch source should use config-relative default profile")) {
+  if (!Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Profile"),
+              "none launch source should use state default profile")) {
     return false;
   }
 
   SetTestLaunchSource("normal");
   const auto normal_path = test_directory / "profile-normal.json";
-#if defined(_WIN32)
-  const auto user_data_home = test_directory / "local-app-data";
-  SetEnvironment("LOCALAPPDATA", user_data_home);
-#else
-  const auto user_data_home = test_directory / "xdg-data";
-  SetEnvironment("XDG_DATA_HOME", user_data_home);
-#endif
-  if (!Expect(WriteFile(normal_path, "{}"),
+  if (!Expect(WriteFile(normal_path,
+                        R"({"bootstrap":{"appId":"com.example.Profile"}})"),
               "failed to write normal profile config") ||
       !LoadConfigExpectSuccess(normal_path, &config)) {
     return false;
   }
-  if (!Expect(config.browser.profile == user_data_home / "muon" / "profile",
-              "normal launch source should use user data default profile")) {
+  if (!Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Profile"),
+              "normal launch source should use state default profile")) {
     return false;
   }
 
@@ -792,8 +837,13 @@ static bool RunLaunchSourceProfilePathTest(
       !LoadConfigExpectSuccess(explicit_path, &config)) {
     return false;
   }
-  return Expect(config.browser.profile == test_directory / "profiles/custom",
-                "explicit browser.profilePath should override launch source");
+  if (!Expect(config.browser.profile == test_directory / "profiles/custom",
+              "explicit browser.profilePath should override launch source")) {
+    return false;
+  }
+
+  ClearEnvironment("MUON_BOOTSTRAP_APP_ID");
+  return true;
 }
 
 static bool ExpectDefaultConfigStart(
@@ -1146,6 +1196,8 @@ static bool RunBrowserConfigLoadingTest(
     const std::filesystem::path& test_directory) {
   MuonConfig config;
   SetTestDefaultLaunchSource();
+  const auto state_home = SetTestStateHome(test_directory, "browser-state");
+  const auto default_profile = GetTestDefaultProfilePath(state_home, "muon");
   const auto browser_path = test_directory / "browser.json";
   if (!Expect(WriteFile(
                   browser_path,
@@ -1179,7 +1231,7 @@ static bool RunBrowserConfigLoadingTest(
                       "ctrl+shift+f10 recycle shortcut") ||
       !Expect(config.browser.start_page == "asset://main/index.html",
               "browser shortcut config changed default start URL") ||
-      !Expect(config.browser.profile == test_directory / ".profile",
+      !Expect(config.browser.profile == default_profile,
               "browser shortcut config changed default profile path") ||
       !Expect(config.browser.plugin.allow.size() == 1,
               "browser shortcut config changed default plugin page allowlist") ||

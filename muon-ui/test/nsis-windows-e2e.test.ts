@@ -434,7 +434,7 @@ const createRuntimeStateFixtureScript = (appId: string): string => `
 $ErrorActionPreference = 'Stop'
 $appId = ${quotePowerShellString(appId)}
 $stateDir = Join-Path $env:LOCALAPPDATA $appId
-$targetStateDir = Join-Path $stateDir 'windows-amd64'
+$targetStateDir = Join-Path $stateDir 'runtime'
 New-Item -ItemType Directory -Force -Path $targetStateDir | Out-Null
 Set-Content -LiteralPath (Join-Path $targetStateDir 'state.txt') -Value 'state' -Encoding UTF8
 Write-Output 'runtime state fixture created'

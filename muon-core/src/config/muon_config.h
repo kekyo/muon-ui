@@ -247,11 +247,13 @@ struct MuonBrowserConfig {
    */
   std::string start_page = "asset://main/index.html";
   /**
-   * CEF profile directory path. Relative paths are resolved from the muon
-   * containing config file for explicit muon.json values. When omitted,
-   * --muon-launch-from selects the default profile location.
+   * CEF profile directory path.
+   *
+   * @remarks Relative paths are resolved from the containing config file for
+   * explicit muon.json values. When omitted, the profile is resolved from the
+   * application state directory.
    */
-  std::filesystem::path profile = "./.profile";
+  std::filesystem::path profile = "profile";
   /**
    * Initial state requested for the main browser window.
    */
@@ -471,6 +473,10 @@ struct MuonConfig {
    * Linux desktop identifier used for Wayland app ID and X11 WM_CLASS.
    */
   std::string desktop_id = "muon";
+  /**
+   * Stable application identifier used for runtime state directories.
+   */
+  std::string app_id = "muon";
   /**
    * Browser asset storage configuration.
    */

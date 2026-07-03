@@ -309,11 +309,12 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
 ```
 
 配布された `dist-muon/<target>` ディレクトリは読み取り専用の元データとして扱われます。
-エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下へステージングし、
-そこへCEFバイナリを展開してから `muon-core` を起動します:
+エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下の `runtime/` へステージングし、
+そこへCEFバイナリを展開してから `muon-core` を起動します。
+CEFプロファイルは同じアプリケーションステートルートの `profile/` に配置されます:
 
-- Linux: `$XDG_STATE_HOME` または `$HOME` の `.local/state/<appId>/<public-target>/`
-- Windows: `%LOCALAPPDATA%\<appId>\<public-target>\`
+- Linux: `$XDG_STATE_HOME/<appId>/runtime/` と `$XDG_STATE_HOME/<appId>/profile/`、または `$HOME/.local/state/<appId>/runtime/` と `$HOME/.local/state/<appId>/profile/`
+- Windows: `%LOCALAPPDATA%\<appId>\runtime\` と `%LOCALAPPDATA%\<appId>\profile\`
 
 起動時の準備では、ユーザーステートディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
 これらについての詳細は、別章を参照して下さい。
@@ -1015,7 +1016,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | キー                                  | 型                                        | 既定値                    | 概要                                                                                     |
 | :------------------------------------ | :---------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------- |
 | `startPage`                           | `string`                                  | `"asset://main/index.html"` | 起動時に最初に読み込むURLです。                                                          |
-| `profile`                             | `string`                                  | `"./.profile"`            | Chromiumプロファイルを保存するディレクトリです。                                         |
+| `profile`                             | `string`                                  | state profile             | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
@@ -1024,8 +1025,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
 
 - `profile` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
-  通常起動時に `profile` を明示しない場合は、OS標準のユーザーデータ領域にアプリケーション用プロファイルが作成されます。
-  開発・テスト向けの直接起動では、既定値の `./.profile` が使われます。
+  `profile` を明示しない場合は、ユーザーステートディレクトリの `<appId>/profile/` が使用されます。
 - `initialWindowState` には `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, `"fullscreen"` を指定出来ます。
   ただし、最終的な表示状態はOSやウインドウマネージャーによって調整される場合があります。
 - `backgroundColor` には `"system"` またはRGB 16進表記の `"RRGGBB"` / `"#RRGGBB"` を指定出来ます。
@@ -1087,7 +1087,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
 - `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
   `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
-- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/<target>/` へstagingし、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へstagingし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
 - 新しいportable配布物から起動した場合、fingerprintの差分によりstate directory側のアプリファイル群が更新され、desktop entryも更新されます。
   state directory配下のlauncherから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。

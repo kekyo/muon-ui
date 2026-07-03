@@ -47,7 +47,13 @@ import {
   type KeyboardModifier,
   type RemoteAgent,
 } from "agent-rover";
-import { afterEach, describe, expect, type TestContext } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  describe,
+  expect,
+  type TestContext,
+} from "vitest";
 
 import {
   connectToMuonCdp as baseConnectToMuonCdp,
@@ -443,6 +449,7 @@ export interface RunningMuon {
   process: MuonProcessHandle;
   pluginDirectory: string;
   remoteWindows?: RunningWindowsRemoteMuon;
+  stateDirectory?: string;
   stderr: string;
   usesValgrind: boolean;
 }
@@ -651,6 +658,7 @@ export const processExitTimeoutMs = shouldUseValgrind
     ? 30000
     : 5000;
 export const runningProcesses: RunningMuon[] = [];
+let sharedLocalStateDirectory: string | undefined = undefined;
 export const execFileAsync = promisify(execFile);
 const nativeInputSenderCacheDirectory = resolve(
   "..",
@@ -937,6 +945,33 @@ export const getMuonBootstrapExecutable = (directory: string): string =>
       ? "muon-bootstrap.exe"
       : "muon-bootstrap",
   );
+
+const getLocalFallbackAppIdForExecutable = (executable: string): string => {
+  const executableName = executable.split(/[\\/]+/u).at(-1) ?? executable;
+  return executableName.toLowerCase().includes("bootstrap")
+    ? "muon-bootstrap"
+    : "muon-core";
+};
+
+const getLocalDefaultProfilePath = (
+  stateHome: string,
+  executable: string,
+): string =>
+  join(stateHome, getLocalFallbackAppIdForExecutable(executable), "profile");
+
+const getSharedLocalStateDirectory = async (): Promise<string> => {
+  sharedLocalStateDirectory ??= await mkdtemp(
+    join(tmpdir(), "muon-local-state-"),
+  );
+  return sharedLocalStateDirectory;
+};
+
+afterAll(async () => {
+  if (sharedLocalStateDirectory !== undefined) {
+    await rm(sharedLocalStateDirectory, { recursive: true, force: true });
+    sharedLocalStateDirectory = undefined;
+  }
+});
 
 export const createBrowserShortcutConfig = (
   overrides: Partial<BrowserShortcutConfig>,
@@ -2730,6 +2765,18 @@ export const startMuon = async (
 
   const executable = executablePath ?? getMuonExecutable(directory);
   await requireFile(executable);
+  const hasExplicitStateHome = Object.prototype.hasOwnProperty.call(
+    environment,
+    "XDG_STATE_HOME",
+  );
+  let stateDirectory = environment.XDG_STATE_HOME;
+  if (!hasExplicitStateHome) {
+    stateDirectory = await getSharedLocalStateDirectory();
+    await rm(getLocalDefaultProfilePath(stateDirectory, executable), {
+      recursive: true,
+      force: true,
+    });
+  }
   const pluginConfig = createPluginConfigEntries(
     configuredPluginNames,
     pluginAllowPatterns,
@@ -2781,15 +2828,22 @@ export const startMuon = async (
   const child = spawn(command, commandArgs, {
     cwd: directory,
     detached: true,
-    env: { ...process.env, ...environment },
+    env: {
+      ...process.env,
+      ...(hasExplicitStateHome ? {} : { XDG_STATE_HOME: stateDirectory }),
+      ...environment,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const running = {
+  const running: RunningMuon = {
     process: child,
     pluginDirectory,
     stderr: "",
     usesValgrind: useValgrind,
   };
+  if (stateDirectory !== undefined && stateDirectory !== "") {
+    running.stateDirectory = stateDirectory;
+  }
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {
     running.stderr += chunk;

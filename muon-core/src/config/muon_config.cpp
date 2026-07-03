@@ -28,6 +28,7 @@ static constexpr char kMuonConfigJson5FileName[] = "muon.json5";
 static constexpr char kMuonConfigJsoncFileName[] = "muon.jsonc";
 static constexpr char kMuonConfigFileName[] = "muon.json";
 static constexpr char kMuonConfigBootstrapKey[] = "bootstrap";
+static constexpr char kMuonConfigAppIdKey[] = "appId";
 static constexpr char kMuonConfigDefaultVersionPolicyKey[] =
     "defaultVersionPolicy";
 static constexpr char kMuonConfigDesktopIdKey[] = "desktopId";
@@ -114,8 +115,9 @@ static constexpr uint8_t kMuonEmbeddedTlvStringTag = 4;
 static constexpr uint8_t kMuonEmbeddedTlvBinaryTag = 5;
 static constexpr uint8_t kMuonEmbeddedTlvArrayTag = 6;
 static constexpr uint8_t kMuonEmbeddedTlvObjectTag = 7;
-static constexpr char kMuonDefaultLocalProfileDirectoryName[] = ".profile";
-static constexpr char kMuonDefaultNormalProfileDirectoryName[] = "profile";
+static constexpr char kMuonDefaultProfileDirectoryName[] = "profile";
+static constexpr char kMuonBootstrapAppIdEnvironmentName[] =
+    "MUON_BOOTSTRAP_APP_ID";
 static constexpr char kMuonFallbackApplicationName[] = "muon";
 
 using muon_internal::DecodeAsciiHexByte;
@@ -207,8 +209,6 @@ struct MuonConfigPathResolution final {
 struct MuonConfigPathBases final {
   std::filesystem::path browser_profile;
   bool has_browser_profile = false;
-  std::filesystem::path default_browser_profile;
-  bool has_default_browser_profile = false;
   std::filesystem::path log_output_path;
   bool has_log_output_path = false;
   std::filesystem::path plugin_path;
@@ -659,8 +659,50 @@ static std::string GetStartupApplicationName() {
   return kMuonFallbackApplicationName;
 }
 
-static bool GetNormalUserDataDirectory(std::filesystem::path* directory,
-                                       std::string* error_message) {
+static std::string GetStartupAppId() {
+  const auto* bootstrap_app_id =
+      std::getenv(kMuonBootstrapAppIdEnvironmentName);
+  if (bootstrap_app_id != nullptr) {
+    const auto app_id = TrimAscii(bootstrap_app_id);
+    if (!app_id.empty()) {
+      return app_id;
+    }
+  }
+  return GetStartupApplicationName();
+}
+
+static bool IsAppIdCharacter(char value) {
+  const auto is_digit = value >= '0' && value <= '9';
+  const auto is_lower = value >= 'a' && value <= 'z';
+  const auto is_upper = value >= 'A' && value <= 'Z';
+  return is_digit || is_lower || is_upper || value == '.' || value == '_' ||
+         value == '-';
+}
+
+static std::string SanitizeAppId(const std::string& value) {
+  std::string result = value;
+  for (auto& character : result) {
+    if (!IsAppIdCharacter(character)) {
+      character = '.';
+    }
+  }
+
+  auto start = size_t{0};
+  while (start < result.size() && result[start] == '.') {
+    start += 1;
+  }
+  auto end = result.size();
+  while (end > start && result[end - 1] == '.') {
+    end -= 1;
+  }
+  if (end == start) {
+    return "muon-app";
+  }
+  return result.substr(start, end - start);
+}
+
+static bool GetDefaultStateHomeDirectory(std::filesystem::path* directory,
+                                         std::string* error_message) {
 #if defined(_WIN32)
   if (GetEnvironmentPath("LOCALAPPDATA", directory)) {
     return true;
@@ -673,43 +715,32 @@ static bool GetNormalUserDataDirectory(std::filesystem::path* directory,
   *error_message = "LOCALAPPDATA and USERPROFILE are unavailable";
   return false;
 #else
-  if (GetEnvironmentPath("XDG_DATA_HOME", directory)) {
+  if (GetEnvironmentPath("XDG_STATE_HOME", directory)) {
     return true;
   }
   std::filesystem::path home;
   if (!GetEnvironmentPath("HOME", &home)) {
-    *error_message = "XDG_DATA_HOME and HOME are unavailable";
+    *error_message = "XDG_STATE_HOME and HOME are unavailable";
     return false;
   }
-  *directory = home / ".local" / "share";
+  *directory = home / ".local" / "state";
   return true;
 #endif
 }
 
 static bool ResolveDefaultBrowserProfilePath(
-    const MuonConfigPathBases& path_bases,
+    const std::string& app_id,
     std::filesystem::path* profile,
     std::string* error_message) {
   const auto launch_source = GetMuonStartupLaunchSource();
-  if (launch_source == kMuonLaunchSourceNone) {
-    std::filesystem::path base_directory;
-    if (path_bases.has_default_browser_profile) {
-      base_directory = path_bases.default_browser_profile;
-    } else if (!ResolveCurrentDirectory(&base_directory, error_message)) {
+  if (launch_source == kMuonLaunchSourceNone ||
+      launch_source == kMuonLaunchSourceNormal) {
+    std::filesystem::path state_home;
+    if (!GetDefaultStateHomeDirectory(&state_home, error_message)) {
       return false;
     }
-    *profile =
-        (base_directory / kMuonDefaultLocalProfileDirectoryName)
-            .lexically_normal();
-    return true;
-  }
-  if (launch_source == kMuonLaunchSourceNormal) {
-    std::filesystem::path user_data_directory;
-    if (!GetNormalUserDataDirectory(&user_data_directory, error_message)) {
-      return false;
-    }
-    *profile = (user_data_directory / GetStartupApplicationName() /
-                kMuonDefaultNormalProfileDirectoryName)
+    *profile = (state_home / SanitizeAppId(app_id) /
+                kMuonDefaultProfileDirectoryName)
                    .lexically_normal();
     return true;
   }
@@ -858,14 +889,13 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
 
 static bool ResolveDefaultConfigPathsFromBases(
     yyjson_val* root,
-    const MuonConfigPathBases& path_bases,
     MuonConfig* config,
     std::string* error_message) {
   if (config == nullptr || error_message == nullptr) {
     return false;
   }
   if (!HasBrowserProfilePath(root)) {
-    return ResolveDefaultBrowserProfilePath(path_bases,
+    return ResolveDefaultBrowserProfilePath(config->app_id,
                                             &config->browser.profile,
                                             error_message);
   }
@@ -2534,6 +2564,7 @@ static bool ReadBootstrapConfig(yyjson_val* root,
                                 std::string* error_message) {
   config->default_version_policy = "tested";
   config->desktop_id = "muon";
+  config->app_id = SanitizeAppId(GetStartupAppId());
   const auto bootstrap = yyjson_obj_get(root, kMuonConfigBootstrapKey);
   if (bootstrap == nullptr) {
     return true;
@@ -2555,6 +2586,18 @@ static bool ReadBootstrapConfig(yyjson_val* root,
       return false;
     }
     config->desktop_id = desktop_id;
+  }
+
+  const auto app_id_value = yyjson_obj_get(bootstrap, kMuonConfigAppIdKey);
+  if (app_id_value != nullptr) {
+    if (!yyjson_is_str(app_id_value)) {
+      *error_message = "muon.json bootstrap.appId must be a string";
+      return false;
+    }
+    const auto app_id = TrimAscii(yyjson_get_str(app_id_value));
+    if (!app_id.empty()) {
+      config->app_id = SanitizeAppId(app_id);
+    }
   }
 
   const auto value =
@@ -2635,12 +2678,9 @@ static bool LoadMuonConfigFromEmbeddedPayload(
   }
 
   MuonConfigPathBases path_bases;
-  path_bases.default_browser_profile = embedded_base_directory;
-  path_bases.has_default_browser_profile = true;
   UpdateConfigPathBases(root, embedded_base_directory, &path_bases);
   ResolveConfigPathsFromBases(root, path_bases, config);
-  return ResolveDefaultConfigPathsFromBases(root, path_bases, config,
-                                            error_message);
+  return ResolveDefaultConfigPathsFromBases(root, config, error_message);
 }
 
 static bool LoadMuonConfigPathSequence(
@@ -2678,9 +2718,6 @@ static bool LoadMuonConfigPathSequence(
     if (document.value == nullptr) {
       continue;
     }
-    path_bases.default_browser_profile = base_directory;
-    path_bases.has_default_browser_profile = true;
-
     const auto root = yyjson_doc_get_root(document.value);
     if (!yyjson_is_obj(root)) {
       *error_message = "muon.json root must be an object";
@@ -2705,8 +2742,7 @@ static bool LoadMuonConfigPathSequence(
     return false;
   }
   ResolveConfigPathsFromBases(root, path_bases, config);
-  return ResolveDefaultConfigPathsFromBases(root, path_bases, config,
-                                            error_message);
+  return ResolveDefaultConfigPathsFromBases(root, config, error_message);
 }
 
 std::filesystem::path GetDefaultMuonConfigPath() {

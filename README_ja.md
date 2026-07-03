@@ -445,6 +445,7 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
   デフォルトでは、 `asset://main/**` にのみ許可されます。これ以外のページからは、muonプラグイン関数にアクセス出来ません。
 - `name` は、プラグイン名です。内蔵プラグインに限り、特別な `"internal"` を使用します。
   その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
+  外部プラグインでは、任意で `sha1` に40桁の16進SHA-1を指定すると、ライブラリ読み込み前にファイル内容が検証されます。
   `spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
   これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
@@ -1180,6 +1181,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `capabilities`               | `readonly object[]`           | `[]`                   | `validate` モードで使用するcapabilityポリシーです。通常はViteプラグインが生成します。 |
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
+| `plugins[].sha1`             | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1です。                           |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -1187,6 +1189,8 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `plugins[].imports[].allow`    | `readonly string[]`         | なし                   | そのimportルールで許可するプラグイン関数パスglobです。                            |
 
 - `path` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
+- `plugins[].sha1` は40桁の16進数文字列です。`internal` プラグインには指定できません。
+  指定された場合、muonは `.so` / `.dll` を読み込む前にファイルのSHA-1を計算し、一致しなければ起動に失敗します。
 - `mode` に `"validate"` を指定した場合、Viteなどのバンドラーが生成したcapability付きvirtual module importからだけプラグイン関数を呼び出せます。
   `"simple"` では、従来通り `window.muon` とその下の名前空間オブジェクトをページに公開します。
 - `pages` は、ページにプラグインAPIブリッジを注入するかどうかだけを制御します。
@@ -1343,6 +1347,7 @@ muon({
 | `pages`                      | `readonly string[]`           | `plugin.pages`         | プラグインAPIブリッジをページへ注入するURLの許可リストです。                      |
 | `plugins`                    | `readonly object[]`           | `plugin.plugins`       | 有効化するプラグインとimport許可のリストです。                                    |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
+| `plugins[].sha1`             | `string`                      | なし                   | 外部プラグインファイルの読み込み前に検証するSHA-1です。                           |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimporterごとのcapability import許可リストです。        |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | Vite project rootからの相対importerパスglobです。                                  |

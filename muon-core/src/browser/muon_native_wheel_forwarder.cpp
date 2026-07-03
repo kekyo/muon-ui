@@ -7,6 +7,8 @@
 #include "browser/muon_native_wheel_forwarder.h"
 
 #include "browser/muon_title_bar.h"
+#include "config/muon_linux_display_backend.h"
+#include "config/muon_startup.h"
 #include "log/muon_close_debug_log.h"
 
 #include "include/cef_task.h"
@@ -14,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <set>
 #include <sstream>
 #include <vector>
@@ -1306,6 +1309,13 @@ static void StopMuonX11WheelThread() {
 
 static void RegisterMuonX11WheelForwarder(CefWindowHandle window_handle) {
   if (window_handle == 0) {
+    return;
+  }
+  if (ResolveMuonLinuxDisplayBackend(GetMuonStartupCommandLine(),
+                                     std::getenv("XDG_SESSION_TYPE"),
+                                     std::getenv("WAYLAND_DISPLAY"),
+                                     std::getenv("DISPLAY")) !=
+      kMuonLinuxDisplayBackendX11) {
     return;
   }
   auto wake_thread = false;

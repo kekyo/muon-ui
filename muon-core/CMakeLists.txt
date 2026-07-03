@@ -665,6 +665,7 @@ set(APP_SOURCES
   src/config/muon_autostart.cpp
   src/config/muon_config.cpp
   src/config/muon_glob.cpp
+  src/config/muon_linux_display_backend.cpp
   src/config/muon_paths.cpp
   src/config/muon_startup.cpp
   src/log/muon_log.cpp
@@ -709,6 +710,7 @@ set(APP_HEADERS
   src/config/muon_autostart.h
   src/config/muon_config.h
   src/config/muon_glob.h
+  src/config/muon_linux_display_backend.h
   src/config/muon_paths.h
   src/config/muon_startup.h
   src/log/muon_log.h
@@ -1375,6 +1377,8 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
+    src/config/muon_linux_display_backend.cpp
+    src/config/muon_startup.cpp
     src/plugins/muon_type_metadata.cpp
     src/browser/muon_window_delegate.cpp
     src/browser/muon_window_state.cpp
@@ -1468,6 +1472,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_config_network_test)
   target_compile_features(muon_config_network_test PRIVATE cxx_std_20)
+  target_compile_definitions(muon_config_network_test PRIVATE
+    MUON_CORE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
   target_include_directories(muon_config_network_test PRIVATE
     include
     src

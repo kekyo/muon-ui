@@ -19,6 +19,10 @@
 #include <string>
 #include <vector>
 
+#ifndef MUON_CORE_SOURCE_DIR
+#define MUON_CORE_SOURCE_DIR "."
+#endif
+
 static bool Expect(bool condition, const std::string& message) {
   if (!condition) {
     std::cerr << message << "\n";
@@ -777,6 +781,37 @@ static bool RunConfigJson5LoadingTest(
                 "JSON5 network.allow count is wrong") &&
          Expect(config.network.allow[0] == "https://json5.example/**",
                 "JSON5 network.allow pattern changed");
+}
+
+static bool ExpectDebugConfig(const std::filesystem::path& path,
+                              const std::string& message) {
+  MuonConfig config;
+  return LoadConfigExpectSuccess(path, &config) &&
+         Expect(config.browser.plugin.mode == kMuonBrowserPluginModeSimple,
+                message + " plugin.mode is not simple") &&
+         Expect(config.browser.plugin.allow.size() == 2,
+                message + " plugin.pages pattern count is wrong") &&
+         Expect(config.browser.plugin.allow[0] == "asset://main/**",
+                message + " first plugin.pages pattern changed") &&
+         Expect(config.browser.plugin.allow[1] == "data:**",
+                message + " second plugin.pages pattern changed") &&
+         Expect(config.plugin.plugins.size() == 1,
+                message + " plugin.plugins entry count changed") &&
+         Expect(config.plugin.plugins[0].name == "internal",
+                message + " plugin.plugins entry name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 1,
+                message + " plugin.plugins allow count changed") &&
+         Expect(config.plugin.plugins[0].allow[0] == "muon.**",
+                message + " plugin.plugins allow value changed");
+}
+
+static bool RunDebugConfigLoadingTest() {
+  const auto config_directory =
+      std::filesystem::path(MUON_CORE_SOURCE_DIR) / "config";
+  return ExpectDebugConfig(config_directory / "muon.dev.json",
+                           "muon.dev.json") &&
+         ExpectDebugConfig(config_directory / "muon.dev.linux.json",
+                           "muon.dev.linux.json");
 }
 
 static bool RunLaunchSourceProfilePathTest(
@@ -2500,6 +2535,7 @@ int main() {
 
   const auto passed = RunConfigLoadingTest(test_directory) &&
                       RunConfigJson5LoadingTest(test_directory) &&
+                      RunDebugConfigLoadingTest() &&
                       RunLaunchSourceProfilePathTest(test_directory) &&
                       RunDefaultConfigSearchOrderTest(test_directory) &&
                       RunCommandLineConfigPathTest(test_directory) &&

@@ -5,6 +5,7 @@
     ]
   },
   "plugin": {
+    "mode": "simple",
     "path": "./plugins",
     "pages": [
       "asset://main/**",

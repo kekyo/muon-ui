@@ -10,6 +10,7 @@
 #include "browser/muon_window_delegate.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
+#include "config/muon_linux_display_backend.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -327,6 +328,58 @@ static bool TestNativeTitleBarSupportDetection() {
   return Expect(IsMuonNativeTitleBarSupported({"muon"}, nullptr, nullptr,
                                              nullptr),
                 "non-Linux native title bar should remain supported");
+#endif
+}
+
+static bool TestLinuxDisplayBackendDetection() {
+#if defined(OS_LINUX)
+  return Expect(ResolveMuonLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=x11"}, "wayland",
+                    "wayland-0", ":0") == kMuonLinuxDisplayBackendX11,
+                "explicit X11 ozone platform should select X11") &&
+         Expect(ResolveMuonLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=wayland"}, "x11", nullptr,
+                    ":0") == kMuonLinuxDisplayBackendWayland,
+                "explicit Wayland ozone platform should select Wayland") &&
+         Expect(ResolveMuonLinuxDisplayBackend(
+                    {"muon", "--ozone-platform-hint=x11"}, "wayland",
+                    "wayland-0", ":0") == kMuonLinuxDisplayBackendX11,
+                "explicit X11 ozone platform hint should select X11") &&
+         Expect(ResolveMuonLinuxDisplayBackend({"muon"}, "wayland",
+                                               "wayland-0", ":0") ==
+                    kMuonLinuxDisplayBackendWayland,
+                "Wayland session should select Wayland") &&
+         Expect(ResolveMuonLinuxDisplayBackend({"muon"}, "x11", nullptr,
+                                               ":0") ==
+                    kMuonLinuxDisplayBackendX11,
+                "X11 session should select X11") &&
+         Expect(ResolveMuonLinuxDisplayBackend({"muon"}, nullptr, nullptr,
+                                               nullptr) ==
+                    kMuonLinuxDisplayBackendUnknown,
+                "missing Linux display signals should remain unknown");
+#else
+  return true;
+#endif
+}
+
+static bool TestLinuxWaylandVulkanMitigationDetection() {
+#if defined(OS_LINUX)
+  return Expect(ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=wayland"}, "x11", nullptr,
+                    ":0"),
+                "explicit Wayland ozone platform should disable CEF Vulkan") &&
+         Expect(ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon"}, "wayland", "wayland-0", ":0"),
+                "Wayland session should disable CEF Vulkan") &&
+         Expect(!ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=x11"}, "wayland",
+                    "wayland-0", ":0"),
+                "explicit X11 ozone platform should keep CEF Vulkan") &&
+         Expect(!ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
+                    {"muon"}, "x11", nullptr, ":0"),
+                "X11 session should keep CEF Vulkan");
+#else
+  return true;
 #endif
 }
 
@@ -656,6 +709,8 @@ int main() {
                  TestTitleBarManifestParsing() &&
                  TestInitialWindowWorkAreaBounds() &&
                  TestNativeTitleBarSupportDetection() &&
+                 TestLinuxDisplayBackendDetection() &&
+                 TestLinuxWaylandVulkanMitigationDetection() &&
                  TestPageDraggableRegionHitTesting() &&
                  TestPageDraggableRegionSearchKeys() &&
                  TestNativeForwarderRegistersChildWindows() &&

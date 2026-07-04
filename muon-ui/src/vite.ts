@@ -23,8 +23,16 @@ import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
 import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
+import {
+  createMuonProgressRenderer,
+  type MuonProgressCallback,
+} from "./progress.js";
 
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  progress?: MuonProgressCallback;
+}
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -424,16 +432,22 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
 
       const buildOptions =
         typeof options.build === "object" ? options.build : {};
-      await buildMuonApp(
-        createMuonBuildOptions(
-          resolvedConfig,
-          buildOptions,
-          resolveMuonRuntimePluginConfig(
-            capabilityResolver,
-            resolvedPluginAccess,
-          ),
+      const muonBuildOptions = createMuonBuildOptions(
+        resolvedConfig,
+        buildOptions,
+        resolveMuonRuntimePluginConfig(
+          capabilityResolver,
+          resolvedPluginAccess,
         ),
       );
+      const progressRenderer = createMuonProgressRenderer();
+      (muonBuildOptions as InternalMuonBuildOptions).progress =
+        progressRenderer.report;
+      try {
+        await buildMuonApp(muonBuildOptions);
+      } finally {
+        progressRenderer.flush();
+      }
     },
   };
 

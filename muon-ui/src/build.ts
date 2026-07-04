@@ -52,6 +52,7 @@ import {
 } from "./linux-desktop.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "./app-icon.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
+import type { MuonProgressCallback } from "./progress.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -77,6 +78,10 @@ type BuildConfig = {
   config: JsonObject;
   directory: string;
 };
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  progress?: MuonProgressCallback;
+}
 
 type ZipEntry = {
   name: string;
@@ -300,6 +305,7 @@ export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
 export const buildMuonApp = async (
   options: MuonBuildOptions = {},
 ): Promise<MuonBuildResult> => {
+  const progress = (options as InternalMuonBuildOptions).progress;
   const root = resolve(options.root ?? process.cwd());
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
   const targets = resolveBuildTargets(options);
@@ -360,7 +366,12 @@ export const buildMuonApp = async (
 
   const results: MuonBuildTargetResult[] = [];
 
-  for (const target of targets) {
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index] as MuonBuildTarget;
+    progress?.({
+      phase: "build",
+      status: `Building Muon target ${target} (${index + 1}/${targets.length})`,
+    });
     const result = await buildMuonTarget({
       packageDirectory,
       root,
@@ -375,8 +386,13 @@ export const buildMuonApp = async (
       salt,
       browserStartPage: options.browserStartPage,
       includeRuntimeHelper: options.includeRuntimeHelper === true,
+      progress,
     });
     results.push(result);
+    progress?.({
+      phase: "build",
+      status: `Built ${result.outputPath}`,
+    });
   }
 
   return {
@@ -658,6 +674,7 @@ const buildMuonTarget = async (input: {
   salt: Buffer;
   browserStartPage: string | undefined;
   includeRuntimeHelper: boolean;
+  progress: MuonProgressCallback | undefined;
 }): Promise<MuonBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
   const sourceRuntimePath = join(
@@ -726,6 +743,10 @@ const buildMuonTarget = async (input: {
     await chmod(runtimeHelperPath, executableMode);
   }
 
+  input.progress?.({
+    phase: "build",
+    status: "Creating assets.zip",
+  });
   const asset = await writeAssetArchive(
     input.assetInput,
     assetZipPath,
@@ -741,6 +762,10 @@ const buildMuonTarget = async (input: {
     input.browserStartPage,
   );
 
+  input.progress?.({
+    phase: "build",
+    status: "Embedding config",
+  });
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
     await embedMuonConfigInRuntime({
       runtimePath: outputPath,
@@ -762,6 +787,10 @@ const buildMuonTarget = async (input: {
   });
 
   if (descriptor.os === "windows") {
+    input.progress?.({
+      phase: "build",
+      status: "Updating Windows resources",
+    });
     await updateWindowsPeIconResource({
       executablePath: join(outputPath, descriptor.runtimeExecutableName),
       resource: input.windowsResource,
@@ -775,6 +804,10 @@ const buildMuonTarget = async (input: {
       cwd: input.root,
     });
   } else if (descriptor.os === "linux") {
+    input.progress?.({
+      phase: "build",
+      status: "Writing Linux desktop files",
+    });
     await writeLinuxDesktopDistributionFiles(outputPath, input.linuxDesktop);
   }
 

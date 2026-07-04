@@ -36,6 +36,26 @@ import type { MuonBuildTarget } from "../src/build.js";
 const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
 
+const runMuonCli = async (
+  root: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<{ stderr: string; stdout: string }> => {
+  const result = await execFileAsync(
+    process.execPath,
+    [resolve("dist", "cli.cjs"), ...args],
+    {
+      cwd: root,
+      env: environment,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  return {
+    stderr: result.stderr,
+    stdout: result.stdout,
+  };
+};
+
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   cleanupDirectories.push(directory);
@@ -498,6 +518,43 @@ describe("muon pack", () => {
         "dist-muon/linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
+  });
+
+  it("writes build and packaging progress from the muon pack CLI while keeping JSON stdout", async () => {
+    const root = await createTemporaryDirectory("muon-pack-cli-progress-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    const environment = await createFakePackagingToolEnvironment(root);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    const result = await runMuonCli(
+      root,
+      ["pack", "--type", "deb", "--json"],
+      environment,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      artifacts: readonly { path: string; target: string; type: string }[];
+    };
+    const artifactPath = join(
+      root,
+      "artifacts",
+      "packed-sample-1.2.3-amd64.deb",
+    );
+
+    expect(parsed.artifacts).toEqual([
+      {
+        path: artifactPath,
+        target: "linux-amd64",
+        type: "deb",
+      },
+    ]);
+    expect(result.stderr).toContain("Building distributions");
+    expect(result.stderr).toContain("Running Vite build");
+    expect(result.stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Packaging deb linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Running dpkg-deb");
+    expect(result.stderr).toContain(`Wrote ${artifactPath}`);
   });
 
   it("packages Vite output under the configured base path when the Muon plugin controls pack", async () => {

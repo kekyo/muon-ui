@@ -62,6 +62,7 @@ import {
   quoteDesktopExecArgument,
   type MuonLinuxDesktopOptions,
 } from "./linux-desktop.js";
+import type { MuonProgressCallback } from "./progress.js";
 
 const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
 const supportedLinuxSandboxModes = ["disabled", "setuid"] as const;
@@ -246,6 +247,14 @@ interface PackageMetadata {
 interface MuonPackTargetPlan {
   target: MuonBuildTarget;
   types: MuonPackType[];
+}
+
+interface InternalMuonPackOptions extends MuonPackOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
 }
 
 const isJsonObject = (value: unknown): value is JsonObject =>
@@ -638,6 +647,7 @@ const packageDeb = async (
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
   linuxSandbox: MuonLinuxSandboxMode,
+  progress: MuonProgressCallback | undefined,
 ): Promise<MuonPackArtifact> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "linux") {
@@ -782,6 +792,10 @@ const packageDeb = async (
     `${metadata.packageName}-${metadata.version}-${architecture}.deb`,
   );
   await mkdir(dirname(outputPath), { recursive: true });
+  progress?.({
+    phase: "pack",
+    status: "Running dpkg-deb",
+  });
   await runTool(
     "dpkg-deb",
     ["--root-owner-group", "--build", packageRoot, outputPath],
@@ -812,6 +826,7 @@ const packageNsis = async (
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
+  progress: MuonProgressCallback | undefined,
 ): Promise<MuonPackArtifact> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "windows") {
@@ -882,6 +897,10 @@ const packageNsis = async (
       "",
     ].join("\n"),
   );
+  progress?.({
+    phase: "pack",
+    status: "Running makensis",
+  });
   await runTool("makensis", [scriptPath], root, environment);
   if ((await statOrUndefined(outputPath)) === undefined) {
     throw new Error(`makensis did not create installer: ${outputPath}`);
@@ -962,6 +981,7 @@ const reapplyPackWindowsResources = async (
 export const packMuonApp = async (
   options: MuonPackOptions,
 ): Promise<MuonPackResult> => {
+  const progress = (options as InternalMuonPackOptions).progress;
   const cwd = resolve(options.root ?? process.cwd());
   const environment = options.environment ?? process.env;
   const project = await loadMuonBuildSequenceProject(cwd);
@@ -1017,6 +1037,9 @@ export const packMuonApp = async (
   if (linuxDesktopOptions !== undefined) {
     buildOptions.linuxDesktop = linuxDesktopOptions;
   }
+  if (progress !== undefined) {
+    (buildOptions as InternalMuonBuildSequenceOptions).progress = progress;
+  }
   const windowsResourceConfig = await readMuonConfigForWindowsResource(
     root,
     options.configPath,
@@ -1038,6 +1061,10 @@ export const packMuonApp = async (
       copyright: undefined,
     },
   });
+  progress?.({
+    phase: "pack",
+    status: "Building distributions",
+  });
   const build = await runMuonBuildSequence(buildOptions, project);
   if (options.packageVersion !== undefined) {
     await reapplyPackWindowsResources(
@@ -1055,37 +1082,51 @@ export const packMuonApp = async (
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
   const artifacts: MuonPackArtifact[] = [];
+  const totalArtifacts = targetPlan.reduce(
+    (sum, entry) => sum + entry.types.length,
+    0,
+  );
+  let artifactIndex = 0;
   for (const target of build.targets) {
     for (const type of typesByTarget.get(target.target) ?? []) {
+      artifactIndex += 1;
+      progress?.({
+        phase: "pack",
+        status: `Packaging ${type} ${target.target} (${artifactIndex}/${totalArtifacts})`,
+      });
+      let artifact: MuonPackArtifact;
       if (type === "zip") {
-        artifacts.push(await packageZip(target, metadata, artifactsRoot));
+        artifact = await packageZip(target, metadata, artifactsRoot);
       } else if (type === "tar.gz") {
-        artifacts.push(await packageTarGz(target, metadata, artifactsRoot));
+        artifact = await packageTarGz(target, metadata, artifactsRoot);
       } else if (type === "deb") {
-        artifacts.push(
-          await packageDeb(
-            root,
-            target,
-            metadata,
-            artifactsRoot,
-            packageBuildRoot,
-            environment,
-            linuxSandbox,
-          ),
+        artifact = await packageDeb(
+          root,
+          target,
+          metadata,
+          artifactsRoot,
+          packageBuildRoot,
+          environment,
+          linuxSandbox,
+          progress,
         );
       } else {
-        artifacts.push(
-          await packageNsis(
-            root,
-            target,
-            metadata,
-            windowsResource,
-            artifactsRoot,
-            packageBuildRoot,
-            environment,
-          ),
+        artifact = await packageNsis(
+          root,
+          target,
+          metadata,
+          windowsResource,
+          artifactsRoot,
+          packageBuildRoot,
+          environment,
+          progress,
         );
       }
+      artifacts.push(artifact);
+      progress?.({
+        phase: "pack",
+        status: `Wrote ${artifact.path}`,
+      });
     }
   }
   return {

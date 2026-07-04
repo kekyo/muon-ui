@@ -20,6 +20,7 @@ import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
 import { mergeMuonLinuxDesktopOptions } from "./linux-desktop.js";
+import type { MuonProgressCallback } from "./progress.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
@@ -50,6 +51,14 @@ export interface MuonBuildSequenceProject {
 export interface MuonBuildSequenceOptions extends MuonBuildOptions {
   /** Target default used only when no Muon Vite plugin defines build options. */
   defaultAllTargets?: boolean;
+}
+
+interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  progress?: MuonProgressCallback;
 }
 
 const isMissingVitePackageError = (error: unknown): boolean => {
@@ -244,6 +253,7 @@ export const runMuonBuildSequence = async (
   options: MuonBuildSequenceOptions = {},
   loadedProject?: MuonBuildSequenceProject,
 ): Promise<MuonBuildResult> => {
+  const progress = (options as InternalMuonBuildSequenceOptions).progress;
   const project =
     loadedProject ??
     (await loadMuonBuildSequenceProject(options.root ?? process.cwd()));
@@ -266,6 +276,10 @@ export const runMuonBuildSequence = async (
     if (packagedAssetOptions.browserStartPage !== undefined) {
       buildOptions.browserStartPage = packagedAssetOptions.browserStartPage;
     }
+    progress?.({
+      phase: "build",
+      status: "Running Vite build",
+    });
     await runViteBuild(project.viteBuildRoot);
   } else if (
     options.defaultAllTargets !== undefined &&
@@ -276,5 +290,8 @@ export const runMuonBuildSequence = async (
   }
 
   copyDefinedBuildOptions(buildOptions, options, usesViteAssets);
+  if (progress !== undefined) {
+    (buildOptions as InternalMuonBuildOptions).progress = progress;
+  }
   return await buildMuonApp(buildOptions);
 };

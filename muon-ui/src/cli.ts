@@ -27,6 +27,10 @@ import { packMuonApp, type MuonPackOptions } from "./pack.js";
 import type { MuonWindowsResourceOptions } from "./windows-resource.js";
 import type { MuonLinuxDesktopOptions } from "./linux-desktop.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
+import {
+  createMuonProgressRenderer,
+  type MuonProgressCallback,
+} from "./progress.js";
 
 interface PrepareCommandOptions {
   muonPath: string | undefined;
@@ -113,6 +117,14 @@ interface DevCommandOptions {
   assets: string | undefined;
   debugger: boolean | undefined;
   json: boolean | undefined;
+}
+
+interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonPackOptions extends MuonPackOptions {
+  progress?: MuonProgressCallback;
 }
 
 const readTargetValues = (value: string): string[] => {
@@ -296,7 +308,16 @@ const runBuildCommand = async (
     buildOptions.packageDirectory = commandOptions.packageDirectory;
   }
 
-  const result = await runMuonBuildSequence(buildOptions);
+  const progressRenderer = createMuonProgressRenderer();
+  (buildOptions as InternalMuonBuildSequenceOptions).progress =
+    progressRenderer.report;
+  const result = await (async () => {
+    try {
+      return await runMuonBuildSequence(buildOptions);
+    } finally {
+      progressRenderer.flush();
+    }
+  })();
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -369,7 +390,15 @@ const runPackCommand = async (
     packOptions.author = commandOptions.author;
   }
 
-  const result = await packMuonApp(packOptions);
+  const progressRenderer = createMuonProgressRenderer();
+  (packOptions as InternalMuonPackOptions).progress = progressRenderer.report;
+  const result = await (async () => {
+    try {
+      return await packMuonApp(packOptions);
+    } finally {
+      progressRenderer.flush();
+    }
+  })();
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
   } else {

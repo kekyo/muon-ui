@@ -383,6 +383,32 @@ static bool TestLinuxWaylandVulkanMitigationDetection() {
 #endif
 }
 
+static bool TestLinuxWaylandAngleOpenGlMitigationDetection() {
+#if defined(OS_LINUX)
+  return Expect(ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=wayland"}, "x11", nullptr,
+                    ":0"),
+                "explicit Wayland ozone platform should use ANGLE OpenGL") &&
+         Expect(ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+                    {"muon"}, "wayland", "wayland-0", ":0"),
+                "Wayland session should use ANGLE OpenGL") &&
+         Expect(!ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+                    {"muon", "--use-gl=desktop"}, "wayland", "wayland-0",
+                    ":0"),
+                "explicit use-gl switch should keep CEF GL selection") &&
+         Expect(!ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+                    {"muon", "--use-angle=vulkan"}, "wayland", "wayland-0",
+                    ":0"),
+                "explicit use-angle switch should keep CEF ANGLE selection") &&
+         Expect(!ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+                    {"muon", "--ozone-platform=x11"}, "wayland",
+                    "wayland-0", ":0"),
+                "explicit X11 ozone platform should keep CEF GL selection");
+#else
+  return true;
+#endif
+}
+
 static bool TestPageDraggableRegionHitTesting() {
   const auto regions = std::vector<CefDraggableRegion>{
       CefDraggableRegion(CefRect(10, 20, 200, 120), true),
@@ -711,6 +737,7 @@ int main() {
                  TestNativeTitleBarSupportDetection() &&
                  TestLinuxDisplayBackendDetection() &&
                  TestLinuxWaylandVulkanMitigationDetection() &&
+                 TestLinuxWaylandAngleOpenGlMitigationDetection() &&
                  TestPageDraggableRegionHitTesting() &&
                  TestPageDraggableRegionSearchKeys() &&
                  TestNativeForwarderRegistersChildWindows() &&

@@ -53,3 +53,20 @@ bool ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
     const char* xdg_session_type,
     const char* wayland_display,
     const char* display);
+
+/**
+ * Returns whether CEF should be forced to ANGLE's OpenGL backend for the
+ * resolved Linux display backend.
+ *
+ * @param command_line Process command line, including argv[0] when available.
+ * @param xdg_session_type XDG_SESSION_TYPE environment value, or null.
+ * @param wayland_display WAYLAND_DISPLAY environment value, or null.
+ * @param display DISPLAY environment value, or null.
+ * @return true when the selected display backend is Wayland and no explicit
+ * GL or ANGLE backend switch was supplied.
+ */
+bool ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+    const std::vector<std::string>& command_line,
+    const char* xdg_session_type,
+    const char* wayland_display,
+    const char* display);

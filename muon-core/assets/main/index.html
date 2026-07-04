@@ -824,6 +824,143 @@
       let fsWatcher = null;
       let activeDialogController = null;
 
+      const setButtonTitle = (selector, title) => {
+        const button = document.querySelector(selector);
+        if (button instanceof HTMLButtonElement) {
+          button.title = title;
+        }
+      };
+
+      const setActionButtonTitles = (attributeName, titles) => {
+        for (const [actionName, title] of Object.entries(titles)) {
+          setButtonTitle(`[${attributeName}="${actionName}"]`, title);
+        }
+      };
+
+      const applyButtonTooltips = () => {
+        setButtonTitle(
+          "#write",
+          'Write: window.muon.fs.writeTextFile(path, text, "utf8")',
+        );
+        setButtonTitle(
+          "#read",
+          'Read: window.muon.fs.readTextFile(path, "utf8")',
+        );
+        setActionButtonTitles("data-fs-action", {
+          readFile: "ReadFile: window.muon.fs.readFile(path, options)",
+          writeFile: "WriteFile: window.muon.fs.writeFile(path, data, options)",
+          writeTextFile:
+            "WriteText: window.muon.fs.writeTextFile(path, text, encoding, options)",
+          readTextFile:
+            "ReadText: window.muon.fs.readTextFile(path, encoding, options)",
+          stat: "Stat: window.muon.fs.stat(path, options)",
+          lstat: "Lstat: window.muon.fs.lstat(path, options)",
+          exists: "Exists: window.muon.fs.exists(path, options)",
+          access: "Access: window.muon.fs.access(path, options)",
+          readdir: "Readdir: window.muon.fs.readdir(path, options)",
+          mkdir: "Mkdir: window.muon.fs.mkdir(path, options)",
+          rename: "Rename: window.muon.fs.rename(path, targetPath, options)",
+          copyFile:
+            "CopyFile: window.muon.fs.copyFile(path, targetPath, options)",
+          appendFile:
+            "AppendFile: window.muon.fs.appendFile(path, data, options)",
+          appendTextFile:
+            "AppendText: window.muon.fs.appendTextFile(path, text, encoding, options)",
+          truncate: "Truncate: window.muon.fs.truncate(path, length, options)",
+          realpath: "Realpath: window.muon.fs.realpath(path, options)",
+          readlink: "Readlink: window.muon.fs.readlink(path, options)",
+          symlink:
+            "Symlink: window.muon.fs.symlink(target, path, type, options)",
+          watchStart: "Watch: window.muon.fs.watch(path, listener, options)",
+          watchStop: "WatchClose: watcher.close()",
+          rm: "Rm: window.muon.fs.rm(path, options)",
+          unlink: "Unlink: window.muon.fs.unlink(path, options)",
+          rmdir: "Rmdir: window.muon.fs.rmdir(path, options)",
+        });
+        setActionButtonTitles("data-dialog-action", {
+          selectFile:
+            "SelectFile: window.muon.fs.dialogs.selectFile(options)",
+          selectFiles:
+            "SelectFiles: window.muon.fs.dialogs.selectFiles(options)",
+          selectDirectory:
+            "SelectDirectory: window.muon.fs.dialogs.selectDirectory(options)",
+          selectDirectories:
+            "SelectDirectories: window.muon.fs.dialogs.selectDirectories(options)",
+          selectSaveFile:
+            "SelectSaveFile: window.muon.fs.dialogs.selectSaveFile(options)",
+        });
+        setButtonTitle("#dialog-abort", "Abort active: AbortController.abort()");
+        setActionButtonTitles("data-environment-action", {
+          getVariables:
+            "GetVariables: window.muon.environments.getVariables()",
+          getCommandLine:
+            "GetCommandLine: window.muon.environments.getCommandLine()",
+          getProcessId:
+            "GetProcessId: window.muon.environments.getProcessId()",
+          getRuntimeInfo:
+            "GetRuntimeInfo: window.muon.environments.getRuntimeInfo()",
+          getAutostart:
+            "GetAutostart: window.muon.environments.getAutostart()",
+          setAutostart:
+            "SetAutostart: window.muon.environments.setAutostart(enabled)",
+        });
+        setButtonTitle(
+          "#executor-load-preset",
+          "LoadPreset: fill window.muon.executor.spawn(options) sample",
+        );
+        setButtonTitle(
+          "#executor-spawn",
+          "Spawn: window.muon.executor.spawn(options)",
+        );
+        setActionButtonTitles("data-bootstrap-action", {
+          getSettings: "GetSettings: window.muon.bootstrap.getSettings()",
+          setSettings: "SetSettings: window.muon.bootstrap.setSettings(settings)",
+          triggerUpdate:
+            "TriggerUpdate: window.muon.bootstrap.triggerUpdate()",
+        });
+        setButtonTitle(
+          "#open-connected-popup",
+          "OpenPopup: window.open(url, target, features)",
+        );
+        setButtonTitle(
+          "#open-noopener-popup",
+          "OpenNoopenerPopup: window.open(url, target, features)",
+        );
+        setActionButtonTitles("data-browser-action", {
+          reload: "Reload: window.muon.browser.reload()",
+          hardReload: "HardReload: window.muon.browser.hardReload()",
+          toggleFullscreen:
+            "ToggleFullscreen: window.muon.browser.toggleFullscreen()",
+          enterFullscreen:
+            "EnterFullscreen: window.muon.browser.enterFullscreen()",
+          exitFullscreen:
+            "ExitFullscreen: window.muon.browser.exitFullscreen()",
+          zoomIn: "ZoomIn: window.muon.browser.zoomIn()",
+          zoomOut: "ZoomOut: window.muon.browser.zoomOut()",
+          resetZoom: "ResetZoom: window.muon.browser.resetZoom()",
+          maximize: "Maximize: window.muon.browser.maximize()",
+          restore: "Restore: window.muon.browser.restore()",
+          minimize: "Minimize: window.muon.browser.minimize()",
+          focus: "Focus: window.muon.browser.focus()",
+          blur: "Blur: window.muon.browser.blur()",
+          show: "Show: window.muon.browser.show()",
+          hide: "Hide: window.muon.browser.hide()",
+          hideShow:
+            "HideShow: window.muon.browser.hide(); window.muon.browser.show()",
+          getWindowBounds:
+            "GetWindowBounds: window.muon.browser.getWindowBounds()",
+          setWindowBounds:
+            "SetWindowBounds: window.muon.browser.setWindowBounds(bounds)",
+          setTitleBarVisibility:
+            "SetTitleBarVisibility: window.muon.browser.setTitleBarVisibility(visible)",
+          setTitleBarIcon:
+            "SetTitleBarIcon: window.muon.browser.setTitleBarIcon(path)",
+          recycle: "Recycle: window.muon.browser.recycle()",
+          shutdown: "Shutdown: window.muon.browser.shutdown(exitCode)",
+          close: "Close: window.muon.browser.close()",
+        });
+      };
+
       const setOutput = (output, message, state) => {
         output.textContent = message;
         output.dataset.state = state;
@@ -1541,6 +1678,7 @@
         });
       }
 
+      applyButtonTooltips();
       loadExecutorPreset();
       handlePopupMode();
     </script>

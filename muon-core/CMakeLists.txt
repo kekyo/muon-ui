@@ -663,6 +663,7 @@ set(APP_SOURCES
   src/browser/muon_window_title.cpp
   src/browser/show_dev_tools_task.cpp
   src/config/muon_autostart.cpp
+  src/config/muon_cef_settings.cpp
   src/config/muon_config.cpp
   src/config/muon_glob.cpp
   src/config/muon_linux_display_backend.cpp
@@ -708,6 +709,7 @@ set(APP_HEADERS
   src/browser/muon_window_title.h
   src/browser/show_dev_tools_task.h
   src/config/muon_autostart.h
+  src/config/muon_cef_settings.h
   src/config/muon_config.h
   src/config/muon_glob.h
   src/config/muon_linux_display_backend.h
@@ -1486,8 +1488,25 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${MUON_CARDIO_GLIB_TARGETS}
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}
-    )
+  )
   MUON_APPLY_SANITIZERS(muon_config_network_test)
+  add_executable(muon_cef_settings_test
+    tests/muon_cef_settings_test.cpp
+    src/config/muon_cef_settings.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_cef_settings_test)
+  target_compile_features(muon_cef_settings_test PRIVATE cxx_std_20)
+  target_include_directories(muon_cef_settings_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_cef_settings_test PRIVATE
+    libcef_dll_wrapper
+    libcef_lib
+    ${CEF_STANDARD_LIBS}
+    ${CMAKE_DL_LIBS}
+    )
+  MUON_APPLY_SANITIZERS(muon_cef_settings_test)
   add_executable(muon_autostart_test
     tests/muon_autostart_test.cpp
     src/muon_string_helpers.cpp
@@ -1569,6 +1588,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME internal_helpers
     COMMAND muon_internal_helpers_test
+    )
+  add_test(
+    NAME cef_settings
+    COMMAND muon_cef_settings_test
     )
   add_test(
     NAME config_network

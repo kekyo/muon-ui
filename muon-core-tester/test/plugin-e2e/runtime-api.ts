@@ -2795,7 +2795,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       }
 
       const commandLines = await listProcessGroupCommandLines(processGroupId);
-      expect(commandLines.join("\n")).not.toContain("--no-sandbox");
+      expect(commandLines.join("\n")).not.toContain("--remote-debugging-port");
       await expect(
         listCdpTargets({ port: MUON_PORT, timeoutMs: 500 }),
       ).rejects.toThrow();

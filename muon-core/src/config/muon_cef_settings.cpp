@@ -6,6 +6,9 @@
 
 #include "config/muon_cef_settings.h"
 
+#include <cstdlib>
+#include <string_view>
+
 static std::filesystem::path ResolveExecutableRelativePath(
     const std::filesystem::path& executable_directory,
     const std::filesystem::path& path) {
@@ -57,12 +60,17 @@ static cef_log_severity_t GetCefLogSeverity(MuonLogLevel level) {
   return LOGSEVERITY_INFO;
 }
 
+static bool ShouldEnableCefSandbox() {
+  const char* value = std::getenv("MUON_CEF_SANDBOX");
+  return value != nullptr && std::string_view(value) == "1";
+}
+
 CefSettings CreateMuonCefSettings(
     const MuonConfig& config,
     const std::filesystem::path& executable_directory,
     const std::filesystem::path& cef_log_path) {
   CefSettings settings;
-  settings.no_sandbox = true;
+  settings.no_sandbox = !ShouldEnableCefSandbox();
   settings.use_views_default_popup = true;
   if (config.cdp.enable) {
     settings.remote_debugging_port = config.cdp.port;

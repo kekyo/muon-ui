@@ -6,6 +6,7 @@
 
 #include "config/muon_cef_settings.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -21,7 +22,24 @@ static std::string ReadCefSettingString(cef_string_t* value) {
   return CefString(value).ToString();
 }
 
+static void SetEnvironmentValue(const char* name, const char* value) {
+#if defined(_WIN32)
+  _putenv_s(name, value);
+#else
+  setenv(name, value, 1);
+#endif
+}
+
+static void ClearEnvironmentValue(const char* name) {
+#if defined(_WIN32)
+  _putenv_s(name, "");
+#else
+  unsetenv(name);
+#endif
+}
+
 static bool TestCreatesLauncherSafeCefSettings() {
+  ClearEnvironmentValue("MUON_CEF_SANDBOX");
   MuonConfig config;
   config.browser.profile = "profile";
   config.cdp.enable = true;
@@ -49,6 +67,20 @@ static bool TestCreatesLauncherSafeCefSettings() {
                 "CEF log severity was not propagated");
 }
 
+static bool TestEnablesCefSandboxWhenBootstrapRequestsIt() {
+  SetEnvironmentValue("MUON_CEF_SANDBOX", "1");
+  MuonConfig config;
+  config.browser.profile = "profile";
+
+  auto settings = CreateMuonCefSettings(
+      config, "/tmp/muon-runtime", "/tmp/muon-runtime/profile/muon-cef.log");
+  return Expect(!settings.no_sandbox,
+                "CEF sandbox was not enabled for system setuid runtime");
+}
+
 int main() {
-  return TestCreatesLauncherSafeCefSettings() ? 0 : 1;
+  return TestCreatesLauncherSafeCefSettings() &&
+                 TestEnablesCefSandboxWhenBootstrapRequestsIt()
+             ? 0
+             : 1;
 }

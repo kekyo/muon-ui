@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { createHash } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
@@ -177,6 +177,7 @@ interface ResolvedRule {
 }
 
 const virtualModulePrefix = "\0muon-capability:";
+const capabilityIdByteLength = 16;
 const moduleNamePattern =
   /^[A-Za-z_$][A-Za-z0-9_$]*:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/u;
 const jsIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
@@ -184,22 +185,15 @@ const jsIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const normalizePath = (path: string): string =>
   (path.split("?")[0] ?? "").replaceAll("\\", "/");
 
-const hashCapabilityRule = (
-  index: number,
-  rule: MuonCapabilityImportOptions,
-): string =>
-  `cap-${createHash("sha1")
-    .update(
-      JSON.stringify({
-        index,
-        pluginName: rule.pluginName,
-        sources: [...(rule.sources ?? [])],
-        packages: [...(rule.packages ?? [])],
-        allow: [...rule.allow],
-      }),
-    )
-    .digest("hex")
-    .slice(0, 16)}`;
+const createCapabilityId = (usedIds: Set<string>): string => {
+  for (;;) {
+    const id = `cap-${randomBytes(capabilityIdByteLength).toString("hex")}`;
+    if (!usedIds.has(id)) {
+      usedIds.add(id);
+      return id;
+    }
+  }
+};
 
 const parseCapabilitySpecifier = (
   source: string,
@@ -341,9 +335,9 @@ const getExportedFunctions = (
 
 const createRuleRuntimeEntry = (
   rule: MuonCapabilityImportOptions,
-  index: number,
+  id: string,
 ): MuonCapabilityRuntimeEntry => ({
-  id: hashCapabilityRule(index, rule),
+  id,
   allow: [...rule.allow],
 });
 
@@ -436,8 +430,9 @@ export const createMuonCapabilityModuleResolver = (
   for (const rule of rules) {
     validateCapabilityRule(rule);
   }
-  const runtimeEntries = rules.map((rule, index) =>
-    createRuleRuntimeEntry(rule, index),
+  const usedCapabilityIds = new Set<string>();
+  const runtimeEntries = rules.map((rule) =>
+    createRuleRuntimeEntry(rule, createCapabilityId(usedCapabilityIds)),
   );
 
   const resolveRule = (
@@ -463,8 +458,10 @@ export const createMuonCapabilityModuleResolver = (
     const relativeImporter = toRootRelativeImporter(root, importer);
     for (let index = 0; index < rules.length; index += 1) {
       const rule = rules[index];
+      const runtimeEntry = runtimeEntries[index];
       if (
         rule === undefined ||
+        runtimeEntry === undefined ||
         !matchesCapabilityRuleImporter(rule, root, importer) ||
         !hasNamespaceFunctionAllow(parsed.namespace, rule.allow)
       ) {
@@ -472,7 +469,7 @@ export const createMuonCapabilityModuleResolver = (
       }
       return {
         index,
-        id: runtimeEntries[index]?.id ?? hashCapabilityRule(index, rule),
+        id: runtimeEntry.id,
         rule,
         namespace: parsed.namespace,
         moduleName: parsed.moduleName,

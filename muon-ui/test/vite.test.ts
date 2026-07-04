@@ -48,6 +48,7 @@ import {
   createMuonBootstrapEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
+import { createMuonCapabilityModuleResolver } from "../src/capability.js";
 import muon, { type MuonVitePluginAccessOptions } from "../src/vite.js";
 import {
   buildTestMuonBuilder,
@@ -983,6 +984,49 @@ describe("muon Vite plugin", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("generates opaque capability ids shared by runtime config and virtual modules", async () => {
+    const root = await createTemporaryDirectory("muon-vite-capability-id-");
+    await mkdir(join(root, "src", "native"), { recursive: true });
+    await mkdir(join(root, "src", "browser"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["muon.executor.spawn"],
+          pluginName: "internal",
+        },
+        {
+          sources: ["src/browser/**"],
+          allow: ["muon.browser.reload"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const runtimeConfig = resolver.getRuntimePluginConfig();
+    expect(runtimeConfig.capabilities.map((entry) => entry.allow)).toEqual([
+      ["muon.executor.spawn"],
+      ["muon.browser.reload"],
+    ]);
+    const capabilityIds = runtimeConfig.capabilities.map((entry) => entry.id);
+    expect(capabilityIds).toHaveLength(new Set(capabilityIds).size);
+    for (const capabilityId of capabilityIds) {
+      expect(capabilityId).toMatch(/^cap-[0-9a-f]{32}$/u);
+    }
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "native", "executor.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain(
+      `__muonCall(${JSON.stringify(capabilityIds[0])}, "muon.executor.spawn"`,
+    );
   });
 
   it("preserves plugin signature in generated plugin runtime config", async () => {

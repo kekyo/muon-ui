@@ -22,6 +22,7 @@ import {
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import { attachMuonVitePluginOptions } from "./vite-options.js";
 import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
+import { createVitePackagedAssetOptions } from "./vite-assets.js";
 
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
@@ -468,26 +469,6 @@ const createMuonWatchOptions = (
   ignored: mergeMuonWatchIgnored(watch?.ignored),
 });
 
-const resolvePackagedAssetBasePath = (base: string): string | undefined => {
-  const normalizedBase = base.trim();
-  if (
-    normalizedBase === "" ||
-    normalizedBase === "/" ||
-    normalizedBase === "./" ||
-    normalizedBase.startsWith("//") ||
-    /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalizedBase) ||
-    !normalizedBase.startsWith("/")
-  ) {
-    return undefined;
-  }
-
-  const normalizedPath = normalizedBase.split(/[?#]/, 1)[0] ?? "";
-  const segments = normalizedPath
-    .split("/")
-    .filter((segment) => segment.length > 0);
-  return segments.length > 0 ? segments.join("/") : undefined;
-};
-
 const createMuonBuildOptions = (
   config: ResolvedConfig,
   buildOptions: MuonViteBuildOptions,
@@ -496,18 +477,14 @@ const createMuonBuildOptions = (
   const outDir = isAbsolute(config.build.outDir)
     ? config.build.outDir
     : resolve(config.root, config.build.outDir);
-  const packagedAssetBasePath = resolvePackagedAssetBasePath(config.base);
-  const assetPrefix =
-    packagedAssetBasePath === undefined
-      ? "main"
-      : `main/${packagedAssetBasePath}`;
+  const packagedAssetOptions = createVitePackagedAssetOptions(config.base);
   const options: MuonBuildOptions = {
     root: config.root,
     assetSourcePath: outDir,
-    assetPrefix,
+    assetPrefix: packagedAssetOptions.assetPrefix,
   };
-  if (packagedAssetBasePath !== undefined) {
-    options.browserStartPage = `asset://${assetPrefix}/index.html`;
+  if (packagedAssetOptions.browserStartPage !== undefined) {
+    options.browserStartPage = packagedAssetOptions.browserStartPage;
   }
 
   if (buildOptions.allTargets !== undefined) {

@@ -142,6 +142,7 @@ const writeViteProject = async (
   root: string,
   packageDirectory: string,
   buildTargets: readonly string[],
+  base: string | undefined = undefined,
 ): Promise<void> => {
   const vitePluginUrl = pathToFileURL(resolve("dist", "vite.mjs")).href;
   await writeFile(
@@ -176,6 +177,7 @@ const writeViteProject = async (
     [
       `import muon from ${JSON.stringify(vitePluginUrl)};`,
       "export default {",
+      ...(base === undefined ? [] : [`  base: ${JSON.stringify(base)},`]),
       "  build: { outDir: 'web-dist' },",
       "  plugins: [",
       `    muon({ build: { targets: ${JSON.stringify(buildTargets)}, packageDirectory: ${JSON.stringify(packageDirectory)} } }),`,
@@ -481,6 +483,38 @@ describe("muon pack", () => {
         "dist-muon/linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
+  });
+
+  it("packages Vite output under the configured base path when the Muon plugin controls pack", async () => {
+    const root = await createTemporaryDirectory("muon-pack-vite-base-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(
+      root,
+      packageDirectory,
+      ["linux-amd64"],
+      "/sample-base/",
+    );
+
+    const result = await packMuonApp({
+      root,
+      types: ["tar.gz"],
+    });
+
+    const [target] = result.targets;
+    const entries = await readZipEntryNames(
+      join(root, "dist-muon/linux-amd64", "assets.zip"),
+    );
+    expect(entries).toContain("main/sample-base/index.html");
+    expect(
+      entries.some((entry) => entry.startsWith("main/sample-base/assets/")),
+    ).toBe(true);
+    expect(entries).not.toContain("main/index.html");
+    expect(target?.embeddedConfig.browser).toEqual({
+      initialTitleBarIcon: "asset://main/.muon/app-icon.png",
+      startPage: "asset://main/sample-base/index.html",
+    });
   });
 
   it("packages non-Vite assets without running Vite when no Muon plugin is configured", async () => {

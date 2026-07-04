@@ -17,6 +17,7 @@ import {
   getMuonVitePluginOptions,
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
+import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
 import { mergeMuonLinuxDesktopOptions } from "./linux-desktop.js";
 
@@ -35,6 +36,8 @@ export interface MuonBuildSequenceProject {
   root: string;
   /** Root passed to Vite when the sequence must run `vite build`. */
   viteBuildRoot: string;
+  /** Vite base URL used by the resolved Vite build. */
+  viteBase: string | undefined;
   /** Absolute Vite output directory used as Muon app assets. */
   viteOutputDirectory: string | undefined;
   /** Muon Vite plugin options if the project config contains the plugin. */
@@ -100,6 +103,7 @@ export const loadMuonBuildSequenceProject = async (
       return {
         root: resolvedCwd,
         viteBuildRoot: resolvedCwd,
+        viteBase: undefined,
         viteOutputDirectory: undefined,
         pluginOptions: undefined,
       };
@@ -118,6 +122,7 @@ export const loadMuonBuildSequenceProject = async (
     return {
       root: resolvedCwd,
       viteBuildRoot: resolvedCwd,
+      viteBase: undefined,
       viteOutputDirectory: undefined,
       pluginOptions: undefined,
     };
@@ -126,6 +131,7 @@ export const loadMuonBuildSequenceProject = async (
   return {
     root: resolvedConfig.root,
     viteBuildRoot: resolvedCwd,
+    viteBase: resolvedConfig.base,
     viteOutputDirectory: resolveViteOutputDirectory(resolvedConfig),
     pluginOptions,
   };
@@ -249,8 +255,14 @@ export const runMuonBuildSequence = async (
       throw new Error("Vite output directory could not be resolved.");
     }
     Object.assign(buildOptions, pluginBuildOptions);
+    const packagedAssetOptions = createVitePackagedAssetOptions(
+      project.viteBase ?? "/",
+    );
     buildOptions.assetSourcePath = project.viteOutputDirectory;
-    buildOptions.assetPrefix = "main";
+    buildOptions.assetPrefix = packagedAssetOptions.assetPrefix;
+    if (packagedAssetOptions.browserStartPage !== undefined) {
+      buildOptions.browserStartPage = packagedAssetOptions.browserStartPage;
+    }
     await runViteBuild(project.viteBuildRoot);
   } else if (
     options.defaultAllTargets !== undefined &&

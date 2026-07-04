@@ -13,6 +13,10 @@ import {
   normalizeMuonTarget,
   type MuonTarget,
 } from "./targets.js";
+import {
+  createMuonProgressRenderer,
+  type MuonProgressEvent,
+} from "./progress.js";
 
 /**
  * Options used to invoke the native Muon builder helper.
@@ -197,6 +201,9 @@ const resolveMuonBuilderExecutable = async (
 
 const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
   const args = ["runtime", "--muon-path", options.muonPath, "--json"];
+  if (!options.quiet) {
+    args.push("--progress-json");
+  }
   if (options.cefPath !== undefined) {
     args.push("--cef-path", options.cefPath);
   }
@@ -226,23 +233,6 @@ interface MuonPrepareStderrForwarder {
   flush(): void;
 }
 
-const spinnerFrames = ["-", "\\", "|", "/"] as const;
-const spinnerIntervalMilliseconds = 100;
-const terminalLineStart = "\r";
-const terminalClearLine = "\x1b[K";
-
-const isMuonPrepareStatusLine = (line: string): boolean => {
-  const trimmed = line.trimEnd();
-  return (
-    trimmed.endsWith("...") ||
-    trimmed === "Failed to prepare CEF." ||
-    trimmed.startsWith("Downloading CEF binary:")
-  );
-};
-
-const shouldKeepMuonPrepareStatusAfterLine = (line: string): boolean =>
-  line.startsWith("Muon files copied to staging:");
-
 const createPlainStderrForwarder = (): MuonPrepareStderrForwarder => ({
   write: (chunk): void => {
     process.stderr.write(chunk);
@@ -250,80 +240,52 @@ const createPlainStderrForwarder = (): MuonPrepareStderrForwarder => ({
   flush: (): void => {},
 });
 
-const createSpinnerStderrForwarder = (): MuonPrepareStderrForwarder => {
+const parseProgressJsonLine = (line: string): MuonProgressEvent | undefined => {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("{")) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return undefined;
+  }
+  const event = parsed as Record<string, unknown>;
+  if (typeof event.phase !== "string" || typeof event.status !== "string") {
+    return undefined;
+  }
+  const current =
+    typeof event.current === "number" && Number.isFinite(event.current)
+      ? event.current
+      : undefined;
+  const total =
+    typeof event.total === "number" && Number.isFinite(event.total)
+      ? event.total
+      : undefined;
+  const determinate =
+    typeof event.determinate === "boolean" ? event.determinate : undefined;
+  return {
+    phase: event.phase,
+    status: event.status,
+    ...(current === undefined ? {} : { current }),
+    ...(total === undefined ? {} : { total }),
+    ...(determinate === undefined ? {} : { determinate }),
+  };
+};
+
+const createProgressJsonStderrForwarder = (): MuonPrepareStderrForwarder => {
   let pending = "";
-  let activeStatus: string | undefined = undefined;
-  let frameIndex = 0;
-  let timer: NodeJS.Timeout | undefined = undefined;
-
-  const writeRaw = (chunk: string): void => {
-    process.stderr.write(chunk);
-  };
-
-  const stopTimer = (): void => {
-    if (timer !== undefined) {
-      clearInterval(timer);
-      timer = undefined;
-    }
-  };
-
-  const renderStatus = (): void => {
-    if (activeStatus === undefined) {
-      return;
-    }
-    const frame = spinnerFrames[frameIndex] ?? spinnerFrames[0];
-    writeRaw(
-      `${terminalLineStart}${frame} ${activeStatus}${terminalClearLine}`,
-    );
-    frameIndex = (frameIndex + 1) % spinnerFrames.length;
-  };
-
-  const ensureTimer = (): void => {
-    if (timer === undefined) {
-      timer = setInterval(renderStatus, spinnerIntervalMilliseconds);
-    }
-  };
-
-  const finishStatus = (): void => {
-    if (activeStatus === undefined) {
-      return;
-    }
-    const status = activeStatus;
-    activeStatus = undefined;
-    stopTimer();
-    frameIndex = 0;
-    writeRaw(`${terminalLineStart}${status}${terminalClearLine}\n`);
-  };
-
-  const startStatus = (status: string): void => {
-    if (activeStatus !== undefined && activeStatus !== status) {
-      finishStatus();
-    }
-    activeStatus = status;
-    renderStatus();
-    ensureTimer();
-  };
+  const renderer = createMuonProgressRenderer();
 
   const writeLine = (line: string): void => {
-    const text = line.replace(/\r?\n$/, "");
-    if (isMuonPrepareStatusLine(text)) {
-      startStatus(text.trimEnd());
-      return;
+    const event = parseProgressJsonLine(line);
+    if (event !== undefined) {
+      renderer.report(event);
     }
-    if (
-      activeStatus !== undefined &&
-      shouldKeepMuonPrepareStatusAfterLine(text)
-    ) {
-      writeRaw(
-        `${terminalLineStart}${terminalClearLine}${
-          line.endsWith("\n") ? line : `${line}\n`
-        }`,
-      );
-      renderStatus();
-      return;
-    }
-    finishStatus();
-    writeRaw(line);
   };
 
   return {
@@ -345,21 +307,17 @@ const createSpinnerStderrForwarder = (): MuonPrepareStderrForwarder => {
         pending = "";
         writeLine(line);
       }
-      finishStatus();
+      renderer.flush();
     },
   };
 };
-
-const createMuonPrepareStderrForwarder = (): MuonPrepareStderrForwarder =>
-  process.stderr.isTTY === true
-    ? createSpinnerStderrForwarder()
-    : createPlainStderrForwarder();
 
 const runMuonPrepareCommand = async (
   options: Pick<MuonPrepareOptions, "prepareExecutablePath" | "environment"> & {
     args: readonly string[];
     cwd: string | undefined;
     quiet: boolean;
+    parseProgressJson: boolean;
   },
 ): Promise<string> => {
   const executable = await resolveMuonBuilderExecutable(options);
@@ -374,7 +332,9 @@ const runMuonPrepareCommand = async (
   child.stderr.setEncoding("utf8");
   const stderrForwarder = options.quiet
     ? undefined
-    : createMuonPrepareStderrForwarder();
+    : options.parseProgressJson
+      ? createProgressJsonStderrForwarder()
+      : createPlainStderrForwarder();
   child.stdout.on("data", (chunk: string) => {
     stdout += chunk;
   });
@@ -417,6 +377,7 @@ export const runMuonPrepare = async (
     environment: options.environment,
     cwd: options.cwd,
     quiet: options.quiet,
+    parseProgressJson: !options.quiet,
     args,
   });
   const result = JSON.parse(stdout) as Partial<MuonPrepareResult>;
@@ -449,6 +410,7 @@ export const runMuonPrepareResourceUpdate = async (
     environment: options.environment,
     cwd: options.cwd,
     quiet: options.quiet,
+    parseProgressJson: false,
     args: [
       "resource",
       "--input",

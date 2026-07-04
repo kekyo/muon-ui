@@ -1238,6 +1238,68 @@ lastCatalogUpdateUnix=0
     expect(stderr).toBe("");
   });
 
+  it("writes structured JSON progress when requested by the native CLI", async () => {
+    const fixture = await createPrepareFixture();
+
+    const { stdout, stderr } = await execFileAsync(
+      prepareExecutablePath,
+      [
+        "runtime",
+        "--muon-path",
+        fixture.muonPath,
+        "--stage-dir",
+        fixture.stageDir,
+        "--target",
+        "linux-amd64",
+        "--cache-dir",
+        fixture.cacheDir,
+        "--progress-json",
+        "--json",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+        },
+      },
+    );
+
+    const result = JSON.parse(stdout) as { stagePath: string };
+    const events = stderr
+      .trim()
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("{"))
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            phase: string;
+            status: string;
+            current: number;
+            total: number;
+            determinate: boolean;
+          },
+      );
+    const downloadEvent = events.find(
+      (event) =>
+        event.phase === "downloading" &&
+        event.status === "Downloading CEF runtime..." &&
+        event.determinate &&
+        event.total > 0 &&
+        event.current > 0,
+    );
+    const installEvent = events.find(
+      (event) =>
+        event.phase === "installing" &&
+        event.status === "Installing CEF runtime..." &&
+        event.current > 0,
+    );
+
+    expect(result.stagePath).toBe(fixture.stageDir);
+    expect(downloadEvent).toBeDefined();
+    expect(installEvent).toBeDefined();
+  });
+
   it("forwards progress messages from the TypeScript wrapper", async () => {
     const fixture = await createPrepareFixture();
     const chunks: string[] = [];
@@ -1261,11 +1323,8 @@ lastCatalogUpdateUnix=0
     }
 
     const stderr = chunks.join("");
-    expect(stderr).toContain(
-      "Downloading CEF binary: version=fake-cef target=linux-amd64 distribution=minimal",
-    );
-    expect(stderr).toContain("Installing CEF runtime...");
-    expect(stderr).toContain("Muon files copied to staging: files=4");
+    expect(stderr).toContain("Downloading CEF runtime... 100%");
+    expect(stderr).toMatch(/Installing CEF runtime\.\.\. \d+ files/u);
     expect(stderr).toContain("Starting Muon...");
   });
 
@@ -1305,17 +1364,8 @@ lastCatalogUpdateUnix=0
     }
 
     const stderr = chunks.join("");
-    expect(stderr).toContain("\r- Downloading CEF binary:");
-    expect(stderr).toContain("\r- Installing CEF runtime...");
-    const muonCopiedIndex = stderr.indexOf(
-      "Muon files copied to staging: files=4",
-    );
-    const cefCopiedIndex = stderr.indexOf("CEF files copied to staging:");
-    expect(muonCopiedIndex).toBeGreaterThanOrEqual(0);
-    expect(cefCopiedIndex).toBeGreaterThan(muonCopiedIndex);
-    expect(stderr.slice(muonCopiedIndex, cefCopiedIndex)).toMatch(
-      /\r[-\\|/] Installing CEF runtime\.\.\./u,
-    );
+    expect(stderr).toMatch(/\r[-\\|/] Downloading CEF runtime\.\.\. \d+%/u);
+    expect(stderr).toMatch(/\r[-\\|/] Installing CEF runtime\.\.\. \d+ files/u);
     expect(stderr).toContain("Starting Muon...");
   });
 

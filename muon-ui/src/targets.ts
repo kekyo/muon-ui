@@ -61,6 +61,10 @@ export interface MuonTargetDescriptor {
    */
   bootstrapExecutableName: string;
   /**
+   * Optional privileged runtime helper executable file name.
+   */
+  runtimeHelperExecutableName?: string;
+  /**
    * Launcher file suffix for app bootstrap executables.
    */
   launcherExtension: string;
@@ -94,6 +98,7 @@ const targetDescriptors = {
     distributionDirectoryName: "dist-muon/linux-amd64",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
+    runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
   },
@@ -105,6 +110,7 @@ const targetDescriptors = {
     distributionDirectoryName: "dist-muon/linux-armhf",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
+    runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
   },
@@ -116,6 +122,7 @@ const targetDescriptors = {
     distributionDirectoryName: "dist-muon/linux-arm64",
     runtimeExecutableName: "muon-core",
     bootstrapExecutableName: "muon-bootstrap",
+    runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
   },

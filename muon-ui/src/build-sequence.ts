@@ -232,6 +232,9 @@ const copyDefinedBuildOptions = (
   if (input.assetSalt !== undefined) {
     output.assetSalt = input.assetSalt;
   }
+  if (input.includeRuntimeHelper !== undefined) {
+    output.includeRuntimeHelper = input.includeRuntimeHelper;
+  }
 };
 
 /**

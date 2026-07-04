@@ -136,8 +136,12 @@ void muon_free_string_array(char **values, size_t count) {
 }
 
 int muon_path_exists(const char *path) {
+#ifdef _WIN32
   (void)path;
   return 0;
+#else
+  return access(path, F_OK) == 0;
+#endif
 }
 
 char *muon_read_text_file(const char *path) {
@@ -152,8 +156,12 @@ int muon_write_text_file(const char *path, const char *content) {
 }
 
 yyjson_doc *muon_json_read_file(const char *path) {
+#ifdef _WIN32
   (void)path;
   return NULL;
+#else
+  return yyjson_read_file(path, 0, NULL, NULL);
+#endif
 }
 
 int muon_bootstrap_get_embedded_app_id(char **app_id) {
@@ -252,9 +260,50 @@ int main(void) {
     fprintf(stderr, "state runtime directory should not be staged again\n");
     failed = 1;
   }
+#ifndef _WIN32
+  const char *install_test_dir = getenv("MUON_BOOTSTRAP_INSTALL_TEST_DIR");
+  if (install_test_dir == NULL || install_test_dir[0] == '\0') {
+    fprintf(stderr, "MUON_BOOTSTRAP_INSTALL_TEST_DIR was not set\n");
+    failed = 1;
+  } else {
+    MuonInstallConfig config;
+    if (read_install_config(install_test_dir, &config) != 0) {
+      fprintf(stderr, "system-setuid install config was rejected\n");
+      failed = 1;
+    } else {
+      if (!config.is_deb || !config.is_system_setuid) {
+        fprintf(stderr, "system-setuid install config mode was not parsed\n");
+        failed = 1;
+      }
+      if (strcmp(config.launcher_path, "/usr/bin/sample-app") != 0 ||
+          strcmp(config.system_runtime_path,
+                 "/var/lib/muon/apps/sample-app/linux-amd64/runtime") != 0 ||
+          strcmp(config.privileged_prepare_path,
+                 "/usr/lib/sample-app/dist-muon/linux-amd64/muon-runtime-helper") !=
+              0) {
+        fprintf(stderr, "system-setuid install config paths were not parsed\n");
+        failed = 1;
+      }
+      install_config_free(&config);
+    }
+  }
+#endif
 	  return failed;
 	}
 HARNESS_EOF
+
+install_config_dir="${OUT_DIR}/install-config"
+mkdir -p "${install_config_dir}"
+cat >"${install_config_dir}/muon-install.json" <<'INSTALL_CONFIG_EOF'
+{
+  "type": "deb",
+  "packageName": "sample-app",
+  "launcherPath": "/usr/bin/sample-app",
+  "runtimeMode": "system-setuid",
+  "systemRuntimePath": "/var/lib/muon/apps/sample-app/linux-amd64/runtime",
+  "privilegedPreparePath": "/usr/lib/sample-app/dist-muon/linux-amd64/muon-runtime-helper"
+}
+INSTALL_CONFIG_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
 	  -I"${SCRIPT_DIR}/src" \
@@ -262,7 +311,8 @@ gcc -std=c99 -Wall -Wextra -pedantic \
 	  -o "${OUT_DIR}/bootstrap_state_directory_harness" \
 	  "${BOOTSTRAP_STATE_HARNESS}" \
 	  "${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src/yyjson.c"
-"${OUT_DIR}/bootstrap_state_directory_harness"
+MUON_BOOTSTRAP_INSTALL_TEST_DIR="${install_config_dir}" \
+  "${OUT_DIR}/bootstrap_state_directory_harness"
 
 cat >"${WIN_FALLBACK_HARNESS}" <<'HARNESS_EOF'
 #define WIN32_LEAN_AND_MEAN

@@ -41,6 +41,7 @@ case "${TARGET}" in
     RANLIB="${RANLIB:-ranlib}"
     EXECUTABLE_NAME="muon-builder"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
+    RUNTIME_HELPER_EXECUTABLE_NAME="muon-runtime-helper"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
     ;;
@@ -52,6 +53,7 @@ case "${TARGET}" in
     RANLIB="${RANLIB:-ranlib}"
     EXECUTABLE_NAME="muon-builder"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
+    RUNTIME_HELPER_EXECUTABLE_NAME="muon-runtime-helper"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
     ;;
@@ -63,6 +65,7 @@ case "${TARGET}" in
     RANLIB="${RANLIB:-ranlib}"
     EXECUTABLE_NAME="muon-builder"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap"
+    RUNTIME_HELPER_EXECUTABLE_NAME="muon-runtime-helper"
     LDFLAGS_VALUE="${LDFLAGS:--static}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-}"
     ;;
@@ -75,6 +78,7 @@ case "${TARGET}" in
     WINDRES="${WINDRES:-i686-w64-mingw32-windres}"
     EXECUTABLE_NAME="muon-builder.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
+    RUNTIME_HELPER_EXECUTABLE_NAME=""
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-${LDFLAGS_VALUE} -mwindows}"
     ;;
@@ -87,6 +91,7 @@ case "${TARGET}" in
     WINDRES="${WINDRES:-x86_64-w64-mingw32-windres}"
     EXECUTABLE_NAME="muon-builder.exe"
     BOOTSTRAP_EXECUTABLE_NAME="muon-bootstrap.exe"
+    RUNTIME_HELPER_EXECUTABLE_NAME=""
     LDFLAGS_VALUE="${LDFLAGS:--static -static-libgcc}"
     BOOTSTRAP_LDFLAGS_VALUE="${BOOTSTRAP_LDFLAGS:-${LDFLAGS_VALUE} -mwindows}"
     ;;
@@ -381,6 +386,12 @@ if [[ -n "${BOOTSTRAP_LDLIBS:-}" ]]; then
   BOOTSTRAP_LDLIBS_VALUE="${BOOTSTRAP_LDLIBS_VALUE} ${BOOTSTRAP_LDLIBS}"
 fi
 
+if [[ -n "${RUNTIME_HELPER_EXECUTABLE_NAME}" ]]; then
+  RUNTIME_HELPER_TARGET_VALUE="${OUT_DIR}/${RUNTIME_HELPER_EXECUTABLE_NAME}"
+else
+  RUNTIME_HELPER_TARGET_VALUE=""
+fi
+
 make -j -C "${SCRIPT_DIR}" -B \
   CC="${CC}" \
   AR="${AR}" \
@@ -388,6 +399,7 @@ make -j -C "${SCRIPT_DIR}" -B \
   YYJSON_SOURCE_DIR="${YYJSON_SOURCE_DIR}" \
   PREPARE_TARGET="${OUT_DIR}/${EXECUTABLE_NAME}" \
   BOOTSTRAP_TARGET="${OUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
+  RUNTIME_HELPER_TARGET="${RUNTIME_HELPER_TARGET_VALUE}" \
   VERSION_HEADER="${VERSION_HEADER}" \
   RUNTIME_INFO_HEADER="${RUNTIME_INFO_HEADER}" \
   CPPFLAGS="${CPPFLAGS_VALUE}" \

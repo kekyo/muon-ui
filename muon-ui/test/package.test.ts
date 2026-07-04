@@ -796,6 +796,9 @@ exit 1
     const nativeBootstrapStat = await stat(
       resolve("dist/native/linux-amd64/muon-bootstrap"),
     );
+    const nativeRuntimeHelperStat = await stat(
+      resolve("dist/native/linux-amd64/muon-runtime-helper"),
+    );
     const nativeDefaultIconStat = await stat(
       resolve("dist/native/muon-256.png"),
     );
@@ -804,6 +807,7 @@ exit 1
     expect(cliStat.mode & 0o111).not.toBe(0);
     expect(nativeBuilderStat.mode & 0o111).not.toBe(0);
     expect(nativeBootstrapStat.mode & 0o111).not.toBe(0);
+    expect(nativeRuntimeHelperStat.mode & 0o111).not.toBe(0);
     expect(nativeDefaultIconStat.size).toBeGreaterThan(0);
     await expect(exists(resolve("dist/cli.mjs"))).resolves.toBe(false);
     await expect(exists(resolve("dist/vite.d.ts"))).resolves.toBe(false);

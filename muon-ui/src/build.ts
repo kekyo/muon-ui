@@ -180,6 +180,12 @@ export interface MuonBuildOptions {
    * @internal
    */
   runtimePluginConfig?: MuonRuntimePluginConfig;
+  /**
+   * Include a privileged Linux runtime helper in generated distributions.
+   *
+   * @internal
+   */
+  includeRuntimeHelper?: boolean;
 }
 
 /**
@@ -224,6 +230,10 @@ export interface MuonBuildTargetResult {
    * Absolute path of the app launcher copied from muon-bootstrap.
    */
   launcherPath: string;
+  /**
+   * Absolute path of the privileged runtime helper when included.
+   */
+  runtimeHelperPath?: string;
   /**
    * Generated asset archive metadata.
    */
@@ -364,6 +374,7 @@ export const buildMuonApp = async (
       linuxDesktop,
       salt,
       browserStartPage: options.browserStartPage,
+      includeRuntimeHelper: options.includeRuntimeHelper === true,
     });
     results.push(result);
   }
@@ -646,6 +657,7 @@ const buildMuonTarget = async (input: {
   linuxDesktop: ResolvedMuonLinuxDesktop;
   salt: Buffer;
   browserStartPage: string | undefined;
+  includeRuntimeHelper: boolean;
 }): Promise<MuonBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
   const sourceRuntimePath = join(
@@ -659,6 +671,16 @@ const buildMuonTarget = async (input: {
     input.target,
     descriptor.bootstrapExecutableName,
   );
+  const sourceRuntimeHelperPath =
+    input.includeRuntimeHelper &&
+    descriptor.runtimeHelperExecutableName !== undefined
+      ? join(
+          input.packageDirectory,
+          "native",
+          input.target,
+          descriptor.runtimeHelperExecutableName,
+        )
+      : undefined;
   const outputPath = join(
     input.outputRoot,
     descriptor.distributionDirectoryName,
@@ -667,6 +689,11 @@ const buildMuonTarget = async (input: {
     outputPath,
     getLauncherFileName(input.appName, descriptor),
   );
+  const runtimeHelperPath =
+    sourceRuntimeHelperPath === undefined ||
+    descriptor.runtimeHelperExecutableName === undefined
+      ? undefined
+      : join(outputPath, descriptor.runtimeHelperExecutableName);
   const assetZipPath = join(outputPath, "assets.zip");
   const runtimeAppId = getMuonTargetRuntimeAppId(input.appId, input.target);
   const appIconPath =
@@ -677,6 +704,7 @@ const buildMuonTarget = async (input: {
   await verifyTargetInputs({
     sourceRuntimePath,
     sourceBootstrapPath,
+    sourceRuntimeHelperPath,
     descriptor,
     target: input.target,
   });
@@ -690,6 +718,13 @@ const buildMuonTarget = async (input: {
   );
   await copyFile(sourceBootstrapPath, launcherPath);
   await chmod(launcherPath, executableMode);
+  if (
+    sourceRuntimeHelperPath !== undefined &&
+    runtimeHelperPath !== undefined
+  ) {
+    await copyFile(sourceRuntimeHelperPath, runtimeHelperPath);
+    await chmod(runtimeHelperPath, executableMode);
+  }
 
   const asset = await writeAssetArchive(
     input.assetInput,
@@ -717,6 +752,13 @@ const buildMuonTarget = async (input: {
       configPath,
       outputPath: undefined,
     });
+    if (runtimeHelperPath !== undefined) {
+      await embedMuonConfigInBootstrapFile({
+        bootstrapPath: runtimeHelperPath,
+        configPath,
+        outputPath: undefined,
+      });
+    }
   });
 
   if (descriptor.os === "windows") {
@@ -741,6 +783,7 @@ const buildMuonTarget = async (input: {
     distributionDirectoryName: descriptor.distributionDirectoryName,
     outputPath,
     launcherPath,
+    ...(runtimeHelperPath === undefined ? {} : { runtimeHelperPath }),
     asset,
     runtimeAppId,
     embeddedConfig,
@@ -751,6 +794,7 @@ const buildMuonTarget = async (input: {
 const verifyTargetInputs = async (input: {
   sourceRuntimePath: string;
   sourceBootstrapPath: string;
+  sourceRuntimeHelperPath: string | undefined;
   descriptor: MuonTargetDescriptor;
   target: MuonBuildTarget;
 }): Promise<void> => {
@@ -762,6 +806,12 @@ const verifyTargetInputs = async (input: {
     input.sourceBootstrapPath,
     `Muon bootstrap for ${input.target}`,
   );
+  if (input.sourceRuntimeHelperPath !== undefined) {
+    await assertFile(
+      input.sourceRuntimeHelperPath,
+      `Muon runtime helper for ${input.target}`,
+    );
+  }
   for (const fileName of input.descriptor.runtimeFiles) {
     await assertFile(
       join(input.sourceRuntimePath, fileName),

@@ -808,6 +808,7 @@ static int staging_root_entry_is_generated_runtime_state(const char *name) {
       "muon-bootstrap.ini",
       "muon-cef.log",
       "muon-close-debug.log",
+      "muon-runtime-helper",
   };
   for (size_t index = 0;
        index < sizeof(generated_entries) / sizeof(generated_entries[0]);

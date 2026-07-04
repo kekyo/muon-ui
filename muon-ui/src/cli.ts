@@ -93,6 +93,7 @@ interface PackCommandOptions {
   linuxIcon: string | undefined;
   linuxCategories: string | undefined;
   linuxStartupNotify: string | undefined;
+  linuxSandbox: string | undefined;
   name: string | undefined;
   appId: string | undefined;
   packageDirectory: string | undefined;
@@ -340,6 +341,9 @@ const runPackCommand = async (
   if (linuxDesktop !== undefined) {
     packOptions.linuxDesktop = linuxDesktop;
   }
+  if (commandOptions.linuxSandbox !== undefined) {
+    packOptions.linuxSandbox = commandOptions.linuxSandbox;
+  }
   if (commandOptions.name !== undefined) {
     packOptions.appName = commandOptions.name;
   }
@@ -585,6 +589,10 @@ const createCliCommand = (): Command => {
     .option("--linux-icon <path>", "Linux desktop PNG icon path")
     .option("--linux-categories <list>", "Linux desktop categories")
     .option("--linux-startup-notify <boolean>", "Linux startup notification")
+    .option(
+      "--linux-sandbox <mode>",
+      "Linux deb CEF sandbox mode: disabled, setuid",
+    )
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
     .option("--package-directory <path>", "Muon package dist directory")

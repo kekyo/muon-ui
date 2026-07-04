@@ -20,6 +20,7 @@
 #include <windows.h>
 #else
 #include <limits.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -38,6 +39,7 @@
 #define MUON_DESKTOP_ICON_FILE_NAME "muon-desktop-icon.png"
 #define MUON_INSTALL_CONFIG_FILE_NAME "muon-install.json"
 #define MUON_BOOTSTRAP_APP_ID_ENVIRONMENT "MUON_BOOTSTRAP_APP_ID"
+#define MUON_CEF_SANDBOX_ENVIRONMENT "MUON_CEF_SANDBOX"
 #define MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT "--muon-launch-from=normal"
 
 static int is_path_separator(char value) {
@@ -273,7 +275,10 @@ typedef struct {
 
 typedef struct {
   int is_deb;
+  int is_system_setuid;
   char *launcher_path;
+  char *system_runtime_path;
+  char *privileged_prepare_path;
 } MuonInstallConfig;
 
 static void string_builder_init(MuonBootstrapStringBuilder *builder) {
@@ -599,6 +604,29 @@ static int read_optional_string_field(yyjson_val *object,
   return *output == NULL ? -1 : 0;
 }
 
+static int read_required_non_empty_string_field(yyjson_val *object,
+                                                const char *key,
+                                                char **output) {
+  yyjson_val *value = yyjson_obj_get(object, key);
+  if (!yyjson_is_str(value) || yyjson_get_str(value)[0] == '\0') {
+    fprintf(stderr, "muon-bootstrap: %s must be a non-empty string.\n", key);
+    return -1;
+  }
+  *output = duplicate_string(yyjson_get_str(value));
+  return *output == NULL ? -1 : 0;
+}
+
+static int install_config_path_is_absolute(const char *path) {
+#ifdef _WIN32
+  return path != NULL &&
+         ((path[0] >= 'A' && path[0] <= 'Z') ||
+          (path[0] >= 'a' && path[0] <= 'z')) &&
+         path[1] == ':' && (path[2] == '/' || path[2] == '\\');
+#else
+  return path != NULL && path[0] == '/';
+#endif
+}
+
 static int read_optional_bool_field(yyjson_val *object,
                                     const char *key,
                                     int fallback,
@@ -709,11 +737,16 @@ static int read_desktop_config(const char *runtime_dir,
 
 static void install_config_init(MuonInstallConfig *config) {
   config->is_deb = 0;
+  config->is_system_setuid = 0;
   config->launcher_path = NULL;
+  config->system_runtime_path = NULL;
+  config->privileged_prepare_path = NULL;
 }
 
 static void install_config_free(MuonInstallConfig *config) {
   free(config->launcher_path);
+  free(config->system_runtime_path);
+  free(config->privileged_prepare_path);
   install_config_init(config);
 }
 
@@ -752,8 +785,45 @@ static int read_install_config(const char *runtime_dir, MuonInstallConfig *confi
   }
   config->launcher_path = duplicate_string(yyjson_get_str(launcher_path));
   config->is_deb = config->launcher_path != NULL ? 1 : 0;
+  yyjson_val *runtime_mode = yyjson_obj_get(root, "runtimeMode");
+  if (runtime_mode != NULL) {
+    if (!yyjson_is_str(runtime_mode)) {
+      yyjson_doc_free(document);
+      fprintf(stderr,
+              "muon-bootstrap: muon-install.json runtimeMode must be a string.\n");
+      return -1;
+    }
+    const char *runtime_mode_string = yyjson_get_str(runtime_mode);
+    if (strcmp(runtime_mode_string, "system-setuid") == 0) {
+      config->is_system_setuid = 1;
+      if (read_required_non_empty_string_field(root, "systemRuntimePath",
+                                               &config->system_runtime_path) !=
+              0 ||
+          read_required_non_empty_string_field(root, "privilegedPreparePath",
+                                               &config->privileged_prepare_path) !=
+              0 ||
+          !install_config_path_is_absolute(config->system_runtime_path) ||
+          !install_config_path_is_absolute(config->privileged_prepare_path)) {
+        yyjson_doc_free(document);
+        fprintf(stderr,
+                "muon-bootstrap: invalid system-setuid muon-install.json.\n");
+        return -1;
+      }
+    } else if (strcmp(runtime_mode_string, "user") != 0 &&
+               strcmp(runtime_mode_string, "disabled") != 0) {
+      yyjson_doc_free(document);
+      fprintf(stderr,
+              "muon-bootstrap: unsupported muon-install.json runtimeMode.\n");
+      return -1;
+    }
+  }
   yyjson_doc_free(document);
-  return config->launcher_path == NULL ? -1 : 0;
+  return config->launcher_path == NULL ||
+                 (config->is_system_setuid &&
+                  (config->system_runtime_path == NULL ||
+                   config->privileged_prepare_path == NULL))
+             ? -1
+             : 0;
 }
 
 static int desktop_entry_is_muon_managed(const char *path) {
@@ -818,6 +888,29 @@ static int update_linux_desktop_entry(const char *runtime_dir,
   return result;
 }
 #else
+typedef struct {
+  int is_deb;
+  int is_system_setuid;
+  char *launcher_path;
+  char *system_runtime_path;
+  char *privileged_prepare_path;
+} MuonInstallConfig;
+
+static void install_config_init(MuonInstallConfig *config) {
+  memset(config, 0, sizeof(*config));
+}
+
+static void install_config_free(MuonInstallConfig *config) {
+  install_config_init(config);
+}
+
+static int read_install_config(const char *runtime_dir,
+                               MuonInstallConfig *config) {
+  (void)runtime_dir;
+  install_config_init(config);
+  return 0;
+}
+
 static int update_linux_desktop_entry(const char *runtime_dir,
                                       const char *bootstrap_path,
                                       const char *app_id) {
@@ -833,6 +926,64 @@ static int should_prepare_staged_runtime(const char *source_runtime_dir,
   return strcmp(source_runtime_dir, runtime_dir) != 0;
 }
 
+#ifndef _WIN32
+static int validate_privileged_prepare_path(const char *path) {
+  struct stat entry;
+  if (stat(path, &entry) != 0) {
+    perror(path);
+    return -1;
+  }
+  if (!S_ISREG(entry.st_mode) || entry.st_uid != 0 ||
+      (entry.st_mode & S_ISUID) == 0 || (entry.st_mode & 0111) == 0) {
+    fprintf(stderr,
+            "muon-bootstrap: privileged prepare helper must be root-owned and setuid executable: %s\n",
+            path);
+    return -1;
+  }
+  return 0;
+}
+
+static int run_privileged_prepare_helper(const char *path) {
+  if (validate_privileged_prepare_path(path) != 0) {
+    return 1;
+  }
+  const pid_t child = fork();
+  if (child < 0) {
+    perror("fork");
+    return 1;
+  }
+  if (child == 0) {
+    char *const helper_argv[] = {(char *)path, NULL};
+    execv(path, helper_argv);
+    const int error_code = errno;
+    perror(path);
+    _exit(error_code == ENOENT ? 127 : 126);
+  }
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) {
+      perror("waitpid");
+      return 1;
+    }
+  }
+  if (WIFEXITED(status)) {
+    const int code = WEXITSTATUS(status);
+    if (code != 0) {
+      fprintf(stderr, "muon-bootstrap: privileged prepare helper failed: %d\n",
+              code);
+    }
+    return code;
+  }
+  if (WIFSIGNALED(status)) {
+    const int code = 128 + WTERMSIG(status);
+    fprintf(stderr, "muon-bootstrap: privileged prepare helper signaled: %d\n",
+            code);
+    return code;
+  }
+  return 1;
+}
+#endif
+
 static char **create_core_argv(const char *core_path, int argc, char **argv) {
   char **core_argv = (char **)calloc((size_t)argc + 1, sizeof(char *));
   if (core_argv == NULL) {
@@ -847,7 +998,8 @@ static char **create_core_argv(const char *core_path, int argc, char **argv) {
 }
 
 static int launch_core(const char *runtime_dir, const char *core_path,
-                       const char *app_id, int argc, char **argv) {
+                       const char *app_id, int enable_cef_sandbox, int argc,
+                       char **argv) {
   char **core_argv = create_core_argv(core_path, argc, argv);
   if (core_argv == NULL) {
     fprintf(stderr, "muon-bootstrap: failed to allocate arguments.\n");
@@ -862,6 +1014,13 @@ static int launch_core(const char *runtime_dir, const char *core_path,
   if (_putenv_s(MUON_BOOTSTRAP_APP_ID_ENVIRONMENT, app_id) != 0) {
     fprintf(stderr, "muon-bootstrap: failed to set %s.\n",
             MUON_BOOTSTRAP_APP_ID_ENVIRONMENT);
+    free(core_argv);
+    return 1;
+  }
+  if (_putenv_s(MUON_CEF_SANDBOX_ENVIRONMENT,
+                enable_cef_sandbox ? "1" : "") != 0) {
+    fprintf(stderr, "muon-bootstrap: failed to set %s.\n",
+            MUON_CEF_SANDBOX_ENVIRONMENT);
     free(core_argv);
     return 1;
   }
@@ -890,6 +1049,14 @@ static int launch_core(const char *runtime_dir, const char *core_path,
     if (setenv(MUON_BOOTSTRAP_APP_ID_ENVIRONMENT, app_id, 1) != 0) {
       perror("setenv");
       _exit(1);
+    }
+    if (enable_cef_sandbox) {
+      if (setenv(MUON_CEF_SANDBOX_ENVIRONMENT, "1", 1) != 0) {
+        perror("setenv");
+        _exit(1);
+      }
+    } else {
+      unsetenv(MUON_CEF_SANDBOX_ENVIRONMENT);
     }
     execv(core_path, core_argv);
     const int error_code = errno;
@@ -925,8 +1092,23 @@ int main(int argc, char **argv) {
   char *source_runtime_dir =
       bootstrap_path == NULL ? NULL : parent_directory(bootstrap_path);
   char *app_id = bootstrap_path == NULL ? NULL : resolve_app_id(bootstrap_path);
-  char *runtime_dir =
-      app_id == NULL ? NULL : create_state_runtime_dir(app_id, get_default_target());
+  MuonInstallConfig install;
+  install_config_init(&install);
+  if (source_runtime_dir != NULL && read_install_config(source_runtime_dir, &install) != 0) {
+    fprintf(stderr, "muon-bootstrap: failed to read install metadata.\n");
+    free(bootstrap_path);
+    free(source_runtime_dir);
+    free(app_id);
+    install_config_free(&install);
+    return 1;
+  }
+  char *runtime_dir = NULL;
+  if (install.is_system_setuid) {
+    runtime_dir = duplicate_string(install.system_runtime_path);
+  } else {
+    runtime_dir =
+        app_id == NULL ? NULL : create_state_runtime_dir(app_id, get_default_target());
+  }
   char *core_path = runtime_dir == NULL
                         ? NULL
                         : path_join(runtime_dir, get_core_executable_name());
@@ -938,12 +1120,34 @@ int main(int argc, char **argv) {
     free(app_id);
     free(runtime_dir);
     free(core_path);
+    install_config_free(&install);
     return 1;
   }
   const char *cache_dir = getenv("MUON_CACHE_DIR");
   int exit_code = 0;
   do {
-    if (should_prepare_staged_runtime(source_runtime_dir, runtime_dir)) {
+    if (install.is_system_setuid) {
+#ifdef _WIN32
+      fprintf(stderr, "muon-bootstrap: system-setuid runtime is unsupported on Windows.\n");
+      free(bootstrap_path);
+      free(source_runtime_dir);
+      free(app_id);
+      free(runtime_dir);
+      free(core_path);
+      install_config_free(&install);
+      return 1;
+#else
+      if (run_privileged_prepare_helper(install.privileged_prepare_path) != 0) {
+        free(bootstrap_path);
+        free(source_runtime_dir);
+        free(app_id);
+        free(runtime_dir);
+        free(core_path);
+        install_config_free(&install);
+        return 1;
+      }
+#endif
+    } else if (should_prepare_staged_runtime(source_runtime_dir, runtime_dir)) {
       MuonBootstrapProgress progress;
       muon_bootstrap_progress_init(&progress);
       const int has_progress = muon_bootstrap_progress_is_available(&progress);
@@ -967,12 +1171,14 @@ int main(int argc, char **argv) {
     if (update_linux_desktop_entry(runtime_dir, bootstrap_path, app_id) != 0) {
       fprintf(stderr, "muon-bootstrap: failed to update desktop entry.\n");
     }
-    exit_code = launch_core(runtime_dir, core_path, app_id, argc, argv);
+    exit_code = launch_core(runtime_dir, core_path, app_id,
+                            install.is_system_setuid, argc, argv);
   } while (exit_code == MUON_RECYCLE_EXIT_CODE);
   free(bootstrap_path);
   free(source_runtime_dir);
   free(app_id);
   free(runtime_dir);
   free(core_path);
+  install_config_free(&install);
   return exit_code;
 }

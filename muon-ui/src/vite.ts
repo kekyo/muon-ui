@@ -468,6 +468,26 @@ const createMuonWatchOptions = (
   ignored: mergeMuonWatchIgnored(watch?.ignored),
 });
 
+const resolvePackagedAssetBasePath = (base: string): string | undefined => {
+  const normalizedBase = base.trim();
+  if (
+    normalizedBase === "" ||
+    normalizedBase === "/" ||
+    normalizedBase === "./" ||
+    normalizedBase.startsWith("//") ||
+    /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(normalizedBase) ||
+    !normalizedBase.startsWith("/")
+  ) {
+    return undefined;
+  }
+
+  const normalizedPath = normalizedBase.split(/[?#]/, 1)[0] ?? "";
+  const segments = normalizedPath
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  return segments.length > 0 ? segments.join("/") : undefined;
+};
+
 const createMuonBuildOptions = (
   config: ResolvedConfig,
   buildOptions: MuonViteBuildOptions,
@@ -476,11 +496,19 @@ const createMuonBuildOptions = (
   const outDir = isAbsolute(config.build.outDir)
     ? config.build.outDir
     : resolve(config.root, config.build.outDir);
+  const packagedAssetBasePath = resolvePackagedAssetBasePath(config.base);
+  const assetPrefix =
+    packagedAssetBasePath === undefined
+      ? "main"
+      : `main/${packagedAssetBasePath}`;
   const options: MuonBuildOptions = {
     root: config.root,
     assetSourcePath: outDir,
-    assetPrefix: "main",
+    assetPrefix,
   };
+  if (packagedAssetBasePath !== undefined) {
+    options.browserStartPage = `asset://${assetPrefix}/index.html`;
+  }
 
   if (buildOptions.allTargets !== undefined) {
     options.allTargets = buildOptions.allTargets;

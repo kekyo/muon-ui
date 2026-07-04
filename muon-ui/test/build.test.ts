@@ -1646,6 +1646,51 @@ describe("muon build", () => {
     });
   });
 
+  it("adds a generated browser start page only when the config omits one", async () => {
+    const generatedStartPage = "asset://main/base-path/index.html";
+    const generatedProject = await createWindowsIconBuildProject(
+      "muon-build-generated-start-page-",
+      "generated-start-page-sample",
+    );
+    const generatedResult = await buildMuonApp({
+      root: generatedProject.root,
+      packageDirectory: generatedProject.packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from("4567", "hex"),
+      browserStartPage: generatedStartPage,
+    });
+
+    expect(generatedResult.targets[0]?.embeddedConfig.browser).toEqual({
+      initialTitleBarIcon: appIconAssetUrl,
+      startPage: generatedStartPage,
+    });
+
+    const configuredProject = await createWindowsIconBuildProject(
+      "muon-build-configured-start-page-",
+      "configured-start-page-sample",
+    );
+    await writeFile(
+      join(configuredProject.root, "muon.json"),
+      `${JSON.stringify(
+        { browser: { startPage: "asset://custom/index.html" } },
+        null,
+        2,
+      )}\n`,
+    );
+    const configuredResult = await buildMuonApp({
+      root: configuredProject.root,
+      packageDirectory: configuredProject.packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from("4568", "hex"),
+      browserStartPage: generatedStartPage,
+    });
+
+    expect(configuredResult.targets[0]?.embeddedConfig.browser).toEqual({
+      startPage: "asset://custom/index.html",
+      initialTitleBarIcon: appIconAssetUrl,
+    });
+  });
+
   it("uses muon config asset.sourcePath relative to the config directory as the non-Vite asset source", async () => {
     const root = await createTemporaryDirectory("muon-build-config-assets-");
     const packageDirectory = await createFakeMuonPackageDist(root);

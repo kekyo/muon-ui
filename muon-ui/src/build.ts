@@ -139,6 +139,10 @@ export interface MuonBuildOptions {
    */
   assetPrefix?: string;
   /**
+   * Default browser start page embedded when muon config omits one.
+   */
+  browserStartPage?: string;
+  /**
    * Muon config path to embed.
    */
   configPath?: string;
@@ -359,6 +363,7 @@ export const buildMuonApp = async (
       windowsResource,
       linuxDesktop,
       salt,
+      browserStartPage: options.browserStartPage,
     });
     results.push(result);
   }
@@ -640,6 +645,7 @@ const buildMuonTarget = async (input: {
   windowsResource: ResolvedMuonWindowsResource;
   linuxDesktop: ResolvedMuonLinuxDesktop;
   salt: Buffer;
+  browserStartPage: string | undefined;
 }): Promise<MuonBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
   const sourceRuntimePath = join(
@@ -697,6 +703,7 @@ const buildMuonTarget = async (input: {
     runtimeAppId,
     input.linuxDesktop.desktopId,
     appIconAssetUrl,
+    input.browserStartPage,
   );
 
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
@@ -974,6 +981,7 @@ const createEmbeddedConfig = (
   appId: string,
   desktopId: string,
   initialTitleBarIcon: string,
+  browserStartPage: string | undefined,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -994,12 +1002,17 @@ const createEmbeddedConfig = (
     throw new Error("muon.json browser must be an object when present.");
   }
 
+  const browserConfig: JsonObject = {
+    ...(sourceBrowser ?? {}),
+    initialTitleBarIcon,
+  };
+  if (browserStartPage !== undefined && browserConfig.startPage === undefined) {
+    browserConfig.startPage = browserStartPage;
+  }
+
   return {
     ...runtimeConfig,
-    browser: {
-      ...(sourceBrowser ?? {}),
-      initialTitleBarIcon,
-    },
+    browser: browserConfig,
     asset: {
       ...(sourceAsset ?? {}),
       sourcePath: appConfigSourcePath,

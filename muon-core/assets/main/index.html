@@ -171,6 +171,39 @@
         min-height: 96px;
       }
 
+      .context-menu-target {
+        display: grid;
+        gap: 10px;
+        min-height: 148px;
+        border: 1px dashed #8c959f;
+        border-radius: 6px;
+        padding: 12px;
+        background: #f6f8fa;
+        color: #1f2328;
+        -webkit-app-region: no-drag;
+      }
+
+      .context-menu-target p {
+        margin: 0;
+      }
+
+      .context-menu-target a {
+        width: fit-content;
+        color: #0969da;
+        -webkit-app-region: no-drag;
+      }
+
+      .context-menu-target img {
+        width: 36px;
+        height: 36px;
+        -webkit-app-region: no-drag;
+      }
+
+      .context-menu-target textarea {
+        min-height: 76px;
+        -webkit-app-region: no-drag;
+      }
+
       .checkbox-row {
         display: flex;
         align-items: center;
@@ -254,6 +287,7 @@
         input,
         select,
         textarea,
+        .context-menu-target,
         button.secondary {
           background: #272b33;
           color: #f0f3f6;
@@ -264,6 +298,7 @@
         .field-grid,
         .field-grid .field,
         .status,
+        .context-menu-target,
         input,
         select,
         textarea,
@@ -274,6 +309,10 @@
         .status,
         label {
           color: #adbac7;
+        }
+
+        .context-menu-target a {
+          color: #6cb6ff;
         }
 
         button {
@@ -675,6 +714,91 @@
             <label for="browser-result">Browser result</label>
             <textarea id="browser-result" class="small" readonly spellcheck="false"></textarea>
           </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-context-menu-items">
+                Context menu items JSON
+              </label>
+              <textarea id="browser-context-menu-items" class="small" spellcheck="false">[
+  {
+    "id": "demo.inspect",
+    "label": "Inspect context target",
+    "placement": "start"
+  },
+  {
+    "type": "separator",
+    "placement": "afterEdit"
+  },
+  {
+    "id": "demo.copySelection",
+    "label": "Selection command",
+    "placement": "afterEdit",
+    "when": {
+      "selection": true,
+      "canCopy": true
+    }
+  },
+  {
+    "id": "demo.editable",
+    "label": "Editable command",
+    "when": {
+      "editable": true
+    }
+  },
+  {
+    "id": "demo.disabled",
+    "label": "Disabled command",
+    "enabled": false
+  }
+]</textarea>
+            </div>
+            <div class="field">
+              <label for="browser-context-menu-result">
+                Context menu command
+              </label>
+              <textarea
+                id="browser-context-menu-result"
+                class="small"
+                readonly
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+          <div class="field">
+            <label for="browser-context-menu-target">Context menu target</label>
+            <div
+              id="browser-context-menu-target"
+              class="context-menu-target"
+              tabindex="0"
+            >
+              <p>
+                Select part of this text or right-click different targets after
+                registering custom items.
+              </p>
+              <a href="https://example.com/context-menu-demo">Context link</a>
+              <img src="/favicon.svg" alt="Muon favicon" />
+              <textarea id="browser-context-menu-editable" spellcheck="false">Editable text for editable and paste-related menu states.</textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button
+              data-browser-context-menu-action="loadPreset"
+              class="secondary"
+              type="button"
+            >
+              Load context preset
+            </button>
+            <button data-browser-context-menu-action="setItems" type="button">
+              Set context items
+            </button>
+            <button
+              data-browser-context-menu-action="clearItems"
+              class="secondary"
+              type="button"
+            >
+              Clear context items
+            </button>
+          </div>
           <div class="actions">
             <button data-browser-action="reload" type="button">Reload</button>
             <button data-browser-action="hardReload" type="button">
@@ -780,6 +904,12 @@
       const browserShutdownExitCodeInput = document.querySelector(
         "#browser-shutdown-exit-code",
       );
+      const browserContextMenuItemsInput = document.querySelector(
+        "#browser-context-menu-items",
+      );
+      const browserContextMenuResultInput = document.querySelector(
+        "#browser-context-menu-result",
+      );
       const dialogOptionsInput = document.querySelector("#dialog-options");
       const dialogResultInput = document.querySelector("#dialog-result");
       const dialogAbortButton = document.querySelector("#dialog-abort");
@@ -819,6 +949,9 @@
       );
       const browserActionButtons = Array.from(
         document.querySelectorAll("[data-browser-action]"),
+      );
+      const browserContextMenuActionButtons = Array.from(
+        document.querySelectorAll("[data-browser-context-menu-action]"),
       );
       const buttons = [writeButton, readButton];
       let fsWatcher = null;
@@ -958,6 +1091,13 @@
           recycle: "Recycle: window.muon.browser.recycle()",
           shutdown: "Shutdown: window.muon.browser.shutdown(exitCode)",
           close: "Close: window.muon.browser.close()",
+        });
+        setActionButtonTitles("data-browser-context-menu-action", {
+          loadPreset: "LoadContextMenuPreset: fill context menu item JSON",
+          setItems:
+            "SetContextMenuItems: window.muon.browser.setContextMenuItems(items, handler)",
+          clearItems:
+            "ClearContextMenuItems: window.muon.browser.clearContextMenuItems()",
         });
       };
 
@@ -1440,6 +1580,67 @@
         },
       };
 
+      const createBrowserContextMenuPreset = () => [
+        {
+          id: "demo.inspect",
+          label: "Inspect context target",
+          placement: "start",
+        },
+        {
+          type: "separator",
+          placement: "afterEdit",
+        },
+        {
+          id: "demo.copySelection",
+          label: "Selection command",
+          placement: "afterEdit",
+          when: {
+            selection: true,
+            canCopy: true,
+          },
+        },
+        {
+          id: "demo.editable",
+          label: "Editable command",
+          when: {
+            editable: true,
+          },
+        },
+        {
+          id: "demo.disabled",
+          label: "Disabled command",
+          enabled: false,
+        },
+      ];
+
+      const loadBrowserContextMenuPreset = () => {
+        const items = createBrowserContextMenuPreset();
+        browserContextMenuItemsInput.value = JSON.stringify(items, null, 2);
+        return items;
+      };
+
+      const browserContextMenuActions = {
+        loadPreset: async () => loadBrowserContextMenuPreset(),
+        setItems: async () => {
+          const items = parseJsonInput(browserContextMenuItemsInput, []);
+          browserContextMenuResultInput.value = "";
+          await window.muon.browser.setContextMenuItems(items, (command) => {
+            setTextResult(browserContextMenuResultInput, command);
+            setOutput(
+              browserStatusOutput,
+              `Context menu selected: ${command.id}`,
+              "ok",
+            );
+          });
+          return items;
+        },
+        clearItems: async () => {
+          await window.muon.browser.clearContextMenuItems();
+          browserContextMenuResultInput.value = "";
+          return "Cleared context menu items";
+        },
+      };
+
       const runBrowserAction = async (actionName) => {
         const action = browserActions[actionName];
         if (typeof action !== "function") {
@@ -1460,6 +1661,26 @@
           browserResultInput.value = message;
           setOutput(browserStatusOutput, message, "error");
         }
+      };
+
+      const runBrowserContextMenuAction = async (actionName) => {
+        const action = browserContextMenuActions[actionName];
+        if (typeof action !== "function") {
+          setOutput(
+            browserStatusOutput,
+            `Unknown context menu action: ${actionName}`,
+            "error",
+          );
+          return;
+        }
+        await runAction({
+          status: browserStatusOutput,
+          result: browserResultInput,
+          buttons: browserContextMenuActionButtons,
+          workingMessage: `${actionName} requested`,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
       };
 
       const dialogActions = {
@@ -1678,8 +1899,17 @@
         });
       }
 
+      for (const button of browserContextMenuActionButtons) {
+        button.addEventListener("click", () => {
+          void runBrowserContextMenuAction(
+            button.dataset.browserContextMenuAction,
+          );
+        });
+      }
+
       applyButtonTooltips();
       loadExecutorPreset();
+      loadBrowserContextMenuPreset();
       handlePopupMode();
     </script>
   </body>

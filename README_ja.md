@@ -1472,6 +1472,11 @@ import { spawn } from "muon:executor";
 | `setWindowBounds(bounds)` | `bounds: MuonWindowBounds` | `Promise<void>` | 現在のトップレベルウインドウ領域の変更を要求します。     |
 | `setContextMenuItems(items, handler?)` | `items: MuonBrowserContextMenuItem[]`, `handler?: (command) => void` | `Promise<void>` | ネイティブコンテキストメニューへ追加するカスタム項目を登録します。 |
 | `clearContextMenuItems()` | なし | `Promise<void>` | 登録済みカスタムコンテキストメニュー項目を解除します。 |
+| `createTray(options, handler?)` | `options: MuonBrowserTrayOptions`, `handler?: (event) => void` | `Promise<string>` | ブラウザ所有のシステムトレイ項目を作成します。 |
+| `setTrayMenu(id, items, handler?)` | `id: string`, `items: MuonBrowserTrayMenuItem[]`, `handler?: (event) => void` | `Promise<void>` | システムトレイ項目のメニューとイベントハンドラを置き換えます。 |
+| `setTrayIcon(id, iconPath)` | `id: string`, `iconPath: string` | `Promise<void>` | システムトレイ項目のPNGアイコンを置き換えます。 |
+| `setTrayTooltip(id, tooltip)` | `id: string`, `tooltip: string \| null` | `Promise<void>` | システムトレイ項目のツールチップを設定または解除します。 |
+| `removeTray(id)` | `id: string` | `Promise<void>` | システムトレイ項目を削除します。 |
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
@@ -1492,6 +1497,12 @@ import { spawn } from "muon:executor";
   `placement` は `"start"`, `"afterEdit"`, `"end"` のいずれかで、省略時は `"end"` です。
   `when` には `editable`, `selection`, `link`, `image`, `canCopy`, `canPaste` のboolean条件を指定出来ます。
   `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
+- `createTray()` はブラウザウインドウ単位でトレイ項目を保持し、main frame navigation、ブラウザ終了、`removeTray()` で削除されます。
+  `options.id` を省略するとMuonが一意なIDを生成して返します。
+  `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
+  メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応し、サブメニューはv1では未対応です。
+  LinuxではStatusNotifierItem対応のデスクトップ環境・パネルで表示されます。AppIndicator/libayatana-appindicatorやGtkStatusIconによるfallbackは将来候補です。
+  トレイ項目だけでMuonプロセスを生存させるclose-to-tray動作は自動提供しません。常駐型アプリでは `initialWindowState: "hidden"` でブラウザを生かしたまま、必要に応じて `show()` / `hide()` を呼び出して下さい。
 - `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
@@ -1523,6 +1534,28 @@ await window.muon.browser.setContextMenuItems(
     console.log(command.id, command.selectionText);
   },
 );
+const trayId = await window.muon.browser.createTray(
+  {
+    id: "main",
+    icon: "icons/app.png",
+    tooltip: "Ready",
+    menu: [
+      { id: "open", label: "Open" },
+      { type: "separator" },
+      { id: "quit", label: "Quit" },
+    ],
+  },
+  async (event) => {
+    if (event.type === "activate" || event.id === "open") {
+      await window.muon.browser.show();
+      return;
+    }
+    if (event.type === "menu" && event.id === "quit") {
+      await window.muon.browser.shutdown(0);
+    }
+  },
+);
+await window.muon.browser.setTrayTooltip(trayId, "Running");
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);

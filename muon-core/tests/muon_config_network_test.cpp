@@ -228,6 +228,9 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
          Expect(browser.initial_window_state ==
                     kMuonBrowserInitialWindowStateNormal,
                 message + " initial window state changed") &&
+         Expect(browser.context_menu_mode ==
+                    kMuonBrowserContextMenuModeStandard,
+                message + " context menu mode changed") &&
          Expect(browser.title_bar == kMuonBrowserTitleBarMuon,
                 message + " title bar mode changed") &&
          Expect(browser.initial_title_bar_visibility,
@@ -639,7 +642,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"DEADBEEF"}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","contextMenu":{"mode":"custom"},"initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"DEADBEEF"}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -665,6 +668,9 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.browser.initial_window_state ==
                     kMuonBrowserInitialWindowStateMaximized,
                 "browser.initialWindowState was not parsed") &&
+         Expect(config.browser.context_menu_mode ==
+                    kMuonBrowserContextMenuModeCustom,
+                "browser.contextMenu.mode was not parsed") &&
          ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
                                     0x3a, 0xbc,
                                     "browser.backgroundColor was not parsed") &&
@@ -1992,6 +1998,14 @@ static bool RunBrowserConfigValidationTest(
       test_directory / "empty-browser-initial-window-state.json";
   const auto unknown_initial_window_state_path =
       test_directory / "unknown-browser-initial-window-state.json";
+  const auto invalid_context_menu_path =
+      test_directory / "invalid-browser-context-menu.json";
+  const auto invalid_context_menu_mode_path =
+      test_directory / "invalid-browser-context-menu-mode.json";
+  const auto empty_context_menu_mode_path =
+      test_directory / "empty-browser-context-menu-mode.json";
+  const auto unknown_context_menu_mode_path =
+      test_directory / "unknown-browser-context-menu-mode.json";
   const auto invalid_initial_title_bar_visibility_path =
       test_directory / "invalid-browser-initial-title-bar-visibility.json";
   const auto invalid_initial_title_bar_icon_path =
@@ -2037,6 +2051,18 @@ static bool RunBrowserConfigValidationTest(
          Expect(WriteFile(unknown_initial_window_state_path,
                           R"({"browser":{"initialWindowState":"iconified"}})"),
                 "failed to write unknown initial window state config") &&
+         Expect(WriteFile(invalid_context_menu_path,
+                          R"({"browser":{"contextMenu":true}})"),
+                "failed to write invalid context menu config") &&
+         Expect(WriteFile(invalid_context_menu_mode_path,
+                          R"({"browser":{"contextMenu":{"mode":42}}})"),
+                "failed to write invalid context menu mode config") &&
+         Expect(WriteFile(empty_context_menu_mode_path,
+                          R"({"browser":{"contextMenu":{"mode":""}}})"),
+                "failed to write empty context menu mode config") &&
+         Expect(WriteFile(unknown_context_menu_mode_path,
+                          R"({"browser":{"contextMenu":{"mode":"native"}}})"),
+                "failed to write unknown context menu mode config") &&
          Expect(WriteFile(invalid_initial_title_bar_visibility_path,
                           R"({"browser":{"initialTitleBarVisibility":"hidden"}})"),
                 "failed to write invalid initial title bar visibility config") &&
@@ -2147,6 +2173,17 @@ static bool RunBrowserConfigValidationTest(
                                  "empty") &&
          LoadConfigExpectFailure(unknown_initial_window_state_path,
                                  "browser.initialWindowState has unknown "
+                                 "value") &&
+         LoadConfigExpectFailure(invalid_context_menu_path,
+                                 "browser.contextMenu must be an object") &&
+         LoadConfigExpectFailure(invalid_context_menu_mode_path,
+                                 "browser.contextMenu.mode must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(empty_context_menu_mode_path,
+                                 "browser.contextMenu.mode must not be "
+                                 "empty") &&
+         LoadConfigExpectFailure(unknown_context_menu_mode_path,
+                                 "browser.contextMenu.mode has unknown "
                                  "value") &&
          LoadConfigExpectFailure(invalid_initial_title_bar_visibility_path,
                                  "browser.initialTitleBarVisibility must be a "

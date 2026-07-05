@@ -54,6 +54,8 @@ static constexpr char kMuonConfigBrowserInitialTitleBarIconKey[] =
 static constexpr char kMuonConfigBrowserBackgroundColorKey[] =
     "backgroundColor";
 static constexpr char kMuonConfigBrowserTitleBarTypeKey[] = "titleBarType";
+static constexpr char kMuonConfigBrowserContextMenuKey[] = "contextMenu";
+static constexpr char kMuonConfigBrowserContextMenuModeKey[] = "mode";
 static constexpr char kMuonConfigBrowserKeybindsKey[] = "keybind";
 static constexpr char kMuonConfigBrowserDevToolsKey[] = "devtools";
 static constexpr char kMuonConfigBrowserReloadKey[] = "reload";
@@ -1517,6 +1519,65 @@ static bool ReadBrowserTitleBarConfig(yyjson_val* browser,
   return true;
 }
 
+static bool ParseBrowserContextMenuMode(
+    const std::string& raw_mode,
+    MuonBrowserContextMenuMode* mode) {
+  if (mode == nullptr) {
+    return false;
+  }
+  if (raw_mode == "standard") {
+    *mode = kMuonBrowserContextMenuModeStandard;
+    return true;
+  }
+  if (raw_mode == "disabled") {
+    *mode = kMuonBrowserContextMenuModeDisabled;
+    return true;
+  }
+  if (raw_mode == "custom") {
+    *mode = kMuonBrowserContextMenuModeCustom;
+    return true;
+  }
+  return false;
+}
+
+static bool ReadBrowserContextMenuConfig(yyjson_val* browser,
+                                         MuonConfig* config,
+                                         std::string* error_message) {
+  const auto context_menu =
+      yyjson_obj_get(browser, kMuonConfigBrowserContextMenuKey);
+  if (context_menu == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_obj(context_menu)) {
+    *error_message = "muon.json browser.contextMenu must be an object";
+    return false;
+  }
+
+  const auto mode =
+      yyjson_obj_get(context_menu, kMuonConfigBrowserContextMenuModeKey);
+  if (mode == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(mode)) {
+    *error_message =
+        "muon.json browser.contextMenu.mode must be a string";
+    return false;
+  }
+  const auto raw_mode = ReadJsonString(mode);
+  if (raw_mode.empty()) {
+    *error_message =
+        "muon.json browser.contextMenu.mode must not be empty";
+    return false;
+  }
+  if (!ParseBrowserContextMenuMode(raw_mode,
+                                   &config->browser.context_menu_mode)) {
+    *error_message =
+        "muon.json browser.contextMenu.mode has unknown value: " + raw_mode;
+    return false;
+  }
+  return true;
+}
+
 static bool ShortcutAcceptsModifiers(const MuonKeyboardShortcut& shortcut,
                                      uint32_t modifiers) {
   if (shortcut.modifiers == modifiers) {
@@ -1729,6 +1790,7 @@ static bool ReadBrowserConfig(yyjson_val* root,
       !ReadBrowserInitialTitleBarIconConfig(browser, config, error_message) ||
       !ReadBrowserBackgroundColorConfig(browser, config, error_message) ||
       !ReadBrowserTitleBarConfig(browser, config, error_message) ||
+      !ReadBrowserContextMenuConfig(browser, config, error_message) ||
       !ReadBrowserKeybindsConfig(browser, config, error_message)) {
     return false;
   }

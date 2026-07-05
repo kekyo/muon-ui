@@ -866,6 +866,120 @@
             >
           </div>
         </section>
+
+        <section class="panel" aria-label="System tray API demo">
+          <h2 class="section-title">System tray</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-tray-id">Tray id</label>
+              <input
+                id="browser-tray-id"
+                autocomplete="off"
+                spellcheck="false"
+                value="demo-tray"
+              />
+            </div>
+            <div class="field">
+              <label for="browser-tray-icon">Tray icon</label>
+              <input
+                id="browser-tray-icon"
+                autocomplete="off"
+                spellcheck="false"
+                value="icons/tray.png"
+              />
+            </div>
+          </div>
+          <div class="field">
+            <label for="browser-tray-tooltip">Tray tooltip</label>
+            <input
+              id="browser-tray-tooltip"
+              autocomplete="off"
+              spellcheck="false"
+              value="Muon tray ready"
+            />
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-tray-menu-items">Tray menu items JSON</label>
+              <textarea id="browser-tray-menu-items" class="small" spellcheck="false">[
+  {
+    "id": "show",
+    "label": "Show window"
+  },
+  {
+    "type": "checkbox",
+    "id": "ready",
+    "label": "Ready",
+    "checked": true
+  },
+  {
+    "type": "separator"
+  },
+  {
+    "type": "radio",
+    "id": "mode-light",
+    "label": "Light mode",
+    "checked": true
+  },
+  {
+    "type": "radio",
+    "id": "mode-dark",
+    "label": "Dark mode"
+  },
+  {
+    "id": "remove",
+    "label": "Remove tray"
+  }
+]</textarea>
+            </div>
+            <div class="field">
+              <label for="browser-tray-events">Tray events</label>
+              <textarea
+                id="browser-tray-events"
+                class="small"
+                readonly
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button data-browser-tray-action="create" type="button">
+              Create tray
+            </button>
+            <button data-browser-tray-action="setMenu" type="button">
+              Set menu
+            </button>
+            <button data-browser-tray-action="setIcon" type="button">
+              Set icon
+            </button>
+            <button data-browser-tray-action="setTooltip" type="button">
+              Set tooltip
+            </button>
+            <button
+              data-browser-tray-action="remove"
+              class="danger"
+              type="button"
+            >
+              Remove tray
+            </button>
+            <button
+              data-browser-tray-action="clearEvents"
+              class="secondary"
+              type="button"
+            >
+              Clear events
+            </button>
+          </div>
+          <div class="field">
+            <label for="browser-tray-status">Tray status</label>
+            <output
+              id="browser-tray-status"
+              class="status inline-status"
+              data-state="idle"
+              >Ready</output
+            >
+          </div>
+        </section>
       </div>
     </main>
     <script>
@@ -910,6 +1024,20 @@
       const browserContextMenuResultInput = document.querySelector(
         "#browser-context-menu-result",
       );
+      const browserTrayIdInput = document.querySelector("#browser-tray-id");
+      const browserTrayIconInput = document.querySelector("#browser-tray-icon");
+      const browserTrayTooltipInput = document.querySelector(
+        "#browser-tray-tooltip",
+      );
+      const browserTrayMenuItemsInput = document.querySelector(
+        "#browser-tray-menu-items",
+      );
+      const browserTrayEventsInput = document.querySelector(
+        "#browser-tray-events",
+      );
+      const browserTrayStatusOutput = document.querySelector(
+        "#browser-tray-status",
+      );
       const dialogOptionsInput = document.querySelector("#dialog-options");
       const dialogResultInput = document.querySelector("#dialog-result");
       const dialogAbortButton = document.querySelector("#dialog-abort");
@@ -953,9 +1081,13 @@
       const browserContextMenuActionButtons = Array.from(
         document.querySelectorAll("[data-browser-context-menu-action]"),
       );
+      const browserTrayActionButtons = Array.from(
+        document.querySelectorAll("[data-browser-tray-action]"),
+      );
       const buttons = [writeButton, readButton];
       let fsWatcher = null;
       let activeDialogController = null;
+      let activeTrayId = null;
 
       const setButtonTitle = (selector, title) => {
         const button = document.querySelector(selector);
@@ -1098,6 +1230,17 @@
             "SetContextMenuItems: window.muon.browser.setContextMenuItems(items, handler)",
           clearItems:
             "ClearContextMenuItems: window.muon.browser.clearContextMenuItems()",
+        });
+        setActionButtonTitles("data-browser-tray-action", {
+          create:
+            "CreateTray: window.muon.browser.createTray(options, handler)",
+          setMenu:
+            "SetTrayMenu: window.muon.browser.setTrayMenu(id, items, handler)",
+          setIcon: "SetTrayIcon: window.muon.browser.setTrayIcon(id, iconPath)",
+          setTooltip:
+            "SetTrayTooltip: window.muon.browser.setTrayTooltip(id, tooltip)",
+          remove: "RemoveTray: window.muon.browser.removeTray(id)",
+          clearEvents: "ClearEvents: clear tray event log",
         });
       };
 
@@ -1641,6 +1784,99 @@
         },
       };
 
+      const getTrayId = () => {
+        const id = browserTrayIdInput.value.trim();
+        if (id === "" && activeTrayId !== null) {
+          return activeTrayId;
+        }
+        if (id === "") {
+          throw new Error("Tray id is required");
+        }
+        return id;
+      };
+
+      const getTrayIcon = () => {
+        const icon = browserTrayIconInput.value.trim();
+        if (icon === "") {
+          throw new Error("Tray icon is required");
+        }
+        return icon;
+      };
+
+      const getTrayMenuItems = () =>
+        parseJsonInput(browserTrayMenuItemsInput, []);
+
+      const appendTrayEvent = (event) => {
+        browserTrayEventsInput.value += `${formatResult(event)}\n`;
+        browserTrayEventsInput.scrollTop = browserTrayEventsInput.scrollHeight;
+      };
+
+      const handleTrayEvent = (event) => {
+        appendTrayEvent(event);
+        setOutput(
+          browserTrayStatusOutput,
+          `Tray event: ${event.type}${event.id ? ` ${event.id}` : ""}`,
+          "ok",
+        );
+        if (event.type === "activate" || event.id === "show") {
+          void window.muon.browser.show().then(() => window.muon.browser.focus());
+        }
+        if (event.type === "menu" && event.id === "remove") {
+          void removeActiveTray();
+        }
+      };
+
+      const createTrayOptions = () => ({
+        id: browserTrayIdInput.value.trim() || undefined,
+        icon: getTrayIcon(),
+        tooltip: browserTrayTooltipInput.value.trim() || undefined,
+        menu: getTrayMenuItems(),
+      });
+
+      const removeActiveTray = async () => {
+        const id = getTrayId();
+        await window.muon.browser.removeTray(id);
+        if (activeTrayId === id) {
+          activeTrayId = null;
+        }
+        return { removed: id };
+      };
+
+      const browserTrayActions = {
+        create: async () => {
+          const id = await window.muon.browser.createTray(
+            createTrayOptions(),
+            handleTrayEvent,
+          );
+          activeTrayId = id;
+          browserTrayIdInput.value = id;
+          return { id };
+        },
+        setMenu: async () => {
+          const id = getTrayId();
+          const items = getTrayMenuItems();
+          await window.muon.browser.setTrayMenu(id, items, handleTrayEvent);
+          return { id, items };
+        },
+        setIcon: async () => {
+          const id = getTrayId();
+          const icon = getTrayIcon();
+          await window.muon.browser.setTrayIcon(id, icon);
+          return { id, icon };
+        },
+        setTooltip: async () => {
+          const id = getTrayId();
+          const tooltip = browserTrayTooltipInput.value.trim() || null;
+          await window.muon.browser.setTrayTooltip(id, tooltip);
+          return { id, tooltip };
+        },
+        remove: removeActiveTray,
+        clearEvents: async () => {
+          browserTrayEventsInput.value = "";
+          return "Cleared tray events";
+        },
+      };
+
       const runBrowserAction = async (actionName) => {
         const action = browserActions[actionName];
         if (typeof action !== "function") {
@@ -1681,6 +1917,28 @@
           successMessage: `${actionName} completed`,
           task: action,
         });
+      };
+
+      const runBrowserTrayAction = async (actionName) => {
+        const action = browserTrayActions[actionName];
+        if (typeof action !== "function") {
+          setOutput(
+            browserTrayStatusOutput,
+            `Unknown tray action: ${actionName}`,
+            "error",
+          );
+          return;
+        }
+        const result = await runAction({
+          status: browserTrayStatusOutput,
+          buttons: browserTrayActionButtons,
+          workingMessage: `${actionName} requested`,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
+        if (result !== undefined) {
+          appendTrayEvent({ action: actionName, result });
+        }
       };
 
       const dialogActions = {
@@ -1904,6 +2162,12 @@
           void runBrowserContextMenuAction(
             button.dataset.browserContextMenuAction,
           );
+        });
+      }
+
+      for (const button of browserTrayActionButtons) {
+        button.addEventListener("click", () => {
+          void runBrowserTrayAction(button.dataset.browserTrayAction);
         });
       }
 

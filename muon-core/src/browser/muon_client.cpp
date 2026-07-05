@@ -3270,9 +3270,10 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       const auto visible = call.encoded_args->GetBool(0);
       SendPluginResult(call.context, call.frame, call.call_id, result);
-      SetRegisteredMuonTitleBarVisibility(window, visible);
-      SetRegisteredMuonTitleBarVisibilityForBrowser(call.browser->GetIdentifier(),
-                                                   visible);
+      if (!SetRegisteredMuonTitleBarVisibilityForBrowser(
+              call.browser->GetIdentifier(), visible)) {
+        SetRegisteredMuonTitleBarVisibility(window, visible);
+      }
       break;
     }
     case MuonBuiltinBrowserFunctionKind::SetTitleBarIcon: {

@@ -953,6 +953,16 @@ static const char* GetMuonBuiltinBrowserFunctionKindName(
       return "SetContextMenuItems";
     case MuonBuiltinBrowserFunctionKind::ClearContextMenuItems:
       return "ClearContextMenuItems";
+    case MuonBuiltinBrowserFunctionKind::CreateTray:
+      return "CreateTray";
+    case MuonBuiltinBrowserFunctionKind::SetTrayMenu:
+      return "SetTrayMenu";
+    case MuonBuiltinBrowserFunctionKind::SetTrayIcon:
+      return "SetTrayIcon";
+    case MuonBuiltinBrowserFunctionKind::SetTrayTooltip:
+      return "SetTrayTooltip";
+    case MuonBuiltinBrowserFunctionKind::RemoveTray:
+      return "RemoveTray";
     case MuonBuiltinBrowserFunctionKind::Close:
       return "Close";
     case MuonBuiltinBrowserFunctionKind::Shutdown:
@@ -994,6 +1004,7 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       plugin_page_policy_(std::move(plugin_page_policy)),
       plugin_capability_policies_(std::move(plugin_capability_policies)),
       unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {
+  tray_service_ = CreateMuonBrowserTrayService(linux_desktop_id_);
   std::ostringstream log;
   log << "MuonClient ctor this=" << FormatMuonCloseDebugPointer(this)
       << " titlebar_custom="
@@ -1062,6 +1073,7 @@ bool MuonClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 
   if (browser && frame && frame->IsMain()) {
     ClearContextMenuRegistrationForBrowser(browser->GetIdentifier());
+    ClearTrayRegistrationsForBrowser(browser->GetIdentifier());
   }
   if (IsCustomMuonTitleBar(title_bar_manifest_) && frame && frame->IsMain()) {
     CefRefPtr<CefBrowserView> browser_view;
@@ -1234,6 +1246,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   title_bar_icon_update_generations_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
+  ClearTrayRegistrationsForBrowser(browser_id);
   browsers_by_id_.erase(browser_id);
   {
     std::ostringstream log;
@@ -2625,6 +2638,292 @@ void MuonClient::DispatchContextMenuCommand(
       script, "muon://browser/context-menu-command", 1);
 }
 
+void MuonClient::ClearTrayRegistrationsForBrowser(int browser_id) {
+  tray_registrations_by_browser_.erase(browser_id);
+  if (tray_service_) {
+    tray_service_->RemoveTraysForBrowser(browser_id);
+  }
+}
+
+MuonBrowserTrayEventCallback MuonClient::CreateTrayEventCallback(
+    int browser_id) {
+  return [this, browser_id](const MuonBrowserTrayEvent& event) {
+    if (!CefCurrentlyOn(TID_UI)) {
+      return;
+    }
+    DispatchTrayEvent(browser_id, event);
+  };
+}
+
+bool MuonClient::CreateTrayForBrowser(const PendingPluginCall& call,
+                                      std::string* tray_id,
+                                      std::string* error_message) {
+  if (tray_id == nullptr || error_message == nullptr) {
+    return false;
+  }
+  if (!call.browser) {
+    *error_message = "Muon browser is unavailable";
+    return false;
+  }
+  if (!call.frame || !call.frame->IsValid()) {
+    *error_message = "Muon browser frame is unavailable";
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 2 ||
+      call.encoded_args->GetType(0) != VTYPE_STRING ||
+      call.encoded_args->GetType(1) != VTYPE_STRING) {
+    *error_message = "Invalid tray options";
+    return false;
+  }
+
+  const auto options_json = call.encoded_args->GetString(0).ToString();
+  const auto token = call.encoded_args->GetString(1).ToString();
+  if (token.empty()) {
+    *error_message = "Invalid tray token";
+    return false;
+  }
+  MuonBrowserTrayOptions options;
+  if (!ParseMuonBrowserTrayOptionsJson(options_json, &options, error_message)) {
+    return false;
+  }
+  MuonBrowserTrayIcon icon;
+  if (!LoadMuonBrowserTrayIconFromStorage(app_storage_, options.icon_path, &icon,
+                                          error_message)) {
+    return false;
+  }
+  if (!tray_service_) {
+    *error_message = "System tray service is unavailable";
+    return false;
+  }
+  const auto browser_id = call.browser->GetIdentifier();
+  if (!tray_service_->CreateTray(browser_id, options, std::move(icon),
+                                 CreateTrayEventCallback(browser_id), tray_id,
+                                 error_message)) {
+    return false;
+  }
+  BrowserTrayRegistration registration;
+  registration.token = token;
+  registration.frame = call.frame;
+  tray_registrations_by_browser_[browser_id][*tray_id] =
+      std::move(registration);
+  return true;
+}
+
+bool MuonClient::SetTrayMenuForBrowser(const PendingPluginCall& call,
+                                       std::string* error_message) {
+  if (!call.browser) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser is unavailable";
+    }
+    return false;
+  }
+  if (!call.frame || !call.frame->IsValid()) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser frame is unavailable";
+    }
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 3 ||
+      call.encoded_args->GetType(0) != VTYPE_STRING ||
+      call.encoded_args->GetType(1) != VTYPE_STRING ||
+      call.encoded_args->GetType(2) != VTYPE_STRING) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid tray menu";
+    }
+    return false;
+  }
+  const auto tray_id = call.encoded_args->GetString(0).ToString();
+  const auto items_json = call.encoded_args->GetString(1).ToString();
+  const auto token = call.encoded_args->GetString(2).ToString();
+  if (!IsValidMuonBrowserTrayId(tray_id)) {
+    if (error_message != nullptr) {
+      *error_message = "Tray id is invalid: " + tray_id;
+    }
+    return false;
+  }
+  if (token.empty()) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid tray token";
+    }
+    return false;
+  }
+  std::vector<MuonBrowserTrayMenuItem> menu_items;
+  if (!ParseMuonBrowserTrayMenuItemsJson(items_json, &menu_items,
+                                         error_message)) {
+    return false;
+  }
+  if (!tray_service_) {
+    if (error_message != nullptr) {
+      *error_message = "System tray service is unavailable";
+    }
+    return false;
+  }
+  if (!tray_service_->SetTrayMenu(call.browser->GetIdentifier(), tray_id,
+                                  std::move(menu_items),
+                                  CreateTrayEventCallback(
+                                      call.browser->GetIdentifier()),
+                                  error_message)) {
+    return false;
+  }
+  BrowserTrayRegistration registration;
+  registration.token = token;
+  registration.frame = call.frame;
+  tray_registrations_by_browser_[call.browser->GetIdentifier()][tray_id] =
+      std::move(registration);
+  return true;
+}
+
+bool MuonClient::SetTrayIconForBrowser(const PendingPluginCall& call,
+                                       std::string* error_message) {
+  if (!call.browser) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser is unavailable";
+    }
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 2 ||
+      call.encoded_args->GetType(0) != VTYPE_STRING ||
+      call.encoded_args->GetType(1) != VTYPE_STRING) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid tray icon";
+    }
+    return false;
+  }
+  const auto tray_id = call.encoded_args->GetString(0).ToString();
+  const auto icon_path = call.encoded_args->GetString(1).ToString();
+  if (!IsValidMuonBrowserTrayId(tray_id) || icon_path.empty()) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid tray icon";
+    }
+    return false;
+  }
+  MuonBrowserTrayIcon icon;
+  if (!LoadMuonBrowserTrayIconFromStorage(app_storage_, icon_path, &icon,
+                                          error_message)) {
+    return false;
+  }
+  if (!tray_service_) {
+    if (error_message != nullptr) {
+      *error_message = "System tray service is unavailable";
+    }
+    return false;
+  }
+  return tray_service_->SetTrayIcon(call.browser->GetIdentifier(), tray_id,
+                                   std::move(icon), error_message);
+}
+
+bool MuonClient::SetTrayTooltipForBrowser(const PendingPluginCall& call,
+                                          std::string* error_message) {
+  if (!call.browser) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser is unavailable";
+    }
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 2 ||
+      call.encoded_args->GetType(0) != VTYPE_STRING ||
+      call.encoded_args->GetType(1) != VTYPE_STRING) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid tray tooltip";
+    }
+    return false;
+  }
+  const auto tray_id = call.encoded_args->GetString(0).ToString();
+  if (!IsValidMuonBrowserTrayId(tray_id)) {
+    if (error_message != nullptr) {
+      *error_message = "Tray id is invalid: " + tray_id;
+    }
+    return false;
+  }
+  if (!tray_service_) {
+    if (error_message != nullptr) {
+      *error_message = "System tray service is unavailable";
+    }
+    return false;
+  }
+  return tray_service_->SetTrayTooltip(
+      call.browser->GetIdentifier(), tray_id,
+      call.encoded_args->GetString(1).ToString(), error_message);
+}
+
+bool MuonClient::RemoveTrayForBrowser(const PendingPluginCall& call,
+                                      std::string* error_message) {
+  if (!call.browser) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser is unavailable";
+    }
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 1 ||
+      call.encoded_args->GetType(0) != VTYPE_STRING) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid tray removal request";
+    }
+    return false;
+  }
+  const auto tray_id = call.encoded_args->GetString(0).ToString();
+  if (!IsValidMuonBrowserTrayId(tray_id)) {
+    if (error_message != nullptr) {
+      *error_message = "Tray id is invalid: " + tray_id;
+    }
+    return false;
+  }
+  const auto browser_id = call.browser->GetIdentifier();
+  if (!tray_service_) {
+    if (error_message != nullptr) {
+      *error_message = "System tray service is unavailable";
+    }
+    return false;
+  }
+  if (!tray_service_->RemoveTray(browser_id, tray_id, error_message)) {
+    return false;
+  }
+  const auto browser_iterator = tray_registrations_by_browser_.find(browser_id);
+  if (browser_iterator != tray_registrations_by_browser_.end()) {
+    browser_iterator->second.erase(tray_id);
+    if (browser_iterator->second.empty()) {
+      tray_registrations_by_browser_.erase(browser_iterator);
+    }
+  }
+  return true;
+}
+
+void MuonClient::DispatchTrayEvent(int browser_id,
+                                   const MuonBrowserTrayEvent& event) {
+  CEF_REQUIRE_UI_THREAD();
+  const auto browser_iterator = browsers_by_id_.find(browser_id);
+  if (browser_iterator == browsers_by_id_.end()) {
+    return;
+  }
+  const auto registrations_iterator =
+      tray_registrations_by_browser_.find(browser_id);
+  if (registrations_iterator == tray_registrations_by_browser_.end()) {
+    return;
+  }
+  const auto registration_iterator =
+      registrations_iterator->second.find(event.tray_id);
+  if (registration_iterator == registrations_iterator->second.end()) {
+    return;
+  }
+
+  CefRefPtr<CefFrame> target_frame = registration_iterator->second.frame;
+  if (!target_frame || !target_frame->IsValid()) {
+    target_frame = browser_iterator->second->GetMainFrame();
+  }
+  if (!target_frame || !target_frame->IsValid()) {
+    return;
+  }
+
+  const auto detail_json = CreateMuonBrowserTrayEventDetailJson(
+      registration_iterator->second.token, event);
+  auto script = std::string("(() => { const detail = ") + detail_json +
+                "; if (typeof globalThis.dispatchEvent === \"function\" && "
+                "typeof globalThis.CustomEvent === \"function\") { "
+                "globalThis.dispatchEvent(new globalThis.CustomEvent("
+                "\"muon-browser-tray-event\", { detail })); } })();";
+  target_frame->ExecuteJavaScript(script, "muon://browser/tray-event", 1);
+}
+
 void MuonClient::SetFullscreen(CefRefPtr<CefBrowser> browser,
                                 bool fullscreen) {
   CefRefPtr<CefWindow> window;
@@ -3073,6 +3372,49 @@ void MuonClient::DispatchBuiltinBrowserCall(
     }
     case MuonBuiltinBrowserFunctionKind::ClearContextMenuItems: {
       if (!ClearContextMenuItemsForBrowser(call, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::CreateTray: {
+      std::string tray_id;
+      if (!CreateTrayForBrowser(call, &tray_id, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      result.value.type = MUON_TYPE_STRING;
+      result.value.string_value = tray_id;
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetTrayMenu: {
+      if (!SetTrayMenuForBrowser(call, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetTrayIcon: {
+      if (!SetTrayIconForBrowser(call, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetTrayTooltip: {
+      if (!SetTrayTooltipForBrowser(call, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::RemoveTray: {
+      if (!RemoveTrayForBrowser(call, &error_message)) {
         RejectPluginCall(call, error_message);
         return;
       }

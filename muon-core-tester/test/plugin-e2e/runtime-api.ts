@@ -18,6 +18,7 @@ import {
   access,
   browserFunctionNames,
   cdpCommandTimeoutMs,
+  cdpStartupTimeoutMs,
   configuredDevToolsShortcuts,
   connectToMuonCdp,
   constants,
@@ -345,7 +346,8 @@ const withMuonInitialWindowState = async (
 const waitForRecycledMuon = async (
   previousProcessId: number,
 ): Promise<{ driver: CdpDriver; processId: number }> => {
-  const deadline = Date.now() + processExitTimeoutMs;
+  const deadline =
+    Date.now() + Math.max(processExitTimeoutMs, cdpStartupTimeoutMs);
   let lastError: unknown = undefined;
   while (Date.now() < deadline) {
     try {

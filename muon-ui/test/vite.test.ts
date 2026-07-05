@@ -1060,6 +1060,44 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("muon.browser.clearContextMenuItems");
   });
 
+  it("generates browser tray virtual module wrappers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-browser-tray-");
+    await mkdir(join(root, "src", "browser"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/browser/**"],
+          allow: [
+            "muon.browser.createTray",
+            "muon.browser.setTrayMenu",
+            "muon.browser.setTrayIcon",
+            "muon.browser.setTrayTooltip",
+            "muon.browser.removeTray",
+          ],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:browser",
+      join(root, "src", "browser", "tray.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain("export const createTray = ");
+    expect(moduleSource).toContain("export const setTrayMenu = ");
+    expect(moduleSource).toContain("export const setTrayIcon = ");
+    expect(moduleSource).toContain("export const setTrayTooltip = ");
+    expect(moduleSource).toContain("export const removeTray = ");
+    expect(moduleSource).toContain("__muonBrowserTrayHandlers");
+    expect(moduleSource).toContain("muon-browser-tray-event");
+    expect(moduleSource).toContain("muon.browser.createTray");
+    expect(moduleSource).toContain("muon.browser.setTrayMenu");
+  });
+
   it("preserves plugin signature in generated plugin runtime config", async () => {
     const root = await createTemporaryDirectory("muon-vite-plugin-signature-");
     const muonDirectory = await createTemporaryDirectory(

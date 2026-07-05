@@ -533,6 +533,179 @@ const createBrowserClearContextMenuItemsExport = (
   await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, []);
 };`;
 
+const createBrowserTrayHelpers =
+  (): string => `const __muonBrowserTrayEventName = "muon-browser-tray-event";
+const __muonBrowserTrayHandlers = new Map();
+let __muonBrowserTrayListening = false;
+const __muonCreateBrowserTrayToken = () => {
+  const crypto = globalThis.crypto;
+  if (
+    crypto &&
+    typeof crypto.getRandomValues === "function" &&
+    typeof globalThis.Uint32Array === "function"
+  ) {
+    const values = new globalThis.Uint32Array(4);
+    crypto.getRandomValues(values);
+    return Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("");
+  }
+  return \`\${Date.now().toString(36)}-\${Math.random().toString(36).slice(2)}\`;
+};
+const __muonEnsureBrowserTrayListener = () => {
+  if (
+    __muonBrowserTrayListening ||
+    typeof globalThis.addEventListener !== "function"
+  ) {
+    return;
+  }
+  globalThis.addEventListener(__muonBrowserTrayEventName, (event) => {
+    const detail = event && event.detail;
+    if (
+      typeof detail !== "object" ||
+      detail === null ||
+      typeof detail.trayId !== "string"
+    ) {
+      return;
+    }
+    const entry = __muonBrowserTrayHandlers.get(detail.trayId);
+    if (
+      entry === undefined ||
+      detail.token !== entry.token ||
+      typeof entry.handler !== "function"
+    ) {
+      return;
+    }
+    entry.handler(detail);
+  });
+  __muonBrowserTrayListening = true;
+};
+const __muonNormalizeBrowserTrayId = (id) => {
+  if (
+    typeof id !== "string" ||
+    id === "" ||
+    /[\\u0000-\\u001f]/u.test(id) ||
+    id.startsWith("muon.") ||
+    id.startsWith("standard.")
+  ) {
+    throw new TypeError("Invalid tray id");
+  }
+  return id;
+};
+const __muonNormalizeBrowserTrayMenuItem = (item) => {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    throw new TypeError("Invalid tray menu item");
+  }
+  if (item.type === "separator") {
+    return { type: "separator" };
+  }
+  const type = item.type === undefined ? "item" : item.type;
+  if (type !== "item" && type !== "checkbox" && type !== "radio") {
+    throw new TypeError("Invalid tray menu item type");
+  }
+  if (typeof item.label !== "string" || item.label === "") {
+    throw new TypeError("Invalid tray menu item label");
+  }
+  if (item.enabled !== undefined && typeof item.enabled !== "boolean") {
+    throw new TypeError("Invalid tray menu item enabled state");
+  }
+  if (item.checked !== undefined && typeof item.checked !== "boolean") {
+    throw new TypeError("Invalid tray menu item checked state");
+  }
+  if (type === "item" && item.checked !== undefined) {
+    throw new TypeError("Invalid tray menu item checked state");
+  }
+  return {
+    ...(type === "item" ? {} : { type }),
+    id: __muonNormalizeBrowserTrayId(item.id),
+    label: item.label,
+    enabled: item.enabled === undefined ? true : item.enabled,
+    ...(item.checked === undefined ? {} : { checked: item.checked }),
+  };
+};
+const __muonNormalizeBrowserTrayMenuItems = (items) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError("Invalid tray menu items");
+  }
+  return items.map(__muonNormalizeBrowserTrayMenuItem);
+};
+const __muonNormalizeBrowserTrayOptions = (options) => {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new TypeError("Invalid tray options");
+  }
+  if (typeof options.icon !== "string" || options.icon === "") {
+    throw new TypeError("Invalid tray icon");
+  }
+  if (options.tooltip !== undefined && options.tooltip !== null && typeof options.tooltip !== "string") {
+    throw new TypeError("Invalid tray tooltip");
+  }
+  return {
+    ...(options.id === undefined ? {} : { id: __muonNormalizeBrowserTrayId(options.id) }),
+    icon: options.icon,
+    ...(options.tooltip === undefined || options.tooltip === null ? {} : { tooltip: options.tooltip }),
+    ...(options.menu === undefined ? {} : { menu: __muonNormalizeBrowserTrayMenuItems(options.menu) }),
+  };
+};`;
+
+const createBrowserCreateTrayExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const createTray = async (options, handler = undefined) => {
+  if (handler !== undefined && typeof handler !== "function") {
+    throw new TypeError("Invalid tray handler");
+  }
+  const normalized = __muonNormalizeBrowserTrayOptions(options);
+  const token = __muonCreateBrowserTrayToken();
+  const trayId = await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [JSON.stringify(normalized), token]);
+  __muonBrowserTrayHandlers.set(trayId, { token, handler });
+  __muonEnsureBrowserTrayListener();
+  return trayId;
+};`;
+
+const createBrowserSetTrayMenuExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const setTrayMenu = async (id, items, handler = undefined) => {
+  if (handler !== undefined && typeof handler !== "function") {
+    throw new TypeError("Invalid tray handler");
+  }
+  const trayId = __muonNormalizeBrowserTrayId(id);
+  const normalized = __muonNormalizeBrowserTrayMenuItems(items);
+  const token = __muonCreateBrowserTrayToken();
+  await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [trayId, JSON.stringify(normalized), token]);
+  __muonBrowserTrayHandlers.set(trayId, { token, handler });
+  __muonEnsureBrowserTrayListener();
+};`;
+
+const createBrowserSetTrayIconExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const setTrayIcon = async (id, iconPath) => {
+  const trayId = __muonNormalizeBrowserTrayId(id);
+  if (typeof iconPath !== "string" || iconPath === "") {
+    throw new TypeError("Invalid tray icon");
+  }
+  await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [trayId, iconPath]);
+};`;
+
+const createBrowserSetTrayTooltipExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const setTrayTooltip = async (id, tooltip) => {
+  const trayId = __muonNormalizeBrowserTrayId(id);
+  if (tooltip !== null && typeof tooltip !== "string") {
+    throw new TypeError("Invalid tray tooltip");
+  }
+  await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [trayId, tooltip === null ? "" : tooltip]);
+};`;
+
+const createBrowserRemoveTrayExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const removeTray = async (id) => {
+  const trayId = __muonNormalizeBrowserTrayId(id);
+  await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [trayId]);
+  __muonBrowserTrayHandlers.delete(trayId);
+};`;
+
 const createGenericFunctionExport = (
   exportName: string,
   capabilityId: string,
@@ -557,6 +730,15 @@ const createModuleSource = (rule: ResolvedRule): string => {
       (exportName === "setContextMenuItems" ||
         exportName === "clearContextMenuItems"),
   );
+  const usesBrowserTrayHelpers = exportedFunctions.some(
+    ([exportName]) =>
+      rule.namespace === "muon.browser" &&
+      (exportName === "createTray" ||
+        exportName === "setTrayMenu" ||
+        exportName === "setTrayIcon" ||
+        exportName === "setTrayTooltip" ||
+        exportName === "removeTray"),
+  );
   const exports = exportedFunctions.map(([exportName, functionPath]) => {
     if (rule.namespace === "muon.executor" && exportName === "spawn") {
       return createExecutorSpawnExport(rule.id, functionPath);
@@ -573,6 +755,21 @@ const createModuleSource = (rule: ResolvedRule): string => {
     ) {
       return createBrowserClearContextMenuItemsExport(rule.id, functionPath);
     }
+    if (rule.namespace === "muon.browser" && exportName === "createTray") {
+      return createBrowserCreateTrayExport(rule.id, functionPath);
+    }
+    if (rule.namespace === "muon.browser" && exportName === "setTrayMenu") {
+      return createBrowserSetTrayMenuExport(rule.id, functionPath);
+    }
+    if (rule.namespace === "muon.browser" && exportName === "setTrayIcon") {
+      return createBrowserSetTrayIconExport(rule.id, functionPath);
+    }
+    if (rule.namespace === "muon.browser" && exportName === "setTrayTooltip") {
+      return createBrowserSetTrayTooltipExport(rule.id, functionPath);
+    }
+    if (rule.namespace === "muon.browser" && exportName === "removeTray") {
+      return createBrowserRemoveTrayExport(rule.id, functionPath);
+    }
     return createGenericFunctionExport(exportName, rule.id, functionPath);
   });
   return `const __muonCall = globalThis.__muon_plugin_call;
@@ -581,6 +778,7 @@ if (typeof __muonCall !== "function") {
 }
 
 ${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
+${usesBrowserTrayHelpers ? `${createBrowserTrayHelpers()}\n\n` : ""}
 ${exports.join("\n\n")}
 `;
 };

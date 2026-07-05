@@ -10,6 +10,7 @@
 #include "browser/muon_browser_shortcut_handler.h"
 #include "browser/muon_builtin_browser.h"
 #include "browser/muon_context_menu.h"
+#include "browser/muon_tray.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "config/muon_config.h"
@@ -425,6 +426,11 @@ class MuonClient final : public CefClient,
     CefRefPtr<CefFrame> frame;
   };
 
+  struct BrowserTrayRegistration {
+    std::string token;
+    CefRefPtr<CefFrame> frame;
+  };
+
   static bool IsKnownBrowserShortcut(const CefKeyEvent& event);
   static bool GetBrowserViewAndWindow(CefRefPtr<CefBrowser> browser,
                                       CefRefPtr<CefBrowserView>* browser_view,
@@ -463,6 +469,20 @@ class MuonClient final : public CefClient,
   void DispatchContextMenuCommand(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefContextMenuParams> params,
                                   const ActiveContextMenuCommand& command);
+  void ClearTrayRegistrationsForBrowser(int browser_id);
+  bool CreateTrayForBrowser(const PendingPluginCall& call,
+                            std::string* tray_id,
+                            std::string* error_message);
+  bool SetTrayMenuForBrowser(const PendingPluginCall& call,
+                             std::string* error_message);
+  bool SetTrayIconForBrowser(const PendingPluginCall& call,
+                             std::string* error_message);
+  bool SetTrayTooltipForBrowser(const PendingPluginCall& call,
+                                std::string* error_message);
+  bool RemoveTrayForBrowser(const PendingPluginCall& call,
+                            std::string* error_message);
+  void DispatchTrayEvent(int browser_id, const MuonBrowserTrayEvent& event);
+  MuonBrowserTrayEventCallback CreateTrayEventCallback(int browser_id);
   void BeginPendingFsDialogCall(int browser_id);
   void EndPendingFsDialogCall(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
@@ -540,6 +560,9 @@ class MuonClient final : public CefClient,
   std::map<int, BrowserContextMenuRegistration> context_menu_registrations_;
   std::map<int, std::map<int, ActiveContextMenuCommand>>
       active_context_menu_commands_by_browser_;
+  std::unique_ptr<MuonBrowserTrayService> tray_service_;
+  std::map<int, std::map<std::string, BrowserTrayRegistration>>
+      tray_registrations_by_browser_;
 
   IMPLEMENT_REFCOUNTING(MuonClient);
   DISALLOW_COPY_AND_ASSIGN(MuonClient);

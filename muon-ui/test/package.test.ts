@@ -990,6 +990,31 @@ const setWindowBoundsResult: Promise<void> = window.muon.browser.setWindowBounds
 });
 const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(true);
 const titleBarIconResult: Promise<void> = window.muon.browser.setTitleBarIcon("icons/app.png");
+const trayIdResult: Promise<string> = window.muon.browser.createTray(
+  {
+    id: "main",
+    icon: "icons/app.png",
+    tooltip: "Ready",
+    menu: [
+      { id: "open", label: "Open" },
+      { type: "checkbox", id: "mute", label: "Mute", checked: false },
+      { type: "separator" },
+    ],
+  },
+  (event) => {
+    if (event.type === "menu") {
+      const checked: boolean = event.checked;
+      void checked;
+    }
+  },
+);
+const trayMenuResult: Promise<void> = window.muon.browser.setTrayMenu(
+  "main",
+  [{ type: "radio", id: "mode-a", label: "Mode A", checked: true }],
+);
+const trayIconResult: Promise<void> = window.muon.browser.setTrayIcon("main", "icons/tray.png");
+const trayTooltipResult: Promise<void> = window.muon.browser.setTrayTooltip("main", null);
+const trayRemoveResult: Promise<void> = window.muon.browser.removeTray("main");
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
@@ -998,6 +1023,11 @@ void windowBoundsResult;
 void setWindowBoundsResult;
 void titleBarVisibilityResult;
 void titleBarIconResult;
+void trayIdResult;
+void trayMenuResult;
+void trayIconResult;
+void trayTooltipResult;
+void trayRemoveResult;
 void existsResult;
 `),
     ).resolves.toBeUndefined();
@@ -1016,6 +1046,20 @@ const setWindowBoundsResult: Promise<void> = window.muon.browser.setWindowBounds
 });
 const titleBarVisibilityResult: Promise<void> = window.muon.browser.setTitleBarVisibility(false);
 const clearTitleBarIconResult: Promise<void> = window.muon.browser.setTitleBarIcon(null);
+const trayIdResult: Promise<string> = window.muon.browser.createTray({
+  icon: "icons/app.png",
+});
+const trayMenuResult: Promise<void> = window.muon.browser.setTrayMenu(
+  "main",
+  [{ id: "open", label: "Open" }],
+  (event) => {
+    const trayId: string = event.trayId;
+    void trayId;
+  },
+);
+const trayIconResult: Promise<void> = window.muon.browser.setTrayIcon("main", "icons/tray.png");
+const trayTooltipResult: Promise<void> = window.muon.browser.setTrayTooltip("main", "Ready");
+const trayRemoveResult: Promise<void> = window.muon.browser.removeTray("main");
 const existsResult: Promise<boolean> = window.muon.fs.exists("asset://main/file");
 void reloadResult;
 void resetZoomResult;
@@ -1024,6 +1068,11 @@ void windowBoundsResult;
 void setWindowBoundsResult;
 void titleBarVisibilityResult;
 void clearTitleBarIconResult;
+void trayIdResult;
+void trayMenuResult;
+void trayIconResult;
+void trayTooltipResult;
+void trayRemoveResult;
 void existsResult;
 `),
     ).resolves.toBeUndefined();

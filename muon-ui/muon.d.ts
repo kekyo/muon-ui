@@ -225,6 +225,151 @@ declare global {
     command: MuonBrowserContextMenuCommand,
   ) => void;
 
+  /** Normal command item inserted into a Muon browser system tray menu. */
+  interface MuonBrowserTrayCommandMenuItem {
+    /**
+     * Item type. Omit for normal command items.
+     *
+     * @defaultValue `"item"`
+     */
+    readonly type?: "item";
+    /**
+     * Application command id.
+     *
+     * @remarks Must be non-empty, must not contain control characters, and
+     * must not start with `muon.` or `standard.`.
+     */
+    readonly id: string;
+    /** User-visible command label. */
+    readonly label: string;
+    /**
+     * Whether the command can be selected.
+     *
+     * @defaultValue `true`
+     */
+    readonly enabled?: boolean;
+  }
+
+  /** Checkbox command item inserted into a Muon browser system tray menu. */
+  interface MuonBrowserTrayCheckboxMenuItem {
+    /** Checkbox item type. */
+    readonly type: "checkbox";
+    /**
+     * Application command id.
+     *
+     * @remarks Must be non-empty, must not contain control characters, and
+     * must not start with `muon.` or `standard.`.
+     */
+    readonly id: string;
+    /** User-visible command label. */
+    readonly label: string;
+    /**
+     * Whether the command can be selected.
+     *
+     * @defaultValue `true`
+     */
+    readonly enabled?: boolean;
+    /**
+     * Whether the item is checked.
+     *
+     * @defaultValue `false`
+     */
+    readonly checked?: boolean;
+  }
+
+  /** Radio command item inserted into a Muon browser system tray menu. */
+  interface MuonBrowserTrayRadioMenuItem {
+    /** Radio item type. */
+    readonly type: "radio";
+    /**
+     * Application command id.
+     *
+     * @remarks Must be non-empty, must not contain control characters, and
+     * must not start with `muon.` or `standard.`.
+     */
+    readonly id: string;
+    /** User-visible command label. */
+    readonly label: string;
+    /**
+     * Whether the command can be selected.
+     *
+     * @defaultValue `true`
+     */
+    readonly enabled?: boolean;
+    /**
+     * Whether the item is checked.
+     *
+     * @defaultValue `false`
+     */
+    readonly checked?: boolean;
+  }
+
+  /** Separator inserted into a Muon browser system tray menu. */
+  interface MuonBrowserTraySeparatorMenuItem {
+    /** Separator item type. */
+    readonly type: "separator";
+  }
+
+  /** Item inserted into a Muon browser system tray menu. */
+  type MuonBrowserTrayMenuItem =
+    | MuonBrowserTrayCommandMenuItem
+    | MuonBrowserTrayCheckboxMenuItem
+    | MuonBrowserTrayRadioMenuItem
+    | MuonBrowserTraySeparatorMenuItem;
+
+  /** Options used when creating a Muon browser system tray item. */
+  interface MuonBrowserTrayOptions {
+    /**
+     * Browser-scoped tray id.
+     *
+     * @remarks When omitted, Muon generates and returns a unique id.
+     */
+    readonly id?: string;
+    /**
+     * Tray icon asset path.
+     *
+     * @remarks Accepts `asset://main/...` URLs or `main`-relative asset paths.
+     * Native tray icons accept PNG icons.
+     */
+    readonly icon: string;
+    /** Tooltip text shown by the platform shell when supported. */
+    readonly tooltip?: string | null;
+    /** Initial tray menu items. */
+    readonly menu?: readonly MuonBrowserTrayMenuItem[];
+  }
+
+  /** Primary or secondary activation event from a Muon browser system tray item. */
+  interface MuonBrowserTrayActivationEvent {
+    /** Event type. */
+    readonly type: "activate" | "secondaryActivate";
+    /** Browser-scoped tray id. */
+    readonly trayId: string;
+    /** Screen X coordinate provided by the platform shell. */
+    readonly x: number;
+    /** Screen Y coordinate provided by the platform shell. */
+    readonly y: number;
+  }
+
+  /** Menu command event from a Muon browser system tray item. */
+  interface MuonBrowserTrayMenuEvent {
+    /** Event type. */
+    readonly type: "menu";
+    /** Browser-scoped tray id. */
+    readonly trayId: string;
+    /** Application command id selected by the user. */
+    readonly id: string;
+    /** Current checked state for checkbox and radio menu items. */
+    readonly checked: boolean;
+  }
+
+  /** Event emitted by a Muon browser system tray item. */
+  type MuonBrowserTrayEvent =
+    | MuonBrowserTrayActivationEvent
+    | MuonBrowserTrayMenuEvent;
+
+  /** Receives Muon browser system tray activation and menu events. */
+  type MuonBrowserTrayEventHandler = (event: MuonBrowserTrayEvent) => void;
+
   /** Browser and native window operations for the current Muon window. */
   interface MuonBrowserApi {
     /**
@@ -360,6 +505,59 @@ declare global {
      * @returns A promise that resolves when the registration is cleared.
      */
     readonly clearContextMenuItems: () => Promise<void>;
+    /**
+     * Create a browser-owned system tray item.
+     *
+     * @param options - Tray icon, tooltip, menu, and optional id.
+     * @param handler - Optional callback for activation and menu events.
+     * @returns A promise for the normalized or generated tray id.
+     * @remarks The tray item is owned by the current browser. It is removed on
+     * main-frame navigation, browser close, or `removeTray()`. Hidden initial
+     * windows can create tray items while the browser stays alive.
+     */
+    readonly createTray: (
+      options: MuonBrowserTrayOptions,
+      handler?: MuonBrowserTrayEventHandler,
+    ) => Promise<string>;
+    /**
+     * Replace menu items for a browser-owned system tray item.
+     *
+     * @param id - Browser-scoped tray id.
+     * @param items - Command and separator items.
+     * @param handler - Optional callback replacing the current tray handler.
+     * @returns A promise that resolves when the menu is updated.
+     */
+    readonly setTrayMenu: (
+      id: string,
+      items: readonly MuonBrowserTrayMenuItem[],
+      handler?: MuonBrowserTrayEventHandler,
+    ) => Promise<void>;
+    /**
+     * Replace the icon for a browser-owned system tray item.
+     *
+     * @param id - Browser-scoped tray id.
+     * @param iconPath - PNG icon asset path.
+     * @returns A promise that resolves when the icon is updated.
+     */
+    readonly setTrayIcon: (id: string, iconPath: string) => Promise<void>;
+    /**
+     * Replace or clear the tooltip for a browser-owned system tray item.
+     *
+     * @param id - Browser-scoped tray id.
+     * @param tooltip - Tooltip text, or `null` to clear it.
+     * @returns A promise that resolves when the tooltip is updated.
+     */
+    readonly setTrayTooltip: (
+      id: string,
+      tooltip: string | null,
+    ) => Promise<void>;
+    /**
+     * Remove a browser-owned system tray item.
+     *
+     * @param id - Browser-scoped tray id.
+     * @returns A promise that resolves when the tray item is removed.
+     */
+    readonly removeTray: (id: string) => Promise<void>;
     /**
      * Show or hide the current Muon custom title bar.
      *
@@ -1370,6 +1568,26 @@ declare module "muon:browser" {
   ) => Promise<void>;
   /** Clear custom native context menu items for the current browser window. */
   export const clearContextMenuItems: () => Promise<void>;
+  /** Create a browser-owned system tray item. */
+  export const createTray: (
+    options: MuonBrowserTrayOptions,
+    handler?: MuonBrowserTrayEventHandler,
+  ) => Promise<string>;
+  /** Replace menu items for a browser-owned system tray item. */
+  export const setTrayMenu: (
+    id: string,
+    items: readonly MuonBrowserTrayMenuItem[],
+    handler?: MuonBrowserTrayEventHandler,
+  ) => Promise<void>;
+  /** Replace the icon for a browser-owned system tray item. */
+  export const setTrayIcon: (id: string, iconPath: string) => Promise<void>;
+  /** Replace or clear the tooltip for a browser-owned system tray item. */
+  export const setTrayTooltip: (
+    id: string,
+    tooltip: string | null,
+  ) => Promise<void>;
+  /** Remove a browser-owned system tray item. */
+  export const removeTray: (id: string) => Promise<void>;
   /** Show or hide the current Muon custom title bar. */
   export const setTitleBarVisibility: (visible: boolean) => Promise<void>;
   /** Set or clear the current window title bar icon. */

@@ -657,6 +657,8 @@ set(APP_SOURCES
   src/browser/muon_context_menu.cpp
   src/browser/muon_default_title_bar_icon.cpp
   src/browser/muon_native_wheel_forwarder.cpp
+  src/browser/muon_tray.cpp
+  src/browser/muon_tray_service.cpp
   src/browser/muon_title_bar.cpp
   src/browser/muon_title_bar_loader.cpp
   src/browser/muon_window_delegate.cpp
@@ -704,6 +706,7 @@ set(APP_HEADERS
   src/browser/muon_context_menu.h
   src/browser/muon_default_title_bar_icon.h
   src/browser/muon_native_wheel_forwarder.h
+  src/browser/muon_tray.h
   src/browser/muon_title_bar.h
   src/browser/muon_title_bar_loader.h
   src/browser/muon_window_delegate.h
@@ -1380,6 +1383,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
     src/browser/muon_context_menu.cpp
+    src/browser/muon_tray.cpp
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
@@ -1407,6 +1411,42 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_builtin_browser_test)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(muon_tray_linux_dbus_test
+      tests/muon_tray_linux_dbus_test.cpp
+      src/muon_json_helpers.cpp
+      src/muon_string_helpers.cpp
+      src/muon_sha1.cpp
+      src/app/muon_app_scheme.cpp
+      src/app/muon_app_storage.cpp
+      src/browser/muon_tray.cpp
+      src/browser/muon_tray_service.cpp
+      src/browser/muon_title_bar.cpp
+      src/config/muon_linux_display_backend.cpp
+      src/config/muon_paths.cpp
+      src/log/muon_close_debug_log.cpp
+      )
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_tray_linux_dbus_test)
+    target_compile_features(muon_tray_linux_dbus_test PRIVATE cxx_std_20)
+    target_include_directories(muon_tray_linux_dbus_test PRIVATE
+      include
+      src
+      "${TRA_FFIC_ROOT_RESOLVED}/include"
+      )
+    target_link_libraries(muon_tray_linux_dbus_test PRIVATE
+      muon_cardio
+      libcef_dll_wrapper
+      libcef_lib
+      yyjson
+      miniz
+      ${LIBFFI_TARGET}
+      ${MUON_NATIVE_WHEEL_TARGETS}
+      ${MUON_CARDIO_GLIB_TARGETS}
+      ${CEF_STANDARD_LIBS}
+      ${CMAKE_DL_LIBS}
+      )
+    MUON_APPLY_SANITIZERS(muon_tray_linux_dbus_test)
+  endif()
   add_executable(muon_default_title_bar_icon_generated_test
     tests/muon_default_title_bar_icon_generated_test.cpp
     "${MUON_DEFAULT_TITLE_BAR_ICON_HEADER_PATH}"
@@ -1585,6 +1625,12 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     NAME builtin_browser
     COMMAND muon_builtin_browser_test
     )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(
+      NAME tray_linux_dbus
+      COMMAND muon_tray_linux_dbus_test
+      )
+  endif()
   add_test(
     NAME muon_ui_title_bar_manifest
     COMMAND "${MUON_RUNTIME_DIR}/muon_ui_title_bar_manifest_test"

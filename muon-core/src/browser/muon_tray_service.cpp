@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -113,7 +114,8 @@ struct MuonBrowserTrayRecord {
 
 #if defined(__linux__)
   GDBusConnection* linux_connection = nullptr;
-  guint linux_watcher_id = 0;
+  guint linux_freedesktop_watcher_id = 0;
+  guint linux_kde_watcher_id = 0;
   guint linux_name_owner_id = 0;
   guint linux_sni_registration_id = 0;
   guint linux_kde_sni_registration_id = 0;
@@ -123,6 +125,7 @@ struct MuonBrowserTrayRecord {
   std::string linux_bus_name;
   std::string linux_item_path = "/StatusNotifierItem";
   std::string linux_menu_path = "/StatusNotifierItem/Menu";
+  std::set<std::string> linux_registered_watcher_owners;
 #elif defined(_WIN32)
   UINT windows_notify_id = 0;
   HICON windows_icon = nullptr;
@@ -183,11 +186,16 @@ class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
 #if defined(__linux__)
   GDBusNodeInfo* linux_sni_node_info_ = nullptr;
   GDBusNodeInfo* linux_menu_node_info_ = nullptr;
+  std::map<std::string, std::string> linux_watcher_owners_by_name_;
 
   MuonBrowserTrayRecord* FindLinuxRecord(GDBusConnection* connection);
   MuonBrowserTrayRecord* FindLinuxRecordByBusName(const char* name);
   GDBusInterfaceInfo* GetLinuxSniInterfaceInfo(const char* interface_name);
-  void RegisterLinuxStatusNotifierItem(MuonBrowserTrayRecord* record);
+  void RegisterLinuxStatusNotifierItem(MuonBrowserTrayRecord* record,
+                                       const std::string& watcher_name,
+                                       const std::string& watcher_owner);
+  void RegisterLinuxStatusNotifierItemWithKnownWatchers(
+      MuonBrowserTrayRecord* record);
   void EmitLinuxSniSignal(MuonBrowserTrayRecord* record,
                           const char* signal_name,
                           GVariant* parameters);
@@ -252,6 +260,9 @@ class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
   static void LinuxWatcherAppeared(GDBusConnection* connection,
                                    const gchar* name,
                                    const gchar* name_owner,
+                                   gpointer user_data);
+  static void LinuxWatcherVanished(GDBusConnection* connection,
+                                   const gchar* name,
                                    gpointer user_data);
 #elif defined(_WIN32)
   HWND windows_message_window_ = nullptr;
@@ -641,6 +652,28 @@ static GVariant* CreateLinuxEmptyStringArray() {
   return g_variant_builder_end(&builder);
 }
 
+struct LinuxStatusNotifierWatcherTarget {
+  const char* bus_name;
+  const char* interface_name;
+};
+
+static constexpr LinuxStatusNotifierWatcherTarget
+    kLinuxStatusNotifierWatcherTargets[] = {
+        {"org.kde.StatusNotifierWatcher", "org.kde.StatusNotifierWatcher"},
+        {"org.freedesktop.StatusNotifierWatcher",
+         "org.freedesktop.StatusNotifierWatcher"},
+};
+
+static const char* FindLinuxStatusNotifierWatcherInterface(
+    const std::string& bus_name) {
+  for (const auto& target : kLinuxStatusNotifierWatcherTargets) {
+    if (bus_name == target.bus_name) {
+      return target.interface_name;
+    }
+  }
+  return nullptr;
+}
+
 static GVariant* CreateLinuxIconPixmap(const MuonBrowserTrayIcon& icon) {
   GVariantBuilder pixmaps;
   g_variant_builder_init(&pixmaps, G_VARIANT_TYPE("a(iiay)"));
@@ -796,10 +829,14 @@ bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
       record->linux_connection, record->linux_bus_name.c_str(),
       G_BUS_NAME_OWNER_FLAGS_NONE, &LinuxNameAcquired, &LinuxNameLost, this,
       nullptr);
-  record->linux_watcher_id = g_bus_watch_name_on_connection(
-      record->linux_connection, "org.freedesktop.StatusNotifierWatcher",
-      G_BUS_NAME_WATCHER_FLAGS_NONE, &LinuxWatcherAppeared, nullptr, this,
-      nullptr);
+  record->linux_kde_watcher_id = g_bus_watch_name_on_connection(
+      record->linux_connection, kLinuxStatusNotifierWatcherTargets[0].bus_name,
+      G_BUS_NAME_WATCHER_FLAGS_NONE, &LinuxWatcherAppeared,
+      &LinuxWatcherVanished, this, nullptr);
+  record->linux_freedesktop_watcher_id = g_bus_watch_name_on_connection(
+      record->linux_connection, kLinuxStatusNotifierWatcherTargets[1].bus_name,
+      G_BUS_NAME_WATCHER_FLAGS_NONE, &LinuxWatcherAppeared,
+      &LinuxWatcherVanished, this, nullptr);
   return true;
 }
 
@@ -808,9 +845,13 @@ void MuonBrowserTrayServiceImpl::PlatformDestroyRecord(
   if (record == nullptr) {
     return;
   }
-  if (record->linux_watcher_id != 0) {
-    g_bus_unwatch_name(record->linux_watcher_id);
-    record->linux_watcher_id = 0;
+  if (record->linux_kde_watcher_id != 0) {
+    g_bus_unwatch_name(record->linux_kde_watcher_id);
+    record->linux_kde_watcher_id = 0;
+  }
+  if (record->linux_freedesktop_watcher_id != 0) {
+    g_bus_unwatch_name(record->linux_freedesktop_watcher_id);
+    record->linux_freedesktop_watcher_id = 0;
   }
   if (record->linux_name_owner_id != 0) {
     g_bus_unown_name(record->linux_name_owner_id);
@@ -842,17 +883,37 @@ void MuonBrowserTrayServiceImpl::PlatformDestroyRecord(
 }
 
 void MuonBrowserTrayServiceImpl::RegisterLinuxStatusNotifierItem(
-    MuonBrowserTrayRecord* record) {
+    MuonBrowserTrayRecord* record,
+    const std::string& watcher_name,
+    const std::string& watcher_owner) {
   if (record == nullptr || record->linux_connection == nullptr ||
       !record->linux_name_acquired) {
     return;
   }
+  const auto* watcher_interface =
+      FindLinuxStatusNotifierWatcherInterface(watcher_name);
+  if (watcher_interface == nullptr ||
+      record->linux_registered_watcher_owners.count(watcher_owner) != 0) {
+    return;
+  }
+  record->linux_registered_watcher_owners.insert(watcher_owner);
   g_dbus_connection_call(
-      record->linux_connection, "org.freedesktop.StatusNotifierWatcher",
-      "/StatusNotifierWatcher", "org.freedesktop.StatusNotifierWatcher",
-      "RegisterStatusNotifierItem",
+      record->linux_connection, watcher_name.c_str(), "/StatusNotifierWatcher",
+      watcher_interface, "RegisterStatusNotifierItem",
       g_variant_new("(s)", record->linux_bus_name.c_str()), nullptr,
       G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr, nullptr);
+}
+
+void MuonBrowserTrayServiceImpl::RegisterLinuxStatusNotifierItemWithKnownWatchers(
+    MuonBrowserTrayRecord* record) {
+  for (const auto& target : kLinuxStatusNotifierWatcherTargets) {
+    const auto iterator =
+        linux_watcher_owners_by_name_.find(target.bus_name);
+    if (iterator != linux_watcher_owners_by_name_.end()) {
+      RegisterLinuxStatusNotifierItem(record, iterator->first,
+                                      iterator->second);
+    }
+  }
 }
 
 void MuonBrowserTrayServiceImpl::EmitLinuxSniSignal(
@@ -1305,7 +1366,7 @@ void MuonBrowserTrayServiceImpl::LinuxNameAcquired(
     return;
   }
   record->linux_name_acquired = true;
-  service->RegisterLinuxStatusNotifierItem(record);
+  service->RegisterLinuxStatusNotifierItemWithKnownWatchers(record);
 }
 
 void MuonBrowserTrayServiceImpl::LinuxNameLost(GDBusConnection* connection,
@@ -1316,6 +1377,7 @@ void MuonBrowserTrayServiceImpl::LinuxNameLost(GDBusConnection* connection,
   auto* record = service->FindLinuxRecordByBusName(name);
   if (record != nullptr) {
     record->linux_name_acquired = false;
+    record->linux_registered_watcher_owners.clear();
   }
 }
 
@@ -1325,12 +1387,27 @@ void MuonBrowserTrayServiceImpl::LinuxWatcherAppeared(
     const gchar* name_owner,
     gpointer user_data) {
   (void)connection;
-  (void)name;
-  (void)name_owner;
-  auto* service = static_cast<MuonBrowserTrayServiceImpl*>(user_data);
-  for (const auto& entry : service->records_) {
-    service->RegisterLinuxStatusNotifierItem(entry.second.get());
+  if (name == nullptr || name_owner == nullptr) {
+    return;
   }
+  auto* service = static_cast<MuonBrowserTrayServiceImpl*>(user_data);
+  service->linux_watcher_owners_by_name_[name] = name_owner;
+  for (const auto& entry : service->records_) {
+    service->RegisterLinuxStatusNotifierItem(entry.second.get(), name,
+                                             name_owner);
+  }
+}
+
+void MuonBrowserTrayServiceImpl::LinuxWatcherVanished(
+    GDBusConnection* connection,
+    const gchar* name,
+    gpointer user_data) {
+  (void)connection;
+  if (name == nullptr) {
+    return;
+  }
+  auto* service = static_cast<MuonBrowserTrayServiceImpl*>(user_data);
+  service->linux_watcher_owners_by_name_.erase(name);
 }
 
 #elif defined(_WIN32)

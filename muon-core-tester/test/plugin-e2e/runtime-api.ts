@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon
 
 import { createHash } from "node:crypto";
+import { PNG } from "pngjs";
 import { expect, it } from "vitest";
 
 import {
@@ -38,6 +39,7 @@ import {
   expectNoDevTools,
   expectNoPageLoad,
   expectProcessExitCode,
+  execFileAsync,
   f11FullscreenShortcut,
   f12DevToolsShortcut,
   f5ReloadShortcut,
@@ -308,9 +310,36 @@ const createExecutorStdinSpawnOptions = (): ExecutorSpawnOptions => {
   };
 };
 
+const createTrayIconPng = (): Buffer => {
+  const png = new PNG({ width: 16, height: 16 });
+  for (let index = 0; index < png.data.length; index += 4) {
+    png.data[index] = 24;
+    png.data[index + 1] = 120;
+    png.data[index + 2] = 180;
+    png.data[index + 3] = 255;
+  }
+  return PNG.sync.write(png);
+};
+
+const trayIconPng = createTrayIconPng();
+
+const createTrayAssetRoot = async (directory: string): Promise<string> => {
+  const assetRoot = join(directory, "tray-assets");
+  const mainRoot = join(assetRoot, "main");
+  const iconsRoot = join(mainRoot, "icons");
+  await mkdir(iconsRoot, { recursive: true });
+  await writeFile(
+    join(mainRoot, "index.html"),
+    "<!doctype html><title>muon hidden tray</title>",
+  );
+  await writeFile(join(iconsRoot, "tray.png"), trayIconPng);
+  return assetRoot;
+};
+
 const withMuonInitialWindowState = async (
   initialWindowState: BrowserInitialWindowState,
   run: (driver: CdpDriver) => Promise<void>,
+  assetSourcePath: string | undefined = undefined,
 ): Promise<void> => {
   const running = await startDebugMuon(
     [],
@@ -324,6 +353,7 @@ const withMuonInitialWindowState = async (
     null,
     true,
     initialWindowState,
+    assetSourcePath,
   );
   let driver: CdpDriver | undefined = undefined;
   try {
@@ -341,6 +371,85 @@ const withMuonInitialWindowState = async (
   } finally {
     await stopMuon(running, driver);
   }
+};
+
+const findStatusNotifierItemBusName = async (): Promise<string> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastError: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      const { stdout } = await execFileAsync(
+        "gdbus",
+        [
+          "call",
+          "--session",
+          "--dest",
+          "org.freedesktop.DBus",
+          "--object-path",
+          "/org/freedesktop/DBus",
+          "--method",
+          "org.freedesktop.DBus.ListNames",
+        ],
+        { timeout: cdpCommandTimeoutMs },
+      );
+      const names = Array.from(
+        String(stdout).matchAll(/'([^']+)'/gu),
+        (match) => match[1],
+      ).filter((name): name is string => name !== undefined);
+      const busName = names.find((name) =>
+        name.startsWith("org.freedesktop.StatusNotifierItem-"),
+      );
+      if (busName !== undefined) {
+        return busName;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(50);
+  }
+  throw new Error(
+    `Timed out waiting for StatusNotifierItem bus name: ${String(lastError)}`,
+  );
+};
+
+const callTrayDbusMethod = async (
+  busName: string,
+  objectPath: string,
+  method: string,
+  args: string[],
+): Promise<void> => {
+  await execFileAsync(
+    "gdbus",
+    [
+      "call",
+      "--session",
+      "--dest",
+      busName,
+      "--object-path",
+      objectPath,
+      "--method",
+      method,
+      ...args,
+    ],
+    { timeout: cdpCommandTimeoutMs },
+  );
+};
+
+const waitForBrowserTrayEvent = async (
+  driver: CdpDriver,
+  type: string,
+): Promise<Record<string, unknown>> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  while (Date.now() < deadline) {
+    const event = await driver.evaluate<Record<string, unknown> | null>(
+      `((globalThis.__muonHiddenTrayEvents ?? []).find((candidate) => candidate.type === ${JSON.stringify(type)}) ?? null)`,
+    );
+    if (event !== null) {
+      return event;
+    }
+    await wait(50);
+  }
+  throw new Error(`Timed out waiting for tray event: ${type}`);
 };
 
 const waitForRecycledMuon = async (
@@ -1650,6 +1759,119 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       );
     });
   });
+
+  linuxIt(
+    "creates a tray and receives tray events from a hidden startup window",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "muon-hidden-tray-"));
+      const assetRoot = await createTrayAssetRoot(directory);
+      try {
+        await withMuonInitialWindowState(
+          "hidden",
+          async (driver) => {
+            await expect(driver.evaluate("document.title")).resolves.toBe(
+              "muon test",
+            );
+            await waitForNativeWindowTitleAbsent(
+              "muon test",
+              cdpCommandTimeoutMs,
+            );
+            const traySetup = await driver.evaluate<
+              | { ok: true; trayId: string }
+              | { message: string; ok: false; stack: string }
+            >(`(async () => {
+              try {
+                globalThis.__muonHiddenTrayEvents = [];
+                const handler = (event) => {
+                  globalThis.__muonHiddenTrayEvents.push(event);
+                };
+                const trayId = await window.muon.browser.createTray(
+                  {
+                    id: "hidden-tray",
+                    icon: "icons/tray.png",
+                    tooltip: "Hidden tray",
+                    menu: [{ id: "open", label: "Open" }],
+                  },
+                  handler,
+                );
+                await window.muon.browser.setTrayMenu(
+                  trayId,
+                  [
+                    { id: "open", label: "Open" },
+                    {
+                      type: "checkbox",
+                      id: "ready",
+                      label: "Ready",
+                      checked: false,
+                    },
+                  ],
+                  handler,
+                );
+                await window.muon.browser.setTrayIcon(trayId, "icons/tray.png");
+                await window.muon.browser.setTrayTooltip(
+                  trayId,
+                  "Hidden tray updated",
+                );
+                globalThis.__muonHiddenTrayId = trayId;
+                return { ok: true, trayId };
+              } catch (error) {
+                return {
+                  message: String(error?.message ?? error),
+                  ok: false,
+                  stack: String(error?.stack ?? ""),
+                };
+              }
+            })()`);
+            expect(traySetup).toEqual({ ok: true, trayId: "hidden-tray" });
+
+            const busName = await findStatusNotifierItemBusName();
+            await callTrayDbusMethod(
+              busName,
+              "/StatusNotifierItem",
+              "org.freedesktop.StatusNotifierItem.Activate",
+              ["12", "34"],
+            );
+            await expect(
+              waitForBrowserTrayEvent(driver, "activate"),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                trayId: "hidden-tray",
+                type: "activate",
+                x: 12,
+                y: 34,
+              }),
+            );
+
+            await callTrayDbusMethod(
+              busName,
+              "/StatusNotifierItem/Menu",
+              "com.canonical.dbusmenu.Event",
+              ["2", "clicked", "<''>", "0"],
+            );
+            await expect(
+              waitForBrowserTrayEvent(driver, "menu"),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                checked: true,
+                id: "ready",
+                trayId: "hidden-tray",
+                type: "menu",
+              }),
+            );
+
+            await expect(
+              driver.evaluate(
+                "window.muon.browser.removeTray(globalThis.__muonHiddenTrayId)",
+              ),
+            ).resolves.toBeUndefined();
+          },
+          assetRoot,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("maximizes and restores through the built-in browser API", async () => {
     await withMuon([], async (driver) => {

@@ -1,6 +1,7 @@
 OUT_DIR ?= ./dist
 PREPARE_TARGET ?= $(OUT_DIR)/muon-builder
 BOOTSTRAP_TARGET ?= $(OUT_DIR)/muon-bootstrap
+RUNTIME_HELPER_TARGET ?=
 LIB_TARGET ?= $(OUT_DIR)/libmuon-builder.a
 CPPFLAGS ?=
 CFLAGS ?= -std=c99 -Os -DNDEBUG -Wall -Wextra -pedantic
@@ -23,7 +24,7 @@ PREPARE_RESOURCE_OBJECTS := $(OUT_DIR)/muon_prepare_resource.o $(OUT_DIR)/engrav
 
 .PHONY: all clean
 
-all: $(LIB_TARGET) $(PREPARE_TARGET) $(BOOTSTRAP_TARGET)
+all: $(LIB_TARGET) $(PREPARE_TARGET) $(BOOTSTRAP_TARGET) $(RUNTIME_HELPER_TARGET)
 
 $(OUT_DIR)/prepare.o: src/prepare.c src/prepare.h src/prepare_progress.h src/prepare_cef.h src/bootstrap_config.h src/common.h src/sha1.h $(YYJSON_SOURCE_DIR)/yyjson.h $(VERSION_HEADER) $(RUNTIME_INFO_HEADER)
 	mkdir -p "$(OUT_DIR)"
@@ -73,5 +74,11 @@ $(BOOTSTRAP_TARGET): src/muon_bootstrap.c src/bootstrap_progress.h src/prepare.h
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(BOOTSTRAP_CPPFLAGS) $(CFLAGS) $(BOOTSTRAP_LDFLAGS) -o "$@" src/muon_bootstrap.c "$(OUT_DIR)/bootstrap_progress.o" $(BOOTSTRAP_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(BOOTSTRAP_LDLIBS)
 
+ifneq ($(strip $(RUNTIME_HELPER_TARGET)),)
+$(RUNTIME_HELPER_TARGET): src/muon_runtime_helper.c src/prepare.h src/common.h $(LIB_TARGET)
+	mkdir -p "$(OUT_DIR)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o "$@" src/muon_runtime_helper.c "$(LIB_TARGET)" $(LDLIBS)
+endif
+
 clean:
-	rm -f "$(PREPARE_TARGET)" "$(BOOTSTRAP_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/bootstrap_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(BOOTSTRAP_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)
+	rm -f "$(PREPARE_TARGET)" "$(BOOTSTRAP_TARGET)" $(if $(strip $(RUNTIME_HELPER_TARGET)),"$(RUNTIME_HELPER_TARGET)") "$(LIB_TARGET)" "$(OUT_DIR)/bootstrap_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(BOOTSTRAP_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)

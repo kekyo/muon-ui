@@ -575,13 +575,13 @@ void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
                                          bool visible);
 
 /**
- * Updates the custom title bar view or native title bar visibility hint for a
- * browser.
+ * Updates the custom title bar view for a browser.
  *
  * @param browser_id Browser identifier whose window should be updated.
  * @param visible Whether the title bar should be visible.
+ * @return true when a registered custom title bar handled the request.
  */
-void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
+bool SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible);
 
 /**

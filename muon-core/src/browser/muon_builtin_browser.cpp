@@ -50,6 +50,220 @@ const normalizeWindowBounds = (bounds) => {
   }
   return { x, y, width, height };
 };
+const contextMenuEventName = "muon-browser-context-menu-command";
+const contextMenuWhenKeys = [
+  "editable",
+  "selection",
+  "link",
+  "image",
+  "canCopy",
+  "canPaste",
+];
+let contextMenuToken = "";
+let contextMenuHandler = undefined;
+let contextMenuListenerRegistered = false;
+const createContextMenuToken = () => {
+  const crypto = globalThis.crypto;
+  if (
+    crypto &&
+    typeof crypto.getRandomValues === "function" &&
+    typeof globalThis.Uint32Array === "function"
+  ) {
+    const values = new globalThis.Uint32Array(4);
+    crypto.getRandomValues(values);
+    return Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("");
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+};
+const ensureContextMenuListener = () => {
+  if (contextMenuListenerRegistered || typeof globalThis.addEventListener !== "function") {
+    return;
+  }
+  globalThis.addEventListener(contextMenuEventName, (event) => {
+    const detail = event && event.detail;
+    if (
+      typeof detail !== "object" ||
+      detail === null ||
+      detail.token !== contextMenuToken ||
+      typeof contextMenuHandler !== "function"
+    ) {
+      return;
+    }
+    contextMenuHandler(detail);
+  });
+  contextMenuListenerRegistered = true;
+};
+const normalizeContextMenuPlacement = (placement) => {
+  if (placement === undefined) {
+    return undefined;
+  }
+  if (placement === "start" || placement === "afterEdit" || placement === "end") {
+    return placement;
+  }
+  throw new TypeError("Invalid context menu placement");
+};
+const normalizeContextMenuWhen = (when) => {
+  if (when === undefined) {
+    return undefined;
+  }
+  if (typeof when !== "object" || when === null || Array.isArray(when)) {
+    throw new TypeError("Invalid context menu condition");
+  }
+  const normalized = {};
+  for (const key of contextMenuWhenKeys) {
+    const value = when[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== "boolean") {
+      throw new TypeError("Invalid context menu condition");
+    }
+    normalized[key] = value;
+  }
+  return normalized;
+};
+const normalizeContextMenuCommandId = (id) => {
+  if (
+    typeof id !== "string" ||
+    id === "" ||
+    /[\u0000-\u001f]/u.test(id) ||
+    id.startsWith("muon.") ||
+    id.startsWith("standard.")
+  ) {
+    throw new TypeError("Invalid context menu item id");
+  }
+  return id;
+};
+const normalizeContextMenuItem = (item) => {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    throw new TypeError("Invalid context menu item");
+  }
+  const placement = normalizeContextMenuPlacement(item.placement);
+  const when = normalizeContextMenuWhen(item.when);
+  if (item.type === "separator") {
+    return {
+      type: "separator",
+      ...(placement === undefined ? {} : { placement }),
+      ...(when === undefined ? {} : { when }),
+    };
+  }
+  if (item.type !== undefined && item.type !== "item") {
+    throw new TypeError("Invalid context menu item type");
+  }
+  if (typeof item.label !== "string" || item.label === "") {
+    throw new TypeError("Invalid context menu item label");
+  }
+  if (item.enabled !== undefined && typeof item.enabled !== "boolean") {
+    throw new TypeError("Invalid context menu item enabled state");
+  }
+  return {
+    id: normalizeContextMenuCommandId(item.id),
+    label: item.label,
+    enabled: item.enabled === undefined ? true : item.enabled,
+    ...(placement === undefined ? {} : { placement }),
+    ...(when === undefined ? {} : { when }),
+  };
+};
+const normalizeContextMenuItems = (items) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError("Invalid context menu items");
+  }
+  return items.map(normalizeContextMenuItem);
+};
+const trayEventName = "muon-browser-tray-event";
+const trayHandlers = new Map();
+let trayListenerRegistered = false;
+const ensureTrayListener = () => {
+  if (trayListenerRegistered || typeof globalThis.addEventListener !== "function") {
+    return;
+  }
+  globalThis.addEventListener(trayEventName, (event) => {
+    const detail = event && event.detail;
+    if (
+      typeof detail !== "object" ||
+      detail === null ||
+      typeof detail.trayId !== "string"
+    ) {
+      return;
+    }
+    const entry = trayHandlers.get(detail.trayId);
+    if (
+      entry === undefined ||
+      detail.token !== entry.token ||
+      typeof entry.handler !== "function"
+    ) {
+      return;
+    }
+    entry.handler(detail);
+  });
+  trayListenerRegistered = true;
+};
+const normalizeTrayId = (id) => {
+  if (
+    typeof id !== "string" ||
+    id === "" ||
+    /[\u0000-\u001f]/u.test(id) ||
+    id.startsWith("muon.") ||
+    id.startsWith("standard.")
+  ) {
+    throw new TypeError("Invalid tray id");
+  }
+  return id;
+};
+const normalizeTrayMenuItem = (item) => {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    throw new TypeError("Invalid tray menu item");
+  }
+  if (item.type === "separator") {
+    return { type: "separator" };
+  }
+  const type = item.type === undefined ? "item" : item.type;
+  if (type !== "item" && type !== "checkbox" && type !== "radio") {
+    throw new TypeError("Invalid tray menu item type");
+  }
+  if (typeof item.label !== "string" || item.label === "") {
+    throw new TypeError("Invalid tray menu item label");
+  }
+  if (item.enabled !== undefined && typeof item.enabled !== "boolean") {
+    throw new TypeError("Invalid tray menu item enabled state");
+  }
+  if (item.checked !== undefined && typeof item.checked !== "boolean") {
+    throw new TypeError("Invalid tray menu item checked state");
+  }
+  if (type === "item" && item.checked !== undefined) {
+    throw new TypeError("Invalid tray menu item checked state");
+  }
+  return {
+    ...(type === "item" ? {} : { type }),
+    id: normalizeTrayId(item.id),
+    label: item.label,
+    enabled: item.enabled === undefined ? true : item.enabled,
+    ...(item.checked === undefined ? {} : { checked: item.checked }),
+  };
+};
+const normalizeTrayMenuItems = (items) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError("Invalid tray menu items");
+  }
+  return items.map(normalizeTrayMenuItem);
+};
+const normalizeTrayOptions = (options) => {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new TypeError("Invalid tray options");
+  }
+  if (typeof options.icon !== "string" || options.icon === "") {
+    throw new TypeError("Invalid tray icon");
+  }
+  if (options.tooltip !== undefined && options.tooltip !== null && typeof options.tooltip !== "string") {
+    throw new TypeError("Invalid tray tooltip");
+  }
+  return {
+    ...(options.id === undefined ? {} : { id: normalizeTrayId(options.id) }),
+    icon: options.icon,
+    ...(options.tooltip === undefined || options.tooltip === null ? {} : { tooltip: options.tooltip }),
+    ...(options.menu === undefined ? {} : { menu: normalizeTrayMenuItems(options.menu) }),
+  };
+};
 const properties = {};
 if (isAllowed("getWindowBounds")) {
   properties.getWindowBounds = {
@@ -72,6 +286,112 @@ if (isAllowed("setWindowBounds")) {
         normalized.width,
         normalized.height,
       );
+    },
+  };
+}
+if (isAllowed("setContextMenuItems")) {
+  properties.setContextMenuItems = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (items, handler = undefined) => {
+      if (handler !== undefined && typeof handler !== "function") {
+        throw new TypeError("Invalid context menu handler");
+      }
+      const normalized = normalizeContextMenuItems(items);
+      const token = createContextMenuToken();
+      await namespace.__setContextMenuItems(JSON.stringify(normalized), token);
+      contextMenuToken = token;
+      contextMenuHandler = handler;
+      ensureContextMenuListener();
+    },
+  };
+}
+if (isAllowed("clearContextMenuItems")) {
+  properties.clearContextMenuItems = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async () => {
+      contextMenuToken = "";
+      contextMenuHandler = undefined;
+      await namespace.__clearContextMenuItems();
+    },
+  };
+}
+if (isAllowed("createTray")) {
+  properties.createTray = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (options, handler = undefined) => {
+      if (handler !== undefined && typeof handler !== "function") {
+        throw new TypeError("Invalid tray handler");
+      }
+      const normalized = normalizeTrayOptions(options);
+      const token = createContextMenuToken();
+      const trayId = await namespace.__createTray(JSON.stringify(normalized), token);
+      trayHandlers.set(trayId, { token, handler });
+      ensureTrayListener();
+      return trayId;
+    },
+  };
+}
+if (isAllowed("setTrayMenu")) {
+  properties.setTrayMenu = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (id, items, handler = undefined) => {
+      if (handler !== undefined && typeof handler !== "function") {
+        throw new TypeError("Invalid tray handler");
+      }
+      const trayId = normalizeTrayId(id);
+      const normalized = normalizeTrayMenuItems(items);
+      const token = createContextMenuToken();
+      await namespace.__setTrayMenu(trayId, JSON.stringify(normalized), token);
+      trayHandlers.set(trayId, { token, handler });
+      ensureTrayListener();
+    },
+  };
+}
+if (isAllowed("setTrayIcon")) {
+  properties.setTrayIcon = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (id, iconPath) => {
+      const trayId = normalizeTrayId(id);
+      if (typeof iconPath !== "string" || iconPath === "") {
+        throw new TypeError("Invalid tray icon");
+      }
+      return namespace.__setTrayIcon(trayId, iconPath);
+    },
+  };
+}
+if (isAllowed("setTrayTooltip")) {
+  properties.setTrayTooltip = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: (id, tooltip) => {
+      const trayId = normalizeTrayId(id);
+      if (tooltip !== null && typeof tooltip !== "string") {
+        throw new TypeError("Invalid tray tooltip");
+      }
+      return namespace.__setTrayTooltip(trayId, tooltip === null ? "" : tooltip);
+    },
+  };
+}
+if (isAllowed("removeTray")) {
+  properties.removeTray = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (id) => {
+      const trayId = normalizeTrayId(id);
+      await namespace.__removeTray(trayId);
+      trayHandlers.delete(trayId);
     },
   };
 }
@@ -130,7 +450,37 @@ static const std::array<MuonTypeMetadata, 4> kMuonBuiltinBrowserWindowBoundsArgs
         {CreateMuonPrimitiveType(MUON_TYPE_I32)},
     }};
 
-static const std::array<MuonBuiltinBrowserFunctionDefinition, 22>
+static const std::array<MuonTypeMetadata, 2>
+    kMuonBuiltinBrowserContextMenuItemsArgs = {{
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+    }};
+
+static const std::array<MuonTypeMetadata, 2>
+    kMuonBuiltinBrowserCreateTrayArgs = {{
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+    }};
+
+static const std::array<MuonTypeMetadata, 3>
+    kMuonBuiltinBrowserSetTrayMenuArgs = {{
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+    }};
+
+static const std::array<MuonTypeMetadata, 2>
+    kMuonBuiltinBrowserSetTrayStringArgs = {{
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+    }};
+
+static const std::array<MuonTypeMetadata, 1>
+    kMuonBuiltinBrowserRemoveTrayArgs = {{
+        {CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+    }};
+
+static const std::array<MuonBuiltinBrowserFunctionDefinition, 29>
     kMuonBuiltinBrowserFunctions = {{
         {"reload", MuonBuiltinBrowserFunctionKind::Reload},
         {"hardReload", MuonBuiltinBrowserFunctionKind::HardReload},
@@ -170,6 +520,45 @@ static const std::array<MuonBuiltinBrowserFunctionDefinition, 22>
          "setWindowBounds",
          kMuonBuiltinBrowserWindowBoundsArgs.data(),
          kMuonBuiltinBrowserWindowBoundsArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__setContextMenuItems",
+         MuonBuiltinBrowserFunctionKind::SetContextMenuItems,
+         "setContextMenuItems",
+         kMuonBuiltinBrowserContextMenuItemsArgs.data(),
+         kMuonBuiltinBrowserContextMenuItemsArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__clearContextMenuItems",
+         MuonBuiltinBrowserFunctionKind::ClearContextMenuItems,
+         "clearContextMenuItems"},
+        {"__createTray",
+         MuonBuiltinBrowserFunctionKind::CreateTray,
+         "createTray",
+         kMuonBuiltinBrowserCreateTrayArgs.data(),
+         kMuonBuiltinBrowserCreateTrayArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_STRING)},
+        {"__setTrayMenu",
+         MuonBuiltinBrowserFunctionKind::SetTrayMenu,
+         "setTrayMenu",
+         kMuonBuiltinBrowserSetTrayMenuArgs.data(),
+         kMuonBuiltinBrowserSetTrayMenuArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__setTrayIcon",
+         MuonBuiltinBrowserFunctionKind::SetTrayIcon,
+         "setTrayIcon",
+         kMuonBuiltinBrowserSetTrayStringArgs.data(),
+         kMuonBuiltinBrowserSetTrayStringArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__setTrayTooltip",
+         MuonBuiltinBrowserFunctionKind::SetTrayTooltip,
+         "setTrayTooltip",
+         kMuonBuiltinBrowserSetTrayStringArgs.data(),
+         kMuonBuiltinBrowserSetTrayStringArgs.size(),
+         CreateMuonPrimitiveType(MUON_TYPE_VOID)},
+        {"__removeTray",
+         MuonBuiltinBrowserFunctionKind::RemoveTray,
+         "removeTray",
+         kMuonBuiltinBrowserRemoveTrayArgs.data(),
+         kMuonBuiltinBrowserRemoveTrayArgs.size(),
          CreateMuonPrimitiveType(MUON_TYPE_VOID)},
         {"__close",
          MuonBuiltinBrowserFunctionKind::Close,

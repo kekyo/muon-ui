@@ -27,6 +27,10 @@ import { packMuonApp, type MuonPackOptions } from "./pack.js";
 import type { MuonWindowsResourceOptions } from "./windows-resource.js";
 import type { MuonLinuxDesktopOptions } from "./linux-desktop.js";
 import { git_commit_hash, version } from "./generated/packageMetadata.js";
+import {
+  createMuonProgressRenderer,
+  type MuonProgressCallback,
+} from "./progress.js";
 
 interface PrepareCommandOptions {
   muonPath: string | undefined;
@@ -93,6 +97,7 @@ interface PackCommandOptions {
   linuxIcon: string | undefined;
   linuxCategories: string | undefined;
   linuxStartupNotify: string | undefined;
+  linuxSandbox: string | undefined;
   name: string | undefined;
   appId: string | undefined;
   packageDirectory: string | undefined;
@@ -112,6 +117,14 @@ interface DevCommandOptions {
   assets: string | undefined;
   debugger: boolean | undefined;
   json: boolean | undefined;
+}
+
+interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonPackOptions extends MuonPackOptions {
+  progress?: MuonProgressCallback;
 }
 
 const readTargetValues = (value: string): string[] => {
@@ -295,7 +308,16 @@ const runBuildCommand = async (
     buildOptions.packageDirectory = commandOptions.packageDirectory;
   }
 
-  const result = await runMuonBuildSequence(buildOptions);
+  const progressRenderer = createMuonProgressRenderer();
+  (buildOptions as InternalMuonBuildSequenceOptions).progress =
+    progressRenderer.report;
+  const result = await (async () => {
+    try {
+      return await runMuonBuildSequence(buildOptions);
+    } finally {
+      progressRenderer.flush();
+    }
+  })();
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -340,6 +362,9 @@ const runPackCommand = async (
   if (linuxDesktop !== undefined) {
     packOptions.linuxDesktop = linuxDesktop;
   }
+  if (commandOptions.linuxSandbox !== undefined) {
+    packOptions.linuxSandbox = commandOptions.linuxSandbox;
+  }
   if (commandOptions.name !== undefined) {
     packOptions.appName = commandOptions.name;
   }
@@ -365,7 +390,15 @@ const runPackCommand = async (
     packOptions.author = commandOptions.author;
   }
 
-  const result = await packMuonApp(packOptions);
+  const progressRenderer = createMuonProgressRenderer();
+  (packOptions as InternalMuonPackOptions).progress = progressRenderer.report;
+  const result = await (async () => {
+    try {
+      return await packMuonApp(packOptions);
+    } finally {
+      progressRenderer.flush();
+    }
+  })();
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -585,6 +618,10 @@ const createCliCommand = (): Command => {
     .option("--linux-icon <path>", "Linux desktop PNG icon path")
     .option("--linux-categories <list>", "Linux desktop categories")
     .option("--linux-startup-notify <boolean>", "Linux startup notification")
+    .option(
+      "--linux-sandbox <mode>",
+      "Linux deb CEF sandbox mode: disabled, setuid",
+    )
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
     .option("--package-directory <path>", "Muon package dist directory")

@@ -62,10 +62,17 @@ import {
   quoteDesktopExecArgument,
   type MuonLinuxDesktopOptions,
 } from "./linux-desktop.js";
+import type { MuonProgressCallback } from "./progress.js";
 
 const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
+const supportedLinuxSandboxModes = ["disabled", "setuid"] as const;
 const defaultArtifactsDirectory = "artifacts";
 const defaultPackageBuildDirectory = ".muon/pack";
+const systemRuntimeRoot = "/var/lib/muon/apps";
+const systemCefCacheRoot = "/var/cache/muon/cef";
+const runtimeHelperExecutableName = "muon-runtime-helper";
+// Keep both names for Debian t64 and pre-t64 GTK3 runtime packages.
+const debGtk3RuntimeDependency = "libgtk-3-0t64 | libgtk-3-0";
 
 type JsonObject = Record<string, unknown>;
 
@@ -73,6 +80,11 @@ type JsonObject = Record<string, unknown>;
  * Muon package output type.
  */
 export type MuonPackType = (typeof supportedPackTypes)[number];
+
+/**
+ * Linux CEF sandbox strategy used by deb packages.
+ */
+export type MuonLinuxSandboxMode = (typeof supportedLinuxSandboxModes)[number];
 
 /**
  * Options for creating redistributable Muon package artifacts.
@@ -133,6 +145,14 @@ export interface MuonPackOptions {
    * package metadata, then Muon defaults.
    */
   linuxDesktop?: MuonLinuxDesktopOptions;
+  /**
+   * Linux deb CEF sandbox mode.
+   *
+   * @remarks `setuid` is opt-in and valid only when packaging Linux deb
+   * artifacts. The default `disabled` preserves the existing no-sandbox
+   * runtime behavior.
+   */
+  linuxSandbox?: string;
   /**
    * Directory containing package runtime/ and native/ folders.
    */
@@ -229,6 +249,14 @@ interface PackageMetadata {
 interface MuonPackTargetPlan {
   target: MuonBuildTarget;
   types: MuonPackType[];
+}
+
+interface InternalMuonPackOptions extends MuonPackOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
 }
 
 const isJsonObject = (value: unknown): value is JsonObject =>
@@ -332,6 +360,19 @@ const normalizePackTypes = (
   return [...new Set(normalized)] as MuonPackType[];
 };
 
+const normalizeLinuxSandboxMode = (
+  mode: string | undefined,
+): MuonLinuxSandboxMode => {
+  if (mode === undefined) {
+    return "disabled";
+  }
+  const normalized = mode.trim().toLowerCase();
+  if (supportedLinuxSandboxModes.includes(normalized as MuonLinuxSandboxMode)) {
+    return normalized as MuonLinuxSandboxMode;
+  }
+  throw new Error(`Unsupported Linux sandbox mode: ${mode}`);
+};
+
 const packTargetSelectorTargets: Record<string, readonly MuonBuildTarget[]> = {
   linux: ["linux-amd64", "linux-armhf", "linux-arm64"],
   windows: ["windows-i686", "windows-amd64"],
@@ -431,6 +472,27 @@ const createPackTargetPlan = (
     throw new Error("No valid muon pack target and type combinations.");
   }
   return plan;
+};
+
+const validateLinuxSandboxModeForPlan = (
+  mode: MuonLinuxSandboxMode,
+  plan: readonly MuonPackTargetPlan[],
+): void => {
+  if (mode === "disabled") {
+    return;
+  }
+  for (const entry of plan) {
+    const descriptor = getMuonTargetDescriptor(entry.target);
+    if (
+      descriptor.os !== "linux" ||
+      entry.types.length !== 1 ||
+      entry.types[0] !== "deb"
+    ) {
+      throw new Error(
+        "--linux-sandbox=setuid is supported only for Linux deb packages. Specify --type deb with Linux targets.",
+      );
+    }
+  }
 };
 
 const runTool = async (
@@ -586,6 +648,8 @@ const packageDeb = async (
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
+  linuxSandbox: MuonLinuxSandboxMode,
+  progress: MuonProgressCallback | undefined,
 ): Promise<MuonPackArtifact> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "linux") {
@@ -600,8 +664,18 @@ const packageDeb = async (
   await rm(packageRoot, { recursive: true, force: true });
   const installRoot = join(packageRoot, "usr", "lib", metadata.packageName);
   const installedDist = join(installRoot, target.distributionDirectoryName);
+  const privilegedPreparePath = `/usr/lib/${metadata.packageName}/${target.distributionDirectoryName}/${runtimeHelperExecutableName}`;
+  const systemRuntimePath = `${systemRuntimeRoot}/${metadata.packageName}/${target.target}/runtime`;
   await mkdir(installedDist, { recursive: true });
   await cp(target.outputPath, installedDist, { recursive: true });
+  if (linuxSandbox === "setuid") {
+    if (target.runtimeHelperPath === undefined) {
+      throw new Error(
+        `Muon runtime helper is unavailable for setuid deb target: ${target.target}`,
+      );
+    }
+    await chmod(join(installedDist, runtimeHelperExecutableName), 0o4755);
+  }
   await writeFile(
     join(installedDist, "muon-install.json"),
     `${JSON.stringify(
@@ -609,6 +683,13 @@ const packageDeb = async (
         type: "deb",
         packageName: metadata.packageName,
         launcherPath: `/usr/bin/${metadata.packageName}`,
+        ...(linuxSandbox === "setuid"
+          ? {
+              runtimeMode: "system-setuid",
+              systemRuntimePath,
+              privilegedPreparePath,
+            }
+          : {}),
       },
       undefined,
       2,
@@ -668,18 +749,59 @@ const packageDeb = async (
       `Version: ${metadata.version}`,
       `Architecture: ${architecture}`,
       `Maintainer: ${metadata.author}`,
+      `Depends: ${debGtk3RuntimeDependency}`,
       `Description: ${metadata.description}`,
       "",
     ].join("\n"),
   );
+  if (linuxSandbox === "setuid") {
+    const postinstPath = join(packageRoot, "DEBIAN", "postinst");
+    await writeFile(
+      postinstPath,
+      [
+        "#!/bin/sh",
+        "set -e",
+        `helper=${JSON.stringify(privilegedPreparePath)}`,
+        'if [ ! -f "$helper" ]; then',
+        '  echo "muon-runtime-helper is missing: $helper" >&2',
+        "  exit 1",
+        "fi",
+        'chown root:root "$helper"',
+        'chmod 4755 "$helper"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    await chmod(postinstPath, 0o755);
+
+    const postrmPath = join(packageRoot, "DEBIAN", "postrm");
+    await writeFile(
+      postrmPath,
+      [
+        "#!/bin/sh",
+        "set -e",
+        'if [ "$1" = "purge" ]; then',
+        `  rm -rf ${JSON.stringify(`${systemRuntimeRoot}/${metadata.packageName}`)}`,
+        `  # Shared CEF cache ${systemCefCacheRoot} is intentionally preserved.`,
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    await chmod(postrmPath, 0o755);
+  }
   const outputPath = join(
     artifactsRoot,
     `${metadata.packageName}-${metadata.version}-${architecture}.deb`,
   );
   await mkdir(dirname(outputPath), { recursive: true });
+  progress?.({
+    phase: "pack",
+    status: "Running dpkg-deb",
+  });
   await runTool(
     "dpkg-deb",
-    ["--build", packageRoot, outputPath],
+    ["--root-owner-group", "--build", packageRoot, outputPath],
     root,
     environment,
   );
@@ -707,6 +829,7 @@ const packageNsis = async (
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
+  progress: MuonProgressCallback | undefined,
 ): Promise<MuonPackArtifact> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "windows") {
@@ -777,6 +900,10 @@ const packageNsis = async (
       "",
     ].join("\n"),
   );
+  progress?.({
+    phase: "pack",
+    status: "Running makensis",
+  });
   await runTool("makensis", [scriptPath], root, environment);
   if ((await statOrUndefined(outputPath)) === undefined) {
     throw new Error(`makensis did not create installer: ${outputPath}`);
@@ -857,6 +984,7 @@ const reapplyPackWindowsResources = async (
 export const packMuonApp = async (
   options: MuonPackOptions,
 ): Promise<MuonPackResult> => {
+  const progress = (options as InternalMuonPackOptions).progress;
   const cwd = resolve(options.root ?? process.cwd());
   const environment = options.environment ?? process.env;
   const project = await loadMuonBuildSequenceProject(cwd);
@@ -869,15 +997,18 @@ export const packMuonApp = async (
   );
   const packageBuildRoot = resolve(root, defaultPackageBuildDirectory);
   const types = normalizePackTypes(options.types);
+  const linuxSandbox = normalizeLinuxSandboxMode(options.linuxSandbox);
   const pluginBuildOptions = resolveMuonViteBuildOptions(project.pluginOptions);
   const targetPlan = createPackTargetPlan(
     types,
     resolvePackTargetCandidates(options, pluginBuildOptions),
   );
+  validateLinuxSandboxModeForPlan(linuxSandbox, targetPlan);
   const buildOptions: MuonBuildSequenceOptions = {
     root: cwd,
     targets: targetPlan.map((entry) => entry.target),
     allTargets: false,
+    includeRuntimeHelper: linuxSandbox === "setuid",
   };
   const windowsResourceOptions = mergeMuonWindowsResourceOptions(
     options.windowsResource,
@@ -909,6 +1040,9 @@ export const packMuonApp = async (
   if (linuxDesktopOptions !== undefined) {
     buildOptions.linuxDesktop = linuxDesktopOptions;
   }
+  if (progress !== undefined) {
+    (buildOptions as InternalMuonBuildSequenceOptions).progress = progress;
+  }
   const windowsResourceConfig = await readMuonConfigForWindowsResource(
     root,
     options.configPath,
@@ -930,6 +1064,10 @@ export const packMuonApp = async (
       copyright: undefined,
     },
   });
+  progress?.({
+    phase: "pack",
+    status: "Building distributions",
+  });
   const build = await runMuonBuildSequence(buildOptions, project);
   if (options.packageVersion !== undefined) {
     await reapplyPackWindowsResources(
@@ -947,36 +1085,51 @@ export const packMuonApp = async (
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
   const artifacts: MuonPackArtifact[] = [];
+  const totalArtifacts = targetPlan.reduce(
+    (sum, entry) => sum + entry.types.length,
+    0,
+  );
+  let artifactIndex = 0;
   for (const target of build.targets) {
     for (const type of typesByTarget.get(target.target) ?? []) {
+      artifactIndex += 1;
+      progress?.({
+        phase: "pack",
+        status: `Packaging ${type} ${target.target} (${artifactIndex}/${totalArtifacts})`,
+      });
+      let artifact: MuonPackArtifact;
       if (type === "zip") {
-        artifacts.push(await packageZip(target, metadata, artifactsRoot));
+        artifact = await packageZip(target, metadata, artifactsRoot);
       } else if (type === "tar.gz") {
-        artifacts.push(await packageTarGz(target, metadata, artifactsRoot));
+        artifact = await packageTarGz(target, metadata, artifactsRoot);
       } else if (type === "deb") {
-        artifacts.push(
-          await packageDeb(
-            root,
-            target,
-            metadata,
-            artifactsRoot,
-            packageBuildRoot,
-            environment,
-          ),
+        artifact = await packageDeb(
+          root,
+          target,
+          metadata,
+          artifactsRoot,
+          packageBuildRoot,
+          environment,
+          linuxSandbox,
+          progress,
         );
       } else {
-        artifacts.push(
-          await packageNsis(
-            root,
-            target,
-            metadata,
-            windowsResource,
-            artifactsRoot,
-            packageBuildRoot,
-            environment,
-          ),
+        artifact = await packageNsis(
+          root,
+          target,
+          metadata,
+          windowsResource,
+          artifactsRoot,
+          packageBuildRoot,
+          environment,
+          progress,
         );
       }
+      artifacts.push(artifact);
+      progress?.({
+        phase: "pack",
+        status: `Wrote ${artifact.path}`,
+      });
     }
   }
   return {

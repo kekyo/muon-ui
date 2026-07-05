@@ -1215,6 +1215,12 @@ int muon_extract_tar_bz2_archive_progress(
       break;
     }
     const int file_type = archive_entry_filetype(entry);
+    if (archive_entry_hardlink(entry) != NULL) {
+      muon_print_error("Unsupported archive hardlink entry: %s\n", path);
+      free(entry_destination);
+      result = -1;
+      break;
+    }
     int mode = (int)archive_entry_perm(entry);
     if (mode == 0) {
       mode = S_ISDIR(file_type) ? 0777 : 0666;
@@ -1236,7 +1242,10 @@ int muon_extract_tar_bz2_archive_progress(
         break;
       }
     } else {
-      archive_read_data_skip(reader);
+      muon_print_error("Unsupported archive entry type: %s\n", path);
+      free(entry_destination);
+      result = -1;
+      break;
     }
     free(entry_destination);
   }

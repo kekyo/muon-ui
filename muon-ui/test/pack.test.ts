@@ -36,6 +36,26 @@ import type { MuonBuildTarget } from "../src/build.js";
 const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
 
+const runMuonCli = async (
+  root: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<{ stderr: string; stdout: string }> => {
+  const result = await execFileAsync(
+    process.execPath,
+    [resolve("dist", "cli.cjs"), ...args],
+    {
+      cwd: root,
+      env: environment,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  return {
+    stderr: result.stderr,
+    stdout: result.stdout,
+  };
+};
+
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   cleanupDirectories.push(directory);
@@ -67,6 +87,7 @@ const fakeTargetDescriptors: Record<
     uiLibraryName: string;
     cardioLibraryName: string;
     bootstrapExecutableName: string;
+    runtimeHelperExecutableName?: string;
   }
 > = {
   "linux-amd64": {
@@ -74,18 +95,21 @@ const fakeTargetDescriptors: Record<
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
+    runtimeHelperExecutableName: "muon-runtime-helper",
   },
   "linux-armhf": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
+    runtimeHelperExecutableName: "muon-runtime-helper",
   },
   "linux-arm64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
     bootstrapExecutableName: "muon-bootstrap",
+    runtimeHelperExecutableName: "muon-runtime-helper",
   },
   "windows-i686": {
     runtimeExecutableName: "muon-core.exe",
@@ -134,6 +158,16 @@ const createFakeMuonPackageDist = async (
         Buffer.from("\nbootstrap suffix\n"),
       ]),
     );
+    if (descriptor.runtimeHelperExecutableName !== undefined) {
+      await writeExecutable(
+        join(nativeDirectory, descriptor.runtimeHelperExecutableName),
+        Buffer.concat([
+          Buffer.from("helper prefix\n"),
+          createMuonBootstrapEmbeddedConfigSlot(),
+          Buffer.from("\nhelper suffix\n"),
+        ]),
+      );
+    }
   }
   return packageDirectory;
 };
@@ -142,6 +176,7 @@ const writeViteProject = async (
   root: string,
   packageDirectory: string,
   buildTargets: readonly string[],
+  base: string | undefined = undefined,
 ): Promise<void> => {
   const vitePluginUrl = pathToFileURL(resolve("dist", "vite.mjs")).href;
   await writeFile(
@@ -176,6 +211,7 @@ const writeViteProject = async (
     [
       `import muon from ${JSON.stringify(vitePluginUrl)};`,
       "export default {",
+      ...(base === undefined ? [] : [`  base: ${JSON.stringify(base)},`]),
       "  build: { outDir: 'web-dist' },",
       "  plugins: [",
       `    muon({ build: { targets: ${JSON.stringify(buildTargets)}, packageDirectory: ${JSON.stringify(packageDirectory)} } }),`,
@@ -401,7 +437,8 @@ const createFakePackagingToolEnvironment = async (
     "dpkg-deb",
     `#!/usr/bin/env bash
 set -euo pipefail
-output_path="\${3:?}"
+args=("$@")
+output_path="\${args[$((\${#args[@]} - 1))]}"
 mkdir -p "$(dirname "$output_path")"
 printf 'deb\\n' > "$output_path"
 `,
@@ -481,6 +518,75 @@ describe("muon pack", () => {
         "dist-muon/linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
+  });
+
+  it("writes build and packaging progress from the muon pack CLI while keeping JSON stdout", async () => {
+    const root = await createTemporaryDirectory("muon-pack-cli-progress-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    const environment = await createFakePackagingToolEnvironment(root);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    const result = await runMuonCli(
+      root,
+      ["pack", "--type", "deb", "--json"],
+      environment,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      artifacts: readonly { path: string; target: string; type: string }[];
+    };
+    const artifactPath = join(
+      root,
+      "artifacts",
+      "packed-sample-1.2.3-amd64.deb",
+    );
+
+    expect(parsed.artifacts).toEqual([
+      {
+        path: artifactPath,
+        target: "linux-amd64",
+        type: "deb",
+      },
+    ]);
+    expect(result.stderr).toContain("Building distributions");
+    expect(result.stderr).toContain("Running Vite build");
+    expect(result.stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Packaging deb linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Running dpkg-deb");
+    expect(result.stderr).toContain(`Wrote ${artifactPath}`);
+  });
+
+  it("packages Vite output under the configured base path when the Muon plugin controls pack", async () => {
+    const root = await createTemporaryDirectory("muon-pack-vite-base-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(
+      root,
+      packageDirectory,
+      ["linux-amd64"],
+      "/sample-base/",
+    );
+
+    const result = await packMuonApp({
+      root,
+      types: ["tar.gz"],
+    });
+
+    const [target] = result.targets;
+    const entries = await readZipEntryNames(
+      join(root, "dist-muon/linux-amd64", "assets.zip"),
+    );
+    expect(entries).toContain("main/sample-base/index.html");
+    expect(
+      entries.some((entry) => entry.startsWith("main/sample-base/assets/")),
+    ).toBe(true);
+    expect(entries).not.toContain("main/index.html");
+    expect(target?.embeddedConfig.browser).toEqual({
+      initialTitleBarIcon: "asset://main/.muon/app-icon.png",
+      startPage: "asset://main/sample-base/index.html",
+    });
   });
 
   it("packages non-Vite assets without running Vite when no Muon plugin is configured", async () => {
@@ -594,8 +700,9 @@ describe("muon pack", () => {
       `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$@" > '${logPath}'
-package_root="\${2:?}"
-output_path="\${3:?}"
+args=("$@")
+package_root="\${args[$((\${#args[@]} - 2))]}"
+output_path="\${args[$((\${#args[@]} - 1))]}"
 find "$package_root" -type f | sort > '${root}/deb-files.txt'
 mkdir -p "$(dirname "$output_path")"
 printf 'deb\\n' > "$output_path"
@@ -619,7 +726,7 @@ printf 'deb\\n' > "$output_path"
     );
     await expect(readFile(artifact?.path ?? "", "utf8")).resolves.toBe("deb\n");
     await expect(readFile(logPath, "utf8")).resolves.toBe(
-      `--build\n${join(root, ".muon", "pack", "deb", "packed-sample-linux-amd64")}\n${artifact?.path}\n`,
+      `--root-owner-group\n--build\n${join(root, ".muon", "pack", "deb", "packed-sample-linux-amd64")}\n${artifact?.path}\n`,
     );
     await expect(readdir(join(root, "artifacts"))).resolves.toEqual([
       "packed-sample-1.2.3-amd64.deb",
@@ -652,6 +759,19 @@ printf 'deb\\n' > "$output_path"
       "pack",
       "deb",
       "packed-sample-linux-amd64",
+    );
+    await expect(
+      readFile(join(packageRoot, "DEBIAN", "control"), "utf8"),
+    ).resolves.toBe(
+      [
+        "Package: packed-sample",
+        "Version: 1.2.3",
+        "Architecture: amd64",
+        "Maintainer: Muon Tester",
+        "Depends: libgtk-3-0t64 | libgtk-3-0",
+        "Description: Packed sample",
+        "",
+      ].join("\n"),
     );
     await expect(
       readFile(
@@ -704,6 +824,122 @@ printf 'deb\\n' > "$output_path"
         2,
       )}\n`,
     );
+  });
+
+  it("creates a setuid deb package tree with system runtime metadata", async () => {
+    const root = await createTemporaryDirectory("muon-pack-deb-setuid-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    const binDirectory = join(root, "bin");
+    const logPath = join(root, "dpkg-deb.log");
+    await mkdir(binDirectory, { recursive: true });
+    await writeFakeTool(
+      binDirectory,
+      "dpkg-deb",
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > '${logPath}'
+args=("$@")
+output_path="\${args[$((\${#args[@]} - 1))]}"
+mkdir -p "$(dirname "$output_path")"
+printf 'deb\\n' > "$output_path"
+`,
+    );
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    const result = await packMuonApp({
+      root,
+      types: ["deb"],
+      linuxSandbox: "setuid",
+      environment: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+      },
+    });
+
+    const [artifact] = result.artifacts;
+    expect(artifact?.type).toBe("deb");
+    await expect(readFile(logPath, "utf8")).resolves.toBe(
+      `--root-owner-group\n--build\n${join(root, ".muon", "pack", "deb", "packed-sample-linux-amd64")}\n${artifact?.path}\n`,
+    );
+
+    const packageRoot = join(
+      root,
+      ".muon",
+      "pack",
+      "deb",
+      "packed-sample-linux-amd64",
+    );
+    const installedDist = join(
+      packageRoot,
+      "usr",
+      "lib",
+      "packed-sample",
+      "dist-muon/linux-amd64",
+    );
+    await expect(
+      readFile(join(installedDist, "muon-install.json"), "utf8"),
+    ).resolves.toBe(
+      `${JSON.stringify(
+        {
+          type: "deb",
+          packageName: "packed-sample",
+          launcherPath: "/usr/bin/packed-sample",
+          runtimeMode: "system-setuid",
+          systemRuntimePath:
+            "/var/lib/muon/apps/packed-sample/linux-amd64/runtime",
+          privilegedPreparePath:
+            "/usr/lib/packed-sample/dist-muon/linux-amd64/muon-runtime-helper",
+        },
+        undefined,
+        2,
+      )}\n`,
+    );
+    const helperStats = await stat(join(installedDist, "muon-runtime-helper"));
+    expect(helperStats.mode & 0o7777).toBe(0o4755);
+    await expect(
+      readFile(join(packageRoot, "DEBIAN", "postinst"), "utf8"),
+    ).resolves.toContain('chmod 4755 "$helper"');
+    await expect(
+      readFile(join(packageRoot, "DEBIAN", "postrm"), "utf8"),
+    ).resolves.toContain('rm -rf "/var/lib/muon/apps/packed-sample"');
+  });
+
+  it("rejects setuid sandbox mode outside Linux deb packaging", async () => {
+    const root = await createTemporaryDirectory("muon-pack-deb-setuid-reject-");
+    const packageDirectory = await createFakeMuonPackageDist(
+      root,
+      allFakePackageTargets,
+    );
+    await writeViteProject(root, packageDirectory, allFakePackageTargets);
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["tar.gz"],
+        targets: ["linux-amd64"],
+        linuxSandbox: "setuid",
+      }),
+    ).rejects.toThrow("--linux-sandbox=setuid is supported only");
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["deb", "tar.gz"],
+        targets: ["linux-amd64"],
+        linuxSandbox: "setuid",
+      }),
+    ).rejects.toThrow("--linux-sandbox=setuid is supported only");
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["nsis"],
+        targets: ["windows-amd64"],
+        linuxSandbox: "setuid",
+      }),
+    ).rejects.toThrow("--linux-sandbox=setuid is supported only");
   });
 
   it("creates an NSIS script and invokes makensis for Windows targets", async () => {

@@ -31,6 +31,19 @@ static std::string GetCommandLineSwitchValue(
   return ToLowerAscii(value);
 }
 
+static bool HasCommandLineSwitch(const std::vector<std::string>& command_line,
+                                 const char* name) {
+  const auto switch_name = std::string("--") + name;
+  const auto switch_prefix = switch_name + "=";
+  for (auto index = size_t{1}; index < command_line.size(); ++index) {
+    if (command_line[index] == switch_name ||
+        command_line[index].rfind(switch_prefix, 0) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool StringEqualsIgnoreCase(const char* value, const char* expected) {
   if (value == nullptr) {
     return false;
@@ -95,4 +108,16 @@ bool ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
   return ResolveMuonLinuxDisplayBackend(command_line, xdg_session_type,
                                         wayland_display, display) ==
          kMuonLinuxDisplayBackendWayland;
+}
+
+bool ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+    const std::vector<std::string>& command_line,
+    const char* xdg_session_type,
+    const char* wayland_display,
+    const char* display) {
+  return ResolveMuonLinuxDisplayBackend(command_line, xdg_session_type,
+                                        wayland_display, display) ==
+             kMuonLinuxDisplayBackendWayland &&
+         !HasCommandLineSwitch(command_line, "use-gl") &&
+         !HasCommandLineSwitch(command_line, "use-angle");
 }

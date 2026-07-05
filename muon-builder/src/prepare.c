@@ -54,6 +54,7 @@ typedef struct {
   int force;
   int quiet;
   int json;
+  int progress_json;
   MuonPrepareProgressCallback progress_callback;
   void *progress_user_data;
   int progress_emitted;
@@ -808,6 +809,7 @@ static int staging_root_entry_is_generated_runtime_state(const char *name) {
       "muon-bootstrap.ini",
       "muon-cef.log",
       "muon-close-debug.log",
+      "muon-runtime-helper",
   };
   for (size_t index = 0;
        index < sizeof(generated_entries) / sizeof(generated_entries[0]);
@@ -1425,6 +1427,78 @@ static void print_cef_result_json(const char *cef_path, const char *archive_path
   yyjson_mut_doc_free(document);
 }
 
+static const char *progress_phase_name(MuonPrepareProgressPhase phase) {
+  switch (phase) {
+  case MUON_PREPARE_PROGRESS_PHASE_CHECKING:
+    return "checking";
+  case MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING:
+    return "downloading";
+  case MUON_PREPARE_PROGRESS_PHASE_VERIFYING:
+    return "verifying";
+  case MUON_PREPARE_PROGRESS_PHASE_INSTALLING:
+    return "installing";
+  case MUON_PREPARE_PROGRESS_PHASE_FINALIZING:
+    return "finalizing";
+  case MUON_PREPARE_PROGRESS_PHASE_DONE:
+    return "done";
+  case MUON_PREPARE_PROGRESS_PHASE_FAILED:
+    return "failed";
+  }
+  return "unknown";
+}
+
+static void print_json_string_literal(FILE *stream, const char *value) {
+  fputc('"', stream);
+  for (const unsigned char *cursor = (const unsigned char *)value;
+       *cursor != '\0'; cursor += 1) {
+    switch (*cursor) {
+    case '"':
+      fputs("\\\"", stream);
+      break;
+    case '\\':
+      fputs("\\\\", stream);
+      break;
+    case '\b':
+      fputs("\\b", stream);
+      break;
+    case '\f':
+      fputs("\\f", stream);
+      break;
+    case '\n':
+      fputs("\\n", stream);
+      break;
+    case '\r':
+      fputs("\\r", stream);
+      break;
+    case '\t':
+      fputs("\\t", stream);
+      break;
+    default:
+      if (*cursor < 0x20) {
+        fprintf(stream, "\\u%04x", (unsigned int)*cursor);
+      } else {
+        fputc((int)*cursor, stream);
+      }
+      break;
+    }
+  }
+  fputc('"', stream);
+}
+
+static void print_progress_json(const MuonPrepareProgress *progress,
+                                void *user_data) {
+  (void)user_data;
+  fputs("{\"phase\":", stderr);
+  print_json_string_literal(stderr, progress_phase_name(progress->phase));
+  fputs(",\"status\":", stderr);
+  print_json_string_literal(stderr,
+                            progress->status == NULL ? "" : progress->status);
+  fprintf(stderr, ",\"current\":%llu,\"total\":%llu,\"determinate\":%s}\n",
+          progress->current, progress->total,
+          progress->determinate ? "true" : "false");
+  fflush(stderr);
+}
+
 static void print_usage(void) {
   muon_print_error(
       "Usage: muon-builder <command> [options]\n"
@@ -1460,6 +1534,8 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
       options->quiet = 1;
     } else if (strcmp(argv[index], "--json") == 0) {
       options->json = 1;
+    } else if (strcmp(argv[index], "--progress-json") == 0) {
+      options->progress_json = 1;
     } else if (strcmp(argv[index], "--help") == 0) {
       print_usage();
       exit(0);
@@ -1774,6 +1850,10 @@ static int run_runtime_command(int argc, char **argv, int start_index) {
   if (parse_runtime_arguments(argc, argv, start_index, &options) != 0) {
     print_usage();
     return 1;
+  }
+  if (options.progress_json && !options.quiet) {
+    options.progress_callback = print_progress_json;
+    options.progress_user_data = NULL;
   }
   const MuonRuntimeInfo *runtime_info = get_embedded_runtime_info();
   PrepareResult result = {0};

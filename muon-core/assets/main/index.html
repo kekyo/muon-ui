@@ -29,13 +29,14 @@
 
       button,
       input,
+      select,
       textarea {
         font: inherit;
         -webkit-app-region: no-drag;
       }
 
       .app {
-        width: min(100%, 920px);
+        width: min(100%, 1160px);
         margin: 0 auto;
         padding: 24px;
       }
@@ -110,6 +111,27 @@
         border-bottom: 0;
       }
 
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0;
+        border-bottom: 1px solid #d0d7de;
+      }
+
+      .field-grid .field {
+        border-bottom: 0;
+      }
+
+      .field-grid .field:nth-child(odd) {
+        border-right: 1px solid #d0d7de;
+      }
+
+      .tight-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+
       label {
         color: #57606a;
         font-size: 13px;
@@ -117,6 +139,7 @@
       }
 
       input,
+      select,
       textarea {
         width: 100%;
         border: 1px solid #d0d7de;
@@ -125,18 +148,72 @@
         color: #1f2328;
       }
 
-      input {
+      input,
+      select {
         min-height: 40px;
         padding: 8px 10px;
       }
 
       textarea {
-        min-height: 260px;
+        min-height: 180px;
         resize: vertical;
         padding: 10px;
         font-family:
           "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
         line-height: 1.45;
+      }
+
+      textarea.large {
+        min-height: 260px;
+      }
+
+      textarea.small {
+        min-height: 96px;
+      }
+
+      .context-menu-target {
+        display: grid;
+        gap: 10px;
+        min-height: 148px;
+        border: 1px dashed #8c959f;
+        border-radius: 6px;
+        padding: 12px;
+        background: #f6f8fa;
+        color: #1f2328;
+        -webkit-app-region: no-drag;
+      }
+
+      .context-menu-target p {
+        margin: 0;
+      }
+
+      .context-menu-target a {
+        width: fit-content;
+        color: #0969da;
+        -webkit-app-region: no-drag;
+      }
+
+      .context-menu-target img {
+        width: 36px;
+        height: 36px;
+        -webkit-app-region: no-drag;
+      }
+
+      .context-menu-target textarea {
+        min-height: 76px;
+        -webkit-app-region: no-drag;
+      }
+
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+      }
+
+      .checkbox-row input {
+        width: auto;
+        min-height: 0;
       }
 
       .actions {
@@ -172,6 +249,29 @@
         opacity: 0.65;
       }
 
+      @media (max-width: 760px) {
+        .app {
+          padding: 16px;
+        }
+
+        .field-grid,
+        .tight-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .field-grid .field:nth-child(odd) {
+          border-right: 0;
+        }
+
+        .field-grid .field {
+          border-bottom: 1px solid #d0d7de;
+        }
+
+        .field-grid .field:last-child {
+          border-bottom: 0;
+        }
+      }
+
       @media (prefers-color-scheme: dark) {
         :root {
           background: #1f2328;
@@ -185,7 +285,9 @@
         .panel,
         .status,
         input,
+        select,
         textarea,
+        .context-menu-target,
         button.secondary {
           background: #272b33;
           color: #f0f3f6;
@@ -193,8 +295,12 @@
 
         .panel,
         .field,
+        .field-grid,
+        .field-grid .field,
         .status,
+        .context-menu-target,
         input,
+        select,
         textarea,
         button.secondary {
           border-color: #444c56;
@@ -203,6 +309,10 @@
         .status,
         label {
           color: #adbac7;
+        }
+
+        .context-menu-target a {
+          color: #6cb6ff;
         }
 
         button {
@@ -226,22 +336,283 @@
       <div class="sections">
         <section class="panel" aria-label="Filesystem demo">
           <h2 class="section-title">Filesystem</h2>
-          <div class="field">
-            <label for="path">Path</label>
-            <input
-              id="path"
-              autocomplete="off"
-              spellcheck="false"
-              value="muon-fs-demo.txt"
-            />
+          <div class="field-grid">
+            <div class="field">
+              <label for="path">Path</label>
+              <input
+                id="path"
+                autocomplete="off"
+                spellcheck="false"
+                value="muon-fs-demo.txt"
+              />
+            </div>
+            <div class="field">
+              <label for="fs-target-path">Target path</label>
+              <input
+                id="fs-target-path"
+                autocomplete="off"
+                spellcheck="false"
+                value="muon-fs-demo-copy.txt"
+              />
+            </div>
           </div>
-          <div class="field">
-            <label for="content">Text</label>
-            <textarea id="content" spellcheck="false">Hello from muon.fs</textarea>
+          <div class="field-grid">
+            <div class="field">
+              <label for="content">Text</label>
+              <textarea id="content" class="large" spellcheck="false">Hello from muon.fs</textarea>
+            </div>
+            <div class="field">
+              <label for="fs-result">Filesystem result</label>
+              <textarea id="fs-result" class="large" readonly spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="fs-bytes">Binary bytes</label>
+              <input
+                id="fs-bytes"
+                autocomplete="off"
+                spellcheck="false"
+                value="3, 1, 4, 1, 5"
+              />
+            </div>
+            <div class="field">
+              <label for="fs-encoding">Text encoding</label>
+              <input
+                id="fs-encoding"
+                autocomplete="off"
+                spellcheck="false"
+                value="utf8"
+              />
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="fs-options">Options JSON</label>
+              <textarea id="fs-options" class="small" spellcheck="false">{}</textarea>
+            </div>
+            <div class="field">
+              <label for="fs-watch-events">Watch events</label>
+              <textarea id="fs-watch-events" class="small" readonly spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="fs-length">Length</label>
+              <input id="fs-length" type="number" min="0" step="1" value="5" />
+            </div>
+            <div class="field">
+              <label for="fs-symlink-type">Symlink type</label>
+              <select id="fs-symlink-type">
+                <option value="file">file</option>
+                <option value="dir">dir</option>
+                <option value="junction">junction</option>
+              </select>
+            </div>
           </div>
           <div class="actions">
             <button id="write" type="button">Write</button>
             <button id="read" class="secondary" type="button">Read</button>
+            <button data-fs-action="readFile" type="button">Read file</button>
+            <button data-fs-action="writeFile" type="button">Write file</button>
+            <button data-fs-action="writeTextFile" type="button">
+              Write text
+            </button>
+            <button data-fs-action="readTextFile" type="button">
+              Read text
+            </button>
+            <button data-fs-action="stat" class="secondary" type="button">
+              Stat
+            </button>
+            <button data-fs-action="lstat" class="secondary" type="button">
+              Lstat
+            </button>
+            <button data-fs-action="exists" class="secondary" type="button">
+              Exists
+            </button>
+            <button data-fs-action="access" class="secondary" type="button">
+              Access
+            </button>
+            <button data-fs-action="readdir" class="secondary" type="button">
+              Readdir
+            </button>
+            <button data-fs-action="mkdir" type="button">Mkdir</button>
+            <button data-fs-action="rename" type="button">Rename</button>
+            <button data-fs-action="copyFile" type="button">Copy file</button>
+            <button data-fs-action="appendFile" type="button">
+              Append file
+            </button>
+            <button data-fs-action="appendTextFile" type="button">
+              Append text
+            </button>
+            <button data-fs-action="truncate" type="button">Truncate</button>
+            <button data-fs-action="realpath" class="secondary" type="button">
+              Realpath
+            </button>
+            <button data-fs-action="readlink" class="secondary" type="button">
+              Readlink
+            </button>
+            <button data-fs-action="symlink" type="button">Symlink</button>
+            <button data-fs-action="watchStart" type="button">
+              Start watch
+            </button>
+            <button
+              id="fs-watch-stop"
+              data-fs-action="watchStop"
+              class="secondary"
+              type="button"
+              disabled
+            >
+              Stop watch
+            </button>
+            <button data-fs-action="rm" class="danger" type="button">Rm</button>
+            <button data-fs-action="unlink" class="danger" type="button">
+              Unlink
+            </button>
+            <button data-fs-action="rmdir" class="danger" type="button">
+              Rmdir
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Filesystem dialog demo">
+          <h2 class="section-title">Filesystem dialogs</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label for="dialog-options">Options JSON</label>
+              <textarea id="dialog-options" class="small" spellcheck="false">{
+  "title": "Select with muon.fs.dialogs",
+  "modal": true,
+  "filters": [
+    {
+      "name": "Text",
+      "extensions": ["txt"]
+    }
+  ]
+}</textarea>
+            </div>
+            <div class="field">
+              <label for="dialog-result">Dialog result</label>
+              <textarea id="dialog-result" class="small" readonly spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button data-dialog-action="selectFile" type="button">
+              Select file
+            </button>
+            <button data-dialog-action="selectFiles" type="button">
+              Select files
+            </button>
+            <button data-dialog-action="selectDirectory" type="button">
+              Select directory
+            </button>
+            <button data-dialog-action="selectDirectories" type="button">
+              Select directories
+            </button>
+            <button data-dialog-action="selectSaveFile" type="button">
+              Select save file
+            </button>
+            <button id="dialog-abort" class="secondary" type="button" disabled>
+              Abort active
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Environment API demo">
+          <h2 class="section-title">Environments</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label for="environment-autostart">Autostart value</label>
+              <select id="environment-autostart">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="environment-result">Environment result</label>
+              <textarea id="environment-result" class="small" readonly spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button data-environment-action="getVariables" type="button">
+              Get variables
+            </button>
+            <button data-environment-action="getCommandLine" type="button">
+              Get command line
+            </button>
+            <button data-environment-action="getProcessId" type="button">
+              Get process id
+            </button>
+            <button data-environment-action="getRuntimeInfo" type="button">
+              Get runtime info
+            </button>
+            <button data-environment-action="getAutostart" type="button">
+              Get autostart
+            </button>
+            <button
+              data-environment-action="setAutostart"
+              class="danger"
+              type="button"
+            >
+              Set autostart
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Executor API demo">
+          <h2 class="section-title">Executor</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label for="executor-options">Spawn options JSON</label>
+              <textarea id="executor-options" class="large" spellcheck="false"></textarea>
+            </div>
+            <div class="field">
+              <label for="executor-result">Executor result</label>
+              <textarea id="executor-result" class="large" readonly spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="executor-load-preset" class="secondary" type="button">
+              Load OS preset
+            </button>
+            <button id="executor-spawn" type="button">Spawn</button>
+          </div>
+        </section>
+
+        <section class="panel" aria-label="Bootstrap API demo">
+          <h2 class="section-title">Bootstrap</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label for="bootstrap-settings">Settings patch JSON</label>
+              <textarea id="bootstrap-settings" class="small" spellcheck="false">{
+  "cefVersionPolicy": null,
+  "cefExactVersion": null,
+  "catalogRefreshIntervalSeconds": null
+}</textarea>
+            </div>
+            <div class="field">
+              <label for="bootstrap-result">Bootstrap result</label>
+              <textarea id="bootstrap-result" class="small" readonly spellcheck="false"></textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button data-bootstrap-action="getSettings" type="button">
+              Get settings
+            </button>
+            <button
+              data-bootstrap-action="setSettings"
+              class="danger"
+              type="button"
+            >
+              Set settings
+            </button>
+            <button
+              data-bootstrap-action="triggerUpdate"
+              class="danger"
+              type="button"
+            >
+              Trigger update
+            </button>
           </div>
         </section>
 
@@ -275,6 +646,159 @@
 
         <section class="panel" aria-label="Browser API demo">
           <h2 class="section-title">Browser window</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label>Window bounds</label>
+              <div class="tight-grid">
+                <input
+                  id="browser-bound-x"
+                  type="number"
+                  step="1"
+                  value="80"
+                  aria-label="Window x"
+                />
+                <input
+                  id="browser-bound-y"
+                  type="number"
+                  step="1"
+                  value="80"
+                  aria-label="Window y"
+                />
+                <input
+                  id="browser-bound-width"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="960"
+                  aria-label="Window width"
+                />
+                <input
+                  id="browser-bound-height"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="720"
+                  aria-label="Window height"
+                />
+              </div>
+            </div>
+            <div class="field">
+              <label for="browser-title-bar-visible">Title bar visibility</label>
+              <div class="checkbox-row">
+                <input id="browser-title-bar-visible" type="checkbox" checked />
+                <span>Visible</span>
+              </div>
+            </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-title-bar-icon">Title bar icon</label>
+              <input
+                id="browser-title-bar-icon"
+                autocomplete="off"
+                spellcheck="false"
+                value="favicon.svg"
+              />
+            </div>
+            <div class="field">
+              <label for="browser-shutdown-exit-code">Shutdown exit code</label>
+              <input
+                id="browser-shutdown-exit-code"
+                type="number"
+                step="1"
+                value="0"
+              />
+            </div>
+          </div>
+          <div class="field">
+            <label for="browser-result">Browser result</label>
+            <textarea id="browser-result" class="small" readonly spellcheck="false"></textarea>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-context-menu-items">
+                Context menu items JSON
+              </label>
+              <textarea id="browser-context-menu-items" class="small" spellcheck="false">[
+  {
+    "id": "demo.inspect",
+    "label": "Inspect context target",
+    "placement": "start"
+  },
+  {
+    "type": "separator",
+    "placement": "afterEdit"
+  },
+  {
+    "id": "demo.copySelection",
+    "label": "Selection command",
+    "placement": "afterEdit",
+    "when": {
+      "selection": true,
+      "canCopy": true
+    }
+  },
+  {
+    "id": "demo.editable",
+    "label": "Editable command",
+    "when": {
+      "editable": true
+    }
+  },
+  {
+    "id": "demo.disabled",
+    "label": "Disabled command",
+    "enabled": false
+  }
+]</textarea>
+            </div>
+            <div class="field">
+              <label for="browser-context-menu-result">
+                Context menu command
+              </label>
+              <textarea
+                id="browser-context-menu-result"
+                class="small"
+                readonly
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+          <div class="field">
+            <label for="browser-context-menu-target">Context menu target</label>
+            <div
+              id="browser-context-menu-target"
+              class="context-menu-target"
+              tabindex="0"
+            >
+              <p>
+                Select part of this text or right-click different targets after
+                registering custom items.
+              </p>
+              <a href="https://example.com/context-menu-demo">Context link</a>
+              <img src="/favicon.svg" alt="Muon favicon" />
+              <textarea id="browser-context-menu-editable" spellcheck="false">Editable text for editable and paste-related menu states.</textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button
+              data-browser-context-menu-action="loadPreset"
+              class="secondary"
+              type="button"
+            >
+              Load context preset
+            </button>
+            <button data-browser-context-menu-action="setItems" type="button">
+              Set context items
+            </button>
+            <button
+              data-browser-context-menu-action="clearItems"
+              class="secondary"
+              type="button"
+            >
+              Clear context items
+            </button>
+          </div>
           <div class="actions">
             <button data-browser-action="reload" type="button">Reload</button>
             <button data-browser-action="hardReload" type="button">
@@ -282,6 +806,12 @@
             </button>
             <button data-browser-action="toggleFullscreen" type="button">
               Toggle fullscreen
+            </button>
+            <button data-browser-action="enterFullscreen" type="button">
+              Enter fullscreen
+            </button>
+            <button data-browser-action="exitFullscreen" type="button">
+              Exit fullscreen
             </button>
             <button data-browser-action="zoomIn" type="button">Zoom in</button>
             <button data-browser-action="zoomOut" type="button">
@@ -299,8 +829,28 @@
             </button>
             <button data-browser-action="focus" type="button">Focus</button>
             <button data-browser-action="blur" type="button">Blur</button>
+            <button data-browser-action="show" type="button">Show</button>
+            <button data-browser-action="hide" type="button">Hide</button>
             <button data-browser-action="hideShow" type="button">
               Hide then show
+            </button>
+            <button data-browser-action="getWindowBounds" type="button">
+              Get bounds
+            </button>
+            <button data-browser-action="setWindowBounds" type="button">
+              Set bounds
+            </button>
+            <button data-browser-action="setTitleBarVisibility" type="button">
+              Set title bar visibility
+            </button>
+            <button data-browser-action="setTitleBarIcon" type="button">
+              Set title bar icon
+            </button>
+            <button data-browser-action="recycle" class="danger" type="button">
+              Recycle
+            </button>
+            <button data-browser-action="shutdown" class="danger" type="button">
+              Shutdown
             </button>
             <button data-browser-action="close" class="danger" type="button">
               Close
@@ -316,27 +866,383 @@
             >
           </div>
         </section>
+
+        <section class="panel" aria-label="System tray API demo">
+          <h2 class="section-title">System tray</h2>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-tray-id">Tray id</label>
+              <input
+                id="browser-tray-id"
+                autocomplete="off"
+                spellcheck="false"
+                value="demo-tray"
+              />
+            </div>
+            <div class="field">
+              <label for="browser-tray-icon">Tray icon</label>
+              <input
+                id="browser-tray-icon"
+                autocomplete="off"
+                spellcheck="false"
+                value="icons/tray.png"
+              />
+            </div>
+          </div>
+          <div class="field">
+            <label for="browser-tray-tooltip">Tray tooltip</label>
+            <input
+              id="browser-tray-tooltip"
+              autocomplete="off"
+              spellcheck="false"
+              value="Muon tray ready"
+            />
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="browser-tray-menu-items">Tray menu items JSON</label>
+              <textarea id="browser-tray-menu-items" class="small" spellcheck="false">[
+  {
+    "id": "show",
+    "label": "Show window"
+  },
+  {
+    "type": "checkbox",
+    "id": "ready",
+    "label": "Ready",
+    "checked": true
+  },
+  {
+    "type": "separator"
+  },
+  {
+    "type": "radio",
+    "id": "mode-light",
+    "label": "Light mode",
+    "checked": true
+  },
+  {
+    "type": "radio",
+    "id": "mode-dark",
+    "label": "Dark mode"
+  },
+  {
+    "id": "remove",
+    "label": "Remove tray"
+  }
+]</textarea>
+            </div>
+            <div class="field">
+              <label for="browser-tray-events">Tray events</label>
+              <textarea
+                id="browser-tray-events"
+                class="small"
+                readonly
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+          <div class="actions">
+            <button data-browser-tray-action="create" type="button">
+              Create tray
+            </button>
+            <button data-browser-tray-action="setMenu" type="button">
+              Set menu
+            </button>
+            <button data-browser-tray-action="setIcon" type="button">
+              Set icon
+            </button>
+            <button data-browser-tray-action="setTooltip" type="button">
+              Set tooltip
+            </button>
+            <button
+              data-browser-tray-action="remove"
+              class="danger"
+              type="button"
+            >
+              Remove tray
+            </button>
+            <button
+              data-browser-tray-action="clearEvents"
+              class="secondary"
+              type="button"
+            >
+              Clear events
+            </button>
+          </div>
+          <div class="field">
+            <label for="browser-tray-status">Tray status</label>
+            <output
+              id="browser-tray-status"
+              class="status inline-status"
+              data-state="idle"
+              >Ready</output
+            >
+          </div>
+        </section>
       </div>
     </main>
     <script>
       const pathInput = document.querySelector("#path");
+      const targetPathInput = document.querySelector("#fs-target-path");
       const contentInput = document.querySelector("#content");
       const statusOutput = document.querySelector("#status");
       const writeButton = document.querySelector("#write");
       const readButton = document.querySelector("#read");
+      const fsBytesInput = document.querySelector("#fs-bytes");
+      const fsEncodingInput = document.querySelector("#fs-encoding");
+      const fsOptionsInput = document.querySelector("#fs-options");
+      const fsResultInput = document.querySelector("#fs-result");
+      const fsLengthInput = document.querySelector("#fs-length");
+      const fsSymlinkTypeInput = document.querySelector("#fs-symlink-type");
+      const fsWatchEventsInput = document.querySelector("#fs-watch-events");
+      const fsWatchStopButton = document.querySelector("#fs-watch-stop");
       const popupUrlInput = document.querySelector("#popup-url");
       const popupStatusOutput = document.querySelector("#popup-status");
       const browserStatusOutput = document.querySelector("#browser-status");
+      const browserResultInput = document.querySelector("#browser-result");
+      const browserBoundXInput = document.querySelector("#browser-bound-x");
+      const browserBoundYInput = document.querySelector("#browser-bound-y");
+      const browserBoundWidthInput = document.querySelector(
+        "#browser-bound-width",
+      );
+      const browserBoundHeightInput = document.querySelector(
+        "#browser-bound-height",
+      );
+      const browserTitleBarVisibleInput = document.querySelector(
+        "#browser-title-bar-visible",
+      );
+      const browserTitleBarIconInput = document.querySelector(
+        "#browser-title-bar-icon",
+      );
+      const browserShutdownExitCodeInput = document.querySelector(
+        "#browser-shutdown-exit-code",
+      );
+      const browserContextMenuItemsInput = document.querySelector(
+        "#browser-context-menu-items",
+      );
+      const browserContextMenuResultInput = document.querySelector(
+        "#browser-context-menu-result",
+      );
+      const browserTrayIdInput = document.querySelector("#browser-tray-id");
+      const browserTrayIconInput = document.querySelector("#browser-tray-icon");
+      const browserTrayTooltipInput = document.querySelector(
+        "#browser-tray-tooltip",
+      );
+      const browserTrayMenuItemsInput = document.querySelector(
+        "#browser-tray-menu-items",
+      );
+      const browserTrayEventsInput = document.querySelector(
+        "#browser-tray-events",
+      );
+      const browserTrayStatusOutput = document.querySelector(
+        "#browser-tray-status",
+      );
+      const dialogOptionsInput = document.querySelector("#dialog-options");
+      const dialogResultInput = document.querySelector("#dialog-result");
+      const dialogAbortButton = document.querySelector("#dialog-abort");
+      const environmentAutostartInput = document.querySelector(
+        "#environment-autostart",
+      );
+      const environmentResultInput = document.querySelector(
+        "#environment-result",
+      );
+      const executorOptionsInput = document.querySelector("#executor-options");
+      const executorResultInput = document.querySelector("#executor-result");
+      const executorLoadPresetButton = document.querySelector(
+        "#executor-load-preset",
+      );
+      const executorSpawnButton = document.querySelector("#executor-spawn");
+      const bootstrapSettingsInput = document.querySelector(
+        "#bootstrap-settings",
+      );
+      const bootstrapResultInput = document.querySelector("#bootstrap-result");
       const openConnectedPopupButton = document.querySelector(
         "#open-connected-popup",
       );
       const openNoopenerPopupButton = document.querySelector(
         "#open-noopener-popup",
       );
+      const fsActionButtons = Array.from(
+        document.querySelectorAll("[data-fs-action]"),
+      );
+      const dialogActionButtons = Array.from(
+        document.querySelectorAll("[data-dialog-action]"),
+      );
+      const environmentActionButtons = Array.from(
+        document.querySelectorAll("[data-environment-action]"),
+      );
+      const bootstrapActionButtons = Array.from(
+        document.querySelectorAll("[data-bootstrap-action]"),
+      );
       const browserActionButtons = Array.from(
         document.querySelectorAll("[data-browser-action]"),
       );
+      const browserContextMenuActionButtons = Array.from(
+        document.querySelectorAll("[data-browser-context-menu-action]"),
+      );
+      const browserTrayActionButtons = Array.from(
+        document.querySelectorAll("[data-browser-tray-action]"),
+      );
       const buttons = [writeButton, readButton];
+      let fsWatcher = null;
+      let activeDialogController = null;
+      let activeTrayId = null;
+
+      const setButtonTitle = (selector, title) => {
+        const button = document.querySelector(selector);
+        if (button instanceof HTMLButtonElement) {
+          button.title = title;
+        }
+      };
+
+      const setActionButtonTitles = (attributeName, titles) => {
+        for (const [actionName, title] of Object.entries(titles)) {
+          setButtonTitle(`[${attributeName}="${actionName}"]`, title);
+        }
+      };
+
+      const applyButtonTooltips = () => {
+        setButtonTitle(
+          "#write",
+          'Write: window.muon.fs.writeTextFile(path, text, "utf8")',
+        );
+        setButtonTitle(
+          "#read",
+          'Read: window.muon.fs.readTextFile(path, "utf8")',
+        );
+        setActionButtonTitles("data-fs-action", {
+          readFile: "ReadFile: window.muon.fs.readFile(path, options)",
+          writeFile: "WriteFile: window.muon.fs.writeFile(path, data, options)",
+          writeTextFile:
+            "WriteText: window.muon.fs.writeTextFile(path, text, encoding, options)",
+          readTextFile:
+            "ReadText: window.muon.fs.readTextFile(path, encoding, options)",
+          stat: "Stat: window.muon.fs.stat(path, options)",
+          lstat: "Lstat: window.muon.fs.lstat(path, options)",
+          exists: "Exists: window.muon.fs.exists(path, options)",
+          access: "Access: window.muon.fs.access(path, options)",
+          readdir: "Readdir: window.muon.fs.readdir(path, options)",
+          mkdir: "Mkdir: window.muon.fs.mkdir(path, options)",
+          rename: "Rename: window.muon.fs.rename(path, targetPath, options)",
+          copyFile:
+            "CopyFile: window.muon.fs.copyFile(path, targetPath, options)",
+          appendFile:
+            "AppendFile: window.muon.fs.appendFile(path, data, options)",
+          appendTextFile:
+            "AppendText: window.muon.fs.appendTextFile(path, text, encoding, options)",
+          truncate: "Truncate: window.muon.fs.truncate(path, length, options)",
+          realpath: "Realpath: window.muon.fs.realpath(path, options)",
+          readlink: "Readlink: window.muon.fs.readlink(path, options)",
+          symlink:
+            "Symlink: window.muon.fs.symlink(target, path, type, options)",
+          watchStart: "Watch: window.muon.fs.watch(path, listener, options)",
+          watchStop: "WatchClose: watcher.close()",
+          rm: "Rm: window.muon.fs.rm(path, options)",
+          unlink: "Unlink: window.muon.fs.unlink(path, options)",
+          rmdir: "Rmdir: window.muon.fs.rmdir(path, options)",
+        });
+        setActionButtonTitles("data-dialog-action", {
+          selectFile:
+            "SelectFile: window.muon.fs.dialogs.selectFile(options)",
+          selectFiles:
+            "SelectFiles: window.muon.fs.dialogs.selectFiles(options)",
+          selectDirectory:
+            "SelectDirectory: window.muon.fs.dialogs.selectDirectory(options)",
+          selectDirectories:
+            "SelectDirectories: window.muon.fs.dialogs.selectDirectories(options)",
+          selectSaveFile:
+            "SelectSaveFile: window.muon.fs.dialogs.selectSaveFile(options)",
+        });
+        setButtonTitle("#dialog-abort", "Abort active: AbortController.abort()");
+        setActionButtonTitles("data-environment-action", {
+          getVariables:
+            "GetVariables: window.muon.environments.getVariables()",
+          getCommandLine:
+            "GetCommandLine: window.muon.environments.getCommandLine()",
+          getProcessId:
+            "GetProcessId: window.muon.environments.getProcessId()",
+          getRuntimeInfo:
+            "GetRuntimeInfo: window.muon.environments.getRuntimeInfo()",
+          getAutostart:
+            "GetAutostart: window.muon.environments.getAutostart()",
+          setAutostart:
+            "SetAutostart: window.muon.environments.setAutostart(enabled)",
+        });
+        setButtonTitle(
+          "#executor-load-preset",
+          "LoadPreset: fill window.muon.executor.spawn(options) sample",
+        );
+        setButtonTitle(
+          "#executor-spawn",
+          "Spawn: window.muon.executor.spawn(options)",
+        );
+        setActionButtonTitles("data-bootstrap-action", {
+          getSettings: "GetSettings: window.muon.bootstrap.getSettings()",
+          setSettings: "SetSettings: window.muon.bootstrap.setSettings(settings)",
+          triggerUpdate:
+            "TriggerUpdate: window.muon.bootstrap.triggerUpdate()",
+        });
+        setButtonTitle(
+          "#open-connected-popup",
+          "OpenPopup: window.open(url, target, features)",
+        );
+        setButtonTitle(
+          "#open-noopener-popup",
+          "OpenNoopenerPopup: window.open(url, target, features)",
+        );
+        setActionButtonTitles("data-browser-action", {
+          reload: "Reload: window.muon.browser.reload()",
+          hardReload: "HardReload: window.muon.browser.hardReload()",
+          toggleFullscreen:
+            "ToggleFullscreen: window.muon.browser.toggleFullscreen()",
+          enterFullscreen:
+            "EnterFullscreen: window.muon.browser.enterFullscreen()",
+          exitFullscreen:
+            "ExitFullscreen: window.muon.browser.exitFullscreen()",
+          zoomIn: "ZoomIn: window.muon.browser.zoomIn()",
+          zoomOut: "ZoomOut: window.muon.browser.zoomOut()",
+          resetZoom: "ResetZoom: window.muon.browser.resetZoom()",
+          maximize: "Maximize: window.muon.browser.maximize()",
+          restore: "Restore: window.muon.browser.restore()",
+          minimize: "Minimize: window.muon.browser.minimize()",
+          focus: "Focus: window.muon.browser.focus()",
+          blur: "Blur: window.muon.browser.blur()",
+          show: "Show: window.muon.browser.show()",
+          hide: "Hide: window.muon.browser.hide()",
+          hideShow:
+            "HideShow: window.muon.browser.hide(); window.muon.browser.show()",
+          getWindowBounds:
+            "GetWindowBounds: window.muon.browser.getWindowBounds()",
+          setWindowBounds:
+            "SetWindowBounds: window.muon.browser.setWindowBounds(bounds)",
+          setTitleBarVisibility:
+            "SetTitleBarVisibility: window.muon.browser.setTitleBarVisibility(visible)",
+          setTitleBarIcon:
+            "SetTitleBarIcon: window.muon.browser.setTitleBarIcon(path)",
+          recycle: "Recycle: window.muon.browser.recycle()",
+          shutdown: "Shutdown: window.muon.browser.shutdown(exitCode)",
+          close: "Close: window.muon.browser.close()",
+        });
+        setActionButtonTitles("data-browser-context-menu-action", {
+          loadPreset: "LoadContextMenuPreset: fill context menu item JSON",
+          setItems:
+            "SetContextMenuItems: window.muon.browser.setContextMenuItems(items, handler)",
+          clearItems:
+            "ClearContextMenuItems: window.muon.browser.clearContextMenuItems()",
+        });
+        setActionButtonTitles("data-browser-tray-action", {
+          create:
+            "CreateTray: window.muon.browser.createTray(options, handler)",
+          setMenu:
+            "SetTrayMenu: window.muon.browser.setTrayMenu(id, items, handler)",
+          setIcon: "SetTrayIcon: window.muon.browser.setTrayIcon(id, iconPath)",
+          setTooltip:
+            "SetTrayTooltip: window.muon.browser.setTrayTooltip(id, tooltip)",
+          remove: "RemoveTray: window.muon.browser.removeTray(id)",
+          clearEvents: "ClearEvents: clear tray event log",
+        });
+      };
 
       const setOutput = (output, message, state) => {
         output.textContent = message;
@@ -346,13 +1252,134 @@
       const setStatus = (message, state) =>
         setOutput(statusOutput, message, state);
 
-      const setBusy = (busy) => {
-        for (const button of buttons) {
+      const setBusy = (busy, targetButtons = buttons) => {
+        for (const button of targetButtons) {
           button.disabled = busy;
         }
       };
 
       const getPath = () => pathInput.value.trim();
+
+      const getTargetPath = () => targetPathInput.value.trim();
+
+      const getEncoding = () => fsEncodingInput.value.trim() || "utf8";
+
+      const getErrorMessage = (error) =>
+        error && typeof error.message === "string"
+          ? error.message
+          : String(error);
+
+      const confirmDanger = (message) => window.confirm(message);
+
+      const parseJsonInput = (input, fallback) => {
+        const text = input.value.trim();
+        if (text === "") {
+          return fallback;
+        }
+        return JSON.parse(text);
+      };
+
+      const parseIntegerInput = (input, name) => {
+        const value = Number(input.value);
+        if (!Number.isSafeInteger(value)) {
+          throw new TypeError(`${name} must be an integer`);
+        }
+        return value;
+      };
+
+      const parseByteInput = () => {
+        const text = fsBytesInput.value.trim();
+        if (text === "") {
+          return new Uint8Array();
+        }
+        const values = text.split(/[\s,]+/).filter((entry) => entry !== "");
+        return Uint8Array.from(
+          values.map((entry) => {
+            const value = Number(entry);
+            if (!Number.isInteger(value) || value < 0 || value > 255) {
+              throw new RangeError("Binary bytes must be integers from 0 to 255");
+            }
+            return value;
+          }),
+        );
+      };
+
+      const formatResult = (value) => {
+        if (value === undefined) {
+          return "undefined";
+        }
+        if (value === null) {
+          return "null";
+        }
+        if (value instanceof ArrayBuffer) {
+          const bytes = Array.from(new Uint8Array(value));
+          return JSON.stringify(
+            {
+              byteLength: value.byteLength,
+              bytes,
+            },
+            null,
+            2,
+          );
+        }
+        if (ArrayBuffer.isView(value)) {
+          return JSON.stringify(
+            {
+              byteLength: value.byteLength,
+              bytes: Array.from(value),
+            },
+            null,
+            2,
+          );
+        }
+        if (typeof value === "string") {
+          return value;
+        }
+        return JSON.stringify(value, null, 2);
+      };
+
+      const setTextResult = (output, value) => {
+        output.value = formatResult(value);
+      };
+
+      const runAction = async ({
+        status,
+        result,
+        buttons: targetButtons,
+        workingMessage = "Working",
+        successMessage,
+        task,
+      }) => {
+        if (targetButtons !== undefined) {
+          setBusy(true, targetButtons);
+        }
+        if (status !== undefined) {
+          setOutput(status, workingMessage, "idle");
+        }
+        try {
+          const value = await task();
+          if (result !== undefined) {
+            setTextResult(result, value);
+          }
+          if (status !== undefined) {
+            setOutput(status, successMessage, "ok");
+          }
+          return value;
+        } catch (error) {
+          const message = getErrorMessage(error);
+          if (result !== undefined) {
+            result.value = message;
+          }
+          if (status !== undefined) {
+            setOutput(status, message, "error");
+          }
+          return undefined;
+        } finally {
+          if (targetButtons !== undefined) {
+            setBusy(false, targetButtons);
+          }
+        }
+      };
 
       const run = async (task, successMessage) => {
         const path = getPath();
@@ -361,26 +1388,167 @@
           return;
         }
 
-        setBusy(true);
-        setStatus("Working", "idle");
-        try {
-          await task(path);
-          setStatus(successMessage, "ok");
-        } catch (error) {
-          const message =
-            error && typeof error.message === "string"
-              ? error.message
-              : String(error);
-          setStatus(message, "error");
-        } finally {
-          setBusy(false);
-        }
+        await runAction({
+          status: statusOutput,
+          buttons,
+          successMessage,
+          task: () => task(path),
+        });
       };
 
-      const getErrorMessage = (error) =>
-        error && typeof error.message === "string"
-          ? error.message
-          : String(error);
+      const getFsOptions = () => parseJsonInput(fsOptionsInput, {});
+
+      const requirePath = () => {
+        const path = getPath();
+        if (path === "") {
+          throw new Error("Path is required");
+        }
+        return path;
+      };
+
+      const requireTargetPath = () => {
+        const path = getTargetPath();
+        if (path === "") {
+          throw new Error("Target path is required");
+        }
+        return path;
+      };
+
+      const fsActions = {
+        readFile: async () => window.muon.fs.readFile(requirePath(), getFsOptions()),
+        writeFile: async () => {
+          await window.muon.fs.writeFile(
+            requirePath(),
+            parseByteInput(),
+            getFsOptions(),
+          );
+          return "Wrote binary file";
+        },
+        readTextFile: async () =>
+          window.muon.fs.readTextFile(requirePath(), getEncoding(), getFsOptions()),
+        writeTextFile: async () => {
+          await window.muon.fs.writeTextFile(
+            requirePath(),
+            contentInput.value,
+            getEncoding(),
+            getFsOptions(),
+          );
+          return "Wrote text file";
+        },
+        stat: async () => window.muon.fs.stat(requirePath(), getFsOptions()),
+        lstat: async () => window.muon.fs.lstat(requirePath(), getFsOptions()),
+        exists: async () => window.muon.fs.exists(requirePath(), getFsOptions()),
+        access: async () => window.muon.fs.access(requirePath(), getFsOptions()),
+        readdir: async () => window.muon.fs.readdir(requirePath(), getFsOptions()),
+        mkdir: async () => {
+          await window.muon.fs.mkdir(requirePath(), getFsOptions());
+          return "Created directory";
+        },
+        rm: async () => {
+          if (!confirmDanger("Remove this path?")) {
+            return "Canceled";
+          }
+          await window.muon.fs.rm(requirePath(), getFsOptions());
+          return "Removed path";
+        },
+        unlink: async () => {
+          if (!confirmDanger("Unlink this file?")) {
+            return "Canceled";
+          }
+          await window.muon.fs.unlink(requirePath(), getFsOptions());
+          return "Unlinked file";
+        },
+        rmdir: async () => {
+          if (!confirmDanger("Remove this directory?")) {
+            return "Canceled";
+          }
+          await window.muon.fs.rmdir(requirePath(), getFsOptions());
+          return "Removed directory";
+        },
+        rename: async () => {
+          await window.muon.fs.rename(requirePath(), requireTargetPath(), getFsOptions());
+          return "Renamed path";
+        },
+        copyFile: async () => {
+          await window.muon.fs.copyFile(
+            requirePath(),
+            requireTargetPath(),
+            getFsOptions(),
+          );
+          return "Copied file";
+        },
+        appendFile: async () => {
+          await window.muon.fs.appendFile(
+            requirePath(),
+            parseByteInput(),
+            getFsOptions(),
+          );
+          return "Appended binary file";
+        },
+        appendTextFile: async () => {
+          await window.muon.fs.appendTextFile(
+            requirePath(),
+            contentInput.value,
+            getEncoding(),
+            getFsOptions(),
+          );
+          return "Appended text file";
+        },
+        truncate: async () => {
+          const length = parseIntegerInput(fsLengthInput, "Length");
+          await window.muon.fs.truncate(requirePath(), length, getFsOptions());
+          return "Truncated file";
+        },
+        realpath: async () => window.muon.fs.realpath(requirePath(), getFsOptions()),
+        readlink: async () => window.muon.fs.readlink(requirePath(), getFsOptions()),
+        symlink: async () => {
+          await window.muon.fs.symlink(
+            requirePath(),
+            requireTargetPath(),
+            fsSymlinkTypeInput.value,
+            getFsOptions(),
+          );
+          return "Created symlink";
+        },
+        watchStart: async () => {
+          if (fsWatcher !== null) {
+            return "Watch is already active";
+          }
+          fsWatchEventsInput.value = "";
+          fsWatcher = await window.muon.fs.watch(
+            requirePath(),
+            (event) => {
+              fsWatchEventsInput.value += `${formatResult(event)}\n`;
+            },
+            getFsOptions(),
+          );
+          fsWatchStopButton.disabled = false;
+          return "Watch started";
+        },
+        watchStop: async () => {
+          if (fsWatcher === null) {
+            return "Watch is not active";
+          }
+          await fsWatcher.close();
+          fsWatcher = null;
+          fsWatchStopButton.disabled = true;
+          return "Watch stopped";
+        },
+      };
+
+      const runFsAction = async (actionName) => {
+        const action = fsActions[actionName];
+        if (typeof action !== "function") {
+          setStatus(`Unknown action: ${actionName}`, "error");
+          return;
+        }
+        await runAction({
+          status: statusOutput,
+          result: fsResultInput,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
+      };
 
       const getPopupMode = () => {
         const hashParams = new URLSearchParams(
@@ -444,6 +1612,20 @@
         }
       };
 
+      const getWindowBoundsInput = () => ({
+        x: parseIntegerInput(browserBoundXInput, "Window x"),
+        y: parseIntegerInput(browserBoundYInput, "Window y"),
+        width: parseIntegerInput(browserBoundWidthInput, "Window width"),
+        height: parseIntegerInput(browserBoundHeightInput, "Window height"),
+      });
+
+      const applyWindowBoundsInputs = (bounds) => {
+        browserBoundXInput.value = String(bounds.x);
+        browserBoundYInput.value = String(bounds.y);
+        browserBoundWidthInput.value = String(bounds.width);
+        browserBoundHeightInput.value = String(bounds.height);
+      };
+
       const browserActions = {
         reload: async () => {
           await window.muon.browser.reload();
@@ -453,6 +1635,12 @@
         },
         toggleFullscreen: async () => {
           await window.muon.browser.toggleFullscreen();
+        },
+        enterFullscreen: async () => {
+          await window.muon.browser.enterFullscreen();
+        },
+        exitFullscreen: async () => {
+          await window.muon.browser.exitFullscreen();
         },
         zoomIn: async () => {
           await window.muon.browser.zoomIn();
@@ -478,14 +1666,214 @@
         blur: async () => {
           await window.muon.browser.blur();
         },
+        show: async () => {
+          await window.muon.browser.show();
+        },
+        hide: async () => {
+          await window.muon.browser.hide();
+        },
         hideShow: async () => {
           await window.muon.browser.hide();
           window.setTimeout(() => {
             void window.muon.browser.show();
           }, 400);
         },
+        getWindowBounds: async () => {
+          const bounds = await window.muon.browser.getWindowBounds();
+          applyWindowBoundsInputs(bounds);
+          return bounds;
+        },
+        setWindowBounds: async () => {
+          const bounds = getWindowBoundsInput();
+          if (bounds.width <= 0 || bounds.height <= 0) {
+            throw new RangeError("Window width and height must be positive");
+          }
+          await window.muon.browser.setWindowBounds(bounds);
+          return bounds;
+        },
+        setTitleBarVisibility: async () => {
+          const visible = browserTitleBarVisibleInput.checked;
+          await window.muon.browser.setTitleBarVisibility(visible);
+          return { visible };
+        },
+        setTitleBarIcon: async () => {
+          const icon = browserTitleBarIconInput.value.trim();
+          await window.muon.browser.setTitleBarIcon(icon);
+          return { icon };
+        },
+        recycle: async () => {
+          if (!confirmDanger("Recycle the process?")) {
+            return "Canceled";
+          }
+          await window.muon.browser.recycle();
+        },
+        shutdown: async () => {
+          if (!confirmDanger("Shutdown the process?")) {
+            return "Canceled";
+          }
+          await window.muon.browser.shutdown(
+            parseIntegerInput(browserShutdownExitCodeInput, "Exit code"),
+          );
+        },
         close: async () => {
+          if (!confirmDanger("Close this window?")) {
+            return "Canceled";
+          }
           await window.muon.browser.close();
+        },
+      };
+
+      const createBrowserContextMenuPreset = () => [
+        {
+          id: "demo.inspect",
+          label: "Inspect context target",
+          placement: "start",
+        },
+        {
+          type: "separator",
+          placement: "afterEdit",
+        },
+        {
+          id: "demo.copySelection",
+          label: "Selection command",
+          placement: "afterEdit",
+          when: {
+            selection: true,
+            canCopy: true,
+          },
+        },
+        {
+          id: "demo.editable",
+          label: "Editable command",
+          when: {
+            editable: true,
+          },
+        },
+        {
+          id: "demo.disabled",
+          label: "Disabled command",
+          enabled: false,
+        },
+      ];
+
+      const loadBrowserContextMenuPreset = () => {
+        const items = createBrowserContextMenuPreset();
+        browserContextMenuItemsInput.value = JSON.stringify(items, null, 2);
+        return items;
+      };
+
+      const browserContextMenuActions = {
+        loadPreset: async () => loadBrowserContextMenuPreset(),
+        setItems: async () => {
+          const items = parseJsonInput(browserContextMenuItemsInput, []);
+          browserContextMenuResultInput.value = "";
+          await window.muon.browser.setContextMenuItems(items, (command) => {
+            setTextResult(browserContextMenuResultInput, command);
+            setOutput(
+              browserStatusOutput,
+              `Context menu selected: ${command.id}`,
+              "ok",
+            );
+          });
+          return items;
+        },
+        clearItems: async () => {
+          await window.muon.browser.clearContextMenuItems();
+          browserContextMenuResultInput.value = "";
+          return "Cleared context menu items";
+        },
+      };
+
+      const getTrayId = () => {
+        const id = browserTrayIdInput.value.trim();
+        if (id === "" && activeTrayId !== null) {
+          return activeTrayId;
+        }
+        if (id === "") {
+          throw new Error("Tray id is required");
+        }
+        return id;
+      };
+
+      const getTrayIcon = () => {
+        const icon = browserTrayIconInput.value.trim();
+        if (icon === "") {
+          throw new Error("Tray icon is required");
+        }
+        return icon;
+      };
+
+      const getTrayMenuItems = () =>
+        parseJsonInput(browserTrayMenuItemsInput, []);
+
+      const appendTrayEvent = (event) => {
+        browserTrayEventsInput.value += `${formatResult(event)}\n`;
+        browserTrayEventsInput.scrollTop = browserTrayEventsInput.scrollHeight;
+      };
+
+      const handleTrayEvent = (event) => {
+        appendTrayEvent(event);
+        setOutput(
+          browserTrayStatusOutput,
+          `Tray event: ${event.type}${event.id ? ` ${event.id}` : ""}`,
+          "ok",
+        );
+        if (event.type === "activate" || event.id === "show") {
+          void window.muon.browser.show().then(() => window.muon.browser.focus());
+        }
+        if (event.type === "menu" && event.id === "remove") {
+          void removeActiveTray();
+        }
+      };
+
+      const createTrayOptions = () => ({
+        id: browserTrayIdInput.value.trim() || undefined,
+        icon: getTrayIcon(),
+        tooltip: browserTrayTooltipInput.value.trim() || undefined,
+        menu: getTrayMenuItems(),
+      });
+
+      const removeActiveTray = async () => {
+        const id = getTrayId();
+        await window.muon.browser.removeTray(id);
+        if (activeTrayId === id) {
+          activeTrayId = null;
+        }
+        return { removed: id };
+      };
+
+      const browserTrayActions = {
+        create: async () => {
+          const id = await window.muon.browser.createTray(
+            createTrayOptions(),
+            handleTrayEvent,
+          );
+          activeTrayId = id;
+          browserTrayIdInput.value = id;
+          return { id };
+        },
+        setMenu: async () => {
+          const id = getTrayId();
+          const items = getTrayMenuItems();
+          await window.muon.browser.setTrayMenu(id, items, handleTrayEvent);
+          return { id, items };
+        },
+        setIcon: async () => {
+          const id = getTrayId();
+          const icon = getTrayIcon();
+          await window.muon.browser.setTrayIcon(id, icon);
+          return { id, icon };
+        },
+        setTooltip: async () => {
+          const id = getTrayId();
+          const tooltip = browserTrayTooltipInput.value.trim() || null;
+          await window.muon.browser.setTrayTooltip(id, tooltip);
+          return { id, tooltip };
+        },
+        remove: removeActiveTray,
+        clearEvents: async () => {
+          browserTrayEventsInput.value = "";
+          return "Cleared tray events";
         },
       };
 
@@ -501,11 +1889,190 @@
         }
         setOutput(browserStatusOutput, `${actionName} requested`, "idle");
         try {
-          await action();
+          const result = await action();
+          setTextResult(browserResultInput, result);
           setOutput(browserStatusOutput, `${actionName} completed`, "ok");
         } catch (error) {
-          setOutput(browserStatusOutput, getErrorMessage(error), "error");
+          const message = getErrorMessage(error);
+          browserResultInput.value = message;
+          setOutput(browserStatusOutput, message, "error");
         }
+      };
+
+      const runBrowserContextMenuAction = async (actionName) => {
+        const action = browserContextMenuActions[actionName];
+        if (typeof action !== "function") {
+          setOutput(
+            browserStatusOutput,
+            `Unknown context menu action: ${actionName}`,
+            "error",
+          );
+          return;
+        }
+        await runAction({
+          status: browserStatusOutput,
+          result: browserResultInput,
+          buttons: browserContextMenuActionButtons,
+          workingMessage: `${actionName} requested`,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
+      };
+
+      const runBrowserTrayAction = async (actionName) => {
+        const action = browserTrayActions[actionName];
+        if (typeof action !== "function") {
+          setOutput(
+            browserTrayStatusOutput,
+            `Unknown tray action: ${actionName}`,
+            "error",
+          );
+          return;
+        }
+        const result = await runAction({
+          status: browserTrayStatusOutput,
+          buttons: browserTrayActionButtons,
+          workingMessage: `${actionName} requested`,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
+        if (result !== undefined) {
+          appendTrayEvent({ action: actionName, result });
+        }
+      };
+
+      const dialogActions = {
+        selectFile: (options) => window.muon.fs.dialogs.selectFile(options),
+        selectFiles: (options) => window.muon.fs.dialogs.selectFiles(options),
+        selectDirectory: (options) =>
+          window.muon.fs.dialogs.selectDirectory(options),
+        selectDirectories: (options) =>
+          window.muon.fs.dialogs.selectDirectories(options),
+        selectSaveFile: (options) =>
+          window.muon.fs.dialogs.selectSaveFile(options),
+      };
+
+      const runDialogAction = async (actionName) => {
+        const action = dialogActions[actionName];
+        if (typeof action !== "function") {
+          dialogResultInput.value = `Unknown action: ${actionName}`;
+          return;
+        }
+        const controller = new AbortController();
+        activeDialogController = controller;
+        dialogAbortButton.disabled = false;
+        dialogResultInput.value = `${actionName} requested`;
+        try {
+          const options = {
+            ...parseJsonInput(dialogOptionsInput, {}),
+            signal: controller.signal,
+          };
+          const result = await action(options);
+          setTextResult(dialogResultInput, result);
+        } catch (error) {
+          dialogResultInput.value = getErrorMessage(error);
+        } finally {
+          if (activeDialogController === controller) {
+            activeDialogController = null;
+            dialogAbortButton.disabled = true;
+          }
+        }
+      };
+
+      const environmentActions = {
+        getVariables: () => window.muon.environments.getVariables(),
+        getCommandLine: () => window.muon.environments.getCommandLine(),
+        getProcessId: () => window.muon.environments.getProcessId(),
+        getRuntimeInfo: () => window.muon.environments.getRuntimeInfo(),
+        getAutostart: () => window.muon.environments.getAutostart(),
+        setAutostart: async () => {
+          const enabled = environmentAutostartInput.value === "true";
+          if (!confirmDanger(`Set autostart to ${String(enabled)}?`)) {
+            return "Canceled";
+          }
+          await window.muon.environments.setAutostart(enabled);
+          return { enabled };
+        },
+      };
+
+      const runEnvironmentAction = async (actionName) => {
+        const action = environmentActions[actionName];
+        if (typeof action !== "function") {
+          environmentResultInput.value = `Unknown action: ${actionName}`;
+          return;
+        }
+        await runAction({
+          result: environmentResultInput,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
+      };
+
+      const createExecutorPreset = () => {
+        const userAgent = window.navigator.userAgent.toLowerCase();
+        if (userAgent.includes("windows")) {
+          return {
+            command: "cmd.exe",
+            args: ["/c", "echo stdout:hello&& echo stderr:ok 1>&2"],
+            stdin: "",
+          };
+        }
+        return {
+          command: "/bin/sh",
+          args: ["-c", "printf 'stdout:hello'; printf 'stderr:ok' >&2"],
+          stdin: "",
+        };
+      };
+
+      const loadExecutorPreset = () => {
+        executorOptionsInput.value = JSON.stringify(createExecutorPreset(), null, 2);
+      };
+
+      const runExecutorSpawn = async () => {
+        await runAction({
+          result: executorResultInput,
+          successMessage: "spawn completed",
+          task: async () =>
+            window.muon.executor.spawn(
+              parseJsonInput(executorOptionsInput, createExecutorPreset()),
+            ),
+        });
+      };
+
+      const bootstrapActions = {
+        getSettings: async () => {
+          const settings = await window.muon.bootstrap.getSettings();
+          bootstrapSettingsInput.value = JSON.stringify(settings, null, 2);
+          return settings;
+        },
+        setSettings: async () => {
+          if (!confirmDanger("Write bootstrap settings?")) {
+            return "Canceled";
+          }
+          const patch = parseJsonInput(bootstrapSettingsInput, {});
+          await window.muon.bootstrap.setSettings(patch);
+          return "Wrote bootstrap settings";
+        },
+        triggerUpdate: async () => {
+          if (!confirmDanger("Trigger bootstrap update?")) {
+            return "Canceled";
+          }
+          await window.muon.bootstrap.triggerUpdate();
+          return "Triggered bootstrap update";
+        },
+      };
+
+      const runBootstrapAction = async (actionName) => {
+        const action = bootstrapActions[actionName];
+        if (typeof action !== "function") {
+          bootstrapResultInput.value = `Unknown action: ${actionName}`;
+          return;
+        }
+        await runAction({
+          result: bootstrapResultInput,
+          successMessage: `${actionName} completed`,
+          task: action,
+        });
       };
 
       writeButton.addEventListener("click", () => {
@@ -533,6 +2100,41 @@
         );
       });
 
+      for (const button of fsActionButtons) {
+        button.addEventListener("click", () => {
+          void runFsAction(button.dataset.fsAction);
+        });
+      }
+
+      for (const button of dialogActionButtons) {
+        button.addEventListener("click", () => {
+          void runDialogAction(button.dataset.dialogAction);
+        });
+      }
+
+      dialogAbortButton.addEventListener("click", () => {
+        if (activeDialogController !== null) {
+          activeDialogController.abort();
+        }
+      });
+
+      for (const button of environmentActionButtons) {
+        button.addEventListener("click", () => {
+          void runEnvironmentAction(button.dataset.environmentAction);
+        });
+      }
+
+      executorLoadPresetButton.addEventListener("click", loadExecutorPreset);
+      executorSpawnButton.addEventListener("click", () => {
+        void runExecutorSpawn();
+      });
+
+      for (const button of bootstrapActionButtons) {
+        button.addEventListener("click", () => {
+          void runBootstrapAction(button.dataset.bootstrapAction);
+        });
+      }
+
       openConnectedPopupButton.addEventListener("click", () => {
         openPopup(
           defaultPopupFeatures,
@@ -555,6 +2157,23 @@
         });
       }
 
+      for (const button of browserContextMenuActionButtons) {
+        button.addEventListener("click", () => {
+          void runBrowserContextMenuAction(
+            button.dataset.browserContextMenuAction,
+          );
+        });
+      }
+
+      for (const button of browserTrayActionButtons) {
+        button.addEventListener("click", () => {
+          void runBrowserTrayAction(button.dataset.browserTrayAction);
+        });
+      }
+
+      applyButtonTooltips();
+      loadExecutorPreset();
+      loadBrowserContextMenuPreset();
       handlePopupMode();
     </script>
   </body>

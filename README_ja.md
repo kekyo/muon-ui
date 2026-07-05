@@ -577,7 +577,7 @@ assets/
 空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
 
 - 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。
-  `data:` プロトコルを使用する場合は、 `network.allow` に `data:**` などの許可パターンを明示的に追加してください。
+  `data:` プロトコルを使用する場合は、 `network.allow` に `data:image/**` などの許可パターンを明示的に追加してください。
 
 あなたが実装しているページが、外部サーバを参照する場合、例えば `<img>` タグの画像データだけ外部の `https://img.example.com/images/...` を参照する場合は:
 
@@ -1022,6 +1022,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
+| `contextMenu`                         | `object`                                  | `{"mode":"standard"}`     | ページ領域のネイティブコンテキストメニュー設定です。                                     |
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
@@ -1038,6 +1039,10 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
   `"muon"` タイトルバーでは、ページ内の任意の要素へCSSで `-webkit-app-region: drag` を指定すると、その領域をドラッグしてウインドウを移動出来ます。
   リンク、ボタン、入力欄など通常のページ操作を受け取る要素には `-webkit-app-region: no-drag` を指定してください。
+- `contextMenu.mode` には `"standard"`, `"disabled"`, `"custom"` を指定出来ます。
+  `"standard"` はCEF標準のコピー/ペーストなどのメニューを表示し、登録済みのMuonカスタム項目を追加します。
+  `"disabled"` は標準項目とカスタム項目の両方を含めてネイティブコンテキストメニューを表示しません。
+  `"custom"` はCEF標準項目を消し、登録済みのMuonカスタム項目だけを表示します。
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
 - 起動時のタイトルバーアイコンは、配布ビルド時に `iconPath` から生成されます。
@@ -1173,7 +1178,8 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 
 - `allow` はホワイトリストです。
   空配列を指定すると、ローカルアセットを含むすべてのネットワークアクセスが許可されなくなります。
-  `data:` プロトコルのURLも例外ではないため、インラインデータURLを読み込む場合は `data:**` などを明示的に追加してください。
+  `data:` プロトコルのURLも例外ではないため、インラインデータURLを読み込む場合は、 `data:image/**` のようにMIMEタイプを絞ってください。
+  `data:**` は `data:text/html,...` も含むため、信頼できない入力から生成されたHTMLが読み込まれると、任意のHTMLやJavaScriptの実行、UI偽装、許可済みネットワークへのアクセスにつながる可能性があります。
   URLパターンでは `*` と `**` を使用出来ます。
   `*` は `:`, `/`, `?`, `#` の区切りを越えず、 `**` は以降のすべての文字にマッチします。
   パターンの大文字小文字は区別されます。
@@ -1464,6 +1470,13 @@ import { spawn } from "muon:executor";
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
 | `getWindowBounds()`   | なし                | `Promise<MuonWindowBounds>` | 現在のトップレベルウインドウ領域を取得します。             |
 | `setWindowBounds(bounds)` | `bounds: MuonWindowBounds` | `Promise<void>` | 現在のトップレベルウインドウ領域の変更を要求します。     |
+| `setContextMenuItems(items, handler?)` | `items: MuonBrowserContextMenuItem[]`, `handler?: (command) => void` | `Promise<void>` | ネイティブコンテキストメニューへ追加するカスタム項目を登録します。 |
+| `clearContextMenuItems()` | なし | `Promise<void>` | 登録済みカスタムコンテキストメニュー項目を解除します。 |
+| `createTray(options, handler?)` | `options: MuonBrowserTrayOptions`, `handler?: (event) => void` | `Promise<string>` | ブラウザ所有のシステムトレイ項目を作成します。 |
+| `setTrayMenu(id, items, handler?)` | `id: string`, `items: MuonBrowserTrayMenuItem[]`, `handler?: (event) => void` | `Promise<void>` | システムトレイ項目のメニューとイベントハンドラを置き換えます。 |
+| `setTrayIcon(id, iconPath)` | `id: string`, `iconPath: string` | `Promise<void>` | システムトレイ項目のPNGアイコンを置き換えます。 |
+| `setTrayTooltip(id, tooltip)` | `id: string`, `tooltip: string \| null` | `Promise<void>` | システムトレイ項目のツールチップを設定または解除します。 |
+| `removeTray(id)` | `id: string` | `Promise<void>` | システムトレイ項目を削除します。 |
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
@@ -1478,6 +1491,18 @@ import { spawn } from "muon:executor";
   `setWindowBounds()` では `x`, `y`, `width`, `height` に32bit符号付き整数範囲のsafe integerを指定し、`width` と `height` は1以上である必要があります。
   Waylandではトップレベルウインドウの配置がcompositorに管理されるため、位置やサイズの要求が無視または調整されることがあります。
   厳密な位置制御が必要な場合はX11バックエンド（例: `--ozone-platform=x11`）を使用して下さい。
+- `setContextMenuItems()` はブラウザウインドウ単位で1つの登録を保持し、再度呼び出すと置き換えます。
+  main frame navigation、ブラウザ終了、`clearContextMenuItems()` で登録は解除されます。
+  通常項目は `id`, `label`, `enabled`, `placement`, `when` を指定でき、セパレータは `type: "separator"` を指定します。
+  `placement` は `"start"`, `"afterEdit"`, `"end"` のいずれかで、省略時は `"end"` です。
+  `when` には `editable`, `selection`, `link`, `image`, `canCopy`, `canPaste` のboolean条件を指定出来ます。
+  `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
+- `createTray()` はブラウザウインドウ単位でトレイ項目を保持し、main frame navigation、ブラウザ終了、`removeTray()` で削除されます。
+  `options.id` を省略するとMuonが一意なIDを生成して返します。
+  `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
+  メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応し、サブメニューはv1では未対応です。
+  LinuxではStatusNotifierItem対応のデスクトップ環境・パネルで表示されます。AppIndicator/libayatana-appindicatorやGtkStatusIconによるfallbackは将来候補です。
+  トレイ項目だけでMuonプロセスを生存させるclose-to-tray動作は自動提供しません。常駐型アプリでは `initialWindowState: "hidden"` でブラウザを生かしたまま、必要に応じて `show()` / `hide()` を呼び出して下さい。
 - `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
@@ -1495,6 +1520,42 @@ await window.muon.browser.setWindowBounds({
   width: 960,
   height: 640,
 });
+await window.muon.browser.setContextMenuItems(
+  [
+    {
+      id: "app.searchSelection",
+      label: "Search Selection",
+      placement: "afterEdit",
+      when: { selection: true },
+    },
+    { type: "separator", placement: "end" },
+  ],
+  (command) => {
+    console.log(command.id, command.selectionText);
+  },
+);
+const trayId = await window.muon.browser.createTray(
+  {
+    id: "main",
+    icon: "icons/app.png",
+    tooltip: "Ready",
+    menu: [
+      { id: "open", label: "Open" },
+      { type: "separator" },
+      { id: "quit", label: "Quit" },
+    ],
+  },
+  async (event) => {
+    if (event.type === "activate" || event.id === "open") {
+      await window.muon.browser.show();
+      return;
+    }
+    if (event.type === "menu" && event.id === "quit") {
+      await window.muon.browser.shutdown(0);
+    }
+  },
+);
+await window.muon.browser.setTrayTooltip(trayId, "Running");
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);
@@ -1809,6 +1870,27 @@ npm run pack
 このパッケージスクリプトは `./build_package.sh` に委譲します。パッケージ生成オプションを直接渡したい場合は、`./build_package.sh` を直接実行することも出来ます。
 
 - サポートされているすべてのアーキテクチャ向けにネイティブコードをビルドおよびテストするため、非常に長い時間がかかります（30分以上かかる可能性があります）。
+
+---
+
+## 制約
+
+### WaylandとVulkan
+
+現在のCEFは、Linux+Wayland環境において、Vulkanとの併用を完全にサポートしていません。多くの場合、この組み合わせは問題を引き起こすとの事なので、muonではLinux表示バックエンドがWaylandと判定された場合に、自動的にCEFのVulkan関連機能を無効化します。
+例えば、 `XDG_SESSION_TYPE=wayland` や `WAYLAND_DISPLAY` 、または `--ozone-platform=wayland` が検出された場合が対象です。
+一方で、 `--ozone-platform=x11` のようにX11バックエンドが明示されている場合は、この無効化を行いません。
+
+また、GL/ANGLEバックエンドが明示指定されていないWayland環境では、Vulkan経由のANGLEを避けるため、CEFがANGLEのOpenGLバックエンドを使用するように調整します。
+
+### virtual moduleインポートのフィルタ機能
+
+muonプラグインのvirtual moduleインポートのフィルタ機能は、サプライチェーン攻撃を完全に排除するものではないことに注意してください。
+これは、実行時にmuonコードへ要求を発生させる場合に、Viteが生成したランダムなcapability IDを使用して、関数呼び出しをフィルタします。
+このIDは推測されにくい値ですが、ロードされたbundleの動的解析や、同じページ上で実行されている悪意あるコードによってIDを特定された場合は、フィルタを突破される可能性があります。
+
+一方で、ページURLのフィルタ（`validate`モードでは自動構成・`simple`モードでは手動構成）は、muonオブジェクトそのものをJavaScriptから参照できなくするため、強固に作用します。
+したがって、不要なプラグイン関数を露出させないように常に注意してください。
 
 ## ライセンス
 

@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { build as viteBuild } from "vite";
 
 import {
@@ -1448,6 +1448,14 @@ describe("muon build", () => {
       targets: readonly { outputPath: string; target: string }[];
     };
 
+    expect(result.stderr).toContain("Running Vite build");
+    expect(result.stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Creating assets.zip");
+    expect(result.stderr).toContain("Embedding config");
+    expect(result.stderr).toContain("Writing Linux desktop files");
+    expect(result.stderr).toContain(
+      `Built ${join(root, "release", "dist-muon/linux-amd64")}`,
+    );
     expect(parsed.appName).toBe("plugin-app");
     expect(parsed.appId).toBe("com.example.plugin-app");
     expect(
@@ -1576,25 +1584,43 @@ describe("muon build", () => {
       `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
     );
 
-    await viteBuild({
-      root,
-      logLevel: "silent",
-      build: {
-        outDir: "web-dist",
-      },
-      plugins: [
-        muon({
-          build: {
-            packageDirectory,
-            targets: ["linux-amd64"],
-            iconPath: "icons/vite.png",
-            assetSalt: Buffer.from([0xca, 0xfe]),
-          },
-        }),
-      ],
-    });
+    const chunks: string[] = [];
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"),
+      );
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      await viteBuild({
+        root,
+        logLevel: "silent",
+        build: {
+          outDir: "web-dist",
+        },
+        plugins: [
+          muon({
+            build: {
+              packageDirectory,
+              targets: ["linux-amd64"],
+              iconPath: "icons/vite.png",
+              assetSalt: Buffer.from([0xca, 0xfe]),
+            },
+          }),
+        ],
+      });
+    } finally {
+      write.mockRestore();
+    }
 
     const outputPath = join(root, "dist-muon/linux-amd64");
+    const stderr = chunks.join("");
+    expect(stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(stderr).toContain("Creating assets.zip");
+    expect(stderr).toContain("Writing Linux desktop files");
+    expect(stderr).toContain(`Built ${outputPath}`);
     const entries = await readZipEntries(join(outputPath, "assets.zip"));
     expect(entries.has("main/index.html")).toBe(true);
     expect(
@@ -1643,6 +1669,51 @@ describe("muon build", () => {
       plugin: {
         mode: "simple",
       },
+    });
+  });
+
+  it("adds a generated browser start page only when the config omits one", async () => {
+    const generatedStartPage = "asset://main/base-path/index.html";
+    const generatedProject = await createWindowsIconBuildProject(
+      "muon-build-generated-start-page-",
+      "generated-start-page-sample",
+    );
+    const generatedResult = await buildMuonApp({
+      root: generatedProject.root,
+      packageDirectory: generatedProject.packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from("4567", "hex"),
+      browserStartPage: generatedStartPage,
+    });
+
+    expect(generatedResult.targets[0]?.embeddedConfig.browser).toEqual({
+      initialTitleBarIcon: appIconAssetUrl,
+      startPage: generatedStartPage,
+    });
+
+    const configuredProject = await createWindowsIconBuildProject(
+      "muon-build-configured-start-page-",
+      "configured-start-page-sample",
+    );
+    await writeFile(
+      join(configuredProject.root, "muon.json"),
+      `${JSON.stringify(
+        { browser: { startPage: "asset://custom/index.html" } },
+        null,
+        2,
+      )}\n`,
+    );
+    const configuredResult = await buildMuonApp({
+      root: configuredProject.root,
+      packageDirectory: configuredProject.packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from("4568", "hex"),
+      browserStartPage: generatedStartPage,
+    });
+
+    expect(configuredResult.targets[0]?.embeddedConfig.browser).toEqual({
+      startPage: "asset://custom/index.html",
+      initialTitleBarIcon: appIconAssetUrl,
     });
   });
 

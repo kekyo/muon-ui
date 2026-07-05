@@ -2051,28 +2051,34 @@ void SetRegisteredMuonTitleBarVisibility(CefRefPtr<CefWindow> window,
   ApplyMuonDraggableRegions(window.get());
 }
 
-void SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
+bool SetRegisteredMuonTitleBarVisibilityForBrowser(int browser_id,
                                                    bool visible) {
   const auto controller =
       g_muon_title_bar_controllers_by_browser_id.find(browser_id);
   if (controller != g_muon_title_bar_controllers_by_browser_id.end() &&
       controller->second != nullptr) {
     controller->second->SetVisible(visible);
-    return;
+    const auto view = g_muon_title_bar_views_by_browser_id.find(browser_id);
+    if (view != g_muon_title_bar_views_by_browser_id.end() && view->second) {
+      SetMuonX11TitleBarVisibility(view->second->GetWindow(), false);
+    }
+    return true;
   }
   const auto view = g_muon_title_bar_views_by_browser_id.find(browser_id);
   if (view == g_muon_title_bar_views_by_browser_id.end() || !view->second) {
-    return;
+    return false;
   }
   view->second->SetVisible(visible);
   view->second->InvalidateLayout();
   const auto window = view->second->GetWindow();
   if (!window) {
-    return;
+    return true;
   }
+  SetMuonX11TitleBarVisibility(window, false);
   window->InvalidateLayout();
   window->Layout();
   ApplyMuonDraggableRegions(window.get());
+  return true;
 }
 
 void SetRegisteredMuonPageDraggableRegions(

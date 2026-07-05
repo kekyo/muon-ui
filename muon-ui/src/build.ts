@@ -52,6 +52,7 @@ import {
 } from "./linux-desktop.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "./app-icon.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
+import type { MuonProgressCallback } from "./progress.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -77,6 +78,10 @@ type BuildConfig = {
   config: JsonObject;
   directory: string;
 };
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  progress?: MuonProgressCallback;
+}
 
 type ZipEntry = {
   name: string;
@@ -139,6 +144,10 @@ export interface MuonBuildOptions {
    */
   assetPrefix?: string;
   /**
+   * Default browser start page embedded when muon config omits one.
+   */
+  browserStartPage?: string;
+  /**
    * Muon config path to embed.
    */
   configPath?: string;
@@ -176,6 +185,12 @@ export interface MuonBuildOptions {
    * @internal
    */
   runtimePluginConfig?: MuonRuntimePluginConfig;
+  /**
+   * Include a privileged Linux runtime helper in generated distributions.
+   *
+   * @internal
+   */
+  includeRuntimeHelper?: boolean;
 }
 
 /**
@@ -220,6 +235,10 @@ export interface MuonBuildTargetResult {
    * Absolute path of the app launcher copied from muon-bootstrap.
    */
   launcherPath: string;
+  /**
+   * Absolute path of the privileged runtime helper when included.
+   */
+  runtimeHelperPath?: string;
   /**
    * Generated asset archive metadata.
    */
@@ -286,6 +305,7 @@ export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
 export const buildMuonApp = async (
   options: MuonBuildOptions = {},
 ): Promise<MuonBuildResult> => {
+  const progress = (options as InternalMuonBuildOptions).progress;
   const root = resolve(options.root ?? process.cwd());
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
   const targets = resolveBuildTargets(options);
@@ -346,7 +366,12 @@ export const buildMuonApp = async (
 
   const results: MuonBuildTargetResult[] = [];
 
-  for (const target of targets) {
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index] as MuonBuildTarget;
+    progress?.({
+      phase: "build",
+      status: `Building Muon target ${target} (${index + 1}/${targets.length})`,
+    });
     const result = await buildMuonTarget({
       packageDirectory,
       root,
@@ -359,8 +384,15 @@ export const buildMuonApp = async (
       windowsResource,
       linuxDesktop,
       salt,
+      browserStartPage: options.browserStartPage,
+      includeRuntimeHelper: options.includeRuntimeHelper === true,
+      progress,
     });
     results.push(result);
+    progress?.({
+      phase: "build",
+      status: `Built ${result.outputPath}`,
+    });
   }
 
   return {
@@ -640,6 +672,9 @@ const buildMuonTarget = async (input: {
   windowsResource: ResolvedMuonWindowsResource;
   linuxDesktop: ResolvedMuonLinuxDesktop;
   salt: Buffer;
+  browserStartPage: string | undefined;
+  includeRuntimeHelper: boolean;
+  progress: MuonProgressCallback | undefined;
 }): Promise<MuonBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
   const sourceRuntimePath = join(
@@ -653,6 +688,16 @@ const buildMuonTarget = async (input: {
     input.target,
     descriptor.bootstrapExecutableName,
   );
+  const sourceRuntimeHelperPath =
+    input.includeRuntimeHelper &&
+    descriptor.runtimeHelperExecutableName !== undefined
+      ? join(
+          input.packageDirectory,
+          "native",
+          input.target,
+          descriptor.runtimeHelperExecutableName,
+        )
+      : undefined;
   const outputPath = join(
     input.outputRoot,
     descriptor.distributionDirectoryName,
@@ -661,6 +706,11 @@ const buildMuonTarget = async (input: {
     outputPath,
     getLauncherFileName(input.appName, descriptor),
   );
+  const runtimeHelperPath =
+    sourceRuntimeHelperPath === undefined ||
+    descriptor.runtimeHelperExecutableName === undefined
+      ? undefined
+      : join(outputPath, descriptor.runtimeHelperExecutableName);
   const assetZipPath = join(outputPath, "assets.zip");
   const runtimeAppId = getMuonTargetRuntimeAppId(input.appId, input.target);
   const appIconPath =
@@ -671,6 +721,7 @@ const buildMuonTarget = async (input: {
   await verifyTargetInputs({
     sourceRuntimePath,
     sourceBootstrapPath,
+    sourceRuntimeHelperPath,
     descriptor,
     target: input.target,
   });
@@ -684,7 +735,18 @@ const buildMuonTarget = async (input: {
   );
   await copyFile(sourceBootstrapPath, launcherPath);
   await chmod(launcherPath, executableMode);
+  if (
+    sourceRuntimeHelperPath !== undefined &&
+    runtimeHelperPath !== undefined
+  ) {
+    await copyFile(sourceRuntimeHelperPath, runtimeHelperPath);
+    await chmod(runtimeHelperPath, executableMode);
+  }
 
+  input.progress?.({
+    phase: "build",
+    status: "Creating assets.zip",
+  });
   const asset = await writeAssetArchive(
     input.assetInput,
     assetZipPath,
@@ -697,8 +759,13 @@ const buildMuonTarget = async (input: {
     runtimeAppId,
     input.linuxDesktop.desktopId,
     appIconAssetUrl,
+    input.browserStartPage,
   );
 
+  input.progress?.({
+    phase: "build",
+    status: "Embedding config",
+  });
   await withTemporaryConfig(embeddedConfig, async (configPath) => {
     await embedMuonConfigInRuntime({
       runtimePath: outputPath,
@@ -710,9 +777,20 @@ const buildMuonTarget = async (input: {
       configPath,
       outputPath: undefined,
     });
+    if (runtimeHelperPath !== undefined) {
+      await embedMuonConfigInBootstrapFile({
+        bootstrapPath: runtimeHelperPath,
+        configPath,
+        outputPath: undefined,
+      });
+    }
   });
 
   if (descriptor.os === "windows") {
+    input.progress?.({
+      phase: "build",
+      status: "Updating Windows resources",
+    });
     await updateWindowsPeIconResource({
       executablePath: join(outputPath, descriptor.runtimeExecutableName),
       resource: input.windowsResource,
@@ -726,6 +804,10 @@ const buildMuonTarget = async (input: {
       cwd: input.root,
     });
   } else if (descriptor.os === "linux") {
+    input.progress?.({
+      phase: "build",
+      status: "Writing Linux desktop files",
+    });
     await writeLinuxDesktopDistributionFiles(outputPath, input.linuxDesktop);
   }
 
@@ -734,6 +816,7 @@ const buildMuonTarget = async (input: {
     distributionDirectoryName: descriptor.distributionDirectoryName,
     outputPath,
     launcherPath,
+    ...(runtimeHelperPath === undefined ? {} : { runtimeHelperPath }),
     asset,
     runtimeAppId,
     embeddedConfig,
@@ -744,6 +827,7 @@ const buildMuonTarget = async (input: {
 const verifyTargetInputs = async (input: {
   sourceRuntimePath: string;
   sourceBootstrapPath: string;
+  sourceRuntimeHelperPath: string | undefined;
   descriptor: MuonTargetDescriptor;
   target: MuonBuildTarget;
 }): Promise<void> => {
@@ -755,6 +839,12 @@ const verifyTargetInputs = async (input: {
     input.sourceBootstrapPath,
     `Muon bootstrap for ${input.target}`,
   );
+  if (input.sourceRuntimeHelperPath !== undefined) {
+    await assertFile(
+      input.sourceRuntimeHelperPath,
+      `Muon runtime helper for ${input.target}`,
+    );
+  }
   for (const fileName of input.descriptor.runtimeFiles) {
     await assertFile(
       join(input.sourceRuntimePath, fileName),
@@ -974,6 +1064,7 @@ const createEmbeddedConfig = (
   appId: string,
   desktopId: string,
   initialTitleBarIcon: string,
+  browserStartPage: string | undefined,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -994,12 +1085,17 @@ const createEmbeddedConfig = (
     throw new Error("muon.json browser must be an object when present.");
   }
 
+  const browserConfig: JsonObject = {
+    ...(sourceBrowser ?? {}),
+    initialTitleBarIcon,
+  };
+  if (browserStartPage !== undefined && browserConfig.startPage === undefined) {
+    browserConfig.startPage = browserStartPage;
+  }
+
   return {
     ...runtimeConfig,
-    browser: {
-      ...(sourceBrowser ?? {}),
-      initialTitleBarIcon,
-    },
+    browser: browserConfig,
     asset: {
       ...(sourceAsset ?? {}),
       sourcePath: appConfigSourcePath,

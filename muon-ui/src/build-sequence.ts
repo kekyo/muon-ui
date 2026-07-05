@@ -17,8 +17,10 @@ import {
   getMuonVitePluginOptions,
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
+import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
 import { mergeMuonLinuxDesktopOptions } from "./linux-desktop.js";
+import type { MuonProgressCallback } from "./progress.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
@@ -35,6 +37,8 @@ export interface MuonBuildSequenceProject {
   root: string;
   /** Root passed to Vite when the sequence must run `vite build`. */
   viteBuildRoot: string;
+  /** Vite base URL used by the resolved Vite build. */
+  viteBase: string | undefined;
   /** Absolute Vite output directory used as Muon app assets. */
   viteOutputDirectory: string | undefined;
   /** Muon Vite plugin options if the project config contains the plugin. */
@@ -47,6 +51,14 @@ export interface MuonBuildSequenceProject {
 export interface MuonBuildSequenceOptions extends MuonBuildOptions {
   /** Target default used only when no Muon Vite plugin defines build options. */
   defaultAllTargets?: boolean;
+}
+
+interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  progress?: MuonProgressCallback;
 }
 
 const isMissingVitePackageError = (error: unknown): boolean => {
@@ -100,6 +112,7 @@ export const loadMuonBuildSequenceProject = async (
       return {
         root: resolvedCwd,
         viteBuildRoot: resolvedCwd,
+        viteBase: undefined,
         viteOutputDirectory: undefined,
         pluginOptions: undefined,
       };
@@ -118,6 +131,7 @@ export const loadMuonBuildSequenceProject = async (
     return {
       root: resolvedCwd,
       viteBuildRoot: resolvedCwd,
+      viteBase: undefined,
       viteOutputDirectory: undefined,
       pluginOptions: undefined,
     };
@@ -126,6 +140,7 @@ export const loadMuonBuildSequenceProject = async (
   return {
     root: resolvedConfig.root,
     viteBuildRoot: resolvedCwd,
+    viteBase: resolvedConfig.base,
     viteOutputDirectory: resolveViteOutputDirectory(resolvedConfig),
     pluginOptions,
   };
@@ -226,6 +241,9 @@ const copyDefinedBuildOptions = (
   if (input.assetSalt !== undefined) {
     output.assetSalt = input.assetSalt;
   }
+  if (input.includeRuntimeHelper !== undefined) {
+    output.includeRuntimeHelper = input.includeRuntimeHelper;
+  }
 };
 
 /**
@@ -235,6 +253,7 @@ export const runMuonBuildSequence = async (
   options: MuonBuildSequenceOptions = {},
   loadedProject?: MuonBuildSequenceProject,
 ): Promise<MuonBuildResult> => {
+  const progress = (options as InternalMuonBuildSequenceOptions).progress;
   const project =
     loadedProject ??
     (await loadMuonBuildSequenceProject(options.root ?? process.cwd()));
@@ -249,8 +268,18 @@ export const runMuonBuildSequence = async (
       throw new Error("Vite output directory could not be resolved.");
     }
     Object.assign(buildOptions, pluginBuildOptions);
+    const packagedAssetOptions = createVitePackagedAssetOptions(
+      project.viteBase ?? "/",
+    );
     buildOptions.assetSourcePath = project.viteOutputDirectory;
-    buildOptions.assetPrefix = "main";
+    buildOptions.assetPrefix = packagedAssetOptions.assetPrefix;
+    if (packagedAssetOptions.browserStartPage !== undefined) {
+      buildOptions.browserStartPage = packagedAssetOptions.browserStartPage;
+    }
+    progress?.({
+      phase: "build",
+      status: "Running Vite build",
+    });
     await runViteBuild(project.viteBuildRoot);
   } else if (
     options.defaultAllTargets !== undefined &&
@@ -261,5 +290,8 @@ export const runMuonBuildSequence = async (
   }
 
   copyDefinedBuildOptions(buildOptions, options, usesViteAssets);
+  if (progress !== undefined) {
+    (buildOptions as InternalMuonBuildOptions).progress = progress;
+  }
   return await buildMuonApp(buildOptions);
 };

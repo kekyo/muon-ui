@@ -192,18 +192,36 @@ static void AppendCommaSeparatedSwitchValues(
   command_line->AppendSwitchWithValue(switch_name, cef_value);
 }
 
+static void AppendSwitchWithAsciiValue(CefRefPtr<CefCommandLine> command_line,
+                                       const char* switch_name,
+                                       const char* value) {
+  CefString cef_value;
+  cef_value.FromString(value);
+  command_line->AppendSwitchWithValue(switch_name, cef_value);
+}
+
 static void ConfigureMuonCefLinuxDisplayCommandLine(
     CefRefPtr<CefCommandLine> command_line) {
 #if defined(OS_LINUX)
+  const auto startup_command_line = GetMuonStartupCommandLine();
+  const auto* xdg_session_type = std::getenv("XDG_SESSION_TYPE");
+  const auto* wayland_display = std::getenv("WAYLAND_DISPLAY");
+  const auto* display = std::getenv("DISPLAY");
   if (!ShouldDisableMuonCefVulkanForLinuxDisplayBackend(
-          GetMuonStartupCommandLine(), std::getenv("XDG_SESSION_TYPE"),
-          std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"))) {
+          startup_command_line, xdg_session_type, wayland_display, display)) {
     return;
   }
   command_line->AppendSwitch("disable-vulkan-surface");
   AppendCommaSeparatedSwitchValues(
       command_line, "disable-features",
       {"Vulkan", "VulkanFromANGLE", "DefaultANGLEVulkan"});
+  if (ShouldUseMuonCefAngleOpenGlForLinuxDisplayBackend(
+          startup_command_line, xdg_session_type, wayland_display, display) &&
+      !command_line->HasSwitch("use-gl") &&
+      !command_line->HasSwitch("use-angle")) {
+    AppendSwitchWithAsciiValue(command_line, "use-gl", "angle");
+    AppendSwitchWithAsciiValue(command_line, "use-angle", "gl");
+  }
 #else
   (void)command_line;
 #endif

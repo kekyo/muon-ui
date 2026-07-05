@@ -217,6 +217,18 @@ enum MuonBrowserTitleBarMode : uint32_t {
 };
 
 /**
+ * Native browser context menu mode from muon.json.
+ */
+enum MuonBrowserContextMenuMode : uint32_t {
+  /** Show CEF standard context menu items and Muon custom items. */
+  kMuonBrowserContextMenuModeStandard = 0,
+  /** Suppress all native context menu items. */
+  kMuonBrowserContextMenuModeDisabled = 1,
+  /** Show only Muon custom context menu items. */
+  kMuonBrowserContextMenuModeCustom = 2,
+};
+
+/**
  * Browser background color configuration from muon.json.
  */
 struct MuonBrowserBackgroundColorConfig {
@@ -268,6 +280,11 @@ struct MuonBrowserConfig {
    * Title bar implementation used for normal browser windows.
    */
   MuonBrowserTitleBarMode title_bar = kMuonBrowserTitleBarMuon;
+  /**
+   * Native context menu behavior for browser pages.
+   */
+  MuonBrowserContextMenuMode context_menu_mode =
+      kMuonBrowserContextMenuModeStandard;
   /**
    * Whether the custom title bar is initially visible.
    */

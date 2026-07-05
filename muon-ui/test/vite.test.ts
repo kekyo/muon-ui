@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
+import AdmZip from "adm-zip";
 import { delay } from "async-primitives";
 import {
   afterAll,
@@ -43,6 +44,11 @@ import {
   getMuonExecutablePath,
   resolveMuonRuntimePath,
 } from "../src/vite-internals.js";
+import {
+  createMuonBootstrapEmbeddedConfigSlot,
+  createMuonEmbeddedConfigSlot,
+} from "../src/embed-config.js";
+import { createMuonCapabilityModuleResolver } from "../src/capability.js";
 import muon, { type MuonVitePluginAccessOptions } from "../src/vite.js";
 import {
   buildTestMuonBuilder,
@@ -262,6 +268,43 @@ const writeFakeCefDirectory = async (): Promise<string> => {
   return cefDirectory;
 };
 
+const writeFakePackagedExecutable = async (
+  path: string,
+  slot: Buffer,
+  prefix: string,
+): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(
+    path,
+    Buffer.concat([
+      Buffer.from(`${prefix} prefix\n`),
+      slot,
+      Buffer.from(`\n${prefix} suffix\n`),
+    ]),
+  );
+  await chmod(path, 0o755);
+};
+
+const createFakePackageDirectory = async (root: string): Promise<string> => {
+  const packageDirectory = join(root, "package-dist");
+  const runtimeDirectory = join(packageDirectory, "runtime", "linux-amd64");
+  const nativeDirectory = join(packageDirectory, "native", "linux-amd64");
+  await writeFakePackagedExecutable(
+    join(runtimeDirectory, "muon-core"),
+    createMuonEmbeddedConfigSlot(),
+    "core",
+  );
+  await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "ui\n");
+  await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
+  await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
+  await writeFakePackagedExecutable(
+    join(nativeDirectory, "muon-bootstrap"),
+    createMuonBootstrapEmbeddedConfigSlot(),
+    "bootstrap",
+  );
+  return packageDirectory;
+};
+
 const writeFakeMuonSource = async (
   muonDirectory: string,
   outputDirectory: string,
@@ -418,6 +461,15 @@ const readCapturedArguments = async (
 
 const pathEndsWith = (value: string, suffix: string): boolean =>
   value.replaceAll("\\", "/").endsWith(suffix);
+
+const readZipEntries = async (
+  archivePath: string,
+): Promise<Map<string, Buffer>> => {
+  const zip = new AdmZip(await readFile(archivePath));
+  return new Map(
+    zip.getEntries().map((entry) => [entry.entryName, entry.getData()]),
+  );
+};
 
 afterEach(async () => {
   for (const server of servers.splice(0)) {
@@ -666,6 +718,59 @@ describe("muon Vite plugin", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("packages Vite base-path output under the matching asset URL root", async () => {
+    const root = await createTemporaryDirectory("muon-vite-base-pack-");
+    const packageDirectory = await createFakePackageDirectory(root);
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "base-path-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<div id="app"></div><script type="module" src="/src/main.ts"></script>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      'document.querySelector("#app")?.append("ready");\n',
+    );
+
+    await viteBuild({
+      root,
+      base: "/maplibre-gl-layers/",
+      logLevel: "silent",
+      plugins: [
+        muon({
+          open: false,
+          build: {
+            targets: ["linux-amd64"],
+            packageDirectory,
+            assetSalt: Buffer.from("1234", "hex"),
+          },
+        }),
+      ],
+    });
+
+    const outputPath = join(root, "dist-muon", "linux-amd64");
+    const entries = await readZipEntries(join(outputPath, "assets.zip"));
+    const indexHtml = entries
+      .get("main/maplibre-gl-layers/index.html")
+      ?.toString("utf8");
+    const embeddedCore = await readFile(join(outputPath, "muon-core"));
+    expect(indexHtml).toContain("/maplibre-gl-layers/assets/");
+    expect(
+      [...entries.keys()].some((entry) =>
+        entry.startsWith("main/maplibre-gl-layers/assets/"),
+      ),
+    ).toBe(true);
+    expect(entries.has("main/index.html")).toBe(false);
+    expect(
+      embeddedCore.includes(
+        Buffer.from("asset://main/maplibre-gl-layers/index.html"),
+      ),
+    ).toBe(true);
+  });
+
   it("resolves validate-mode executor virtual modules from muon.json plugin imports", async () => {
     const root = await createTemporaryDirectory("muon-vite-config-capability-");
     await mkdir(join(root, "src", "native"), { recursive: true });
@@ -879,6 +984,118 @@ describe("muon Vite plugin", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("generates opaque capability ids shared by runtime config and virtual modules", async () => {
+    const root = await createTemporaryDirectory("muon-vite-capability-id-");
+    await mkdir(join(root, "src", "native"), { recursive: true });
+    await mkdir(join(root, "src", "browser"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["muon.executor.spawn"],
+          pluginName: "internal",
+        },
+        {
+          sources: ["src/browser/**"],
+          allow: ["muon.browser.reload"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const runtimeConfig = resolver.getRuntimePluginConfig();
+    expect(runtimeConfig.capabilities.map((entry) => entry.allow)).toEqual([
+      ["muon.executor.spawn"],
+      ["muon.browser.reload"],
+    ]);
+    const capabilityIds = runtimeConfig.capabilities.map((entry) => entry.id);
+    expect(capabilityIds).toHaveLength(new Set(capabilityIds).size);
+    for (const capabilityId of capabilityIds) {
+      expect(capabilityId).toMatch(/^cap-[0-9a-f]{32}$/u);
+    }
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "native", "executor.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain(
+      `__muonCall(${JSON.stringify(capabilityIds[0])}, "muon.executor.spawn"`,
+    );
+  });
+
+  it("generates browser context menu virtual module wrappers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-browser-menu-");
+    await mkdir(join(root, "src", "browser"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/browser/**"],
+          allow: [
+            "muon.browser.setContextMenuItems",
+            "muon.browser.clearContextMenuItems",
+          ],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:browser",
+      join(root, "src", "browser", "menu.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain("export const setContextMenuItems = ");
+    expect(moduleSource).toContain("export const clearContextMenuItems = ");
+    expect(moduleSource).toContain("__muonBrowserContextMenuHandler");
+    expect(moduleSource).toContain("muon.browser.setContextMenuItems");
+    expect(moduleSource).toContain("muon.browser.clearContextMenuItems");
+  });
+
+  it("generates browser tray virtual module wrappers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-browser-tray-");
+    await mkdir(join(root, "src", "browser"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/browser/**"],
+          allow: [
+            "muon.browser.createTray",
+            "muon.browser.setTrayMenu",
+            "muon.browser.setTrayIcon",
+            "muon.browser.setTrayTooltip",
+            "muon.browser.removeTray",
+          ],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:browser",
+      join(root, "src", "browser", "tray.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain("export const createTray = ");
+    expect(moduleSource).toContain("export const setTrayMenu = ");
+    expect(moduleSource).toContain("export const setTrayIcon = ");
+    expect(moduleSource).toContain("export const setTrayTooltip = ");
+    expect(moduleSource).toContain("export const removeTray = ");
+    expect(moduleSource).toContain("__muonBrowserTrayHandlers");
+    expect(moduleSource).toContain("muon-browser-tray-event");
+    expect(moduleSource).toContain("muon.browser.createTray");
+    expect(moduleSource).toContain("muon.browser.setTrayMenu");
   });
 
   it("preserves plugin signature in generated plugin runtime config", async () => {

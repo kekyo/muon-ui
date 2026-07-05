@@ -1022,6 +1022,7 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
 | `titleBarType`                        | `string`                                  | `"muon"`                  | 通常ブラウザウインドウのタイトルバー実装です。                                           |
+| `contextMenu`                         | `object`                                  | `{"mode":"standard"}`     | ページ領域のネイティブコンテキストメニュー設定です。                                     |
 | `initialTitleBarVisibility`           | `boolean`                                 | `true`                    | Muonカスタムタイトルバーを起動時に表示するかどうかです。                                 |
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
@@ -1038,6 +1039,10 @@ Viteの開発起動では、設定ファイルが存在しない場合や不正�
   Waylandなどネイティブ装飾を使用できないと判断した場合は警告ログを出力し、`"muon"`相当へフォールバックします。
   `"muon"` タイトルバーでは、ページ内の任意の要素へCSSで `-webkit-app-region: drag` を指定すると、その領域をドラッグしてウインドウを移動出来ます。
   リンク、ボタン、入力欄など通常のページ操作を受け取る要素には `-webkit-app-region: no-drag` を指定してください。
+- `contextMenu.mode` には `"standard"`, `"disabled"`, `"custom"` を指定出来ます。
+  `"standard"` はCEF標準のコピー/ペーストなどのメニューを表示し、登録済みのMuonカスタム項目を追加します。
+  `"disabled"` は標準項目とカスタム項目の両方を含めてネイティブコンテキストメニューを表示しません。
+  `"custom"` はCEF標準項目を消し、登録済みのMuonカスタム項目だけを表示します。
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
 - 起動時のタイトルバーアイコンは、配布ビルド時に `iconPath` から生成されます。
@@ -1465,6 +1470,8 @@ import { spawn } from "muon:executor";
 | `restore()`           | なし                | `Promise<void>` | 最小化または最大化されたウインドウを通常状態に戻します。         |
 | `getWindowBounds()`   | なし                | `Promise<MuonWindowBounds>` | 現在のトップレベルウインドウ領域を取得します。             |
 | `setWindowBounds(bounds)` | `bounds: MuonWindowBounds` | `Promise<void>` | 現在のトップレベルウインドウ領域の変更を要求します。     |
+| `setContextMenuItems(items, handler?)` | `items: MuonBrowserContextMenuItem[]`, `handler?: (command) => void` | `Promise<void>` | ネイティブコンテキストメニューへ追加するカスタム項目を登録します。 |
+| `clearContextMenuItems()` | なし | `Promise<void>` | 登録済みカスタムコンテキストメニュー項目を解除します。 |
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
@@ -1479,6 +1486,12 @@ import { spawn } from "muon:executor";
   `setWindowBounds()` では `x`, `y`, `width`, `height` に32bit符号付き整数範囲のsafe integerを指定し、`width` と `height` は1以上である必要があります。
   Waylandではトップレベルウインドウの配置がcompositorに管理されるため、位置やサイズの要求が無視または調整されることがあります。
   厳密な位置制御が必要な場合はX11バックエンド（例: `--ozone-platform=x11`）を使用して下さい。
+- `setContextMenuItems()` はブラウザウインドウ単位で1つの登録を保持し、再度呼び出すと置き換えます。
+  main frame navigation、ブラウザ終了、`clearContextMenuItems()` で登録は解除されます。
+  通常項目は `id`, `label`, `enabled`, `placement`, `when` を指定でき、セパレータは `type: "separator"` を指定します。
+  `placement` は `"start"`, `"afterEdit"`, `"end"` のいずれかで、省略時は `"end"` です。
+  `when` には `editable`, `selection`, `link`, `image`, `canCopy`, `canPaste` のboolean条件を指定出来ます。
+  `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
 - `setTitleBarVisibility()` はMuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
@@ -1496,6 +1509,20 @@ await window.muon.browser.setWindowBounds({
   width: 960,
   height: 640,
 });
+await window.muon.browser.setContextMenuItems(
+  [
+    {
+      id: "app.searchSelection",
+      label: "Search Selection",
+      placement: "afterEdit",
+      when: { selection: true },
+    },
+    { type: "separator", placement: "end" },
+  ],
+  (command) => {
+    console.log(command.id, command.selectionText);
+  },
+);
 await window.muon.browser.setTitleBarVisibility(false);
 await window.muon.browser.setTitleBarIcon("icons/app.png");
 await window.muon.browser.shutdown(0);

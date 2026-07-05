@@ -71,6 +71,8 @@ const defaultPackageBuildDirectory = ".muon/pack";
 const systemRuntimeRoot = "/var/lib/muon/apps";
 const systemCefCacheRoot = "/var/cache/muon/cef";
 const runtimeHelperExecutableName = "muon-runtime-helper";
+// Keep both names for Debian t64 and pre-t64 GTK3 runtime packages.
+const debGtk3RuntimeDependency = "libgtk-3-0t64 | libgtk-3-0";
 
 type JsonObject = Record<string, unknown>;
 
@@ -747,6 +749,7 @@ const packageDeb = async (
       `Version: ${metadata.version}`,
       `Architecture: ${architecture}`,
       `Maintainer: ${metadata.author}`,
+      `Depends: ${debGtk3RuntimeDependency}`,
       `Description: ${metadata.description}`,
       "",
     ].join("\n"),

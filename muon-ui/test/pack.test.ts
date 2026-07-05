@@ -761,6 +761,19 @@ printf 'deb\\n' > "$output_path"
       "packed-sample-linux-amd64",
     );
     await expect(
+      readFile(join(packageRoot, "DEBIAN", "control"), "utf8"),
+    ).resolves.toBe(
+      [
+        "Package: packed-sample",
+        "Version: 1.2.3",
+        "Architecture: amd64",
+        "Maintainer: Muon Tester",
+        "Depends: libgtk-3-0t64 | libgtk-3-0",
+        "Description: Packed sample",
+        "",
+      ].join("\n"),
+    );
+    await expect(
       readFile(
         join(
           packageRoot,

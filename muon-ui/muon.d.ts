@@ -117,6 +117,114 @@ declare global {
     readonly height: number;
   }
 
+  /** Placement slot for Muon browser context menu items. */
+  type MuonBrowserContextMenuPlacement = "start" | "afterEdit" | "end";
+
+  /** Visibility conditions for a Muon browser context menu item. */
+  interface MuonBrowserContextMenuWhen {
+    /** Match editable targets when specified. */
+    readonly editable?: boolean;
+    /** Match text selection state when specified. */
+    readonly selection?: boolean;
+    /** Match link targets when specified. */
+    readonly link?: boolean;
+    /** Match image targets when specified. */
+    readonly image?: boolean;
+    /** Match copy availability when specified. */
+    readonly canCopy?: boolean;
+    /** Match paste availability when specified. */
+    readonly canPaste?: boolean;
+  }
+
+  /** Command item inserted into the Muon browser native context menu. */
+  interface MuonBrowserContextMenuCommandItem {
+    /**
+     * Item type. Omit for normal command items.
+     *
+     * @defaultValue `"item"`
+     */
+    readonly type?: "item";
+    /**
+     * Application command id.
+     *
+     * @remarks Must be non-empty, must not contain control characters, and
+     * must not start with `muon.` or `standard.`.
+     */
+    readonly id: string;
+    /** User-visible command label. */
+    readonly label: string;
+    /**
+     * Whether the command can be selected.
+     *
+     * @defaultValue `true`
+     */
+    readonly enabled?: boolean;
+    /**
+     * Placement slot relative to standard CEF menu groups.
+     *
+     * @defaultValue `"end"`
+     */
+    readonly placement?: MuonBrowserContextMenuPlacement;
+    /** Optional visibility conditions. */
+    readonly when?: MuonBrowserContextMenuWhen;
+  }
+
+  /** Separator inserted into the Muon browser native context menu. */
+  interface MuonBrowserContextMenuSeparatorItem {
+    /** Separator item type. */
+    readonly type: "separator";
+    /**
+     * Placement slot relative to standard CEF menu groups.
+     *
+     * @defaultValue `"end"`
+     */
+    readonly placement?: MuonBrowserContextMenuPlacement;
+    /** Optional visibility conditions. */
+    readonly when?: MuonBrowserContextMenuWhen;
+  }
+
+  /** Item inserted into the Muon browser native context menu. */
+  type MuonBrowserContextMenuItem =
+    | MuonBrowserContextMenuCommandItem
+    | MuonBrowserContextMenuSeparatorItem;
+
+  /** Context captured when a Muon browser context menu command is selected. */
+  interface MuonBrowserContextMenuCommand {
+    /** Application command id selected by the user. */
+    readonly id: string;
+    /** X coordinate in the page view where the menu was invoked. */
+    readonly x: number;
+    /** Y coordinate in the page view where the menu was invoked. */
+    readonly y: number;
+    /** Top-level page URL reported by CEF. */
+    readonly pageUrl: string;
+    /** Frame URL reported by CEF. */
+    readonly frameUrl: string;
+    /** Link URL at the invocation target, when present. */
+    readonly linkUrl: string;
+    /** Source URL for media at the invocation target, when present. */
+    readonly sourceUrl: string;
+    /** Selection text at the invocation target, when present. */
+    readonly selectionText: string;
+    /** Whether the target was editable. */
+    readonly editable: boolean;
+    /** Whether text was selected. */
+    readonly selection: boolean;
+    /** Whether the target was inside a link. */
+    readonly link: boolean;
+    /** Whether the target was an image. */
+    readonly image: boolean;
+    /** Whether copy was available. */
+    readonly canCopy: boolean;
+    /** Whether paste was available. */
+    readonly canPaste: boolean;
+  }
+
+  /** Receives Muon browser context menu command selections. */
+  type MuonBrowserContextMenuHandler = (
+    command: MuonBrowserContextMenuCommand,
+  ) => void;
+
   /** Browser and native window operations for the current Muon window. */
   interface MuonBrowserApi {
     /**
@@ -232,6 +340,26 @@ declare global {
      * Wayland compositors may ignore or adjust requested position and size.
      */
     readonly setWindowBounds: (bounds: MuonWindowBounds) => Promise<void>;
+    /**
+     * Replace the current browser window's custom native context menu items.
+     *
+     * @param items - Command and separator items to insert.
+     * @param handler - Optional callback for command selections.
+     * @returns A promise that resolves when the registration is stored.
+     * @remarks The registration is browser-scoped and is replaced by the next
+     * call. It is cleared on main-frame navigation, browser close, or
+     * `clearContextMenuItems()`.
+     */
+    readonly setContextMenuItems: (
+      items: readonly MuonBrowserContextMenuItem[],
+      handler?: MuonBrowserContextMenuHandler,
+    ) => Promise<void>;
+    /**
+     * Clear custom native context menu items for the current browser window.
+     *
+     * @returns A promise that resolves when the registration is cleared.
+     */
+    readonly clearContextMenuItems: () => Promise<void>;
     /**
      * Show or hide the current Muon custom title bar.
      *
@@ -1198,6 +1326,60 @@ declare global {
     /** Captured UTF-8 stderr text. */
     readonly stderr: string;
   }
+}
+
+declare module "muon:browser" {
+  /** Reload the current page. */
+  export const reload: () => Promise<void>;
+  /** Reload the current page while ignoring cached data. */
+  export const hardReload: () => Promise<void>;
+  /** Toggle fullscreen mode for the current browser window. */
+  export const toggleFullscreen: () => Promise<void>;
+  /** Enter fullscreen mode for the current browser window. */
+  export const enterFullscreen: () => Promise<void>;
+  /** Exit fullscreen mode for the current browser window. */
+  export const exitFullscreen: () => Promise<void>;
+  /** Increase the current page zoom level. */
+  export const zoomIn: () => Promise<void>;
+  /** Decrease the current page zoom level. */
+  export const zoomOut: () => Promise<void>;
+  /** Reset the current page zoom level. */
+  export const resetZoom: () => Promise<void>;
+  /** Show the current browser window. */
+  export const show: () => Promise<void>;
+  /** Hide the current browser window. */
+  export const hide: () => Promise<void>;
+  /** Focus and activate the current browser window. */
+  export const focus: () => Promise<void>;
+  /** Deactivate the current browser window. */
+  export const blur: () => Promise<void>;
+  /** Minimize the current browser window. */
+  export const minimize: () => Promise<void>;
+  /** Maximize the current browser window. */
+  export const maximize: () => Promise<void>;
+  /** Restore the current browser window from minimized or maximized state. */
+  export const restore: () => Promise<void>;
+  /** Return bounds for the current top-level Muon window. */
+  export const getWindowBounds: () => Promise<MuonWindowBounds>;
+  /** Request new bounds for the current top-level Muon window. */
+  export const setWindowBounds: (bounds: MuonWindowBounds) => Promise<void>;
+  /** Replace the current browser window's custom native context menu items. */
+  export const setContextMenuItems: (
+    items: readonly MuonBrowserContextMenuItem[],
+    handler?: MuonBrowserContextMenuHandler,
+  ) => Promise<void>;
+  /** Clear custom native context menu items for the current browser window. */
+  export const clearContextMenuItems: () => Promise<void>;
+  /** Show or hide the current Muon custom title bar. */
+  export const setTitleBarVisibility: (visible: boolean) => Promise<void>;
+  /** Set or clear the current window title bar icon. */
+  export const setTitleBarIcon: (path: string | null) => Promise<void>;
+  /** Close the current browser window. */
+  export const close: () => Promise<void>;
+  /** Shut down the Muon process. */
+  export const shutdown: (exitCode?: number) => Promise<void>;
+  /** Recycle the Muon process by requesting an automatic restart. */
+  export const recycle: () => Promise<void>;
 }
 
 declare module "muon:executor" {

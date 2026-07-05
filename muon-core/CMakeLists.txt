@@ -654,6 +654,7 @@ set(APP_SOURCES
   src/browser/muon_browser_view_delegate.cpp
   src/browser/muon_builtin_browser.cpp
   src/browser/muon_client.cpp
+  src/browser/muon_context_menu.cpp
   src/browser/muon_default_title_bar_icon.cpp
   src/browser/muon_native_wheel_forwarder.cpp
   src/browser/muon_title_bar.cpp
@@ -700,6 +701,7 @@ set(APP_HEADERS
   src/browser/muon_browser_view_delegate.h
   src/browser/muon_builtin_browser.h
   src/browser/muon_client.h
+  src/browser/muon_context_menu.h
   src/browser/muon_default_title_bar_icon.h
   src/browser/muon_native_wheel_forwarder.h
   src/browser/muon_title_bar.h
@@ -1374,8 +1376,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_app_scheme_storage_test)
   add_executable(muon_builtin_browser_test
     tests/muon_builtin_browser_test.cpp
+    src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
+    src/browser/muon_context_menu.cpp
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp

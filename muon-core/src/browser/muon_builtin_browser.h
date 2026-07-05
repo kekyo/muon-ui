@@ -35,6 +35,8 @@ enum class MuonBuiltinBrowserFunctionKind {
   SetTitleBarIcon,
   GetWindowBounds,
   SetWindowBounds,
+  SetContextMenuItems,
+  ClearContextMenuItems,
   Close,
   Shutdown,
   Recycle,

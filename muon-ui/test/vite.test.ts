@@ -1029,6 +1029,37 @@ describe("muon Vite plugin", () => {
     );
   });
 
+  it("generates browser context menu virtual module wrappers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-browser-menu-");
+    await mkdir(join(root, "src", "browser"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/browser/**"],
+          allow: [
+            "muon.browser.setContextMenuItems",
+            "muon.browser.clearContextMenuItems",
+          ],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:browser",
+      join(root, "src", "browser", "menu.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain("export const setContextMenuItems = ");
+    expect(moduleSource).toContain("export const clearContextMenuItems = ");
+    expect(moduleSource).toContain("__muonBrowserContextMenuHandler");
+    expect(moduleSource).toContain("muon.browser.setContextMenuItems");
+    expect(moduleSource).toContain("muon.browser.clearContextMenuItems");
+  });
+
   it("preserves plugin signature in generated plugin runtime config", async () => {
     const root = await createTemporaryDirectory("muon-vite-plugin-signature-");
     const muonDirectory = await createTemporaryDirectory(

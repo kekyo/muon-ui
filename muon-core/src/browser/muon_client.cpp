@@ -25,6 +25,7 @@
 
 #include "include/cef_app.h"
 #include "include/cef_command_ids.h"
+#include "include/internal/cef_types.h"
 #include "include/cef_process_message.h"
 #include "include/cef_request.h"
 #include "include/cef_task.h"
@@ -773,6 +774,140 @@ static MuonLogLevel GetMuonLogLevelFromCefSeverity(cef_log_severity_t level) {
   return kMuonLogLevelInfo;
 }
 
+static MuonBrowserContextMenuState CreateMuonContextMenuState(
+    CefRefPtr<CefContextMenuParams> params) {
+  MuonBrowserContextMenuState state;
+  if (!params) {
+    return state;
+  }
+  const auto type_flags = params->GetTypeFlags();
+  const auto edit_flags = params->GetEditStateFlags();
+  state.editable =
+      params->IsEditable() || ((type_flags & CM_TYPEFLAG_EDITABLE) != 0);
+  state.selection = ((type_flags & CM_TYPEFLAG_SELECTION) != 0) ||
+                    !params->GetSelectionText().ToString().empty();
+  state.link = ((type_flags & CM_TYPEFLAG_LINK) != 0) ||
+               !params->GetLinkUrl().ToString().empty();
+  state.image =
+      params->GetMediaType() == CM_MEDIATYPE_IMAGE || params->HasImageContents();
+  state.can_copy = ((edit_flags & CM_EDITFLAG_CAN_COPY) != 0) ||
+                   state.selection;
+  state.can_paste = (edit_flags & CM_EDITFLAG_CAN_PASTE) != 0;
+  return state;
+}
+
+static std::vector<int> GetContextMenuCommandIds(
+    CefRefPtr<CefMenuModel> model) {
+  std::vector<int> command_ids;
+  if (!model) {
+    return command_ids;
+  }
+  const auto count = model->GetCount();
+  command_ids.reserve(count);
+  for (auto index = size_t{0}; index < count; ++index) {
+    command_ids.push_back(model->GetCommandIdAt(index));
+  }
+  return command_ids;
+}
+
+static size_t GetContextMenuInsertionIndex(
+    CefRefPtr<CefMenuModel> model,
+    MuonBrowserContextMenuPlacement placement) {
+  const auto command_ids = GetContextMenuCommandIds(model);
+  auto index = GetMuonBrowserContextMenuInsertionIndex(placement, command_ids);
+  if (model && index > model->GetCount()) {
+    index = model->GetCount();
+  }
+  return index;
+}
+
+static void AppendJsonComma(std::string* json, bool* first) {
+  if (*first) {
+    *first = false;
+    return;
+  }
+  json->push_back(',');
+}
+
+static void AppendJsonStringMember(std::string* json,
+                                   bool* first,
+                                   const char* key,
+                                   const std::string& value) {
+  AppendJsonComma(json, first);
+  muon_internal::AppendJsonString(json, key);
+  json->push_back(':');
+  muon_internal::AppendJsonString(json, value);
+}
+
+static void AppendJsonIntMember(std::string* json,
+                                bool* first,
+                                const char* key,
+                                int value) {
+  AppendJsonComma(json, first);
+  muon_internal::AppendJsonString(json, key);
+  json->push_back(':');
+  *json += std::to_string(value);
+}
+
+static void AppendJsonBoolMember(std::string* json,
+                                 bool* first,
+                                 const char* key,
+                                 bool value) {
+  AppendJsonComma(json, first);
+  muon_internal::AppendJsonString(json, key);
+  json->push_back(':');
+  *json += value ? "true" : "false";
+}
+
+static std::string CreateContextMenuCommandDetailJson(
+    CefRefPtr<CefContextMenuParams> params,
+    const std::string& token,
+    const std::string& id) {
+  const auto state = CreateMuonContextMenuState(params);
+  auto json = std::string("{");
+  auto first = true;
+  AppendJsonStringMember(&json, &first, "token", token);
+  AppendJsonStringMember(&json, &first, "id", id);
+  AppendJsonIntMember(&json, &first, "x", params ? params->GetXCoord() : 0);
+  AppendJsonIntMember(&json, &first, "y", params ? params->GetYCoord() : 0);
+  AppendJsonStringMember(&json, &first, "pageUrl",
+                         params ? params->GetPageUrl().ToString() : "");
+  AppendJsonStringMember(&json, &first, "frameUrl",
+                         params ? params->GetFrameUrl().ToString() : "");
+  AppendJsonStringMember(&json, &first, "linkUrl",
+                         params ? params->GetLinkUrl().ToString() : "");
+  AppendJsonStringMember(&json, &first, "sourceUrl",
+                         params ? params->GetSourceUrl().ToString() : "");
+  AppendJsonStringMember(
+      &json, &first, "selectionText",
+      params ? params->GetSelectionText().ToString() : "");
+  AppendJsonBoolMember(&json, &first, "editable", state.editable);
+  AppendJsonBoolMember(&json, &first, "selection", state.selection);
+  AppendJsonBoolMember(&json, &first, "link", state.link);
+  AppendJsonBoolMember(&json, &first, "image", state.image);
+  AppendJsonBoolMember(&json, &first, "canCopy", state.can_copy);
+  AppendJsonBoolMember(&json, &first, "canPaste", state.can_paste);
+  json.push_back('}');
+  return json;
+}
+
+static bool InsertContextMenuItem(CefRefPtr<CefMenuModel> model,
+                                  size_t index,
+                                  int command_id,
+                                  const MuonBrowserContextMenuItem& item) {
+  if (!model) {
+    return false;
+  }
+  if (item.type == kMuonBrowserContextMenuItemSeparator) {
+    return model->InsertSeparatorAt(index);
+  }
+  if (!model->InsertItemAt(index, command_id, item.label)) {
+    return false;
+  }
+  model->SetEnabled(command_id, item.enabled);
+  return true;
+}
+
 static const char* GetMuonBuiltinBrowserFunctionKindName(
     MuonBuiltinBrowserFunctionKind kind) {
   switch (kind) {
@@ -814,6 +949,10 @@ static const char* GetMuonBuiltinBrowserFunctionKindName(
       return "GetWindowBounds";
     case MuonBuiltinBrowserFunctionKind::SetWindowBounds:
       return "SetWindowBounds";
+    case MuonBuiltinBrowserFunctionKind::SetContextMenuItems:
+      return "SetContextMenuItems";
+    case MuonBuiltinBrowserFunctionKind::ClearContextMenuItems:
+      return "ClearContextMenuItems";
     case MuonBuiltinBrowserFunctionKind::Close:
       return "Close";
     case MuonBuiltinBrowserFunctionKind::Shutdown:
@@ -921,6 +1060,9 @@ bool MuonClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
   (void)user_gesture;
   (void)is_redirect;
 
+  if (browser && frame && frame->IsMain()) {
+    ClearContextMenuRegistrationForBrowser(browser->GetIdentifier());
+  }
   if (IsCustomMuonTitleBar(title_bar_manifest_) && frame && frame->IsMain()) {
     CefRefPtr<CefBrowserView> browser_view;
     CefRefPtr<CefWindow> window;
@@ -1091,6 +1233,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   pending_favicon_requests_.erase(browser_id);
   title_bar_icon_update_generations_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
+  ClearContextMenuRegistrationForBrowser(browser_id);
   browsers_by_id_.erase(browser_id);
   {
     std::ostringstream log;
@@ -1583,7 +1726,107 @@ void MuonClient::OnBeforeContextMenu(
     CefRefPtr<CefContextMenuParams> params,
     CefRefPtr<CefMenuModel> model) {
   CEF_REQUIRE_UI_THREAD();
-  model->Clear();
+  (void)frame;
+  if (!model) {
+    return;
+  }
+  const auto browser_id = browser ? browser->GetIdentifier() : 0;
+  if (browser_id > 0) {
+    active_context_menu_commands_by_browser_.erase(browser_id);
+  }
+
+  if (browser_config_.context_menu_mode ==
+      kMuonBrowserContextMenuModeDisabled) {
+    model->Clear();
+    return;
+  }
+  if (browser_config_.context_menu_mode == kMuonBrowserContextMenuModeCustom) {
+    model->Clear();
+  }
+  if (browser_id <= 0) {
+    return;
+  }
+
+  const auto registration_iterator =
+      context_menu_registrations_.find(browser_id);
+  if (registration_iterator == context_menu_registrations_.end()) {
+    return;
+  }
+
+  const auto state = CreateMuonContextMenuState(params);
+  auto& active_commands =
+      active_context_menu_commands_by_browser_[browser_id];
+  auto next_command_id = static_cast<int>(MENU_ID_USER_FIRST);
+  const auto insert_placement =
+      [&](MuonBrowserContextMenuPlacement placement) {
+        auto insertion_index = GetContextMenuInsertionIndex(model, placement);
+        for (const auto& item : registration_iterator->second.items) {
+          if (item.placement != placement ||
+              !IsMuonBrowserContextMenuItemVisible(item, state)) {
+            continue;
+          }
+          auto command_id = 0;
+          if (item.type == kMuonBrowserContextMenuItemCommand) {
+            if (next_command_id > MENU_ID_USER_LAST) {
+              return;
+            }
+            command_id = next_command_id;
+          }
+          if (!InsertContextMenuItem(model, insertion_index, command_id,
+                                     item)) {
+            continue;
+          }
+          if (item.type == kMuonBrowserContextMenuItemCommand) {
+            ActiveContextMenuCommand command;
+            command.id = item.id;
+            command.token = registration_iterator->second.token;
+            command.frame = registration_iterator->second.frame;
+            active_commands[command_id] = std::move(command);
+            next_command_id += 1;
+          }
+          insertion_index += 1;
+        }
+      };
+
+  insert_placement(kMuonBrowserContextMenuPlacementStart);
+  insert_placement(kMuonBrowserContextMenuPlacementAfterEdit);
+  insert_placement(kMuonBrowserContextMenuPlacementEnd);
+}
+
+bool MuonClient::OnContextMenuCommand(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefContextMenuParams> params,
+    int command_id,
+    CefContextMenuHandler::EventFlags event_flags) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)frame;
+  (void)event_flags;
+  if (!browser) {
+    return false;
+  }
+  const auto browser_id = browser->GetIdentifier();
+  const auto browser_iterator =
+      active_context_menu_commands_by_browser_.find(browser_id);
+  if (browser_iterator == active_context_menu_commands_by_browser_.end()) {
+    return false;
+  }
+  const auto command_iterator = browser_iterator->second.find(command_id);
+  if (command_iterator == browser_iterator->second.end()) {
+    return false;
+  }
+  DispatchContextMenuCommand(browser, params, command_iterator->second);
+  return true;
+}
+
+void MuonClient::OnContextMenuDismissed(CefRefPtr<CefBrowser> browser,
+                                        CefRefPtr<CefFrame> frame) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)frame;
+  if (!browser) {
+    return;
+  }
+  active_context_menu_commands_by_browser_.erase(browser->GetIdentifier());
 }
 
 bool MuonClient::OnChromeCommand(
@@ -2288,6 +2531,100 @@ void MuonClient::ClearModalBrowserViewDisable(int browser_id) {
   }
 }
 
+void MuonClient::ClearContextMenuRegistrationForBrowser(int browser_id) {
+  context_menu_registrations_.erase(browser_id);
+  active_context_menu_commands_by_browser_.erase(browser_id);
+}
+
+bool MuonClient::SetContextMenuItemsForBrowser(
+    const PendingPluginCall& call,
+    std::string* error_message) {
+  if (!call.browser) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser is unavailable";
+    }
+    return false;
+  }
+  if (!call.frame || !call.frame->IsValid()) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser frame is unavailable";
+    }
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 2 ||
+      call.encoded_args->GetType(0) != VTYPE_STRING ||
+      call.encoded_args->GetType(1) != VTYPE_STRING) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid context menu items";
+    }
+    return false;
+  }
+
+  const auto items_json = call.encoded_args->GetString(0).ToString();
+  const auto token = call.encoded_args->GetString(1).ToString();
+  if (token.empty()) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid context menu token";
+    }
+    return false;
+  }
+  BrowserContextMenuRegistration registration;
+  registration.token = token;
+  registration.frame = call.frame;
+  if (!ParseMuonBrowserContextMenuItemsJson(items_json, &registration.items,
+                                            error_message)) {
+    return false;
+  }
+
+  const auto browser_id = call.browser->GetIdentifier();
+  context_menu_registrations_[browser_id] = std::move(registration);
+  active_context_menu_commands_by_browser_.erase(browser_id);
+  return true;
+}
+
+bool MuonClient::ClearContextMenuItemsForBrowser(
+    const PendingPluginCall& call,
+    std::string* error_message) {
+  if (!call.browser) {
+    if (error_message != nullptr) {
+      *error_message = "Muon browser is unavailable";
+    }
+    return false;
+  }
+  if (!call.encoded_args || call.encoded_args->GetSize() != 0) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid context menu clear request";
+    }
+    return false;
+  }
+  ClearContextMenuRegistrationForBrowser(call.browser->GetIdentifier());
+  return true;
+}
+
+void MuonClient::DispatchContextMenuCommand(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefContextMenuParams> params,
+    const ActiveContextMenuCommand& command) {
+  CefRefPtr<CefFrame> target_frame = command.frame;
+  if ((!target_frame || !target_frame->IsValid()) && browser) {
+    target_frame = browser->GetMainFrame();
+  }
+  if (!target_frame || !target_frame->IsValid()) {
+    return;
+  }
+
+  const auto detail_json =
+      CreateContextMenuCommandDetailJson(params, command.token, command.id);
+  auto script =
+      std::string("(() => { const detail = ") + detail_json +
+      "; if (typeof globalThis.dispatchEvent === \"function\" && "
+      "typeof globalThis.CustomEvent === \"function\") { "
+      "globalThis.dispatchEvent(new globalThis.CustomEvent("
+      "\"muon-browser-context-menu-command\", { detail })); } })();";
+  target_frame->ExecuteJavaScript(
+      script, "muon://browser/context-menu-command", 1);
+}
+
 void MuonClient::SetFullscreen(CefRefPtr<CefBrowser> browser,
                                 bool fullscreen) {
   CefRefPtr<CefWindow> window;
@@ -2724,6 +3061,22 @@ void MuonClient::DispatchBuiltinBrowserCall(
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
       window->SetBounds(CefRect(x, y, width, height));
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::SetContextMenuItems: {
+      if (!SetContextMenuItemsForBrowser(call, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
+      break;
+    }
+    case MuonBuiltinBrowserFunctionKind::ClearContextMenuItems: {
+      if (!ClearContextMenuItemsForBrowser(call, &error_message)) {
+        RejectPluginCall(call, error_message);
+        return;
+      }
+      SendPluginResult(call.context, call.frame, call.call_id, result);
       break;
     }
     case MuonBuiltinBrowserFunctionKind::Close: {

@@ -384,6 +384,155 @@ const createExecutorSpawnExport = (
   return JSON.parse(source);
 };`;
 
+const createBrowserContextMenuHelpers =
+  (): string => `const __muonBrowserContextMenuEventName = "muon-browser-context-menu-command";
+const __muonBrowserContextMenuWhenKeys = [
+  "editable",
+  "selection",
+  "link",
+  "image",
+  "canCopy",
+  "canPaste",
+];
+let __muonBrowserContextMenuToken = "";
+let __muonBrowserContextMenuHandler = undefined;
+let __muonBrowserContextMenuListening = false;
+const __muonCreateBrowserContextMenuToken = () => {
+  const crypto = globalThis.crypto;
+  if (
+    crypto &&
+    typeof crypto.getRandomValues === "function" &&
+    typeof globalThis.Uint32Array === "function"
+  ) {
+    const values = new globalThis.Uint32Array(4);
+    crypto.getRandomValues(values);
+    return Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("");
+  }
+  return \`\${Date.now().toString(36)}-\${Math.random().toString(36).slice(2)}\`;
+};
+const __muonEnsureBrowserContextMenuListener = () => {
+  if (
+    __muonBrowserContextMenuListening ||
+    typeof globalThis.addEventListener !== "function"
+  ) {
+    return;
+  }
+  globalThis.addEventListener(__muonBrowserContextMenuEventName, (event) => {
+    const detail = event && event.detail;
+    if (
+      typeof detail !== "object" ||
+      detail === null ||
+      detail.token !== __muonBrowserContextMenuToken ||
+      typeof __muonBrowserContextMenuHandler !== "function"
+    ) {
+      return;
+    }
+    __muonBrowserContextMenuHandler(detail);
+  });
+  __muonBrowserContextMenuListening = true;
+};
+const __muonNormalizeBrowserContextMenuPlacement = (placement) => {
+  if (placement === undefined) {
+    return undefined;
+  }
+  if (placement === "start" || placement === "afterEdit" || placement === "end") {
+    return placement;
+  }
+  throw new TypeError("Invalid context menu placement");
+};
+const __muonNormalizeBrowserContextMenuWhen = (when) => {
+  if (when === undefined) {
+    return undefined;
+  }
+  if (typeof when !== "object" || when === null || Array.isArray(when)) {
+    throw new TypeError("Invalid context menu condition");
+  }
+  const normalized = {};
+  for (const key of __muonBrowserContextMenuWhenKeys) {
+    const value = when[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== "boolean") {
+      throw new TypeError("Invalid context menu condition");
+    }
+    normalized[key] = value;
+  }
+  return normalized;
+};
+const __muonNormalizeBrowserContextMenuCommandId = (id) => {
+  if (
+    typeof id !== "string" ||
+    id === "" ||
+    /[\\u0000-\\u001f]/u.test(id) ||
+    id.startsWith("muon.") ||
+    id.startsWith("standard.")
+  ) {
+    throw new TypeError("Invalid context menu item id");
+  }
+  return id;
+};
+const __muonNormalizeBrowserContextMenuItem = (item) => {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    throw new TypeError("Invalid context menu item");
+  }
+  const placement = __muonNormalizeBrowserContextMenuPlacement(item.placement);
+  const when = __muonNormalizeBrowserContextMenuWhen(item.when);
+  if (item.type === "separator") {
+    return {
+      type: "separator",
+      ...(placement === undefined ? {} : { placement }),
+      ...(when === undefined ? {} : { when }),
+    };
+  }
+  if (item.type !== undefined && item.type !== "item") {
+    throw new TypeError("Invalid context menu item type");
+  }
+  if (typeof item.label !== "string" || item.label === "") {
+    throw new TypeError("Invalid context menu item label");
+  }
+  if (item.enabled !== undefined && typeof item.enabled !== "boolean") {
+    throw new TypeError("Invalid context menu item enabled state");
+  }
+  return {
+    id: __muonNormalizeBrowserContextMenuCommandId(item.id),
+    label: item.label,
+    enabled: item.enabled === undefined ? true : item.enabled,
+    ...(placement === undefined ? {} : { placement }),
+    ...(when === undefined ? {} : { when }),
+  };
+};
+const __muonNormalizeBrowserContextMenuItems = (items) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError("Invalid context menu items");
+  }
+  return items.map(__muonNormalizeBrowserContextMenuItem);
+};`;
+
+const createBrowserSetContextMenuItemsExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const setContextMenuItems = async (items, handler = undefined) => {
+  if (handler !== undefined && typeof handler !== "function") {
+    throw new TypeError("Invalid context menu handler");
+  }
+  const normalized = __muonNormalizeBrowserContextMenuItems(items);
+  const token = __muonCreateBrowserContextMenuToken();
+  await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [JSON.stringify(normalized), token]);
+  __muonBrowserContextMenuToken = token;
+  __muonBrowserContextMenuHandler = handler;
+  __muonEnsureBrowserContextMenuListener();
+};`;
+
+const createBrowserClearContextMenuItemsExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `export const clearContextMenuItems = async () => {
+  __muonBrowserContextMenuToken = "";
+  __muonBrowserContextMenuHandler = undefined;
+  await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, []);
+};`;
+
 const createGenericFunctionExport = (
   exportName: string,
   capabilityId: string,
@@ -402,16 +551,36 @@ const createModuleSource = (rule: ResolvedRule): string => {
     );
   }
 
-  const exports = exportedFunctions.map(([exportName, functionPath]) =>
-    rule.namespace === "muon.executor" && exportName === "spawn"
-      ? createExecutorSpawnExport(rule.id, functionPath)
-      : createGenericFunctionExport(exportName, rule.id, functionPath),
+  const usesBrowserContextMenuHelpers = exportedFunctions.some(
+    ([exportName]) =>
+      rule.namespace === "muon.browser" &&
+      (exportName === "setContextMenuItems" ||
+        exportName === "clearContextMenuItems"),
   );
+  const exports = exportedFunctions.map(([exportName, functionPath]) => {
+    if (rule.namespace === "muon.executor" && exportName === "spawn") {
+      return createExecutorSpawnExport(rule.id, functionPath);
+    }
+    if (
+      rule.namespace === "muon.browser" &&
+      exportName === "setContextMenuItems"
+    ) {
+      return createBrowserSetContextMenuItemsExport(rule.id, functionPath);
+    }
+    if (
+      rule.namespace === "muon.browser" &&
+      exportName === "clearContextMenuItems"
+    ) {
+      return createBrowserClearContextMenuItemsExport(rule.id, functionPath);
+    }
+    return createGenericFunctionExport(exportName, rule.id, functionPath);
+  });
   return `const __muonCall = globalThis.__muon_plugin_call;
 if (typeof __muonCall !== "function") {
   throw new Error("Muon plugin capability bridge is not available.");
 }
 
+${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
 ${exports.join("\n\n")}
 `;
 };

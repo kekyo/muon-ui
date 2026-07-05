@@ -9,6 +9,7 @@
 #include "app/muon_app_storage.h"
 #include "browser/muon_browser_shortcut_handler.h"
 #include "browser/muon_builtin_browser.h"
+#include "browser/muon_context_menu.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "config/muon_config.h"
@@ -266,6 +267,32 @@ class MuonClient final : public CefClient,
                            CefRefPtr<CefMenuModel> model) override;
 
   /**
+   * Handles Muon custom context menu commands.
+   *
+   * @param browser Browser that received the context menu command.
+   * @param frame Frame that received the context menu command.
+   * @param params Context menu parameters from CEF.
+   * @param command_id Selected menu command id.
+   * @param event_flags CEF event flags for the command.
+   * @return true when a Muon custom command was handled.
+   */
+  bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefContextMenuParams> params,
+                            int command_id,
+                            CefContextMenuHandler::EventFlags event_flags)
+      override;
+
+  /**
+   * Clears transient Muon custom context menu command mappings.
+   *
+   * @param browser Browser whose context menu was dismissed.
+   * @param frame Frame that received the context menu request.
+   */
+  void OnContextMenuDismissed(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefFrame> frame) override;
+
+  /**
    * Blocks Chromium default browser commands controlled by muon.json.
    *
    * @param browser Browser that received the command.
@@ -386,6 +413,18 @@ class MuonClient final : public CefClient,
     int depth = 0;
   };
 
+  struct BrowserContextMenuRegistration {
+    std::vector<MuonBrowserContextMenuItem> items;
+    std::string token;
+    CefRefPtr<CefFrame> frame;
+  };
+
+  struct ActiveContextMenuCommand {
+    std::string id;
+    std::string token;
+    CefRefPtr<CefFrame> frame;
+  };
+
   static bool IsKnownBrowserShortcut(const CefKeyEvent& event);
   static bool GetBrowserViewAndWindow(CefRefPtr<CefBrowser> browser,
                                       CefRefPtr<CefBrowserView>* browser_view,
@@ -416,6 +455,14 @@ class MuonClient final : public CefClient,
                                     std::string* error_message);
   void EndModalBrowserViewDisable(int browser_id);
   void ClearModalBrowserViewDisable(int browser_id);
+  void ClearContextMenuRegistrationForBrowser(int browser_id);
+  bool SetContextMenuItemsForBrowser(const PendingPluginCall& call,
+                                     std::string* error_message);
+  bool ClearContextMenuItemsForBrowser(const PendingPluginCall& call,
+                                       std::string* error_message);
+  void DispatchContextMenuCommand(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefContextMenuParams> params,
+                                  const ActiveContextMenuCommand& command);
   void BeginPendingFsDialogCall(int browser_id);
   void EndPendingFsDialogCall(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
@@ -490,6 +537,9 @@ class MuonClient final : public CefClient,
       modal_browser_view_disable_states_;
   std::map<int, uint64_t> title_bar_icon_update_generations_;
   std::map<int, CefRefPtr<CefURLRequest>> pending_favicon_requests_;
+  std::map<int, BrowserContextMenuRegistration> context_menu_registrations_;
+  std::map<int, std::map<int, ActiveContextMenuCommand>>
+      active_context_menu_commands_by_browser_;
 
   IMPLEMENT_REFCOUNTING(MuonClient);
   DISALLOW_COPY_AND_ASSIGN(MuonClient);

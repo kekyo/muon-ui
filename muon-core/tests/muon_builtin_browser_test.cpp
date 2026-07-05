@@ -6,11 +6,14 @@
 
 #include "browser/muon_builtin_browser.h"
 #include "browser/muon_native_wheel_forwarder.h"
+#include "browser/muon_context_menu.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 #include "config/muon_linux_display_backend.h"
+
+#include "include/internal/cef_types.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +41,8 @@ static bool TestBrowserFunctionDefinitions() {
       "setTitleBarIcon",
       "__getWindowBounds",
       "__setWindowBounds",
+      "__setContextMenuItems",
+      "__clearContextMenuItems",
       "__close",         "__shutdown",     "__recycle",
   };
   const auto expected_kinds = std::vector<MuonBuiltinBrowserFunctionKind>{
@@ -60,6 +65,8 @@ static bool TestBrowserFunctionDefinitions() {
       MuonBuiltinBrowserFunctionKind::SetTitleBarIcon,
       MuonBuiltinBrowserFunctionKind::GetWindowBounds,
       MuonBuiltinBrowserFunctionKind::SetWindowBounds,
+      MuonBuiltinBrowserFunctionKind::SetContextMenuItems,
+      MuonBuiltinBrowserFunctionKind::ClearContextMenuItems,
       MuonBuiltinBrowserFunctionKind::Close,
       MuonBuiltinBrowserFunctionKind::Shutdown,
       MuonBuiltinBrowserFunctionKind::Recycle,
@@ -87,6 +94,8 @@ static bool TestBrowserFunctionDefinitions() {
   const auto set_title_bar_icon = definitions[16];
   const auto get_window_bounds = definitions[17];
   const auto set_window_bounds = definitions[18];
+  const auto set_context_menu_items = definitions[19];
+  const auto clear_context_menu_items = definitions[20];
   const auto shutdown = definitions[expected_names.size() - 2];
   const auto recycle = definitions.back();
   if (!Expect(set_title_bar_visibility.arg_count == 1,
@@ -131,6 +140,28 @@ static bool TestBrowserFunctionDefinitions() {
               "unexpected set window bounds height argument type") ||
       !Expect(set_window_bounds.return_type.type == MUON_TYPE_VOID,
               "unexpected set window bounds return type") ||
+      !Expect(set_context_menu_items.filter_name != nullptr &&
+                  std::string(set_context_menu_items.filter_name) ==
+                      "setContextMenuItems",
+              "unexpected set context menu items filter name") ||
+      !Expect(set_context_menu_items.arg_count == 2,
+              "unexpected set context menu items argument count") ||
+      !Expect(set_context_menu_items.arg_types != nullptr,
+              "missing set context menu items argument metadata") ||
+      !Expect(set_context_menu_items.arg_types[0].type == MUON_TYPE_STRING,
+              "unexpected set context menu items json argument type") ||
+      !Expect(set_context_menu_items.arg_types[1].type == MUON_TYPE_STRING,
+              "unexpected set context menu items token argument type") ||
+      !Expect(set_context_menu_items.return_type.type == MUON_TYPE_VOID,
+              "unexpected set context menu items return type") ||
+      !Expect(clear_context_menu_items.filter_name != nullptr &&
+                  std::string(clear_context_menu_items.filter_name) ==
+                      "clearContextMenuItems",
+              "unexpected clear context menu items filter name") ||
+      !Expect(clear_context_menu_items.arg_count == 0,
+              "unexpected clear context menu items argument count") ||
+      !Expect(clear_context_menu_items.return_type.type == MUON_TYPE_VOID,
+              "unexpected clear context menu items return type") ||
       !Expect(shutdown.filter_name != nullptr &&
                   std::string(shutdown.filter_name) == "shutdown",
               "unexpected browser shutdown filter name") ||
@@ -153,7 +184,108 @@ static bool TestBrowserFunctionDefinitions() {
               "missing browser setup script")) {
     return false;
   }
+  const std::string setup_script(GetMuonBuiltinBrowserSetupScript());
+  if (!Expect(setup_script.find("setContextMenuItems") != std::string::npos,
+              "setup script does not expose setContextMenuItems") ||
+      !Expect(setup_script.find("clearContextMenuItems") != std::string::npos,
+              "setup script does not expose clearContextMenuItems")) {
+    return false;
+  }
   return true;
+}
+
+static bool TestContextMenuItemsJson() {
+  std::vector<MuonBrowserContextMenuItem> items;
+  std::string error_message;
+  if (!Expect(ParseMuonBrowserContextMenuItemsJson(
+                  R"([{"id":"app.search","label":"Search","enabled":false,"placement":"afterEdit","when":{"selection":true,"canCopy":true}},{"type":"separator","placement":"start","when":{"editable":false}}])",
+                  &items, &error_message),
+              error_message.c_str()) ||
+      !Expect(items.size() == 2, "unexpected context menu item count")) {
+    return false;
+  }
+
+  const auto& command = items[0];
+  const auto& separator = items[1];
+  if (!Expect(command.type == kMuonBrowserContextMenuItemCommand,
+              "unexpected command item type") ||
+      !Expect(command.id == "app.search", "unexpected command item id") ||
+      !Expect(command.label == "Search", "unexpected command item label") ||
+      !Expect(!command.enabled, "unexpected command enabled state") ||
+      !Expect(command.placement == kMuonBrowserContextMenuPlacementAfterEdit,
+              "unexpected command placement") ||
+      !Expect(command.when.selection == kMuonBrowserContextMenuConditionTrue,
+              "unexpected command selection condition") ||
+      !Expect(command.when.can_copy == kMuonBrowserContextMenuConditionTrue,
+              "unexpected command copy condition") ||
+      !Expect(separator.type == kMuonBrowserContextMenuItemSeparator,
+              "unexpected separator item type") ||
+      !Expect(separator.placement == kMuonBrowserContextMenuPlacementStart,
+              "unexpected separator placement") ||
+      !Expect(separator.when.editable == kMuonBrowserContextMenuConditionFalse,
+              "unexpected separator editable condition")) {
+    return false;
+  }
+
+  MuonBrowserContextMenuState state;
+  state.selection = true;
+  state.can_copy = true;
+  state.editable = true;
+  if (!Expect(IsMuonBrowserContextMenuItemVisible(command, state),
+              "command item should be visible") ||
+      !Expect(!IsMuonBrowserContextMenuItemVisible(separator, state),
+              "separator item should be hidden for editable state")) {
+    return false;
+  }
+  state.editable = false;
+  return Expect(IsMuonBrowserContextMenuItemVisible(separator, state),
+                "separator item should be visible for non-editable state");
+}
+
+static bool TestContextMenuItemValidation() {
+  std::vector<MuonBrowserContextMenuItem> items;
+  std::string error_message;
+  return Expect(!ParseMuonBrowserContextMenuItemsJson(
+                    R"([{"id":"","label":"Empty"}])", &items,
+                    &error_message),
+                "empty context menu id was accepted") &&
+         Expect(!ParseMuonBrowserContextMenuItemsJson(
+                    R"([{"id":"standard.copy","label":"Copy"}])", &items,
+                    &error_message),
+                "reserved standard context menu id was accepted") &&
+         Expect(!ParseMuonBrowserContextMenuItemsJson(
+                    "[{\"id\":\"app.\\u0001bad\",\"label\":\"Bad\"}]", &items,
+                    &error_message),
+                "control character context menu id was accepted");
+}
+
+static bool TestContextMenuInsertionIndex() {
+  const auto command_ids = std::vector<int>{
+      MENU_ID_BACK,
+      MENU_ID_UNDO,
+      MENU_ID_COPY,
+      MENU_ID_SELECT_ALL,
+      MENU_ID_VIEW_SOURCE,
+  };
+  const auto non_edit_command_ids = std::vector<int>{
+      MENU_ID_BACK,
+      MENU_ID_VIEW_SOURCE,
+  };
+  return Expect(GetMuonBrowserContextMenuInsertionIndex(
+                    kMuonBrowserContextMenuPlacementStart, command_ids) == 0,
+                "unexpected start insertion index") &&
+         Expect(GetMuonBrowserContextMenuInsertionIndex(
+                    kMuonBrowserContextMenuPlacementAfterEdit, command_ids) ==
+                    4,
+                "unexpected after edit insertion index") &&
+         Expect(GetMuonBrowserContextMenuInsertionIndex(
+                    kMuonBrowserContextMenuPlacementEnd, command_ids) ==
+                    command_ids.size(),
+                "unexpected end insertion index") &&
+         Expect(GetMuonBrowserContextMenuInsertionIndex(
+                    kMuonBrowserContextMenuPlacementAfterEdit,
+                    non_edit_command_ids) == non_edit_command_ids.size(),
+                "unexpected after edit fallback insertion index");
 }
 
 static bool TestWindowTitleFallback() {
@@ -727,7 +859,9 @@ static bool TestCustomTitleBarWindowDelegate() {
 }
 
 int main() {
-  return TestBrowserFunctionDefinitions() && TestWindowTitleFallback() &&
+  return TestBrowserFunctionDefinitions() && TestContextMenuItemsJson() &&
+                 TestContextMenuItemValidation() &&
+                 TestContextMenuInsertionIndex() && TestWindowTitleFallback() &&
                  TestInitialWindowShowState() &&
 #if defined(OS_LINUX)
                  TestLinuxWindowPropertiesUseDesktopId() &&

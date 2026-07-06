@@ -53,7 +53,7 @@ interface MuonDevOverrideConfig {
 }
 
 /**
- * Options for launching Muon directly against local development assets.
+ * Options for launching muon directly against local development assets.
  */
 export interface MuonDevOptions {
   /**
@@ -77,7 +77,7 @@ export interface MuonDevOptions {
   stagePath?: string;
 
   /**
-   * Muon config path passed before the generated development override.
+   * muon config path passed before the generated development override.
    */
   configPath?: string;
 
@@ -87,7 +87,7 @@ export interface MuonDevOptions {
   assetSourcePath?: string;
 
   /**
-   * Enable the Muon debugger defaults during development startup.
+   * Enable the muon debugger defaults during development startup.
    */
   enableDebugger?: boolean;
 
@@ -117,7 +117,7 @@ export interface MuonDevOptions {
 }
 
 /**
- * Result returned after the Muon development process exits.
+ * Result returned after the muon development process exits.
  */
 export interface MuonDevResult {
   /**
@@ -126,7 +126,7 @@ export interface MuonDevResult {
   root: string;
 
   /**
-   * Muon runtime target used for prepare.
+   * muon runtime target used for prepare.
    */
   target: string;
 
@@ -141,7 +141,7 @@ export interface MuonDevResult {
   cefPath: string;
 
   /**
-   * Directory containing the prepared Muon runtime.
+   * Directory containing the prepared muon runtime.
    */
   stagePath: string;
 
@@ -166,7 +166,7 @@ export interface MuonDevResult {
   assetSourcePath: string;
 
   /**
-   * Exit code returned by the Muon process.
+   * Exit code returned by the muon process.
    */
   exitCode: number;
 }
@@ -273,7 +273,7 @@ const resolveProjectConfigPath = async (
   if (configPath !== undefined) {
     const resolvedPath = resolveFromRoot(root, configPath);
     if (!(await fileExists(resolvedPath))) {
-      throw new Error(`Muon config file does not exist: ${resolvedPath}`);
+      throw new Error(`muon config file does not exist: ${resolvedPath}`);
     }
     return resolvedPath;
   }
@@ -373,11 +373,11 @@ const assertDevelopmentAssetDirectory = async (
   try {
     await access(assetSourcePath, constants.F_OK);
   } catch {
-    throw new Error(`Muon run asset source does not exist: ${assetSourcePath}`);
+    throw new Error(`muon run asset source does not exist: ${assetSourcePath}`);
   }
 
   throw new Error(
-    `Muon run asset source must be a directory: ${assetSourcePath}`,
+    `muon run asset source must be a directory: ${assetSourcePath}`,
   );
 };
 
@@ -484,10 +484,10 @@ const runMuonExecutable = async (
 };
 
 /**
- * Launches Muon directly against local development assets.
+ * Launches muon directly against local development assets.
  *
  * @param options Development startup options.
- * @returns Development startup result after the Muon process exits.
+ * @returns Development startup result after the muon process exits.
  */
 export const runMuonDev = async (
   options: MuonDevOptions = {},

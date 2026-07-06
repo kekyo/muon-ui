@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 /**
- * Import-side capability rule for Muon plugin virtual modules.
+ * Import-side capability rule for muon plugin virtual modules.
  */
 export interface MuonCapabilityImportOptions {
   /**
@@ -147,7 +147,7 @@ export interface MuonResolvedCapabilityModule {
  */
 export interface MuonCapabilityModuleResolver {
   /**
-   * Resolves a Muon virtual module specifier for one importer.
+   * Resolves a muon virtual module specifier for one importer.
    */
   resolveId: (
     source: string,
@@ -347,7 +347,7 @@ const validateCapabilityRule = (rule: MuonCapabilityImportOptions): void => {
     (rule.packages === undefined || rule.packages.length === 0)
   ) {
     throw new Error(
-      "Muon capability import rule requires sources or packages.",
+      "muon capability import rule requires sources or packages.",
     );
   }
 };
@@ -379,9 +379,160 @@ const parseModuleVirtualId = (
 const createExecutorSpawnExport = (
   capabilityId: string,
   functionPath: string,
-): string => `export const spawn = async (options = {}) => {
-  const source = await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [JSON.stringify(options ?? {})]);
-  return JSON.parse(source);
+): string => `const __muonExecutorActiveProcesses = new Set();
+const __muonExecutorEmptyBytes = new Uint8Array(0);
+const __muonExecutorOwnerCallback = () => {};
+const __muonExecutorToBytes = (data) => {
+  if (typeof data === "string") {
+    return new TextEncoder().encode(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new TypeError("stdin data must be a string or BufferSource");
+};
+const __muonExecutorFromBase64 = (source) => {
+  const text = atob(source ?? "");
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index += 1) {
+    bytes[index] = text.charCodeAt(index);
+  }
+  return bytes;
+};
+const __muonExecutorRpc = async (
+  request,
+  data = __muonExecutorEmptyBytes,
+  onStdout = null,
+  onStderr = null,
+) =>
+  JSON.parse(
+    await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [
+      JSON.stringify(request),
+      data,
+      0,
+      __muonExecutorOwnerCallback,
+      onStdout,
+      onStderr,
+    ]),
+  );
+const __muonExecutorDecodeWaitResult = (raw) => {
+  const result = {
+    processId: raw.processId,
+    exitCode: raw.exitCode,
+  };
+  if (Object.prototype.hasOwnProperty.call(raw, "stdoutBase64")) {
+    result.stdout = __muonExecutorFromBase64(raw.stdoutBase64);
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, "stderrBase64")) {
+    result.stderr = __muonExecutorFromBase64(raw.stderrBase64);
+  }
+  return result;
+};
+const __muonExecutorDisposeActiveProcesses = async () => {
+  if (__muonExecutorActiveProcesses.size === 0) {
+    return;
+  }
+  for (const handle of Array.from(__muonExecutorActiveProcesses)) {
+    try {
+      await handle.dispose();
+    } catch {}
+  }
+};
+if (typeof globalThis.addEventListener === "function") {
+  for (const eventName of ["beforeunload", "pagehide", "unload"]) {
+    globalThis.addEventListener(eventName, __muonExecutorDisposeActiveProcesses);
+  }
+}
+export const spawn = async (options = {}) => {
+  const stdoutCallback =
+    typeof options.onStdout === "function"
+      ? (chunk) => options.onStdout(new Uint8Array(chunk))
+      : null;
+  const stderrCallback =
+    typeof options.onStderr === "function"
+      ? (chunk) => options.onStderr(new Uint8Array(chunk))
+      : null;
+  const start = await __muonExecutorRpc(
+    {
+      op: "start",
+      options: {
+        command: options.command,
+        args: options.args,
+        cwd: options.cwd,
+        env: options.env,
+      },
+      captureStdout: stdoutCallback === null,
+      captureStderr: stderrCallback === null,
+    },
+    __muonExecutorEmptyBytes,
+    stdoutCallback,
+    stderrCallback,
+  );
+  const handleId = start.handleId;
+  let disposed = false;
+  let stdinClosing = false;
+  let waitPromise = null;
+  const handle = {
+    processId: start.processId,
+    writeStdin: async (data) => {
+      if (disposed) {
+        throw new Error("executor process is disposed");
+      }
+      if (stdinClosing) {
+        throw new Error("stdin is closed");
+      }
+      await __muonExecutorRpc(
+        { op: "writeStdin", handleId },
+        __muonExecutorToBytes(data),
+      );
+    },
+    closeStdin: async () => {
+      if (disposed) {
+        throw new Error("executor process is disposed");
+      }
+      stdinClosing = true;
+      await __muonExecutorRpc({ op: "closeStdin", handleId });
+    },
+    wait: () => {
+      if (waitPromise !== null) {
+        return waitPromise;
+      }
+      waitPromise = (async () => {
+        const result = __muonExecutorDecodeWaitResult(
+          await __muonExecutorRpc({ op: "wait", handleId }),
+        );
+        if (!disposed) {
+          disposed = true;
+          __muonExecutorActiveProcesses.delete(handle);
+          try {
+            await __muonExecutorRpc({ op: "dispose", handleId });
+          } catch {}
+        }
+        return result;
+      })();
+      return waitPromise;
+    },
+    kill: async () => {
+      if (disposed) {
+        throw new Error("executor process is disposed");
+      }
+      await __muonExecutorRpc({ op: "kill", handleId });
+    },
+    dispose: async () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      __muonExecutorActiveProcesses.delete(handle);
+      await __muonExecutorRpc({ op: "dispose", handleId });
+    },
+  };
+  Object.freeze(handle);
+  __muonExecutorActiveProcesses.add(handle);
+  return handle;
 };`;
 
 const createBrowserContextMenuHelpers =
@@ -631,7 +782,8 @@ const __muonNormalizeBrowserTrayOptions = (options) => {
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
     throw new TypeError("Invalid tray options");
   }
-  if (typeof options.icon !== "string" || options.icon === "") {
+  const hasIcon = options.icon !== undefined;
+  if (hasIcon && (typeof options.icon !== "string" || options.icon === "")) {
     throw new TypeError("Invalid tray icon");
   }
   if (options.tooltip !== undefined && options.tooltip !== null && typeof options.tooltip !== "string") {
@@ -639,7 +791,7 @@ const __muonNormalizeBrowserTrayOptions = (options) => {
   }
   return {
     ...(options.id === undefined ? {} : { id: __muonNormalizeBrowserTrayId(options.id) }),
-    icon: options.icon,
+    ...(hasIcon ? { icon: options.icon } : {}),
     ...(options.tooltip === undefined || options.tooltip === null ? {} : { tooltip: options.tooltip }),
     ...(options.menu === undefined ? {} : { menu: __muonNormalizeBrowserTrayMenuItems(options.menu) }),
   };
@@ -720,7 +872,7 @@ const createModuleSource = (rule: ResolvedRule): string => {
   );
   if (exportedFunctions.length === 0) {
     throw new Error(
-      `Muon capability import has no exact function exports: ${rule.moduleName}`,
+      `muon capability import has no exact function exports: ${rule.moduleName}`,
     );
   }
 
@@ -774,7 +926,7 @@ const createModuleSource = (rule: ResolvedRule): string => {
   });
   return `const __muonCall = globalThis.__muon_plugin_call;
 if (typeof __muonCall !== "function") {
-  throw new Error("Muon plugin capability bridge is not available.");
+  throw new Error("muon plugin capability bridge is not available.");
 }
 
 ${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
@@ -818,7 +970,7 @@ export const createMuonCapabilityModuleResolver = (
     }
     if (importer === undefined) {
       throw new Error(
-        `Muon capability import is not allowed without an importer: ${source}`,
+        `muon capability import is not allowed without an importer: ${source}`,
       );
     }
 
@@ -844,7 +996,7 @@ export const createMuonCapabilityModuleResolver = (
     }
 
     throw new Error(
-      `Muon capability import is not allowed: ${source} from ${relativeImporter}`,
+      `muon capability import is not allowed: ${source} from ${relativeImporter}`,
     );
   };
 

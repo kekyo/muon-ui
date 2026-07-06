@@ -10,9 +10,9 @@
 
 /**
  * @file muon_plugin_api.h
- * @brief Public C ABI used by native Muon plugins.
+ * @brief Public C ABI used by native muon plugins.
  *
- * A Muon plugin exports a `muon_init_plugin` function and returns metadata
+ * A muon plugin exports a `muon_init_plugin` function and returns metadata
  * for the functions it wants to expose to JavaScript. Each native function uses
  * a completion-first ABI:
  *
@@ -32,7 +32,7 @@ extern "C" {
 #endif
 
 /**
- * @brief Executable function pointer owned by Muon or by a plugin.
+ * @brief Executable function pointer owned by muon or by a plugin.
  *
  * This is an opaque callable pointer. Cast a C function with the ABI described
  * by a `muon_function_signature` to this type when publishing metadata or
@@ -67,12 +67,12 @@ typedef void (*muon_user_function)(void);
  *
  * @remarks For a successful `MUON_TYPE_VOID` result, pass null for both
  * parameters. For all other successful result types, `result` must be non-null.
- * Muon copies scalar values and strings before this callback returns. Buffer
+ * muon copies scalar values and strings before this callback returns. Buffer
  * view memory must remain readable until the callback returns unless it was
  * allocated through `muon_plugin_helpers::allocate_shared_buffer` and returned
  * as the completion result. Only the first completion call for an invocation is
  * used; later calls are ignored. Returning a plugin-owned function value gives
- * Muon its own reference; the plugin should still release any registration or
+ * muon its own reference; the plugin should still release any registration or
  * retain it no longer needs.
  */
 typedef void (*muon_completion_func)(const void* result,
@@ -83,7 +83,7 @@ typedef void (*muon_completion_func)(const void* result,
  *
  * @param user_data The state pointer passed to `register_closure`.
  *
- * @remarks Muon calls this when the registered closure function is released.
+ * @remarks muon calls this when the registered closure function is released.
  * The callback may be null when no cleanup is required.
  */
 typedef void (*muon_finalize_user_data)(void* user_data);
@@ -150,7 +150,7 @@ typedef enum muon_log_level {
  * @brief Borrowed mutable byte buffer view.
  *
  * @remarks Arguments received from JavaScript are temporary views owned by
- * Muon. A plugin may read or write them while the invocation is pending, but
+ * muon. A plugin may read or write them while the invocation is pending, but
  * must not keep the pointer after completing the invocation. Result buffer views
  * are copied to the renderer unless they refer to a shared buffer allocated by
  * `allocate_shared_buffer`.
@@ -168,7 +168,7 @@ typedef struct muon_buffer_view {
  * @remarks Handles are created by
  * `muon_plugin_helpers::allocate_shared_buffer`. Return the associated
  * `muon_buffer_view` through a completion callback to transfer the allocation
- * to Muon, or call `muon_plugin_helpers::release_shared_buffer` if the
+ * to muon, or call `muon_plugin_helpers::release_shared_buffer` if the
  * allocation will not be returned. Do not dereference the handle.
  */
 typedef struct muon_shared_buffer* muon_shared_buffer_handle;
@@ -288,7 +288,7 @@ typedef struct muon_completion_error {
 typedef void (*muon_completion_callback)(void);
 
 /**
- * @brief Registers a plugin-owned pure function with the Muon host marshaller.
+ * @brief Registers a plugin-owned pure function with the muon host marshaller.
  *
  * @param signature Completion-first signature for the function.
  * @param function Plugin implementation. The native ABI is
@@ -298,7 +298,7 @@ typedef void (*muon_completion_callback)(void);
  * @return 1 on success, 0 on failure.
  *
  * @remarks The returned function pointer is owned by the plugin until it is
- * given to Muon as a value or explicitly released with the
+ * given to muon as a value or explicitly released with the
  * `release_plugin_function_pointer` helper macro. Use this helper for stateless
  * function values that do not need a per-function user data pointer.
  */
@@ -309,7 +309,7 @@ typedef uint8_t (*muon_plugin_helper_register_pure_function)(
     muon_error_buffer* error);
 
 /**
- * @brief Registers a plugin-owned stateful closure with the Muon host
+ * @brief Registers a plugin-owned stateful closure with the muon host
  * marshaller.
  *
  * @param signature Completion-first signature for the closure.
@@ -357,9 +357,9 @@ typedef uint8_t (*muon_plugin_helper_create_completion_function)(
     muon_error_buffer* error);
 
 /**
- * @brief Retains a Muon-owned function pointer beyond the current call.
+ * @brief Retains a muon-owned function pointer beyond the current call.
  *
- * @param retained_func Function value received from Muon or JavaScript.
+ * @param retained_func Function value received from muon or JavaScript.
  * @return 1 on success, 0 on failure.
  *
  * @remarks Function arguments are borrowed until the current invocation
@@ -394,7 +394,7 @@ typedef void (*muon_plugin_release_function_pointer)(
  *
  * @remarks Fill `out_view->data` and return `out_view` as a
  * `MUON_TYPE_BUFFER_VIEW` completion result to transfer the allocation to
- * Muon without copying. If the plugin does not return the view, it must pass
+ * muon without copying. If the plugin does not return the view, it must pass
  * `out_handle` to `release_shared_buffer`. After either transfer or release,
  * both the view and handle are invalid.
  */
@@ -417,7 +417,7 @@ typedef void (*muon_plugin_release_shared_buffer)(
     muon_shared_buffer_handle handle);
 
 /**
- * @brief Emits a plugin log message through Muon's configured logger.
+ * @brief Emits a plugin log message through muon's configured logger.
  *
  * @param level Message severity.
  * @param message Null-terminated UTF-8 message. Null is treated as empty.
@@ -431,7 +431,7 @@ typedef void (*muon_plugin_helper_log_message)(
  *
  * @remarks The helper table pointer passed to `muon_init_plugin` may be
  * cached by the plugin while the plugin remains loaded. Helper calls fail or
- * become no-ops after the owning Muon runtime has been destroyed.
+ * become no-ops after the owning muon runtime has been destroyed.
  */
 typedef struct muon_plugin_helpers {
   /** ABI slot for `register_pure_function`. */
@@ -455,7 +455,7 @@ typedef struct muon_plugin_helpers {
    *
    * @remarks Fill `out_view->data` and return `out_view` as a
    * `MUON_TYPE_BUFFER_VIEW` completion result to transfer the allocation to
-   * Muon without copying. If the plugin does not return the view, it must pass
+   * muon without copying. If the plugin does not return the view, it must pass
    * `out_handle` to `release_shared_buffer`. After either transfer or release,
    * both the view and handle are invalid.
    */
@@ -488,7 +488,7 @@ typedef struct muon_plugin_helpers {
  * @return 1 on success, 0 on failure.
  *
  * @remarks The returned function pointer is owned by the plugin until it is
- * given to Muon as a value or explicitly released with the
+ * given to muon as a value or explicitly released with the
  * `release_plugin_function_pointer` helper macro. Use this helper for stateless
  * function values that do not need a per-function user data pointer.
  */
@@ -497,7 +497,7 @@ typedef struct muon_plugin_helpers {
       (signature), (muon_user_function)(function), (out_function), (error))
 
 /**
- * @brief Registers a plugin-owned stateful closure with the Muon host
+ * @brief Registers a plugin-owned stateful closure with the muon host
  * marshaller.
  *
  * @param signature Completion-first signature for the closure.
@@ -542,9 +542,9 @@ typedef struct muon_plugin_helpers {
       (out_completion), (error))
 
 /**
- * @brief Retains a Muon-owned function pointer beyond the current call.
+ * @brief Retains a muon-owned function pointer beyond the current call.
  *
- * @param retained_func Function value received from Muon or JavaScript.
+ * @param retained_func Function value received from muon or JavaScript.
  * @return 1 on success, 0 on failure.
  *
  * @remarks Function arguments are borrowed until the current invocation
@@ -571,7 +571,7 @@ typedef struct muon_plugin_helpers {
       (muon_native_function)(released_func))
 
 /**
- * @brief Emits a plugin log message through Muon's configured logger.
+ * @brief Emits a plugin log message through muon's configured logger.
  *
  * @param level Message severity.
  * @param message Null-terminated UTF-8 message. Null is treated as empty.
@@ -595,18 +595,18 @@ typedef struct muon_plugin_namespace {
    * JavaScript function body executed after native functions in this namespace
    * are registered. May be null when no setup is needed.
    *
-   * @remarks Muon invokes this body as a trusted setup script with
+   * @remarks muon invokes this body as a trusted setup script with
    * `namespace` bound to the namespace object and `globalThis` bound to the V8
    * global object. `isAllowed(name)` returns whether a public function name in
    * this namespace passed plugin allow filtering. The body must remain valid
-   * while Muon reads plugin metadata.
+   * while muon reads plugin metadata.
    */
   const char* setup_script;
   /**
    * Null-terminated table of JavaScript-visible function metadata pointers.
    *
    * May be null to expose no functions. Static storage is recommended so the
-   * table and all referenced descriptors remain valid while Muon reads the
+   * table and all referenced descriptors remain valid while muon reads the
    * returned metadata.
    */
   const muon_plugin_function_metadata* const* functions;
@@ -620,7 +620,7 @@ typedef struct muon_plugin_metadata {
    * Null-terminated table of JavaScript namespace metadata pointers.
    *
    * May be null to expose no namespaces. Static storage is recommended so the
-   * table and all referenced descriptors remain valid while Muon reads the
+   * table and all referenced descriptors remain valid while muon reads the
    * returned metadata.
    */
   const muon_plugin_namespace* const* namespaces;
@@ -634,7 +634,7 @@ typedef struct muon_plugin_metadata {
  * @return Plugin metadata, or null to decline loading.
  *
  * @remarks A plugin library must export a function named `muon_init_plugin`
- * with this signature. Muon calls it once while loading the library. Returning
+ * with this signature. muon calls it once while loading the library. Returning
  * invalid metadata causes the library or individual functions to be skipped.
  */
 typedef const muon_plugin_metadata* (*muon_init_plugin_func)(

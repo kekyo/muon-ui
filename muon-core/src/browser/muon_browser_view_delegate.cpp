@@ -86,7 +86,7 @@ bool MuonBrowserViewDelegate::OnPopupBrowserViewCreated(
                              close_handler_,
                              linux_desktop_id_));
   if (!is_devtools) {
-    // Popups are modeless in Muon even when they keep an opener reference.
+    // Popups are modeless in muon even when they keep an opener reference.
     EnablePopupOpenerBrowserViewTask::EnablePopupOpenerBrowserView(browser_view);
     CefPostTask(TID_UI, new EnablePopupOpenerBrowserViewTask(browser_view));
     CefPostDelayedTask(TID_UI,

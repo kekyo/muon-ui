@@ -89,12 +89,12 @@ type ZipEntry = {
 };
 
 /**
- * Public Muon runtime target used by CLI, Vite options, and package layout.
+ * Public muon runtime target used by CLI, Vite options, and package layout.
  */
 export type MuonBuildTarget = MuonTarget;
 
 /**
- * Options for creating redistributable Muon app directories.
+ * Options for creating redistributable muon app directories.
  */
 export interface MuonBuildOptions {
   /**
@@ -148,7 +148,7 @@ export interface MuonBuildOptions {
    */
   browserStartPage?: string;
   /**
-   * Muon config path to embed.
+   * muon config path to embed.
    */
   configPath?: string;
   /**
@@ -163,14 +163,14 @@ export interface MuonBuildOptions {
    * Windows PE and NSIS resource metadata.
    *
    * @defaultValue Uses `muon.json` `windows.resource`, `project.json`,
-   * `package.json`, then Muon defaults.
+   * `package.json`, then muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
   /**
    * Linux desktop entry metadata.
    *
    * @defaultValue Uses `muon.json` `linux.desktop`, package metadata, then
-   * Muon defaults.
+   * muon defaults.
    */
   linuxDesktop?: MuonLinuxDesktopOptions;
   /**
@@ -261,7 +261,7 @@ export interface MuonBuildTargetResult {
 }
 
 /**
- * Result of a Muon app build.
+ * Result of a muon app build.
  */
 export interface MuonBuildResult {
   /**
@@ -300,7 +300,7 @@ export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
 };
 
 /**
- * Builds CEF-free Muon app distribution directories for one or more targets.
+ * Builds CEF-free muon app distribution directories for one or more targets.
  */
 export const buildMuonApp = async (
   options: MuonBuildOptions = {},
@@ -370,7 +370,7 @@ export const buildMuonApp = async (
     const target = targets[index] as MuonBuildTarget;
     progress?.({
       phase: "build",
-      status: `Building Muon target ${target} (${index + 1}/${targets.length})`,
+      status: `Building muon target ${target} (${index + 1}/${targets.length})`,
     });
     const result = await buildMuonTarget({
       packageDirectory,
@@ -554,7 +554,7 @@ const readBuildConfig = async (
   }
 
   return {
-    config: await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
+    config: await readJsonObjectFile(resolvedConfigPath, "muon config file"),
     directory: dirname(resolvedConfigPath),
   };
 };
@@ -618,7 +618,7 @@ const resolveConfigPath = async (
       return resolvedPath;
     }
 
-    throw new Error(`Muon config file does not exist: ${resolvedPath}`);
+    throw new Error(`muon config file does not exist: ${resolvedPath}`);
   }
 
   for (const fileName of defaultConfigFileNames) {
@@ -833,27 +833,27 @@ const verifyTargetInputs = async (input: {
 }): Promise<void> => {
   await assertDirectory(
     input.sourceRuntimePath,
-    `Muon runtime for ${input.target}`,
+    `muon runtime for ${input.target}`,
   );
   await assertFile(
     input.sourceBootstrapPath,
-    `Muon bootstrap for ${input.target}`,
+    `muon bootstrap for ${input.target}`,
   );
   if (input.sourceRuntimeHelperPath !== undefined) {
     await assertFile(
       input.sourceRuntimeHelperPath,
-      `Muon runtime helper for ${input.target}`,
+      `muon runtime helper for ${input.target}`,
     );
   }
   for (const fileName of input.descriptor.runtimeFiles) {
     await assertFile(
       join(input.sourceRuntimePath, fileName),
-      `Muon runtime file ${fileName} for ${input.target}`,
+      `muon runtime file ${fileName} for ${input.target}`,
     );
   }
   await assertFile(
     join(input.sourceRuntimePath, muonLicenseFileName),
-    `Muon license file for ${input.target}`,
+    `muon license file for ${input.target}`,
   );
 };
 
@@ -911,7 +911,7 @@ const writeAssetArchive = async (
 ): Promise<MuonBuildAssetResult> => {
   const sourceStats = await statOrUndefined(input.sourcePath);
   if (sourceStats === undefined) {
-    throw new Error(`Muon asset source does not exist: ${input.sourcePath}`);
+    throw new Error(`muon asset source does not exist: ${input.sourcePath}`);
   }
 
   const archive = sourceStats.isDirectory()
@@ -921,7 +921,7 @@ const writeAssetArchive = async (
       : undefined;
   if (archive === undefined) {
     throw new Error(
-      `Muon asset source is not a directory or file: ${input.sourcePath}`,
+      `muon asset source is not a directory or file: ${input.sourcePath}`,
     );
   }
   await writeFile(outputPath, archive);
@@ -946,7 +946,7 @@ const createAssetArchiveFromDirectory = async (
 ): Promise<Buffer> => {
   const entries = await collectZipEntries(input.sourcePath, input.prefix);
   if (entries.length === 0) {
-    throw new Error(`Muon asset source has no files: ${input.sourcePath}`);
+    throw new Error(`muon asset source has no files: ${input.sourcePath}`);
   }
 
   return createZipArchive(appendZipEntries(entries, extraEntries));
@@ -961,7 +961,7 @@ const createAssetArchiveFromZipFile = async (
     assertSafeZipEntryName(entry.name);
     if (zip.getEntry(entry.name) !== null) {
       throw new Error(
-        `Muon app icon asset entry already exists: ${entry.name}`,
+        `muon app icon asset entry already exists: ${entry.name}`,
       );
     }
     zip.addFile(entry.name, entry.data);
@@ -979,7 +979,7 @@ const appendZipEntries = (
     assertSafeZipEntryName(entry.name);
     if (names.has(entry.name)) {
       throw new Error(
-        `Muon app icon asset entry already exists: ${entry.name}`,
+        `muon app icon asset entry already exists: ${entry.name}`,
       );
     }
     names.add(entry.name);
@@ -1003,7 +1003,7 @@ const readZipEntryCount = (archive: Buffer, sourcePath: string): number => {
     }
   }
 
-  throw new Error(`Muon asset ZIP could not be read: ${sourcePath}`);
+  throw new Error(`muon asset ZIP could not be read: ${sourcePath}`);
 };
 
 const collectZipEntries = async (

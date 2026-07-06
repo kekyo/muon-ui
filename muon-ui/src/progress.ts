@@ -4,7 +4,7 @@
 // https://github.com/kekyo/muon
 
 /**
- * Progress event used by internal Muon build, pack, and prepare operations.
+ * Progress event used by internal muon build, pack, and prepare operations.
  *
  * @internal
  */
@@ -46,14 +46,14 @@ export interface MuonProgressEvent {
 }
 
 /**
- * Receives internal Muon progress events.
+ * Receives internal muon progress events.
  *
  * @internal
  */
 export type MuonProgressCallback = (event: MuonProgressEvent) => void;
 
 /**
- * Renders internal Muon progress events to stderr.
+ * Renders internal muon progress events to stderr.
  *
  * @internal
  */
@@ -74,7 +74,7 @@ export interface MuonProgressRenderer {
 }
 
 const spinnerFrames = ["-", "\\", "|", "/"] as const;
-const spinnerIntervalMilliseconds = 100;
+const spinnerIntervalMilliseconds = 500;
 const terminalLineStart = "\r";
 const terminalClearLine = "\x1b[K";
 
@@ -97,22 +97,16 @@ const formatProgressEvent = (event: MuonProgressEvent): string => {
   return status;
 };
 
-const createLineProgressRenderer = (): MuonProgressRenderer => {
-  let lastLine: string | undefined = undefined;
-  return {
-    report: (event): void => {
-      const line = formatProgressEvent(event);
-      if (line !== lastLine) {
-        process.stderr.write(`${line}\n`);
-        lastLine = line;
-      }
-    },
-    flush: (): void => {},
-  };
-};
+interface ActiveProgressLine {
+  key: string;
+  text: string;
+}
+
+const getProgressLineKey = (event: MuonProgressEvent): string =>
+  `${event.phase}\0${event.status.trimEnd()}`;
 
 const createSpinnerProgressRenderer = (): MuonProgressRenderer => {
-  let activeStatus: string | undefined = undefined;
+  let activeLine: ActiveProgressLine | undefined = undefined;
   let frameIndex = 0;
   let timer: NodeJS.Timeout | undefined = undefined;
 
@@ -127,45 +121,57 @@ const createSpinnerProgressRenderer = (): MuonProgressRenderer => {
     }
   };
 
-  const renderStatus = (): void => {
-    if (activeStatus === undefined) {
+  const renderLine = (): void => {
+    if (activeLine === undefined) {
       return;
     }
     const frame = spinnerFrames[frameIndex] ?? spinnerFrames[0];
     writeRaw(
-      `${terminalLineStart}${frame} ${activeStatus}${terminalClearLine}`,
+      `${terminalLineStart}${frame} ${activeLine.text}${terminalClearLine}`,
     );
     frameIndex = (frameIndex + 1) % spinnerFrames.length;
   };
 
   const ensureTimer = (): void => {
     if (timer === undefined) {
-      timer = setInterval(renderStatus, spinnerIntervalMilliseconds);
+      timer = setInterval(renderLine, spinnerIntervalMilliseconds);
+      timer.unref();
     }
   };
 
-  const finishStatus = (): void => {
-    if (activeStatus === undefined) {
+  const finishLine = (): void => {
+    if (activeLine === undefined) {
       return;
     }
-    const status = activeStatus;
-    activeStatus = undefined;
     stopTimer();
+    const text = activeLine.text;
+    activeLine = undefined;
     frameIndex = 0;
-    writeRaw(`${terminalLineStart}${status}${terminalClearLine}\n`);
+    writeRaw(`${terminalLineStart}${text}${terminalClearLine}\n`);
   };
 
   return {
     report: (event): void => {
-      const status = formatProgressEvent(event);
-      if (activeStatus !== undefined && activeStatus !== status) {
-        finishStatus();
+      const nextLine = {
+        key: getProgressLineKey(event),
+        text: formatProgressEvent(event),
+      };
+      if (activeLine === undefined) {
+        activeLine = nextLine;
+        renderLine();
+        ensureTimer();
+        return;
       }
-      activeStatus = status;
-      renderStatus();
+      if (activeLine.key !== nextLine.key) {
+        renderLine();
+        activeLine = nextLine;
+        renderLine();
+      } else {
+        activeLine = nextLine;
+      }
       ensureTimer();
     },
-    flush: finishStatus,
+    flush: finishLine,
   };
 };
 
@@ -175,6 +181,4 @@ const createSpinnerProgressRenderer = (): MuonProgressRenderer => {
  * @internal
  */
 export const createMuonProgressRenderer = (): MuonProgressRenderer =>
-  process.stderr.isTTY === true
-    ? createSpinnerProgressRenderer()
-    : createLineProgressRenderer();
+  createSpinnerProgressRenderer();

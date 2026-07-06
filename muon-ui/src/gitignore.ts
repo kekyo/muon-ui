@@ -25,7 +25,7 @@ const muonGitignoreEntryAliases: Record<MuonGitignoreEntry, readonly string[]> =
   };
 
 /**
- * Result of ensuring Muon generated directories are ignored by Git.
+ * Result of ensuring muon generated directories are ignored by Git.
  */
 export interface MuonGitignoreResult {
   /**
@@ -52,7 +52,7 @@ const hasMuonGitignoreEntry = (
     .some((line) => muonGitignoreEntryAliases[entry].includes(line));
 
 /**
- * Adds Muon generated directories to a project .gitignore file.
+ * Adds muon generated directories to a project .gitignore file.
  *
  * @param root Project root containing the .gitignore file.
  * @returns Gitignore update result.

@@ -31,6 +31,7 @@ static constexpr char kMuonFunctionArgumentKindPluginProxy[] = "plugin_proxy";
 static constexpr char kMuonFunctionArgumentProxyIdKey[] = "proxy_id";
 static constexpr char kMuonFunctionArgumentTypeKey[] = "type_key";
 static constexpr char kMuonFunctionArgumentTypeDescriptorKey[] = "type";
+static constexpr char kMuonExecutorSpawnFunctionPath[] = "muon.executor.spawn";
 static constexpr double kMuonTwoTo63 = 9223372036854775808.0;
 static constexpr double kMuonTwoTo64 = 18446744073709551616.0;
 static int g_next_muon_v8_context_id = 1;
@@ -117,7 +118,7 @@ static bool ParseMuonUInt64String(const std::string& source, uint64_t* value) {
 }
 
 // CEF does not expose the V8 integer API needed for lossless 64-bit JS values.
-// Muon therefore mirrors the Node-API int64 number boundary:
+// muon therefore mirrors the Node-API int64 number boundary:
 // napi_create_int64 creates a JS number and documents precision loss outside
 // Number.MIN_SAFE_INTEGER/Number.MAX_SAFE_INTEGER, while napi_get_value_int64
 // requires a JS number and maps non-finite values to zero.
@@ -351,20 +352,20 @@ bool MuonV8Handler::Execute(const CefString& name,
     if (arguments.size() != 3 || !arguments[0] || !arguments[0]->IsString() ||
         !arguments[1] || !arguments[1]->IsString() || !arguments[2] ||
         !arguments[2]->IsArray()) {
-      RejectPromise(promise, "Invalid Muon capability call");
+      RejectPromise(promise, "Invalid muon capability call");
       return true;
     }
     capability_id = arguments[0]->GetStringValue().ToString();
     capability_function_path = arguments[1]->GetStringValue().ToString();
     if (capability_id.empty() || capability_function_path.empty()) {
-      RejectPromise(promise, "Invalid Muon capability call");
+      RejectPromise(promise, "Invalid muon capability call");
       return true;
     }
     const auto public_function_iterator =
         function_indexes_by_public_path_.find(capability_function_path);
     if (public_function_iterator == function_indexes_by_public_path_.end()) {
       RejectPromise(promise,
-                    "Unknown Muon capability function: " +
+                    "Unknown muon capability function: " +
                         capability_function_path);
       return true;
     }
@@ -373,7 +374,7 @@ bool MuonV8Handler::Execute(const CefString& name,
             functions_[public_function_iterator->second].id));
     if (function_iterator == function_indexes_by_v8_name_.end()) {
       RejectPromise(promise,
-                    "Unknown Muon capability function: " +
+                    "Unknown muon capability function: " +
                         capability_function_path);
       return true;
     }
@@ -393,7 +394,7 @@ bool MuonV8Handler::Execute(const CefString& name,
     const auto& proxy = proxy_iterator->second;
     if (proxy.function_type.type != MUON_TYPE_FUNCTION ||
         proxy.function_type.function_return_type.empty()) {
-      RejectPromise(promise, "Muon function proxy type is invalid");
+      RejectPromise(promise, "muon function proxy type is invalid");
       return true;
     }
     arg_types = proxy.function_type.function_arg_types;
@@ -413,11 +414,15 @@ bool MuonV8Handler::Execute(const CefString& name,
     RejectPromise(promise, error_message);
     return true;
   }
+  if (function_name == kMuonExecutorSpawnFunctionPath &&
+      encoded_args->GetSize() >= 3) {
+    encoded_args->SetDouble(2, static_cast<double>(context_id_));
+  }
 
   const auto context = CefV8Context::GetCurrentContext();
   const auto frame = context ? context->GetFrame() : nullptr;
   if (!frame) {
-    RejectPromise(promise, "Muon frame is not available");
+    RejectPromise(promise, "muon frame is not available");
     return true;
   }
 
@@ -573,7 +578,7 @@ bool MuonV8Handler::ResolvePluginResultMessage(
       static_cast<muon_value_type>(message_args->GetInt(2));
   if (returned_type != pending_promise.return_type.type) {
     pending_promise.promise->RejectPromise(
-        "Muon plugin returned an unexpected result type");
+        "muon plugin returned an unexpected result type");
     context_->Exit();
     return true;
   }
@@ -597,7 +602,7 @@ void MuonV8Handler::RejectAllPendingPromises() {
   }
 
   for (const auto& entry : pending_promises_) {
-    entry.second.promise->RejectPromise("Muon V8 context was released");
+    entry.second.promise->RejectPromise("muon V8 context was released");
   }
   pending_promises_.clear();
   pending_result_messages_.clear();

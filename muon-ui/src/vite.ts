@@ -44,7 +44,7 @@ export interface MuonWindowsResourceOptions {
   /**
    * Windows-specific icon PNG file path override.
    *
-   * @remarks Only `.png` files are accepted as app inputs. Muon generates the
+   * @remarks Only `.png` files are accepted as app inputs. muon generates the
    * required Windows `.ico` file automatically when updating PE resources or
    * creating NSIS installers. Use top-level `iconPath` for a shared static
    * application icon. Relative paths are resolved from the source that supplied
@@ -58,7 +58,7 @@ export interface MuonWindowsResourceOptions {
    * Product name written to the Windows version resource.
    *
    * @defaultValue Uses `windows.resource.productName`, `project.json`,
-   * `package.json`, then the Muon launcher name.
+   * `package.json`, then the muon launcher name.
    */
   productName?: string;
 
@@ -118,7 +118,7 @@ export interface MuonLinuxDesktopOptions {
   /**
    * Desktop entry identifier without the `.desktop` suffix.
    *
-   * @defaultValue Uses the resolved Muon `appId`.
+   * @defaultValue Uses the resolved muon `appId`.
    */
   desktopId?: string;
 
@@ -164,7 +164,7 @@ export interface MuonLinuxDesktopOptions {
 }
 
 /**
- * Options for generating Muon app distributions after Vite build.
+ * Options for generating muon app distributions after Vite build.
  */
 export interface MuonViteBuildOptions {
   /**
@@ -209,7 +209,7 @@ export interface MuonViteBuildOptions {
   outputRoot?: string;
 
   /**
-   * Muon config path to embed.
+   * muon config path to embed.
    *
    * @defaultValue Auto-detects `muon.json5`, `muon.jsonc`, then `muon.json`;
    * uses an empty config when none exists.
@@ -232,7 +232,7 @@ export interface MuonViteBuildOptions {
    * Windows PE and NSIS resource metadata.
    *
    * @defaultValue Uses CLI options, `muon.json` `windows.resource`,
-   * `project.json`, `package.json`, then Muon defaults.
+   * `project.json`, `package.json`, then muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
 
@@ -240,7 +240,7 @@ export interface MuonViteBuildOptions {
    * Linux desktop entry metadata.
    *
    * @defaultValue Uses CLI options, `muon.json` `linux.desktop`, package
-   * metadata, then Muon defaults.
+   * metadata, then muon defaults.
    */
   linuxDesktop?: MuonLinuxDesktopOptions;
 
@@ -261,17 +261,17 @@ export interface MuonViteBuildOptions {
 }
 
 /**
- * Import-side capability rule for Muon plugin virtual modules.
+ * Import-side capability rule for muon plugin virtual modules.
  */
 export interface MuonVitePluginAccessImportOptions extends MuonPluginAccessImportOptions {}
 
 /**
- * Plugin entry and capability import configuration for Muon virtual modules.
+ * Plugin entry and capability import configuration for muon virtual modules.
  */
 export interface MuonVitePluginAccessEntryOptions extends MuonPluginAccessEntryOptions {}
 
 /**
- * Plugin access configuration for Muon plugin virtual modules.
+ * Plugin access configuration for muon plugin virtual modules.
  */
 export interface MuonVitePluginAccessOptions extends MuonPluginAccessOptions {
   /**
@@ -281,7 +281,7 @@ export interface MuonVitePluginAccessOptions extends MuonPluginAccessOptions {
 }
 
 /**
- * Options for the Muon Vite development plugin.
+ * Options for the muon Vite development plugin.
  */
 export interface MuonVitePluginOptions {
   /**
@@ -311,7 +311,7 @@ export interface MuonVitePluginOptions {
   stagePath?: string;
 
   /**
-   * Launch Muon automatically during Vite dev startup.
+   * Launch muon automatically during Vite dev startup.
    *
    * @remarks This is independent from Vite's server.open browser startup
    * option. Vite build ignores this option.
@@ -320,7 +320,7 @@ export interface MuonVitePluginOptions {
   open?: boolean;
 
   /**
-   * Enable the Muon debugger defaults during Vite dev startup.
+   * Enable the muon debugger defaults during Vite dev startup.
    *
    * @remarks When enabled, the generated development config enables CDP and
    * binds DevTools to F12. Vite build ignores this option.
@@ -351,9 +351,9 @@ export interface MuonVitePluginOptions {
 }
 
 /**
- * Creates a Vite plugin that launches Muon during Vite dev startup.
+ * Creates a Vite plugin that launches muon during Vite dev startup.
  *
- * @param options Muon plugin options used for development startup and build.
+ * @param options muon plugin options used for development startup and build.
  * @returns Vite plugin instance.
  * @defaultValue `options` defaults to `{}`.
  */
@@ -386,7 +386,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
           ? {
               onConfigReadError: (error: unknown): void => {
                 config.logger.warn(
-                  `Muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
+                  `muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
                 );
               },
             }

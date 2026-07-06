@@ -384,6 +384,8 @@ static bool TestTrayOptionsJson() {
               error_message.c_str()) ||
       !Expect(options.id == "main", "unexpected tray id") ||
       !Expect(options.icon_path == "icons/tray.png", "unexpected tray icon") ||
+      !Expect(!options.follow_title_bar_icon,
+              "tray with icon should not follow the title bar icon") ||
       !Expect(options.tooltip == "Ready", "unexpected tray tooltip") ||
       !Expect(options.menu_items.size() == 4, "unexpected tray menu count")) {
     return false;
@@ -410,6 +412,19 @@ static bool TestTrayOptionsJson() {
                 "unexpected tray separator type");
 }
 
+static bool TestTrayOptionsWithoutIconFollowTitleBar() {
+  MuonBrowserTrayOptions options;
+  std::string error_message;
+  return Expect(ParseMuonBrowserTrayOptionsJson(
+                    R"({"id":"main","tooltip":"Ready"})", &options,
+                    &error_message),
+                error_message.c_str()) &&
+         Expect(options.id == "main", "unexpected tray id") &&
+         Expect(options.icon_path.empty(), "unexpected tray icon") &&
+         Expect(options.follow_title_bar_icon,
+                "tray without icon should follow the title bar icon");
+}
+
 static bool TestTrayMenuItemsJsonValidation() {
   std::vector<MuonBrowserTrayMenuItem> items;
   MuonBrowserTrayOptions options;
@@ -427,8 +442,14 @@ static bool TestTrayMenuItemsJsonValidation() {
                     &error_message),
                 "reserved tray id was accepted") &&
          Expect(!ParseMuonBrowserTrayOptionsJson(
-                    R"({"id":"main"})", &options, &error_message),
-                "tray options without icon were accepted") &&
+                    R"({"id":"main","icon":null})", &options, &error_message),
+                "null tray icon was accepted") &&
+         Expect(!ParseMuonBrowserTrayOptionsJson(
+                    R"({"id":"main","icon":""})", &options, &error_message),
+                "empty tray icon was accepted") &&
+         Expect(!ParseMuonBrowserTrayOptionsJson(
+                    R"({"id":"main","icon":42})", &options, &error_message),
+                "non-string tray icon was accepted") &&
          Expect(!ParseMuonBrowserTrayMenuItemsJson(
                     R"([{"id":"open","label":"Open"},{"id":"open","label":"Again"}])",
                     &items, &error_message),
@@ -444,11 +465,11 @@ static bool TestTrayMenuItemsJsonValidation() {
 }
 
 static bool TestWindowTitleFallback() {
-  return Expect(GetMuonDefaultWindowTitle() == std::string("Muon"),
+  return Expect(GetMuonDefaultWindowTitle() == std::string("muon"),
                 "unexpected default window title") &&
-         Expect(GetMuonDevToolsWindowTitle() == std::string("Muon DevTools"),
+         Expect(GetMuonDevToolsWindowTitle() == std::string("muon DevTools"),
                 "unexpected DevTools window title") &&
-         Expect(GetMuonWindowTitleOrDefault("") == "Muon",
+         Expect(GetMuonWindowTitleOrDefault("") == "muon",
                 "empty page title did not use default") &&
          Expect(GetMuonWindowTitleOrDefault("Page") == "Page",
                 "non-empty page title was not preserved");
@@ -1017,6 +1038,7 @@ int main() {
   return TestBrowserFunctionDefinitions() && TestContextMenuItemsJson() &&
                  TestContextMenuItemValidation() &&
                  TestContextMenuInsertionIndex() && TestTrayOptionsJson() &&
+                 TestTrayOptionsWithoutIconFollowTitleBar() &&
                  TestTrayMenuItemsJsonValidation() &&
                  TestWindowTitleFallback() &&
                  TestInitialWindowShowState() &&

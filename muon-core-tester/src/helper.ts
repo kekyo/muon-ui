@@ -10,9 +10,9 @@ const OPEN_READY_STATE = 1;
 const CLOSED_READY_STATE = 3;
 
 /**
- * CDP title used by the internal Muon custom title bar target.
+ * CDP title used by the internal muon custom title bar target.
  */
-export const MUON_TITLE_BAR_TARGET_TITLE = "Muon Title Bar";
+export const MUON_TITLE_BAR_TARGET_TITLE = "muon Title Bar";
 
 /**
  * JSON-compatible value used for CDP parameters and results.
@@ -97,14 +97,14 @@ export interface CdpTarget {
 }
 
 /**
- * Returns true when a CDP target belongs to the internal Muon title bar.
+ * Returns true when a CDP target belongs to the internal muon title bar.
  *
  * @param target CDP target entry.
  */
 export const isMuonTitleBarTarget = (target: CdpTarget): boolean =>
   target.title === MUON_TITLE_BAR_TARGET_TITLE ||
-  target.url.includes("Muon%20Title%20Bar") ||
-  target.url.includes("Muon Title Bar") ||
+  target.url.includes("muon%20Title%20Bar") ||
+  target.url.includes("muon Title Bar") ||
   target.url.includes("muon-title-bar");
 
 /**

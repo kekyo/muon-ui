@@ -11,7 +11,7 @@
 #include <vector>
 
 /**
- * Muon browser context menu item kind.
+ * muon browser context menu item kind.
  */
 enum MuonBrowserContextMenuItemType {
   /** Command item that notifies JavaScript when selected. */
@@ -21,7 +21,7 @@ enum MuonBrowserContextMenuItemType {
 };
 
 /**
- * Placement slot for Muon browser context menu items.
+ * Placement slot for muon browser context menu items.
  */
 enum MuonBrowserContextMenuPlacement {
   /** Insert before the existing menu content. */
@@ -67,7 +67,7 @@ struct MuonBrowserContextMenuConditions {
 };
 
 /**
- * Context menu state used to evaluate Muon item visibility.
+ * Context menu state used to evaluate muon item visibility.
  */
 struct MuonBrowserContextMenuState {
   /** Whether the target is editable. */
@@ -85,7 +85,7 @@ struct MuonBrowserContextMenuState {
 };
 
 /**
- * Parsed Muon browser context menu item.
+ * Parsed muon browser context menu item.
  */
 struct MuonBrowserContextMenuItem {
   /** Item kind. */
@@ -105,7 +105,7 @@ struct MuonBrowserContextMenuItem {
 };
 
 /**
- * Parses and validates a JSON array of Muon browser context menu items.
+ * Parses and validates a JSON array of muon browser context menu items.
  *
  * @param items_json JSON array produced by the JavaScript wrapper.
  * @param items Receives normalized items on success.

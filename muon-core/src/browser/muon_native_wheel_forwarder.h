@@ -68,11 +68,11 @@ CefWindowHandle GetMuonNativeWheelForwarderTopmostRegisteredWindowAtPoint(
         top_level_windows);
 
 /**
- * Returns whether a Windows non-client mouse down hit-test should start Muon's
+ * Returns whether a Windows non-client mouse down hit-test should start muon's
  * custom draggable-region window drag handling.
  *
  * @param native_hit_test Win32 WM_NCLBUTTONDOWN hit-test code.
- * @return true when Muon should handle the hit as a title/page drag.
+ * @return true when muon should handle the hit as a title/page drag.
  */
 bool ShouldHandleMuonWindowsNonClientDragHitTest(int native_hit_test);
 

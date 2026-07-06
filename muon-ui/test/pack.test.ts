@@ -186,7 +186,7 @@ const writeViteProject = async (
         name: "@scope/packed-sample",
         version: "1.2.3",
         description: "Packed sample",
-        author: "Muon Tester",
+        author: "muon Tester",
         type: "module",
       },
       null,
@@ -231,7 +231,7 @@ const writeViteProjectWithoutMuonPlugin = async (
         name: "plain-vite-packed-sample",
         version: "1.2.3",
         description: "Plain Vite packed sample",
-        author: "Muon Tester",
+        author: "muon Tester",
         type: "module",
       },
       null,
@@ -280,7 +280,7 @@ const writeViteProjectWithMuonBuildDisabled = async (
         name: "disabled-packed-sample",
         version: "1.2.3",
         description: "Disabled packed sample",
-        author: "Muon Tester",
+        author: "muon Tester",
         type: "module",
       },
       null,
@@ -551,13 +551,13 @@ describe("muon pack", () => {
     ]);
     expect(result.stderr).toContain("Building distributions");
     expect(result.stderr).toContain("Running Vite build");
-    expect(result.stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Building muon target linux-amd64 (1/1)");
     expect(result.stderr).toContain("Packaging deb linux-amd64 (1/1)");
     expect(result.stderr).toContain("Running dpkg-deb");
     expect(result.stderr).toContain(`Wrote ${artifactPath}`);
   });
 
-  it("packages Vite output under the configured base path when the Muon plugin controls pack", async () => {
+  it("packages Vite output under the configured base path when the muon plugin controls pack", async () => {
     const root = await createTemporaryDirectory("muon-pack-vite-base-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
       "linux-amd64",
@@ -589,7 +589,7 @@ describe("muon pack", () => {
     });
   });
 
-  it("packages non-Vite assets without running Vite when no Muon plugin is configured", async () => {
+  it("packages non-Vite assets without running Vite when no muon plugin is configured", async () => {
     const root = await createTemporaryDirectory("muon-pack-no-muon-plugin-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
       "linux-amd64",
@@ -667,7 +667,7 @@ describe("muon pack", () => {
     ).resolves.toBe("notices\n");
   });
 
-  it("rejects package builds when the Vite Muon plugin disables Muon builds", async () => {
+  it("rejects package builds when the Vite muon plugin disables muon builds", async () => {
     const root = await createTemporaryDirectory("muon-pack-disabled-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
       "linux-amd64",
@@ -681,7 +681,7 @@ describe("muon pack", () => {
         targets: ["linux-amd64"],
         types: ["tar.gz"],
       }),
-    ).rejects.toThrow("Muon build is disabled by muon({ build: false })");
+    ).rejects.toThrow("muon build is disabled by muon({ build: false })");
   });
 
   it("creates a deb package tree and invokes dpkg-deb for Linux targets", async () => {
@@ -767,7 +767,7 @@ printf 'deb\\n' > "$output_path"
         "Package: packed-sample",
         "Version: 1.2.3",
         "Architecture: amd64",
-        "Maintainer: Muon Tester",
+        "Maintainer: muon Tester",
         "Depends: libgtk-3-0t64 | libgtk-3-0",
         "Description: Packed sample",
         "",
@@ -797,7 +797,7 @@ printf 'deb\\n' > "$output_path"
         "Categories=Utility;",
         "StartupNotify=true",
         "StartupWMClass=scope.packed-sample",
-        "X-Muon-Managed=true",
+        "X-muon-Managed=true",
         "",
       ].join("\n"),
     );

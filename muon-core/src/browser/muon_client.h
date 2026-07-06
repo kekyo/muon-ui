@@ -239,7 +239,7 @@ class MuonClient final : public CefClient,
                           const std::vector<CefString>& icon_urls) override;
 
   /**
-   * Logs JavaScript console output through the unified Muon logger.
+   * Logs JavaScript console output through the unified muon logger.
    *
    * @param browser Browser that received console output.
    * @param level CEF console severity.
@@ -268,14 +268,14 @@ class MuonClient final : public CefClient,
                            CefRefPtr<CefMenuModel> model) override;
 
   /**
-   * Handles Muon custom context menu commands.
+   * Handles muon custom context menu commands.
    *
    * @param browser Browser that received the context menu command.
    * @param frame Frame that received the context menu command.
    * @param params Context menu parameters from CEF.
    * @param command_id Selected menu command id.
    * @param event_flags CEF event flags for the command.
-   * @return true when a Muon custom command was handled.
+   * @return true when a muon custom command was handled.
    */
   bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser,
                             CefRefPtr<CefFrame> frame,
@@ -285,7 +285,7 @@ class MuonClient final : public CefClient,
       override;
 
   /**
-   * Clears transient Muon custom context menu command mappings.
+   * Clears transient muon custom context menu command mappings.
    *
    * @param browser Browser whose context menu was dismissed.
    * @param frame Frame that received the context menu request.
@@ -333,9 +333,9 @@ class MuonClient final : public CefClient,
                              bool* is_keyboard_shortcut) override;
 
   /**
-   * Runs CEF file input dialogs through the Muon UI dialog provider.
+   * Runs CEF file input dialogs through the muon UI dialog provider.
    *
-   * @return true when the Muon UI provider accepted the dialog request.
+   * @return true when the muon UI provider accepted the dialog request.
    */
   bool OnFileDialog(CefRefPtr<CefBrowser> browser,
                     CefDialogHandler::FileDialogMode mode,
@@ -483,6 +483,11 @@ class MuonClient final : public CefClient,
                             std::string* error_message);
   void DispatchTrayEvent(int browser_id, const MuonBrowserTrayEvent& event);
   MuonBrowserTrayEventCallback CreateTrayEventCallback(int browser_id);
+  bool ResolveTitleBarTrayIconForBrowser(int browser_id,
+                                         MuonBrowserTrayIcon* icon,
+                                         std::string* error_message) const;
+  void UpdateFollowingTrayIconForBrowser(int browser_id,
+                                         const MuonTitleBarIcon* icon);
   void BeginPendingFsDialogCall(int browser_id);
   void EndPendingFsDialogCall(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
@@ -532,6 +537,8 @@ class MuonClient final : public CefClient,
   std::string linux_desktop_id_;
   bool has_initial_title_bar_icon_ = false;
   MuonTitleBarIcon initial_title_bar_icon_;
+  bool has_default_title_bar_tray_icon_ = false;
+  MuonBrowserTrayIcon default_title_bar_tray_icon_;
   std::function<bool(int32_t)> shutdown_requester_;
   std::shared_ptr<MuonAppStorage> app_storage_;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime_;
@@ -556,6 +563,8 @@ class MuonClient final : public CefClient,
   std::map<int, ModalBrowserViewDisableState>
       modal_browser_view_disable_states_;
   std::map<int, uint64_t> title_bar_icon_update_generations_;
+  std::map<int, bool> title_bar_icon_has_png_by_browser_;
+  std::map<int, MuonBrowserTrayIcon> title_bar_tray_icons_by_browser_;
   std::map<int, CefRefPtr<CefURLRequest>> pending_favicon_requests_;
   std::map<int, BrowserContextMenuRegistration> context_menu_registrations_;
   std::map<int, std::map<int, ActiveContextMenuCommand>>

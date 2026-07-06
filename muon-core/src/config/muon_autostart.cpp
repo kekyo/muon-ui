@@ -620,7 +620,7 @@ bool CreateDefaultMuonAutostartOptions(MuonAutostartOptions* options,
   options->executable_path.clear();
   options->launch_source = GetMuonStartupLaunchSource();
   if (!GetMuonExecutablePath(&options->executable_path)) {
-    *error_message = "Failed to resolve Muon executable path";
+    *error_message = "Failed to resolve muon executable path";
     return false;
   }
   return true;

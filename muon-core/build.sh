@@ -164,7 +164,7 @@ verify_windows_version_resource() {
     "${fixed_version}" \
     --product-version \
     "${fixed_version}" \
-    "ProductName=Muon" \
+    "ProductName=muon" \
     "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
     "FileDescription=${file_description}" \
     "FileVersion=${version}" \
@@ -189,11 +189,11 @@ const fs = require("fs");
 const patches = [
   {
     sourcePath: process.argv[1],
-    marker: "Muon: tolerate CEF Windows popup settings without size",
+    marker: "muon: tolerate CEF Windows popup settings without size",
   },
   {
     sourcePath: process.argv[2],
-    marker: "Muon: tolerate CEF Windows browser view settings without size",
+    marker: "muon: tolerate CEF Windows browser view settings without size",
   },
 ];
 const guardPattern = /  if \(!template_util::has_valid_size\(settings\)\) {\n    DCHECK\(false\) << "invalid settings->\[base\.\]size";\n    return(?: 0| NULL)?;\n  }/g;
@@ -211,7 +211,12 @@ for (const patch of patches) {
     replacementCount += 1;
     return replacement;
   });
-  if (replacementCount === 0 && !source.includes(patch.marker)) {
+  const legacyMarker = patch.marker.replace(/^muon:/, "Muon:");
+  if (
+    replacementCount === 0 &&
+    !source.includes(patch.marker) &&
+    !source.includes(legacyMarker)
+  ) {
     throw new Error(`CEF settings guard was not found: ${patch.sourcePath}`);
   }
   fs.writeFileSync(patch.sourcePath, source);
@@ -433,12 +438,12 @@ cp -f \
 if [[ "${TARGET_NAME}" == windows-* ]]; then
   verify_windows_version_resource \
     "${RUNTIME_DIR}/muon-core.exe" \
-    "Muon Core Runtime" \
+    "muon Core Runtime" \
     "muon-core" \
     "muon-core.exe"
   verify_windows_version_resource \
     "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
-    "Muon Bootstrap" \
+    "muon Bootstrap" \
     "muon-bootstrap" \
     "${BOOTSTRAP_EXECUTABLE_NAME}"
 fi

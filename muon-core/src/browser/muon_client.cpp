@@ -8,6 +8,7 @@
 
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
+#include "browser/muon_default_title_bar_icon.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
@@ -1005,6 +1006,25 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       plugin_capability_policies_(std::move(plugin_capability_policies)),
       unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {
   tray_service_ = CreateMuonBrowserTrayService(linux_desktop_id_);
+  std::string tray_icon_error;
+  if (has_initial_title_bar_icon_ &&
+      LoadMuonBrowserTrayIconFromTitleBarIcon(
+          initial_title_bar_icon_, "initial title bar icon",
+          &default_title_bar_tray_icon_, &tray_icon_error)) {
+    has_default_title_bar_tray_icon_ = true;
+  } else {
+    MuonTitleBarIcon default_title_bar_icon;
+    if (LoadDefaultMuonTitleBarIcon(&default_title_bar_icon,
+                                    &tray_icon_error) &&
+        LoadMuonBrowserTrayIconFromTitleBarIcon(
+            default_title_bar_icon, "embedded default title bar icon",
+            &default_title_bar_tray_icon_, &tray_icon_error)) {
+      has_default_title_bar_tray_icon_ = true;
+    } else {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
+                     tray_icon_error);
+    }
+  }
   std::ostringstream log;
   log << "MuonClient ctor this=" << FormatMuonCloseDebugPointer(this)
       << " titlebar_custom="
@@ -1244,6 +1264,8 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   }
   pending_favicon_requests_.erase(browser_id);
   title_bar_icon_update_generations_.erase(browser_id);
+  title_bar_icon_has_png_by_browser_.erase(browser_id);
+  title_bar_tray_icons_by_browser_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
   ClearTrayRegistrationsForBrowser(browser_id);
@@ -1473,11 +1495,11 @@ bool MuonClient::PrepareShutdown(
     return true;
   }
   if (!shutdown_requester_) {
-    *error_message = "Muon shutdown is unavailable";
+    *error_message = "muon shutdown is unavailable";
     return false;
   }
   if (!shutdown_requester_(exit_code)) {
-    *error_message = "Muon shutdown was not accepted";
+    *error_message = "muon shutdown was not accepted";
     return false;
   }
 
@@ -1654,6 +1676,7 @@ bool MuonClient::SetTitleBarIconForBrowser(
   const auto browser_id = browser->GetIdentifier();
   SetRegisteredMuonTitleBarIconForBrowser(browser_id, icon);
   if (!HasRegisteredMuonWindowForBrowser(browser_id)) {
+    UpdateFollowingTrayIconForBrowser(browser_id, icon);
     return true;
   }
 
@@ -1665,6 +1688,7 @@ bool MuonClient::SetTitleBarIconForBrowser(
   }
   (void)browser_view;
   SetRegisteredMuonTitleBarIcon(window, icon);
+  UpdateFollowingTrayIconForBrowser(browser_id, icon);
   return true;
 }
 
@@ -1919,7 +1943,7 @@ bool MuonClient::HandleBrowserShortcut(CefRefPtr<CefBrowser> browser,
     if (!PrepareShutdown(kMuonRecycleExitCode, &browsers,
                          &should_start_shutdown, &error_message)) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
-                     "Muon recycle shortcut failed: " + error_message);
+                     "muon recycle shortcut failed: " + error_message);
       return true;
     }
     if (should_start_shutdown) {
@@ -2020,7 +2044,7 @@ bool MuonClient::OnProcessMessageReceived(
       rejected_call.frame = frame;
       rejected_call.call_id = args->GetInt(0);
       RejectPluginCall(rejected_call,
-                       "Muon plugin API is not available for this page");
+                       "muon plugin API is not available for this page");
     }
     return true;
   }
@@ -2094,7 +2118,7 @@ bool MuonClient::OnProcessMessageReceived(
         RejectPluginCall(
             pending_call,
             error_message.empty()
-                ? "Muon plugin capability is required for validate mode"
+                ? "muon plugin capability is required for validate mode"
                 : error_message);
         return true;
       }
@@ -2307,21 +2331,21 @@ bool MuonClient::GetBrowserViewAndWindow(
   }
   if (!browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
   const auto resolved_browser_view = CefBrowserView::GetForBrowser(browser);
   if (!resolved_browser_view) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser view is unavailable";
+      *error_message = "muon browser view is unavailable";
     }
     return false;
   }
   auto resolved_window = resolved_browser_view->GetWindow();
   if (!resolved_window) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser window is unavailable";
+      *error_message = "muon browser window is unavailable";
     }
     return false;
   }
@@ -2554,13 +2578,13 @@ bool MuonClient::SetContextMenuItemsForBrowser(
     std::string* error_message) {
   if (!call.browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
   if (!call.frame || !call.frame->IsValid()) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser frame is unavailable";
+      *error_message = "muon browser frame is unavailable";
     }
     return false;
   }
@@ -2600,7 +2624,7 @@ bool MuonClient::ClearContextMenuItemsForBrowser(
     std::string* error_message) {
   if (!call.browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
@@ -2655,6 +2679,53 @@ MuonBrowserTrayEventCallback MuonClient::CreateTrayEventCallback(
   };
 }
 
+bool MuonClient::ResolveTitleBarTrayIconForBrowser(
+    int browser_id,
+    MuonBrowserTrayIcon* icon,
+    std::string* error_message) const {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  const auto has_current_png =
+      title_bar_icon_has_png_by_browser_.find(browser_id);
+  const auto current_icon = title_bar_tray_icons_by_browser_.find(browser_id);
+  if (has_current_png != title_bar_icon_has_png_by_browser_.end() &&
+      has_current_png->second &&
+      current_icon != title_bar_tray_icons_by_browser_.end()) {
+    *icon = current_icon->second;
+    return true;
+  }
+  if (has_default_title_bar_tray_icon_) {
+    *icon = default_title_bar_tray_icon_;
+    return true;
+  }
+  *error_message = "Default tray icon is unavailable";
+  return false;
+}
+
+void MuonClient::UpdateFollowingTrayIconForBrowser(
+    int browser_id,
+    const MuonTitleBarIcon* icon) {
+  if (browser_id <= 0 || icon == nullptr || icon->png_data.empty()) {
+    if (browser_id > 0) {
+      title_bar_icon_has_png_by_browser_[browser_id] = false;
+    }
+    return;
+  }
+  MuonBrowserTrayIcon tray_icon;
+  std::string error_message;
+  if (!LoadMuonBrowserTrayIconFromTitleBarIcon(
+          *icon, "current title bar icon", &tray_icon, &error_message)) {
+    title_bar_icon_has_png_by_browser_[browser_id] = false;
+    return;
+  }
+  title_bar_icon_has_png_by_browser_[browser_id] = true;
+  title_bar_tray_icons_by_browser_[browser_id] = tray_icon;
+  if (tray_service_) {
+    tray_service_->SetFollowingTrayIconForBrowser(browser_id, tray_icon);
+  }
+}
+
 bool MuonClient::CreateTrayForBrowser(const PendingPluginCall& call,
                                       std::string* tray_id,
                                       std::string* error_message) {
@@ -2662,11 +2733,11 @@ bool MuonClient::CreateTrayForBrowser(const PendingPluginCall& call,
     return false;
   }
   if (!call.browser) {
-    *error_message = "Muon browser is unavailable";
+    *error_message = "muon browser is unavailable";
     return false;
   }
   if (!call.frame || !call.frame->IsValid()) {
-    *error_message = "Muon browser frame is unavailable";
+    *error_message = "muon browser frame is unavailable";
     return false;
   }
   if (!call.encoded_args || call.encoded_args->GetSize() != 2 ||
@@ -2687,9 +2758,16 @@ bool MuonClient::CreateTrayForBrowser(const PendingPluginCall& call,
     return false;
   }
   MuonBrowserTrayIcon icon;
-  if (!LoadMuonBrowserTrayIconFromStorage(app_storage_, options.icon_path, &icon,
-                                          error_message)) {
-    return false;
+  if (options.follow_title_bar_icon) {
+    if (!ResolveTitleBarTrayIconForBrowser(call.browser->GetIdentifier(), &icon,
+                                           error_message)) {
+      return false;
+    }
+  } else {
+    if (!LoadMuonBrowserTrayIconFromStorage(app_storage_, options.icon_path,
+                                            &icon, error_message)) {
+      return false;
+    }
   }
   if (!tray_service_) {
     *error_message = "System tray service is unavailable";
@@ -2713,13 +2791,13 @@ bool MuonClient::SetTrayMenuForBrowser(const PendingPluginCall& call,
                                        std::string* error_message) {
   if (!call.browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
   if (!call.frame || !call.frame->IsValid()) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser frame is unavailable";
+      *error_message = "muon browser frame is unavailable";
     }
     return false;
   }
@@ -2777,7 +2855,7 @@ bool MuonClient::SetTrayIconForBrowser(const PendingPluginCall& call,
                                        std::string* error_message) {
   if (!call.browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
@@ -2816,7 +2894,7 @@ bool MuonClient::SetTrayTooltipForBrowser(const PendingPluginCall& call,
                                           std::string* error_message) {
   if (!call.browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
@@ -2850,7 +2928,7 @@ bool MuonClient::RemoveTrayForBrowser(const PendingPluginCall& call,
                                       std::string* error_message) {
   if (!call.browser) {
     if (error_message != nullptr) {
-      *error_message = "Muon browser is unavailable";
+      *error_message = "muon browser is unavailable";
     }
     return false;
   }
@@ -2991,23 +3069,23 @@ bool MuonClient::IsPluginCapabilityAllowed(
     return true;
   }
   if (capability_id.empty() || function_path.empty()) {
-    *error_message = "Muon plugin capability is required for validate mode";
+    *error_message = "muon plugin capability is required for validate mode";
     return false;
   }
   const auto capability_iterator =
       plugin_capability_policies_.find(capability_id);
   if (capability_iterator == plugin_capability_policies_.end() ||
       !capability_iterator->second) {
-    *error_message = "Muon plugin capability is unknown: " + capability_id;
+    *error_message = "muon plugin capability is unknown: " + capability_id;
     return false;
   }
   if (!capability_iterator->second->IsAllowedFunctionPath(function_path)) {
     *error_message =
-        "Muon plugin capability is not allowed for " + function_path;
+        "muon plugin capability is not allowed for " + function_path;
     return false;
   }
   if (!plugin_runtime_) {
-    *error_message = "Muon plugin runtime is unavailable";
+    *error_message = "muon plugin runtime is unavailable";
     return false;
   }
   for (const auto& function : plugin_runtime_->GetFunctions()) {
@@ -3017,14 +3095,14 @@ bool MuonClient::IsPluginCapabilityAllowed(
     const auto expected_function_path = CreateMuonFunctionPublicPath(function);
     if (expected_function_path != function_path) {
       *error_message =
-          "Muon plugin capability function path does not match the requested "
+          "muon plugin capability function path does not match the requested "
           "function";
       return false;
     }
     return true;
   }
 
-  *error_message = "Unknown Muon plugin function";
+  *error_message = "Unknown muon plugin function";
   return false;
 }
 
@@ -3108,7 +3186,7 @@ void MuonClient::DispatchBuiltinBrowserCall(
     log << "MuonClient DispatchBuiltinBrowserCall no_browser kind="
         << GetMuonBuiltinBrowserFunctionKindName(kind);
     AppendMuonCloseDebugLog(log.str());
-    RejectPluginCall(call, "Muon browser is unavailable");
+    RejectPluginCall(call, "muon browser is unavailable");
     return;
   }
   {
@@ -3513,7 +3591,7 @@ void MuonClient::DispatchBuiltinBrowserCall(
       break;
     }
     case MuonBuiltinBrowserFunctionKind::None:
-      RejectPluginCall(call, "Unknown Muon browser function");
+      RejectPluginCall(call, "Unknown muon browser function");
       return;
   }
 }

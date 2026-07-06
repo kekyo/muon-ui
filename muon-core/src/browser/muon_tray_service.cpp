@@ -83,11 +83,29 @@ bool LoadMuonBrowserTrayIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                        &title_bar_icon, error_message)) {
     return false;
   }
+  return LoadMuonBrowserTrayIconFromTitleBarIcon(title_bar_icon, path, icon,
+                                                error_message);
+}
 
+bool LoadMuonBrowserTrayIconFromTitleBarIcon(
+    const MuonTitleBarIcon& title_bar_icon,
+    const std::string& source,
+    MuonBrowserTrayIcon* icon,
+    std::string* error_message) {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  error_message->clear();
+  const auto diagnostic_source = source.empty() ? "title bar icon" : source;
+  if (title_bar_icon.png_data.empty()) {
+    *error_message = "Tray icon must be backed by PNG data: " +
+                     diagnostic_source;
+    return false;
+  }
   MuonBrowserTrayIcon loaded_icon;
-  loaded_icon.png_data = std::move(title_bar_icon.png_data);
+  loaded_icon.png_data = title_bar_icon.png_data;
   if (!DecodeMuonBrowserTrayIconPng(loaded_icon.png_data, &loaded_icon)) {
-    *error_message = "Tray icon must be a valid PNG: " + path;
+    *error_message = "Tray icon must be a valid PNG: " + diagnostic_source;
     return false;
   }
   *icon = std::move(loaded_icon);
@@ -108,6 +126,7 @@ struct MuonBrowserTrayRecord {
   int browser_id = 0;
   std::string tray_id;
   std::string tooltip;
+  bool follow_title_bar_icon = false;
   MuonBrowserTrayIcon icon;
   std::vector<MuonBrowserTrayMenuItem> menu_items;
   MuonBrowserTrayEventCallback callback;
@@ -152,6 +171,9 @@ class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
                    const std::string& tray_id,
                    MuonBrowserTrayIcon icon,
                    std::string* error_message) override;
+  void SetFollowingTrayIconForBrowser(
+      int browser_id,
+      const MuonBrowserTrayIcon& icon) override;
   bool SetTrayTooltip(int browser_id,
                       const std::string& tray_id,
                       const std::string& tooltip,
@@ -500,6 +522,7 @@ bool MuonBrowserTrayServiceImpl::CreateTray(
   record->browser_id = browser_id;
   record->tray_id = normalized_id;
   record->tooltip = options.tooltip;
+  record->follow_title_bar_icon = options.follow_title_bar_icon;
   record->icon = std::move(icon);
   record->menu_items = options.menu_items;
   record->callback = std::move(callback);
@@ -545,8 +568,22 @@ bool MuonBrowserTrayServiceImpl::SetTrayIcon(int browser_id,
     return false;
   }
   record->icon = std::move(icon);
+  record->follow_title_bar_icon = false;
   PlatformUpdateIcon(record);
   return true;
+}
+
+void MuonBrowserTrayServiceImpl::SetFollowingTrayIconForBrowser(
+    int browser_id,
+    const MuonBrowserTrayIcon& icon) {
+  for (auto& entry : records_) {
+    if (entry.first.browser_id != browser_id ||
+        !entry.second->follow_title_bar_icon) {
+      continue;
+    }
+    entry.second->icon = icon;
+    PlatformUpdateIcon(entry.second.get());
+  }
 }
 
 bool MuonBrowserTrayServiceImpl::SetTrayTooltip(

@@ -74,6 +74,7 @@ import {
   waitForCdp,
   waitForDocumentTitle,
   waitForInnerWidth,
+  waitForMuonStderr,
   waitForDevToolsTarget,
   waitForNativeActiveWindowTitle,
   waitForNativeWindowTitle,
@@ -105,10 +106,10 @@ import type {
 interface ExecutorSpawnOptions {
   args: string[];
   command: string;
-  stdin?: string;
 }
 
 const isLocalLinuxE2e = process.platform === "linux" && !isWindowsRemoteE2e();
+const windowsIt = isWindowsRemoteE2e() ? it : it.skip;
 
 const windowsRemoteTarget = (): string | undefined =>
   getWindowsRemoteContext()?.runtime.target;
@@ -287,7 +288,6 @@ const createExecutorStdinSpawnOptions = (): ExecutorSpawnOptions => {
         "$inputText = [Console]::In.ReadToEnd(); [Console]::Out.Write('stdout:' + $inputText); [Console]::Error.Write('stderr:ok'); exit 7",
       ],
       command: "powershell.exe",
-      stdin: "hello",
     };
   }
 
@@ -306,22 +306,98 @@ const createExecutorStdinSpawnOptions = (): ExecutorSpawnOptions => {
   return {
     args: ["-e", childScript],
     command: process.execPath,
-    stdin: "hello",
   };
 };
 
-const createTrayIconPng = (): Buffer => {
+const createExecutorStreamingSpawnOptions = (): ExecutorSpawnOptions => {
+  if (isWindowsRemoteE2e()) {
+    return {
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$stdout = [Console]::OpenStandardOutput(); $stderr = [Console]::OpenStandardError(); Start-Sleep -Milliseconds 100; $stdout.Write([byte[]](111,49), 0, 2); $stdout.Flush(); Start-Sleep -Milliseconds 100; $stderr.Write([byte[]](101,49), 0, 2); $stderr.Flush(); $inputStream = [Console]::OpenStandardInput(); $buffer = New-Object byte[] 4096; $memory = New-Object System.IO.MemoryStream; while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) { $memory.Write($buffer, 0, $read) }; $prefix = [Text.Encoding]::UTF8.GetBytes('stdin:'); $stdout.Write($prefix, 0, $prefix.Length); $bytes = $memory.ToArray(); $stdout.Write($bytes, 0, $bytes.Length); $done = [Text.Encoding]::UTF8.GetBytes('done'); $stderr.Write($done, 0, $done.Length); exit 7",
+      ],
+      command: "powershell.exe",
+    };
+  }
+
+  const childScript = `
+    const input = [];
+    setTimeout(() => process.stdout.write(Buffer.from([111, 49])), 100);
+    setTimeout(() => process.stderr.write(Buffer.from([101, 49])), 200);
+    process.stdin.on("data", (chunk) => {
+      input.push(Buffer.from(chunk));
+    });
+    process.stdin.on("end", () => {
+      process.stdout.write(Buffer.concat([Buffer.from("stdin:"), ...input]));
+      process.stderr.write("done");
+      process.exitCode = 7;
+    });
+  `;
+  return {
+    args: ["-e", childScript],
+    command: process.execPath,
+  };
+};
+
+const createExecutorLongRunningSpawnOptions = (
+  marker: string,
+): ExecutorSpawnOptions => {
+  if (isWindowsRemoteE2e()) {
+    return {
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$marker = ${JSON.stringify(marker)}; Start-Sleep -Seconds 30`,
+      ],
+      command: "powershell.exe",
+    };
+  }
+
+  return {
+    args: [
+      "-e",
+      `const marker = ${JSON.stringify(marker)}; setInterval(() => {}, 1000);`,
+    ],
+    command: process.execPath,
+  };
+};
+
+interface WindowsCommandResult {
+  exitCode: number | null;
+  stderr: string;
+  stdout: string;
+}
+
+const windowsPowerShellPath = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
+const windowsTrayCallbackMessage = 0x8000 + 0x4d3;
+const windowsTrayPrimaryActivateMessage = 0x0202;
+const windowsTraySecondaryActivateMessage = 0x0208;
+const windowsTrayContextMenuMessage = 0x007b;
+let windowsTrayCallbackSequence = 0;
+
+const createTrayIconPng = (
+  red: number = 24,
+  green: number = 120,
+  blue: number = 180,
+): Buffer => {
   const png = new PNG({ width: 16, height: 16 });
   for (let index = 0; index < png.data.length; index += 4) {
-    png.data[index] = 24;
-    png.data[index + 1] = 120;
-    png.data[index + 2] = 180;
+    png.data[index] = red;
+    png.data[index + 1] = green;
+    png.data[index + 2] = blue;
     png.data[index + 3] = 255;
   }
   return PNG.sync.write(png);
 };
 
 const trayIconPng = createTrayIconPng();
+const trayAltIconPng = createTrayIconPng(220, 80, 32);
+const titleIconPng = createTrayIconPng(80, 180, 80);
 
 const createTrayAssetRoot = async (directory: string): Promise<string> => {
   const assetRoot = join(directory, "tray-assets");
@@ -333,7 +409,142 @@ const createTrayAssetRoot = async (directory: string): Promise<string> => {
     "<!doctype html><title>muon hidden tray</title>",
   );
   await writeFile(join(iconsRoot, "tray.png"), trayIconPng);
+  await writeFile(join(iconsRoot, "tray-alt.png"), trayAltIconPng);
+  await writeFile(join(iconsRoot, "title.png"), titleIconPng);
   return assetRoot;
+};
+
+const readWindowsRemoteUtf8IfExists = async (path: string): Promise<string> => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    throw new Error("Windows remote e2e context is not configured");
+  }
+  if (!(await context.agent.files.exists(path))) {
+    return "";
+  }
+
+  let lastError: unknown = undefined;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      return (await context.agent.files.readFile(path)).toString("utf8");
+    } catch (error) {
+      lastError = error;
+      await wait(250);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Failed to read remote file: ${path}`);
+};
+
+const runWindowsPowerShell = async (
+  remoteDirectory: string,
+  label: string,
+  script: string,
+  timeoutMs: number,
+): Promise<WindowsCommandResult> => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    throw new Error("Windows remote e2e context is not configured");
+  }
+  const scriptPath = join(remoteDirectory, `${label}.ps1`);
+  const stdoutPath = join(remoteDirectory, `${label}.stdout.log`);
+  const stderrPath = join(remoteDirectory, `${label}.stderr.log`);
+  await writeFile(
+    scriptPath,
+    Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(script)]),
+  );
+  const processInfo = await context.agent.applications.launch({
+    arguments: [
+      "-NoProfile",
+      "-Sta",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ],
+    createNoWindow: true,
+    path: windowsPowerShellPath,
+    stderrPath,
+    stdoutPath,
+    workingDirectory: remoteDirectory,
+  });
+  const snapshot = await context.agent.processes.waitForExit(processInfo.id, {
+    intervalMs: 250,
+    timeoutMs,
+  });
+  return {
+    exitCode: snapshot.exitCode,
+    stderr: await readWindowsRemoteUtf8IfExists(stderrPath),
+    stdout: await readWindowsRemoteUtf8IfExists(stdoutPath),
+  };
+};
+
+const sendWindowsTrayCallback = async (
+  remoteDirectory: string,
+  notifyId: number,
+  eventMessage: number,
+  selectFirstMenuItem: boolean = false,
+): Promise<void> => {
+  const keysBlock = selectFirstMenuItem
+    ? `
+Add-Type -AssemblyName System.Windows.Forms
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait('{DOWN}{ENTER}')
+Start-Sleep -Milliseconds 300
+`
+    : "";
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class MuonTrayTestNative {
+  public static readonly IntPtr HWND_MESSAGE = new IntPtr(-3);
+
+  [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  public static extern IntPtr FindWindowExW(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool PostMessageW(IntPtr hWnd, UInt32 msg, IntPtr wParam, IntPtr lParam);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool SetCursorPos(int x, int y);
+}
+"@
+
+$deadline = [DateTime]::UtcNow.AddMilliseconds(${String(cdpCommandTimeoutMs)})
+$hwnd = [IntPtr]::Zero
+while ([DateTime]::UtcNow -lt $deadline) {
+  $hwnd = [MuonTrayTestNative]::FindWindowExW([MuonTrayTestNative]::HWND_MESSAGE, [IntPtr]::Zero, 'MuonBrowserTrayMessageWindow', $null)
+  if ($hwnd -ne [IntPtr]::Zero) {
+    break
+  }
+  Start-Sleep -Milliseconds 50
+}
+if ($hwnd -eq [IntPtr]::Zero) {
+  throw 'Timed out waiting for MuonBrowserTrayMessageWindow.'
+}
+
+[MuonTrayTestNative]::SetCursorPos(160, 160) | Out-Null
+if (-not [MuonTrayTestNative]::PostMessageW($hwnd, [UInt32]${String(windowsTrayCallbackMessage)}, [IntPtr]${String(notifyId)}, [IntPtr]${String(eventMessage)})) {
+  $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  throw "PostMessageW failed: $lastError"
+}
+${keysBlock}
+Write-Output 'ok'
+`;
+  const result = await runWindowsPowerShell(
+    remoteDirectory,
+    `windows-tray-callback-${String((windowsTrayCallbackSequence += 1)).padStart(3, "0")}-${String(notifyId)}-${String(eventMessage)}`,
+    script,
+    cdpCommandTimeoutMs,
+  );
+  expect(
+    result.stdout.trim(),
+    `Windows tray callback failed.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  ).toBe("ok");
 };
 
 const withMuonInitialWindowState = async (
@@ -438,11 +649,12 @@ const callTrayDbusMethod = async (
 const waitForBrowserTrayEvent = async (
   driver: CdpDriver,
   type: string,
+  trayId: string | undefined = undefined,
 ): Promise<Record<string, unknown>> => {
   const deadline = Date.now() + cdpCommandTimeoutMs;
   while (Date.now() < deadline) {
     const event = await driver.evaluate<Record<string, unknown> | null>(
-      `((globalThis.__muonHiddenTrayEvents ?? []).find((candidate) => candidate.type === ${JSON.stringify(type)}) ?? null)`,
+      `((globalThis.__muonHiddenTrayEvents ?? []).find((candidate) => candidate.type === ${JSON.stringify(type)} && (${trayId === undefined ? "true" : `candidate.trayId === ${JSON.stringify(trayId)}`})) ?? null)`,
     );
     if (event !== null) {
       return event;
@@ -481,7 +693,7 @@ const waitForRecycledMuon = async (
     }
     await wait(200);
   }
-  throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
+  throw new Error(`Timed out waiting for recycled muon: ${String(lastError)}`);
 };
 
 const dispatchRecycleKeyboardShortcut = async (
@@ -809,9 +1021,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     );
     try {
       await waitForProcessExit(running, processExitTimeoutMs);
-      expect(running.process.exitCode).toBe(1);
-      expect(running.stderr).toContain(
+      await expectProcessExitCode(running, 1);
+      await waitForMuonStderr(
+        running,
         "Plugin namespace must contain at least two segments: single",
+        cdpCommandTimeoutMs,
       );
     } finally {
       await stopMuon(running, undefined);
@@ -841,7 +1055,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         keys: string[];
         spawnType: string;
         runType: string;
-        internalRunType: string;
+        internalRpcType: string;
         environmentType: string;
         result: {
           processId: number;
@@ -850,21 +1064,28 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           stderr: string;
         };
       }>(`(async () => {
-        const result = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+        const decoder = new TextDecoder();
+        const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+        const waitResult = await child.wait();
         return {
           keys: Object.keys(window.muon.executor).sort(),
           spawnType: typeof window.muon.executor.spawn,
           runType: typeof window.muon.executor.run,
-          internalRunType: typeof window.muon.executor.__run,
+          internalRpcType: typeof window.muon.executor.__spawnRpc,
           environmentType: typeof window.muon.environments,
-          result,
+          result: {
+            processId: waitResult.processId,
+            exitCode: waitResult.exitCode,
+            stdout: decoder.decode(waitResult.stdout),
+            stderr: decoder.decode(waitResult.stderr),
+          },
         };
       })()`);
       expect(values).toEqual({
         keys: ["spawn"],
         spawnType: "function",
         runType: "undefined",
-        internalRunType: "function",
+        internalRpcType: "function",
         environmentType: "undefined",
         result: {
           processId: expect.any(Number),
@@ -1441,11 +1662,16 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           executorKeys: string[];
           executorInternalType: string;
         }>(`(async () => {
+          const decoder = new TextDecoder();
           const variables = await window.muon.environments.getVariables();
           const commandLine = await window.muon.environments.getCommandLine();
           const processId = await window.muon.environments.getProcessId();
           const runtimeInfo = await window.muon.environments.getRuntimeInfo();
-          const runResult = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+          const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+          await child.writeStdin("he");
+          await child.writeStdin(new Uint8Array([108, 108, 111]));
+          await child.closeStdin();
+          const waitResult = await child.wait();
           return {
             envValue: variables.MUON_E2E_ENVIRONMENTS_TEST,
             commandLineHasPluginDir: commandLine.some((value) =>
@@ -1455,9 +1681,14 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             keys: Object.keys(window.muon.environments).sort(),
             internalType: typeof window.muon.environments.__getVariables,
             runtimeInfoName: runtimeInfo.name,
-            runResult,
+            runResult: {
+              processId: waitResult.processId,
+              exitCode: waitResult.exitCode,
+              stdout: decoder.decode(waitResult.stdout),
+              stderr: decoder.decode(waitResult.stderr),
+            },
             executorKeys: Object.keys(window.muon.executor).sort(),
-            executorInternalType: typeof window.muon.executor.__run,
+            executorInternalType: typeof window.muon.executor.__spawnRpc,
           };
         })()`);
 
@@ -1489,6 +1720,185 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       },
     );
   });
+
+  it("streams child process output and writes stdin incrementally", async () => {
+    const spawnOptions = createExecutorStreamingSpawnOptions();
+    await withMuonEnvironment([], {}, async (driver) => {
+      const values = await driver.evaluate<{
+        processId: number;
+        exitCode: number;
+        stdoutBytesBeforeInput: number[];
+        stderrBytesBeforeInput: number[];
+        stdoutBytes: number[];
+        stderrBytes: number[];
+        resultHasStdout: boolean;
+        resultHasStderr: boolean;
+      }>(`(async () => {
+        const stdoutBytes = [];
+        const stderrBytes = [];
+        const until = async (predicate) => {
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline) {
+            if (predicate()) {
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          throw new Error("Timed out waiting for executor callback");
+        };
+        const child = await window.muon.executor.spawn({
+          ...${JSON.stringify(spawnOptions)},
+          onStdout: (chunk) => stdoutBytes.push(...Array.from(chunk)),
+          onStderr: (chunk) => stderrBytes.push(...Array.from(chunk)),
+        });
+        await until(() => stdoutBytes.length >= 2 && stderrBytes.length >= 2);
+        const stdoutBytesBeforeInput = [...stdoutBytes];
+        const stderrBytesBeforeInput = [...stderrBytes];
+        await child.writeStdin("a");
+        await child.writeStdin(new Uint8Array([98, 0, 99]));
+        await child.closeStdin();
+        const waitResult = await child.wait();
+        await until(() => stderrBytes.length >= 6);
+        return {
+          processId: waitResult.processId,
+          exitCode: waitResult.exitCode,
+          stdoutBytesBeforeInput,
+          stderrBytesBeforeInput,
+          stdoutBytes,
+          stderrBytes,
+          resultHasStdout: waitResult.stdout !== undefined,
+          resultHasStderr: waitResult.stderr !== undefined,
+        };
+      })()`);
+
+      expect(values).toEqual({
+        processId: expect.any(Number),
+        exitCode: 7,
+        stdoutBytesBeforeInput: [111, 49],
+        stderrBytesBeforeInput: [101, 49],
+        stdoutBytes: [111, 49, 115, 116, 100, 105, 110, 58, 97, 98, 0, 99],
+        stderrBytes: [101, 49, 100, 111, 110, 101],
+        resultHasStdout: false,
+        resultHasStderr: false,
+      });
+      expect(values.processId).toBeGreaterThan(0);
+    });
+  });
+
+  it("terminates a running child process through the executor handle", async () => {
+    const marker = `muon-spawn-kill-${Date.now().toString(36)}`;
+    const spawnOptions = createExecutorLongRunningSpawnOptions(marker);
+    await withMuonEnvironment([], {}, async (driver) => {
+      const values = await driver.evaluate<{
+        processId: number;
+        exitCode: number;
+        writeAfterCloseRejected: boolean;
+        writeAfterDisposeRejected: boolean;
+      }>(`(async () => {
+        const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+        await child.kill();
+        const waitResult = await child.wait();
+        let writeAfterCloseRejected = false;
+        let writeAfterDisposeRejected = false;
+        const closedChild = await window.muon.executor.spawn(${JSON.stringify(createExecutorStdinSpawnOptions())});
+        await closedChild.closeStdin();
+        try {
+          await closedChild.writeStdin("x");
+        } catch {
+          writeAfterCloseRejected = true;
+        }
+        await closedChild.dispose();
+        try {
+          await closedChild.writeStdin("x");
+        } catch {
+          writeAfterDisposeRejected = true;
+        }
+        return {
+          processId: waitResult.processId,
+          exitCode: waitResult.exitCode,
+          writeAfterCloseRejected,
+          writeAfterDisposeRejected,
+        };
+      })()`);
+
+      expect(values.processId).toBeGreaterThan(0);
+      expect(values.exitCode).not.toBe(0);
+      expect(values.writeAfterCloseRejected).toBe(true);
+      expect(values.writeAfterDisposeRejected).toBe(true);
+    });
+  });
+
+  linuxIt(
+    "terminates executor children when the V8 context is released",
+    async () => {
+      const marker = `muon-spawn-context-release-${Date.now().toString(36)}`;
+      const running = await startDebugMuon(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        undefined,
+        ["muon.executor.spawn"],
+      );
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon executor context release</title>",
+          cdpCommandTimeoutMs,
+        );
+        await driver.evaluate(`(async () => {
+        globalThis.executorChild = await window.muon.executor.spawn(${JSON.stringify(
+          createExecutorLongRunningSpawnOptions(marker),
+        )});
+      })()`);
+        for (let index = 0; index < 50; index += 1) {
+          const commandLines = await listProcessGroupCommandLines(
+            running.process.pid ?? 0,
+          );
+          if (
+            commandLines.some((commandLine) => commandLine.includes(marker))
+          ) {
+            break;
+          }
+          await wait(100);
+        }
+        expect(
+          (await listProcessGroupCommandLines(running.process.pid ?? 0)).some(
+            (commandLine) => commandLine.includes(marker),
+          ),
+        ).toBe(true);
+
+        await driver.navigate(
+          "data:text/html,<title>muon executor context released</title>",
+          cdpCommandTimeoutMs,
+        );
+        for (let index = 0; index < 100; index += 1) {
+          const commandLines = await listProcessGroupCommandLines(
+            running.process.pid ?? 0,
+          );
+          if (
+            !commandLines.some((commandLine) => commandLine.includes(marker))
+          ) {
+            return;
+          }
+          await wait(100);
+        }
+        const commandLines = await listProcessGroupCommandLines(
+          running.process.pid ?? 0,
+        );
+        expect(
+          commandLines.some((commandLine) => commandLine.includes(marker)),
+        ).toBe(false);
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+      }
+    },
+  );
 
   linuxIt("manages normal autostart through XDG autostart", async () => {
     const configHome = await mkdtemp(join(tmpdir(), "muon-xdg-config-"));
@@ -1864,6 +2274,178 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
                 "window.muon.browser.removeTray(globalThis.__muonHiddenTrayId)",
               ),
             ).resolves.toBeUndefined();
+          },
+          assetRoot,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  windowsIt(
+    "creates Windows trays and receives tray events from a hidden startup window",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "muon-windows-tray-"));
+      const assetRoot = await createTrayAssetRoot(directory);
+      try {
+        await withMuonInitialWindowState(
+          "hidden",
+          async (driver) => {
+            await expect(driver.evaluate("document.title")).resolves.toBe(
+              "muon test",
+            );
+            const traySetup = await driver.evaluate<
+              | { followTrayId: string; ok: true; trayId: string }
+              | { message: string; ok: false; stack: string }
+            >(`(async () => {
+              try {
+                globalThis.__muonHiddenTrayEvents = [];
+                const handler = (event) => {
+                  globalThis.__muonHiddenTrayEvents.push(event);
+                };
+                await window.muon.browser.setTitleBarIcon("icons/title.png");
+                const trayId = await window.muon.browser.createTray(
+                  {
+                    id: "windows-tray",
+                    icon: "icons/tray.png",
+                    tooltip: "Windows tray",
+                    menu: [{ id: "open", label: "Open" }],
+                  },
+                  handler,
+                );
+                const followTrayId = await window.muon.browser.createTray(
+                  {
+                    id: "windows-follow-tray",
+                    tooltip: "Follow tray",
+                  },
+                  handler,
+                );
+                await window.muon.browser.setTrayMenu(
+                  trayId,
+                  [
+                    {
+                      type: "checkbox",
+                      id: "ready",
+                      label: "Ready",
+                      checked: false,
+                    },
+                    { id: "open", label: "Open" },
+                  ],
+                  handler,
+                );
+                await window.muon.browser.setTrayIcon(
+                  trayId,
+                  "icons/tray-alt.png",
+                );
+                await window.muon.browser.setTrayTooltip(
+                  trayId,
+                  "Windows tray updated",
+                );
+                await window.muon.browser.setTitleBarIcon("icons/tray-alt.png");
+                globalThis.__muonHiddenTrayId = trayId;
+                globalThis.__muonWindowsFollowTrayId = followTrayId;
+                return { followTrayId, ok: true, trayId };
+              } catch (error) {
+                return {
+                  message: String(error?.message ?? error),
+                  ok: false,
+                  stack: String(error?.stack ?? ""),
+                };
+              }
+            })()`);
+            expect(traySetup).toEqual({
+              followTrayId: "windows-follow-tray",
+              ok: true,
+              trayId: "windows-tray",
+            });
+
+            await sendWindowsTrayCallback(
+              directory,
+              1,
+              windowsTrayPrimaryActivateMessage,
+            );
+            await expect(
+              waitForBrowserTrayEvent(driver, "activate", "windows-tray"),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                trayId: "windows-tray",
+                type: "activate",
+              }),
+            );
+
+            await sendWindowsTrayCallback(
+              directory,
+              1,
+              windowsTraySecondaryActivateMessage,
+            );
+            await expect(
+              waitForBrowserTrayEvent(
+                driver,
+                "secondaryActivate",
+                "windows-tray",
+              ),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                trayId: "windows-tray",
+                type: "secondaryActivate",
+              }),
+            );
+
+            await sendWindowsTrayCallback(
+              directory,
+              1,
+              windowsTrayContextMenuMessage,
+              true,
+            );
+            await expect(
+              waitForBrowserTrayEvent(driver, "menu", "windows-tray"),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                checked: true,
+                id: "ready",
+                trayId: "windows-tray",
+                type: "menu",
+              }),
+            );
+
+            await sendWindowsTrayCallback(
+              directory,
+              2,
+              windowsTrayPrimaryActivateMessage,
+            );
+            await expect(
+              waitForBrowserTrayEvent(
+                driver,
+                "activate",
+                "windows-follow-tray",
+              ),
+            ).resolves.toEqual(
+              expect.objectContaining({
+                trayId: "windows-follow-tray",
+                type: "activate",
+              }),
+            );
+
+            const eventCountBeforeRemoval = await driver.evaluate<number>(
+              "(globalThis.__muonHiddenTrayEvents ?? []).length",
+            );
+            await expect(
+              driver.evaluate(
+                "window.muon.browser.removeTray(globalThis.__muonHiddenTrayId)",
+              ),
+            ).resolves.toBeUndefined();
+            await sendWindowsTrayCallback(
+              directory,
+              1,
+              windowsTrayPrimaryActivateMessage,
+            );
+            await wait(250);
+            await expect(
+              driver.evaluate<number>(
+                "(globalThis.__muonHiddenTrayEvents ?? []).length",
+              ),
+            ).resolves.toBe(eventCountBeforeRemoval);
           },
           assetRoot,
         );
@@ -2906,7 +3488,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     );
   });
 
-  it("keeps Muon APIs out of the DevTools frontend", async () => {
+  it("keeps muon APIs out of the DevTools frontend", async () => {
     const directory = await mkdtemp(join(tmpdir(), "muon-devtools-fs-"));
     const devToolsDrivers: CdpDriver[] = [];
     try {
@@ -3015,7 +3597,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       expect(running.process.exitCode).toBeNull();
       const processGroupId = running.process.pid;
       if (processGroupId === undefined) {
-        throw new Error("Muon process id is unavailable");
+        throw new Error("muon process id is unavailable");
       }
 
       const commandLines = await listProcessGroupCommandLines(processGroupId);

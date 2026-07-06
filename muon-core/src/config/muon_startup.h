@@ -11,7 +11,7 @@
 #include <vector>
 
 /**
- * Process exit code reserved for Muon recycle requests.
+ * Process exit code reserved for muon recycle requests.
  */
 inline constexpr int32_t kMuonRecycleExitCode = 88;
 
@@ -26,12 +26,12 @@ inline constexpr char kMuonLaunchSourceNone[] = "none";
 inline constexpr char kMuonLaunchSourceNormal[] = "normal";
 
 /**
- * Command-line switch prefix used to select the Muon launch source.
+ * Command-line switch prefix used to select the muon launch source.
  */
 inline constexpr char kMuonLaunchSourceSwitchPrefix[] = "--muon-launch-from=";
 
 /**
- * Stores the process command line captured at Muon startup.
+ * Stores the process command line captured at muon startup.
  *
  * @param argc Argument count passed to main.
  * @param argv Argument vector passed to main.
@@ -39,7 +39,7 @@ inline constexpr char kMuonLaunchSourceSwitchPrefix[] = "--muon-launch-from=";
 void SetMuonStartupCommandLine(int argc, char* argv[]);
 
 /**
- * Extracts the Muon launch source from a command line.
+ * Extracts the muon launch source from a command line.
  *
  * @remarks Missing switch values default to `none`. When the switch appears
  * more than once, the last value is used.
@@ -51,11 +51,11 @@ std::string GetMuonLaunchSourceFromCommandLine(
     const std::vector<std::string>& command_line);
 
 /**
- * Returns the command line captured at Muon startup.
+ * Returns the command line captured at muon startup.
  */
 std::vector<std::string> GetMuonStartupCommandLine();
 
 /**
- * Returns the launch source captured at Muon startup.
+ * Returns the launch source captured at muon startup.
  */
 std::string GetMuonStartupLaunchSource();

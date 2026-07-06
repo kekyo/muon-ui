@@ -100,7 +100,7 @@ static MuonTitleBarManifest LoadConfiguredMuonTitleBarManifest(
         kMuonLogSourceMuon, kMuonLogLevelWarning,
         "browser.titleBarType is native, but native title bar decoration is not "
         "available on the current Linux display backend. Falling back to the "
-        "Muon title bar.");
+        "muon title bar.");
     return LoadMuonTitleBarManifestFromUi();
   }
   return CreateNativeMuonTitleBarManifest();
@@ -608,21 +608,21 @@ void MuonApp::OnContextInitialized() {
   if (!plugin_page_policy_error_.empty()) {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + plugin_page_policy_error_);
+                   "muon startup failed: " + plugin_page_policy_error_);
     CefQuitMessageLoop();
     return;
   }
   if (!unsafe_parent_access_policy_error_.empty()) {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + unsafe_parent_access_policy_error_);
+                   "muon startup failed: " + unsafe_parent_access_policy_error_);
     CefQuitMessageLoop();
     return;
   }
   if (!plugin_capability_policy_error_.empty()) {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + plugin_capability_policy_error_);
+                   "muon startup failed: " + plugin_capability_policy_error_);
     CefQuitMessageLoop();
     return;
   }
@@ -634,7 +634,7 @@ void MuonApp::OnContextInitialized() {
                                &network_policy, &error_message)) {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + error_message);
+                   "muon startup failed: " + error_message);
     CefQuitMessageLoop();
     return;
   }
@@ -648,7 +648,7 @@ void MuonApp::OnContextInitialized() {
           "Invalid plugin entry '" + plugin_config.name + "': " +
           error_message;
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                     "Muon startup failed: " + error_message);
+                     "muon startup failed: " + error_message);
       CefQuitMessageLoop();
       return;
     }
@@ -667,7 +667,7 @@ void MuonApp::OnContextInitialized() {
     exit_code_ = 1;
     error_message = plugin_runtime->GetStartupError();
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + error_message);
+                   "muon startup failed: " + error_message);
     CefQuitMessageLoop();
     return;
   }
@@ -678,7 +678,7 @@ void MuonApp::OnContextInitialized() {
   if (!app_storage) {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + error_message);
+                   "muon startup failed: " + error_message);
     CefQuitMessageLoop();
     return;
   }
@@ -689,7 +689,7 @@ void MuonApp::OnContextInitialized() {
     constexpr char error_message[] =
         "Failed to register asset scheme handler factory";
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   std::string("Muon startup failed: ") + error_message);
+                   std::string("muon startup failed: ") + error_message);
     CefQuitMessageLoop();
     return;
   }
@@ -701,7 +701,7 @@ void MuonApp::OnContextInitialized() {
             &initial_title_bar_icon, &error_message)) {
       exit_code_ = 1;
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                     "Muon startup failed: " + error_message);
+                     "muon startup failed: " + error_message);
       CefQuitMessageLoop();
       return;
     }
@@ -711,7 +711,7 @@ void MuonApp::OnContextInitialized() {
                                      &error_message)) {
       exit_code_ = 1;
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                     "Muon startup failed: " + error_message);
+                     "muon startup failed: " + error_message);
       CefQuitMessageLoop();
       return;
     }
@@ -893,7 +893,10 @@ void MuonApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
   const auto args = message->GetArgumentList();
   args->SetSize(1);
   args->SetInt(0, handler_iterator->second->GetContextId());
-  frame->SendProcessMessage(PID_BROWSER, message);
+  const auto target_frame = browser ? browser->GetMainFrame() : frame;
+  if (target_frame) {
+    target_frame->SendProcessMessage(PID_BROWSER, message);
+  }
 
   handler_iterator->second->RejectAllPendingPromises();
   handler_iterator->second->ReleaseFunctionReferences();

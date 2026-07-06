@@ -19,7 +19,7 @@ import {
 } from "./progress.js";
 
 /**
- * Options used to invoke the native Muon builder helper.
+ * Options used to invoke the native muon builder helper.
  */
 export interface MuonPrepareOptions {
   /**
@@ -74,7 +74,7 @@ export interface MuonPrepareOptions {
 }
 
 /**
- * Options used to update Windows PE resources through the native Muon helper.
+ * Options used to update Windows PE resources through the native muon helper.
  */
 export interface MuonPrepareResourceUpdateOptions {
   /**
@@ -120,7 +120,7 @@ export interface MuonPrepareResourceUpdateOptions {
  */
 export interface MuonPrepareResult {
   /**
-   * Directory containing the staged Muon runtime.
+   * Directory containing the staged muon runtime.
    */
   stagePath?: string;
 
@@ -141,11 +141,11 @@ export interface MuonPrepareResult {
 }
 
 /**
- * Returns the default Muon prepare target for a Node platform and architecture.
+ * Returns the default muon prepare target for a Node platform and architecture.
  *
  * @param platform Node platform.
  * @param architecture Node architecture.
- * @returns Muon prepare target name.
+ * @returns muon prepare target name.
  */
 export const getDefaultMuonPrepareTarget = (
   platform: NodeJS.Platform,
@@ -155,7 +155,7 @@ export const getDefaultMuonPrepareTarget = (
     return getDefaultMuonTarget(platform, architecture);
   } catch {
     throw new Error(
-      `Unsupported Muon prepare target: platform=${platform}, arch=${architecture}`,
+      `Unsupported muon prepare target: platform=${platform}, arch=${architecture}`,
     );
   }
 };
@@ -213,7 +213,7 @@ const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
   if (options.target !== undefined) {
     args.push(
       "--target",
-      normalizeMuonTarget(options.target, "Muon prepare target"),
+      normalizeMuonTarget(options.target, "muon prepare target"),
     );
   }
   if (options.cacheDir !== undefined) {

@@ -6,8 +6,8 @@
 
 #include "browser/muon_window_title.h"
 
-static constexpr char kWindowTitle[] = "Muon";
-static constexpr char kDevToolsWindowTitle[] = "Muon DevTools";
+static constexpr char kWindowTitle[] = "muon";
+static constexpr char kDevToolsWindowTitle[] = "muon DevTools";
 
 const char* GetMuonDefaultWindowTitle() {
   return kWindowTitle;

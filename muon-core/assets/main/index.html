@@ -249,6 +249,48 @@
         opacity: 0.65;
       }
 
+      .executor-note {
+        margin: 0;
+        padding: 16px 16px 0;
+        color: #57606a;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .executor-log {
+        min-height: 260px;
+        max-height: 360px;
+        overflow: auto;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        padding: 10px;
+        background: #0f1720;
+        color: #d1d7e0;
+        font-family:
+          "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        -webkit-app-region: no-drag;
+      }
+
+      .executor-log-line[data-stream="stdout"] {
+        color: #d1d7e0;
+      }
+
+      .executor-log-line[data-stream="stderr"] {
+        color: #ffb4b4;
+      }
+
+      .executor-log-line[data-stream="status"] {
+        color: #8bd5ff;
+      }
+
+      .executor-log-line[data-stream="stdin"] {
+        color: #a6e3a1;
+      }
+
       @media (max-width: 760px) {
         .app {
           padding: 16px;
@@ -309,6 +351,14 @@
         .status,
         label {
           color: #adbac7;
+        }
+
+        .executor-note {
+          color: #adbac7;
+        }
+
+        .executor-log {
+          border-color: #444c56;
         }
 
         .context-menu-target a {
@@ -561,21 +611,81 @@
 
         <section class="panel" aria-label="Executor API demo">
           <h2 class="section-title">Executor</h2>
+          <p class="executor-note">
+            Pipe mode. stdout/stderr are streamed through pipes, and stdin is
+            written explicitly. TTY-dependent programs such as more, less, vim,
+            and top are outside this demo.
+          </p>
           <div class="field-grid">
             <div class="field">
-              <label for="executor-options">Spawn options JSON</label>
-              <textarea id="executor-options" class="large" spellcheck="false"></textarea>
+              <label for="executor-command">Command</label>
+              <input
+                id="executor-command"
+                autocomplete="off"
+                spellcheck="false"
+              />
             </div>
             <div class="field">
-              <label for="executor-result">Executor result</label>
-              <textarea id="executor-result" class="large" readonly spellcheck="false"></textarea>
+              <label for="executor-cwd">Cwd</label>
+              <input id="executor-cwd" autocomplete="off" spellcheck="false" />
             </div>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="executor-args">Args JSON array</label>
+              <textarea id="executor-args" class="small" spellcheck="false">[]</textarea>
+            </div>
+            <div class="field">
+              <label for="executor-auto-rules">Auto response rules JSON</label>
+              <textarea id="executor-auto-rules" class="small" spellcheck="false">[]</textarea>
+            </div>
+          </div>
+          <div class="field">
+            <label for="executor-stdin">stdin</label>
+            <input
+              id="executor-stdin"
+              autocomplete="off"
+              spellcheck="false"
+              disabled
+            />
+          </div>
+          <div class="field">
+            <label for="executor-log">stdout / stderr / status</label>
+            <div
+              id="executor-log"
+              class="executor-log"
+              role="log"
+              aria-live="polite"
+            ></div>
           </div>
           <div class="actions">
             <button id="executor-load-preset" class="secondary" type="button">
               Load OS preset
             </button>
-            <button id="executor-spawn" type="button">Spawn</button>
+            <button
+              id="executor-select-file"
+              class="secondary"
+              type="button"
+              hidden
+            >
+              Select file
+            </button>
+            <button id="executor-start" type="button">Start</button>
+            <button id="executor-send" type="button" disabled>Send</button>
+            <button id="executor-kill" class="danger" type="button" disabled>
+              Kill
+            </button>
+            <button
+              id="executor-dispose"
+              class="secondary"
+              type="button"
+              disabled
+            >
+              Dispose
+            </button>
+            <button id="executor-clear" class="secondary" type="button">
+              Clear
+            </button>
           </div>
         </section>
 
@@ -776,7 +886,7 @@
                 registering custom items.
               </p>
               <a href="https://example.com/context-menu-demo">Context link</a>
-              <img src="/favicon.svg" alt="Muon favicon" />
+              <img src="/favicon.svg" alt="muon favicon" />
               <textarea id="browser-context-menu-editable" spellcheck="false">Editable text for editable and paste-related menu states.</textarea>
             </div>
           </div>
@@ -895,7 +1005,7 @@
               id="browser-tray-tooltip"
               autocomplete="off"
               spellcheck="false"
-              value="Muon tray ready"
+              value="muon tray ready"
             />
           </div>
           <div class="field-grid">
@@ -1047,12 +1157,26 @@
       const environmentResultInput = document.querySelector(
         "#environment-result",
       );
-      const executorOptionsInput = document.querySelector("#executor-options");
-      const executorResultInput = document.querySelector("#executor-result");
+      const executorCommandInput = document.querySelector("#executor-command");
+      const executorArgsInput = document.querySelector("#executor-args");
+      const executorCwdInput = document.querySelector("#executor-cwd");
+      const executorAutoRulesInput = document.querySelector(
+        "#executor-auto-rules",
+      );
+      const executorStdinInput = document.querySelector("#executor-stdin");
+      const executorLogOutput = document.querySelector("#executor-log");
       const executorLoadPresetButton = document.querySelector(
         "#executor-load-preset",
       );
-      const executorSpawnButton = document.querySelector("#executor-spawn");
+      const executorSelectFileButton = document.querySelector(
+        "#executor-select-file",
+      );
+      const executorStartButton = document.querySelector("#executor-start");
+      const executorSendButton = document.querySelector("#executor-send");
+      const executorKillButton = document.querySelector("#executor-kill");
+      const executorDisposeButton =
+        document.querySelector("#executor-dispose");
+      const executorClearButton = document.querySelector("#executor-clear");
       const bootstrapSettingsInput = document.querySelector(
         "#bootstrap-settings",
       );
@@ -1088,6 +1212,16 @@
       let fsWatcher = null;
       let activeDialogController = null;
       let activeTrayId = null;
+      let executorProcess = null;
+      let executorRunning = false;
+      let stdoutDecoder = new TextDecoder();
+      let stderrDecoder = new TextDecoder();
+      let logBuffer = [];
+      let autoRules = [];
+      let executorCombinedOutput = "";
+      let executorAutoResponseRunning = false;
+      const executorMaxLogCharacters = 20000;
+      const executorMaxCombinedCharacters = 12000;
 
       const setButtonTitle = (selector, title) => {
         const button = document.querySelector(selector);
@@ -1171,11 +1305,31 @@
         });
         setButtonTitle(
           "#executor-load-preset",
-          "LoadPreset: fill window.muon.executor.spawn(options) sample",
+          "LoadPreset: fill a pipe-mode executor sample",
         );
         setButtonTitle(
-          "#executor-spawn",
-          "Spawn: window.muon.executor.spawn(options)",
+          "#executor-select-file",
+          "SelectFile: choose the command path",
+        );
+        setButtonTitle(
+          "#executor-start",
+          "Start: window.muon.executor.spawn({ command, args, cwd, onStdout, onStderr })",
+        );
+        setButtonTitle(
+          "#executor-send",
+          "Send: process.writeStdin(text + newline)",
+        );
+        setButtonTitle(
+          "#executor-kill",
+          "Kill: process.kill()",
+        );
+        setButtonTitle(
+          "#executor-dispose",
+          "Dispose: process.dispose()",
+        );
+        setButtonTitle(
+          "#executor-clear",
+          "Clear: remove log entries without stopping the process",
         );
         setActionButtonTitles("data-bootstrap-action", {
           getSettings: "GetSettings: window.muon.bootstrap.getSettings()",
@@ -2008,35 +2162,345 @@
         });
       };
 
+      const isExecutorWindows = () =>
+        window.navigator.userAgent.toLowerCase().includes("windows");
+
+      const getExecutorNewline = () => (isExecutorWindows() ? "\r\n" : "\n");
+
+      const hasExecutorFileDialog = () =>
+        typeof window.muon?.fs?.dialogs?.selectFile === "function";
+
       const createExecutorPreset = () => {
-        const userAgent = window.navigator.userAgent.toLowerCase();
-        if (userAgent.includes("windows")) {
+        if (isExecutorWindows()) {
           return {
             command: "cmd.exe",
-            args: ["/c", "echo stdout:hello&& echo stderr:ok 1>&2"],
-            stdin: "",
+            args: [
+              "/Q",
+              "/C",
+              "echo ready& set /P answer=continue? & echo answer:%answer%",
+            ],
+            cwd: "",
+            autoRules: [{ pattern: "continue\\?", input: "y", once: true }],
           };
         }
         return {
           command: "/bin/sh",
-          args: ["-c", "printf 'stdout:hello'; printf 'stderr:ok' >&2"],
-          stdin: "",
+          args: [
+            "-c",
+            "printf 'ready\\n'; printf 'continue? '; read answer; printf 'answer:%s\\n' \"$answer\"; printf 'stderr sample\\n' >&2",
+          ],
+          cwd: "",
+          autoRules: [{ pattern: "continue\\?", input: "y", once: true }],
         };
       };
 
       const loadExecutorPreset = () => {
-        executorOptionsInput.value = JSON.stringify(createExecutorPreset(), null, 2);
+        const preset = createExecutorPreset();
+        executorCommandInput.value = preset.command;
+        executorArgsInput.value = JSON.stringify(preset.args, null, 2);
+        executorCwdInput.value = preset.cwd;
+        executorAutoRulesInput.value = JSON.stringify(preset.autoRules, null, 2);
       };
 
-      const runExecutorSpawn = async () => {
-        await runAction({
-          result: executorResultInput,
-          successMessage: "spawn completed",
-          task: async () =>
-            window.muon.executor.spawn(
-              parseJsonInput(executorOptionsInput, createExecutorPreset()),
-            ),
+      const renderExecutorLog = () => {
+        executorLogOutput.textContent = "";
+        for (const entry of logBuffer) {
+          const line = document.createElement("span");
+          line.className = "executor-log-line";
+          line.dataset.stream = entry.stream;
+          line.textContent = entry.text;
+          executorLogOutput.append(line);
+        }
+        executorLogOutput.scrollTop = executorLogOutput.scrollHeight;
+      };
+
+      const trimExecutorLogBuffer = () => {
+        let length = logBuffer.reduce(
+          (total, entry) => total + entry.text.length,
+          0,
+        );
+        while (length > executorMaxLogCharacters && logBuffer.length > 0) {
+          const entry = logBuffer[0];
+          const overflow = length - executorMaxLogCharacters;
+          if (entry.text.length <= overflow) {
+            logBuffer.shift();
+            length -= entry.text.length;
+            continue;
+          }
+          entry.text = entry.text.slice(overflow);
+          length -= overflow;
+        }
+      };
+
+      const appendExecutorLog = (stream, text) => {
+        if (text === "") {
+          return;
+        }
+        logBuffer.push({ stream, text });
+        trimExecutorLogBuffer();
+        renderExecutorLog();
+      };
+
+      const appendExecutorOutput = (stream, text) => {
+        appendExecutorLog(stream, text);
+        executorCombinedOutput = `${executorCombinedOutput}${text}`;
+        if (executorCombinedOutput.length > executorMaxCombinedCharacters) {
+          executorCombinedOutput = executorCombinedOutput.slice(
+            executorCombinedOutput.length - executorMaxCombinedCharacters,
+          );
+        }
+        void runExecutorAutoResponses();
+      };
+
+      const clearExecutorLog = () => {
+        logBuffer = [];
+        renderExecutorLog();
+      };
+
+      const setExecutorControls = () => {
+        const fileDialogAvailable = hasExecutorFileDialog();
+        executorCommandInput.disabled = executorRunning;
+        executorArgsInput.disabled = executorRunning;
+        executorCwdInput.disabled = executorRunning;
+        executorAutoRulesInput.disabled = executorRunning;
+        executorLoadPresetButton.disabled = executorRunning;
+        executorStartButton.disabled = executorRunning;
+        executorStdinInput.disabled = !executorRunning || executorProcess === null;
+        executorSendButton.disabled = !executorRunning || executorProcess === null;
+        executorKillButton.disabled = !executorRunning || executorProcess === null;
+        executorDisposeButton.disabled = executorProcess === null;
+        executorSelectFileButton.hidden = !fileDialogAvailable;
+        executorSelectFileButton.disabled = executorRunning || !fileDialogAvailable;
+      };
+
+      const parseExecutorArgs = () => {
+        const args = parseJsonInput(executorArgsInput, []);
+        if (!Array.isArray(args)) {
+          throw new TypeError("Args must be a JSON array");
+        }
+        return args.map((entry) => String(entry));
+      };
+
+      const parseExecutorAutoRules = () => {
+        const rules = parseJsonInput(executorAutoRulesInput, []);
+        if (!Array.isArray(rules)) {
+          throw new TypeError("Auto response rules must be a JSON array");
+        }
+        return rules.map((rule, index) => {
+          if (rule === null || typeof rule !== "object") {
+            throw new TypeError(`Auto response rule ${index} must be an object`);
+          }
+          if (typeof rule.pattern !== "string") {
+            throw new TypeError(
+              `Auto response rule ${index} must have a string pattern`,
+            );
+          }
+          if (typeof rule.input !== "string") {
+            throw new TypeError(
+              `Auto response rule ${index} must have a string input`,
+            );
+          }
+          return {
+            pattern: rule.pattern,
+            input: rule.input,
+            once: rule.once !== false,
+            used: false,
+            matchedLength: -1,
+            expression: new RegExp(rule.pattern),
+          };
         });
+      };
+
+      const sendExecutorInput = async (text, source) => {
+        if (executorProcess === null || !executorRunning) {
+          appendExecutorLog("status", "stdin is not open\n");
+          return;
+        }
+        appendExecutorLog("stdin", `> ${text}\n`);
+        await executorProcess.writeStdin(`${text}${getExecutorNewline()}`);
+        if (source === "manual") {
+          executorStdinInput.value = "";
+        }
+      };
+
+      const runExecutorAutoResponses = async () => {
+        if (executorAutoResponseRunning) {
+          return;
+        }
+        executorAutoResponseRunning = true;
+        try {
+          for (const rule of autoRules) {
+            if (executorProcess === null || !executorRunning) {
+              return;
+            }
+            if (rule.once && rule.used) {
+              continue;
+            }
+            if (rule.matchedLength === executorCombinedOutput.length) {
+              continue;
+            }
+            rule.expression.lastIndex = 0;
+            if (!rule.expression.test(executorCombinedOutput)) {
+              continue;
+            }
+            rule.used = true;
+            rule.matchedLength = executorCombinedOutput.length;
+            await sendExecutorInput(rule.input, "auto");
+          }
+        } catch (error) {
+          appendExecutorLog(
+            "status",
+            `auto response failed: ${getErrorMessage(error)}\n`,
+          );
+        } finally {
+          executorAutoResponseRunning = false;
+        }
+      };
+
+      const handleExecutorChunk = (stream, chunk) => {
+        const decoder = stream === "stdout" ? stdoutDecoder : stderrDecoder;
+        const text = decoder.decode(chunk, { stream: true });
+        appendExecutorOutput(stream, text);
+      };
+
+      const waitExecutorProcess = async (process) => {
+        try {
+          const result = await process.wait();
+          appendExecutorOutput("stdout", stdoutDecoder.decode());
+          appendExecutorOutput("stderr", stderrDecoder.decode());
+          appendExecutorLog("status", `exit code: ${result.exitCode}\n`);
+        } catch (error) {
+          appendExecutorLog("status", `wait failed: ${getErrorMessage(error)}\n`);
+        } finally {
+          if (executorProcess === process) {
+            executorProcess = null;
+            executorRunning = false;
+            setExecutorControls();
+          }
+        }
+      };
+
+      const startExecutor = async () => {
+        if (executorRunning) {
+          return;
+        }
+        const command = executorCommandInput.value.trim();
+        if (command === "") {
+          appendExecutorLog("status", "command is required\n");
+          return;
+        }
+        let args = [];
+        let cwd = "";
+        try {
+          args = parseExecutorArgs();
+          cwd = executorCwdInput.value.trim();
+          autoRules = parseExecutorAutoRules();
+        } catch (error) {
+          appendExecutorLog("status", `${getErrorMessage(error)}\n`);
+          return;
+        }
+
+        stdoutDecoder = new TextDecoder();
+        stderrDecoder = new TextDecoder();
+        executorCombinedOutput = "";
+        executorAutoResponseRunning = false;
+        executorRunning = true;
+        setExecutorControls();
+        appendExecutorLog("status", `starting: ${command}\n`);
+        try {
+          const process = await window.muon.executor.spawn({
+            command,
+            args,
+            cwd: cwd === "" ? undefined : cwd,
+            onStdout: (chunk) => {
+              handleExecutorChunk("stdout", chunk);
+            },
+            onStderr: (chunk) => {
+              handleExecutorChunk("stderr", chunk);
+            },
+          });
+          executorProcess = process;
+          appendExecutorLog("status", `started pid: ${process.processId}\n`);
+          setExecutorControls();
+          void waitExecutorProcess(process);
+        } catch (error) {
+          executorRunning = false;
+          executorProcess = null;
+          setExecutorControls();
+          appendExecutorLog("status", `start failed: ${getErrorMessage(error)}\n`);
+        }
+      };
+
+      const killExecutor = async () => {
+        if (executorProcess === null) {
+          return;
+        }
+        appendExecutorLog("status", "kill requested\n");
+        try {
+          await executorProcess.kill();
+        } catch (error) {
+          appendExecutorLog("status", `kill failed: ${getErrorMessage(error)}\n`);
+        }
+      };
+
+      const disposeExecutor = async () => {
+        if (executorProcess === null) {
+          return;
+        }
+        const process = executorProcess;
+        executorProcess = null;
+        executorRunning = false;
+        setExecutorControls();
+        try {
+          await process.dispose();
+          appendExecutorLog("status", "disposed\n");
+        } catch (error) {
+          appendExecutorLog(
+            "status",
+            `dispose failed: ${getErrorMessage(error)}\n`,
+          );
+        }
+      };
+
+      const sendManualExecutorInput = async () => {
+        await sendExecutorInput(executorStdinInput.value, "manual");
+      };
+
+      const extractSelectedFilePath = (value) => {
+        if (typeof value === "string") {
+          return value;
+        }
+        if (Array.isArray(value)) {
+          return value.length === 0 ? "" : extractSelectedFilePath(value[0]);
+        }
+        if (value !== null && typeof value === "object") {
+          for (const key of ["path", "filePath"]) {
+            const path = value[key];
+            if (typeof path === "string") {
+              return path;
+            }
+          }
+          return extractSelectedFilePath(value.paths);
+        }
+        return "";
+      };
+
+      const selectExecutorFile = async () => {
+        if (!hasExecutorFileDialog()) {
+          return;
+        }
+        try {
+          const selected = await window.muon.fs.dialogs.selectFile();
+          const path = extractSelectedFilePath(selected);
+          if (path !== "") {
+            executorCommandInput.value = path;
+          }
+        } catch (error) {
+          appendExecutorLog(
+            "status",
+            `select file failed: ${getErrorMessage(error)}\n`,
+          );
+        }
       };
 
       const bootstrapActions = {
@@ -2125,8 +2589,27 @@
       }
 
       executorLoadPresetButton.addEventListener("click", loadExecutorPreset);
-      executorSpawnButton.addEventListener("click", () => {
-        void runExecutorSpawn();
+      executorSelectFileButton.addEventListener("click", () => {
+        void selectExecutorFile();
+      });
+      executorStartButton.addEventListener("click", () => {
+        void startExecutor();
+      });
+      executorSendButton.addEventListener("click", () => {
+        void sendManualExecutorInput();
+      });
+      executorKillButton.addEventListener("click", () => {
+        void killExecutor();
+      });
+      executorDisposeButton.addEventListener("click", () => {
+        void disposeExecutor();
+      });
+      executorClearButton.addEventListener("click", clearExecutorLog);
+      executorStdinInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void sendManualExecutorInput();
+        }
       });
 
       for (const button of bootstrapActionButtons) {
@@ -2173,6 +2656,7 @@
 
       applyButtonTooltips();
       loadExecutorPreset();
+      setExecutorControls();
       loadBrowserContextMenuPreset();
       handlePopupMode();
     </script>

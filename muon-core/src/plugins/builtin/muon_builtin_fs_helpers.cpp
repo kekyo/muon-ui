@@ -28,7 +28,7 @@
 namespace muon_internal {
 
 static constexpr char kMuonBuiltinFsShutdownError[] =
-    "Muon filesystem runtime is shutting down";
+    "muon filesystem runtime is shutting down";
 static constexpr char kMuonBuiltinFsGenericError[] =
     "Filesystem operation failed";
 

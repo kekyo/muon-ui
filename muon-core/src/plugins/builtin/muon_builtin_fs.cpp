@@ -50,9 +50,9 @@
 namespace muon_internal {
 
 static constexpr char kMuonBuiltinFsShutdownError[] =
-    "Muon filesystem runtime is shutting down";
+    "muon filesystem runtime is shutting down";
 static constexpr char kMuonBuiltinFsUnavailableError[] =
-    "Muon filesystem runtime is unavailable";
+    "muon filesystem runtime is unavailable";
 static constexpr char kMuonBuiltinFsEncodingError[] =
     "Only utf8 encoding is supported";
 static constexpr char kMuonBuiltinFsGenericError[] =
@@ -2738,7 +2738,7 @@ class MuonBuiltinFsRuntime final {
       return false;
     }
     if (helpers_ == nullptr) {
-      *error_message = "Muon filesystem helpers are unavailable";
+      *error_message = "muon filesystem helpers are unavailable";
       return false;
     }
     completions_enabled_->store(true);

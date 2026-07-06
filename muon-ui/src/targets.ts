@@ -4,7 +4,7 @@
 // https://github.com/kekyo/muon
 
 /**
- * Public Muon target platform identifier.
+ * Public muon target platform identifier.
  */
 export type MuonTarget =
   | "linux-amd64"
@@ -24,16 +24,16 @@ export type MuonCefTarget =
   | "windows64";
 
 /**
- * Muon target operating system family.
+ * muon target operating system family.
  */
 export type MuonTargetOperatingSystem = "linux" | "windows";
 
 /**
- * Metadata for one supported Muon target.
+ * Metadata for one supported muon target.
  */
 export interface MuonTargetDescriptor {
   /**
-   * Public target identifier accepted by Muon CLI and Vite options.
+   * Public target identifier accepted by muon CLI and Vite options.
    */
   id: MuonTarget;
   /**
@@ -79,7 +79,7 @@ export interface MuonTargetDescriptor {
 }
 
 /**
- * Supported public Muon targets in deterministic build order.
+ * Supported public muon targets in deterministic build order.
  */
 export const allMuonTargets = [
   "linux-amd64",
@@ -165,9 +165,9 @@ const targetByCefTarget = Object.fromEntries(
 ) as Record<MuonCefTarget, MuonTarget>;
 
 /**
- * Returns metadata for a public Muon target.
+ * Returns metadata for a public muon target.
  *
- * @param target Public Muon target.
+ * @param target Public muon target.
  * @returns Target descriptor.
  */
 export const getMuonTargetDescriptor = (
@@ -178,7 +178,7 @@ export const getMuonTargetDescriptor = (
  * Returns the runtime app identifier embedded for one target distribution.
  *
  * @param appId Base sanitized application identifier.
- * @param target Public Muon target.
+ * @param target Public muon target.
  * @returns Target runtime application identifier.
  *
  * @remarks Windows targets append their public architecture name so 32-bit and
@@ -193,15 +193,15 @@ export const getMuonTargetRuntimeAppId = (
 };
 
 /**
- * Normalizes a user supplied public Muon target.
+ * Normalizes a user supplied public muon target.
  *
  * @param target Target value supplied by the user.
  * @param label Error label used in diagnostics.
- * @returns Public Muon target.
+ * @returns Public muon target.
  */
 export const normalizeMuonTarget = (
   target: string,
-  label = "Muon target",
+  label = "muon target",
 ): MuonTarget => {
   const normalized = target.trim().toLowerCase();
   if (allMuonTargets.includes(normalized as MuonTarget)) {
@@ -211,11 +211,11 @@ export const normalizeMuonTarget = (
 };
 
 /**
- * Resolves a Node platform and architecture pair to a public Muon target.
+ * Resolves a Node platform and architecture pair to a public muon target.
  *
  * @param platform Node platform.
  * @param architecture Node architecture.
- * @returns Public Muon target.
+ * @returns Public muon target.
  */
 export const getDefaultMuonTarget = (
   platform: NodeJS.Platform,
@@ -241,15 +241,15 @@ export const getDefaultMuonTarget = (
     }
   }
   throw new Error(
-    `Unsupported Muon target: platform=${platform}, arch=${architecture}`,
+    `Unsupported muon target: platform=${platform}, arch=${architecture}`,
   );
 };
 
 /**
- * Resolves an internal CEF target to a public Muon target.
+ * Resolves an internal CEF target to a public muon target.
  *
  * @param cefTarget Internal CEF target.
- * @returns Public Muon target.
+ * @returns Public muon target.
  */
 export const getMuonTargetForCefTarget = (
   cefTarget: MuonCefTarget,

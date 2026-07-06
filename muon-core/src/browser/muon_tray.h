@@ -14,8 +14,10 @@
 #include <string>
 #include <vector>
 
+struct MuonTitleBarIcon;
+
 /**
- * Muon browser tray menu item kind.
+ * muon browser tray menu item kind.
  */
 enum MuonBrowserTrayMenuItemType {
   /** Normal command item that notifies JavaScript when selected. */
@@ -29,7 +31,7 @@ enum MuonBrowserTrayMenuItemType {
 };
 
 /**
- * Parsed Muon browser tray menu item.
+ * Parsed muon browser tray menu item.
  */
 struct MuonBrowserTrayMenuItem {
   /** Item kind. */
@@ -45,13 +47,15 @@ struct MuonBrowserTrayMenuItem {
 };
 
 /**
- * Parsed Muon browser tray creation options.
+ * Parsed muon browser tray creation options.
  */
 struct MuonBrowserTrayOptions {
   /** Optional tray id. Empty means the browser service should generate one. */
   std::string id;
-  /** Required tray icon asset path. */
+  /** Optional tray icon asset path. Empty means follow the title bar icon. */
   std::string icon_path;
+  /** Whether the tray icon follows the current title bar icon. */
+  bool follow_title_bar_icon = false;
   /** Optional tooltip text. Empty means no tooltip. */
   std::string tooltip;
   /** Initial tray menu items. */
@@ -62,7 +66,7 @@ struct MuonBrowserTrayOptions {
  * Decoded tray icon bitmap.
  */
 struct MuonBrowserTrayIcon {
-  /** Source PNG bytes loaded from Muon app storage. */
+  /** Source PNG bytes loaded from muon app storage. */
   std::vector<uint8_t> png_data;
   /** RGBA bitmap data decoded from the PNG. */
   std::vector<uint8_t> rgba;
@@ -151,6 +155,14 @@ class MuonBrowserTrayService {
                            std::string* error_message) = 0;
 
   /**
+   * Replaces the icon for all title-bar-following tray items owned by a
+   * browser.
+   */
+  virtual void SetFollowingTrayIconForBrowser(
+      int browser_id,
+      const MuonBrowserTrayIcon& icon) = 0;
+
+  /**
    * Replaces the tooltip for an existing browser-owned tray item.
    */
   virtual bool SetTrayTooltip(int browser_id,
@@ -177,7 +189,7 @@ class MuonBrowserTrayService {
 bool IsValidMuonBrowserTrayId(const std::string& id);
 
 /**
- * Parses and validates a JSON array of Muon browser tray menu items.
+ * Parses and validates a JSON array of muon browser tray menu items.
  *
  * @param items_json JSON array produced by the JavaScript wrapper.
  * @param items Receives normalized menu items on success.
@@ -190,7 +202,7 @@ bool ParseMuonBrowserTrayMenuItemsJson(
     std::string* error_message);
 
 /**
- * Parses and validates Muon browser tray creation options JSON.
+ * Parses and validates muon browser tray creation options JSON.
  *
  * @param options_json JSON object produced by the JavaScript wrapper.
  * @param options Receives normalized options on success.
@@ -209,7 +221,7 @@ std::string CreateMuonBrowserTrayEventDetailJson(
     const MuonBrowserTrayEvent& event);
 
 /**
- * Loads a tray icon from Muon app storage.
+ * Loads a tray icon from muon app storage.
  *
  * @param storage Asset storage backing asset:// resources.
  * @param path Icon asset path. Accepts asset://main/... or main-relative paths.
@@ -221,6 +233,21 @@ bool LoadMuonBrowserTrayIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                         const std::string& path,
                                         MuonBrowserTrayIcon* icon,
                                         std::string* error_message);
+
+/**
+ * Loads a tray icon from an already loaded title bar icon.
+ *
+ * @param title_bar_icon Title bar icon whose PNG bytes are used for the tray.
+ * @param source Diagnostic source label used in error messages.
+ * @param icon Receives decoded tray icon data.
+ * @param error_message Receives a validation diagnostic.
+ * @return true when a tray icon was loaded from PNG data.
+ */
+bool LoadMuonBrowserTrayIconFromTitleBarIcon(
+    const MuonTitleBarIcon& title_bar_icon,
+    const std::string& source,
+    MuonBrowserTrayIcon* icon,
+    std::string* error_message);
 
 /**
  * Creates a platform tray service.

@@ -6,23 +6,23 @@
 export {};
 
 declare global {
-  /** Browser window object extended with the Muon host API. */
+  /** Browser window object extended with the muon host API. */
   interface Window {
-    /** Host APIs exposed by Muon to pages that pass the plugin allow policy. */
+    /** Host APIs exposed by muon to pages that pass the plugin allow policy. */
     readonly muon: MuonApi;
   }
 
-  /** Host APIs exposed by Muon to the main page. */
+  /** Host APIs exposed by muon to the main page. */
   interface MuonApi {
-    /** Browser and native window operations for the current Muon window. */
+    /** Browser and native window operations for the current muon window. */
     readonly browser: MuonBrowserApi;
-    /** Bootstrap update controls exposed by Muon. */
+    /** Bootstrap update controls exposed by muon. */
     readonly bootstrap: MuonBootstrapApi;
-    /** Environment information exposed by Muon. */
+    /** Environment information exposed by muon. */
     readonly environments: MuonEnvironmentsApi;
-    /** Child process execution operations exposed by Muon. */
+    /** Child process execution operations exposed by muon. */
     readonly executor: MuonExecutorApi;
-    /** Filesystem operations exposed by the built-in Muon filesystem plugin. */
+    /** Filesystem operations exposed by the built-in muon filesystem plugin. */
     readonly fs: MuonFsApi;
   }
 
@@ -80,7 +80,7 @@ declare global {
     readonly catalogRefreshIntervalSeconds?: number | null;
   }
 
-  /** Bootstrap update controls exposed by Muon. */
+  /** Bootstrap update controls exposed by muon. */
   interface MuonBootstrapApi {
     /**
      * Return bootstrap settings used by the next muon-bootstrap startup.
@@ -105,7 +105,7 @@ declare global {
     readonly triggerUpdate: () => Promise<void>;
   }
 
-  /** Top-level Muon window bounds in DIP screen coordinates. */
+  /** Top-level muon window bounds in DIP screen coordinates. */
   interface MuonWindowBounds {
     /** Left edge of the window in screen coordinates. */
     readonly x: number;
@@ -117,10 +117,10 @@ declare global {
     readonly height: number;
   }
 
-  /** Placement slot for Muon browser context menu items. */
+  /** Placement slot for muon browser context menu items. */
   type MuonBrowserContextMenuPlacement = "start" | "afterEdit" | "end";
 
-  /** Visibility conditions for a Muon browser context menu item. */
+  /** Visibility conditions for a muon browser context menu item. */
   interface MuonBrowserContextMenuWhen {
     /** Match editable targets when specified. */
     readonly editable?: boolean;
@@ -136,7 +136,7 @@ declare global {
     readonly canPaste?: boolean;
   }
 
-  /** Command item inserted into the Muon browser native context menu. */
+  /** Command item inserted into the muon browser native context menu. */
   interface MuonBrowserContextMenuCommandItem {
     /**
      * Item type. Omit for normal command items.
@@ -169,7 +169,7 @@ declare global {
     readonly when?: MuonBrowserContextMenuWhen;
   }
 
-  /** Separator inserted into the Muon browser native context menu. */
+  /** Separator inserted into the muon browser native context menu. */
   interface MuonBrowserContextMenuSeparatorItem {
     /** Separator item type. */
     readonly type: "separator";
@@ -183,12 +183,12 @@ declare global {
     readonly when?: MuonBrowserContextMenuWhen;
   }
 
-  /** Item inserted into the Muon browser native context menu. */
+  /** Item inserted into the muon browser native context menu. */
   type MuonBrowserContextMenuItem =
     | MuonBrowserContextMenuCommandItem
     | MuonBrowserContextMenuSeparatorItem;
 
-  /** Context captured when a Muon browser context menu command is selected. */
+  /** Context captured when a muon browser context menu command is selected. */
   interface MuonBrowserContextMenuCommand {
     /** Application command id selected by the user. */
     readonly id: string;
@@ -220,12 +220,12 @@ declare global {
     readonly canPaste: boolean;
   }
 
-  /** Receives Muon browser context menu command selections. */
+  /** Receives muon browser context menu command selections. */
   type MuonBrowserContextMenuHandler = (
     command: MuonBrowserContextMenuCommand,
   ) => void;
 
-  /** Normal command item inserted into a Muon browser system tray menu. */
+  /** Normal command item inserted into a muon browser system tray menu. */
   interface MuonBrowserTrayCommandMenuItem {
     /**
      * Item type. Omit for normal command items.
@@ -250,7 +250,7 @@ declare global {
     readonly enabled?: boolean;
   }
 
-  /** Checkbox command item inserted into a Muon browser system tray menu. */
+  /** Checkbox command item inserted into a muon browser system tray menu. */
   interface MuonBrowserTrayCheckboxMenuItem {
     /** Checkbox item type. */
     readonly type: "checkbox";
@@ -277,7 +277,7 @@ declare global {
     readonly checked?: boolean;
   }
 
-  /** Radio command item inserted into a Muon browser system tray menu. */
+  /** Radio command item inserted into a muon browser system tray menu. */
   interface MuonBrowserTrayRadioMenuItem {
     /** Radio item type. */
     readonly type: "radio";
@@ -304,41 +304,42 @@ declare global {
     readonly checked?: boolean;
   }
 
-  /** Separator inserted into a Muon browser system tray menu. */
+  /** Separator inserted into a muon browser system tray menu. */
   interface MuonBrowserTraySeparatorMenuItem {
     /** Separator item type. */
     readonly type: "separator";
   }
 
-  /** Item inserted into a Muon browser system tray menu. */
+  /** Item inserted into a muon browser system tray menu. */
   type MuonBrowserTrayMenuItem =
     | MuonBrowserTrayCommandMenuItem
     | MuonBrowserTrayCheckboxMenuItem
     | MuonBrowserTrayRadioMenuItem
     | MuonBrowserTraySeparatorMenuItem;
 
-  /** Options used when creating a Muon browser system tray item. */
+  /** Options used when creating a muon browser system tray item. */
   interface MuonBrowserTrayOptions {
     /**
      * Browser-scoped tray id.
      *
-     * @remarks When omitted, Muon generates and returns a unique id.
+     * @remarks When omitted, muon generates and returns a unique id.
      */
     readonly id?: string;
     /**
      * Tray icon asset path.
      *
      * @remarks Accepts `asset://main/...` URLs or `main`-relative asset paths.
-     * Native tray icons accept PNG icons.
+     * Native tray icons accept PNG icons. Omit to follow the current title bar
+     * icon.
      */
-    readonly icon: string;
+    readonly icon?: string;
     /** Tooltip text shown by the platform shell when supported. */
     readonly tooltip?: string | null;
     /** Initial tray menu items. */
     readonly menu?: readonly MuonBrowserTrayMenuItem[];
   }
 
-  /** Primary or secondary activation event from a Muon browser system tray item. */
+  /** Primary or secondary activation event from a muon browser system tray item. */
   interface MuonBrowserTrayActivationEvent {
     /** Event type. */
     readonly type: "activate" | "secondaryActivate";
@@ -350,7 +351,7 @@ declare global {
     readonly y: number;
   }
 
-  /** Menu command event from a Muon browser system tray item. */
+  /** Menu command event from a muon browser system tray item. */
   interface MuonBrowserTrayMenuEvent {
     /** Event type. */
     readonly type: "menu";
@@ -362,15 +363,15 @@ declare global {
     readonly checked: boolean;
   }
 
-  /** Event emitted by a Muon browser system tray item. */
+  /** Event emitted by a muon browser system tray item. */
   type MuonBrowserTrayEvent =
     | MuonBrowserTrayActivationEvent
     | MuonBrowserTrayMenuEvent;
 
-  /** Receives Muon browser system tray activation and menu events. */
+  /** Receives muon browser system tray activation and menu events. */
   type MuonBrowserTrayEventHandler = (event: MuonBrowserTrayEvent) => void;
 
-  /** Browser and native window operations for the current Muon window. */
+  /** Browser and native window operations for the current muon window. */
   interface MuonBrowserApi {
     /**
      * Reload the current page.
@@ -467,16 +468,16 @@ declare global {
      */
     readonly restore: () => Promise<void>;
     /**
-     * Return bounds for the current top-level Muon window.
+     * Return bounds for the current top-level muon window.
      *
      * @returns A promise for window bounds in DIP screen coordinates.
      * @remarks The bounds describe the top-level window, not just the browser
-     * content area, and therefore include Muon custom title bars or native
+     * content area, and therefore include muon custom title bars or native
      * window frames when present.
      */
     readonly getWindowBounds: () => Promise<MuonWindowBounds>;
     /**
-     * Request new bounds for the current top-level Muon window.
+     * Request new bounds for the current top-level muon window.
      *
      * @param bounds - New window bounds in DIP screen coordinates.
      * @returns A promise that resolves when the bounds change is requested.
@@ -559,7 +560,7 @@ declare global {
      */
     readonly removeTray: (id: string) => Promise<void>;
     /**
-     * Show or hide the current Muon custom title bar.
+     * Show or hide the current muon custom title bar.
      *
      * @param visible - Whether the title bar should be visible.
      * @returns A promise that resolves when the title bar visibility is requested.
@@ -572,7 +573,7 @@ declare global {
      * @param path - Asset path for an icon, or `null` to clear the icon.
      * @returns A promise that resolves when the title bar icon is requested.
      * @remarks Accepts `asset://main/...` URLs or `main`-relative asset paths.
-     * The icon is loaded from the configured Muon asset storage. Muon custom
+     * The icon is loaded from the configured muon asset storage. muon custom
      * title bars accept browser-displayable image formats. Native title bars
      * accept PNG icons only and reject other formats.
      */
@@ -587,14 +588,14 @@ declare global {
      */
     readonly close: () => Promise<void>;
     /**
-     * Shut down the Muon process.
+     * Shut down the muon process.
      *
      * @param exitCode - Process exit code. Omit to use `0`.
      * @returns A promise that resolves after the shutdown request is submitted.
      */
     readonly shutdown: (exitCode?: number) => Promise<void>;
     /**
-     * Recycle the Muon process by requesting an automatic restart.
+     * Recycle the muon process by requesting an automatic restart.
      *
      * @returns A promise that resolves after the recycle request is submitted.
      * @remarks The page context can be destroyed by process shutdown before
@@ -604,7 +605,7 @@ declare global {
   }
 
   /**
-   * Filesystem operations exposed by the built-in Muon filesystem plugin.
+   * Filesystem operations exposed by the built-in muon filesystem plugin.
    *
    * @remarks Linux accepts local paths or GIO/GVfs URI values for filesystem
    * location arguments. Other platforms accept local filesystem paths.
@@ -939,7 +940,7 @@ declare global {
      * @param listener - Listener invoked for change, rename, and error events.
      * @param options - Optional abort signal.
      * @returns A promise for a watcher handle.
-     * @remarks Muon currently watches by polling snapshots. Listener exceptions
+     * @remarks muon currently watches by polling snapshots. Listener exceptions
      * and rejected promises are ignored. Aborting before the watcher is created
      * rejects; aborting after creation closes the watcher.
      */
@@ -948,11 +949,11 @@ declare global {
       listener: MuonFsWatchListener,
       options?: MuonFsOperationOptions,
     ) => Promise<MuonFsWatcher>;
-    /** Native filesystem dialogs exposed by the built-in Muon filesystem plugin. */
+    /** Native filesystem dialogs exposed by the built-in muon filesystem plugin. */
     readonly dialogs: MuonFsDialogsApi;
   }
 
-  /** Native filesystem dialogs exposed by the built-in Muon filesystem plugin. */
+  /** Native filesystem dialogs exposed by the built-in muon filesystem plugin. */
   interface MuonFsDialogsApi {
     /**
      * Show a native file open dialog and return the selected local path or URI.
@@ -1014,7 +1015,7 @@ declare global {
      *
      * @remarks If the signal is already aborted, the operation rejects with the
      * signal reason or an `AbortError`. If it aborts while the operation is
-     * pending, Muon requests native cancellation when possible.
+     * pending, muon requests native cancellation when possible.
      * @defaultValue No abort signal.
      */
     readonly signal?: AbortSignal;
@@ -1050,7 +1051,7 @@ declare global {
     readonly position?: number;
   }
 
-  /** Access modes checked by Muon filesystem access. */
+  /** Access modes checked by muon filesystem access. */
   type MuonFsAccessMode = "read" | "write" | "execute";
 
   /** Options for checking path accessibility. */
@@ -1269,7 +1270,7 @@ declare global {
     readonly confirmOverwrite?: boolean;
   }
 
-  /** Filesystem entry type reported by Muon. */
+  /** Filesystem entry type reported by muon. */
   type MuonFsEntryType =
     | "file"
     | "directory"
@@ -1332,8 +1333,8 @@ declare global {
   /**
    * Listener invoked for filesystem watch events.
    *
-   * @param event - Watch event emitted by Muon.
-   * @returns Ignored by Muon. Rejected promises are ignored.
+   * @param event - Watch event emitted by muon.
+   * @returns Ignored by muon. Rejected promises are ignored.
    */
   type MuonFsWatchListener = (event: MuonFsWatchEvent) => void | Promise<void>;
 
@@ -1348,13 +1349,13 @@ declare global {
     readonly close: () => Promise<void>;
   }
 
-  /** Runtime metadata for the current Muon process. */
+  /** Runtime metadata for the current muon process. */
   interface MuonRuntimeInfo {
     /** Runtime package name. */
     readonly name: string;
     /** Native executable file name included in the runtime payload. */
     readonly executableName: string;
-    /** Muon runtime target name. */
+    /** muon runtime target name. */
     readonly target: string;
     /** Internal CEF target name used for catalog lookup. */
     readonly cefTarget: string;
@@ -1402,7 +1403,7 @@ declare global {
     readonly size: number;
   }
 
-  /** CEF build loaded by the current Muon process. */
+  /** CEF build loaded by the current muon process. */
   interface MuonCefRuntimeInfo {
     /** Runtime CEF version reported by libcef. */
     readonly version: string;
@@ -1412,7 +1413,7 @@ declare global {
     readonly apiHash: string;
   }
 
-  /** Environment information exposed by Muon. */
+  /** Environment information exposed by muon. */
   interface MuonEnvironmentsApi {
     /**
      * Return the current process environment variables.
@@ -1421,28 +1422,28 @@ declare global {
      */
     readonly getVariables: () => Promise<Record<string, string>>;
     /**
-     * Return the command line captured when the current Muon process started.
+     * Return the command line captured when the current muon process started.
      *
      * @returns A promise for the process command line, including `argv[0]` when available.
      */
     readonly getCommandLine: () => Promise<string[]>;
     /**
-     * Return the native Muon process id.
+     * Return the native muon process id.
      *
      * @returns A promise for the current process id.
      */
     readonly getProcessId: () => Promise<number>;
     /**
-     * Return runtime metadata for the current Muon process.
+     * Return runtime metadata for the current muon process.
      *
      * @returns A promise for build-time muon-core metadata and runtime CEF metadata.
      */
     readonly getRuntimeInfo: () => Promise<MuonRuntimeInfo>;
     /**
-     * Return whether the current Muon application starts with the user session.
+     * Return whether the current muon application starts with the user session.
      *
      * @returns A promise for the autostart state, or `undefined` when unknown.
-     * @remarks The active launch source selects the platform backend. Muon uses
+     * @remarks The active launch source selects the platform backend. muon uses
      * XDG Autostart on POSIX desktop environments and the current user's Run
      * registry entry on Windows.
      */
@@ -1456,23 +1457,22 @@ declare global {
     readonly setAutostart: (enabled: boolean) => Promise<void>;
   }
 
-  /** Child process execution operations exposed by Muon. */
+  /** Child process execution operations exposed by muon. */
   interface MuonExecutorApi {
     /**
      * Spawn a child process without invoking a shell.
      *
      * @param options - Process launch options.
-     * @returns A promise for the completed child process result.
-     * @remarks The promise resolves even when the child exits with a non-zero
-     * exit code. It rejects only when the process cannot be launched or the
-     * options are invalid.
+     * @returns A promise for the started child process handle.
+     * @remarks The returned process handle controls stdin, termination, and
+     * completion observation. Use `wait()` to receive the exit result.
      */
     readonly spawn: (
       options: MuonExecutorSpawnOptions,
-    ) => Promise<MuonExecutorSpawnResult>;
+    ) => Promise<MuonExecutorProcess>;
   }
 
-  /** Options for spawning a child process through Muon. */
+  /** Options for spawning a child process through muon. */
   interface MuonExecutorSpawnOptions {
     /**
      * Executable path or executable name resolved through `PATH`.
@@ -1488,12 +1488,19 @@ declare global {
      */
     readonly args?: readonly string[];
     /**
-     * UTF-8 text written to the child process stdin.
+     * Receives stdout chunks as the child process writes them.
      *
-     * @remarks Omit or use an empty string to close stdin without writing data.
-     * @defaultValue `""`
+     * @remarks When specified, `wait()` omits `stdout` from its result. The
+     * callback receives a fresh `Uint8Array` for each chunk.
      */
-    readonly stdin?: string;
+    readonly onStdout?: (chunk: Uint8Array) => void;
+    /**
+     * Receives stderr chunks as the child process writes them.
+     *
+     * @remarks When specified, `wait()` omits `stderr` from its result. The
+     * callback receives a fresh `Uint8Array` for each chunk.
+     */
+    readonly onStderr?: (chunk: Uint8Array) => void;
     /**
      * Working directory used for the child process.
      *
@@ -1513,16 +1520,58 @@ declare global {
     readonly env?: Record<string, string>;
   }
 
+  /** Started child process handle. */
+  interface MuonExecutorProcess {
+    /** Child process id. */
+    readonly processId: number;
+    /**
+     * Write bytes to the child process stdin.
+     *
+     * @param data - UTF-8 text or raw bytes to write.
+     * @returns A promise that resolves after the bytes are written.
+     * @remarks Calls are processed in call order. Strings are UTF-8 encoded.
+     */
+    readonly writeStdin: (data: string | BufferSource) => Promise<void>;
+    /**
+     * Close child process stdin after all pending writes are processed.
+     *
+     * @returns A promise that resolves when stdin is closed.
+     */
+    readonly closeStdin: () => Promise<void>;
+    /**
+     * Wait for the child process to exit.
+     *
+     * @returns A promise for the completed child process result.
+     * @remarks The same promise is reused for repeated calls. It resolves even
+     * when the child exits with a non-zero exit code.
+     */
+    readonly wait: () => Promise<MuonExecutorSpawnResult>;
+    /**
+     * Request process termination.
+     *
+     * @returns A promise that resolves when the termination request is issued.
+     * @remarks POSIX uses `SIGTERM`; Windows uses `TerminateProcess(..., 1)`.
+     */
+    readonly kill: () => Promise<void>;
+    /**
+     * Release the native handle and terminate the process when it is still
+     * running.
+     *
+     * @returns A promise that resolves after disposal is requested.
+     */
+    readonly dispose: () => Promise<void>;
+  }
+
   /** Completed child process result. */
   interface MuonExecutorSpawnResult {
     /** Child process id. */
     readonly processId: number;
     /** Child process exit code. */
     readonly exitCode: number;
-    /** Captured UTF-8 stdout text. */
-    readonly stdout: string;
-    /** Captured UTF-8 stderr text. */
-    readonly stderr: string;
+    /** Captured stdout bytes when `onStdout` was not specified. */
+    readonly stdout?: Uint8Array;
+    /** Captured stderr bytes when `onStderr` was not specified. */
+    readonly stderr?: Uint8Array;
   }
 }
 
@@ -1557,9 +1606,9 @@ declare module "muon:browser" {
   export const maximize: () => Promise<void>;
   /** Restore the current browser window from minimized or maximized state. */
   export const restore: () => Promise<void>;
-  /** Return bounds for the current top-level Muon window. */
+  /** Return bounds for the current top-level muon window. */
   export const getWindowBounds: () => Promise<MuonWindowBounds>;
-  /** Request new bounds for the current top-level Muon window. */
+  /** Request new bounds for the current top-level muon window. */
   export const setWindowBounds: (bounds: MuonWindowBounds) => Promise<void>;
   /** Replace the current browser window's custom native context menu items. */
   export const setContextMenuItems: (
@@ -1588,15 +1637,15 @@ declare module "muon:browser" {
   ) => Promise<void>;
   /** Remove a browser-owned system tray item. */
   export const removeTray: (id: string) => Promise<void>;
-  /** Show or hide the current Muon custom title bar. */
+  /** Show or hide the current muon custom title bar. */
   export const setTitleBarVisibility: (visible: boolean) => Promise<void>;
   /** Set or clear the current window title bar icon. */
   export const setTitleBarIcon: (path: string | null) => Promise<void>;
   /** Close the current browser window. */
   export const close: () => Promise<void>;
-  /** Shut down the Muon process. */
+  /** Shut down the muon process. */
   export const shutdown: (exitCode?: number) => Promise<void>;
-  /** Recycle the Muon process by requesting an automatic restart. */
+  /** Recycle the muon process by requesting an automatic restart. */
   export const recycle: () => Promise<void>;
 }
 
@@ -1605,9 +1654,9 @@ declare module "muon:executor" {
    * Spawn a child process without invoking a shell.
    *
    * @param options - Process launch options.
-   * @returns A promise for the completed child process result.
+   * @returns A promise for the started child process handle.
    */
   export const spawn: (
     options: MuonExecutorSpawnOptions,
-  ) => Promise<MuonExecutorSpawnResult>;
+  ) => Promise<MuonExecutorProcess>;
 }

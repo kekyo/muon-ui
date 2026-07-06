@@ -71,7 +71,7 @@ interface MuonOverrideConfig {
 }
 
 /**
- * Options for resolving a Muon runtime directory used by the Vite plugin.
+ * Options for resolving a muon runtime directory used by the Vite plugin.
  */
 export interface MuonRuntimePathOptions {
   /**
@@ -80,7 +80,7 @@ export interface MuonRuntimePathOptions {
   root: string;
 
   /**
-   * Public Muon runtime target such as linux-amd64 or windows-amd64.
+   * Public muon runtime target such as linux-amd64 or windows-amd64.
    */
   target: string;
 
@@ -90,7 +90,7 @@ export interface MuonRuntimePathOptions {
   muonPath: string | undefined;
 
   /**
-   * Directory containing the packaged Muon JavaScript files.
+   * Directory containing the packaged muon JavaScript files.
    *
    * @remarks This is injectable for tests. Production code uses the module directory.
    */
@@ -158,19 +158,19 @@ MUON_OVERRIDE_CONFIG=${quotePosix(overrideConfigPath)}
 MUON_CONFIG_ARGS=()
 if [[ -n "$MUON_PROJECT_CONFIG" ]]; then
   if [[ ! -f "$MUON_PROJECT_CONFIG" ]]; then
-    echo "Muon startup failed: project config does not exist: $MUON_PROJECT_CONFIG" >&2
+    echo "muon startup failed: project config does not exist: $MUON_PROJECT_CONFIG" >&2
     exit 1
   fi
   MUON_CONFIG_ARGS+=("-c" "$MUON_PROJECT_CONFIG")
 fi
 
 if [[ ! -x "$MUON_EXECUTABLE" ]]; then
-  echo "Muon startup failed: executable does not exist or is not executable: $MUON_EXECUTABLE" >&2
+  echo "muon startup failed: executable does not exist or is not executable: $MUON_EXECUTABLE" >&2
   exit 1
 fi
 
 if [[ ! -f "$MUON_OVERRIDE_CONFIG" ]]; then
-  echo "Muon startup failed: generated override config does not exist: $MUON_OVERRIDE_CONFIG" >&2
+  echo "muon startup failed: generated override config does not exist: $MUON_OVERRIDE_CONFIG" >&2
   exit 1
 fi
 MUON_CONFIG_ARGS+=("-c" "$MUON_OVERRIDE_CONFIG")
@@ -206,12 +206,12 @@ set "MUON_PROJECT_CONFIG=${getOptionalWindowsCmdValue(projectConfigPath)}"
 set "MUON_OVERRIDE_CONFIG=${escapeWindowsCmdValue(overrideConfigPath)}"
 
 if not exist "%MUON_EXECUTABLE%" (
-  echo Muon startup failed: executable does not exist: %MUON_EXECUTABLE% 1>&2
+  echo muon startup failed: executable does not exist: %MUON_EXECUTABLE% 1>&2
   exit /b 1
 )
 
 if not exist "%MUON_OVERRIDE_CONFIG%" (
-  echo Muon startup failed: generated override config does not exist: %MUON_OVERRIDE_CONFIG% 1>&2
+  echo muon startup failed: generated override config does not exist: %MUON_OVERRIDE_CONFIG% 1>&2
   exit /b 1
 )
 
@@ -219,7 +219,7 @@ pushd "%MUON_EXECUTABLE_DIRECTORY%"
 :muon_recycle_loop
 if defined MUON_PROJECT_CONFIG (
   if not exist "%MUON_PROJECT_CONFIG%" (
-    echo Muon startup failed: project config does not exist: %MUON_PROJECT_CONFIG% 1>&2
+    echo muon startup failed: project config does not exist: %MUON_PROJECT_CONFIG% 1>&2
     popd
     exit /b 1
   )
@@ -296,7 +296,7 @@ const writeMuonOverrideConfig = (
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
-    server.config.logger.warn("Muon Vite plugin could not resolve a Vite URL.");
+    server.config.logger.warn("muon Vite plugin could not resolve a Vite URL.");
     return false;
   }
   writeFileSync(
@@ -365,14 +365,14 @@ const resolveProjectConfigPath = async (
       return candidatePath;
     } catch (error) {
       server.config.logger.warn(
-        `Muon project config will be ignored because it could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
+        `muon project config will be ignored because it could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
       );
       return undefined;
     }
   }
 
   server.config.logger.warn(
-    `Muon project config was not found in ${server.config.root}; launching with generated Vite config only.`,
+    `muon project config was not found in ${server.config.root}; launching with generated Vite config only.`,
   );
   return undefined;
 };
@@ -414,7 +414,7 @@ const launchMuon = (
     windowsHide: false,
   });
   child.once("error", (error) => {
-    server.config.logger.warn(`Muon startup failed: ${getErrorMessage(error)}`);
+    server.config.logger.warn(`muon startup failed: ${getErrorMessage(error)}`);
   });
   child.unref();
 };

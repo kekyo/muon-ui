@@ -27,7 +27,7 @@ template <typename Task>
 static void schedule_async(muon_completion_func comp, Task&& task) {
   auto* dispatcher = cardio::unsafe_get_current_dispatcher();
   if (dispatcher == nullptr) {
-    comp(nullptr, "Muon main dispatcher is unavailable");
+    comp(nullptr, "muon main dispatcher is unavailable");
     return;
   }
   muon_internal::FireAndForgetOnDispatcher(

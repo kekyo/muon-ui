@@ -9,7 +9,7 @@ option(MUON_TRACK_FFI_CLOSURES
   "Track libffi closure allocation and free counts in the muon runtime."
   OFF)
 option(MUON_BUILD_TESTS
-  "Build Muon test plugins and local executable tests."
+  "Build muon test plugins and local executable tests."
   ON)
 option(MUON_RUNTIME_INCLUDE_APP_FILES
   "Copy development app config and assets into the runtime payload."
@@ -32,7 +32,7 @@ set(MUON_CEF_SHA1 "" CACHE STRING
 set(MUON_CEF_SIZE "0" CACHE STRING
   "CEF binary package size used to generate muon runtime metadata.")
 set(MUON_TARGET_NAME "" CACHE STRING
-  "Public Muon runtime target name used to generate runtime metadata.")
+  "Public muon runtime target name used to generate runtime metadata.")
 set(MUON_CEF_TARGET_NAME "" CACHE STRING
   "Internal CEF target name used to generate runtime metadata.")
 set(MUON_CORE_VERSION "" CACHE STRING
@@ -451,7 +451,7 @@ if(MINGW)
   list(JOIN MUON_MINGW_RUNTIME_DLLS "|" MUON_MINGW_RUNTIME_DLLS_ARG)
 endif()
 
-# CEF defaults disable C++ exceptions, but Muon builds with exceptions enabled.
+# CEF defaults disable C++ exceptions, but muon builds with exceptions enabled.
 foreach(MUON_CEF_FLAG_LIST IN ITEMS
     CEF_COMPILER_FLAGS
     CEF_CXX_COMPILER_FLAGS

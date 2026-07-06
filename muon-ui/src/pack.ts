@@ -77,7 +77,7 @@ const debGtk3RuntimeDependency = "libgtk-3-0t64 | libgtk-3-0";
 type JsonObject = Record<string, unknown>;
 
 /**
- * Muon package output type.
+ * muon package output type.
  */
 export type MuonPackType = (typeof supportedPackTypes)[number];
 
@@ -87,7 +87,7 @@ export type MuonPackType = (typeof supportedPackTypes)[number];
 export type MuonLinuxSandboxMode = (typeof supportedLinuxSandboxModes)[number];
 
 /**
- * Options for creating redistributable Muon package artifacts.
+ * Options for creating redistributable muon package artifacts.
  */
 export interface MuonPackOptions {
   /**
@@ -109,7 +109,7 @@ export interface MuonPackOptions {
    */
   allTargets?: boolean;
   /**
-   * Muon config path to embed.
+   * muon config path to embed.
    */
   configPath?: string;
   /**
@@ -135,14 +135,14 @@ export interface MuonPackOptions {
    * Windows PE and NSIS resource metadata.
    *
    * @defaultValue Uses Vite build options, `muon.json` `windows.resource`,
-   * `project.json`, `package.json`, then Muon defaults.
+   * `project.json`, `package.json`, then muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
   /**
    * Linux desktop entry metadata.
    *
    * @defaultValue Uses Vite build options, `muon.json` `linux.desktop`,
-   * package metadata, then Muon defaults.
+   * package metadata, then muon defaults.
    */
   linuxDesktop?: MuonLinuxDesktopOptions;
   /**
@@ -192,7 +192,7 @@ export interface MuonPackArtifact {
    */
   type: MuonPackType;
   /**
-   * Muon target packaged in this artifact.
+   * muon target packaged in this artifact.
    */
   target: MuonBuildTarget;
   /**
@@ -202,7 +202,7 @@ export interface MuonPackArtifact {
 }
 
 /**
- * Result of a Muon package build.
+ * Result of a muon package build.
  */
 export interface MuonPackResult {
   /**
@@ -226,7 +226,7 @@ export interface MuonPackResult {
    */
   appId: string;
   /**
-   * Muon dist build result.
+   * muon dist build result.
    */
   build: MuonBuildResult;
   /**
@@ -319,7 +319,7 @@ const resolveMetadata = (
     options.description ??
     (typeof packageJson.description === "string"
       ? packageJson.description
-      : "Muon application");
+      : "muon application");
   const author =
     options.author ?? stringifyAuthor(packageJson.author) ?? "Unknown";
   return {
@@ -671,7 +671,7 @@ const packageDeb = async (
   if (linuxSandbox === "setuid") {
     if (target.runtimeHelperPath === undefined) {
       throw new Error(
-        `Muon runtime helper is unavailable for setuid deb target: ${target.target}`,
+        `muon runtime helper is unavailable for setuid deb target: ${target.target}`,
       );
     }
     await chmod(join(installedDist, runtimeHelperExecutableName), 0o4755);
@@ -976,7 +976,7 @@ const reapplyPackWindowsResources = async (
 };
 
 /**
- * Runs the Muon build sequence and creates redistributable packages.
+ * Runs the muon build sequence and creates redistributable packages.
  *
  * @param options Pack options.
  * @returns Generated package artifacts.

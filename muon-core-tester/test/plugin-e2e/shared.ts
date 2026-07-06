@@ -322,8 +322,8 @@ const closeActiveCdpDrivers = (): void => {
 };
 
 const isMuonTitleBarUrl = (url: string): boolean =>
-  url.includes("Muon%20Title%20Bar") ||
-  url.includes("Muon Title Bar") ||
+  url.includes("muon%20Title%20Bar") ||
+  url.includes("muon Title Bar") ||
   url.includes("muon-title-bar");
 
 const isUsableWindowsRemotePageUrl = (url: string): boolean =>
@@ -2003,7 +2003,7 @@ export const waitForMuonStderr = async (
     }
     await wait(100);
   }
-  throw new Error(`Timed out waiting for Muon stderr: ${expected}`);
+  throw new Error(`Timed out waiting for muon stderr: ${expected}`);
 };
 
 export const waitForDocumentTitle = async (
@@ -3156,7 +3156,7 @@ export const startNativeFileDialogProbe = async (
     },
   );
   if (response.exceptionDetails !== undefined) {
-    throw new Error("Failed to start Muon native file dialog probe");
+    throw new Error("Failed to start muon native file dialog probe");
   }
 };
 

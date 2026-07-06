@@ -3,10 +3,10 @@
   <assemblyIdentity
     version="1.0.0.0"
     processorArchitecture="*"
-    name="Muon.Bootstrap"
+    name="muon.Bootstrap"
     type="win32"
   />
-  <description>Muon bootstrap</description>
+  <description>muon bootstrap</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity

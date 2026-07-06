@@ -418,7 +418,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
   if (isLocalLinuxNativeDialogE2e) {
     it("keeps the opener browser view clickable while an opener popup is open", async () => {
       const pageTitle = "muon opener popup parent input";
-      const buttonLabel = "Muon Parent Input Counter";
+      const buttonLabel = "muon Parent Input Counter";
       const popupUrl = `${MUON_APP_URL}#popup=connected`;
       const popupFeatures = "width=240,height=180";
       const running = await startGestamentDebugMuon(["asset://main/**"]);
@@ -514,8 +514,8 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("detects a GTK file dialog with Gestament", async () => {
       const pageTitle = "muon gestament dialog test";
-      const title = "Muon Gestament File Dialog Test";
-      const buttonLabel = "Muon Probe Select";
+      const title = "muon Gestament File Dialog Test";
+      const buttonLabel = "muon Probe Select";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-gestament-dialog-"),
       );
@@ -579,7 +579,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
       }
     });
 
-    it("uses the Muon UI dialog provider for CEF file inputs", async () => {
+    it("uses the muon UI dialog provider for CEF file inputs", async () => {
       const pageTitle = "muon cef file input dialog";
       const dialogTitle = "Open";
       const running = await startGestamentDebugMuon();
@@ -628,9 +628,9 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("disables the opener browser view while a default modal GTK file dialog is open", async () => {
       const pageTitle = "muon modal dialog disables opener";
-      const title = "Muon Modal Disable Probe";
-      const buttonLabel = "Muon Modal Probe Select";
-      const pageButtonLabel = "Muon Page Counter Button";
+      const title = "muon Modal Disable Probe";
+      const buttonLabel = "muon Modal Probe Select";
+      const pageButtonLabel = "muon Page Counter Button";
       const testDirectory = await mkdtemp(join(tmpdir(), "muon-modal-dialog-"));
       const selectedPath = join(testDirectory, "selected.txt");
       await writeFile(selectedPath, "selected", "utf8");
@@ -699,9 +699,9 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("keeps the opener browser view enabled while a non-modal GTK file dialog is open", async () => {
       const pageTitle = "muon non-modal dialog keeps opener enabled";
-      const title = "Muon Non Modal Disable Probe";
-      const buttonLabel = "Muon Non Modal Probe Select";
-      const pageButtonLabel = "Muon Non Modal Page Counter Button";
+      const title = "muon Non Modal Disable Probe";
+      const buttonLabel = "muon Non Modal Probe Select";
+      const pageButtonLabel = "muon Non Modal Page Counter Button";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-non-modal-dialog-"),
       );
@@ -767,8 +767,8 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("closes a default modal GTK file dialog when the opener browser closes", async () => {
       const pageTitle = "muon modal dialog owner close";
-      const title = "Muon Modal Owner Close Probe";
-      const buttonLabel = "Muon Modal Owner Close Select";
+      const title = "muon Modal Owner Close Probe";
+      const buttonLabel = "muon Modal Owner Close Select";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-modal-owner-close-"),
       );
@@ -802,8 +802,8 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("keeps a non-modal GTK file dialog open when the opener browser closes", async () => {
       const pageTitle = "muon non-modal dialog owner close";
-      const title = "Muon Non Modal Owner Close Probe";
-      const buttonLabel = "Muon Non Modal Owner Close Select";
+      const title = "muon Non Modal Owner Close Probe";
+      const buttonLabel = "muon Non Modal Owner Close Select";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-non-modal-owner-close-"),
       );
@@ -852,7 +852,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
   if (isWindowsRemoteE2e()) {
     it("keeps the opener browser view clickable while an opener popup is open on Windows", async () => {
       const pageTitle = "muon windows opener popup parent input";
-      const buttonLabel = "Muon Windows Parent Input Counter";
+      const buttonLabel = "muon Windows Parent Input Counter";
       const popupUrl = `${MUON_APP_URL}#popup=connected`;
       const popupFeatures = "width=240,height=180";
       const running = await startWindowsNativeDialogMuon(["asset://main/**"]);
@@ -957,8 +957,8 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("detects a Windows native file dialog with agent-rover", async () => {
       const pageTitle = "muon windows dialog test";
-      const title = "Muon Windows File Dialog Test";
-      const buttonLabel = "Muon Windows Probe Select";
+      const title = "muon Windows File Dialog Test";
+      const buttonLabel = "muon Windows Probe Select";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-windows-dialog-"),
       );
@@ -1004,7 +1004,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
       }
     });
 
-    it("uses the Muon UI dialog provider for CEF file inputs on Windows", async () => {
+    it("uses the muon UI dialog provider for CEF file inputs on Windows", async () => {
       const pageTitle = "muon windows cef file input dialog";
       const dialogTitle = /^(Open|開く)$/;
       const running = await startWindowsNativeDialogMuon();
@@ -1060,9 +1060,9 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("disables the opener browser view while a default modal Windows file dialog is open", async () => {
       const pageTitle = "muon windows modal dialog disables opener";
-      const title = "Muon Windows Modal Disable Probe";
-      const buttonLabel = "Muon Windows Modal Probe Select";
-      const pageButtonLabel = "Muon Windows Page Counter Button";
+      const title = "muon Windows Modal Disable Probe";
+      const buttonLabel = "muon Windows Modal Probe Select";
+      const pageButtonLabel = "muon Windows Page Counter Button";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-windows-modal-dialog-"),
       );
@@ -1127,9 +1127,9 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("keeps the opener browser view enabled while a non-modal Windows file dialog is open", async () => {
       const pageTitle = "muon windows non-modal dialog keeps opener enabled";
-      const title = "Muon Windows Non Modal Disable Probe";
-      const buttonLabel = "Muon Windows Non Modal Probe Select";
-      const pageButtonLabel = "Muon Windows Non Modal Page Counter Button";
+      const title = "muon Windows Non Modal Disable Probe";
+      const buttonLabel = "muon Windows Non Modal Probe Select";
+      const pageButtonLabel = "muon Windows Non Modal Page Counter Button";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-windows-non-modal-dialog-"),
       );
@@ -1189,8 +1189,8 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("closes a default modal Windows file dialog when the opener browser closes", async () => {
       const pageTitle = "muon windows modal dialog owner close";
-      const title = "Muon Windows Modal Owner Close Probe";
-      const buttonLabel = "Muon Windows Modal Owner Close Select";
+      const title = "muon Windows Modal Owner Close Probe";
+      const buttonLabel = "muon Windows Modal Owner Close Select";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-windows-modal-owner-close-"),
       );
@@ -1229,8 +1229,8 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
     it("keeps a non-modal Windows file dialog open when the opener browser closes", async () => {
       const pageTitle = "muon windows non-modal dialog owner close";
-      const title = "Muon Windows Non Modal Owner Close Probe";
-      const buttonLabel = "Muon Windows Non Modal Owner Close Select";
+      const title = "muon Windows Non Modal Owner Close Probe";
+      const buttonLabel = "muon Windows Non Modal Owner Close Select";
       const testDirectory = await mkdtemp(
         join(tmpdir(), "muon-windows-non-modal-owner-close-"),
       );

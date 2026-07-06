@@ -24,7 +24,7 @@ import type { MuonProgressCallback } from "./progress.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
- * when a CLI command owns the Muon build sequence.
+ * when a CLI command owns the muon build sequence.
  */
 export const muonBuildSequenceSuppressViteBuildEnvironmentKey =
   "MUON_SUPPRESS_VITE_MUON_BUILD";
@@ -33,23 +33,23 @@ export const muonBuildSequenceSuppressViteBuildEnvironmentKey =
  * Resolved project metadata used by the CLI build sequence.
  */
 export interface MuonBuildSequenceProject {
-  /** Project root used for Muon config and package metadata. */
+  /** Project root used for muon config and package metadata. */
   root: string;
   /** Root passed to Vite when the sequence must run `vite build`. */
   viteBuildRoot: string;
   /** Vite base URL used by the resolved Vite build. */
   viteBase: string | undefined;
-  /** Absolute Vite output directory used as Muon app assets. */
+  /** Absolute Vite output directory used as muon app assets. */
   viteOutputDirectory: string | undefined;
-  /** Muon Vite plugin options if the project config contains the plugin. */
+  /** muon Vite plugin options if the project config contains the plugin. */
   pluginOptions: MuonVitePluginOptions | undefined;
 }
 
 /**
- * Options for running the CLI-oriented Muon build sequence.
+ * Options for running the CLI-oriented muon build sequence.
  */
 export interface MuonBuildSequenceOptions extends MuonBuildOptions {
-  /** Target default used only when no Muon Vite plugin defines build options. */
+  /** Target default used only when no muon Vite plugin defines build options. */
   defaultAllTargets?: boolean;
 }
 
@@ -97,7 +97,7 @@ const findMuonVitePluginOptions = async (
 };
 
 /**
- * Loads Vite configuration only far enough to discover whether a Muon plugin
+ * Loads Vite configuration only far enough to discover whether a muon plugin
  * controls the build sequence.
  */
 export const loadMuonBuildSequenceProject = async (
@@ -147,13 +147,13 @@ export const loadMuonBuildSequenceProject = async (
 };
 
 /**
- * Returns Muon build options from a Muon Vite plugin declaration.
+ * Returns muon build options from a muon Vite plugin declaration.
  */
 export const resolveMuonViteBuildOptions = (
   pluginOptions: MuonVitePluginOptions | undefined,
 ): MuonViteBuildOptions => {
   if (pluginOptions?.build === false) {
-    throw new Error("Muon build is disabled by muon({ build: false }).");
+    throw new Error("muon build is disabled by muon({ build: false }).");
   }
   return typeof pluginOptions?.build === "object" ? pluginOptions.build : {};
 };

@@ -55,9 +55,9 @@ struct MuonTitleBarManifest {
   int controls_width = 0;
 
   /**
-   * Whether Muon may handle the standard right-side controls from native input.
+   * Whether muon may handle the standard right-side controls from native input.
    *
-   * @remarks This is only set by the built-in Muon title bar manifest.
+   * @remarks This is only set by the built-in muon title bar manifest.
    */
   bool native_window_controls = false;
 
@@ -103,18 +103,18 @@ struct MuonTitleBarBackgroundColor {
 };
 
 /**
- * Loaded title bar icon data for native and Muon title bars.
+ * Loaded title bar icon data for native and muon title bars.
  */
 struct MuonTitleBarIcon {
   /**
    * PNG bytes used to create native title/app bar images.
    *
-   * @remarks Non-PNG icons used by the Muon custom title bar leave this empty.
+   * @remarks Non-PNG icons used by the muon custom title bar leave this empty.
    */
   std::vector<uint8_t> png_data;
 
   /**
-   * Image data URL used by the Muon custom title bar.
+   * Image data URL used by the muon custom title bar.
    */
   std::string data_url;
 };
@@ -200,7 +200,7 @@ bool LoadMuonTitleBarIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                      std::string* error_message);
 
 /**
- * Loads a title bar icon from asset storage for the Muon custom title bar.
+ * Loads a title bar icon from asset storage for the muon custom title bar.
  *
  * @param storage Asset storage backing asset:// resources.
  * @param path Icon asset path. Accepts asset://main/... or main-relative paths.
@@ -276,7 +276,7 @@ bool ShouldReplaceRegisteredMuonTitleBarWindowForBrowser(
     bool candidate_has_controller);
 
 /**
- * Standard Muon title bar control hit-test result.
+ * Standard muon title bar control hit-test result.
  */
 enum class MuonTitleBarControlAction {
   /**
@@ -301,7 +301,7 @@ enum class MuonTitleBarControlAction {
 };
 
 /**
- * Hit-tests a standard Muon title bar control at a window-relative point.
+ * Hit-tests a standard muon title bar control at a window-relative point.
  *
  * @param native_window_controls Whether native controls are enabled.
  * @param title_bar_height Title bar height in DIP.
@@ -459,7 +459,7 @@ class MuonTitleBarController final : public CefClient,
   const MuonTitleBarBackgroundColor background_color_;
   CefWindowHandle window_handle_ = 0;
   CefRefPtr<CefBrowser> browser_;
-  std::string title_ = "Muon";
+  std::string title_ = "muon";
   std::string icon_data_url_;
   bool active_ = true;
   bool maximized_ = false;

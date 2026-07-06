@@ -230,14 +230,18 @@ bool ParseMuonBrowserTrayOptionsJson(const std::string& options_json,
   }
 
   const auto icon = yyjson_obj_get(root, kMuonTrayIconKey);
-  if (!yyjson_is_str(icon)) {
-    *error_message = "Tray icon must be a string";
-    return false;
-  }
-  options->icon_path = ReadJsonString(icon);
-  if (options->icon_path.empty()) {
-    *error_message = "Tray icon must not be empty";
-    return false;
+  if (icon == nullptr) {
+    options->follow_title_bar_icon = true;
+  } else {
+    if (!yyjson_is_str(icon)) {
+      *error_message = "Tray icon must be a string";
+      return false;
+    }
+    options->icon_path = ReadJsonString(icon);
+    if (options->icon_path.empty()) {
+      *error_message = "Tray icon must not be empty";
+      return false;
+    }
   }
 
   const auto tooltip = yyjson_obj_get(root, kMuonTrayTooltipKey);

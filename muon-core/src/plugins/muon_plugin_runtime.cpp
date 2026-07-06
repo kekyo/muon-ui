@@ -11,6 +11,7 @@
 
 #include "plugins/builtin/muon_builtin.h"
 #include "browser/muon_builtin_browser.h"
+#include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 #include "plugins/muon_js_bridge.h"
@@ -237,12 +238,12 @@ static std::string GetMuonTrafficError(const tra_ffic_error& error) {
 
 static_assert(MUON_COMPLETION_ERROR_MESSAGE_CAPACITY ==
                   TRA_FFIC_ERROR_MESSAGE_CAPACITY,
-              "Muon completion errors must match tra-ffic errors");
+              "muon completion errors must match tra-ffic errors");
 static_assert(sizeof(muon_completion_error) == sizeof(tra_ffic_error),
-              "Muon completion error ABI must match tra-ffic error ABI");
+              "muon completion error ABI must match tra-ffic error ABI");
 static_assert(offsetof(muon_completion_error, message) ==
                   offsetof(tra_ffic_error, message),
-              "Muon completion error message offset must match tra-ffic");
+              "muon completion error message offset must match tra-ffic");
 
 static void NotifyMuonTrafficFinalization(tra_ffic_task_queue* queue,
                                            void* state) {
@@ -278,7 +279,7 @@ MuonPluginRuntimeImpl::MuonPluginRuntimeImpl(
       std::make_unique<std::shared_ptr<MuonTrafficDrainState>>(
           traffic_drain_state);
   if (main_dispatcher == nullptr) {
-    startup_error = "Muon main dispatcher is unavailable";
+    startup_error = "muon main dispatcher is unavailable";
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError, startup_error);
     return;
   }
@@ -478,7 +479,7 @@ static uint8_t RegisterMuonPluginPureFunction(
   auto* impl = GetMuonRuntimeForHelpers();
   if (impl == nullptr ||
       !impl->traffic_initialized) {
-    CopyMuonPluginHelperError("Muon plugin runtime is unavailable", error);
+    CopyMuonPluginHelperError("muon plugin runtime is unavailable", error);
     return 0;
   }
   std::shared_ptr<MuonFunctionSignatureStorage> signature_storage;
@@ -510,7 +511,7 @@ static uint8_t RegisterMuonPluginClosure(
   auto* impl = GetMuonRuntimeForHelpers();
   if (impl == nullptr ||
       !impl->traffic_initialized) {
-    CopyMuonPluginHelperError("Muon plugin runtime is unavailable", error);
+    CopyMuonPluginHelperError("muon plugin runtime is unavailable", error);
     return 0;
   }
   std::shared_ptr<MuonFunctionSignatureStorage> signature_storage;
@@ -549,7 +550,7 @@ static uint8_t CreateMuonCompletionFunction(
   auto* impl = GetMuonRuntimeForHelpers();
   if (impl == nullptr ||
       !impl->traffic_initialized) {
-    CopyMuonPluginHelperError("Muon plugin runtime is unavailable", error);
+    CopyMuonPluginHelperError("muon plugin runtime is unavailable", error);
     return 0;
   }
   MuonTypeMetadata return_metadata;
@@ -804,7 +805,7 @@ static uint8_t AllocateMuonSharedBuffer(
   }
   auto* impl = GetMuonRuntimeForHelpers();
   if (impl == nullptr) {
-    CopyMuonPluginHelperError("Muon plugin runtime is unavailable", error);
+    CopyMuonPluginHelperError("muon plugin runtime is unavailable", error);
     return 0;
   }
   if constexpr (sizeof(uintptr_t) > sizeof(size_t)) {
@@ -1455,7 +1456,7 @@ static void HandleMuonTrafficCallResult(void* user_data,
   MuonPluginCallResult call_result;
   if (result == nullptr) {
     call_result.success = false;
-    call_result.error_message = "Muon plugin call did not produce a result";
+    call_result.error_message = "muon plugin call did not produce a result";
     state->completion(call_result);
     return;
   }
@@ -2503,6 +2504,7 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
 }
 
 static void ShutdownMuonBuiltinPlugins() {
+  ShutdownMuonBuiltinExecutor();
   ShutdownMuonBuiltinFsDialogs();
   ShutdownMuonBuiltinFs();
 }
@@ -2534,6 +2536,13 @@ static bool RegisterMuonInternalPlugins(
     return FailMuonPluginStartup(
         impl,
         "Built-in filesystem dialogs plugin failed: " + error_message);
+  }
+  if (!InitializeMuonBuiltinExecutor(&kMuonPluginHelpers,
+                                     impl->main_dispatcher,
+                                     &error_message)) {
+    ShutdownMuonBuiltinPlugins();
+    return FailMuonPluginStartup(
+        impl, "Built-in executor plugin failed: " + error_message);
   }
   impl->fs_dialogs_cancel_owner_functions.push_back(
       &muon_builtin_fs_dialogs_cancel_owner_browser);
@@ -2713,7 +2722,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
   if (function_iterator == impl_->functions_by_id.end()) {
     MuonPluginCallResult result;
     result.success = false;
-    result.error_message = "Unknown Muon plugin function";
+    result.error_message = "Unknown muon plugin function";
     completion(result);
     return;
   }
@@ -2736,7 +2745,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
   if (dispatcher == nullptr) {
     MuonPluginCallResult result;
     result.success = false;
-    result.error_message = "Muon main dispatcher is unavailable";
+    result.error_message = "muon main dispatcher is unavailable";
     completion(result);
     return;
   }
@@ -2775,7 +2784,7 @@ void MuonPluginRuntime::InvokeProxy(
       proxy.function_type.function_return_type.empty()) {
     MuonPluginCallResult result;
     result.success = false;
-    result.error_message = "Unknown Muon function proxy";
+    result.error_message = "Unknown muon function proxy";
     completion(result);
     return;
   }
@@ -2798,7 +2807,7 @@ void MuonPluginRuntime::InvokeProxy(
   if (dispatcher == nullptr) {
     MuonPluginCallResult result;
     result.success = false;
-    result.error_message = "Muon main dispatcher is unavailable";
+    result.error_message = "muon main dispatcher is unavailable";
     completion(result);
     return;
   }
@@ -3084,6 +3093,7 @@ void MuonPluginRuntime::ReleaseFunctionContext(
     const MuonPluginInvocationContext& context,
     int renderer_context_id) {
   CEF_REQUIRE_UI_THREAD();
+  ReleaseMuonBuiltinExecutorContext(renderer_context_id);
   const auto owner_id = CreateMuonFunctionOwnerId(context,
                                                    renderer_context_id);
   std::vector<std::string> source_ids;

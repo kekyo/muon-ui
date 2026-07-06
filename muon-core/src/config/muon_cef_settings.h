@@ -12,12 +12,12 @@
 #include <filesystem>
 
 /**
- * Creates the CEF initialization settings used by the Muon browser process.
+ * Creates the CEF initialization settings used by the muon browser process.
  *
- * @param config Loaded Muon runtime configuration.
- * @param executable_directory Directory that contains the running Muon binary.
+ * @param config Loaded muon runtime configuration.
+ * @param executable_directory Directory that contains the running muon binary.
  * @param cef_log_path CEF log file path.
- * @return CEF settings configured for the current Muon runtime.
+ * @return CEF settings configured for the current muon runtime.
  */
 CefSettings CreateMuonCefSettings(
     const MuonConfig& config,

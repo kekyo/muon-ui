@@ -4,7 +4,7 @@
 // https://github.com/kekyo/muon
 
 /**
- * Asset layout derived from Vite's resolved base URL for packaged Muon apps.
+ * Asset layout derived from Vite's resolved base URL for packaged muon apps.
  */
 export interface MuonVitePackagedAssetOptions {
   /** ZIP entry prefix used for copied Vite build output. */
@@ -39,7 +39,7 @@ export const resolveVitePackagedAssetBasePath = (
 };
 
 /**
- * Creates Muon asset options for packaging Vite build output.
+ * Creates muon asset options for packaging Vite build output.
  */
 export const createVitePackagedAssetOptions = (
   base: string,

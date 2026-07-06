@@ -274,12 +274,12 @@ const createWindowsCoreResourceFixture = async (
         fileType: "app",
       },
       strings: {
-        CompanyName: "Muon Core Company",
-        FileDescription: "Muon Core Runtime",
+        CompanyName: "muon Core Company",
+        FileDescription: "muon Core Runtime",
         FileVersion: "9.9.9-core",
         InternalName: "muon-core",
         OriginalFilename: "muon-core.exe",
-        ProductName: "Muon Core",
+        ProductName: "muon Core",
         ProductVersion: "9.9.9-core",
       },
     },
@@ -741,11 +741,11 @@ describe("muon build", () => {
           windows: {
             resource: {
               iconPath: "icons/app.png",
-              productName: "Muon Config Product",
-              fileDescription: "Muon Config Description",
-              companyName: "Muon Config Company",
+              productName: "muon Config Product",
+              fileDescription: "muon Config Description",
+              companyName: "muon Config Company",
               version: "7.8.9",
-              copyright: "Copyright Muon Config",
+              copyright: "Copyright muon Config",
             },
           },
         },
@@ -788,10 +788,10 @@ describe("muon build", () => {
       "9.9.9.9",
       "--product-version",
       "9.9.9.9",
-      "CompanyName=Muon Core Company",
-      "FileDescription=Muon Core Runtime",
+      "CompanyName=muon Core Company",
+      "FileDescription=muon Core Runtime",
       "FileVersion=9.9.9-core",
-      "ProductName=Muon Core",
+      "ProductName=muon Core",
       "ProductVersion=9.9.9-core",
       "InternalName=muon-core",
       "OriginalFilename=muon-core.exe",
@@ -801,12 +801,12 @@ describe("muon build", () => {
       "7.8.9.0",
       "--product-version",
       "7.8.9.0",
-      "CompanyName=Muon Config Company",
-      "FileDescription=Muon Config Description",
+      "CompanyName=muon Config Company",
+      "FileDescription=muon Config Description",
       "FileVersion=7.8.9",
-      "ProductName=Muon Config Product",
+      "ProductName=muon Config Product",
       "ProductVersion=7.8.9",
-      "LegalCopyright=Copyright Muon Config",
+      "LegalCopyright=Copyright muon Config",
     ]);
   });
 
@@ -878,9 +878,9 @@ describe("muon build", () => {
       "9.9.9.9",
       "--product-version",
       "9.9.9.9",
-      "CompanyName=Muon Core Company",
-      "FileDescription=Muon Core Runtime",
-      "ProductName=Muon Core",
+      "CompanyName=muon Core Company",
+      "FileDescription=muon Core Runtime",
+      "ProductName=muon Core",
     ]);
   });
 
@@ -1206,7 +1206,7 @@ describe("muon build", () => {
         targets: ["linux-amd64"],
         iconPath: "icons/app.ico",
       }),
-    ).rejects.toThrow("Muon app icon must be a .png file");
+    ).rejects.toThrow("muon app icon must be a .png file");
   });
 
   it("rejects missing top-level app icon PNG files", async () => {
@@ -1226,7 +1226,7 @@ describe("muon build", () => {
         packageDirectory,
         targets: ["linux-amd64"],
       }),
-    ).rejects.toThrow(`Muon app icon does not exist: ${iconPath}`);
+    ).rejects.toThrow(`muon app icon does not exist: ${iconPath}`);
   });
 
   it("rejects invalid top-level app icon PNG files", async () => {
@@ -1247,7 +1247,7 @@ describe("muon build", () => {
         targets: ["linux-amd64"],
         iconPath: "icons/app.png",
       }),
-    ).rejects.toThrow("Muon app icon must be a valid PNG");
+    ).rejects.toThrow("muon app icon must be a valid PNG");
   });
 
   it("rejects app assets that collide with the generated app icon asset", async () => {
@@ -1273,7 +1273,7 @@ describe("muon build", () => {
         targets: ["linux-amd64"],
       }),
     ).rejects.toThrow(
-      `Muon app icon asset entry already exists: ${appIconAssetEntryName}`,
+      `muon app icon asset entry already exists: ${appIconAssetEntryName}`,
     );
   });
 
@@ -1449,7 +1449,7 @@ describe("muon build", () => {
     };
 
     expect(result.stderr).toContain("Running Vite build");
-    expect(result.stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(result.stderr).toContain("Building muon target linux-amd64 (1/1)");
     expect(result.stderr).toContain("Creating assets.zip");
     expect(result.stderr).toContain("Embedding config");
     expect(result.stderr).toContain("Writing Linux desktop files");
@@ -1543,12 +1543,12 @@ describe("muon build", () => {
     ).resolves.toBe(true);
   });
 
-  it("rejects muon build when the Vite plugin disables Muon builds", async () => {
+  it("rejects muon build when the Vite plugin disables muon builds", async () => {
     const root = await createTemporaryDirectory("muon-build-cli-disabled-");
     await writeViteMuonBuildProject(root, "false");
 
     await expect(runMuonCli(root, ["build"])).rejects.toThrow(
-      "Muon build is disabled by muon({ build: false })",
+      "muon build is disabled by muon({ build: false })",
     );
   });
 
@@ -1617,7 +1617,7 @@ describe("muon build", () => {
 
     const outputPath = join(root, "dist-muon/linux-amd64");
     const stderr = chunks.join("");
-    expect(stderr).toContain("Building Muon target linux-amd64 (1/1)");
+    expect(stderr).toContain("Building muon target linux-amd64 (1/1)");
     expect(stderr).toContain("Creating assets.zip");
     expect(stderr).toContain("Writing Linux desktop files");
     expect(stderr).toContain(`Built ${outputPath}`);
@@ -1938,6 +1938,6 @@ describe("muon build", () => {
         targets: ["linux-amd64"],
         configPath,
       }),
-    ).rejects.toThrow(`Muon config file does not exist: ${configPath}`);
+    ).rejects.toThrow(`muon config file does not exist: ${configPath}`);
   });
 });

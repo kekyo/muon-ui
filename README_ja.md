@@ -475,10 +475,11 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
 
 ```javascript
 // 子プロセスを起動する
-var result = await window.muon.executor.spawn({
+var child = await window.muon.executor.spawn({
   command: "node",
   args: ["script.js"],
 });
+var result = await child.wait();
 ```
 
 この方法であれば、muon Viteプラグインによるビルドプロセスを適用する必要がありません。
@@ -1009,8 +1010,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
 - `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
-  `muon build` / Vite build / `muon pack` は解決済みPNGを `assets.zip` の `main/.muon/app-icon.png` に追加し、runtime内部設定として `browser.initialTitleBarIcon: "asset://main/.muon/app-icon.png"` を生成します。
-  既存アセットに同じエントリがある場合はビルドエラーになります。
+  内部的には、 `asset://main/.muon/app-icon.png"` に配置されます。従って、既存アセットに同じエントリがある場合はビルドエラーになります。
 - Windowsだけ、またはLinuxだけ別アイコンにしたい場合は、それぞれ `windows.resource.iconPath`、`linux.desktop.iconPath` をoverrideとして指定します。
 - 実行中に通常ブラウザウインドウのタイトルバーアイコンだけを変更する場合は、`window.muon.browser.setTitleBarIcon()` を使用します。
 
@@ -1047,7 +1047,6 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
 - 起動時のタイトルバーアイコンは、配布ビルド時に `iconPath` から生成されます。
-  `muon build` / Vite build / `muon pack` の入力 `muon.json` に `browser.initialTitleBarIcon` を書くことは出来ません。
   ページがfaviconを指定した場合、muonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
   ページ遷移時、faviconが存在しない場合や取得・変換できない場合は、生成済みの初期タイトルバーアイコン、または内蔵muonアイコンへ戻ります。
   favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
@@ -1093,13 +1092,10 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
-  `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
-- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へstagingし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
-  Windows portable配布物では、runtime state用IDとして `<appId>.<arch>` を使用します。
-  このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
-- 新しいportable配布物から起動した場合、fingerprintの差分によりstate directory側のアプリファイル群が更新され、desktop entryも更新されます。
-  state directory配下のlauncherから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
+- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へステージングし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+  このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくステートディレクトリ配下の絶対パスを指します。
+- 新しいポータブル配布物から起動した場合、署名の差分によりステートディレクトリ側のアプリファイル群が更新され、desktop entryも更新されます。
+  ステートディレクトリ配下のランチャーから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
   debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-bootstrap` はユーザーhomeへ新規desktop entryを作成しません。
   既存のmuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
@@ -1111,7 +1107,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 ### windowsキー
 
 `windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
-この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
+この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やランチャーへ埋め込まれる実行時設定からは除外されます。
 
 ```json
 {
@@ -1139,8 +1135,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
 | `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
 
-- `resource.iconPath` は `.png` のみ受け付けます。muonは、Windows PE/NSISが必要とする`.ico`ファイルをビルド時に自動生成します。
-  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
+- `resource.iconPath` は `.png` のみ受け付けます。muonは、Windows PE/NSISが必要とする `.ico` ファイルをビルド時に自動生成します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
 - Windowsアイコンの解決順は、CLI/Vite optionの `windowsResource.iconPath` または `--windows-icon`、`muon.json` の `windows.resource.iconPath`、統一 `iconPath`、`project.json.iconPath`、muon既定アイコンです。
@@ -1149,8 +1144,8 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
 - `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
   文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
-- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
-  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
+- `muon build` はランチャーのconfig埋め込み後に `muon-builder resource` でPEファイルのリソースを直接更新します。
+  コードサイニング署名を適用する場合は、署名後に更新して署名を破壊しないように、最終的な成果物に対して署名して下さい。
 - `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
   setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
   NSISの `Name` / `DisplayName` / installer path / uninstall registry key / state削除先はWindows architecture別になりますが、`ProductName` などのWindows resource metadataと成果物ファイル名は同じmetadata規則を維持します。
@@ -1160,15 +1155,13 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | キー        | 型       | 既定値   | 概要                                                                 |
 | :---------- | :------- | :------- | :------------------------------------------------------------------- |
 | `sourcePath` | `string` | `assets` | `asset://` URLとして公開するアセットディレクトリまたはZIPファイルです。 |
-| `signature` | `string` | なし     | ZIPアセットの改ざん検出に使う40桁のSHA-1署名です。                   |
-| `salt`      | `string` | なし     | `signature` の計算に使うsaltを16進文字列で指定します。                |
 
 - `sourcePath` を省略した場合は、実行ファイルと同じディレクトリにある `assets` が使用されます。
   相対パスは `muon.json` からの相対パスとして解決されます。
   ディレクトリを指定した場合はその内容が、ZIPファイルを指定した場合はZIP内の内容が `asset://main/...` として参照出来ます。
-- `signature` は、アセットをZIPファイルとして配布する場合の整合性検証に使います。
-  `signature` を指定する場合は `salt` も指定してください。
-  検証に失敗した場合、muonアプリケーションは起動しません。
+
+> 注釈: ここに挙げられていない `signature`, `salt` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
+> 解説は省略します。
 
 ### networkキー
 
@@ -1392,7 +1385,7 @@ muon({
 
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
-  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。CEF由来の `linux64` や `windows64`、`x64` などの別名は受け付けません。
+  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。
 - `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
@@ -1421,7 +1414,9 @@ muon({
 この章では、プラグイン名前空間と関数パスを分かりやすく示すため、`window.muon.*` 形式でAPIを表記しています。
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
 既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
-例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、`muon:executor` から `spawn` をインポートします。
+
+例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、
+`muon:executor` から `spawn` をインポートします:
 
 ```ts
 import { spawn } from "muon:executor";
@@ -1480,9 +1475,7 @@ import { spawn } from "muon:executor";
 - `createTray()` はブラウザウインドウ単位でトレイ項目を保持し、main frame navigation、ブラウザ終了、`removeTray()` で削除されます。
   `options.id` を省略するとmuonが一意なIDを生成して返します。
   `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
-  メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応し、サブメニューはv1では未対応です。
-  LinuxではStatusNotifierItem対応のデスクトップ環境・パネルで表示されます。AppIndicator/libayatana-appindicatorやGtkStatusIconによるfallbackは将来候補です。
-  トレイ項目だけでmuonプロセスを生存させるclose-to-tray動作は自動提供しません。常駐型アプリでは `initialWindowState: "hidden"` でブラウザを生かしたまま、必要に応じて `show()` / `hide()` を呼び出して下さい。
+  メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応します。
 - `setTitleBarVisibility()` はmuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
@@ -1591,39 +1584,55 @@ if (autostart !== true) {
 
 ### muon.executor名前空間
 
-`window.muon.executor` は、シェルを介さずに子プロセスを起動します。
+`window.muon.executor` は、シェルを介さずに子プロセスを起動し、標準入出力を逐次扱います。
 
-| 関数             | 引数                                | 戻り値                             | 説明                                         |
-| :--------------- | :---------------------------------- | :--------------------------------- | :------------------------------------------- |
-| `spawn(options)` | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorSpawnResult>` | 子プロセスを起動し、終了後に結果を返します。 |
+| 関数             | 引数                                | 戻り値                         | 説明                                       |
+| :--------------- | :---------------------------------- | :----------------------------- | :----------------------------------------- |
+| `spawn(options)` | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorProcess>` | 子プロセスを起動し、操作用ハンドルを返します。 |
 
 `MuonExecutorSpawnOptions`:
 
-| プロパティ | 型                       | 説明                                                                                                          |
-| :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------ |
-| `command`  | `string`                 | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用出来ません。 |
-| `args`     | `readonly string[]`      | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
-| `stdin`    | `string`                 | 子プロセスの標準入力へ書き込むUTF-8テキストです。省略時は何も書き込みません。                                 |
-| `cwd`      | `string`                 | 子プロセスの作業ディレクトリです。                                                                            |
-| `env`      | `Record<string, string>` | 環境変数の上書き値です。現在のプロセス環境とマージされます。キーは空文字列、`=`, NUL文字を含められません。    |
+| プロパティ | 型                             | 説明                                                                                                          |
+| :--------- | :----------------------------- | :------------------------------------------------------------------------------------------------------------ |
+| `command`  | `string`                       | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用出来ません。 |
+| `args`     | `readonly string[]`            | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
+| `cwd`      | `string`                       | 子プロセスの作業ディレクトリです。                                                                            |
+| `env`      | `Record<string, string>`       | 環境変数の上書き値です。現在のプロセス環境とマージされます。キーは空文字列、`=`, NUL文字を含められません。    |
+| `onStdout` | `(chunk: Uint8Array) => void`  | 標準出力のチャンクを逐次受け取ります。指定した場合、`wait()` の結果に `stdout` は含まれません。                |
+| `onStderr` | `(chunk: Uint8Array) => void`  | 標準エラーのチャンクを逐次受け取ります。指定した場合、`wait()` の結果に `stderr` は含まれません。              |
+
+`MuonExecutorProcess`:
+
+| プロパティ/関数      | 型                                                   | 説明                                                                                 |
+| :------------------- | :--------------------------------------------------- | :----------------------------------------------------------------------------------- |
+| `processId`          | `number`                                             | 起動した子プロセスIDです。                                                           |
+| `writeStdin(data)`   | `(data: string \| BufferSource) => Promise<void>`    | 標準入力へ逐次書き込みます。文字列はUTF-8としてエンコードされ、呼び出し順に処理されます。 |
+| `closeStdin()`       | `() => Promise<void>`                                | 未完了の書き込みを処理した後、標準入力を閉じます。                                   |
+| `wait()`             | `() => Promise<MuonExecutorSpawnResult>`             | 子プロセスの終了を待ちます。同じPromiseを再利用します。                              |
+| `kill()`             | `() => Promise<void>`                                | 子プロセスの終了を要求します。POSIXでは `SIGTERM`、Windowsでは `TerminateProcess(..., 1)` を使用します。 |
+| `dispose()`          | `() => Promise<void>`                                | ネイティブハンドルを解放し、実行中なら終了を要求します。                             |
 
 `MuonExecutorSpawnResult`:
 
-| プロパティ  | 型       | 説明                                                           |
-| :---------- | :------- | :------------------------------------------------------------- |
-| `processId` | `number` | 起動した子プロセスIDです。                                     |
-| `exitCode`  | `number` | 子プロセスの終了コードです。非0終了でもPromiseは解決されます。 |
-| `stdout`    | `string` | 標準出力として収集されたUTF-8テキストです。                    |
-| `stderr`    | `string` | 標準エラーとして収集されたUTF-8テキストです。                  |
+| プロパティ  | 型           | 説明                                                                 |
+| :---------- | :----------- | :------------------------------------------------------------------- |
+| `processId` | `number`     | 起動した子プロセスIDです。                                           |
+| `exitCode`  | `number`     | 子プロセスの終了コードです。非0終了でもPromiseは解決されます。       |
+| `stdout`    | `Uint8Array` | `onStdout` が指定されていない場合に、標準出力として収集されたバイト列です。 |
+| `stderr`    | `Uint8Array` | `onStderr` が指定されていない場合に、標準エラーとして収集されたバイト列です。 |
 
 ```js
-const result = await window.muon.executor.spawn({
+const child = await window.muon.executor.spawn({
   command: "node",
   args: ["script.js"],
-  stdin: "input text",
+  onStdout: (chunk) => console.log(new TextDecoder().decode(chunk)),
 });
 
-console.log(result.exitCode, result.stdout, result.stderr);
+await child.writeStdin("input text");
+await child.closeStdin();
+
+const result = await child.wait();
+console.log(result.exitCode);
 ```
 
 ### muon.fs名前空間

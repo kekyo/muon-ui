@@ -475,10 +475,11 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
 
 ```javascript
 // 子プロセスを起動する
-var result = await window.muon.executor.spawn({
+var child = await window.muon.executor.spawn({
   command: "node",
   args: ["script.js"],
 });
+var result = await child.wait();
 ```
 
 この方法であれば、muon Viteプラグインによるビルドプロセスを適用する必要がありません。
@@ -1583,39 +1584,55 @@ if (autostart !== true) {
 
 ### muon.executor名前空間
 
-`window.muon.executor` は、シェルを介さずに子プロセスを起動します。
+`window.muon.executor` は、シェルを介さずに子プロセスを起動し、標準入出力を逐次扱います。
 
-| 関数             | 引数                                | 戻り値                             | 説明                                         |
-| :--------------- | :---------------------------------- | :--------------------------------- | :------------------------------------------- |
-| `spawn(options)` | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorSpawnResult>` | 子プロセスを起動し、終了後に結果を返します。 |
+| 関数             | 引数                                | 戻り値                         | 説明                                       |
+| :--------------- | :---------------------------------- | :----------------------------- | :----------------------------------------- |
+| `spawn(options)` | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorProcess>` | 子プロセスを起動し、操作用ハンドルを返します。 |
 
 `MuonExecutorSpawnOptions`:
 
-| プロパティ | 型                       | 説明                                                                                                          |
-| :--------- | :----------------------- | :------------------------------------------------------------------------------------------------------------ |
-| `command`  | `string`                 | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用出来ません。 |
-| `args`     | `readonly string[]`      | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
-| `stdin`    | `string`                 | 子プロセスの標準入力へ書き込むUTF-8テキストです。省略時は何も書き込みません。                                 |
-| `cwd`      | `string`                 | 子プロセスの作業ディレクトリです。                                                                            |
-| `env`      | `Record<string, string>` | 環境変数の上書き値です。現在のプロセス環境とマージされます。キーは空文字列、`=`, NUL文字を含められません。    |
+| プロパティ | 型                             | 説明                                                                                                          |
+| :--------- | :----------------------------- | :------------------------------------------------------------------------------------------------------------ |
+| `command`  | `string`                       | 実行ファイルのパス、または `PATH` から解決する実行ファイル名です。必須で、空文字列やNUL文字は使用出来ません。 |
+| `args`     | `readonly string[]`            | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
+| `cwd`      | `string`                       | 子プロセスの作業ディレクトリです。                                                                            |
+| `env`      | `Record<string, string>`       | 環境変数の上書き値です。現在のプロセス環境とマージされます。キーは空文字列、`=`, NUL文字を含められません。    |
+| `onStdout` | `(chunk: Uint8Array) => void`  | 標準出力のチャンクを逐次受け取ります。指定した場合、`wait()` の結果に `stdout` は含まれません。                |
+| `onStderr` | `(chunk: Uint8Array) => void`  | 標準エラーのチャンクを逐次受け取ります。指定した場合、`wait()` の結果に `stderr` は含まれません。              |
+
+`MuonExecutorProcess`:
+
+| プロパティ/関数      | 型                                                   | 説明                                                                                 |
+| :------------------- | :--------------------------------------------------- | :----------------------------------------------------------------------------------- |
+| `processId`          | `number`                                             | 起動した子プロセスIDです。                                                           |
+| `writeStdin(data)`   | `(data: string \| BufferSource) => Promise<void>`    | 標準入力へ逐次書き込みます。文字列はUTF-8としてエンコードされ、呼び出し順に処理されます。 |
+| `closeStdin()`       | `() => Promise<void>`                                | 未完了の書き込みを処理した後、標準入力を閉じます。                                   |
+| `wait()`             | `() => Promise<MuonExecutorSpawnResult>`             | 子プロセスの終了を待ちます。同じPromiseを再利用します。                              |
+| `kill()`             | `() => Promise<void>`                                | 子プロセスの終了を要求します。POSIXでは `SIGTERM`、Windowsでは `TerminateProcess(..., 1)` を使用します。 |
+| `dispose()`          | `() => Promise<void>`                                | ネイティブハンドルを解放し、実行中なら終了を要求します。                             |
 
 `MuonExecutorSpawnResult`:
 
-| プロパティ  | 型       | 説明                                                           |
-| :---------- | :------- | :------------------------------------------------------------- |
-| `processId` | `number` | 起動した子プロセスIDです。                                     |
-| `exitCode`  | `number` | 子プロセスの終了コードです。非0終了でもPromiseは解決されます。 |
-| `stdout`    | `string` | 標準出力として収集されたUTF-8テキストです。                    |
-| `stderr`    | `string` | 標準エラーとして収集されたUTF-8テキストです。                  |
+| プロパティ  | 型           | 説明                                                                 |
+| :---------- | :----------- | :------------------------------------------------------------------- |
+| `processId` | `number`     | 起動した子プロセスIDです。                                           |
+| `exitCode`  | `number`     | 子プロセスの終了コードです。非0終了でもPromiseは解決されます。       |
+| `stdout`    | `Uint8Array` | `onStdout` が指定されていない場合に、標準出力として収集されたバイト列です。 |
+| `stderr`    | `Uint8Array` | `onStderr` が指定されていない場合に、標準エラーとして収集されたバイト列です。 |
 
 ```js
-const result = await window.muon.executor.spawn({
+const child = await window.muon.executor.spawn({
   command: "node",
   args: ["script.js"],
-  stdin: "input text",
+  onStdout: (chunk) => console.log(new TextDecoder().decode(chunk)),
 });
 
-console.log(result.exitCode, result.stdout, result.stderr);
+await child.writeStdin("input text");
+await child.closeStdin();
+
+const result = await child.wait();
+console.log(result.exitCode);
 ```
 
 ### muon.fs名前空間

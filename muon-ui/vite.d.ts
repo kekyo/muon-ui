@@ -21,7 +21,7 @@ export interface MuonWindowsResourceOptions {
    * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
    * icon.
    */
-  iconPath?: string;
+  readonly iconPath?: string;
 
   /**
    * Product name written to the Windows version resource.
@@ -29,7 +29,7 @@ export interface MuonWindowsResourceOptions {
    * @defaultValue Uses `windows.resource.productName`, `project.json`,
    * `package.json`, then the muon launcher name.
    */
-  productName?: string;
+  readonly productName?: string;
 
   /**
    * File description written to the Windows version resource.
@@ -37,7 +37,7 @@ export interface MuonWindowsResourceOptions {
    * @defaultValue Uses `windows.resource.fileDescription`, `project.json`,
    * `package.json.description`, then the product name.
    */
-  fileDescription?: string;
+  readonly fileDescription?: string;
 
   /**
    * Company name written to the Windows version resource.
@@ -45,7 +45,7 @@ export interface MuonWindowsResourceOptions {
    * @defaultValue Uses `windows.resource.companyName`, `project.json`,
    * `package.json.author`, then `"Unknown"`.
    */
-  companyName?: string;
+  readonly companyName?: string;
 
   /**
    * Product and file version string.
@@ -55,7 +55,7 @@ export interface MuonWindowsResourceOptions {
    * @defaultValue Uses `windows.resource.version`, `project.json.version`,
    * `package.json.version`, then `"0.0.0"`.
    */
-  version?: string;
+  readonly version?: string;
 
   /**
    * Legal copyright written to the Windows version resource.
@@ -63,21 +63,21 @@ export interface MuonWindowsResourceOptions {
    * @defaultValue Uses `windows.resource.copyright`, `project.json`, then
    * `package.json.copyright` when available.
    */
-  copyright?: string;
+  readonly copyright?: string;
 
   /**
    * Windows resource language identifier.
    *
    * @defaultValue `1033` (`en-US`).
    */
-  language?: number;
+  readonly language?: number;
 
   /**
    * Windows version resource code page.
    *
    * @defaultValue `1200` (`UTF-16LE`).
    */
-  codePage?: number;
+  readonly codePage?: number;
 }
 
 /**
@@ -89,20 +89,20 @@ export interface MuonLinuxDesktopOptions {
    *
    * @defaultValue Uses the resolved muon `appId`.
    */
-  desktopId?: string;
+  readonly desktopId?: string;
   /**
    * Application display name.
    *
    * @defaultValue Uses `linux.desktop.name`, then `package.json` name.
    */
-  name?: string;
+  readonly name?: string;
   /**
    * Desktop entry comment.
    *
    * @defaultValue Uses `linux.desktop.comment`, then `package.json`
    * description.
    */
-  comment?: string;
+  readonly comment?: string;
   /**
    * Linux-specific static application icon PNG file path.
    *
@@ -113,19 +113,19 @@ export interface MuonLinuxDesktopOptions {
    * @defaultValue Uses top-level `iconPath`, then the packaged `muon-256.png`
    * icon.
    */
-  iconPath?: string;
+  readonly iconPath?: string;
   /**
    * Desktop menu categories.
    *
    * @defaultValue `["Utility"]`.
    */
-  categories?: readonly string[];
+  readonly categories?: readonly string[];
   /**
    * Whether desktop startup notification is requested.
    *
    * @defaultValue `true`.
    */
-  startupNotify?: boolean;
+  readonly startupNotify?: boolean;
 }
 
 /**
@@ -138,7 +138,7 @@ export interface MuonViteBuildOptions {
    * @defaultValue Uses every supported target unless `allTargets` is `false`,
    * then the host target is used.
    */
-  targets?: readonly string[];
+  readonly targets?: readonly string[];
 
   /**
    * Build every supported target from the installed package.
@@ -146,7 +146,7 @@ export interface MuonViteBuildOptions {
    * @remarks Set false to build only the host target when `targets` is omitted.
    * @defaultValue `true` when `targets` is omitted.
    */
-  allTargets?: boolean;
+  readonly allTargets?: boolean;
 
   /**
    * File name used for the app launcher.
@@ -154,7 +154,7 @@ export interface MuonViteBuildOptions {
    * @remarks The .exe suffix is added automatically for Windows targets.
    * @defaultValue The sanitized package name, or `"muon-app"` when unavailable.
    */
-  appName?: string;
+  readonly appName?: string;
 
   /**
    * Stable base application identifier used for portable runtime state.
@@ -164,14 +164,14 @@ export interface MuonViteBuildOptions {
    *
    * @defaultValue The sanitized package name, or `"muon-app"` when unavailable.
    */
-  appId?: string;
+  readonly appId?: string;
 
   /**
    * Parent directory that receives dist-muon/linux-amd64/ style outputs.
    *
    * @defaultValue The Vite project root.
    */
-  outputRoot?: string;
+  readonly outputRoot?: string;
 
   /**
    * muon config path to embed.
@@ -179,7 +179,7 @@ export interface MuonViteBuildOptions {
    * @defaultValue Auto-detects `muon.json5`, `muon.jsonc`, then `muon.json`;
    * uses an empty config when none exists.
    */
-  configPath?: string;
+  readonly configPath?: string;
 
   /**
    * Static application icon PNG file path.
@@ -191,7 +191,7 @@ export interface MuonViteBuildOptions {
    * @defaultValue Uses top-level `muon.json` `iconPath`, `project.json`, then
    * the packaged `muon-256.png` icon.
    */
-  iconPath?: string;
+  readonly iconPath?: string;
 
   /**
    * Windows PE and NSIS resource metadata.
@@ -199,7 +199,7 @@ export interface MuonViteBuildOptions {
    * @defaultValue Uses CLI options, `muon.json` `windows.resource`,
    * `project.json`, `package.json`, then muon defaults.
    */
-  windowsResource?: MuonWindowsResourceOptions;
+  readonly windowsResource?: MuonWindowsResourceOptions;
 
   /**
    * Linux desktop entry metadata.
@@ -207,14 +207,14 @@ export interface MuonViteBuildOptions {
    * @defaultValue Uses `muon.json` `linux.desktop`, package metadata, then
    * muon defaults.
    */
-  linuxDesktop?: MuonLinuxDesktopOptions;
+  readonly linuxDesktop?: MuonLinuxDesktopOptions;
 
   /**
    * Directory containing package runtime/ and native/ folders.
    *
    * @defaultValue The installed muon package dist directory.
    */
-  packageDirectory?: string;
+  readonly packageDirectory?: string;
 
   /**
    * Asset salt override for deterministic tests.
@@ -222,7 +222,7 @@ export interface MuonViteBuildOptions {
    * @remarks Production builds should omit this option.
    * @defaultValue A random 16-byte salt.
    */
-  assetSalt?: Uint8Array;
+  readonly assetSalt?: Uint8Array;
 }
 
 /**
@@ -232,17 +232,17 @@ export interface MuonVitePluginAccessImportOptions {
   /**
    * Importer source globs relative to the Vite project root.
    */
-  sources?: readonly string[];
+  readonly sources?: readonly string[];
   /**
    * NPM package names allowed to import the virtual module.
    */
-  packages?: readonly string[];
+  readonly packages?: readonly string[];
   /**
    * Plugin function path globs allowed for matching importers.
    *
    * @remarks Required in validate mode. Simple mode does not use import rules.
    */
-  allow?: readonly string[];
+  readonly allow?: readonly string[];
 }
 
 /**
@@ -252,7 +252,7 @@ export interface MuonVitePluginAccessEntryOptions {
   /**
    * Plugin entry name.
    */
-  name: string;
+  readonly name: string;
   /**
    * Optional expected SHA-1 signature for the external plugin library.
    *
@@ -260,25 +260,25 @@ export interface MuonVitePluginAccessEntryOptions {
    * plugin library bytes followed by `salt`. It is not supported for
    * `internal`.
    */
-  signature?: string;
+  readonly signature?: string;
   /**
    * Optional hexadecimal salt appended before checking the plugin signature.
    *
    * @remarks Required when `signature` is specified. It is not supported for
    * `internal`.
    */
-  salt?: string;
+  readonly salt?: string;
   /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *
    * @remarks Required in simple mode. Validate mode derives the runtime
    * allowlist from `imports[].allow` and rejects this field in public config.
    */
-  allow?: readonly string[];
+  readonly allow?: readonly string[];
   /**
    * Validate-mode import rules for this plugin entry.
    */
-  imports?: readonly MuonVitePluginAccessImportOptions[];
+  readonly imports?: readonly MuonVitePluginAccessImportOptions[];
 }
 
 /**
@@ -288,19 +288,19 @@ export interface MuonVitePluginAccessOptions {
   /**
    * External plugin directory override.
    */
-  path?: string;
+  readonly path?: string;
   /**
    * Plugin exposure mode.
    */
-  mode?: "simple" | "validate";
+  readonly mode?: "simple" | "validate";
   /**
    * Page URL patterns where the plugin bridge is exposed.
    */
-  pages?: readonly string[];
+  readonly pages?: readonly string[];
   /**
    * Runtime plugin entries and validate-mode import rules.
    */
-  plugins?: readonly MuonVitePluginAccessEntryOptions[];
+  readonly plugins?: readonly MuonVitePluginAccessEntryOptions[];
 }
 
 /**
@@ -314,7 +314,7 @@ export interface MuonVitePluginOptions {
    * the packaged runtime at dist/runtime/<public-target> is used.
    * @defaultValue The packaged runtime at `dist/runtime/<public-target>`.
    */
-  muonPath?: string;
+  readonly muonPath?: string;
 
   /**
    * Directory containing CEF files, or a CEF archive root with Release/Resources.
@@ -323,7 +323,7 @@ export interface MuonVitePluginOptions {
    * muon-builder downloads and caches the tested CEF artifact from muonPath.
    * @defaultValue The tested CEF artifact downloaded and cached by muon-builder.
    */
-  cefPath?: string;
+  readonly cefPath?: string;
 
   /**
    * Runtime staging directory used for development startup.
@@ -331,7 +331,7 @@ export interface MuonVitePluginOptions {
    * @remarks Relative paths are resolved from the Vite project root.
    * @defaultValue `.muon/<public-target>`.
    */
-  stagePath?: string;
+  readonly stagePath?: string;
 
   /**
    * Launch muon automatically during Vite dev startup.
@@ -340,7 +340,7 @@ export interface MuonVitePluginOptions {
    * option. Vite build ignores this option.
    * @defaultValue `true`
    */
-  open?: boolean;
+  readonly open?: boolean;
 
   /**
    * Enable the muon debugger defaults during Vite dev startup.
@@ -349,7 +349,7 @@ export interface MuonVitePluginOptions {
    * binds DevTools to F12. Vite build ignores this option.
    * @defaultValue `true`
    */
-  enableDebugger?: boolean;
+  readonly enableDebugger?: boolean;
 
   /**
    * Plugin access mode and virtual module capability imports.
@@ -361,7 +361,7 @@ export interface MuonVitePluginOptions {
    * @defaultValue `muon.json` plugin config, or validate mode with no
    * capability imports.
    */
-  pluginAccess?: false | MuonVitePluginAccessOptions;
+  readonly pluginAccess?: false | MuonVitePluginAccessOptions;
 
   /**
    * Build app distributions from Vite output.
@@ -370,7 +370,7 @@ export interface MuonVitePluginOptions {
    * bridge enabled.
    * @defaultValue `true` during Vite build.
    */
-  build?: boolean | MuonViteBuildOptions;
+  readonly build?: boolean | MuonViteBuildOptions;
 }
 
 /**

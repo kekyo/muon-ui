@@ -72,6 +72,8 @@ const getLocalBootstrapCefLogPath = (
   return join(stateHome, "muon-bootstrap", "profile", "muon-cef.log");
 };
 
+const localIt = isWindowsRemoteE2e() ? it.skip : it;
+
 const waitForConsoleMessage = async (
   driver: CdpDriver,
   type: string,
@@ -630,6 +632,198 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  localIt(
+    "runs executor terminal controls from the default app page",
+    async () => {
+      const interactiveScript = `
+      const readline = require("node:readline");
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        terminal: false,
+      });
+      let index = 0;
+      process.stdout.write("ready\\n");
+      process.stderr.write("warn\\n");
+      rl.on("line", (line) => {
+        index += 1;
+        if (index === 1) {
+          process.stdout.write("input:" + line + "\\n");
+          process.stdout.write("continue? ");
+          return;
+        }
+        process.stdout.write("auto:" + line + "\\n", () => {
+          process.exit(7);
+        });
+      });
+    `;
+      const killScript = `
+      process.stdout.write("loop-start\\n");
+      setInterval(() => {}, 1000);
+    `;
+      const running = await startDebugMuon([], ["asset://main/**"]);
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        const values = await driver.evaluate<{
+          sawInitialOutputBeforeInput: boolean;
+          clearKeptProcessRunning: boolean;
+          autoResponded: boolean;
+          exitedWithCode: boolean;
+          killedWithExit: boolean;
+          sendDisabledAfterExit: boolean;
+        }>(`(async () => {
+        const wait = async (predicate, message) => {
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline) {
+            if (predicate()) {
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          throw new Error(message);
+        };
+        const waitForControls = async () => {
+          const deadline = Date.now() + 3000;
+          while (Date.now() < deadline) {
+            const commandInput = document.querySelector("#executor-command");
+            const argsInput = document.querySelector("#executor-args");
+            const cwdInput = document.querySelector("#executor-cwd");
+            const autoRulesInput = document.querySelector("#executor-auto-rules");
+            const stdinInput = document.querySelector("#executor-stdin");
+            const logOutput = document.querySelector("#executor-log");
+            const startButton = document.querySelector("#executor-start");
+            const sendButton = document.querySelector("#executor-send");
+            const killButton = document.querySelector("#executor-kill");
+            const clearButton = document.querySelector("#executor-clear");
+            if (
+              commandInput instanceof HTMLInputElement &&
+              argsInput instanceof HTMLTextAreaElement &&
+              cwdInput instanceof HTMLInputElement &&
+              autoRulesInput instanceof HTMLTextAreaElement &&
+              stdinInput instanceof HTMLInputElement &&
+              logOutput instanceof HTMLElement &&
+              startButton instanceof HTMLButtonElement &&
+              sendButton instanceof HTMLButtonElement &&
+              killButton instanceof HTMLButtonElement &&
+              clearButton instanceof HTMLButtonElement
+            ) {
+              return {
+                commandInput,
+                argsInput,
+                cwdInput,
+                autoRulesInput,
+                stdinInput,
+                logOutput,
+                startButton,
+                sendButton,
+                killButton,
+                clearButton,
+              };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          throw new Error("Executor terminal controls are missing");
+        };
+
+        const {
+          commandInput,
+          argsInput,
+          cwdInput,
+          autoRulesInput,
+          stdinInput,
+          logOutput,
+          startButton,
+          sendButton,
+          killButton,
+          clearButton,
+        } = await waitForControls();
+
+        const logText = () => logOutput.textContent ?? "";
+        commandInput.value = ${JSON.stringify(process.execPath)};
+        argsInput.value = ${JSON.stringify(JSON.stringify(["-e", interactiveScript], null, 2))};
+        cwdInput.value = "";
+        autoRulesInput.value = ${JSON.stringify(
+          JSON.stringify(
+            [{ pattern: "continue\\\\?", input: "auto", once: true }],
+            null,
+            2,
+          ),
+        )};
+        startButton.click();
+
+        await wait(
+          () => logText().includes("ready") && logText().includes("warn"),
+          "Timed out waiting for initial executor output",
+        );
+        const sawInitialOutputBeforeInput =
+          startButton.disabled && !sendButton.disabled && logText().includes("ready");
+
+        clearButton.click();
+        await wait(() => logText() === "", "Timed out waiting for cleared log");
+        const clearKeptProcessRunning = startButton.disabled && !sendButton.disabled;
+
+        stdinInput.value = "manual";
+        sendButton.click();
+        await wait(
+          () => logText().includes("input:manual"),
+          "Timed out waiting for manual stdin echo",
+        );
+        await wait(
+          () => logText().includes("auto:auto"),
+          "Timed out waiting for auto response",
+        );
+        const autoResponded = logText().includes("auto:auto");
+        await wait(
+          () => logText().includes("exit code: 7"),
+          "Timed out waiting for executor exit code",
+        );
+        const exitedWithCode = !startButton.disabled && sendButton.disabled;
+        const sendDisabledAfterExit = sendButton.disabled;
+
+        commandInput.value = ${JSON.stringify(process.execPath)};
+        argsInput.value = ${JSON.stringify(JSON.stringify(["-e", killScript], null, 2))};
+        autoRulesInput.value = "[]";
+        startButton.click();
+        await wait(
+          () => logText().includes("loop-start") && startButton.disabled,
+          "Timed out waiting for kill process start",
+        );
+        killButton.click();
+        await wait(
+          () => logText().includes("exit code:") && !startButton.disabled,
+          "Timed out waiting for killed executor exit",
+        );
+
+        return {
+          sawInitialOutputBeforeInput,
+          clearKeptProcessRunning,
+          autoResponded,
+          exitedWithCode,
+          killedWithExit: logText().includes("exit code:"),
+          sendDisabledAfterExit,
+        };
+      })()`);
+
+        expect(values).toEqual({
+          sawInitialOutputBeforeInput: true,
+          clearKeptProcessRunning: true,
+          autoResponded: true,
+          exitedWithCode: true,
+          killedWithExit: true,
+          sendDisabledAfterExit: true,
+        });
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+      }
+    },
+  );
 
   it("runs popup and browser controls from the default app page", async () => {
     const running = await startDebugMuon(

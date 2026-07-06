@@ -400,6 +400,12 @@ static int extract_archive(
   if (muon_remove_recursive(temporary_directory) != 0) {
     result = -1;
   }
+  if (result == 0 && file_count != NULL) {
+    muon_report_progress(progress_callback, progress_user_data,
+                         MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+                         "Installing CEF runtime...",
+                         (unsigned long long)*file_count, 0, 0);
+  }
   free(release_path);
   free(resource_path);
   free(temporary_directory);
@@ -701,6 +707,12 @@ static int copy_cef_source(
   }
   free(release_path);
   free(resource_path);
+  if (result == 0 && file_count != NULL) {
+    muon_report_progress(progress_callback, progress_user_data,
+                         MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+                         "Installing CEF runtime...",
+                         (unsigned long long)*file_count, 0, 0);
+  }
   return result;
 }
 

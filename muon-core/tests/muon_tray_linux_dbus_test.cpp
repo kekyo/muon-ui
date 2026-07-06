@@ -635,10 +635,96 @@ bool TestLinuxStatusNotifierItemBackend() {
   return true;
 }
 
+bool TestLinuxTitleBarFollowingTrayIcons() {
+  TestDbusSession session;
+  if (!Expect(session.Start(), "failed to start private D-Bus session")) {
+    return false;
+  }
+
+  std::string error_message;
+  FakeStatusNotifierWatcher watcher;
+  if (!Expect(watcher.Start(&error_message), error_message)) {
+    return false;
+  }
+
+  auto service = CreateMuonBrowserTrayService("muon-test");
+  auto callback = [](const MuonBrowserTrayEvent& event) { (void)event; };
+
+  MuonBrowserTrayOptions fixed_options;
+  fixed_options.id = "fixed";
+
+  MuonBrowserTrayOptions follow_options;
+  follow_options.id = "follow";
+  follow_options.follow_title_bar_icon = true;
+
+  std::string fixed_id;
+  std::string follow_id;
+  if (!Expect(service->CreateTray(7, fixed_options, CreateIcon(1, 2, 3, 4),
+                                  callback, &fixed_id, &error_message),
+              error_message) ||
+      !Expect(service->CreateTray(7, follow_options, CreateIcon(5, 6, 7, 8),
+                                  callback, &follow_id, &error_message),
+              error_message) ||
+      !Expect(WaitUntil([&watcher]() {
+                return watcher.registered_items().size() >= 2;
+              }),
+              "watcher did not receive tray registrations")) {
+    return false;
+  }
+
+  const auto fixed_bus_name = watcher.registered_items()[0];
+  const auto follow_bus_name = watcher.registered_items()[1];
+  std::vector<uint8_t> fixed_icon_bytes;
+  std::vector<uint8_t> follow_icon_bytes;
+  if (!Expect(ReadIconPixmapProperty(watcher.connection(), fixed_bus_name,
+                                     &fixed_icon_bytes, &error_message),
+              error_message) ||
+      !Expect(ReadIconPixmapProperty(watcher.connection(), follow_bus_name,
+                                     &follow_icon_bytes, &error_message),
+              error_message) ||
+      !Expect(fixed_icon_bytes == std::vector<uint8_t>({4, 1, 2, 3}),
+              "fixed tray icon had unexpected initial bytes") ||
+      !Expect(follow_icon_bytes == std::vector<uint8_t>({8, 5, 6, 7}),
+              "following tray icon had unexpected initial bytes")) {
+    return false;
+  }
+
+  service->SetFollowingTrayIconForBrowser(7, CreateIcon(9, 10, 11, 12));
+  if (!Expect(ReadIconPixmapProperty(watcher.connection(), fixed_bus_name,
+                                     &fixed_icon_bytes, &error_message),
+              error_message) ||
+      !Expect(ReadIconPixmapProperty(watcher.connection(), follow_bus_name,
+                                     &follow_icon_bytes, &error_message),
+              error_message) ||
+      !Expect(fixed_icon_bytes == std::vector<uint8_t>({4, 1, 2, 3}),
+              "fixed tray icon followed a title bar icon update") ||
+      !Expect(follow_icon_bytes == std::vector<uint8_t>({12, 9, 10, 11}),
+              "following tray icon did not observe a title bar icon update")) {
+    return false;
+  }
+
+  if (!Expect(service->SetTrayIcon(7, follow_id, CreateIcon(21, 22, 23, 24),
+                                   &error_message),
+              error_message)) {
+    return false;
+  }
+  service->SetFollowingTrayIconForBrowser(7, CreateIcon(31, 32, 33, 34));
+  if (!Expect(ReadIconPixmapProperty(watcher.connection(), follow_bus_name,
+                                     &follow_icon_bytes, &error_message),
+              error_message) ||
+      !Expect(follow_icon_bytes == std::vector<uint8_t>({24, 21, 22, 23}),
+              "setTrayIcon should stop title bar icon following")) {
+    return false;
+  }
+
+  return true;
+}
+
 }  // namespace
 
 int main() {
-  if (!TestLinuxStatusNotifierItemBackend()) {
+  if (!TestLinuxStatusNotifierItemBackend() ||
+      !TestLinuxTitleBarFollowingTrayIcons()) {
     return 1;
   }
   return 0;

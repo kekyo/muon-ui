@@ -631,7 +631,8 @@ const __muonNormalizeBrowserTrayOptions = (options) => {
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
     throw new TypeError("Invalid tray options");
   }
-  if (typeof options.icon !== "string" || options.icon === "") {
+  const hasIcon = options.icon !== undefined;
+  if (hasIcon && (typeof options.icon !== "string" || options.icon === "")) {
     throw new TypeError("Invalid tray icon");
   }
   if (options.tooltip !== undefined && options.tooltip !== null && typeof options.tooltip !== "string") {
@@ -639,7 +640,7 @@ const __muonNormalizeBrowserTrayOptions = (options) => {
   }
   return {
     ...(options.id === undefined ? {} : { id: __muonNormalizeBrowserTrayId(options.id) }),
-    icon: options.icon,
+    ...(hasIcon ? { icon: options.icon } : {}),
     ...(options.tooltip === undefined || options.tooltip === null ? {} : { tooltip: options.tooltip }),
     ...(options.menu === undefined ? {} : { menu: __muonNormalizeBrowserTrayMenuItems(options.menu) }),
   };

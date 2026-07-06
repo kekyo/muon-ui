@@ -1008,6 +1008,9 @@ const trayIdResult: Promise<string> = window.muon.browser.createTray(
     }
   },
 );
+const titleBarTrayIdResult: Promise<string> = window.muon.browser.createTray({
+  id: "title-bar",
+});
 const trayMenuResult: Promise<void> = window.muon.browser.setTrayMenu(
   "main",
   [{ type: "radio", id: "mode-a", label: "Mode A", checked: true }],
@@ -1024,6 +1027,7 @@ void setWindowBoundsResult;
 void titleBarVisibilityResult;
 void titleBarIconResult;
 void trayIdResult;
+void titleBarTrayIdResult;
 void trayMenuResult;
 void trayIconResult;
 void trayTooltipResult;

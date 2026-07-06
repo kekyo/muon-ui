@@ -329,9 +329,10 @@ declare global {
      * Tray icon asset path.
      *
      * @remarks Accepts `asset://main/...` URLs or `main`-relative asset paths.
-     * Native tray icons accept PNG icons.
+     * Native tray icons accept PNG icons. Omit to follow the current title bar
+     * icon.
      */
-    readonly icon: string;
+    readonly icon?: string;
     /** Tooltip text shown by the platform shell when supported. */
     readonly tooltip?: string | null;
     /** Initial tray menu items. */

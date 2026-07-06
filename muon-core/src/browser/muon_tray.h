@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+struct MuonTitleBarIcon;
+
 /**
  * muon browser tray menu item kind.
  */
@@ -50,8 +52,10 @@ struct MuonBrowserTrayMenuItem {
 struct MuonBrowserTrayOptions {
   /** Optional tray id. Empty means the browser service should generate one. */
   std::string id;
-  /** Required tray icon asset path. */
+  /** Optional tray icon asset path. Empty means follow the title bar icon. */
   std::string icon_path;
+  /** Whether the tray icon follows the current title bar icon. */
+  bool follow_title_bar_icon = false;
   /** Optional tooltip text. Empty means no tooltip. */
   std::string tooltip;
   /** Initial tray menu items. */
@@ -151,6 +155,14 @@ class MuonBrowserTrayService {
                            std::string* error_message) = 0;
 
   /**
+   * Replaces the icon for all title-bar-following tray items owned by a
+   * browser.
+   */
+  virtual void SetFollowingTrayIconForBrowser(
+      int browser_id,
+      const MuonBrowserTrayIcon& icon) = 0;
+
+  /**
    * Replaces the tooltip for an existing browser-owned tray item.
    */
   virtual bool SetTrayTooltip(int browser_id,
@@ -221,6 +233,21 @@ bool LoadMuonBrowserTrayIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                         const std::string& path,
                                         MuonBrowserTrayIcon* icon,
                                         std::string* error_message);
+
+/**
+ * Loads a tray icon from an already loaded title bar icon.
+ *
+ * @param title_bar_icon Title bar icon whose PNG bytes are used for the tray.
+ * @param source Diagnostic source label used in error messages.
+ * @param icon Receives decoded tray icon data.
+ * @param error_message Receives a validation diagnostic.
+ * @return true when a tray icon was loaded from PNG data.
+ */
+bool LoadMuonBrowserTrayIconFromTitleBarIcon(
+    const MuonTitleBarIcon& title_bar_icon,
+    const std::string& source,
+    MuonBrowserTrayIcon* icon,
+    std::string* error_message);
 
 /**
  * Creates a platform tray service.

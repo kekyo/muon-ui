@@ -8,6 +8,7 @@
 
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
+#include "browser/muon_default_title_bar_icon.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
@@ -1005,6 +1006,25 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       plugin_capability_policies_(std::move(plugin_capability_policies)),
       unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {
   tray_service_ = CreateMuonBrowserTrayService(linux_desktop_id_);
+  std::string tray_icon_error;
+  if (has_initial_title_bar_icon_ &&
+      LoadMuonBrowserTrayIconFromTitleBarIcon(
+          initial_title_bar_icon_, "initial title bar icon",
+          &default_title_bar_tray_icon_, &tray_icon_error)) {
+    has_default_title_bar_tray_icon_ = true;
+  } else {
+    MuonTitleBarIcon default_title_bar_icon;
+    if (LoadDefaultMuonTitleBarIcon(&default_title_bar_icon,
+                                    &tray_icon_error) &&
+        LoadMuonBrowserTrayIconFromTitleBarIcon(
+            default_title_bar_icon, "embedded default title bar icon",
+            &default_title_bar_tray_icon_, &tray_icon_error)) {
+      has_default_title_bar_tray_icon_ = true;
+    } else {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
+                     tray_icon_error);
+    }
+  }
   std::ostringstream log;
   log << "MuonClient ctor this=" << FormatMuonCloseDebugPointer(this)
       << " titlebar_custom="
@@ -1244,6 +1264,8 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   }
   pending_favicon_requests_.erase(browser_id);
   title_bar_icon_update_generations_.erase(browser_id);
+  title_bar_icon_has_png_by_browser_.erase(browser_id);
+  title_bar_tray_icons_by_browser_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
   ClearTrayRegistrationsForBrowser(browser_id);
@@ -1654,6 +1676,7 @@ bool MuonClient::SetTitleBarIconForBrowser(
   const auto browser_id = browser->GetIdentifier();
   SetRegisteredMuonTitleBarIconForBrowser(browser_id, icon);
   if (!HasRegisteredMuonWindowForBrowser(browser_id)) {
+    UpdateFollowingTrayIconForBrowser(browser_id, icon);
     return true;
   }
 
@@ -1665,6 +1688,7 @@ bool MuonClient::SetTitleBarIconForBrowser(
   }
   (void)browser_view;
   SetRegisteredMuonTitleBarIcon(window, icon);
+  UpdateFollowingTrayIconForBrowser(browser_id, icon);
   return true;
 }
 
@@ -2655,6 +2679,53 @@ MuonBrowserTrayEventCallback MuonClient::CreateTrayEventCallback(
   };
 }
 
+bool MuonClient::ResolveTitleBarTrayIconForBrowser(
+    int browser_id,
+    MuonBrowserTrayIcon* icon,
+    std::string* error_message) const {
+  if (icon == nullptr || error_message == nullptr) {
+    return false;
+  }
+  const auto has_current_png =
+      title_bar_icon_has_png_by_browser_.find(browser_id);
+  const auto current_icon = title_bar_tray_icons_by_browser_.find(browser_id);
+  if (has_current_png != title_bar_icon_has_png_by_browser_.end() &&
+      has_current_png->second &&
+      current_icon != title_bar_tray_icons_by_browser_.end()) {
+    *icon = current_icon->second;
+    return true;
+  }
+  if (has_default_title_bar_tray_icon_) {
+    *icon = default_title_bar_tray_icon_;
+    return true;
+  }
+  *error_message = "Default tray icon is unavailable";
+  return false;
+}
+
+void MuonClient::UpdateFollowingTrayIconForBrowser(
+    int browser_id,
+    const MuonTitleBarIcon* icon) {
+  if (browser_id <= 0 || icon == nullptr || icon->png_data.empty()) {
+    if (browser_id > 0) {
+      title_bar_icon_has_png_by_browser_[browser_id] = false;
+    }
+    return;
+  }
+  MuonBrowserTrayIcon tray_icon;
+  std::string error_message;
+  if (!LoadMuonBrowserTrayIconFromTitleBarIcon(
+          *icon, "current title bar icon", &tray_icon, &error_message)) {
+    title_bar_icon_has_png_by_browser_[browser_id] = false;
+    return;
+  }
+  title_bar_icon_has_png_by_browser_[browser_id] = true;
+  title_bar_tray_icons_by_browser_[browser_id] = tray_icon;
+  if (tray_service_) {
+    tray_service_->SetFollowingTrayIconForBrowser(browser_id, tray_icon);
+  }
+}
+
 bool MuonClient::CreateTrayForBrowser(const PendingPluginCall& call,
                                       std::string* tray_id,
                                       std::string* error_message) {
@@ -2687,9 +2758,16 @@ bool MuonClient::CreateTrayForBrowser(const PendingPluginCall& call,
     return false;
   }
   MuonBrowserTrayIcon icon;
-  if (!LoadMuonBrowserTrayIconFromStorage(app_storage_, options.icon_path, &icon,
-                                          error_message)) {
-    return false;
+  if (options.follow_title_bar_icon) {
+    if (!ResolveTitleBarTrayIconForBrowser(call.browser->GetIdentifier(), &icon,
+                                           error_message)) {
+      return false;
+    }
+  } else {
+    if (!LoadMuonBrowserTrayIconFromStorage(app_storage_, options.icon_path,
+                                            &icon, error_message)) {
+      return false;
+    }
   }
   if (!tray_service_) {
     *error_message = "System tray service is unavailable";

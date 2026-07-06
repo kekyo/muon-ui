@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -1050,7 +1051,7 @@ static void RunWindowsCommandThread(std::shared_ptr<ExecutorProcess> process) {
       auto offset = size_t{0};
       while (offset < command.data.size()) {
         const auto remaining = std::min<size_t>(
-            command.data.size() - offset, DWORD_MAX);
+            command.data.size() - offset, std::numeric_limits<DWORD>::max());
         DWORD written = 0;
         if (!WriteFile(handle, command.data.data() + offset,
                        static_cast<DWORD>(remaining), &written, nullptr)) {

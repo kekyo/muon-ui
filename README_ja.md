@@ -1009,8 +1009,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
 - `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
-  `muon build` / Vite build / `muon pack` は解決済みPNGを `assets.zip` の `main/.muon/app-icon.png` に追加し、runtime内部設定として `browser.initialTitleBarIcon: "asset://main/.muon/app-icon.png"` を生成します。
-  既存アセットに同じエントリがある場合はビルドエラーになります。
+  内部的には、 `asset://main/.muon/app-icon.png"` に配置されます。従って、既存アセットに同じエントリがある場合はビルドエラーになります。
 - Windowsだけ、またはLinuxだけ別アイコンにしたい場合は、それぞれ `windows.resource.iconPath`、`linux.desktop.iconPath` をoverrideとして指定します。
 - 実行中に通常ブラウザウインドウのタイトルバーアイコンだけを変更する場合は、`window.muon.browser.setTitleBarIcon()` を使用します。
 
@@ -1047,7 +1046,6 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 - `initialTitleBarVisibility` は、通常ブラウザウインドウのタイトルバーを初期表示するかどうかを指定します。
   `false` を指定すると、起動直後はタイトルバーが非表示になります。
 - 起動時のタイトルバーアイコンは、配布ビルド時に `iconPath` から生成されます。
-  `muon build` / Vite build / `muon pack` の入力 `muon.json` に `browser.initialTitleBarIcon` を書くことは出来ません。
   ページがfaviconを指定した場合、muonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
   ページ遷移時、faviconが存在しない場合や取得・変換できない場合は、生成済みの初期タイトルバーアイコン、または内蔵muonアイコンへ戻ります。
   favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
@@ -1093,13 +1091,10 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- `muon build` はLinuxターゲットの `dist-muon/linux-*` に `muon-desktop.json` と `muon-desktop-icon.png` を同梱します。
-  `muon-desktop.json` は `muon-bootstrap` がportable用desktop entryを生成するためのsidecarです。
-- portable配布物から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へstagingし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
-  Windows portable配布物では、runtime state用IDとして `<appId>.<arch>` を使用します。
-  このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくstate directory配下の絶対パスを指します。
-- 新しいportable配布物から起動した場合、fingerprintの差分によりstate directory側のアプリファイル群が更新され、desktop entryも更新されます。
-  state directory配下のlauncherから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
+- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へステージングし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+  このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくステートディレクトリ配下の絶対パスを指します。
+- 新しいポータブル配布物から起動した場合、署名の差分によりステートディレクトリ側のアプリファイル群が更新され、desktop entryも更新されます。
+  ステートディレクトリ配下のランチャーから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
   debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-bootstrap` はユーザーhomeへ新規desktop entryを作成しません。
   既存のmuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
@@ -1111,7 +1106,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 ### windowsキー
 
 `windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
-この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やlauncherへ埋め込まれる実行時設定からは除外されます。
+この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やランチャーへ埋め込まれる実行時設定からは除外されます。
 
 ```json
 {
@@ -1139,8 +1134,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
 | `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
 
-- `resource.iconPath` は `.png` のみ受け付けます。muonは、Windows PE/NSISが必要とする`.ico`ファイルをビルド時に自動生成します。
-  入力PNGはまず透明余白付きで256x256へ正規化され、そこから128x128、64x64、48x48、32x32、24x24、16x16へ縮小されます。
+- `resource.iconPath` は `.png` のみ受け付けます。muonは、Windows PE/NSISが必要とする `.ico` ファイルをビルド時に自動生成します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリ、`project.json` はproject rootです。
 - Windowsアイコンの解決順は、CLI/Vite optionの `windowsResource.iconPath` または `--windows-icon`、`muon.json` の `windows.resource.iconPath`、統一 `iconPath`、`project.json.iconPath`、muon既定アイコンです。
@@ -1149,8 +1143,8 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
 - `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
   文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
-- `muon build` はlauncherのconfig埋め込み後に `muon-builder resource` でPE resourceを更新します。
-  そのため、アプリ開発環境に `windres` は不要です。署名済みPEを更新する用途は対象外で、コード署名前に実行する前提です。
+- `muon build` はランチャーのconfig埋め込み後に `muon-builder resource` でPEファイルのリソースを直接更新します。
+  コードサイニング署名を適用する場合は、署名後に更新して署名を破壊しないように、最終的な成果物に対して署名して下さい。
 - `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
   setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
   NSISの `Name` / `DisplayName` / installer path / uninstall registry key / state削除先はWindows architecture別になりますが、`ProductName` などのWindows resource metadataと成果物ファイル名は同じmetadata規則を維持します。
@@ -1160,15 +1154,13 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | キー        | 型       | 既定値   | 概要                                                                 |
 | :---------- | :------- | :------- | :------------------------------------------------------------------- |
 | `sourcePath` | `string` | `assets` | `asset://` URLとして公開するアセットディレクトリまたはZIPファイルです。 |
-| `signature` | `string` | なし     | ZIPアセットの改ざん検出に使う40桁のSHA-1署名です。                   |
-| `salt`      | `string` | なし     | `signature` の計算に使うsaltを16進文字列で指定します。                |
 
 - `sourcePath` を省略した場合は、実行ファイルと同じディレクトリにある `assets` が使用されます。
   相対パスは `muon.json` からの相対パスとして解決されます。
   ディレクトリを指定した場合はその内容が、ZIPファイルを指定した場合はZIP内の内容が `asset://main/...` として参照出来ます。
-- `signature` は、アセットをZIPファイルとして配布する場合の整合性検証に使います。
-  `signature` を指定する場合は `salt` も指定してください。
-  検証に失敗した場合、muonアプリケーションは起動しません。
+
+> 注釈: ここに挙げられていない `signature`, `salt` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
+> 解説は省略します。
 
 ### networkキー
 
@@ -1392,7 +1384,7 @@ muon({
 
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
-  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。CEF由来の `linux64` や `windows64`、`x64` などの別名は受け付けません。
+  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。
 - `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。

@@ -133,7 +133,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
             alphaName: boolean;
             beta: boolean;
             executor: boolean;
-            executorRun: boolean;
+            executorSpawn: boolean;
           };
           mutationResults: Record<string, string>;
           alphaNameUnchanged: boolean;
@@ -141,7 +141,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           functionExtraType: string;
           alphaKeys: string[];
           executorKeys: string[];
-          internalRunType: string;
+          internalRpcType: string;
         }>(`(async () => {
           "use strict";
           const captureMutation = (mutate) => {
@@ -189,7 +189,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
             alphaKeys: Object.keys(window.muon.test.alpha).sort(),
             executorKeys: Object.keys(window.muon.executor).sort(),
             runType: typeof window.muon.executor.run,
-            internalRunType: typeof window.muon.executor.__run,
+            internalRpcType: typeof window.muon.executor.__spawnRpc,
           };
         })()`);
         expect(values).toEqual({
@@ -217,7 +217,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           alphaKeys: ["alphaAdd", "alphaName"],
           executorKeys: ["spawn"],
           runType: "undefined",
-          internalRunType: "function",
+          internalRpcType: "function",
         });
       },
     );

@@ -31,6 +31,7 @@ static constexpr char kMuonFunctionArgumentKindPluginProxy[] = "plugin_proxy";
 static constexpr char kMuonFunctionArgumentProxyIdKey[] = "proxy_id";
 static constexpr char kMuonFunctionArgumentTypeKey[] = "type_key";
 static constexpr char kMuonFunctionArgumentTypeDescriptorKey[] = "type";
+static constexpr char kMuonExecutorSpawnFunctionPath[] = "muon.executor.spawn";
 static constexpr double kMuonTwoTo63 = 9223372036854775808.0;
 static constexpr double kMuonTwoTo64 = 18446744073709551616.0;
 static int g_next_muon_v8_context_id = 1;
@@ -412,6 +413,10 @@ bool MuonV8Handler::Execute(const CefString& name,
                                   &error_message)) {
     RejectPromise(promise, error_message);
     return true;
+  }
+  if (function_name == kMuonExecutorSpawnFunctionPath &&
+      encoded_args->GetSize() >= 3) {
+    encoded_args->SetDouble(2, static_cast<double>(context_id_));
   }
 
   const auto context = CefV8Context::GetCurrentContext();

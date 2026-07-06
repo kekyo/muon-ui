@@ -893,7 +893,10 @@ void MuonApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
   const auto args = message->GetArgumentList();
   args->SetSize(1);
   args->SetInt(0, handler_iterator->second->GetContextId());
-  frame->SendProcessMessage(PID_BROWSER, message);
+  const auto target_frame = browser ? browser->GetMainFrame() : frame;
+  if (target_frame) {
+    target_frame->SendProcessMessage(PID_BROWSER, message);
+  }
 
   handler_iterator->second->RejectAllPendingPromises();
   handler_iterator->second->ReleaseFunctionReferences();

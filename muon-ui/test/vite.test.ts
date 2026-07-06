@@ -1027,6 +1027,12 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain(
       `__muonCall(${JSON.stringify(capabilityIds[0])}, "muon.executor.spawn"`,
     );
+    expect(moduleSource).toContain("export const spawn = async (options = {})");
+    expect(moduleSource).toContain("writeStdin");
+    expect(moduleSource).toContain("closeStdin");
+    expect(moduleSource).toContain("wait");
+    expect(moduleSource).toContain("kill");
+    expect(moduleSource).toContain("dispose");
   });
 
   it("generates browser context menu virtual module wrappers", async () => {

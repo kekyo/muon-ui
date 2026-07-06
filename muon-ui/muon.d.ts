@@ -1463,14 +1463,13 @@ declare global {
      * Spawn a child process without invoking a shell.
      *
      * @param options - Process launch options.
-     * @returns A promise for the completed child process result.
-     * @remarks The promise resolves even when the child exits with a non-zero
-     * exit code. It rejects only when the process cannot be launched or the
-     * options are invalid.
+     * @returns A promise for the started child process handle.
+     * @remarks The returned process handle controls stdin, termination, and
+     * completion observation. Use `wait()` to receive the exit result.
      */
     readonly spawn: (
       options: MuonExecutorSpawnOptions,
-    ) => Promise<MuonExecutorSpawnResult>;
+    ) => Promise<MuonExecutorProcess>;
   }
 
   /** Options for spawning a child process through muon. */
@@ -1489,12 +1488,19 @@ declare global {
      */
     readonly args?: readonly string[];
     /**
-     * UTF-8 text written to the child process stdin.
+     * Receives stdout chunks as the child process writes them.
      *
-     * @remarks Omit or use an empty string to close stdin without writing data.
-     * @defaultValue `""`
+     * @remarks When specified, `wait()` omits `stdout` from its result. The
+     * callback receives a fresh `Uint8Array` for each chunk.
      */
-    readonly stdin?: string;
+    readonly onStdout?: (chunk: Uint8Array) => void;
+    /**
+     * Receives stderr chunks as the child process writes them.
+     *
+     * @remarks When specified, `wait()` omits `stderr` from its result. The
+     * callback receives a fresh `Uint8Array` for each chunk.
+     */
+    readonly onStderr?: (chunk: Uint8Array) => void;
     /**
      * Working directory used for the child process.
      *
@@ -1514,16 +1520,58 @@ declare global {
     readonly env?: Record<string, string>;
   }
 
+  /** Started child process handle. */
+  interface MuonExecutorProcess {
+    /** Child process id. */
+    readonly processId: number;
+    /**
+     * Write bytes to the child process stdin.
+     *
+     * @param data - UTF-8 text or raw bytes to write.
+     * @returns A promise that resolves after the bytes are written.
+     * @remarks Calls are processed in call order. Strings are UTF-8 encoded.
+     */
+    readonly writeStdin: (data: string | BufferSource) => Promise<void>;
+    /**
+     * Close child process stdin after all pending writes are processed.
+     *
+     * @returns A promise that resolves when stdin is closed.
+     */
+    readonly closeStdin: () => Promise<void>;
+    /**
+     * Wait for the child process to exit.
+     *
+     * @returns A promise for the completed child process result.
+     * @remarks The same promise is reused for repeated calls. It resolves even
+     * when the child exits with a non-zero exit code.
+     */
+    readonly wait: () => Promise<MuonExecutorSpawnResult>;
+    /**
+     * Request process termination.
+     *
+     * @returns A promise that resolves when the termination request is issued.
+     * @remarks POSIX uses `SIGTERM`; Windows uses `TerminateProcess(..., 1)`.
+     */
+    readonly kill: () => Promise<void>;
+    /**
+     * Release the native handle and terminate the process when it is still
+     * running.
+     *
+     * @returns A promise that resolves after disposal is requested.
+     */
+    readonly dispose: () => Promise<void>;
+  }
+
   /** Completed child process result. */
   interface MuonExecutorSpawnResult {
     /** Child process id. */
     readonly processId: number;
     /** Child process exit code. */
     readonly exitCode: number;
-    /** Captured UTF-8 stdout text. */
-    readonly stdout: string;
-    /** Captured UTF-8 stderr text. */
-    readonly stderr: string;
+    /** Captured stdout bytes when `onStdout` was not specified. */
+    readonly stdout?: Uint8Array;
+    /** Captured stderr bytes when `onStderr` was not specified. */
+    readonly stderr?: Uint8Array;
   }
 }
 
@@ -1606,9 +1654,9 @@ declare module "muon:executor" {
    * Spawn a child process without invoking a shell.
    *
    * @param options - Process launch options.
-   * @returns A promise for the completed child process result.
+   * @returns A promise for the started child process handle.
    */
   export const spawn: (
     options: MuonExecutorSpawnOptions,
-  ) => Promise<MuonExecutorSpawnResult>;
+  ) => Promise<MuonExecutorProcess>;
 }

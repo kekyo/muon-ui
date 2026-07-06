@@ -379,9 +379,160 @@ const parseModuleVirtualId = (
 const createExecutorSpawnExport = (
   capabilityId: string,
   functionPath: string,
-): string => `export const spawn = async (options = {}) => {
-  const source = await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [JSON.stringify(options ?? {})]);
-  return JSON.parse(source);
+): string => `const __muonExecutorActiveProcesses = new Set();
+const __muonExecutorEmptyBytes = new Uint8Array(0);
+const __muonExecutorOwnerCallback = () => {};
+const __muonExecutorToBytes = (data) => {
+  if (typeof data === "string") {
+    return new TextEncoder().encode(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new TypeError("stdin data must be a string or BufferSource");
+};
+const __muonExecutorFromBase64 = (source) => {
+  const text = atob(source ?? "");
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index += 1) {
+    bytes[index] = text.charCodeAt(index);
+  }
+  return bytes;
+};
+const __muonExecutorRpc = async (
+  request,
+  data = __muonExecutorEmptyBytes,
+  onStdout = null,
+  onStderr = null,
+) =>
+  JSON.parse(
+    await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [
+      JSON.stringify(request),
+      data,
+      0,
+      __muonExecutorOwnerCallback,
+      onStdout,
+      onStderr,
+    ]),
+  );
+const __muonExecutorDecodeWaitResult = (raw) => {
+  const result = {
+    processId: raw.processId,
+    exitCode: raw.exitCode,
+  };
+  if (Object.prototype.hasOwnProperty.call(raw, "stdoutBase64")) {
+    result.stdout = __muonExecutorFromBase64(raw.stdoutBase64);
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, "stderrBase64")) {
+    result.stderr = __muonExecutorFromBase64(raw.stderrBase64);
+  }
+  return result;
+};
+const __muonExecutorDisposeActiveProcesses = async () => {
+  if (__muonExecutorActiveProcesses.size === 0) {
+    return;
+  }
+  for (const handle of Array.from(__muonExecutorActiveProcesses)) {
+    try {
+      await handle.dispose();
+    } catch {}
+  }
+};
+if (typeof globalThis.addEventListener === "function") {
+  for (const eventName of ["beforeunload", "pagehide", "unload"]) {
+    globalThis.addEventListener(eventName, __muonExecutorDisposeActiveProcesses);
+  }
+}
+export const spawn = async (options = {}) => {
+  const stdoutCallback =
+    typeof options.onStdout === "function"
+      ? (chunk) => options.onStdout(new Uint8Array(chunk))
+      : null;
+  const stderrCallback =
+    typeof options.onStderr === "function"
+      ? (chunk) => options.onStderr(new Uint8Array(chunk))
+      : null;
+  const start = await __muonExecutorRpc(
+    {
+      op: "start",
+      options: {
+        command: options.command,
+        args: options.args,
+        cwd: options.cwd,
+        env: options.env,
+      },
+      captureStdout: stdoutCallback === null,
+      captureStderr: stderrCallback === null,
+    },
+    __muonExecutorEmptyBytes,
+    stdoutCallback,
+    stderrCallback,
+  );
+  const handleId = start.handleId;
+  let disposed = false;
+  let stdinClosing = false;
+  let waitPromise = null;
+  const handle = {
+    processId: start.processId,
+    writeStdin: async (data) => {
+      if (disposed) {
+        throw new Error("executor process is disposed");
+      }
+      if (stdinClosing) {
+        throw new Error("stdin is closed");
+      }
+      await __muonExecutorRpc(
+        { op: "writeStdin", handleId },
+        __muonExecutorToBytes(data),
+      );
+    },
+    closeStdin: async () => {
+      if (disposed) {
+        throw new Error("executor process is disposed");
+      }
+      stdinClosing = true;
+      await __muonExecutorRpc({ op: "closeStdin", handleId });
+    },
+    wait: () => {
+      if (waitPromise !== null) {
+        return waitPromise;
+      }
+      waitPromise = (async () => {
+        const result = __muonExecutorDecodeWaitResult(
+          await __muonExecutorRpc({ op: "wait", handleId }),
+        );
+        if (!disposed) {
+          disposed = true;
+          __muonExecutorActiveProcesses.delete(handle);
+          try {
+            await __muonExecutorRpc({ op: "dispose", handleId });
+          } catch {}
+        }
+        return result;
+      })();
+      return waitPromise;
+    },
+    kill: async () => {
+      if (disposed) {
+        throw new Error("executor process is disposed");
+      }
+      await __muonExecutorRpc({ op: "kill", handleId });
+    },
+    dispose: async () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      __muonExecutorActiveProcesses.delete(handle);
+      await __muonExecutorRpc({ op: "dispose", handleId });
+    },
+  };
+  Object.freeze(handle);
+  __muonExecutorActiveProcesses.add(handle);
+  return handle;
 };`;
 
 const createBrowserContextMenuHelpers =

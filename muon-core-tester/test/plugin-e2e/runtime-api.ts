@@ -106,7 +106,6 @@ import type {
 interface ExecutorSpawnOptions {
   args: string[];
   command: string;
-  stdin?: string;
 }
 
 const isLocalLinuxE2e = process.platform === "linux" && !isWindowsRemoteE2e();
@@ -289,7 +288,6 @@ const createExecutorStdinSpawnOptions = (): ExecutorSpawnOptions => {
         "$inputText = [Console]::In.ReadToEnd(); [Console]::Out.Write('stdout:' + $inputText); [Console]::Error.Write('stderr:ok'); exit 7",
       ],
       command: "powershell.exe",
-      stdin: "hello",
     };
   }
 
@@ -308,7 +306,64 @@ const createExecutorStdinSpawnOptions = (): ExecutorSpawnOptions => {
   return {
     args: ["-e", childScript],
     command: process.execPath,
-    stdin: "hello",
+  };
+};
+
+const createExecutorStreamingSpawnOptions = (): ExecutorSpawnOptions => {
+  if (isWindowsRemoteE2e()) {
+    return {
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$stdout = [Console]::OpenStandardOutput(); $stderr = [Console]::OpenStandardError(); Start-Sleep -Milliseconds 100; $stdout.Write([byte[]](111,49), 0, 2); $stdout.Flush(); Start-Sleep -Milliseconds 100; $stderr.Write([byte[]](101,49), 0, 2); $stderr.Flush(); $inputStream = [Console]::OpenStandardInput(); $buffer = New-Object byte[] 4096; $memory = New-Object System.IO.MemoryStream; while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) { $memory.Write($buffer, 0, $read) }; $prefix = [Text.Encoding]::UTF8.GetBytes('stdin:'); $stdout.Write($prefix, 0, $prefix.Length); $bytes = $memory.ToArray(); $stdout.Write($bytes, 0, $bytes.Length); $done = [Text.Encoding]::UTF8.GetBytes('done'); $stderr.Write($done, 0, $done.Length); exit 7",
+      ],
+      command: "powershell.exe",
+    };
+  }
+
+  const childScript = `
+    const input = [];
+    setTimeout(() => process.stdout.write(Buffer.from([111, 49])), 100);
+    setTimeout(() => process.stderr.write(Buffer.from([101, 49])), 200);
+    process.stdin.on("data", (chunk) => {
+      input.push(Buffer.from(chunk));
+    });
+    process.stdin.on("end", () => {
+      process.stdout.write(Buffer.concat([Buffer.from("stdin:"), ...input]));
+      process.stderr.write("done");
+      process.exitCode = 7;
+    });
+  `;
+  return {
+    args: ["-e", childScript],
+    command: process.execPath,
+  };
+};
+
+const createExecutorLongRunningSpawnOptions = (
+  marker: string,
+): ExecutorSpawnOptions => {
+  if (isWindowsRemoteE2e()) {
+    return {
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$marker = ${JSON.stringify(marker)}; Start-Sleep -Seconds 30`,
+      ],
+      command: "powershell.exe",
+    };
+  }
+
+  return {
+    args: [
+      "-e",
+      `const marker = ${JSON.stringify(marker)}; setInterval(() => {}, 1000);`,
+    ],
+    command: process.execPath,
   };
 };
 
@@ -1000,7 +1055,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         keys: string[];
         spawnType: string;
         runType: string;
-        internalRunType: string;
+        internalRpcType: string;
         environmentType: string;
         result: {
           processId: number;
@@ -1009,21 +1064,28 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           stderr: string;
         };
       }>(`(async () => {
-        const result = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+        const decoder = new TextDecoder();
+        const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+        const waitResult = await child.wait();
         return {
           keys: Object.keys(window.muon.executor).sort(),
           spawnType: typeof window.muon.executor.spawn,
           runType: typeof window.muon.executor.run,
-          internalRunType: typeof window.muon.executor.__run,
+          internalRpcType: typeof window.muon.executor.__spawnRpc,
           environmentType: typeof window.muon.environments,
-          result,
+          result: {
+            processId: waitResult.processId,
+            exitCode: waitResult.exitCode,
+            stdout: decoder.decode(waitResult.stdout),
+            stderr: decoder.decode(waitResult.stderr),
+          },
         };
       })()`);
       expect(values).toEqual({
         keys: ["spawn"],
         spawnType: "function",
         runType: "undefined",
-        internalRunType: "function",
+        internalRpcType: "function",
         environmentType: "undefined",
         result: {
           processId: expect.any(Number),
@@ -1600,11 +1662,16 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           executorKeys: string[];
           executorInternalType: string;
         }>(`(async () => {
+          const decoder = new TextDecoder();
           const variables = await window.muon.environments.getVariables();
           const commandLine = await window.muon.environments.getCommandLine();
           const processId = await window.muon.environments.getProcessId();
           const runtimeInfo = await window.muon.environments.getRuntimeInfo();
-          const runResult = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+          const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+          await child.writeStdin("he");
+          await child.writeStdin(new Uint8Array([108, 108, 111]));
+          await child.closeStdin();
+          const waitResult = await child.wait();
           return {
             envValue: variables.MUON_E2E_ENVIRONMENTS_TEST,
             commandLineHasPluginDir: commandLine.some((value) =>
@@ -1614,9 +1681,14 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             keys: Object.keys(window.muon.environments).sort(),
             internalType: typeof window.muon.environments.__getVariables,
             runtimeInfoName: runtimeInfo.name,
-            runResult,
+            runResult: {
+              processId: waitResult.processId,
+              exitCode: waitResult.exitCode,
+              stdout: decoder.decode(waitResult.stdout),
+              stderr: decoder.decode(waitResult.stderr),
+            },
             executorKeys: Object.keys(window.muon.executor).sort(),
-            executorInternalType: typeof window.muon.executor.__run,
+            executorInternalType: typeof window.muon.executor.__spawnRpc,
           };
         })()`);
 
@@ -1648,6 +1720,185 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       },
     );
   });
+
+  it("streams child process output and writes stdin incrementally", async () => {
+    const spawnOptions = createExecutorStreamingSpawnOptions();
+    await withMuonEnvironment([], {}, async (driver) => {
+      const values = await driver.evaluate<{
+        processId: number;
+        exitCode: number;
+        stdoutBytesBeforeInput: number[];
+        stderrBytesBeforeInput: number[];
+        stdoutBytes: number[];
+        stderrBytes: number[];
+        resultHasStdout: boolean;
+        resultHasStderr: boolean;
+      }>(`(async () => {
+        const stdoutBytes = [];
+        const stderrBytes = [];
+        const until = async (predicate) => {
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline) {
+            if (predicate()) {
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          throw new Error("Timed out waiting for executor callback");
+        };
+        const child = await window.muon.executor.spawn({
+          ...${JSON.stringify(spawnOptions)},
+          onStdout: (chunk) => stdoutBytes.push(...Array.from(chunk)),
+          onStderr: (chunk) => stderrBytes.push(...Array.from(chunk)),
+        });
+        await until(() => stdoutBytes.length >= 2 && stderrBytes.length >= 2);
+        const stdoutBytesBeforeInput = [...stdoutBytes];
+        const stderrBytesBeforeInput = [...stderrBytes];
+        await child.writeStdin("a");
+        await child.writeStdin(new Uint8Array([98, 0, 99]));
+        await child.closeStdin();
+        const waitResult = await child.wait();
+        await until(() => stderrBytes.length >= 6);
+        return {
+          processId: waitResult.processId,
+          exitCode: waitResult.exitCode,
+          stdoutBytesBeforeInput,
+          stderrBytesBeforeInput,
+          stdoutBytes,
+          stderrBytes,
+          resultHasStdout: waitResult.stdout !== undefined,
+          resultHasStderr: waitResult.stderr !== undefined,
+        };
+      })()`);
+
+      expect(values).toEqual({
+        processId: expect.any(Number),
+        exitCode: 7,
+        stdoutBytesBeforeInput: [111, 49],
+        stderrBytesBeforeInput: [101, 49],
+        stdoutBytes: [111, 49, 115, 116, 100, 105, 110, 58, 97, 98, 0, 99],
+        stderrBytes: [101, 49, 100, 111, 110, 101],
+        resultHasStdout: false,
+        resultHasStderr: false,
+      });
+      expect(values.processId).toBeGreaterThan(0);
+    });
+  });
+
+  it("terminates a running child process through the executor handle", async () => {
+    const marker = `muon-spawn-kill-${Date.now().toString(36)}`;
+    const spawnOptions = createExecutorLongRunningSpawnOptions(marker);
+    await withMuonEnvironment([], {}, async (driver) => {
+      const values = await driver.evaluate<{
+        processId: number;
+        exitCode: number;
+        writeAfterCloseRejected: boolean;
+        writeAfterDisposeRejected: boolean;
+      }>(`(async () => {
+        const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
+        await child.kill();
+        const waitResult = await child.wait();
+        let writeAfterCloseRejected = false;
+        let writeAfterDisposeRejected = false;
+        const closedChild = await window.muon.executor.spawn(${JSON.stringify(createExecutorStdinSpawnOptions())});
+        await closedChild.closeStdin();
+        try {
+          await closedChild.writeStdin("x");
+        } catch {
+          writeAfterCloseRejected = true;
+        }
+        await closedChild.dispose();
+        try {
+          await closedChild.writeStdin("x");
+        } catch {
+          writeAfterDisposeRejected = true;
+        }
+        return {
+          processId: waitResult.processId,
+          exitCode: waitResult.exitCode,
+          writeAfterCloseRejected,
+          writeAfterDisposeRejected,
+        };
+      })()`);
+
+      expect(values.processId).toBeGreaterThan(0);
+      expect(values.exitCode).not.toBe(0);
+      expect(values.writeAfterCloseRejected).toBe(true);
+      expect(values.writeAfterDisposeRejected).toBe(true);
+    });
+  });
+
+  linuxIt(
+    "terminates executor children when the V8 context is released",
+    async () => {
+      const marker = `muon-spawn-context-release-${Date.now().toString(36)}`;
+      const running = await startDebugMuon(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        undefined,
+        ["muon.executor.spawn"],
+      );
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon executor context release</title>",
+          cdpCommandTimeoutMs,
+        );
+        await driver.evaluate(`(async () => {
+        globalThis.executorChild = await window.muon.executor.spawn(${JSON.stringify(
+          createExecutorLongRunningSpawnOptions(marker),
+        )});
+      })()`);
+        for (let index = 0; index < 50; index += 1) {
+          const commandLines = await listProcessGroupCommandLines(
+            running.process.pid ?? 0,
+          );
+          if (
+            commandLines.some((commandLine) => commandLine.includes(marker))
+          ) {
+            break;
+          }
+          await wait(100);
+        }
+        expect(
+          (await listProcessGroupCommandLines(running.process.pid ?? 0)).some(
+            (commandLine) => commandLine.includes(marker),
+          ),
+        ).toBe(true);
+
+        await driver.navigate(
+          "data:text/html,<title>muon executor context released</title>",
+          cdpCommandTimeoutMs,
+        );
+        for (let index = 0; index < 100; index += 1) {
+          const commandLines = await listProcessGroupCommandLines(
+            running.process.pid ?? 0,
+          );
+          if (
+            !commandLines.some((commandLine) => commandLine.includes(marker))
+          ) {
+            return;
+          }
+          await wait(100);
+        }
+        const commandLines = await listProcessGroupCommandLines(
+          running.process.pid ?? 0,
+        );
+        expect(
+          commandLines.some((commandLine) => commandLine.includes(marker)),
+        ).toBe(false);
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+      }
+    },
+  );
 
   linuxIt("manages normal autostart through XDG autostart", async () => {
     const configHome = await mkdtemp(join(tmpdir(), "muon-xdg-config-"));

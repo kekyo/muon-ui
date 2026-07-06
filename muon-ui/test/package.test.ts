@@ -236,11 +236,6 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "muon.d.ts",
       parentName: "MuonExecutorSpawnOptions",
-      memberName: "stdin",
-    },
-    {
-      filePath: "muon.d.ts",
-      parentName: "MuonExecutorSpawnOptions",
       memberName: "cwd",
     },
     {

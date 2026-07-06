@@ -11,6 +11,7 @@
 
 #include "plugins/builtin/muon_builtin.h"
 #include "browser/muon_builtin_browser.h"
+#include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 #include "plugins/muon_js_bridge.h"
@@ -2503,6 +2504,7 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
 }
 
 static void ShutdownMuonBuiltinPlugins() {
+  ShutdownMuonBuiltinExecutor();
   ShutdownMuonBuiltinFsDialogs();
   ShutdownMuonBuiltinFs();
 }
@@ -2534,6 +2536,13 @@ static bool RegisterMuonInternalPlugins(
     return FailMuonPluginStartup(
         impl,
         "Built-in filesystem dialogs plugin failed: " + error_message);
+  }
+  if (!InitializeMuonBuiltinExecutor(&kMuonPluginHelpers,
+                                     impl->main_dispatcher,
+                                     &error_message)) {
+    ShutdownMuonBuiltinPlugins();
+    return FailMuonPluginStartup(
+        impl, "Built-in executor plugin failed: " + error_message);
   }
   impl->fs_dialogs_cancel_owner_functions.push_back(
       &muon_builtin_fs_dialogs_cancel_owner_browser);
@@ -3084,6 +3093,7 @@ void MuonPluginRuntime::ReleaseFunctionContext(
     const MuonPluginInvocationContext& context,
     int renderer_context_id) {
   CEF_REQUIRE_UI_THREAD();
+  ReleaseMuonBuiltinExecutorContext(renderer_context_id);
   const auto owner_id = CreateMuonFunctionOwnerId(context,
                                                    renderer_context_id);
   std::vector<std::string> source_ids;

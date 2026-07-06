@@ -1421,7 +1421,9 @@ muon({
 この章では、プラグイン名前空間と関数パスを分かりやすく示すため、`window.muon.*` 形式でAPIを表記しています。
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
 既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
-例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、`muon:executor` から `spawn` をインポートします。
+
+例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、
+`muon:executor` から `spawn` をインポートします:
 
 ```ts
 import { spawn } from "muon:executor";
@@ -1480,9 +1482,7 @@ import { spawn } from "muon:executor";
 - `createTray()` はブラウザウインドウ単位でトレイ項目を保持し、main frame navigation、ブラウザ終了、`removeTray()` で削除されます。
   `options.id` を省略するとmuonが一意なIDを生成して返します。
   `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
-  メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応し、サブメニューはv1では未対応です。
-  LinuxではStatusNotifierItem対応のデスクトップ環境・パネルで表示されます。AppIndicator/libayatana-appindicatorやGtkStatusIconによるfallbackは将来候補です。
-  トレイ項目だけでmuonプロセスを生存させるclose-to-tray動作は自動提供しません。常駐型アプリでは `initialWindowState: "hidden"` でブラウザを生かしたまま、必要に応じて `show()` / `hide()` を呼び出して下さい。
+  メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応します。
 - `setTitleBarVisibility()` はmuonカスタムタイトルバーの表示/非表示を切り替えます。
   Linux X11のネイティブタイトルバーでは、ウインドウマネージャーへネイティブ装飾の表示/非表示ヒントを設定します。
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。

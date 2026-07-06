@@ -211,7 +211,12 @@ for (const patch of patches) {
     replacementCount += 1;
     return replacement;
   });
-  if (replacementCount === 0 && !source.includes(patch.marker)) {
+  const legacyMarker = patch.marker.replace(/^muon:/, "Muon:");
+  if (
+    replacementCount === 0 &&
+    !source.includes(patch.marker) &&
+    !source.includes(legacyMarker)
+  ) {
     throw new Error(`CEF settings guard was not found: ${patch.sourcePath}`);
   }
   fs.writeFileSync(patch.sourcePath, source);

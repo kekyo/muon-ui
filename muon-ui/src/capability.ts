@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 /**
- * Import-side capability rule for Muon plugin virtual modules.
+ * Import-side capability rule for muon plugin virtual modules.
  */
 export interface MuonCapabilityImportOptions {
   /**
@@ -147,7 +147,7 @@ export interface MuonResolvedCapabilityModule {
  */
 export interface MuonCapabilityModuleResolver {
   /**
-   * Resolves a Muon virtual module specifier for one importer.
+   * Resolves a muon virtual module specifier for one importer.
    */
   resolveId: (
     source: string,
@@ -347,7 +347,7 @@ const validateCapabilityRule = (rule: MuonCapabilityImportOptions): void => {
     (rule.packages === undefined || rule.packages.length === 0)
   ) {
     throw new Error(
-      "Muon capability import rule requires sources or packages.",
+      "muon capability import rule requires sources or packages.",
     );
   }
 };
@@ -720,7 +720,7 @@ const createModuleSource = (rule: ResolvedRule): string => {
   );
   if (exportedFunctions.length === 0) {
     throw new Error(
-      `Muon capability import has no exact function exports: ${rule.moduleName}`,
+      `muon capability import has no exact function exports: ${rule.moduleName}`,
     );
   }
 
@@ -774,7 +774,7 @@ const createModuleSource = (rule: ResolvedRule): string => {
   });
   return `const __muonCall = globalThis.__muon_plugin_call;
 if (typeof __muonCall !== "function") {
-  throw new Error("Muon plugin capability bridge is not available.");
+  throw new Error("muon plugin capability bridge is not available.");
 }
 
 ${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
@@ -818,7 +818,7 @@ export const createMuonCapabilityModuleResolver = (
     }
     if (importer === undefined) {
       throw new Error(
-        `Muon capability import is not allowed without an importer: ${source}`,
+        `muon capability import is not allowed without an importer: ${source}`,
       );
     }
 
@@ -844,7 +844,7 @@ export const createMuonCapabilityModuleResolver = (
     }
 
     throw new Error(
-      `Muon capability import is not allowed: ${source} from ${relativeImporter}`,
+      `muon capability import is not allowed: ${source} from ${relativeImporter}`,
     );
   };
 

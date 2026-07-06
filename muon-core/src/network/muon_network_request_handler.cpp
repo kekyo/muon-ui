@@ -102,7 +102,7 @@ static void AppendJavaScriptStringLiteral(std::string* target,
 }
 
 static std::string CreateForbiddenMessage(const std::string& url) {
-  return std::string("Forbidden: blocked by Muon network policy: ") + url;
+  return std::string("Forbidden: blocked by muon network policy: ") + url;
 }
 
 static std::string CreateConsoleWarnScript(const std::string& message) {
@@ -150,7 +150,7 @@ pre {
 </head>
 <body>
 <h1>Forbidden</h1>
-<p>Blocked by Muon network policy:</p>
+<p>Blocked by muon network policy:</p>
 <pre>)HTML");
   AppendHtmlEscaped(&document, url);
   document.append(R"HTML(</pre>

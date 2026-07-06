@@ -19,7 +19,7 @@ const char* GetMuonDefaultWindowTitle();
 const char* GetMuonDevToolsWindowTitle();
 
 /**
- * Returns a non-empty window title, falling back to the Muon default.
+ * Returns a non-empty window title, falling back to the muon default.
  *
  * @param page_title Title reported by the page.
  * @return page_title when non-empty; otherwise the default browser title.

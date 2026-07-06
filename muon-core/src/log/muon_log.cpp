@@ -421,9 +421,9 @@ bool InitializeMuonLogger(const MuonLogConfig& config,
   }
 #if defined(_WIN32)
   if (logger->config.output.type == kMuonLogOutputEventLog) {
-    logger->event_source = RegisterEventSourceA(nullptr, "Muon");
+    logger->event_source = RegisterEventSourceA(nullptr, "muon");
     if (logger->event_source == nullptr) {
-      *error_message = "Failed to register Muon event log source";
+      *error_message = "Failed to register muon event log source";
       return false;
     }
   }
@@ -474,7 +474,7 @@ bool StartMuonCefLogForwarder(const std::filesystem::path& path,
   StopMuonCefLogForwarder();
   error_message->clear();
   if (cardio::unsafe_get_current_dispatcher() == nullptr) {
-    *error_message = "Muon main dispatcher is unavailable";
+    *error_message = "muon main dispatcher is unavailable";
     return false;
   }
   if (!EnsureMuonLogParentDirectory(path, error_message)) {

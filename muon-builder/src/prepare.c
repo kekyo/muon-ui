@@ -101,7 +101,7 @@ static int validate_public_target(const char *target) {
   if (muon_cef_target_from_public_target(target) != NULL) {
     return 0;
   }
-  muon_print_error("Unsupported Muon prepare target: %s\n",
+  muon_print_error("Unsupported muon prepare target: %s\n",
                    target == NULL ? "(null)" : target);
   return -1;
 }
@@ -321,13 +321,13 @@ static const MuonRuntimeInfo *get_embedded_runtime_info(void) {
       kMuonRuntimeInfo.cef_reference_artifact.url == NULL ||
       kMuonRuntimeInfo.cef_reference_artifact.sha1 == NULL ||
       kMuonRuntimeInfo.cef_reference_artifact.size == 0) {
-    muon_print_error("Invalid embedded Muon runtime metadata.\n");
+    muon_print_error("Invalid embedded muon runtime metadata.\n");
     return NULL;
   }
   return &kMuonRuntimeInfo;
 #else
   muon_print_error(
-      "Muon runtime metadata is not embedded in this muon-builder build.\n");
+      "muon runtime metadata is not embedded in this muon-builder build.\n");
   return NULL;
 #endif
 }
@@ -1177,7 +1177,7 @@ static int prepare_staging(const PrepareOptions *options,
     free(temporary_ready);
     return -1;
   }
-  muon_log_message("Muon files copied to staging: files=%llu",
+  muon_log_message("muon files copied to staging: files=%llu",
               (unsigned long long)muon_file_count);
   if ((cef_is_archive
            ? extract_archive(cef_path, temporary_directory, &cef_file_count,
@@ -1214,7 +1214,7 @@ static int prepare_staging(const PrepareOptions *options,
     return -1;
   }
   prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
-                          "Starting Muon...", 0, 0, 0);
+                          "Starting muon...", 0, 0, 0);
   if (muon_path_exists(options->stage_dir) &&
       muon_remove_recursive(options->stage_dir) != 0) {
     muon_remove_recursive(temporary_directory);
@@ -1342,7 +1342,7 @@ static int prepare_cef_in_place(const PrepareOptions *options,
     return -1;
   }
   prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
-                          "Starting Muon...", 0, 0, 0);
+                          "Starting muon...", 0, 0, 0);
   muon_release_lock(lock_name);
   const int set_result = set_prepare_result(result, options->muon_path,
                                             options->muon_path, cef_path, 0);
@@ -1716,7 +1716,7 @@ cleanup_paths:
         &options,
         exit_code == 0 ? MUON_PREPARE_PROGRESS_PHASE_DONE
                        : MUON_PREPARE_PROGRESS_PHASE_FAILED,
-        exit_code == 0 ? "Starting Muon..." : "Failed to prepare CEF.", 0, 0,
+        exit_code == 0 ? "Starting muon..." : "Failed to prepare CEF.", 0, 0,
         0);
   }
   free(cef_path);
@@ -1828,7 +1828,7 @@ cleanup_paths:
         &options,
         exit_code == 0 ? MUON_PREPARE_PROGRESS_PHASE_DONE
                        : MUON_PREPARE_PROGRESS_PHASE_FAILED,
-        exit_code == 0 ? "Starting Muon..." : "Failed to prepare CEF.", 0, 0,
+        exit_code == 0 ? "Starting muon..." : "Failed to prepare CEF.", 0, 0,
         0);
   }
   free(cef_path);

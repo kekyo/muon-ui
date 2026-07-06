@@ -72,7 +72,7 @@ class MuonApp final : public CefApp,
       CefRefPtr<CefCommandLine> command_line) override;
 
   /**
-   * Propagates Muon command-line config files to CEF child processes.
+   * Propagates muon command-line config files to CEF child processes.
    *
    * @param command_line Mutable child process command line.
    */

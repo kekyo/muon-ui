@@ -39,7 +39,7 @@ enum MuonLogLevel : uint32_t {
  * Unified log source.
  */
 enum MuonLogSource : uint32_t {
-  /** Muon host internals. */
+  /** muon host internals. */
   kMuonLogSourceMuon = 0,
   /** CEF and Chromium internals. */
   kMuonLogSourceCef = 1,
@@ -88,7 +88,7 @@ struct MuonLogConfig {
   MuonLogLevel level = kMuonLogLevelInfo;
   /** Single output sink. */
   MuonLogOutputConfig output;
-  /** Muon host source level. */
+  /** muon host source level. */
   MuonLogLevel muon = kMuonLogLevelInfo;
   /** CEF source level. */
   MuonLogLevel cef = kMuonLogLevelWarning;
@@ -171,7 +171,7 @@ struct MuonBrowserPluginConfig {
    */
   MuonBrowserPluginMode mode = kMuonBrowserPluginModeValidate;
   /**
-   * Glob patterns that allow Muon plugin APIs for full page URLs.
+   * Glob patterns that allow muon plugin APIs for full page URLs.
    */
   std::vector<std::string> allow = {"asset://main/**"};
   /**
@@ -212,7 +212,7 @@ enum MuonBrowserBackgroundColorMode : uint32_t {
 enum MuonBrowserTitleBarMode : uint32_t {
   /** Use the platform native title bar. */
   kMuonBrowserTitleBarNative = 0,
-  /** Use the Muon title bar provided by libmuon-ui. */
+  /** Use the muon title bar provided by libmuon-ui. */
   kMuonBrowserTitleBarMuon = 1,
 };
 
@@ -220,11 +220,11 @@ enum MuonBrowserTitleBarMode : uint32_t {
  * Native browser context menu mode from muon.json.
  */
 enum MuonBrowserContextMenuMode : uint32_t {
-  /** Show CEF standard context menu items and Muon custom items. */
+  /** Show CEF standard context menu items and muon custom items. */
   kMuonBrowserContextMenuModeStandard = 0,
   /** Suppress all native context menu items. */
   kMuonBrowserContextMenuModeDisabled = 1,
-  /** Show only Muon custom context menu items. */
+  /** Show only muon custom context menu items. */
   kMuonBrowserContextMenuModeCustom = 2,
 };
 
@@ -334,7 +334,7 @@ struct MuonBrowserConfig {
    */
   MuonKeyboardShortcut reset_zoom;
   /**
-   * Shortcut that recycles the Muon process.
+   * Shortcut that recycles the muon process.
    */
   MuonKeyboardShortcut recycle;
 };

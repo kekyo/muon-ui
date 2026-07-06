@@ -31,7 +31,7 @@ typedef struct {
 } MuonCefArtifact;
 
 /**
- * CEF reference metadata embedded in the Muon runtime.
+ * CEF reference metadata embedded in the muon runtime.
  */
 typedef struct {
   /** Tested CEF binary distribution version. */
@@ -71,7 +71,7 @@ void muon_prepare_free_cef_artifact(MuonCefArtifact *artifact);
 /**
  * Downloads and atomically replaces the cached CEF catalog when possible.
  *
- * @param cache_dir Muon cache directory.
+ * @param cache_dir muon cache directory.
  * @param force Non-zero to refresh even when a cached catalog exists.
  * @return 0 on success, or non-zero on failure.
  *
@@ -88,7 +88,7 @@ int muon_prepare_ensure_catalog_cache_with_status_progress(
 /**
  * Resolves metadata for a CEF artifact from the cached catalog.
  *
- * @param cache_dir Muon cache directory.
+ * @param cache_dir muon cache directory.
  * @param version Requested CEF version.
  * @param target Requested target platform.
  * @param distribution Requested distribution name.
@@ -104,7 +104,7 @@ int muon_prepare_resolve_cef_artifact(const char *cache_dir,
 /**
  * Resolves and verifies a CEF archive according to a version policy.
  *
- * @param cache_dir Muon cache directory.
+ * @param cache_dir muon cache directory.
  * @param reference Runtime embedded CEF reference metadata.
  * @param policy Version policy: tested, same-major-latest, compat-latest, or exact.
  * @param exact_version CEF version used by the exact policy.
@@ -126,7 +126,7 @@ int muon_prepare_ensure_cef_archive_cache_for_policy_progress(
 /**
  * Ensures the CEF archive exists in the artifact cache and is verified.
  *
- * @param cache_dir Muon cache directory.
+ * @param cache_dir muon cache directory.
  * @param artifact Artifact metadata resolved from the catalog.
  * @param force Non-zero to redownload the archive.
  * @param archive_path Receives the cached archive path.

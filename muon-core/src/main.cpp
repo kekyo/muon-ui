@@ -45,7 +45,7 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   if (!LoadMuonStartupConfig(GetMuonStartupCommandLine(), &config,
                              &config_paths, &embedded_config,
                              &error_message)) {
-    std::fprintf(stderr, "Muon startup failed: %s\n", error_message.c_str());
+    std::fprintf(stderr, "muon startup failed: %s\n", error_message.c_str());
     std::fflush(stderr);
     return 1;
   }
@@ -55,7 +55,7 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
       GetMuonInternalCefLogPath(executable_directory, config.browser.profile);
   if (!InitializeMuonLogger(config.log, executable_directory, cef_log_path,
                             &error_message)) {
-    std::fprintf(stderr, "Muon startup failed: %s\n", error_message.c_str());
+    std::fprintf(stderr, "muon startup failed: %s\n", error_message.c_str());
     std::fflush(stderr);
     return 1;
   }
@@ -91,7 +91,7 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   if (cef_logging_enabled &&
       !ResetMuonCefLogFile(cef_log_path, &error_message)) {
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + error_message);
+                   "muon startup failed: " + error_message);
     ShutdownMuonLogger();
     return 1;
   }
@@ -105,7 +105,7 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   if (cef_logging_enabled &&
       !StartMuonCefLogForwarder(cef_log_path, &error_message)) {
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Muon startup failed: " + error_message);
+                   "muon startup failed: " + error_message);
     ClearMuonNativeWheelForwarders();
     ClearMuonTitleBarRegistrations();
     CefShutdown();

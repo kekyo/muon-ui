@@ -78,18 +78,18 @@ export interface ResolvedMuonLinuxDesktop {
 }
 
 /**
- * Muon config file content and directory used for Linux desktop option
+ * muon config file content and directory used for Linux desktop option
  * resolution.
  */
 export interface MuonLinuxDesktopConfigSource {
-  /** Parsed Muon config object. */
+  /** Parsed muon config object. */
   config: JsonObject;
   /** Directory that relative config paths are resolved from. */
   directory: string;
 }
 
 /**
- * Reads the Muon config file using the same default file names as muon build.
+ * Reads the muon config file using the same default file names as muon build.
  */
 export const readMuonConfigForLinuxDesktop = async (
   root: string,
@@ -103,7 +103,7 @@ export const readMuonConfigForLinuxDesktop = async (
     };
   }
   return {
-    config: await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
+    config: await readJsonObjectFile(resolvedConfigPath, "muon config file"),
     directory: dirname(resolvedConfigPath),
   };
 };
@@ -289,7 +289,7 @@ export const createLinuxDesktopEntry = (input: {
   }
   lines.push(`StartupNotify=${input.desktop.startupNotify ? "true" : "false"}`);
   lines.push(`StartupWMClass=${escapeDesktopString(input.desktop.desktopId)}`);
-  lines.push("X-Muon-Managed=true");
+  lines.push("X-muon-Managed=true");
   lines.push("");
   return lines.join("\n");
 };
@@ -322,7 +322,7 @@ const resolveConfigPath = async (
     if (await fileExists(resolvedPath)) {
       return resolvedPath;
     }
-    throw new Error(`Muon config file does not exist: ${resolvedPath}`);
+    throw new Error(`muon config file does not exist: ${resolvedPath}`);
   }
 
   for (const fileName of defaultConfigFileNames) {

@@ -32,7 +32,7 @@ interface WindowsIconImage {
  * @param pngData Source PNG bytes.
  * @param source Diagnostic source label used in errors.
  * @param label User-facing diagnostic label.
- * @returns PNG bytes normalized to the Muon base icon size.
+ * @returns PNG bytes normalized to the muon base icon size.
  * @remarks Non-square images are fitted into transparent padding without
  * stretching. The normalized PNG is the source for all platform-specific icon
  * derivatives.
@@ -62,7 +62,7 @@ export const createNormalizedIconPngData = async (
  *
  * @param pngData Source PNG bytes.
  * @param source Diagnostic source label used in errors.
- * @returns PNG bytes normalized to the Muon base icon size.
+ * @returns PNG bytes normalized to the muon base icon size.
  */
 export const createNormalizedMuonIconPngData = async (
   pngData: Buffer,

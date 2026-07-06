@@ -333,7 +333,7 @@ static BOOL WINAPI muon_test_init_common_controls_ex(
 
 static int wait_for_progress_window(void) {
   for (int attempt = 0; attempt < 100; attempt += 1) {
-    HWND window = FindWindowA("MuonBootstrapProgressWindow", "Muon");
+    HWND window = FindWindowA("MuonBootstrapProgressWindow", "muon");
     if (window != NULL && IsWindowVisible(window)) {
       return 0;
     }
@@ -411,7 +411,7 @@ static void collect_controls(HWND window, ProgressControls *controls) {
 
 static int wait_for_progress_window(HWND *window) {
   for (int attempt = 0; attempt < 100; attempt += 1) {
-    HWND candidate = FindWindowA("MuonBootstrapProgressWindow", "Muon");
+    HWND candidate = FindWindowA("MuonBootstrapProgressWindow", "muon");
     if (candidate != NULL && IsWindowVisible(candidate)) {
       *window = candidate;
       return 0;

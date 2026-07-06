@@ -568,7 +568,7 @@ describe("muon Vite plugin", () => {
     expect(watchChanges.some((id) => id.includes("/.muon/"))).toBe(false);
   });
 
-  it("launches Muon when server.open is false", async () => {
+  it("launches muon when server.open is false", async () => {
     const root = await createTemporaryDirectory("muon-vite-server-closed-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -602,7 +602,7 @@ describe("muon Vite plugin", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("forwards native prepare phase progress while starting Muon", async () => {
+  it("forwards native prepare phase progress while starting muon", async () => {
     const root = await createTemporaryDirectory("muon-vite-prepare-progress-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -640,10 +640,10 @@ describe("muon Vite plugin", () => {
 
     const stderr = chunks.join("");
     expect(stderr).toContain("Installing CEF runtime...");
-    expect(stderr).toContain("Starting Muon...");
+    expect(stderr).toContain("Starting muon...");
   });
 
-  it("does not launch Muon when the plugin open option is false", async () => {
+  it("does not launch muon when the plugin open option is false", async () => {
     const root = await createTemporaryDirectory("muon-vite-closed-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     await writeBasicViteProject(root);
@@ -1556,10 +1556,10 @@ describe("muon Vite plugin", () => {
           }),
         ],
       }),
-    ).rejects.toThrow("Muon capability import is not allowed");
+    ).rejects.toThrow("muon capability import is not allowed");
   });
 
-  it("launches Muon without server.open", async () => {
+  it("launches muon without server.open", async () => {
     const root = await createTemporaryDirectory("muon-vite-open-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -1654,7 +1654,7 @@ describe("muon Vite plugin", () => {
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
   });
 
-  it("launches both the browser and Muon when server.open is true", async () => {
+  it("launches both the browser and muon when server.open is true", async () => {
     const root = await createTemporaryDirectory("muon-vite-browser-and-muon-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -1799,7 +1799,7 @@ describe("muon Vite plugin", () => {
       .split("\n");
     const overrideConfigPath = args[1];
     expect(args).toEqual(["-c", overrideConfigPath]);
-    expect(warnings.join("\n")).toContain("Muon project config was not found");
+    expect(warnings.join("\n")).toContain("muon project config was not found");
     expect(warnings.join("\n")).toContain("generated Vite config only");
   });
 
@@ -1838,7 +1838,7 @@ describe("muon Vite plugin", () => {
     expect(warnings.join("\n")).toContain("will be ignored");
   });
 
-  it("uses the Vite base URL as the Muon start page when server.open is a string", async () => {
+  it("uses the Vite base URL as the muon start page when server.open is a string", async () => {
     const root = await createTemporaryDirectory("muon-vite-path-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -1885,7 +1885,7 @@ describe("muon Vite plugin", () => {
 });
 
 describe("muon run CLI", () => {
-  it("launches Muon directly without a Vite config", async () => {
+  it("launches muon directly without a Vite config", async () => {
     const root = await createTemporaryDirectory("muon-dev-direct-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
@@ -1953,7 +1953,7 @@ describe("muon run CLI", () => {
     });
   });
 
-  it("restarts Muon when the direct run process requests recycle", async () => {
+  it("restarts muon when the direct run process requests recycle", async () => {
     const root = await createTemporaryDirectory("muon-dev-recycle-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
@@ -1993,7 +1993,7 @@ describe("muon run CLI", () => {
     ]);
   });
 
-  it("restarts Muon from the muon-core dev supervisor", async () => {
+  it("restarts muon from the muon-core dev supervisor", async () => {
     const runtimeDirectory = await createTemporaryDirectory(
       "muon-core-dev-runtime-",
     );
@@ -2219,7 +2219,7 @@ describe("muon run CLI", () => {
     ]);
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Muon run asset source does not exist");
+    expect(result.stderr).toContain("muon run asset source does not exist");
     await expect(
       access(join(outputDirectory, "override.json")),
     ).rejects.toThrow();
@@ -2261,7 +2261,7 @@ describe("muon launch scripts", () => {
     ).resolves.toBe(`${runtimeDirectory}\n`);
   });
 
-  it("restarts from the POSIX script when Muon requests recycle", async () => {
+  it("restarts from the POSIX script when muon requests recycle", async () => {
     const root = await createTemporaryDirectory("muon vite shell recycle ");
     const runtimeDirectory = join(root, "runtime dir");
     const outputDirectory = join(root, "output dir");
@@ -2329,17 +2329,17 @@ describe("muon launch scripts", () => {
 
   it("creates a Windows script that preserves paths with spaces", () => {
     const script = createMuonLaunchScript({
-      muonExecutablePath: "C:\\Muon Runtime\\muon-core.exe",
+      muonExecutablePath: "C:\\muon Runtime\\muon-core.exe",
       projectConfigPath: "C:\\My App\\muon.json",
       overrideConfigPath: "C:\\Temp Dir\\muon.vite.json",
       platform: "win32",
     });
 
     expect(script).toContain(
-      'set "MUON_EXECUTABLE=C:\\Muon Runtime\\muon-core.exe"',
+      'set "MUON_EXECUTABLE=C:\\muon Runtime\\muon-core.exe"',
     );
     expect(script).toContain(
-      'set "MUON_EXECUTABLE_DIRECTORY=C:\\Muon Runtime"',
+      'set "MUON_EXECUTABLE_DIRECTORY=C:\\muon Runtime"',
     );
     expect(script).toContain('set "MUON_PROJECT_CONFIG=C:\\My App\\muon.json"');
     expect(script).toContain(

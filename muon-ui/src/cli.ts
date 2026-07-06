@@ -557,7 +557,7 @@ const createCliCommand = (): Command => {
 
   program
     .command("build")
-    .description("Build CEF-free Muon app distribution directories")
+    .description("Build CEF-free muon app distribution directories")
     .option(
       "--target <target>",
       "public target or comma-separated public targets",
@@ -583,7 +583,7 @@ const createCliCommand = (): Command => {
     .option("--out-dir <path>", "output root directory")
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
-    .option("--package-directory <path>", "Muon package dist directory")
+    .option("--package-directory <path>", "muon package dist directory")
     .option("--json", "write result as JSON")
     .action(async (options: BuildCommandOptions) => {
       await runBuildCommand(options);
@@ -591,7 +591,7 @@ const createCliCommand = (): Command => {
 
   program
     .command("pack")
-    .description("Build and package a Muon app")
+    .description("Build and package a muon app")
     .option(
       "--type <type>",
       "package type or comma-separated package types: zip, tar.gz, tgz, deb, nsis (default: all)",
@@ -624,7 +624,7 @@ const createCliCommand = (): Command => {
     )
     .option("--name <name>", "launcher file name")
     .option("--app-id <id>", "stable application identifier")
-    .option("--package-directory <path>", "Muon package dist directory")
+    .option("--package-directory <path>", "muon package dist directory")
     .option("--artifacts-dir <path>", "package artifact output directory")
     .option("--package-name <name>", "package name override")
     .option("--package-version <version>", "package version override")
@@ -637,13 +637,13 @@ const createCliCommand = (): Command => {
 
   const devCommand = program
     .command("run")
-    .description("Launch Muon directly with local development assets")
-    .option("--muon-path <path>", "Muon runtime file root")
+    .description("Launch muon directly with local development assets")
+    .option("--muon-path <path>", "muon runtime file root")
     .option("--cef-path <path>", "CEF file root")
     .option("--stage-dir <path>", "prepared runtime output directory")
     .option("--config <path>", "muon config path")
     .option("--assets <path>", "development asset directory")
-    .option("--no-debugger", "disable Muon debugger defaults")
+    .option("--no-debugger", "disable muon debugger defaults")
     .option("--json", "write result as JSON")
     .action(async (options: DevCommandOptions) => {
       await runDevCommand(options, devCommand);
@@ -651,15 +651,15 @@ const createCliCommand = (): Command => {
 
   program
     .command("init")
-    .description("Initialize Muon project helper files")
+    .description("Initialize muon project helper files")
     .action(async () => {
       await runInitCommand();
     });
 
   program
     .command("prepare")
-    .description("Prepare a Muon runtime with CEF files")
-    .requiredOption("--muon-path <path>", "Muon runtime file root")
+    .description("Prepare a muon runtime with CEF files")
+    .requiredOption("--muon-path <path>", "muon runtime file root")
     .option("--cef-path <path>", "CEF file root")
     .option("--stage-dir <path>", "prepared runtime output directory")
     .option("--target <target>", "prepare target")
@@ -673,7 +673,7 @@ const createCliCommand = (): Command => {
 
   program
     .command("embed-config")
-    .description("Embed muon.json into Muon runtime files")
+    .description("Embed muon.json into muon runtime files")
     .option("--runtime-path <path>", "prepared runtime directory")
     .option("--core-path <path>", "muon-core executable path")
     .option("--bootstrap-path <path>", "muon-bootstrap executable path")

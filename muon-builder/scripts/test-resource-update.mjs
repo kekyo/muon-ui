@@ -39,7 +39,7 @@ try {
             fileType: "app",
           },
           strings: {
-            CompanyName: "Muon Tester",
+            CompanyName: "muon Tester",
             FileDescription: "Resource Test",
             FileVersion: "1.2.3",
             ProductName: "Resource Product",
@@ -74,7 +74,7 @@ try {
     "1.2.3.4",
     "--product-version",
     "2.3.4.5",
-    "CompanyName=Muon Tester",
+    "CompanyName=muon Tester",
     "FileDescription=Resource Test",
     "ProductName=Resource Product",
   ]);

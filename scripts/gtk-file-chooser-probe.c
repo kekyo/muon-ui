@@ -48,7 +48,7 @@ static gboolean close_dialog(gpointer data) {
 
 int main(int argc, char** argv) {
   const char* title = read_arg_value(
-      argc, argv, "--title", "Muon GTK Standalone Probe Dialog");
+      argc, argv, "--title", "muon GTK Standalone Probe Dialog");
   const char* mode = read_arg_value(argc, argv, "--mode", "null-parent");
   const int accessibility = has_arg(argc, argv, "--accessibility");
 
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
   GtkWindow* parent = NULL;
   if (strcmp(mode, "transient") == 0) {
     GtkWidget* parent_widget = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(parent_widget), "Muon GTK Probe Parent");
+    gtk_window_set_title(GTK_WINDOW(parent_widget), "muon GTK Probe Parent");
     gtk_widget_show_all(parent_widget);
     parent = GTK_WINDOW(parent_widget);
   }
@@ -76,20 +76,20 @@ int main(int argc, char** argv) {
   if (accessibility) {
     set_accessible_metadata(
         dialog,
-        "Muon GTK probe dialog accessible name",
-        "Muon GTK probe dialog accessible description",
+        "muon GTK probe dialog accessible name",
+        "muon GTK probe dialog accessible description",
         "muon-gtk-probe-dialog");
     set_accessible_metadata(
         gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog),
                                            GTK_RESPONSE_ACCEPT),
-        "Muon GTK probe accept button accessible name",
-        "Muon GTK probe accept button accessible description",
+        "muon GTK probe accept button accessible name",
+        "muon GTK probe accept button accessible description",
         "muon-gtk-probe-accept");
     set_accessible_metadata(
         gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog),
                                            GTK_RESPONSE_CANCEL),
-        "Muon GTK probe cancel button accessible name",
-        "Muon GTK probe cancel button accessible description",
+        "muon GTK probe cancel button accessible name",
+        "muon GTK probe cancel button accessible description",
         "muon-gtk-probe-cancel");
   }
 

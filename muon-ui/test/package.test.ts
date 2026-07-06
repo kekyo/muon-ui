@@ -839,7 +839,7 @@ exit 1
     expect(stdout).toContain("embed-config");
   });
 
-  it("adds Muon generated directories through the muon CLI init command", async () => {
+  it("adds muon generated directories through the muon CLI init command", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-"));
     cleanupDirectories.push(root);
     const cliPath = resolve("dist", "cli.cjs");
@@ -859,7 +859,7 @@ exit 1
     );
   });
 
-  it("appends a missing Muon dist gitignore entry when the muon CLI init command is repeated", async () => {
+  it("appends a missing muon dist gitignore entry when the muon CLI init command is repeated", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-existing-"));
     cleanupDirectories.push(root);
     await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\n");
@@ -875,7 +875,7 @@ exit 1
     );
   });
 
-  it("adds the current Muon dist gitignore entry when a legacy entry exists", async () => {
+  it("adds the current muon dist gitignore entry when a legacy entry exists", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-legacy-existing-"));
     cleanupDirectories.push(root);
     await writeFile(join(root, ".gitignore"), "dist*/\n.muon/\ndist-muon-*/\n");
@@ -891,7 +891,7 @@ exit 1
     );
   });
 
-  it("keeps existing Muon generated gitignore entries when the muon CLI init command is repeated", async () => {
+  it("keeps existing muon generated gitignore entries when the muon CLI init command is repeated", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-init-generated-existing-"));
     cleanupDirectories.push(root);
     await writeFile(
@@ -974,7 +974,7 @@ exit 1
     expect(missingTargets).toEqual([]);
   });
 
-  it("provides Muon globals through root TypeScript imports", async () => {
+  it("provides muon globals through root TypeScript imports", async () => {
     await expect(
       runTypeScriptConsumer(`import "muon-ui";
 
@@ -1095,9 +1095,9 @@ const plugin = muon({
       iconPath: "icons/app.png",
       productName: "Package Test App",
       fileDescription: "Package test app",
-      companyName: "Muon Tester",
+      companyName: "muon Tester",
       version: "1.2.3",
-      copyright: "Copyright Muon Tester",
+      copyright: "Copyright muon Tester",
       language: 1033,
       codePage: 1200,
     },

@@ -30,7 +30,7 @@
 int muon_prepare_main(int argc, char **argv);
 
 /**
- * Prepares CEF files inside an existing portable Muon runtime directory.
+ * Prepares CEF files inside an existing portable muon runtime directory.
  *
  * @param muon_path Directory containing muon-core runtime files.
  * @param target Public runtime target such as linux-amd64, linux-armhf,
@@ -44,7 +44,7 @@ int muon_prepare_in_place(const char *muon_path, const char *target,
                           const char *cache_dir, int force, int quiet);
 
 /**
- * Prepares CEF files inside an existing portable Muon runtime directory and
+ * Prepares CEF files inside an existing portable muon runtime directory and
  * reports progress events to the caller.
  *
  * @param muon_path Directory containing muon-core runtime files.
@@ -63,7 +63,7 @@ int muon_prepare_in_place_with_progress(
     void *progress_user_data);
 
 /**
- * Prepares CEF and Muon runtime files in a separate staging directory and
+ * Prepares CEF and muon runtime files in a separate staging directory and
  * reports progress events to the caller.
  *
  * @param muon_path Directory containing source muon-core runtime files.

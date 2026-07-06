@@ -4,7 +4,7 @@
 // https://github.com/kekyo/muon
 
 /**
- * Progress event used by internal Muon build, pack, and prepare operations.
+ * Progress event used by internal muon build, pack, and prepare operations.
  *
  * @internal
  */
@@ -46,14 +46,14 @@ export interface MuonProgressEvent {
 }
 
 /**
- * Receives internal Muon progress events.
+ * Receives internal muon progress events.
  *
  * @internal
  */
 export type MuonProgressCallback = (event: MuonProgressEvent) => void;
 
 /**
- * Renders internal Muon progress events to stderr.
+ * Renders internal muon progress events to stderr.
  *
  * @internal
  */

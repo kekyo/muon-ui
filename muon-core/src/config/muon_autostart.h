@@ -32,7 +32,7 @@ struct MuonAutostartOptions final {
 };
 
 /**
- * Creates autostart options for the currently running Muon process.
+ * Creates autostart options for the currently running muon process.
  *
  * @param options Receives executable path and launch source.
  * @param error_message Receives a diagnostic on failure.

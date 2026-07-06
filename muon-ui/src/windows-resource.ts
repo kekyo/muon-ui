@@ -95,17 +95,17 @@ export interface ResolvedMuonWindowsResource {
 }
 
 /**
- * Muon config file content and directory used for resource option resolution.
+ * muon config file content and directory used for resource option resolution.
  */
 export interface MuonWindowsResourceConfigSource {
-  /** Parsed Muon config object. */
+  /** Parsed muon config object. */
   config: JsonObject;
   /** Directory that relative config paths are resolved from. */
   directory: string;
 }
 
 /**
- * Reads the Muon config file using the same default file names as muon build.
+ * Reads the muon config file using the same default file names as muon build.
  */
 export const readMuonConfigForWindowsResource = async (
   root: string,
@@ -119,7 +119,7 @@ export const readMuonConfigForWindowsResource = async (
     };
   }
   return {
-    config: await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
+    config: await readJsonObjectFile(resolvedConfigPath, "muon config file"),
     directory: dirname(resolvedConfigPath),
   };
 };
@@ -415,7 +415,7 @@ const resolveConfigPath = async (
     if (await fileExists(resolvedPath)) {
       return resolvedPath;
     }
-    throw new Error(`Muon config file does not exist: ${resolvedPath}`);
+    throw new Error(`muon config file does not exist: ${resolvedPath}`);
   }
 
   for (const fileName of defaultConfigFileNames) {

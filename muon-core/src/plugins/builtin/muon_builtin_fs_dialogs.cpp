@@ -1169,7 +1169,7 @@ void PostMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
   auto* dispatcher = cardio::unsafe_get_current_dispatcher();
   if (dispatcher == nullptr) {
     CompleteMuonUiFsDialogOperation(
-        operation, nullptr, "Muon main dispatcher is unavailable");
+        operation, nullptr, "muon main dispatcher is unavailable");
     return;
   }
   muon_internal::FireAndForgetOnDispatcher(

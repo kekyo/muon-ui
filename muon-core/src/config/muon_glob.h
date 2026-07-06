@@ -10,7 +10,7 @@
 #include <vector>
 
 /**
- * One compiled token from a Muon allow glob.
+ * One compiled token from a muon allow glob.
  */
 struct MuonGlobToken {
   /**
@@ -36,7 +36,7 @@ struct MuonGlobToken {
 };
 
 /**
- * Compiled Muon allow glob.
+ * Compiled muon allow glob.
  */
 struct MuonGlob {
   /**
@@ -50,7 +50,7 @@ struct MuonGlob {
 };
 
 /**
- * Compiles and validates a Muon allow glob pattern.
+ * Compiles and validates a muon allow glob pattern.
  *
  * @param pattern Raw glob pattern from muon.json.
  * @param separators Characters that `*` cannot consume.
@@ -64,7 +64,7 @@ bool CompileMuonGlob(const std::string& pattern,
                      std::string* error_message);
 
 /**
- * Returns whether a target string fully matches a compiled Muon glob.
+ * Returns whether a target string fully matches a compiled muon glob.
  *
  * @param glob Compiled glob pattern.
  * @param target Target string to test.

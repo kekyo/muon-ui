@@ -481,7 +481,7 @@ const waitForRecycledMuon = async (
     }
     await wait(200);
   }
-  throw new Error(`Timed out waiting for recycled Muon: ${String(lastError)}`);
+  throw new Error(`Timed out waiting for recycled muon: ${String(lastError)}`);
 };
 
 const dispatchRecycleKeyboardShortcut = async (
@@ -2906,7 +2906,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     );
   });
 
-  it("keeps Muon APIs out of the DevTools frontend", async () => {
+  it("keeps muon APIs out of the DevTools frontend", async () => {
     const directory = await mkdtemp(join(tmpdir(), "muon-devtools-fs-"));
     const devToolsDrivers: CdpDriver[] = [];
     try {
@@ -3015,7 +3015,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       expect(running.process.exitCode).toBeNull();
       const processGroupId = running.process.pid;
       if (processGroupId === undefined) {
-        throw new Error("Muon process id is unavailable");
+        throw new Error("muon process id is unavailable");
       }
 
       const commandLines = await listProcessGroupCommandLines(processGroupId);

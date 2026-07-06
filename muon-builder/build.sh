@@ -205,7 +205,7 @@ BEGIN
       VALUE "InternalName", "$(escape_rc_string "${internal_name}")\0"
       VALUE "LegalCopyright", "Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)\0"
       VALUE "OriginalFilename", "$(escape_rc_string "${original_filename}")\0"
-      VALUE "ProductName", "Muon\0"
+      VALUE "ProductName", "muon\0"
       VALUE "ProductVersion", "$(escape_rc_string "${version}")\0"
       VALUE "Comments", "$(escape_rc_string "${comments}")\0"
       VALUE "PrivateBuild", "$(escape_rc_string "${git_commit_hash}")\0"
@@ -337,7 +337,7 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
     "${PREPARE_RESOURCE_SCRIPT}" \
     "" \
     "" \
-    "Muon Builder Tool" \
+    "muon Builder Tool" \
     "muon-builder" \
     "${EXECUTABLE_NAME}" \
     "${WINDOWS_RESOURCE_VERSION}" \
@@ -355,7 +355,7 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
     "${BOOTSTRAP_RESOURCE_SCRIPT}" \
     "" \
     "muon_bootstrap.manifest" \
-    "Muon Bootstrap" \
+    "muon Bootstrap" \
     "muon-bootstrap" \
     "${BOOTSTRAP_EXECUTABLE_NAME}" \
     "${WINDOWS_RESOURCE_VERSION}" \

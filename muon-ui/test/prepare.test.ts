@@ -634,7 +634,7 @@ afterEach(async () => {
 });
 
 describe("muon prepare target resolution", () => {
-  it("resolves supported Node platforms to Muon runtime targets", () => {
+  it("resolves supported Node platforms to muon runtime targets", () => {
     expect(getDefaultMuonPrepareTarget("linux", "x64")).toBe("linux-amd64");
     expect(getDefaultMuonPrepareTarget("linux", "arm")).toBe("linux-armhf");
     expect(getDefaultMuonPrepareTarget("linux", "arm64")).toBe("linux-arm64");
@@ -644,7 +644,7 @@ describe("muon prepare target resolution", () => {
 
   it("rejects unsupported Linux i686 targets", () => {
     expect(() => getDefaultMuonPrepareTarget("linux", "ia32")).toThrow(
-      "Unsupported Muon prepare target: platform=linux, arch=ia32",
+      "Unsupported muon prepare target: platform=linux, arch=ia32",
     );
   });
 
@@ -662,7 +662,7 @@ describe("muon prepare target resolution", () => {
         environment: process.env,
         cwd: process.cwd(),
       }),
-    ).rejects.toThrow("Unsupported Muon prepare target: linux64");
+    ).rejects.toThrow("Unsupported muon prepare target: linux64");
   });
 });
 
@@ -1202,8 +1202,8 @@ lastCatalogUpdateUnix=0
     expect(stderr).toContain(
       "CEF files copied to staging: version=fake-cef files=3",
     );
-    expect(stderr).toContain("Muon files copied to staging: files=4");
-    expect(stderr).toContain("Starting Muon...");
+    expect(stderr).toContain("muon files copied to staging: files=4");
+    expect(stderr).toContain("Starting muon...");
   });
 
   it("does not write progress messages when native quiet mode is enabled", async () => {
@@ -1325,7 +1325,7 @@ lastCatalogUpdateUnix=0
     const stderr = chunks.join("");
     expect(stderr).toContain("Downloading CEF runtime... 100%");
     expect(stderr).toMatch(/Installing CEF runtime\.\.\. \d+ files/u);
-    expect(stderr).toContain("Starting Muon...");
+    expect(stderr).toContain("Starting muon...");
   });
 
   it("renders TypeScript wrapper status messages with a spinner on TTY", async () => {
@@ -1366,7 +1366,7 @@ lastCatalogUpdateUnix=0
     const stderr = chunks.join("");
     expect(stderr).toMatch(/\r[-\\|/] Downloading CEF runtime\.\.\. \d+%/u);
     expect(stderr).toMatch(/\r[-\\|/] Installing CEF runtime\.\.\. \d+ files/u);
-    expect(stderr).toContain("Starting Muon...");
+    expect(stderr).toContain("Starting muon...");
   });
 
   it("reports structured progress for bootstrap in-place CEF preparation", async () => {
@@ -1389,7 +1389,7 @@ lastCatalogUpdateUnix=0
       expect.stringContaining("|Installing CEF runtime...|"),
     );
     expect(firstRun).toContainEqual(
-      expect.stringContaining("|Starting Muon...|"),
+      expect.stringContaining("|Starting muon...|"),
     );
 
     await expect(
@@ -1424,7 +1424,7 @@ lastCatalogUpdateUnix=0
     expect(chunks).toEqual([]);
   });
 
-  it("adds Muon generated directories to gitignore when staging under the project .muon directory", async () => {
+  it("adds muon generated directories to gitignore when staging under the project .muon directory", async () => {
     const fixture = await createPrepareFixture();
 
     await prepareFixture(fixture);
@@ -1434,7 +1434,7 @@ lastCatalogUpdateUnix=0
     ).resolves.toBe(".muon/\ndist-muon/\nartifacts/\n");
   });
 
-  it("appends a missing Muon dist gitignore entry without duplicating .muon", async () => {
+  it("appends a missing muon dist gitignore entry without duplicating .muon", async () => {
     const fixture = await createPrepareFixture();
     await writeFile(
       join(fixture.projectPath, ".gitignore"),
@@ -1448,7 +1448,7 @@ lastCatalogUpdateUnix=0
     ).resolves.toBe("dist*/\n.muon/\ndist-muon/\nartifacts/\n");
   });
 
-  it("adds the current Muon dist gitignore entry when a legacy entry exists", async () => {
+  it("adds the current muon dist gitignore entry when a legacy entry exists", async () => {
     const fixture = await createPrepareFixture();
     await writeFile(
       join(fixture.projectPath, ".gitignore"),
@@ -1794,7 +1794,7 @@ exit 17
         "Categories=Utility;Development;",
         "StartupNotify=false",
         "StartupWMClass=scope.sample-app",
-        "X-Muon-Managed=true",
+        "X-muon-Managed=true",
         "",
       ].join("\n"),
     );
@@ -1996,7 +1996,7 @@ exit 17
 
     await writeFile(
       desktopEntryPath,
-      "[Desktop Entry]\nName=Managed\nExec=/tmp/old\nX-Muon-Managed=true\n",
+      "[Desktop Entry]\nName=Managed\nExec=/tmp/old\nX-muon-Managed=true\n",
     );
     await expect(
       execFileAsync(appBootstrapPath, [], {
@@ -2018,7 +2018,7 @@ exit 17
         "Categories=Utility;",
         "StartupNotify=true",
         "StartupWMClass=scope.deb-app",
-        "X-Muon-Managed=true",
+        "X-muon-Managed=true",
         "",
       ].join("\n"),
     );

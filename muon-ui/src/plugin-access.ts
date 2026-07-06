@@ -21,7 +21,7 @@ import type {
 export type MuonPluginAccessMode = "simple" | "validate";
 
 /**
- * Import-side capability rule from public Muon plugin access config.
+ * Import-side capability rule from public muon plugin access config.
  */
 export interface MuonPluginAccessImportOptions {
   /**
@@ -41,7 +41,7 @@ export interface MuonPluginAccessImportOptions {
 }
 
 /**
- * Plugin entry from public Muon plugin access config.
+ * Plugin entry from public muon plugin access config.
  */
 export interface MuonPluginAccessEntryOptions {
   /**
@@ -189,7 +189,7 @@ const resolveMuonConfigPath = async (
     if (await fileExists(resolvedPath)) {
       return resolvedPath;
     }
-    throw new Error(`Muon config file does not exist: ${resolvedPath}`);
+    throw new Error(`muon config file does not exist: ${resolvedPath}`);
   }
 
   for (const fileName of defaultConfigFileNames) {
@@ -632,7 +632,7 @@ export const resolveMuonPluginAccessOptions = async ({
   if (resolvedConfigPath !== undefined) {
     try {
       base = readPluginAccessOptions(
-        await readJsonObjectFile(resolvedConfigPath, "Muon config file"),
+        await readJsonObjectFile(resolvedConfigPath, "muon config file"),
       );
     } catch (error) {
       if (onConfigReadError === undefined) {

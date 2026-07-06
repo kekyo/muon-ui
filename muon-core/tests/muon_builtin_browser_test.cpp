@@ -444,11 +444,11 @@ static bool TestTrayMenuItemsJsonValidation() {
 }
 
 static bool TestWindowTitleFallback() {
-  return Expect(GetMuonDefaultWindowTitle() == std::string("Muon"),
+  return Expect(GetMuonDefaultWindowTitle() == std::string("muon"),
                 "unexpected default window title") &&
-         Expect(GetMuonDevToolsWindowTitle() == std::string("Muon DevTools"),
+         Expect(GetMuonDevToolsWindowTitle() == std::string("muon DevTools"),
                 "unexpected DevTools window title") &&
-         Expect(GetMuonWindowTitleOrDefault("") == "Muon",
+         Expect(GetMuonWindowTitleOrDefault("") == "muon",
                 "empty page title did not use default") &&
          Expect(GetMuonWindowTitleOrDefault("Page") == "Page",
                 "non-empty page title was not preserved");

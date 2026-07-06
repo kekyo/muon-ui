@@ -79,7 +79,7 @@ bool ResetMuonCefLogFile(const std::filesystem::path& path,
                          std::string* error_message);
 
 /**
- * Initializes the process-global Muon logger.
+ * Initializes the process-global muon logger.
  *
  * @param config Log configuration.
  * @param base_directory Directory used for relative file paths.
@@ -93,12 +93,12 @@ bool InitializeMuonLogger(const MuonLogConfig& config,
                           std::string* error_message);
 
 /**
- * Shuts down the process-global Muon logger.
+ * Shuts down the process-global muon logger.
  */
 void ShutdownMuonLogger();
 
 /**
- * Emits one message through the process-global Muon logger.
+ * Emits one message through the process-global muon logger.
  *
  * @param source Message source.
  * @param level Message level.
@@ -109,7 +109,7 @@ void LogMuonMessage(MuonLogSource source,
                     const std::string& message);
 
 /**
- * Starts forwarding CEF's internal log file to the configured Muon sink.
+ * Starts forwarding CEF's internal log file to the configured muon sink.
  *
  * @param path CEF log file path.
  * @param error_message Receives a startup failure diagnostic.

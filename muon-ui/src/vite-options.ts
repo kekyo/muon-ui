@@ -153,11 +153,11 @@ const isMuonVitePluginOptions = (
 };
 
 /**
- * Attaches raw Muon Vite plugin options to a plugin instance.
+ * Attaches raw muon Vite plugin options to a plugin instance.
  *
  * @param plugin Plugin object.
  * @param options Raw plugin options.
- * @returns Plugin object with internal Muon metadata.
+ * @returns Plugin object with internal muon metadata.
  */
 export const attachMuonVitePluginOptions = <TPlugin extends object>(
   plugin: TPlugin,
@@ -174,10 +174,10 @@ export const attachMuonVitePluginOptions = <TPlugin extends object>(
 };
 
 /**
- * Reads raw Muon Vite plugin options from a plugin instance.
+ * Reads raw muon Vite plugin options from a plugin instance.
  *
  * @param plugin Candidate plugin object.
- * @returns Attached Muon options, if present.
+ * @returns Attached muon options, if present.
  */
 export const getMuonVitePluginOptions = (
   plugin: unknown,

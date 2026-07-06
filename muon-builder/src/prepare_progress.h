@@ -7,7 +7,7 @@
 #define MUON_PREPARE_PROGRESS_H
 
 /**
- * High-level phase for a Muon runtime preparation progress event.
+ * High-level phase for a muon runtime preparation progress event.
  */
 typedef enum {
   /** The prepare helper is checking update metadata. */
@@ -18,7 +18,7 @@ typedef enum {
   MUON_PREPARE_PROGRESS_PHASE_VERIFYING = 2,
   /** CEF runtime files are being installed into the runtime directory. */
   MUON_PREPARE_PROGRESS_PHASE_INSTALLING = 3,
-  /** Preparation has finished and Muon is about to start. */
+  /** Preparation has finished and muon is about to start. */
   MUON_PREPARE_PROGRESS_PHASE_FINALIZING = 4,
   /** Preparation has completed successfully. */
   MUON_PREPARE_PROGRESS_PHASE_DONE = 5,
@@ -27,7 +27,7 @@ typedef enum {
 } MuonPrepareProgressPhase;
 
 /**
- * Progress event emitted while preparing a Muon runtime.
+ * Progress event emitted while preparing a muon runtime.
  */
 typedef struct {
   /** Current high-level preparation phase. */

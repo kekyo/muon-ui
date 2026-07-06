@@ -322,8 +322,8 @@ const writeViteProject = async (
     join(root, "package.json"),
     `${JSON.stringify(
       {
-        author: "Muon Tester",
-        description: "Muon NSIS e2e sample",
+        author: "muon Tester",
+        description: "muon NSIS e2e sample",
         name: packageName,
         type: "module",
         version: "1.2.3",
@@ -847,7 +847,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
     try {
       const result = await packMuonApp({
         appId,
-        author: "Muon Tester",
+        author: "muon Tester",
         environment: process.env,
         packageDirectory,
         packageName,

@@ -47,9 +47,9 @@ node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
   1.2.3.0 \
   --product-version \
   1.2.3.0 \
-  "ProductName=Muon" \
+  "ProductName=muon" \
   "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
-  "FileDescription=Muon Bootstrap" \
+  "FileDescription=muon Bootstrap" \
   "FileVersion=1.2.3-beta" \
   "ProductVersion=1.2.3-beta" \
   "InternalName=muon-bootstrap" \
@@ -80,9 +80,9 @@ node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
   1.2.3.0 \
   --product-version \
   1.2.3.0 \
-  "ProductName=Muon" \
+  "ProductName=muon" \
   "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
-  "FileDescription=Muon Builder Tool" \
+  "FileDescription=muon Builder Tool" \
   "FileVersion=1.2.3-beta" \
   "ProductVersion=1.2.3-beta" \
   "InternalName=muon-builder" \

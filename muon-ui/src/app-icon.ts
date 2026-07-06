@@ -55,7 +55,7 @@ export const createAppIconOptionsSource = (
 };
 
 /**
- * Reads the top-level `iconPath` from a Muon config object.
+ * Reads the top-level `iconPath` from a muon config object.
  */
 export const readConfigAppIconSource = (
   config: JsonObject,
@@ -101,15 +101,15 @@ export const resolveMuonAppIconPath = async (
 
 const assertMuonAppIconPath = async (iconPath: string): Promise<void> => {
   if (extname(iconPath).toLowerCase() !== ".png") {
-    throw new Error(`Muon app icon must be a .png file: ${iconPath}`);
+    throw new Error(`muon app icon must be a .png file: ${iconPath}`);
   }
   if (!(await fileExists(iconPath))) {
-    throw new Error(`Muon app icon does not exist: ${iconPath}`);
+    throw new Error(`muon app icon does not exist: ${iconPath}`);
   }
   await createNormalizedIconPngData(
     await readFile(iconPath),
     iconPath,
-    "Muon app icon",
+    "muon app icon",
   );
 };
 

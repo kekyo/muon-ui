@@ -545,7 +545,7 @@ static char *create_desktop_entry_content(const MuonDesktopConfig *desktop,
                                   : "StartupNotify=false\n") != 0 ||
       append_desktop_entry_key_value(&builder, "StartupWMClass",
                                      desktop->desktop_id) != 0 ||
-      string_builder_append(&builder, "X-Muon-Managed=true\n") != 0) {
+      string_builder_append(&builder, "X-muon-Managed=true\n") != 0) {
     string_builder_free(&builder);
     return NULL;
   }
@@ -834,7 +834,7 @@ static int desktop_entry_is_muon_managed(const char *path) {
   if (content == NULL) {
     return -1;
   }
-  const int managed = strstr(content, "X-Muon-Managed=true") != NULL;
+  const int managed = strstr(content, "X-muon-Managed=true") != NULL;
   free(content);
   return managed;
 }

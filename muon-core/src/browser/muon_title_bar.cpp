@@ -37,7 +37,7 @@
 
 namespace {
 
-constexpr char kMuonTitleBarTitle[] = "Muon Title Bar";
+constexpr char kMuonTitleBarTitle[] = "muon Title Bar";
 constexpr char kMuonTitleBarActionPrefix[] =
     "https://muon.internal/title-bar/";
 constexpr char kMuonTitleBarExtraInfoKey[] = "muonInternalTitleBar";
@@ -1432,7 +1432,7 @@ void MuonTitleBarController::DetachWindow() {
 }
 
 void MuonTitleBarController::SetTitle(const std::string& title) {
-  title_ = title.empty() ? "Muon" : title;
+  title_ = title.empty() ? "muon" : title;
   SendTitle();
 }
 

@@ -133,7 +133,7 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
       (GetSystemMetrics(SM_CYSCREEN) - MUON_PROGRESS_HEIGHT) / 2;
   backend->window = CreateWindowExA(
       WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-      "MuonBootstrapProgressWindow", "Muon", WS_CAPTION | WS_SYSMENU, x, y,
+      "MuonBootstrapProgressWindow", "muon", WS_CAPTION | WS_SYSMENU, x, y,
       MUON_PROGRESS_WIDTH, MUON_PROGRESS_HEIGHT, NULL, NULL, backend->instance,
       NULL);
   if (backend->window == NULL) {
@@ -503,7 +503,7 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
                     XCB_WINDOW_CLASS_INPUT_OUTPUT,
                     backend->screen->root_visual,
                     XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK, values);
-  const char title[] = "Muon";
+  const char title[] = "muon";
   xcb_change_property(backend->connection, XCB_PROP_MODE_REPLACE,
                       backend->window, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8,
                       (uint32_t)strlen(title), title);

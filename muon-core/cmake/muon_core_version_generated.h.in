@@ -11,5 +11,7 @@
 
 #define MUON_CORE_VERSION "{version}"
 #define MUON_CORE_GIT_COMMIT_HASH "{git.commit.hash}"
+#define MUON_CORE_BUILD_DATE "{buildDate}"
+#define MUON_CORE_GIT_COMMIT_DATE "{git.commit.date}"
 
 #endif

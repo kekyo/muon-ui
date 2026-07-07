@@ -1375,6 +1375,10 @@ declare global {
     readonly version: string;
     /** Git commit hash embedded at build time. */
     readonly gitCommitHash: string;
+    /** Build date embedded at build time. */
+    readonly buildDate: string;
+    /** Git commit date embedded at build time. */
+    readonly gitCommitDate: string;
   }
 
   /** CEF build selected when muon-core was built. */

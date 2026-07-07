@@ -24,6 +24,8 @@ typedef struct {
   const char *cef_target;
   const char *muon_core_version;
   const char *muon_core_git_commit_hash;
+  const char *muon_core_build_date;
+  const char *muon_core_git_commit_date;
   const char *cef_reference_version;
   const char *cef_reference_distribution;
   int cef_reference_api_version;
@@ -34,6 +36,8 @@ typedef struct {
 } MuonRuntimeInfo;
 
 static const MuonRuntimeInfo kMuonRuntimeInfo = {
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,

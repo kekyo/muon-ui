@@ -624,6 +624,8 @@ if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; t
 #define MUON_CORE_VERSION_GENERATED_H
 #define MUON_CORE_VERSION "1.2.3"
 #define MUON_CORE_GIT_COMMIT_HASH "fake-generated-hash"
+#define MUON_CORE_BUILD_DATE "2026-07-07T00:00:00+09:00"
+#define MUON_CORE_GIT_COMMIT_DATE "2026-07-01T00:00:00+09:00"
 #endif
 HEADER
 fi
@@ -727,6 +729,8 @@ if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; t
 #define MUON_CORE_VERSION_GENERATED_H
 #define MUON_CORE_VERSION "1.2.3"
 #define MUON_CORE_GIT_COMMIT_HASH "fake-generated-hash"
+#define MUON_CORE_BUILD_DATE "2026-07-07T00:00:00+09:00"
+#define MUON_CORE_GIT_COMMIT_DATE "2026-07-01T00:00:00+09:00"
 #endif
 HEADER
   exit 0

@@ -56,6 +56,8 @@ typedef struct {
   const char *cef_target;
   const char *muon_core_version;
   const char *muon_core_git_commit_hash;
+  const char *muon_core_build_date;
+  const char *muon_core_git_commit_date;
   const char *cef_reference_version;
   const char *cef_reference_distribution;
   int cef_reference_api_version;
@@ -76,6 +78,8 @@ static const MuonRuntimeInfo kMuonRuntimeInfo = {
     "linux64",
     "fake-muon-core",
     "fake-git-commit",
+    "2026-07-07T00:00:00+09:00",
+    "2026-07-01T00:00:00+09:00",
     "fake-cef",
     "minimal",
     14700,

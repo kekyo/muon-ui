@@ -144,6 +144,10 @@ static bool CreateRuntimeInfoJson(std::string* result,
                         kMuonRuntimeInfo.muon_core_version) ||
       !AddRuntimeString(document, muon_core, "gitCommitHash",
                         kMuonRuntimeInfo.muon_core_git_commit_hash) ||
+      !AddRuntimeString(document, muon_core, "buildDate",
+                        kMuonRuntimeInfo.muon_core_build_date) ||
+      !AddRuntimeString(document, muon_core, "gitCommitDate",
+                        kMuonRuntimeInfo.muon_core_git_commit_date) ||
       !AddRuntimeString(document, cef_artifact, "fileName",
                         kMuonRuntimeInfo.cef_reference_artifact.file_name) ||
       !AddRuntimeString(document, cef_artifact, "url",

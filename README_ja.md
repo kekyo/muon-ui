@@ -1588,6 +1588,8 @@ await window.muon.bootstrap.triggerUpdate();
 | `getAutostart()`        | なし               | `Promise<boolean \| undefined>`   | ユーザーセッション開始時に現在のアプリを自動起動する設定かどうかを返します。判別不能な場合は `undefined` です。 |
 | `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>`                   | 自動起動設定を有効または無効にします。                                                                          |
 
+- `getRuntimeInfo()` の `muonCore` には、`version`, `gitCommitHash`, `buildDate`, `gitCommitDate` が含まれます。
+  `buildDate` と `gitCommitDate` はISO 8601形式の文字列です。
 - `getAutostart()` と `setAutostart()` は、起動時のlaunch sourceに応じたプラットフォームバックエンドを使用します。
   POSIX desktopではXDG Autostart、Windowsでは現在のユーザーのRun registry entryを使用します。
 

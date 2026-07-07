@@ -507,7 +507,21 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
   これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
 
-なお、Viteプラグイン引数の `pluginAccess` でも同じ設定を上書き出来ますが、通常は `muon.json` にまとめておくと実行時設定とインポート許可の対応が読みやすくなります。
+次に、TypeScriptコンパイラに対して、型定義を参照できるようにします。
+`tsconfig.json` で `compilerOptions.types` に対して、muonの型定義も明示的に加えて下さい:
+
+```json
+{
+  "compilerOptions": {
+    "types": [
+      "vite/client",   // Viteの型定義
+      "muon-ui"        // muon内蔵プラグインの型定義（追加する）
+    ]
+  }
+}
+```
+
+これで、muon内蔵プラグインを使ってコードを実装することが出来るようになります。
 
 上記の方法でmuonプラグインを参照することは `validate` モードと呼びます。
 他には `simple` モードも存在します:

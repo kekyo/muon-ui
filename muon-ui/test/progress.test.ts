@@ -34,6 +34,16 @@ const captureStderr = (): {
   };
 };
 
+const getCompletedProgressLines = (output: string): string[] =>
+  output
+    .replace(/\x1b\[K/gu, "")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const segments = line.split("\r").filter((segment) => segment.length > 0);
+      return segments.at(-1) ?? "";
+    });
+
 describe("createMuonProgressRenderer", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -100,8 +110,47 @@ describe("createMuonProgressRenderer", () => {
     }
 
     const output = stderr.chunks.join("");
-    expect(output).toMatch(/\r[-\\|/] Installing CEF runtime\.\.\. 3 files/u);
     expect(output).toMatch(/\r[-\\|/] Starting muon\.\.\./u);
-    expect(output.match(/\n/gu)?.length ?? 0).toBe(1);
+    expect(getCompletedProgressLines(output)).toEqual([
+      "Installing CEF runtime... 3 files",
+      "Starting muon...",
+    ]);
+  });
+
+  it("keeps different status messages as completed lines", () => {
+    const stderr = captureStderr();
+    try {
+      const renderer = createMuonProgressRenderer();
+      renderer.report({
+        phase: "build",
+        status: "Creating assets.zip",
+        current: 0,
+        total: 0,
+        determinate: false,
+      });
+      renderer.report({
+        phase: "build",
+        status: "Updating Windows resources",
+        current: 0,
+        total: 0,
+        determinate: false,
+      });
+      renderer.report({
+        phase: "build",
+        status: "Writing Linux desktop files",
+        current: 0,
+        total: 0,
+        determinate: false,
+      });
+      renderer.flush();
+    } finally {
+      stderr.restore();
+    }
+
+    expect(getCompletedProgressLines(stderr.chunks.join(""))).toEqual([
+      "Creating assets.zip",
+      "Updating Windows resources",
+      "Writing Linux desktop files",
+    ]);
   });
 });

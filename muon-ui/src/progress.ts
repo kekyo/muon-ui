@@ -163,7 +163,7 @@ const createSpinnerProgressRenderer = (): MuonProgressRenderer => {
         return;
       }
       if (activeLine.key !== nextLine.key) {
-        renderLine();
+        finishLine();
         activeLine = nextLine;
         renderLine();
       } else {

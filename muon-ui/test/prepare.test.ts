@@ -1365,7 +1365,7 @@ lastCatalogUpdateUnix=0
 
     const stderr = chunks.join("");
     expect(stderr).toMatch(/\r[-\\|/] Downloading CEF runtime\.\.\. \d+%/u);
-    expect(stderr).toMatch(/\r[-\\|/] Installing CEF runtime\.\.\. \d+ files/u);
+    expect(stderr).toMatch(/\rInstalling CEF runtime\.\.\. \d+ files/u);
     expect(stderr).toContain("Starting muon...");
   });
 

@@ -298,10 +298,10 @@ npx muon pack --target windows-amd64 --type nsis
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定出来ます。
 - `--type` は `zip`, `tgz`, `tar.gz`, `deb`, `nsis` をカンマ区切りまたは複数指定出来ます。
   省略時は `zip`, `tgz`, `deb`, `nsis` のすべてを対象にします。
-- `zip` はWindowsターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むポータブルZIPです。
-- `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むポータブルgzip圧縮tarです。
+- `zip` はWindowsターゲットだけで使用でき、各 `<packageName>/<target>` ディレクトリを含むポータブルZIPです。
+- `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `<packageName>/<target>` ディレクトリを含むポータブルgzip圧縮tarです。
   `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
-  ポータブル配布物にはCEFバイナリを含めず、初回起動時に展開先の `dist-muon/<target>` 直下へCEFを準備します。
+  ポータブル配布物にはCEFバイナリを含めず、初回起動時に展開先の `<packageName>/<target>` 直下へCEFを準備します。
   プロファイルも同じディレクトリ直下の `profile/` が使われます。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   Debian/Ubuntuでは、 `sudo apt install dpkg-deb` でインストール出来ます。
@@ -352,7 +352,7 @@ CEFプロファイルは同じアプリケーションステートルートの `
 これらについての詳細は、別章を参照して下さい。
 
 `muon pack --type zip` と `muon pack --type tgz` / `tar.gz` のポータブル配布物は例外です。
-展開した `dist-muon/<target>` 直下にあるアプリランチャーを起動すると、`muon-bootstrap` は同じディレクトリ直下へCEFをin-placeで準備し、`muon-core` もそのディレクトリをカレントディレクトリとして起動します。
+展開した `<packageName>/<target>` 直下にあるアプリランチャーを起動すると、`muon-bootstrap` は同じディレクトリ直下へCEFをin-placeで準備し、`muon-core` もそのディレクトリをカレントディレクトリとして起動します。
 ポータブル配布物ではビルド時に `browser.profilePath` が `profile` に固定されるため、CEFプロファイルは展開先直下の `profile/` に作成されます。
 runtimeとprofileのためにユーザーステートディレクトリは使用しません。
 ただし、ダウンロード済みCEF tarballのキャッシュは従来通り `MUON_CACHE_DIR` または既定の `~/.cache/muon/` 系ディレクトリに保存されます。
@@ -1145,7 +1145,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` は展開先の `dist-muon/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` は展開先の `<packageName>/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、展開先ディレクトリ配下の絶対パスを指します。
 - 同じ展開先で再起動した場合は準備済みCEFを再利用します。別のディレクトリへ展開した配布物から起動した場合は、その展開先ごとにCEF準備とdesktop entry更新が行われます。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。

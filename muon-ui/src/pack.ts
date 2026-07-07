@@ -632,6 +632,11 @@ const addDirectoryToZip = async (
   await walk(directory);
 };
 
+const getPortableArchiveEntryRoot = (
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+): string => `${metadata.packageName}/${target.target}`;
+
 const packageZip = async (
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
@@ -641,7 +646,7 @@ const packageZip = async (
   await addDirectoryToZip(
     zip,
     target.outputPath,
-    target.distributionDirectoryName,
+    getPortableArchiveEntryRoot(target, metadata),
   );
   const outputPath = join(
     artifactsRoot,
@@ -702,7 +707,7 @@ const packageTarGz = async (
   const packer = createTarPacker(
     createTarGzEntryGenerator(
       target.outputPath,
-      target.distributionDirectoryName,
+      getPortableArchiveEntryRoot(target, metadata),
     ),
     "gzip",
   );

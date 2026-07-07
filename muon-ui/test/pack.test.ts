@@ -532,25 +532,22 @@ describe("muon pack", () => {
     await expect(exists(join(root, "dist-muon/linux-amd64"))).resolves.toBe(
       true,
     );
-    await expect(readTarGzEntryNames(artifact?.path ?? "")).resolves.toContain(
-      "dist-muon/linux-amd64/assets.zip",
-    );
-    await expect(readTarGzEntryNames(artifact?.path ?? "")).resolves.toContain(
-      "dist-muon/linux-amd64/muon-install.json",
-    );
-    await expect(
-      readTarGzEntryNames(artifact?.path ?? ""),
-    ).resolves.not.toContain("dist-muon/linux-amd64/libcef.so");
+    const entries = await readTarGzEntryNames(artifact?.path ?? "");
+    expect(entries).toContain("packed-sample/linux-amd64/assets.zip");
+    expect(entries).toContain("packed-sample/linux-amd64/muon-install.json");
+    expect(entries).not.toContain("dist-muon/linux-amd64/assets.zip");
+    expect(entries).not.toContain("dist-muon/linux-amd64/muon-install.json");
+    expect(entries).not.toContain("packed-sample/linux-amd64/libcef.so");
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",
-        "dist-muon/linux-amd64/CREDITS.md",
+        "packed-sample/linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",
-        "dist-muon/linux-amd64/muon-install.json",
+        "packed-sample/linux-amd64/muon-install.json",
       ),
     ).resolves.toBe(
       `${JSON.stringify(
@@ -565,7 +562,7 @@ describe("muon pack", () => {
     const portableCore = (
       await readTarGzBinaryEntry(
         artifact?.path ?? "",
-        "dist-muon/linux-amd64/muon-core",
+        "packed-sample/linux-amd64/muon-core",
       )
     ).toString("utf8");
     expect(portableCore).toContain("profilePath");
@@ -709,7 +706,7 @@ describe("muon pack", () => {
     const portableCore = (
       await readTarGzBinaryEntry(
         artifact?.path ?? "",
-        "dist-muon/linux-amd64/muon-core",
+        "packed-sample/linux-amd64/muon-core",
       )
     ).toString("utf8");
     expect(portableCore).toContain("profilePath");
@@ -737,17 +734,24 @@ describe("muon pack", () => {
 
     const [artifact] = result.artifacts;
     const entries = await readTarGzEntryNames(artifact?.path ?? "");
-    expect(entries).toContain("dist-muon/linux-amd64/README.md");
-    expect(entries).toContain("dist-muon/linux-amd64/LICENSE");
-    expect(entries).not.toContain("dist-muon/linux-amd64/web-dist/index.html");
+    expect(entries).toContain("packed-sample/linux-amd64/README.md");
+    expect(entries).toContain("packed-sample/linux-amd64/LICENSE");
+    expect(entries).not.toContain(
+      "packed-sample/linux-amd64/web-dist/index.html",
+    );
+    expect(entries).not.toContain("dist-muon/linux-amd64/README.md");
+    expect(entries).not.toContain("dist-muon/linux-amd64/LICENSE");
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",
-        "dist-muon/linux-amd64/README.md",
+        "packed-sample/linux-amd64/README.md",
       ),
     ).resolves.toBe("read me\n");
     await expect(
-      readTarGzTextEntry(artifact?.path ?? "", "dist-muon/linux-amd64/LICENSE"),
+      readTarGzTextEntry(
+        artifact?.path ?? "",
+        "packed-sample/linux-amd64/LICENSE",
+      ),
     ).resolves.toBe("license\n");
   });
 
@@ -776,12 +780,13 @@ describe("muon pack", () => {
 
     const [artifact] = result.artifacts;
     const entries = await readTarGzEntryNames(artifact?.path ?? "");
-    expect(entries).toContain("dist-muon/linux-amd64/NOTICE.md");
-    expect(entries).not.toContain("dist-muon/linux-amd64/README.md");
+    expect(entries).toContain("packed-sample/linux-amd64/NOTICE.md");
+    expect(entries).not.toContain("packed-sample/linux-amd64/README.md");
+    expect(entries).not.toContain("dist-muon/linux-amd64/NOTICE.md");
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",
-        "dist-muon/linux-amd64/NOTICE.md",
+        "packed-sample/linux-amd64/NOTICE.md",
       ),
     ).resolves.toBe("notice\n");
   });
@@ -811,7 +816,7 @@ describe("muon pack", () => {
     const [artifact] = result.artifacts;
     await expect(
       readTarGzEntryNames(artifact?.path ?? ""),
-    ).resolves.not.toContain("dist-muon/linux-amd64/README.md");
+    ).resolves.not.toContain("packed-sample/linux-amd64/README.md");
   });
 
   it("packages non-Vite assets without running Vite when no muon plugin is configured", async () => {
@@ -881,25 +886,22 @@ describe("muon pack", () => {
     expect(artifact?.path).toBe(
       join(root, "artifacts", "packed-sample-1.2.3-windows-amd64.zip"),
     );
-    await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
-      "dist-muon/windows-amd64/assets.zip",
-    );
-    await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
-      "dist-muon/windows-amd64/muon-install.json",
-    );
-    await expect(
-      readZipEntryNames(artifact?.path ?? ""),
-    ).resolves.not.toContain("dist-muon/windows-amd64/libcef.dll");
+    const entries = await readZipEntryNames(artifact?.path ?? "");
+    expect(entries).toContain("packed-sample/windows-amd64/assets.zip");
+    expect(entries).toContain("packed-sample/windows-amd64/muon-install.json");
+    expect(entries).not.toContain("dist-muon/windows-amd64/assets.zip");
+    expect(entries).not.toContain("dist-muon/windows-amd64/muon-install.json");
+    expect(entries).not.toContain("packed-sample/windows-amd64/libcef.dll");
     await expect(
       readZipTextEntry(
         artifact?.path ?? "",
-        "dist-muon/windows-amd64/CREDITS.md",
+        "packed-sample/windows-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
     await expect(
       readZipTextEntry(
         artifact?.path ?? "",
-        "dist-muon/windows-amd64/muon-install.json",
+        "packed-sample/windows-amd64/muon-install.json",
       ),
     ).resolves.toBe(
       `${JSON.stringify(
@@ -914,7 +916,7 @@ describe("muon pack", () => {
     const portableCore = (
       await readZipBinaryEntry(
         artifact?.path ?? "",
-        "dist-muon/windows-amd64/muon-core.exe",
+        "packed-sample/windows-amd64/muon-core.exe",
       )
     ).toString("utf8");
     expect(portableCore).toContain("profilePath");
@@ -1137,7 +1139,7 @@ printf 'deb\\n' > "$output_path"
     await expect(
       readTarGzTextEntry(
         tarArtifact?.path ?? "",
-        "dist-muon/linux-amd64/muon-install.json",
+        "packed-sample/linux-amd64/muon-install.json",
       ),
     ).resolves.toBe(
       `${JSON.stringify(

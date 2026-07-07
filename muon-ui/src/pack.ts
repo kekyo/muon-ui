@@ -71,8 +71,37 @@ const defaultPackageBuildDirectory = ".muon/pack";
 const systemRuntimeRoot = "/var/lib/muon/apps";
 const systemCefCacheRoot = "/var/cache/muon/cef";
 const runtimeHelperExecutableName = "muon-runtime-helper";
-// Keep both names for Debian t64 and pre-t64 GTK3 runtime packages.
-const debGtk3RuntimeDependency = "libgtk-3-0t64 | libgtk-3-0";
+// Keep both names for Debian t64 and pre-t64 runtime packages.
+const debRuntimeDependencies = [
+  "libc6",
+  "libgcc-s1",
+  "libstdc++6",
+  "libffi8",
+  "libexpat1",
+  "libdbus-1-3",
+  "libglib2.0-0t64 | libglib2.0-0",
+  "libgtk-3-0t64 | libgtk-3-0",
+  "libatk-bridge2.0-0t64 | libatk-bridge2.0-0",
+  "libatk1.0-0t64 | libatk1.0-0",
+  "libatspi2.0-0t64 | libatspi2.0-0",
+  "libcups2t64 | libcups2",
+  "libnspr4",
+  "libnss3",
+  "libgbm1",
+  "libasound2t64 | libasound2",
+  "libudev1",
+  "libx11-6",
+  "libxcb1",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxext6",
+  "libxfixes3",
+  "libxi6",
+  "libxkbcommon0",
+  "libxrandr2",
+  "libcairo2",
+  "libpango-1.0-0",
+] as const;
 
 type JsonObject = Record<string, unknown>;
 
@@ -776,7 +805,7 @@ const packageDeb = async (
       `Version: ${metadata.version}`,
       `Architecture: ${architecture}`,
       `Maintainer: ${metadata.author}`,
-      `Depends: ${debGtk3RuntimeDependency}`,
+      `Depends: ${debRuntimeDependencies.join(", ")}`,
       `Description: ${metadata.description}`,
       "",
     ].join("\n"),

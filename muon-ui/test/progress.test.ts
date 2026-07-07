@@ -7,12 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMuonProgressRenderer } from "../src/progress.js";
 
-const wait = async (milliseconds: number): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-};
-
 const captureStderr = (): {
   chunks: string[];
   restore(): void;
@@ -46,10 +40,12 @@ const getCompletedProgressLines = (output: string): string[] =>
 
 describe("createMuonProgressRenderer", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it("throttles installing file updates on one spinner line", async () => {
+    vi.useFakeTimers();
     const stderr = captureStderr();
     try {
       const renderer = createMuonProgressRenderer();
@@ -63,12 +59,13 @@ describe("createMuonProgressRenderer", () => {
         });
       }
 
-      expect(stderr.chunks.join("")).not.toContain("\n");
+      const initialOutput = stderr.chunks.join("");
+      expect(initialOutput).not.toContain("\n");
+      expect(initialOutput).toContain("1 files");
+      expect(initialOutput).not.toContain("228 files");
 
-      await wait(450);
-      expect(stderr.chunks.join("")).not.toContain("228 files");
-
-      await wait(100);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(stderr.chunks.join("")).toContain("228 files");
       renderer.flush();
     } finally {
       stderr.restore();

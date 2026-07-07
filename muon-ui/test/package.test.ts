@@ -425,7 +425,10 @@ const createConsumerProject = async (): Promise<string> => {
   return root;
 };
 
-const runTypeScriptConsumer = async (source: string): Promise<void> => {
+const runTypeScriptConsumer = async (
+  source: string,
+  types: readonly string[] = [],
+): Promise<void> => {
   const root = await createConsumerProject();
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "src", "main.ts"), source);
@@ -438,7 +441,7 @@ const runTypeScriptConsumer = async (source: string): Promise<void> => {
           module: "ESNext",
           moduleResolution: "Bundler",
           lib: ["ES2022", "DOM"],
-          types: [],
+          types,
           strict: true,
           noEmit: true,
         },
@@ -913,6 +916,7 @@ exit 1
     const files = await getDryRunPackageFiles();
 
     expect(files).toContain("muon.d.ts");
+    expect(files).toContain("muon-virtual-modules.d.ts");
     expect(files).toContain("vite.d.ts");
     expect(files).not.toContain("dist/cli.mjs");
     expect(files).not.toContain("dist/cli.d.ts");
@@ -1078,6 +1082,23 @@ void trayTooltipResult;
 void trayRemoveResult;
 void existsResult;
 `),
+    ).resolves.toBeUndefined();
+  });
+
+  it("provides muon virtual modules through configured TypeScript types", async () => {
+    await expect(
+      runTypeScriptConsumer(
+        `import { spawn } from "muon:executor";
+
+const run = async (): Promise<void> => {
+  const process = await spawn({ command: "node", args: ["--version"] });
+  const result: MuonExecutorSpawnResult = await process.wait();
+  void result;
+};
+void run;
+`,
+        ["muon-ui"],
+      ),
     ).resolves.toBeUndefined();
   });
 

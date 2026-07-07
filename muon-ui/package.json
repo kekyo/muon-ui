@@ -17,11 +17,13 @@
       "import": "./dist/vite.mjs",
       "require": "./dist/vite.cjs"
     },
-    "./muon.d.ts": "./muon.d.ts"
+    "./muon.d.ts": "./muon.d.ts",
+    "./muon-virtual-modules.d.ts": "./muon-virtual-modules.d.ts"
   },
   "files": [
     "dist",
     "muon.d.ts",
+    "muon-virtual-modules.d.ts",
     "vite.d.ts"
   ],
   "scripts": {

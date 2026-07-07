@@ -6,6 +6,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { delay } from "async-primitives";
 import { describe, expect, it } from "vitest";
 
 import { createXvfbCommandEnvironment } from "../../scripts/xvfb-environment.mjs";
@@ -153,7 +154,7 @@ describe("CDP helper calls", () => {
       id: 2,
       result: { frameId: "frame-1", loaderId: "loader-1" },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await delay(0);
     expect(await readPromiseState(navigatePromise)).toBe("pending");
     socket.message({
       method: "Page.frameNavigated",

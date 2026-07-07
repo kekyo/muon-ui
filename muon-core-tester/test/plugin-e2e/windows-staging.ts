@@ -8,6 +8,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 import type { RemoteAgent } from "agent-rover";
+import { delay } from "async-primitives";
 
 import type { WindowsE2eEnvironment } from "./windows-environment.js";
 import type { WindowsRuntimeTarget } from "./windows-matrix.js";
@@ -35,12 +36,6 @@ const toRemoteRelativePath = (path: string): string =>
 
 const hashBuffer = (buffer: Buffer): string =>
   createHash("sha256").update(buffer).digest("hex");
-
-const wait = async (delayMs: number): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-};
 
 const normalizeWindowsProcessPath = (path: string): string =>
   path
@@ -113,7 +108,7 @@ export const removeWindowsStagedRuntimeDirectory = async (
   let lastError: unknown = undefined;
   for (const delayMs of [0, ...stagingRemoveRetryDelaysMs]) {
     if (delayMs > 0) {
-      await wait(delayMs);
+      await delay(delayMs);
     }
     await cleanupWindowsStagedRuntimeProcesses(
       agent,

@@ -28,7 +28,7 @@ import {
   stopGestamentMuon,
   targetTimeoutMs,
   tmpdir,
-  wait,
+  delay,
   waitForGestamentMuonExit,
   waitForGestamentNativeWindowClosed,
   waitForMuonFsSelectFile,
@@ -110,7 +110,7 @@ const clickBrowserWindowOutsideBounds = async (
   await app.input.moveMouseTo(Math.round(point.x), Math.round(point.y));
   await app.input.setMouseButton("left", true);
   await app.input.setMouseButton("left", false);
-  await wait(100);
+  await delay(100);
 };
 
 const readBrowserWindowBounds = async (
@@ -148,7 +148,7 @@ const moveDialogAwayFromBrowserClickPoint = async (
   } catch {
     // Moving the dialog is only a best-effort aid for the click probe.
   }
-  await wait(100);
+  await delay(100);
 };
 
 const createCounterPage = (pageTitle: string, buttonLabel: string): string =>
@@ -261,7 +261,7 @@ const clickWindowsWindowCenter = async (window: AppWindow): Promise<void> => {
     },
     { button: "left" },
   );
-  await wait(100);
+  await delay(100);
 };
 
 const findWindowsDialogTextInput = async (
@@ -281,7 +281,7 @@ const findWindowsDialogTextInput = async (
     if (match !== undefined) {
       return match;
     }
-    await wait(100);
+    await delay(100);
   }
   return undefined;
 };
@@ -302,9 +302,9 @@ const selectWindowsDialogFile = async (
   await context.agent.keyboard.pasteText(selectedPath, {
     restoreClipboard: true,
   });
-  await wait(100);
+  await delay(100);
   await context.agent.keyboard.press("Enter");
-  await wait(100);
+  await delay(100);
 };
 
 const findWindowsDialogButtonByLabel = async (
@@ -322,7 +322,7 @@ const findWindowsDialogButtonByLabel = async (
     if (match !== undefined) {
       return match;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows native dialog button '${buttonLabel}'. Last descendants: ${JSON.stringify(
@@ -358,7 +358,7 @@ const clickWindowsBrowserWindowOutsideBounds = async (
     },
     { button: "left" },
   );
-  await wait(100);
+  await delay(100);
 };
 
 const waitForWindowsWindowEnabled = async (
@@ -372,7 +372,7 @@ const waitForWindowsWindowEnabled = async (
     if (lastWindow.enabled === expectedEnabled) {
       return lastWindow;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows window '${title}' enabled=${String(
@@ -395,7 +395,7 @@ const moveWindowsDialogAwayFromBrowserClickPoint = async (
     // Moving common dialogs is best-effort; the click probe has fallback points.
     return dialogWindow;
   } finally {
-    await wait(100);
+    await delay(100);
   }
 };
 
@@ -492,7 +492,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           running.driver.evaluate("window.__muonCounter"),
         ).resolves.toBe(0);
         await running.driver.evaluate("window.muon.browser.focus()");
-        await wait(200);
+        await delay(200);
         await clickBrowserWindow(running.app, browserBounds, undefined);
         const deadline = Date.now() + cdpCommandTimeoutMs;
         let counter = 0;
@@ -503,7 +503,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           if (counter === 1) {
             break;
           }
-          await wait(100);
+          await delay(100);
         }
         expect(counter).toBe(1);
       } finally {
@@ -835,7 +835,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           cdpCommandTimeoutMs,
         );
         await closeOwnerBrowserWindow(running.driver);
-        await wait(500);
+        await delay(500);
         await expect(
           findGestamentNativeWindow(running.app, title, cdpCommandTimeoutMs),
         ).resolves.toBeDefined();
@@ -934,7 +934,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
 
         await expect(driver.evaluate("window.__muonCounter")).resolves.toBe(0);
         await driver.evaluate("window.muon.browser.focus()");
-        await wait(200);
+        await delay(200);
         await clickWindowsBrowserWindowOutsideBounds(
           browserWindow,
           popupBounds,
@@ -946,7 +946,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           if (counter === 1) {
             break;
           }
-          await wait(100);
+          await delay(100);
         }
         expect(counter).toBe(1);
       } finally {
@@ -1263,7 +1263,7 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
         await browserWindow.close();
         driver.close();
         driver = undefined;
-        await wait(500);
+        await delay(500);
         await expect(waitForWindowsDialogByTitle(title)).resolves.toBeDefined();
 
         await selectWindowsDialogFile(dialog, selectedPath);

@@ -47,6 +47,7 @@ import {
   type KeyboardModifier,
   type RemoteAgent,
 } from "agent-rover";
+import { delay } from "async-primitives";
 import {
   afterAll,
   afterEach,
@@ -81,7 +82,7 @@ import {
   type WindowsRemoteProcessHandle,
 } from "./windows-context.js";
 
-export { constants, isMuonTitleBarTarget, MUON_TITLE_BAR_TARGET_TITLE };
+export { constants, delay, isMuonTitleBarTarget, MUON_TITLE_BAR_TARGET_TITLE };
 
 export type { CdpDriver, CdpTarget };
 
@@ -363,7 +364,7 @@ export const connectToMuonCdp = async (
       } catch (error) {
         lastError = error;
       }
-      await wait(100);
+      await delay(100);
     }
     throw new Error(
       `Timed out connecting to Windows remote CDP target '${cdpOptions.targetId}': ${String(
@@ -420,7 +421,7 @@ export const connectToMuonCdp = async (
     } catch (error) {
       lastError = error;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out connecting to Windows remote CDP: ${String(lastError)}`,
@@ -985,12 +986,6 @@ export const createBrowserShortcutConfig = (
   ...overrides,
 });
 
-export const wait = async (ms: number): Promise<void> => {
-  await new Promise<void>((resolvePromise) => {
-    setTimeout(resolvePromise, ms);
-  });
-};
-
 export const requireFile = async (path: string): Promise<void> => {
   const entry = await stat(path);
   if (!entry.isFile()) {
@@ -1103,7 +1098,7 @@ export const waitForCdp = async (timeoutMs: number): Promise<void> => {
     } catch (error) {
       lastError = error;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(`Timed out waiting for muon CDP: ${String(lastError)}`);
 };
@@ -1127,7 +1122,7 @@ export const waitForDevToolsTarget = async (
     if (devToolsTarget !== undefined) {
       return devToolsTarget;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error("Timed out waiting for DevTools target");
 };
@@ -1145,7 +1140,7 @@ export const waitForTargetClosed = async (
     if (!targets.some((target) => target.id === targetId)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(`Timed out waiting for CDP target to close: ${targetId}`);
 };
@@ -1363,7 +1358,7 @@ export const waitForNativeWindowTitleAbsent = async (
     if (!titles.includes(expectedTitle)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window title '${expectedTitle}' to disappear. Last titles: ${JSON.stringify(lastTitles ?? [])}`,
@@ -1488,7 +1483,7 @@ export const waitForNativeActiveWindowTitle = async (
     if (title === expectedTitle) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native active window title '${expectedTitle}'. Last title: ${JSON.stringify(lastTitle ?? "")}`,
@@ -1511,7 +1506,7 @@ export const waitForNativeWindowStates = async (
     if (expectedStates.every((state) => states.includes(state))) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window states ${JSON.stringify(
@@ -1536,7 +1531,7 @@ export const waitForNativeWindowStatesAbsent = async (
     if (absentStates.every((state) => !states.includes(state))) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window states ${JSON.stringify(
@@ -1562,7 +1557,7 @@ export const waitForNativeWindowTitle = async (
     if (titles.includes(expectedTitle)) {
       return true;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window title '${expectedTitle}'. Last titles: ${JSON.stringify(
@@ -1688,7 +1683,7 @@ export const waitForPageTargetUrl = async (
     if (target !== undefined) {
       return target;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(`Timed out waiting for page target URL: ${expectedUrl}`);
 };
@@ -1714,7 +1709,7 @@ export const waitForNewPageTarget = async (
     if (target !== undefined) {
       return target;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error("Timed out waiting for new page target");
 };
@@ -1723,7 +1718,7 @@ export const expectNoNewPageTarget = async (
   previousTargetIds: Set<string>,
   timeoutMs: number,
 ): Promise<void> => {
-  await wait(timeoutMs);
+  await delay(timeoutMs);
   const targets = await listCdpTargets({
     port: MUON_PORT,
     timeoutMs: 1000,
@@ -1945,7 +1940,7 @@ export const waitForWindowBounds = async (
     if (isCloseWindowBounds(lastBounds, expectedBounds, 2)) {
       return lastBounds;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for window bounds change. Last bounds: ${JSON.stringify(lastBounds)}`,
@@ -1969,7 +1964,7 @@ export const waitForOuterSizeChange = async (
     if (isDifferentOuterSize(size, initialSize)) {
       return size;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error("Timed out waiting for outer window size change");
 };
@@ -1985,7 +1980,7 @@ export const waitForInnerWidth = async (
     if (matches(value)) {
       return value;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error("Timed out waiting for innerWidth change");
 };
@@ -2001,7 +1996,7 @@ export const waitForMuonStderr = async (
     if (running.stderr.includes(expected)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(`Timed out waiting for muon stderr: ${expected}`);
 };
@@ -2022,7 +2017,7 @@ export const waitForDocumentTitle = async (
         throw error;
       }
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(`Timed out waiting for document title: ${expectedTitle}`);
 };
@@ -2582,7 +2577,7 @@ const startWindowsRemoteCdpRelay = async (
     stdoutPath,
     workingDirectory: join(context.runtime.relayExecutablePath, ".."),
   });
-  await wait(250);
+  await delay(250);
   const snapshot = await context.agent.processes.snapshot(processInfo.id);
   if (!snapshot.running) {
     const stderr = (await context.agent.files.exists(stderrPath))
@@ -3082,7 +3077,7 @@ export const waitForGestamentMuonExit = async (
     if (output.exitCode !== null || output.exitSignal !== null) {
       return output;
     }
-    await wait(100);
+    await delay(100);
   }
   const output = await app.output();
   throw new Error(
@@ -3109,7 +3104,7 @@ export const waitForMuonFsSelectFile = async (
     } catch (error) {
       lastType = String(error);
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for window.muon.fs.dialogs.selectFile. Last value: ${lastType}`,
@@ -3241,7 +3236,7 @@ export const findGestamentButtonByName = async (
       return match;
     }
     lastDiagnostics = diagnostics;
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Gestament button '${buttonName}'. Last diagnostics: ${JSON.stringify(
@@ -3283,7 +3278,7 @@ export const findGestamentAppButtonByName = async (
     }
     lastWindowDiagnostics = windowDiagnostics;
     lastButtonDiagnostics = buttonDiagnostics;
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Gestament app button '${buttonName}'. Last window diagnostics: ${JSON.stringify(
@@ -3381,7 +3376,7 @@ export const findGestamentNativeDialogButtonByLabel = async (
     } catch (error) {
       lastTextError = String(error);
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Gestament native dialog button '${buttonName}'. Last semantic diagnostics: ${JSON.stringify(
@@ -3489,7 +3484,7 @@ export const findGestamentNativeWindow = async (
       }
     }
     lastDiagnostics = diagnostics;
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Gestament native window '${title}'. Last diagnostics: ${JSON.stringify(
@@ -3525,7 +3520,7 @@ export const waitForGestamentNativeWindowClosed = async (
       return;
     }
     lastDiagnostics = diagnostics;
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Gestament native window '${title}' to close. Last diagnostics: ${JSON.stringify(
@@ -4126,7 +4121,7 @@ export const runBuiltinFsAdditionalOperations = async (
     "additional watch",
     `(async () => {
     const rootPath = ${JSON.stringify(rootPath)};
-    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const watchPath = rootPath + "/watch";
     await window.muon.fs.mkdir(watchPath);
     const events = [];
@@ -4138,12 +4133,12 @@ export const runBuiltinFsAdditionalOperations = async (
       if (events.some((event) => event.filename === "watched.txt")) {
         break;
       }
-      await wait(100);
+      await delay(100);
     }
     await watcher.close();
     const afterCloseCount = events.length;
     await window.muon.fs.writeTextFile(watchPath + "/after.txt", "two", "utf8");
-    await wait(250);
+    await delay(250);
     return {
       filenames: events.map((event) => event.filename),
       afterCloseCount,
@@ -4332,7 +4327,7 @@ export const runBuiltinFsFileUriOperations = async (
     const rootUri = ${JSON.stringify(rootUri)};
     const renamedPath = ${JSON.stringify(renamedPath)};
     const uri = (path) => new URL(path, rootUri).href;
-    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const rejection = async (operation) => {
       try {
         await operation();
@@ -4460,12 +4455,12 @@ export const runBuiltinFsFileUriOperations = async (
       if (events.some((event) => event.filename === "watched.txt")) {
         break;
       }
-      await wait(100);
+      await delay(100);
     }
     await watcher.close();
     const afterCloseCount = events.length;
     await window.muon.fs.writeTextFile(uri("watch/after.txt"), "two", "utf8");
-    await wait(250);
+    await delay(250);
 
     if (symlink.supported) {
       await window.muon.fs.unlink(linkUri);

@@ -24,6 +24,7 @@ import {
   saveDiagnostics,
   type RemoteAgent,
 } from "agent-rover";
+import { delay } from "async-primitives";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MuonBuildTarget } from "../src/build.js";
@@ -214,12 +215,6 @@ const copyLocalDirectoryToRemote = async (
   }
 };
 
-const wait = async (milliseconds: number): Promise<void> => {
-  await new Promise<void>((resolvePromise) => {
-    setTimeout(resolvePromise, milliseconds);
-  });
-};
-
 const readRemoteUtf8IfExists = async (
   agent: RemoteAgent,
   path: string,
@@ -234,7 +229,7 @@ const readRemoteUtf8IfExists = async (
       return (await agent.files.readFile(path)).toString("utf8");
     } catch (error) {
       lastError = error;
-      await wait(250);
+      await delay(250);
     }
   }
   if (lastError instanceof Error) {

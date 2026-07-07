@@ -177,6 +177,10 @@ const writeViteProject = async (
   packageDirectory: string,
   buildTargets: readonly string[],
   base: string | undefined = undefined,
+  options: {
+    buildOptions?: Record<string, unknown>;
+    packageJson?: Record<string, unknown>;
+  } = {},
 ): Promise<void> => {
   const vitePluginUrl = pathToFileURL(resolve("dist", "vite.mjs")).href;
   await writeFile(
@@ -188,6 +192,7 @@ const writeViteProject = async (
         description: "Packed sample",
         author: "muon Tester",
         type: "module",
+        ...(options.packageJson ?? {}),
       },
       null,
       2,
@@ -214,7 +219,11 @@ const writeViteProject = async (
       ...(base === undefined ? [] : [`  base: ${JSON.stringify(base)},`]),
       "  build: { outDir: 'web-dist' },",
       "  plugins: [",
-      `    muon({ build: { targets: ${JSON.stringify(buildTargets)}, packageDirectory: ${JSON.stringify(packageDirectory)} } }),`,
+      `    muon({ build: ${JSON.stringify({
+        targets: buildTargets,
+        packageDirectory,
+        ...(options.buildOptions ?? {}),
+      })} }),`,
       "  ],",
       "};",
     ].join("\n"),
@@ -624,6 +633,103 @@ describe("muon pack", () => {
       initialTitleBarIcon: "asset://main/.muon/app-icon.png",
       startPage: "asset://main/sample-base/index.html",
     });
+  });
+
+  it("copies package.json files into package distributions while excluding the Vite asset output", async () => {
+    const root = await createTemporaryDirectory("muon-pack-package-files-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeFile(join(root, "README.md"), "read me\n");
+    await writeFile(join(root, "LICENSE"), "license\n");
+    await writeViteProject(root, packageDirectory, ["linux-amd64"], undefined, {
+      packageJson: {
+        files: ["web-dist", "README.md", "LICENSE"],
+      },
+    });
+
+    const result = await packMuonApp({
+      root,
+      types: ["tar.gz"],
+    });
+
+    const [artifact] = result.artifacts;
+    const entries = await readTarGzEntryNames(artifact?.path ?? "");
+    expect(entries).toContain("dist-muon/linux-amd64/README.md");
+    expect(entries).toContain("dist-muon/linux-amd64/LICENSE");
+    expect(entries).not.toContain("dist-muon/linux-amd64/web-dist/index.html");
+    await expect(
+      readTarGzTextEntry(
+        artifact?.path ?? "",
+        "dist-muon/linux-amd64/README.md",
+      ),
+    ).resolves.toBe("read me\n");
+    await expect(
+      readTarGzTextEntry(artifact?.path ?? "", "dist-muon/linux-amd64/LICENSE"),
+    ).resolves.toBe("license\n");
+  });
+
+  it("prefers muon Vite plugin distribution files over package.json files", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-pack-plugin-distribution-files-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeFile(join(root, "README.md"), "read me\n");
+    await writeFile(join(root, "NOTICE.md"), "notice\n");
+    await writeViteProject(root, packageDirectory, ["linux-amd64"], undefined, {
+      buildOptions: {
+        distributionFiles: ["NOTICE.md"],
+      },
+      packageJson: {
+        files: ["README.md"],
+      },
+    });
+
+    const result = await packMuonApp({
+      root,
+      types: ["tar.gz"],
+    });
+
+    const [artifact] = result.artifacts;
+    const entries = await readTarGzEntryNames(artifact?.path ?? "");
+    expect(entries).toContain("dist-muon/linux-amd64/NOTICE.md");
+    expect(entries).not.toContain("dist-muon/linux-amd64/README.md");
+    await expect(
+      readTarGzTextEntry(
+        artifact?.path ?? "",
+        "dist-muon/linux-amd64/NOTICE.md",
+      ),
+    ).resolves.toBe("notice\n");
+  });
+
+  it("uses an empty muon Vite plugin distribution file list as an override", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-pack-empty-distribution-files-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeFile(join(root, "README.md"), "read me\n");
+    await writeViteProject(root, packageDirectory, ["linux-amd64"], undefined, {
+      buildOptions: {
+        distributionFiles: [],
+      },
+      packageJson: {
+        files: ["README.md"],
+      },
+    });
+
+    const result = await packMuonApp({
+      root,
+      types: ["tar.gz"],
+    });
+
+    const [artifact] = result.artifacts;
+    await expect(
+      readTarGzEntryNames(artifact?.path ?? ""),
+    ).resolves.not.toContain("dist-muon/linux-amd64/README.md");
   });
 
   it("packages non-Vite assets without running Vite when no muon plugin is configured", async () => {

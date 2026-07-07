@@ -194,6 +194,16 @@ export interface MuonViteBuildOptions {
   readonly iconPath?: string;
 
   /**
+   * Additional project files copied next to the generated app launcher.
+   *
+   * @remarks When omitted, `package.json` `files` is used as a candidate list.
+   * Only regular files are copied. Asset input paths, `node_modules`, `.git`,
+   * and generated target output directories are excluded. Set an empty array to
+   * disable package.json files fallback.
+   */
+  readonly distributionFiles?: readonly string[];
+
+  /**
    * Windows PE and NSIS resource metadata.
    *
    * @defaultValue Uses CLI options, `muon.json` `windows.resource`,

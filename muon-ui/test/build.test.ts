@@ -204,6 +204,21 @@ const createWindowsIconBuildProject = async (
   return { root, packageDirectory };
 };
 
+const createDistributionFileBuildProject = async (
+  prefix: string,
+  packageJson: Record<string, unknown>,
+): Promise<WindowsIconBuildProject> => {
+  const root = await createTemporaryDirectory(prefix);
+  const packageDirectory = await createFakeMuonPackageDist(root);
+  await writeFile(
+    join(root, "package.json"),
+    `${JSON.stringify(packageJson, null, 2)}\n`,
+  );
+  await mkdir(join(root, "assets"), { recursive: true });
+  await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+  return { root, packageDirectory };
+};
+
 const writeWindowsIconPngFixture = async (
   iconPath: string,
   data: Buffer = redIconPngData,
@@ -655,6 +670,107 @@ describe("muon build", () => {
     await expect(
       readFile(join(outputPath, "libwinpthread-1.dll"), "utf8"),
     ).resolves.toBe("windows-amd64 libwinpthread-1.dll\n");
+  });
+
+  it("copies package.json files into the distribution root while excluding app assets", async () => {
+    const { root, packageDirectory } = await createDistributionFileBuildProject(
+      "muon-build-package-files-",
+      {
+        name: "package-files-sample",
+        files: ["assets", "README.md", "LICENSE"],
+      },
+    );
+    await writeFile(join(root, "README.md"), "read me\n");
+    await writeFile(join(root, "LICENSE"), "license\n");
+
+    await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      assetSalt: Buffer.from([0xfa, 0xce]),
+    });
+
+    const outputPath = join(root, "dist-muon/linux-amd64");
+    await expect(readFile(join(outputPath, "README.md"), "utf8")).resolves.toBe(
+      "read me\n",
+    );
+    await expect(readFile(join(outputPath, "LICENSE"), "utf8")).resolves.toBe(
+      "license\n",
+    );
+    await expect(exists(join(outputPath, "index.html"))).resolves.toBe(false);
+  });
+
+  it("rejects invalid package.json files values", async () => {
+    const { root, packageDirectory } = await createDistributionFileBuildProject(
+      "muon-build-invalid-package-files-",
+      {
+        name: "invalid-package-files-sample",
+        files: ["README.md", 42],
+      },
+    );
+    await writeFile(join(root, "README.md"), "read me\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        assetSalt: Buffer.from([0xfb, 0xad]),
+      }),
+    ).rejects.toThrow("package.json files must be an array of strings");
+  });
+
+  it("rejects unsupported distribution file paths", async () => {
+    const { root, packageDirectory } = await createDistributionFileBuildProject(
+      "muon-build-unsupported-distribution-files-",
+      {
+        name: "unsupported-distribution-files-sample",
+      },
+    );
+    await writeFile(join(root, "README.md"), "read me\n");
+    await writeFile(join(root, "NOTICE.md"), "notice\n");
+    await mkdir(join(root, "docs"), { recursive: true });
+    await writeFile(join(root, "docs", "NOTICE.md"), "docs notice\n");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        distributionFiles: ["docs"],
+        assetSalt: Buffer.from([0xfc, 0x01]),
+      }),
+    ).rejects.toThrow("muon distribution file must be a regular file");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        distributionFiles: [join(root, "README.md")],
+        assetSalt: Buffer.from([0xfc, 0x02]),
+      }),
+    ).rejects.toThrow("muon distribution file path must be relative");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        distributionFiles: ["MISSING.md"],
+        assetSalt: Buffer.from([0xfc, 0x03]),
+      }),
+    ).rejects.toThrow("muon distribution file does not exist");
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        distributionFiles: ["NOTICE.md", "docs/NOTICE.md"],
+        assetSalt: Buffer.from([0xfc, 0x04]),
+      }),
+    ).rejects.toThrow("Duplicate muon distribution file destination");
   });
 
   it("uses architecture-specific runtime app IDs for Windows target distributions", async () => {

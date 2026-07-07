@@ -191,16 +191,34 @@ CDP (Chrome DevTools Protocol) も有効化されているので、Playwrightで
 
 ### 配布用ビルド
 
-Vite muonプラグインを設定した状態で `vite build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
+実際にmuonアプリを配布する場合、アプリの名称やクレジットなどを追加する必要があります。
+これらは NPMパッケージの慣例に習って、 `package.json` に記述すれば、それが反映されます。
+例えば:
+
+```json
+{
+  "name": "my-muon-app",
+  "version": "0.1.0",
+  "description": "First time muon app.",
+  // :
+  // :
+}
+```
+
+のように記述することで、muonアプリの名称・バージョン・説明を反映させることが出来ます。
+
+muon Viteプラグインを設定した状態で `npm run build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
 ```bash
 npm run build
 ```
 
-Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
-既定ではインストール済みmuonパッケージが対応する全ターゲットをビルドし、`dist-muon/linux-amd64/` や `dist-muon/windows-amd64/` のようなターゲット別ディレクトリに出力されます。
+> 注釈: これは `package.json` の `scripts` に定義された `vite build` の別名です。
 
-ターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定出来ます:
+Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
+既定では、muonがサポートする全ターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力されます。
+
+ビルドするターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定出来ます:
 
 ```ts
 import { defineConfig } from 'vite';
@@ -213,10 +231,10 @@ export default defineConfig({
         targets: ['linux-amd64', 'windows-amd64'],
         iconPath: 'icons/app.png',
         linuxDesktop: {
-          name: 'My App',
+          name: 'My App (linux)',
         },
         windowsResource: {
-          productName: 'My App',
+          productName: 'My App (windows)',
         }
       },
     }),
@@ -231,59 +249,59 @@ export default defineConfig({
 
 既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、スコープ付きパッケージ名の場合はスコープを除いた名前を使用します。
 また、`build.iconPath` にアイコンとなるPNGフォーマットの画像を配置しておけば、muonアプリのアイコンとして機能するようになります。
+上記例のように、LinuxターゲットやWindowsターゲットに固有の指定を追加することも出来ます。
 
 ### パッケージ生成
 
-インストーラーやアーカイブなどの配布用パッケージを生成する場合は、 `muon pack` コマンドを使用します:
+muonは、インストーラーやアーカイブなどの配布用パッケージも簡単に生成出来ます。
+
+前節の配布用ビルドの準備が出来ていれば、 `muon pack` コマンドを実行するだけです:
 
 ```bash
 npx muon pack
 ```
 
+> 注釈: 上記を思い出すのが難しければ、 `package.json` の `scripts` に `pack` エントリを追加しても良いと思います。私はそうしています :)
+
 `muon pack` は `muon build` と同じビルドシーケンスで配布用ディレクトリを生成してから、指定した形式にパッケージ化します。
-muon Viteプラグインがある場合は `vite build` を実行し、その間はViteプラグイン側のmuon配布用ビルドを抑止してから、CLI側で1回だけmuon配布用ディレクトリを生成します。
-muon Viteプラグインが無い場合は `vite build` を実行せず、既に存在するアセットを使用します。
-その後、指定した形式ごとに `./artifacts/` へ最終配布物だけを出力します。
+
+- muon Viteプラグインがある場合は `vite build` を実行して muonアプリを生成します。
+- muon Viteプラグインが無い場合は `vite build` を実行せず、既に存在するアセットを使用します。
+
+その後、指定した形式ごとに `artifacts/` へ最終配布物を出力します。
 `deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
 
+`muon pack` にオプションを指定しない場合は、すべてのターゲットに対応したファイル群を生成します。
 以下にオプション指定の例を示します:
 
 ```bash
-npx muon pack --type zip
-npx muon pack --type tar.gz
-npx muon pack --type tgz
-npx muon pack --type nsis
 npx muon pack --target windows
 npx muon pack --target amd64
-npx muon pack --type tar.gz,deb --target linux-amd64
-npx muon pack --type nsis --target windows-amd64
+npx muon pack --type tgz
+npx muon pack --type nsis
+npx muon pack --target linux-amd64 --type tgz,deb 
+npx muon pack --target windows-amd64 --type nsis
 ```
 
-- `--type` は `zip`, `tar.gz`, `tgz`, `deb`, `nsis` をカンマ区切りまたは複数指定出来ます。
-  `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
-  省略時は `zip`, `tar.gz`, `deb`, `nsis` のすべてを対象にします。
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
-  muon Viteプラグインが無い場合、未指定時はすべての対応ターゲットをパッケージ候補にします。
+  muon Viteプラグインが無い場合や未指定時は、すべての対応ターゲットをパッケージ候補にします。
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定出来ます。
+- `--type` は `zip`, `tgz`, `tar.gz`, `deb`, `nsis` をカンマ区切りまたは複数指定出来ます。
+  省略時は `zip`, `tgz`, `deb`, `nsis` のすべてを対象にします。
 - `zip` はWindowsターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むZIPです。
-- `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むgzip圧縮tarです。
+- `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むgzip圧縮tarです。
+  `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
-  インストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
-  ランチャー表示用に `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` もpackage-owned fileとして配置します。
-  アンインストール時にユーザーのstate directoryは削除しませんが、system desktop entryとiconはdpkgにより削除されるため、ランチャー表示は消えます。
+  Debian/Ubuntuでは、 `sudo apt install dpkg-deb` でインストール出来ます。
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
-  Debian/Ubuntuでは、単に `sudo apt install nsis` でインストール出来ます。
+  Debian/Ubuntuでは、 `sudo apt install nsis` でインストール出来ます。
   Windows環境では [Nullsoft Scriptable Install System](https://nsis.sourceforge.io/Main_Page) からダウンロード出来ます。
-- NSISの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>-<arch>` です。
-  表示名、Start Menu shortcut、アンインストールentryには `<packageName> (<arch>)` を使用します。
-  アンインストール時には `%LOCALAPPDATA%\<appId>.<arch>` のruntime stateも削除します。
-  `<arch>` は `amd64` または `i686` です。
 - 指定した形式とターゲットに対応しない組み合わせはスキップされ、有効な組み合わせだけが生成されます。
   例えば `muon pack --type nsis` はWindowsターゲットのNSISだけを生成し、Linuxターゲットは生成しません。
 - CLIオプションは、 `muon build` で指定できる `--icon`, `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
   `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書き出来ます。
-  `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
-  例えば screw-up 1.35.0以降でGit由来のversionを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。
+- `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
+  例えば [screw-up 1.35.0](https://github.com/kekyo/screw-up/) 以降でGit由来のバージョンを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。
 
 ---
 
@@ -666,6 +684,19 @@ npx muon build --icon icons/app.png --linux-name "My App"
 
 > 注釈: muon CLIを使用してビルドを行う場合は、virtual moduleの解決 (`import`によるmuonプラグインの参照) が出来ません。
 > 従って、muonプラグインの参照モード `validate` は使用できず、常に `simple` モードを使用する必要があります。
+
+---
+
+## パッケージのインストール先について (Advanced topics)
+
+debパッケージのインストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
+ランチャー表示用に `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` もpackage-owned fileとして配置します。
+アンインストール時にユーザーのstate directoryは削除しませんが、system desktop entryとiconはdpkgにより削除されるため、ランチャー表示は消えます。
+
+nsisの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>-<arch>` です。
+表示名、Start Menu shortcut、アンインストールentryには `<packageName> (<arch>)` を使用します。
+アンインストール時には `%LOCALAPPDATA%\<appId>.<arch>` のruntime stateも削除します。
+`<arch>` は `amd64` または `i686` です。
 
 ---
 
@@ -1785,7 +1816,7 @@ if (path !== null) {
 
 ---
 
-## セルフビルド (Advanced topic)
+## muon-uiセルフビルド (Advanced topic)
 
 必要なパッケージのインストール:
 

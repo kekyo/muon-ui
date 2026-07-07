@@ -7,12 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMuonProgressRenderer } from "../src/progress.js";
 
-const wait = async (milliseconds: number): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-};
-
 const captureStderr = (): {
   chunks: string[];
   restore(): void;
@@ -34,12 +28,24 @@ const captureStderr = (): {
   };
 };
 
+const getCompletedProgressLines = (output: string): string[] =>
+  output
+    .replace(/\x1b\[K/gu, "")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const segments = line.split("\r").filter((segment) => segment.length > 0);
+      return segments.at(-1) ?? "";
+    });
+
 describe("createMuonProgressRenderer", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it("throttles installing file updates on one spinner line", async () => {
+    vi.useFakeTimers();
     const stderr = captureStderr();
     try {
       const renderer = createMuonProgressRenderer();
@@ -53,12 +59,13 @@ describe("createMuonProgressRenderer", () => {
         });
       }
 
-      expect(stderr.chunks.join("")).not.toContain("\n");
+      const initialOutput = stderr.chunks.join("");
+      expect(initialOutput).not.toContain("\n");
+      expect(initialOutput).toContain("1 files");
+      expect(initialOutput).not.toContain("228 files");
 
-      await wait(450);
-      expect(stderr.chunks.join("")).not.toContain("228 files");
-
-      await wait(100);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(stderr.chunks.join("")).toContain("228 files");
       renderer.flush();
     } finally {
       stderr.restore();
@@ -100,8 +107,47 @@ describe("createMuonProgressRenderer", () => {
     }
 
     const output = stderr.chunks.join("");
-    expect(output).toMatch(/\r[-\\|/] Installing CEF runtime\.\.\. 3 files/u);
     expect(output).toMatch(/\r[-\\|/] Starting muon\.\.\./u);
-    expect(output.match(/\n/gu)?.length ?? 0).toBe(1);
+    expect(getCompletedProgressLines(output)).toEqual([
+      "Installing CEF runtime... 3 files",
+      "Starting muon...",
+    ]);
+  });
+
+  it("keeps different status messages as completed lines", () => {
+    const stderr = captureStderr();
+    try {
+      const renderer = createMuonProgressRenderer();
+      renderer.report({
+        phase: "build",
+        status: "Creating assets.zip",
+        current: 0,
+        total: 0,
+        determinate: false,
+      });
+      renderer.report({
+        phase: "build",
+        status: "Updating Windows resources",
+        current: 0,
+        total: 0,
+        determinate: false,
+      });
+      renderer.report({
+        phase: "build",
+        status: "Writing Linux desktop files",
+        current: 0,
+        total: 0,
+        determinate: false,
+      });
+      renderer.flush();
+    } finally {
+      stderr.restore();
+    }
+
+    expect(getCompletedProgressLines(stderr.chunks.join(""))).toEqual([
+      "Creating assets.zip",
+      "Updating Windows resources",
+      "Writing Linux desktop files",
+    ]);
   });
 });

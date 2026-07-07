@@ -73,6 +73,14 @@ int main() {
                     EXPECTED_MUON_CORE_GIT_COMMIT_HASH)) {
     return 6;
   }
+  if (kMuonRuntimeInfo.muon_core_build_date == nullptr ||
+      kMuonRuntimeInfo.muon_core_build_date[0] == '\0') {
+    return 15;
+  }
+  if (kMuonRuntimeInfo.muon_core_git_commit_date == nullptr ||
+      kMuonRuntimeInfo.muon_core_git_commit_date[0] == '\0') {
+    return 16;
+  }
   if (!StringEquals(kMuonRuntimeInfo.cef_reference_version,
                     EXPECTED_CEF_VERSION)) {
     return 7;

@@ -275,6 +275,7 @@ typedef struct {
 
 typedef struct {
   int is_deb;
+  int is_portable;
   int is_system_setuid;
   char *launcher_path;
   char *system_runtime_path;
@@ -737,6 +738,7 @@ static int read_desktop_config(const char *runtime_dir,
 
 static void install_config_init(MuonInstallConfig *config) {
   config->is_deb = 0;
+  config->is_portable = 0;
   config->is_system_setuid = 0;
   config->launcher_path = NULL;
   config->system_runtime_path = NULL;
@@ -771,6 +773,19 @@ static int read_install_config(const char *runtime_dir, MuonInstallConfig *confi
     yyjson_doc_free(document);
     fprintf(stderr, "muon-bootstrap: muon-install.json type must be a string.\n");
     return -1;
+  }
+  if (strcmp(yyjson_get_str(type), "portable") == 0) {
+    yyjson_val *runtime_mode = yyjson_obj_get(root, "runtimeMode");
+    if (!yyjson_is_str(runtime_mode) ||
+        strcmp(yyjson_get_str(runtime_mode), "in-place") != 0) {
+      yyjson_doc_free(document);
+      fprintf(stderr,
+              "muon-bootstrap: portable muon-install.json runtimeMode must be in-place.\n");
+      return -1;
+    }
+    config->is_portable = 1;
+    yyjson_doc_free(document);
+    return 0;
   }
   if (strcmp(yyjson_get_str(type), "deb") != 0) {
     yyjson_doc_free(document);
@@ -890,6 +905,7 @@ static int update_linux_desktop_entry(const char *runtime_dir,
 #else
 typedef struct {
   int is_deb;
+  int is_portable;
   int is_system_setuid;
   char *launcher_path;
   char *system_runtime_path;
@@ -906,8 +922,39 @@ static void install_config_free(MuonInstallConfig *config) {
 
 static int read_install_config(const char *runtime_dir,
                                MuonInstallConfig *config) {
-  (void)runtime_dir;
   install_config_init(config);
+  char *path = muon_path_join(runtime_dir, MUON_INSTALL_CONFIG_FILE_NAME);
+  if (path == NULL) {
+    return -1;
+  }
+  if (!muon_path_exists(path)) {
+    free(path);
+    return 0;
+  }
+  yyjson_doc *document = muon_json_read_file(path);
+  free(path);
+  if (document == NULL) {
+    return -1;
+  }
+  yyjson_val *root = yyjson_doc_get_root(document);
+  yyjson_val *type = yyjson_is_obj(root) ? yyjson_obj_get(root, "type") : NULL;
+  if (!yyjson_is_str(type)) {
+    yyjson_doc_free(document);
+    fprintf(stderr, "muon-bootstrap: muon-install.json type must be a string.\n");
+    return -1;
+  }
+  if (strcmp(yyjson_get_str(type), "portable") == 0) {
+    yyjson_val *runtime_mode = yyjson_obj_get(root, "runtimeMode");
+    if (!yyjson_is_str(runtime_mode) ||
+        strcmp(yyjson_get_str(runtime_mode), "in-place") != 0) {
+      yyjson_doc_free(document);
+      fprintf(stderr,
+              "muon-bootstrap: portable muon-install.json runtimeMode must be in-place.\n");
+      return -1;
+    }
+    config->is_portable = 1;
+  }
+  yyjson_doc_free(document);
   return 0;
 }
 
@@ -1105,6 +1152,8 @@ int main(int argc, char **argv) {
   char *runtime_dir = NULL;
   if (install.is_system_setuid) {
     runtime_dir = duplicate_string(install.system_runtime_path);
+  } else if (install.is_portable) {
+    runtime_dir = duplicate_string(source_runtime_dir);
   } else {
     runtime_dir =
         app_id == NULL ? NULL : create_state_runtime_dir(app_id, get_default_target());
@@ -1147,6 +1196,27 @@ int main(int argc, char **argv) {
         return 1;
       }
 #endif
+    } else if (install.is_portable) {
+      MuonBootstrapProgress progress;
+      muon_bootstrap_progress_init(&progress);
+      const int has_progress = muon_bootstrap_progress_is_available(&progress);
+      if (muon_prepare_in_place_with_progress(
+              source_runtime_dir, get_default_target(), cache_dir, 0,
+              has_progress, has_progress ? on_prepare_progress : NULL,
+              has_progress ? &progress : NULL) != 0) {
+        if (has_progress) {
+          muon_bootstrap_progress_fail(&progress);
+        }
+        muon_bootstrap_progress_dispose(&progress);
+        free(bootstrap_path);
+        free(source_runtime_dir);
+        free(app_id);
+        free(runtime_dir);
+        free(core_path);
+        install_config_free(&install);
+        return 1;
+      }
+      muon_bootstrap_progress_dispose(&progress);
     } else if (should_prepare_staged_runtime(source_runtime_dir, runtime_dir)) {
       MuonBootstrapProgress progress;
       muon_bootstrap_progress_init(&progress);

@@ -1117,6 +1117,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             muonCore: {
               version: string;
               gitCommitHash: string;
+              buildDate: string;
+              gitCommitDate: string;
             };
             cefReference: {
               version: string;
@@ -1165,6 +1167,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           muonCore: {
             version: expect.any(String),
             gitCommitHash: expect.any(String),
+            buildDate: expect.any(String),
+            gitCommitDate: expect.any(String),
           },
           cefReference: {
             version: expect.any(String),
@@ -1206,6 +1210,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         );
         expect(values.runtimeInfo.muonCore.version).not.toBe("");
         expect(values.runtimeInfo.muonCore.gitCommitHash).not.toBe("");
+        expect(values.runtimeInfo.muonCore.buildDate).not.toBe("");
+        expect(values.runtimeInfo.muonCore.gitCommitDate).not.toBe("");
         expect(values.runtimeInfo.cefReference.artifact.size).toBeGreaterThan(
           0,
         );

@@ -74,7 +74,7 @@ export interface MuonProgressRenderer {
 }
 
 const spinnerFrames = ["-", "\\", "|", "/"] as const;
-const spinnerIntervalMilliseconds = 500;
+const spinnerIntervalMilliseconds = 200;
 const terminalLineStart = "\r";
 const terminalClearLine = "\x1b[K";
 
@@ -163,7 +163,7 @@ const createSpinnerProgressRenderer = (): MuonProgressRenderer => {
         return;
       }
       if (activeLine.key !== nextLine.key) {
-        renderLine();
+        finishLine();
         activeLine = nextLine;
         renderLine();
       } else {

@@ -9,6 +9,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   writeFile,
@@ -59,6 +60,14 @@ interface WindowsNsisInstallIdentity {
   displayName: string;
   installDirectoryName: string;
   runtimeAppId: string;
+}
+
+interface MuonPackCliJsonResult {
+  artifacts: readonly {
+    path: string;
+    target: string;
+    type: string;
+  }[];
 }
 
 const readRequiredEnvironmentValue = (
@@ -158,6 +167,53 @@ const joinWindowsPath = (...paths: string[]): string => win32.join(...paths);
 const quotePowerShellString = (value: string): string =>
   `'${value.replaceAll("'", "''")}'`;
 
+const writeRemoteFile = async (
+  agent: RemoteAgent,
+  path: string,
+  content: Buffer | string,
+): Promise<void> => {
+  await agent.files.mkdir(win32.dirname(path), { recursive: true });
+  await agent.files.writeFile(
+    path,
+    Buffer.isBuffer(content) ? content : Buffer.from(content),
+  );
+};
+
+const writeRemoteTextFile = async (
+  agent: RemoteAgent,
+  path: string,
+  content: string,
+): Promise<void> => {
+  await writeRemoteFile(agent, path, content);
+};
+
+const copyLocalFileToRemote = async (
+  agent: RemoteAgent,
+  localPath: string,
+  remotePath: string,
+): Promise<void> => {
+  await writeRemoteFile(agent, remotePath, await readFile(localPath));
+};
+
+const copyLocalDirectoryToRemote = async (
+  agent: RemoteAgent,
+  localDirectory: string,
+  remoteDirectory: string,
+): Promise<void> => {
+  await agent.files.mkdir(remoteDirectory, { recursive: true });
+  const entries = await readdir(localDirectory, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const localPath = join(localDirectory, entry.name);
+    const remotePath = joinWindowsPath(remoteDirectory, entry.name);
+    if (entry.isDirectory()) {
+      await copyLocalDirectoryToRemote(agent, localPath, remotePath);
+    } else if (entry.isFile()) {
+      await copyLocalFileToRemote(agent, localPath, remotePath);
+    }
+  }
+};
+
 const wait = async (milliseconds: number): Promise<void> => {
   await new Promise<void>((resolvePromise) => {
     setTimeout(resolvePromise, milliseconds);
@@ -251,6 +307,191 @@ const expectWindowsCommandSucceeded = (
     `${label} failed.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   ).toBe(true);
 };
+
+const writeRemoteSharpStub = async (
+  agent: RemoteAgent,
+  remoteNodeModulesDirectory: string,
+): Promise<void> => {
+  const sharpDirectory = joinWindowsPath(remoteNodeModulesDirectory, "sharp");
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(sharpDirectory, "package.json"),
+    `${JSON.stringify({ name: "sharp", version: "0.0.0", main: "index.js" }, null, 2)}\n`,
+  );
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(sharpDirectory, "index.js"),
+    [
+      "module.exports = (input) => {",
+      "  const source = Buffer.isBuffer(input) ? Buffer.from(input) : Buffer.from(input ?? []);",
+      "  let width = 256;",
+      "  let height = 256;",
+      "  const chain = {",
+      "    metadata: async () => ({ format: 'png' }),",
+      "    resize: (nextWidth, nextHeight) => {",
+      "      width = Number(nextWidth) || width;",
+      "      height = Number(nextHeight) || height;",
+      "      return chain;",
+      "    },",
+      "    ensureAlpha: () => chain,",
+      "    png: () => chain,",
+      "    raw: () => chain,",
+      "    toBuffer: async (options) => {",
+      "      if (options?.resolveWithObject === true) {",
+      "        return {",
+      "          data: Buffer.alloc(width * height * 4),",
+      "          info: { width, height, channels: 4 },",
+      "        };",
+      "      }",
+      "      return source;",
+      "    },",
+      "  };",
+      "  return chain;",
+      "};",
+      "",
+    ].join("\n"),
+  );
+};
+
+const stageRemoteMuonPackCli = async (
+  agent: RemoteAgent,
+  remoteDirectory: string,
+): Promise<void> => {
+  const remoteNodeModulesDirectory = joinWindowsPath(
+    remoteDirectory,
+    "node_modules",
+  );
+  const remoteMuonUiDirectory = joinWindowsPath(
+    remoteNodeModulesDirectory,
+    "muon-ui",
+  );
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(remoteMuonUiDirectory, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "muon-ui",
+        version: "0.0.0",
+        type: "module",
+        bin: { muon: "./dist/cli.cjs" },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await copyLocalDirectoryToRemote(
+    agent,
+    resolve("dist"),
+    joinWindowsPath(remoteMuonUiDirectory, "dist"),
+  );
+  for (const packageName of ["adm-zip", "commander", "tar-vern"] as const) {
+    await copyLocalDirectoryToRemote(
+      agent,
+      resolve("..", "node_modules", packageName),
+      joinWindowsPath(remoteNodeModulesDirectory, packageName),
+    );
+  }
+  await writeRemoteSharpStub(agent, remoteNodeModulesDirectory);
+};
+
+const createRemotePlainAssetsProject = async (
+  agent: RemoteAgent,
+  remoteDirectory: string,
+  packageName: string,
+): Promise<void> => {
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(remoteDirectory, "package.json"),
+    `${JSON.stringify(
+      {
+        author: "muon Tester",
+        description: "muon pack Windows e2e sample",
+        name: packageName,
+        version: "1.2.3",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(remoteDirectory, "assets", "index.html"),
+    "<!doctype html><title>windows pack e2e</title>",
+  );
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(remoteDirectory, "muon.json"),
+    `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
+  );
+};
+
+const createRemoteFakeLinuxPackageDist = async (
+  agent: RemoteAgent,
+  remoteDirectory: string,
+): Promise<string> => {
+  const target: MuonBuildTarget = "linux-amd64";
+  const descriptor = getMuonTargetDescriptor(target);
+  const packageDirectory = joinWindowsPath(remoteDirectory, "package-dist");
+  const runtimeDirectory = joinWindowsPath(packageDirectory, "runtime", target);
+  const nativeDirectory = joinWindowsPath(packageDirectory, "native", target);
+  await writeRemoteFile(
+    agent,
+    joinWindowsPath(runtimeDirectory, descriptor.runtimeExecutableName),
+    Buffer.concat([
+      Buffer.from("core prefix\n"),
+      createMuonEmbeddedConfigSlot(),
+      Buffer.from("\ncore suffix\n"),
+    ]),
+  );
+  for (const fileName of descriptor.runtimeFiles) {
+    if (fileName !== descriptor.runtimeExecutableName) {
+      await writeRemoteTextFile(
+        agent,
+        joinWindowsPath(runtimeDirectory, fileName),
+        `${fileName}\n`,
+      );
+    }
+  }
+  await writeRemoteTextFile(
+    agent,
+    joinWindowsPath(runtimeDirectory, "CREDITS.md"),
+    "notices\n",
+  );
+  await writeRemoteFile(
+    agent,
+    joinWindowsPath(nativeDirectory, descriptor.bootstrapExecutableName),
+    Buffer.concat([
+      Buffer.from("bootstrap prefix\n"),
+      createMuonBootstrapEmbeddedConfigSlot(),
+      Buffer.from("\nbootstrap suffix\n"),
+    ]),
+  );
+  await copyLocalFileToRemote(
+    agent,
+    resolve("dist", "native", "muon-256.png"),
+    joinWindowsPath(packageDirectory, "native", "muon-256.png"),
+  );
+  return packageDirectory;
+};
+
+const createMuonPackCliScript = (packageDirectory: string): string => `
+$ErrorActionPreference = 'Stop'
+$cliPath = Join-Path $PWD 'node_modules\\muon-ui\\dist\\cli.cjs'
+$packageDirectory = ${quotePowerShellString(packageDirectory)}
+$arguments = @(
+  $cliPath,
+  'pack',
+  '--target',
+  'linux-amd64',
+  '--json',
+  '--package-directory',
+  $packageDirectory
+)
+& node @arguments
+if ($LASTEXITCODE -ne 0) {
+  exit $LASTEXITCODE
+}
+`;
 
 const createFakeMuonPackageDist = async (
   root: string,
@@ -792,6 +1033,81 @@ afterAll(() => {
 });
 
 describeWindowsNsis(suiteName, { concurrent: false }, () => {
+  it("runs muon pack on Windows and skips deb when dpkg-deb is unavailable", async () => {
+    if (
+      windowsAgent === undefined ||
+      windowsE2eEnvironment.status !== "configured"
+    ) {
+      throw new Error("Windows e2e environment is not configured.");
+    }
+
+    const capabilities = await windowsAgent.capabilities();
+    expect(capabilities.platform).toBe("windows");
+
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const packageName = `muon-pack-e2e-${suffix}`;
+    const remoteDirectory = await createRemoteTestDirectory(
+      windowsAgent,
+      windowsE2eEnvironment.environment,
+      packageName,
+    );
+
+    try {
+      await stageRemoteMuonPackCli(windowsAgent, remoteDirectory);
+      await createRemotePlainAssetsProject(
+        windowsAgent,
+        remoteDirectory,
+        packageName,
+      );
+      const packageDirectory = await createRemoteFakeLinuxPackageDist(
+        windowsAgent,
+        remoteDirectory,
+      );
+      const result = await runWindowsPowerShell(
+        windowsAgent,
+        remoteDirectory,
+        "muon-pack-linux",
+        createMuonPackCliScript(packageDirectory),
+        120000,
+      );
+      expect(
+        result.exitCode === 0 || result.exitCode === null,
+        `muon pack failed.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      ).toBe(true);
+      const parsed = JSON.parse(result.stdout.trim()) as MuonPackCliJsonResult;
+      expect(
+        parsed.artifacts.map(
+          (artifact) =>
+            `${artifact.type}:${artifact.target}:${win32.basename(artifact.path)}`,
+        ),
+      ).toEqual([`tar.gz:linux-amd64:${packageName}-1.2.3-linux-amd64.tar.gz`]);
+      expect(result.stderr).toContain(
+        "Warning: dpkg-deb is not available; skipping deb package for linux-amd64.",
+      );
+      const [artifact] = parsed.artifacts;
+      expect(artifact).toBeDefined();
+      await expect(
+        windowsAgent.files.exists(artifact?.path ?? ""),
+      ).resolves.toBe(true);
+      await expect(
+        windowsAgent.files.exists(
+          joinWindowsPath(
+            remoteDirectory,
+            "artifacts",
+            `${packageName}-1.2.3-amd64.deb`,
+          ),
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        windowsAgent.files.exists(
+          joinWindowsPath(remoteDirectory, "artifacts", "deb"),
+        ),
+      ).resolves.toBe(false);
+    } finally {
+      await removeRemoteDirectoryIfExists(windowsAgent, remoteDirectory);
+    }
+  });
+
   it("is visible in Windows Settings and can be uninstalled from it", async () => {
     if (
       windowsAgent === undefined ||

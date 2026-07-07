@@ -5,12 +5,27 @@
 
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  cp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { parse } from "json5";
-import type { UserConfig } from "vite";
+import type { InlineConfig, Plugin, UserConfig } from "vite";
 
+import {
+  loadMuonBuildSequenceProject,
+  muonBuildSequenceSuppressViteBuildEnvironmentKey,
+  resolveMuonViteBuildOptions,
+  type MuonBuildSequenceProject,
+} from "./build-sequence.js";
+import type { MuonRuntimePluginConfig } from "./capability.js";
 import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import {
@@ -20,7 +35,10 @@ import {
 import {
   flattenVitePluginOptions,
   getMuonVitePluginOptions,
+  getMuonVitePluginRuntimeState,
+  type MuonVitePluginRuntimeState,
 } from "./vite-options.js";
+import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 
 const muonRecycleExitCode = 88;
@@ -30,6 +48,15 @@ type JsonObject = Record<string, unknown>;
 interface LoadedViteMuonOptions {
   root: string;
   pluginOptions: MuonVitePluginOptions | undefined;
+}
+
+interface PreparedViteRunAssets {
+  root: string;
+  pluginOptions: MuonVitePluginOptions;
+  configPath: string | undefined;
+  assetSourcePath: string;
+  browserStartPage: string | undefined;
+  runtimePluginConfig: MuonRuntimePluginConfig;
 }
 
 interface ProjectConfigResolution {
@@ -45,11 +72,13 @@ interface MuonDevOverrideConfig {
     enable: true;
   };
   browser?: {
-    keybind: {
+    startPage?: string;
+    keybind?: {
       devtools: "f12";
       recycle: "ctrl+f12";
     };
   };
+  plugin?: MuonRuntimePluginConfig;
 }
 
 /**
@@ -266,6 +295,105 @@ const loadViteMuonOptions = async (
   };
 };
 
+const getRuntimePluginConfigFromViteBuild = async (
+  root: string,
+): Promise<MuonRuntimePluginConfig> => {
+  const vite = await import("vite");
+  let resolvedRuntimeStates: readonly MuonVitePluginRuntimeState[] = [];
+  const inspector: Plugin = {
+    name: "muon-run-vite-build-inspector",
+    enforce: "post",
+    configResolved: (config): void => {
+      const runtimeStates = config.plugins
+        .map((plugin) => getMuonVitePluginRuntimeState(plugin))
+        .filter(
+          (runtimeState): runtimeState is MuonVitePluginRuntimeState =>
+            runtimeState !== undefined,
+        );
+      if (runtimeStates.length > 1) {
+        throw new Error(
+          "Multiple muon() plugin definitions were found in vite.config.*.",
+        );
+      }
+      resolvedRuntimeStates = runtimeStates;
+    },
+  };
+  const previous =
+    process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
+  process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = "1";
+  try {
+    await vite.build({
+      root,
+      logLevel: "silent",
+      plugins: [inspector],
+    } satisfies InlineConfig);
+  } finally {
+    if (previous === undefined) {
+      delete process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
+    } else {
+      process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = previous;
+    }
+  }
+
+  const runtimeState = resolvedRuntimeStates[0];
+  const runtimePluginConfig = runtimeState?.getRuntimePluginConfig();
+  if (runtimePluginConfig === undefined) {
+    throw new Error("muon Vite plugin runtime config was not resolved.");
+  }
+  return runtimePluginConfig;
+};
+
+const copyViteOutputAsRunAssets = async (
+  project: MuonBuildSequenceProject,
+  assetSourcePath: string,
+  assetPrefix: string,
+): Promise<void> => {
+  if (project.viteOutputDirectory === undefined) {
+    throw new Error("Vite output directory could not be resolved.");
+  }
+
+  await assertDevelopmentAssetDirectory(project.viteOutputDirectory);
+  const destinationPath = join(assetSourcePath, ...assetPrefix.split("/"));
+  await mkdir(dirname(destinationPath), { recursive: true });
+  await cp(project.viteOutputDirectory, destinationPath, {
+    recursive: true,
+  });
+};
+
+const prepareViteRunAssets = async (
+  cwd: string,
+): Promise<PreparedViteRunAssets | undefined> => {
+  const project = await loadMuonBuildSequenceProject(cwd);
+  if (project.pluginOptions === undefined) {
+    return undefined;
+  }
+
+  const buildOptions = resolveMuonViteBuildOptions(project.pluginOptions);
+  const packagedAssetOptions = createVitePackagedAssetOptions(
+    project.viteBase ?? "/",
+  );
+  const assetSourcePath = join(project.root, ".muon", "run", "assets");
+
+  await rm(assetSourcePath, { recursive: true, force: true });
+  const runtimePluginConfig = await getRuntimePluginConfigFromViteBuild(
+    project.viteBuildRoot,
+  );
+  await copyViteOutputAsRunAssets(
+    project,
+    assetSourcePath,
+    packagedAssetOptions.assetPrefix,
+  );
+
+  return {
+    root: project.root,
+    pluginOptions: project.pluginOptions,
+    configPath: buildOptions.configPath,
+    assetSourcePath,
+    browserStartPage: packagedAssetOptions.browserStartPage,
+    runtimePluginConfig,
+  };
+};
+
 const resolveProjectConfigPath = async (
   root: string,
   configPath: string | undefined,
@@ -363,6 +491,15 @@ const readConfigAssetSourcePath = (
   return sourcePath;
 };
 
+const hasConfigBrowserStartPage = (config: JsonObject | undefined): boolean => {
+  if (config === undefined) {
+    return false;
+  }
+
+  const browser = config.browser;
+  return isJsonObject(browser) && browser.startPage !== undefined;
+};
+
 const assertDevelopmentAssetDirectory = async (
   assetSourcePath: string,
 ): Promise<void> => {
@@ -425,28 +562,47 @@ const resolveAssetSource = async (
 const createMuonDevOverrideConfig = (
   assetSourcePath: string | undefined,
   enableDebugger: boolean,
-): MuonDevOverrideConfig => ({
-  ...(assetSourcePath === undefined
-    ? {}
-    : {
-        asset: {
-          sourcePath: assetSourcePath,
-        },
-      }),
-  ...(enableDebugger
-    ? {
-        cdp: {
-          enable: true,
-        },
-        browser: {
-          keybind: {
-            devtools: "f12",
-            recycle: "ctrl+f12",
+  browserStartPage: string | undefined,
+  runtimePluginConfig: MuonRuntimePluginConfig | undefined,
+): MuonDevOverrideConfig => {
+  const browser =
+    browserStartPage === undefined && !enableDebugger
+      ? undefined
+      : {
+          ...(browserStartPage === undefined
+            ? {}
+            : { startPage: browserStartPage }),
+          ...(enableDebugger
+            ? {
+                keybind: {
+                  devtools: "f12" as const,
+                  recycle: "ctrl+f12" as const,
+                },
+              }
+            : {}),
+        };
+
+  return {
+    ...(assetSourcePath === undefined
+      ? {}
+      : {
+          asset: {
+            sourcePath: assetSourcePath,
           },
-        },
-      }
-    : {}),
-});
+        }),
+    ...(enableDebugger
+      ? {
+          cdp: {
+            enable: true,
+          },
+        }
+      : {}),
+    ...(browser === undefined ? {} : { browser }),
+    ...(runtimePluginConfig === undefined
+      ? {}
+      : { plugin: runtimePluginConfig }),
+  };
+};
 
 const writeMuonDevOverrideConfig = async (
   overrideConfigPath: string,
@@ -493,7 +649,17 @@ export const runMuonDev = async (
   options: MuonDevOptions = {},
 ): Promise<MuonDevResult> => {
   const cwd = resolve(options.root ?? process.cwd());
-  const loadedViteOptions = await loadViteMuonOptions(cwd);
+  const preparedViteAssets =
+    options.assetSourcePath === undefined
+      ? await prepareViteRunAssets(cwd)
+      : undefined;
+  const loadedViteOptions =
+    preparedViteAssets === undefined
+      ? await loadViteMuonOptions(cwd)
+      : {
+          root: preparedViteAssets.root,
+          pluginOptions: preparedViteAssets.pluginOptions,
+        };
   const root = loadedViteOptions.root;
   const pluginOptions = loadedViteOptions.pluginOptions;
   const platform = options.platform ?? process.platform;
@@ -519,12 +685,22 @@ export const runMuonDev = async (
         : resolveFromRoot(root, pluginOptions.stagePath);
   const enableDebugger =
     options.enableDebugger ?? pluginOptions?.enableDebugger ?? true;
-  const projectConfig = await resolveProjectConfig(root, options.configPath);
-  const asset = await resolveAssetSource(
+  const projectConfig = await resolveProjectConfig(
     root,
-    options.assetSourcePath,
-    projectConfig,
+    options.configPath ?? preparedViteAssets?.configPath,
   );
+  const asset =
+    preparedViteAssets === undefined
+      ? await resolveAssetSource(root, options.assetSourcePath, projectConfig)
+      : {
+          assetSourcePath: preparedViteAssets.assetSourcePath,
+          overrideAssetSourcePath: preparedViteAssets.assetSourcePath,
+        };
+  const browserStartPage =
+    preparedViteAssets?.browserStartPage !== undefined &&
+    !hasConfigBrowserStartPage(projectConfig.config)
+      ? preparedViteAssets.browserStartPage
+      : undefined;
   const overrideConfigPath = join(root, ".muon", "run", "muon.run.json");
 
   await ensureMuonGitignoreEntry(root);
@@ -547,7 +723,12 @@ export const runMuonDev = async (
 
   await writeMuonDevOverrideConfig(
     overrideConfigPath,
-    createMuonDevOverrideConfig(asset.overrideAssetSourcePath, enableDebugger),
+    createMuonDevOverrideConfig(
+      asset.overrideAssetSourcePath,
+      enableDebugger,
+      browserStartPage,
+      preparedViteAssets?.runtimePluginConfig,
+    ),
   );
   const muonExecutablePath = getMuonExecutablePath(
     preparedRuntime.stagePath,

@@ -39,6 +39,10 @@ set(MUON_CORE_VERSION "" CACHE STRING
   "muon-core version used to generate runtime metadata.")
 set(MUON_CORE_GIT_COMMIT_HASH "" CACHE STRING
   "muon-core git commit hash used to generate runtime metadata.")
+set(MUON_CORE_BUILD_DATE "" CACHE STRING
+  "muon-core build date used to generate runtime metadata.")
+set(MUON_CORE_GIT_COMMIT_DATE "" CACHE STRING
+  "muon-core git commit date used to generate runtime metadata.")
 set(MUON_CORE_VERSION_HEADER "" CACHE FILEPATH
   "Generated muon-core version header used to generate runtime metadata.")
 set(TRA_FFIC_ROOT "../deps/tra-ffic" CACHE PATH
@@ -88,6 +92,25 @@ if(NOT MUON_CORE_GIT_COMMIT_HASH)
     set(MUON_CORE_GIT_COMMIT_HASH "${MUON_CORE_GIT_OUTPUT}")
   else()
     set(MUON_CORE_GIT_COMMIT_HASH "unknown")
+  endif()
+endif()
+if(NOT MUON_CORE_BUILD_DATE)
+  string(TIMESTAMP MUON_CORE_BUILD_DATE "%Y-%m-%dT%H:%M:%SZ" UTC)
+endif()
+if(NOT MUON_CORE_GIT_COMMIT_DATE)
+  execute_process(
+    COMMAND git show -s --format=%cI HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE MUON_CORE_GIT_DATE_RESULT
+    OUTPUT_VARIABLE MUON_CORE_GIT_DATE_OUTPUT
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  if(MUON_CORE_GIT_DATE_RESULT EQUAL 0 AND
+      NOT MUON_CORE_GIT_DATE_OUTPUT STREQUAL "")
+    set(MUON_CORE_GIT_COMMIT_DATE "${MUON_CORE_GIT_DATE_OUTPUT}")
+  else()
+    set(MUON_CORE_GIT_COMMIT_DATE "unknown")
   endif()
 endif()
 if(NOT MUON_RUNTIME_DIR)
@@ -951,6 +974,8 @@ else()
 
 #define MUON_CORE_VERSION \"${MUON_CORE_VERSION}\"
 #define MUON_CORE_GIT_COMMIT_HASH \"${MUON_CORE_GIT_COMMIT_HASH}\"
+#define MUON_CORE_BUILD_DATE \"${MUON_CORE_BUILD_DATE}\"
+#define MUON_CORE_GIT_COMMIT_DATE \"${MUON_CORE_GIT_COMMIT_DATE}\"
 
 #endif
 ")

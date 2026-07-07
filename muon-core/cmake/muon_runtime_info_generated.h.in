@@ -29,6 +29,8 @@ typedef struct {
   const char *cef_target;
   const char *muon_core_version;
   const char *muon_core_git_commit_hash;
+  const char *muon_core_build_date;
+  const char *muon_core_git_commit_date;
   const char *cef_reference_version;
   const char *cef_reference_distribution;
   int cef_reference_api_version;
@@ -47,8 +49,10 @@ static const MuonRuntimeInfo kMuonRuntimeInfo = {
     "@APP_EXECUTABLE_NAME@",
     "@MUON_TARGET_NAME@",
     "@MUON_CEF_TARGET_NAME@",
-    MUON_CORE_VERSION,          // muon_core_version_generated.h
-    MUON_CORE_GIT_COMMIT_HASH,  // muon_core_version_generated.h
+    MUON_CORE_VERSION,           // muon_core_version_generated.h
+    MUON_CORE_GIT_COMMIT_HASH,   // muon_core_version_generated.h
+    MUON_CORE_BUILD_DATE,        // muon_core_version_generated.h
+    MUON_CORE_GIT_COMMIT_DATE,   // muon_core_version_generated.h
     "@MUON_CEF_VERSION@",
     "minimal",
     @MUON_CEF_API_VERSION@,

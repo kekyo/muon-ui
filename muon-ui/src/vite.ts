@@ -20,7 +20,10 @@ import {
   type MuonResolvedPluginAccessOptions,
 } from "./plugin-access.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
-import { attachMuonVitePluginOptions } from "./vite-options.js";
+import {
+  attachMuonVitePluginOptions,
+  attachMuonVitePluginRuntimeState,
+} from "./vite-options.js";
 import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import {
@@ -192,7 +195,7 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
-   * Stable base application identifier used for portable runtime state.
+   * Stable base application identifier used for runtime app identity.
    *
    * @remarks Windows target distributions embed `<appId>.<arch>` as their
    * runtime app identifier. Linux targets embed this value unchanged.
@@ -227,6 +230,16 @@ export interface MuonViteBuildOptions {
    * the packaged `muon-256.png` icon.
    */
   iconPath?: string;
+
+  /**
+   * Additional project files copied next to the generated app launcher.
+   *
+   * @remarks When omitted, `package.json` `files` is used as a candidate list.
+   * Only regular files are copied. Asset input paths, `node_modules`, `.git`,
+   * and generated target output directories are excluded. Set an empty array to
+   * disable package.json files fallback.
+   */
+  distributionFiles?: readonly string[];
 
   /**
    * Windows PE and NSIS resource metadata.
@@ -362,6 +375,11 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   let capabilityResolver: MuonCapabilityModuleResolver | undefined = undefined;
   let resolvedPluginAccess: MuonResolvedPluginAccessOptions | undefined =
     undefined;
+  let loadedCapabilityRuntimePluginConfig: MuonRuntimePluginConfig | undefined =
+    undefined;
+
+  const getRuntimePluginConfig = (): MuonRuntimePluginConfig =>
+    resolveMuonRuntimePluginConfig(capabilityResolver, resolvedPluginAccess);
 
   const plugin: Plugin = {
     name: "muon",
@@ -402,16 +420,18 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     },
     resolveId: (source, importer) =>
       capabilityResolver?.resolveId(source, importer)?.id,
-    load: (id) => capabilityResolver?.load(id),
+    load: (id) => {
+      const source = capabilityResolver?.load(id);
+      if (source !== undefined) {
+        loadedCapabilityRuntimePluginConfig = getRuntimePluginConfig();
+      }
+      return source;
+    },
     configureServer: async (server) => {
       await startMuonViteBrowserBridge({
         server,
         pluginOptions: options,
-        getRuntimePluginConfig: () =>
-          resolveMuonRuntimePluginConfig(
-            capabilityResolver,
-            resolvedPluginAccess,
-          ),
+        getRuntimePluginConfig,
         platform: process.platform,
         architecture: process.arch,
         environment: process.env,
@@ -435,10 +455,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       const muonBuildOptions = createMuonBuildOptions(
         resolvedConfig,
         buildOptions,
-        resolveMuonRuntimePluginConfig(
-          capabilityResolver,
-          resolvedPluginAccess,
-        ),
+        getRuntimePluginConfig(),
       );
       const progressRenderer = createMuonProgressRenderer();
       (muonBuildOptions as InternalMuonBuildOptions).progress =
@@ -451,7 +468,16 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     },
   };
 
-  return attachMuonVitePluginOptions(plugin, options);
+  return attachMuonVitePluginRuntimeState(
+    attachMuonVitePluginOptions(plugin, options),
+    {
+      getResolvedConfig: () => resolvedConfig,
+      getRuntimePluginConfig: () =>
+        resolvedConfig === undefined
+          ? undefined
+          : (loadedCapabilityRuntimePluginConfig ?? getRuntimePluginConfig()),
+    },
+  );
 };
 
 const isMuonStagingWatchPath = (path: string): boolean => {
@@ -521,6 +547,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.iconPath !== undefined) {
     options.iconPath = buildOptions.iconPath;
+  }
+  if (buildOptions.distributionFiles !== undefined) {
+    options.distributionFiles = buildOptions.distributionFiles;
   }
   if (buildOptions.windowsResource !== undefined) {
     options.windowsResource = buildOptions.windowsResource;

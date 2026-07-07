@@ -10,6 +10,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -439,6 +440,34 @@ const writeDevAssets = async (root: string): Promise<string> => {
     "<!doctype html><title>muon run test</title>",
   );
   return assetsPath;
+};
+
+const writeRunViteApplication = async (root: string): Promise<void> => {
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(
+    join(root, "index.html"),
+    '<!doctype html><div id="app"></div><script type="module" src="/src/main.ts"></script>',
+  );
+  await writeFile(
+    join(root, "src", "main.ts"),
+    'document.querySelector("#app")?.append("muon run vite build");\n',
+  );
+};
+
+const readRunBuiltJavaScript = async (
+  root: string,
+  assetBasePath = join(".muon", "run", "assets", "main", "assets"),
+): Promise<string> => {
+  const assetsDirectory = join(root, assetBasePath);
+  const fileNames = await readdir(assetsDirectory);
+  const chunks: string[] = [];
+  for (const fileName of fileNames) {
+    if (!fileName.endsWith(".js")) {
+      continue;
+    }
+    chunks.push(await readFile(join(assetsDirectory, fileName), "utf8"));
+  }
+  return chunks.join("\n");
 };
 
 const writeMuonViteConfig = async (
@@ -1891,6 +1920,298 @@ describe("muon Vite plugin", () => {
 });
 
 describe("muon run CLI", () => {
+  it("builds Vite assets before direct run when a muon plugin config is present", async () => {
+    const root = await createTemporaryDirectory("muon-dev-vite-assets-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeRunViteApplication(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    await writeMuonViteConfig(
+      root,
+      [
+        'import muon from "__MUON_VITE_URL__";',
+        "export default {",
+        '  base: "/nested/base/",',
+        '  build: { outDir: "web-dist" },',
+        "  plugins: [",
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)} }),`,
+        "  ],",
+        "};",
+      ].join("\n"),
+    );
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-dev-cache-");
+
+    const result = await runMuonCli(root, ["run", "--json"]);
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    const devResult = JSON.parse(result.stdout) as {
+      assetSourcePath: string;
+      overrideConfigPath: string;
+    };
+    const overrideConfig = JSON.parse(
+      await readFile(join(outputDirectory, "override.json"), "utf8"),
+    ) as {
+      asset: { sourcePath: string };
+      browser: { startPage: string };
+    };
+
+    await expect(
+      access(join(root, "web-dist", "index.html")),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(
+        join(
+          root,
+          ".muon",
+          "run",
+          "assets",
+          "main",
+          "nested",
+          "base",
+          "index.html",
+        ),
+      ),
+    ).resolves.toBeUndefined();
+    expect(devResult.assetSourcePath).toBe(
+      join(root, ".muon", "run", "assets"),
+    );
+    expect(overrideConfig.asset.sourcePath).toBe(devResult.assetSourcePath);
+    expect(overrideConfig.browser.startPage).toBe(
+      "asset://main/nested/base/index.html",
+    );
+    expect(await readCapturedArguments(outputDirectory)).toEqual([
+      "-c",
+      devResult.overrideConfigPath,
+    ]);
+  });
+
+  it("uses the Vite build config path for direct run unless the CLI overrides it", async () => {
+    const root = await createTemporaryDirectory("muon-dev-vite-config-path-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    const pluginConfigPath = join(root, "settings", "plugin-muon.json");
+    const cliConfigPath = join(root, "settings", "cli-muon.json");
+    await mkdir(dirname(pluginConfigPath), { recursive: true });
+    await writeFile(
+      pluginConfigPath,
+      `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
+    );
+    await writeFile(
+      cliConfigPath,
+      `${JSON.stringify({ network: { allow: ["asset://cli/**"] } }, null, 2)}\n`,
+    );
+    await writeRunViteApplication(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    await writeMuonViteConfig(
+      root,
+      [
+        'import muon from "__MUON_VITE_URL__";',
+        "export default {",
+        '  build: { outDir: "web-dist" },',
+        "  plugins: [",
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, build: { configPath: "settings/plugin-muon.json" } }),`,
+        "  ],",
+        "};",
+      ].join("\n"),
+    );
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-dev-cache-");
+
+    const pluginResult = await runMuonCli(root, ["run", "--json"]);
+    expect(pluginResult.stderr).toBe("");
+    expect(pluginResult.exitCode).toBe(0);
+    const pluginDevResult = JSON.parse(pluginResult.stdout) as {
+      overrideConfigPath: string;
+      projectConfigPath: string;
+    };
+    expect(pluginDevResult.projectConfigPath).toBe(pluginConfigPath);
+    expect(await readCapturedArguments(outputDirectory)).toEqual([
+      "-c",
+      pluginConfigPath,
+      "-c",
+      pluginDevResult.overrideConfigPath,
+    ]);
+
+    const cliResult = await runMuonCli(root, [
+      "run",
+      "--config",
+      "settings/cli-muon.json",
+      "--json",
+    ]);
+    expect(cliResult.stderr).toBe("");
+    expect(cliResult.exitCode).toBe(0);
+    const cliDevResult = JSON.parse(cliResult.stdout) as {
+      overrideConfigPath: string;
+      projectConfigPath: string;
+    };
+    expect(cliDevResult.projectConfigPath).toBe(cliConfigPath);
+    expect(await readCapturedArguments(outputDirectory)).toEqual([
+      "-c",
+      cliConfigPath,
+      "-c",
+      cliDevResult.overrideConfigPath,
+    ]);
+  });
+
+  it("keeps a configured browser start page for Vite-backed direct run", async () => {
+    const root = await createTemporaryDirectory("muon-dev-vite-start-page-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify({ browser: { startPage: "asset://main/custom.html" } }, null, 2)}\n`,
+    );
+    await writeRunViteApplication(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    await writeMuonViteConfig(
+      root,
+      [
+        'import muon from "__MUON_VITE_URL__";',
+        "export default {",
+        '  base: "/nested/base/",',
+        '  build: { outDir: "web-dist" },',
+        "  plugins: [",
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)} }),`,
+        "  ],",
+        "};",
+      ].join("\n"),
+    );
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-dev-cache-");
+
+    const result = await runMuonCli(root, ["run", "--json"]);
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    const devResult = JSON.parse(result.stdout) as {
+      overrideConfigPath: string;
+    };
+    const overrideConfig = JSON.parse(
+      await readFile(join(outputDirectory, "override.json"), "utf8"),
+    ) as {
+      browser: { startPage?: string };
+    };
+
+    expect(overrideConfig.browser.startPage).toBeUndefined();
+    expect(await readCapturedArguments(outputDirectory)).toEqual([
+      "-c",
+      join(root, "muon.json"),
+      "-c",
+      devResult.overrideConfigPath,
+    ]);
+  });
+
+  it("keeps Vite pluginAccess capability ids consistent with direct run config", async () => {
+    const root = await createTemporaryDirectory("muon-dev-vite-capability-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await mkdir(join(root, "src", "native"), { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<script type="module" src="/src/main.ts"></script>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      'import { runNative } from "./native/executor";\nvoid runNative();\n',
+    );
+    await writeFile(
+      join(root, "src", "native", "executor.ts"),
+      [
+        'import { spawn } from "muon:executor";',
+        "export const runNative = async () =>",
+        "  await spawn({ command: 'node', args: ['script.js'] });",
+        "",
+      ].join("\n"),
+    );
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    await writeMuonViteConfig(
+      root,
+      [
+        'import muon from "__MUON_VITE_URL__";',
+        "export default {",
+        '  build: { outDir: "web-dist" },',
+        "  plugins: [",
+        "    muon({",
+        `      muonPath: ${JSON.stringify(muonDirectory)},`,
+        `      cefPath: ${JSON.stringify(cefDirectory)},`,
+        "      pluginAccess: {",
+        "        plugins: [",
+        "          {",
+        '            name: "internal",',
+        "            imports: [",
+        "              {",
+        '                sources: ["src/native/**"],',
+        '                allow: ["muon.executor.spawn"],',
+        "              },",
+        "            ],",
+        "          },",
+        "        ],",
+        "      },",
+        "    }),",
+        "  ],",
+        "};",
+      ].join("\n"),
+    );
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-dev-cache-");
+
+    const result = await runMuonCli(root, ["run", "--json"]);
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    const overrideConfig = JSON.parse(
+      await readFile(join(outputDirectory, "override.json"), "utf8"),
+    ) as {
+      plugin: {
+        capabilities: { id: string; allow: string[] }[];
+        plugins: { name: string; allow: string[] }[];
+      };
+    };
+    const capabilityId = overrideConfig.plugin.capabilities[0]?.id;
+    if (capabilityId === undefined) {
+      throw new Error("capability id was not generated");
+    }
+
+    expect(overrideConfig.plugin.plugins).toEqual([
+      {
+        name: "internal",
+        allow: ["muon.executor.spawn"],
+      },
+    ]);
+    expect(await readRunBuiltJavaScript(root)).toContain(capabilityId);
+  });
+
+  it("rejects Vite-backed direct run when muon build is disabled", async () => {
+    const root = await createTemporaryDirectory("muon-dev-vite-disabled-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeRunViteApplication(root);
+    await writeMuonViteConfig(
+      root,
+      [
+        'import muon from "__MUON_VITE_URL__";',
+        "export default {",
+        "  plugins: [",
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, build: false }),`,
+        "  ],",
+        "};",
+      ].join("\n"),
+    );
+
+    const result = await runMuonCli(root, ["run", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "muon build is disabled by muon({ build: false })",
+    );
+  });
+
   it("launches muon directly without a Vite config", async () => {
     const root = await createTemporaryDirectory("muon-dev-direct-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
@@ -2045,7 +2366,7 @@ describe("muon run CLI", () => {
         'import muon from "__MUON_VITE_URL__";',
         "export default {",
         "  plugins: [",
-        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, build: { targets: ["linux-amd64"] } }),`,
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, build: false }),`,
         "  ],",
         "};",
       ].join("\n"),

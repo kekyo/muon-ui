@@ -1464,9 +1464,22 @@ void MuonTitleBarController::SetNativeHoveredControl(
   SendNativeHover();
 }
 
+void MuonTitleBarController::SetNativePressedControl(
+    MuonTitleBarControlAction action) {
+  if (native_pressed_control_ == action) {
+    if (action != MuonTitleBarControlAction::NoControl) {
+      SendNativePressed();
+    }
+    return;
+  }
+  native_pressed_control_ = action;
+  SendNativePressed();
+}
+
 void MuonTitleBarController::SetVisible(bool visible) {
   visible_ = visible;
   if (!visible_) {
+    SetNativePressedControl(MuonTitleBarControlAction::NoControl);
     SetNativeHoveredControl(MuonTitleBarControlAction::NoControl);
   }
   const auto title_bar_view = ResolveTitleBarView();
@@ -1589,6 +1602,7 @@ void MuonTitleBarController::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   SendState();
   SendIcon();
   SendNativeHover();
+  SendNativePressed();
 }
 
 bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -1690,6 +1704,17 @@ void MuonTitleBarController::SendNativeHover() {
   ExecuteJavaScript(
       std::string("window.__muonTitleBar && "
                   "window.__muonTitleBar.setNativeHover(") +
+      (action_name == nullptr ? std::string("null")
+                              : CreateJavaScriptStringLiteral(action_name)) +
+      ");");
+}
+
+void MuonTitleBarController::SendNativePressed() {
+  const auto* action_name =
+      GetMuonTitleBarControlActionName(native_pressed_control_);
+  ExecuteJavaScript(
+      std::string("window.__muonTitleBar && "
+                  "window.__muonTitleBar.setNativePressed(") +
       (action_name == nullptr ? std::string("null")
                               : CreateJavaScriptStringLiteral(action_name)) +
       ");");
@@ -2251,6 +2276,24 @@ bool SetRegisteredMuonTitleBarHoveredControl(
     return false;
   }
   controller->SetNativeHoveredControl(action);
+  return true;
+}
+
+bool SetRegisteredMuonTitleBarPressedControl(
+    CefWindowHandle window_handle,
+    MuonTitleBarControlAction action) {
+  CEF_REQUIRE_UI_THREAD();
+
+  const auto controller =
+      FindMuonTitleBarControllerByWindowHandle(window_handle);
+  if (controller == nullptr) {
+    return false;
+  }
+  if (action != MuonTitleBarControlAction::NoControl &&
+      !controller->CanHandleNativeWindowControls()) {
+    return false;
+  }
+  controller->SetNativePressedControl(action);
   return true;
 }
 

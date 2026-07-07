@@ -1288,16 +1288,25 @@ lastCatalogUpdateUnix=0
         event.total > 0 &&
         event.current > 0,
     );
-    const installEvent = events.find(
+    const extractEvent = events.find(
+      (event) =>
+        event.phase === "installing" &&
+        event.status === "Extracting CEF runtime..." &&
+        event.current > 0,
+    );
+    const finalInstallEvent = events.find(
       (event) =>
         event.phase === "installing" &&
         event.status === "Installing CEF runtime..." &&
-        event.current > 0,
+        !event.determinate &&
+        event.current === 3 &&
+        event.total === 0,
     );
 
     expect(result.stagePath).toBe(fixture.stageDir);
     expect(downloadEvent).toBeDefined();
-    expect(installEvent).toBeDefined();
+    expect(extractEvent).toBeDefined();
+    expect(finalInstallEvent).toBeDefined();
   });
 
   it("forwards progress messages from the TypeScript wrapper", async () => {
@@ -1365,7 +1374,7 @@ lastCatalogUpdateUnix=0
 
     const stderr = chunks.join("");
     expect(stderr).toMatch(/\r[-\\|/] Downloading CEF runtime\.\.\. \d+%/u);
-    expect(stderr).toMatch(/\r[-\\|/] Installing CEF runtime\.\.\. \d+ files/u);
+    expect(stderr).toMatch(/\rInstalling CEF runtime\.\.\. \d+ files/u);
     expect(stderr).toContain("Starting muon...");
   });
 
@@ -1386,8 +1395,12 @@ lastCatalogUpdateUnix=0
       expect.stringContaining("|Verifying download...|"),
     );
     expect(firstRun).toContainEqual(
+      expect.stringContaining("|Extracting CEF runtime...|"),
+    );
+    expect(firstRun).toContainEqual(
       expect.stringContaining("|Installing CEF runtime...|"),
     );
+    expect(firstRun).toContain("install|Installing CEF runtime...|0|3|0");
     expect(firstRun).toContainEqual(
       expect.stringContaining("|Starting muon...|"),
     );
@@ -1822,6 +1835,63 @@ exit 19
     await expect(
       readFile(join(outputDirectory, "state-launcher.txt"), "utf8"),
     ).resolves.toBe("state launcher\n");
+  });
+
+  it("bootstraps a portable install in place without using the user state runtime", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-bootstrap-portable-state-",
+    );
+    const appId = "scope.portable-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
+    const outputDirectory = await createTemporaryDirectory(
+      "muon-bootstrap-portable-output-",
+    );
+    const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+pwd > '${escapedOutput}/cwd.txt'
+exit 17
+`,
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId },
+    });
+
+    await expect(
+      execFileAsync(appBootstrapPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CACHE_DIR: fixture.cacheDir,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 17 });
+
+    await expect(
+      readFile(join(outputDirectory, "cwd.txt"), "utf8"),
+    ).resolves.toBe(`${fixture.muonPath}\n`);
+    await expect(
+      readFile(join(fixture.muonPath, "libcef.so"), "utf8"),
+    ).resolves.toBe("cef library\n");
+    await expect(access(join(stateRuntimePath, "muon-core"))).rejects.toThrow();
   });
 
   it("updates the staged runtime and desktop entry from a newer portable distribution", async () => {

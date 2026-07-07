@@ -17,7 +17,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
@@ -80,12 +88,18 @@ type BuildConfig = {
 };
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
+  browserProfilePathOverride: string | undefined;
   progress?: MuonProgressCallback;
 }
 
 type ZipEntry = {
   name: string;
   data: Buffer;
+};
+
+type DistributionFile = {
+  sourcePath: string;
+  fileName: string;
 };
 
 /**
@@ -125,7 +139,7 @@ export interface MuonBuildOptions {
    */
   appName?: string;
   /**
-   * Stable base application identifier used for portable runtime state.
+   * Stable base application identifier used for runtime app identity.
    *
    * @remarks Windows target distributions embed `<appId>.<arch>` as their
    * runtime app identifier. Linux targets embed this value unchanged.
@@ -159,6 +173,14 @@ export interface MuonBuildOptions {
    * Platform-specific icon paths override it for their target.
    */
   iconPath?: string;
+  /**
+   * Additional project files copied next to the generated app launcher.
+   *
+   * @remarks When omitted, `package.json` `files` is used as a candidate list.
+   * Only regular files are copied. Asset input paths, `node_modules`, `.git`,
+   * and generated target output directories are excluded.
+   */
+  distributionFiles?: readonly string[];
   /**
    * Windows PE and NSIS resource metadata.
    *
@@ -273,7 +295,7 @@ export interface MuonBuildResult {
    */
   appName: string;
   /**
-   * Stable base application identifier used to derive target runtime state.
+   * Stable base application identifier used to derive target runtime identity.
    *
    * @remarks See each target's `runtimeAppId` for the identifier embedded into
    * that target distribution.
@@ -305,7 +327,9 @@ export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
 export const buildMuonApp = async (
   options: MuonBuildOptions = {},
 ): Promise<MuonBuildResult> => {
-  const progress = (options as InternalMuonBuildOptions).progress;
+  const internalOptions = options as InternalMuonBuildOptions;
+  const browserProfilePathOverride = internalOptions.browserProfilePathOverride;
+  const progress = internalOptions.progress;
   const root = resolve(options.root ?? process.cwd());
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
   const targets = resolveBuildTargets(options);
@@ -363,6 +387,18 @@ export const buildMuonApp = async (
   const salt = Buffer.from(
     options.assetSalt ?? randomBytes(assetSaltByteLength),
   );
+  const distributionFiles = await resolveDistributionFiles({
+    root,
+    packageJson,
+    configuredFiles: options.distributionFiles,
+    assetSourcePath: assetInput.sourcePath,
+    outputPaths: targets.map((target) =>
+      join(
+        outputRoot,
+        getMuonTargetDescriptor(target).distributionDirectoryName,
+      ),
+    ),
+  });
 
   const results: MuonBuildTargetResult[] = [];
 
@@ -383,8 +419,10 @@ export const buildMuonApp = async (
       sourceConfig,
       windowsResource,
       linuxDesktop,
+      distributionFiles,
       salt,
       browserStartPage: options.browserStartPage,
+      browserProfilePathOverride,
       includeRuntimeHelper: options.includeRuntimeHelper === true,
       progress,
     });
@@ -453,6 +491,106 @@ const resolveAssetInput = (
     sourcePath,
     prefix: normalizeZipPrefix(assetPrefix ?? ""),
   };
+};
+
+const readStringArray = (value: unknown, label: string): readonly string[] => {
+  if (
+    Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string")
+  ) {
+    return value;
+  }
+  throw new Error(`${label} must be an array of strings.`);
+};
+
+const readDistributionFileCandidates = (
+  packageJson: JsonObject,
+  configuredFiles: readonly string[] | undefined,
+): readonly string[] => {
+  if (configuredFiles !== undefined) {
+    return readStringArray(configuredFiles, "muon distributionFiles");
+  }
+  if (packageJson.files === undefined) {
+    return [];
+  }
+  return readStringArray(packageJson.files, "package.json files");
+};
+
+const isSameOrInsidePath = (parentPath: string, path: string): boolean => {
+  const relativePath = relative(parentPath, path);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+  );
+};
+
+const isExcludedDistributionFilePath = (
+  path: string,
+  excludedPaths: readonly string[],
+): boolean =>
+  excludedPaths.some((excludedPath) => isSameOrInsidePath(excludedPath, path));
+
+const resolveDistributionFiles = async (input: {
+  root: string;
+  packageJson: JsonObject;
+  configuredFiles: readonly string[] | undefined;
+  assetSourcePath: string;
+  outputPaths: readonly string[];
+}): Promise<DistributionFile[]> => {
+  const candidates = readDistributionFileCandidates(
+    input.packageJson,
+    input.configuredFiles,
+  );
+  const excludedPaths = [
+    resolve(input.root, "node_modules"),
+    resolve(input.root, ".git"),
+    input.assetSourcePath,
+    ...input.outputPaths,
+  ];
+  const destinationNames = new Set<string>();
+  const files: DistributionFile[] = [];
+
+  for (const candidate of candidates) {
+    if (candidate.trim() === "") {
+      throw new Error("muon distribution file path must not be empty.");
+    }
+    if (isAbsolute(candidate)) {
+      throw new Error(
+        `muon distribution file path must be relative: ${candidate}`,
+      );
+    }
+
+    const sourcePath = resolve(input.root, candidate);
+    if (!isSameOrInsidePath(input.root, sourcePath)) {
+      throw new Error(
+        `muon distribution file path must stay inside the project root: ${candidate}`,
+      );
+    }
+    if (isExcludedDistributionFilePath(sourcePath, excludedPaths)) {
+      continue;
+    }
+
+    const stats = await statOrUndefined(sourcePath);
+    if (stats === undefined) {
+      throw new Error(`muon distribution file does not exist: ${candidate}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(
+        `muon distribution file must be a regular file: ${candidate}`,
+      );
+    }
+
+    const fileName = basename(sourcePath);
+    if (destinationNames.has(fileName)) {
+      throw new Error(
+        `Duplicate muon distribution file destination: ${fileName}`,
+      );
+    }
+    destinationNames.add(fileName);
+    files.push({ sourcePath, fileName });
+  }
+
+  return files;
 };
 
 const normalizeZipPrefix = (prefix: string): string => {
@@ -671,8 +809,10 @@ const buildMuonTarget = async (input: {
   sourceConfig: JsonObject;
   windowsResource: ResolvedMuonWindowsResource;
   linuxDesktop: ResolvedMuonLinuxDesktop;
+  distributionFiles: readonly DistributionFile[];
   salt: Buffer;
   browserStartPage: string | undefined;
+  browserProfilePathOverride: string | undefined;
   includeRuntimeHelper: boolean;
   progress: MuonProgressCallback | undefined;
 }): Promise<MuonBuildTargetResult> => {
@@ -742,6 +882,7 @@ const buildMuonTarget = async (input: {
     await copyFile(sourceRuntimeHelperPath, runtimeHelperPath);
     await chmod(runtimeHelperPath, executableMode);
   }
+  await copyDistributionFiles(input.distributionFiles, outputPath);
 
   input.progress?.({
     phase: "build",
@@ -760,6 +901,7 @@ const buildMuonTarget = async (input: {
     input.linuxDesktop.desktopId,
     appIconAssetUrl,
     input.browserStartPage,
+    input.browserProfilePathOverride,
   );
 
   input.progress?.({
@@ -901,6 +1043,21 @@ const copyRuntimeFiles = async (
     join(sourceRuntimePath, muonLicenseFileName),
     join(outputPath, muonLicenseFileName),
   );
+};
+
+const copyDistributionFiles = async (
+  files: readonly DistributionFile[],
+  outputPath: string,
+): Promise<void> => {
+  for (const file of files) {
+    const destinationPath = join(outputPath, file.fileName);
+    if ((await statOrUndefined(destinationPath)) !== undefined) {
+      throw new Error(
+        `muon distribution file destination already exists: ${file.fileName}`,
+      );
+    }
+    await copyFile(file.sourcePath, destinationPath);
+  }
 };
 
 const writeAssetArchive = async (
@@ -1065,6 +1222,7 @@ const createEmbeddedConfig = (
   desktopId: string,
   initialTitleBarIcon: string,
   browserStartPage: string | undefined,
+  browserProfilePathOverride: string | undefined,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -1091,6 +1249,9 @@ const createEmbeddedConfig = (
   };
   if (browserStartPage !== undefined && browserConfig.startPage === undefined) {
     browserConfig.startPage = browserStartPage;
+  }
+  if (browserProfilePathOverride !== undefined) {
+    browserConfig.profilePath = browserProfilePathOverride;
   }
 
   return {

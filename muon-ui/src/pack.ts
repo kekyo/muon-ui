@@ -28,7 +28,9 @@ import {
 } from "tar-vern";
 
 import {
+  buildMuonApp,
   getDefaultMuonBuildTarget,
+  type MuonBuildOptions,
   type MuonBuildResult,
   type MuonBuildTarget,
   type MuonBuildTargetResult,
@@ -38,9 +40,11 @@ import {
   muonBuildSequenceSuppressViteBuildEnvironmentKey,
   resolveMuonViteBuildOptions,
   runMuonBuildSequence,
+  type MuonBuildSequenceProject,
   type MuonBuildSequenceOptions,
 } from "./build-sequence.js";
 import type { MuonViteBuildOptions } from "./vite.js";
+import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import {
   allMuonTargets,
   getMuonTargetDescriptor,
@@ -71,8 +75,42 @@ const defaultPackageBuildDirectory = ".muon/pack";
 const systemRuntimeRoot = "/var/lib/muon/apps";
 const systemCefCacheRoot = "/var/cache/muon/cef";
 const runtimeHelperExecutableName = "muon-runtime-helper";
-// Keep both names for Debian t64 and pre-t64 GTK3 runtime packages.
-const debGtk3RuntimeDependency = "libgtk-3-0t64 | libgtk-3-0";
+const portableProfilePath = "profile";
+const portableInstallMetadata = {
+  type: "portable",
+  runtimeMode: "in-place",
+} as const;
+// Keep both names for Debian t64 and pre-t64 runtime packages.
+const debRuntimeDependencies = [
+  "libc6",
+  "libgcc-s1",
+  "libstdc++6",
+  "libffi8",
+  "libexpat1",
+  "libdbus-1-3",
+  "libglib2.0-0t64 | libglib2.0-0",
+  "libgtk-3-0t64 | libgtk-3-0",
+  "libatk-bridge2.0-0t64 | libatk-bridge2.0-0",
+  "libatk1.0-0t64 | libatk1.0-0",
+  "libatspi2.0-0t64 | libatspi2.0-0",
+  "libcups2t64 | libcups2",
+  "libnspr4",
+  "libnss3",
+  "libgbm1",
+  "libasound2t64 | libasound2",
+  "libudev1",
+  "libx11-6",
+  "libxcb1",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxext6",
+  "libxfixes3",
+  "libxi6",
+  "libxkbcommon0",
+  "libxrandr2",
+  "libcairo2",
+  "libpango-1.0-0",
+] as const;
 
 type JsonObject = Record<string, unknown>;
 
@@ -125,7 +163,7 @@ export interface MuonPackOptions {
    */
   appName?: string;
   /**
-   * Stable base application identifier used for portable runtime state.
+   * Stable base application identifier used for runtime app identity.
    *
    * @remarks Windows target distributions embed `<appId>.<arch>` as their
    * runtime app identifier. Linux targets embed this value unchanged.
@@ -256,6 +294,11 @@ interface InternalMuonPackOptions extends MuonPackOptions {
 }
 
 interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  browserProfilePathOverride: string | undefined;
   progress?: MuonProgressCallback;
 }
 
@@ -458,6 +501,9 @@ const packTypeSupportsTarget = (
   );
 };
 
+const isPortablePackType = (type: MuonPackType): boolean =>
+  type === "zip" || type === "tar.gz";
+
 const createPackTargetPlan = (
   types: readonly MuonPackType[],
   targets: readonly MuonBuildTarget[],
@@ -524,6 +570,33 @@ const runTool = async (
   }
 };
 
+const isUnavailableToolError = (
+  error: unknown,
+  executable: string,
+): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const nodeError = error as NodeJS.ErrnoException;
+  return (
+    nodeError.code === "ENOENT" &&
+    (nodeError.syscall === `spawn ${executable}` ||
+      nodeError.path === executable)
+  );
+};
+
+const reportSkippedUnavailableTool = (
+  progress: MuonProgressCallback | undefined,
+  executable: string,
+  type: MuonPackType,
+  target: MuonBuildTarget,
+): void => {
+  progress?.({
+    phase: "pack",
+    status: `Warning: ${executable} is not available; skipping ${type} package for ${target}.`,
+  });
+};
+
 const statOrUndefined = async (path: string): Promise<Stats | undefined> => {
   try {
     return await stat(path);
@@ -559,6 +632,11 @@ const addDirectoryToZip = async (
   await walk(directory);
 };
 
+const getPortableArchiveEntryRoot = (
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+): string => `${metadata.packageName}/${target.target}`;
+
 const packageZip = async (
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
@@ -568,7 +646,7 @@ const packageZip = async (
   await addDirectoryToZip(
     zip,
     target.outputPath,
-    target.distributionDirectoryName,
+    getPortableArchiveEntryRoot(target, metadata),
   );
   const outputPath = join(
     artifactsRoot,
@@ -629,7 +707,7 @@ const packageTarGz = async (
   const packer = createTarPacker(
     createTarGzEntryGenerator(
       target.outputPath,
-      target.distributionDirectoryName,
+      getPortableArchiveEntryRoot(target, metadata),
     ),
     "gzip",
   );
@@ -641,6 +719,15 @@ const packageTarGz = async (
   };
 };
 
+const writePortableInstallMetadata = async (
+  target: MuonBuildTargetResult,
+): Promise<void> => {
+  await writeFile(
+    join(target.outputPath, "muon-install.json"),
+    `${JSON.stringify(portableInstallMetadata, undefined, 2)}\n`,
+  );
+};
+
 const packageDeb = async (
   root: string,
   target: MuonBuildTargetResult,
@@ -650,7 +737,7 @@ const packageDeb = async (
   environment: NodeJS.ProcessEnv,
   linuxSandbox: MuonLinuxSandboxMode,
   progress: MuonProgressCallback | undefined,
-): Promise<MuonPackArtifact> => {
+): Promise<MuonPackArtifact | undefined> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "linux") {
     throw new Error(`Unsupported deb target: ${target.target}`);
@@ -749,7 +836,7 @@ const packageDeb = async (
       `Version: ${metadata.version}`,
       `Architecture: ${architecture}`,
       `Maintainer: ${metadata.author}`,
-      `Depends: ${debGtk3RuntimeDependency}`,
+      `Depends: ${debRuntimeDependencies.join(", ")}`,
       `Description: ${metadata.description}`,
       "",
     ].join("\n"),
@@ -799,12 +886,20 @@ const packageDeb = async (
     phase: "pack",
     status: "Running dpkg-deb",
   });
-  await runTool(
-    "dpkg-deb",
-    ["--root-owner-group", "--build", packageRoot, outputPath],
-    root,
-    environment,
-  );
+  try {
+    await runTool(
+      "dpkg-deb",
+      ["--root-owner-group", "--build", packageRoot, outputPath],
+      root,
+      environment,
+    );
+  } catch (error) {
+    if (isUnavailableToolError(error, "dpkg-deb")) {
+      reportSkippedUnavailableTool(progress, "dpkg-deb", "deb", target.target);
+      return undefined;
+    }
+    throw error;
+  }
   return {
     type: "deb",
     target: target.target,
@@ -830,7 +925,7 @@ const packageNsis = async (
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
   progress: MuonProgressCallback | undefined,
-): Promise<MuonPackArtifact> => {
+): Promise<MuonPackArtifact | undefined> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "windows") {
     throw new Error(`Unsupported nsis target: ${target.target}`);
@@ -904,7 +999,15 @@ const packageNsis = async (
     phase: "pack",
     status: "Running makensis",
   });
-  await runTool("makensis", [scriptPath], root, environment);
+  try {
+    await runTool("makensis", [scriptPath], root, environment);
+  } catch (error) {
+    if (isUnavailableToolError(error, "makensis")) {
+      reportSkippedUnavailableTool(progress, "makensis", "nsis", target.target);
+      return undefined;
+    }
+    throw error;
+  }
   if ((await statOrUndefined(outputPath)) === undefined) {
     throw new Error(`makensis did not create installer: ${outputPath}`);
   }
@@ -973,6 +1076,106 @@ const reapplyPackWindowsResources = async (
       });
     }
   }
+};
+
+const createPortableBuildOptions = (input: {
+  project: MuonBuildSequenceProject;
+  pluginBuildOptions: MuonViteBuildOptions;
+  options: MuonPackOptions;
+  outputRoot: string;
+  targets: readonly MuonBuildTarget[];
+  windowsResourceOptions: MuonWindowsResourceOptions | undefined;
+  linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
+  iconPath: string | undefined;
+  progress: MuonProgressCallback | undefined;
+}): MuonBuildOptions => {
+  const buildOptions: MuonBuildOptions = {
+    root: input.project.root,
+    targets: input.targets,
+    allTargets: false,
+    outputRoot: input.outputRoot,
+  };
+
+  if (input.project.pluginOptions !== undefined) {
+    if (input.project.viteOutputDirectory === undefined) {
+      throw new Error("Vite output directory could not be resolved.");
+    }
+    Object.assign(buildOptions, input.pluginBuildOptions);
+    const packagedAssetOptions = createVitePackagedAssetOptions(
+      input.project.viteBase ?? "/",
+    );
+    buildOptions.assetSourcePath = input.project.viteOutputDirectory;
+    buildOptions.assetPrefix = packagedAssetOptions.assetPrefix;
+    if (packagedAssetOptions.browserStartPage !== undefined) {
+      buildOptions.browserStartPage = packagedAssetOptions.browserStartPage;
+    }
+  }
+
+  buildOptions.targets = input.targets;
+  buildOptions.allTargets = false;
+  buildOptions.outputRoot = input.outputRoot;
+  if (input.options.configPath !== undefined) {
+    buildOptions.configPath = input.options.configPath;
+  }
+  if (input.iconPath !== undefined) {
+    buildOptions.iconPath = input.iconPath;
+  }
+  if (input.options.appName !== undefined) {
+    buildOptions.appName = input.options.appName;
+  }
+  if (input.options.appId !== undefined) {
+    buildOptions.appId = input.options.appId;
+  }
+  if (input.options.packageDirectory !== undefined) {
+    buildOptions.packageDirectory = input.options.packageDirectory;
+  }
+  if (input.windowsResourceOptions !== undefined) {
+    buildOptions.windowsResource = input.windowsResourceOptions;
+  }
+  if (input.linuxDesktopOptions !== undefined) {
+    buildOptions.linuxDesktop = input.linuxDesktopOptions;
+  }
+  if (input.progress !== undefined) {
+    (buildOptions as InternalMuonBuildOptions).progress = input.progress;
+  }
+  (buildOptions as InternalMuonBuildOptions).browserProfilePathOverride =
+    portableProfilePath;
+  return buildOptions;
+};
+
+const buildPortableTargets = async (input: {
+  project: MuonBuildSequenceProject;
+  pluginBuildOptions: MuonViteBuildOptions;
+  options: MuonPackOptions;
+  packageBuildRoot: string;
+  targets: readonly MuonBuildTarget[];
+  windowsResourceOptions: MuonWindowsResourceOptions | undefined;
+  linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
+  iconPath: string | undefined;
+  progress: MuonProgressCallback | undefined;
+}): Promise<Map<MuonBuildTarget, MuonBuildTargetResult>> => {
+  if (input.targets.length === 0) {
+    return new Map();
+  }
+  input.progress?.({
+    phase: "pack",
+    status: "Building portable distributions",
+  });
+  const build = await buildMuonApp(
+    createPortableBuildOptions({
+      project: input.project,
+      pluginBuildOptions: input.pluginBuildOptions,
+      options: input.options,
+      outputRoot: join(input.packageBuildRoot, "portable-build"),
+      targets: input.targets,
+      windowsResourceOptions: input.windowsResourceOptions,
+      linuxDesktopOptions: input.linuxDesktopOptions,
+      iconPath: input.iconPath,
+      progress: input.progress,
+    }),
+  );
+  await Promise.all(build.targets.map(writePortableInstallMetadata));
+  return new Map(build.targets.map((target) => [target.target, target]));
 };
 
 /**
@@ -1080,10 +1283,32 @@ export const packMuonApp = async (
   const typesByTarget = new Map(
     targetPlan.map((entry) => [entry.target, entry.types] as const),
   );
+  const portableTargets = targetPlan
+    .filter((entry) => entry.types.some(isPortablePackType))
+    .map((entry) => entry.target);
   await rm(packageBuildRoot, { recursive: true, force: true });
   await rm(join(artifactsRoot, "deb"), { recursive: true, force: true });
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
+  const portableTargetsByTarget = await buildPortableTargets({
+    project,
+    pluginBuildOptions,
+    options,
+    packageBuildRoot,
+    targets: portableTargets,
+    windowsResourceOptions,
+    linuxDesktopOptions,
+    iconPath,
+    progress,
+  });
+  if (options.packageVersion !== undefined) {
+    await reapplyPackWindowsResources(
+      [...portableTargetsByTarget.values()],
+      windowsResource,
+      root,
+      environment,
+    );
+  }
   const artifacts: MuonPackArtifact[] = [];
   const totalArtifacts = targetPlan.reduce(
     (sum, entry) => sum + entry.types.length,
@@ -1097,11 +1322,19 @@ export const packMuonApp = async (
         phase: "pack",
         status: `Packaging ${type} ${target.target} (${artifactIndex}/${totalArtifacts})`,
       });
-      let artifact: MuonPackArtifact;
+      let artifact: MuonPackArtifact | undefined;
       if (type === "zip") {
-        artifact = await packageZip(target, metadata, artifactsRoot);
+        const portableTarget = portableTargetsByTarget.get(target.target);
+        if (portableTarget === undefined) {
+          throw new Error(`Portable target was not built: ${target.target}`);
+        }
+        artifact = await packageZip(portableTarget, metadata, artifactsRoot);
       } else if (type === "tar.gz") {
-        artifact = await packageTarGz(target, metadata, artifactsRoot);
+        const portableTarget = portableTargetsByTarget.get(target.target);
+        if (portableTarget === undefined) {
+          throw new Error(`Portable target was not built: ${target.target}`);
+        }
+        artifact = await packageTarGz(portableTarget, metadata, artifactsRoot);
       } else if (type === "deb") {
         artifact = await packageDeb(
           root,
@@ -1124,6 +1357,9 @@ export const packMuonApp = async (
           environment,
           progress,
         );
+      }
+      if (artifact === undefined) {
+        continue;
       }
       artifacts.push(artifact);
       progress?.({

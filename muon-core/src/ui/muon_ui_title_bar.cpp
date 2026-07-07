@@ -46,8 +46,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
   --muon-titlebar-border: #b9b7b3;
   --muon-titlebar-button-hover: rgba(0, 0, 0, 0.08);
   --muon-titlebar-button-active: rgba(0, 0, 0, 0.14);
-  --muon-titlebar-close-hover: #c81010;
-  --muon-titlebar-close-active: #ff2020;
+  --muon-titlebar-close-hover: #c42b1c;
+  --muon-titlebar-close-active: #dd442e;
   --muon-titlebar-close-fg: #ffffff;
   --muon-titlebar-icon-backdrop: #ebe9e6;
 }
@@ -63,8 +63,8 @@ constexpr char kMuonTitleBarCss[] = R"CSS(
     --muon-titlebar-border: #1f1f1f;
     --muon-titlebar-button-hover: rgba(255, 255, 255, 0.12);
     --muon-titlebar-button-active: rgba(255, 255, 255, 0.18);
-    --muon-titlebar-close-hover: #c01010;
-    --muon-titlebar-close-active: #e82020;
+    --muon-titlebar-close-hover: #dd442e;
+    --muon-titlebar-close-active: #c42b1c;
     --muon-titlebar-icon-backdrop: #303030;
   }
 }
@@ -178,8 +178,22 @@ body {
   color: var(--muon-titlebar-close-fg);
 }
 
-.control.close:active {
+.title-bar.native-hover-minimize.native-pressed-minimize
+  .control[data-action="minimize"],
+.title-bar.native-hover-maximize.native-pressed-maximize
+  .control[data-action="maximize"] {
+  background: var(--muon-titlebar-button-active);
+}
+
+.control.close:active,
+.title-bar.native-hover-close .control.close:active {
   background: var(--muon-titlebar-close-active);
+  color: var(--muon-titlebar-close-fg);
+}
+
+.title-bar.native-hover-close.native-pressed-close .control.close {
+  background: var(--muon-titlebar-close-active);
+  color: var(--muon-titlebar-close-fg);
 }
 
 .icon {
@@ -314,6 +328,8 @@ constexpr char kMuonTitleBarJs[] = R"JS(
   const nativeHoverActions = new Set(["minimize", "maximize", "close"]);
   const nativeHoverClasses = [...nativeHoverActions]
     .map((action) => `native-hover-${action}`);
+  const nativePressedClasses = [...nativeHoverActions]
+    .map((action) => `native-pressed-${action}`);
   const sendAction = (action) => {
     globalThis.location.href =
       `https://muon.internal/title-bar/${action}?t=${Date.now()}`;
@@ -322,6 +338,12 @@ constexpr char kMuonTitleBarJs[] = R"JS(
     bar.classList.remove(...nativeHoverClasses);
     if (nativeHoverActions.has(action)) {
       bar.classList.add(`native-hover-${action}`);
+    }
+  };
+  const setNativePressed = (action) => {
+    bar.classList.remove(...nativePressedClasses);
+    if (nativeHoverActions.has(action)) {
+      bar.classList.add(`native-pressed-${action}`);
     }
   };
 
@@ -352,6 +374,7 @@ constexpr char kMuonTitleBarJs[] = R"JS(
       bar.classList.toggle("maximized", state?.maximized === true);
     },
     setNativeHover,
+    setNativePressed,
   };
 })();
 )JS";

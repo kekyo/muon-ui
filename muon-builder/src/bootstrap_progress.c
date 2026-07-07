@@ -33,6 +33,34 @@
 #define MUON_PROGRESS_FRAME_NANOSECONDS 33000000ULL
 #define MUON_PROGRESS_PULSE_PERIOD_NANOSECONDS 1600000000ULL
 #define MUON_PROGRESS_BACKGROUND_COLOR 0xc0c0c0
+#define MUON_PROGRESS_STATUS_CAPACITY 256
+
+static void format_progress_status(const MuonPrepareProgress *event,
+                                   char *output, size_t output_size) {
+  if (output_size == 0) {
+    return;
+  }
+  const char *status = event->status == NULL ? "" : event->status;
+  if (event->determinate && event->total != 0) {
+    const unsigned long long current =
+        event->current > event->total ? event->total : event->current;
+    unsigned long long percentage =
+        (unsigned long long)(((long double)current /
+                              (long double)event->total) *
+                             100.0L);
+    if (percentage > 100) {
+      percentage = 100;
+    }
+    snprintf(output, output_size, "%s %llu%%", status, percentage);
+    return;
+  }
+  if (event->phase == MUON_PREPARE_PROGRESS_PHASE_INSTALLING &&
+      event->current > 0) {
+    snprintf(output, output_size, "%s %llu files", status, event->current);
+    return;
+  }
+  snprintf(output, output_size, "%s", status);
+}
 
 static unsigned long long progress_position(const MuonPrepareProgress *event,
                                             unsigned long long width) {
@@ -68,6 +96,11 @@ unsigned short muon_bootstrap_progress_test_pulse_position(
     unsigned long long elapsed_nanoseconds, unsigned short range) {
   return pulse_position_from_elapsed(elapsed_nanoseconds, (uint16_t)range);
 }
+
+void muon_bootstrap_progress_test_format_event(
+    const MuonPrepareProgress *event, char *output, size_t output_size) {
+  format_progress_status(event, output, output_size);
+}
 #endif
 
 #ifdef _WIN32
@@ -83,7 +116,7 @@ typedef struct {
   DWORD thread_id;
   CRITICAL_SECTION mutex;
   MuonPrepareProgress last_event;
-  char status[256];
+  char status[MUON_PROGRESS_STATUS_CAPACITY];
   int has_event;
   int stop_requested;
   int shown;
@@ -133,7 +166,7 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
       (GetSystemMetrics(SM_CYSCREEN) - MUON_PROGRESS_HEIGHT) / 2;
   backend->window = CreateWindowExA(
       WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-      "MuonBootstrapProgressWindow", "muon", WS_CAPTION | WS_SYSMENU, x, y,
+      "MuonBootstrapProgressWindow", "muon", WS_CAPTION, x, y,
       MUON_PROGRESS_WIDTH, MUON_PROGRESS_HEIGHT, NULL, NULL, backend->instance,
       NULL);
   if (backend->window == NULL) {
@@ -329,8 +362,7 @@ void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
   }
   EnterCriticalSection(&backend->mutex);
   backend->last_event = *event;
-  snprintf(backend->status, sizeof(backend->status), "%s",
-           event->status == NULL ? "" : event->status);
+  format_progress_status(event, backend->status, sizeof(backend->status));
   backend->last_event.status = backend->status;
   backend->has_event = 1;
   LeaveCriticalSection(&backend->mutex);
@@ -380,7 +412,7 @@ typedef struct {
   pthread_mutex_t mutex;
   pthread_cond_t condition;
   MuonPrepareProgress last_event;
-  char status[256];
+  char status[MUON_PROGRESS_STATUS_CAPACITY];
   int has_event;
   int stop_requested;
   int shown;
@@ -397,6 +429,26 @@ static xcb_atom_t intern_atom(xcb_connection_t *connection, const char *name) {
   const xcb_atom_t atom = reply->atom;
   free(reply);
   return atom;
+}
+
+typedef struct {
+  uint32_t flags;
+  uint32_t functions;
+  uint32_t decorations;
+  int32_t input_mode;
+  uint32_t status;
+} MotifWmHints;
+
+static void hide_window_decorations(MuonBootstrapProgressBackend *backend) {
+  const xcb_atom_t motif_hints =
+      intern_atom(backend->connection, "_MOTIF_WM_HINTS");
+  if (motif_hints == XCB_ATOM_NONE) {
+    return;
+  }
+  const MotifWmHints hints = {2, 0, 0, 0, 0};
+  xcb_change_property(backend->connection, XCB_PROP_MODE_REPLACE,
+                      backend->window, motif_hints, motif_hints, 32,
+                      sizeof(hints) / sizeof(uint32_t), &hints);
 }
 
 static void set_foreground(MuonBootstrapProgressBackend *backend,
@@ -516,6 +568,7 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
                         backend->window, backend->wm_protocols, XCB_ATOM_ATOM,
                         32, 1, &backend->wm_delete_window);
   }
+  hide_window_decorations(backend);
   backend->gc = xcb_generate_id(backend->connection);
   const uint32_t gc_values[] = {backend->screen->black_pixel,
                                 MUON_PROGRESS_BACKGROUND_COLOR};
@@ -658,8 +711,7 @@ void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
   }
   pthread_mutex_lock(&backend->mutex);
   backend->last_event = *event;
-  snprintf(backend->status, sizeof(backend->status), "%s",
-           event->status == NULL ? "" : event->status);
+  format_progress_status(event, backend->status, sizeof(backend->status));
   backend->last_event.status = backend->status;
   backend->has_event = 1;
   pthread_cond_signal(&backend->condition);

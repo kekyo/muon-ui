@@ -405,6 +405,26 @@ CDPが使用できると他のデバッガも使用できるようになりま�
 
 ---
 
+## ローカルアセットの構成
+
+muonの特徴的な機能の一つが、ローカルアセットです。
+特殊なURLスキーム `asset://` を使用して、ローカルに配置されたビルド済みのアセットファイルを参照できるものです。
+
+muon Viteプラグインを使用している場合はあまり意識する必要はありませんが、muonアプリがどのようにページを表示するのかは知っておいたほうが良いでしょう。
+Viteは、ウェブアプリケーションのソースコードをビルドして `./dist/` に配置します。その後:
+
+1. `npm run dev` 実行時は、 `./dist/` の内容が `http://localhost:5173/` として公開され、 muonがこれを表示します。結果として `http://localhost:5173/index.html` が参照されます。
+2. `npx muon run` でmuonアプリを実行した場合は、 muonが `./dist/` の内容を直接 `asset://main/` として参照可能にします。結果として `asset://main/index.html` が参照されます。
+3. `npm run build` で生成されたmuonアプリ (`./dist-muon/linux-amd64/`など) を実行した場合は、アセットファイル群を直接 `asset://main/` として参照可能にします。結果として `asset://main/index.html` が参照されます。このとき、アセットファイル群は `./dist/` ではなく、これらをパッキングした `assets.zip` から参照します。
+
+1は、ViteによるHMRデバッグの体験を向上させるために必要で、Viteから開発起動を行っている場合のみ、URLオリジンはViteサーバー(`http://localhost:5173/`)となります。2と3は、muonアプリとして配布した状態に近く、URLオリジンは `asset://main/` です。
+
+このように、URLのオリジンが変化するため、muonアプリ実装時には注意が必要です。
+例えば、現在のURLを固定的に `http://localhost:5173/` から判定するコードを記述すると、muonアプリとしてビルドされた途端に誤動作を起こします。
+Viteを普段から使用している開発者であれば、デプロイ後にURLオリジンが変わることは一般的に想定されることなので、それほど違和感は無いと思われます。
+
+---
+
 ## muonプラグインを使用する
 
 ここまでで、muonアプリを開発するための開発ライフサイクルを説明しましたが、
@@ -425,10 +445,11 @@ muonプラグインの基本的な機能は、muon内蔵プラグインが提供
 import { spawn } from "muon:executor";
 
 // spawn関数を使用
-const result = await spawn({
-  command: "node",
-  args: ["script.js"],
+const child = await spawn({
+  command: "ps",
+  args: ["xw"],
 });
+const result = await child.wait();
 ```
 
 「確かにこれは簡単だ、早速試してみよう！」と思っても、これはそのままでは動作しません。
@@ -459,12 +480,11 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
 }
 ```
 
-- `mode` は、プラグインアクセスの方式を決定します。省略可能で、既定は `validate` です。
+- `mode` は、プラグインアクセスの方式を決定します。省略可能で、既定は `"validate"` です。
 - `pages` は、muonプラグインへのアクセスを可能にするページのURLです。
   既定では、 `asset://main/**` にのみ許可されます。これ以外のページからは、muonプラグイン関数にアクセス出来ません。
 - `name` は、プラグイン名です。内蔵プラグインに限り、特別な `"internal"` を使用します。
-  その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (*.soまたは*.dll) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
-  外部プラグインでは、任意で `SHA1` に40桁の16進SHA-1を指定すると、ライブラリ読み込み前にファイル内容が検証されます。
+  その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (`*.so`または`*.dll`) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
   `spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
   これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
@@ -492,10 +512,10 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
 `simple` モードでは、 `window` オブジェクトから名前空間オブジェクトを辿ることで、muonプラグインの関数群にアクセス出来ます:
 
 ```javascript
-// 子プロセスを起動する
+// 子プロセスを起動する (simpleモード)
 var child = await window.muon.executor.spawn({
-  command: "node",
-  args: ["script.js"],
+  command: "ps",
+  args: ["xw"],
 });
 var result = await child.wait();
 ```
@@ -533,42 +553,6 @@ TypeScriptを使用してコードを記述する場合は、 `muon:executor` �
 
 ---
 
-## ローカルアセットの構成
-
-muonの特徴的な機能の一つが、ローカルアセットです。
-特殊なURLスキーム `asset://` を使用して、ローカルに配置されたビルド済みのアセットファイルを参照できるものです。
-
-ローカルアセットファイル群は、既定では `assets/` ディレクトリ内に配置します。配置例を示します:
-
-```text
-assets/
-├── main/
-|   ├── index.html
-|   ├── app.js
-|   ├── style.css
-|   └── images/
-|       └── logo.png
-└── sub/
-    ├── index.html
-    └── child.js
-```
-
-ローカルアセットディレクトリは、 `muon.json` の `asset.sourcePath` で位置を指定出来ます。
-既定では `muon.json` が存在するディレクトリからの相対パス、または絶対パス指定です。
-
-```json
-{
-  "asset": {
-    "sourcePath": "./assets/"
-  }
-}
-```
-
-`asset://main/index.html` にアクセスすると、 `./assets/main/index.html` ファイルがページに渡されて描画されます。
-もちろん、同様に画像ファイルなどの付随アセットファイルも参照出来ます。
-
----
-
 ## 外部ネットワークにアクセスする
 
 最初に解説したとおり、muonの様々な機能は「ホワイトリスト」形式で使用可能になります。
@@ -592,7 +576,6 @@ assets/
 例えば、意図的に空リスト (`network.allow: []`) にすると、ローカルアセットを含むすべてのネットワークアクセスが無効となり、何も表示できなくなります。
 しかし、実際に空にしてみると、 `npm run dev` でViteサーバーとmuonを起動してみても正しく表示されるでしょう。
 これは、 `npm run dev` した時に、この `network.allow` リストにViteサーバーのURLが一時的に追加されるためです。
-`muon run` はViteサーバーのURLを追加しないため、直接起動では空リストのまま表示することは出来ません。
 空リストのままビルドを実行すると、無効なmuonアプリが生成されてしまうので注意して下さい。
 
 - 注意: `data:...` のようなインラインデータURLも `network.allow` の対象です。

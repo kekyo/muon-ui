@@ -200,12 +200,20 @@ CDP (Chrome DevTools Protocol) も有効化されているので、Playwrightで
   "name": "my-muon-app",
   "version": "0.1.0",
   "description": "First time muon app.",
+  "files": [
+    "README.md",
+    "LICENSE",
+    "dist"
+  ],
   // :
   // :
 }
 ```
 
 のように記述することで、muonアプリの名称・バージョン・説明を反映させることが出来ます。
+`files` に通常ファイルを指定すると、条件を満たすものは配布ディレクトリ直下へ追加コピーされます。
+上記の例では `README.md` と `LICENSE` が含まれます。
+`dist` のようにアセット元として解決されたパスは追加コピー対象から除外されます。
 
 muon Viteプラグインを設定した状態で `npm run build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
@@ -230,6 +238,7 @@ export default defineConfig({
       build: {  // ビルドオプションの指定
         targets: ['linux-amd64', 'windows-amd64'],
         iconPath: 'icons/app.png',
+        distributionFiles: ['README.md', 'LICENSE'],
         linuxDesktop: {
           name: 'My App (linux)',
         },
@@ -249,6 +258,7 @@ export default defineConfig({
 
 既定では、アプリケーションの実行ファイル名は `package.json` の `name` から生成され、スコープ付きパッケージ名の場合はスコープを除いた名前を使用します。
 また、`build.iconPath` にアイコンとなるPNGフォーマットの画像を配置しておけば、muonアプリのアイコンとして機能するようになります。
+`build.distributionFiles` を指定した場合は `package.json` の `files` より優先され、空配列を指定すると追加コピーを行いません。
 上記例のように、LinuxターゲットやWindowsターゲットに固有の指定を追加することも出来ます。
 
 ### パッケージ生成
@@ -651,6 +661,8 @@ muon Viteプラグインが無い場合、 `muon build` はコンテンツビル
 
 `asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。
 アセット元がディレクトリの場合は `assets.zip` にパッキングし、ZIPファイルの場合は配布先の `assets.zip` としてそのままコピーして署名します。
+また、`package.json` の `files` に `README.md` や `LICENSE` などの通常ファイルを指定すると、条件を満たすものは配布先ディレクトリ直下へコピーされます。
+muon Viteプラグインの `build.distributionFiles` が指定されている場合は、`package.json` の `files` ではなくそのリストを使用します。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
 muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
@@ -1400,6 +1412,7 @@ muon({
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むmuon設定ファイルです。                          |
 | `iconPath`         | `string`            | `muon.json`またはmuon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                                |
+| `distributionFiles` | `readonly string[]` | `package.json` の `files`        | 配布ディレクトリ直下へ追加コピーするファイルリストです。                    |
 | `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
 | `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
@@ -1407,11 +1420,11 @@ muon({
 - `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
   `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。
-- `appName` を省略した場合は、Vite project rootの `package.json` にある `name` から生成します。
+- `appName` を省略した場合は、 `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。
   Windowsターゲットでは `.exe` が自動的に付与されます。
-- `appId` を省略した場合も、Vite project rootの `package.json` にある `name` からbase IDを生成します。
+- `appId` を省略した場合も、 `package.json` にある `name` からbase IDを生成します。
   `@scope/name` は `scope.name` になり、その他の使用できない文字は `-` に正規化されます。
   Linuxターゲットでは生成された値をそのまま `bootstrap.appId` として `muon-core` とランチャーに埋め込みます。
   Windowsターゲットでは `windows-amd64` に `<appId>.amd64`、`windows-i686` に `<appId>.i686` を埋め込みます。
@@ -1420,12 +1433,19 @@ muon({
   設定ファイルが存在しない場合は `{}` 相当として扱います。
 - `iconPath` は Vite project rootからの相対パスとして解決されます。
   `windowsResource.iconPath` と `linuxDesktop.iconPath` は、それぞれのターゲットだけに適用されるoverrideです。
+- `distributionFiles` を省略した場合は、 `package.json` にある `files` を候補リストとして使用します。
+  指定した場合は、 `package.json` の `files` より優先され、空配列は追加ファイルなしとして扱われます。
+  候補パスは相対パスだけを受け付け、絶対パスは使用できません。
+  コピーされるのは通常ファイルのみで、コピー先はターゲット別配布ディレクトリ直下の `basename` です。
+  ディレクトリ、glob、npm の暗黙include/excludeは展開しません。
+  `asset.sourcePath` として解決されたパス配下、`node_modules`、`.git`、出力先配布ディレクトリ配下は除外されます。
+  同じ `basename` へコピーされる候補が複数ある場合はエラーになります。
 - Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
   そのため、ビルド後のアセットは `asset://main/` から参照出来ます。
 - `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
 - `linuxDesktop` は `muon.json` の `linux.desktop` と同じキーを受け付け、CLIの `--linux-*` オプションと同じ優先度で扱われます。
 
-> 注釈: ここに挙げられていない `packageDirectory` については、テストやパッケージ検証向けの引数です。
+> 注釈: `packageDirectory` については、テストやパッケージ検証向けの引数です。
 > 解説は省略します。
 
 ---

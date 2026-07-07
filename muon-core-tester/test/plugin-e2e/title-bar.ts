@@ -11,7 +11,9 @@ import {
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   execFileAsync,
+  isMuonTitleBarTarget,
   join,
+  listCdpTargets,
   mkdir,
   mkdtemp,
   parseXpropWindowStateAtoms,
@@ -136,6 +138,30 @@ const expectedSvgTitleBarIconColor: RgbaPixel = {
   red: 0x30,
   green: 0x70,
   blue: 0xe0,
+  alpha: 255,
+};
+const expectedWindowsCloseHoverLightColor: RgbaPixel = {
+  red: 0xc4,
+  green: 0x2b,
+  blue: 0x1c,
+  alpha: 255,
+};
+const expectedWindowsCloseActiveLightColor: RgbaPixel = {
+  red: 0xdd,
+  green: 0x44,
+  blue: 0x2e,
+  alpha: 255,
+};
+const expectedWindowsCloseHoverDarkColor: RgbaPixel = {
+  red: 0xdd,
+  green: 0x44,
+  blue: 0x2e,
+  alpha: 255,
+};
+const expectedWindowsCloseActiveDarkColor: RgbaPixel = {
+  red: 0xc4,
+  green: 0x2b,
+  blue: 0x1c,
   alpha: 255,
 };
 
@@ -995,6 +1021,102 @@ const doubleClickWindowsTitleBar = async (): Promise<void> => {
   await wait(150);
 };
 
+const connectToWindowsTitleBarCdp = async (): Promise<CdpDriver> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  let lastTargets = "";
+  let lastError: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      const targets = await listCdpTargets({
+        timeoutMs: Math.max(1, deadline - Date.now()),
+      });
+      lastTargets = targets
+        .map((target) => `${target.id}:${target.type}:${target.title}`)
+        .join(", ");
+      const target = targets.find(
+        (candidate) =>
+          candidate.type === "page" &&
+          candidate.webSocketDebuggerUrl !== undefined &&
+          isMuonTitleBarTarget(candidate),
+      );
+      if (target !== undefined) {
+        return await connectToMuonCdp({
+          targetId: target.id,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+        });
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(100);
+  }
+  throw new Error(
+    `Timed out connecting to Windows title bar CDP target. Last targets: ${lastTargets}. Last error: ${String(lastError)}`,
+  );
+};
+
+const readWindowsTitleBarCloseButtonColor = async (
+  driver: CdpDriver,
+  colorScheme: "light" | "dark",
+  state: "hover" | "pressed",
+): Promise<RgbaPixel> => {
+  await driver.send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-color-scheme", value: colorScheme }],
+  });
+  return await driver.evaluate<RgbaPixel>(`(() => {
+    const api = globalThis.__muonTitleBar;
+    if (typeof api?.setNativeHover !== "function") {
+      throw new Error("missing native hover bridge");
+    }
+    if (typeof api?.setNativePressed !== "function") {
+      throw new Error("missing native pressed bridge");
+    }
+    const close = document.getElementById("muon-close");
+    if (!(close instanceof HTMLElement)) {
+      throw new Error("missing close button");
+    }
+    api.setNativeHover(null);
+    api.setNativePressed(null);
+    api.setNativeHover("close");
+    if (${JSON.stringify(state)} === "pressed") {
+      api.setNativePressed("close");
+    }
+    const value = getComputedStyle(close).backgroundColor;
+    api.setNativePressed(null);
+    api.setNativeHover(null);
+    const match = /^rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)(?:\\s*,\\s*(\\d*(?:\\.\\d+)?|1|0))?\\s*\\)$/u.exec(value);
+    if (match === null || match[1] === undefined || match[2] === undefined || match[3] === undefined) {
+      throw new Error("unsupported background color: " + value);
+    }
+    return {
+      red: Number(match[1]),
+      green: Number(match[2]),
+      blue: Number(match[3]),
+      alpha: match[4] === undefined ? 255 : Math.round(Number(match[4]) * 255),
+    };
+  })()`);
+};
+
+const expectWindowsTitleBarCloseButtonColor = async (
+  driver: CdpDriver,
+  colorScheme: "light" | "dark",
+  state: "hover" | "pressed",
+  expected: RgbaPixel,
+): Promise<void> => {
+  const actual = await readWindowsTitleBarCloseButtonColor(
+    driver,
+    colorScheme,
+    state,
+  );
+  if (!isPixelNear(actual, expected, 0)) {
+    throw new Error(
+      `Expected Windows close button ${colorScheme} ${state} color ${JSON.stringify(
+        expected,
+      )}, got ${JSON.stringify(actual)}`,
+    );
+  }
+};
+
 const waitForWindowsCloseButtonHover = async (): Promise<void> => {
   const context = requireWindowsRemoteContext();
   const deadline = Date.now() + cdpCommandTimeoutMs;
@@ -1014,13 +1136,7 @@ const waitForWindowsCloseButtonHover = async (): Promise<void> => {
       window.bounds.width - 8,
       Math.round(titleBarHeight / 2),
     );
-    if (
-      isPixelNear(
-        lastPixel,
-        { red: 0xc8, green: 0x10, blue: 0x10, alpha: 255 },
-        12,
-      )
-    ) {
+    if (isPixelNear(lastPixel, expectedWindowsCloseHoverLightColor, 12)) {
       return;
     }
     await wait(100);
@@ -1438,6 +1554,59 @@ windowsTitleBarIt(
       await runTitleBarStep("close through browser API", async () => {
         await closeWindowsBrowserAndWait(driver, running);
       });
+    });
+  },
+);
+
+windowsTitleBarIt(
+  "uses themed Windows custom title bar close button colors",
+  async () => {
+    await withWindowsTitleBarMuon(async () => {
+      const titleBarDriver = await connectToWindowsTitleBarCdp();
+      try {
+        await runTitleBarStep(
+          "verify light close hover color",
+          async () =>
+            await expectWindowsTitleBarCloseButtonColor(
+              titleBarDriver,
+              "light",
+              "hover",
+              expectedWindowsCloseHoverLightColor,
+            ),
+        );
+        await runTitleBarStep(
+          "verify light close pressed color",
+          async () =>
+            await expectWindowsTitleBarCloseButtonColor(
+              titleBarDriver,
+              "light",
+              "pressed",
+              expectedWindowsCloseActiveLightColor,
+            ),
+        );
+        await runTitleBarStep(
+          "verify dark close hover color",
+          async () =>
+            await expectWindowsTitleBarCloseButtonColor(
+              titleBarDriver,
+              "dark",
+              "hover",
+              expectedWindowsCloseHoverDarkColor,
+            ),
+        );
+        await runTitleBarStep(
+          "verify dark close pressed color",
+          async () =>
+            await expectWindowsTitleBarCloseButtonColor(
+              titleBarDriver,
+              "dark",
+              "pressed",
+              expectedWindowsCloseActiveDarkColor,
+            ),
+        );
+      } finally {
+        titleBarDriver.close();
+      }
     });
   },
 );

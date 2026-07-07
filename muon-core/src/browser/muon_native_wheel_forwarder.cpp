@@ -302,9 +302,21 @@ static void ForgetMuonWindowsSubclassForRoot(HWND root_window_handle,
 
 static void ClearMuonWindowsPendingTitleBarControl(HWND window_handle,
                                                    bool release_capture) {
+  auto pending = MuonWindowsPendingTitleBarControl();
+  auto had_pending = false;
   {
     std::lock_guard<std::mutex> lock(g_muon_windows_subclass_mutex);
-    g_muon_windows_pending_title_bar_controls.erase(window_handle);
+    const auto iterator =
+        g_muon_windows_pending_title_bar_controls.find(window_handle);
+    if (iterator != g_muon_windows_pending_title_bar_controls.end()) {
+      pending = iterator->second;
+      had_pending = true;
+      g_muon_windows_pending_title_bar_controls.erase(iterator);
+    }
+  }
+  if (had_pending) {
+    SetRegisteredMuonTitleBarPressedControl(
+        pending.root_window_handle, MuonTitleBarControlAction::NoControl);
   }
   if (release_capture && GetCapture() == window_handle) {
     ReleaseCapture();
@@ -372,6 +384,7 @@ static bool BeginMuonWindowsTitleBarControl(HWND root_window_handle,
         {root_window_handle, action};
   }
   SetCapture(window_handle);
+  SetRegisteredMuonTitleBarPressedControl(root_window_handle, action);
   return true;
 }
 
@@ -389,6 +402,8 @@ static bool CompleteMuonWindowsTitleBarControl(HWND window_handle,
     g_muon_windows_pending_title_bar_controls.erase(iterator);
   }
 
+  SetRegisteredMuonTitleBarPressedControl(
+      pending.root_window_handle, MuonTitleBarControlAction::NoControl);
   if (GetCapture() == window_handle) {
     ReleaseCapture();
   }

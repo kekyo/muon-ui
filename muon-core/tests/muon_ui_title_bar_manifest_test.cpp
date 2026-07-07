@@ -94,7 +94,19 @@ int main() {
              "missing system theme switching") &&
       Expect(Contains(css, "--muon-titlebar-close-hover"),
              "missing themed button accent") &&
+      Expect(Contains(css, "--muon-titlebar-close-hover: #c42b1c;"),
+             "missing Windows light close hover color") &&
+      Expect(Contains(css, "--muon-titlebar-close-active: #dd442e;"),
+             "missing Windows light close active color") &&
+      Expect(Contains(css, "--muon-titlebar-close-hover: #dd442e;"),
+             "missing Windows dark close hover color") &&
+      Expect(Contains(css, "--muon-titlebar-close-active: #c42b1c;"),
+             "missing Windows dark close active color") &&
+      Expect(Contains(css, "native-pressed-close"),
+             "missing native pressed close style") &&
       Expect(Contains(css, "border-bottom"), "missing GTK-like separator") &&
+      Expect(Contains(js, "setNativePressed"),
+             "missing native pressed bridge") &&
       Expect(Contains(js, "__muonTitleBar"), "missing title bar bridge");
 
   yyjson_doc_free(document);

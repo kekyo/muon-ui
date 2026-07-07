@@ -298,9 +298,11 @@ npx muon pack --target windows-amd64 --type nsis
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定出来ます。
 - `--type` は `zip`, `tgz`, `tar.gz`, `deb`, `nsis` をカンマ区切りまたは複数指定出来ます。
   省略時は `zip`, `tgz`, `deb`, `nsis` のすべてを対象にします。
-- `zip` はWindowsターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むZIPです。
-- `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むgzip圧縮tarです。
+- `zip` はWindowsターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むポータブルZIPです。
+- `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `dist-muon/<target>` ディレクトリをトップレベルに含むポータブルgzip圧縮tarです。
   `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
+  ポータブル配布物にはCEFバイナリを含めず、初回起動時に展開先の `dist-muon/<target>` 直下へCEFを準備します。
+  プロファイルも同じディレクトリ直下の `profile/` が使われます。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   Debian/Ubuntuでは、 `sudo apt install dpkg-deb` でインストール出来ます。
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。
@@ -338,7 +340,7 @@ muonアプリ起動時に、必要なCEFバイナリをダウンロードして�
     └── cef_binary_<version>_<target>_minimal.tar.bz2
 ```
 
-配布された `dist-muon/<target>` ディレクトリは読み取り専用の元データとして扱われます。
+`muon build` の出力や通常インストーラー用のruntimeでは、配布された `dist-muon/<target>` ディレクトリは読み取り専用の元データとして扱われます。
 エンドユーザーがアプリケーションを起動すると、`muon-bootstrap` は実行前にdist全体をユーザーステートディレクトリ配下の `runtime/` へステージングし、
 そこへCEFバイナリを展開してから `muon-core` を起動します。
 CEFプロファイルは同じアプリケーションステートルートの `profile/` に配置されます:
@@ -348,6 +350,12 @@ CEFプロファイルは同じアプリケーションステートルートの `
 
 起動時の準備では、ユーザーステートディレクトリの `muon-bootstrap.ini` に従ってCEFバージョンとカタログ更新を判断します。
 これらについての詳細は、別章を参照して下さい。
+
+`muon pack --type zip` と `muon pack --type tgz` / `tar.gz` のポータブル配布物は例外です。
+展開した `dist-muon/<target>` 直下にあるアプリランチャーを起動すると、`muon-bootstrap` は同じディレクトリ直下へCEFをin-placeで準備し、`muon-core` もそのディレクトリをカレントディレクトリとして起動します。
+ポータブル配布物ではビルド時に `browser.profilePath` が `profile` に固定されるため、CEFプロファイルは展開先直下の `profile/` に作成されます。
+runtimeとprofileのためにユーザーステートディレクトリは使用しません。
+ただし、ダウンロード済みCEF tarballのキャッシュは従来通り `MUON_CACHE_DIR` または既定の `~/.cache/muon/` 系ディレクトリに保存されます。
 
 ---
 
@@ -1123,10 +1131,9 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` はアプリ一式を `~/.local/state/<appId>/runtime/` へステージングし、CEFプロファイルを `~/.local/state/<appId>/profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
-  このdesktop entryの `Exec`, `TryExec`, `Icon` は、起動元の展開ディレクトリではなくステートディレクトリ配下の絶対パスを指します。
-- 新しいポータブル配布物から起動した場合、署名の差分によりステートディレクトリ側のアプリファイル群が更新され、desktop entryも更新されます。
-  ステートディレクトリ配下のランチャーから起動した場合は、自己再配置せずdesktop entryの安全な再生成だけを行います。
+- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` は展開先の `dist-muon/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+  このdesktop entryの `Exec`, `TryExec`, `Icon` は、展開先ディレクトリ配下の絶対パスを指します。
+- 同じ展開先で再起動した場合は準備済みCEFを再利用します。別のディレクトリへ展開した配布物から起動した場合は、その展開先ごとにCEF準備とdesktop entry更新が行われます。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
   debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-bootstrap` はユーザーhomeへ新規desktop entryを作成しません。
   既存のmuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
@@ -1408,7 +1415,7 @@ muon({
 | `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
 | `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
-| `appId`            | `string`            | `package.json` の `name`      | portable runtime stateを識別するbase IDです。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
+| `appId`            | `string`            | `package.json` の `name`      | ランタイムアプリ識別子のbase IDです。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
 | `configPath`       | `string`            | 自動探索                       | ランタイムとランチャーに埋め込むmuon設定ファイルです。                          |
 | `iconPath`         | `string`            | `muon.json`またはmuon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                                |

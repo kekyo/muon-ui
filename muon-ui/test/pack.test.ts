@@ -557,6 +557,43 @@ describe("muon pack", () => {
     expect(result.stderr).toContain(`Wrote ${artifactPath}`);
   });
 
+  it("warns and skips CLI package artifacts that require unavailable external tools", async () => {
+    const root = await createTemporaryDirectory("muon-pack-cli-missing-tools-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+      "windows-amd64",
+    ]);
+    const emptyPathDirectory = join(root, "empty-path");
+    await mkdir(emptyPathDirectory, { recursive: true });
+    await writeViteProject(root, packageDirectory, [
+      "linux-amd64",
+      "windows-amd64",
+    ]);
+
+    const result = await runMuonCli(
+      root,
+      ["pack", "--target", "amd64", "--json"],
+      {
+        ...process.env,
+        PATH: emptyPathDirectory,
+      },
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      artifacts: readonly { path: string; target: string; type: string }[];
+    };
+
+    expect(getArtifactSummary(parsed.artifacts)).toEqual([
+      "tar.gz:linux-amd64:packed-sample-1.2.3-linux-amd64.tar.gz",
+      "zip:windows-amd64:packed-sample-1.2.3-windows-amd64.zip",
+    ]);
+    expect(result.stderr).toContain(
+      "Warning: dpkg-deb is not available; skipping deb package for linux-amd64.",
+    );
+    expect(result.stderr).toContain(
+      "Warning: makensis is not available; skipping nsis package for windows-amd64.",
+    );
+  });
+
   it("packages Vite output under the configured base path when the muon plugin controls pack", async () => {
     const root = await createTemporaryDirectory("muon-pack-vite-base-");
     const packageDirectory = await createFakeMuonPackageDist(root, [

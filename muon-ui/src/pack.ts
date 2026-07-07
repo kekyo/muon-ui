@@ -524,6 +524,33 @@ const runTool = async (
   }
 };
 
+const isUnavailableToolError = (
+  error: unknown,
+  executable: string,
+): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const nodeError = error as NodeJS.ErrnoException;
+  return (
+    nodeError.code === "ENOENT" &&
+    (nodeError.syscall === `spawn ${executable}` ||
+      nodeError.path === executable)
+  );
+};
+
+const reportSkippedUnavailableTool = (
+  progress: MuonProgressCallback | undefined,
+  executable: string,
+  type: MuonPackType,
+  target: MuonBuildTarget,
+): void => {
+  progress?.({
+    phase: "pack",
+    status: `Warning: ${executable} is not available; skipping ${type} package for ${target}.`,
+  });
+};
+
 const statOrUndefined = async (path: string): Promise<Stats | undefined> => {
   try {
     return await stat(path);
@@ -650,7 +677,7 @@ const packageDeb = async (
   environment: NodeJS.ProcessEnv,
   linuxSandbox: MuonLinuxSandboxMode,
   progress: MuonProgressCallback | undefined,
-): Promise<MuonPackArtifact> => {
+): Promise<MuonPackArtifact | undefined> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "linux") {
     throw new Error(`Unsupported deb target: ${target.target}`);
@@ -799,12 +826,20 @@ const packageDeb = async (
     phase: "pack",
     status: "Running dpkg-deb",
   });
-  await runTool(
-    "dpkg-deb",
-    ["--root-owner-group", "--build", packageRoot, outputPath],
-    root,
-    environment,
-  );
+  try {
+    await runTool(
+      "dpkg-deb",
+      ["--root-owner-group", "--build", packageRoot, outputPath],
+      root,
+      environment,
+    );
+  } catch (error) {
+    if (isUnavailableToolError(error, "dpkg-deb")) {
+      reportSkippedUnavailableTool(progress, "dpkg-deb", "deb", target.target);
+      return undefined;
+    }
+    throw error;
+  }
   return {
     type: "deb",
     target: target.target,
@@ -830,7 +865,7 @@ const packageNsis = async (
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
   progress: MuonProgressCallback | undefined,
-): Promise<MuonPackArtifact> => {
+): Promise<MuonPackArtifact | undefined> => {
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "windows") {
     throw new Error(`Unsupported nsis target: ${target.target}`);
@@ -904,7 +939,15 @@ const packageNsis = async (
     phase: "pack",
     status: "Running makensis",
   });
-  await runTool("makensis", [scriptPath], root, environment);
+  try {
+    await runTool("makensis", [scriptPath], root, environment);
+  } catch (error) {
+    if (isUnavailableToolError(error, "makensis")) {
+      reportSkippedUnavailableTool(progress, "makensis", "nsis", target.target);
+      return undefined;
+    }
+    throw error;
+  }
   if ((await statOrUndefined(outputPath)) === undefined) {
     throw new Error(`makensis did not create installer: ${outputPath}`);
   }
@@ -1097,7 +1140,7 @@ export const packMuonApp = async (
         phase: "pack",
         status: `Packaging ${type} ${target.target} (${artifactIndex}/${totalArtifacts})`,
       });
-      let artifact: MuonPackArtifact;
+      let artifact: MuonPackArtifact | undefined;
       if (type === "zip") {
         artifact = await packageZip(target, metadata, artifactsRoot);
       } else if (type === "tar.gz") {
@@ -1124,6 +1167,9 @@ export const packMuonApp = async (
           environment,
           progress,
         );
+      }
+      if (artifact === undefined) {
+        continue;
       }
       artifacts.push(artifact);
       progress?.({

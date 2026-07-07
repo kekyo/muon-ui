@@ -1837,6 +1837,63 @@ exit 19
     ).resolves.toBe("state launcher\n");
   });
 
+  it("bootstraps a portable install in place without using the user state runtime", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-bootstrap-portable-state-",
+    );
+    const appId = "scope.portable-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
+    const outputDirectory = await createTemporaryDirectory(
+      "muon-bootstrap-portable-output-",
+    );
+    const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+pwd > '${escapedOutput}/cwd.txt'
+exit 17
+`,
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
+      bootstrap: { appId },
+    });
+
+    await expect(
+      execFileAsync(appBootstrapPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CACHE_DIR: fixture.cacheDir,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 17 });
+
+    await expect(
+      readFile(join(outputDirectory, "cwd.txt"), "utf8"),
+    ).resolves.toBe(`${fixture.muonPath}\n`);
+    await expect(
+      readFile(join(fixture.muonPath, "libcef.so"), "utf8"),
+    ).resolves.toBe("cef library\n");
+    await expect(access(join(stateRuntimePath, "muon-core"))).rejects.toThrow();
+  });
+
   it("updates the staged runtime and desktop entry from a newer portable distribution", async () => {
     const firstFixture = await createPrepareFixture();
     const secondFixture = await createPrepareFixture();

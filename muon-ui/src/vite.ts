@@ -195,7 +195,7 @@ export interface MuonViteBuildOptions {
   appName?: string;
 
   /**
-   * Stable base application identifier used for portable runtime state.
+   * Stable base application identifier used for runtime app identity.
    *
    * @remarks Windows target distributions embed `<appId>.<arch>` as their
    * runtime app identifier. Linux targets embed this value unchanged.

@@ -351,6 +351,13 @@ const readZipTextEntry = async (
   archivePath: string,
   entryName: string,
 ): Promise<string> => {
+  return (await readZipBinaryEntry(archivePath, entryName)).toString("utf8");
+};
+
+const readZipBinaryEntry = async (
+  archivePath: string,
+  entryName: string,
+): Promise<Buffer> => {
   const content = await readFile(archivePath);
   const endSignature = 0x06054b50;
   let endOffset = -1;
@@ -384,7 +391,7 @@ const readZipTextEntry = async (
       const dataStart =
         localHeaderOffset + 30 + localNameLength + localExtraLength;
       const data = content.subarray(dataStart, dataStart + compressedSize);
-      return (method === 0 ? data : inflateRawSync(data)).toString("utf8");
+      return method === 0 ? data : inflateRawSync(data);
     }
     cursor += 46 + nameLength + extraLength + commentLength;
   }
@@ -406,12 +413,19 @@ const readTarGzTextEntry = async (
   archivePath: string,
   entryName: string,
 ): Promise<string> => {
+  return (await readTarGzBinaryEntry(archivePath, entryName)).toString("utf8");
+};
+
+const readTarGzBinaryEntry = async (
+  archivePath: string,
+  entryName: string,
+): Promise<Buffer> => {
   for await (const entry of createTarExtractor(
     createReadStream(archivePath),
     "gzip",
   )) {
     if (entry.kind === "file" && entry.path === entryName) {
-      return await entry.getContent("string");
+      return await entry.getContent("buffer");
     }
   }
   throw new Error(`tar.gz entry was not found: ${entryName}`);
@@ -521,12 +535,41 @@ describe("muon pack", () => {
     await expect(readTarGzEntryNames(artifact?.path ?? "")).resolves.toContain(
       "dist-muon/linux-amd64/assets.zip",
     );
+    await expect(readTarGzEntryNames(artifact?.path ?? "")).resolves.toContain(
+      "dist-muon/linux-amd64/muon-install.json",
+    );
+    await expect(
+      readTarGzEntryNames(artifact?.path ?? ""),
+    ).resolves.not.toContain("dist-muon/linux-amd64/libcef.so");
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",
         "dist-muon/linux-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
+    await expect(
+      readTarGzTextEntry(
+        artifact?.path ?? "",
+        "dist-muon/linux-amd64/muon-install.json",
+      ),
+    ).resolves.toBe(
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        undefined,
+        2,
+      )}\n`,
+    );
+    const portableCore = (
+      await readTarGzBinaryEntry(
+        artifact?.path ?? "",
+        "dist-muon/linux-amd64/muon-core",
+      )
+    ).toString("utf8");
+    expect(portableCore).toContain("profilePath");
+    expect(portableCore).toContain("profile");
   });
 
   it("writes build and packaging progress from the muon pack CLI while keeping JSON stdout", async () => {
@@ -633,6 +676,45 @@ describe("muon pack", () => {
       initialTitleBarIcon: "asset://main/.muon/app-icon.png",
       startPage: "asset://main/sample-base/index.html",
     });
+  });
+
+  it("overrides explicit browser profile paths for portable tar.gz artifacts", async () => {
+    const root = await createTemporaryDirectory("muon-pack-portable-profile-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          browser: {
+            profilePath: "profiles/custom",
+          },
+          network: {
+            allow: ["asset://main/**"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await packMuonApp({
+      root,
+      types: ["tar.gz"],
+    });
+
+    const [artifact] = result.artifacts;
+    const portableCore = (
+      await readTarGzBinaryEntry(
+        artifact?.path ?? "",
+        "dist-muon/linux-amd64/muon-core",
+      )
+    ).toString("utf8");
+    expect(portableCore).toContain("profilePath");
+    expect(portableCore).toContain("profile");
+    expect(portableCore).not.toContain("profiles/custom");
   });
 
   it("copies package.json files into package distributions while excluding the Vite asset output", async () => {
@@ -802,12 +884,41 @@ describe("muon pack", () => {
     await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
       "dist-muon/windows-amd64/assets.zip",
     );
+    await expect(readZipEntryNames(artifact?.path ?? "")).resolves.toContain(
+      "dist-muon/windows-amd64/muon-install.json",
+    );
+    await expect(
+      readZipEntryNames(artifact?.path ?? ""),
+    ).resolves.not.toContain("dist-muon/windows-amd64/libcef.dll");
     await expect(
       readZipTextEntry(
         artifact?.path ?? "",
         "dist-muon/windows-amd64/CREDITS.md",
       ),
     ).resolves.toBe("notices\n");
+    await expect(
+      readZipTextEntry(
+        artifact?.path ?? "",
+        "dist-muon/windows-amd64/muon-install.json",
+      ),
+    ).resolves.toBe(
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        undefined,
+        2,
+      )}\n`,
+    );
+    const portableCore = (
+      await readZipBinaryEntry(
+        artifact?.path ?? "",
+        "dist-muon/windows-amd64/muon-core.exe",
+      )
+    ).toString("utf8");
+    expect(portableCore).toContain("profilePath");
+    expect(portableCore).toContain("profile");
   });
 
   it("rejects package builds when the Vite muon plugin disables muon builds", async () => {
@@ -977,6 +1088,75 @@ printf 'deb\\n' > "$output_path"
       readFile(
         join(
           packageRoot,
+          "usr",
+          "lib",
+          "packed-sample",
+          "dist-muon/linux-amd64",
+          "muon-install.json",
+        ),
+        "utf8",
+      ),
+    ).resolves.toBe(
+      `${JSON.stringify(
+        {
+          type: "deb",
+          packageName: "packed-sample",
+          launcherPath: "/usr/bin/packed-sample",
+        },
+        undefined,
+        2,
+      )}\n`,
+    );
+  });
+
+  it("keeps deb metadata separate from portable tar.gz metadata in mixed Linux packaging", async () => {
+    const root = await createTemporaryDirectory("muon-pack-mixed-linux-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    const result = await packMuonApp({
+      root,
+      types: ["tgz", "deb"],
+      environment: await createFakePackagingToolEnvironment(root),
+    });
+
+    const tarArtifact = result.artifacts.find(
+      (artifact) => artifact.type === "tar.gz",
+    );
+    const debArtifact = result.artifacts.find(
+      (artifact) => artifact.type === "deb",
+    );
+    expect(tarArtifact?.path).toBe(
+      join(root, "artifacts", "packed-sample-1.2.3-linux-amd64.tar.gz"),
+    );
+    expect(debArtifact?.path).toBe(
+      join(root, "artifacts", "packed-sample-1.2.3-amd64.deb"),
+    );
+    await expect(
+      readTarGzTextEntry(
+        tarArtifact?.path ?? "",
+        "dist-muon/linux-amd64/muon-install.json",
+      ),
+    ).resolves.toBe(
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        undefined,
+        2,
+      )}\n`,
+    );
+    await expect(
+      readFile(
+        join(
+          root,
+          ".muon",
+          "pack",
+          "deb",
+          "packed-sample-linux-amd64",
           "usr",
           "lib",
           "packed-sample",

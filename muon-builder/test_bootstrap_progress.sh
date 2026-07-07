@@ -254,6 +254,20 @@ int muon_prepare_staged_with_progress(
   return 1;
 }
 
+int muon_prepare_in_place_with_progress(
+    const char *muon_path, const char *target, const char *cache_dir, int force,
+    int quiet, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data) {
+  (void)muon_path;
+  (void)target;
+  (void)cache_dir;
+  (void)force;
+  (void)quiet;
+  (void)progress_callback;
+  (void)progress_user_data;
+  return 1;
+}
+
 static int set_environment(const char *name, const char *value) {
 #ifdef _WIN32
   return _putenv_s(name, value);

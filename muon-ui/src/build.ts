@@ -88,6 +88,7 @@ type BuildConfig = {
 };
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
+  browserProfilePathOverride: string | undefined;
   progress?: MuonProgressCallback;
 }
 
@@ -138,7 +139,7 @@ export interface MuonBuildOptions {
    */
   appName?: string;
   /**
-   * Stable base application identifier used for portable runtime state.
+   * Stable base application identifier used for runtime app identity.
    *
    * @remarks Windows target distributions embed `<appId>.<arch>` as their
    * runtime app identifier. Linux targets embed this value unchanged.
@@ -294,7 +295,7 @@ export interface MuonBuildResult {
    */
   appName: string;
   /**
-   * Stable base application identifier used to derive target runtime state.
+   * Stable base application identifier used to derive target runtime identity.
    *
    * @remarks See each target's `runtimeAppId` for the identifier embedded into
    * that target distribution.
@@ -326,7 +327,9 @@ export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
 export const buildMuonApp = async (
   options: MuonBuildOptions = {},
 ): Promise<MuonBuildResult> => {
-  const progress = (options as InternalMuonBuildOptions).progress;
+  const internalOptions = options as InternalMuonBuildOptions;
+  const browserProfilePathOverride = internalOptions.browserProfilePathOverride;
+  const progress = internalOptions.progress;
   const root = resolve(options.root ?? process.cwd());
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
   const targets = resolveBuildTargets(options);
@@ -419,6 +422,7 @@ export const buildMuonApp = async (
       distributionFiles,
       salt,
       browserStartPage: options.browserStartPage,
+      browserProfilePathOverride,
       includeRuntimeHelper: options.includeRuntimeHelper === true,
       progress,
     });
@@ -808,6 +812,7 @@ const buildMuonTarget = async (input: {
   distributionFiles: readonly DistributionFile[];
   salt: Buffer;
   browserStartPage: string | undefined;
+  browserProfilePathOverride: string | undefined;
   includeRuntimeHelper: boolean;
   progress: MuonProgressCallback | undefined;
 }): Promise<MuonBuildTargetResult> => {
@@ -896,6 +901,7 @@ const buildMuonTarget = async (input: {
     input.linuxDesktop.desktopId,
     appIconAssetUrl,
     input.browserStartPage,
+    input.browserProfilePathOverride,
   );
 
   input.progress?.({
@@ -1216,6 +1222,7 @@ const createEmbeddedConfig = (
   desktopId: string,
   initialTitleBarIcon: string,
   browserStartPage: string | undefined,
+  browserProfilePathOverride: string | undefined,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -1242,6 +1249,9 @@ const createEmbeddedConfig = (
   };
   if (browserStartPage !== undefined && browserConfig.startPage === undefined) {
     browserConfig.startPage = browserStartPage;
+  }
+  if (browserProfilePathOverride !== undefined) {
+    browserConfig.profilePath = browserProfilePathOverride;
   }
 
   return {

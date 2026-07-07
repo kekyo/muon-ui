@@ -28,7 +28,9 @@ import {
 } from "tar-vern";
 
 import {
+  buildMuonApp,
   getDefaultMuonBuildTarget,
+  type MuonBuildOptions,
   type MuonBuildResult,
   type MuonBuildTarget,
   type MuonBuildTargetResult,
@@ -38,9 +40,11 @@ import {
   muonBuildSequenceSuppressViteBuildEnvironmentKey,
   resolveMuonViteBuildOptions,
   runMuonBuildSequence,
+  type MuonBuildSequenceProject,
   type MuonBuildSequenceOptions,
 } from "./build-sequence.js";
 import type { MuonViteBuildOptions } from "./vite.js";
+import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import {
   allMuonTargets,
   getMuonTargetDescriptor,
@@ -71,6 +75,11 @@ const defaultPackageBuildDirectory = ".muon/pack";
 const systemRuntimeRoot = "/var/lib/muon/apps";
 const systemCefCacheRoot = "/var/cache/muon/cef";
 const runtimeHelperExecutableName = "muon-runtime-helper";
+const portableProfilePath = "profile";
+const portableInstallMetadata = {
+  type: "portable",
+  runtimeMode: "in-place",
+} as const;
 // Keep both names for Debian t64 and pre-t64 runtime packages.
 const debRuntimeDependencies = [
   "libc6",
@@ -154,7 +163,7 @@ export interface MuonPackOptions {
    */
   appName?: string;
   /**
-   * Stable base application identifier used for portable runtime state.
+   * Stable base application identifier used for runtime app identity.
    *
    * @remarks Windows target distributions embed `<appId>.<arch>` as their
    * runtime app identifier. Linux targets embed this value unchanged.
@@ -285,6 +294,11 @@ interface InternalMuonPackOptions extends MuonPackOptions {
 }
 
 interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  progress?: MuonProgressCallback;
+}
+
+interface InternalMuonBuildOptions extends MuonBuildOptions {
+  browserProfilePathOverride: string | undefined;
   progress?: MuonProgressCallback;
 }
 
@@ -486,6 +500,9 @@ const packTypeSupportsTarget = (
     (type === "nsis" && descriptor.os === "windows")
   );
 };
+
+const isPortablePackType = (type: MuonPackType): boolean =>
+  type === "zip" || type === "tar.gz";
 
 const createPackTargetPlan = (
   types: readonly MuonPackType[],
@@ -695,6 +712,15 @@ const packageTarGz = async (
     target: target.target,
     path: outputPath,
   };
+};
+
+const writePortableInstallMetadata = async (
+  target: MuonBuildTargetResult,
+): Promise<void> => {
+  await writeFile(
+    join(target.outputPath, "muon-install.json"),
+    `${JSON.stringify(portableInstallMetadata, undefined, 2)}\n`,
+  );
 };
 
 const packageDeb = async (
@@ -1047,6 +1073,106 @@ const reapplyPackWindowsResources = async (
   }
 };
 
+const createPortableBuildOptions = (input: {
+  project: MuonBuildSequenceProject;
+  pluginBuildOptions: MuonViteBuildOptions;
+  options: MuonPackOptions;
+  outputRoot: string;
+  targets: readonly MuonBuildTarget[];
+  windowsResourceOptions: MuonWindowsResourceOptions | undefined;
+  linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
+  iconPath: string | undefined;
+  progress: MuonProgressCallback | undefined;
+}): MuonBuildOptions => {
+  const buildOptions: MuonBuildOptions = {
+    root: input.project.root,
+    targets: input.targets,
+    allTargets: false,
+    outputRoot: input.outputRoot,
+  };
+
+  if (input.project.pluginOptions !== undefined) {
+    if (input.project.viteOutputDirectory === undefined) {
+      throw new Error("Vite output directory could not be resolved.");
+    }
+    Object.assign(buildOptions, input.pluginBuildOptions);
+    const packagedAssetOptions = createVitePackagedAssetOptions(
+      input.project.viteBase ?? "/",
+    );
+    buildOptions.assetSourcePath = input.project.viteOutputDirectory;
+    buildOptions.assetPrefix = packagedAssetOptions.assetPrefix;
+    if (packagedAssetOptions.browserStartPage !== undefined) {
+      buildOptions.browserStartPage = packagedAssetOptions.browserStartPage;
+    }
+  }
+
+  buildOptions.targets = input.targets;
+  buildOptions.allTargets = false;
+  buildOptions.outputRoot = input.outputRoot;
+  if (input.options.configPath !== undefined) {
+    buildOptions.configPath = input.options.configPath;
+  }
+  if (input.iconPath !== undefined) {
+    buildOptions.iconPath = input.iconPath;
+  }
+  if (input.options.appName !== undefined) {
+    buildOptions.appName = input.options.appName;
+  }
+  if (input.options.appId !== undefined) {
+    buildOptions.appId = input.options.appId;
+  }
+  if (input.options.packageDirectory !== undefined) {
+    buildOptions.packageDirectory = input.options.packageDirectory;
+  }
+  if (input.windowsResourceOptions !== undefined) {
+    buildOptions.windowsResource = input.windowsResourceOptions;
+  }
+  if (input.linuxDesktopOptions !== undefined) {
+    buildOptions.linuxDesktop = input.linuxDesktopOptions;
+  }
+  if (input.progress !== undefined) {
+    (buildOptions as InternalMuonBuildOptions).progress = input.progress;
+  }
+  (buildOptions as InternalMuonBuildOptions).browserProfilePathOverride =
+    portableProfilePath;
+  return buildOptions;
+};
+
+const buildPortableTargets = async (input: {
+  project: MuonBuildSequenceProject;
+  pluginBuildOptions: MuonViteBuildOptions;
+  options: MuonPackOptions;
+  packageBuildRoot: string;
+  targets: readonly MuonBuildTarget[];
+  windowsResourceOptions: MuonWindowsResourceOptions | undefined;
+  linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
+  iconPath: string | undefined;
+  progress: MuonProgressCallback | undefined;
+}): Promise<Map<MuonBuildTarget, MuonBuildTargetResult>> => {
+  if (input.targets.length === 0) {
+    return new Map();
+  }
+  input.progress?.({
+    phase: "pack",
+    status: "Building portable distributions",
+  });
+  const build = await buildMuonApp(
+    createPortableBuildOptions({
+      project: input.project,
+      pluginBuildOptions: input.pluginBuildOptions,
+      options: input.options,
+      outputRoot: join(input.packageBuildRoot, "portable-build"),
+      targets: input.targets,
+      windowsResourceOptions: input.windowsResourceOptions,
+      linuxDesktopOptions: input.linuxDesktopOptions,
+      iconPath: input.iconPath,
+      progress: input.progress,
+    }),
+  );
+  await Promise.all(build.targets.map(writePortableInstallMetadata));
+  return new Map(build.targets.map((target) => [target.target, target]));
+};
+
 /**
  * Runs the muon build sequence and creates redistributable packages.
  *
@@ -1152,10 +1278,32 @@ export const packMuonApp = async (
   const typesByTarget = new Map(
     targetPlan.map((entry) => [entry.target, entry.types] as const),
   );
+  const portableTargets = targetPlan
+    .filter((entry) => entry.types.some(isPortablePackType))
+    .map((entry) => entry.target);
   await rm(packageBuildRoot, { recursive: true, force: true });
   await rm(join(artifactsRoot, "deb"), { recursive: true, force: true });
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
+  const portableTargetsByTarget = await buildPortableTargets({
+    project,
+    pluginBuildOptions,
+    options,
+    packageBuildRoot,
+    targets: portableTargets,
+    windowsResourceOptions,
+    linuxDesktopOptions,
+    iconPath,
+    progress,
+  });
+  if (options.packageVersion !== undefined) {
+    await reapplyPackWindowsResources(
+      [...portableTargetsByTarget.values()],
+      windowsResource,
+      root,
+      environment,
+    );
+  }
   const artifacts: MuonPackArtifact[] = [];
   const totalArtifacts = targetPlan.reduce(
     (sum, entry) => sum + entry.types.length,
@@ -1171,9 +1319,17 @@ export const packMuonApp = async (
       });
       let artifact: MuonPackArtifact | undefined;
       if (type === "zip") {
-        artifact = await packageZip(target, metadata, artifactsRoot);
+        const portableTarget = portableTargetsByTarget.get(target.target);
+        if (portableTarget === undefined) {
+          throw new Error(`Portable target was not built: ${target.target}`);
+        }
+        artifact = await packageZip(portableTarget, metadata, artifactsRoot);
       } else if (type === "tar.gz") {
-        artifact = await packageTarGz(target, metadata, artifactsRoot);
+        const portableTarget = portableTargetsByTarget.get(target.target);
+        if (portableTarget === undefined) {
+          throw new Error(`Portable target was not built: ${target.target}`);
+        }
+        artifact = await packageTarGz(portableTarget, metadata, artifactsRoot);
       } else if (type === "deb") {
         artifact = await packageDeb(
           root,

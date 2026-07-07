@@ -358,10 +358,12 @@ static int extract_archive(
     free(temporary_directory);
     return -1;
   }
+  size_t extracted_file_count = 0;
   if (muon_extract_tar_bz2_archive_progress(
-          archive_path, temporary_directory, 1, NULL, progress_callback,
+          archive_path, temporary_directory, 1, &extracted_file_count,
+          progress_callback,
           progress_user_data, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
-          "Installing CEF runtime...") != 0) {
+          "Extracting CEF runtime...") != 0) {
     muon_remove_recursive(temporary_directory);
     free(temporary_directory);
     return -1;

@@ -17,6 +17,7 @@ cat >"${HARNESS}" <<'HARNESS_EOF'
 #endif
 
 #include <stdio.h>
+#include <string.h>
 
 #define MUON_BOOTSTRAP_PROGRESS_TEST
 #include "../../src/bootstrap_progress.c"
@@ -40,6 +41,33 @@ static int assert_in_range(const char *name, unsigned short actual,
   return 0;
 }
 
+static int assert_string(const char *name, const char *actual,
+                         const char *expected) {
+  if (strcmp(actual, expected) != 0) {
+    fprintf(stderr, "%s: expected %s, got %s\n", name, expected, actual);
+    return 1;
+  }
+  return 0;
+}
+
+static int assert_progress_text(const char *name,
+                                MuonPrepareProgressPhase phase,
+                                const char *status,
+                                unsigned long long current,
+                                unsigned long long total,
+                                int determinate,
+                                const char *expected) {
+  MuonPrepareProgress event;
+  char text[256];
+  event.phase = phase;
+  event.status = status;
+  event.current = current;
+  event.total = total;
+  event.determinate = determinate;
+  muon_bootstrap_progress_test_format_event(&event, text, sizeof(text));
+  return assert_string(name, text, expected);
+}
+
 int main(void) {
   const unsigned short range = 210;
   const unsigned short first =
@@ -56,6 +84,25 @@ int main(void) {
     fprintf(stderr, "later timestamp: expected a different pulse position\n");
     failed = 1;
   }
+  failed |= assert_progress_text(
+      "download percentage", MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING,
+      "Downloading CEF runtime...", 42, 100, 1,
+      "Downloading CEF runtime... 42%");
+  failed |= assert_progress_text(
+      "download percentage clamp", MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING,
+      "Downloading CEF runtime...", 250, 100, 1,
+      "Downloading CEF runtime... 100%");
+  failed |= assert_progress_text(
+      "extract file count", MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+      "Extracting CEF runtime...", 123, 0, 0,
+      "Extracting CEF runtime... 123 files");
+  failed |= assert_progress_text(
+      "install file count", MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+      "Installing CEF runtime...", 228, 0, 0,
+      "Installing CEF runtime... 228 files");
+  failed |= assert_progress_text(
+      "plain status", MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
+      "Starting muon...", 0, 0, 0, "Starting muon...");
   return failed;
 }
 HARNESS_EOF
@@ -493,6 +540,29 @@ static int assert_background(HWND window, HWND label) {
   return 0;
 }
 
+static int assert_close_button_hidden(HWND window) {
+  const LONG_PTR style = GetWindowLongPtrA(window, GWL_STYLE);
+  if ((style & WS_SYSMENU) != 0) {
+    fprintf(stderr, "progress window still exposes the close system menu\n");
+    return 1;
+  }
+  return 0;
+}
+
+static int wait_for_label_text(HWND label, const char *expected) {
+  char actual[256];
+  for (int attempt = 0; attempt < 100; attempt += 1) {
+    actual[0] = '\0';
+    GetWindowTextA(label, actual, sizeof(actual));
+    if (strcmp(actual, expected) == 0) {
+      return 0;
+    }
+    Sleep(20);
+  }
+  fprintf(stderr, "progress label: expected %s, got %s\n", expected, actual);
+  return 1;
+}
+
 int main(void) {
   MuonBootstrapProgress progress;
   muon_bootstrap_progress_init(&progress);
@@ -516,9 +586,12 @@ int main(void) {
     failed |= wait_for_mode(window, 0, &controls);
   }
   if (!failed) {
+    failed |= assert_close_button_hidden(window);
     failed |= assert_progress_geometry(controls.determinate_bar,
                                        controls.marquee_bar);
     failed |= assert_background(window, controls.label);
+    failed |= wait_for_label_text(controls.label,
+                                  "Downloading CEF runtime... 25%");
     const LRESULT position =
         SendMessageA(controls.determinate_bar, PBM_GETPOS, 0, 0);
     if (position <= 0) {
@@ -529,12 +602,14 @@ int main(void) {
 
   event.phase = MUON_PREPARE_PROGRESS_PHASE_INSTALLING;
   event.status = "Installing CEF runtime...";
-  event.current = 0;
+  event.current = 42;
   event.total = 0;
   event.determinate = 0;
   muon_bootstrap_progress_update(&progress, &event);
   if (!failed) {
     failed |= wait_for_mode(window, 1, &controls);
+    failed |= wait_for_label_text(controls.label,
+                                  "Installing CEF runtime... 42 files");
   }
 
   muon_bootstrap_progress_dispose(&progress);

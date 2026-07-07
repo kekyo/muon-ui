@@ -1288,16 +1288,25 @@ lastCatalogUpdateUnix=0
         event.total > 0 &&
         event.current > 0,
     );
-    const installEvent = events.find(
+    const extractEvent = events.find(
+      (event) =>
+        event.phase === "installing" &&
+        event.status === "Extracting CEF runtime..." &&
+        event.current > 0,
+    );
+    const finalInstallEvent = events.find(
       (event) =>
         event.phase === "installing" &&
         event.status === "Installing CEF runtime..." &&
-        event.current > 0,
+        !event.determinate &&
+        event.current === 3 &&
+        event.total === 0,
     );
 
     expect(result.stagePath).toBe(fixture.stageDir);
     expect(downloadEvent).toBeDefined();
-    expect(installEvent).toBeDefined();
+    expect(extractEvent).toBeDefined();
+    expect(finalInstallEvent).toBeDefined();
   });
 
   it("forwards progress messages from the TypeScript wrapper", async () => {
@@ -1386,8 +1395,12 @@ lastCatalogUpdateUnix=0
       expect.stringContaining("|Verifying download...|"),
     );
     expect(firstRun).toContainEqual(
+      expect.stringContaining("|Extracting CEF runtime...|"),
+    );
+    expect(firstRun).toContainEqual(
       expect.stringContaining("|Installing CEF runtime...|"),
     );
+    expect(firstRun).toContain("install|Installing CEF runtime...|0|3|0");
     expect(firstRun).toContainEqual(
       expect.stringContaining("|Starting muon...|"),
     );

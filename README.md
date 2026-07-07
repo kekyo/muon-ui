@@ -60,7 +60,7 @@ you can develop modern local GUI applications using the web-based technology eco
 - It is provided as an easy-to-use NPM package, allowing you to easily turn your web application project into a native GUI application. No complex configuration or modifications are required.
 - The browser responsible for rendering is CEF (Chromium Embedded Framework). This means that, from the perspective of the web application, it is virtually equivalent to using Chromium or Chrome.
 - It supports Vite plugins. Since it supports Vite’s HMR, you can preview real-time updates during development.
-- With `muon run`, you can launch a development environment that uses local assets directly without starting an HTTP server.
+- With `muon run`, you can launch a development environment without starting an HTTP server. If a muon Vite plugin is detected, it runs `vite build` first and serves the built output as local assets; otherwise, or when `--assets` is specified, it keeps the traditional local-asset behavior. `muon run` does not start `vite dev` and does not provide HMR.
 - You can include the Linux desktop launcher and icon metadata in your distribution build.
 - You can use DevTools. Furthermore, since it supports CDP (Chromium DevTools Protocol), you can perform remote debugging from an external source.
 - You can display multiple browser windows. Browser windows can also be organized into a parent-child hierarchy.

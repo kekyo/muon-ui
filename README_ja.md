@@ -700,6 +700,9 @@ npx muon build --icon icons/app.png --linux-name "My App"
 - Windowsターゲットでは、`--windows-icon`, `--windows-product-name`, `--windows-file-description`, `--windows-company-name`, `--windows-version`, `--windows-copyright` でlauncherとNSIS installer用のWindows resource metadataを上書き出来ます。
   `--windows-icon` はWindowsターゲット専用のアイコンoverrideです。
   同じ値は `muon.json` の `windows.resource` でも指定出来ます。
+- Windowsコードサイニングを行う場合は、`--windows-sign-command`, 繰り返し指定可能な `--windows-sign-arg`, `--windows-sign-target` を指定します。
+  `--windows-sign-arg` には署名対象ファイルに置換される `{path}` が必要で、`{target}` と `{kind}` も使用出来ます。
+  `--no-windows-code-signing` を指定すると、`muon.json` の `windows.codeSigning` を無効化します。
 - Linuxターゲットでは、`--linux-desktop-id`, `--linux-name`, `--linux-comment`, `--linux-icon`, `--linux-categories`, `--linux-startup-notify` でdesktop entry metadataを上書き出来ます。
   `--linux-icon` はLinuxターゲット専用のアイコンoverrideです。
   同じ値は `muon.json` の `linux.desktop` でも指定出来ます。
@@ -1160,6 +1163,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 
 `windows.resource` は配布ビルド用のWindows PE/NSIS resource metadataです。
 この設定は `muon build` と `muon pack` のビルド時にだけ使われ、`muon-core` やランチャーへ埋め込まれる実行時設定からは除外されます。
+`windows.codeSigning` も同じくビルド時だけ使われ、実行時設定へは埋め込まれません。
 
 ```json
 {
@@ -1171,6 +1175,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
       "companyName": "Example Inc.",
       "version": "1.2.3",
       "copyright": "Copyright Example Inc."
+    },
+    "codeSigning": {
+      "command": "signtool",
+      "args": ["sign", "/fd", "SHA256", "{path}"],
+      "targets": ["runtime", "launcher", "nsisInstaller", "nsisUninstaller"]
     }
   }
 }
@@ -1186,6 +1195,9 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `resource.copyright`   | `string` | `package.json.copyright`   | Windows version resourceの`LegalCopyright`です。                         |
 | `resource.language`    | `number` | `1033`                     | version resourceとicon resourceのlanguage IDです。                       |
 | `resource.codePage`    | `number` | `1200`                     | version resourceのcode pageです。                                        |
+| `codeSigning.command`  | `string` | なし                       | 署名対象ファイルごとに実行する外部署名コマンドです。                     |
+| `codeSigning.args`     | `string[]` | なし                     | 署名コマンドの引数です。`{path}` が必須です。                            |
+| `codeSigning.targets`  | `string[]` | 全署名対象                | `runtime`, `launcher`, `nsisInstaller`, `nsisUninstaller` から選択します。 |
 
 - `resource.iconPath` は `.png` のみ受け付けます。muonは、Windows PE/NSISが必要とする `.ico` ファイルをビルド時に自動生成します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
@@ -1194,12 +1206,16 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 - Windows resource metadataの解決順はフィールドごとに、CLI/Vite option、`muon.json` の `windows.resource`、`project.json`、`package.json`、既定値です。
   ただし `muon pack` で `--package-version` を指定した場合、`resource.version` では `package.json.version` の位置に `--package-version` の値を使用します。
   `--windows-version`、`muon.json`、`project.json` による明示的なWindows resource versionは、引き続き `--package-version` より優先されます。
+- Windowsコードサイニングの解決順は、CLI/API option、Vite pluginの `build.windowsCodeSigning`、`muon.json` の `windows.codeSigning` です。
+  `command` はmuonが実装する署名処理ではなく、CIや開発者環境から供給される `signtool` や署名用wrapper scriptを指定します。
+  `args` の `{path}` は署名対象ファイルパス、`{target}` は `windows-amd64` などのmuon target、`{kind}` は署名対象種別に置換されます。
 - `version` が `1.2.3` の場合、PE固定値とNSISの `VIProductVersion` / `VIFileVersion` は `1.2.3.0` になります。
   文字列版の `FileVersion` / `ProductVersion` には元の `1.2.3` が入ります。
 - `muon build` はランチャーのconfig埋め込み後に `muon-builder resource` でPEファイルのリソースを直接更新します。
-  コードサイニング署名を適用する場合は、署名後に更新して署名を破壊しないように、最終的な成果物に対して署名して下さい。
+  コードサイニング署名は、このPE更新後に `runtime` と `launcher` に対して実行されます。
 - `muon pack --type nsis` は、同じ解決済みmetadataからNSIS scriptへ `Icon`, `UninstallIcon`, `VIProductVersion`, `VIFileVersion`, `VIAddVersionKey` を出力します。
   setup本体と `Uninstall.exe` の表示情報を揃えるため、NSISについてはPE後処理ではなくNSIS directiveを使用します。
+  `nsisInstaller` と `nsisUninstaller` のコードサイニングも、NSISの `!finalize` / `!uninstfinalize` を介して実行されます。
   NSISの `Name` / `DisplayName` / installer path / uninstall registry key / state削除先はWindows architecture別になりますが、`ProductName` などのWindows resource metadataと成果物ファイル名は同じmetadata規則を維持します。
 
 ### assetキー
@@ -1435,6 +1451,7 @@ muon({
 | `iconPath`         | `string`            | `muon.json`またはmuon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                                |
 | `distributionFiles` | `readonly string[]` | `package.json` の `files`        | 配布ディレクトリ直下へ追加コピーするファイルリストです。                    |
 | `windowsResource`  | `object`            | `windows.resource`             | Windows launcherとNSIS installer/uninstallerに埋め込むresource metadataです。   |
+| `windowsCodeSigning` | `object \| false`  | `windows.codeSigning`          | Windows実行ファイルに対する外部コードサイニングコマンドです。              |
 | `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
@@ -1464,6 +1481,7 @@ muon({
 - Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
   そのため、ビルド後のアセットは `asset://main/` から参照出来ます。
 - `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
+- `windowsCodeSigning` は `muon.json` の `windows.codeSigning` と同じキーを受け付け、`false` を指定すると `muon.json` の署名設定を無効化します。
 - `linuxDesktop` は `muon.json` の `linux.desktop` と同じキーを受け付け、CLIの `--linux-*` オプションと同じ優先度で扱われます。
 
 > 注釈: `packageDirectory` については、テストやパッケージ検証向けの引数です。
@@ -1930,7 +1948,7 @@ npm run pack
 
 ### WaylandとVulkan
 
-現在のCEFは、Linux+Wayland環境において、Vulkanとの併用を完全にサポートしていません。多くの場合、この組み合わせは問題を引き起こすとの事なので、muonではLinux表示バックエンドがWaylandと判定された場合に、自動的にCEFのVulkan関連機能を無効化します。
+現在のCEF (`147.0.14+g76d2442`) は、Linux+Wayland環境において、Vulkanとの併用を完全にサポートしていません。多くの場合、この組み合わせは問題を引き起こすとの事なので、muonではLinux表示バックエンドがWaylandと判定された場合に、自動的にCEFのVulkan関連機能を無効化します。
 例えば、 `XDG_SESSION_TYPE=wayland` や `WAYLAND_DISPLAY` 、または `--ozone-platform=wayland` が検出された場合が対象です。
 一方で、 `--ozone-platform=x11` のようにX11バックエンドが明示されている場合は、この無効化を行いません。
 

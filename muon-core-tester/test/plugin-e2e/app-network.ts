@@ -679,8 +679,9 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           sendDisabledAfterExit: boolean;
         }>(`(async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const timeoutMs = ${String(cdpCommandTimeoutMs)};
         const waitFor = async (predicate, message) => {
-          const deadline = Date.now() + 5000;
+          const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             if (predicate()) {
               return;
@@ -690,7 +691,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           throw new Error(message);
         };
         const waitForControls = async () => {
-          const deadline = Date.now() + 3000;
+          const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             const commandInput = document.querySelector("#executor-command");
             const argsInput = document.querySelector("#executor-args");

@@ -37,7 +37,12 @@ struct MuonFunctionSignatureStorage {
   std::vector<MuonTypeDescriptorStorage> argument_storage;
   MuonTypeDescriptorStorage return_storage;
   std::vector<tra_ffic_type> argument_descriptors;
-  tra_ffic_signature signature = {0, nullptr, nullptr};
+  tra_ffic_signature signature = {
+      TRA_FFIC_SIGNATURE_ABI_COMPLETION,
+      0,
+      nullptr,
+      nullptr,
+  };
 };
 
 /**
@@ -86,7 +91,7 @@ bool ConvertMuonFunctionSignature(
  * Creates owned C ABI signature storage from recursive metadata.
  *
  * @param arg_types Function argument metadata.
- * @param return_type Function completion result metadata.
+ * @param return_type Function result metadata.
  * @returns Owned signature storage with stable nested descriptor pointers.
  */
 std::unique_ptr<MuonFunctionSignatureStorage>

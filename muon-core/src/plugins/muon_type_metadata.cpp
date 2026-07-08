@@ -152,6 +152,7 @@ CreateMuonFunctionSignatureStorage(
     storage->argument_descriptors.push_back(arg_storage.descriptor);
   }
 
+  storage->signature.abi = TRA_FFIC_SIGNATURE_ABI_COMPLETION;
   storage->signature.arg_count =
       static_cast<uint32_t>(storage->argument_descriptors.size());
   storage->signature.arg_types = storage->argument_descriptors.empty()

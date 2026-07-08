@@ -172,10 +172,47 @@ static bool RunTrafficTypeMappingTest() {
                 "buffer_view canonical key is invalid");
 }
 
+static bool RunTrafficSignatureAbiTest() {
+  const auto nested =
+      FunctionType({Type(MUON_TYPE_I32)}, Type(MUON_TYPE_BOOL));
+  const auto storage = CreateMuonFunctionSignatureStorage({nested}, nested);
+  const auto* signature = GetMuonFunctionSignature(storage.get());
+  if (!Expect(signature != nullptr, "traffic signature was not created")) {
+    return false;
+  }
+  if (!Expect(signature->abi == TRA_FFIC_SIGNATURE_ABI_COMPLETION,
+              "traffic signature did not use completion ABI")) {
+    return false;
+  }
+  if (!Expect(signature->arg_count == 1,
+              "traffic signature changed the argument count")) {
+    return false;
+  }
+  const auto* argument_signature =
+      signature->arg_types[0].function_signature;
+  if (!Expect(argument_signature != nullptr,
+              "traffic argument function signature was not created")) {
+    return false;
+  }
+  if (!Expect(argument_signature->abi == TRA_FFIC_SIGNATURE_ABI_COMPLETION,
+              "traffic argument signature did not use completion ABI")) {
+    return false;
+  }
+  const auto* return_signature =
+      signature->return_type->function_signature;
+  if (!Expect(return_signature != nullptr,
+              "traffic return function signature was not created")) {
+    return false;
+  }
+  return Expect(return_signature->abi == TRA_FFIC_SIGNATURE_ABI_COMPLETION,
+                "traffic return signature did not use completion ABI");
+}
+
 int main() {
   const auto passed = RunPrimitiveConversionTest() &&
                       RunNestedFunctionRoundtripTest() &&
                       RunUnsupportedTypeTest() &&
-                      RunTrafficTypeMappingTest();
+                      RunTrafficTypeMappingTest() &&
+                      RunTrafficSignatureAbiTest();
   return passed ? 0 : 1;
 }

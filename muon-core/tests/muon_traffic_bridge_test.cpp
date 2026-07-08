@@ -29,6 +29,7 @@ static const tra_ffic_type kI32FunctionArgs[] = {
 };
 
 static const tra_ffic_signature kI32FunctionSignature = {
+    TRA_FFIC_SIGNATURE_ABI_COMPLETION,
     1,
     kI32FunctionArgs,
     &kI32Type,
@@ -49,6 +50,7 @@ static const tra_ffic_type kBufferViewFunctionArgs[] = {
 };
 
 static const tra_ffic_signature kBufferViewFunctionSignature = {
+    TRA_FFIC_SIGNATURE_ABI_COMPLETION,
     1,
     kBufferViewFunctionArgs,
     &kBufferViewType,
@@ -59,6 +61,7 @@ static const tra_ffic_type kFunctionRoundtripArgs[] = {
 };
 
 static const tra_ffic_signature kFunctionRoundtripSignature = {
+    TRA_FFIC_SIGNATURE_ABI_COMPLETION,
     1,
     kFunctionRoundtripArgs,
     &kI32FunctionType,

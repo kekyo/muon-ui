@@ -3,16 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { constants, writeFileSync } from "node:fs";
-import {
-  access,
-  chmod,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +28,7 @@ export interface MuonLaunchScriptOptions {
 interface MuonViteSessionOptions {
   server: ViteDevServer;
   pluginOptions: MuonVitePluginOptions;
-  getRuntimePluginConfig: () => MuonRuntimePluginConfig;
+  refreshRuntimePluginConfig: () => Promise<MuonRuntimePluginConfig>;
   platform: NodeJS.Platform;
   architecture: NodeJS.Architecture;
   environment: NodeJS.ProcessEnv;
@@ -43,10 +36,7 @@ interface MuonViteSessionOptions {
 
 interface MuonRuntimePaths {
   temporaryDirectory: string;
-  launchScriptPath: string;
   overrideConfigPath: string;
-  projectConfigPath: string | undefined;
-  muonExecutablePath: string;
 }
 
 interface MuonOverrideConfig {
@@ -128,9 +118,6 @@ export const getMuonExecutablePath = (
   platform: NodeJS.Platform,
 ): string =>
   join(runtimePath, platform === "win32" ? "muon-core.exe" : "muon-core");
-
-const getLaunchScriptFileName = (platform: NodeJS.Platform): string =>
-  platform === "win32" ? "open-muon.cmd" : "open-muon.sh";
 
 const quotePosix = (value: string): string =>
   `'${value.replaceAll("'", "'\\''")}'`;
@@ -292,7 +279,7 @@ const writeMuonOverrideConfig = (
   server: ViteDevServer,
   overrideConfigPath: string,
   pluginOptions: MuonVitePluginOptions,
-  getRuntimePluginConfig: () => MuonRuntimePluginConfig,
+  runtimePluginConfig: MuonRuntimePluginConfig,
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
@@ -305,7 +292,7 @@ const writeMuonOverrideConfig = (
       createMuonOverrideConfig(
         startUrl,
         pluginOptions.enableDebugger !== false,
-        getRuntimePluginConfig(),
+        runtimePluginConfig,
       ),
       null,
       2,
@@ -314,22 +301,11 @@ const writeMuonOverrideConfig = (
   return true;
 };
 
-const createRuntimePaths = async (
-  server: ViteDevServer,
-  stagePath: string,
-  platform: NodeJS.Platform,
-  projectConfigPath: string | undefined,
-): Promise<MuonRuntimePaths> => {
+const createRuntimePaths = async (): Promise<MuonRuntimePaths> => {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "muon-vite-"));
   return {
     temporaryDirectory,
-    launchScriptPath: join(
-      temporaryDirectory,
-      getLaunchScriptFileName(platform),
-    ),
     overrideConfigPath: join(temporaryDirectory, "muon.vite.json"),
-    projectConfigPath,
-    muonExecutablePath: getMuonExecutablePath(stagePath, platform),
   };
 };
 
@@ -377,52 +353,44 @@ const resolveProjectConfigPath = async (
   return undefined;
 };
 
-const writeLaunchScript = async (
-  paths: MuonRuntimePaths,
-  platform: NodeJS.Platform,
-): Promise<void> => {
-  await writeFile(
-    paths.launchScriptPath,
-    createMuonLaunchScript({
-      muonExecutablePath: paths.muonExecutablePath,
-      projectConfigPath: paths.projectConfigPath,
-      overrideConfigPath: paths.overrideConfigPath,
-      platform,
-    }),
-  );
-  if (platform !== "win32") {
-    await chmod(paths.launchScriptPath, 0o700);
-  }
-};
+const createMuonConfigArguments = (
+  projectConfigPath: string | undefined,
+  overrideConfigPath: string,
+): string[] => [
+  ...(projectConfigPath === undefined ? [] : ["-c", projectConfigPath]),
+  "-c",
+  overrideConfigPath,
+];
 
-const quoteWindowsCommandArgument = (value: string): string =>
-  `"${value.replaceAll('"', '\\"')}"`;
-
-const launchMuon = (
-  paths: MuonRuntimePaths,
-  platform: NodeJS.Platform,
-  server: ViteDevServer,
-): void => {
-  const command = platform === "win32" ? "cmd.exe" : paths.launchScriptPath;
-  const args =
-    platform === "win32"
-      ? ["/d", "/s", "/c", quoteWindowsCommandArgument(paths.launchScriptPath)]
-      : [];
-  const child = spawn(command, args, {
-    detached: true,
+const waitForMuonProcess = async (
+  muonExecutablePath: string,
+  configArguments: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  setCurrentChild: (child: ChildProcess | undefined) => void,
+): Promise<number> => {
+  const child = spawn(muonExecutablePath, [...configArguments], {
+    cwd: dirname(muonExecutablePath),
+    env: environment,
     stdio: "ignore",
     windowsHide: false,
   });
-  child.once("error", (error) => {
-    server.config.logger.warn(`muon startup failed: ${getErrorMessage(error)}`);
-  });
-  child.unref();
+  setCurrentChild(child);
+  try {
+    return await new Promise<number>((resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        resolvePromise(code ?? 1);
+      });
+    });
+  } finally {
+    setCurrentChild(undefined);
+  }
 };
 
 export const startMuonViteBrowserBridge = async ({
   server,
   pluginOptions,
-  getRuntimePluginConfig,
+  refreshRuntimePluginConfig,
   platform,
   architecture,
   environment,
@@ -447,28 +415,65 @@ export const startMuonViteBrowserBridge = async ({
     pluginOptions.stagePath === undefined
       ? resolve(server.config.root, ".muon", target)
       : resolveFromRoot(server.config.root, pluginOptions.stagePath);
-  const preparedRuntime = await runMuonPrepare({
-    muonPath,
-    cefPath,
-    stageDir: stagePath,
-    target,
-    cacheDir: environment.MUON_CACHE_DIR,
-    force: false,
-    quiet: false,
-    prepareExecutablePath: undefined,
-    environment,
-    cwd: server.config.root,
-  });
-  if (preparedRuntime.stagePath === undefined) {
-    throw new Error("muon-builder did not return a staged runtime path.");
-  }
-  const paths = await createRuntimePaths(
-    server,
-    preparedRuntime.stagePath,
-    platform,
-    await resolveProjectConfigPath(server),
-  );
-  await writeLaunchScript(paths, platform);
+  const paths = await createRuntimePaths();
+
+  let currentChild: ChildProcess | undefined = undefined;
+  let closing = false;
+  let supervisorPromise: Promise<void> | undefined = undefined;
+
+  const setCurrentChild = (child: ChildProcess | undefined): void => {
+    currentChild = child;
+  };
+
+  const runSupervisor = async (): Promise<void> => {
+    let exitCode = muonRecycleExitCode;
+    while (!closing && exitCode === muonRecycleExitCode) {
+      try {
+        const preparedRuntime = await runMuonPrepare({
+          muonPath,
+          cefPath,
+          stageDir: stagePath,
+          target,
+          cacheDir: environment.MUON_CACHE_DIR,
+          force: false,
+          quiet: false,
+          prepareExecutablePath: undefined,
+          environment,
+          cwd: server.config.root,
+        });
+        if (preparedRuntime.stagePath === undefined) {
+          throw new Error("muon-builder did not return a staged runtime path.");
+        }
+        const runtimePluginConfig = await refreshRuntimePluginConfig();
+        const projectConfigPath = await resolveProjectConfigPath(server);
+        const configWritten = writeMuonOverrideConfig(
+          server,
+          paths.overrideConfigPath,
+          pluginOptions,
+          runtimePluginConfig,
+        );
+        if (!configWritten || closing) {
+          return;
+        }
+        exitCode = await waitForMuonProcess(
+          getMuonExecutablePath(preparedRuntime.stagePath, platform),
+          createMuonConfigArguments(
+            projectConfigPath,
+            paths.overrideConfigPath,
+          ),
+          environment,
+          setCurrentChild,
+        );
+      } catch (error) {
+        if (!closing) {
+          server.config.logger.warn(
+            `muon startup failed: ${getErrorMessage(error)}`,
+          );
+        }
+        return;
+      }
+    }
+  };
 
   let cleanupPromise: Promise<void> | undefined = undefined;
   const cleanup = async (): Promise<void> => {
@@ -476,6 +481,9 @@ export const startMuonViteBrowserBridge = async ({
       return cleanupPromise;
     }
     cleanupPromise = (async () => {
+      closing = true;
+      currentChild?.kill();
+      await supervisorPromise;
       await rm(paths.temporaryDirectory, { recursive: true, force: true });
     })();
     return cleanupPromise;
@@ -493,14 +501,6 @@ export const startMuonViteBrowserBridge = async ({
     void cleanup();
   });
   server.httpServer.once("listening", () => {
-    const configWritten = writeMuonOverrideConfig(
-      server,
-      paths.overrideConfigPath,
-      pluginOptions,
-      getRuntimePluginConfig,
-    );
-    if (configWritten) {
-      launchMuon(paths, platform, server);
-    }
+    supervisorPromise = runSupervisor();
   });
 };

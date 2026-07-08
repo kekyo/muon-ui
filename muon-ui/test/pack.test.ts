@@ -71,6 +71,50 @@ const exists = async (path: string): Promise<boolean> => {
   }
 };
 
+const createFakeSigningCommand = async (
+  binDirectory: string,
+  logDirectory: string,
+  name: string,
+): Promise<{ command: string; args: readonly string[]; logPath: string }> => {
+  const scriptPath = join(binDirectory, name);
+  const logPath = join(logDirectory, `${name}.log`);
+  await writeExecutable(
+    scriptPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `${JSON.stringify(process.execPath)} --input-type=module - "$@" <<'EOF'`,
+      "import { appendFileSync } from 'node:fs';",
+      "const [kind, target, path] = process.argv.slice(2);",
+      `appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ kind, target, path }) + "\\n");`,
+      "EOF",
+      "",
+    ].join("\n"),
+  );
+  return {
+    command: name,
+    args: ["{kind}", "{target}", "{path}"],
+    logPath,
+  };
+};
+
+const readSigningLog = async (
+  logPath: string,
+): Promise<{ kind: string; target: string; path: string }[]> => {
+  if (!(await exists(logPath))) {
+    return [];
+  }
+  const content = await readFile(logPath, "utf8");
+  return content
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map(
+      (line) =>
+        JSON.parse(line) as { kind: string; target: string; path: string },
+    );
+};
+
 const writeExecutable = async (
   path: string,
   content: Buffer | string,
@@ -1431,6 +1475,108 @@ printf 'nsis\\n' > "$output_path"
       '  Exec "$\\"$INSTDIR\\packed-sample.exe$\\""',
     );
     expect(nsisScript).toContain("FunctionEnd");
+  });
+
+  it("signs Windows distribution executables and NSIS artifacts from muon config", async () => {
+    const root = await createTemporaryDirectory("muon-pack-windows-signing-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "windows-amd64",
+    ]);
+    const binDirectory = join(root, "bin");
+    const uninstallerPath = join(root, "fake-uninstall.exe");
+    await mkdir(binDirectory, { recursive: true });
+    const signer = await createFakeSigningCommand(
+      binDirectory,
+      root,
+      "fake-sign",
+    );
+    await writeFakeTool(
+      binDirectory,
+      "makensis",
+      `#!/usr/bin/env bash
+set -euo pipefail
+script_path="\${1:?}"
+output_path="$(sed -n 's/^OutFile "\\(.*\\)"$/\\1/p' "$script_path")"
+finalize_command="$(sed -n "s/^!finalize '\\(.*\\)' = 0$/\\1/p" "$script_path")"
+uninst_finalize_command="$(sed -n "s/^!uninstfinalize '\\(.*\\)' = 0$/\\1/p" "$script_path")"
+mkdir -p "$(dirname "$output_path")"
+printf 'uninstaller\\n' > '${uninstallerPath}'
+printf 'nsis\\n' > "$output_path"
+if [ -n "$uninst_finalize_command" ]; then
+  eval "\${uninst_finalize_command//%1/${uninstallerPath}}"
+fi
+if [ -n "$finalize_command" ]; then
+  eval "\${finalize_command//%1/$output_path}"
+fi
+`,
+    );
+    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            codeSigning: {
+              command: signer.command,
+              args: signer.args,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await packMuonApp({
+      root,
+      types: ["nsis"],
+      packageVersion: "4.5.6",
+      environment: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+      },
+    });
+
+    const [artifact] = result.artifacts;
+    const log = await readSigningLog(signer.logPath);
+    expect(log).toEqual([
+      {
+        kind: "runtime",
+        target: "windows-amd64",
+        path: join(root, "dist-muon/windows-amd64", "muon-core.exe"),
+      },
+      {
+        kind: "launcher",
+        target: "windows-amd64",
+        path: join(root, "dist-muon/windows-amd64", "packed-sample.exe"),
+      },
+      {
+        kind: "runtime",
+        target: "windows-amd64",
+        path: join(root, "dist-muon/windows-amd64", "muon-core.exe"),
+      },
+      {
+        kind: "launcher",
+        target: "windows-amd64",
+        path: join(root, "dist-muon/windows-amd64", "packed-sample.exe"),
+      },
+      {
+        kind: "nsisUninstaller",
+        target: "windows-amd64",
+        path: uninstallerPath,
+      },
+      {
+        kind: "nsisInstaller",
+        target: "windows-amd64",
+        path: artifact?.path ?? "",
+      },
+    ]);
+    const nsisScript = await readFile(
+      join(root, ".muon", "pack", "nsis", "packed-sample-windows-amd64.nsi"),
+      "utf8",
+    );
+    expect(nsisScript).toContain("!finalize");
+    expect(nsisScript).toContain("!uninstfinalize");
   });
 
   it("uses the package version override as the NSIS Windows resource version fallback", async () => {

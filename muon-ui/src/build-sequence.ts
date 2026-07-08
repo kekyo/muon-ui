@@ -54,10 +54,12 @@ export interface MuonBuildSequenceOptions extends MuonBuildOptions {
 }
 
 interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  environment?: NodeJS.ProcessEnv;
   progress?: MuonProgressCallback;
 }
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
+  environment?: NodeJS.ProcessEnv;
   progress?: MuonProgressCallback;
 }
 
@@ -229,6 +231,9 @@ const copyDefinedBuildOptions = (
       output.windowsResource = windowsResource;
     }
   }
+  if (input.windowsCodeSigning !== undefined) {
+    output.windowsCodeSigning = input.windowsCodeSigning;
+  }
   if (input.linuxDesktop !== undefined) {
     const linuxDesktop = mergeMuonLinuxDesktopOptions(
       input.linuxDesktop,
@@ -256,7 +261,8 @@ export const runMuonBuildSequence = async (
   options: MuonBuildSequenceOptions = {},
   loadedProject?: MuonBuildSequenceProject,
 ): Promise<MuonBuildResult> => {
-  const progress = (options as InternalMuonBuildSequenceOptions).progress;
+  const internalOptions = options as InternalMuonBuildSequenceOptions;
+  const progress = internalOptions.progress;
   const project =
     loadedProject ??
     (await loadMuonBuildSequenceProject(options.root ?? process.cwd()));
@@ -293,6 +299,10 @@ export const runMuonBuildSequence = async (
   }
 
   copyDefinedBuildOptions(buildOptions, options, usesViteAssets);
+  if (internalOptions.environment !== undefined) {
+    (buildOptions as InternalMuonBuildOptions).environment =
+      internalOptions.environment;
+  }
   if (progress !== undefined) {
     (buildOptions as InternalMuonBuildOptions).progress = progress;
   }

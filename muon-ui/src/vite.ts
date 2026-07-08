@@ -30,6 +30,12 @@ import {
   createMuonProgressRenderer,
   type MuonProgressCallback,
 } from "./progress.js";
+import type { MuonWindowsCodeSigningOptions } from "./windows-code-signing.js";
+
+export type {
+  MuonWindowsCodeSigningOptions,
+  MuonWindowsCodeSigningTarget,
+} from "./windows-code-signing.js";
 
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
@@ -250,6 +256,14 @@ export interface MuonViteBuildOptions {
   windowsResource?: MuonWindowsResourceOptions;
 
   /**
+   * Windows code signing command for generated executable artifacts.
+   *
+   * @remarks Uses `muon.json` `windows.codeSigning` when omitted. Set false
+   * to disable `muon.json` code signing.
+   */
+  windowsCodeSigning?: false | MuonWindowsCodeSigningOptions;
+
+  /**
    * Linux desktop entry metadata.
    *
    * @defaultValue Uses CLI options, `muon.json` `linux.desktop`, package
@@ -381,6 +395,40 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   const getRuntimePluginConfig = (): MuonRuntimePluginConfig =>
     resolveMuonRuntimePluginConfig(capabilityResolver, resolvedPluginAccess);
 
+  const refreshPluginAccess = async (config: ResolvedConfig): Promise<void> => {
+    resolvedPluginAccess = await resolveMuonPluginAccessOptions({
+      root: config.root,
+      configPath: resolveMuonConfigPathForViteCommand(config, options),
+      pluginAccess: options.pluginAccess,
+      ...(config.command === "serve"
+        ? {
+            onConfigReadError: (error: unknown): void => {
+              config.logger.warn(
+                `muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
+              );
+            },
+          }
+        : {}),
+    });
+    capabilityResolver =
+      resolvedPluginAccess.mode === "validate"
+        ? createMuonCapabilityModuleResolver(
+            config.root,
+            resolvedPluginAccess.capabilityOptions,
+          )
+        : undefined;
+    loadedCapabilityRuntimePluginConfig = undefined;
+  };
+
+  const refreshRuntimePluginConfig =
+    async (): Promise<MuonRuntimePluginConfig> => {
+      if (resolvedConfig === undefined) {
+        throw new Error("muon Vite plugin config was not resolved.");
+      }
+      await refreshPluginAccess(resolvedConfig);
+      return getRuntimePluginConfig();
+    };
+
   const plugin: Plugin = {
     name: "muon",
     config: (config): Omit<UserConfig, "plugins"> | null => {
@@ -396,27 +444,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     },
     configResolved: async (config): Promise<void> => {
       resolvedConfig = config;
-      resolvedPluginAccess = await resolveMuonPluginAccessOptions({
-        root: config.root,
-        configPath: resolveMuonConfigPathForViteCommand(config, options),
-        pluginAccess: options.pluginAccess,
-        ...(config.command === "serve"
-          ? {
-              onConfigReadError: (error: unknown): void => {
-                config.logger.warn(
-                  `muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
-                );
-              },
-            }
-          : {}),
-      });
-      capabilityResolver =
-        resolvedPluginAccess.mode === "validate"
-          ? createMuonCapabilityModuleResolver(
-              config.root,
-              resolvedPluginAccess.capabilityOptions,
-            )
-          : undefined;
+      await refreshPluginAccess(config);
     },
     resolveId: (source, importer) =>
       capabilityResolver?.resolveId(source, importer)?.id,
@@ -431,7 +459,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       await startMuonViteBrowserBridge({
         server,
         pluginOptions: options,
-        getRuntimePluginConfig,
+        refreshRuntimePluginConfig,
         platform: process.platform,
         architecture: process.arch,
         environment: process.env,
@@ -553,6 +581,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.windowsResource !== undefined) {
     options.windowsResource = buildOptions.windowsResource;
+  }
+  if (buildOptions.windowsCodeSigning !== undefined) {
+    options.windowsCodeSigning = buildOptions.windowsCodeSigning;
   }
   if (buildOptions.linuxDesktop !== undefined) {
     options.linuxDesktop = buildOptions.linuxDesktop;

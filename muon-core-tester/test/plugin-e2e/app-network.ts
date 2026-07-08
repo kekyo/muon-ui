@@ -36,7 +36,7 @@ import {
   stopMuon,
   targetTimeoutMs,
   tmpdir,
-  wait,
+  delay,
   waitForDocumentTitle,
   waitForMuonStderr,
   waitForNetworkResponse,
@@ -140,7 +140,7 @@ const waitForDocumentLocation = async (
         throw error;
       }
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(`Timed out waiting for document location: ${expectedHref}`);
 };
@@ -432,7 +432,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           } catch (error) {
             lastError = error;
           }
-          await wait(100);
+          await delay(100);
         }
         throw lastError;
       };
@@ -558,6 +558,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         content: string;
         status: string;
       }>(`(async () => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const waitForControls = async () => {
           const deadline = Date.now() + 3000;
           while (Date.now() < deadline) {
@@ -581,7 +582,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
                 statusOutput,
               };
             }
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await delay(25);
           }
           throw new Error("Default filesystem demo controls are missing");
         };
@@ -600,7 +601,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
             if (statusOutput.textContent === expected) {
               return;
             }
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await delay(25);
           }
           throw new Error("Timed out waiting for status: " + expected);
         };
@@ -677,18 +678,20 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           killedWithExit: boolean;
           sendDisabledAfterExit: boolean;
         }>(`(async () => {
-        const wait = async (predicate, message) => {
-          const deadline = Date.now() + 5000;
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const timeoutMs = ${String(cdpCommandTimeoutMs)};
+        const waitFor = async (predicate, message) => {
+          const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             if (predicate()) {
               return;
             }
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await delay(25);
           }
           throw new Error(message);
         };
         const waitForControls = async () => {
-          const deadline = Date.now() + 3000;
+          const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             const commandInput = document.querySelector("#executor-command");
             const argsInput = document.querySelector("#executor-args");
@@ -725,7 +728,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
                 clearButton,
               };
             }
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await delay(25);
           }
           throw new Error("Executor terminal controls are missing");
         };
@@ -756,7 +759,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         )};
         startButton.click();
 
-        await wait(
+        await waitFor(
           () => logText().includes("ready") && logText().includes("warn"),
           "Timed out waiting for initial executor output",
         );
@@ -764,21 +767,21 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           startButton.disabled && !sendButton.disabled && logText().includes("ready");
 
         clearButton.click();
-        await wait(() => logText() === "", "Timed out waiting for cleared log");
+        await waitFor(() => logText() === "", "Timed out waiting for cleared log");
         const clearKeptProcessRunning = startButton.disabled && !sendButton.disabled;
 
         stdinInput.value = "manual";
         sendButton.click();
-        await wait(
+        await waitFor(
           () => logText().includes("input:manual"),
           "Timed out waiting for manual stdin echo",
         );
-        await wait(
+        await waitFor(
           () => logText().includes("auto:auto"),
           "Timed out waiting for auto response",
         );
         const autoResponded = logText().includes("auto:auto");
-        await wait(
+        await waitFor(
           () => logText().includes("exit code: 7"),
           "Timed out waiting for executor exit code",
         );
@@ -789,12 +792,12 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         argsInput.value = ${JSON.stringify(JSON.stringify(["-e", killScript], null, 2))};
         autoRulesInput.value = "[]";
         startButton.click();
-        await wait(
+        await waitFor(
           () => logText().includes("loop-start") && startButton.disabled,
           "Timed out waiting for kill process start",
         );
         killButton.click();
-        await wait(
+        await waitFor(
           () => logText().includes("exit code:") && !startButton.disabled,
           "Timed out waiting for killed executor exit",
         );
@@ -850,6 +853,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         state: string;
         widthChanged: boolean;
       }>(`(async () => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const waitForControls = async () => {
           const deadline = Date.now() + 3000;
           while (Date.now() < deadline) {
@@ -861,7 +865,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
             ) {
               return { button, status };
             }
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await delay(25);
           }
           throw new Error("Default browser demo controls are missing");
         };
@@ -881,7 +885,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
               widthChanged: true,
             };
           }
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await delay(25);
         }
         return {
           status: status.textContent ?? "",
@@ -920,6 +924,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         status: string;
         state: string;
       }>(`(async () => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const status = document.querySelector("#popup-status");
         if (!(status instanceof HTMLOutputElement)) {
           throw new Error("Default popup demo status is missing");
@@ -932,7 +937,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
               state: status.dataset.state ?? "",
             };
           }
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await delay(25);
         }
         return {
           status: status.textContent ?? "",
@@ -976,6 +981,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         "Runtime.evaluate",
         {
           expression: `(async () => {
+            const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             const deadline = Date.now() + 3000;
             while (Date.now() < deadline) {
               const button = document.querySelector("#open-connected-popup");
@@ -983,7 +989,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
                 button.click();
                 return "clicked";
               }
-              await new Promise((resolve) => setTimeout(resolve, 25));
+              await delay(25);
             }
             throw new Error("Default popup demo button is missing");
           })()`,
@@ -1260,7 +1266,7 @@ try {
       expect(popupTarget.type).toBe("page");
       const deadline = Date.now() + targetTimeoutMs;
       while (popupHits === 0 && Date.now() < deadline) {
-        await wait(100);
+        await delay(100);
       }
       expect(popupHits).toBe(1);
       expect(modifiedHits).toBe(0);
@@ -1344,7 +1350,7 @@ try {
       );
       const deadline = Date.now() + targetTimeoutMs;
       while (popupHits === 0 && Date.now() < deadline) {
-        await wait(100);
+        await delay(100);
       }
       expect(popupHits).toBe(1);
       expect(modifiedHits).toBe(0);

@@ -68,6 +68,45 @@ const exists = async (path: string): Promise<boolean> => {
   }
 };
 
+const createFakeSigningCommand = async (
+  root: string,
+  name: string,
+): Promise<{ command: string; args: readonly string[]; logPath: string }> => {
+  const scriptPath = join(root, `${name}.mjs`);
+  const logPath = join(root, `${name}.log`);
+  await writeFile(
+    scriptPath,
+    [
+      "import { appendFileSync } from 'node:fs';",
+      "const [kind, target, path] = process.argv.slice(2);",
+      `appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ kind, target, path }) + "\\n");`,
+      "",
+    ].join("\n"),
+  );
+  return {
+    command: process.execPath,
+    args: [scriptPath, "{kind}", "{target}", "{path}"],
+    logPath,
+  };
+};
+
+const readSigningLog = async (
+  logPath: string,
+): Promise<{ kind: string; target: string; path: string }[]> => {
+  if (!(await exists(logPath))) {
+    return [];
+  }
+  const content = await readFile(logPath, "utf8");
+  return content
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map(
+      (line) =>
+        JSON.parse(line) as { kind: string; target: string; path: string },
+    );
+};
+
 const writeExecutable = async (
   path: string,
   slot: Buffer,
@@ -812,6 +851,126 @@ describe("muon build", () => {
       appId: "scope.windows-app-id-sample.amd64",
       desktopId: "scope.windows-app-id-sample",
     });
+  });
+
+  it("signs Windows runtime and launcher executables from muon config without embedding signing options", async () => {
+    const root = await createTemporaryDirectory("muon-build-windows-signing-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const signer = await createFakeSigningCommand(root, "config-sign");
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "windows-signing-sample" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            codeSigning: {
+              command: signer.command,
+              args: signer.args,
+            },
+            runtimeFlag: true,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["windows-amd64"],
+      assetSalt: Buffer.from([0x51, 0x60]),
+    });
+
+    const [target] = result.targets;
+    const outputPath = join(root, "dist-muon/windows-amd64");
+    await expect(readSigningLog(signer.logPath)).resolves.toEqual([
+      {
+        kind: "runtime",
+        target: "windows-amd64",
+        path: join(outputPath, "muon-core.exe"),
+      },
+      {
+        kind: "launcher",
+        target: "windows-amd64",
+        path: join(outputPath, "windows-signing-sample.exe"),
+      },
+    ]);
+    expect(target?.embeddedConfig.windows).toEqual({ runtimeFlag: true });
+  });
+
+  it("lets API Windows code signing options override and disable muon config signing", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-windows-signing-override-",
+    );
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const configSigner = await createFakeSigningCommand(root, "config-sign");
+    const apiSigner = await createFakeSigningCommand(root, "api-sign");
+    await writeFile(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "windows-signing-override" }, null, 2)}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          windows: {
+            codeSigning: {
+              command: configSigner.command,
+              args: configSigner.args,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["windows-amd64"],
+      assetSalt: Buffer.from([0x51, 0x61]),
+      windowsCodeSigning: {
+        command: apiSigner.command,
+        args: apiSigner.args,
+        targets: ["launcher"],
+      },
+    });
+
+    await expect(readSigningLog(configSigner.logPath)).resolves.toEqual([]);
+    await expect(readSigningLog(apiSigner.logPath)).resolves.toEqual([
+      {
+        kind: "launcher",
+        target: "windows-amd64",
+        path: join(
+          root,
+          "dist-muon/windows-amd64",
+          "windows-signing-override.exe",
+        ),
+      },
+    ]);
+
+    await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["windows-amd64"],
+      assetSalt: Buffer.from([0x51, 0x62]),
+      windowsCodeSigning: false,
+    });
+
+    await expect(readSigningLog(configSigner.logPath)).resolves.toEqual([]);
   });
 
   it("updates Windows core and launcher icon resources from muon config metadata", async () => {
@@ -1597,6 +1756,54 @@ describe("muon build", () => {
     );
   });
 
+  it("passes Windows code signing options from the muon Vite plugin build config", async () => {
+    const root = await createTemporaryDirectory("muon-build-vite-signing-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const signer = await createFakeSigningCommand(root, "vite-sign");
+    await writeViteMuonBuildProject(
+      root,
+      `{
+        packageDirectory: ${JSON.stringify(packageDirectory)},
+        targets: ['windows-amd64'],
+        windowsCodeSigning: {
+          command: ${JSON.stringify(signer.command)},
+          args: ${JSON.stringify(signer.args)},
+          targets: ['launcher']
+        }
+      }`,
+    );
+
+    const result = await runMuonCli(root, ["build", "--json"]);
+    const parsed = JSON.parse(result.stdout) as {
+      targets: readonly { outputPath: string; target: string }[];
+    };
+
+    expect(
+      parsed.targets.map((target) => ({
+        outputPath: target.outputPath,
+        target: target.target,
+      })),
+    ).toEqual([
+      {
+        outputPath: join(root, "dist-muon/windows-amd64"),
+        target: "windows-amd64",
+      },
+    ]);
+    await expect(readSigningLog(signer.logPath)).resolves.toEqual([
+      {
+        kind: "launcher",
+        target: "windows-amd64",
+        path: join(
+          root,
+          "dist-muon/windows-amd64",
+          "vite-cli-build-sample.exe",
+        ),
+      },
+    ]);
+  });
+
   it("lets muon build CLI options override Vite plugin build options", async () => {
     const root = await createTemporaryDirectory("muon-build-cli-override-");
     const pluginPackageDirectory = await createFakeMuonPackageDistForTargets(
@@ -1657,6 +1864,50 @@ describe("muon build", () => {
     await expect(
       exists(join(root, "cli-release", "dist-muon/linux-amd64", "cli-app")),
     ).resolves.toBe(true);
+  });
+
+  it("passes Windows code signing options from the muon build CLI", async () => {
+    const root = await createTemporaryDirectory("muon-build-cli-signing-");
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-amd64",
+    ]);
+    const signer = await createFakeSigningCommand(root, "cli-sign");
+    await writeViteMuonBuildProject(
+      root,
+      `{
+        packageDirectory: ${JSON.stringify(packageDirectory)},
+        targets: ['windows-amd64']
+      }`,
+    );
+
+    await runMuonCli(root, [
+      "build",
+      "--json",
+      "--windows-sign-command",
+      signer.command,
+      "--windows-sign-arg",
+      signer.args[0] ?? "",
+      "--windows-sign-arg",
+      signer.args[1] ?? "",
+      "--windows-sign-arg",
+      signer.args[2] ?? "",
+      "--windows-sign-arg",
+      signer.args[3] ?? "",
+      "--windows-sign-target",
+      "launcher",
+    ]);
+
+    await expect(readSigningLog(signer.logPath)).resolves.toEqual([
+      {
+        kind: "launcher",
+        target: "windows-amd64",
+        path: join(
+          root,
+          "dist-muon/windows-amd64",
+          "vite-cli-build-sample.exe",
+        ),
+      },
+    ]);
   });
 
   it("rejects muon build when the Vite plugin disables muon builds", async () => {

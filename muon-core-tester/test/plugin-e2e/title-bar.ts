@@ -27,7 +27,7 @@ import {
   stopMuon,
   stopGestamentMuon,
   tmpdir,
-  wait,
+  delay,
   waitForDocumentTitle,
   waitForGestamentMuonExit,
   waitForProcessExit,
@@ -357,7 +357,7 @@ const waitForNativeMotifDecorationsByTitle = async (
     if (lastDecorations === expectedDecorations) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for _MOTIF_WM_HINTS decorations ${expectedDecorations}. Last decorations: ${String(lastDecorations)}`,
@@ -400,7 +400,7 @@ const waitForNativeWindowBoundsByTitle = async (
     if (id !== undefined) {
       return await readNativeWindowBounds(id, env);
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window '${title}'. Last X11 ids: ${JSON.stringify(lastIds)}`,
@@ -420,7 +420,7 @@ const waitForNativeWindowStatesByTitle = async (
     if (expectedStates.every((state) => lastStates.includes(state))) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window states ${JSON.stringify(
@@ -442,7 +442,7 @@ const waitForNativeWindowStatesAbsentByTitle = async (
     if (absentStates.every((state) => !lastStates.includes(state))) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window states ${JSON.stringify(
@@ -517,7 +517,7 @@ const waitForTitleBarBackgroundColor = async (
     ) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for title bar background. Last pixels: ${JSON.stringify({
@@ -539,7 +539,7 @@ const waitForTitleBarHidden = async (
     if (isPixelNear(lastPixel, expectedAppPageBackgroundColor)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for title bar to hide. Last pixel: ${JSON.stringify(lastPixel)}`,
@@ -561,7 +561,7 @@ const waitForTitleBarIconColor = async (
     if (isPixelNear(lastPixel, expected)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for title bar icon color. Last pixel: ${JSON.stringify(lastPixel)}`,
@@ -589,7 +589,7 @@ const waitForTitleBarIconContrast = async (
     if (lastIconPixels > 0) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for title bar icon contrast. Last icon pixel count: ${lastIconPixels}`,
@@ -666,7 +666,7 @@ const expectTitleBarChrome = async (
     ) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for title bar chrome. Last top-left pixel: ${JSON.stringify(
@@ -697,7 +697,7 @@ const clickTitleBarButton = async (
   );
   await running.app.input.setMouseButton("left", true);
   await running.app.input.setMouseButton("left", false);
-  await wait(100);
+  await delay(100);
 };
 
 const dragMouse = async (
@@ -709,17 +709,17 @@ const dragMouse = async (
 ): Promise<void> => {
   await running.app.input.moveMouseTo(startX, startY);
   await running.app.input.setMouseButton("left", true);
-  await wait(100);
+  await delay(100);
   const stepCount = 10;
   for (let step = 1; step <= stepCount; step += 1) {
     await running.app.input.moveMouseTo(
       Math.round(startX + ((endX - startX) * step) / stepCount),
       Math.round(startY + ((endY - startY) * step) / stepCount),
     );
-    await wait(50);
+    await delay(50);
   }
   await running.app.input.setMouseButton("left", false);
-  await wait(300);
+  await delay(300);
 };
 
 const clickPageNoDragControl = async (
@@ -731,9 +731,9 @@ const clickPageNoDragControl = async (
   const deadline = Date.now() + cdpCommandTimeoutMs;
   while (Date.now() < deadline) {
     await running.app.input.moveMouseTo(clickX, clickY);
-    await wait(50);
+    await delay(50);
     await running.app.input.setMouseButton("left", true);
-    await wait(50);
+    await delay(50);
     await running.app.input.setMouseButton("left", false);
     const clickCount = Number(
       await driver.evaluate(
@@ -743,7 +743,7 @@ const clickPageNoDragControl = async (
     if (clickCount >= 1) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error("Timed out waiting for page no-drag control click");
 };
@@ -829,12 +829,12 @@ const sendNativeMouseWheelUntilPageScrollChange = async (
   let lastPosition = initial;
   while (Date.now() < deadline) {
     await sendNativeMouseWheel(windowTitle, rootX, rootY, direction);
-    await wait(100);
+    await delay(100);
     lastPosition = await readPageScrollPosition(driver);
     if (lastPosition[axis] > initial[axis]) {
       return lastPosition;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for page ${axis} scroll. Initial: ${JSON.stringify(
@@ -855,7 +855,7 @@ const waitForNativeWindowMove = async (
     if (lastBounds.x !== initialBounds.x || lastBounds.y !== initialBounds.y) {
       return lastBounds;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for native window move. Initial: ${JSON.stringify(
@@ -868,7 +868,7 @@ const expectNativeWindowStill = async (
   initialBounds: NativeWindowBounds,
   env: NodeJS.ProcessEnv,
 ): Promise<void> => {
-  await wait(300);
+  await delay(300);
   const currentBounds = await readNativeWindowBounds(initialBounds.id, env);
   expect(currentBounds.x).toBe(initialBounds.x);
   expect(currentBounds.y).toBe(initialBounds.y);
@@ -919,7 +919,7 @@ const waitForWindowsWindowMaximized = async (
     if (lastWindow.maximized === expectedMaximized) {
       return lastWindow;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows window maximized=${String(
@@ -941,7 +941,7 @@ const waitForWindowsWindowMove = async (
     ) {
       return lastWindow;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows window move. Initial: ${JSON.stringify(
@@ -953,7 +953,7 @@ const waitForWindowsWindowMove = async (
 const expectWindowsWindowStill = async (
   initialBounds: ScreenRect,
 ): Promise<void> => {
-  await wait(300);
+  await delay(300);
   const currentWindow = await waitForWindowsTitleBarWindow();
   expect(currentWindow.bounds.x).toBe(initialBounds.x);
   expect(currentWindow.bounds.y).toBe(initialBounds.y);
@@ -971,9 +971,9 @@ const dragWindowsMouse = async (
   const window = await waitForWindowsTitleBarWindow();
   await window.activate();
   await context.agent.mouse.move(start);
-  await wait(150);
+  await delay(150);
   await context.agent.mouse.drag(start, end, { button: "left" });
-  await wait(300);
+  await delay(300);
 };
 
 const getWindowsTitleBarButtonPoint = (
@@ -1004,7 +1004,7 @@ const clickWindowsTitleBarButton = async (
       button: "left",
     },
   );
-  await wait(150);
+  await delay(150);
 };
 
 const doubleClickWindowsTitleBar = async (): Promise<void> => {
@@ -1016,9 +1016,9 @@ const doubleClickWindowsTitleBar = async (): Promise<void> => {
   };
   await window.activate();
   await context.agent.mouse.click(point, { button: "left" });
-  await wait(80);
+  await delay(80);
   await context.agent.mouse.click(point, { button: "left" });
-  await wait(150);
+  await delay(150);
 };
 
 const connectToWindowsTitleBarCdp = async (): Promise<CdpDriver> => {
@@ -1048,7 +1048,7 @@ const connectToWindowsTitleBarCdp = async (): Promise<CdpDriver> => {
     } catch (error) {
       lastError = error;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out connecting to Windows title bar CDP target. Last targets: ${lastTargets}. Last error: ${String(lastError)}`,
@@ -1129,7 +1129,7 @@ const waitForWindowsCloseButtonHover = async (): Promise<void> => {
       x: Math.round(hoverPoint.x),
       y: Math.round(hoverPoint.y),
     });
-    await wait(100);
+    await delay(100);
     const capture = await captureWindowsWindow(window);
     lastPixel = getWindowsWindowPixel(
       capture,
@@ -1139,7 +1139,7 @@ const waitForWindowsCloseButtonHover = async (): Promise<void> => {
     if (isPixelNear(lastPixel, expectedWindowsCloseHoverLightColor, 12)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows close button hover. Last pixel: ${JSON.stringify(lastPixel)}`,
@@ -1161,7 +1161,7 @@ const waitForWindowsWindowTopResize = async (
     ) {
       return lastWindow;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows top-edge resize. Initial: ${JSON.stringify(
@@ -1189,7 +1189,7 @@ const clickWindowsPagePoint = async (
     if (clickCount >= 1) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error("Timed out waiting for Windows page no-drag control click");
 };
@@ -1210,7 +1210,7 @@ const waitForWindowsTitleBarBackgroundColor = async (
     ) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows title bar background. Last pixels: ${JSON.stringify(
@@ -1233,7 +1233,7 @@ const waitForWindowsTitleBarHidden = async (
     if (isPixelNear(lastPixel, expectedAppPageBackgroundColor, 6)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows title bar to hide. Last pixel: ${JSON.stringify(lastPixel)}`,
@@ -1254,7 +1254,7 @@ const waitForWindowsTitleBarIconColor = async (
     if (isPixelNear(lastPixel, expected, 8)) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows title bar icon color. Last pixel: ${JSON.stringify(lastPixel)}`,
@@ -1291,7 +1291,7 @@ const waitForWindowsTitleBarIconContrast = async (
     if (lastIconPixels > 0) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows title bar icon contrast. Last icon pixel count: ${lastIconPixels}`,
@@ -1350,7 +1350,7 @@ const expectWindowsTitleBarChrome = async (
     ) {
       return;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for Windows title bar chrome. Last top pixel: ${JSON.stringify(

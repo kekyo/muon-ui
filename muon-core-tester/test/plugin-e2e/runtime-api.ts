@@ -70,7 +70,7 @@ import {
   stopMuon,
   targetTimeoutMs,
   tmpdir,
-  wait,
+  delay,
   waitForCdp,
   waitForDocumentTitle,
   waitForInnerWidth,
@@ -219,7 +219,7 @@ const evaluateWithWindowsCdpReconnect = async <T>(
       });
     } catch (error) {
       lastError = error;
-      await wait(100);
+      await delay(100);
     }
   }
 
@@ -429,7 +429,7 @@ const readWindowsRemoteUtf8IfExists = async (path: string): Promise<string> => {
       return (await context.agent.files.readFile(path)).toString("utf8");
     } catch (error) {
       lastError = error;
-      await wait(250);
+      await delay(250);
     }
   }
   throw lastError instanceof Error
@@ -616,7 +616,7 @@ const findStatusNotifierItemBusName = async (): Promise<string> => {
     } catch (error) {
       lastError = error;
     }
-    await wait(50);
+    await delay(50);
   }
   throw new Error(
     `Timed out waiting for StatusNotifierItem bus name: ${String(lastError)}`,
@@ -659,7 +659,7 @@ const waitForBrowserTrayEvent = async (
     if (event !== null) {
       return event;
     }
-    await wait(50);
+    await delay(50);
   }
   throw new Error(`Timed out waiting for tray event: ${type}`);
 };
@@ -691,7 +691,7 @@ const waitForRecycledMuon = async (
     } catch (error) {
       lastError = error;
     }
-    await wait(200);
+    await delay(200);
   }
   throw new Error(`Timed out waiting for recycled muon: ${String(lastError)}`);
 };
@@ -729,7 +729,7 @@ const waitForTextFileContent = async (
     } catch (error) {
       lastError = error;
     }
-    await wait(100);
+    await delay(100);
   }
   throw new Error(
     `Timed out waiting for ${description}: ${lastContent ?? String(lastError)}`,
@@ -1740,6 +1740,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         resultHasStdout: boolean;
         resultHasStderr: boolean;
       }>(`(async () => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const stdoutBytes = [];
         const stderrBytes = [];
         const until = async (predicate) => {
@@ -1748,7 +1749,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             if (predicate()) {
               return;
             }
-            await new Promise((resolve) => setTimeout(resolve, 20));
+            await delay(20);
           }
           throw new Error("Timed out waiting for executor callback");
         };
@@ -1869,7 +1870,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           ) {
             break;
           }
-          await wait(100);
+          await delay(100);
         }
         expect(
           (await listProcessGroupCommandLines(running.process.pid ?? 0)).some(
@@ -1890,7 +1891,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           ) {
             return;
           }
-          await wait(100);
+          await delay(100);
         }
         const commandLines = await listProcessGroupCommandLines(
           running.process.pid ?? 0,
@@ -2446,7 +2447,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               1,
               windowsTrayPrimaryActivateMessage,
             );
-            await wait(250);
+            await delay(250);
             await expect(
               driver.evaluate<number>(
                 "(globalThis.__muonHiddenTrayEvents ?? []).length",
@@ -3310,7 +3311,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           "data:text/html,<title>muon reload disabled</title>",
           cdpCommandTimeoutMs,
         );
-        await wait(100);
+        await delay(100);
         await expectNoPageLoad(driver, f5ReloadShortcut);
         await expectNoPageLoad(driver, ctrlRReloadShortcut);
       },
@@ -3364,7 +3365,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       async (driver) => {
         const initialSize = await getOuterSize(driver);
         await dispatchKeyboardShortcut(driver, f11FullscreenShortcut);
-        await wait(1000);
+        await delay(1000);
         await expect(getOuterSize(driver)).resolves.toEqual(initialSize);
       },
     );
@@ -3486,7 +3487,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         );
         const initialWidth = await driver.evaluate<number>("window.innerWidth");
         await dispatchKeyboardShortcut(driver, ctrlPlusZoomShortcut);
-        await wait(1000);
+        await delay(1000);
         await expect(driver.evaluate("window.innerWidth")).resolves.toBe(
           initialWidth,
         );
@@ -3599,7 +3600,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   it("does not expose the Debug CDP endpoint from a Release build", async () => {
     const running = await startReleaseMuon();
     try {
-      await wait(shouldUseValgrind ? 5000 : 1000);
+      await delay(shouldUseValgrind ? 5000 : 1000);
       expect(running.process.exitCode).toBeNull();
       const processGroupId = running.process.pid;
       if (processGroupId === undefined) {

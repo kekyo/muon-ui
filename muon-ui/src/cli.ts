@@ -31,6 +31,10 @@ import {
   createMuonProgressRenderer,
   type MuonProgressCallback,
 } from "./progress.js";
+import type {
+  MuonWindowsCodeSigningOptions,
+  MuonWindowsCodeSigningTarget,
+} from "./windows-code-signing.js";
 
 interface PrepareCommandOptions {
   muonPath: string | undefined;
@@ -66,6 +70,10 @@ interface BuildCommandOptions {
   windowsCompanyName: string | undefined;
   windowsVersion: string | undefined;
   windowsCopyright: string | undefined;
+  windowsSignCommand: string | undefined;
+  windowsSignArg: string[] | undefined;
+  windowsSignTarget: string[] | undefined;
+  windowsCodeSigning: boolean | undefined;
   linuxDesktopId: string | undefined;
   linuxName: string | undefined;
   linuxComment: string | undefined;
@@ -91,6 +99,10 @@ interface PackCommandOptions {
   windowsCompanyName: string | undefined;
   windowsVersion: string | undefined;
   windowsCopyright: string | undefined;
+  windowsSignCommand: string | undefined;
+  windowsSignArg: string[] | undefined;
+  windowsSignTarget: string[] | undefined;
+  windowsCodeSigning: boolean | undefined;
   linuxDesktopId: string | undefined;
   linuxName: string | undefined;
   linuxComment: string | undefined;
@@ -139,6 +151,20 @@ const appendTargetValues = (value: string, previous: string[]): string[] => {
 };
 
 const appendPackTypeValues = (
+  value: string,
+  previous: string[] | undefined,
+): string[] => {
+  return [...(previous ?? []), ...readTargetValues(value)];
+};
+
+const appendWindowsSignArgValue = (
+  value: string,
+  previous: string[] | undefined,
+): string[] => {
+  return [...(previous ?? []), value];
+};
+
+const appendWindowsSignTargetValues = (
   value: string,
   previous: string[] | undefined,
 ): string[] => {
@@ -259,8 +285,45 @@ const createLinuxDesktopOptions = (commandOptions: {
   return Object.keys(options).length === 0 ? undefined : options;
 };
 
+const createWindowsCodeSigningOptions = (
+  commandOptions: {
+    windowsSignCommand: string | undefined;
+    windowsSignArg: string[] | undefined;
+    windowsSignTarget: string[] | undefined;
+    windowsCodeSigning: boolean | undefined;
+  },
+  command: Command,
+): false | MuonWindowsCodeSigningOptions | undefined => {
+  if (
+    command.getOptionValueSource("windowsCodeSigning") === "cli" &&
+    commandOptions.windowsCodeSigning === false
+  ) {
+    return false;
+  }
+  const args = commandOptions.windowsSignArg ?? [];
+  const targets = commandOptions.windowsSignTarget ?? [];
+  if (commandOptions.windowsSignCommand === undefined) {
+    if (args.length > 0 || targets.length > 0) {
+      throw new Error(
+        "--windows-sign-command is required when Windows signing arguments or targets are specified.",
+      );
+    }
+    return undefined;
+  }
+
+  const options: MuonWindowsCodeSigningOptions = {
+    command: commandOptions.windowsSignCommand,
+    args,
+  };
+  if (targets.length > 0) {
+    options.targets = targets as MuonWindowsCodeSigningTarget[];
+  }
+  return options;
+};
+
 const runBuildCommand = async (
   commandOptions: BuildCommandOptions,
+  command: Command,
 ): Promise<void> => {
   const targets = commandOptions.target;
   if (commandOptions.all === true && targets.length > 0) {
@@ -290,6 +353,13 @@ const runBuildCommand = async (
   const windowsResource = createWindowsResourceOptions(commandOptions);
   if (windowsResource !== undefined) {
     buildOptions.windowsResource = windowsResource;
+  }
+  const windowsCodeSigning = createWindowsCodeSigningOptions(
+    commandOptions,
+    command,
+  );
+  if (windowsCodeSigning !== undefined) {
+    buildOptions.windowsCodeSigning = windowsCodeSigning;
   }
   const linuxDesktop = createLinuxDesktopOptions(commandOptions);
   if (linuxDesktop !== undefined) {
@@ -329,6 +399,7 @@ const runBuildCommand = async (
 
 const runPackCommand = async (
   commandOptions: PackCommandOptions,
+  command: Command,
 ): Promise<void> => {
   const targets = commandOptions.target;
   if (commandOptions.all === true && targets.length > 0) {
@@ -357,6 +428,13 @@ const runPackCommand = async (
   const windowsResource = createWindowsResourceOptions(commandOptions);
   if (windowsResource !== undefined) {
     packOptions.windowsResource = windowsResource;
+  }
+  const windowsCodeSigning = createWindowsCodeSigningOptions(
+    commandOptions,
+    command,
+  );
+  if (windowsCodeSigning !== undefined) {
+    packOptions.windowsCodeSigning = windowsCodeSigning;
   }
   const linuxDesktop = createLinuxDesktopOptions(commandOptions);
   if (linuxDesktop !== undefined) {
@@ -574,6 +652,18 @@ const createCliCommand = (): Command => {
     .option("--windows-company-name <name>", "Windows company name")
     .option("--windows-version <version>", "Windows resource version")
     .option("--windows-copyright <text>", "Windows legal copyright")
+    .option("--windows-sign-command <command>", "Windows code signing command")
+    .option(
+      "--windows-sign-arg <arg>",
+      "Windows code signing command argument",
+      appendWindowsSignArgValue,
+    )
+    .option(
+      "--windows-sign-target <target>",
+      "Windows code signing target or comma-separated targets",
+      appendWindowsSignTargetValues,
+    )
+    .option("--no-windows-code-signing", "disable muon.json Windows signing")
     .option("--linux-desktop-id <id>", "Linux desktop entry identifier")
     .option("--linux-name <name>", "Linux desktop display name")
     .option("--linux-comment <text>", "Linux desktop comment")
@@ -585,8 +675,8 @@ const createCliCommand = (): Command => {
     .option("--app-id <id>", "stable application identifier")
     .option("--package-directory <path>", "muon package dist directory")
     .option("--json", "write result as JSON")
-    .action(async (options: BuildCommandOptions) => {
-      await runBuildCommand(options);
+    .action(async (options: BuildCommandOptions, command: Command) => {
+      await runBuildCommand(options, command);
     });
 
   program
@@ -612,6 +702,18 @@ const createCliCommand = (): Command => {
     .option("--windows-company-name <name>", "Windows company name")
     .option("--windows-version <version>", "Windows resource version")
     .option("--windows-copyright <text>", "Windows legal copyright")
+    .option("--windows-sign-command <command>", "Windows code signing command")
+    .option(
+      "--windows-sign-arg <arg>",
+      "Windows code signing command argument",
+      appendWindowsSignArgValue,
+    )
+    .option(
+      "--windows-sign-target <target>",
+      "Windows code signing target or comma-separated targets",
+      appendWindowsSignTargetValues,
+    )
+    .option("--no-windows-code-signing", "disable muon.json Windows signing")
     .option("--linux-desktop-id <id>", "Linux desktop entry identifier")
     .option("--linux-name <name>", "Linux desktop display name")
     .option("--linux-comment <text>", "Linux desktop comment")
@@ -631,8 +733,8 @@ const createCliCommand = (): Command => {
     .option("--description <text>", "package description override")
     .option("--author <text>", "package author override")
     .option("--json", "write result as JSON")
-    .action(async (options: PackCommandOptions) => {
-      await runPackCommand(options);
+    .action(async (options: PackCommandOptions, command: Command) => {
+      await runPackCommand(options, command);
     });
 
   const devCommand = program

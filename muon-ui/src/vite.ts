@@ -30,6 +30,12 @@ import {
   createMuonProgressRenderer,
   type MuonProgressCallback,
 } from "./progress.js";
+import type { MuonWindowsCodeSigningOptions } from "./windows-code-signing.js";
+
+export type {
+  MuonWindowsCodeSigningOptions,
+  MuonWindowsCodeSigningTarget,
+} from "./windows-code-signing.js";
 
 type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
@@ -248,6 +254,14 @@ export interface MuonViteBuildOptions {
    * `project.json`, `package.json`, then muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
+
+  /**
+   * Windows code signing command for generated executable artifacts.
+   *
+   * @remarks Uses `muon.json` `windows.codeSigning` when omitted. Set false
+   * to disable `muon.json` code signing.
+   */
+  windowsCodeSigning?: false | MuonWindowsCodeSigningOptions;
 
   /**
    * Linux desktop entry metadata.
@@ -567,6 +581,9 @@ const createMuonBuildOptions = (
   }
   if (buildOptions.windowsResource !== undefined) {
     options.windowsResource = buildOptions.windowsResource;
+  }
+  if (buildOptions.windowsCodeSigning !== undefined) {
+    options.windowsCodeSigning = buildOptions.windowsCodeSigning;
   }
   if (buildOptions.linuxDesktop !== undefined) {
     options.linuxDesktop = buildOptions.linuxDesktop;

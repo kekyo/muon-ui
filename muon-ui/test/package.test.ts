@@ -286,6 +286,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonViteBuildOptions",
+      memberName: "windowsCodeSigning",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonViteBuildOptions",
       memberName: "linuxDesktop",
     },
     {

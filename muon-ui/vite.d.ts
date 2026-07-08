@@ -6,6 +6,40 @@
 import type { Plugin } from "vite";
 
 /**
+ * Windows executable artifact kind accepted by code signing options.
+ */
+export type MuonWindowsCodeSigningTarget =
+  | "runtime"
+  | "launcher"
+  | "nsisInstaller"
+  | "nsisUninstaller";
+
+/**
+ * External Windows code signing command options.
+ */
+export interface MuonWindowsCodeSigningOptions {
+  /**
+   * Executable or script used to sign one file.
+   */
+  readonly command: string;
+
+  /**
+   * Arguments passed to the signing command.
+   *
+   * @remarks `{path}` is required and is replaced with the executable path.
+   * `{target}` and `{kind}` are also replaced when present.
+   */
+  readonly args: readonly string[];
+
+  /**
+   * Artifact kinds to sign.
+   *
+   * @defaultValue Signs all supported Windows artifact kinds.
+   */
+  readonly targets?: readonly MuonWindowsCodeSigningTarget[];
+}
+
+/**
  * Windows PE and NSIS resource metadata options.
  */
 export interface MuonWindowsResourceOptions {
@@ -210,6 +244,15 @@ export interface MuonViteBuildOptions {
    * `project.json`, `package.json`, then muon defaults.
    */
   readonly windowsResource?: MuonWindowsResourceOptions;
+
+  /**
+   * Windows code signing command for generated executable artifacts.
+   *
+   * @remarks Uses `muon.json` `windows.codeSigning` when omitted. Set false
+   * to disable `muon.json` code signing.
+   * @defaultValue Uses `muon.json` `windows.codeSigning` when present.
+   */
+  readonly windowsCodeSigning?: false | MuonWindowsCodeSigningOptions;
 
   /**
    * Linux desktop entry metadata.

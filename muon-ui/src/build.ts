@@ -58,6 +58,13 @@ import {
   type MuonLinuxDesktopOptions,
   type ResolvedMuonLinuxDesktop,
 } from "./linux-desktop.js";
+import {
+  resolveMuonWindowsCodeSigning,
+  signWindowsExecutable,
+  stripBuildOnlyWindowsCodeSigningConfig,
+  type MuonWindowsCodeSigningOptions,
+  type ResolvedMuonWindowsCodeSigning,
+} from "./windows-code-signing.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "./app-icon.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonProgressCallback } from "./progress.js";
@@ -89,6 +96,7 @@ type BuildConfig = {
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
   browserProfilePathOverride: string | undefined;
+  environment?: NodeJS.ProcessEnv;
   progress?: MuonProgressCallback;
 }
 
@@ -188,6 +196,13 @@ export interface MuonBuildOptions {
    * `package.json`, then muon defaults.
    */
   windowsResource?: MuonWindowsResourceOptions;
+  /**
+   * Windows code signing command for generated executable artifacts.
+   *
+   * @remarks Set false to disable `muon.json` `windows.codeSigning`.
+   * The command is supplied by the application project or CI environment.
+   */
+  windowsCodeSigning?: false | MuonWindowsCodeSigningOptions;
   /**
    * Linux desktop entry metadata.
    *
@@ -329,6 +344,7 @@ export const buildMuonApp = async (
 ): Promise<MuonBuildResult> => {
   const internalOptions = options as InternalMuonBuildOptions;
   const browserProfilePathOverride = internalOptions.browserProfilePathOverride;
+  const environment = internalOptions.environment ?? process.env;
   const progress = internalOptions.progress;
   const root = resolve(options.root ?? process.cwd());
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
@@ -368,6 +384,10 @@ export const buildMuonApp = async (
       version: "0.0.0",
       copyright: undefined,
     },
+  });
+  const windowsCodeSigning = resolveMuonWindowsCodeSigning({
+    muonConfig: sourceConfig,
+    options: options.windowsCodeSigning,
   });
   const linuxDesktop = await resolveMuonLinuxDesktop({
     root,
@@ -418,9 +438,11 @@ export const buildMuonApp = async (
       assetInput,
       sourceConfig,
       windowsResource,
+      windowsCodeSigning,
       linuxDesktop,
       distributionFiles,
       salt,
+      environment,
       browserStartPage: options.browserStartPage,
       browserProfilePathOverride,
       includeRuntimeHelper: options.includeRuntimeHelper === true,
@@ -808,9 +830,11 @@ const buildMuonTarget = async (input: {
   assetInput: AssetInput;
   sourceConfig: JsonObject;
   windowsResource: ResolvedMuonWindowsResource;
+  windowsCodeSigning: ResolvedMuonWindowsCodeSigning | undefined;
   linuxDesktop: ResolvedMuonLinuxDesktop;
   distributionFiles: readonly DistributionFile[];
   salt: Buffer;
+  environment: NodeJS.ProcessEnv;
   browserStartPage: string | undefined;
   browserProfilePathOverride: string | undefined;
   includeRuntimeHelper: boolean;
@@ -936,14 +960,36 @@ const buildMuonTarget = async (input: {
     await updateWindowsPeIconResource({
       executablePath: join(outputPath, descriptor.runtimeExecutableName),
       resource: input.windowsResource,
-      environment: process.env,
+      environment: input.environment,
       cwd: input.root,
     });
     await updateWindowsPeResources({
       executablePath: launcherPath,
       resource: input.windowsResource,
-      environment: process.env,
+      environment: input.environment,
       cwd: input.root,
+    });
+    if (input.windowsCodeSigning !== undefined) {
+      input.progress?.({
+        phase: "build",
+        status: "Signing Windows executables",
+      });
+    }
+    await signWindowsExecutable({
+      codeSigning: input.windowsCodeSigning,
+      kind: "runtime",
+      target: input.target,
+      path: join(outputPath, descriptor.runtimeExecutableName),
+      cwd: input.root,
+      environment: input.environment,
+    });
+    await signWindowsExecutable({
+      codeSigning: input.windowsCodeSigning,
+      kind: "launcher",
+      target: input.target,
+      path: launcherPath,
+      cwd: input.root,
+      environment: input.environment,
     });
   } else if (descriptor.os === "linux") {
     input.progress?.({
@@ -1235,7 +1281,9 @@ const createEmbeddedConfig = (
 
   const runtimeConfig = stripBuildOnlyAppIconConfig(
     stripBuildOnlyLinuxDesktopConfig(
-      stripBuildOnlyWindowsResourceConfig(sourceConfig),
+      stripBuildOnlyWindowsCodeSigningConfig(
+        stripBuildOnlyWindowsResourceConfig(sourceConfig),
+      ),
     ),
   );
   const sourceBrowser = runtimeConfig.browser;

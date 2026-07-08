@@ -7,6 +7,7 @@ import type { ResolvedConfig } from "vite";
 
 import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonVitePluginOptions } from "./vite.js";
+import { isMuonWindowsCodeSigningOptions } from "./windows-code-signing.js";
 
 /**
  * Metadata symbol used to recover `muon()` plugin options from `vite.config.*`.
@@ -104,6 +105,9 @@ const isMuonViteBuildOptions = (value: unknown): boolean => {
       isStringArray(value.distributionFiles)) &&
     (value.windowsResource === undefined ||
       isWindowsResourceOptions(value.windowsResource)) &&
+    (value.windowsCodeSigning === undefined ||
+      value.windowsCodeSigning === false ||
+      isMuonWindowsCodeSigningOptions(value.windowsCodeSigning)) &&
     (value.linuxDesktop === undefined ||
       isLinuxDesktopOptions(value.linuxDesktop)) &&
     (value.packageDirectory === undefined ||

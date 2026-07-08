@@ -59,6 +59,14 @@ import {
   type MuonWindowsResourceOptions,
   type ResolvedMuonWindowsResource,
 } from "./windows-resource.js";
+import {
+  includesWindowsCodeSigningTarget,
+  resolveMuonWindowsCodeSigning,
+  signWindowsExecutable,
+  type MuonWindowsCodeSigningOptions,
+  type MuonWindowsCodeSigningTarget,
+  type ResolvedMuonWindowsCodeSigning,
+} from "./windows-code-signing.js";
 import { createWindowsIconFromPngFile } from "./windows-icon.js";
 import {
   createLinuxDesktopEntry,
@@ -177,6 +185,13 @@ export interface MuonPackOptions {
    */
   windowsResource?: MuonWindowsResourceOptions;
   /**
+   * Windows code signing command for generated executable artifacts.
+   *
+   * @remarks Set false to disable `muon.json` `windows.codeSigning`.
+   * The command is supplied by the application project or CI environment.
+   */
+  windowsCodeSigning?: false | MuonWindowsCodeSigningOptions;
+  /**
    * Linux desktop entry metadata.
    *
    * @defaultValue Uses Vite build options, `muon.json` `linux.desktop`,
@@ -294,11 +309,13 @@ interface InternalMuonPackOptions extends MuonPackOptions {
 }
 
 interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
+  environment?: NodeJS.ProcessEnv;
   progress?: MuonProgressCallback;
 }
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
   browserProfilePathOverride: string | undefined;
+  environment?: NodeJS.ProcessEnv;
   progress?: MuonProgressCallback;
 }
 
@@ -921,6 +938,7 @@ const packageNsis = async (
   target: MuonBuildTargetResult,
   metadata: PackageMetadata,
   windowsResource: ResolvedMuonWindowsResource,
+  windowsCodeSigning: ResolvedMuonWindowsCodeSigning | undefined,
   artifactsRoot: string,
   packageBuildRoot: string,
   environment: NodeJS.ProcessEnv,
@@ -952,12 +970,19 @@ const packageNsis = async (
     `${metadata.packageName}-${target.target}.ico`,
   );
   await createWindowsIconFromPngFile(windowsResource.iconPath, iconPath);
+  const codeSigningDirectives = await createNsisCodeSigningDirectives({
+    root,
+    scriptPath,
+    target: target.target,
+    codeSigning: windowsCodeSigning,
+  });
   await writeFile(
     scriptPath,
     [
       "Unicode true",
       `Name "${escapeNsis(nsisDisplayName)}"`,
       `OutFile "${escapeNsis(outputPath)}"`,
+      ...codeSigningDirectives,
       `InstallDir "$LOCALAPPDATA\\Programs\\${escapeNsis(nsisInstallDirectoryName)}"`,
       "RequestExecutionLevel user",
       "ShowInstDetails nevershow",
@@ -1050,6 +1075,98 @@ const createNsisResourceDirectives = (
   return lines;
 };
 
+const createNsisCodeSigningWrapperScript = (configPath: string): string =>
+  [
+    "#!/usr/bin/env node",
+    "const { readFileSync } = require('node:fs');",
+    "const { spawnSync } = require('node:child_process');",
+    `const config = JSON.parse(readFileSync(${JSON.stringify(configPath)}, 'utf8'));`,
+    "const [kind, target, path] = process.argv.slice(2);",
+    "const args = config.args.map((arg) => arg.replaceAll('{path}', path).replaceAll('{target}', target).replaceAll('{kind}', kind));",
+    "const result = spawnSync(config.command, args, { cwd: config.cwd, env: process.env, stdio: 'inherit' });",
+    "if (result.error) {",
+    "  console.error(result.error.message);",
+    "  process.exit(1);",
+    "}",
+    "process.exit(result.status ?? 1);",
+    "",
+  ].join("\n");
+
+const createNsisCodeSigningDirectiveCommand = (input: {
+  wrapperPath: string;
+  kind: MuonWindowsCodeSigningTarget;
+  target: MuonBuildTarget;
+}): string =>
+  `"${escapeNsis(process.execPath)}" "${escapeNsis(input.wrapperPath)}" "${input.kind}" "${input.target}" "%1"`;
+
+const createNsisCodeSigningDirectives = async (input: {
+  root: string;
+  scriptPath: string;
+  target: MuonBuildTarget;
+  codeSigning: ResolvedMuonWindowsCodeSigning | undefined;
+}): Promise<string[]> => {
+  const codeSigning = input.codeSigning;
+  if (codeSigning === undefined) {
+    return [];
+  }
+  const signsInstaller = includesWindowsCodeSigningTarget(
+    codeSigning,
+    "nsisInstaller",
+  );
+  const signsUninstaller = includesWindowsCodeSigningTarget(
+    codeSigning,
+    "nsisUninstaller",
+  );
+  if (!signsInstaller && !signsUninstaller) {
+    return [];
+  }
+
+  const scriptDirectory = dirname(input.scriptPath);
+  const configPath = join(
+    scriptDirectory,
+    `${basename(input.scriptPath)}.sign.json`,
+  );
+  const wrapperPath = join(
+    scriptDirectory,
+    `${basename(input.scriptPath)}.sign.cjs`,
+  );
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        command: codeSigning.command,
+        args: codeSigning.args,
+        cwd: input.root,
+      },
+      undefined,
+      2,
+    )}\n`,
+  );
+  await writeFile(wrapperPath, createNsisCodeSigningWrapperScript(configPath));
+  await chmod(wrapperPath, 0o755);
+
+  const lines: string[] = [];
+  if (signsInstaller) {
+    lines.push(
+      `!finalize '${createNsisCodeSigningDirectiveCommand({
+        wrapperPath,
+        kind: "nsisInstaller",
+        target: input.target,
+      })}' = 0`,
+    );
+  }
+  if (signsUninstaller) {
+    lines.push(
+      `!uninstfinalize '${createNsisCodeSigningDirectiveCommand({
+        wrapperPath,
+        kind: "nsisUninstaller",
+        target: input.target,
+      })}' = 0`,
+    );
+  }
+  return lines;
+};
+
 const reapplyPackWindowsResources = async (
   targets: readonly MuonBuildTargetResult[],
   resource: ResolvedMuonWindowsResource,
@@ -1078,6 +1195,44 @@ const reapplyPackWindowsResources = async (
   }
 };
 
+const signPackWindowsExecutables = async (
+  targets: readonly MuonBuildTargetResult[],
+  codeSigning: ResolvedMuonWindowsCodeSigning | undefined,
+  root: string,
+  environment: NodeJS.ProcessEnv,
+  progress: MuonProgressCallback | undefined,
+): Promise<void> => {
+  if (codeSigning === undefined) {
+    return;
+  }
+  progress?.({
+    phase: "pack",
+    status: "Signing Windows executables",
+  });
+  for (const target of targets) {
+    const descriptor = getMuonTargetDescriptor(target.target);
+    if (descriptor.os !== "windows") {
+      continue;
+    }
+    await signWindowsExecutable({
+      codeSigning,
+      kind: "runtime",
+      target: target.target,
+      path: join(target.outputPath, descriptor.runtimeExecutableName),
+      cwd: root,
+      environment,
+    });
+    await signWindowsExecutable({
+      codeSigning,
+      kind: "launcher",
+      target: target.target,
+      path: target.launcherPath,
+      cwd: root,
+      environment,
+    });
+  }
+};
+
 const createPortableBuildOptions = (input: {
   project: MuonBuildSequenceProject;
   pluginBuildOptions: MuonViteBuildOptions;
@@ -1085,8 +1240,10 @@ const createPortableBuildOptions = (input: {
   outputRoot: string;
   targets: readonly MuonBuildTarget[];
   windowsResourceOptions: MuonWindowsResourceOptions | undefined;
+  windowsCodeSigningOptions: false | MuonWindowsCodeSigningOptions | undefined;
   linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
   iconPath: string | undefined;
+  environment: NodeJS.ProcessEnv;
   progress: MuonProgressCallback | undefined;
 }): MuonBuildOptions => {
   const buildOptions: MuonBuildOptions = {
@@ -1132,12 +1289,16 @@ const createPortableBuildOptions = (input: {
   if (input.windowsResourceOptions !== undefined) {
     buildOptions.windowsResource = input.windowsResourceOptions;
   }
+  if (input.windowsCodeSigningOptions !== undefined) {
+    buildOptions.windowsCodeSigning = input.windowsCodeSigningOptions;
+  }
   if (input.linuxDesktopOptions !== undefined) {
     buildOptions.linuxDesktop = input.linuxDesktopOptions;
   }
   if (input.progress !== undefined) {
     (buildOptions as InternalMuonBuildOptions).progress = input.progress;
   }
+  (buildOptions as InternalMuonBuildOptions).environment = input.environment;
   (buildOptions as InternalMuonBuildOptions).browserProfilePathOverride =
     portableProfilePath;
   return buildOptions;
@@ -1150,8 +1311,10 @@ const buildPortableTargets = async (input: {
   packageBuildRoot: string;
   targets: readonly MuonBuildTarget[];
   windowsResourceOptions: MuonWindowsResourceOptions | undefined;
+  windowsCodeSigningOptions: false | MuonWindowsCodeSigningOptions | undefined;
   linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
   iconPath: string | undefined;
+  environment: NodeJS.ProcessEnv;
   progress: MuonProgressCallback | undefined;
 }): Promise<Map<MuonBuildTarget, MuonBuildTargetResult>> => {
   if (input.targets.length === 0) {
@@ -1169,8 +1332,10 @@ const buildPortableTargets = async (input: {
       outputRoot: join(input.packageBuildRoot, "portable-build"),
       targets: input.targets,
       windowsResourceOptions: input.windowsResourceOptions,
+      windowsCodeSigningOptions: input.windowsCodeSigningOptions,
       linuxDesktopOptions: input.linuxDesktopOptions,
       iconPath: input.iconPath,
+      environment: input.environment,
       progress: input.progress,
     }),
   );
@@ -1217,6 +1382,10 @@ export const packMuonApp = async (
     options.windowsResource,
     pluginBuildOptions.windowsResource,
   );
+  const windowsCodeSigningOptions =
+    options.windowsCodeSigning !== undefined
+      ? options.windowsCodeSigning
+      : pluginBuildOptions.windowsCodeSigning;
   const linuxDesktopOptions = mergeMuonLinuxDesktopOptions(
     options.linuxDesktop,
     pluginBuildOptions.linuxDesktop,
@@ -1240,12 +1409,16 @@ export const packMuonApp = async (
   if (windowsResourceOptions !== undefined) {
     buildOptions.windowsResource = windowsResourceOptions;
   }
+  if (windowsCodeSigningOptions !== undefined) {
+    buildOptions.windowsCodeSigning = windowsCodeSigningOptions;
+  }
   if (linuxDesktopOptions !== undefined) {
     buildOptions.linuxDesktop = linuxDesktopOptions;
   }
   if (progress !== undefined) {
     (buildOptions as InternalMuonBuildSequenceOptions).progress = progress;
   }
+  (buildOptions as InternalMuonBuildSequenceOptions).environment = environment;
   const windowsResourceConfig = await readMuonConfigForWindowsResource(
     root,
     options.configPath,
@@ -1267,6 +1440,10 @@ export const packMuonApp = async (
       copyright: undefined,
     },
   });
+  const windowsCodeSigning = resolveMuonWindowsCodeSigning({
+    muonConfig: windowsResourceConfig.config,
+    options: windowsCodeSigningOptions,
+  });
   progress?.({
     phase: "pack",
     status: "Building distributions",
@@ -1278,6 +1455,13 @@ export const packMuonApp = async (
       windowsResource,
       root,
       environment,
+    );
+    await signPackWindowsExecutables(
+      build.targets,
+      windowsCodeSigning,
+      root,
+      environment,
+      progress,
     );
   }
   const typesByTarget = new Map(
@@ -1297,8 +1481,10 @@ export const packMuonApp = async (
     packageBuildRoot,
     targets: portableTargets,
     windowsResourceOptions,
+    windowsCodeSigningOptions,
     linuxDesktopOptions,
     iconPath,
+    environment,
     progress,
   });
   if (options.packageVersion !== undefined) {
@@ -1307,6 +1493,13 @@ export const packMuonApp = async (
       windowsResource,
       root,
       environment,
+    );
+    await signPackWindowsExecutables(
+      [...portableTargetsByTarget.values()],
+      windowsCodeSigning,
+      root,
+      environment,
+      progress,
     );
   }
   const artifacts: MuonPackArtifact[] = [];
@@ -1352,6 +1545,7 @@ export const packMuonApp = async (
           target,
           metadata,
           windowsResource,
+          windowsCodeSigning,
           artifactsRoot,
           packageBuildRoot,
           environment,

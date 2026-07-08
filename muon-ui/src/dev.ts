@@ -621,34 +621,24 @@ const runMuonExecutable = async (
   environment: NodeJS.ProcessEnv,
 ): Promise<number> => {
   const args = configPaths.flatMap((configPath) => ["-c", configPath]);
-  let exitCode = 0;
-  do {
-    const child = spawn(muonExecutablePath, args, {
-      cwd: dirname(muonExecutablePath),
-      env: environment,
-      stdio: ["ignore", "inherit", "inherit"],
-    });
+  const child = spawn(muonExecutablePath, args, {
+    cwd: dirname(muonExecutablePath),
+    env: environment,
+    stdio: ["ignore", "inherit", "inherit"],
+  });
 
-    exitCode = await new Promise<number>((resolvePromise, reject) => {
-      child.once("error", reject);
-      child.once("close", (code) => {
-        resolvePromise(code ?? 1);
-      });
+  return await new Promise<number>((resolvePromise, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => {
+      resolvePromise(code ?? 1);
     });
-  } while (exitCode === muonRecycleExitCode);
-  return exitCode;
+  });
 };
 
-/**
- * Launches muon directly against local development assets.
- *
- * @param options Development startup options.
- * @returns Development startup result after the muon process exits.
- */
-export const runMuonDev = async (
-  options: MuonDevOptions = {},
+const runMuonDevOnce = async (
+  options: MuonDevOptions,
+  cwd: string,
 ): Promise<MuonDevResult> => {
-  const cwd = resolve(options.root ?? process.cwd());
   const preparedViteAssets =
     options.assetSourcePath === undefined
       ? await prepareViteRunAssets(cwd)
@@ -760,4 +750,21 @@ export const runMuonDev = async (
     assetSourcePath: asset.assetSourcePath,
     exitCode,
   };
+};
+
+/**
+ * Launches muon directly against local development assets.
+ *
+ * @param options Development startup options.
+ * @returns Development startup result after the muon process exits.
+ */
+export const runMuonDev = async (
+  options: MuonDevOptions = {},
+): Promise<MuonDevResult> => {
+  const cwd = resolve(options.root ?? process.cwd());
+  let result: MuonDevResult;
+  do {
+    result = await runMuonDevOnce(options, cwd);
+  } while (result.exitCode === muonRecycleExitCode);
+  return result;
 };

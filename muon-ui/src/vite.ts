@@ -381,6 +381,40 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   const getRuntimePluginConfig = (): MuonRuntimePluginConfig =>
     resolveMuonRuntimePluginConfig(capabilityResolver, resolvedPluginAccess);
 
+  const refreshPluginAccess = async (config: ResolvedConfig): Promise<void> => {
+    resolvedPluginAccess = await resolveMuonPluginAccessOptions({
+      root: config.root,
+      configPath: resolveMuonConfigPathForViteCommand(config, options),
+      pluginAccess: options.pluginAccess,
+      ...(config.command === "serve"
+        ? {
+            onConfigReadError: (error: unknown): void => {
+              config.logger.warn(
+                `muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
+              );
+            },
+          }
+        : {}),
+    });
+    capabilityResolver =
+      resolvedPluginAccess.mode === "validate"
+        ? createMuonCapabilityModuleResolver(
+            config.root,
+            resolvedPluginAccess.capabilityOptions,
+          )
+        : undefined;
+    loadedCapabilityRuntimePluginConfig = undefined;
+  };
+
+  const refreshRuntimePluginConfig =
+    async (): Promise<MuonRuntimePluginConfig> => {
+      if (resolvedConfig === undefined) {
+        throw new Error("muon Vite plugin config was not resolved.");
+      }
+      await refreshPluginAccess(resolvedConfig);
+      return getRuntimePluginConfig();
+    };
+
   const plugin: Plugin = {
     name: "muon",
     config: (config): Omit<UserConfig, "plugins"> | null => {
@@ -396,27 +430,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     },
     configResolved: async (config): Promise<void> => {
       resolvedConfig = config;
-      resolvedPluginAccess = await resolveMuonPluginAccessOptions({
-        root: config.root,
-        configPath: resolveMuonConfigPathForViteCommand(config, options),
-        pluginAccess: options.pluginAccess,
-        ...(config.command === "serve"
-          ? {
-              onConfigReadError: (error: unknown): void => {
-                config.logger.warn(
-                  `muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
-                );
-              },
-            }
-          : {}),
-      });
-      capabilityResolver =
-        resolvedPluginAccess.mode === "validate"
-          ? createMuonCapabilityModuleResolver(
-              config.root,
-              resolvedPluginAccess.capabilityOptions,
-            )
-          : undefined;
+      await refreshPluginAccess(config);
     },
     resolveId: (source, importer) =>
       capabilityResolver?.resolveId(source, importer)?.id,
@@ -431,7 +445,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       await startMuonViteBrowserBridge({
         server,
         pluginOptions: options,
-        getRuntimePluginConfig,
+        refreshRuntimePluginConfig,
         platform: process.platform,
         architecture: process.arch,
         environment: process.env,

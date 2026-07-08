@@ -1,4 +1,4 @@
-## muon Viteプラグインリファレンス
+# muon Viteプラグインリファレンス
 
 muon Viteプラグインの引数 `options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
 
@@ -19,7 +19,7 @@ export default defineConfig({
 });
 ```
 
-### rootキー
+## rootキー
 
 | キー             | 型                    | 既定値                      | 概要                                                                 |
 | :--------------- | :-------------------- | :-------------------------- | :------------------------------------------------------------------- |
@@ -42,7 +42,7 @@ export default defineConfig({
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでmuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
 
-### pluginAccessキー
+## pluginAccessキー
 
 `pluginAccess` は、`muon.json` の `plugin` 設定と同じ形で、Vite側から一部を上書きするための設定です。
 省略した場合は `muon.json` の `plugin` 設定をそのまま使用し、`plugin.mode` の省略時は `"validate"` として扱います。
@@ -86,7 +86,7 @@ muon({
 
 - 各項目は、`muon.json` の `plugin` と同様です。未定義の既定値は、`muon.json` の各項目にフォールバックします。
 
-### buildキー
+## buildキー
 
 `build` に `false` を指定すると、Viteの通常ビルドだけを実行し、muon配布用ディレクトリの生成を無効化します。
 この状態では `muon build` と `muon pack` もエラーになり、配布用ビルドは行われません。

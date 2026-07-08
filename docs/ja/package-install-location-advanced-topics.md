@@ -1,4 +1,4 @@
-## パッケージのインストール先について (Advanced topics)
+# パッケージのインストール先について (Advanced topics)
 
 debパッケージのインストール先は `/usr/lib/<packageName>/` と `/usr/bin/<packageName>` です。
 ランチャー表示用に `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` もpackage-owned fileとして配置します。

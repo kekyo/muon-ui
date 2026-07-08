@@ -1,4 +1,4 @@
-## ウインドウ間連携の制約 (Advanced topics)
+# ウインドウ間連携の制約 (Advanced topics)
 
 `browser.allowUnsafeJavaScriptParentAccess` は、ページから別のページを（別のウインドウで）開いた場合などに、
 子孫のページから親のページのオブジェクトにアクセス出来るかどうかをフィルタします。

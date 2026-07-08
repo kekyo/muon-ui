@@ -1,4 +1,4 @@
-## muon内蔵プラグインリファレンス
+# muon内蔵プラグインリファレンス
 
 この章では、プラグイン名前空間と関数パスを分かりやすく示すため、`window.muon.*` 形式でAPIを表記しています。
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
@@ -11,7 +11,7 @@
 import { spawn } from "muon:executor";
 ```
 
-### muon.browser名前空間
+## muon.browser名前空間
 
 `window.muon.browser` は、現在のmuonブラウザウインドウとページ表示を操作します。
 
@@ -124,7 +124,7 @@ await window.muon.browser.shutdown(0);
 await window.muon.browser.recycle();
 ```
 
-### muon.bootstrap名前空間
+## muon.bootstrap名前空間
 
 `window.muon.bootstrap` は、次回 `muon-bootstrap` 起動時に使われるCEF更新設定を扱います。
 設定はruntimeディレクトリの `muon-bootstrap.ini` に保存され、現在実行中のCEFには影響しません。
@@ -143,7 +143,7 @@ await window.muon.bootstrap.setSettings({
 await window.muon.bootstrap.triggerUpdate();
 ```
 
-### muon.environments名前空間
+## muon.environments名前空間
 
 `window.muon.environments` は、muonプロセスの環境情報と自動起動設定を扱います。
 
@@ -173,7 +173,7 @@ if (autostart !== true) {
 }
 ```
 
-### muon.executor名前空間
+## muon.executor名前空間
 
 `window.muon.executor` は、シェルを介さずに子プロセスを起動し、標準入出力を逐次扱います。
 
@@ -226,7 +226,7 @@ const result = await child.wait();
 console.log(result.exitCode);
 ```
 
-### muon.fs名前空間
+## muon.fs名前空間
 
 `window.muon.fs` は、ローカルファイルシステムを操作します。
 各関数の `path`, `source`, `destination`, `target` は、ファイル位置を表す文字列です。
@@ -308,7 +308,7 @@ const watcher = await window.muon.fs.watch("/tmp/muon-note.txt", (event) => {
 await watcher.close();
 ```
 
-### muon.fs.dialogs名前空間
+## muon.fs.dialogs名前空間
 
 `window.muon.fs.dialogs` は、ネイティブファイルダイアログを表示します。
 この名前空間の関数はファイルやディレクトリを作成・変更せず、ユーザーが選択したパスまたはURIを返すだけです。

@@ -1,4 +1,4 @@
-## CEFバージョンとCEF APIバージョン (Advanced topics)
+# CEFバージョンとCEF APIバージョン (Advanced topics)
 
 CEFには、ネイティブAPIのバージョニングが存在します。通常、このバージョニングは「バージョンウインドウ」が存在し、CEFのいくつかのバージョンに渡って互換性が維持されます。
 

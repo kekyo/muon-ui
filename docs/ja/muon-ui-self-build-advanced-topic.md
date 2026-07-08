@@ -1,4 +1,4 @@
-## muon-uiセルフビルド (Advanced topic)
+# muon-uiセルフビルド (Advanced topic)
 
 必要なパッケージのインストール:
 
@@ -14,7 +14,7 @@ apt-get install -y \
 
 - Node.jsのインストールは [nvm](https://github.com/nvm-sh/nvm) 経由の方が良いかも知れません。バージョンは20以降です。
 
-### ビルドとテスト
+## ビルドとテスト
 
 ```bash
 npm install
@@ -28,7 +28,7 @@ muonをデバッグページで起動するには:
 npm run dev
 ```
 
-### Windowsバイナリのe2eテスト
+## Windowsバイナリのe2eテスト
 
 Windowsバイナリのe2eテストを実行するには、 [agent-rover](https://github.com/kekyo/agent-rover/) のリモートエージェントを起動した Windows 11 (amd64) のマシンが必要です。
 これは、仮想マシン上のインスタンスでも構いません。その上で、以下のようにテストを起動します:
@@ -42,7 +42,7 @@ npm run test:windows-e2e --workspace muon-core-tester
 
 あるいは、環境変数が定義されていれば、 `npm run test` で一括テストにWindows e2eテストが含まれます。
 
-### パッケージ生成
+## パッケージ生成
 
 ```bash
 # Prerequisities

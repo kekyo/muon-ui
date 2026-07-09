@@ -42,6 +42,7 @@ struct MuonFunctionSignatureStorage {
       0,
       nullptr,
       nullptr,
+      TRA_FFIC_ARGUMENT_PASSING_STACK,
   };
 };
 

@@ -184,6 +184,11 @@ static bool RunTrafficSignatureAbiTest() {
               "traffic signature did not use completion ABI")) {
     return false;
   }
+  if (!Expect(signature->argument_passing ==
+                  TRA_FFIC_ARGUMENT_PASSING_STACK,
+              "traffic signature did not use stack argument passing")) {
+    return false;
+  }
   if (!Expect(signature->arg_count == 1,
               "traffic signature changed the argument count")) {
     return false;
@@ -198,6 +203,11 @@ static bool RunTrafficSignatureAbiTest() {
               "traffic argument signature did not use completion ABI")) {
     return false;
   }
+  if (!Expect(argument_signature->argument_passing ==
+                  TRA_FFIC_ARGUMENT_PASSING_STACK,
+              "traffic argument signature did not use stack argument passing")) {
+    return false;
+  }
   const auto* return_signature =
       signature->return_type->function_signature;
   if (!Expect(return_signature != nullptr,
@@ -205,7 +215,10 @@ static bool RunTrafficSignatureAbiTest() {
     return false;
   }
   return Expect(return_signature->abi == TRA_FFIC_SIGNATURE_ABI_COMPLETION,
-                "traffic return signature did not use completion ABI");
+                "traffic return signature did not use completion ABI") &&
+         Expect(return_signature->argument_passing ==
+                    TRA_FFIC_ARGUMENT_PASSING_STACK,
+                "traffic return signature did not use stack argument passing");
 }
 
 int main() {

@@ -159,6 +159,7 @@ CreateMuonFunctionSignatureStorage(
                                      ? nullptr
                                      : storage->argument_descriptors.data();
   storage->signature.return_type = &storage->return_storage.descriptor;
+  storage->signature.argument_passing = TRA_FFIC_ARGUMENT_PASSING_STACK;
   return storage;
 }
 

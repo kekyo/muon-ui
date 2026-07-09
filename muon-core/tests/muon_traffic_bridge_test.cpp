@@ -33,6 +33,7 @@ static const tra_ffic_signature kI32FunctionSignature = {
     1,
     kI32FunctionArgs,
     &kI32Type,
+    TRA_FFIC_ARGUMENT_PASSING_STACK,
 };
 
 static const tra_ffic_type kI32FunctionType = {
@@ -54,6 +55,7 @@ static const tra_ffic_signature kBufferViewFunctionSignature = {
     1,
     kBufferViewFunctionArgs,
     &kBufferViewType,
+    TRA_FFIC_ARGUMENT_PASSING_STACK,
 };
 
 static const tra_ffic_type kFunctionRoundtripArgs[] = {
@@ -65,6 +67,7 @@ static const tra_ffic_signature kFunctionRoundtripSignature = {
     1,
     kFunctionRoundtripArgs,
     &kI32FunctionType,
+    TRA_FFIC_ARGUMENT_PASSING_STACK,
 };
 
 struct TestSides {

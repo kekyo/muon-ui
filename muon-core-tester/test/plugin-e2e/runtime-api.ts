@@ -762,6 +762,118 @@ body {
 <main>native shortcut drag region</main>`,
   )}`;
 
+const adhocLibrarySource = `#define _POSIX_C_SOURCE 200809L
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+static char marker_path[4096];
+static int marker_enabled = 0;
+
+static void write_marker(const char* label) {
+  if (!marker_enabled) {
+    return;
+  }
+  FILE* file = fopen(marker_path, "a");
+  if (file == NULL) {
+    return;
+  }
+  fprintf(file, "%s\\n", label);
+  fclose(file);
+}
+
+__attribute__((destructor)) static void muon_adhoc_unload_marker(void) {
+  write_marker("unloaded");
+}
+
+int32_t muon_adhoc_set_marker_path(const char* path) {
+  size_t length;
+  if (path == NULL) {
+    return 0;
+  }
+  length = strlen(path);
+  if (length >= sizeof(marker_path)) {
+    return 0;
+  }
+  memcpy(marker_path, path, length + 1);
+  marker_enabled = 1;
+  return 1;
+}
+
+int32_t muon_adhoc_add(int32_t left, int32_t right) {
+  return left + right;
+}
+
+int32_t muon_adhoc_sleep_then_add(
+    int32_t left,
+    int32_t right,
+    uint32_t milliseconds) {
+  struct timespec request;
+  request.tv_sec = milliseconds / 1000u;
+  request.tv_nsec = (long)(milliseconds % 1000u) * 1000000L;
+  while (nanosleep(&request, &request) != 0 && errno == EINTR) {
+  }
+  return left + right;
+}
+
+void* muon_adhoc_alloc(uint64_t size) {
+  if (size > (uint64_t)SIZE_MAX) {
+    return NULL;
+  }
+  return malloc((size_t)size);
+}
+
+void muon_adhoc_free(void* pointer) {
+  free(pointer);
+}
+`;
+
+interface AdhocLibraryBuild {
+  readonly directory: string;
+  readonly libraryPath: string;
+  readonly markerPath: string;
+  readonly contextMarkerPath: string;
+}
+
+const buildAdhocTestLibrary = async (): Promise<AdhocLibraryBuild> => {
+  const directory = await mkdtemp(join(tmpdir(), "muon-adhoc-library-"));
+  const sourcePath = join(directory, "muon_adhoc_library.c");
+  const libraryPath = join(directory, "libmuon_adhoc_library.so");
+  const markerPath = join(directory, "release-marker.txt");
+  const contextMarkerPath = join(directory, "context-marker.txt");
+  try {
+    await writeFile(sourcePath, adhocLibrarySource, "utf8");
+    await execFileAsync(
+      "gcc",
+      [
+        sourcePath,
+        "-std=c99",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-shared",
+        "-fPIC",
+        "-o",
+        libraryPath,
+      ],
+      { timeout: cdpCommandTimeoutMs },
+    );
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    directory,
+    libraryPath,
+    markerPath,
+    contextMarkerPath,
+  };
+};
+
 describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   const linuxIt = isLocalLinuxE2e ? it : it.skip;
 
@@ -1928,6 +2040,259 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
       } finally {
         await stopMuon(running, driver);
+      }
+    },
+  );
+
+  linuxIt(
+    "loads and calls ad-hoc dynamic library functions without blocking the UI",
+    async () => {
+      const library = await buildAdhocTestLibrary();
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const values = await driver.evaluate<{
+            addResult: number;
+            callAfterReleaseRejected: boolean;
+            invalidSignatureRejected: boolean;
+            missingLibraryRejected: boolean;
+            missingSymbolRejected: boolean;
+            markerAccepted: number;
+            pointerNonZero: boolean;
+            releaseSettledBeforeCall: boolean;
+            responsivenessElapsed: number;
+            sleepResult: number;
+            ticksDuringCall: number;
+          }>(`(async () => {
+            const delay = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+            const executor = window.muon.executor;
+            let missingLibraryRejected = false;
+            try {
+              await executor.loadLibrary(${JSON.stringify(
+                `${library.libraryPath}.missing`,
+              )});
+            } catch {
+              missingLibraryRejected = true;
+            }
+
+            const loaded = await executor.loadLibrary(${JSON.stringify(
+              library.libraryPath,
+            )});
+            try {
+              const int32Signature = {
+                argTypes: [executor.int32, executor.int32],
+                returnType: executor.int32,
+              };
+              const add = await loaded.getFunction(
+                "muon_adhoc_add",
+                int32Signature,
+              );
+              const addResult = await add(20, 22);
+              const markerAccepted = await (
+                await loaded.getFunction("muon_adhoc_set_marker_path", {
+                  argTypes: [executor.stringType],
+                  returnType: executor.int32,
+                })
+              )(${JSON.stringify(library.markerPath)});
+              let missingSymbolRejected = false;
+              try {
+                await loaded.getFunction(
+                  "muon_adhoc_missing_symbol",
+                  int32Signature,
+                );
+              } catch {
+                missingSymbolRejected = true;
+              }
+              let invalidSignatureRejected = false;
+              try {
+                await loaded.getFunction("muon_adhoc_add", {
+                  argTypes: [{ name: "not-a-native-type" }],
+                  returnType: executor.int32,
+                });
+              } catch {
+                invalidSignatureRejected = true;
+              }
+
+              const allocate = await loaded.getFunction("muon_adhoc_alloc", {
+                argTypes: [executor.usize],
+                returnType: executor.pointer,
+              });
+              const releasePointer = await loaded.getFunction(
+                "muon_adhoc_free",
+                {
+                  argTypes: [executor.pointer],
+                  returnType: executor.voidType,
+                },
+              );
+              const pointer = await allocate(64n);
+              const pointerNonZero = pointer.toString() !== "0";
+              await releasePointer(pointer);
+
+              const sleepThenAdd = await loaded.getFunction(
+                "muon_adhoc_sleep_then_add",
+                {
+                  argTypes: [executor.int32, executor.int32, executor.uint32],
+                  returnType: executor.int32,
+                },
+              );
+              let ticks = 0;
+              const interval = setInterval(() => {
+                ticks += 1;
+              }, 10);
+              const startedAt = performance.now();
+              const sleepPromise = sleepThenAdd(30, 12, 1000);
+              await delay(100);
+              const responsivenessElapsed = performance.now() - startedAt;
+              const ticksDuringCall = ticks;
+              const releasePromise = loaded.release();
+              let releaseSettled = false;
+              const releaseWatcher = (async () => {
+                await releasePromise;
+                releaseSettled = true;
+              })();
+              await delay(100);
+              const releaseSettledBeforeCall = releaseSettled;
+              const sleepResult = await sleepPromise;
+              await releaseWatcher;
+              clearInterval(interval);
+
+              let callAfterReleaseRejected = false;
+              try {
+                await add(1, 2);
+              } catch {
+                callAfterReleaseRejected = true;
+              }
+
+              return {
+                addResult,
+                callAfterReleaseRejected,
+                invalidSignatureRejected,
+                markerAccepted,
+                missingLibraryRejected,
+                missingSymbolRejected,
+                pointerNonZero,
+                releaseSettledBeforeCall,
+                responsivenessElapsed,
+                sleepResult,
+                ticksDuringCall,
+              };
+            } catch (error) {
+              try {
+                await loaded.release();
+              } catch {}
+              throw error;
+            }
+          })()`);
+
+          expect(values).toEqual({
+            addResult: 42,
+            callAfterReleaseRejected: true,
+            invalidSignatureRejected: true,
+            markerAccepted: 1,
+            missingLibraryRejected: true,
+            missingSymbolRejected: true,
+            pointerNonZero: true,
+            releaseSettledBeforeCall: false,
+            responsivenessElapsed: expect.any(Number),
+            sleepResult: 42,
+            ticksDuringCall: expect.any(Number),
+          });
+          expect(values.responsivenessElapsed).toBeLessThan(900);
+          expect(values.ticksDuringCall).toBeGreaterThan(0);
+        });
+        const marker = await waitForTextFileContent(
+          library.markerPath,
+          (content) => content.includes("unloaded"),
+          "ad-hoc library release marker",
+        );
+        expect(marker).toContain("unloaded");
+      } finally {
+        await rm(library.directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  linuxIt(
+    "unloads ad-hoc dynamic libraries when the V8 context is released",
+    async () => {
+      const library = await buildAdhocTestLibrary();
+      const running = await startDebugMuon(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        undefined,
+        ["muon.executor.loadLibrary"],
+      );
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon adhoc context release</title>",
+          cdpCommandTimeoutMs,
+        );
+        await expect(
+          driver.evaluate(`(async () => {
+            const executor = window.muon.executor;
+            const library = await executor.loadLibrary(${JSON.stringify(
+              library.libraryPath,
+            )});
+            const setMarkerPath = await library.getFunction(
+              "muon_adhoc_set_marker_path",
+              {
+                argTypes: [executor.stringType],
+                returnType: executor.int32,
+              },
+            );
+            const accepted = await setMarkerPath(${JSON.stringify(
+              library.contextMarkerPath,
+            )});
+            globalThis.__muonAdhocContextReleaseLibrary = library;
+            return {
+              accepted,
+              keys: Object.keys(executor).sort(),
+            };
+          })()`),
+        ).resolves.toEqual({
+          accepted: 1,
+          keys: [
+            "bool",
+            "bufferView",
+            "float32",
+            "float64",
+            "int16",
+            "int32",
+            "int64",
+            "int8",
+            "loadLibrary",
+            "pointer",
+            "stringType",
+            "uint16",
+            "uint32",
+            "uint64",
+            "uint8",
+            "usize",
+            "voidType",
+          ],
+        });
+
+        await driver.navigate(
+          "data:text/html,<title>muon adhoc context released</title>",
+          cdpCommandTimeoutMs,
+        );
+        const marker = await waitForTextFileContent(
+          library.contextMarkerPath,
+          (content) => content.includes("unloaded"),
+          "ad-hoc library context release marker",
+        );
+        expect(marker).toContain("unloaded");
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+        await rm(library.directory, { recursive: true, force: true });
       }
     },
   );

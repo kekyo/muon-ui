@@ -3,8 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
-import type { RemoteAgent, RemoteProcessSnapshot } from "agent-rover";
+import type {
+  RemoteAgent,
+  RemoteDirectorySyncOptions,
+  RemoteDirectorySyncResult,
+  RemoteProcessSnapshot,
+} from "agent-rover";
 
 import {
   createWindowsE2eMatrix,
@@ -24,13 +33,13 @@ import {
 } from "./plugin-e2e/windows-context.js";
 import {
   cleanupWindowsStagedRuntimeProcesses,
-  removeWindowsStagedRuntimeDirectory,
+  stageWindowsRuntimeDirectory,
 } from "./plugin-e2e/windows-staging.js";
 
 interface FakeStagingAgent {
   agent: RemoteAgent;
   getKilledProcessIds: () => number[];
-  getRemoveAttempts: () => number;
+  getSyncDirectoryOptions: () => RemoteDirectorySyncOptions[];
   getWaitedProcessIds: () => number[];
 }
 
@@ -40,29 +49,37 @@ const createProcessSnapshot = (
   path: string,
   running: boolean,
 ): RemoteProcessSnapshot => ({
+  createdAt: "2026-07-09T00:00:00.000Z",
   exitCode: running ? null : 0,
   id,
   name,
+  parentProcessId: null,
   path,
   running,
 });
 
 const createFakeStagingAgent = (
   initialProcesses: readonly RemoteProcessSnapshot[],
-  removeFailureCount: number,
 ): FakeStagingAgent => {
   let processes = [...initialProcesses];
   const killedProcessIds: number[] = [];
+  const syncDirectoryOptions: RemoteDirectorySyncOptions[] = [];
   const waitedProcessIds: number[] = [];
-  let removeAttempts = 0;
 
   const agent = {
     files: {
-      remove: async (): Promise<void> => {
-        removeAttempts += 1;
-        if (removeAttempts <= removeFailureCount) {
-          throw new Error("DeleteFileW failed.");
-        }
+      syncDirectory: async (
+        options: RemoteDirectorySyncOptions,
+      ): Promise<RemoteDirectorySyncResult> => {
+        syncDirectoryOptions.push(options);
+        return {
+          bytesUploaded: 0,
+          createdDirectories: 0,
+          deletedDirectories: 0,
+          deletedFiles: 0,
+          skippedFiles: 0,
+          uploadedFiles: 0,
+        };
       },
     },
     processes: {
@@ -93,7 +110,7 @@ const createFakeStagingAgent = (
   return {
     agent,
     getKilledProcessIds: () => killedProcessIds,
-    getRemoveAttempts: () => removeAttempts,
+    getSyncDirectoryOptions: () => syncDirectoryOptions,
     getWaitedProcessIds: () => waitedProcessIds,
   };
 };
@@ -310,36 +327,33 @@ describe("Windows e2e staging", () => {
   ] as const;
 
   it("terminates stale processes that can hold staged runtime files", async () => {
-    const fake = createFakeStagingAgent(
-      [
-        createProcessSnapshot(
-          10,
-          "muon-core.exe",
-          String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
-          true,
-        ),
-        createProcessSnapshot(
-          11,
-          "bootstrap.exe",
-          String.raw`C:\muon-e2e\windows-i686\release\bootstrap.exe`,
-          true,
-        ),
-        createProcessSnapshot(12, "muon-cdp-relay.exe", "", true),
-        createProcessSnapshot(
-          13,
-          "muon-core.exe",
-          String.raw`C:\other\muon-core.exe`,
-          true,
-        ),
-        createProcessSnapshot(
-          14,
-          "muon-core.exe",
-          String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
-          false,
-        ),
-      ],
-      0,
-    );
+    const fake = createFakeStagingAgent([
+      createProcessSnapshot(
+        10,
+        "muon-core.exe",
+        String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
+        true,
+      ),
+      createProcessSnapshot(
+        11,
+        "bootstrap.exe",
+        String.raw`C:\muon-e2e\windows-i686\release\bootstrap.exe`,
+        true,
+      ),
+      createProcessSnapshot(12, "muon-cdp-relay.exe", "", true),
+      createProcessSnapshot(
+        13,
+        "muon-core.exe",
+        String.raw`C:\other\muon-core.exe`,
+        true,
+      ),
+      createProcessSnapshot(
+        14,
+        "muon-core.exe",
+        String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
+        false,
+      ),
+    ]);
 
     await cleanupWindowsStagedRuntimeProcesses(
       fake.agent,
@@ -351,27 +365,30 @@ describe("Windows e2e staging", () => {
     expect(fake.getWaitedProcessIds()).toEqual([10, 11, 12]);
   });
 
-  it("retries staging directory removal after clearing stale locks", async () => {
-    const fake = createFakeStagingAgent(
-      [
-        createProcessSnapshot(
-          20,
-          "muon-core.exe",
-          String.raw`C:\muon-e2e\windows-i686\debug\muon-core.exe`,
-          true,
-        ),
-      ],
-      2,
-    );
+  it("uses agent-rover directory sync for runtime staging", async () => {
+    const fake = createFakeStagingAgent([]);
+    const localDirectory = await mkdtemp(join(tmpdir(), "muon-runtime-"));
+    try {
+      await writeFile(join(localDirectory, "muon-core.exe"), "runtime");
 
-    await removeWindowsStagedRuntimeDirectory(
-      fake.agent,
-      debugRuntimeDirectory,
-      runtimeDirectories,
-      relayExecutablePath,
-    );
+      await stageWindowsRuntimeDirectory(
+        fake.agent,
+        localDirectory,
+        debugRuntimeDirectory,
+      );
 
-    expect(fake.getKilledProcessIds()).toEqual([20]);
-    expect(fake.getRemoveAttempts()).toBe(3);
+      expect(fake.getSyncDirectoryOptions()).toEqual([
+        {
+          checksum: "sha256",
+          localPath: localDirectory,
+          mode: "mirror",
+          onLockedFile: "killRelatedProcessesAndRetry",
+          relatedProcessPaths: [debugRuntimeDirectory],
+          remotePath: debugRuntimeDirectory,
+        },
+      ]);
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
+    }
   });
 });

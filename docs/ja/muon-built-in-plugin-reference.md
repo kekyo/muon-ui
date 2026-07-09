@@ -175,11 +175,20 @@ if (autostart !== true) {
 
 ## muon.executor名前空間
 
-`window.muon.executor` は、シェルを介さずに子プロセスを起動し、標準入出力を逐次扱います。
+`window.muon.executor` は、muon外部の機能を実行する機能を集約しています。
+例えば、子プロセスを起動したり、動的ライブラリ内の指定した関数を呼び出せます。
 
-| 関数             | 引数                                | 戻り値                         | 説明                                       |
-| :--------------- | :---------------------------------- | :----------------------------- | :----------------------------------------- |
-| `spawn(options)` | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorProcess>` | 子プロセスを起動し、操作用ハンドルを返します。 |
+これらの機能は非常に強力であり、かつmuonやCEFのセキュリティ境界面による保護がありません。
+任意のパスの実行ファイルを実行出来たり、任意の動的ライブラリのネイティブコードを制限なく実行出来ます。
+
+使用する際は細心の注意が必要です。これらの機能が必要でない場合は、`muon.json` のホワイトリストに乗せないようにして下さい。
+
+| 関数                | 引数                                | 戻り値                         | 説明                                       |
+| :------------------ | :---------------------------------- | :----------------------------- | :----------------------------------------- |
+| `spawn(options)`    | `options: MuonExecutorSpawnOptions` | `Promise<MuonExecutorProcess>` | 子プロセスを起動し、操作用ハンドルを返します。 |
+| `loadLibrary(path)` | `path: string`                      | `Promise<MuonAdhocLibrary>`    | `.so` / `.dll` を読み込み、アドホックFFI用ハンドルを返します。 |
+
+### 子プロセスの実行
 
 `MuonExecutorSpawnOptions`:
 
@@ -225,6 +234,68 @@ await child.closeStdin();
 const result = await child.wait();
 console.log(result.exitCode);
 ```
+
+### 動的ライブラリのロードと実行
+
+`loadLibrary()` は、指定された動的ライブラリをロードし、ライブラリ内のエントリポイントを呼び出し可能にします。
+
+返されたハンドル (`MuonAdhocLibrary`) を使用して、ライブラリ内の関数エントリポイントを特定して、JavaScriptの関数オブジェクトを取得できます。
+この関数オブジェクトを通じて、動的ライブラリの機能を呼び出せます。
+
+`MuonAdhocLibrary`:
+
+| 関数                              | 型                                                           | 説明                                                              |
+| :-------------------------------- | :----------------------------------------------------------- | :---------------------------------------------------------------- |
+| `getFunction(name, signature)`    | `<T>(name: string, signature: MuonAdhocSignature) => Promise<T>` | native symbolを解決し、async JavaScript proxy関数を返します。       |
+| `release()`                       | `() => Promise<void>`                                       | 新規呼び出しを拒否し、実行中呼び出しの完了後にライブラリを解放します。 |
+
+対象のエントリポイントの関数がどのようなシグネチャ（引数と戻り値の型）を想定しているかは、 `getFunction()` の引数で指定する必要があります。
+従って、不明なシグネチャのエントリポイントを呼び出すことは出来ません。
+
+`MuonAdhocSignature` は `{ argTypes, returnType }` で、型定数には `voidType`, `bool`, `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `float32`, `float64`, `stringType`, `pointer`, `bufferView`, `usize` を指定出来ます。
+64bit整数と `usize` はJSONではdecimal stringとして運ばれ、JavaScript側の引数には `number`, `bigint`, `string` を渡せます。
+
+以下の例は、 `libc.so` 内の `malloc` と `free` を呼び出す例です:
+
+```ts
+import { loadLibrary, pointer, usize, voidType } from "muon:executor";
+
+type MallocType = (size: MuonAdhocIntegerValue) => Promise<MuonNativePointer>;
+type FreeType = (p: MuonNativePointer) => Promise<void>;
+
+// libc.soをロードする
+const library = await loadLibrary("libc.so");
+try {
+  // mallocへの関数オブジェクトを得る
+  const malloc = await library.getFunction<MallocType>("malloc", {
+    argTypes: [usize],
+    returnType: pointer,
+  });
+
+  // freeへの関数オブジェクトを得る
+  const free = await library.getFunction<FreeType>("free", {
+    argTypes: [pointer],
+    returnType: voidType,
+  });
+
+  // 呼び出す
+  const p = await malloc(123n);
+  await free(p);
+} finally {
+  await library.release();
+}
+```
+
+- すべてのエントリポイント関数は、一般的な戻り値のシグネチャ、つまり同期的な戻り値を想定します。
+  しかしJavaScript側では、 `getFunction()` が返す関数オブジェクトが必ず `Promise<T>` を返します。
+  つまり、内部では同期的にエントリポイント関数を呼び出していますが、JavaScript側では必ず `await` で `Promise<T>` が完了するのを待機する必要があります。
+- エントリポイント関数の呼び出しは、一時ワーカースレッドで実行されるため、関数が呼び出しを長時間ブロックしてもmuonの動作に支障はありません。
+  但し、`loadLibrary()` でロードしたライブラリを `release()` で解放する場合は、これらの関数呼び出しの `Promise` がすべて完了している必要があります。完了していない場合は `release()` が待機させられます。
+
+> 注釈: この機能は、非常に簡易的でアドホックな利用を想定しています。
+> 例えば、戻り値や引数のポインタは、 `MuonNativePointer` として扱われ、muonは所有権を管理しません。
+> また、 `getFunction()` で扱う型メタデータ定義には、任意の構造を持つ構造体などを定義できません。
+> 複雑なコールバック所有権や、寿命の長いあるいは厳密な管理が必要なインスタンスを扱う場合、構造体によるデータのやり取りが必要な場合は、通常のmuonプラグインとして実装することを検討して下さい。
 
 ## muon.fs名前空間
 

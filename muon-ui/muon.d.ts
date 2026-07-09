@@ -1487,6 +1487,99 @@ declare global {
     readonly spawn: (
       options: MuonExecutorSpawnOptions,
     ) => Promise<MuonExecutorProcess>;
+    /**
+     * Load a native dynamic library for ad-hoc FFI calls.
+     *
+     * @param path - Path or platform loader name for the library.
+     * @returns A promise for the loaded library handle.
+     * @remarks Calls made through the returned handle are executed on temporary
+     * worker threads. Pointer values are opaque and are not owned by muon.
+     */
+    readonly loadLibrary: (path: string) => Promise<MuonAdhocLibrary>;
+    /** Native `void` type descriptor. */
+    readonly voidType: MuonAdhocType<void>;
+    /** Native `bool` type descriptor. */
+    readonly bool: MuonAdhocType<boolean>;
+    /** Native signed 8-bit integer type descriptor. */
+    readonly int8: MuonAdhocType<number>;
+    /** Native unsigned 8-bit integer type descriptor. */
+    readonly uint8: MuonAdhocType<number>;
+    /** Native signed 16-bit integer type descriptor. */
+    readonly int16: MuonAdhocType<number>;
+    /** Native unsigned 16-bit integer type descriptor. */
+    readonly uint16: MuonAdhocType<number>;
+    /** Native signed 32-bit integer type descriptor. */
+    readonly int32: MuonAdhocType<number>;
+    /** Native unsigned 32-bit integer type descriptor. */
+    readonly uint32: MuonAdhocType<number>;
+    /** Native signed 64-bit integer type descriptor. */
+    readonly int64: MuonAdhocType<MuonAdhocIntegerValue>;
+    /** Native unsigned 64-bit integer type descriptor. */
+    readonly uint64: MuonAdhocType<MuonAdhocIntegerValue>;
+    /** Native 32-bit floating-point type descriptor. */
+    readonly float32: MuonAdhocType<number>;
+    /** Native 64-bit floating-point type descriptor. */
+    readonly float64: MuonAdhocType<number>;
+    /** Native UTF-8 string pointer type descriptor. */
+    readonly stringType: MuonAdhocType<string | null>;
+    /** Native pointer type descriptor. */
+    readonly pointer: MuonAdhocType<MuonNativePointer | null>;
+    /** Native mutable byte buffer view type descriptor. */
+    readonly bufferView: MuonAdhocType<Uint8Array>;
+    /** Native `size_t` type descriptor. */
+    readonly usize: MuonAdhocType<MuonAdhocIntegerValue>;
+  }
+
+  /** Integer value accepted by ad-hoc native calls. */
+  type MuonAdhocIntegerValue = number | bigint | string;
+
+  /** Opaque native pointer value returned by ad-hoc native calls. */
+  interface MuonNativePointer {
+    /** Decimal string representation of the native address. */
+    readonly value: string;
+    /**
+     * Return the decimal string representation of the native address.
+     *
+     * @returns The native address as a decimal string.
+     */
+    readonly toString: () => string;
+  }
+
+  /** Type descriptor used by ad-hoc native signatures. */
+  interface MuonAdhocType<TValue = unknown> {
+    /** Stable type name consumed by the muon executor runtime. */
+    readonly name: string;
+  }
+
+  /** Function signature used by ad-hoc native calls. */
+  interface MuonAdhocSignature {
+    /** Native argument type descriptors. */
+    readonly argTypes: readonly MuonAdhocType[];
+    /** Native return type descriptor. */
+    readonly returnType: MuonAdhocType;
+  }
+
+  /** Dynamic library handle used by ad-hoc native calls. */
+  interface MuonAdhocLibrary extends AsyncReleaseable {
+    /**
+     * Resolve a native function from the loaded library.
+     *
+     * @param name - Native symbol name.
+     * @param signature - Native function signature.
+     * @returns A promise for an async JavaScript proxy function.
+     * @remarks The proxy function does not own pointer return values.
+     */
+    readonly getFunction: <T extends (...args: any[]) => Promise<unknown>>(
+      name: string,
+      signature: MuonAdhocSignature,
+    ) => Promise<T>;
+    /**
+     * Release the native library handle.
+     *
+     * @returns A promise that resolves after in-flight calls finish and the
+     * library is unloaded.
+     */
+    readonly release: () => Promise<void>;
   }
 
   /** Options for spawning a child process through muon. */

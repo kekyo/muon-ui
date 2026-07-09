@@ -1093,7 +1093,14 @@ void existsResult;
   it("provides muon virtual modules through configured TypeScript types", async () => {
     await expect(
       runTypeScriptConsumer(
-        `import { spawn } from "muon:executor";
+        `import {
+  int32,
+  loadLibrary,
+  pointer,
+  spawn,
+  usize,
+  voidType,
+} from "muon:executor";
 
 const run = async (): Promise<void> => {
   const process = await spawn({ command: "node", args: ["--version"] });
@@ -1101,8 +1108,36 @@ const run = async (): Promise<void> => {
   const disposable: AsyncDisposable = releaseable;
   const result: MuonExecutorSpawnResult = await process.wait();
   await releaseable.release();
+
+  const library: MuonAdhocLibrary = await loadLibrary("libc.so");
+  const mallocSignature: MuonAdhocSignature = {
+    argTypes: [usize],
+    returnType: pointer,
+  };
+  const freeSignature: MuonAdhocSignature = {
+    argTypes: [pointer],
+    returnType: voidType,
+  };
+  const addSignature: MuonAdhocSignature = {
+    argTypes: [int32, int32],
+    returnType: int32,
+  };
+  const malloc: (
+    size: MuonAdhocIntegerValue,
+  ) => Promise<MuonNativePointer> = await library.getFunction(
+    "malloc",
+    mallocSignature,
+  );
+  const free: (p: MuonNativePointer) => Promise<void> =
+    await library.getFunction("free", freeSignature);
+  const add: (a: number, b: number) => Promise<number> =
+    await library.getFunction("add", addSignature);
+  const pointerValue = await malloc(123n);
+  await free(pointerValue);
+  await library.release();
   void disposable;
   void result;
+  void add;
 };
 void run;
 `,

@@ -1233,6 +1233,45 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("dispose");
   });
 
+  it("generates executor loadLibrary virtual module wrappers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-adhoc-library-");
+    await mkdir(join(root, "src", "native"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["muon.executor.loadLibrary"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const runtimeConfig = resolver.getRuntimePluginConfig();
+    const capabilityId = runtimeConfig.capabilities[0]?.id;
+    if (capabilityId === undefined) {
+      throw new Error("capability id was not generated");
+    }
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "native", "library.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain(
+      `__muonCall(${JSON.stringify(capabilityId)}, "muon.executor.loadLibrary"`,
+    );
+    expect(moduleSource).toContain("export const loadLibrary = async (path)");
+    expect(moduleSource).toContain("export const pointer = ");
+    expect(moduleSource).toContain("export const usize = ");
+    expect(moduleSource).toContain('op: "getFunction"');
+    expect(moduleSource).toContain('op: "call"');
+    expect(moduleSource).toContain('op: "release"');
+    expect(moduleSource).toContain('Symbol.for("muon.nativePointer")');
+  });
+
   it("generates browser context menu virtual module wrappers", async () => {
     const root = await createTemporaryDirectory("muon-vite-browser-menu-");
     await mkdir(join(root, "src", "browser"), { recursive: true });

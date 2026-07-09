@@ -78,6 +78,45 @@ declare module "muon:browser" {
 }
 
 declare module "muon:executor" {
+  /** Native `void` type descriptor. */
+  export const voidType: MuonAdhocType<void>;
+  /** Native `bool` type descriptor. */
+  export const bool: MuonAdhocType<boolean>;
+  /** Native signed 8-bit integer type descriptor. */
+  export const int8: MuonAdhocType<number>;
+  /** Native unsigned 8-bit integer type descriptor. */
+  export const uint8: MuonAdhocType<number>;
+  /** Native signed 16-bit integer type descriptor. */
+  export const int16: MuonAdhocType<number>;
+  /** Native unsigned 16-bit integer type descriptor. */
+  export const uint16: MuonAdhocType<number>;
+  /** Native signed 32-bit integer type descriptor. */
+  export const int32: MuonAdhocType<number>;
+  /** Native unsigned 32-bit integer type descriptor. */
+  export const uint32: MuonAdhocType<number>;
+  /** Native signed 64-bit integer type descriptor. */
+  export const int64: MuonAdhocType<MuonAdhocIntegerValue>;
+  /** Native unsigned 64-bit integer type descriptor. */
+  export const uint64: MuonAdhocType<MuonAdhocIntegerValue>;
+  /** Native 32-bit floating-point type descriptor. */
+  export const float32: MuonAdhocType<number>;
+  /** Native 64-bit floating-point type descriptor. */
+  export const float64: MuonAdhocType<number>;
+  /** Native UTF-8 string pointer type descriptor. */
+  export const stringType: MuonAdhocType<string | null>;
+  /** Native pointer type descriptor. */
+  export const pointer: MuonAdhocType<MuonNativePointer | null>;
+  /** Native mutable byte buffer view type descriptor. */
+  export const bufferView: MuonAdhocType<Uint8Array>;
+  /** Native `size_t` type descriptor. */
+  export const usize: MuonAdhocType<MuonAdhocIntegerValue>;
+  /**
+   * Load a native dynamic library for ad-hoc FFI calls.
+   *
+   * @param path - Path or platform loader name for the library.
+   * @returns A promise for the loaded library handle.
+   */
+  export const loadLibrary: (path: string) => Promise<MuonAdhocLibrary>;
   /**
    * Spawn a child process without invoking a shell.
    *

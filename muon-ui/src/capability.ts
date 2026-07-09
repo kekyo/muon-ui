@@ -548,6 +548,254 @@ export const spawn = async (options = {}) => {
   return handle;
 };`;
 
+const createExecutorLoadLibraryExport = (
+  capabilityId: string,
+  functionPath: string,
+): string => `const __muonAdhocActiveLibraries = new Set();
+const __muonAdhocEmptyBytes = new Uint8Array(0);
+const __muonAdhocAsyncDispose =
+  typeof Symbol === "function" && typeof Symbol.asyncDispose === "symbol"
+    ? Symbol.asyncDispose
+    : null;
+const __muonAdhocPointerBrand =
+  typeof Symbol === "function" ? Symbol.for("muon.nativePointer") : "__muonNativePointer";
+const __muonAdhocType = (name) => Object.freeze({ name });
+const __muonAdhocTypes = Object.freeze({
+  voidType: __muonAdhocType("void"),
+  bool: __muonAdhocType("bool"),
+  int8: __muonAdhocType("int8"),
+  uint8: __muonAdhocType("uint8"),
+  int16: __muonAdhocType("int16"),
+  uint16: __muonAdhocType("uint16"),
+  int32: __muonAdhocType("int32"),
+  uint32: __muonAdhocType("uint32"),
+  int64: __muonAdhocType("int64"),
+  uint64: __muonAdhocType("uint64"),
+  float32: __muonAdhocType("float32"),
+  float64: __muonAdhocType("float64"),
+  stringType: __muonAdhocType("string"),
+  pointer: __muonAdhocType("pointer"),
+  bufferView: __muonAdhocType("bufferView"),
+  usize: __muonAdhocType("usize"),
+});
+const __muonAdhocToBytes = (data) => {
+  if (typeof data === "string") {
+    return new TextEncoder().encode(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new TypeError("bufferView argument must be a string or BufferSource");
+};
+const __muonAdhocFromBase64 = (source) => {
+  const text = atob(source ?? "");
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index += 1) {
+    bytes[index] = text.charCodeAt(index);
+  }
+  return bytes;
+};
+const __muonAdhocCreatePointer = (value) => {
+  const text = String(value ?? "0");
+  const pointer = {
+    [__muonAdhocPointerBrand]: true,
+    value: text,
+    toString: () => text,
+    toJSON: () => text,
+  };
+  return Object.freeze(pointer);
+};
+const __muonAdhocNormalizeType = (type) => {
+  if (typeof type === "string") {
+    return { name: type };
+  }
+  if (type && typeof type.name === "string") {
+    return { name: type.name };
+  }
+  throw new TypeError("adhoc type descriptor is invalid");
+};
+const __muonAdhocNormalizeSignature = (signature) => {
+  if (!signature || !Array.isArray(signature.argTypes)) {
+    throw new TypeError("adhoc signature is invalid");
+  }
+  return {
+    argTypes: signature.argTypes.map(__muonAdhocNormalizeType),
+    returnType: __muonAdhocNormalizeType(signature.returnType),
+  };
+};
+const __muonAdhocEncodeInteger = (value) => {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Math.trunc(value) !== value) {
+      throw new TypeError("integer argument must be finite");
+    }
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  throw new TypeError("integer argument must be a number, bigint, or string");
+};
+const __muonAdhocEncodePointer = (value) => {
+  if (value === null || value === undefined) {
+    return "0";
+  }
+  if (typeof value === "object" && value[__muonAdhocPointerBrand]) {
+    return value.value;
+  }
+  return __muonAdhocEncodeInteger(value);
+};
+const __muonAdhocEncodeCall = (signature, args) => {
+  if (args.length !== signature.argTypes.length) {
+    throw new TypeError("Invalid adhoc argument count");
+  }
+  const encoded = [];
+  const chunks = [];
+  const bufferViews = [];
+  let offset = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const name = signature.argTypes[index].name;
+    const value = args[index];
+    if (name === "int64" || name === "uint64" || name === "usize") {
+      encoded.push(__muonAdhocEncodeInteger(value));
+    } else if (name === "pointer") {
+      encoded.push(__muonAdhocEncodePointer(value));
+    } else if (name === "bufferView") {
+      const bytes = __muonAdhocToBytes(value);
+      chunks.push(bytes);
+      bufferViews.push({ argIndex: index, offset, size: bytes.byteLength });
+      offset += bytes.byteLength;
+      encoded.push(null);
+    } else {
+      encoded.push(value);
+    }
+  }
+  const data = new Uint8Array(offset);
+  let writeOffset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, writeOffset);
+    writeOffset += chunk.byteLength;
+  }
+  return { args: encoded, bufferViews, data };
+};
+const __muonAdhocDecodeResult = (signature, raw) => {
+  const name = signature.returnType.name;
+  if (name === "void") {
+    return undefined;
+  }
+  if (name === "pointer") {
+    return __muonAdhocCreatePointer(raw.pointer);
+  }
+  if (name === "int64" || name === "uint64" || name === "usize") {
+    return BigInt(raw.value);
+  }
+  if (name === "bufferView") {
+    return __muonAdhocFromBase64(raw.base64);
+  }
+  return raw.value;
+};
+const __muonAdhocRpc = async (request, data = __muonAdhocEmptyBytes) =>
+  JSON.parse(
+    await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, [
+      JSON.stringify(request),
+      data,
+      0,
+    ]),
+  );
+const __muonAdhocReleaseActiveLibraries = async () => {
+  if (__muonAdhocActiveLibraries.size === 0) {
+    return;
+  }
+  for (const handle of Array.from(__muonAdhocActiveLibraries)) {
+    try {
+      await handle.release();
+    } catch {}
+  }
+};
+if (typeof globalThis.addEventListener === "function") {
+  for (const eventName of ["beforeunload", "pagehide", "unload"]) {
+    globalThis.addEventListener(eventName, __muonAdhocReleaseActiveLibraries);
+  }
+}
+export const voidType = __muonAdhocTypes.voidType;
+export const bool = __muonAdhocTypes.bool;
+export const int8 = __muonAdhocTypes.int8;
+export const uint8 = __muonAdhocTypes.uint8;
+export const int16 = __muonAdhocTypes.int16;
+export const uint16 = __muonAdhocTypes.uint16;
+export const int32 = __muonAdhocTypes.int32;
+export const uint32 = __muonAdhocTypes.uint32;
+export const int64 = __muonAdhocTypes.int64;
+export const uint64 = __muonAdhocTypes.uint64;
+export const float32 = __muonAdhocTypes.float32;
+export const float64 = __muonAdhocTypes.float64;
+export const stringType = __muonAdhocTypes.stringType;
+export const pointer = __muonAdhocTypes.pointer;
+export const bufferView = __muonAdhocTypes.bufferView;
+export const usize = __muonAdhocTypes.usize;
+export const loadLibrary = async (path) => {
+  const start = await __muonAdhocRpc({ op: "load", path });
+  const libraryId = start.libraryId;
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    __muonAdhocActiveLibraries.delete(handle);
+    await __muonAdhocRpc({ op: "release", libraryId });
+  };
+  const handle = {
+    getFunction: async (name, signature) => {
+      if (released) {
+        throw new Error("adhoc library is released");
+      }
+      const normalizedSignature = __muonAdhocNormalizeSignature(signature);
+      const loaded = await __muonAdhocRpc({
+        op: "getFunction",
+        libraryId,
+        name,
+        signature: normalizedSignature,
+      });
+      const functionId = loaded.functionId;
+      return async (...args) => {
+        if (released) {
+          throw new Error("adhoc library is released");
+        }
+        const encoded = __muonAdhocEncodeCall(normalizedSignature, args);
+        const raw = await __muonAdhocRpc(
+          {
+            op: "call",
+            libraryId,
+            functionId,
+            args: encoded.args,
+            bufferViews: encoded.bufferViews,
+          },
+          encoded.data,
+        );
+        return __muonAdhocDecodeResult(normalizedSignature, raw);
+      };
+    },
+    release,
+  };
+  if (__muonAdhocAsyncDispose !== null) {
+    Object.defineProperty(handle, __muonAdhocAsyncDispose, {
+      configurable: false,
+      enumerable: false,
+      value: release,
+      writable: false,
+    });
+  }
+  Object.freeze(handle);
+  __muonAdhocActiveLibraries.add(handle);
+  return handle;
+};`;
+
 const createBrowserContextMenuHelpers =
   (): string => `const __muonBrowserContextMenuEventName = "muon-browser-context-menu-command";
 const __muonBrowserContextMenuWhenKeys = [
@@ -907,6 +1155,9 @@ const createModuleSource = (rule: ResolvedRule): string => {
   const exports = exportedFunctions.map(([exportName, functionPath]) => {
     if (rule.namespace === "muon.executor" && exportName === "spawn") {
       return createExecutorSpawnExport(rule.id, functionPath);
+    }
+    if (rule.namespace === "muon.executor" && exportName === "loadLibrary") {
+      return createExecutorLoadLibraryExport(rule.id, functionPath);
     }
     if (
       rule.namespace === "muon.browser" &&

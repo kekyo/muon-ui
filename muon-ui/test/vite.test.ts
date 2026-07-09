@@ -898,6 +898,11 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
+                config: {
+                  "executor.spawn.allow":
+                    "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+                  "executor.mode": "strict",
+                },
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -980,6 +985,11 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
+                config: {
+                  "executor.spawn.allow":
+                    "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+                  "executor.mode": "strict",
+                },
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -1124,6 +1134,11 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
+                config: {
+                  "executor.spawn.allow":
+                    "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+                  "executor.mode": "strict",
+                },
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -1164,13 +1179,21 @@ describe("muon Vite plugin", () => {
       ) as {
         plugin: {
           capabilities: { allow: string[] }[];
-          plugins: { name: string; allow: string[] }[];
+          plugins: {
+            name: string;
+            allow: string[];
+            config?: Record<string, string>;
+          }[];
         };
       };
       expect(overrideConfig.plugin.plugins).toEqual([
         {
           name: "internal",
           allow: ["muon.executor.spawn", "muon.browser.reload"],
+          config: {
+            "executor.spawn.allow": "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+            "executor.mode": "strict",
+          },
         },
       ]);
       expect(
@@ -1370,6 +1393,9 @@ describe("muon Vite plugin", () => {
               name: "foobar",
               signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
               salt: "deadbeef",
+              config: {
+                "foobar.mode": "strict",
+              },
               imports: [
                 {
                   sources: ["src/native/**"],
@@ -1393,6 +1419,7 @@ describe("muon Vite plugin", () => {
             allow: string[];
             signature?: string;
             salt?: string;
+            config?: Record<string, string>;
           }[];
         };
       };
@@ -1402,6 +1429,9 @@ describe("muon Vite plugin", () => {
           allow: ["foobar.run"],
           signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
           salt: "deadbeef",
+          config: {
+            "foobar.mode": "strict",
+          },
         },
       ]);
     } finally {
@@ -1585,6 +1615,42 @@ describe("muon Vite plugin", () => {
         ],
       }),
     ).rejects.toThrow("requires sources or packages");
+  });
+
+  it("rejects plugin config values that are not strings", async () => {
+    const root = await createTemporaryDirectory("muon-vite-plugin-config-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                  config: {
+                    "executor.enabled": true,
+                  },
+                  imports: [
+                    {
+                      sources: ["src/native/**"],
+                      allow: ["muon.executor.spawn"],
+                    },
+                  ],
+                },
+              ],
+            } as unknown as MuonVitePluginAccessOptions,
+          }),
+        ],
+      }),
+    ).rejects.toThrow(
+      "plugin.plugins[0].config.executor.enabled must be a string",
+    );
   });
 
   it("rejects simple-mode plugin entries without allow", async () => {

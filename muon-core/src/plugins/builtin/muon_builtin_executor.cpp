@@ -3261,9 +3261,10 @@ extern "C" void muon_builtin_executor_library_rpc(
   yyjson_doc_free(document);
 }
 
-bool InitializeMuonBuiltinExecutor(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinExecutor(const muon_plugin_init_context* context,
                                    cardio::dispatcher* dispatcher,
                                    std::string* error_message) {
+  const auto* helpers = context == nullptr ? nullptr : context->helpers;
   if (helpers == nullptr) {
     if (error_message != nullptr) {
       *error_message = "Plugin helpers are unavailable";
@@ -3794,11 +3795,11 @@ Object.defineProperties(namespace, properties);
 
 }  // namespace muon_internal
 
-bool InitializeMuonBuiltinExecutor(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinExecutor(const muon_plugin_init_context* context,
                                    cardio::dispatcher* dispatcher,
                                    std::string* error_message) {
   return muon_internal::InitializeMuonBuiltinExecutor(
-      helpers, dispatcher, error_message);
+      context, dispatcher, error_message);
 }
 
 void ShutdownMuonBuiltinExecutor() {

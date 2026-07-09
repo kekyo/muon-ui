@@ -386,6 +386,21 @@ struct MuonNetworkConfig {
 };
 
 /**
+ * One string key-value plugin configuration entry from
+ * plugin.plugins[].config in muon.json.
+ */
+struct MuonPluginConfigEntry {
+  /**
+   * Plugin-defined configuration key.
+   */
+  std::string key;
+  /**
+   * Plugin-defined configuration value.
+   */
+  std::string value;
+};
+
+/**
  * One plugin entry from the plugin.plugins array in muon.json.
  */
 struct MuonPluginEntryConfig {
@@ -418,6 +433,10 @@ struct MuonPluginEntryConfig {
    * Glob patterns that allow full plugin function paths.
    */
   std::vector<std::string> allow;
+  /**
+   * Plugin-defined string key-value configuration entries.
+   */
+  std::vector<MuonPluginConfigEntry> config;
 };
 
 /**

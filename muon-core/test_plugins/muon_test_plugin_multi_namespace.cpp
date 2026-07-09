@@ -73,7 +73,7 @@ static const muon_plugin_metadata multi_namespace_metadata = {
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(
-    const muon_plugin_helpers* helpers) {
-  (void)helpers;
+    const muon_plugin_init_context* context) {
+  (void)context;
   return &multi_namespace_metadata;
 }

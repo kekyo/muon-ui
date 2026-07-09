@@ -7,6 +7,7 @@ import { expect, it } from "vitest";
 
 import {
   MUON_PORT,
+  TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   TEST_NETWORK_ALLOW_PATTERNS,
   cdpCommandTimeoutMs,
   connectToMuonCdp,
@@ -63,6 +64,55 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         driver.evaluate("window.muon.test.alpha.alphaAdd(12, 30)"),
       ).resolves.toBe(42);
     });
+  });
+
+  it("passes string config entries to external plugins", async () => {
+    const running = await startDebugMuon(
+      ["muon_test_plugin_alpha"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.test.alpha.alphaName", "muon.test.alpha.alphaConfig"],
+      ["muon_test_plugin_alpha"],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {},
+      {
+        muon_test_plugin_alpha: {
+          "alpha.config": "configured\nvalue",
+        },
+      },
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin config</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate("window.muon.test.alpha.alphaConfig()"),
+      ).resolves.toBe("configured\nvalue");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
   });
 
   it("filters external plugin functions by full public path", async () => {
@@ -214,7 +264,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           alphaNameUnchanged: true,
           rootExtraType: "undefined",
           functionExtraType: "undefined",
-          alphaKeys: ["alphaAdd", "alphaName"],
+          alphaKeys: ["alphaAdd", "alphaConfig", "alphaName"],
           executorKeys: [
             "bool",
             "bufferView",

@@ -652,12 +652,17 @@ void MuonApp::OnContextInitialized() {
       CefQuitMessageLoop();
       return;
     }
-    plugins.push_back({plugin_config.name,
-                       plugin_config.has_signature,
-                       plugin_config.signature,
-                       plugin_config.has_salt,
-                       plugin_config.salt,
-                       plugin_policy});
+    MuonPluginRuntimeLoadEntry plugin;
+    plugin.plugin = plugin_config.name;
+    plugin.has_expected_signature = plugin_config.has_signature;
+    plugin.expected_signature = plugin_config.signature;
+    plugin.has_signature_salt = plugin_config.has_salt;
+    plugin.signature_salt = plugin_config.salt;
+    plugin.plugin_policy = plugin_policy;
+    for (const auto& config_entry : plugin_config.config) {
+      plugin.config.push_back({config_entry.key, config_entry.value});
+    }
+    plugins.push_back(std::move(plugin));
   }
 
   InitializeMuonBuiltinBootstrap(config_.default_version_policy);

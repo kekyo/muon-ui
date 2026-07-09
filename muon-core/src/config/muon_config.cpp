@@ -88,6 +88,7 @@ static constexpr char kMuonConfigPluginEntrySignatureKey[] = "signature";
 static constexpr char kMuonConfigPluginEntrySaltKey[] = "salt";
 static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
 static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
+static constexpr char kMuonConfigPluginEntryConfigKey[] = "config";
 static constexpr char kMuonInternalPluginName[] = "internal";
 static constexpr char kMuonConfigLogKey[] = "log";
 static constexpr char kMuonConfigLogLevelKey[] = "level";
@@ -2324,6 +2325,70 @@ static bool ReadDebuggerConfig(yyjson_val* root,
   return true;
 }
 
+static bool ContainsNulByte(const std::string& value) {
+  return value.find('\0') != std::string::npos;
+}
+
+static bool ReadPluginEntryStringConfig(
+    yyjson_val* entry,
+    const std::string& config_path,
+    std::vector<MuonPluginConfigEntry>* target,
+    std::string* error_message) {
+  if (target == nullptr || error_message == nullptr) {
+    return false;
+  }
+  target->clear();
+  const auto config_value =
+      yyjson_obj_get(entry, kMuonConfigPluginEntryConfigKey);
+  if (config_value == nullptr) {
+    return true;
+  }
+  const auto config_value_path = config_path + ".config";
+  if (!yyjson_is_obj(config_value)) {
+    *error_message = "muon.json " + config_value_path + " must be an object";
+    return false;
+  }
+
+  std::set<std::string> keys;
+  size_t index = 0;
+  size_t max = 0;
+  yyjson_val* key = nullptr;
+  yyjson_val* value = nullptr;
+  yyjson_obj_foreach(config_value, index, max, key, value) {
+    std::string key_string(yyjson_get_str(key), yyjson_get_len(key));
+    if (key_string.empty()) {
+      *error_message =
+          "muon.json " + config_value_path + " key must not be empty";
+      return false;
+    }
+    if (ContainsNulByte(key_string)) {
+      *error_message =
+          "muon.json " + config_value_path + " key must not contain NUL";
+      return false;
+    }
+    if (keys.find(key_string) != keys.end()) {
+      *error_message =
+          "muon.json " + config_value_path +
+          " has duplicate key: " + key_string;
+      return false;
+    }
+    keys.insert(key_string);
+
+    const auto value_path = config_value_path + "." + key_string;
+    if (!yyjson_is_str(value)) {
+      *error_message = "muon.json " + value_path + " must be a string";
+      return false;
+    }
+    std::string value_string(yyjson_get_str(value), yyjson_get_len(value));
+    if (ContainsNulByte(value_string)) {
+      *error_message = "muon.json " + value_path + " must not contain NUL";
+      return false;
+    }
+    target->push_back({std::move(key_string), std::move(value_string)});
+  }
+  return true;
+}
+
 static bool ReadPluginConfig(yyjson_val* root,
                              MuonConfig* config,
                              std::string* error_message) {
@@ -2456,6 +2521,11 @@ static bool ReadPluginConfig(yyjson_val* root,
     if (!ReadRequiredStringArray(entry, kMuonConfigPluginEntryAllowKey,
                                  config_path + ".allow",
                                  &plugin_config.allow, error_message)) {
+      return false;
+    }
+    if (!ReadPluginEntryStringConfig(entry, config_path,
+                                     &plugin_config.config,
+                                     error_message)) {
       return false;
     }
     config->plugin.plugins.push_back(std::move(plugin_config));

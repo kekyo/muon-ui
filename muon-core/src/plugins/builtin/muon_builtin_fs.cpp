@@ -4702,11 +4702,12 @@ static const muon_plugin_metadata fs_metadata = {
     fs_namespaces,
 };
 
-bool InitializeMuonBuiltinFs(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,
                               std::string* error_message) {
   if (error_message == nullptr) {
     return false;
   }
+  const auto* helpers = context == nullptr ? nullptr : context->helpers;
   auto runtime =
       std::make_shared<muon_internal::MuonBuiltinFsRuntime>(helpers);
   if (!runtime->Start(error_message)) {

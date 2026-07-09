@@ -24,6 +24,20 @@
 struct MuonPluginRuntimeImpl;
 
 /**
+ * String key-value plugin configuration entry prepared from muon.json.
+ */
+struct MuonPluginRuntimeConfigEntry {
+  /**
+   * Plugin-defined configuration key.
+   */
+  std::string key;
+  /**
+   * Plugin-defined configuration value.
+   */
+  std::string value;
+};
+
+/**
  * Explicit plugin load entry prepared from muon.json.
  */
 struct MuonPluginRuntimeLoadEntry {
@@ -51,6 +65,10 @@ struct MuonPluginRuntimeLoadEntry {
    * Function allow policy for this plugin entry.
    */
   std::shared_ptr<MuonPluginPolicy> plugin_policy;
+  /**
+   * Plugin-defined string key-value configuration entries.
+   */
+  std::vector<MuonPluginRuntimeConfigEntry> config;
 };
 
 /**

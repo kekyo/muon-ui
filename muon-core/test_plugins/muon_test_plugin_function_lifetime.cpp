@@ -259,8 +259,8 @@ static const muon_plugin_metadata lifetime_metadata = {
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(
-    const muon_plugin_helpers* helpers) {
-  helper_table = helpers;
+    const muon_plugin_init_context* context) {
+  helper_table = context == nullptr ? nullptr : context->helpers;
   retained_function = nullptr;
   return &lifetime_metadata;
 }

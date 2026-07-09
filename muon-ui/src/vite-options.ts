@@ -49,6 +49,16 @@ const isRecord = (value: unknown): value is Record<string | symbol, unknown> =>
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
+const isStringRecord = (value: unknown): value is Record<string, string> =>
+  isRecord(value) &&
+  Object.entries(value).every(
+    ([entryKey, entryValue]) =>
+      entryKey.length > 0 &&
+      !entryKey.includes("\0") &&
+      typeof entryValue === "string" &&
+      !entryValue.includes("\0"),
+  );
+
 const isWindowsResourceOptions = (value: unknown): boolean => {
   if (!isRecord(value)) {
     return false;
@@ -137,6 +147,7 @@ const isMuonVitePluginAccessEntryOptions = (value: unknown): boolean => {
     typeof value.name === "string" &&
     (value.signature === undefined || typeof value.signature === "string") &&
     (value.salt === undefined || typeof value.salt === "string") &&
+    (value.config === undefined || isStringRecord(value.config)) &&
     (value.allow === undefined || isStringArray(value.allow)) &&
     (value.imports === undefined ||
       (Array.isArray(value.imports) &&

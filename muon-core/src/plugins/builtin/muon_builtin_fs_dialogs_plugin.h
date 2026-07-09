@@ -37,11 +37,11 @@ using MuonFsDialogsCancelOwnerBrowserFunction = void (*)(int owner_browser_id);
 /**
  * Initializes the filesystem dialogs plugin runtime.
  *
- * @param helpers Host helper table used by dialog cancellation functions.
+ * @param context Plugin initialization context supplied by muon.
  * @param error_message Receives an initialization diagnostic.
  * @return true when the runtime is ready.
  */
-bool InitializeMuonBuiltinFsDialogs(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinFsDialogs(const muon_plugin_init_context* context,
                                     std::string* error_message);
 
 /**

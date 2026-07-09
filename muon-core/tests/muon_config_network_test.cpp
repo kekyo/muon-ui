@@ -515,7 +515,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   if (!Expect(
           WriteFile(
               plugin_access_path,
-              R"({"plugin":{"mode":"simple","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.executor.*"],"imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+              R"({"plugin":{"mode":"simple","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.executor.*"],"config":{"executor.spawn.allow":"glob:/usr/bin/**\nglob:/opt/app/bin/**","executor.empty":"","executor.mode":"strict"},"imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
           "failed to write plugin access config") ||
       !LoadConfigExpectSuccess(plugin_access_path, &config)) {
     return false;
@@ -544,7 +544,23 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !Expect(config.plugin.plugins[0].allow.size() == 1,
               "plugin.plugins allow count changed") ||
       !Expect(config.plugin.plugins[0].allow[0] == "muon.executor.*",
-              "plugin.plugins allow value changed")) {
+              "plugin.plugins allow value changed") ||
+      !Expect(config.plugin.plugins[0].config.size() == 3,
+              "plugin.plugins config entry count changed") ||
+      !Expect(config.plugin.plugins[0].config[0].key ==
+                  "executor.spawn.allow",
+              "first plugin.plugins config key changed") ||
+      !Expect(config.plugin.plugins[0].config[0].value ==
+                  "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+              "first plugin.plugins config value changed") ||
+      !Expect(config.plugin.plugins[0].config[1].key == "executor.empty",
+              "second plugin.plugins config key changed") ||
+      !Expect(config.plugin.plugins[0].config[1].value.empty(),
+              "second plugin.plugins config value changed") ||
+      !Expect(config.plugin.plugins[0].config[2].key == "executor.mode",
+              "third plugin.plugins config key changed") ||
+      !Expect(config.plugin.plugins[0].config[2].value == "strict",
+              "third plugin.plugins config value changed")) {
     return false;
   }
 
@@ -1494,6 +1510,18 @@ static bool RunConfigValidationTest(
       test_directory / "invalid-plugin-allow.json";
   const auto invalid_plugin_entry_path =
       test_directory / "invalid-plugin-entry.json";
+  const auto invalid_plugin_config_path =
+      test_directory / "invalid-plugin-config.json";
+  const auto invalid_plugin_config_value_path =
+      test_directory / "invalid-plugin-config-value.json";
+  const auto empty_plugin_config_key_path =
+      test_directory / "empty-plugin-config-key.json";
+  const auto nul_plugin_config_key_path =
+      test_directory / "nul-plugin-config-key.json";
+  const auto nul_plugin_config_value_path =
+      test_directory / "nul-plugin-config-value.json";
+  const auto duplicate_plugin_config_key_path =
+      test_directory / "duplicate-plugin-config-key.json";
   const auto invalid_asset_path = test_directory / "invalid-asset.json";
   const auto invalid_asset_from_type_path =
       test_directory / "invalid-asset-from-type.json";
@@ -1658,6 +1686,24 @@ static bool RunConfigValidationTest(
          Expect(WriteFile(invalid_plugin_entry_path,
                           R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**",42]}]}})"),
                 "failed to write invalid plugin allow entry config") &&
+         Expect(WriteFile(invalid_plugin_config_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":true}]}})"),
+                "failed to write invalid plugin config object config") &&
+         Expect(WriteFile(invalid_plugin_config_value_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor.enabled":true}}]}})"),
+                "failed to write invalid plugin config value config") &&
+         Expect(WriteFile(empty_plugin_config_key_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"":"value"}}]}})"),
+                "failed to write empty plugin config key config") &&
+         Expect(WriteFile(nul_plugin_config_key_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor\u0000mode":"value"}}]}})"),
+                "failed to write NUL plugin config key config") &&
+         Expect(WriteFile(nul_plugin_config_value_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor.mode":"value\u0000"}}]}})"),
+                "failed to write NUL plugin config value config") &&
+         Expect(WriteFile(duplicate_plugin_config_key_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor.mode":"strict","executor.mode":"loose"}}]}})"),
+                "failed to write duplicate plugin config key config") &&
          Expect(WriteFile(invalid_asset_path, R"({"asset":true})"),
                 "failed to write invalid asset config") &&
          Expect(WriteFile(invalid_asset_from_type_path,
@@ -1803,6 +1849,23 @@ static bool RunConfigValidationTest(
                                  "plugin.plugins[0].allow must be an array") &&
          LoadConfigExpectFailure(invalid_plugin_entry_path,
                                  "plugin.plugins[0].allow entries must be strings") &&
+         LoadConfigExpectFailure(invalid_plugin_config_path,
+                                 "plugin.plugins[0].config must be an object") &&
+         LoadConfigExpectFailure(invalid_plugin_config_value_path,
+                                 "plugin.plugins[0].config.executor.enabled "
+                                 "must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_config_key_path,
+                                 "plugin.plugins[0].config key must not be "
+                                 "empty") &&
+         LoadConfigExpectFailure(nul_plugin_config_key_path,
+                                 "plugin.plugins[0].config key must not "
+                                 "contain NUL") &&
+         LoadConfigExpectFailure(nul_plugin_config_value_path,
+                                 "plugin.plugins[0].config.executor.mode "
+                                 "must not contain NUL") &&
+         LoadConfigExpectFailure(duplicate_plugin_config_key_path,
+                                 "plugin.plugins[0].config has duplicate "
+                                 "key") &&
          LoadConfigExpectFailure(invalid_asset_path,
                                  "asset must be an object") &&
          LoadConfigExpectFailure(invalid_asset_from_type_path,

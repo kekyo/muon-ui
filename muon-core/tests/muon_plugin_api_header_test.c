@@ -182,6 +182,9 @@ int main(void) {
   muon_buffer_view buffer_view = {0, 0};
   muon_shared_buffer_handle shared_buffer = 0;
   muon_log_level log_level = MUON_LOG_LEVEL_INFO;
+  muon_plugin_config_entry config_entries[] = {
+      {"sample.key", "value"},
+  };
   muon_plugin_helpers helpers = {
       &sample_register_pure_function,
       &sample_register_closure,
@@ -192,6 +195,15 @@ int main(void) {
       &sample_create_completion_function,
       &sample_log_message,
   };
+  muon_plugin_init_context init_context = {
+      &helpers,
+      "sample",
+      1,
+      config_entries,
+  };
+  muon_init_plugin_func init_plugin = 0;
+  const char* config_value =
+      muon_plugin_get_config_value(&init_context, "sample.key");
 
   (void)signature;
   (void)metadata;
@@ -216,6 +228,10 @@ int main(void) {
   (void)buffer_view;
   (void)shared_buffer;
   (void)log_level;
+  (void)init_plugin;
+  if (config_value == 0 || config_value[0] != 'v') {
+    return 1;
+  }
   (void)helpers.register_pure_function(
       &signature, &sample_function, &native_function, 0);
   (void)helpers.register_closure(

@@ -519,6 +519,7 @@ export interface PluginConfigEntry {
   allow: string[];
   signature?: string;
   salt?: string;
+  config?: Record<string, string>;
 }
 
 export interface NetworkAuthorizedOriginConfig {
@@ -2120,6 +2121,7 @@ export const createPluginConfigEntries = (
   includeStandardPlugins = true,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): PluginConfigEntry[] => {
   const standardPluginEntries = includeStandardPlugins
     ? STANDARD_PLUGIN_NAMES.flatMap((pluginName) => {
@@ -2139,6 +2141,9 @@ export const createPluginConfigEntries = (
                 ...(pluginSaltByName[pluginName] === undefined
                   ? {}
                   : { salt: pluginSaltByName[pluginName] }),
+                ...(pluginConfigByName[pluginName] === undefined
+                  ? {}
+                  : { config: pluginConfigByName[pluginName] }),
               },
             ];
       })
@@ -2155,6 +2160,9 @@ export const createPluginConfigEntries = (
       ...(pluginSaltByName[pluginName] === undefined
         ? {}
         : { salt: pluginSaltByName[pluginName] }),
+      ...(pluginConfigByName[pluginName] === undefined
+        ? {}
+        : { config: pluginConfigByName[pluginName] }),
     })),
   ];
 };
@@ -2294,6 +2302,7 @@ interface StartWindowsRemoteMuonOptions {
   pluginAllowPatterns: string[];
   pluginSaltByName: Readonly<Record<string, string>>;
   pluginSignatureByName: Readonly<Record<string, string>>;
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>>;
   pluginNames: string[];
   waitForDebugPort: boolean;
 }
@@ -2613,6 +2622,7 @@ const startWindowsRemoteMuon = async (
     options.includeStandardPlugins,
     options.pluginSignatureByName,
     options.pluginSaltByName,
+    options.pluginConfigByName,
   );
   const configDirectory = join(directory, ".muon-test-config");
   const pluginDirectory = join(directory, "test-plugins");
@@ -2736,6 +2746,7 @@ export const startMuon = async (
   logConfig: Record<string, unknown> | undefined = undefined,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -2760,6 +2771,7 @@ export const startMuon = async (
         networkAllowPatterns,
         networkAuthorizedOrigins,
         pluginAllowPatterns,
+        pluginConfigByName,
         pluginSaltByName,
         pluginSignatureByName,
         pluginNames,
@@ -2789,6 +2801,7 @@ export const startMuon = async (
     includeStandardPlugins,
     pluginSignatureByName,
     pluginSaltByName,
+    pluginConfigByName,
   );
   const pluginDirectory = await createPluginDirectory(
     directory,
@@ -2900,6 +2913,7 @@ export const startDebugMuon = async (
   logConfig: Record<string, unknown> | undefined = undefined,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -2930,6 +2944,7 @@ export const startDebugMuon = async (
     logConfig,
     pluginSignatureByName,
     pluginSaltByName,
+    pluginConfigByName,
   );
 
 export const startDebugMuonBootstrap = async (

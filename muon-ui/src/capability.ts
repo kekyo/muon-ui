@@ -72,6 +72,10 @@ export interface MuonRuntimePluginEntryConfig {
    */
   salt?: string;
   /**
+   * Plugin-defined string key-value configuration entries.
+   */
+  config?: Readonly<Record<string, string>>;
+  /**
    * Plugin function path globs allowed for this plugin entry.
    */
   allow: readonly string[];

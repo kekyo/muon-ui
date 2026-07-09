@@ -438,6 +438,23 @@ static muon_init_plugin_func GetMuonPluginInitFunction(void* handle) {
   return reinterpret_cast<muon_init_plugin_func>(address);
 }
 
+static muon_plugin_init_context CreateMuonPluginInitContext(
+    const MuonPluginRuntimeLoadEntry& plugin,
+    const muon_plugin_helpers* helpers,
+    std::vector<muon_plugin_config_entry>* config_entries) {
+  config_entries->clear();
+  config_entries->reserve(plugin.config.size());
+  for (const auto& entry : plugin.config) {
+    config_entries->push_back({entry.key.c_str(), entry.value.c_str()});
+  }
+  return {
+      helpers,
+      plugin.plugin.c_str(),
+      static_cast<uint32_t>(config_entries->size()),
+      config_entries->empty() ? nullptr : config_entries->data(),
+  };
+}
+
 static MuonFsDialogsCancelOwnerBrowserFunction
 GetMuonFsDialogsCancelOwnerBrowserFunction(void* handle) {
   const auto address = GetMuonDynamicLibrarySymbol(
@@ -2481,7 +2498,10 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
     return FailMuonPluginStartup(impl, error_message);
   }
 
-  const auto* metadata = init_plugin(&kMuonPluginHelpers);
+  std::vector<muon_plugin_config_entry> config_entries;
+  const auto init_context =
+      CreateMuonPluginInitContext(plugin, &kMuonPluginHelpers, &config_entries);
+  const auto* metadata = init_plugin(&init_context);
   if (metadata == nullptr) {
     const auto error_message = "Plugin declined loading: " + path.string();
     CloseMuonDynamicLibrary(handle);
@@ -2521,23 +2541,27 @@ static const MuonPluginRuntimeLoadEntry* FindMuonInternalPluginEntry(
 
 static bool RegisterMuonInternalPlugins(
     MuonPluginRuntimeImpl* impl,
+    const MuonPluginRuntimeLoadEntry& plugin,
     const MuonPluginPolicy& plugin_policy) {
   if (!plugin_policy.HasAllowPatterns()) {
     return true;
   }
 
+  std::vector<muon_plugin_config_entry> config_entries;
+  const auto init_context =
+      CreateMuonPluginInitContext(plugin, &kMuonPluginHelpers, &config_entries);
   std::string error_message;
-  if (!InitializeMuonBuiltinFs(&kMuonPluginHelpers, &error_message)) {
+  if (!InitializeMuonBuiltinFs(&init_context, &error_message)) {
     return FailMuonPluginStartup(
         impl, "Built-in filesystem plugin failed: " + error_message);
   }
-  if (!InitializeMuonBuiltinFsDialogs(&kMuonPluginHelpers, &error_message)) {
+  if (!InitializeMuonBuiltinFsDialogs(&init_context, &error_message)) {
     ShutdownMuonBuiltinPlugins();
     return FailMuonPluginStartup(
         impl,
         "Built-in filesystem dialogs plugin failed: " + error_message);
   }
-  if (!InitializeMuonBuiltinExecutor(&kMuonPluginHelpers,
+  if (!InitializeMuonBuiltinExecutor(&init_context,
                                      impl->main_dispatcher,
                                      &error_message)) {
     ShutdownMuonBuiltinPlugins();
@@ -2622,7 +2646,7 @@ MuonPluginRuntime::MuonPluginRuntime(
                             "Plugin policy is unavailable: internal");
     } else {
       (void)RegisterMuonInternalPlugins(
-          impl_.get(), *internal_plugin->plugin_policy);
+          impl_.get(), *internal_plugin, *internal_plugin->plugin_policy);
     }
   }
   if (impl_->startup_error.empty() &&

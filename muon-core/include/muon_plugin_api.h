@@ -580,6 +580,84 @@ typedef struct muon_plugin_helpers {
   __log_message_impl((level), (message))
 
 /**
+ * @brief Single string configuration entry for a plugin.
+ */
+typedef struct muon_plugin_config_entry {
+  /**
+   * Non-empty UTF-8 configuration key.
+   */
+  const char* key;
+  /**
+   * UTF-8 configuration value. Empty strings are valid.
+   */
+  const char* value;
+} muon_plugin_config_entry;
+
+/**
+ * @brief Plugin initialization context supplied by the muon host.
+ *
+ * @remarks `helpers` may be cached while the plugin remains loaded.
+ * `plugin_name` and `config_entries` are borrowed only for the duration of the
+ * `muon_init_plugin` call. Copy configuration values during initialization when
+ * they must be used later.
+ */
+typedef struct muon_plugin_init_context {
+  /**
+   * Host helper table. May be null only when the host cannot provide helpers.
+   */
+  const muon_plugin_helpers* helpers;
+  /**
+   * Plugin entry name from muon.json.
+   */
+  const char* plugin_name;
+  /**
+   * Number of entries in `config_entries`.
+   */
+  uint32_t config_count;
+  /**
+   * String key-value configuration entries from plugin.plugins[].config.
+   */
+  const muon_plugin_config_entry* config_entries;
+} muon_plugin_init_context;
+
+static inline uint8_t muon_plugin_config_key_equals(const char* left,
+                                                     const char* right) {
+  if (left == 0 || right == 0) {
+    return 0;
+  }
+  while (*left != '\0' && *right != '\0') {
+    if (*left != *right) {
+      return 0;
+    }
+    ++left;
+    ++right;
+  }
+  return *left == '\0' && *right == '\0';
+}
+
+/**
+ * @brief Returns the first plugin configuration value for a key.
+ *
+ * @param context Initialization context supplied to `muon_init_plugin`.
+ * @param key Non-null configuration key to search for.
+ * @return Borrowed value pointer, or null when the key is not configured.
+ */
+static inline const char* muon_plugin_get_config_value(
+    const muon_plugin_init_context* context,
+    const char* key) {
+  if (context == 0 || key == 0 || context->config_entries == 0) {
+    return 0;
+  }
+  for (uint32_t index = 0; index < context->config_count; ++index) {
+    const muon_plugin_config_entry* entry = &context->config_entries[index];
+    if (muon_plugin_config_key_equals(entry->key, key)) {
+      return entry->value;
+    }
+  }
+  return 0;
+}
+
+/**
  * @brief JavaScript namespace exported by a plugin.
  */
 typedef struct muon_plugin_namespace {
@@ -629,8 +707,7 @@ typedef struct muon_plugin_metadata {
 /**
  * @brief Plugin entry point type.
  *
- * @param helpers Host helper table. May be null only when the host cannot
- * provide helpers.
+ * @param context Initialization context supplied by the muon host.
  * @return Plugin metadata, or null to decline loading.
  *
  * @remarks A plugin library must export a function named `muon_init_plugin`
@@ -638,7 +715,7 @@ typedef struct muon_plugin_metadata {
  * invalid metadata causes the library or individual functions to be skipped.
  */
 typedef const muon_plugin_metadata* (*muon_init_plugin_func)(
-    const muon_plugin_helpers* helpers);
+    const muon_plugin_init_context* context);
 
 #ifdef __cplusplus
 }

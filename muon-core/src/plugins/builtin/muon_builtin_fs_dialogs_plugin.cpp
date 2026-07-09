@@ -940,11 +940,12 @@ static const muon_plugin_function_metadata* const
 
 }  // namespace muon_internal
 
-bool InitializeMuonBuiltinFsDialogs(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinFsDialogs(const muon_plugin_init_context* context,
                                     std::string* error_message) {
   if (error_message == nullptr) {
     return false;
   }
+  const auto* helpers = context == nullptr ? nullptr : context->helpers;
   if (helpers == nullptr) {
     *error_message = "Filesystem dialog helpers are unavailable";
     return false;
@@ -986,9 +987,9 @@ const muon_plugin_metadata* GetMuonBuiltinFsDialogsPluginMetadata() {
 }
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(
-    const muon_plugin_helpers* helpers) {
+    const muon_plugin_init_context* context) {
   auto error_message = std::string{};
-  if (!InitializeMuonBuiltinFsDialogs(helpers, &error_message)) {
+  if (!InitializeMuonBuiltinFsDialogs(context, &error_message)) {
     return nullptr;
   }
   return GetMuonBuiltinFsDialogsPluginMetadata();

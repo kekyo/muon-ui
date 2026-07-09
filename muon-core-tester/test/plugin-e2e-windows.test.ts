@@ -100,7 +100,9 @@ describeWindowsE2e(suiteName, { concurrent: false }, () => {
     );
 
     expect(typeof windowsAgent.applications.launch).toBe("function");
+    expect(typeof windowsAgent.processes.launchManaged).toBe("function");
     expect(typeof windowsAgent.processes.kill).toBe("function");
+    expect(typeof windowsAgent.files.syncDirectory).toBe("function");
     expect(typeof windowsAgent.files.writeFile).toBe("function");
     expect(typeof windowsAgent.windows).toBe("function");
     expect(typeof windowsAgent.keyboard.press).toBe("function");

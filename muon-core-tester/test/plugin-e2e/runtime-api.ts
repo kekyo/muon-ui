@@ -3536,10 +3536,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
-      await expect(
-        popupDriver.evaluate(`window.muon.browser.close(); "requested"`),
-      ).resolves.toBe("requested");
-      popupDriver.close();
+      const popupCloseDriver = await requestBrowserClose(popupDriver);
+      popupCloseDriver?.close();
       popupDriver = undefined;
 
       await waitForTargetClosed(popupTarget.id, targetTimeoutMs);

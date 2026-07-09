@@ -54,7 +54,7 @@
   "devDependencies": {
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
-    "agent-rover": "^0.1.0",
+    "agent-rover": "^0.2.0",
     "async-primitives": ">=1.7.0",
     "prettier-max": ">=1.16.0",
     "screw-up": ">=1.35.0",

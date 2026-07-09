@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   connectWindowsAgent,
   requiredWindowsAgentFeatureNames,
+  requiredWindowsAgentProtocolVersion,
 } from "./plugin-e2e/windows-agent.js";
 import {
   clearWindowsRemoteContext,
@@ -91,6 +92,9 @@ describeWindowsE2e(suiteName, { concurrent: false }, () => {
 
     const capabilities = await windowsAgent.capabilities();
     expect(capabilities.platform).toBe("windows");
+    expect(capabilities.protocolVersion).toBe(
+      requiredWindowsAgentProtocolVersion,
+    );
     expect(capabilities.features).toEqual(
       expect.arrayContaining([...requiredWindowsAgentFeatureNames]),
     );

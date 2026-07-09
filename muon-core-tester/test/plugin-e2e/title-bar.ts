@@ -959,6 +959,16 @@ const expectWindowsWindowStill = async (
   expect(currentWindow.bounds.y).toBe(initialBounds.y);
 };
 
+const activateWindowsTitleBarWindowIfAllowed = async (
+  window: AppWindow,
+): Promise<void> => {
+  try {
+    await window.activate();
+  } catch {
+    // SetForegroundWindow can be denied; the following mouse action is enough.
+  }
+};
+
 const dragWindowsMouse = async (
   startX: number,
   startY: number,
@@ -969,7 +979,7 @@ const dragWindowsMouse = async (
   const start = { x: Math.round(startX), y: Math.round(startY) };
   const end = { x: Math.round(endX), y: Math.round(endY) };
   const window = await waitForWindowsTitleBarWindow();
-  await window.activate();
+  await activateWindowsTitleBarWindowIfAllowed(window);
   await context.agent.mouse.move(start);
   await delay(150);
   await context.agent.mouse.drag(start, end, { button: "left" });
@@ -997,7 +1007,7 @@ const clickWindowsTitleBarButton = async (
 ): Promise<void> => {
   const context = requireWindowsRemoteContext();
   const window = await waitForWindowsTitleBarWindow();
-  await window.activate();
+  await activateWindowsTitleBarWindowIfAllowed(window);
   await context.agent.mouse.click(
     getWindowsTitleBarButtonPoint(window, action),
     {
@@ -1014,7 +1024,7 @@ const doubleClickWindowsTitleBar = async (): Promise<void> => {
     x: window.bounds.x + Math.min(220, Math.floor(window.bounds.width / 2)),
     y: window.bounds.y + Math.round(titleBarHeight / 2),
   };
-  await window.activate();
+  await activateWindowsTitleBarWindowIfAllowed(window);
   await context.agent.mouse.click(point, { button: "left" });
   await delay(80);
   await context.agent.mouse.click(point, { button: "left" });
@@ -1123,7 +1133,7 @@ const waitForWindowsCloseButtonHover = async (): Promise<void> => {
   let lastPixel: RgbaPixel | undefined = undefined;
   while (Date.now() < deadline) {
     const window = await waitForWindowsTitleBarWindow();
-    await window.activate();
+    await activateWindowsTitleBarWindowIfAllowed(window);
     const hoverPoint = getWindowsTitleBarButtonPoint(window, "close");
     await context.agent.mouse.move({
       x: Math.round(hoverPoint.x),

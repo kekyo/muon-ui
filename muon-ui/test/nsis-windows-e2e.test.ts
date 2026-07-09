@@ -9,7 +9,6 @@ import {
   chmod,
   mkdir,
   mkdtemp,
-  readdir,
   readFile,
   rm,
   writeFile,
@@ -24,7 +23,6 @@ import {
   saveDiagnostics,
   type RemoteAgent,
 } from "agent-rover";
-import { delay } from "async-primitives";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MuonBuildTarget } from "../src/build.js";
@@ -201,41 +199,12 @@ const copyLocalDirectoryToRemote = async (
   localDirectory: string,
   remoteDirectory: string,
 ): Promise<void> => {
-  await agent.files.mkdir(remoteDirectory, { recursive: true });
-  const entries = await readdir(localDirectory, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const localPath = join(localDirectory, entry.name);
-    const remotePath = joinWindowsPath(remoteDirectory, entry.name);
-    if (entry.isDirectory()) {
-      await copyLocalDirectoryToRemote(agent, localPath, remotePath);
-    } else if (entry.isFile()) {
-      await copyLocalFileToRemote(agent, localPath, remotePath);
-    }
-  }
-};
-
-const readRemoteUtf8IfExists = async (
-  agent: RemoteAgent,
-  path: string,
-): Promise<string> => {
-  if (!(await agent.files.exists(path))) {
-    return "";
-  }
-
-  let lastError: unknown = undefined;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      return (await agent.files.readFile(path)).toString("utf8");
-    } catch (error) {
-      lastError = error;
-      await delay(250);
-    }
-  }
-  if (lastError instanceof Error) {
-    throw lastError;
-  }
-  throw new Error(`Failed to read remote file: ${path}`);
+  await agent.files.syncDirectory({
+    checksum: "sha256",
+    localPath: localDirectory,
+    mode: "mirror",
+    remotePath: remoteDirectory,
+  });
 };
 
 const runWindowsProcess = async (
@@ -246,25 +215,27 @@ const runWindowsProcess = async (
   commandArguments: readonly string[],
   timeoutMs: number,
 ): Promise<WindowsCommandResult> => {
-  const stdoutPath = joinWindowsPath(remoteDirectory, `${label}.stdout.log`);
-  const stderrPath = joinWindowsPath(remoteDirectory, `${label}.stderr.log`);
-  const processInfo = await agent.applications.launch({
+  const processInfo = await agent.processes.launchManaged({
     arguments: commandArguments,
+    captureStderr: true,
+    captureStdout: true,
     createNoWindow: true,
     path: commandPath,
-    stderrPath,
-    stdoutPath,
     workingDirectory: remoteDirectory,
   });
-  const snapshot = await agent.processes.waitForExit(processInfo.id, {
-    intervalMs: 250,
-    timeoutMs,
-  });
-  return {
-    exitCode: snapshot.exitCode,
-    stderr: await readRemoteUtf8IfExists(agent, stderrPath),
-    stdout: await readRemoteUtf8IfExists(agent, stdoutPath),
-  };
+  try {
+    const snapshot = await processInfo.waitForExit({
+      intervalMs: 250,
+      timeoutMs,
+    });
+    return {
+      exitCode: snapshot.root.exitCode,
+      stderr: await processInfo.stderrText(),
+      stdout: await processInfo.stdoutText(),
+    };
+  } finally {
+    await processInfo.releaseAsync();
+  }
 };
 
 const runWindowsPowerShell = async (

@@ -201,7 +201,7 @@ if (autostart !== true) {
 | `closeStdin()`       | `() => Promise<void>`                                | 未完了の書き込みを処理した後、標準入力を閉じます。                                   |
 | `wait()`             | `() => Promise<MuonExecutorSpawnResult>`             | 子プロセスの終了を待ちます。同じPromiseを再利用します。                              |
 | `kill()`             | `() => Promise<void>`                                | 子プロセスの終了を要求します。POSIXでは `SIGTERM`、Windowsでは `TerminateProcess(..., 1)` を使用します。 |
-| `dispose()`          | `() => Promise<void>`                                | ネイティブハンドルを解放し、実行中なら終了を要求します。                             |
+| `release()`          | `() => Promise<void>`                                | ネイティブハンドルを解放し、実行中なら終了を要求します。                             |
 
 `MuonExecutorSpawnResult`:
 
@@ -375,4 +375,3 @@ if (path !== null) {
 ```
 
 ---
-

@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+/// <reference lib="esnext.disposable" />
 /// <reference path="./muon-virtual-modules.d.ts" />
 
 export {};
@@ -26,6 +27,16 @@ declare global {
     readonly executor: MuonExecutorApi;
     /** Filesystem operations exposed by the built-in muon filesystem plugin. */
     readonly fs: MuonFsApi;
+  }
+
+  /** Asynchronously releasable resource handle. */
+  interface AsyncReleaseable extends AsyncDisposable {
+    /**
+     * Release the resource.
+     *
+     * @returns A promise that resolves after the resource is released.
+     */
+    readonly release: () => Promise<void>;
   }
 
   /** CEF version selection policy used by muon-bootstrap. */
@@ -1527,7 +1538,7 @@ declare global {
   }
 
   /** Started child process handle. */
-  interface MuonExecutorProcess {
+  interface MuonExecutorProcess extends AsyncReleaseable {
     /** Child process id. */
     readonly processId: number;
     /**
@@ -1563,9 +1574,9 @@ declare global {
      * Release the native handle and terminate the process when it is still
      * running.
      *
-     * @returns A promise that resolves after disposal is requested.
+     * @returns A promise that resolves after release is requested.
      */
-    readonly dispose: () => Promise<void>;
+    readonly release: () => Promise<void>;
   }
 
   /** Completed child process result. */

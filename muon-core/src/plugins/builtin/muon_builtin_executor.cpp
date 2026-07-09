@@ -2127,6 +2127,10 @@ static constexpr char executor_setup_script[] = R"JS(
 const __muonExecutorActiveProcesses = new Set();
 const __muonExecutorEmptyBytes = new Uint8Array(0);
 const __muonExecutorOwnerCallback = () => {};
+const __muonExecutorAsyncDispose =
+  typeof Symbol === "function" && typeof Symbol.asyncDispose === "symbol"
+    ? Symbol.asyncDispose
+    : null;
 const __muonExecutorToBytes = (data) => {
   if (typeof data === "string") {
     return new TextEncoder().encode(data);
@@ -2208,14 +2212,22 @@ if (isAllowed("spawn")) {
         stderrCallback,
       );
       const handleId = start.handleId;
-      let disposed = false;
+      let released = false;
       let stdinClosing = false;
       let waitPromise = null;
+      const release = async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        __muonExecutorActiveProcesses.delete(handle);
+        await __muonExecutorRpc({ op: "dispose", handleId });
+      };
       const handle = {
         processId: start.processId,
         writeStdin: async (data) => {
-          if (disposed) {
-            throw new Error("executor process is disposed");
+          if (released) {
+            throw new Error("executor process is released");
           }
           if (stdinClosing) {
             throw new Error("stdin is closed");
@@ -2226,8 +2238,8 @@ if (isAllowed("spawn")) {
           );
         },
         closeStdin: async () => {
-          if (disposed) {
-            throw new Error("executor process is disposed");
+          if (released) {
+            throw new Error("executor process is released");
           }
           stdinClosing = true;
           await __muonExecutorRpc({ op: "closeStdin", handleId });
@@ -2240,8 +2252,8 @@ if (isAllowed("spawn")) {
             const result = __muonExecutorDecodeWaitResult(
               await __muonExecutorRpc({ op: "wait", handleId }),
             );
-            if (!disposed) {
-              disposed = true;
+            if (!released) {
+              released = true;
               __muonExecutorActiveProcesses.delete(handle);
               try {
                 await __muonExecutorRpc({ op: "dispose", handleId });
@@ -2252,39 +2264,40 @@ if (isAllowed("spawn")) {
           return waitPromise;
         },
         kill: async () => {
-          if (disposed) {
-            throw new Error("executor process is disposed");
+          if (released) {
+            throw new Error("executor process is released");
           }
           await __muonExecutorRpc({ op: "kill", handleId });
         },
-        dispose: async () => {
-          if (disposed) {
-            return;
-          }
-          disposed = true;
-          __muonExecutorActiveProcesses.delete(handle);
-          await __muonExecutorRpc({ op: "dispose", handleId });
-        },
+        release,
       };
+      if (__muonExecutorAsyncDispose !== null) {
+        Object.defineProperty(handle, __muonExecutorAsyncDispose, {
+          configurable: false,
+          enumerable: false,
+          value: release,
+          writable: false,
+        });
+      }
       Object.freeze(handle);
       __muonExecutorActiveProcesses.add(handle);
       return handle;
     },
   };
 }
-const __muonExecutorDisposeActiveProcesses = async () => {
+const __muonExecutorReleaseActiveProcesses = async () => {
   if (__muonExecutorActiveProcesses.size === 0) {
     return;
   }
   for (const handle of Array.from(__muonExecutorActiveProcesses)) {
     try {
-      await handle.dispose();
+      await handle.release();
     } catch {}
   }
 };
 if (typeof globalThis.addEventListener === "function") {
   for (const eventName of ["beforeunload", "pagehide", "unload"]) {
-    globalThis.addEventListener(eventName, __muonExecutorDisposeActiveProcesses);
+    globalThis.addEventListener(eventName, __muonExecutorReleaseActiveProcesses);
   }
 }
 Object.defineProperties(namespace, properties);

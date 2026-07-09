@@ -676,12 +676,12 @@
               Kill
             </button>
             <button
-              id="executor-dispose"
+              id="executor-release"
               class="secondary"
               type="button"
               disabled
             >
-              Dispose
+              Release
             </button>
             <button id="executor-clear" class="secondary" type="button">
               Clear
@@ -1174,8 +1174,8 @@
       const executorStartButton = document.querySelector("#executor-start");
       const executorSendButton = document.querySelector("#executor-send");
       const executorKillButton = document.querySelector("#executor-kill");
-      const executorDisposeButton =
-        document.querySelector("#executor-dispose");
+      const executorReleaseButton =
+        document.querySelector("#executor-release");
       const executorClearButton = document.querySelector("#executor-clear");
       const bootstrapSettingsInput = document.querySelector(
         "#bootstrap-settings",
@@ -1324,8 +1324,8 @@
           "Kill: process.kill()",
         );
         setButtonTitle(
-          "#executor-dispose",
-          "Dispose: process.dispose()",
+          "#executor-release",
+          "Release: process.release()",
         );
         setButtonTitle(
           "#executor-clear",
@@ -2268,7 +2268,7 @@
         executorStdinInput.disabled = !executorRunning || executorProcess === null;
         executorSendButton.disabled = !executorRunning || executorProcess === null;
         executorKillButton.disabled = !executorRunning || executorProcess === null;
-        executorDisposeButton.disabled = executorProcess === null;
+        executorReleaseButton.disabled = executorProcess === null;
         executorSelectFileButton.hidden = !fileDialogAvailable;
         executorSelectFileButton.disabled = executorRunning || !fileDialogAvailable;
       };
@@ -2443,7 +2443,7 @@
         }
       };
 
-      const disposeExecutor = async () => {
+      const releaseExecutor = async () => {
         if (executorProcess === null) {
           return;
         }
@@ -2452,12 +2452,12 @@
         executorRunning = false;
         setExecutorControls();
         try {
-          await process.dispose();
-          appendExecutorLog("status", "disposed\n");
+          await process.release();
+          appendExecutorLog("status", "released\n");
         } catch (error) {
           appendExecutorLog(
             "status",
-            `dispose failed: ${getErrorMessage(error)}\n`,
+            `release failed: ${getErrorMessage(error)}\n`,
           );
         }
       };
@@ -2601,8 +2601,8 @@
       executorKillButton.addEventListener("click", () => {
         void killExecutor();
       });
-      executorDisposeButton.addEventListener("click", () => {
-        void disposeExecutor();
+      executorReleaseButton.addEventListener("click", () => {
+        void releaseExecutor();
       });
       executorClearButton.addEventListener("click", clearExecutorLog);
       executorStdinInput.addEventListener("keydown", (event) => {

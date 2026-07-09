@@ -1097,7 +1097,11 @@ void existsResult;
 
 const run = async (): Promise<void> => {
   const process = await spawn({ command: "node", args: ["--version"] });
+  const releaseable: AsyncReleaseable = process;
+  const disposable: AsyncDisposable = releaseable;
   const result: MuonExecutorSpawnResult = await process.wait();
+  await releaseable.release();
+  void disposable;
   void result;
 };
 void run;

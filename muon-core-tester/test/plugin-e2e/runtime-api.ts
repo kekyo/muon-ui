@@ -1799,39 +1799,45 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       const values = await driver.evaluate<{
         processId: number;
         exitCode: number;
+        asyncDisposeExposed: boolean;
         writeAfterCloseRejected: boolean;
-        writeAfterDisposeRejected: boolean;
+        writeAfterReleaseRejected: boolean;
       }>(`(async () => {
         const child = await window.muon.executor.spawn(${JSON.stringify(spawnOptions)});
         await child.kill();
         const waitResult = await child.wait();
         let writeAfterCloseRejected = false;
-        let writeAfterDisposeRejected = false;
+        let writeAfterReleaseRejected = false;
         const closedChild = await window.muon.executor.spawn(${JSON.stringify(createExecutorStdinSpawnOptions())});
+        const asyncDisposeExposed =
+          typeof Symbol.asyncDispose !== "symbol" ||
+          typeof closedChild[Symbol.asyncDispose] === "function";
         await closedChild.closeStdin();
         try {
           await closedChild.writeStdin("x");
         } catch {
           writeAfterCloseRejected = true;
         }
-        await closedChild.dispose();
+        await closedChild.release();
         try {
           await closedChild.writeStdin("x");
         } catch {
-          writeAfterDisposeRejected = true;
+          writeAfterReleaseRejected = true;
         }
         return {
           processId: waitResult.processId,
           exitCode: waitResult.exitCode,
+          asyncDisposeExposed,
           writeAfterCloseRejected,
-          writeAfterDisposeRejected,
+          writeAfterReleaseRejected,
         };
       })()`);
 
       expect(values.processId).toBeGreaterThan(0);
       expect(values.exitCode).not.toBe(0);
+      expect(values.asyncDisposeExposed).toBe(true);
       expect(values.writeAfterCloseRejected).toBe(true);
-      expect(values.writeAfterDisposeRejected).toBe(true);
+      expect(values.writeAfterReleaseRejected).toBe(true);
     });
   });
 

@@ -51,6 +51,9 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
       },
       {
         "name": "foobar",
+        "config": {
+          "foobar.mode": "strict"
+        },
         "imports": [
           {
             "sources": ["src/native/**"],
@@ -269,6 +272,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `pages`                      | `readonly string[]`           | `["asset://main/**"]`  | プラグイン名前空間や関数をページから参照可能にするURLのリストです。               |
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
+| `plugins[].config`           | `readonly object`             | `{}`                   | プラグイン初期化時に渡す文字列key-value設定です。                                 |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -287,6 +291,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   例えば `muon_fs_dialogs_gtk3.so` を使う場合の `name` は `"muon_fs_dialogs_gtk3"` です。
   `"internal"` は予約名であり、外部プラグイン名としては使用出来ません。
   同じ `name` を複数回指定することは出来ません。
+- `plugins[].config` は、そのプラグインへ初期化時に渡す設定テーブルです。
+  未指定または `{}` の場合は空の設定として扱われます。
+  keyは空文字列不可で、keyとvalueはいずれもNUL文字を含められません。
+  valueに指定できるのは文字列だけです。空文字列や改行を含む文字列は指定できますが、object、array、number、boolean、nullは設定エラーになります。
+  複数行の値やglob/正規表現の区切りなど、値の意味と解釈は各プラグインの責務です。
 - `plugins[].allow` は、`simple` モードでプラグインが持つ関数パスを `window` 階層に公開するためのホワイトリストです。
   `simple` モードでは必須で、`validate` モードでは指定できません。
   `muon.fs.*` のようなパターンを指定出来ます。
@@ -353,4 +362,3 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 > 解説は省略します。
 
 ---
-

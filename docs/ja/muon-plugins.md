@@ -46,7 +46,10 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
             "sources": ["src/native/**"],
             "allow": ["muon.executor.spawn"]
           }
-        ]
+        ],
+        "config": {
+          "foobar.settings": "John Doe"
+        }
       }
     ]
   }
@@ -60,6 +63,9 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
   その他のプラグインは、`plugins/` ディレクトリ内に配置されたプラグインファイル (`*.so`または`*.dll`) を読み込みますが、拡張子を除いたファイル名部分を `name` に指定します。
   `spawn()` は、`muon.executor` 名前空間に配置されている、muon内蔵プラグインによる関数です。
   これを呼び出し可能にするには、`name` に `"internal"`を、`imports[].allow` に `"muon.executor.spawn"` と指定します。
+- `config` は、そのプラグインへ初期化時に渡す文字列key-value設定です。
+  keyとvalueはいずれも文字列で、valueにobject、array、number、boolean、nullは指定できません。
+  未指定の場合は空の設定として扱われます。値の意味はプラグインごとに異なります。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
 
 次に、TypeScriptコンパイラに対して、型定義を参照できるようにします。
@@ -123,6 +129,26 @@ muon DevToolsを開いてコンソールで直接試すことが出来ます:
 > のように制限させることが出来て、その他のJavaScriptコードからmuonプラグイン関数を呼び出すことが難しくなります。
 > これにより、NPMのサプライチェーン攻撃に対する耐性を向上させることが出来ます。
 
+## muon.jsonの設定を読む
+
+プラグインは `muon_init_plugin()` の `muon_plugin_init_context` から `muon.json` の `plugins[].config` を参照できます。
+`plugin_name` と `config_entries` は `muon_init_plugin()` 呼び出し中だけ有効です。初期化後も使う値は、プラグイン側でコピーしてください。
+helper tableは従来通り `context->helpers` から参照でき、プラグイン側で保持できます。
+
+```cpp
+extern "C" const muon_plugin_metadata* muon_init_plugin(
+    const muon_plugin_init_context* context) {
+  const char* mode = muon_plugin_get_config_value(context, "foobar.mode");
+  if (mode != NULL && strcmp(mode, "strict") == 0) {
+    /* enable strict behavior */
+  }
+  return &metadata;
+}
+```
+
+muonは `config` を文字列の配列として渡すだけで、値の中身は解釈しません。
+改行区切り、glob、正規表現、カンマ区切りなどの形式が必要な場合は、各プラグインの仕様として定義して実装します。
+
 ## muonプラグイン関数のシグネチャ
 
 muonプラグインで公開されるすべての関数は、`Promise` を返却する関数として定義されていることに注意して下さい。
@@ -139,4 +165,3 @@ TypeScriptを使用してコードを記述する場合は、 `muon:executor` �
 > ホワイトリストへの指定が漏れていると実行時エラーとなることに注意が必要です。
 
 ---
-

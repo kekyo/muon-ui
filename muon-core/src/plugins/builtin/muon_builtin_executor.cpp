@@ -10,11 +10,13 @@
 #include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_environment_helpers.h"
+#include "plugins/muon_type_metadata.h"
 #include "yyjson.h"
 
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -25,6 +27,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +40,8 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -69,6 +75,27 @@ struct SpawnRpcRequest {
   RunOptions options;
   bool capture_stdout = true;
   bool capture_stderr = true;
+};
+
+enum class LibraryRpcOperation {
+  kLoad,
+  kGetFunction,
+  kCall,
+  kRelease,
+};
+
+struct LibraryRpcRequest {
+  LibraryRpcOperation operation = LibraryRpcOperation::kLoad;
+  uint32_t library_id = 0;
+  uint32_t function_id = 0;
+  std::string path;
+  std::string name;
+  std::vector<MuonTypeMetadata> arg_types;
+  std::vector<std::string> arg_type_names;
+  MuonTypeMetadata return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
+  std::string return_type_name = "void";
+  yyjson_val* args = nullptr;
+  yyjson_val* buffer_views = nullptr;
 };
 
 struct ExecutorCommand {
@@ -136,12 +163,46 @@ struct ExecutorProcess {
 #endif
 };
 
+struct AdhocFunction {
+  uint32_t function_id = 0;
+  std::string name;
+  std::vector<MuonTypeMetadata> arg_types;
+  std::vector<std::string> arg_type_names;
+  MuonTypeMetadata return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
+  std::string return_type_name;
+  std::shared_ptr<MuonFunctionSignatureStorage> signature_storage;
+  muon_native_function registered_function = nullptr;
+  tra_ffic_function_ref function_ref = {};
+};
+
+struct AdhocLibrary {
+  uint32_t library_id = 0;
+  int renderer_context_id = 0;
+  const muon_plugin_helpers* helpers = nullptr;
+  cardio::dispatcher* dispatcher = nullptr;
+  void* handle = nullptr;
+  std::mutex mutex;
+  uint32_t next_function_id = 1;
+  std::map<uint32_t, std::shared_ptr<AdhocFunction>> functions;
+  std::vector<muon_completion_func> release_completions;
+  bool release_requested = false;
+  bool closed = false;
+  bool runtime_available = true;
+  size_t active_calls = 0;
+  tra_ffic_task_queue traffic_queue = {};
+  tra_ffic_side caller_side = {};
+  tra_ffic_side callee_side = {};
+  bool traffic_initialized = false;
+};
+
 struct ExecutorRuntime {
   const muon_plugin_helpers* helpers = nullptr;
   cardio::dispatcher* dispatcher = nullptr;
   std::mutex mutex;
   uint32_t next_handle_id = 1;
+  uint32_t next_library_id = 1;
   std::map<uint32_t, std::shared_ptr<ExecutorProcess>> processes;
+  std::map<uint32_t, std::shared_ptr<AdhocLibrary>> libraries;
   bool shutting_down = false;
 };
 
@@ -149,6 +210,21 @@ struct OutputCallbackCompletionState {
   const muon_plugin_helpers* helpers = nullptr;
   std::shared_ptr<ExecutorProcess> process;
   muon_completion_func completion = nullptr;
+};
+
+struct AdhocDecodedArgs {
+  std::vector<tra_ffic_value> values;
+  std::vector<std::string> string_storage;
+  std::vector<std::vector<uint8_t>> buffer_storage;
+};
+
+struct AdhocCallState {
+  std::shared_ptr<AdhocLibrary> library;
+  std::shared_ptr<AdhocFunction> function;
+  AdhocDecodedArgs args;
+  muon_completion_func completion = nullptr;
+  std::string result_json;
+  std::string error_message;
 };
 
 static std::unique_ptr<ExecutorRuntime> g_executor_runtime;
@@ -215,6 +291,12 @@ static const muon_type_descriptor spawn_rpc_args[] = {
     owner_callback_type,
     output_callback_type,
     output_callback_type,
+};
+
+static const muon_type_descriptor library_rpc_args[] = {
+    type_string,
+    type_buffer_view,
+    type_u32,
 };
 
 static bool ContainsNul(std::string_view value) {
@@ -476,6 +558,741 @@ static std::string Base64Encode(const std::vector<uint8_t>& data) {
     encoded.push_back('=');
   }
   return encoded;
+}
+
+static std::string GetExecutorTrafficError(const tra_ffic_error& error) {
+  return error.message[0] == '\0' ? "tra-ffic operation failed"
+                                  : error.message;
+}
+
+static bool ParseUint64Text(std::string_view source, uint64_t* value) {
+  if (value == nullptr || source.empty()) {
+    return false;
+  }
+  uint64_t parsed = 0;
+  const auto* begin = source.data();
+  const auto* end = begin + source.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end) {
+    return false;
+  }
+  *value = parsed;
+  return true;
+}
+
+static bool ParseInt64Text(std::string_view source, int64_t* value) {
+  if (value == nullptr || source.empty()) {
+    return false;
+  }
+  int64_t parsed = 0;
+  const auto* begin = source.data();
+  const auto* end = begin + source.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end) {
+    return false;
+  }
+  *value = parsed;
+  return true;
+}
+
+static bool ReadAdhocUint64(yyjson_val* value,
+                            uint64_t max_value,
+                            uint64_t* target) {
+  if (target == nullptr || value == nullptr) {
+    return false;
+  }
+  uint64_t parsed = 0;
+  if (yyjson_is_uint(value)) {
+    parsed = yyjson_get_uint(value);
+  } else if (yyjson_is_str(value)) {
+    const auto source =
+        std::string_view(yyjson_get_str(value), yyjson_get_len(value));
+    if (!ParseUint64Text(source, &parsed)) {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  if (parsed > max_value) {
+    return false;
+  }
+  *target = parsed;
+  return true;
+}
+
+static bool ReadAdhocInt64(yyjson_val* value,
+                           int64_t min_value,
+                           int64_t max_value,
+                           int64_t* target) {
+  if (target == nullptr || value == nullptr) {
+    return false;
+  }
+  int64_t parsed = 0;
+  if (yyjson_is_sint(value)) {
+    parsed = yyjson_get_sint(value);
+  } else if (yyjson_is_uint(value)) {
+    const auto unsigned_value = yyjson_get_uint(value);
+    if (unsigned_value >
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+      return false;
+    }
+    parsed = static_cast<int64_t>(unsigned_value);
+  } else if (yyjson_is_str(value)) {
+    const auto source =
+        std::string_view(yyjson_get_str(value), yyjson_get_len(value));
+    if (!ParseInt64Text(source, &parsed)) {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  if (parsed < min_value || parsed > max_value) {
+    return false;
+  }
+  *target = parsed;
+  return true;
+}
+
+static bool ReadAdhocDouble(yyjson_val* value, double* target) {
+  if (target == nullptr || value == nullptr) {
+    return false;
+  }
+  if (yyjson_is_real(value)) {
+    *target = yyjson_get_real(value);
+    return std::isfinite(*target);
+  }
+  if (yyjson_is_sint(value)) {
+    *target = static_cast<double>(yyjson_get_sint(value));
+    return true;
+  }
+  if (yyjson_is_uint(value)) {
+    *target = static_cast<double>(yyjson_get_uint(value));
+    return true;
+  }
+  return false;
+}
+
+static bool ConvertAdhocTypeName(std::string_view source,
+                                 bool allow_void,
+                                 MuonTypeMetadata* type,
+                                 std::string* canonical_name,
+                                 std::string* error_message) {
+  if (type == nullptr || canonical_name == nullptr) {
+    return false;
+  }
+  auto value_type = MUON_TYPE_VOID;
+  std::string name(source);
+  if (name == "voidType") {
+    name = "void";
+  } else if (name == "stringType") {
+    name = "string";
+  }
+  if (name == "void") {
+    value_type = MUON_TYPE_VOID;
+  } else if (name == "bool") {
+    value_type = MUON_TYPE_BOOL;
+  } else if (name == "int8") {
+    value_type = MUON_TYPE_I8;
+  } else if (name == "uint8") {
+    value_type = MUON_TYPE_U8;
+  } else if (name == "int16") {
+    value_type = MUON_TYPE_I16;
+  } else if (name == "uint16") {
+    value_type = MUON_TYPE_U16;
+  } else if (name == "int32") {
+    value_type = MUON_TYPE_I32;
+  } else if (name == "uint32") {
+    value_type = MUON_TYPE_U32;
+  } else if (name == "int64") {
+    value_type = MUON_TYPE_I64;
+  } else if (name == "uint64") {
+    value_type = MUON_TYPE_U64;
+  } else if (name == "float32") {
+    value_type = MUON_TYPE_F32;
+  } else if (name == "float64") {
+    value_type = MUON_TYPE_F64;
+  } else if (name == "string") {
+    value_type = MUON_TYPE_STRING;
+  } else if (name == "pointer") {
+    value_type = MUON_TYPE_POINTER;
+  } else if (name == "bufferView") {
+    value_type = MUON_TYPE_BUFFER_VIEW;
+  } else if (name == "usize") {
+    value_type = sizeof(size_t) >= 8 ? MUON_TYPE_U64 : MUON_TYPE_U32;
+  } else {
+    if (error_message != nullptr) {
+      *error_message = "Unsupported adhoc type";
+    }
+    return false;
+  }
+  if (!allow_void && value_type == MUON_TYPE_VOID) {
+    if (error_message != nullptr) {
+      *error_message = "Void type is not valid here";
+    }
+    return false;
+  }
+  *type = CreateMuonPrimitiveType(value_type);
+  *canonical_name = name;
+  return true;
+}
+
+static bool ReadAdhocType(yyjson_val* value,
+                          bool allow_void,
+                          MuonTypeMetadata* type,
+                          std::string* canonical_name,
+                          std::string* error_message) {
+  yyjson_val* type_value = value;
+  if (yyjson_is_obj(value)) {
+    type_value = yyjson_obj_get(value, "name");
+    if (type_value == nullptr) {
+      type_value = yyjson_obj_get(value, "type");
+    }
+  }
+  if (!yyjson_is_str(type_value)) {
+    *error_message = "Adhoc type must be a type descriptor";
+    return false;
+  }
+  const auto name =
+      std::string_view(yyjson_get_str(type_value), yyjson_get_len(type_value));
+  return ConvertAdhocTypeName(name, allow_void, type, canonical_name,
+                              error_message);
+}
+
+static bool ReadLibraryHandleId(yyjson_val* object,
+                                uint32_t* library_id,
+                                std::string* error_message) {
+  const auto value = yyjson_obj_get(object, "libraryId");
+  if (!yyjson_is_uint(value)) {
+    *error_message = "libraryId is required";
+    return false;
+  }
+  const auto parsed = yyjson_get_uint(value);
+  if (parsed == 0 || parsed > UINT32_MAX) {
+    *error_message = "libraryId is invalid";
+    return false;
+  }
+  *library_id = static_cast<uint32_t>(parsed);
+  return true;
+}
+
+static bool ReadFunctionHandleId(yyjson_val* object,
+                                 uint32_t* function_id,
+                                 std::string* error_message) {
+  const auto value = yyjson_obj_get(object, "functionId");
+  if (!yyjson_is_uint(value)) {
+    *error_message = "functionId is required";
+    return false;
+  }
+  const auto parsed = yyjson_get_uint(value);
+  if (parsed == 0 || parsed > UINT32_MAX) {
+    *error_message = "functionId is invalid";
+    return false;
+  }
+  *function_id = static_cast<uint32_t>(parsed);
+  return true;
+}
+
+static bool ParseAdhocSignature(yyjson_val* value,
+                                LibraryRpcRequest* request,
+                                std::string* error_message) {
+  if (!yyjson_is_obj(value)) {
+    *error_message = "signature must be an object";
+    return false;
+  }
+  const auto args = yyjson_obj_get(value, "argTypes");
+  if (!yyjson_is_arr(args)) {
+    *error_message = "signature.argTypes must be an array";
+    return false;
+  }
+  request->arg_types.clear();
+  request->arg_type_names.clear();
+  request->arg_types.resize(yyjson_arr_size(args));
+  request->arg_type_names.resize(yyjson_arr_size(args));
+  for (auto index = size_t{0}; index < yyjson_arr_size(args); ++index) {
+    if (!ReadAdhocType(yyjson_arr_get(args, index), false,
+                       &request->arg_types[index],
+                       &request->arg_type_names[index], error_message)) {
+      return false;
+    }
+  }
+  const auto return_type = yyjson_obj_get(value, "returnType");
+  if (!ReadAdhocType(return_type, true, &request->return_type,
+                     &request->return_type_name, error_message)) {
+    return false;
+  }
+  return true;
+}
+
+static bool ParseLibraryRpcRequestRoot(yyjson_val* root,
+                                       LibraryRpcRequest* request,
+                                       std::string* error_message) {
+  if (!yyjson_is_obj(root)) {
+    *error_message = "Request JSON root must be an object";
+    return false;
+  }
+  const auto op = yyjson_obj_get(root, "op");
+  if (!yyjson_is_str(op)) {
+    *error_message = "op is required";
+    return false;
+  }
+  const std::string op_name(yyjson_get_str(op), yyjson_get_len(op));
+  if (op_name == "load") {
+    request->operation = LibraryRpcOperation::kLoad;
+    return ReadRequiredString(root, "path", &request->path, error_message);
+  }
+  if (op_name == "getFunction") {
+    request->operation = LibraryRpcOperation::kGetFunction;
+    return ReadLibraryHandleId(root, &request->library_id, error_message) &&
+           ReadRequiredString(root, "name", &request->name, error_message) &&
+           ParseAdhocSignature(yyjson_obj_get(root, "signature"), request,
+                               error_message);
+  }
+  if (op_name == "call") {
+    request->operation = LibraryRpcOperation::kCall;
+    request->args = yyjson_obj_get(root, "args");
+    request->buffer_views = yyjson_obj_get(root, "bufferViews");
+    if (!yyjson_is_arr(request->args)) {
+      *error_message = "args must be an array";
+      return false;
+    }
+    if (request->buffer_views != nullptr &&
+        !yyjson_is_arr(request->buffer_views)) {
+      *error_message = "bufferViews must be an array";
+      return false;
+    }
+    return ReadLibraryHandleId(root, &request->library_id, error_message) &&
+           ReadFunctionHandleId(root, &request->function_id, error_message);
+  }
+  if (op_name == "release") {
+    request->operation = LibraryRpcOperation::kRelease;
+    return ReadLibraryHandleId(root, &request->library_id, error_message);
+  }
+  *error_message = "op is unsupported";
+  return false;
+}
+
+static bool FindAdhocBufferView(yyjson_val* buffer_views,
+                                size_t arg_index,
+                                size_t* offset,
+                                size_t* size,
+                                std::string* error_message) {
+  if (offset == nullptr || size == nullptr) {
+    return false;
+  }
+  if (!yyjson_is_arr(buffer_views)) {
+    *error_message = "buffer_view argument is missing";
+    return false;
+  }
+  for (auto index = size_t{0}; index < yyjson_arr_size(buffer_views); ++index) {
+    const auto entry = yyjson_arr_get(buffer_views, index);
+    if (!yyjson_is_obj(entry)) {
+      *error_message = "bufferViews entries must be objects";
+      return false;
+    }
+    uint64_t raw_index = 0;
+    uint64_t raw_offset = 0;
+    uint64_t raw_size = 0;
+    if (!ReadAdhocUint64(yyjson_obj_get(entry, "argIndex"), SIZE_MAX,
+                         &raw_index) ||
+        !ReadAdhocUint64(yyjson_obj_get(entry, "offset"), SIZE_MAX,
+                         &raw_offset) ||
+        !ReadAdhocUint64(yyjson_obj_get(entry, "size"), SIZE_MAX,
+                         &raw_size)) {
+      *error_message = "bufferViews entry is invalid";
+      return false;
+    }
+    if (raw_index == arg_index) {
+      *offset = static_cast<size_t>(raw_offset);
+      *size = static_cast<size_t>(raw_size);
+      return true;
+    }
+  }
+  *error_message = "buffer_view argument is missing";
+  return false;
+}
+
+static bool DecodeAdhocCallArguments(const AdhocFunction& function,
+                                     yyjson_val* args,
+                                     yyjson_val* buffer_views,
+                                     const muon_buffer_view& data,
+                                     AdhocDecodedArgs* decoded,
+                                     std::string* error_message) {
+  if (decoded == nullptr || !yyjson_is_arr(args) ||
+      yyjson_arr_size(args) != function.arg_types.size()) {
+    *error_message = "Invalid adhoc argument count";
+    return false;
+  }
+  decoded->values.clear();
+  decoded->string_storage.clear();
+  decoded->buffer_storage.clear();
+  decoded->values.resize(function.arg_types.size());
+  decoded->string_storage.reserve(function.arg_types.size());
+  decoded->buffer_storage.reserve(function.arg_types.size());
+  const auto* data_begin = static_cast<const uint8_t*>(data.data);
+  for (auto index = size_t{0}; index < function.arg_types.size(); ++index) {
+    const auto argument = yyjson_arr_get(args, index);
+    const auto type = function.arg_types[index].type;
+    switch (type) {
+      case MUON_TYPE_BOOL:
+        if (!yyjson_is_bool(argument)) {
+          *error_message = "Invalid bool argument";
+          return false;
+        }
+        decoded->values[index] = tra_ffic_value_bool(yyjson_get_bool(argument));
+        break;
+      case MUON_TYPE_I8: {
+        int64_t value = 0;
+        if (!ReadAdhocInt64(argument, INT8_MIN, INT8_MAX, &value)) {
+          *error_message = "Invalid int8 argument";
+          return false;
+        }
+        decoded->values[index] = tra_ffic_value_int8(static_cast<int8_t>(value));
+        break;
+      }
+      case MUON_TYPE_U8: {
+        uint64_t value = 0;
+        if (!ReadAdhocUint64(argument, UINT8_MAX, &value)) {
+          *error_message = "Invalid uint8 argument";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_uint8(static_cast<uint8_t>(value));
+        break;
+      }
+      case MUON_TYPE_I16: {
+        int64_t value = 0;
+        if (!ReadAdhocInt64(argument, INT16_MIN, INT16_MAX, &value)) {
+          *error_message = "Invalid int16 argument";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_int16(static_cast<int16_t>(value));
+        break;
+      }
+      case MUON_TYPE_U16: {
+        uint64_t value = 0;
+        if (!ReadAdhocUint64(argument, UINT16_MAX, &value)) {
+          *error_message = "Invalid uint16 argument";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_uint16(static_cast<uint16_t>(value));
+        break;
+      }
+      case MUON_TYPE_I32: {
+        int64_t value = 0;
+        if (!ReadAdhocInt64(argument, INT32_MIN, INT32_MAX, &value)) {
+          *error_message = "Invalid int32 argument";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_int32(static_cast<int32_t>(value));
+        break;
+      }
+      case MUON_TYPE_U32: {
+        uint64_t value = 0;
+        if (!ReadAdhocUint64(argument, UINT32_MAX, &value)) {
+          *error_message = "Invalid uint32 argument";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_uint32(static_cast<uint32_t>(value));
+        break;
+      }
+      case MUON_TYPE_I64: {
+        int64_t value = 0;
+        if (!ReadAdhocInt64(argument, INT64_MIN, INT64_MAX, &value)) {
+          *error_message = "Invalid int64 argument";
+          return false;
+        }
+        decoded->values[index] = tra_ffic_value_int64(value);
+        break;
+      }
+      case MUON_TYPE_U64: {
+        uint64_t value = 0;
+        if (!ReadAdhocUint64(argument, UINT64_MAX, &value)) {
+          *error_message = "Invalid uint64 argument";
+          return false;
+        }
+        decoded->values[index] = tra_ffic_value_uint64(value);
+        break;
+      }
+      case MUON_TYPE_F32: {
+        double value = 0.0;
+        if (!ReadAdhocDouble(argument, &value) ||
+            value < -static_cast<double>(std::numeric_limits<float>::max()) ||
+            value > static_cast<double>(std::numeric_limits<float>::max())) {
+          *error_message = "Invalid float32 argument";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_float(static_cast<float>(value));
+        break;
+      }
+      case MUON_TYPE_F64: {
+        double value = 0.0;
+        if (!ReadAdhocDouble(argument, &value)) {
+          *error_message = "Invalid float64 argument";
+          return false;
+        }
+        decoded->values[index] = tra_ffic_value_double(value);
+        break;
+      }
+      case MUON_TYPE_STRING:
+        if (yyjson_is_null(argument)) {
+          decoded->values[index] = tra_ffic_value_string(nullptr);
+          break;
+        }
+        if (!yyjson_is_str(argument)) {
+          *error_message = "Invalid string argument";
+          return false;
+        }
+        decoded->string_storage.emplace_back(yyjson_get_str(argument),
+                                             yyjson_get_len(argument));
+        if (ContainsNul(decoded->string_storage.back())) {
+          *error_message = "String argument must not contain NUL";
+          return false;
+        }
+        decoded->values[index] =
+            tra_ffic_value_string(decoded->string_storage.back().c_str());
+        break;
+      case MUON_TYPE_POINTER: {
+        uint64_t value = 0;
+        if (yyjson_is_null(argument)) {
+          value = 0;
+        } else if (!ReadAdhocUint64(
+                       argument,
+                       static_cast<uint64_t>(
+                           std::numeric_limits<uintptr_t>::max()),
+                       &value)) {
+          *error_message = "Invalid pointer argument";
+          return false;
+        }
+        decoded->values[index] = tra_ffic_value_pointer(
+            reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
+        break;
+      }
+      case MUON_TYPE_BUFFER_VIEW: {
+        size_t offset = 0;
+        size_t size = 0;
+        if (!FindAdhocBufferView(buffer_views, index, &offset, &size,
+                                 error_message)) {
+          return false;
+        }
+        if ((size > 0 && data_begin == nullptr) || offset > data.size ||
+            size > data.size - offset) {
+          *error_message = "buffer_view data is invalid";
+          return false;
+        }
+        auto& storage = decoded->buffer_storage.emplace_back();
+        if (size > 0) {
+          storage.assign(data_begin + offset, data_begin + offset + size);
+        }
+        decoded->values[index] = tra_ffic_value_buffer_view(
+            storage.empty() ? nullptr : storage.data(),
+            static_cast<uintptr_t>(storage.size()));
+        break;
+      }
+      case MUON_TYPE_VOID:
+      case MUON_TYPE_FUNCTION:
+      default:
+        *error_message = "Unsupported adhoc argument type";
+        return false;
+    }
+  }
+  return true;
+}
+
+static std::string CreateAdhocCallResultJson(
+    const tra_ffic_result& result,
+    const MuonTypeMetadata& return_type,
+    std::string* error_message) {
+  if (!result.success) {
+    if (error_message != nullptr) {
+      *error_message = result.error_message;
+    }
+    return {};
+  }
+  std::string json = "{";
+  switch (return_type.type) {
+    case MUON_TYPE_VOID:
+      break;
+    case MUON_TYPE_BOOL:
+      json += "\"value\":";
+      json += result.value.as.bool_value ? "true" : "false";
+      break;
+    case MUON_TYPE_I8:
+      json += "\"value\":";
+      json += std::to_string(result.value.as.int8_value);
+      break;
+    case MUON_TYPE_U8:
+      json += "\"value\":";
+      json += std::to_string(result.value.as.uint8_value);
+      break;
+    case MUON_TYPE_I16:
+      json += "\"value\":";
+      json += std::to_string(result.value.as.int16_value);
+      break;
+    case MUON_TYPE_U16:
+      json += "\"value\":";
+      json += std::to_string(result.value.as.uint16_value);
+      break;
+    case MUON_TYPE_I32:
+      json += "\"value\":";
+      json += std::to_string(result.value.as.int32_value);
+      break;
+    case MUON_TYPE_U32:
+      json += "\"value\":";
+      json += std::to_string(result.value.as.uint32_value);
+      break;
+    case MUON_TYPE_I64:
+      json += "\"value\":";
+      AppendJsonString(&json, std::to_string(result.value.as.int64_value));
+      break;
+    case MUON_TYPE_U64:
+      json += "\"value\":";
+      AppendJsonString(&json, std::to_string(result.value.as.uint64_value));
+      break;
+    case MUON_TYPE_F32:
+      if (!std::isfinite(result.value.as.float_value)) {
+        if (error_message != nullptr) {
+          *error_message = "Adhoc function returned a non-finite float32 value";
+        }
+        return {};
+      }
+      json += "\"value\":";
+      json += std::to_string(result.value.as.float_value);
+      break;
+    case MUON_TYPE_F64:
+      if (!std::isfinite(result.value.as.double_value)) {
+        if (error_message != nullptr) {
+          *error_message = "Adhoc function returned a non-finite float64 value";
+        }
+        return {};
+      }
+      json += "\"value\":";
+      json += std::to_string(result.value.as.double_value);
+      break;
+    case MUON_TYPE_STRING:
+      json += "\"value\":";
+      if (result.value.as.string_value == nullptr) {
+        json += "null";
+      } else {
+        AppendJsonString(&json, result.value.as.string_value);
+      }
+      break;
+    case MUON_TYPE_POINTER:
+      json += "\"pointer\":";
+      AppendJsonString(
+          &json,
+          std::to_string(reinterpret_cast<uintptr_t>(
+              result.value.as.pointer_value)));
+      break;
+    case MUON_TYPE_BUFFER_VIEW: {
+      const auto& view = result.value.as.buffer_view_value;
+      if (view.data == nullptr && view.size != 0) {
+        if (error_message != nullptr) {
+          *error_message = "Adhoc function returned an invalid buffer_view";
+        }
+        return {};
+      }
+      const auto* begin = static_cast<const uint8_t*>(view.data);
+      auto bytes = std::vector<uint8_t>();
+      if (view.size > 0) {
+        bytes.assign(begin, begin + view.size);
+      }
+      json += "\"base64\":";
+      AppendJsonString(&json, Base64Encode(bytes));
+      break;
+    }
+    case MUON_TYPE_FUNCTION:
+    default:
+      if (error_message != nullptr) {
+        *error_message = "Unsupported adhoc return type";
+      }
+      return {};
+  }
+  json += "}";
+  return json;
+}
+
+static void CaptureAdhocCallResult(void* raw_state,
+                                   const tra_ffic_result* result) {
+  auto* state = static_cast<AdhocCallState*>(raw_state);
+  if (state == nullptr) {
+    return;
+  }
+  if (result == nullptr) {
+    state->error_message = "Adhoc function did not produce a result";
+    return;
+  }
+  state->result_json = CreateAdhocCallResultJson(
+      *result, state->function->return_type, &state->error_message);
+}
+
+static void CloseAdhocDynamicLibrary(void* handle) {
+  if (handle == nullptr) {
+    return;
+  }
+#if defined(_WIN32)
+  FreeLibrary(static_cast<HMODULE>(handle));
+#else
+  dlclose(handle);
+#endif
+}
+
+static void* OpenAdhocDynamicLibrary(const std::string& path,
+                                     std::string* error_message) {
+#if defined(_WIN32)
+  std::wstring wide_path;
+  if (!MuonUtf8ToWide(path, &wide_path)) {
+    *error_message = "Library path is not valid UTF-8";
+    return nullptr;
+  }
+  auto* handle = LoadLibraryW(wide_path.c_str());
+  if (handle == nullptr) {
+    *error_message = "Failed to load library";
+  }
+  return handle;
+#else
+  dlerror();
+  auto* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handle == nullptr) {
+    const auto* message = dlerror();
+    *error_message =
+        message == nullptr ? "Failed to load library" : message;
+  }
+  return handle;
+#endif
+}
+
+static void* GetAdhocDynamicLibrarySymbol(void* handle,
+                                          const std::string& name,
+                                          std::string* error_message) {
+  if (handle == nullptr) {
+    *error_message = "Library handle is unavailable";
+    return nullptr;
+  }
+#if defined(_WIN32)
+  auto* symbol = reinterpret_cast<void*>(
+      GetProcAddress(static_cast<HMODULE>(handle), name.c_str()));
+  if (symbol == nullptr) {
+    *error_message = "Library symbol is unavailable";
+  }
+  return symbol;
+#else
+  dlerror();
+  auto* symbol = dlsym(handle, name.c_str());
+  const auto* message = dlerror();
+  if (message != nullptr) {
+    *error_message = message;
+    return nullptr;
+  }
+  if (symbol == nullptr) {
+    *error_message = "Library symbol is unavailable";
+  }
+  return symbol;
+#endif
 }
 
 static std::string CreateStartResultJson(uint32_t handle_id,
@@ -851,6 +1668,151 @@ static std::shared_ptr<ExecutorProcess> RemoveExecutorProcess(
   auto process = iterator->second;
   runtime->processes.erase(iterator);
   return process;
+}
+
+static std::shared_ptr<AdhocLibrary> FindAdhocLibrary(uint32_t library_id) {
+  std::lock_guard<std::mutex> runtime_lock(g_executor_runtime_mutex);
+  auto* runtime = g_executor_runtime.get();
+  if (runtime == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(runtime->mutex);
+  const auto iterator = runtime->libraries.find(library_id);
+  return iterator == runtime->libraries.end() ? nullptr : iterator->second;
+}
+
+static std::shared_ptr<AdhocLibrary> RemoveAdhocLibrary(uint32_t library_id) {
+  std::lock_guard<std::mutex> runtime_lock(g_executor_runtime_mutex);
+  auto* runtime = g_executor_runtime.get();
+  if (runtime == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(runtime->mutex);
+  const auto iterator = runtime->libraries.find(library_id);
+  if (iterator == runtime->libraries.end()) {
+    return nullptr;
+  }
+  auto library = iterator->second;
+  runtime->libraries.erase(iterator);
+  return library;
+}
+
+static void FinalizeAdhocLibrary(
+    const std::shared_ptr<AdhocLibrary>& library) {
+  if (!library) {
+    return;
+  }
+  std::vector<muon_native_function> functions;
+  void* handle = nullptr;
+  auto traffic_initialized = false;
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    if (library->closed) {
+      return;
+    }
+    library->closed = true;
+    for (const auto& entry : library->functions) {
+      if (entry.second && entry.second->registered_function != nullptr) {
+        functions.push_back(entry.second->registered_function);
+        entry.second->registered_function = nullptr;
+      }
+    }
+    library->functions.clear();
+    handle = library->handle;
+    library->handle = nullptr;
+    traffic_initialized = library->traffic_initialized;
+    library->traffic_initialized = false;
+  }
+  for (const auto function : functions) {
+    tra_ffic_error error;
+    (void)tra_ffic_function_release(function, &error);
+  }
+  if (traffic_initialized) {
+    tra_ffic_side_destroy(&library->callee_side);
+    tra_ffic_side_destroy(&library->caller_side);
+    tra_ffic_task_drain_finalization(&library->traffic_queue);
+    tra_ffic_task_queue_destroy(&library->traffic_queue);
+  }
+  CloseAdhocDynamicLibrary(handle);
+}
+
+static void CompleteAdhocReleaseWaiters(
+    const std::shared_ptr<AdhocLibrary>& library) {
+  if (!library) {
+    return;
+  }
+  std::vector<muon_completion_func> completions;
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    completions.swap(library->release_completions);
+  }
+  for (const auto completion : completions) {
+    if (library->runtime_available && library->dispatcher != nullptr) {
+      FireAndForgetOnDispatcher(
+          library->dispatcher,
+          [completion]() { CompleteMuonString(completion, "{}"); });
+    }
+  }
+}
+
+static void TryFinalizeReleasedAdhocLibrary(
+    const std::shared_ptr<AdhocLibrary>& library) {
+  auto should_finalize = false;
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    should_finalize =
+        library->release_requested && library->active_calls == 0 &&
+        !library->closed;
+  }
+  if (!should_finalize) {
+    return;
+  }
+  FinalizeAdhocLibrary(library);
+  CompleteAdhocReleaseWaiters(library);
+}
+
+static void FinishAdhocCall(const std::shared_ptr<AdhocLibrary>& library) {
+  if (!library) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    if (library->active_calls > 0) {
+      library->active_calls -= 1;
+    }
+  }
+  TryFinalizeReleasedAdhocLibrary(library);
+}
+
+static void ReleaseAdhocLibrary(
+    const std::shared_ptr<AdhocLibrary>& library,
+    muon_completion_func completion) {
+  if (!library) {
+    if (completion != nullptr) {
+      CompleteMuonString(completion, "{}");
+    }
+    return;
+  }
+  auto should_finalize = false;
+  auto should_complete = false;
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    library->release_requested = true;
+    if (library->active_calls == 0 && !library->closed) {
+      should_finalize = true;
+      should_complete = completion != nullptr;
+    } else if (library->active_calls > 0 && completion != nullptr) {
+      library->release_completions.push_back(completion);
+    } else if (library->closed) {
+      should_complete = completion != nullptr;
+    }
+  }
+  if (should_finalize) {
+    FinalizeAdhocLibrary(library);
+  }
+  if (should_complete) {
+    CompleteMuonString(completion, "{}");
+  }
 }
 
 static bool CopyBufferView(const muon_buffer_view& data,
@@ -1907,11 +2869,11 @@ static void WaitExecutorProcess(const std::shared_ptr<ExecutorProcess>& process,
       complete_now = true;
     } else if (process->exited) {
       failure_message = process->failure_message;
-    if (failure_message.empty()) {
-      result_json = CreateWaitResultJson(*process);
-    }
-    complete_now = true;
-  } else {
+      if (failure_message.empty()) {
+        result_json = CreateWaitResultJson(*process);
+      }
+      complete_now = true;
+    } else {
       process->wait_completions.push_back(completion);
     }
   }
@@ -1951,6 +2913,207 @@ static void DisposeExecutorProcess(
   if (should_terminate) {
     RequestPlatformTerminate(process);
   }
+}
+
+static bool LoadAdhocLibrary(const LibraryRpcRequest& request,
+                             int renderer_context_id,
+                             std::string* result_json,
+                             std::string* error_message) {
+  auto* runtime = GetExecutorRuntime();
+  if (runtime == nullptr || runtime->shutting_down) {
+    *error_message = "executor runtime is unavailable";
+    return false;
+  }
+  if (renderer_context_id <= 0) {
+    *error_message = "renderer context id is unavailable";
+    return false;
+  }
+  auto* handle = OpenAdhocDynamicLibrary(request.path, error_message);
+  if (handle == nullptr) {
+    return false;
+  }
+
+  auto library = std::make_shared<AdhocLibrary>();
+  library->renderer_context_id = renderer_context_id;
+  library->helpers = runtime->helpers;
+  library->dispatcher = runtime->dispatcher;
+  library->handle = handle;
+  tra_ffic_error traffic_error;
+  if (!tra_ffic_task_queue_init(&library->traffic_queue, nullptr, nullptr)) {
+    CloseAdhocDynamicLibrary(handle);
+    *error_message = "Failed to initialize adhoc tra-ffic queue";
+    return false;
+  }
+  if (!tra_ffic_side_init_pair(&library->caller_side, &library->callee_side,
+                               tra_ffic_task_queue_schedule_callback,
+                               &library->traffic_queue, &traffic_error)) {
+    tra_ffic_task_queue_destroy(&library->traffic_queue);
+    CloseAdhocDynamicLibrary(handle);
+    *error_message = GetExecutorTrafficError(traffic_error);
+    return false;
+  }
+  library->traffic_initialized = true;
+  {
+    std::lock_guard<std::mutex> lock(runtime->mutex);
+    library->library_id = runtime->next_library_id;
+    runtime->next_library_id += 1;
+    runtime->libraries[library->library_id] = library;
+  }
+
+  *result_json = "{\"libraryId\":";
+  *result_json += std::to_string(library->library_id);
+  *result_json += "}";
+  return true;
+}
+
+static bool GetAdhocFunction(const LibraryRpcRequest& request,
+                             std::string* result_json,
+                             std::string* error_message) {
+  const auto library = FindAdhocLibrary(request.library_id);
+  if (!library) {
+    *error_message = "adhoc library handle is unavailable";
+    return false;
+  }
+
+  auto function = std::make_shared<AdhocFunction>();
+  function->name = request.name;
+  function->arg_types = request.arg_types;
+  function->arg_type_names = request.arg_type_names;
+  function->return_type = request.return_type;
+  function->return_type_name = request.return_type_name;
+  function->signature_storage = std::shared_ptr<MuonFunctionSignatureStorage>(
+      CreateMuonFunctionSignatureStorageForAbi(
+          function->arg_types, function->return_type,
+          TRA_FFIC_SIGNATURE_ABI_RETVAL)
+          .release());
+
+  tra_ffic_error traffic_error;
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    if (library->release_requested || library->closed) {
+      *error_message = "adhoc library is released";
+      return false;
+    }
+    auto* symbol = GetAdhocDynamicLibrarySymbol(library->handle, request.name,
+                                                error_message);
+    if (symbol == nullptr) {
+      return false;
+    }
+    if (!tra_ffic_side_create_pure_function_impl(
+            &library->callee_side,
+            GetMuonFunctionSignature(function->signature_storage.get()),
+            reinterpret_cast<tra_ffic_user_function>(symbol),
+            &function->registered_function, &traffic_error)) {
+      *error_message = GetExecutorTrafficError(traffic_error);
+      return false;
+    }
+    function->function_ref.raw = reinterpret_cast<tra_ffic_native_function>(
+        function->registered_function);
+    function->function_ref.owner_side = &library->callee_side;
+    function->function_ref.signature =
+        GetMuonFunctionSignature(function->signature_storage.get());
+    function->function_id = library->next_function_id;
+    library->next_function_id += 1;
+    library->functions[function->function_id] = function;
+  }
+
+  *result_json = "{\"functionId\":";
+  *result_json += std::to_string(function->function_id);
+  *result_json += "}";
+  return true;
+}
+
+static bool BeginAdhocCall(const LibraryRpcRequest& request,
+                           const muon_buffer_view& data,
+                           std::shared_ptr<AdhocLibrary>* library_out,
+                           std::shared_ptr<AdhocFunction>* function_out,
+                           AdhocDecodedArgs* decoded_args,
+                           std::string* error_message) {
+  auto library = FindAdhocLibrary(request.library_id);
+  if (!library) {
+    *error_message = "adhoc library handle is unavailable";
+    return false;
+  }
+  std::shared_ptr<AdhocFunction> function;
+  {
+    std::lock_guard<std::mutex> lock(library->mutex);
+    if (library->release_requested || library->closed) {
+      *error_message = "adhoc library is released";
+      return false;
+    }
+    const auto iterator = library->functions.find(request.function_id);
+    if (iterator == library->functions.end()) {
+      *error_message = "adhoc function handle is unavailable";
+      return false;
+    }
+    function = iterator->second;
+    library->active_calls += 1;
+  }
+
+  if (!DecodeAdhocCallArguments(*function, request.args,
+                                request.buffer_views, data, decoded_args,
+                                error_message)) {
+    FinishAdhocCall(library);
+    return false;
+  }
+  *library_out = std::move(library);
+  *function_out = std::move(function);
+  return true;
+}
+
+static void CompleteAdhocCallOnDispatcher(
+    const std::shared_ptr<AdhocCallState>& state) {
+  const auto library = state->library;
+  if (!library || !library->runtime_available ||
+      library->dispatcher == nullptr || state->completion == nullptr) {
+    return;
+  }
+  if (state->error_message.empty()) {
+    FireAndForgetOnDispatcher(
+        library->dispatcher,
+        [completion = state->completion, result = state->result_json]() {
+          CompleteMuonString(completion, result);
+        });
+  } else {
+    FireAndForgetOnDispatcher(
+        library->dispatcher,
+        [completion = state->completion, message = state->error_message]() {
+          CompleteMuonError(completion, message);
+        });
+  }
+}
+
+static void RunAdhocCallThread(std::shared_ptr<AdhocCallState> state) {
+  tra_ffic_error traffic_error;
+  if (!tra_ffic_call_with_result(
+          &state->library->caller_side, &state->function->function_ref,
+          state->args.values.empty() ? nullptr : state->args.values.data(),
+          static_cast<uint32_t>(state->args.values.size()),
+          CaptureAdhocCallResult, state.get(), &traffic_error)) {
+    state->error_message = GetExecutorTrafficError(traffic_error);
+  }
+  CompleteAdhocCallOnDispatcher(state);
+  FinishAdhocCall(state->library);
+}
+
+static bool StartAdhocCall(const LibraryRpcRequest& request,
+                           const muon_buffer_view& data,
+                           muon_completion_func completion,
+                           std::string* error_message) {
+  auto state = std::make_shared<AdhocCallState>();
+  state->completion = completion;
+  if (!BeginAdhocCall(request, data, &state->library, &state->function,
+                      &state->args, error_message)) {
+    return false;
+  }
+  try {
+    std::thread(RunAdhocCallThread, state).detach();
+  } catch (...) {
+    FinishAdhocCall(state->library);
+    *error_message = "Failed to start adhoc call worker";
+    return false;
+  }
+  return true;
 }
 
 extern "C" void muon_builtin_executor_spawn_rpc(
@@ -2034,6 +3197,70 @@ extern "C" void muon_builtin_executor_spawn_rpc(
   CompleteMuonError(completion, "unsupported executor operation");
 }
 
+extern "C" void muon_builtin_executor_library_rpc(
+    muon_completion_func completion,
+    const char* request_json,
+    muon_buffer_view data,
+    uint32_t renderer_context_id) {
+  if (request_json == nullptr) {
+    CompleteMuonError(completion, "Request JSON is required");
+    return;
+  }
+  yyjson_read_err read_error = {};
+  auto* document = yyjson_read_opts(
+      const_cast<char*>(request_json), std::strlen(request_json),
+      YYJSON_READ_NOFLAG, nullptr, &read_error);
+  if (document == nullptr) {
+    CompleteMuonError(completion, "Request JSON is invalid");
+    return;
+  }
+
+  LibraryRpcRequest request;
+  std::string error_message;
+  std::string result_json;
+  auto started_async_call = false;
+  const auto parsed = ParseLibraryRpcRequestRoot(
+      yyjson_doc_get_root(document), &request, &error_message);
+  if (parsed) {
+    switch (request.operation) {
+      case LibraryRpcOperation::kLoad:
+        if (LoadAdhocLibrary(request, static_cast<int>(renderer_context_id),
+                             &result_json, &error_message)) {
+          CompleteMuonString(completion, result_json);
+        } else {
+          CompleteMuonError(completion, error_message);
+        }
+        break;
+      case LibraryRpcOperation::kGetFunction:
+        if (GetAdhocFunction(request, &result_json, &error_message)) {
+          CompleteMuonString(completion, result_json);
+        } else {
+          CompleteMuonError(completion, error_message);
+        }
+        break;
+      case LibraryRpcOperation::kCall:
+        started_async_call =
+            StartAdhocCall(request, data, completion, &error_message);
+        if (!started_async_call) {
+          CompleteMuonError(completion, error_message);
+        }
+        break;
+      case LibraryRpcOperation::kRelease: {
+        const auto library = RemoveAdhocLibrary(request.library_id);
+        if (!library) {
+          CompleteMuonError(completion, "adhoc library handle is unavailable");
+        } else {
+          ReleaseAdhocLibrary(library, completion);
+        }
+        break;
+      }
+    }
+  } else {
+    CompleteMuonError(completion, error_message);
+  }
+  yyjson_doc_free(document);
+}
+
 bool InitializeMuonBuiltinExecutor(const muon_plugin_helpers* helpers,
                                    cardio::dispatcher* dispatcher,
                                    std::string* error_message) {
@@ -2062,6 +3289,7 @@ bool InitializeMuonBuiltinExecutor(const muon_plugin_helpers* helpers,
 
 void ShutdownMuonBuiltinExecutor() {
   std::vector<std::shared_ptr<ExecutorProcess>> processes;
+  std::vector<std::shared_ptr<AdhocLibrary>> libraries;
   {
     std::lock_guard<std::mutex> runtime_lock(g_executor_runtime_mutex);
     if (!g_executor_runtime) {
@@ -2073,7 +3301,11 @@ void ShutdownMuonBuiltinExecutor() {
       for (const auto& entry : g_executor_runtime->processes) {
         processes.push_back(entry.second);
       }
+      for (const auto& entry : g_executor_runtime->libraries) {
+        libraries.push_back(entry.second);
+      }
       g_executor_runtime->processes.clear();
+      g_executor_runtime->libraries.clear();
     }
     g_executor_runtime.reset();
   }
@@ -2084,10 +3316,18 @@ void ShutdownMuonBuiltinExecutor() {
     }
     DisposeExecutorProcess(process);
   }
+  for (const auto& library : libraries) {
+    {
+      std::lock_guard<std::mutex> lock(library->mutex);
+      library->runtime_available = false;
+    }
+    ReleaseAdhocLibrary(library, nullptr);
+  }
 }
 
 void ReleaseMuonBuiltinExecutorContext(int renderer_context_id) {
   std::vector<std::shared_ptr<ExecutorProcess>> processes;
+  std::vector<std::shared_ptr<AdhocLibrary>> libraries;
   {
     std::lock_guard<std::mutex> runtime_lock(g_executor_runtime_mutex);
     auto* runtime = g_executor_runtime.get();
@@ -2105,9 +3345,26 @@ void ReleaseMuonBuiltinExecutorContext(int renderer_context_id) {
         ++iterator;
       }
     }
+    for (auto iterator = runtime->libraries.begin();
+         iterator != runtime->libraries.end();) {
+      const auto library = iterator->second;
+      if (library->renderer_context_id == renderer_context_id) {
+        libraries.push_back(library);
+        iterator = runtime->libraries.erase(iterator);
+      } else {
+        ++iterator;
+      }
+    }
   }
   for (const auto& process : processes) {
     DisposeExecutorProcess(process);
+  }
+  for (const auto& library : libraries) {
+    {
+      std::lock_guard<std::mutex> lock(library->mutex);
+      library->runtime_available = false;
+    }
+    ReleaseAdhocLibrary(library, nullptr);
   }
 }
 
@@ -2118,13 +3375,22 @@ static const muon_plugin_function_metadata spawn_function = {
     "spawn",
 };
 
+static const muon_plugin_function_metadata library_function = {
+    "__libraryRpc",
+    reinterpret_cast<muon_native_function>(&muon_builtin_executor_library_rpc),
+    {3, library_rpc_args, &type_string},
+    "loadLibrary",
+};
+
 static const muon_plugin_function_metadata* const executor_functions[] = {
     &spawn_function,
+    &library_function,
     nullptr,
 };
 
 static constexpr char executor_setup_script[] = R"JS(
 const __muonExecutorActiveProcesses = new Set();
+const __muonExecutorActiveLibraries = new Set();
 const __muonExecutorEmptyBytes = new Uint8Array(0);
 const __muonExecutorOwnerCallback = () => {};
 const __muonExecutorAsyncDispose =
@@ -2151,6 +3417,128 @@ const __muonExecutorFromBase64 = (source) => {
   }
   return bytes;
 };
+const __muonExecutorPointerBrand =
+  typeof Symbol === "function" ? Symbol.for("muon.nativePointer") : "__muonNativePointer";
+const __muonExecutorType = (name) => Object.freeze({ name });
+const __muonExecutorTypes = Object.freeze({
+  voidType: __muonExecutorType("void"),
+  bool: __muonExecutorType("bool"),
+  int8: __muonExecutorType("int8"),
+  uint8: __muonExecutorType("uint8"),
+  int16: __muonExecutorType("int16"),
+  uint16: __muonExecutorType("uint16"),
+  int32: __muonExecutorType("int32"),
+  uint32: __muonExecutorType("uint32"),
+  int64: __muonExecutorType("int64"),
+  uint64: __muonExecutorType("uint64"),
+  float32: __muonExecutorType("float32"),
+  float64: __muonExecutorType("float64"),
+  stringType: __muonExecutorType("string"),
+  pointer: __muonExecutorType("pointer"),
+  bufferView: __muonExecutorType("bufferView"),
+  usize: __muonExecutorType("usize"),
+});
+const __muonExecutorCreatePointer = (value) => {
+  const text = String(value ?? "0");
+  const pointer = {
+    [__muonExecutorPointerBrand]: true,
+    value: text,
+    toString: () => text,
+    toJSON: () => text,
+  };
+  return Object.freeze(pointer);
+};
+const __muonExecutorNormalizeType = (type) => {
+  if (typeof type === "string") {
+    return { name: type };
+  }
+  if (type && typeof type.name === "string") {
+    return { name: type.name };
+  }
+  throw new TypeError("adhoc type descriptor is invalid");
+};
+const __muonExecutorNormalizeSignature = (signature) => {
+  if (!signature || !Array.isArray(signature.argTypes)) {
+    throw new TypeError("adhoc signature is invalid");
+  }
+  return {
+    argTypes: signature.argTypes.map(__muonExecutorNormalizeType),
+    returnType: __muonExecutorNormalizeType(signature.returnType),
+  };
+};
+const __muonExecutorEncodeInteger = (value) => {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Math.trunc(value) !== value) {
+      throw new TypeError("integer argument must be finite");
+    }
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  throw new TypeError("integer argument must be a number, bigint, or string");
+};
+const __muonExecutorEncodePointer = (value) => {
+  if (value === null || value === undefined) {
+    return "0";
+  }
+  if (typeof value === "object" && value[__muonExecutorPointerBrand]) {
+    return value.value;
+  }
+  return __muonExecutorEncodeInteger(value);
+};
+const __muonExecutorEncodeCall = (signature, args) => {
+  if (args.length !== signature.argTypes.length) {
+    throw new TypeError("Invalid adhoc argument count");
+  }
+  const encoded = [];
+  const chunks = [];
+  const bufferViews = [];
+  let offset = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const name = signature.argTypes[index].name;
+    const value = args[index];
+    if (name === "int64" || name === "uint64" || name === "usize") {
+      encoded.push(__muonExecutorEncodeInteger(value));
+    } else if (name === "pointer") {
+      encoded.push(__muonExecutorEncodePointer(value));
+    } else if (name === "bufferView") {
+      const bytes = __muonExecutorToBytes(value);
+      chunks.push(bytes);
+      bufferViews.push({ argIndex: index, offset, size: bytes.byteLength });
+      offset += bytes.byteLength;
+      encoded.push(null);
+    } else {
+      encoded.push(value);
+    }
+  }
+  const data = new Uint8Array(offset);
+  let writeOffset = 0;
+  for (const chunk of chunks) {
+    data.set(chunk, writeOffset);
+    writeOffset += chunk.byteLength;
+  }
+  return { args: encoded, bufferViews, data };
+};
+const __muonExecutorDecodeAdhocResult = (signature, raw) => {
+  const name = signature.returnType.name;
+  if (name === "void") {
+    return undefined;
+  }
+  if (name === "pointer") {
+    return __muonExecutorCreatePointer(raw.pointer);
+  }
+  if (name === "int64" || name === "uint64" || name === "usize") {
+    return BigInt(raw.value);
+  }
+  if (name === "bufferView") {
+    return __muonExecutorFromBase64(raw.base64);
+  }
+  return raw.value;
+};
 const __muonExecutorRpc = async (
   request,
   data = __muonExecutorEmptyBytes,
@@ -2165,6 +3553,17 @@ const __muonExecutorRpc = async (
       __muonExecutorOwnerCallback,
       onStdout,
       onStderr,
+    ),
+  );
+const __muonExecutorLibraryRpc = async (
+  request,
+  data = __muonExecutorEmptyBytes,
+) =>
+  JSON.parse(
+    await namespace.__libraryRpc(
+      JSON.stringify(request),
+      data,
+      0,
     ),
   );
 const __muonExecutorDecodeWaitResult = (raw) => {
@@ -2285,6 +3684,85 @@ if (isAllowed("spawn")) {
     },
   };
 }
+if (isAllowed("loadLibrary")) {
+  for (const [name, value] of Object.entries(__muonExecutorTypes)) {
+    properties[name] = {
+      enumerable: true,
+      configurable: false,
+      writable: false,
+      value,
+    };
+  }
+  properties.loadLibrary = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async (path) => {
+      const start = await __muonExecutorLibraryRpc({ op: "load", path });
+      const libraryId = start.libraryId;
+      let released = false;
+      const release = async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        __muonExecutorActiveLibraries.delete(handle);
+        await __muonExecutorLibraryRpc({ op: "release", libraryId });
+      };
+      const handle = {
+        getFunction: async (name, signature) => {
+          if (released) {
+            throw new Error("adhoc library is released");
+          }
+          const normalizedSignature =
+            __muonExecutorNormalizeSignature(signature);
+          const loaded = await __muonExecutorLibraryRpc({
+            op: "getFunction",
+            libraryId,
+            name,
+            signature: normalizedSignature,
+          });
+          const functionId = loaded.functionId;
+          return async (...args) => {
+            if (released) {
+              throw new Error("adhoc library is released");
+            }
+            const encoded = __muonExecutorEncodeCall(
+              normalizedSignature,
+              args,
+            );
+            const raw = await __muonExecutorLibraryRpc(
+              {
+                op: "call",
+                libraryId,
+                functionId,
+                args: encoded.args,
+                bufferViews: encoded.bufferViews,
+              },
+              encoded.data,
+            );
+            return __muonExecutorDecodeAdhocResult(
+              normalizedSignature,
+              raw,
+            );
+          };
+        },
+        release,
+      };
+      if (__muonExecutorAsyncDispose !== null) {
+        Object.defineProperty(handle, __muonExecutorAsyncDispose, {
+          configurable: false,
+          enumerable: false,
+          value: release,
+          writable: false,
+        });
+      }
+      Object.freeze(handle);
+      __muonExecutorActiveLibraries.add(handle);
+      return handle;
+    },
+  };
+}
 const __muonExecutorReleaseActiveProcesses = async () => {
   if (__muonExecutorActiveProcesses.size === 0) {
     return;
@@ -2295,9 +3773,20 @@ const __muonExecutorReleaseActiveProcesses = async () => {
     } catch {}
   }
 };
+const __muonExecutorReleaseActiveLibraries = async () => {
+  if (__muonExecutorActiveLibraries.size === 0) {
+    return;
+  }
+  for (const handle of Array.from(__muonExecutorActiveLibraries)) {
+    try {
+      await handle.release();
+    } catch {}
+  }
+};
 if (typeof globalThis.addEventListener === "function") {
   for (const eventName of ["beforeunload", "pagehide", "unload"]) {
     globalThis.addEventListener(eventName, __muonExecutorReleaseActiveProcesses);
+    globalThis.addEventListener(eventName, __muonExecutorReleaseActiveLibraries);
   }
 }
 Object.defineProperties(namespace, properties);

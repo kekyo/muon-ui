@@ -221,11 +221,30 @@ static bool RunTrafficSignatureAbiTest() {
                 "traffic return signature did not use stack argument passing");
 }
 
+static bool RunTrafficRetvalSignatureAbiTest() {
+  const auto storage = CreateMuonFunctionSignatureStorageForAbi(
+      {Type(MUON_TYPE_U64)}, Type(MUON_TYPE_POINTER),
+      TRA_FFIC_SIGNATURE_ABI_RETVAL);
+  const auto* signature = GetMuonFunctionSignature(storage.get());
+  return Expect(signature != nullptr, "retval traffic signature was not created") &&
+         Expect(signature->abi == TRA_FFIC_SIGNATURE_ABI_RETVAL,
+                "traffic signature did not use retval ABI") &&
+         Expect(signature->arg_count == 1,
+                "retval traffic signature changed the argument count") &&
+         Expect(signature->arg_types[0].kind == TRA_FFIC_TYPE_UINT64,
+                "retval traffic argument type is invalid") &&
+         Expect(signature->return_type->kind == TRA_FFIC_TYPE_POINTER,
+                "retval traffic return type is invalid") &&
+         Expect(signature->argument_passing == TRA_FFIC_ARGUMENT_PASSING_STACK,
+                "retval traffic signature did not use stack argument passing");
+}
+
 int main() {
   const auto passed = RunPrimitiveConversionTest() &&
                       RunNestedFunctionRoundtripTest() &&
                       RunUnsupportedTypeTest() &&
                       RunTrafficTypeMappingTest() &&
-                      RunTrafficSignatureAbiTest();
+                      RunTrafficSignatureAbiTest() &&
+                      RunTrafficRetvalSignatureAbiTest();
   return passed ? 0 : 1;
 }

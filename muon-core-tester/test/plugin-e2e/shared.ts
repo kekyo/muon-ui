@@ -46,6 +46,7 @@ import {
   type AppWindow,
   type KeyboardModifier,
   type RemoteAgent,
+  type RemoteManagedProcess,
 } from "agent-rover";
 import { delay } from "async-primitives";
 import {
@@ -131,11 +132,7 @@ const refreshWindowsRemoteStderr = async (
     return;
   }
   try {
-    running.stderr = (
-      await requireWindowsRemoteContext().agent.files.readFile(
-        remote.stderrPath,
-      )
-    ).toString("utf8");
+    running.stderr = await remote.muonProcess.stderrText();
   } catch {
     // The stderr file may not exist before the process writes to it.
   }
@@ -436,13 +433,11 @@ export interface RunningWindowsRemoteMuon {
   cdpPort: number;
   configPath: string;
   configDirectory: string;
-  relayStderrPath: string;
-  relayStdoutPath: string;
+  muonProcess: RemoteManagedProcess;
+  relayProcess: RemoteManagedProcess;
   relayProcessId: number;
   runId: number;
   profilePath: string;
-  stderrPath: string;
-  stdoutPath: string;
   target: string;
 }
 
@@ -1150,17 +1145,13 @@ export const waitForProcessExit = async (
   timeoutMs: number,
 ): Promise<void> => {
   if (running.remoteWindows !== undefined) {
-    const snapshot =
-      await requireWindowsRemoteContext().agent.processes.waitForExit(
-        running.process.pid ?? 0,
-        {
-          intervalMs: 100,
-          timeoutMs,
-        },
-      );
+    const snapshot = await running.remoteWindows.muonProcess.waitForExit({
+      intervalMs: 100,
+      timeoutMs,
+    });
     applyWindowsRemoteProcessSnapshot(
       running.process as WindowsRemoteProcessHandle,
-      snapshot,
+      snapshot.root,
     );
     await refreshWindowsRemoteStderr(running);
     return;
@@ -2309,9 +2300,7 @@ interface StartWindowsRemoteMuonOptions {
 
 interface RunningWindowsRemoteCdpRelay {
   cdpPort: number;
-  processId: number;
-  stderrPath: string;
-  stdoutPath: string;
+  process: RemoteManagedProcess;
 }
 
 interface SelectedWindowsRemoteRuntimeDirectory {
@@ -2405,6 +2394,39 @@ const copyWindowsRemoteArtifactFile = async (
   }
 };
 
+const writeWindowsRemoteArtifactText = async (
+  directory: string,
+  artifactName: string,
+  text: string,
+): Promise<void> => {
+  await nodeWriteFile(nodeJoin(directory, artifactName), text, "utf8");
+};
+
+const writeWindowsRemoteManagedProcessArtifacts = async (
+  directory: string,
+  prefix: string,
+  process: RemoteManagedProcess,
+): Promise<void> => {
+  try {
+    await writeWindowsRemoteArtifactText(
+      directory,
+      `${prefix}-stdout.log`,
+      await process.stdoutText(),
+    );
+  } catch {
+    // The process under test can still hold diagnostic files briefly.
+  }
+  try {
+    await writeWindowsRemoteArtifactText(
+      directory,
+      `${prefix}-stderr.log`,
+      await process.stderrText(),
+    );
+  } catch {
+    // The process under test can still hold diagnostic files briefly.
+  }
+};
+
 const saveWindowsRemoteMuonArtifacts = async (
   running: RunningMuon,
 ): Promise<void> => {
@@ -2439,29 +2461,15 @@ const saveWindowsRemoteMuonArtifacts = async (
     "muon.json",
     remote.configPath,
   );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
+  await writeWindowsRemoteManagedProcessArtifacts(
     artifactDirectory,
-    "muon-stdout.log",
-    remote.stdoutPath,
+    "muon",
+    remote.muonProcess,
   );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
+  await writeWindowsRemoteManagedProcessArtifacts(
     artifactDirectory,
-    "muon-stderr.log",
-    remote.stderrPath,
-  );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
-    artifactDirectory,
-    "relay-stdout.log",
-    remote.relayStdoutPath,
-  );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
-    artifactDirectory,
-    "relay-stderr.log",
-    remote.relayStderrPath,
+    "relay",
+    remote.relayProcess,
   );
   const runtimeDirectory =
     remote.buildType === "release"
@@ -2561,33 +2569,28 @@ const startWindowsRemoteCdpRelay = async (
   cdpPort: number,
 ): Promise<RunningWindowsRemoteCdpRelay> => {
   const context = requireWindowsRemoteContext();
-  const stdoutPath = join(
-    configDirectory,
-    `muon-cdp-relay-${String(runId)}-stdout.log`,
-  );
-  const stderrPath = join(
-    configDirectory,
-    `muon-cdp-relay-${String(runId)}-stderr.log`,
-  );
-  const processInfo = await context.agent.applications.launch({
+  const processInfo = await context.agent.processes.launchManaged({
     arguments: [String(cdpPort), String(MUON_PORT)],
+    captureStderr: true,
+    captureStdout: true,
     createNoWindow: true,
     path: context.runtime.relayExecutablePath,
-    stderrPath,
-    stdoutPath,
     workingDirectory: join(context.runtime.relayExecutablePath, ".."),
   });
-  await delay(250);
-  const snapshot = await context.agent.processes.snapshot(processInfo.id);
-  if (!snapshot.running) {
-    const stderr = (await context.agent.files.exists(stderrPath))
-      ? (await context.agent.files.readFile(stderrPath)).toString("utf8")
-      : "";
-    throw new Error(
-      `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
-    );
+  try {
+    await delay(250);
+    const snapshot = await processInfo.rootSnapshot();
+    if (!snapshot.running) {
+      const stderr = await processInfo.stderrText();
+      throw new Error(
+        `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
+      );
+    }
+    return { cdpPort, process: processInfo };
+  } catch (error) {
+    await processInfo.releaseAsync();
+    throw error;
   }
-  return { cdpPort, processId: processInfo.id, stderrPath, stdoutPath };
 };
 
 const startWindowsRemoteMuon = async (
@@ -2643,22 +2646,27 @@ const startWindowsRemoteMuon = async (
     options.logConfig,
     profilePath,
   );
-  const stderrPath = join(configDirectory, `muon-${String(runId)}-stderr.log`);
-  const stdoutPath = join(configDirectory, `muon-${String(runId)}-stdout.log`);
   const cdpPort = allocateWindowsRemoteCdpPort();
   const relay = await startWindowsRemoteCdpRelay(
     configDirectory,
     runId,
     cdpPort,
   );
-  const launched = await context.agent.applications.launch({
-    arguments: ["-c", configPath],
-    environment: createWindowsRemoteEnvironment(options.environment),
-    path: executable,
-    stderrPath,
-    stdoutPath,
-    workingDirectory: directory,
-  });
+  const launched = await (async (): Promise<RemoteManagedProcess> => {
+    try {
+      return await context.agent.processes.launchManaged({
+        arguments: ["-c", configPath],
+        captureStderr: true,
+        captureStdout: true,
+        environment: createWindowsRemoteEnvironment(options.environment),
+        path: executable,
+        workingDirectory: directory,
+      });
+    } catch (error) {
+      await relay.process.releaseAsync();
+      throw error;
+    }
+  })();
   const running: RunningMuon = {
     pluginDirectory: configDirectory,
     process: createWindowsRemoteProcessHandle(launched.id, launched.name),
@@ -2668,13 +2676,11 @@ const startWindowsRemoteMuon = async (
       cdpPort: relay.cdpPort,
       configDirectory,
       configPath,
-      relayStderrPath: relay.stderrPath,
-      relayStdoutPath: relay.stdoutPath,
-      relayProcessId: relay.processId,
+      muonProcess: launched,
+      relayProcess: relay.process,
+      relayProcessId: relay.process.id,
       runId,
       profilePath,
-      stderrPath,
-      stdoutPath,
       target: context.runtime.target,
     },
     stderr: "",
@@ -3586,7 +3592,7 @@ export const stopMuon = async (
   }
 
   if (running.remoteWindows !== undefined) {
-    const context = requireWindowsRemoteContext();
+    const remote = running.remoteWindows;
     let exited = false;
     if (driver !== undefined) {
       exited = await waitForProcessExitOrTimeout(running, processExitTimeoutMs);
@@ -3594,7 +3600,7 @@ export const stopMuon = async (
 
     if (!exited && running.process.exitCode === null) {
       try {
-        await context.agent.processes.kill(running.process.pid ?? 0);
+        await remote.muonProcess.kill();
       } catch {
         // The process may already be closed.
       }
@@ -3604,16 +3610,35 @@ export const stopMuon = async (
       await waitForProcessExitOrTimeout(running, 3000);
     }
     try {
-      await context.agent.processes.kill(running.remoteWindows.relayProcessId);
+      await remote.relayProcess.kill();
     } catch {
       // The relay may already be closed.
     }
-    await refreshWindowsRemoteStderr(running);
-    await saveWindowsRemoteMuonArtifacts(running);
-    await rm(running.remoteWindows.configDirectory, {
-      recursive: true,
-      force: true,
-    });
+    let cleanupError: unknown = undefined;
+    try {
+      await refreshWindowsRemoteStderr(running);
+      await saveWindowsRemoteMuonArtifacts(running);
+      await rm(remote.configDirectory, {
+        recursive: true,
+        force: true,
+      });
+    } catch (error) {
+      cleanupError = error;
+    } finally {
+      for (const processInfo of [remote.muonProcess, remote.relayProcess]) {
+        try {
+          await processInfo.releaseAsync();
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+    }
+    if (cleanupError instanceof Error) {
+      throw cleanupError;
+    }
+    if (cleanupError !== undefined) {
+      throw new Error(String(cleanupError));
+    }
     return;
   }
 

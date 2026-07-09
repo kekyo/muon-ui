@@ -422,29 +422,6 @@ const createTrayAssetRoot = async (directory: string): Promise<string> => {
   return assetRoot;
 };
 
-const readWindowsRemoteUtf8IfExists = async (path: string): Promise<string> => {
-  const context = getWindowsRemoteContext();
-  if (context === undefined) {
-    throw new Error("Windows remote e2e context is not configured");
-  }
-  if (!(await context.agent.files.exists(path))) {
-    return "";
-  }
-
-  let lastError: unknown = undefined;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      return (await context.agent.files.readFile(path)).toString("utf8");
-    } catch (error) {
-      lastError = error;
-      await delay(250);
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`Failed to read remote file: ${path}`);
-};
-
 const runWindowsPowerShell = async (
   remoteDirectory: string,
   label: string,
@@ -456,13 +433,11 @@ const runWindowsPowerShell = async (
     throw new Error("Windows remote e2e context is not configured");
   }
   const scriptPath = join(remoteDirectory, `${label}.ps1`);
-  const stdoutPath = join(remoteDirectory, `${label}.stdout.log`);
-  const stderrPath = join(remoteDirectory, `${label}.stderr.log`);
   await writeFile(
     scriptPath,
     Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(script)]),
   );
-  const processInfo = await context.agent.applications.launch({
+  const processInfo = await context.agent.processes.launchManaged({
     arguments: [
       "-NoProfile",
       "-Sta",
@@ -471,21 +446,25 @@ const runWindowsPowerShell = async (
       "-File",
       scriptPath,
     ],
+    captureStderr: true,
+    captureStdout: true,
     createNoWindow: true,
     path: windowsPowerShellPath,
-    stderrPath,
-    stdoutPath,
     workingDirectory: remoteDirectory,
   });
-  const snapshot = await context.agent.processes.waitForExit(processInfo.id, {
-    intervalMs: 250,
-    timeoutMs,
-  });
-  return {
-    exitCode: snapshot.exitCode,
-    stderr: await readWindowsRemoteUtf8IfExists(stderrPath),
-    stdout: await readWindowsRemoteUtf8IfExists(stdoutPath),
-  };
+  try {
+    const snapshot = await processInfo.waitForExit({
+      intervalMs: 250,
+      timeoutMs,
+    });
+    return {
+      exitCode: snapshot.root.exitCode,
+      stderr: await processInfo.stderrText(),
+      stdout: await processInfo.stdoutText(),
+    };
+  } finally {
+    await processInfo.releaseAsync();
+  }
 };
 
 const sendWindowsTrayCallback = async (

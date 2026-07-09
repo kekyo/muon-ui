@@ -4,6 +4,14 @@
 // https://github.com/kekyo/muon
 
 import { createHash } from "node:crypto";
+import {
+  mkdtemp as nodeMkdtemp,
+  readFile as nodeReadFile,
+  rm as nodeRm,
+  writeFile as nodeWriteFile,
+} from "node:fs/promises";
+import { tmpdir as nodeTmpdir } from "node:os";
+import { join as nodeJoin } from "node:path";
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
 
@@ -831,12 +839,153 @@ void muon_adhoc_free(void* pointer) {
 }
 `;
 
+const adhocWindowsLibrarySource = `#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>
+
+static char marker_path[4096];
+static int marker_enabled = 0;
+
+static void write_marker(const char* label) {
+  HANDLE file;
+  DWORD written;
+  if (!marker_enabled) {
+    return;
+  }
+  file = CreateFileA(
+      marker_path,
+      FILE_APPEND_DATA,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      NULL,
+      OPEN_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL,
+      NULL);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  WriteFile(file, label, (DWORD)strlen(label), &written, NULL);
+  WriteFile(file, "\\r\\n", 2, &written, NULL);
+  CloseHandle(file);
+}
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+  (void)instance;
+  (void)reserved;
+  if (reason == DLL_PROCESS_DETACH) {
+    write_marker("unloaded");
+  }
+  return TRUE;
+}
+
+__declspec(dllexport) int32_t __cdecl muon_adhoc_set_marker_path(
+    const char* path) {
+  size_t length;
+  if (path == NULL) {
+    return 0;
+  }
+  length = strlen(path);
+  if (length >= sizeof(marker_path)) {
+    return 0;
+  }
+  memcpy(marker_path, path, length + 1);
+  marker_enabled = 1;
+  return 1;
+}
+
+__declspec(dllexport) int32_t __cdecl muon_adhoc_add(
+    int32_t left,
+    int32_t right) {
+  return left + right;
+}
+
+__declspec(dllexport) int32_t __cdecl muon_adhoc_sleep_then_add(
+    int32_t left,
+    int32_t right,
+    uint32_t milliseconds) {
+  Sleep(milliseconds);
+  return left + right;
+}
+
+__declspec(dllexport) void* __cdecl muon_adhoc_alloc(size_t size) {
+  return malloc(size);
+}
+
+__declspec(dllexport) void __cdecl muon_adhoc_free(void* pointer) {
+  free(pointer);
+}
+`;
+
+const adhocWindowsLibraryDefinition = `LIBRARY muon_adhoc_library
+EXPORTS
+  muon_adhoc_set_marker_path
+  muon_adhoc_add
+  muon_adhoc_sleep_then_add
+  muon_adhoc_alloc
+  muon_adhoc_free
+`;
+
 interface AdhocLibraryBuild {
   readonly directory: string;
   readonly libraryPath: string;
   readonly markerPath: string;
   readonly contextMarkerPath: string;
 }
+
+interface AdhocCallValues {
+  readonly addResult: number;
+  readonly callAfterReleaseRejected: boolean;
+  readonly invalidSignatureRejected: boolean;
+  readonly missingLibraryRejected: boolean;
+  readonly missingSymbolRejected: boolean;
+  readonly markerAccepted: number;
+  readonly pointerNonZero: boolean;
+  readonly releaseSettledBeforeCall: boolean;
+  readonly responsivenessElapsed: number;
+  readonly sleepResult: number;
+  readonly ticksDuringCall: number;
+}
+
+const expectAdhocCallValues = (values: AdhocCallValues): void => {
+  const serialized = JSON.stringify(values);
+  const expectEqual = <T>(name: string, actual: T, expected: T): void => {
+    if (actual !== expected) {
+      throw new Error(
+        `Expected ${name} to be ${String(expected)}, got ${String(actual)}: ${serialized}`,
+      );
+    }
+  };
+
+  expectEqual("addResult", values.addResult, 42);
+  expectEqual(
+    "callAfterReleaseRejected",
+    values.callAfterReleaseRejected,
+    true,
+  );
+  expectEqual(
+    "invalidSignatureRejected",
+    values.invalidSignatureRejected,
+    true,
+  );
+  expectEqual("markerAccepted", values.markerAccepted, 1);
+  expectEqual("missingLibraryRejected", values.missingLibraryRejected, true);
+  expectEqual("missingSymbolRejected", values.missingSymbolRejected, true);
+  expectEqual("pointerNonZero", values.pointerNonZero, true);
+  expectEqual(
+    "releaseSettledBeforeCall",
+    values.releaseSettledBeforeCall,
+    false,
+  );
+  expectEqual(
+    "responsivenessElapsed type",
+    typeof values.responsivenessElapsed,
+    "number",
+  );
+  expectEqual("sleepResult", values.sleepResult, 42);
+  expectEqual("ticksDuringCall type", typeof values.ticksDuringCall, "number");
+  expect(values.responsivenessElapsed, serialized).toBeLessThan(900);
+  expect(values.ticksDuringCall, serialized).toBeGreaterThan(0);
+};
 
 const buildAdhocTestLibrary = async (): Promise<AdhocLibraryBuild> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-adhoc-library-"));
@@ -872,6 +1021,66 @@ const buildAdhocTestLibrary = async (): Promise<AdhocLibraryBuild> => {
     markerPath,
     contextMarkerPath,
   };
+};
+
+const buildWindowsAdhocTestLibrary = async (): Promise<AdhocLibraryBuild> => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    throw new Error("Windows remote e2e context is not configured");
+  }
+
+  const compiler =
+    context.runtime.target === "windows-i686"
+      ? "i686-w64-mingw32-gcc"
+      : "x86_64-w64-mingw32-gcc";
+  const localDirectory = await nodeMkdtemp(
+    nodeJoin(nodeTmpdir(), "muon-adhoc-windows-library-"),
+  );
+  let remoteDirectory: string | undefined = undefined;
+  try {
+    const sourcePath = nodeJoin(localDirectory, "muon_adhoc_library.c");
+    const definitionPath = nodeJoin(localDirectory, "muon_adhoc_library.def");
+    const localLibraryPath = nodeJoin(localDirectory, "muon_adhoc_library.dll");
+    await nodeWriteFile(sourcePath, adhocWindowsLibrarySource, "utf8");
+    await nodeWriteFile(definitionPath, adhocWindowsLibraryDefinition, "utf8");
+    await execFileAsync(
+      compiler,
+      [
+        sourcePath,
+        definitionPath,
+        "-std=c99",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-shared",
+        "-o",
+        localLibraryPath,
+      ],
+      { timeout: cdpCommandTimeoutMs },
+    );
+
+    remoteDirectory = await mkdtemp(
+      join(tmpdir(), "muon-adhoc-windows-library-"),
+    );
+    const libraryPath = join(remoteDirectory, "muon_adhoc_library.dll");
+    const markerPath = join(remoteDirectory, "release-marker.txt");
+    const contextMarkerPath = join(remoteDirectory, "context-marker.txt");
+    await writeFile(libraryPath, await nodeReadFile(localLibraryPath));
+    return {
+      directory: remoteDirectory,
+      libraryPath,
+      markerPath,
+      contextMarkerPath,
+    };
+  } catch (error) {
+    if (remoteDirectory !== undefined) {
+      await rm(remoteDirectory, { recursive: true, force: true });
+    }
+    throw error;
+  } finally {
+    await nodeRm(localDirectory, { recursive: true, force: true });
+  }
 };
 
 describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
@@ -2050,19 +2259,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       const library = await buildAdhocTestLibrary();
       try {
         await withMuonEnvironment([], {}, async (driver) => {
-          const values = await driver.evaluate<{
-            addResult: number;
-            callAfterReleaseRejected: boolean;
-            invalidSignatureRejected: boolean;
-            missingLibraryRejected: boolean;
-            missingSymbolRejected: boolean;
-            markerAccepted: number;
-            pointerNonZero: boolean;
-            releaseSettledBeforeCall: boolean;
-            responsivenessElapsed: number;
-            sleepResult: number;
-            ticksDuringCall: number;
-          }>(`(async () => {
+          const values = await driver.evaluate<AdhocCallValues>(`(async () => {
             const delay = (ms) =>
               new Promise((resolve) => setTimeout(resolve, ms));
             const executor = window.muon.executor;
@@ -2184,21 +2381,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             }
           })()`);
 
-          expect(values).toEqual({
-            addResult: 42,
-            callAfterReleaseRejected: true,
-            invalidSignatureRejected: true,
-            markerAccepted: 1,
-            missingLibraryRejected: true,
-            missingSymbolRejected: true,
-            pointerNonZero: true,
-            releaseSettledBeforeCall: false,
-            responsivenessElapsed: expect.any(Number),
-            sleepResult: 42,
-            ticksDuringCall: expect.any(Number),
-          });
-          expect(values.responsivenessElapsed).toBeLessThan(900);
-          expect(values.ticksDuringCall).toBeGreaterThan(0);
+          expectAdhocCallValues(values);
         });
         const marker = await waitForTextFileContent(
           library.markerPath,
@@ -2286,6 +2469,233 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           library.contextMarkerPath,
           (content) => content.includes("unloaded"),
           "ad-hoc library context release marker",
+        );
+        expect(marker).toContain("unloaded");
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+        await rm(library.directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  windowsIt(
+    "loads and calls Windows ad-hoc dynamic library functions without blocking the UI",
+    async () => {
+      const library = await buildWindowsAdhocTestLibrary();
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const values = await driver.evaluate<AdhocCallValues>(`(async () => {
+            const delay = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+            const executor = window.muon.executor;
+            let missingLibraryRejected = false;
+            try {
+              await executor.loadLibrary(${JSON.stringify(
+                `${library.libraryPath}.missing`,
+              )});
+            } catch {
+              missingLibraryRejected = true;
+            }
+
+            const loaded = await executor.loadLibrary(${JSON.stringify(
+              library.libraryPath,
+            )});
+            try {
+              const int32Signature = {
+                argTypes: [executor.int32, executor.int32],
+                returnType: executor.int32,
+              };
+              const add = await loaded.getFunction(
+                "muon_adhoc_add",
+                int32Signature,
+              );
+              const addResult = await add(20, 22);
+              const markerAccepted = await (
+                await loaded.getFunction("muon_adhoc_set_marker_path", {
+                  argTypes: [executor.stringType],
+                  returnType: executor.int32,
+                })
+              )(${JSON.stringify(library.markerPath)});
+              let missingSymbolRejected = false;
+              try {
+                await loaded.getFunction(
+                  "muon_adhoc_missing_symbol",
+                  int32Signature,
+                );
+              } catch {
+                missingSymbolRejected = true;
+              }
+              let invalidSignatureRejected = false;
+              try {
+                await loaded.getFunction("muon_adhoc_add", {
+                  argTypes: [{ name: "not-a-native-type" }],
+                  returnType: executor.int32,
+                });
+              } catch {
+                invalidSignatureRejected = true;
+              }
+
+              const allocate = await loaded.getFunction("muon_adhoc_alloc", {
+                argTypes: [executor.usize],
+                returnType: executor.pointer,
+              });
+              const releasePointer = await loaded.getFunction(
+                "muon_adhoc_free",
+                {
+                  argTypes: [executor.pointer],
+                  returnType: executor.voidType,
+                },
+              );
+              const pointer = await allocate(64n);
+              const pointerNonZero = pointer.toString() !== "0";
+              await releasePointer(pointer);
+
+              const sleepThenAdd = await loaded.getFunction(
+                "muon_adhoc_sleep_then_add",
+                {
+                  argTypes: [executor.int32, executor.int32, executor.uint32],
+                  returnType: executor.int32,
+                },
+              );
+              let ticks = 0;
+              const interval = setInterval(() => {
+                ticks += 1;
+              }, 10);
+              const startedAt = performance.now();
+              const sleepPromise = sleepThenAdd(30, 12, 1000);
+              await delay(100);
+              const responsivenessElapsed = performance.now() - startedAt;
+              const ticksDuringCall = ticks;
+              const releasePromise = loaded.release();
+              let releaseSettled = false;
+              const releaseWatcher = (async () => {
+                await releasePromise;
+                releaseSettled = true;
+              })();
+              await delay(100);
+              const releaseSettledBeforeCall = releaseSettled;
+              const sleepResult = await sleepPromise;
+              await releaseWatcher;
+              clearInterval(interval);
+
+              let callAfterReleaseRejected = false;
+              try {
+                await add(1, 2);
+              } catch {
+                callAfterReleaseRejected = true;
+              }
+
+              return {
+                addResult,
+                callAfterReleaseRejected,
+                invalidSignatureRejected,
+                markerAccepted,
+                missingLibraryRejected,
+                missingSymbolRejected,
+                pointerNonZero,
+                releaseSettledBeforeCall,
+                responsivenessElapsed,
+                sleepResult,
+                ticksDuringCall,
+              };
+            } catch (error) {
+              try {
+                await loaded.release();
+              } catch {}
+              throw error;
+            }
+          })()`);
+
+          expectAdhocCallValues(values);
+        });
+        const marker = await waitForTextFileContent(
+          library.markerPath,
+          (content) => content.includes("unloaded"),
+          "Windows ad-hoc library release marker",
+        );
+        expect(marker).toContain("unloaded");
+      } finally {
+        await rm(library.directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  windowsIt(
+    "unloads Windows ad-hoc dynamic libraries when the V8 context is released",
+    async () => {
+      const library = await buildWindowsAdhocTestLibrary();
+      const running = await startDebugMuon(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        undefined,
+        ["muon.executor.loadLibrary"],
+      );
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon adhoc windows context release</title>",
+          cdpCommandTimeoutMs,
+        );
+        await expect(
+          driver.evaluate(`(async () => {
+            const executor = window.muon.executor;
+            const library = await executor.loadLibrary(${JSON.stringify(
+              library.libraryPath,
+            )});
+            const setMarkerPath = await library.getFunction(
+              "muon_adhoc_set_marker_path",
+              {
+                argTypes: [executor.stringType],
+                returnType: executor.int32,
+              },
+            );
+            const accepted = await setMarkerPath(${JSON.stringify(
+              library.contextMarkerPath,
+            )});
+            globalThis.__muonAdhocContextReleaseLibrary = library;
+            return {
+              accepted,
+              keys: Object.keys(executor).sort(),
+            };
+          })()`),
+        ).resolves.toEqual({
+          accepted: 1,
+          keys: [
+            "bool",
+            "bufferView",
+            "float32",
+            "float64",
+            "int16",
+            "int32",
+            "int64",
+            "int8",
+            "loadLibrary",
+            "pointer",
+            "stringType",
+            "uint16",
+            "uint32",
+            "uint64",
+            "uint8",
+            "usize",
+            "voidType",
+          ],
+        });
+
+        await driver.navigate(
+          "data:text/html,<title>muon adhoc windows context released</title>",
+          cdpCommandTimeoutMs,
+        );
+        const marker = await waitForTextFileContent(
+          library.contextMarkerPath,
+          (content) => content.includes("unloaded"),
+          "Windows ad-hoc library context release marker",
         );
         expect(marker).toContain("unloaded");
       } catch (error) {

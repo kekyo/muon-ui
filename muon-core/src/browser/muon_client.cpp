@@ -1273,7 +1273,6 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   }
   pending_favicon_requests_.erase(browser_id);
   title_bar_icon_update_generations_.erase(browser_id);
-  title_bar_icon_has_png_by_browser_.erase(browser_id);
   title_bar_tray_icons_by_browser_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
@@ -2695,12 +2694,8 @@ bool MuonClient::ResolveTitleBarTrayIconForBrowser(
   if (icon == nullptr || error_message == nullptr) {
     return false;
   }
-  const auto has_current_png =
-      title_bar_icon_has_png_by_browser_.find(browser_id);
   const auto current_icon = title_bar_tray_icons_by_browser_.find(browser_id);
-  if (has_current_png != title_bar_icon_has_png_by_browser_.end() &&
-      has_current_png->second &&
-      current_icon != title_bar_tray_icons_by_browser_.end()) {
+  if (current_icon != title_bar_tray_icons_by_browser_.end()) {
     *icon = current_icon->second;
     return true;
   }
@@ -2715,20 +2710,20 @@ bool MuonClient::ResolveTitleBarTrayIconForBrowser(
 void MuonClient::UpdateFollowingTrayIconForBrowser(
     int browser_id,
     const MuonTitleBarIcon* icon) {
-  if (browser_id <= 0 || icon == nullptr || icon->png_data.empty()) {
-    if (browser_id > 0) {
-      title_bar_icon_has_png_by_browser_[browser_id] = false;
-    }
+  if (browser_id <= 0) {
+    return;
+  }
+  if (icon == nullptr || icon->bitmap == nullptr) {
+    title_bar_tray_icons_by_browser_.erase(browser_id);
     return;
   }
   MuonBrowserTrayIcon tray_icon;
   std::string error_message;
   if (!LoadMuonBrowserTrayIconFromTitleBarIcon(
           *icon, "current title bar icon", &tray_icon, &error_message)) {
-    title_bar_icon_has_png_by_browser_[browser_id] = false;
+    title_bar_tray_icons_by_browser_.erase(browser_id);
     return;
   }
-  title_bar_icon_has_png_by_browser_[browser_id] = true;
   title_bar_tray_icons_by_browser_[browser_id] = tray_icon;
   if (tray_service_) {
     tray_service_->SetFollowingTrayIconForBrowser(browser_id, tray_icon);

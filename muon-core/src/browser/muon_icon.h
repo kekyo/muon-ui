@@ -9,7 +9,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
+
+/**
+ * Decoded runtime icon pixels shared by native icon consumers.
+ *
+ * @remarks Pixels are tightly packed in row-major premultiplied RGBA8888
+ * format. The row stride is `pixel_width * 4`, and the byte length must be
+ * exactly `pixel_width * pixel_height * 4`.
+ */
+struct MuonIconBitmap {
+  /** Premultiplied RGBA8888 pixel bytes. */
+  std::vector<uint8_t> rgba;
+  /** Bitmap width in physical pixels. */
+  int pixel_width = 0;
+  /** Bitmap height in physical pixels. */
+  int pixel_height = 0;
+};
+
+/**
+ * Immutable shared decoded runtime icon bitmap.
+ */
+using MuonIconBitmapPtr = std::shared_ptr<const MuonIconBitmap>;
 
 /**
  * Resource limits enforced before decoding a runtime icon PNG.
@@ -53,6 +75,15 @@ enum class MuonIconPngDecodeResult {
   /** Metadata validation and the guarded decoder both succeeded. */
   Decoded,
 };
+
+/**
+ * Returns whether decoded icon pixels satisfy the production bitmap contract.
+ *
+ * @param bitmap Decoded premultiplied RGBA8888 bitmap.
+ * @return true when dimensions, pixel count, and exact byte length are within
+ * production runtime icon limits.
+ */
+bool IsMuonIconBitmapWithinLimits(const MuonIconBitmap& bitmap);
 
 /**
  * Callback that performs full PNG decoding after metadata validation.

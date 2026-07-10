@@ -193,9 +193,41 @@ static bool TestBoundedByteAppend() {
                 "rejected overflowing append changed bytes");
 }
 
+static MuonIconBitmap CreateBitmap(int pixel_width,
+                                   int pixel_height,
+                                   size_t byte_length) {
+  MuonIconBitmap bitmap;
+  bitmap.pixel_width = pixel_width;
+  bitmap.pixel_height = pixel_height;
+  bitmap.rgba.resize(byte_length);
+  return bitmap;
+}
+
+static bool TestDecodedIconBitmapLimits() {
+  return Expect(IsMuonIconBitmapWithinLimits(CreateBitmap(1, 1, 4)),
+                "valid 1x1 decoded bitmap was rejected") &&
+         Expect(IsMuonIconBitmapWithinLimits(
+                    CreateBitmap(256, 256, 256 * 256 * 4)),
+                "valid 256x256 decoded bitmap was rejected") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(0, 1, 0)),
+                "zero-width decoded bitmap was accepted") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(-1, 1, 4)),
+                "negative-width decoded bitmap was accepted") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(1, 0, 0)),
+                "zero-height decoded bitmap was accepted") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(257, 1, 257 * 4)),
+                "over-width decoded bitmap was accepted") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(1, 257, 257 * 4)),
+                "over-height decoded bitmap was accepted") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(2, 2, 15)),
+                "short decoded bitmap was accepted") &&
+         Expect(!IsMuonIconBitmapWithinLimits(CreateBitmap(2, 2, 17)),
+                "long decoded bitmap was accepted");
+}
+
 int main() {
   return TestIconPngMetadataBudget() && TestProductionIconPngLimits() &&
-                 TestBoundedByteAppend()
+                 TestBoundedByteAppend() && TestDecodedIconBitmapLimits()
              ? 0
              : 1;
 }

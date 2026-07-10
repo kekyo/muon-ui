@@ -16,6 +16,29 @@ static uint32_t ReadBigEndianUint32(const uint8_t* data) {
          static_cast<uint32_t>(data[3]);
 }
 
+bool IsMuonIconBitmapWithinLimits(const MuonIconBitmap& bitmap) {
+  if (bitmap.pixel_width <= 0 || bitmap.pixel_height <= 0) {
+    return false;
+  }
+  const auto width = static_cast<uint64_t>(bitmap.pixel_width);
+  const auto height = static_cast<uint64_t>(bitmap.pixel_height);
+  if (width > kMuonIconPngDecodeLimits.max_width ||
+      height > kMuonIconPngDecodeLimits.max_height) {
+    return false;
+  }
+  const auto pixels = width * height;
+  if (pixels > kMuonIconPngDecodeLimits.max_pixels ||
+      pixels > std::numeric_limits<uint64_t>::max() / 4) {
+    return false;
+  }
+  const auto rgba_bytes = pixels * 4;
+  if (rgba_bytes > kMuonIconPngDecodeLimits.max_rgba_bytes ||
+      rgba_bytes > std::numeric_limits<size_t>::max()) {
+    return false;
+  }
+  return bitmap.rgba.size() == static_cast<size_t>(rgba_bytes);
+}
+
 MuonIconPngDecodeResult DecodeMuonIconPngWithinLimits(
     const uint8_t* data,
     size_t size,

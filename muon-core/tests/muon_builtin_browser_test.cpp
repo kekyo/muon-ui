@@ -1028,14 +1028,13 @@ static bool TestTitleBarIconImageLimits() {
 
   return Expect(!oversized_loaded,
                 "custom title bar accepted an oversized PNG") &&
-         Expect(oversized_icon.png_data.empty() &&
-                    oversized_icon.data_url.empty(),
+         Expect(!oversized_icon.bitmap && oversized_icon.data_url.empty(),
                 "rejected oversized PNG produced icon data") &&
          Expect(oversized_error.find("256x256") != std::string::npos,
                 "oversized PNG did not report the runtime icon limit") &&
          Expect(svg_loaded, "custom title bar rejected a non-PNG image") &&
-         Expect(svg_icon.png_data.empty(),
-                "non-PNG custom title bar image produced native PNG data") &&
+         Expect(!svg_icon.bitmap,
+                "non-PNG custom title bar image produced a native bitmap") &&
          Expect(svg_icon.data_url.rfind("data:image/svg+xml;base64,", 0) == 0,
                 "non-PNG custom title bar image did not retain data URL "
                 "fallback") &&

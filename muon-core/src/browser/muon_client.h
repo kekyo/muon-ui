@@ -563,7 +563,6 @@ class MuonClient final : public CefClient,
   std::map<int, ModalBrowserViewDisableState>
       modal_browser_view_disable_states_;
   std::map<int, uint64_t> title_bar_icon_update_generations_;
-  std::map<int, bool> title_bar_icon_has_png_by_browser_;
   std::map<int, MuonBrowserTrayIcon> title_bar_tray_icons_by_browser_;
   std::map<int, CefRefPtr<CefURLRequest>> pending_favicon_requests_;
   std::map<int, BrowserContextMenuRegistration> context_menu_registrations_;

@@ -423,6 +423,93 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
     });
   });
 
+  it("releases fresh renderer callbacks after completed plugin calls", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          const references = [];
+          for (let index = 0; index < 3; index += 1) {
+            let callback = () => index;
+            references.push(new WeakRef(callback));
+            const isNull = await window.muon.test.functionLifetime.lifetimeNullPointer(callback);
+            if (isNull) {
+              throw new Error("renderer callback unexpectedly decoded as null");
+            }
+            callback = null;
+          }
+          globalThis.__muonCompletedCallbackReferences = references;
+          return references.length;
+        })()`),
+      ).resolves.toBe(3);
+
+      await driver.send("HeapProfiler.collectGarbage");
+      await expect(
+        driver.evaluate(
+          "globalThis.__muonCompletedCallbackReferences.filter((reference) => reference.deref() !== undefined).length",
+        ),
+      ).resolves.toBe(0);
+    });
+  });
+
+  it("releases duplicated renderer callbacks after overlapping calls", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          let callback = () => undefined;
+          globalThis.__muonOverlappingCallbackReference = new WeakRef(callback);
+          const results = await Promise.all([
+            window.muon.test.functionLifetime.lifetimeOverlapSamePointer(
+              callback,
+              callback,
+            ),
+            window.muon.test.functionLifetime.lifetimeOverlapSamePointer(
+              callback,
+              callback,
+            ),
+          ]);
+          callback = null;
+          return results;
+        })()`),
+      ).resolves.toEqual([true, true]);
+
+      await driver.send("HeapProfiler.collectGarbage");
+      await expect(
+        driver.evaluate(
+          "globalThis.__muonOverlappingCallbackReference.deref() === undefined",
+        ),
+      ).resolves.toBe(true);
+    });
+  });
+
+  it("releases renderer callback transfers after argument encoding fails", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          let callback = () => undefined;
+          globalThis.__muonFailedEncodingCallbackReference = new WeakRef(callback);
+          try {
+            await window.muon.test.functionLifetime.lifetimeSamePointer(
+              callback,
+              1,
+            );
+            return "resolved";
+          } catch (error) {
+            return String(error && error.message ? error.message : error);
+          } finally {
+            callback = null;
+          }
+        })()`),
+      ).resolves.toBe("Invalid argument 1: expected function");
+
+      await driver.send("HeapProfiler.collectGarbage");
+      await expect(
+        driver.evaluate(
+          "globalThis.__muonFailedEncodingCallbackReference.deref() === undefined",
+        ),
+      ).resolves.toBe(true);
+    });
+  });
+
   it("marshals null function values", async () => {
     await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
       const values = await driver.evaluate(`(async () => {
@@ -467,20 +554,73 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
   it("lets plugins retain function pointers beyond completion", async () => {
     await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
       const retained = await driver.evaluate(`(async () => {
-        const callback = () => undefined;
+        let callback = () => undefined;
+        globalThis.__muonRetainedCallbackReference = new WeakRef(callback);
         const retained = await window.muon.test.functionLifetime.lifetimeRetain(callback);
         const matched = await window.muon.test.functionLifetime.lifetimeRetainedMatches(callback);
-        await window.muon.test.functionLifetime.lifetimeFinalizeRetained();
-        const asyncRetained = await window.muon.test.functionLifetime.lifetimeAsyncRetainFinalize(
-          callback,
-        );
-        return { retained, matched, asyncRetained };
+        callback = null;
+        return { retained, matched };
       })()`);
+
+      await driver.send("HeapProfiler.collectGarbage");
+      const retainedType = await driver.evaluate(
+        "typeof globalThis.__muonRetainedCallbackReference.deref()",
+      );
+
+      await expect(
+        driver.evaluate(
+          "window.muon.test.functionLifetime.lifetimeFinalizeRetained()",
+        ),
+      ).resolves.toBeUndefined();
+      await driver.send("HeapProfiler.collectGarbage");
+      const released = await driver.evaluate(
+        "globalThis.__muonRetainedCallbackReference.deref() === undefined",
+      );
+
       expect(retained).toEqual({
         retained: true,
         matched: true,
-        asyncRetained: true,
       });
+      expect(retainedType).toBe("function");
+      expect(released).toBe(true);
+
+      await expect(
+        driver.evaluate(`(() => {
+          const callback = () => undefined;
+          return window.muon.test.functionLifetime.lifetimeAsyncRetainFinalize(
+            callback,
+          );
+        })()`),
+      ).resolves.toBe(true);
+    });
+  });
+
+  it("rejects retained callbacks after their renderer context is released", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          const callback = () => undefined;
+          return await window.muon.test.functionLifetime.lifetimeRetain(callback);
+        })()`),
+      ).resolves.toBe(true);
+
+      await driver.navigate(
+        "data:text/html,<title>muon retained callback released</title>",
+        cdpCommandTimeoutMs,
+      );
+      const rejection = await evaluateRejection(
+        driver,
+        "window.muon.test.functionLifetime.lifetimeInvokeRetained()",
+      );
+      await expect(
+        driver.evaluate(
+          "window.muon.test.functionLifetime.lifetimeFinalizeRetained()",
+        ),
+      ).resolves.toBeUndefined();
+      expect([
+        "Renderer function context is unavailable",
+        "Renderer frame is unavailable",
+      ]).toContain(rejection);
     });
   });
 

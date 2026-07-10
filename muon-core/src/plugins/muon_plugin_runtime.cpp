@@ -98,15 +98,58 @@ struct MuonRendererFunctionSource {
   MuonPluginInvocationContext context;
   std::string owner_id;
   std::string source_id;
+  std::string lease_token;
   int renderer_context_id = 0;
   int function_id = 0;
   MuonTypeMetadata function_type;
   muon_native_function function = nullptr;
+  size_t active_bridge_borrows = 0;
+  bool bridge_retain_active = false;
+  bool context_valid = true;
+  bool renderer_lease_active = false;
+};
+
+static void ReleaseMuonRendererFunctionBorrow(
+    MuonRendererFunctionSource* source);
+
+struct MuonRendererFunctionBorrow {
+  MuonRendererFunctionBorrow() = default;
+
+  explicit MuonRendererFunctionBorrow(MuonRendererFunctionSource* source)
+      : source(source) {}
+
+  ~MuonRendererFunctionBorrow() { Reset(); }
+
+  MuonRendererFunctionBorrow(const MuonRendererFunctionBorrow&) = delete;
+  MuonRendererFunctionBorrow& operator=(
+      const MuonRendererFunctionBorrow&) = delete;
+
+  MuonRendererFunctionBorrow(MuonRendererFunctionBorrow&& other) noexcept
+      : source(std::exchange(other.source, nullptr)) {}
+
+  MuonRendererFunctionBorrow& operator=(
+      MuonRendererFunctionBorrow&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      source = std::exchange(other.source, nullptr);
+    }
+    return *this;
+  }
+
+  void Reset() {
+    auto* borrowed_source = std::exchange(source, nullptr);
+    if (borrowed_source != nullptr) {
+      ReleaseMuonRendererFunctionBorrow(borrowed_source);
+    }
+  }
+
+  MuonRendererFunctionSource* source = nullptr;
 };
 
 struct MuonPendingRendererFunctionCall {
   tra_ffic_completion completion = nullptr;
-  MuonRendererFunctionSource source;
+  MuonRendererFunctionSource* source = nullptr;
+  MuonRendererFunctionBorrow source_borrow;
 };
 
 struct muon_shared_buffer {
@@ -126,6 +169,11 @@ struct MuonDecodedArguments {
   std::vector<tra_ffic_value> values;
   std::vector<std::string> string_storage;
   std::shared_ptr<MuonSharedBufferPayload> shared_payload;
+  std::vector<MuonRendererFunctionBorrow> renderer_function_borrows;
+
+  void ResetRendererFunctionBorrows() {
+    renderer_function_borrows.clear();
+  }
 };
 
 struct MuonTrafficCallState {
@@ -186,8 +234,11 @@ struct MuonPluginRuntimeImpl {
   tra_ffic_side plugin_side = {};
   bool traffic_initialized = false;
 
-  std::map<std::string, muon_native_function> renderer_functions_by_source;
-  std::map<std::string, std::vector<std::string>> renderer_source_ids_by_owner;
+  uint64_t next_renderer_source_lease_token = 1;
+  std::map<std::string, MuonRendererFunctionSource*>
+      renderer_functions_by_source;
+  std::map<std::string, std::set<MuonRendererFunctionSource*>>
+      renderer_sources_by_owner;
 
   uint32_t next_renderer_call_id = 1;
   std::map<uint32_t, MuonPendingRendererFunctionCall>
@@ -1265,8 +1316,95 @@ static bool CreateMuonTrafficFunctionRef(
   return true;
 }
 
+static void SendMuonRendererFunctionSourceLeaseMessage(
+    const MuonRendererFunctionSource& source,
+    const char* message_name) {
+  if (!source.context_valid || !source.renderer_lease_active ||
+      !source.context.frame || !source.context.frame->IsValid()) {
+    return;
+  }
+  const auto message = CefProcessMessage::Create(message_name);
+  const auto args = message->GetArgumentList();
+  args->SetSize(3);
+  args->SetInt(0, source.renderer_context_id);
+  args->SetInt(1, source.function_id);
+  args->SetString(2, source.lease_token);
+  source.context.frame->SendProcessMessage(PID_RENDERER, message);
+}
+
+static void ReleaseMuonRendererFunctionBridgeRetainIfIdle(
+    MuonRendererFunctionSource* source) {
+  if (source == nullptr || source->active_bridge_borrows != 0 ||
+      !source->bridge_retain_active) {
+    return;
+  }
+
+  const auto function = source->function;
+  source->bridge_retain_active = false;
+  tra_ffic_error error;
+  (void)tra_ffic_function_release(function, &error);
+}
+
+static void ReleaseMuonRendererFunctionBorrow(
+    MuonRendererFunctionSource* source) {
+  if (source == nullptr || source->active_bridge_borrows == 0) {
+    return;
+  }
+  source->active_bridge_borrows -= 1;
+  ReleaseMuonRendererFunctionBridgeRetainIfIdle(source);
+}
+
+static bool AcquireMuonRendererFunctionBorrow(
+    MuonRendererFunctionSource* source,
+    MuonRendererFunctionBorrow* borrow,
+    std::string* error_message) {
+  if (source == nullptr || borrow == nullptr || error_message == nullptr) {
+    return false;
+  }
+  if (!source->context_valid) {
+    *error_message = "Renderer function context is unavailable";
+    return false;
+  }
+  if (!source->bridge_retain_active) {
+    tra_ffic_error retain_error;
+    if (!tra_ffic_function_retain(source->function, &retain_error)) {
+      *error_message = GetMuonTrafficError(retain_error);
+      return false;
+    }
+    source->bridge_retain_active = true;
+  }
+  source->active_bridge_borrows += 1;
+  *borrow = MuonRendererFunctionBorrow(source);
+  return true;
+}
+
 static void DestroyMuonRendererFunctionSource(void* state) {
-  delete static_cast<MuonRendererFunctionSource*>(state);
+  auto* source = static_cast<MuonRendererFunctionSource*>(state);
+  if (source == nullptr) {
+    return;
+  }
+  auto* impl = source->impl;
+  if (impl != nullptr) {
+    const auto source_iterator =
+        impl->renderer_functions_by_source.find(source->source_id);
+    if (source_iterator != impl->renderer_functions_by_source.end() &&
+        source_iterator->second == source) {
+      impl->renderer_functions_by_source.erase(source_iterator);
+    }
+    const auto owner_iterator =
+        impl->renderer_sources_by_owner.find(source->owner_id);
+    if (owner_iterator != impl->renderer_sources_by_owner.end()) {
+      owner_iterator->second.erase(source);
+      if (owner_iterator->second.empty()) {
+        impl->renderer_sources_by_owner.erase(owner_iterator);
+      }
+    }
+  }
+  SendMuonRendererFunctionSourceLeaseMessage(
+      *source, kMuonRendererFunctionSourceReleaseMessageName);
+  source->renderer_lease_active = false;
+  source->impl = nullptr;
+  delete source;
 }
 
 static uint32_t RegisterMuonFunctionProxyForOwner(
@@ -1474,21 +1612,19 @@ static void HandleMuonTrafficCallResult(void* user_data,
   if (result == nullptr) {
     call_result.success = false;
     call_result.error_message = "muon plugin call did not produce a result";
-    state->completion(call_result);
-    return;
-  }
-  if (!result->success) {
+  } else if (!result->success) {
     call_result.success = false;
     call_result.error_message = result->error_message;
-    state->completion(call_result);
-    return;
+  } else {
+    call_result.success = CopyMuonTrafficValueToPluginValue(
+        state->impl, state->call_id, state->renderer_context_id,
+        result->value, state->return_type, &call_result,
+        &call_result.error_message);
   }
 
-  call_result.success = CopyMuonTrafficValueToPluginValue(
-      state->impl, state->call_id, state->renderer_context_id,
-      result->value, state->return_type, &call_result,
-      &call_result.error_message);
-  state->completion(call_result);
+  auto completion = std::move(state->completion);
+  state->decoded_args.ResetRendererFunctionBorrows();
+  completion(call_result);
 }
 
 static bool SetMuonEncodedValue(
@@ -1578,6 +1714,32 @@ static void CompleteMuonRendererFunctionWithError(
     const std::string& error_message) {
   if (completion != nullptr) {
     completion(nullptr, error_message.c_str());
+  }
+}
+
+static void CompleteMuonPendingRendererFunctionCall(
+    MuonPendingRendererFunctionCall* pending_call,
+    uint32_t call_id,
+    const void* value,
+    const char* error_message) {
+  if (pending_call == nullptr) {
+    return;
+  }
+  auto* source = pending_call->source;
+  if (source != nullptr && source->context_valid && source->context.frame &&
+      source->context.frame->IsValid()) {
+    const auto message =
+        CefProcessMessage::Create(kMuonRendererFunctionResultConsumedMessageName);
+    const auto args = message->GetArgumentList();
+    args->SetSize(2);
+    args->SetInt(0, source->renderer_context_id);
+    args->SetInt(1, static_cast<int>(call_id));
+    source->context.frame->SendProcessMessage(PID_RENDERER, message);
+  }
+
+  const auto completion = std::exchange(pending_call->completion, nullptr);
+  if (completion != nullptr) {
+    completion(value, error_message);
   }
 }
 
@@ -1689,6 +1851,11 @@ static void InvokeMuonRendererFunctionClosure(
         completion, "Renderer function source is unavailable");
     return;
   }
+  if (!source->context_valid) {
+    CompleteMuonRendererFunctionWithError(
+        completion, "Renderer function context is unavailable");
+    return;
+  }
   if (arg_count != source->function_type.function_arg_types.size()) {
     CompleteMuonRendererFunctionWithError(
         completion, "Renderer function argument count is invalid");
@@ -1706,13 +1873,22 @@ static void InvokeMuonRendererFunctionClosure(
     }
   }
 
+  MuonRendererFunctionBorrow source_borrow;
+  if (!AcquireMuonRendererFunctionBorrow(
+          source, &source_borrow, &error_message)) {
+    CompleteMuonRendererFunctionWithError(completion, error_message);
+    return;
+  }
+
   auto call_id = uint32_t{0};
   call_id = source->impl->next_renderer_call_id;
   source->impl->next_renderer_call_id += 1;
   MuonPendingRendererFunctionCall pending_call;
   pending_call.completion = completion;
-  pending_call.source = *source;
-  source->impl->pending_renderer_function_calls[call_id] = pending_call;
+  pending_call.source = source;
+  pending_call.source_borrow = std::move(source_borrow);
+  source->impl->pending_renderer_function_calls.emplace(
+      call_id, std::move(pending_call));
 
   std::vector<MuonSharedBufferSource> shared_sources;
   for (auto index = size_t{0}; index < encoded_values.size(); ++index) {
@@ -1733,7 +1909,7 @@ static void InvokeMuonRendererFunctionClosure(
         source->impl->pending_renderer_function_calls.find(call_id);
     if (pending_iterator !=
         source->impl->pending_renderer_function_calls.end()) {
-      pending_call = pending_iterator->second;
+      pending_call = std::move(pending_iterator->second);
       source->impl->pending_renderer_function_calls.erase(pending_iterator);
     }
     CompleteMuonRendererFunctionWithError(pending_call.completion,
@@ -1741,18 +1917,19 @@ static void InvokeMuonRendererFunctionClosure(
     return;
   }
 
-  CefPostTask(TID_UI, new MuonFunctionTask([impl = source->impl,
-                                             source = *source, call_id,
-                                             encoded_values,
-                                             shared_message]() {
-    if (!source.context.frame || !source.context.frame->IsValid()) {
+  const auto task_posted = CefPostTask(
+      TID_UI, new MuonFunctionTask([impl = source->impl, call_id,
+                                     encoded_values, shared_message]() {
+    auto pending_iterator =
+        impl->pending_renderer_function_calls.find(call_id);
+    if (pending_iterator == impl->pending_renderer_function_calls.end()) {
+      return;
+    }
+    auto* source = pending_iterator->second.source;
+    if (source == nullptr || !source->context_valid ||
+        !source->context.frame || !source->context.frame->IsValid()) {
       MuonPendingRendererFunctionCall pending_call;
-      const auto pending_iterator =
-          impl->pending_renderer_function_calls.find(call_id);
-      if (pending_iterator == impl->pending_renderer_function_calls.end()) {
-        return;
-      }
-      pending_call = pending_iterator->second;
+      pending_call = std::move(pending_iterator->second);
       impl->pending_renderer_function_calls.erase(pending_iterator);
       CompleteMuonRendererFunctionWithError(
           pending_call.completion, "Renderer frame is unavailable");
@@ -1776,7 +1953,7 @@ static void InvokeMuonRendererFunctionClosure(
             impl->pending_renderer_function_calls.end()) {
           return;
         }
-        pending_call = pending_iterator->second;
+        pending_call = std::move(pending_iterator->second);
         impl->pending_renderer_function_calls.erase(pending_iterator);
         CompleteMuonRendererFunctionWithError(pending_call.completion,
                                                encode_error_message);
@@ -1786,17 +1963,29 @@ static void InvokeMuonRendererFunctionClosure(
 
     message_args->SetSize(5);
     message_args->SetInt(0, static_cast<int>(call_id));
-    message_args->SetInt(1, source.renderer_context_id);
-    message_args->SetInt(2, source.function_id);
+    message_args->SetInt(1, source->renderer_context_id);
+    message_args->SetInt(2, source->function_id);
     message_args->SetList(3, encoded_args);
     message_args->SetDictionary(4, CreateMuonTypeMetadataDictionary(
-                                       source.function_type));
+                                       source->function_type));
     if (shared_message.message) {
-      source.context.frame->SendProcessMessage(PID_RENDERER,
-                                               shared_message.message);
+      source->context.frame->SendProcessMessage(PID_RENDERER,
+                                                shared_message.message);
     }
-    source.context.frame->SendProcessMessage(PID_RENDERER, message);
+    source->context.frame->SendProcessMessage(PID_RENDERER, message);
   }));
+  if (!task_posted) {
+    MuonPendingRendererFunctionCall failed_call;
+    const auto pending_iterator =
+        source->impl->pending_renderer_function_calls.find(call_id);
+    if (pending_iterator !=
+        source->impl->pending_renderer_function_calls.end()) {
+      failed_call = std::move(pending_iterator->second);
+      source->impl->pending_renderer_function_calls.erase(pending_iterator);
+    }
+    CompleteMuonRendererFunctionWithError(
+        failed_call.completion, "Failed to dispatch renderer function call");
+  }
 }
 
 static bool GetMuonNumericListValue(CefRefPtr<CefListValue> list,
@@ -1874,20 +2063,51 @@ static bool GetOrCreateMuonRendererFunction(
     int function_id,
     const MuonTypeMetadata& function_type,
     muon_native_function* function,
+    MuonRendererFunctionBorrow* borrow,
     std::string* error_message) {
+  if (impl == nullptr || function == nullptr || borrow == nullptr ||
+      error_message == nullptr) {
+    return false;
+  }
+  if (function_type.type != MUON_TYPE_FUNCTION ||
+      function_type.function_return_type.empty()) {
+    *error_message = "Renderer function type is invalid";
+    return false;
+  }
+
   const auto owner_id = CreateMuonFunctionOwnerId(context, renderer_context_id);
   const auto source_id =
       CreateMuonFunctionSourceId(owner_id, function_id) + ":" +
       CreateMuonTypeCanonicalKey(function_type);
-  const auto existing = impl->renderer_functions_by_source.find(source_id);
+  auto existing = impl->renderer_functions_by_source.find(source_id);
   if (existing != impl->renderer_functions_by_source.end()) {
-    *function = existing->second;
-    return true;
+    auto* source = existing->second;
+    if (source == nullptr) {
+      impl->renderer_functions_by_source.erase(existing);
+    } else if (!source->context_valid) {
+      *error_message = "Renderer function context is unavailable";
+      return false;
+    } else {
+      if (!source->bridge_retain_active) {
+        tra_ffic_error retain_error;
+        if (!tra_ffic_function_retain(source->function, &retain_error)) {
+          impl->renderer_functions_by_source.erase(existing);
+          source = nullptr;
+        } else {
+          source->bridge_retain_active = true;
+        }
+      }
+      if (source != nullptr) {
+        source->active_bridge_borrows += 1;
+        *function = source->function;
+        *borrow = MuonRendererFunctionBorrow(source);
+        return true;
+      }
+    }
   }
 
-  if (function_type.type != MUON_TYPE_FUNCTION ||
-      function_type.function_return_type.empty()) {
-    *error_message = "Renderer function type is invalid";
+  if (!context.frame || !context.frame->IsValid()) {
+    *error_message = "Renderer function frame is unavailable";
     return false;
   }
 
@@ -1897,6 +2117,9 @@ static bool GetOrCreateMuonRendererFunction(
   source->context.renderer_context_id = renderer_context_id;
   source->owner_id = owner_id;
   source->source_id = source_id;
+  source->lease_token =
+      std::to_string(impl->next_renderer_source_lease_token);
+  impl->next_renderer_source_lease_token += 1;
   source->renderer_context_id = renderer_context_id;
   source->function_id = function_id;
   source->function_type = function_type;
@@ -1914,11 +2137,18 @@ static bool GetOrCreateMuonRendererFunction(
     return false;
   }
   source->function = created_function;
-  impl->renderer_functions_by_source[source_id] = created_function;
-  impl->renderer_source_ids_by_owner[owner_id].push_back(source_id);
+  source->active_bridge_borrows = 1;
+  source->bridge_retain_active = true;
+  source->renderer_lease_active = true;
+  auto* borrowed_source = source.get();
+  impl->renderer_functions_by_source[source_id] = borrowed_source;
+  impl->renderer_sources_by_owner[owner_id].insert(borrowed_source);
+  SendMuonRendererFunctionSourceLeaseMessage(
+      *borrowed_source, kMuonRendererFunctionSourceAcquireMessageName);
 
   (void)source.release();
   *function = created_function;
+  *borrow = MuonRendererFunctionBorrow(borrowed_source);
   return true;
 }
 
@@ -1930,6 +2160,7 @@ static bool DecodeMuonPluginArguments(
     std::shared_ptr<MuonSharedBufferPayload> shared_payload,
     MuonDecodedArguments* decoded_args,
     std::string* error_message) {
+  decoded_args->ResetRendererFunctionBorrows();
   if (!encoded_args) {
     *error_message = "Missing argument list";
     return false;
@@ -1944,6 +2175,7 @@ static bool DecodeMuonPluginArguments(
   decoded_args->shared_payload = std::move(shared_payload);
   decoded_args->values.resize(arg_types.size());
   decoded_args->string_storage.reserve(arg_types.size());
+  decoded_args->renderer_function_borrows.reserve(arg_types.size());
   for (auto index = size_t{0}; index < arg_types.size(); ++index) {
     const auto& expected_type = arg_types[index];
     auto& target = decoded_args->values[index];
@@ -2177,11 +2409,15 @@ static bool DecodeMuonPluginArguments(
               encoded_function->GetInt(kMuonFunctionArgumentContextIdKey);
           const auto function_id =
               encoded_function->GetInt(kMuonFunctionArgumentFunctionIdKey);
+          MuonRendererFunctionBorrow renderer_function_borrow;
           if (!GetOrCreateMuonRendererFunction(
                   impl, context, renderer_context_id, function_id,
-                  expected_type, &function, error_message)) {
+                  expected_type, &function, &renderer_function_borrow,
+                  error_message)) {
             return false;
           }
+          decoded_args->renderer_function_borrows.push_back(
+              std::move(renderer_function_borrow));
         }
         target = tra_ffic_value_function(function);
         break;
@@ -2223,6 +2459,7 @@ static void InvokeMuonTrafficFunction(
     result.success = false;
     result.error_message = GetMuonTrafficError(error);
     auto call_completion = std::move(state->completion);
+    state->decoded_args.ResetRendererFunctionBorrows();
     delete state;
     call_completion(result);
   }
@@ -2761,6 +2998,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = error_message;
+    decoded_args.ResetRendererFunctionBorrows();
     completion(result);
     return;
   }
@@ -2770,6 +3008,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = "muon main dispatcher is unavailable";
+    decoded_args.ResetRendererFunctionBorrows();
     completion(result);
     return;
   }
@@ -2823,6 +3062,7 @@ void MuonPluginRuntime::InvokeProxy(
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = error_message;
+    decoded_args.ResetRendererFunctionBorrows();
     completion(result);
     return;
   }
@@ -2832,6 +3072,7 @@ void MuonPluginRuntime::InvokeProxy(
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = "muon main dispatcher is unavailable";
+    decoded_args.ResetRendererFunctionBorrows();
     completion(result);
     return;
   }
@@ -2895,7 +3136,7 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
     return;
   }
   const auto args = message->GetArgumentList();
-  if (!args || args->GetSize() < 3) {
+  if (!args || args->GetSize() < 1) {
     return;
   }
 
@@ -2906,29 +3147,44 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
   if (pending_iterator == impl_->pending_renderer_function_calls.end()) {
     return;
   }
-  pending_call = pending_iterator->second;
+  pending_call = std::move(pending_iterator->second);
   impl_->pending_renderer_function_calls.erase(pending_iterator);
 
+  const auto complete = [&pending_call, call_id](
+                            const void* value,
+                            const char* error_message) {
+    CompleteMuonPendingRendererFunctionCall(
+        &pending_call, call_id, value, error_message);
+  };
   if (pending_call.completion == nullptr) {
+    complete(nullptr, nullptr);
+    return;
+  }
+  if (args->GetSize() < 3) {
+    complete(nullptr, "Renderer function result is invalid");
     return;
   }
   const auto success = args->GetBool(1);
   if (!success) {
     const auto error_message = args->GetString(2).ToString();
-    pending_call.completion(nullptr, error_message.c_str());
+    complete(nullptr, error_message.c_str());
     return;
   }
-  if (pending_call.source.function_type.function_return_type.empty()) {
-    pending_call.completion(nullptr, "Renderer function return type is invalid");
+  if (pending_call.source == nullptr ||
+      pending_call.source->function_type.function_return_type.empty()) {
+    complete(nullptr, "Renderer function return type is invalid");
     return;
   }
 
   const auto& expected_type =
-      pending_call.source.function_type.function_return_type[0];
+      pending_call.source->function_type.function_return_type[0];
   const auto returned_type = static_cast<muon_value_type>(args->GetInt(2));
   if (returned_type != expected_type.type) {
-    pending_call.completion(nullptr,
-                            "Renderer function returned an unexpected type");
+    complete(nullptr, "Renderer function returned an unexpected type");
+    return;
+  }
+  if (expected_type.type != MUON_TYPE_VOID && args->GetSize() < 4) {
+    complete(nullptr, "Renderer function result value is missing");
     return;
   }
 
@@ -2950,126 +3206,119 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
   muon_buffer_view buffer_storage = {nullptr, 0};
   switch (expected_type.type) {
     case MUON_TYPE_VOID:
-      pending_call.completion(nullptr, nullptr);
+      complete(nullptr, nullptr);
       return;
     case MUON_TYPE_BOOL:
       bool_storage = args->GetBool(3);
-      pending_call.completion(&bool_storage, nullptr);
+      complete(&bool_storage, nullptr);
       return;
     case MUON_TYPE_I8:
       i8_storage = static_cast<int8_t>(args->GetInt(3));
-      pending_call.completion(&i8_storage, nullptr);
+      complete(&i8_storage, nullptr);
       return;
     case MUON_TYPE_U8:
       u8_storage = static_cast<uint8_t>(args->GetInt(3));
-      pending_call.completion(&u8_storage, nullptr);
+      complete(&u8_storage, nullptr);
       return;
     case MUON_TYPE_I16:
       i16_storage = static_cast<int16_t>(args->GetInt(3));
-      pending_call.completion(&i16_storage, nullptr);
+      complete(&i16_storage, nullptr);
       return;
     case MUON_TYPE_U16:
       u16_storage = static_cast<uint16_t>(args->GetInt(3));
-      pending_call.completion(&u16_storage, nullptr);
+      complete(&u16_storage, nullptr);
       return;
     case MUON_TYPE_I32:
       i32_storage = args->GetInt(3);
-      pending_call.completion(&i32_storage, nullptr);
+      complete(&i32_storage, nullptr);
       return;
     case MUON_TYPE_U32:
       u32_storage = static_cast<uint32_t>(args->GetDouble(3));
-      pending_call.completion(&u32_storage, nullptr);
+      complete(&u32_storage, nullptr);
       return;
     case MUON_TYPE_I64:
       if (args->GetType(3) != VTYPE_STRING ||
           !ParseMuonInt64(args->GetString(3).ToString(), &i64_storage)) {
-        pending_call.completion(nullptr,
-                                "Renderer function returned a non-i64 value");
+        complete(nullptr, "Renderer function returned a non-i64 value");
         return;
       }
-      pending_call.completion(&i64_storage, nullptr);
+      complete(&i64_storage, nullptr);
       return;
     case MUON_TYPE_U64:
       if (args->GetType(3) != VTYPE_STRING ||
           !ParseMuonUInt64(args->GetString(3).ToString(), &u64_storage)) {
-        pending_call.completion(nullptr,
-                                "Renderer function returned a non-u64 value");
+        complete(nullptr, "Renderer function returned a non-u64 value");
         return;
       }
-      pending_call.completion(&u64_storage, nullptr);
+      complete(&u64_storage, nullptr);
       return;
     case MUON_TYPE_F32:
       f32_storage = static_cast<float>(args->GetDouble(3));
-      pending_call.completion(&f32_storage, nullptr);
+      complete(&f32_storage, nullptr);
       return;
     case MUON_TYPE_F64:
       f64_storage = args->GetDouble(3);
-      pending_call.completion(&f64_storage, nullptr);
+      complete(&f64_storage, nullptr);
       return;
     case MUON_TYPE_POINTER:
       if (!GetMuonPointerListValue(args, 3, &pointer_storage)) {
-        pending_call.completion(
-            nullptr, "Renderer function returned a non-pointer value");
+        complete(nullptr, "Renderer function returned a non-pointer value");
         return;
       }
-      pending_call.completion(&pointer_storage, nullptr);
+      complete(&pointer_storage, nullptr);
       return;
     case MUON_TYPE_STRING:
       if (args->GetType(3) == VTYPE_NULL) {
-        pending_call.completion(&string_pointer, nullptr);
+        complete(&string_pointer, nullptr);
         return;
       }
       string_storage = args->GetString(3).ToString();
       string_pointer = string_storage.c_str();
-      pending_call.completion(&string_pointer, nullptr);
+      complete(&string_pointer, nullptr);
       return;
     case MUON_TYPE_BUFFER_VIEW: {
       if (args->GetType(3) != VTYPE_DICTIONARY || !shared_payload) {
-        pending_call.completion(
-            nullptr, "Renderer function returned a non-buffer_view value");
+        complete(nullptr,
+                 "Renderer function returned a non-buffer_view value");
         return;
       }
       MuonSharedBufferEntry placeholder;
       if (!ReadMuonSharedBufferPlaceholder(args->GetDictionary(3),
                                             &placeholder) ||
           placeholder.value_index != 3) {
-        pending_call.completion(
-            nullptr, "Renderer function returned an invalid buffer_view value");
+        complete(nullptr,
+                 "Renderer function returned an invalid buffer_view value");
         return;
       }
       MuonSharedBufferEntry entry;
       if (!FindMuonSharedBufferEntry(*shared_payload, 3, &entry) ||
           entry.offset != placeholder.offset ||
           entry.size != placeholder.size) {
-        pending_call.completion(
-            nullptr, "Renderer function buffer_view payload is missing");
+        complete(nullptr, "Renderer function buffer_view payload is missing");
         return;
       }
       buffer_storage.data = GetMuonSharedBufferEntryData(*shared_payload,
                                                           entry);
       buffer_storage.size = static_cast<uintptr_t>(entry.size);
       if (entry.size > 0 && buffer_storage.data == nullptr) {
-        pending_call.completion(
-            nullptr, "Renderer function buffer_view payload is invalid");
+        complete(nullptr, "Renderer function buffer_view payload is invalid");
         return;
       }
-      pending_call.completion(&buffer_storage, nullptr);
+      complete(&buffer_storage, nullptr);
       return;
     }
     case MUON_TYPE_FUNCTION: {
       if (args->GetType(3) == VTYPE_NULL) {
-        pending_call.completion(&function_storage, nullptr);
+        complete(&function_storage, nullptr);
         return;
       }
       if (args->GetType(3) != VTYPE_DICTIONARY) {
-        pending_call.completion(nullptr,
-                                "Renderer function result is not a function");
+        complete(nullptr, "Renderer function result is not a function");
         return;
       }
       const auto encoded_function = args->GetDictionary(3);
       if (!encoded_function) {
-        pending_call.completion(nullptr,
-                                "Renderer function result is invalid");
+        complete(nullptr, "Renderer function result is invalid");
         return;
       }
       if (encoded_function->HasKey(kMuonFunctionArgumentProxyIdKey)) {
@@ -3078,19 +3327,17 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
             encoded_function->GetInt(kMuonFunctionArgumentProxyIdKey));
         if (!TryGetMuonFunctionProxy(impl_.get(), proxy_id, &proxy) ||
             !AreEqualMuonTypes(proxy.function_type, expected_type)) {
-          pending_call.completion(nullptr,
-                                  "Renderer returned an unknown function proxy");
+          complete(nullptr, "Renderer returned an unknown function proxy");
           return;
         }
         function_storage = proxy.function;
-        pending_call.completion(&function_storage, nullptr);
+        complete(&function_storage, nullptr);
         return;
       }
 
       if (!encoded_function->HasKey(kMuonFunctionArgumentContextIdKey) ||
           !encoded_function->HasKey(kMuonFunctionArgumentFunctionIdKey)) {
-        pending_call.completion(nullptr,
-                                "Renderer function result is invalid");
+        complete(nullptr, "Renderer function result is invalid");
         return;
       }
       const auto renderer_context_id =
@@ -3098,17 +3345,20 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
       const auto function_id =
           encoded_function->GetInt(kMuonFunctionArgumentFunctionIdKey);
       std::string error_message;
+      MuonRendererFunctionBorrow renderer_function_borrow;
       if (!GetOrCreateMuonRendererFunction(
-              impl_.get(), pending_call.source.context, renderer_context_id,
-              function_id, expected_type, &function_storage, &error_message)) {
-        pending_call.completion(nullptr, error_message.c_str());
+              impl_.get(), pending_call.source->context, renderer_context_id,
+              function_id, expected_type, &function_storage,
+              &renderer_function_borrow, &error_message)) {
+        complete(nullptr, error_message.c_str());
         return;
       }
-      pending_call.completion(&function_storage, nullptr);
+      complete(&function_storage, nullptr);
+      renderer_function_borrow.Reset();
       return;
     }
     default:
-      pending_call.completion(nullptr, "Unsupported renderer return type");
+      complete(nullptr, "Unsupported renderer return type");
       return;
   }
 }
@@ -3120,24 +3370,50 @@ void MuonPluginRuntime::ReleaseFunctionContext(
   ReleaseMuonBuiltinExecutorContext(renderer_context_id);
   const auto owner_id = CreateMuonFunctionOwnerId(context,
                                                    renderer_context_id);
-  std::vector<std::string> source_ids;
+  std::vector<MuonRendererFunctionSource*> sources;
   const auto owner_iterator =
-      impl_->renderer_source_ids_by_owner.find(owner_id);
-  if (owner_iterator != impl_->renderer_source_ids_by_owner.end()) {
-    source_ids = owner_iterator->second;
-    impl_->renderer_source_ids_by_owner.erase(owner_iterator);
+      impl_->renderer_sources_by_owner.find(owner_id);
+  if (owner_iterator != impl_->renderer_sources_by_owner.end()) {
+    sources.assign(owner_iterator->second.begin(),
+                   owner_iterator->second.end());
+    impl_->renderer_sources_by_owner.erase(owner_iterator);
   }
-  for (const auto& source_id : source_ids) {
-    muon_native_function function = nullptr;
-    const auto source_iterator =
-        impl_->renderer_functions_by_source.find(source_id);
-    if (source_iterator == impl_->renderer_functions_by_source.end()) {
+
+  for (auto* source : sources) {
+    if (source == nullptr) {
       continue;
     }
-    function = source_iterator->second;
-    impl_->renderer_functions_by_source.erase(source_iterator);
-    tra_ffic_error error;
-    (void)tra_ffic_function_release(function, &error);
+    source->context_valid = false;
+    source->renderer_lease_active = false;
+    source->context.frame = nullptr;
+    const auto source_iterator =
+        impl_->renderer_functions_by_source.find(source->source_id);
+    if (source_iterator != impl_->renderer_functions_by_source.end() &&
+        source_iterator->second == source) {
+      impl_->renderer_functions_by_source.erase(source_iterator);
+    }
+  }
+
+  std::vector<MuonPendingRendererFunctionCall> pending_calls;
+  auto pending_iterator = impl_->pending_renderer_function_calls.begin();
+  while (pending_iterator != impl_->pending_renderer_function_calls.end()) {
+    auto* source = pending_iterator->second.source;
+    if (source == nullptr || source->owner_id != owner_id) {
+      ++pending_iterator;
+      continue;
+    }
+    pending_calls.push_back(std::move(pending_iterator->second));
+    pending_iterator =
+        impl_->pending_renderer_function_calls.erase(pending_iterator);
+  }
+
+  for (auto* source : sources) {
+    ReleaseMuonRendererFunctionBridgeRetainIfIdle(source);
+  }
+  for (auto& pending_call : pending_calls) {
+    CompleteMuonRendererFunctionWithError(
+        pending_call.completion, "Renderer function context was released");
+    pending_call.completion = nullptr;
   }
 
   std::vector<uint32_t> proxy_ids;

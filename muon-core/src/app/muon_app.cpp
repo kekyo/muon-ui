@@ -507,6 +507,12 @@ static int GetMuonResultContextId(CefRefPtr<CefProcessMessage> message) {
       args->GetSize() >= 2) {
     return args->GetInt(1);
   }
+  if ((message_name == kMuonRendererFunctionSourceAcquireMessageName ||
+       message_name == kMuonRendererFunctionSourceReleaseMessageName ||
+       message_name == kMuonRendererFunctionResultConsumedMessageName) &&
+      args->GetSize() >= 1) {
+    return args->GetInt(0);
+  }
   return 0;
 }
 
@@ -898,7 +904,9 @@ void MuonApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
   const auto args = message->GetArgumentList();
   args->SetSize(1);
   args->SetInt(0, handler_iterator->second->GetContextId());
-  const auto target_frame = browser ? browser->GetMainFrame() : frame;
+  const auto target_frame = frame ? frame
+                                  : browser ? browser->GetMainFrame()
+                                            : nullptr;
   if (target_frame) {
     target_frame->SendProcessMessage(PID_BROWSER, message);
   }
@@ -922,7 +930,10 @@ bool MuonApp::OnProcessMessageReceived(
   if (message_name != kMuonPluginResultSharedMessageName &&
       message_name != kMuonPluginResultMessageName &&
       message_name != kMuonRendererFunctionCallSharedMessageName &&
-      message_name != kMuonRendererFunctionCallMessageName) {
+      message_name != kMuonRendererFunctionCallMessageName &&
+      message_name != kMuonRendererFunctionSourceAcquireMessageName &&
+      message_name != kMuonRendererFunctionSourceReleaseMessageName &&
+      message_name != kMuonRendererFunctionResultConsumedMessageName) {
     return false;
   }
   const auto context_id = GetMuonResultContextId(message);
@@ -942,6 +953,18 @@ bool MuonApp::OnProcessMessageReceived(
   }
   if (message_name == kMuonRendererFunctionCallMessageName) {
     return handler_iterator->second->HandleRendererFunctionCallMessage(message);
+  }
+  if (message_name == kMuonRendererFunctionSourceAcquireMessageName) {
+    return handler_iterator->second
+        ->HandleRendererFunctionSourceAcquireMessage(message);
+  }
+  if (message_name == kMuonRendererFunctionSourceReleaseMessageName) {
+    return handler_iterator->second
+        ->HandleRendererFunctionSourceReleaseMessage(message);
+  }
+  if (message_name == kMuonRendererFunctionResultConsumedMessageName) {
+    return handler_iterator->second
+        ->HandleRendererFunctionResultConsumedMessage(message);
   }
   return false;
 }

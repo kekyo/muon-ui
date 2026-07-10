@@ -14,9 +14,13 @@
 
 static const muon_plugin_helpers* helper_table = nullptr;
 static muon_native_function retained_function = nullptr;
+static muon_completion_func pending_overlap_completion = nullptr;
+static muon_native_function pending_overlap_function = nullptr;
+static bool pending_overlap_arguments_match = false;
 
 using FunctionToFunction = void (*)(muon_completion_func,
                                     muon_native_function);
+using VoidFunction = void (*)(muon_completion_func);
 
 static void complete_bool(muon_completion_func comp, bool value) {
   const auto result = value;
@@ -52,6 +56,28 @@ extern "C" void lifetime_async_same_pointer(muon_completion_func comp,
   schedule_async(comp, [comp, first, second]() {
     complete_bool(comp, first != nullptr && first == second);
   });
+}
+
+extern "C" void lifetime_overlap_same_pointer(muon_completion_func comp,
+                                               muon_native_function first,
+                                               muon_native_function second) {
+  const auto arguments_match = first != nullptr && first == second;
+  if (pending_overlap_completion == nullptr) {
+    pending_overlap_completion = comp;
+    pending_overlap_function = first;
+    pending_overlap_arguments_match = arguments_match;
+    return;
+  }
+
+  const auto previous_completion = pending_overlap_completion;
+  const auto calls_match = pending_overlap_arguments_match &&
+                           arguments_match &&
+                           pending_overlap_function == first;
+  pending_overlap_completion = nullptr;
+  pending_overlap_function = nullptr;
+  pending_overlap_arguments_match = false;
+  complete_bool(previous_completion, calls_match);
+  complete_bool(comp, calls_match);
 }
 
 extern "C" void lifetime_null_pointer(muon_completion_func comp,
@@ -90,6 +116,14 @@ extern "C" void lifetime_retained_matches(muon_completion_func comp,
                                            muon_native_function function) {
   complete_bool(comp, retained_function != nullptr &&
                           retained_function == function);
+}
+
+extern "C" void lifetime_invoke_retained(muon_completion_func comp) {
+  if (retained_function == nullptr) {
+    comp(nullptr, "retained function is unavailable");
+    return;
+  }
+  reinterpret_cast<VoidFunction>(retained_function)(comp);
 }
 
 extern "C" void lifetime_finalize_retained(muon_completion_func comp) {
@@ -183,6 +217,12 @@ static const muon_plugin_function_metadata lifetime_functions[] = {
         nullptr,
     },
     {
+        "lifetimeOverlapSamePointer",
+        reinterpret_cast<muon_native_function>(&lifetime_overlap_same_pointer),
+        {2, two_function_args, &type_bool},
+        nullptr,
+    },
+    {
         "lifetimeNullPointer",
         reinterpret_cast<muon_native_function>(&lifetime_null_pointer),
         {1, one_function_arg, &type_bool},
@@ -213,6 +253,12 @@ static const muon_plugin_function_metadata lifetime_functions[] = {
         nullptr,
     },
     {
+        "lifetimeInvokeRetained",
+        reinterpret_cast<muon_native_function>(&lifetime_invoke_retained),
+        {0, nullptr, &type_void},
+        nullptr,
+    },
+    {
         "lifetimeFinalizeRetained",
         reinterpret_cast<muon_native_function>(&lifetime_finalize_retained),
         {0, nullptr, &type_void},
@@ -238,6 +284,8 @@ static const muon_plugin_function_metadata* const lifetime_functions_pointers[] 
     &lifetime_functions[7],
     &lifetime_functions[8],
     &lifetime_functions[9],
+    &lifetime_functions[10],
+    &lifetime_functions[11],
     nullptr,
 };
 
@@ -262,5 +310,8 @@ extern "C" const muon_plugin_metadata* muon_init_plugin(
     const muon_plugin_init_context* context) {
   helper_table = context == nullptr ? nullptr : context->helpers;
   retained_function = nullptr;
+  pending_overlap_completion = nullptr;
+  pending_overlap_function = nullptr;
+  pending_overlap_arguments_match = false;
   return &lifetime_metadata;
 }

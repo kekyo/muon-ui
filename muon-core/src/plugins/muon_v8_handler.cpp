@@ -309,6 +309,52 @@ std::string CreateMuonV8FunctionName(uint32_t function_id) {
   return "__muon_function_" + std::to_string(function_id);
 }
 
+MuonV8Handler::FunctionTransfers::FunctionTransfers(MuonV8Handler* owner)
+    : owner(owner) {}
+
+MuonV8Handler::FunctionTransfers::~FunctionTransfers() {
+  Reset();
+}
+
+MuonV8Handler::FunctionTransfers::FunctionTransfers(
+    FunctionTransfers&& other) noexcept
+    : owner(other.owner), function_ids(std::move(other.function_ids)) {
+  other.owner = nullptr;
+  other.function_ids.clear();
+}
+
+MuonV8Handler::FunctionTransfers&
+MuonV8Handler::FunctionTransfers::operator=(
+    FunctionTransfers&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  Reset();
+  owner = other.owner;
+  function_ids = std::move(other.function_ids);
+  other.owner = nullptr;
+  other.function_ids.clear();
+  return *this;
+}
+
+void MuonV8Handler::FunctionTransfers::Add(int function_id) {
+  function_ids.push_back(function_id);
+}
+
+void MuonV8Handler::FunctionTransfers::Reset() {
+  if (owner != nullptr) {
+    for (const auto function_id : function_ids) {
+      owner->ReleaseFunctionTransfer(function_id);
+    }
+  }
+  owner = nullptr;
+  function_ids.clear();
+}
+
+bool MuonV8Handler::FunctionTransfers::Empty() const {
+  return function_ids.empty();
+}
+
 MuonV8Handler::MuonV8Handler(std::vector<MuonFunctionMetadata> functions,
                                CefRefPtr<CefV8Context> context)
     : functions_(std::move(functions)),
@@ -409,9 +455,11 @@ bool MuonV8Handler::Execute(const CefString& name,
   next_call_id_ += 1;
   const auto encoded_args = CefListValue::Create();
   std::vector<MuonSharedBufferSource> shared_sources;
+  FunctionTransfers function_transfers(this);
   std::string error_message;
   if (!ValidateAndEncodeArguments(function_name, arg_types, call_arguments,
                                   encoded_args, &shared_sources,
+                                  &function_transfers,
                                   &error_message)) {
     RejectPromise(promise, error_message);
     return true;
@@ -449,7 +497,8 @@ bool MuonV8Handler::Execute(const CefString& name,
   PendingPromise pending_promise;
   pending_promise.promise = promise;
   pending_promise.return_type = return_type;
-  pending_promises_[call_id] = pending_promise;
+  pending_promise.function_transfers = std::move(function_transfers);
+  pending_promises_.emplace(call_id, std::move(pending_promise));
 
   const auto message = CefProcessMessage::Create(
       is_proxy_call ? kMuonPluginProxyCallMessageName
@@ -497,7 +546,7 @@ bool MuonV8Handler::HandleResultMessage(CefRefPtr<CefProcessMessage> message) {
     if (pending_payload.has_error) {
       const auto pending_iterator = pending_promises_.find(call_id);
       if (pending_iterator != pending_promises_.end()) {
-        const auto pending_promise = pending_iterator->second;
+        auto pending_promise = std::move(pending_iterator->second);
         pending_promises_.erase(pending_iterator);
         if (context_ && context_->IsValid() && context_->Enter()) {
           pending_promise.promise->RejectPromise(pending_payload.error_message);
@@ -530,7 +579,7 @@ bool MuonV8Handler::HandleResultSharedMessage(
     if (!decoded) {
       const auto pending_iterator = pending_promises_.find(call_id);
       if (pending_iterator != pending_promises_.end()) {
-        const auto pending_promise = pending_iterator->second;
+        auto pending_promise = std::move(pending_iterator->second);
         pending_promises_.erase(pending_iterator);
         if (context_ && context_->IsValid() && context_->Enter()) {
           pending_promise.promise->RejectPromise(error_message);
@@ -563,7 +612,7 @@ bool MuonV8Handler::ResolvePluginResultMessage(
     return true;
   }
 
-  const auto pending_promise = pending_iterator->second;
+  auto pending_promise = std::move(pending_iterator->second);
   pending_promises_.erase(pending_iterator);
 
   if (!context_ || !context_->IsValid() || !context_->Enter()) {
@@ -617,10 +666,12 @@ void MuonV8Handler::RejectAllPendingPromises() {
 
 void MuonV8Handler::ReleaseFunctionReferences() {
   CEF_REQUIRE_RENDERER_THREAD();
+  pending_renderer_function_result_transfers_.clear();
   function_references_.clear();
   proxy_functions_by_name_.clear();
   pending_renderer_function_call_messages_.clear();
   pending_renderer_function_call_payloads_.clear();
+  context_ = nullptr;
 }
 
 int MuonV8Handler::GetContextId() const {
@@ -637,6 +688,7 @@ bool MuonV8Handler::ValidateAndEncodeArguments(
     const CefV8ValueList& arguments,
     CefRefPtr<CefListValue> encoded_args,
     std::vector<MuonSharedBufferSource>* shared_sources,
+    FunctionTransfers* function_transfers,
     std::string* error_message) {
   if (arguments.size() != arg_types.size()) {
     *error_message = "Invalid argument count for " + function_name;
@@ -815,7 +867,8 @@ bool MuonV8Handler::ValidateAndEncodeArguments(
           return false;
         }
         auto encoded_function = CefDictionaryValue::Create();
-        if (!EncodeFunctionArgument(expected_type, argument, encoded_function)) {
+        if (!EncodeFunctionArgument(expected_type, argument, encoded_function,
+                                    function_transfers)) {
           *error_message = "Invalid argument " + std::to_string(index) +
                            ": function type mismatch";
           return false;
@@ -850,7 +903,8 @@ bool MuonV8Handler::ValidateAndEncodeArguments(
 bool MuonV8Handler::EncodeFunctionArgument(
     const MuonTypeMetadata& expected_type,
     CefRefPtr<CefV8Value> argument,
-    CefRefPtr<CefDictionaryValue> encoded_function) {
+    CefRefPtr<CefDictionaryValue> encoded_function,
+    FunctionTransfers* function_transfers) {
   for (const auto& reference : function_references_) {
     if (reference.plugin_proxy && reference.function &&
         reference.function->IsSame(argument)) {
@@ -870,7 +924,8 @@ bool MuonV8Handler::EncodeFunctionArgument(
     }
   }
 
-  const auto function_id = GetOrCreateFunctionId(argument);
+  const auto function_id =
+      AcquireFunctionTransfer(argument, function_transfers);
   encoded_function->SetInt(kMuonFunctionArgumentContextIdKey, context_id_);
   encoded_function->SetInt(kMuonFunctionArgumentFunctionIdKey, function_id);
   encoded_function->SetString(kMuonFunctionArgumentTypeKey,
@@ -886,10 +941,14 @@ void MuonV8Handler::RejectPromise(CefRefPtr<CefV8Value> promise,
   promise->RejectPromise(error_message);
 }
 
-int MuonV8Handler::GetOrCreateFunctionId(CefRefPtr<CefV8Value> function) {
-  for (const auto& reference : function_references_) {
+int MuonV8Handler::AcquireFunctionTransfer(
+    CefRefPtr<CefV8Value> function,
+    FunctionTransfers* function_transfers) {
+  for (auto& reference : function_references_) {
     if (!reference.plugin_proxy && reference.function &&
         reference.function->IsSame(function)) {
+      reference.pending_transfer_count += 1;
+      function_transfers->Add(reference.id);
       return reference.id;
     }
   }
@@ -898,8 +957,35 @@ int MuonV8Handler::GetOrCreateFunctionId(CefRefPtr<CefV8Value> function) {
   reference.id = next_function_id_;
   next_function_id_ += 1;
   reference.function = function;
+  reference.pending_transfer_count = 1;
+  function_transfers->Add(reference.id);
   function_references_.push_back(reference);
   return reference.id;
+}
+
+void MuonV8Handler::ReleaseFunctionTransfer(int function_id) {
+  for (auto& reference : function_references_) {
+    if (!reference.plugin_proxy && reference.id == function_id) {
+      if (reference.pending_transfer_count > 0) {
+        reference.pending_transfer_count -= 1;
+      }
+      break;
+    }
+  }
+  ReleaseFunctionReferenceIfUnused(function_id);
+}
+
+void MuonV8Handler::ReleaseFunctionReferenceIfUnused(int function_id) {
+  for (auto iterator = function_references_.begin();
+       iterator != function_references_.end(); ++iterator) {
+    if (!iterator->plugin_proxy && iterator->id == function_id) {
+      if (iterator->pending_transfer_count == 0 &&
+          iterator->source_lease_tokens.empty()) {
+        function_references_.erase(iterator);
+      }
+      return;
+    }
+  }
 }
 
 bool MuonV8Handler::HandleRendererFunctionCallMessage(
@@ -967,6 +1053,74 @@ bool MuonV8Handler::HandleRendererFunctionCallSharedMessage(
   pending_payload.error_message = error_message;
   pending_payload.has_error = !decoded;
   pending_renderer_function_call_payloads_[call_id] = pending_payload;
+  return true;
+}
+
+bool MuonV8Handler::HandleRendererFunctionSourceAcquireMessage(
+    CefRefPtr<CefProcessMessage> message) {
+  CEF_REQUIRE_RENDERER_THREAD();
+  if (!message || message->GetName().ToString() !=
+                      kMuonRendererFunctionSourceAcquireMessageName) {
+    return false;
+  }
+  const auto args = message->GetArgumentList();
+  if (!args || args->GetSize() < 3 || args->GetType(0) != VTYPE_INT ||
+      args->GetType(1) != VTYPE_INT || args->GetType(2) != VTYPE_STRING ||
+      args->GetInt(0) != context_id_) {
+    return true;
+  }
+  const auto function_id = args->GetInt(1);
+  const auto lease_token = args->GetString(2).ToString();
+  if (lease_token.empty()) {
+    return true;
+  }
+  for (auto& reference : function_references_) {
+    if (!reference.plugin_proxy && reference.id == function_id) {
+      reference.source_lease_tokens.insert(lease_token);
+      break;
+    }
+  }
+  return true;
+}
+
+bool MuonV8Handler::HandleRendererFunctionSourceReleaseMessage(
+    CefRefPtr<CefProcessMessage> message) {
+  CEF_REQUIRE_RENDERER_THREAD();
+  if (!message || message->GetName().ToString() !=
+                      kMuonRendererFunctionSourceReleaseMessageName) {
+    return false;
+  }
+  const auto args = message->GetArgumentList();
+  if (!args || args->GetSize() < 3 || args->GetType(0) != VTYPE_INT ||
+      args->GetType(1) != VTYPE_INT || args->GetType(2) != VTYPE_STRING ||
+      args->GetInt(0) != context_id_) {
+    return true;
+  }
+  const auto function_id = args->GetInt(1);
+  const auto lease_token = args->GetString(2).ToString();
+  for (auto& reference : function_references_) {
+    if (!reference.plugin_proxy && reference.id == function_id) {
+      reference.source_lease_tokens.erase(lease_token);
+      break;
+    }
+  }
+  ReleaseFunctionReferenceIfUnused(function_id);
+  return true;
+}
+
+bool MuonV8Handler::HandleRendererFunctionResultConsumedMessage(
+    CefRefPtr<CefProcessMessage> message) {
+  CEF_REQUIRE_RENDERER_THREAD();
+  if (!message || message->GetName().ToString() !=
+                      kMuonRendererFunctionResultConsumedMessageName) {
+    return false;
+  }
+  const auto args = message->GetArgumentList();
+  if (!args || args->GetSize() < 2 || args->GetType(0) != VTYPE_INT ||
+      args->GetType(1) != VTYPE_INT || args->GetInt(0) != context_id_) {
+    return true;
+  }
+  pending_renderer_function_result_transfers_.erase(args->GetInt(1));
   return true;
 }
 
@@ -1063,6 +1217,7 @@ bool MuonV8Handler::SendFunctionResult(int call_id,
   args->SetBool(1, true);
   args->SetInt(2, static_cast<int>(return_type.type));
   MuonCreatedSharedBufferMessage shared_message;
+  FunctionTransfers function_transfers(this);
   switch (return_type.type) {
     case MUON_TYPE_VOID:
       args->SetNull(3);
@@ -1254,7 +1409,8 @@ bool MuonV8Handler::SendFunctionResult(int call_id,
         break;
       }
       const auto encoded_function = CefDictionaryValue::Create();
-      if (!EncodeFunctionArgument(return_type, value, encoded_function)) {
+      if (!EncodeFunctionArgument(return_type, value, encoded_function,
+                                  &function_transfers)) {
         args->SetBool(1, false);
         args->SetString(2, "Renderer function returned a function with an incompatible type");
         args->SetNull(3);
@@ -1304,6 +1460,10 @@ bool MuonV8Handler::SendFunctionResult(int call_id,
   if (return_type.type == MUON_TYPE_BUFFER_VIEW && args->GetBool(1) &&
       shared_message.message) {
     frame->SendProcessMessage(PID_BROWSER, shared_message.message);
+  }
+  if (!function_transfers.Empty() && args->GetBool(1)) {
+    pending_renderer_function_result_transfers_.insert_or_assign(
+        call_id, std::move(function_transfers));
   }
   frame->SendProcessMessage(PID_BROWSER, message);
   return true;

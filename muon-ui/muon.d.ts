@@ -1499,35 +1499,35 @@ declare global {
     /** Native `void` type descriptor. */
     readonly voidType: MuonAdhocType<void>;
     /** Native `bool` type descriptor. */
-    readonly bool: MuonAdhocType<boolean>;
+    readonly boolType: MuonAdhocType<boolean>;
     /** Native signed 8-bit integer type descriptor. */
-    readonly int8: MuonAdhocType<number>;
+    readonly int8Type: MuonAdhocType<number>;
     /** Native unsigned 8-bit integer type descriptor. */
-    readonly uint8: MuonAdhocType<number>;
+    readonly uint8Type: MuonAdhocType<number>;
     /** Native signed 16-bit integer type descriptor. */
-    readonly int16: MuonAdhocType<number>;
+    readonly int16Type: MuonAdhocType<number>;
     /** Native unsigned 16-bit integer type descriptor. */
-    readonly uint16: MuonAdhocType<number>;
+    readonly uint16Type: MuonAdhocType<number>;
     /** Native signed 32-bit integer type descriptor. */
-    readonly int32: MuonAdhocType<number>;
+    readonly int32Type: MuonAdhocType<number>;
     /** Native unsigned 32-bit integer type descriptor. */
-    readonly uint32: MuonAdhocType<number>;
+    readonly uint32Type: MuonAdhocType<number>;
     /** Native signed 64-bit integer type descriptor. */
-    readonly int64: MuonAdhocType<MuonAdhocIntegerValue>;
+    readonly int64Type: MuonAdhocType<MuonAdhocIntegerValue>;
     /** Native unsigned 64-bit integer type descriptor. */
-    readonly uint64: MuonAdhocType<MuonAdhocIntegerValue>;
+    readonly uint64Type: MuonAdhocType<MuonAdhocIntegerValue>;
     /** Native 32-bit floating-point type descriptor. */
-    readonly float32: MuonAdhocType<number>;
+    readonly float32Type: MuonAdhocType<number>;
     /** Native 64-bit floating-point type descriptor. */
-    readonly float64: MuonAdhocType<number>;
+    readonly float64Type: MuonAdhocType<number>;
     /** Native UTF-8 string pointer type descriptor. */
     readonly stringType: MuonAdhocType<string | null>;
     /** Native pointer type descriptor. */
-    readonly pointer: MuonAdhocType<MuonNativePointer | null>;
+    readonly pointerType: MuonAdhocType<MuonNativePointer | null>;
     /** Native mutable byte buffer view type descriptor. */
-    readonly bufferView: MuonAdhocType<Uint8Array>;
+    readonly bufferViewType: MuonAdhocType<Uint8Array>;
     /** Native `size_t` type descriptor. */
-    readonly usize: MuonAdhocType<MuonAdhocIntegerValue>;
+    readonly usizeType: MuonAdhocType<MuonAdhocIntegerValue>;
   }
 
   /** Integer value accepted by ad-hoc native calls. */

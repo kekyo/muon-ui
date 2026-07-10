@@ -566,21 +566,21 @@ const __muonAdhocPointerBrand =
 const __muonAdhocType = (name) => Object.freeze({ name });
 const __muonAdhocTypes = Object.freeze({
   voidType: __muonAdhocType("void"),
-  bool: __muonAdhocType("bool"),
-  int8: __muonAdhocType("int8"),
-  uint8: __muonAdhocType("uint8"),
-  int16: __muonAdhocType("int16"),
-  uint16: __muonAdhocType("uint16"),
-  int32: __muonAdhocType("int32"),
-  uint32: __muonAdhocType("uint32"),
-  int64: __muonAdhocType("int64"),
-  uint64: __muonAdhocType("uint64"),
-  float32: __muonAdhocType("float32"),
-  float64: __muonAdhocType("float64"),
+  boolType: __muonAdhocType("bool"),
+  int8Type: __muonAdhocType("int8"),
+  uint8Type: __muonAdhocType("uint8"),
+  int16Type: __muonAdhocType("int16"),
+  uint16Type: __muonAdhocType("uint16"),
+  int32Type: __muonAdhocType("int32"),
+  uint32Type: __muonAdhocType("uint32"),
+  int64Type: __muonAdhocType("int64"),
+  uint64Type: __muonAdhocType("uint64"),
+  float32Type: __muonAdhocType("float32"),
+  float64Type: __muonAdhocType("float64"),
   stringType: __muonAdhocType("string"),
-  pointer: __muonAdhocType("pointer"),
-  bufferView: __muonAdhocType("bufferView"),
-  usize: __muonAdhocType("usize"),
+  pointerType: __muonAdhocType("pointer"),
+  bufferViewType: __muonAdhocType("bufferView"),
+  usizeType: __muonAdhocType("usize"),
 });
 const __muonAdhocToBytes = (data) => {
   if (typeof data === "string") {
@@ -727,21 +727,21 @@ if (typeof globalThis.addEventListener === "function") {
   }
 }
 export const voidType = __muonAdhocTypes.voidType;
-export const bool = __muonAdhocTypes.bool;
-export const int8 = __muonAdhocTypes.int8;
-export const uint8 = __muonAdhocTypes.uint8;
-export const int16 = __muonAdhocTypes.int16;
-export const uint16 = __muonAdhocTypes.uint16;
-export const int32 = __muonAdhocTypes.int32;
-export const uint32 = __muonAdhocTypes.uint32;
-export const int64 = __muonAdhocTypes.int64;
-export const uint64 = __muonAdhocTypes.uint64;
-export const float32 = __muonAdhocTypes.float32;
-export const float64 = __muonAdhocTypes.float64;
+export const boolType = __muonAdhocTypes.boolType;
+export const int8Type = __muonAdhocTypes.int8Type;
+export const uint8Type = __muonAdhocTypes.uint8Type;
+export const int16Type = __muonAdhocTypes.int16Type;
+export const uint16Type = __muonAdhocTypes.uint16Type;
+export const int32Type = __muonAdhocTypes.int32Type;
+export const uint32Type = __muonAdhocTypes.uint32Type;
+export const int64Type = __muonAdhocTypes.int64Type;
+export const uint64Type = __muonAdhocTypes.uint64Type;
+export const float32Type = __muonAdhocTypes.float32Type;
+export const float64Type = __muonAdhocTypes.float64Type;
 export const stringType = __muonAdhocTypes.stringType;
-export const pointer = __muonAdhocTypes.pointer;
-export const bufferView = __muonAdhocTypes.bufferView;
-export const usize = __muonAdhocTypes.usize;
+export const pointerType = __muonAdhocTypes.pointerType;
+export const bufferViewType = __muonAdhocTypes.bufferViewType;
+export const usizeType = __muonAdhocTypes.usizeType;
 export const loadLibrary = async (path) => {
   const start = await __muonAdhocRpc({ op: "load", path });
   const libraryId = start.libraryId;

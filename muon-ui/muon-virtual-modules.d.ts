@@ -81,35 +81,35 @@ declare module "muon:executor" {
   /** Native `void` type descriptor. */
   export const voidType: MuonAdhocType<void>;
   /** Native `bool` type descriptor. */
-  export const bool: MuonAdhocType<boolean>;
+  export const boolType: MuonAdhocType<boolean>;
   /** Native signed 8-bit integer type descriptor. */
-  export const int8: MuonAdhocType<number>;
+  export const int8Type: MuonAdhocType<number>;
   /** Native unsigned 8-bit integer type descriptor. */
-  export const uint8: MuonAdhocType<number>;
+  export const uint8Type: MuonAdhocType<number>;
   /** Native signed 16-bit integer type descriptor. */
-  export const int16: MuonAdhocType<number>;
+  export const int16Type: MuonAdhocType<number>;
   /** Native unsigned 16-bit integer type descriptor. */
-  export const uint16: MuonAdhocType<number>;
+  export const uint16Type: MuonAdhocType<number>;
   /** Native signed 32-bit integer type descriptor. */
-  export const int32: MuonAdhocType<number>;
+  export const int32Type: MuonAdhocType<number>;
   /** Native unsigned 32-bit integer type descriptor. */
-  export const uint32: MuonAdhocType<number>;
+  export const uint32Type: MuonAdhocType<number>;
   /** Native signed 64-bit integer type descriptor. */
-  export const int64: MuonAdhocType<MuonAdhocIntegerValue>;
+  export const int64Type: MuonAdhocType<MuonAdhocIntegerValue>;
   /** Native unsigned 64-bit integer type descriptor. */
-  export const uint64: MuonAdhocType<MuonAdhocIntegerValue>;
+  export const uint64Type: MuonAdhocType<MuonAdhocIntegerValue>;
   /** Native 32-bit floating-point type descriptor. */
-  export const float32: MuonAdhocType<number>;
+  export const float32Type: MuonAdhocType<number>;
   /** Native 64-bit floating-point type descriptor. */
-  export const float64: MuonAdhocType<number>;
+  export const float64Type: MuonAdhocType<number>;
   /** Native UTF-8 string pointer type descriptor. */
   export const stringType: MuonAdhocType<string | null>;
   /** Native pointer type descriptor. */
-  export const pointer: MuonAdhocType<MuonNativePointer | null>;
+  export const pointerType: MuonAdhocType<MuonNativePointer | null>;
   /** Native mutable byte buffer view type descriptor. */
-  export const bufferView: MuonAdhocType<Uint8Array>;
+  export const bufferViewType: MuonAdhocType<Uint8Array>;
   /** Native `size_t` type descriptor. */
-  export const usize: MuonAdhocType<MuonAdhocIntegerValue>;
+  export const usizeType: MuonAdhocType<MuonAdhocIntegerValue>;
   /**
    * Load a native dynamic library for ad-hoc FFI calls.
    *

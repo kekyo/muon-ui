@@ -1283,16 +1283,60 @@ describe("muon Vite plugin", () => {
     expect(resolved).toBeDefined();
     const moduleSource =
       resolved === undefined ? undefined : resolver.load(resolved.id);
+    if (typeof moduleSource !== "string") {
+      throw new Error("executor module source was not generated");
+    }
     expect(moduleSource).toContain(
       `__muonCall(${JSON.stringify(capabilityId)}, "muon.executor.loadLibrary"`,
     );
     expect(moduleSource).toContain("export const loadLibrary = async (path)");
-    expect(moduleSource).toContain("export const pointer = ");
-    expect(moduleSource).toContain("export const usize = ");
     expect(moduleSource).toContain('op: "getFunction"');
     expect(moduleSource).toContain('op: "call"');
     expect(moduleSource).toContain('op: "release"');
     expect(moduleSource).toContain('Symbol.for("muon.nativePointer")');
+
+    const modulePath = join(root, "executor.mjs");
+    await writeFile(modulePath, moduleSource);
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __muon_plugin_call?: () => string;
+    };
+    const originalMuonCall = runtimeGlobal.__muon_plugin_call;
+    runtimeGlobal.__muon_plugin_call = () => "{}";
+    try {
+      const moduleExports = (await import(
+        pathToFileURL(modulePath).href
+      )) as Record<string, unknown>;
+      const typeNames = {
+        voidType: "void",
+        boolType: "bool",
+        int8Type: "int8",
+        uint8Type: "uint8",
+        int16Type: "int16",
+        uint16Type: "uint16",
+        int32Type: "int32",
+        uint32Type: "uint32",
+        int64Type: "int64",
+        uint64Type: "uint64",
+        float32Type: "float32",
+        float64Type: "float64",
+        stringType: "string",
+        pointerType: "pointer",
+        bufferViewType: "bufferView",
+        usizeType: "usize",
+      };
+      expect(Object.keys(moduleExports).sort()).toEqual(
+        [...Object.keys(typeNames), "loadLibrary"].sort(),
+      );
+      for (const [exportName, name] of Object.entries(typeNames)) {
+        expect(moduleExports[exportName]).toEqual({ name });
+      }
+    } finally {
+      if (originalMuonCall === undefined) {
+        delete runtimeGlobal.__muon_plugin_call;
+      } else {
+        runtimeGlobal.__muon_plugin_call = originalMuonCall;
+      }
+    }
   });
 
   it("generates browser context menu virtual module wrappers", async () => {

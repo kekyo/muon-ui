@@ -2019,23 +2019,23 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             stderr: "stderr:ok",
           },
           executorKeys: [
-            "bool",
-            "bufferView",
-            "float32",
-            "float64",
-            "int16",
-            "int32",
-            "int64",
-            "int8",
+            "boolType",
+            "bufferViewType",
+            "float32Type",
+            "float64Type",
+            "int16Type",
+            "int32Type",
+            "int64Type",
+            "int8Type",
             "loadLibrary",
-            "pointer",
+            "pointerType",
             "spawn",
             "stringType",
-            "uint16",
-            "uint32",
-            "uint64",
-            "uint8",
-            "usize",
+            "uint16Type",
+            "uint32Type",
+            "uint64Type",
+            "uint8Type",
+            "usizeType",
             "voidType",
           ],
           executorInternalType: "function",
@@ -2256,8 +2256,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             )});
             try {
               const int32Signature = {
-                argTypes: [executor.int32, executor.int32],
-                returnType: executor.int32,
+                argTypes: [executor.int32Type, executor.int32Type],
+                returnType: executor.int32Type,
               };
               const add = await loaded.getFunction(
                 "muon_adhoc_add",
@@ -2267,7 +2267,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               const markerAccepted = await (
                 await loaded.getFunction("muon_adhoc_set_marker_path", {
                   argTypes: [executor.stringType],
-                  returnType: executor.int32,
+                  returnType: executor.int32Type,
                 })
               )(${JSON.stringify(library.markerPath)});
               let missingSymbolRejected = false;
@@ -2283,20 +2283,20 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               try {
                 await loaded.getFunction("muon_adhoc_add", {
                   argTypes: [{ name: "not-a-native-type" }],
-                  returnType: executor.int32,
+                  returnType: executor.int32Type,
                 });
               } catch {
                 invalidSignatureRejected = true;
               }
 
               const allocate = await loaded.getFunction("muon_adhoc_alloc", {
-                argTypes: [executor.usize],
-                returnType: executor.pointer,
+                argTypes: [executor.usizeType],
+                returnType: executor.pointerType,
               });
               const releasePointer = await loaded.getFunction(
                 "muon_adhoc_free",
                 {
-                  argTypes: [executor.pointer],
+                  argTypes: [executor.pointerType],
                   returnType: executor.voidType,
                 },
               );
@@ -2307,8 +2307,12 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               const sleepThenAdd = await loaded.getFunction(
                 "muon_adhoc_sleep_then_add",
                 {
-                  argTypes: [executor.int32, executor.int32, executor.uint32],
-                  returnType: executor.int32,
+                  argTypes: [
+                    executor.int32Type,
+                    executor.int32Type,
+                    executor.uint32Type,
+                  ],
+                  returnType: executor.int32Type,
                 },
               );
               let ticks = 0;
@@ -2405,7 +2409,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               "muon_adhoc_set_marker_path",
               {
                 argTypes: [executor.stringType],
-                returnType: executor.int32,
+                returnType: executor.int32Type,
               },
             );
             const accepted = await setMarkerPath(${JSON.stringify(
@@ -2420,22 +2424,22 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         ).resolves.toEqual({
           accepted: 1,
           keys: [
-            "bool",
-            "bufferView",
-            "float32",
-            "float64",
-            "int16",
-            "int32",
-            "int64",
-            "int8",
+            "boolType",
+            "bufferViewType",
+            "float32Type",
+            "float64Type",
+            "int16Type",
+            "int32Type",
+            "int64Type",
+            "int8Type",
             "loadLibrary",
-            "pointer",
+            "pointerType",
             "stringType",
-            "uint16",
-            "uint32",
-            "uint64",
-            "uint8",
-            "usize",
+            "uint16Type",
+            "uint32Type",
+            "uint64Type",
+            "uint8Type",
+            "usizeType",
             "voidType",
           ],
         });
@@ -2483,8 +2487,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             )});
             try {
               const int32Signature = {
-                argTypes: [executor.int32, executor.int32],
-                returnType: executor.int32,
+                argTypes: [executor.int32Type, executor.int32Type],
+                returnType: executor.int32Type,
               };
               const add = await loaded.getFunction(
                 "muon_adhoc_add",
@@ -2494,7 +2498,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               const markerAccepted = await (
                 await loaded.getFunction("muon_adhoc_set_marker_path", {
                   argTypes: [executor.stringType],
-                  returnType: executor.int32,
+                  returnType: executor.int32Type,
                 })
               )(${JSON.stringify(library.markerPath)});
               let missingSymbolRejected = false;
@@ -2510,20 +2514,20 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               try {
                 await loaded.getFunction("muon_adhoc_add", {
                   argTypes: [{ name: "not-a-native-type" }],
-                  returnType: executor.int32,
+                  returnType: executor.int32Type,
                 });
               } catch {
                 invalidSignatureRejected = true;
               }
 
               const allocate = await loaded.getFunction("muon_adhoc_alloc", {
-                argTypes: [executor.usize],
-                returnType: executor.pointer,
+                argTypes: [executor.usizeType],
+                returnType: executor.pointerType,
               });
               const releasePointer = await loaded.getFunction(
                 "muon_adhoc_free",
                 {
-                  argTypes: [executor.pointer],
+                  argTypes: [executor.pointerType],
                   returnType: executor.voidType,
                 },
               );
@@ -2534,8 +2538,12 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               const sleepThenAdd = await loaded.getFunction(
                 "muon_adhoc_sleep_then_add",
                 {
-                  argTypes: [executor.int32, executor.int32, executor.uint32],
-                  returnType: executor.int32,
+                  argTypes: [
+                    executor.int32Type,
+                    executor.int32Type,
+                    executor.uint32Type,
+                  ],
+                  returnType: executor.int32Type,
                 },
               );
               let ticks = 0;
@@ -2632,7 +2640,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
               "muon_adhoc_set_marker_path",
               {
                 argTypes: [executor.stringType],
-                returnType: executor.int32,
+                returnType: executor.int32Type,
               },
             );
             const accepted = await setMarkerPath(${JSON.stringify(
@@ -2647,22 +2655,22 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         ).resolves.toEqual({
           accepted: 1,
           keys: [
-            "bool",
-            "bufferView",
-            "float32",
-            "float64",
-            "int16",
-            "int32",
-            "int64",
-            "int8",
+            "boolType",
+            "bufferViewType",
+            "float32Type",
+            "float64Type",
+            "int16Type",
+            "int32Type",
+            "int64Type",
+            "int8Type",
             "loadLibrary",
-            "pointer",
+            "pointerType",
             "stringType",
-            "uint16",
-            "uint32",
-            "uint64",
-            "uint8",
-            "usize",
+            "uint16Type",
+            "uint32Type",
+            "uint64Type",
+            "uint8Type",
+            "usizeType",
             "voidType",
           ],
         });

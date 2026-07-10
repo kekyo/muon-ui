@@ -9,6 +9,7 @@
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
 #include "browser/muon_default_title_bar_icon.h"
+#include "browser/muon_icon.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
@@ -122,7 +123,8 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
   void OnRequestComplete(CefRefPtr<CefURLRequest> request) override {
     auto success = false;
     std::string mime_type;
-    if (request && request->GetRequestStatus() == UR_SUCCESS) {
+    if (!response_over_budget_ && request &&
+        request->GetRequestStatus() == UR_SUCCESS) {
       const auto response = request->GetResponse();
       const auto status = response ? response->GetStatus() : 0;
       if (status >= 200 && status < 300) {
@@ -153,12 +155,18 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
   void OnDownloadData(CefRefPtr<CefURLRequest> request,
                       const void* data,
                       size_t data_length) override {
-    (void)request;
-    if (data == nullptr || data_length == 0) {
+    if (response_over_budget_ || data_length == 0) {
       return;
     }
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    data_.insert(data_.end(), bytes, bytes + data_length);
+    if (!AppendMuonBytesWithinLimit(
+            &data_, data, data_length,
+            kMuonIconPngDecodeLimits.max_encoded_bytes)) {
+      response_over_budget_ = true;
+      data_.clear();
+      if (request) {
+        request->Cancel();
+      }
+    }
   }
 
   bool GetAuthCredentials(bool isProxy,
@@ -179,6 +187,7 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
  private:
   Completion completion_;
   std::vector<uint8_t> data_;
+  bool response_over_budget_ = false;
 
   IMPLEMENT_REFCOUNTING(MuonFaviconUrlRequestClient);
   DISALLOW_COPY_AND_ASSIGN(MuonFaviconUrlRequestClient);

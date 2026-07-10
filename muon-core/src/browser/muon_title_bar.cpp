@@ -6,6 +6,7 @@
 
 #include "browser/muon_title_bar.h"
 
+#include "browser/muon_icon.h"
 #include "config/muon_linux_display_backend.h"
 #include "log/muon_close_debug_log.h"
 #include "yyjson.h"
@@ -312,8 +313,15 @@ static bool DecodeMuonTitleBarIconPng(const std::vector<uint8_t>& png_data,
   if (png_data.empty() || bitmap == nullptr) {
     return false;
   }
-  auto image = CefImage::CreateImage();
-  if (!image || !image->AddPNG(1.0f, png_data.data(), png_data.size())) {
+  CefRefPtr<CefImage> image;
+  const auto result = DecodeMuonIconPngWithinLimits(
+      png_data.data(), png_data.size(), kMuonIconPngDecodeLimits,
+      [&image, &png_data]() {
+        image = CefImage::CreateImage();
+        return image &&
+               image->AddPNG(1.0f, png_data.data(), png_data.size());
+      });
+  if (result != MuonIconPngDecodeResult::Decoded) {
     return false;
   }
 
@@ -1103,32 +1111,57 @@ std::vector<float> GetMuonTitleBarIconPngScaleFactors(int pixel_width,
       pixel_width, pixel_height, kMuonNativeTitleBarIconDipSize);
 }
 
+static MuonIconPngDecodeResult LoadMuonTitleBarIconFromPngBytesWithResult(
+    const uint8_t* data,
+    size_t size,
+    const std::string& source,
+    MuonTitleBarIcon* icon,
+    std::string* error_message);
+
 bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
                                       size_t size,
                                       const std::string& source,
                                       MuonTitleBarIcon* icon,
                                       std::string* error_message) {
+  return LoadMuonTitleBarIconFromPngBytesWithResult(
+             data, size, source, icon, error_message) ==
+         MuonIconPngDecodeResult::Decoded;
+}
+
+static MuonIconPngDecodeResult LoadMuonTitleBarIconFromPngBytesWithResult(
+    const uint8_t* data,
+    size_t size,
+    const std::string& source,
+    MuonTitleBarIcon* icon,
+    std::string* error_message) {
   if (icon == nullptr || error_message == nullptr) {
-    return false;
+    return MuonIconPngDecodeResult::DecodeFailed;
   }
   error_message->clear();
   const auto diagnostic_source = source.empty() ? "title bar icon" : source;
   if (data == nullptr || size == 0) {
     *error_message =
         "Title bar icon PNG must not be empty: " + diagnostic_source;
-    return false;
+    return MuonIconPngDecodeResult::InvalidMetadata;
   }
 
-  auto image = CefImage::CreateImage();
-  if (!image) {
+  CefRefPtr<CefImage> image;
+  const auto result = DecodeMuonIconPngWithinLimits(
+      data, size, kMuonIconPngDecodeLimits, [&image, data, size]() {
+        image = CefImage::CreateImage();
+        return image && image->AddPNG(1.0f, data, size);
+      });
+  if (result == MuonIconPngDecodeResult::OverBudget) {
     *error_message =
-        "Title bar icon must be a valid PNG: " + diagnostic_source;
-    return false;
+        "Title bar icon PNG exceeds the supported 256x256 pixel or 1 MiB "
+        "encoded limit: " +
+        diagnostic_source;
+    return result;
   }
-  if (!image->AddPNG(1.0f, data, size)) {
+  if (result != MuonIconPngDecodeResult::Decoded) {
     *error_message =
         "Title bar icon must be a valid PNG: " + diagnostic_source;
-    return false;
+    return result;
   }
 
   auto loaded_icon = MuonTitleBarIcon{};
@@ -1136,7 +1169,7 @@ bool LoadMuonTitleBarIconFromPngBytes(const uint8_t* data,
   loaded_icon.data_url =
       "data:image/png;base64," + CefBase64Encode(data, size).ToString();
   *icon = std::move(loaded_icon);
-  return true;
+  return MuonIconPngDecodeResult::Decoded;
 }
 
 bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
@@ -1158,10 +1191,12 @@ bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
   }
 
   std::string png_error;
-  if (LoadMuonTitleBarIconFromPngBytes(data, size, source, icon, &png_error)) {
+  const auto png_result = LoadMuonTitleBarIconFromPngBytesWithResult(
+      data, size, source, icon, &png_error);
+  if (png_result == MuonIconPngDecodeResult::Decoded) {
     return true;
   }
-  if (require_png) {
+  if (require_png || png_result != MuonIconPngDecodeResult::NotPng) {
     *error_message = png_error;
     return false;
   }

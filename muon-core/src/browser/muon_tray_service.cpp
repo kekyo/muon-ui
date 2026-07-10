@@ -6,6 +6,7 @@
 
 #include "browser/muon_tray.h"
 
+#include "browser/muon_icon.h"
 #include "browser/muon_title_bar.h"
 
 #include "include/cef_image.h"
@@ -35,8 +36,15 @@ static bool DecodeMuonBrowserTrayIconPng(const std::vector<uint8_t>& png_data,
   if (png_data.empty() || icon == nullptr) {
     return false;
   }
-  auto image = CefImage::CreateImage();
-  if (!image || !image->AddPNG(1.0f, png_data.data(), png_data.size())) {
+  CefRefPtr<CefImage> image;
+  const auto result = DecodeMuonIconPngWithinLimits(
+      png_data.data(), png_data.size(), kMuonIconPngDecodeLimits,
+      [&image, &png_data]() {
+        image = CefImage::CreateImage();
+        return image &&
+               image->AddPNG(1.0f, png_data.data(), png_data.size());
+      });
+  if (result != MuonIconPngDecodeResult::Decoded) {
     return false;
   }
 

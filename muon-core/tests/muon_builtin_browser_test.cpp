@@ -980,6 +980,69 @@ static bool TestTitleBarControllerRegistrationRemoval() {
                 "bar controller registration");
 }
 
+static void WriteBigEndianUint32(std::vector<uint8_t>* data,
+                                 size_t offset,
+                                 uint32_t value) {
+  (*data)[offset] = static_cast<uint8_t>(value >> 24);
+  (*data)[offset + 1] = static_cast<uint8_t>(value >> 16);
+  (*data)[offset + 2] = static_cast<uint8_t>(value >> 8);
+  (*data)[offset + 3] = static_cast<uint8_t>(value);
+}
+
+static std::vector<uint8_t> CreateSyntheticPngIhdr(uint32_t width,
+                                                   uint32_t height) {
+  auto data = std::vector<uint8_t>(33, 0);
+  const uint8_t signature[] = {0x89, 0x50, 0x4e, 0x47,
+                               0x0d, 0x0a, 0x1a, 0x0a};
+  for (auto index = size_t{0}; index < sizeof(signature); ++index) {
+    data[index] = signature[index];
+  }
+  WriteBigEndianUint32(&data, 8, 13);
+  data[12] = 'I';
+  data[13] = 'H';
+  data[14] = 'D';
+  data[15] = 'R';
+  WriteBigEndianUint32(&data, 16, width);
+  WriteBigEndianUint32(&data, 20, height);
+  data[24] = 8;
+  data[25] = 6;
+  return data;
+}
+
+static bool TestTitleBarIconImageLimits() {
+  const auto oversized_png = CreateSyntheticPngIhdr(257, 1);
+  auto oversized_icon = MuonTitleBarIcon{};
+  std::string oversized_error;
+  const auto oversized_loaded = LoadMuonTitleBarIconFromImageBytes(
+      oversized_png.data(), oversized_png.size(), "image/png",
+      "oversized favicon", false, &oversized_icon, &oversized_error);
+
+  const auto svg = std::string(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" "
+      "height=\"16\"></svg>");
+  auto svg_icon = MuonTitleBarIcon{};
+  std::string svg_error;
+  const auto svg_loaded = LoadMuonTitleBarIconFromImageBytes(
+      reinterpret_cast<const uint8_t*>(svg.data()), svg.size(),
+      "image/svg+xml", "custom title bar SVG", false, &svg_icon, &svg_error);
+
+  return Expect(!oversized_loaded,
+                "custom title bar accepted an oversized PNG") &&
+         Expect(oversized_icon.png_data.empty() &&
+                    oversized_icon.data_url.empty(),
+                "rejected oversized PNG produced icon data") &&
+         Expect(oversized_error.find("256x256") != std::string::npos,
+                "oversized PNG did not report the runtime icon limit") &&
+         Expect(svg_loaded, "custom title bar rejected a non-PNG image") &&
+         Expect(svg_icon.png_data.empty(),
+                "non-PNG custom title bar image produced native PNG data") &&
+         Expect(svg_icon.data_url.rfind("data:image/svg+xml;base64,", 0) == 0,
+                "non-PNG custom title bar image did not retain data URL "
+                "fallback") &&
+         Expect(svg_error.empty(),
+                "non-PNG custom title bar image reported an error");
+}
+
 static bool TestTitleBarIconNativeScaleFactors() {
   return Expect(GetMuonTitleBarIconPngScaleFactors(16, 16) ==
                     std::vector<float>{1.0f},
@@ -1062,6 +1125,7 @@ int main() {
                  TestTitleBarBrowserIdResolution() &&
                  TestTitleBarBrowserWindowRegistrationResolution() &&
                  TestTitleBarControllerRegistrationRemoval() &&
+                 TestTitleBarIconImageLimits() &&
                  TestTitleBarIconNativeScaleFactors() &&
                  TestCustomTitleBarWindowDelegate()
              ? 0

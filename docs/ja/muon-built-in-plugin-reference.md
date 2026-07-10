@@ -70,6 +70,7 @@ import { spawn } from "muon:executor";
   このヒントはウインドウマネージャー依存であり、非対応環境では反映されないことがあります。
 - `setTitleBarIcon()` はアイコンのアセットパスを受け取り、`null` を指定すると現在のウインドウのタイトルバーアイコンを解除します。
   `path` には `"asset://main/icons/app.png"` のような `asset://main/` URL、または `"icons/app.png"` のような `main` からの相対アセットパスを指定します。
+  PNGはエンコード済みデータが1 MiB以下、幅・高さが各256 px以下、総画素数が65,536以下である必要があります。この制限は`createTray()`と`setTrayIcon()`で指定するPNGにも適用されます。
   `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を指定出来ます。
   `"native"` タイトルバーではPNG以外を指定するとPromiseが拒否されます。
 

@@ -679,6 +679,7 @@ set(APP_SOURCES
   src/browser/muon_client.cpp
   src/browser/muon_context_menu.cpp
   src/browser/muon_default_title_bar_icon.cpp
+  src/browser/muon_icon.cpp
   src/browser/muon_native_wheel_forwarder.cpp
   src/browser/muon_tray.cpp
   src/browser/muon_tray_service.cpp
@@ -728,6 +729,7 @@ set(APP_HEADERS
   src/browser/muon_client.h
   src/browser/muon_context_menu.h
   src/browser/muon_default_title_bar_icon.h
+  src/browser/muon_icon.h
   src/browser/muon_native_wheel_forwarder.h
   src/browser/muon_tray.h
   src/browser/muon_title_bar.h
@@ -1408,6 +1410,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
     src/browser/muon_context_menu.cpp
+    src/browser/muon_icon.cpp
     src/browser/muon_tray.cpp
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
@@ -1446,6 +1449,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       src/app/muon_app_storage.cpp
       src/browser/muon_tray.cpp
       src/browser/muon_tray_service.cpp
+      src/browser/muon_icon.cpp
       src/browser/muon_title_bar.cpp
       src/config/muon_linux_display_backend.cpp
       src/config/muon_paths.cpp
@@ -1506,6 +1510,16 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     yyjson
     )
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
+  add_executable(muon_icon_test
+    tests/muon_icon_test.cpp
+    src/browser/muon_icon.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_icon_test)
+  target_compile_features(muon_icon_test PRIVATE cxx_std_20)
+  target_include_directories(muon_icon_test PRIVATE
+    src
+    )
+  MUON_APPLY_SANITIZERS(muon_icon_test)
   add_executable(muon_internal_helpers_test
     tests/muon_internal_helpers_test.cpp
     src/muon_json_helpers.cpp
@@ -1663,6 +1677,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME internal_helpers
     COMMAND muon_internal_helpers_test
+    )
+  add_test(
+    NAME icon
+    COMMAND muon_icon_test
     )
   add_test(
     NAME cef_settings

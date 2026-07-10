@@ -109,7 +109,9 @@ const configuredTitleBarBackgroundColor = "#123456";
 const appPageBackgroundColor = "#d7ebe5";
 const initialTitleBarIconPath = "icons/title-bar-initial.png";
 const updatedTitleBarIconPath = "icons/title-bar-updated.png";
+const overLimitTitleBarIconPath = "icons/title-bar-over-limit.png";
 const svgTitleBarIconPath = "icons/title-bar-vector.svg";
+const overLimitImageLoadedTitle = "oversized ordinary image loaded";
 const expectedTitleBarBackgroundColor: RgbaPixel = {
   red: 0x12,
   green: 0x34,
@@ -132,6 +134,12 @@ const expectedUpdatedTitleBarIconColor: RgbaPixel = {
   red: 0x20,
   green: 0xd0,
   blue: 0x60,
+  alpha: 255,
+};
+const expectedOverLimitTitleBarIconColor: RgbaPixel = {
+  red: 0xa0,
+  green: 0x20,
+  blue: 0xd0,
   alpha: 255,
 };
 const expectedSvgTitleBarIconColor: RgbaPixel = {
@@ -165,8 +173,12 @@ const expectedWindowsCloseActiveDarkColor: RgbaPixel = {
   alpha: 255,
 };
 
-const createSolidPng = (color: RgbaPixel): Buffer => {
-  const png = new PNG({ width: 16, height: 16 });
+const createSolidPng = (
+  color: RgbaPixel,
+  width: number,
+  height: number,
+): Buffer => {
+  const png = new PNG({ width, height });
   for (let index = 0; index < png.data.length; index += 4) {
     png.data[index] = color.red;
     png.data[index + 1] = color.green;
@@ -178,6 +190,11 @@ const createSolidPng = (color: RgbaPixel): Buffer => {
 
 const createSolidSvg = (color: RgbaPixel): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="rgb(${color.red},${color.green},${color.blue})"/></svg>`;
+
+const createOverLimitFaviconPage = (): string =>
+  `<!doctype html><title>${testWindowTitle}</title><link rel="icon" type="image/png" href="${overLimitTitleBarIconPath}"><img id="ordinary-over-limit-image" src="${overLimitTitleBarIconPath}"><script>const image=document.getElementById("ordinary-over-limit-image");const report=()=>{document.title=image.naturalWidth===257&&image.naturalHeight===257?${JSON.stringify(
+    overLimitImageLoadedTitle,
+  )}:"oversized ordinary image failed";};if(image.complete){report();}else{image.addEventListener("load",report,{once:true});image.addEventListener("error",()=>{document.title="oversized ordinary image failed";},{once:true});}</script>`;
 
 const createTitleBarPage = (
   title: string,
@@ -214,6 +231,10 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
     createTitleBarPage(testWindowTitle, svgTitleBarIconPath),
   );
   await writeFile(
+    join(mainRoot, "favicon-over-limit.html"),
+    createOverLimitFaviconPage(),
+  );
+  await writeFile(
     join(mainRoot, "broken-favicon.html"),
     createTitleBarPage(testWindowTitle, "icons/missing.svg"),
   );
@@ -227,11 +248,15 @@ const createTitleBarAssetRoot = async (directory: string): Promise<string> => {
   );
   await writeFile(
     join(assetRoot, "main", initialTitleBarIconPath),
-    createSolidPng(expectedInitialTitleBarIconColor),
+    createSolidPng(expectedInitialTitleBarIconColor, 16, 16),
   );
   await writeFile(
     join(assetRoot, "main", updatedTitleBarIconPath),
-    createSolidPng(expectedUpdatedTitleBarIconColor),
+    createSolidPng(expectedUpdatedTitleBarIconColor, 16, 16),
+  );
+  await writeFile(
+    join(assetRoot, "main", overLimitTitleBarIconPath),
+    createSolidPng(expectedOverLimitTitleBarIconColor, 257, 257),
   );
   await writeFile(
     join(assetRoot, "main", svgTitleBarIconPath),
@@ -1915,6 +1940,21 @@ windowsTitleBarIt(
           );
         });
         await runTitleBarStep(
+          "reject an oversized favicon without blocking an ordinary image",
+          async () => {
+            await driver.navigate("asset://main/favicon-over-limit.html");
+            await waitForDocumentTitle(
+              driver,
+              overLimitImageLoadedTitle,
+              cdpCommandTimeoutMs,
+            );
+            await waitForWindowsTitleBarIconColor(
+              window,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
+        await runTitleBarStep(
           "fall back when favicon cannot be loaded",
           async () => {
             await driver.navigate("asset://main/broken-favicon.html");
@@ -2296,6 +2336,22 @@ titleBarIt(
             expectedSvgTitleBarIconColor,
           );
         });
+        await runTitleBarStep(
+          "reject an oversized favicon without blocking an ordinary image",
+          async () => {
+            await driver.navigate("asset://main/favicon-over-limit.html");
+            await waitForDocumentTitle(
+              driver,
+              overLimitImageLoadedTitle,
+              cdpCommandTimeoutMs,
+            );
+            await waitForTitleBarIconColor(
+              running,
+              bounds,
+              expectedInitialTitleBarIconColor,
+            );
+          },
+        );
         await runTitleBarStep(
           "fall back when favicon cannot be loaded",
           async () => {

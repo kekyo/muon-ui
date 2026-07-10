@@ -252,13 +252,18 @@ console.log(result.exitCode);
 対象のエントリポイントの関数がどのようなシグネチャ（引数と戻り値の型）を想定しているかは、 `getFunction()` の引数で指定する必要があります。
 従って、不明なシグネチャのエントリポイントを呼び出すことは出来ません。
 
-`MuonAdhocSignature` は `{ argTypes, returnType }` で、型定数には `voidType`, `bool`, `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`, `float32`, `float64`, `stringType`, `pointer`, `bufferView`, `usize` を指定出来ます。
+`MuonAdhocSignature` は `{ argTypes, returnType }` で、型定数には `voidType`, `boolType`, `int8Type`, `uint8Type`, `int16Type`, `uint16Type`, `int32Type`, `uint32Type`, `int64Type`, `uint64Type`, `float32Type`, `float64Type`, `stringType`, `pointerType`, `bufferViewType`, `usizeType` を指定出来ます。
 64bit整数と `usize` はJSONではdecimal stringとして運ばれ、JavaScript側の引数には `number`, `bigint`, `string` を渡せます。
 
 以下の例は、 `libc.so` 内の `malloc` と `free` を呼び出す例です:
 
 ```ts
-import { loadLibrary, pointer, usize, voidType } from "muon:executor";
+import {
+  loadLibrary,
+  pointerType,
+  usizeType,
+  voidType,
+} from "muon:executor";
 
 type MallocType = (size: MuonAdhocIntegerValue) => Promise<MuonNativePointer>;
 type FreeType = (p: MuonNativePointer) => Promise<void>;
@@ -268,13 +273,13 @@ const library = await loadLibrary("libc.so");
 try {
   // mallocへの関数オブジェクトを得る
   const malloc = await library.getFunction<MallocType>("malloc", {
-    argTypes: [usize],
-    returnType: pointer,
+    argTypes: [usizeType],
+    returnType: pointerType,
   });
 
   // freeへの関数オブジェクトを得る
   const free = await library.getFunction<FreeType>("free", {
-    argTypes: [pointer],
+    argTypes: [pointerType],
     returnType: voidType,
   });
 

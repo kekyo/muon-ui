@@ -6,15 +6,18 @@
 import { expect, it } from "vitest";
 
 import {
+  MUON_APP_URL,
   MUON_PORT,
   TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   TEST_NETWORK_ALLOW_PATTERNS,
+  TEST_PLUGIN_ALLOW_PATTERNS,
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   describeMuonPluginBridge,
   evaluateRejection,
   expectDebugMuonStartupFailure,
   join,
+  openPopupTarget,
   startDebugMuon,
   stopMuon,
   withMuon,
@@ -899,11 +902,16 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           },
         );
         const proxy = await window.muon.test.types.returnBufferFunction();
-        const proxyResult = Array.from(
-          new Uint8Array(
-            await proxy(Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17])),
-          ),
-        );
+        let proxyResult = [];
+        try {
+          proxyResult = Array.from(
+            new Uint8Array(
+              await proxy(Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17])),
+            ),
+          );
+        } finally {
+          proxy.dispose();
+        }
         return {
           checksum,
           transformed,
@@ -936,6 +944,341 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           "(async () => typeof (await window.muon.test.types.returnVoid()))()",
         ),
       ).resolves.toBe("undefined");
+    });
+  });
+
+  it("disposes plugin function proxy wrappers independently", async () => {
+    await withMuon(["muon_test_plugin_types"], async (driver) => {
+      const values = await driver.evaluate<{
+        sameObject: boolean;
+        disposeDescriptor: {
+          configurable: boolean;
+          enumerable: boolean;
+          type: string;
+          writable: boolean;
+        } | null;
+        disposeEnumerated: boolean;
+        disposeErrors: string[];
+        disposedCall: {
+          isPromise: boolean;
+          message: string;
+          status: string;
+          synchronousThrow: boolean;
+        };
+        reargument: { message: string; status: string };
+        secondCall: { message: string; result: number[]; status: string };
+        secondDisposeError: string;
+      }>(`(async () => {
+        const first = await window.muon.test.types.returnBufferFunction();
+        const second = await window.muon.test.types.returnBufferFunction();
+        const descriptor = Object.getOwnPropertyDescriptor(first, "dispose");
+        const disposeDescriptor = descriptor === undefined
+          ? null
+          : {
+              configurable: descriptor.configurable,
+              enumerable: descriptor.enumerable,
+              type: typeof descriptor.value,
+              writable: descriptor.writable,
+            };
+        const disposeErrors = [];
+        for (let index = 0; index < 2; index += 1) {
+          try {
+            first.dispose();
+          } catch (error) {
+            disposeErrors.push(
+              String(error && error.message ? error.message : error),
+            );
+          }
+        }
+
+        const disposedCall = {
+          isPromise: false,
+          message: "",
+          status: "",
+          synchronousThrow: false,
+        };
+        try {
+          const result = first(
+            Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17]),
+          );
+          disposedCall.isPromise = result instanceof Promise;
+          try {
+            await result;
+            disposedCall.status = "fulfilled";
+          } catch (error) {
+            disposedCall.status = "rejected";
+            disposedCall.message = String(
+              error && error.message ? error.message : error,
+            );
+          }
+        } catch (error) {
+          disposedCall.synchronousThrow = true;
+          disposedCall.status = "threw";
+          disposedCall.message = String(
+            error && error.message ? error.message : error,
+          );
+        }
+
+        const reargument = { message: "", status: "" };
+        try {
+          await window.muon.test.types.bufferCallbackRoundtrip(first);
+          reargument.status = "fulfilled";
+        } catch (error) {
+          reargument.status = "rejected";
+          reargument.message = String(
+            error && error.message ? error.message : error,
+          );
+        }
+
+        const secondCall = { message: "", result: [], status: "" };
+        try {
+          secondCall.result = Array.from(
+            new Uint8Array(
+              await second(
+                Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17]),
+              ),
+            ),
+          );
+          secondCall.status = "fulfilled";
+        } catch (error) {
+          secondCall.status = "rejected";
+          secondCall.message = String(
+            error && error.message ? error.message : error,
+          );
+        }
+
+        let secondDisposeError = "";
+        try {
+          second.dispose();
+        } catch (error) {
+          secondDisposeError = String(
+            error && error.message ? error.message : error,
+          );
+        }
+        return {
+          sameObject: first === second,
+          disposeDescriptor,
+          disposeEnumerated: Object.keys(first).includes("dispose"),
+          disposeErrors,
+          disposedCall,
+          reargument,
+          secondCall,
+          secondDisposeError,
+        };
+      })()`);
+
+      expect(values.sameObject).toBe(false);
+      expect(values.disposeDescriptor).toEqual({
+        configurable: false,
+        enumerable: false,
+        type: "function",
+        writable: false,
+      });
+      expect(values.disposeEnumerated).toBe(false);
+      expect(values.disposeErrors).toEqual([]);
+      expect(values.disposedCall.synchronousThrow).toBe(false);
+      expect(values.disposedCall.isPromise).toBe(true);
+      expect(values.disposedCall.status).toBe("rejected");
+      expect(values.disposedCall.message.toLowerCase()).toContain("disposed");
+      expect(values.reargument.status).toBe("rejected");
+      expect(values.reargument.message.toLowerCase()).toContain("disposed");
+      expect(values.secondCall).toEqual({
+        message: "",
+        result: [27, 28, 29, 30, 31, 32, 33, 34],
+        status: "fulfilled",
+      });
+      expect(values.secondDisposeError).toBe("");
+    });
+  });
+
+  it("rejects plugin function proxy use from another V8 context", async () => {
+    const pluginNames = ["muon_test_plugin_recursive_functions"];
+    const running = await startDebugMuon(
+      pluginNames,
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      pluginNames,
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      ["asset://main/**"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    const popupDrivers: CdpDriver[] = [];
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await expect(
+        driver.evaluate(`(async () => {
+          let proxy;
+          const roundtrip = await window.muon.test.recursiveFunctions
+            .recursiveFunctionArgRoundtrip((value) => {
+              proxy = value;
+              return value;
+            });
+          if (roundtrip !== 42 || typeof proxy !== "function") {
+            throw new Error("unexpected recursive function result");
+          }
+          globalThis.__muonCrossContextProxy = proxy;
+          return roundtrip;
+        })()`),
+      ).resolves.toBe(42);
+
+      const popupTarget = await openPopupTarget(
+        driver,
+        MUON_APP_URL,
+        "",
+        "muonProxyContext",
+      );
+      const popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        targetId: popupTarget.id,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      popupDrivers.push(popupDriver);
+      const result = await popupDriver.evaluate<{
+        disposeMessage: string;
+        disposeStatus: string;
+        invokeMessage: string;
+        invokeStatus: string;
+        invokeValue: number | null;
+        reargumentMessage: string;
+        reargumentStatus: string;
+        reargumentValue: number | null;
+      }>(`(async () => {
+          if (window.opener === null) {
+            throw new Error("proxy owner window is unavailable");
+          }
+          const proxy = window.opener.__muonCrossContextProxy;
+          if (typeof proxy !== "function") {
+            throw new Error("proxy owner value is unavailable");
+          }
+          const result = {
+            disposeMessage: "",
+            disposeStatus: "fulfilled",
+            invokeMessage: "",
+            invokeStatus: "fulfilled",
+            invokeValue: null,
+            reargumentMessage: "",
+            reargumentStatus: "fulfilled",
+            reargumentValue: null,
+          };
+          try {
+            result.invokeValue = await proxy(41);
+          } catch (error) {
+            result.invokeStatus = "rejected";
+            result.invokeMessage = String(
+              error && error.message ? error.message : error,
+            );
+          }
+          try {
+            result.reargumentValue = await window.muon.test
+              .recursiveFunctions.recursiveInvoke(proxy);
+          } catch (error) {
+            result.reargumentStatus = "rejected";
+            result.reargumentMessage = String(
+              error && error.message ? error.message : error,
+            );
+          }
+          try {
+            proxy.dispose();
+          } catch (error) {
+            result.disposeStatus = "threw";
+            result.disposeMessage = String(
+              error && error.message ? error.message : error,
+            );
+          }
+          return result;
+        })()`);
+
+      expect(result.invokeStatus).toBe("rejected");
+      expect(result.invokeValue).toBeNull();
+      expect(result.invokeMessage.toLowerCase()).toContain("context");
+      expect(result.reargumentStatus).toBe("rejected");
+      expect(result.reargumentValue).toBeNull();
+      expect(result.reargumentMessage.toLowerCase()).toContain("context");
+      expect(result.disposeStatus).toBe("threw");
+      expect(result.disposeMessage.toLowerCase()).toContain("context");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      if (driver !== undefined) {
+        try {
+          await driver.evaluate(`(() => {
+            const proxy = globalThis.__muonCrossContextProxy;
+            if (typeof proxy === "function") {
+              proxy.dispose();
+            }
+            delete globalThis.__muonCrossContextProxy;
+          })()`);
+        } catch {
+          // The owner context may already be unavailable during cleanup.
+        }
+      }
+      for (const popupDriver of popupDrivers) {
+        popupDriver.close();
+      }
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("releases plugin function proxy wrappers after garbage collection", async () => {
+    await withMuon(["muon_test_plugin_recursive_functions"], async (driver) => {
+      await expect(
+        driver.evaluate(`(() => {
+          globalThis.__muonPluginProxyReady = false;
+          globalThis.__muonPluginProxyError = "";
+          globalThis.__muonPluginProxyType = "";
+          setTimeout(async () => {
+            try {
+              const value = await window.muon.test.recursiveFunctions
+                .recursiveFunctionArgRoundtrip((proxy) => {
+                  globalThis.__muonPluginProxyReference = new WeakRef(proxy);
+                  globalThis.__muonPluginProxyType = typeof proxy;
+                  return proxy;
+                });
+              if (value !== 42) {
+                throw new Error("unexpected recursive function result");
+              }
+            } catch (error) {
+              globalThis.__muonPluginProxyError = String(
+                error && error.message ? error.message : error,
+              );
+            } finally {
+              setTimeout(() => {
+                globalThis.__muonPluginProxyReady = true;
+              }, 0);
+            }
+          }, 0);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+
+      let ready = false;
+      for (let attempt = 0; attempt < 20 && !ready; attempt += 1) {
+        ready = await driver.evaluate<boolean>(
+          "globalThis.__muonPluginProxyReady",
+        );
+      }
+      expect(ready).toBe(true);
+      await expect(
+        driver.evaluate("globalThis.__muonPluginProxyError"),
+      ).resolves.toBe("");
+      await expect(
+        driver.evaluate("globalThis.__muonPluginProxyType"),
+      ).resolves.toBe("function");
+
+      let collected = false;
+      for (let attempt = 0; attempt < 3 && !collected; attempt += 1) {
+        await driver.send("HeapProfiler.collectGarbage");
+        collected = await driver.evaluate<boolean>(
+          "globalThis.__muonPluginProxyReference.deref() === undefined",
+        );
+      }
+      expect(collected).toBe(true);
     });
   });
 

@@ -899,20 +899,21 @@ void MuonApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
     return;
   }
 
+  const auto context_id = handler_iterator->second->GetContextId();
+  const auto target_frame = frame ? frame
+                                  : browser ? browser->GetMainFrame()
+                                            : nullptr;
+  handler_iterator->second->RejectAllPendingPromises();
+  handler_iterator->second->ReleaseFunctionReferences();
+
   const auto message =
       CefProcessMessage::Create(kMuonFunctionContextReleasedMessageName);
   const auto args = message->GetArgumentList();
   args->SetSize(1);
-  args->SetInt(0, handler_iterator->second->GetContextId());
-  const auto target_frame = frame ? frame
-                                  : browser ? browser->GetMainFrame()
-                                            : nullptr;
+  args->SetInt(0, context_id);
   if (target_frame) {
     target_frame->SendProcessMessage(PID_BROWSER, message);
   }
-
-  handler_iterator->second->RejectAllPendingPromises();
-  handler_iterator->second->ReleaseFunctionReferences();
   v8_handlers_by_context_.erase(handler_iterator);
 }
 

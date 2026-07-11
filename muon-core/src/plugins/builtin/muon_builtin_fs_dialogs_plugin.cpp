@@ -211,6 +211,12 @@ static void CompleteMuonFsDialogsProviderOperation(
 
 static void PostMuonFsDialogsOperation(
     std::unique_ptr<MuonFsDialogsOperationState> state) {
+  if (state->provider_operation &&
+      state->provider_operation->cancel_requested) {
+    MarkProviderOperationCompleted(state->provider_operation);
+    CompleteMuonError(state->completion, "Native dialog was canceled");
+    return;
+  }
   auto* raw_state = state.release();
   auto handle = muon_ui_fs_dialog_operation_handle{};
   const auto started = muon_ui_fs_dialogs_run(
@@ -454,56 +460,108 @@ const getAbortSignal = (options) => {
   return signal;
 };
 
-const runAbortable = (options, nativeCall) => {
-  let signal = null;
-  try {
-    signal = getAbortSignal(options);
-  } catch (error) {
-    return Promise.reject(error);
-  }
+const runAbortable = async (options, nativeCall) => {
+  const signal = getAbortSignal(options);
   if (signal === null) {
-    return nativeCall(null);
+    return await nativeCall(null);
   }
   if (signal.aborted) {
-    return Promise.reject(createAbortReason(signal));
+    throw createAbortReason(signal);
   }
 
-  let nativeCancel = null;
-  let cancelRequested = false;
+  const nativeCancelRecords = new Map();
   let aborted = false;
+  let settled = false;
   let rejectAbort = null;
   const abortPromise = new Promise((_resolve, reject) => {
     rejectAbort = reject;
   });
-  const requestNativeCancel = () => {
-    if (cancelRequested || nativeCancel === null) {
-      return;
-    }
-    cancelRequested = true;
+
+  const invokeNativeCancel = async (record) => {
     try {
-      Promise.resolve(nativeCancel()).catch(() => undefined);
+      await record.cancel();
     } catch (_error) {
     }
   };
-  const onAbort = () => {
+  const requestNativeCancel = async (record) => {
+    if (record.disposed) {
+      return;
+    }
+    if (record.cancelPromise === null) {
+      record.cancelPromise = invokeNativeCancel(record);
+    }
+    await record.cancelPromise;
+  };
+  const disposeNativeCancel = async (record, shouldCancel) => {
+    if (record.disposed) {
+      return;
+    }
+    let cancelPromise = null;
+    if (shouldCancel) {
+      cancelPromise = requestNativeCancel(record);
+    }
+    try {
+      record.cancel.dispose();
+    } catch (_error) {
+    }
+    record.disposed = true;
+    nativeCancelRecords.delete(record.cancel);
+    if (cancelPromise !== null) {
+      await cancelPromise;
+    }
+  };
+  const getNativeCancelRecord = (cancel) => {
+    const existing = nativeCancelRecords.get(cancel);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const record = {
+      cancel,
+      cancelPromise: null,
+      disposed: false,
+    };
+    nativeCancelRecords.set(cancel, record);
+    return record;
+  };
+  const onAbort = async () => {
+    if (aborted) {
+      return;
+    }
     aborted = true;
     rejectAbort(createAbortReason(signal));
-    requestNativeCancel();
+    const records = Array.from(nativeCancelRecords.values());
+    for (const record of records) {
+      await requestNativeCancel(record);
+    }
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const abortWatcher = (cancel) => {
-    nativeCancel = cancel;
+  const abortWatcher = async (cancel) => {
+    const record = getNativeCancelRecord(cancel);
+    if (settled) {
+      await disposeNativeCancel(record, aborted || signal.aborted);
+      return;
+    }
     if (aborted || signal.aborted) {
-      requestNativeCancel();
+      await requestNativeCancel(record);
     }
   };
 
-  const nativePromise = Promise.resolve().then(() => nativeCall(abortWatcher));
-  return Promise.race([nativePromise, abortPromise]).finally(() => {
+  const invokeNative = async () => {
+    await Promise.resolve();
+    return await nativeCall(abortWatcher);
+  };
+  try {
+    return await Promise.race([invokeNative(), abortPromise]);
+  } finally {
+    settled = true;
     signal.removeEventListener("abort", onAbort);
-    nativeCancel = null;
-  });
+    const shouldCancel = aborted || signal.aborted;
+    const records = Array.from(nativeCancelRecords.values());
+    for (const record of records) {
+      await disposeNativeCancel(record, shouldCancel);
+    }
+  }
 };
 
 const parseNativeJson = async (source) => JSON.parse(await source);

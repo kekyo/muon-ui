@@ -24,6 +24,17 @@
 struct MuonPluginRuntimeImpl;
 
 /**
+ * Browser registration for one renderer-owned plugin function proxy wrapper.
+ */
+struct MuonPluginFunctionProxyRegistration {
+  /** Runtime-wide proxy entry identifier. */
+  uint32_t proxy_id = 0;
+
+  /** Unique decimal token for this renderer wrapper lease. */
+  std::string lease_token;
+};
+
+/**
  * String key-value plugin configuration entry prepared from muon.json.
  */
 struct MuonPluginRuntimeConfigEntry {
@@ -157,9 +168,18 @@ class MuonPluginRuntime final {
 
   /**
    * Invokes a plugin-owned function proxy from renderer-process IPC.
+   *
+   * @param context Renderer context that owns the wrapper lease.
+   * @param proxy_id Runtime proxy entry identifier.
+   * @param lease_token Unique wrapper lease token.
+   * @param call_id Renderer call identifier.
+   * @param encoded_args CEF list containing encoded JavaScript arguments.
+   * @param shared_payload Optional shared-buffer argument payload.
+   * @param completion Completion callback that runs on the browser UI thread.
    */
   void InvokeProxy(const MuonPluginInvocationContext& context,
                    uint32_t proxy_id,
+                   const std::string& lease_token,
                    int call_id,
                    CefRefPtr<CefListValue> encoded_args,
                    std::shared_ptr<MuonSharedBufferPayload> shared_payload,
@@ -167,8 +187,13 @@ class MuonPluginRuntime final {
 
   /**
    * Completes a renderer-owned function call initiated by a plugin pointer.
+   *
+   * @param context Actual browser and frame that sent the result.
+   * @param message Renderer result process message.
+   * @param shared_payload Optional shared-buffer result payload.
    */
   void CompleteRendererFunctionCall(
+      const MuonPluginInvocationContext& context,
       CefRefPtr<CefProcessMessage> message,
       std::shared_ptr<MuonSharedBufferPayload> shared_payload);
 
@@ -185,11 +210,32 @@ class MuonPluginRuntime final {
 
   /**
    * Registers one plugin-owned function wrapper for the renderer context.
+   *
+   * @param context Renderer context that will own the wrapper lease.
+   * @param function Plugin-owned function pointer.
+   * @param function_type Function signature metadata.
+   * @param registration Receives the proxy id and unique wrapper lease token.
+   * @param error_message Receives a diagnostic on failure.
+   * @return true when one wrapper lease was registered.
    */
-  uint32_t RegisterPluginFunctionProxy(
+  bool RegisterPluginFunctionProxy(
       const MuonPluginInvocationContext& context,
       muon_native_function function,
-      const MuonTypeMetadata& function_type);
+      const MuonTypeMetadata& function_type,
+      MuonPluginFunctionProxyRegistration* registration,
+      std::string* error_message);
+
+  /**
+   * Releases one plugin function proxy wrapper lease.
+   *
+   * @param context Renderer context requesting the release.
+   * @param proxy_id Runtime proxy entry identifier.
+   * @param lease_token Unique wrapper lease token.
+   */
+  void ReleasePluginFunctionProxy(
+      const MuonPluginInvocationContext& context,
+      uint32_t proxy_id,
+      const std::string& lease_token);
 
   /**
    * Releases function sources owned by a renderer V8 context.
@@ -199,6 +245,13 @@ class MuonPluginRuntime final {
    */
   void ReleaseFunctionContext(const MuonPluginInvocationContext& context,
                               int renderer_context_id);
+
+  /**
+   * Releases all function sources and proxy leases owned by one browser.
+   *
+   * @param browser_id Browser whose renderer process was closed or terminated.
+   */
+  void ReleaseFunctionBrowser(int browser_id);
 
  private:
   std::unique_ptr<MuonPluginRuntimeImpl> impl_;

@@ -25,6 +25,11 @@ inline constexpr char kMuonV8CapabilityCallFunctionName[] =
     "__muon_plugin_call";
 
 /**
+ * Internal lifetime state attached to one JavaScript plugin function proxy.
+ */
+class MuonPluginFunctionProxyState;
+
+/**
  * V8 handler for functions exposed under plugin namespace objects.
  */
 class MuonV8Handler final : public CefV8Handler {
@@ -111,7 +116,8 @@ class MuonV8Handler final : public CefV8Handler {
   void RejectAllPendingPromises();
 
   /**
-   * Releases strong references to JavaScript function arguments.
+   * Releases JavaScript function references and plugin proxy leases before
+   * the owning V8 context is destroyed.
    */
   void ReleaseFunctionReferences();
 
@@ -126,6 +132,8 @@ class MuonV8Handler final : public CefV8Handler {
   bool IsForContext(CefRefPtr<CefV8Context> context) const;
 
  private:
+  friend class MuonPluginFunctionProxyState;
+
   struct FunctionTransfers {
     explicit FunctionTransfers(MuonV8Handler* owner = nullptr);
     ~FunctionTransfers();
@@ -151,18 +159,8 @@ class MuonV8Handler final : public CefV8Handler {
   struct FunctionReference {
     int id = 0;
     CefRefPtr<CefV8Value> function;
-    bool plugin_proxy = false;
-    uint32_t proxy_id = 0;
-    MuonTypeMetadata function_type = CreateMuonPrimitiveType(
-        MUON_TYPE_VOID);
-    std::string proxy_name;
     size_t pending_transfer_count = 0;
     std::set<std::string> source_lease_tokens;
-  };
-
-  struct ProxyFunction {
-    uint32_t proxy_id = 0;
-    MuonTypeMetadata function_type;
   };
 
   struct PendingSharedPayload {
@@ -184,7 +182,18 @@ class MuonV8Handler final : public CefV8Handler {
   bool EncodeFunctionArgument(const MuonTypeMetadata& expected_type,
                               CefRefPtr<CefV8Value> argument,
                               CefRefPtr<CefDictionaryValue> encoded_function,
-                              FunctionTransfers* function_transfers);
+                              FunctionTransfers* function_transfers,
+                              std::string* error_message);
+  bool ExecutePluginCall(const std::string& function_name,
+                         const std::vector<MuonTypeMetadata>& arg_types,
+                         const MuonTypeMetadata& return_type,
+                         uint32_t function_id,
+                         const std::string& proxy_lease_token,
+                         bool is_capability_call,
+                         const std::string& capability_id,
+                         const std::string& capability_function_path,
+                         const CefV8ValueList& call_arguments,
+                         CefRefPtr<CefV8Value> promise);
   void RejectPromise(CefRefPtr<CefV8Value> promise,
                      const std::string& error_message) const;
   int AcquireFunctionTransfer(CefRefPtr<CefV8Value> function,
@@ -200,9 +209,22 @@ class MuonV8Handler final : public CefV8Handler {
       CefRefPtr<CefListValue> values,
       size_t index,
       std::shared_ptr<MuonSharedBufferPayload> shared_payload);
-  CefRefPtr<CefV8Value> GetOrCreatePluginProxyFunction(
+  CefRefPtr<CefV8Value> CreatePluginProxyFunction(
       uint32_t proxy_id,
+      const std::string& lease_token,
       const MuonTypeMetadata& function_type);
+  bool EnsurePluginProxyFactory(std::string* error_message);
+  CefRefPtr<MuonPluginFunctionProxyState> FindPluginProxyState(
+      CefRefPtr<CefV8Value> function,
+      std::string* error_message) const;
+  CefRefPtr<MuonPluginFunctionProxyState> FindPluginProxyStateFromMarker(
+      CefRefPtr<CefV8Value> marker) const;
+  void RegisterPluginProxyState(
+      const CefBaseRefCounted* user_data,
+      MuonPluginFunctionProxyState* state);
+  void UnregisterPluginProxyState(
+      const CefBaseRefCounted* user_data,
+      MuonPluginFunctionProxyState* state);
   bool InvokeRendererFunctionCallMessage(
       CefRefPtr<CefProcessMessage> message,
       std::shared_ptr<MuonSharedBufferPayload> shared_payload);
@@ -214,8 +236,9 @@ class MuonV8Handler final : public CefV8Handler {
   std::vector<MuonFunctionMetadata> functions_;
   std::map<std::string, size_t> function_indexes_by_v8_name_;
   std::map<std::string, size_t> function_indexes_by_public_path_;
-  std::map<std::string, ProxyFunction> proxy_functions_by_name_;
   std::vector<FunctionReference> function_references_;
+  std::map<const CefBaseRefCounted*, MuonPluginFunctionProxyState*>
+      plugin_proxy_states_by_user_data_;
   std::map<int, PendingPromise> pending_promises_;
   std::map<int, CefRefPtr<CefProcessMessage>> pending_result_messages_;
   std::map<int, PendingSharedPayload> pending_result_payloads_;
@@ -226,9 +249,12 @@ class MuonV8Handler final : public CefV8Handler {
   std::map<int, FunctionTransfers>
       pending_renderer_function_result_transfers_;
   CefRefPtr<CefV8Context> context_;
+  CefRefPtr<CefV8Value> plugin_proxy_dispatch_function_;
+  CefRefPtr<CefV8Value> plugin_proxy_factory_;
   int context_id_ = 0;
   int next_call_id_ = 1;
   int next_function_id_ = 1;
+  uint64_t next_proxy_wrapper_id_ = 1;
 
   IMPLEMENT_REFCOUNTING(MuonV8Handler);
   DISALLOW_COPY_AND_ASSIGN(MuonV8Handler);

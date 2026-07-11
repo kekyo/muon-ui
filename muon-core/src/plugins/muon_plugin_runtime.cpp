@@ -55,8 +55,11 @@ static constexpr char kMuonFunctionArgumentContextIdKey[] = "context_id";
 static constexpr char kMuonFunctionArgumentFunctionIdKey[] = "function_id";
 static constexpr char kMuonFunctionArgumentKindKey[] = "kind";
 static constexpr char kMuonFunctionArgumentKindPluginProxy[] = "plugin_proxy";
+static constexpr char kMuonFunctionArgumentLeaseTokenKey[] = "lease_token";
 static constexpr char kMuonFunctionArgumentProxyIdKey[] = "proxy_id";
 static constexpr char kMuonFunctionArgumentTypeKey[] = "type_key";
+
+static std::string GetMuonTrafficError(const tra_ffic_error& error);
 
 class MuonFunctionTask final : public CefTask {
  public:
@@ -90,7 +93,12 @@ struct MuonFunctionProxy {
   MuonTypeMetadata function_type;
   std::shared_ptr<MuonFunctionSignatureStorage> signature_storage;
   tra_ffic_function_ref function_ref = {};
-  uint32_t wrapper_lease_count = 0;
+  std::map<std::string, std::string> lease_owners_by_token;
+};
+
+struct MuonFunctionOwner {
+  int browser_id = 0;
+  int renderer_context_id = 0;
 };
 
 struct MuonRendererFunctionSource {
@@ -111,6 +119,11 @@ struct MuonRendererFunctionSource {
 
 static void ReleaseMuonRendererFunctionBorrow(
     MuonRendererFunctionSource* source);
+static bool ReleaseMuonFunctionProxyLease(
+    struct MuonPluginRuntimeImpl* impl,
+    const std::string& owner_id,
+    uint32_t proxy_id,
+    const std::string& lease_token);
 
 struct MuonRendererFunctionBorrow {
   MuonRendererFunctionBorrow() = default;
@@ -146,10 +159,112 @@ struct MuonRendererFunctionBorrow {
   MuonRendererFunctionSource* source = nullptr;
 };
 
+struct MuonFunctionRetain {
+  MuonFunctionRetain() = default;
+
+  ~MuonFunctionRetain() { Reset(); }
+
+  MuonFunctionRetain(const MuonFunctionRetain&) = delete;
+  MuonFunctionRetain& operator=(const MuonFunctionRetain&) = delete;
+
+  MuonFunctionRetain(MuonFunctionRetain&& other) noexcept
+      : function(std::exchange(other.function, nullptr)) {}
+
+  MuonFunctionRetain& operator=(MuonFunctionRetain&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      function = std::exchange(other.function, nullptr);
+    }
+    return *this;
+  }
+
+  bool Acquire(muon_native_function retained_function,
+               std::string* error_message) {
+    Reset();
+    tra_ffic_error error;
+    if (!tra_ffic_function_retain(retained_function, &error)) {
+      if (error_message != nullptr) {
+        *error_message = GetMuonTrafficError(error);
+      }
+      return false;
+    }
+    function = retained_function;
+    return true;
+  }
+
+  void Reset() {
+    const auto retained_function = std::exchange(function, nullptr);
+    if (retained_function != nullptr) {
+      tra_ffic_error error;
+      (void)tra_ffic_function_release(retained_function, &error);
+    }
+  }
+
+  muon_native_function function = nullptr;
+};
+
+struct MuonPendingProxyTransfers {
+  MuonPendingProxyTransfers() = default;
+
+  MuonPendingProxyTransfers(struct MuonPluginRuntimeImpl* impl,
+                            std::string owner_id)
+      : impl(impl), owner_id(std::move(owner_id)) {}
+
+  ~MuonPendingProxyTransfers() { Reset(); }
+
+  MuonPendingProxyTransfers(const MuonPendingProxyTransfers&) = delete;
+  MuonPendingProxyTransfers& operator=(
+      const MuonPendingProxyTransfers&) = delete;
+
+  MuonPendingProxyTransfers(MuonPendingProxyTransfers&& other) noexcept
+      : impl(std::exchange(other.impl, nullptr)),
+        owner_id(std::move(other.owner_id)),
+        registrations(std::move(other.registrations)) {}
+
+  MuonPendingProxyTransfers& operator=(
+      MuonPendingProxyTransfers&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      impl = std::exchange(other.impl, nullptr);
+      owner_id = std::move(other.owner_id);
+      registrations = std::move(other.registrations);
+    }
+    return *this;
+  }
+
+  void Add(MuonPluginFunctionProxyRegistration registration) {
+    registrations.push_back(std::move(registration));
+  }
+
+  void Commit() {
+    impl = nullptr;
+    owner_id.clear();
+    registrations.clear();
+  }
+
+  void Reset() {
+    auto* release_impl = std::exchange(impl, nullptr);
+    if (release_impl != nullptr) {
+      for (const auto& registration : registrations) {
+        (void)ReleaseMuonFunctionProxyLease(
+            release_impl, owner_id, registration.proxy_id,
+            registration.lease_token);
+      }
+    }
+    owner_id.clear();
+    registrations.clear();
+  }
+
+  struct MuonPluginRuntimeImpl* impl = nullptr;
+  std::string owner_id;
+  std::vector<MuonPluginFunctionProxyRegistration> registrations;
+};
+
 struct MuonPendingRendererFunctionCall {
   tra_ffic_completion completion = nullptr;
   MuonRendererFunctionSource* source = nullptr;
   MuonRendererFunctionBorrow source_borrow;
+  MuonPendingProxyTransfers proxy_transfers;
 };
 
 struct muon_shared_buffer {
@@ -170,9 +285,11 @@ struct MuonDecodedArguments {
   std::vector<std::string> string_storage;
   std::shared_ptr<MuonSharedBufferPayload> shared_payload;
   std::vector<MuonRendererFunctionBorrow> renderer_function_borrows;
+  std::vector<MuonFunctionRetain> function_retains;
 
-  void ResetRendererFunctionBorrows() {
+  void ResetFunctionBorrows() {
     renderer_function_borrows.clear();
+    function_retains.clear();
   }
 };
 
@@ -245,9 +362,12 @@ struct MuonPluginRuntimeImpl {
       pending_renderer_function_calls;
 
   uint32_t next_proxy_id = 1;
+  uint64_t next_proxy_lease_token = 1;
   std::map<uint32_t, MuonFunctionProxy> proxies_by_id;
   std::map<std::string, uint32_t> proxy_ids_by_key;
-  std::map<std::string, std::vector<uint32_t>> proxy_ids_by_owner;
+  std::map<std::string, std::map<std::string, uint32_t>>
+      proxy_leases_by_owner;
+  std::map<std::string, MuonFunctionOwner> active_function_owners;
 
   std::map<muon_shared_buffer_handle,
            std::unique_ptr<muon_shared_buffer>>
@@ -1287,12 +1407,15 @@ static std::string CreateMuonFunctionProxyKey(
 
 static CefRefPtr<CefDictionaryValue> CreateMuonEncodedPluginProxy(
     uint32_t proxy_id,
+    const std::string& lease_token,
     const MuonTypeMetadata& function_type) {
   const auto encoded_function = CefDictionaryValue::Create();
   encoded_function->SetString(kMuonFunctionArgumentKindKey,
                               kMuonFunctionArgumentKindPluginProxy);
   encoded_function->SetInt(kMuonFunctionArgumentProxyIdKey,
                            static_cast<int>(proxy_id));
+  encoded_function->SetString(kMuonFunctionArgumentLeaseTokenKey,
+                              lease_token);
   encoded_function->SetString(kMuonFunctionArgumentTypeKey,
                               CreateMuonTypeCanonicalKey(function_type));
   encoded_function->SetDictionary("type",
@@ -1407,68 +1530,114 @@ static void DestroyMuonRendererFunctionSource(void* state) {
   delete source;
 }
 
-static uint32_t RegisterMuonFunctionProxyForOwner(
+static bool RegisterMuonFunctionProxyForOwner(
     MuonPluginRuntimeImpl* impl,
     const std::string& owner_id,
     muon_native_function function,
-    const MuonTypeMetadata& function_type) {
+    const MuonTypeMetadata& function_type,
+    MuonPluginFunctionProxyRegistration* registration,
+    std::string* error_message) {
   if (impl == nullptr || function == nullptr ||
       function_type.type != MUON_TYPE_FUNCTION ||
-      function_type.function_return_type.empty()) {
-    return 0;
+      function_type.function_return_type.empty() || registration == nullptr ||
+      error_message == nullptr) {
+    return false;
+  }
+  registration->proxy_id = 0;
+  registration->lease_token.clear();
+  if (impl->active_function_owners.find(owner_id) ==
+      impl->active_function_owners.end()) {
+    *error_message = "Renderer function context is unavailable";
+    return false;
   }
 
   tra_ffic_error retain_error;
   if (!tra_ffic_function_retain(function, &retain_error)) {
-    return 0;
+    *error_message = GetMuonTrafficError(retain_error);
+    return false;
   }
 
   const auto key = CreateMuonFunctionProxyKey(function, function_type);
+  auto* proxy = static_cast<MuonFunctionProxy*>(nullptr);
   const auto existing = impl->proxy_ids_by_key.find(key);
   if (existing != impl->proxy_ids_by_key.end()) {
-    auto& proxy = impl->proxies_by_id[existing->second];
-    proxy.wrapper_lease_count += 1;
-    impl->proxy_ids_by_owner[owner_id].push_back(proxy.id);
-    return proxy.id;
+    const auto proxy_iterator = impl->proxies_by_id.find(existing->second);
+    if (proxy_iterator != impl->proxies_by_id.end()) {
+      proxy = &proxy_iterator->second;
+    } else {
+      impl->proxy_ids_by_key.erase(existing);
+    }
   }
 
-  auto signature_storage = CreateSharedSignature(
-      function_type.function_arg_types, function_type.function_return_type[0]);
-  tra_ffic_function_ref function_ref = {};
-  std::string error_message;
-  if (!CreateMuonTrafficFunctionRef(function, signature_storage,
-                                     &function_ref, &error_message)) {
-    (void)tra_ffic_function_release(function, &retain_error);
-    return 0;
+  if (proxy == nullptr) {
+    auto signature_storage = CreateSharedSignature(
+        function_type.function_arg_types,
+        function_type.function_return_type[0]);
+    tra_ffic_function_ref function_ref = {};
+    if (!CreateMuonTrafficFunctionRef(function, signature_storage,
+                                      &function_ref, error_message)) {
+      (void)tra_ffic_function_release(function, &retain_error);
+      return false;
+    }
+
+    MuonFunctionProxy created_proxy;
+    created_proxy.id = impl->next_proxy_id;
+    impl->next_proxy_id += 1;
+    created_proxy.function = function;
+    created_proxy.function_type = function_type;
+    created_proxy.signature_storage = std::move(signature_storage);
+    created_proxy.function_ref = function_ref;
+    const auto proxy_id = created_proxy.id;
+    impl->proxies_by_id.emplace(proxy_id, std::move(created_proxy));
+    impl->proxy_ids_by_key[key] = proxy_id;
+    proxy = &impl->proxies_by_id.find(proxy_id)->second;
   }
 
-  MuonFunctionProxy proxy;
-  proxy.id = impl->next_proxy_id;
-  impl->next_proxy_id += 1;
-  proxy.function = function;
-  proxy.function_type = function_type;
-  proxy.signature_storage = std::move(signature_storage);
-  proxy.function_ref = function_ref;
-  proxy.wrapper_lease_count = 1;
-  const auto proxy_id = proxy.id;
-  impl->proxies_by_id[proxy_id] = proxy;
-  impl->proxy_ids_by_key[key] = proxy_id;
-  impl->proxy_ids_by_owner[owner_id].push_back(proxy_id);
-  return proxy_id;
+  registration->proxy_id = proxy->id;
+  registration->lease_token =
+      std::to_string(impl->next_proxy_lease_token);
+  impl->next_proxy_lease_token += 1;
+  proxy->lease_owners_by_token[registration->lease_token] = owner_id;
+  impl->proxy_leases_by_owner[owner_id][registration->lease_token] =
+      proxy->id;
+  return true;
 }
 
-static void ReleaseMuonFunctionProxy(MuonPluginRuntimeImpl* impl,
-                                      uint32_t proxy_id) {
-  muon_native_function function = nullptr;
+static bool ReleaseMuonFunctionProxyLease(
+    MuonPluginRuntimeImpl* impl,
+    const std::string& owner_id,
+    uint32_t proxy_id,
+    const std::string& lease_token) {
+  if (impl == nullptr || lease_token.empty()) {
+    return false;
+  }
   const auto proxy_iterator = impl->proxies_by_id.find(proxy_id);
   if (proxy_iterator == impl->proxies_by_id.end()) {
-    return;
+    return false;
   }
   auto& proxy = proxy_iterator->second;
-  function = proxy.function;
-  if (proxy.wrapper_lease_count > 1) {
-    proxy.wrapper_lease_count -= 1;
-  } else {
+  const auto lease_iterator =
+      proxy.lease_owners_by_token.find(lease_token);
+  if (lease_iterator == proxy.lease_owners_by_token.end() ||
+      lease_iterator->second != owner_id) {
+    return false;
+  }
+
+  const auto function = proxy.function;
+  proxy.lease_owners_by_token.erase(lease_iterator);
+  const auto owner_iterator = impl->proxy_leases_by_owner.find(owner_id);
+  if (owner_iterator != impl->proxy_leases_by_owner.end()) {
+    const auto owner_lease_iterator =
+        owner_iterator->second.find(lease_token);
+    if (owner_lease_iterator != owner_iterator->second.end() &&
+        owner_lease_iterator->second == proxy_id) {
+      owner_iterator->second.erase(owner_lease_iterator);
+    }
+    if (owner_iterator->second.empty()) {
+      impl->proxy_leases_by_owner.erase(owner_iterator);
+    }
+  }
+  if (proxy.lease_owners_by_token.empty()) {
     impl->proxy_ids_by_key.erase(
         CreateMuonFunctionProxyKey(proxy.function, proxy.function_type));
     impl->proxies_by_id.erase(proxy_iterator);
@@ -1476,13 +1645,27 @@ static void ReleaseMuonFunctionProxy(MuonPluginRuntimeImpl* impl,
 
   tra_ffic_error error;
   (void)tra_ffic_function_release(function, &error);
+  return true;
 }
 
-static bool TryGetMuonFunctionProxy(MuonPluginRuntimeImpl* impl,
-                                     uint32_t proxy_id,
-                                     MuonFunctionProxy* proxy) {
+static bool TryGetMuonFunctionProxyForLease(
+    MuonPluginRuntimeImpl* impl,
+    const std::string& owner_id,
+    uint32_t proxy_id,
+    const std::string& lease_token,
+    MuonFunctionProxy* proxy) {
+  if (impl == nullptr || lease_token.empty()) {
+    return false;
+  }
   const auto proxy_iterator = impl->proxies_by_id.find(proxy_id);
   if (proxy_iterator == impl->proxies_by_id.end()) {
+    return false;
+  }
+  const auto lease_iterator =
+      proxy_iterator->second.lease_owners_by_token.find(lease_token);
+  if (lease_iterator ==
+          proxy_iterator->second.lease_owners_by_token.end() ||
+      lease_iterator->second != owner_id) {
     return false;
   }
   if (proxy != nullptr) {
@@ -1623,7 +1806,7 @@ static void HandleMuonTrafficCallResult(void* user_data,
   }
 
   auto completion = std::move(state->completion);
-  state->decoded_args.ResetRendererFunctionBorrows();
+  state->decoded_args.ResetFunctionBorrows();
   completion(call_result);
 }
 
@@ -1689,8 +1872,10 @@ static bool SetMuonEncodedValue(
         return true;
       }
       list->SetDictionary(
-          index, CreateMuonEncodedPluginProxy(value.function_proxy_id,
-                                               value.function_type));
+          index, CreateMuonEncodedPluginProxy(
+                     value.function_proxy_id,
+                     value.function_proxy_lease_token,
+                     value.function_type));
       return true;
     case MUON_TYPE_BUFFER_VIEW: {
       MuonSharedBufferEntry entry;
@@ -1749,6 +1934,7 @@ static bool CopyMuonTrafficArgumentForRenderer(
     const MuonTypeMetadata& expected_type,
     const tra_ffic_value& raw_value,
     MuonPluginValue* value,
+    MuonPendingProxyTransfers* proxy_transfers,
     std::string* error_message) {
   auto raw_type = MUON_TYPE_VOID;
   if (!ConvertTrafficValueTypeToMuon(raw_value.kind, &raw_type) ||
@@ -1815,11 +2001,20 @@ static bool CopyMuonTrafficArgumentForRenderer(
         value->is_null = true;
         return true;
       }
-      value->function_proxy_id = RegisterMuonFunctionProxyForOwner(
-          impl, source.owner_id, raw_value.as.function_value, expected_type);
-      if (value->function_proxy_id == 0) {
-        *error_message = "Failed to register nested function proxy";
+      if (proxy_transfers == nullptr) {
+        *error_message = "Nested function proxy transfer is unavailable";
         return false;
+      }
+      {
+        MuonPluginFunctionProxyRegistration registration;
+        if (!RegisterMuonFunctionProxyForOwner(
+                impl, source.owner_id, raw_value.as.function_value,
+                expected_type, &registration, error_message)) {
+          return false;
+        }
+        value->function_proxy_id = registration.proxy_id;
+        value->function_proxy_lease_token = registration.lease_token;
+        proxy_transfers->Add(std::move(registration));
       }
       return true;
     case MUON_TYPE_BUFFER_VIEW:
@@ -1862,12 +2057,15 @@ static void InvokeMuonRendererFunctionClosure(
     return;
   }
 
+  MuonPendingProxyTransfers proxy_transfers(source->impl,
+                                             source->owner_id);
   std::vector<MuonPluginValue> encoded_values(arg_count);
   std::string error_message;
   for (auto index = size_t{0}; index < arg_count; ++index) {
     if (!CopyMuonTrafficArgumentForRenderer(
-            source->impl, *source, source->function_type.function_arg_types[index],
-            args[index], &encoded_values[index], &error_message)) {
+            source->impl, *source,
+            source->function_type.function_arg_types[index], args[index],
+            &encoded_values[index], &proxy_transfers, &error_message)) {
       CompleteMuonRendererFunctionWithError(completion, error_message);
       return;
     }
@@ -1887,6 +2085,7 @@ static void InvokeMuonRendererFunctionClosure(
   pending_call.completion = completion;
   pending_call.source = source;
   pending_call.source_borrow = std::move(source_borrow);
+  pending_call.proxy_transfers = std::move(proxy_transfers);
   source->impl->pending_renderer_function_calls.emplace(
       call_id, std::move(pending_call));
 
@@ -1969,10 +2168,11 @@ static void InvokeMuonRendererFunctionClosure(
     message_args->SetDictionary(4, CreateMuonTypeMetadataDictionary(
                                        source->function_type));
     if (shared_message.message) {
-      source->context.frame->SendProcessMessage(PID_RENDERER,
-                                                shared_message.message);
+      source->context.frame->SendProcessMessage(
+          PID_RENDERER, shared_message.message);
     }
     source->context.frame->SendProcessMessage(PID_RENDERER, message);
+    pending_iterator->second.proxy_transfers.Commit();
   }));
   if (!task_posted) {
     MuonPendingRendererFunctionCall failed_call;
@@ -2076,6 +2276,10 @@ static bool GetOrCreateMuonRendererFunction(
   }
 
   const auto owner_id = CreateMuonFunctionOwnerId(context, renderer_context_id);
+  impl->active_function_owners[owner_id] = {
+      context.browser_id,
+      renderer_context_id,
+  };
   const auto source_id =
       CreateMuonFunctionSourceId(owner_id, function_id) + ":" +
       CreateMuonTypeCanonicalKey(function_type);
@@ -2160,7 +2364,7 @@ static bool DecodeMuonPluginArguments(
     std::shared_ptr<MuonSharedBufferPayload> shared_payload,
     MuonDecodedArguments* decoded_args,
     std::string* error_message) {
-  decoded_args->ResetRendererFunctionBorrows();
+  decoded_args->ResetFunctionBorrows();
   if (!encoded_args) {
     *error_message = "Missing argument list";
     return false;
@@ -2176,6 +2380,7 @@ static bool DecodeMuonPluginArguments(
   decoded_args->values.resize(arg_types.size());
   decoded_args->string_storage.reserve(arg_types.size());
   decoded_args->renderer_function_borrows.reserve(arg_types.size());
+  decoded_args->function_retains.reserve(arg_types.size());
   for (auto index = size_t{0}; index < arg_types.size(); ++index) {
     const auto& expected_type = arg_types[index];
     auto& target = decoded_args->values[index];
@@ -2387,10 +2592,35 @@ static bool DecodeMuonPluginArguments(
              encoded_function->GetString(kMuonFunctionArgumentKindKey)
                      .ToString() ==
                  kMuonFunctionArgumentKindPluginProxy)) {
+          if (encoded_function->GetType(kMuonFunctionArgumentKindKey) !=
+                  VTYPE_STRING ||
+              encoded_function->GetString(kMuonFunctionArgumentKindKey)
+                      .ToString() !=
+                  kMuonFunctionArgumentKindPluginProxy ||
+              encoded_function->GetType(kMuonFunctionArgumentProxyIdKey) !=
+                  VTYPE_INT ||
+              encoded_function->GetInt(kMuonFunctionArgumentProxyIdKey) <= 0 ||
+              encoded_function->GetType(
+                  kMuonFunctionArgumentLeaseTokenKey) != VTYPE_STRING ||
+              encoded_function->GetString(
+                  kMuonFunctionArgumentLeaseTokenKey).ToString().empty() ||
+              encoded_function->GetType(kMuonFunctionArgumentTypeKey) !=
+                  VTYPE_STRING ||
+              encoded_function->GetString(kMuonFunctionArgumentTypeKey)
+                      .ToString() !=
+                  CreateMuonTypeCanonicalKey(expected_type)) {
+            *error_message = "Invalid plugin function proxy";
+            return false;
+          }
           const auto proxy_id = static_cast<uint32_t>(
               encoded_function->GetInt(kMuonFunctionArgumentProxyIdKey));
+          const auto lease_token = encoded_function->GetString(
+              kMuonFunctionArgumentLeaseTokenKey).ToString();
+          const auto owner_id = CreateMuonFunctionOwnerId(
+              context, context.renderer_context_id);
           MuonFunctionProxy proxy;
-          if (!TryGetMuonFunctionProxy(impl, proxy_id, &proxy)) {
+          if (!TryGetMuonFunctionProxyForLease(
+                  impl, owner_id, proxy_id, lease_token, &proxy)) {
             *error_message = "Unknown plugin function proxy";
             return false;
           }
@@ -2398,7 +2628,13 @@ static bool DecodeMuonPluginArguments(
             *error_message = "Plugin function proxy type mismatch";
             return false;
           }
+          MuonFunctionRetain function_retain;
+          if (!function_retain.Acquire(proxy.function, error_message)) {
+            return false;
+          }
           function = proxy.function;
+          decoded_args->function_retains.push_back(
+              std::move(function_retain));
         } else {
           if (!encoded_function->HasKey(kMuonFunctionArgumentContextIdKey) ||
               !encoded_function->HasKey(kMuonFunctionArgumentFunctionIdKey)) {
@@ -2459,7 +2695,7 @@ static void InvokeMuonTrafficFunction(
     result.success = false;
     result.error_message = GetMuonTrafficError(error);
     auto call_completion = std::move(state->completion);
-    state->decoded_args.ResetRendererFunctionBorrows();
+    state->decoded_args.ResetFunctionBorrows();
     delete state;
     call_completion(result);
   }
@@ -2903,15 +3139,44 @@ MuonPluginRuntime::~MuonPluginRuntime() {
   if (g_muon_runtime_helpers == impl_.get()) {
     g_muon_runtime_helpers = nullptr;
   }
-  std::vector<uint32_t> proxy_ids;
-  for (const auto& entry : impl_->proxy_ids_by_owner) {
-    proxy_ids.insert(proxy_ids.end(), entry.second.begin(),
-                     entry.second.end());
+  for (const auto& owner_entry : impl_->renderer_sources_by_owner) {
+    for (auto* source : owner_entry.second) {
+      if (source == nullptr) {
+        continue;
+      }
+      source->context_valid = false;
+      source->renderer_lease_active = false;
+      source->context.frame = nullptr;
+    }
   }
-  impl_->proxy_ids_by_owner.clear();
-  for (const auto proxy_id : proxy_ids) {
-    ReleaseMuonFunctionProxy(impl_.get(), proxy_id);
+  impl_->renderer_functions_by_source.clear();
+  impl_->renderer_sources_by_owner.clear();
+  impl_->active_function_owners.clear();
+  std::vector<MuonPendingRendererFunctionCall> pending_renderer_calls;
+  pending_renderer_calls.reserve(
+      impl_->pending_renderer_function_calls.size());
+  for (auto& pending_entry : impl_->pending_renderer_function_calls) {
+    pending_renderer_calls.push_back(std::move(pending_entry.second));
   }
+  impl_->pending_renderer_function_calls.clear();
+  for (auto& pending_call : pending_renderer_calls) {
+    pending_call.proxy_transfers.Reset();
+    CompleteMuonRendererFunctionWithError(
+        pending_call.completion, "Plugin runtime is shutting down");
+    pending_call.completion = nullptr;
+    pending_call.source_borrow.Reset();
+    pending_call.source = nullptr;
+  }
+  impl_->DrainTrafficTasks();
+  const auto proxy_leases_by_owner = impl_->proxy_leases_by_owner;
+  for (const auto& owner_entry : proxy_leases_by_owner) {
+    for (const auto& lease_entry : owner_entry.second) {
+      (void)ReleaseMuonFunctionProxyLease(
+          impl_.get(), owner_entry.first, lease_entry.second,
+          lease_entry.first);
+    }
+  }
+  impl_->DrainTrafficTasks();
   auto libraries = std::move(impl_->libraries);
   impl_.reset();
   for (auto& library : libraries) {
@@ -2989,6 +3254,11 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
   }
 
   auto* function = function_iterator->second;
+  impl_->active_function_owners[CreateMuonFunctionOwnerId(
+      context, context.renderer_context_id)] = {
+      context.browser_id,
+      context.renderer_context_id,
+  };
   MuonDecodedArguments decoded_args;
   std::string error_message;
   if (!DecodeMuonPluginArguments(impl_.get(), context,
@@ -2998,7 +3268,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = error_message;
-    decoded_args.ResetRendererFunctionBorrows();
+    decoded_args.ResetFunctionBorrows();
     completion(result);
     return;
   }
@@ -3008,7 +3278,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = "muon main dispatcher is unavailable";
-    decoded_args.ResetRendererFunctionBorrows();
+    decoded_args.ResetFunctionBorrows();
     completion(result);
     return;
   }
@@ -3036,13 +3306,17 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
 void MuonPluginRuntime::InvokeProxy(
     const MuonPluginInvocationContext& context,
     uint32_t proxy_id,
+    const std::string& lease_token,
     int call_id,
     CefRefPtr<CefListValue> encoded_args,
     std::shared_ptr<MuonSharedBufferPayload> shared_payload,
     Completion completion) {
   CEF_REQUIRE_UI_THREAD();
+  const auto owner_id = CreateMuonFunctionOwnerId(
+      context, context.renderer_context_id);
   MuonFunctionProxy proxy;
-  if (!TryGetMuonFunctionProxy(impl_.get(), proxy_id, &proxy) ||
+  if (!TryGetMuonFunctionProxyForLease(
+          impl_.get(), owner_id, proxy_id, lease_token, &proxy) ||
       proxy.function_type.type != MUON_TYPE_FUNCTION ||
       proxy.function_type.function_return_type.empty()) {
     MuonPluginCallResult result;
@@ -3052,8 +3326,17 @@ void MuonPluginRuntime::InvokeProxy(
     return;
   }
 
-  MuonDecodedArguments decoded_args;
+  MuonFunctionRetain proxy_retain;
   std::string error_message;
+  if (!proxy_retain.Acquire(proxy.function, &error_message)) {
+    MuonPluginCallResult result;
+    result.success = false;
+    result.error_message = error_message;
+    completion(result);
+    return;
+  }
+
+  MuonDecodedArguments decoded_args;
   if (!DecodeMuonPluginArguments(impl_.get(), context,
                                   proxy.function_type.function_arg_types,
                                   encoded_args, std::move(shared_payload),
@@ -3062,17 +3345,18 @@ void MuonPluginRuntime::InvokeProxy(
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = error_message;
-    decoded_args.ResetRendererFunctionBorrows();
+    decoded_args.ResetFunctionBorrows();
     completion(result);
     return;
   }
+  decoded_args.function_retains.push_back(std::move(proxy_retain));
 
   auto* dispatcher = cardio::unsafe_get_current_dispatcher();
   if (dispatcher == nullptr) {
     MuonPluginCallResult result;
     result.success = false;
     result.error_message = "muon main dispatcher is unavailable";
-    decoded_args.ResetRendererFunctionBorrows();
+    decoded_args.ResetFunctionBorrows();
     completion(result);
     return;
   }
@@ -3097,15 +3381,29 @@ void MuonPluginRuntime::InvokeProxy(
   });
 }
 
-uint32_t MuonPluginRuntime::RegisterPluginFunctionProxy(
+bool MuonPluginRuntime::RegisterPluginFunctionProxy(
     const MuonPluginInvocationContext& context,
     muon_native_function function,
-    const MuonTypeMetadata& function_type) {
+    const MuonTypeMetadata& function_type,
+    MuonPluginFunctionProxyRegistration* registration,
+    std::string* error_message) {
   CEF_REQUIRE_UI_THREAD();
   const auto owner_id = CreateMuonFunctionOwnerId(
       context, context.renderer_context_id);
   return RegisterMuonFunctionProxyForOwner(impl_.get(), owner_id, function,
-                                            function_type);
+                                            function_type, registration,
+                                            error_message);
+}
+
+void MuonPluginRuntime::ReleasePluginFunctionProxy(
+    const MuonPluginInvocationContext& context,
+    uint32_t proxy_id,
+    const std::string& lease_token) {
+  CEF_REQUIRE_UI_THREAD();
+  const auto owner_id = CreateMuonFunctionOwnerId(
+      context, context.renderer_context_id);
+  (void)ReleaseMuonFunctionProxyLease(
+      impl_.get(), owner_id, proxy_id, lease_token);
 }
 
 bool MuonPluginRuntime::CreateSharedBufferMessage(
@@ -3128,6 +3426,7 @@ bool MuonPluginRuntime::CreateSharedBufferMessage(
 }
 
 void MuonPluginRuntime::CompleteRendererFunctionCall(
+    const MuonPluginInvocationContext& context,
     CefRefPtr<CefProcessMessage> message,
     std::shared_ptr<MuonSharedBufferPayload> shared_payload) {
   CEF_REQUIRE_UI_THREAD();
@@ -3136,7 +3435,7 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
     return;
   }
   const auto args = message->GetArgumentList();
-  if (!args || args->GetSize() < 1) {
+  if (!args || args->GetSize() < 1 || args->GetType(0) != VTYPE_INT) {
     return;
   }
 
@@ -3145,6 +3444,13 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
   const auto pending_iterator =
       impl_->pending_renderer_function_calls.find(call_id);
   if (pending_iterator == impl_->pending_renderer_function_calls.end()) {
+    return;
+  }
+  const auto* pending_source = pending_iterator->second.source;
+  if (pending_source == nullptr ||
+      context.renderer_context_id != pending_source->renderer_context_id ||
+      CreateMuonFunctionOwnerId(context, context.renderer_context_id) !=
+          pending_source->owner_id) {
     return;
   }
   pending_call = std::move(pending_iterator->second);
@@ -3160,12 +3466,18 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
     complete(nullptr, nullptr);
     return;
   }
-  if (args->GetSize() < 3) {
+  if (args->GetSize() != 5 || args->GetType(1) != VTYPE_BOOL ||
+      args->GetType(4) != VTYPE_INT ||
+      args->GetInt(4) != pending_call.source->renderer_context_id) {
     complete(nullptr, "Renderer function result is invalid");
     return;
   }
   const auto success = args->GetBool(1);
   if (!success) {
+    if (args->GetType(2) != VTYPE_STRING) {
+      complete(nullptr, "Renderer function result is invalid");
+      return;
+    }
     const auto error_message = args->GetString(2).ToString();
     complete(nullptr, error_message.c_str());
     return;
@@ -3178,13 +3490,13 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
 
   const auto& expected_type =
       pending_call.source->function_type.function_return_type[0];
+  if (args->GetType(2) != VTYPE_INT) {
+    complete(nullptr, "Renderer function result type is invalid");
+    return;
+  }
   const auto returned_type = static_cast<muon_value_type>(args->GetInt(2));
   if (returned_type != expected_type.type) {
     complete(nullptr, "Renderer function returned an unexpected type");
-    return;
-  }
-  if (expected_type.type != MUON_TYPE_VOID && args->GetSize() < 4) {
-    complete(nullptr, "Renderer function result value is missing");
     return;
   }
 
@@ -3321,13 +3633,47 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
         complete(nullptr, "Renderer function result is invalid");
         return;
       }
-      if (encoded_function->HasKey(kMuonFunctionArgumentProxyIdKey)) {
+      if (encoded_function->HasKey(kMuonFunctionArgumentProxyIdKey) ||
+          (encoded_function->HasKey(kMuonFunctionArgumentKindKey) &&
+           encoded_function->GetString(kMuonFunctionArgumentKindKey)
+                   .ToString() ==
+               kMuonFunctionArgumentKindPluginProxy)) {
+        if (encoded_function->GetType(kMuonFunctionArgumentKindKey) !=
+                VTYPE_STRING ||
+            encoded_function->GetString(kMuonFunctionArgumentKindKey)
+                    .ToString() !=
+                kMuonFunctionArgumentKindPluginProxy ||
+            encoded_function->GetType(kMuonFunctionArgumentProxyIdKey) !=
+                VTYPE_INT ||
+            encoded_function->GetInt(kMuonFunctionArgumentProxyIdKey) <= 0 ||
+            encoded_function->GetType(
+                kMuonFunctionArgumentLeaseTokenKey) != VTYPE_STRING ||
+            encoded_function->GetString(
+                kMuonFunctionArgumentLeaseTokenKey).ToString().empty() ||
+            encoded_function->GetType(kMuonFunctionArgumentTypeKey) !=
+                VTYPE_STRING ||
+            encoded_function->GetString(kMuonFunctionArgumentTypeKey)
+                    .ToString() !=
+                CreateMuonTypeCanonicalKey(expected_type)) {
+          complete(nullptr, "Renderer returned an invalid function proxy");
+          return;
+        }
         MuonFunctionProxy proxy;
         const auto proxy_id = static_cast<uint32_t>(
             encoded_function->GetInt(kMuonFunctionArgumentProxyIdKey));
-        if (!TryGetMuonFunctionProxy(impl_.get(), proxy_id, &proxy) ||
+        const auto lease_token = encoded_function->GetString(
+            kMuonFunctionArgumentLeaseTokenKey).ToString();
+        if (!TryGetMuonFunctionProxyForLease(
+                impl_.get(), pending_call.source->owner_id, proxy_id,
+                lease_token, &proxy) ||
             !AreEqualMuonTypes(proxy.function_type, expected_type)) {
           complete(nullptr, "Renderer returned an unknown function proxy");
+          return;
+        }
+        MuonFunctionRetain function_retain;
+        std::string error_message;
+        if (!function_retain.Acquire(proxy.function, &error_message)) {
+          complete(nullptr, error_message.c_str());
           return;
         }
         function_storage = proxy.function;
@@ -3336,12 +3682,26 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
       }
 
       if (!encoded_function->HasKey(kMuonFunctionArgumentContextIdKey) ||
-          !encoded_function->HasKey(kMuonFunctionArgumentFunctionIdKey)) {
+          !encoded_function->HasKey(kMuonFunctionArgumentFunctionIdKey) ||
+          encoded_function->GetType(kMuonFunctionArgumentContextIdKey) !=
+              VTYPE_INT ||
+          encoded_function->GetType(kMuonFunctionArgumentFunctionIdKey) !=
+              VTYPE_INT ||
+          encoded_function->GetType(kMuonFunctionArgumentTypeKey) !=
+              VTYPE_STRING ||
+          encoded_function->GetString(kMuonFunctionArgumentTypeKey)
+                  .ToString() !=
+              CreateMuonTypeCanonicalKey(expected_type)) {
         complete(nullptr, "Renderer function result is invalid");
         return;
       }
       const auto renderer_context_id =
           encoded_function->GetInt(kMuonFunctionArgumentContextIdKey);
+      if (renderer_context_id != pending_call.source->renderer_context_id) {
+        complete(nullptr,
+                 "Renderer function result belongs to another context");
+        return;
+      }
       const auto function_id =
           encoded_function->GetInt(kMuonFunctionArgumentFunctionIdKey);
       std::string error_message;
@@ -3363,20 +3723,21 @@ void MuonPluginRuntime::CompleteRendererFunctionCall(
   }
 }
 
-void MuonPluginRuntime::ReleaseFunctionContext(
-    const MuonPluginInvocationContext& context,
-    int renderer_context_id) {
-  CEF_REQUIRE_UI_THREAD();
+static void ReleaseMuonFunctionOwner(MuonPluginRuntimeImpl* impl,
+                                     const std::string& owner_id,
+                                     int renderer_context_id) {
+  if (impl == nullptr) {
+    return;
+  }
   ReleaseMuonBuiltinExecutorContext(renderer_context_id);
-  const auto owner_id = CreateMuonFunctionOwnerId(context,
-                                                   renderer_context_id);
+  impl->active_function_owners.erase(owner_id);
   std::vector<MuonRendererFunctionSource*> sources;
   const auto owner_iterator =
-      impl_->renderer_sources_by_owner.find(owner_id);
-  if (owner_iterator != impl_->renderer_sources_by_owner.end()) {
+      impl->renderer_sources_by_owner.find(owner_id);
+  if (owner_iterator != impl->renderer_sources_by_owner.end()) {
     sources.assign(owner_iterator->second.begin(),
                    owner_iterator->second.end());
-    impl_->renderer_sources_by_owner.erase(owner_iterator);
+    impl->renderer_sources_by_owner.erase(owner_iterator);
   }
 
   for (auto* source : sources) {
@@ -3387,16 +3748,16 @@ void MuonPluginRuntime::ReleaseFunctionContext(
     source->renderer_lease_active = false;
     source->context.frame = nullptr;
     const auto source_iterator =
-        impl_->renderer_functions_by_source.find(source->source_id);
-    if (source_iterator != impl_->renderer_functions_by_source.end() &&
+        impl->renderer_functions_by_source.find(source->source_id);
+    if (source_iterator != impl->renderer_functions_by_source.end() &&
         source_iterator->second == source) {
-      impl_->renderer_functions_by_source.erase(source_iterator);
+      impl->renderer_functions_by_source.erase(source_iterator);
     }
   }
 
   std::vector<MuonPendingRendererFunctionCall> pending_calls;
-  auto pending_iterator = impl_->pending_renderer_function_calls.begin();
-  while (pending_iterator != impl_->pending_renderer_function_calls.end()) {
+  auto pending_iterator = impl->pending_renderer_function_calls.begin();
+  while (pending_iterator != impl->pending_renderer_function_calls.end()) {
     auto* source = pending_iterator->second.source;
     if (source == nullptr || source->owner_id != owner_id) {
       ++pending_iterator;
@@ -3404,25 +3765,53 @@ void MuonPluginRuntime::ReleaseFunctionContext(
     }
     pending_calls.push_back(std::move(pending_iterator->second));
     pending_iterator =
-        impl_->pending_renderer_function_calls.erase(pending_iterator);
+        impl->pending_renderer_function_calls.erase(pending_iterator);
   }
 
   for (auto* source : sources) {
     ReleaseMuonRendererFunctionBridgeRetainIfIdle(source);
   }
   for (auto& pending_call : pending_calls) {
+    pending_call.proxy_transfers.Reset();
     CompleteMuonRendererFunctionWithError(
         pending_call.completion, "Renderer function context was released");
     pending_call.completion = nullptr;
   }
 
-  std::vector<uint32_t> proxy_ids;
-  const auto proxy_iterator = impl_->proxy_ids_by_owner.find(owner_id);
-  if (proxy_iterator != impl_->proxy_ids_by_owner.end()) {
-    proxy_ids = proxy_iterator->second;
-    impl_->proxy_ids_by_owner.erase(proxy_iterator);
+  auto proxy_leases = std::map<std::string, uint32_t>{};
+  const auto proxy_iterator =
+      impl->proxy_leases_by_owner.find(owner_id);
+  if (proxy_iterator != impl->proxy_leases_by_owner.end()) {
+    proxy_leases = proxy_iterator->second;
   }
-  for (const auto proxy_id : proxy_ids) {
-    ReleaseMuonFunctionProxy(impl_.get(), proxy_id);
+  for (const auto& lease_entry : proxy_leases) {
+    (void)ReleaseMuonFunctionProxyLease(
+        impl, owner_id, lease_entry.second, lease_entry.first);
+  }
+}
+
+void MuonPluginRuntime::ReleaseFunctionContext(
+    const MuonPluginInvocationContext& context,
+    int renderer_context_id) {
+  CEF_REQUIRE_UI_THREAD();
+  ReleaseMuonFunctionOwner(
+      impl_.get(), CreateMuonFunctionOwnerId(context, renderer_context_id),
+      renderer_context_id);
+}
+
+void MuonPluginRuntime::ReleaseFunctionBrowser(int browser_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0) {
+    return;
+  }
+  auto owners = std::vector<std::pair<std::string, int>>{};
+  for (const auto& owner_entry : impl_->active_function_owners) {
+    if (owner_entry.second.browser_id == browser_id) {
+      owners.emplace_back(owner_entry.first,
+                          owner_entry.second.renderer_context_id);
+    }
+  }
+  for (const auto& owner : owners) {
+    ReleaseMuonFunctionOwner(impl_.get(), owner.first, owner.second);
   }
 }

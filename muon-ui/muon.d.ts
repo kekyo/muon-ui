@@ -29,6 +29,34 @@ declare global {
     readonly fs: MuonFsApi;
   }
 
+  /**
+   * JavaScript proxy for a native function returned by a muon plugin.
+   *
+   * @typeParam TArgs - Arguments accepted by the native function.
+   * @typeParam TResult - Value produced by the native function.
+   * @remarks Calls are asynchronous and return a promise. Dispose the proxy
+   * deterministically when it is no longer needed. Calling a disposed proxy
+   * returns a rejected promise, and passing it back to a plugin is a validation
+   * error.
+   */
+  interface MuonPluginFunctionProxy<TArgs extends readonly unknown[], TResult> {
+    /**
+     * Invoke the native function.
+     *
+     * @param args - Arguments passed to the native function.
+     * @returns A promise for the native function result.
+     */
+    (...args: TArgs): Promise<TResult>;
+    /**
+     * Release this JavaScript wrapper's native function lease.
+     *
+     * @remarks Disposal is synchronous and idempotent. Garbage collection and
+     * V8 context cleanup are fallbacks only; use this method for deterministic
+     * release.
+     */
+    readonly dispose: () => void;
+  }
+
   /** Asynchronously releasable resource handle. */
   interface AsyncReleaseable extends AsyncDisposable {
     /**

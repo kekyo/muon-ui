@@ -1090,6 +1090,33 @@ void existsResult;
     ).resolves.toBeUndefined();
   });
 
+  it("provides disposable plugin function proxy types", async () => {
+    await expect(
+      runTypeScriptConsumer(`import type {} from "muon-ui";
+
+declare const proxy: MuonPluginFunctionProxy<
+  readonly [number, string],
+  string
+>;
+
+const result: Promise<string> = proxy(123, "value");
+const disposed: void = proxy.dispose();
+proxy.dispose();
+
+// @ts-expect-error dispose is synchronous.
+const disposePromise: Promise<void> = proxy.dispose();
+// @ts-expect-error The proxy argument tuple is enforced.
+proxy("123", "value");
+// @ts-expect-error dispose cannot be replaced.
+proxy.dispose = () => {};
+
+void result;
+void disposed;
+void disposePromise;
+`),
+    ).resolves.toBeUndefined();
+  });
+
   it("provides muon virtual modules through configured TypeScript types", async () => {
     await expect(
       runTypeScriptConsumer(

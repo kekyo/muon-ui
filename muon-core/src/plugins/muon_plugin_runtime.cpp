@@ -14,6 +14,7 @@
 #include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
+#include "plugins/muon_function_wrapper_lifecycle.h"
 #include "plugins/muon_js_bridge.h"
 #include "config/muon_paths.h"
 #include "log/muon_log.h"
@@ -93,7 +94,11 @@ struct MuonFunctionProxy {
   MuonTypeMetadata function_type;
   std::shared_ptr<MuonFunctionSignatureStorage> signature_storage;
   tra_ffic_function_ref function_ref = {};
-  std::map<std::string, std::string> lease_owners_by_token;
+  struct Lease {
+    std::string owner_id;
+    MuonFunctionWrapperLease wrapper_lease;
+  };
+  std::map<std::string, Lease> leases_by_token;
 };
 
 struct MuonFunctionOwner {
@@ -110,7 +115,11 @@ struct MuonRendererFunctionSource {
   int renderer_context_id = 0;
   int function_id = 0;
   MuonTypeMetadata function_type;
+  MuonFunctionWrapperLease wrapper_lease;
   muon_native_function function = nullptr;
+  // tra-ffic can run the closure finalizer synchronously when creation fails
+  // after it has accepted the closure state.
+  bool* finalized_during_acquire = nullptr;
   size_t active_bridge_borrows = 0;
   bool bridge_retain_active = false;
   bool context_valid = true;
@@ -200,7 +209,37 @@ struct MuonFunctionRetain {
     }
   }
 
+  muon_native_function Detach() {
+    return std::exchange(function, nullptr);
+  }
+
   muon_native_function function = nullptr;
+};
+
+struct MuonFunctionWrapperLeaseGuard {
+  MuonFunctionWrapperLeaseGuard(
+      MuonFunctionWrapperLifecycle* lifecycle,
+      const MuonFunctionWrapperLease* lease)
+      : lifecycle(lifecycle), lease(lease) {}
+
+  ~MuonFunctionWrapperLeaseGuard() {
+    if (lifecycle != nullptr && lease != nullptr) {
+      (void)lifecycle->Release(*lease);
+    }
+  }
+
+  MuonFunctionWrapperLeaseGuard(
+      const MuonFunctionWrapperLeaseGuard&) = delete;
+  MuonFunctionWrapperLeaseGuard& operator=(
+      const MuonFunctionWrapperLeaseGuard&) = delete;
+
+  void Commit() {
+    lifecycle = nullptr;
+    lease = nullptr;
+  }
+
+  MuonFunctionWrapperLifecycle* lifecycle = nullptr;
+  const MuonFunctionWrapperLease* lease = nullptr;
 };
 
 struct MuonPendingProxyTransfers {
@@ -350,6 +389,11 @@ struct MuonPluginRuntimeImpl {
   tra_ffic_side renderer_side = {};
   tra_ffic_side plugin_side = {};
   bool traffic_initialized = false;
+
+  MuonFunctionWrapperLifecycle function_wrapper_lifecycle{
+      {kMuonFunctionWrapperOwnerLimit,
+       kMuonFunctionWrapperGlobalLimit}};
+  std::set<MuonRendererFunctionSource*> live_renderer_function_sources;
 
   uint64_t next_renderer_source_lease_token = 1;
   std::map<std::string, MuonRendererFunctionSource*>
@@ -1488,6 +1532,11 @@ static bool AcquireMuonRendererFunctionBorrow(
     *error_message = "Renderer function context is unavailable";
     return false;
   }
+  if (source->active_bridge_borrows ==
+      std::numeric_limits<size_t>::max()) {
+    *error_message = "Renderer function borrow limit is exhausted";
+    return false;
+  }
   if (!source->bridge_retain_active) {
     tra_ffic_error retain_error;
     if (!tra_ffic_function_retain(source->function, &retain_error)) {
@@ -1506,6 +1555,9 @@ static void DestroyMuonRendererFunctionSource(void* state) {
   if (source == nullptr) {
     return;
   }
+  if (source->finalized_during_acquire != nullptr) {
+    *source->finalized_during_acquire = true;
+  }
   auto* impl = source->impl;
   if (impl != nullptr) {
     const auto source_iterator =
@@ -1522,6 +1574,9 @@ static void DestroyMuonRendererFunctionSource(void* state) {
         impl->renderer_sources_by_owner.erase(owner_iterator);
       }
     }
+    impl->live_renderer_function_sources.erase(source);
+    (void)impl->function_wrapper_lifecycle.Release(
+        source->wrapper_lease);
   }
   SendMuonRendererFunctionSourceLeaseMessage(
       *source, kMuonRendererFunctionSourceReleaseMessageName);
@@ -1551,12 +1606,6 @@ static bool RegisterMuonFunctionProxyForOwner(
     return false;
   }
 
-  tra_ffic_error retain_error;
-  if (!tra_ffic_function_retain(function, &retain_error)) {
-    *error_message = GetMuonTrafficError(retain_error);
-    return false;
-  }
-
   const auto key = CreateMuonFunctionProxyKey(function, function_type);
   auto* proxy = static_cast<MuonFunctionProxy*>(nullptr);
   const auto existing = impl->proxy_ids_by_key.find(key);
@@ -1569,17 +1618,54 @@ static bool RegisterMuonFunctionProxyForOwner(
     }
   }
 
-  if (proxy == nullptr) {
-    auto signature_storage = CreateSharedSignature(
-        function_type.function_arg_types,
-        function_type.function_return_type[0]);
-    tra_ffic_function_ref function_ref = {};
-    if (!CreateMuonTrafficFunctionRef(function, signature_storage,
-                                      &function_ref, error_message)) {
-      (void)tra_ffic_function_release(function, &retain_error);
-      return false;
-    }
+  if (impl->next_proxy_lease_token == 0 ||
+      impl->next_proxy_lease_token ==
+          std::numeric_limits<uint64_t>::max()) {
+    *error_message = "Plugin function proxy lease ids are exhausted";
+    return false;
+  }
+  if (proxy == nullptr &&
+      (impl->next_proxy_id == 0 ||
+       impl->next_proxy_id >
+           static_cast<uint32_t>(std::numeric_limits<int>::max()))) {
+    *error_message = "Plugin function proxy ids are exhausted";
+    return false;
+  }
 
+  auto signature_storage = std::shared_ptr<MuonFunctionSignatureStorage>{};
+  auto function_ref = tra_ffic_function_ref{};
+  auto function_retain = MuonFunctionRetain{};
+  const auto wrapper_lease = impl->function_wrapper_lifecycle.TryAcquire(
+      owner_id, MuonFunctionWrapperKind::kPluginProxyLease,
+      [&]() {
+        if (proxy == nullptr) {
+          signature_storage = CreateSharedSignature(
+              function_type.function_arg_types,
+              function_type.function_return_type[0]);
+        }
+        if (!function_retain.Acquire(function, error_message)) {
+          return false;
+        }
+        if (proxy != nullptr) {
+          return true;
+        }
+        if (!CreateMuonTrafficFunctionRef(
+                function, signature_storage, &function_ref,
+                error_message)) {
+          return false;
+        }
+        return true;
+      });
+  if (!wrapper_lease.has_value()) {
+    if (error_message->empty()) {
+      *error_message = "Function wrapper quota exceeded";
+    }
+    return false;
+  }
+  auto wrapper_lease_guard = MuonFunctionWrapperLeaseGuard(
+      &impl->function_wrapper_lifecycle, &*wrapper_lease);
+
+  if (proxy == nullptr) {
     MuonFunctionProxy created_proxy;
     created_proxy.id = impl->next_proxy_id;
     impl->next_proxy_id += 1;
@@ -1597,9 +1683,14 @@ static bool RegisterMuonFunctionProxyForOwner(
   registration->lease_token =
       std::to_string(impl->next_proxy_lease_token);
   impl->next_proxy_lease_token += 1;
-  proxy->lease_owners_by_token[registration->lease_token] = owner_id;
+  proxy->leases_by_token[registration->lease_token] = {
+      owner_id,
+      *wrapper_lease,
+  };
   impl->proxy_leases_by_owner[owner_id][registration->lease_token] =
       proxy->id;
+  (void)function_retain.Detach();
+  wrapper_lease_guard.Commit();
   return true;
 }
 
@@ -1617,14 +1708,15 @@ static bool ReleaseMuonFunctionProxyLease(
   }
   auto& proxy = proxy_iterator->second;
   const auto lease_iterator =
-      proxy.lease_owners_by_token.find(lease_token);
-  if (lease_iterator == proxy.lease_owners_by_token.end() ||
-      lease_iterator->second != owner_id) {
+      proxy.leases_by_token.find(lease_token);
+  if (lease_iterator == proxy.leases_by_token.end() ||
+      lease_iterator->second.owner_id != owner_id) {
     return false;
   }
 
   const auto function = proxy.function;
-  proxy.lease_owners_by_token.erase(lease_iterator);
+  const auto wrapper_lease = lease_iterator->second.wrapper_lease;
+  proxy.leases_by_token.erase(lease_iterator);
   const auto owner_iterator = impl->proxy_leases_by_owner.find(owner_id);
   if (owner_iterator != impl->proxy_leases_by_owner.end()) {
     const auto owner_lease_iterator =
@@ -1637,7 +1729,8 @@ static bool ReleaseMuonFunctionProxyLease(
       impl->proxy_leases_by_owner.erase(owner_iterator);
     }
   }
-  if (proxy.lease_owners_by_token.empty()) {
+  (void)impl->function_wrapper_lifecycle.Release(wrapper_lease);
+  if (proxy.leases_by_token.empty()) {
     impl->proxy_ids_by_key.erase(
         CreateMuonFunctionProxyKey(proxy.function, proxy.function_type));
     impl->proxies_by_id.erase(proxy_iterator);
@@ -1662,10 +1755,10 @@ static bool TryGetMuonFunctionProxyForLease(
     return false;
   }
   const auto lease_iterator =
-      proxy_iterator->second.lease_owners_by_token.find(lease_token);
+      proxy_iterator->second.leases_by_token.find(lease_token);
   if (lease_iterator ==
-          proxy_iterator->second.lease_owners_by_token.end() ||
-      lease_iterator->second != owner_id) {
+          proxy_iterator->second.leases_by_token.end() ||
+      lease_iterator->second.owner_id != owner_id) {
     return false;
   }
   if (proxy != nullptr) {
@@ -2078,6 +2171,13 @@ static void InvokeMuonRendererFunctionClosure(
     return;
   }
 
+  if (source->impl->next_renderer_call_id == 0 ||
+      source->impl->next_renderer_call_id >
+          static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+    CompleteMuonRendererFunctionWithError(
+        completion, "Renderer function call ids are exhausted");
+    return;
+  }
   auto call_id = uint32_t{0};
   call_id = source->impl->next_renderer_call_id;
   source->impl->next_renderer_call_id += 1;
@@ -2302,6 +2402,11 @@ static bool GetOrCreateMuonRendererFunction(
         }
       }
       if (source != nullptr) {
+        if (source->active_bridge_borrows ==
+            std::numeric_limits<size_t>::max()) {
+          *error_message = "Renderer function borrow limit is exhausted";
+          return false;
+        }
         source->active_bridge_borrows += 1;
         *function = source->function;
         *borrow = MuonRendererFunctionBorrow(source);
@@ -2314,6 +2419,12 @@ static bool GetOrCreateMuonRendererFunction(
     *error_message = "Renderer function frame is unavailable";
     return false;
   }
+  if (impl->next_renderer_source_lease_token == 0 ||
+      impl->next_renderer_source_lease_token ==
+          std::numeric_limits<uint64_t>::max()) {
+    *error_message = "Renderer function source lease ids are exhausted";
+    return false;
+  }
 
   auto source = std::make_unique<MuonRendererFunctionSource>();
   source->impl = impl;
@@ -2321,36 +2432,59 @@ static bool GetOrCreateMuonRendererFunction(
   source->context.renderer_context_id = renderer_context_id;
   source->owner_id = owner_id;
   source->source_id = source_id;
-  source->lease_token =
-      std::to_string(impl->next_renderer_source_lease_token);
-  impl->next_renderer_source_lease_token += 1;
   source->renderer_context_id = renderer_context_id;
   source->function_id = function_id;
   source->function_type = function_type;
+  auto* created_source = source.get();
 
   const auto signature_storage = CreateSharedSignature(
       function_type.function_arg_types, function_type.function_return_type[0]);
-  tra_ffic_error error;
   muon_native_function created_function = nullptr;
-  if (!tra_ffic_side_create_raw_closure(
-          &impl->renderer_side,
-          GetMuonFunctionSignature(signature_storage.get()),
-          InvokeMuonRendererFunctionClosure, source.get(),
-          DestroyMuonRendererFunctionSource, &created_function, &error)) {
-    *error_message = GetMuonTrafficError(error);
+  const auto wrapper_lease = impl->function_wrapper_lifecycle.TryAcquire(
+      owner_id, MuonFunctionWrapperKind::kRendererSource,
+      [&]() {
+        created_source->lease_token =
+            std::to_string(impl->next_renderer_source_lease_token);
+        impl->next_renderer_source_lease_token += 1;
+        auto finalized_during_acquire = false;
+        created_source->finalized_during_acquire =
+            &finalized_during_acquire;
+        auto* closure_state = source.release();
+        auto error = tra_ffic_error{};
+        if (!tra_ffic_side_create_raw_closure(
+                &impl->renderer_side,
+                GetMuonFunctionSignature(signature_storage.get()),
+                InvokeMuonRendererFunctionClosure, closure_state,
+                DestroyMuonRendererFunctionSource, &created_function,
+                &error)) {
+          if (!finalized_during_acquire) {
+            closure_state->finalized_during_acquire = nullptr;
+            delete closure_state;
+          }
+          *error_message = GetMuonTrafficError(error);
+          return false;
+        }
+        closure_state->finalized_during_acquire = nullptr;
+        return true;
+      });
+  if (!wrapper_lease.has_value()) {
+    if (error_message->empty()) {
+      *error_message = "Function wrapper quota exceeded";
+    }
     return false;
   }
-  source->function = created_function;
-  source->active_bridge_borrows = 1;
-  source->bridge_retain_active = true;
-  source->renderer_lease_active = true;
-  auto* borrowed_source = source.get();
+  created_source->wrapper_lease = *wrapper_lease;
+  created_source->function = created_function;
+  created_source->active_bridge_borrows = 1;
+  created_source->bridge_retain_active = true;
+  created_source->renderer_lease_active = true;
+  auto* borrowed_source = created_source;
   impl->renderer_functions_by_source[source_id] = borrowed_source;
   impl->renderer_sources_by_owner[owner_id].insert(borrowed_source);
+  impl->live_renderer_function_sources.insert(borrowed_source);
   SendMuonRendererFunctionSourceLeaseMessage(
       *borrowed_source, kMuonRendererFunctionSourceAcquireMessageName);
 
-  (void)source.release();
   *function = created_function;
   *borrow = MuonRendererFunctionBorrow(borrowed_source);
   return true;
@@ -3815,3 +3949,54 @@ void MuonPluginRuntime::ReleaseFunctionBrowser(int browser_id) {
     ReleaseMuonFunctionOwner(impl_.get(), owner.first, owner.second);
   }
 }
+
+#if defined(MUON_TEST_BUILD)
+MuonFunctionWrapperDiagnostics
+MuonPluginRuntime::GetFunctionWrapperDiagnostics(
+    const MuonPluginInvocationContext& context) const {
+  CEF_REQUIRE_UI_THREAD();
+  auto diagnostics = MuonFunctionWrapperDiagnostics{};
+  const auto owner_id = CreateMuonFunctionOwnerId(
+      context, context.renderer_context_id);
+  const auto owner_counts =
+      impl_->function_wrapper_lifecycle.GetOwnerCounts(owner_id);
+  const auto global_counts =
+      impl_->function_wrapper_lifecycle.GetGlobalCounts();
+  diagnostics.owner.sources = owner_counts.renderer_source_count;
+  diagnostics.owner.proxy_leases =
+      owner_counts.plugin_proxy_lease_count;
+  diagnostics.global.sources = global_counts.renderer_source_count;
+  diagnostics.global.proxy_leases =
+      global_counts.plugin_proxy_lease_count;
+
+  for (const auto* source : impl_->live_renderer_function_sources) {
+    if (source == nullptr) {
+      continue;
+    }
+    diagnostics.global.borrows += source->active_bridge_borrows;
+    if (source->owner_id == owner_id) {
+      diagnostics.owner.borrows += source->active_bridge_borrows;
+    }
+  }
+  diagnostics.global.proxies = impl_->proxies_by_id.size();
+  const auto owner_proxy_iterator =
+      impl_->proxy_leases_by_owner.find(owner_id);
+  if (owner_proxy_iterator != impl_->proxy_leases_by_owner.end()) {
+    auto owner_proxy_ids = std::set<uint32_t>{};
+    for (const auto& lease_entry : owner_proxy_iterator->second) {
+      owner_proxy_ids.insert(lease_entry.second);
+    }
+    diagnostics.owner.proxies = owner_proxy_ids.size();
+  }
+
+#if defined(MUON_TRACK_FFI_CLOSURES)
+  const auto closure_snapshot = tra_ffic_get_closure_tracker_snapshot();
+  diagnostics.ffi_closures_enabled = true;
+  diagnostics.ffi_closure_alloc = closure_snapshot.alloc_count;
+  diagnostics.ffi_closure_free = closure_snapshot.free_count;
+  diagnostics.ffi_closure_live = closure_snapshot.live_count;
+  diagnostics.ffi_closure_high_water = closure_snapshot.high_water;
+#endif
+  return diagnostics;
+}
+#endif

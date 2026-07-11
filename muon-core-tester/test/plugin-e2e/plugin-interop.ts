@@ -18,8 +18,10 @@ import {
   expectDebugMuonStartupFailure,
   join,
   openPopupTarget,
+  readFunctionWrapperDiagnostics,
   startDebugMuon,
   stopMuon,
+  waitForFunctionWrapperDiagnosticBaseline,
   withMuon,
   withTrackedMuon,
 } from "./shared.js";
@@ -428,6 +430,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
 
   it("releases fresh renderer callbacks after completed plugin calls", async () => {
     await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
       await expect(
         driver.evaluate(`(async () => {
           const references = [];
@@ -451,6 +454,11 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           "globalThis.__muonCompletedCallbackReferences.filter((reference) => reference.deref() !== undefined).length",
         ),
       ).resolves.toBe(0);
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "fresh renderer callbacks",
+      );
     });
   });
 
@@ -556,6 +564,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
 
   it("lets plugins retain function pointers beyond completion", async () => {
     await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
       const retained = await driver.evaluate(`(async () => {
         let callback = () => undefined;
         globalThis.__muonRetainedCallbackReference = new WeakRef(callback);
@@ -595,6 +604,11 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           );
         })()`),
       ).resolves.toBe(true);
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "explicitly retained renderer callback",
+      );
     });
   });
 
@@ -949,6 +963,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
 
   it("disposes plugin function proxy wrappers independently", async () => {
     await withMuon(["muon_test_plugin_types"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
       const values = await driver.evaluate<{
         sameObject: boolean;
         disposeDescriptor: {
@@ -1088,6 +1103,11 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         status: "fulfilled",
       });
       expect(values.secondDisposeError).toBe("");
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "disposed plugin function proxies",
+      );
     });
   });
 
@@ -1227,6 +1247,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
 
   it("releases plugin function proxy wrappers after garbage collection", async () => {
     await withMuon(["muon_test_plugin_recursive_functions"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
       await expect(
         driver.evaluate(`(() => {
           globalThis.__muonPluginProxyReady = false;
@@ -1279,6 +1300,11 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         );
       }
       expect(collected).toBe(true);
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "garbage-collected plugin function proxy",
+      );
     });
   });
 

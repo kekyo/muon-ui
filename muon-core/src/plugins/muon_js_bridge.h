@@ -96,3 +96,17 @@ inline constexpr char kMuonPluginProxyReleaseMessageName[] =
  */
 inline constexpr char kMuonFunctionContextReleasedMessageName[] =
     "muon.function.context.released";
+
+#if defined(MUON_TEST_BUILD)
+/**
+ * Test-build process message used to request function wrapper diagnostics.
+ */
+inline constexpr char kMuonFunctionWrapperDiagnosticsRequestMessageName[] =
+    "muon.function.wrapper.diagnostics.request";
+
+/**
+ * Test-build process message used to return function wrapper diagnostics.
+ */
+inline constexpr char kMuonFunctionWrapperDiagnosticsResultMessageName[] =
+    "muon.function.wrapper.diagnostics.result";
+#endif

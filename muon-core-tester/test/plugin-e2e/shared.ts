@@ -4609,6 +4609,261 @@ export const runBuiltinFsFileUriOperations = async (
   expect(values.invalid.unlinkDirectory).not.toBe("");
 };
 
+/** Function wrapper counts exposed by test builds of Muon. */
+export interface FunctionWrapperDiagnosticCounts {
+  /** Live renderer function sources. */
+  sources: number;
+  /** Active native bridge borrows of renderer functions. */
+  borrows: number;
+  /** Live native function proxy sources. */
+  proxies: number;
+  /** Live renderer leases of native function proxies. */
+  proxyLeases: number;
+}
+
+/** FFI closure tracker counts exposed by test builds of Muon. */
+export interface FunctionWrapperFfiClosureDiagnostics {
+  /** Whether FFI closure tracking is enabled for this build. */
+  enabled: boolean;
+  /** Total number of allocated FFI closures. */
+  alloc: number;
+  /** Total number of released FFI closures. */
+  free: number;
+  /** Current number of live FFI closures. */
+  live: number;
+  /** Highest observed number of simultaneously live FFI closures. */
+  highWater: number;
+}
+
+/** Function wrapper lifecycle snapshot exposed by test builds of Muon. */
+export interface FunctionWrapperDiagnostics {
+  /** Counts owned by the calling browser, frame, and V8 context. */
+  owner: FunctionWrapperDiagnosticCounts;
+  /** Counts across the current Muon plugin runtime. */
+  global: FunctionWrapperDiagnosticCounts;
+  /** Process-wide FFI closure tracker counts. */
+  ffiClosures: FunctionWrapperFfiClosureDiagnostics;
+}
+
+const functionWrapperCountKeys = [
+  "borrows",
+  "proxies",
+  "proxyLeases",
+  "sources",
+] as const;
+
+const haveMatchingFunctionWrapperLifecycleCounts = (
+  current: FunctionWrapperDiagnostics,
+  baseline: FunctionWrapperDiagnostics,
+): boolean =>
+  functionWrapperCountKeys.every(
+    (key) =>
+      current.owner[key] === baseline.owner[key] &&
+      current.global[key] === baseline.global[key],
+  ) && current.ffiClosures.live === baseline.ffiClosures.live;
+
+/**
+ * Reads the function wrapper lifecycle snapshot from a test Muon build.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @returns The current owner, global, and FFI closure counts.
+ */
+export const readFunctionWrapperDiagnostics = async (
+  driver: CdpDriver,
+): Promise<FunctionWrapperDiagnostics> =>
+  await driver.evaluate<FunctionWrapperDiagnostics>(
+    "window.muon.__functionWrapperDiagnostics()",
+  );
+
+/**
+ * Verifies the test-only diagnostic API descriptor and result schema.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @returns The snapshot obtained while checking the API.
+ */
+export const expectFunctionWrapperDiagnosticApi = async (
+  driver: CdpDriver,
+): Promise<FunctionWrapperDiagnostics> => {
+  const result = await driver.evaluate<{
+    descriptor: {
+      configurable: boolean;
+      enumerable: boolean;
+      valueType: string;
+      writable: boolean;
+    } | null;
+    diagnostics: FunctionWrapperDiagnostics;
+    ffiClosureKeys: string[];
+    globalKeys: string[];
+    listed: boolean;
+    ownerKeys: string[];
+    resultKeys: string[];
+    returnsPromise: boolean;
+    validCounts: boolean;
+    validFfiClosures: boolean;
+  }>(`(async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window.muon,
+      "__functionWrapperDiagnostics",
+    );
+    const pending = window.muon.__functionWrapperDiagnostics();
+    const diagnostics = await pending;
+    const countValues = [
+      ...Object.values(diagnostics.owner),
+      ...Object.values(diagnostics.global),
+    ];
+    const ffiCountValues = [
+      diagnostics.ffiClosures.alloc,
+      diagnostics.ffiClosures.free,
+      diagnostics.ffiClosures.live,
+      diagnostics.ffiClosures.highWater,
+    ];
+    return {
+      descriptor: descriptor === undefined
+        ? null
+        : {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            valueType: typeof descriptor.value,
+            writable: descriptor.writable,
+          },
+      diagnostics,
+      ffiClosureKeys: Object.keys(diagnostics.ffiClosures).sort(),
+      globalKeys: Object.keys(diagnostics.global).sort(),
+      listed: Object.keys(window.muon).includes(
+        "__functionWrapperDiagnostics",
+      ),
+      ownerKeys: Object.keys(diagnostics.owner).sort(),
+      resultKeys: Object.keys(diagnostics).sort(),
+      returnsPromise: pending instanceof Promise,
+      validCounts: countValues.every(
+        (value) => Number.isSafeInteger(value) && value >= 0,
+      ),
+      validFfiClosures:
+        typeof diagnostics.ffiClosures.enabled === "boolean" &&
+        ffiCountValues.every(
+          (value) => Number.isSafeInteger(value) && value >= 0,
+        ) &&
+        diagnostics.ffiClosures.alloc >= diagnostics.ffiClosures.free &&
+        diagnostics.ffiClosures.live ===
+          diagnostics.ffiClosures.alloc - diagnostics.ffiClosures.free &&
+        diagnostics.ffiClosures.highWater >= diagnostics.ffiClosures.live,
+    };
+  })()`);
+
+  expect(result.descriptor).toEqual({
+    configurable: false,
+    enumerable: false,
+    valueType: "function",
+    writable: false,
+  });
+  expect(result.listed).toBe(false);
+  expect(result.returnsPromise).toBe(true);
+  expect(result.resultKeys).toEqual(["ffiClosures", "global", "owner"]);
+  expect(result.ownerKeys).toEqual([...functionWrapperCountKeys]);
+  expect(result.globalKeys).toEqual([...functionWrapperCountKeys]);
+  expect(result.ffiClosureKeys).toEqual([
+    "alloc",
+    "enabled",
+    "free",
+    "highWater",
+    "live",
+  ]);
+  expect(result.validCounts).toBe(true);
+  expect(result.validFfiClosures).toBe(true);
+  for (const key of functionWrapperCountKeys) {
+    expect(result.diagnostics.owner[key]).toBeLessThanOrEqual(
+      result.diagnostics.global[key],
+    );
+  }
+  return result.diagnostics;
+};
+
+/**
+ * Waits until wrapper lifecycle counts return to a previously observed state.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @param baseline Snapshot to compare against.
+ * @param operationLabel Description included in timeout failures.
+ */
+export const waitForFunctionWrapperDiagnosticBaseline = async (
+  driver: CdpDriver,
+  baseline: FunctionWrapperDiagnostics,
+  operationLabel: string,
+): Promise<void> => {
+  const deadline = Date.now() + targetTimeoutMs;
+  let current = await readFunctionWrapperDiagnostics(driver);
+  while (
+    !haveMatchingFunctionWrapperLifecycleCounts(current, baseline) &&
+    Date.now() < deadline
+  ) {
+    await delay(20);
+    current = await readFunctionWrapperDiagnostics(driver);
+  }
+  if (!haveMatchingFunctionWrapperLifecycleCounts(current, baseline)) {
+    throw new Error(
+      `${operationLabel} did not restore function wrapper counts: ` +
+        `baseline=${JSON.stringify(baseline)} current=${JSON.stringify(current)}`,
+    );
+  }
+};
+
+/**
+ * Exercises the fs and fs-dialogs AbortSignal wrapper paths without exhausting
+ * their wrapper quotas.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @param existingPath Existing filesystem path used by fs operations.
+ */
+export const runFunctionWrapperAbortLeaseScenarios = async (
+  driver: CdpDriver,
+  existingPath: string,
+): Promise<void> => {
+  const baseline = await expectFunctionWrapperDiagnosticApi(driver);
+
+  for (let index = 0; index < 3; index += 1) {
+    await expect(
+      driver.evaluate<boolean>(`(async () => {
+        const controller = new AbortController();
+        return await window.muon.fs.exists(
+          ${JSON.stringify(existingPath)},
+          { signal: controller.signal },
+        );
+      })()`),
+    ).resolves.toBe(true);
+    await waitForFunctionWrapperDiagnosticBaseline(
+      driver,
+      baseline,
+      `fs AbortSignal call ${index + 1}`,
+    );
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const reason = `function wrapper diagnostic abort ${index + 1}`;
+    await expect(
+      driver.evaluate<string>(`(async () => {
+        const controller = new AbortController();
+        const operation = window.muon.fs.dialogs.selectFile({
+          signal: controller.signal,
+        });
+        queueMicrotask(() => {
+          controller.abort(new Error(${JSON.stringify(reason)}));
+        });
+        try {
+          await operation;
+          return "fulfilled";
+        } catch (error) {
+          return String(error && error.message ? error.message : error);
+        }
+      })()`),
+    ).resolves.toBe(reason);
+    await waitForFunctionWrapperDiagnosticBaseline(
+      driver,
+      baseline,
+      `fs-dialogs AbortSignal call ${index + 1}`,
+    );
+  }
+};
+
 export const runBuiltinFsAbortScenarios = async (
   driver: CdpDriver,
   directory: string,

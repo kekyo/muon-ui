@@ -513,6 +513,12 @@ static int GetMuonResultContextId(CefRefPtr<CefProcessMessage> message) {
       args->GetSize() >= 1) {
     return args->GetInt(0);
   }
+#if defined(MUON_TEST_BUILD)
+  if (message_name == kMuonFunctionWrapperDiagnosticsResultMessageName &&
+      args->GetSize() >= 1 && args->GetType(0) == VTYPE_INT) {
+    return args->GetInt(0);
+  }
+#endif
   return 0;
 }
 
@@ -816,6 +822,11 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
   const auto global = context->GetGlobal();
   CefRefPtr<MuonV8Handler> handler(
       new MuonV8Handler(renderer_metadata_.functions, context));
+  if (handler->GetContextId() <= 0) {
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                   "Muon V8 context ids are exhausted");
+    return;
+  }
   const auto readonly_attribute = static_cast<CefV8Value::PropertyAttribute>(
       V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE);
   if (config_.browser.plugin.mode == kMuonBrowserPluginModeValidate) {
@@ -874,6 +885,40 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
       return;
     }
   }
+#if defined(MUON_TEST_BUILD)
+  {
+    CefRefPtr<CefV8Value> muon_namespace;
+    std::string diagnostic_error_message;
+    if (!GetOrCreateMuonNamespaceObject(
+            global, "muon", readonly_attribute, &muon_namespace,
+            &diagnostic_error_message)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     diagnostic_error_message);
+      return;
+    }
+    if (muon_namespace->HasValue(
+            kMuonV8FunctionWrapperDiagnosticsFunctionName)) {
+      LogMuonMessage(
+          kMuonLogSourceMuon, kMuonLogLevelError,
+          "Function wrapper diagnostic conflicts with existing member");
+      return;
+    }
+    const auto diagnostic_attribute =
+        static_cast<CefV8Value::PropertyAttribute>(
+            V8_PROPERTY_ATTRIBUTE_READONLY |
+            V8_PROPERTY_ATTRIBUTE_DONTDELETE |
+            V8_PROPERTY_ATTRIBUTE_DONTENUM);
+    if (!muon_namespace->SetValue(
+            kMuonV8FunctionWrapperDiagnosticsFunctionName,
+            CefV8Value::CreateFunction(
+                kMuonV8FunctionWrapperDiagnosticsFunctionName, handler),
+            diagnostic_attribute)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Failed to create function wrapper diagnostic API");
+      return;
+    }
+  }
+#endif
   std::string error_message;
   if (!FreezeMuonPluginDefinitions(context, renderer_metadata_,
                                    &error_message)) {
@@ -934,7 +979,11 @@ bool MuonApp::OnProcessMessageReceived(
       message_name != kMuonRendererFunctionCallMessageName &&
       message_name != kMuonRendererFunctionSourceAcquireMessageName &&
       message_name != kMuonRendererFunctionSourceReleaseMessageName &&
-      message_name != kMuonRendererFunctionResultConsumedMessageName) {
+      message_name != kMuonRendererFunctionResultConsumedMessageName
+#if defined(MUON_TEST_BUILD)
+      && message_name != kMuonFunctionWrapperDiagnosticsResultMessageName
+#endif
+  ) {
     return false;
   }
   const auto context_id = GetMuonResultContextId(message);
@@ -967,5 +1016,11 @@ bool MuonApp::OnProcessMessageReceived(
     return handler_iterator->second
         ->HandleRendererFunctionResultConsumedMessage(message);
   }
+#if defined(MUON_TEST_BUILD)
+  if (message_name == kMuonFunctionWrapperDiagnosticsResultMessageName) {
+    return handler_iterator->second
+        ->HandleFunctionWrapperDiagnosticsResultMessage(message);
+  }
+#endif
   return false;
 }

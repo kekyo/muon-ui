@@ -419,6 +419,45 @@ static MuonPluginInvocationContext CreateMuonPluginInvocationContext(
   return context;
 }
 
+#if defined(MUON_TEST_BUILD)
+static CefRefPtr<CefDictionaryValue>
+CreateMuonFunctionWrapperDiagnosticCountsDictionary(
+    const MuonFunctionWrapperDiagnosticCounts& counts) {
+  const auto dictionary = CefDictionaryValue::Create();
+  dictionary->SetDouble("sources", static_cast<double>(counts.sources));
+  dictionary->SetDouble("borrows", static_cast<double>(counts.borrows));
+  dictionary->SetDouble("proxies", static_cast<double>(counts.proxies));
+  dictionary->SetDouble("proxyLeases",
+                        static_cast<double>(counts.proxy_leases));
+  return dictionary;
+}
+
+static CefRefPtr<CefDictionaryValue>
+CreateMuonFunctionWrapperDiagnosticsDictionary(
+    const MuonFunctionWrapperDiagnostics& diagnostics) {
+  const auto dictionary = CefDictionaryValue::Create();
+  dictionary->SetDictionary(
+      "owner", CreateMuonFunctionWrapperDiagnosticCountsDictionary(
+                   diagnostics.owner));
+  dictionary->SetDictionary(
+      "global", CreateMuonFunctionWrapperDiagnosticCountsDictionary(
+                    diagnostics.global));
+  const auto ffi_closures = CefDictionaryValue::Create();
+  ffi_closures->SetBool("enabled", diagnostics.ffi_closures_enabled);
+  ffi_closures->SetDouble(
+      "alloc", static_cast<double>(diagnostics.ffi_closure_alloc));
+  ffi_closures->SetDouble(
+      "free", static_cast<double>(diagnostics.ffi_closure_free));
+  ffi_closures->SetDouble(
+      "live", static_cast<double>(diagnostics.ffi_closure_live));
+  ffi_closures->SetDouble(
+      "highWater",
+      static_cast<double>(diagnostics.ffi_closure_high_water));
+  dictionary->SetDictionary("ffiClosures", ffi_closures);
+  return dictionary;
+}
+#endif
+
 static std::string CreateMuonRendererFunctionResultKey(
     const MuonPluginInvocationContext& context,
     int call_id) {
@@ -2115,6 +2154,44 @@ bool MuonClient::OnProcessMessageReceived(
   }
 
   const auto message_name = message->GetName().ToString();
+#if defined(MUON_TEST_BUILD)
+  if (message_name ==
+      kMuonFunctionWrapperDiagnosticsRequestMessageName) {
+    const auto args = message->GetArgumentList();
+    if (!args || args->GetSize() != 2 ||
+        args->GetType(0) != VTYPE_INT || args->GetInt(0) <= 0 ||
+        args->GetType(1) != VTYPE_INT || args->GetInt(1) <= 0 ||
+        !frame || !frame->IsValid()) {
+      return true;
+    }
+    const auto renderer_context_id = args->GetInt(0);
+    const auto request_id = args->GetInt(1);
+    const auto invocation_context = CreateMuonPluginInvocationContext(
+        browser, frame, renderer_context_id);
+    const auto success = plugin_runtime_ &&
+                         IsPluginPageAllowed(frame, plugin_page_policy_);
+    auto diagnostics = CefDictionaryValue::Create();
+    auto error_message = std::string{};
+    if (success) {
+      diagnostics = CreateMuonFunctionWrapperDiagnosticsDictionary(
+          plugin_runtime_->GetFunctionWrapperDiagnostics(
+              invocation_context));
+    } else {
+      error_message = "Function wrapper diagnostics are unavailable";
+    }
+    const auto result = CefProcessMessage::Create(
+        kMuonFunctionWrapperDiagnosticsResultMessageName);
+    const auto result_args = result->GetArgumentList();
+    result_args->SetSize(5);
+    result_args->SetInt(0, renderer_context_id);
+    result_args->SetInt(1, request_id);
+    result_args->SetBool(2, success);
+    result_args->SetDictionary(3, diagnostics);
+    result_args->SetString(4, error_message);
+    frame->SendProcessMessage(PID_RENDERER, result);
+    return true;
+  }
+#endif
   if (message_name == kMuonPluginProxyReleaseMessageName) {
     const auto args = message->GetArgumentList();
     if (!plugin_runtime_ || !args || args->GetSize() != 3 ||

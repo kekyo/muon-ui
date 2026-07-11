@@ -68,6 +68,7 @@ import {
   runBuiltinFsDialogValidation,
   runBuiltinFsFileUriOperations,
   runBuiltinFsRoundtrip,
+  runFunctionWrapperAbortLeaseScenarios,
   sendNativeKeyboardShortcut,
   shiftF9DevToolsShortcut,
   shouldUseValgrind,
@@ -3781,6 +3782,9 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     const directory = await mkdtemp(join(tmpdir(), "muon-fs-"));
     try {
       await withMuon([], async (driver) => {
+        await runFilesystemStep("function wrapper lifecycle", async () => {
+          await runFunctionWrapperAbortLeaseScenarios(driver, directory);
+        });
         await runFilesystemStep("roundtrip", async () => {
           await runBuiltinFsRoundtrip(driver, directory);
         });

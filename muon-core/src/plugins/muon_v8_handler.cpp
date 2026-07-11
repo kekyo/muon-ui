@@ -6,6 +6,7 @@
 
 #include "plugins/muon_v8_handler.h"
 
+#include "plugins/muon_function_wrapper_lifecycle.h"
 #include "plugins/muon_js_bridge.h"
 #include "plugins/muon_shared_buffer.h"
 
@@ -43,9 +44,35 @@ static constexpr char kMuonExecutorLoadLibraryFunctionPath[] =
     "muon.executor.loadLibrary";
 static constexpr double kMuonTwoTo63 = 9223372036854775808.0;
 static constexpr double kMuonTwoTo64 = 18446744073709551616.0;
+#if defined(MUON_TEST_BUILD)
+static constexpr char kMuonFunctionWrapperOwnerKey[] = "owner";
+static constexpr char kMuonFunctionWrapperGlobalKey[] = "global";
+static constexpr char kMuonFunctionWrapperFfiClosuresKey[] = "ffiClosures";
+static constexpr char kMuonFunctionWrapperSourcesKey[] = "sources";
+static constexpr char kMuonFunctionWrapperBorrowsKey[] = "borrows";
+static constexpr char kMuonFunctionWrapperProxiesKey[] = "proxies";
+static constexpr char kMuonFunctionWrapperProxyLeasesKey[] = "proxyLeases";
+static constexpr char kMuonFunctionWrapperFfiEnabledKey[] = "enabled";
+static constexpr char kMuonFunctionWrapperFfiAllocKey[] = "alloc";
+static constexpr char kMuonFunctionWrapperFfiFreeKey[] = "free";
+static constexpr char kMuonFunctionWrapperFfiLiveKey[] = "live";
+static constexpr char kMuonFunctionWrapperFfiHighWaterKey[] = "highWater";
+static constexpr double kMuonMaximumSafeJavaScriptInteger =
+    9007199254740991.0;
+#endif
 static int g_next_muon_v8_context_id = 1;
 static std::map<const CefBaseRefCounted*, MuonPluginFunctionProxyState*>
     g_muon_plugin_proxy_states_by_user_data;
+
+static int AcquireMuonV8ContextId() {
+  if (g_next_muon_v8_context_id <= 0) {
+    return 0;
+  }
+  const auto context_id = g_next_muon_v8_context_id;
+  g_next_muon_v8_context_id =
+      context_id == std::numeric_limits<int>::max() ? 0 : context_id + 1;
+  return context_id;
+}
 
 class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
  public:
@@ -214,6 +241,176 @@ static bool GetNumericV8Value(CefRefPtr<CefV8Value> value, double* number) {
   }
   return false;
 }
+
+#if defined(MUON_TEST_BUILD)
+static bool ReadMuonDiagnosticCount(
+    CefRefPtr<CefDictionaryValue> dictionary,
+    const char* key,
+    double* count) {
+  if (!dictionary || key == nullptr || count == nullptr) {
+    return false;
+  }
+  const auto type = dictionary->GetType(key);
+  auto value = 0.0;
+  if (type == VTYPE_INT) {
+    value = static_cast<double>(dictionary->GetInt(key));
+  } else if (type == VTYPE_DOUBLE) {
+    value = dictionary->GetDouble(key);
+  } else {
+    return false;
+  }
+  if (!std::isfinite(value) || std::trunc(value) != value || value < 0.0 ||
+      value > kMuonMaximumSafeJavaScriptInteger) {
+    return false;
+  }
+  *count = value;
+  return true;
+}
+
+static bool SetMuonDiagnosticCount(
+    CefRefPtr<CefV8Value> object,
+    const char* key,
+    double count) {
+  return object && key != nullptr &&
+         object->SetValue(key, CefV8Value::CreateDouble(count),
+                          V8_PROPERTY_ATTRIBUTE_NONE);
+}
+
+static CefRefPtr<CefV8Value> CreateMuonFunctionWrapperCountObject(
+    CefRefPtr<CefDictionaryValue> dictionary,
+    std::string* error_message) {
+  if (!dictionary || dictionary->GetSize() != 4 ||
+      error_message == nullptr) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid function wrapper diagnostic count schema";
+    }
+    return nullptr;
+  }
+  auto sources = 0.0;
+  auto borrows = 0.0;
+  auto proxies = 0.0;
+  auto proxy_leases = 0.0;
+  if (!ReadMuonDiagnosticCount(dictionary, kMuonFunctionWrapperSourcesKey,
+                               &sources) ||
+      !ReadMuonDiagnosticCount(dictionary, kMuonFunctionWrapperBorrowsKey,
+                               &borrows) ||
+      !ReadMuonDiagnosticCount(dictionary, kMuonFunctionWrapperProxiesKey,
+                               &proxies) ||
+      !ReadMuonDiagnosticCount(dictionary,
+                               kMuonFunctionWrapperProxyLeasesKey,
+                               &proxy_leases)) {
+    *error_message = "Invalid function wrapper diagnostic count schema";
+    return nullptr;
+  }
+
+  const auto result = CefV8Value::CreateObject(nullptr, nullptr);
+  if (!result ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperSourcesKey,
+                              sources) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperBorrowsKey,
+                              borrows) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperProxiesKey,
+                              proxies) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperProxyLeasesKey,
+                              proxy_leases)) {
+    *error_message = "Failed to create function wrapper diagnostic counts";
+    return nullptr;
+  }
+  return result;
+}
+
+static CefRefPtr<CefV8Value> CreateMuonFfiClosureDiagnosticObject(
+    CefRefPtr<CefDictionaryValue> dictionary,
+    std::string* error_message) {
+  if (!dictionary || dictionary->GetSize() != 5 ||
+      dictionary->GetType(kMuonFunctionWrapperFfiEnabledKey) != VTYPE_BOOL ||
+      error_message == nullptr) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid FFI closure diagnostic schema";
+    }
+    return nullptr;
+  }
+  auto alloc = 0.0;
+  auto released = 0.0;
+  auto live = 0.0;
+  auto high_water = 0.0;
+  if (!ReadMuonDiagnosticCount(dictionary, kMuonFunctionWrapperFfiAllocKey,
+                               &alloc) ||
+      !ReadMuonDiagnosticCount(dictionary, kMuonFunctionWrapperFfiFreeKey,
+                               &released) ||
+      !ReadMuonDiagnosticCount(dictionary, kMuonFunctionWrapperFfiLiveKey,
+                               &live) ||
+      !ReadMuonDiagnosticCount(dictionary,
+                               kMuonFunctionWrapperFfiHighWaterKey,
+                               &high_water)) {
+    *error_message = "Invalid FFI closure diagnostic schema";
+    return nullptr;
+  }
+  if (alloc < released || live != alloc - released || high_water < live) {
+    *error_message = "Inconsistent FFI closure diagnostic counts";
+    return nullptr;
+  }
+
+  const auto result = CefV8Value::CreateObject(nullptr, nullptr);
+  if (!result ||
+      !result->SetValue(
+          kMuonFunctionWrapperFfiEnabledKey,
+          CefV8Value::CreateBool(
+              dictionary->GetBool(kMuonFunctionWrapperFfiEnabledKey)),
+          V8_PROPERTY_ATTRIBUTE_NONE) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperFfiAllocKey,
+                              alloc) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperFfiFreeKey,
+                              released) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperFfiLiveKey,
+                              live) ||
+      !SetMuonDiagnosticCount(result, kMuonFunctionWrapperFfiHighWaterKey,
+                              high_water)) {
+    *error_message = "Failed to create FFI closure diagnostics";
+    return nullptr;
+  }
+  return result;
+}
+
+static CefRefPtr<CefV8Value> CreateMuonFunctionWrapperDiagnosticObject(
+    CefRefPtr<CefDictionaryValue> dictionary,
+    std::string* error_message) {
+  if (!dictionary || dictionary->GetSize() != 3 ||
+      dictionary->GetType(kMuonFunctionWrapperOwnerKey) != VTYPE_DICTIONARY ||
+      dictionary->GetType(kMuonFunctionWrapperGlobalKey) != VTYPE_DICTIONARY ||
+      dictionary->GetType(kMuonFunctionWrapperFfiClosuresKey) !=
+          VTYPE_DICTIONARY ||
+      error_message == nullptr) {
+    if (error_message != nullptr) {
+      *error_message = "Invalid function wrapper diagnostic schema";
+    }
+    return nullptr;
+  }
+  const auto owner = CreateMuonFunctionWrapperCountObject(
+      dictionary->GetDictionary(kMuonFunctionWrapperOwnerKey), error_message);
+  const auto global = CreateMuonFunctionWrapperCountObject(
+      dictionary->GetDictionary(kMuonFunctionWrapperGlobalKey), error_message);
+  const auto ffi_closures = CreateMuonFfiClosureDiagnosticObject(
+      dictionary->GetDictionary(kMuonFunctionWrapperFfiClosuresKey),
+      error_message);
+  if (!owner || !global || !ffi_closures) {
+    return nullptr;
+  }
+
+  const auto result = CefV8Value::CreateObject(nullptr, nullptr);
+  if (!result ||
+      !result->SetValue(kMuonFunctionWrapperOwnerKey, owner,
+                        V8_PROPERTY_ATTRIBUTE_NONE) ||
+      !result->SetValue(kMuonFunctionWrapperGlobalKey, global,
+                        V8_PROPERTY_ATTRIBUTE_NONE) ||
+      !result->SetValue(kMuonFunctionWrapperFfiClosuresKey, ffi_closures,
+                        V8_PROPERTY_ATTRIBUTE_NONE)) {
+    *error_message = "Failed to create function wrapper diagnostics";
+    return nullptr;
+  }
+  return result;
+}
+#endif
 
 static bool ContainsMuonNulCharacter(const std::string& value) {
   return value.find('\0') != std::string::npos;
@@ -520,8 +717,7 @@ MuonV8Handler::MuonV8Handler(std::vector<MuonFunctionMetadata> functions,
                                CefRefPtr<CefV8Context> context)
     : functions_(std::move(functions)),
       context_(context),
-      context_id_(g_next_muon_v8_context_id) {
-  g_next_muon_v8_context_id += 1;
+      context_id_(AcquireMuonV8ContextId()) {
   for (auto index = size_t{0}; index < functions_.size(); ++index) {
     function_indexes_by_v8_name_[CreateMuonV8FunctionName(
         functions_[index].id)] = index;
@@ -564,6 +760,46 @@ bool MuonV8Handler::Execute(const CefString& name,
     }
     return state->Invoke(call_arguments, retval);
   }
+
+#if defined(MUON_TEST_BUILD)
+  if (v8_name == kMuonV8FunctionWrapperDiagnosticsFunctionName) {
+    const auto promise = CefV8Value::CreatePromise();
+    retval = promise;
+    if (!arguments.empty()) {
+      RejectPromise(promise,
+                    "Function wrapper diagnostics do not accept arguments");
+      return true;
+    }
+    const auto frame = context_ ? context_->GetFrame() : nullptr;
+    if (!frame || !frame->IsValid()) {
+      RejectPromise(promise, "muon frame is not available");
+      return true;
+    }
+    if (next_diagnostic_request_id_ <= 0) {
+      RejectPromise(promise,
+                    "Function wrapper diagnostic request ids are exhausted");
+      return true;
+    }
+
+    const auto request_id = next_diagnostic_request_id_;
+    next_diagnostic_request_id_ =
+        request_id == std::numeric_limits<int>::max() ? 0 : request_id + 1;
+    const auto message = CefProcessMessage::Create(
+        kMuonFunctionWrapperDiagnosticsRequestMessageName);
+    const auto message_args = message ? message->GetArgumentList() : nullptr;
+    if (!message_args) {
+      RejectPromise(promise,
+                    "Failed to create function wrapper diagnostic request");
+      return true;
+    }
+    message_args->SetSize(2);
+    message_args->SetInt(0, context_id_);
+    message_args->SetInt(1, request_id);
+    pending_diagnostic_promises_[request_id] = promise;
+    frame->SendProcessMessage(PID_BROWSER, message);
+    return true;
+  }
+#endif
 
   auto is_capability_call = v8_name == kMuonV8CapabilityCallFunctionName;
   auto function_iterator = function_indexes_by_v8_name_.find(v8_name);
@@ -643,8 +879,13 @@ bool MuonV8Handler::ExecutePluginCall(
     CefRefPtr<CefV8Value> promise) {
   const auto is_proxy_call = !proxy_lease_token.empty();
 
+  if (next_call_id_ <= 0) {
+    RejectPromise(promise, "muon call ids are exhausted");
+    return true;
+  }
   const auto call_id = next_call_id_;
-  next_call_id_ += 1;
+  next_call_id_ =
+      call_id == std::numeric_limits<int>::max() ? 0 : call_id + 1;
   const auto encoded_args = CefListValue::Create();
   std::vector<MuonSharedBufferSource> shared_sources;
   FunctionTransfers function_transfers(this);
@@ -664,7 +905,7 @@ bool MuonV8Handler::ExecutePluginCall(
 
   const auto context = CefV8Context::GetCurrentContext();
   const auto frame = context ? context->GetFrame() : nullptr;
-  if (!frame) {
+  if (!frame || !frame->IsValid()) {
     RejectPromise(promise, "muon frame is not available");
     return true;
   }
@@ -836,10 +1077,85 @@ bool MuonV8Handler::ResolvePluginResultMessage(
   return true;
 }
 
+#if defined(MUON_TEST_BUILD)
+bool MuonV8Handler::HandleFunctionWrapperDiagnosticsResultMessage(
+    CefRefPtr<CefProcessMessage> message) {
+  CEF_REQUIRE_RENDERER_THREAD();
+  if (!message || message->GetName().ToString() !=
+                      kMuonFunctionWrapperDiagnosticsResultMessageName) {
+    return false;
+  }
+
+  const auto message_args = message->GetArgumentList();
+  if (!message_args || message_args->GetSize() < 2 ||
+      message_args->GetType(0) != VTYPE_INT ||
+      message_args->GetType(1) != VTYPE_INT ||
+      message_args->GetInt(0) != context_id_) {
+    return true;
+  }
+  const auto request_id = message_args->GetInt(1);
+  const auto pending_iterator =
+      pending_diagnostic_promises_.find(request_id);
+  if (pending_iterator == pending_diagnostic_promises_.end()) {
+    return true;
+  }
+  const auto promise = pending_iterator->second;
+  pending_diagnostic_promises_.erase(pending_iterator);
+
+  if (!context_ || !context_->IsValid() || !context_->Enter()) {
+    return true;
+  }
+  if (message_args->GetSize() != 5 ||
+      message_args->GetType(2) != VTYPE_BOOL ||
+      message_args->GetType(3) != VTYPE_DICTIONARY ||
+      message_args->GetType(4) != VTYPE_STRING) {
+    RejectPromise(promise,
+                  "Invalid function wrapper diagnostic result message");
+    context_->Exit();
+    return true;
+  }
+
+  const auto success = message_args->GetBool(2);
+  const auto diagnostics = message_args->GetDictionary(3);
+  const auto browser_error = message_args->GetString(4).ToString();
+  if (!success) {
+    if (!diagnostics || diagnostics->GetSize() != 0 ||
+        browser_error.empty()) {
+      RejectPromise(promise,
+                    "Invalid function wrapper diagnostic failure result");
+    } else {
+      RejectPromise(promise, browser_error);
+    }
+    context_->Exit();
+    return true;
+  }
+  if (!browser_error.empty()) {
+    RejectPromise(promise,
+                  "Invalid function wrapper diagnostic success result");
+    context_->Exit();
+    return true;
+  }
+
+  auto error_message = std::string{};
+  const auto value = CreateMuonFunctionWrapperDiagnosticObject(
+      diagnostics, &error_message);
+  if (!value) {
+    RejectPromise(promise, error_message);
+  } else {
+    promise->ResolvePromise(value);
+  }
+  context_->Exit();
+  return true;
+}
+#endif
+
 void MuonV8Handler::RejectAllPendingPromises() {
   CEF_REQUIRE_RENDERER_THREAD();
   if (!context_ || !context_->IsValid() || !context_->Enter()) {
     pending_promises_.clear();
+#if defined(MUON_TEST_BUILD)
+    pending_diagnostic_promises_.clear();
+#endif
     pending_result_messages_.clear();
     pending_result_payloads_.clear();
     pending_renderer_function_call_messages_.clear();
@@ -851,6 +1167,12 @@ void MuonV8Handler::RejectAllPendingPromises() {
     entry.second.promise->RejectPromise("muon V8 context was released");
   }
   pending_promises_.clear();
+#if defined(MUON_TEST_BUILD)
+  for (const auto& entry : pending_diagnostic_promises_) {
+    entry.second->RejectPromise("muon V8 context was released");
+  }
+  pending_diagnostic_promises_.clear();
+#endif
   pending_result_messages_.clear();
   pending_result_payloads_.clear();
   pending_renderer_function_call_messages_.clear();
@@ -875,6 +1197,9 @@ void MuonV8Handler::ReleaseFunctionReferences() {
   function_references_.clear();
   pending_renderer_function_call_messages_.clear();
   pending_renderer_function_call_payloads_.clear();
+#if defined(MUON_TEST_BUILD)
+  pending_diagnostic_promises_.clear();
+#endif
   plugin_proxy_dispatch_function_ = nullptr;
   plugin_proxy_factory_ = nullptr;
   context_ = nullptr;
@@ -1150,8 +1475,11 @@ bool MuonV8Handler::EncodeFunctionArgument(
     return true;
   }
 
-  const auto function_id =
-      AcquireFunctionTransfer(argument, function_transfers);
+  auto function_id = 0;
+  if (!AcquireFunctionTransfer(argument, function_transfers, &function_id,
+                               error_message)) {
+    return false;
+  }
   encoded_function->SetInt(kMuonFunctionArgumentContextIdKey, context_id_);
   encoded_function->SetInt(kMuonFunctionArgumentFunctionIdKey, function_id);
   encoded_function->SetString(kMuonFunctionArgumentTypeKey,
@@ -1167,25 +1495,47 @@ void MuonV8Handler::RejectPromise(CefRefPtr<CefV8Value> promise,
   promise->RejectPromise(error_message);
 }
 
-int MuonV8Handler::AcquireFunctionTransfer(
+bool MuonV8Handler::AcquireFunctionTransfer(
     CefRefPtr<CefV8Value> function,
-    FunctionTransfers* function_transfers) {
+    FunctionTransfers* function_transfers,
+    int* function_id,
+    std::string* error_message) {
+  if (!function || !function_transfers || !function_id || !error_message) {
+    return false;
+  }
   for (auto& reference : function_references_) {
     if (reference.function && reference.function->IsSame(function)) {
+      if (reference.pending_transfer_count ==
+          std::numeric_limits<size_t>::max()) {
+        *error_message = "renderer function transfer count is exhausted";
+        return false;
+      }
       reference.pending_transfer_count += 1;
       function_transfers->Add(reference.id);
-      return reference.id;
+      *function_id = reference.id;
+      return true;
     }
   }
 
+  if (function_references_.size() >= kMuonRendererFunctionReferenceLimit) {
+    *error_message = "renderer function reference limit exceeded";
+    return false;
+  }
+  if (next_function_id_ <= 0) {
+    *error_message = "renderer function ids are exhausted";
+    return false;
+  }
   FunctionReference reference;
   reference.id = next_function_id_;
-  next_function_id_ += 1;
+  next_function_id_ = reference.id == std::numeric_limits<int>::max()
+                          ? 0
+                          : reference.id + 1;
   reference.function = function;
   reference.pending_transfer_count = 1;
   function_transfers->Add(reference.id);
+  *function_id = reference.id;
   function_references_.push_back(reference);
-  return reference.id;
+  return true;
 }
 
 void MuonV8Handler::ReleaseFunctionTransfer(int function_id) {
@@ -1289,7 +1639,7 @@ bool MuonV8Handler::HandleRendererFunctionSourceAcquireMessage(
     return false;
   }
   const auto args = message->GetArgumentList();
-  if (!args || args->GetSize() < 3 || args->GetType(0) != VTYPE_INT ||
+  if (!args || args->GetSize() != 3 || args->GetType(0) != VTYPE_INT ||
       args->GetType(1) != VTYPE_INT || args->GetType(2) != VTYPE_STRING ||
       args->GetInt(0) != context_id_) {
     return true;
@@ -1316,7 +1666,7 @@ bool MuonV8Handler::HandleRendererFunctionSourceReleaseMessage(
     return false;
   }
   const auto args = message->GetArgumentList();
-  if (!args || args->GetSize() < 3 || args->GetType(0) != VTYPE_INT ||
+  if (!args || args->GetSize() != 3 || args->GetType(0) != VTYPE_INT ||
       args->GetType(1) != VTYPE_INT || args->GetType(2) != VTYPE_STRING ||
       args->GetInt(0) != context_id_) {
     return true;
@@ -1341,7 +1691,7 @@ bool MuonV8Handler::HandleRendererFunctionResultConsumedMessage(
     return false;
   }
   const auto args = message->GetArgumentList();
-  if (!args || args->GetSize() < 2 || args->GetType(0) != VTYPE_INT ||
+  if (!args || args->GetSize() != 2 || args->GetType(0) != VTYPE_INT ||
       args->GetType(1) != VTYPE_INT || args->GetInt(0) != context_id_) {
     return true;
   }
@@ -1864,8 +2214,16 @@ CefRefPtr<CefV8Value> MuonV8Handler::CreatePluginProxyFunction(
     uint32_t proxy_id,
     const std::string& lease_token,
     const MuonTypeMetadata& function_type) {
+  if (next_proxy_wrapper_id_ == 0) {
+    CefRefPtr<MuonPluginFunctionProxyState> exhausted_state =
+        new MuonPluginFunctionProxyState(this, context_, proxy_id, lease_token,
+                                         function_type, 0);
+    exhausted_state->DisposeForCreationFailure();
+    return CefV8Value::CreateUndefined();
+  }
   const auto wrapper_id = next_proxy_wrapper_id_;
-  next_proxy_wrapper_id_ += 1;
+  next_proxy_wrapper_id_ =
+      wrapper_id == std::numeric_limits<uint64_t>::max() ? 0 : wrapper_id + 1;
   CefRefPtr<MuonPluginFunctionProxyState> state =
       new MuonPluginFunctionProxyState(this, context_, proxy_id, lease_token,
                                        function_type, wrapper_id);

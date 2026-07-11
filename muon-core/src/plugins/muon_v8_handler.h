@@ -24,6 +24,15 @@
 inline constexpr char kMuonV8CapabilityCallFunctionName[] =
     "__muon_plugin_call";
 
+#if defined(MUON_TEST_BUILD)
+/**
+ * Test-build JavaScript function name used to request function wrapper
+ * diagnostics.
+ */
+inline constexpr char kMuonV8FunctionWrapperDiagnosticsFunctionName[] =
+    "__functionWrapperDiagnostics";
+#endif
+
 /**
  * Internal lifetime state attached to one JavaScript plugin function proxy.
  */
@@ -109,6 +118,18 @@ class MuonV8Handler final : public CefV8Handler {
    */
   bool HandleRendererFunctionResultConsumedMessage(
       CefRefPtr<CefProcessMessage> message);
+
+#if defined(MUON_TEST_BUILD)
+  /**
+   * Resolves or rejects a pending test-build function wrapper diagnostic
+   * request.
+   *
+   * @param message Diagnostic result process message from the browser process.
+   * @return true when the message was handled.
+   */
+  bool HandleFunctionWrapperDiagnosticsResultMessage(
+      CefRefPtr<CefProcessMessage> message);
+#endif
 
   /**
    * Rejects all pending promises before the owning V8 context is released.
@@ -196,8 +217,10 @@ class MuonV8Handler final : public CefV8Handler {
                          CefRefPtr<CefV8Value> promise);
   void RejectPromise(CefRefPtr<CefV8Value> promise,
                      const std::string& error_message) const;
-  int AcquireFunctionTransfer(CefRefPtr<CefV8Value> function,
-                              FunctionTransfers* function_transfers);
+  bool AcquireFunctionTransfer(CefRefPtr<CefV8Value> function,
+                               FunctionTransfers* function_transfers,
+                               int* function_id,
+                               std::string* error_message);
   void ReleaseFunctionTransfer(int function_id);
   void ReleaseFunctionReferenceIfUnused(int function_id);
   CefRefPtr<CefV8Value> CreateV8ValueFromResult(
@@ -240,6 +263,9 @@ class MuonV8Handler final : public CefV8Handler {
   std::map<const CefBaseRefCounted*, MuonPluginFunctionProxyState*>
       plugin_proxy_states_by_user_data_;
   std::map<int, PendingPromise> pending_promises_;
+#if defined(MUON_TEST_BUILD)
+  std::map<int, CefRefPtr<CefV8Value>> pending_diagnostic_promises_;
+#endif
   std::map<int, CefRefPtr<CefProcessMessage>> pending_result_messages_;
   std::map<int, PendingSharedPayload> pending_result_payloads_;
   std::map<int, CefRefPtr<CefProcessMessage>>
@@ -255,6 +281,9 @@ class MuonV8Handler final : public CefV8Handler {
   int next_call_id_ = 1;
   int next_function_id_ = 1;
   uint64_t next_proxy_wrapper_id_ = 1;
+#if defined(MUON_TEST_BUILD)
+  int next_diagnostic_request_id_ = 1;
+#endif
 
   IMPLEMENT_REFCOUNTING(MuonV8Handler);
   DISALLOW_COPY_AND_ASSIGN(MuonV8Handler);

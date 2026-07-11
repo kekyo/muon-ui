@@ -15,6 +15,8 @@
 #include "include/cef_process_message.h"
 #include "include/cef_values.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -22,6 +24,47 @@
 #include <vector>
 
 struct MuonPluginRuntimeImpl;
+
+#if defined(MUON_TEST_BUILD)
+/** Test-build counts for one function wrapper lifecycle scope. */
+struct MuonFunctionWrapperDiagnosticCounts {
+  /** Live renderer-owned function sources. */
+  size_t sources = 0;
+
+  /** Active bridge borrows of renderer-owned function sources. */
+  size_t borrows = 0;
+
+  /** Distinct plugin-owned native function proxy entries. */
+  size_t proxies = 0;
+
+  /** Renderer wrapper leases for plugin-owned native function proxies. */
+  size_t proxy_leases = 0;
+};
+
+/** Test-build snapshot of function wrapper lifecycle state. */
+struct MuonFunctionWrapperDiagnostics {
+  /** Counts for the requesting browser, frame, and V8 context. */
+  MuonFunctionWrapperDiagnosticCounts owner;
+
+  /** Counts across this browser-process plugin runtime. */
+  MuonFunctionWrapperDiagnosticCounts global;
+
+  /** Whether libffi closure tracking is compiled into this build. */
+  bool ffi_closures_enabled = false;
+
+  /** Total tracked libffi closure allocations. */
+  uint64_t ffi_closure_alloc = 0;
+
+  /** Total tracked libffi closure releases. */
+  uint64_t ffi_closure_free = 0;
+
+  /** Currently live tracked libffi closures. */
+  uint64_t ffi_closure_live = 0;
+
+  /** Highest tracked libffi closure live count. */
+  uint64_t ffi_closure_high_water = 0;
+};
+#endif
 
 /**
  * Browser registration for one renderer-owned plugin function proxy wrapper.
@@ -252,6 +295,17 @@ class MuonPluginRuntime final {
    * @param browser_id Browser whose renderer process was closed or terminated.
    */
   void ReleaseFunctionBrowser(int browser_id);
+
+#if defined(MUON_TEST_BUILD)
+  /**
+   * Returns test-only function wrapper lifecycle diagnostics.
+   *
+   * @param context Actual browser, frame, and renderer context owner.
+   * @return Current owner, global, and libffi closure counts.
+   */
+  MuonFunctionWrapperDiagnostics GetFunctionWrapperDiagnostics(
+      const MuonPluginInvocationContext& context) const;
+#endif
 
  private:
   std::unique_ptr<MuonPluginRuntimeImpl> impl_;

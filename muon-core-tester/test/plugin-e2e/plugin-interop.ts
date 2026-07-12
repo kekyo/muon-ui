@@ -924,7 +924,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
             ),
           );
         } finally {
-          proxy.dispose();
+          proxy.release();
         }
         return {
           checksum,
@@ -961,20 +961,27 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
     });
   });
 
-  it("disposes plugin function proxy wrappers independently", async () => {
+  it("releases plugin function proxy wrappers independently", async () => {
     await withMuon(["muon_test_plugin_types"], async (driver) => {
       const baseline = await readFunctionWrapperDiagnostics(driver);
       const values = await driver.evaluate<{
         sameObject: boolean;
-        disposeDescriptor: {
+        releaseDescriptor: {
           configurable: boolean;
           enumerable: boolean;
           type: string;
           writable: boolean;
         } | null;
-        disposeEnumerated: boolean;
-        disposeErrors: string[];
-        disposedCall: {
+        symbolDisposeDescriptor: {
+          configurable: boolean;
+          enumerable: boolean;
+          type: string;
+          writable: boolean;
+        } | null;
+        releaseEnumerated: boolean;
+        releaseFunctionsMatch: boolean;
+        releaseErrors: string[];
+        releasedCall: {
           isPromise: boolean;
           message: string;
           status: string;
@@ -982,12 +989,13 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         };
         reargument: { message: string; status: string };
         secondCall: { message: string; result: number[]; status: string };
-        secondDisposeError: string;
+        secondReleaseError: string;
+        oldDisposeType: string;
       }>(`(async () => {
         const first = await window.muon.test.types.returnBufferFunction();
         const second = await window.muon.test.types.returnBufferFunction();
-        const descriptor = Object.getOwnPropertyDescriptor(first, "dispose");
-        const disposeDescriptor = descriptor === undefined
+        const descriptor = Object.getOwnPropertyDescriptor(first, "release");
+        const releaseDescriptor = descriptor === undefined
           ? null
           : {
               configurable: descriptor.configurable,
@@ -995,18 +1003,29 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
               type: typeof descriptor.value,
               writable: descriptor.writable,
             };
-        const disposeErrors = [];
-        for (let index = 0; index < 2; index += 1) {
-          try {
-            first.dispose();
-          } catch (error) {
-            disposeErrors.push(
-              String(error && error.message ? error.message : error),
-            );
-          }
+        const symbolDescriptor = Object.getOwnPropertyDescriptor(
+          first,
+          Symbol.dispose,
+        );
+        const symbolDisposeDescriptor = symbolDescriptor === undefined
+          ? null
+          : {
+              configurable: symbolDescriptor.configurable,
+              enumerable: symbolDescriptor.enumerable,
+              type: typeof symbolDescriptor.value,
+              writable: symbolDescriptor.writable,
+            };
+        const releaseErrors = [];
+        try {
+          first.release();
+          first[Symbol.dispose]();
+        } catch (error) {
+          releaseErrors.push(
+            String(error && error.message ? error.message : error),
+          );
         }
 
-        const disposedCall = {
+        const releasedCall = {
           isPromise: false,
           message: "",
           status: "",
@@ -1016,20 +1035,20 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           const result = first(
             Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17]),
           );
-          disposedCall.isPromise = result instanceof Promise;
+          releasedCall.isPromise = result instanceof Promise;
           try {
             await result;
-            disposedCall.status = "fulfilled";
+            releasedCall.status = "fulfilled";
           } catch (error) {
-            disposedCall.status = "rejected";
-            disposedCall.message = String(
+            releasedCall.status = "rejected";
+            releasedCall.message = String(
               error && error.message ? error.message : error,
             );
           }
         } catch (error) {
-          disposedCall.synchronousThrow = true;
-          disposedCall.status = "threw";
-          disposedCall.message = String(
+          releasedCall.synchronousThrow = true;
+          releasedCall.status = "threw";
+          releasedCall.message = String(
             error && error.message ? error.message : error,
           );
         }
@@ -1062,51 +1081,62 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           );
         }
 
-        let secondDisposeError = "";
+        let secondReleaseError = "";
         try {
-          second.dispose();
+          second[Symbol.dispose]();
         } catch (error) {
-          secondDisposeError = String(
+          secondReleaseError = String(
             error && error.message ? error.message : error,
           );
         }
         return {
           sameObject: first === second,
-          disposeDescriptor,
-          disposeEnumerated: Object.keys(first).includes("dispose"),
-          disposeErrors,
-          disposedCall,
+          releaseDescriptor,
+          symbolDisposeDescriptor,
+          releaseEnumerated: Object.keys(first).includes("release"),
+          releaseFunctionsMatch: first.release === first[Symbol.dispose],
+          releaseErrors,
+          releasedCall,
           reargument,
           secondCall,
-          secondDisposeError,
+          secondReleaseError,
+          oldDisposeType: typeof first.dispose,
         };
       })()`);
 
       expect(values.sameObject).toBe(false);
-      expect(values.disposeDescriptor).toEqual({
+      expect(values.releaseDescriptor).toEqual({
         configurable: false,
         enumerable: false,
         type: "function",
         writable: false,
       });
-      expect(values.disposeEnumerated).toBe(false);
-      expect(values.disposeErrors).toEqual([]);
-      expect(values.disposedCall.synchronousThrow).toBe(false);
-      expect(values.disposedCall.isPromise).toBe(true);
-      expect(values.disposedCall.status).toBe("rejected");
-      expect(values.disposedCall.message.toLowerCase()).toContain("disposed");
+      expect(values.symbolDisposeDescriptor).toEqual({
+        configurable: false,
+        enumerable: false,
+        type: "function",
+        writable: false,
+      });
+      expect(values.releaseEnumerated).toBe(false);
+      expect(values.releaseFunctionsMatch).toBe(true);
+      expect(values.releaseErrors).toEqual([]);
+      expect(values.releasedCall.synchronousThrow).toBe(false);
+      expect(values.releasedCall.isPromise).toBe(true);
+      expect(values.releasedCall.status).toBe("rejected");
+      expect(values.releasedCall.message.toLowerCase()).toContain("released");
       expect(values.reargument.status).toBe("rejected");
-      expect(values.reargument.message.toLowerCase()).toContain("disposed");
+      expect(values.reargument.message.toLowerCase()).toContain("released");
       expect(values.secondCall).toEqual({
         message: "",
         result: [27, 28, 29, 30, 31, 32, 33, 34],
         status: "fulfilled",
       });
-      expect(values.secondDisposeError).toBe("");
+      expect(values.secondReleaseError).toBe("");
+      expect(values.oldDisposeType).toBe("undefined");
       await waitForFunctionWrapperDiagnosticBaseline(
         driver,
         baseline,
-        "disposed plugin function proxies",
+        "released plugin function proxies",
       );
     });
   });
@@ -1160,8 +1190,8 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
       });
       popupDrivers.push(popupDriver);
       const result = await popupDriver.evaluate<{
-        disposeMessage: string;
-        disposeStatus: string;
+        releaseMessage: string;
+        releaseStatus: string;
         invokeMessage: string;
         invokeStatus: string;
         invokeValue: number | null;
@@ -1177,8 +1207,8 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
             throw new Error("proxy owner value is unavailable");
           }
           const result = {
-            disposeMessage: "",
-            disposeStatus: "fulfilled",
+            releaseMessage: "",
+            releaseStatus: "fulfilled",
             invokeMessage: "",
             invokeStatus: "fulfilled",
             invokeValue: null,
@@ -1204,10 +1234,10 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
             );
           }
           try {
-            proxy.dispose();
+            proxy.release();
           } catch (error) {
-            result.disposeStatus = "threw";
-            result.disposeMessage = String(
+            result.releaseStatus = "threw";
+            result.releaseMessage = String(
               error && error.message ? error.message : error,
             );
           }
@@ -1220,8 +1250,8 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
       expect(result.reargumentStatus).toBe("rejected");
       expect(result.reargumentValue).toBeNull();
       expect(result.reargumentMessage.toLowerCase()).toContain("context");
-      expect(result.disposeStatus).toBe("threw");
-      expect(result.disposeMessage.toLowerCase()).toContain("context");
+      expect(result.releaseStatus).toBe("threw");
+      expect(result.releaseMessage.toLowerCase()).toContain("context");
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
     } finally {
@@ -1230,7 +1260,7 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           await driver.evaluate(`(() => {
             const proxy = globalThis.__muonCrossContextProxy;
             if (typeof proxy === "function") {
-              proxy.dispose();
+              proxy.release();
             }
             delete globalThis.__muonCrossContextProxy;
           })()`);

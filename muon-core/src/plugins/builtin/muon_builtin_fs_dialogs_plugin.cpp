@@ -484,7 +484,7 @@ const runAbortable = async (options, nativeCall) => {
     }
   };
   const requestNativeCancel = async (record) => {
-    if (record.disposed) {
+    if (record.released) {
       return;
     }
     if (record.cancelPromise === null) {
@@ -492,8 +492,8 @@ const runAbortable = async (options, nativeCall) => {
     }
     await record.cancelPromise;
   };
-  const disposeNativeCancel = async (record, shouldCancel) => {
-    if (record.disposed) {
+  const releaseNativeCancel = async (record, shouldCancel) => {
+    if (record.released) {
       return;
     }
     let cancelPromise = null;
@@ -501,10 +501,10 @@ const runAbortable = async (options, nativeCall) => {
       cancelPromise = requestNativeCancel(record);
     }
     try {
-      record.cancel.dispose();
+      record.cancel.release();
     } catch (_error) {
     }
-    record.disposed = true;
+    record.released = true;
     nativeCancelRecords.delete(record.cancel);
     if (cancelPromise !== null) {
       await cancelPromise;
@@ -518,7 +518,7 @@ const runAbortable = async (options, nativeCall) => {
     const record = {
       cancel,
       cancelPromise: null,
-      disposed: false,
+      released: false,
     };
     nativeCancelRecords.set(cancel, record);
     return record;
@@ -539,7 +539,7 @@ const runAbortable = async (options, nativeCall) => {
   const abortWatcher = async (cancel) => {
     const record = getNativeCancelRecord(cancel);
     if (settled) {
-      await disposeNativeCancel(record, aborted || signal.aborted);
+      await releaseNativeCancel(record, aborted || signal.aborted);
       return;
     }
     if (aborted || signal.aborted) {
@@ -559,7 +559,7 @@ const runAbortable = async (options, nativeCall) => {
     const shouldCancel = aborted || signal.aborted;
     const records = Array.from(nativeCancelRecords.values());
     for (const record of records) {
-      await disposeNativeCancel(record, shouldCancel);
+      await releaseNativeCancel(record, shouldCancel);
     }
   }
 };

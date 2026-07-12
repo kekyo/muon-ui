@@ -1100,19 +1100,27 @@ declare const proxy: MuonPluginFunctionProxy<
 >;
 
 const result: Promise<string> = proxy(123, "value");
-const disposed: void = proxy.dispose();
-proxy.dispose();
+const releaseable: Releaseable = proxy;
+const disposable: Disposable = proxy;
+const released: void = proxy.release();
+const symbolReleased: void = proxy[Symbol.dispose]();
+proxy.release();
 
-// @ts-expect-error dispose is synchronous.
-const disposePromise: Promise<void> = proxy.dispose();
+// @ts-expect-error release is synchronous.
+const releasePromise: Promise<void> = proxy.release();
 // @ts-expect-error The proxy argument tuple is enforced.
 proxy("123", "value");
-// @ts-expect-error dispose cannot be replaced.
-proxy.dispose = () => {};
+// @ts-expect-error release cannot be replaced.
+proxy.release = () => {};
+// @ts-expect-error The old dispose member is not exposed.
+proxy.dispose();
 
 void result;
-void disposed;
-void disposePromise;
+void releaseable;
+void disposable;
+void released;
+void symbolReleased;
+void releasePromise;
 `),
     ).resolves.toBeUndefined();
   });

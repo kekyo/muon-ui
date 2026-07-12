@@ -34,7 +34,7 @@ static constexpr char kMuonFunctionArgumentProxyLeaseTokenKey[] =
     "lease_token";
 static constexpr char kMuonFunctionArgumentTypeKey[] = "type_key";
 static constexpr char kMuonFunctionArgumentTypeDescriptorKey[] = "type";
-static constexpr char kMuonPluginProxyDisposePropertyName[] = "dispose";
+static constexpr char kMuonPluginProxyReleasePropertyName[] = "release";
 static constexpr char kMuonPluginProxyDispatchFunctionName[] =
     "__muon_plugin_proxy_dispatch";
 static constexpr char kMuonPluginProxyMarkerPropertyName[] =
@@ -98,8 +98,8 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
     CEF_REQUIRE_RENDERER_THREAD();
     const auto promise = CefV8Value::CreatePromise();
     retval = promise;
-    if (disposed_) {
-      promise->RejectPromise("muon function proxy is disposed");
+    if (released_) {
+      promise->RejectPromise("muon function proxy is released");
       return true;
     }
     if (!IsCurrentOwnerContext()) {
@@ -123,14 +123,14 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
         false, std::string{}, std::string{}, arguments, promise);
   }
 
-  bool DisposeFromJavaScript(CefRefPtr<CefV8Value>& retval,
+  bool ReleaseFromJavaScript(CefRefPtr<CefV8Value>& retval,
                              CefString& exception) {
     CEF_REQUIRE_RENDERER_THREAD();
     if (!IsCurrentOwnerContext()) {
       exception = "muon function proxy belongs to another V8 context";
       return true;
     }
-    DisposeLease();
+    ReleaseLease();
     retval = CefV8Value::CreateUndefined();
     return true;
   }
@@ -147,7 +147,7 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
 
   const std::string& GetCallName() const { return call_name_; }
 
-  bool IsDisposed() const { return disposed_; }
+  bool IsReleased() const { return released_; }
 
   bool IsCurrentOwnerContext() const {
     const auto current_context = CefV8Context::GetCurrentContext();
@@ -158,15 +158,15 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
            context_->IsSame(entered_context);
   }
 
-  void DisposeForCreationFailure() {
-    DisposeLease();
+  void ReleaseForCreationFailure() {
+    ReleaseLease();
     handler_ = nullptr;
     context_ = nullptr;
     frame_ = nullptr;
   }
 
-  void DisposeForContextRelease() {
-    DisposeLease();
+  void ReleaseForContextRelease() {
+    ReleaseLease();
     handler_ = nullptr;
     context_ = nullptr;
     frame_ = nullptr;
@@ -174,7 +174,7 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
 
  private:
   ~MuonPluginFunctionProxyState() override {
-    DisposeLease();
+    ReleaseLease();
     const auto handler = handler_;
     if (handler) {
       handler->UnregisterPluginProxyState(GetUserDataKey(), this);
@@ -188,11 +188,11 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
     }
   }
 
-  void DisposeLease() {
-    if (disposed_) {
+  void ReleaseLease() {
+    if (released_) {
       return;
     }
-    disposed_ = true;
+    released_ = true;
     if (!frame_ || !frame_->IsValid()) {
       return;
     }
@@ -220,7 +220,7 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
   std::string lease_token_;
   MuonTypeMetadata function_type_ = CreateMuonPrimitiveType(MUON_TYPE_VOID);
   std::string call_name_;
-  bool disposed_ = false;
+  bool released_ = false;
 
   IMPLEMENT_REFCOUNTING(MuonPluginFunctionProxyState);
   DISALLOW_COPY_AND_ASSIGN(MuonPluginFunctionProxyState);
@@ -748,10 +748,10 @@ bool MuonV8Handler::Execute(const CefString& name,
     }
     if (arguments[1]->GetBoolValue()) {
       if (arguments.size() != 2) {
-        exception = "Invalid muon function proxy disposal";
+        exception = "Invalid muon function proxy release";
         return true;
       }
-      return state->DisposeFromJavaScript(retval, exception);
+      return state->ReleaseFromJavaScript(retval, exception);
     }
     CefV8ValueList call_arguments;
     call_arguments.reserve(arguments.size() - 2);
@@ -1191,7 +1191,7 @@ void MuonV8Handler::ReleaseFunctionReferences() {
   }
   plugin_proxy_states_by_user_data_.clear();
   for (const auto& proxy_state : proxy_states) {
-    proxy_state->DisposeForContextRelease();
+    proxy_state->ReleaseForContextRelease();
   }
   pending_renderer_function_result_transfers_.clear();
   function_references_.clear();
@@ -1449,8 +1449,8 @@ bool MuonV8Handler::EncodeFunctionArgument(
     return false;
   }
   if (proxy_state != nullptr) {
-    if (proxy_state->IsDisposed()) {
-      *error_message = "function proxy is disposed";
+    if (proxy_state->IsReleased()) {
+      *error_message = "function proxy is released";
       return false;
     }
     if (!proxy_state->IsCurrentOwnerContext()) {
@@ -2218,7 +2218,7 @@ CefRefPtr<CefV8Value> MuonV8Handler::CreatePluginProxyFunction(
     CefRefPtr<MuonPluginFunctionProxyState> exhausted_state =
         new MuonPluginFunctionProxyState(this, context_, proxy_id, lease_token,
                                          function_type, 0);
-    exhausted_state->DisposeForCreationFailure();
+    exhausted_state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
   const auto wrapper_id = next_proxy_wrapper_id_;
@@ -2229,19 +2229,19 @@ CefRefPtr<CefV8Value> MuonV8Handler::CreatePluginProxyFunction(
                                        function_type, wrapper_id);
   if (lease_token.empty() || function_type.type != MUON_TYPE_FUNCTION ||
       function_type.function_return_type.empty()) {
-    state->DisposeForCreationFailure();
+    state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
 
   auto error_message = std::string{};
   if (!EnsurePluginProxyFactory(&error_message)) {
-    state->DisposeForCreationFailure();
+    state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
 
   const auto marker = CefV8Value::CreateObject(nullptr, nullptr);
   if (!marker || !marker->SetUserData(state)) {
-    state->DisposeForCreationFailure();
+    state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
   CefV8ValueList arguments;
@@ -2254,14 +2254,14 @@ CefRefPtr<CefV8Value> MuonV8Handler::CreatePluginProxyFunction(
     if (plugin_proxy_factory_->HasException()) {
       plugin_proxy_factory_->ClearException();
     }
-    state->DisposeForCreationFailure();
+    state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
   const auto function = created_values->GetValue(0);
-  const auto dispose_function = created_values->GetValue(1);
-  if (!function || !function->IsFunction() || !dispose_function ||
-      !dispose_function->IsFunction()) {
-    state->DisposeForCreationFailure();
+  const auto release_function = created_values->GetValue(1);
+  if (!function || !function->IsFunction() || !release_function ||
+      !release_function->IsFunction()) {
+    state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
   const auto property_attributes =
@@ -2271,9 +2271,9 @@ CefRefPtr<CefV8Value> MuonV8Handler::CreatePluginProxyFunction(
           V8_PROPERTY_ATTRIBUTE_DONTDELETE);
   if (!function->SetValue(kMuonPluginProxyMarkerPropertyName, marker,
                           property_attributes) ||
-      !function->SetValue(kMuonPluginProxyDisposePropertyName,
-                          dispose_function, property_attributes)) {
-    state->DisposeForCreationFailure();
+      !function->SetValue(kMuonPluginProxyReleasePropertyName,
+                          release_function, property_attributes)) {
+    state->ReleaseForCreationFailure();
     return CefV8Value::CreateUndefined();
   }
   RegisterPluginProxyState(state->GetUserDataKey(), state.get());
@@ -2293,8 +2293,14 @@ bool MuonV8Handler::EnsurePluginProxyFactory(std::string* error_message) {
 ((dispatch, marker) => {
   "use strict";
   const proxy = (...args) => dispatch(marker, false, ...args);
-  const dispose = () => dispatch(marker, true);
-  return [proxy, dispose];
+  const release = () => dispatch(marker, true);
+  Object.defineProperty(proxy, Symbol.dispose, {
+    configurable: false,
+    enumerable: false,
+    value: release,
+    writable: false,
+  });
+  return [proxy, release];
 })
 )JS";
   CefRefPtr<CefV8Value> factory;

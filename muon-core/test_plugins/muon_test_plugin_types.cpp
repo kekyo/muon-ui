@@ -755,8 +755,8 @@ static const muon_plugin_metadata type_metadata = {
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(
-    const muon_plugin_helpers* helpers) {
-  helper_table = helpers;
+    const muon_plugin_init_context* context) {
+  helper_table = context == nullptr ? nullptr : context->helpers;
   pending_buffer_callback_completion = nullptr;
   registered_buffer_function = nullptr;
   helper_error_message[0] = '\0';

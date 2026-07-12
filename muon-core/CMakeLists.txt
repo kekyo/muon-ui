@@ -679,6 +679,7 @@ set(APP_SOURCES
   src/browser/muon_client.cpp
   src/browser/muon_context_menu.cpp
   src/browser/muon_default_title_bar_icon.cpp
+  src/browser/muon_icon.cpp
   src/browser/muon_native_wheel_forwarder.cpp
   src/browser/muon_tray.cpp
   src/browser/muon_tray_service.cpp
@@ -707,6 +708,7 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs.cpp
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
+  src/plugins/muon_function_wrapper_lifecycle.cpp
   src/plugins/muon_plugin_metadata.cpp
   src/plugins/muon_plugin_policy.cpp
   src/plugins/muon_plugin_runtime.cpp
@@ -728,6 +730,7 @@ set(APP_HEADERS
   src/browser/muon_client.h
   src/browser/muon_context_menu.h
   src/browser/muon_default_title_bar_icon.h
+  src/browser/muon_icon.h
   src/browser/muon_native_wheel_forwarder.h
   src/browser/muon_tray.h
   src/browser/muon_title_bar.h
@@ -757,6 +760,7 @@ set(APP_HEADERS
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.h
   src/plugins/builtin/muon_builtin_fs_helpers.h
   src/plugins/muon_js_bridge.h
+  src/plugins/muon_function_wrapper_lifecycle.h
   src/plugins/muon_plugin_metadata.h
   src/plugins/muon_plugin_policy.h
   src/plugins/muon_plugin_runtime.h
@@ -777,6 +781,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     src/plugins/builtin/muon_builtin_fs_dialogs.cpp
     src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
     src/plugins/builtin/muon_builtin_fs_helpers.cpp
+    src/plugins/muon_function_wrapper_lifecycle.cpp
     src/plugins/muon_traffic_cardio_operation.cpp
     tests/muon_traffic_cardio_operation_test.cpp
     PROPERTIES
@@ -788,6 +793,7 @@ elseif(MSVC)
     src/plugins/builtin/muon_builtin_fs_dialogs.cpp
     src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
     src/plugins/builtin/muon_builtin_fs_helpers.cpp
+    src/plugins/muon_function_wrapper_lifecycle.cpp
     src/plugins/muon_traffic_cardio_operation.cpp
     PROPERTIES
     COMPILE_OPTIONS /EHsc
@@ -1028,6 +1034,9 @@ if(MUON_TRACK_FFI_CLOSURES)
     MUON_TRACK_FFI_CLOSURES
     TRA_FFIC_TRACK_CLOSURES
     )
+endif()
+if(MUON_BUILD_TESTS)
+  target_compile_definitions(${APP_NAME} PRIVATE MUON_TEST_BUILD)
 endif()
 MUON_APPLY_SANITIZERS(${APP_NAME})
 
@@ -1408,6 +1417,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
     src/browser/muon_context_menu.cpp
+    src/browser/muon_icon.cpp
     src/browser/muon_tray.cpp
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
@@ -1446,6 +1456,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       src/app/muon_app_storage.cpp
       src/browser/muon_tray.cpp
       src/browser/muon_tray_service.cpp
+      src/browser/muon_icon.cpp
       src/browser/muon_title_bar.cpp
       src/config/muon_linux_display_backend.cpp
       src/config/muon_paths.cpp
@@ -1506,6 +1517,16 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     yyjson
     )
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
+  add_executable(muon_icon_test
+    tests/muon_icon_test.cpp
+    src/browser/muon_icon.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_icon_test)
+  target_compile_features(muon_icon_test PRIVATE cxx_std_20)
+  target_include_directories(muon_icon_test PRIVATE
+    src
+    )
+  MUON_APPLY_SANITIZERS(muon_icon_test)
   add_executable(muon_internal_helpers_test
     tests/muon_internal_helpers_test.cpp
     src/muon_json_helpers.cpp
@@ -1618,6 +1639,20 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     muon_cardio
     )
   MUON_APPLY_SANITIZERS(muon_traffic_cardio_operation_test)
+  add_executable(muon_function_wrapper_lifecycle_test
+    tests/muon_function_wrapper_lifecycle_test.cpp
+    src/plugins/muon_function_wrapper_lifecycle.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_function_wrapper_lifecycle_test)
+  target_compile_features(muon_function_wrapper_lifecycle_test PRIVATE
+    cxx_std_20)
+  target_include_directories(muon_function_wrapper_lifecycle_test PRIVATE
+    src
+    )
+  target_link_libraries(muon_function_wrapper_lifecycle_test PRIVATE
+    Threads::Threads
+    )
+  MUON_APPLY_SANITIZERS(muon_function_wrapper_lifecycle_test)
   add_executable(muon_plugin_metadata_test
     tests/muon_plugin_metadata_test.cpp
     src/plugins/muon_plugin_metadata.cpp
@@ -1665,6 +1700,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     COMMAND muon_internal_helpers_test
     )
   add_test(
+    NAME icon
+    COMMAND muon_icon_test
+    )
+  add_test(
     NAME cef_settings
     COMMAND muon_cef_settings_test
     )
@@ -1683,6 +1722,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME traffic_cardio_operation
     COMMAND muon_traffic_cardio_operation_test
+    )
+  add_test(
+    NAME function_wrapper_lifecycle
+    COMMAND muon_function_wrapper_lifecycle_test
     )
   add_test(
     NAME plugin_metadata

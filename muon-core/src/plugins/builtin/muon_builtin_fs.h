@@ -13,11 +13,11 @@
 /**
  * Initializes the built-in filesystem plugin runtime.
  *
- * @param helpers Host helper table used by built-in functions.
+ * @param context Plugin initialization context supplied by muon.
  * @param error_message Receives an initialization diagnostic.
  * @return true when the runtime is ready.
  */
-bool InitializeMuonBuiltinFs(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,
                               std::string* error_message);
 
 /**

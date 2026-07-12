@@ -9,6 +9,7 @@
 #include "browser/muon_browser_background_color.h"
 #include "browser/muon_browser_view_delegate.h"
 #include "browser/muon_default_title_bar_icon.h"
+#include "browser/muon_icon.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
@@ -122,7 +123,8 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
   void OnRequestComplete(CefRefPtr<CefURLRequest> request) override {
     auto success = false;
     std::string mime_type;
-    if (request && request->GetRequestStatus() == UR_SUCCESS) {
+    if (!response_over_budget_ && request &&
+        request->GetRequestStatus() == UR_SUCCESS) {
       const auto response = request->GetResponse();
       const auto status = response ? response->GetStatus() : 0;
       if (status >= 200 && status < 300) {
@@ -153,12 +155,18 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
   void OnDownloadData(CefRefPtr<CefURLRequest> request,
                       const void* data,
                       size_t data_length) override {
-    (void)request;
-    if (data == nullptr || data_length == 0) {
+    if (response_over_budget_ || data_length == 0) {
       return;
     }
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    data_.insert(data_.end(), bytes, bytes + data_length);
+    if (!AppendMuonBytesWithinLimit(
+            &data_, data, data_length,
+            kMuonIconPngDecodeLimits.max_encoded_bytes)) {
+      response_over_budget_ = true;
+      data_.clear();
+      if (request) {
+        request->Cancel();
+      }
+    }
   }
 
   bool GetAuthCredentials(bool isProxy,
@@ -179,6 +187,7 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
  private:
   Completion completion_;
   std::vector<uint8_t> data_;
+  bool response_over_budget_ = false;
 
   IMPLEMENT_REFCOUNTING(MuonFaviconUrlRequestClient);
   DISALLOW_COPY_AND_ASSIGN(MuonFaviconUrlRequestClient);
@@ -410,6 +419,53 @@ static MuonPluginInvocationContext CreateMuonPluginInvocationContext(
   return context;
 }
 
+#if defined(MUON_TEST_BUILD)
+static CefRefPtr<CefDictionaryValue>
+CreateMuonFunctionWrapperDiagnosticCountsDictionary(
+    const MuonFunctionWrapperDiagnosticCounts& counts) {
+  const auto dictionary = CefDictionaryValue::Create();
+  dictionary->SetDouble("sources", static_cast<double>(counts.sources));
+  dictionary->SetDouble("borrows", static_cast<double>(counts.borrows));
+  dictionary->SetDouble("proxies", static_cast<double>(counts.proxies));
+  dictionary->SetDouble("proxyLeases",
+                        static_cast<double>(counts.proxy_leases));
+  return dictionary;
+}
+
+static CefRefPtr<CefDictionaryValue>
+CreateMuonFunctionWrapperDiagnosticsDictionary(
+    const MuonFunctionWrapperDiagnostics& diagnostics) {
+  const auto dictionary = CefDictionaryValue::Create();
+  dictionary->SetDictionary(
+      "owner", CreateMuonFunctionWrapperDiagnosticCountsDictionary(
+                   diagnostics.owner));
+  dictionary->SetDictionary(
+      "global", CreateMuonFunctionWrapperDiagnosticCountsDictionary(
+                    diagnostics.global));
+  const auto ffi_closures = CefDictionaryValue::Create();
+  ffi_closures->SetBool("enabled", diagnostics.ffi_closures_enabled);
+  ffi_closures->SetDouble(
+      "alloc", static_cast<double>(diagnostics.ffi_closure_alloc));
+  ffi_closures->SetDouble(
+      "free", static_cast<double>(diagnostics.ffi_closure_free));
+  ffi_closures->SetDouble(
+      "live", static_cast<double>(diagnostics.ffi_closure_live));
+  ffi_closures->SetDouble(
+      "highWater",
+      static_cast<double>(diagnostics.ffi_closure_high_water));
+  dictionary->SetDictionary("ffiClosures", ffi_closures);
+  return dictionary;
+}
+#endif
+
+static std::string CreateMuonRendererFunctionResultKey(
+    const MuonPluginInvocationContext& context,
+    int call_id) {
+  return std::to_string(context.browser_id) + ":" + context.frame_id + ":" +
+         std::to_string(context.renderer_context_id) + ":" +
+         std::to_string(call_id);
+}
+
 static bool IsMuonPluginCallMessageName(const std::string& message_name) {
   return message_name == kMuonPluginCallSharedMessageName ||
          message_name == kMuonPluginCallMessageName ||
@@ -436,6 +492,7 @@ static int GetMuonPluginCallRendererContextId(
 static constexpr char kMuonFunctionValueKindKey[] = "kind";
 static constexpr char kMuonFunctionValueKindPluginProxy[] = "plugin_proxy";
 static constexpr char kMuonFunctionValueProxyIdKey[] = "proxy_id";
+static constexpr char kMuonFunctionValueLeaseTokenKey[] = "lease_token";
 static constexpr char kMuonFunctionValueTypeKey[] = "type_key";
 static constexpr char kMuonFsDialogsNamespace[] = "muon.fs.dialogs";
 static constexpr cef_color_t kMuonModalInputBlockerBackground =
@@ -1235,6 +1292,53 @@ void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   }
 }
 
+void MuonClient::ReleaseFunctionBrowserState(int browser_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0) {
+    return;
+  }
+  if (plugin_runtime_) {
+    plugin_runtime_->ReleaseFunctionBrowser(browser_id);
+  }
+  const auto belongs_to_browser = [browser_id](
+                                      const MuonPluginInvocationContext&
+                                          context) {
+    return context.browser_id == browser_id;
+  };
+  for (auto iterator = pending_plugin_calls_.begin();
+       iterator != pending_plugin_calls_.end();) {
+    if (belongs_to_browser(iterator->second.context)) {
+      iterator = pending_plugin_calls_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = pending_plugin_call_payloads_.begin();
+       iterator != pending_plugin_call_payloads_.end();) {
+    if (belongs_to_browser(iterator->second.context)) {
+      iterator = pending_plugin_call_payloads_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = pending_renderer_function_result_messages_.begin();
+       iterator != pending_renderer_function_result_messages_.end();) {
+    if (belongs_to_browser(iterator->second.context)) {
+      iterator = pending_renderer_function_result_messages_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = pending_renderer_function_result_payloads_.begin();
+       iterator != pending_renderer_function_result_payloads_.end();) {
+    if (belongs_to_browser(iterator->second.result.context)) {
+      iterator = pending_renderer_function_result_payloads_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+}
+
 void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   const auto browser_id = browser->GetIdentifier();
@@ -1256,6 +1360,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   if (plugin_runtime_) {
     plugin_runtime_->CancelFsDialogsForOwner(browser_id);
   }
+  ReleaseFunctionBrowserState(browser_id);
   const auto pending_favicon_request =
       pending_favicon_requests_.find(browser_id);
   if (pending_favicon_request != pending_favicon_requests_.end() &&
@@ -1264,7 +1369,6 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   }
   pending_favicon_requests_.erase(browser_id);
   title_bar_icon_update_generations_.erase(browser_id);
-  title_bar_icon_has_png_by_browser_.erase(browser_id);
   title_bar_tray_icons_by_browser_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
@@ -1282,6 +1386,25 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     AppendMuonCloseDebugLog(log.str());
   }
   QuitMessageLoopWhenIdle();
+}
+
+void MuonClient::OnRenderProcessTerminated(
+    CefRefPtr<CefBrowser> browser,
+    TerminationStatus status,
+    int error_code,
+    const CefString& error_string) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)status;
+  (void)error_code;
+  (void)error_string;
+  if (!browser) {
+    return;
+  }
+  const auto browser_id = browser->GetIdentifier();
+  if (plugin_runtime_) {
+    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+  }
+  ReleaseFunctionBrowserState(browser_id);
 }
 
 void MuonClient::BeginPendingFsDialogCall(int browser_id) {
@@ -2031,6 +2154,61 @@ bool MuonClient::OnProcessMessageReceived(
   }
 
   const auto message_name = message->GetName().ToString();
+#if defined(MUON_TEST_BUILD)
+  if (message_name ==
+      kMuonFunctionWrapperDiagnosticsRequestMessageName) {
+    const auto args = message->GetArgumentList();
+    if (!args || args->GetSize() != 2 ||
+        args->GetType(0) != VTYPE_INT || args->GetInt(0) <= 0 ||
+        args->GetType(1) != VTYPE_INT || args->GetInt(1) <= 0 ||
+        !frame || !frame->IsValid()) {
+      return true;
+    }
+    const auto renderer_context_id = args->GetInt(0);
+    const auto request_id = args->GetInt(1);
+    const auto invocation_context = CreateMuonPluginInvocationContext(
+        browser, frame, renderer_context_id);
+    const auto success = plugin_runtime_ &&
+                         IsPluginPageAllowed(frame, plugin_page_policy_);
+    auto diagnostics = CefDictionaryValue::Create();
+    auto error_message = std::string{};
+    if (success) {
+      diagnostics = CreateMuonFunctionWrapperDiagnosticsDictionary(
+          plugin_runtime_->GetFunctionWrapperDiagnostics(
+              invocation_context));
+    } else {
+      error_message = "Function wrapper diagnostics are unavailable";
+    }
+    const auto result = CefProcessMessage::Create(
+        kMuonFunctionWrapperDiagnosticsResultMessageName);
+    const auto result_args = result->GetArgumentList();
+    result_args->SetSize(5);
+    result_args->SetInt(0, renderer_context_id);
+    result_args->SetInt(1, request_id);
+    result_args->SetBool(2, success);
+    result_args->SetDictionary(3, diagnostics);
+    result_args->SetString(4, error_message);
+    frame->SendProcessMessage(PID_RENDERER, result);
+    return true;
+  }
+#endif
+  if (message_name == kMuonPluginProxyReleaseMessageName) {
+    const auto args = message->GetArgumentList();
+    if (!plugin_runtime_ || !args || args->GetSize() != 3 ||
+        args->GetType(0) != VTYPE_INT ||
+        args->GetType(1) != VTYPE_INT ||
+        args->GetInt(1) <= 0 ||
+        args->GetType(2) != VTYPE_STRING ||
+        args->GetString(2).ToString().empty()) {
+      return true;
+    }
+    const auto invocation_context = CreateMuonPluginInvocationContext(
+        browser, frame, args->GetInt(0));
+    plugin_runtime_->ReleasePluginFunctionProxy(
+        invocation_context, static_cast<uint32_t>(args->GetInt(1)),
+        args->GetString(2).ToString());
+    return true;
+  }
   if (IsMuonPluginCallMessageName(message_name) &&
       !IsPluginPageAllowed(frame, plugin_page_policy_)) {
     const auto args = message->GetArgumentList();
@@ -2051,20 +2229,35 @@ bool MuonClient::OnProcessMessageReceived(
   if (message_name == kMuonPluginCallSharedMessageName ||
       message_name == kMuonPluginProxyCallSharedMessageName) {
     auto call_id = 0;
+    auto renderer_context_id = 0;
+    std::string metadata_error_message;
+    if (!ReadMuonSharedBufferPayloadMetadata(
+            message, &call_id, &renderer_context_id,
+            &metadata_error_message)) {
+      return true;
+    }
+    auto decoded_call_id = 0;
     std::shared_ptr<MuonSharedBufferPayload> payload;
     std::string error_message;
     const auto decoded = DecodeMuonSharedBufferPayload(
-        message, &call_id, &payload, &error_message);
-    const auto renderer_context_id =
-        payload ? payload->renderer_context_id : 0;
+        message, &decoded_call_id, &payload, &error_message);
+    const auto payload_valid =
+        decoded && decoded_call_id == call_id && payload &&
+        payload->renderer_context_id == renderer_context_id;
+    if (!payload_valid && decoded) {
+      payload = nullptr;
+      error_message = "Shared buffer call metadata is inconsistent";
+    }
+    const auto invocation_context = CreateMuonPluginInvocationContext(
+        browser, frame, renderer_context_id);
     const auto key = CreatePendingSharedKey(message_name,
-                                            renderer_context_id,
+                                            invocation_context,
                                             call_id);
     const auto pending_iterator = pending_plugin_calls_.find(key);
     if (pending_iterator != pending_plugin_calls_.end()) {
       const auto pending_call = pending_iterator->second;
       pending_plugin_calls_.erase(pending_iterator);
-      if (!decoded) {
+      if (!payload_valid) {
         RejectPluginCall(pending_call, error_message);
       } else {
         DispatchPluginCall(pending_call, payload);
@@ -2072,9 +2265,10 @@ bool MuonClient::OnProcessMessageReceived(
       return true;
     }
     PendingSharedPayload pending_payload;
+    pending_payload.context = invocation_context;
     pending_payload.payload = payload;
     pending_payload.error_message = error_message;
-    pending_payload.has_error = !decoded;
+    pending_payload.has_error = !payload_valid;
     pending_plugin_call_payloads_[key] = pending_payload;
     return true;
   }
@@ -2103,7 +2297,7 @@ bool MuonClient::OnProcessMessageReceived(
     const auto shared_key =
         has_shared_placeholders
             ? CreatePendingSharedKey(kMuonPluginCallSharedMessageName,
-                                     renderer_context_id, call_id)
+                                     invocation_context, call_id)
             : std::string{};
     if (browser_config_.plugin.mode == kMuonBrowserPluginModeValidate) {
       std::string error_message;
@@ -2144,7 +2338,29 @@ bool MuonClient::OnProcessMessageReceived(
   }
   if (message_name == kMuonPluginProxyCallMessageName) {
     const auto args = message->GetArgumentList();
-    if (!plugin_runtime_ || !args || args->GetSize() < 4) {
+    const auto valid_call =
+        plugin_runtime_ && args && args->GetSize() == 5 &&
+        args->GetType(0) == VTYPE_INT &&
+        args->GetType(1) == VTYPE_INT && args->GetInt(1) > 0 &&
+        args->GetType(2) == VTYPE_LIST &&
+        args->GetType(3) == VTYPE_INT &&
+        args->GetType(4) == VTYPE_STRING &&
+        !args->GetString(4).ToString().empty();
+    if (!valid_call) {
+      if (args && args->GetSize() >= 1 &&
+          args->GetType(0) == VTYPE_INT) {
+        PendingPluginCall rejected_call;
+        const auto renderer_context_id =
+            args->GetSize() >= 4 && args->GetType(3) == VTYPE_INT
+                ? args->GetInt(3)
+                : 0;
+        rejected_call.context = CreateMuonPluginInvocationContext(
+            browser, frame, renderer_context_id);
+        rejected_call.frame = frame;
+        rejected_call.call_id = args->GetInt(0);
+        RejectPluginCall(rejected_call,
+                         "Invalid muon function proxy call");
+      }
       return true;
     }
 
@@ -2161,10 +2377,11 @@ bool MuonClient::OnProcessMessageReceived(
     pending_call.encoded_args = encoded_args;
     pending_call.call_id = call_id;
     pending_call.function_id = proxy_id;
+    pending_call.proxy_lease_token = args->GetString(4).ToString();
     pending_call.proxy_call = true;
     if (CefListValueHasMuonSharedBufferPlaceholders(encoded_args)) {
       const auto key = CreatePendingSharedKey(
-          kMuonPluginProxyCallSharedMessageName, renderer_context_id, call_id);
+          kMuonPluginProxyCallSharedMessageName, invocation_context, call_id);
       const auto payload_iterator = pending_plugin_call_payloads_.find(key);
       if (payload_iterator == pending_plugin_call_payloads_.end()) {
         pending_plugin_calls_[key] = pending_call;
@@ -2184,90 +2401,174 @@ bool MuonClient::OnProcessMessageReceived(
   }
   if (message_name == kMuonRendererFunctionResultSharedMessageName) {
     auto call_id = 0;
+    auto renderer_context_id = 0;
+    std::string metadata_error_message;
+    if (!ReadMuonSharedBufferPayloadMetadata(
+            message, &call_id, &renderer_context_id,
+            &metadata_error_message)) {
+      return true;
+    }
+    auto decoded_call_id = 0;
     std::shared_ptr<MuonSharedBufferPayload> payload;
     std::string error_message;
     const auto decoded = DecodeMuonSharedBufferPayload(
-        message, &call_id, &payload, &error_message);
+        message, &decoded_call_id, &payload, &error_message);
+    const auto payload_valid =
+        decoded && decoded_call_id == call_id && payload &&
+        payload->renderer_context_id == renderer_context_id;
+    if (!payload_valid && decoded) {
+      payload = nullptr;
+      error_message = "Shared buffer result metadata is inconsistent";
+    }
+    const auto sender_context = CreateMuonPluginInvocationContext(
+        browser, frame, renderer_context_id);
+    const auto result_key =
+        CreateMuonRendererFunctionResultKey(sender_context, call_id);
     const auto metadata_iterator =
-        pending_renderer_function_result_messages_.find(call_id);
+        pending_renderer_function_result_messages_.find(result_key);
     if (metadata_iterator !=
         pending_renderer_function_result_messages_.end()) {
       const auto metadata = metadata_iterator->second;
       pending_renderer_function_result_messages_.erase(metadata_iterator);
       if (plugin_runtime_) {
-        if (!decoded) {
+        if (!payload_valid) {
           const auto error_result =
               CefProcessMessage::Create(kMuonRendererFunctionResultMessageName);
           const auto error_args = error_result->GetArgumentList();
-          error_args->SetSize(4);
+          error_args->SetSize(5);
           error_args->SetInt(0, call_id);
           error_args->SetBool(1, false);
           error_args->SetString(2, error_message);
           error_args->SetNull(3);
-          plugin_runtime_->CompleteRendererFunctionCall(error_result, nullptr);
+          error_args->SetInt(4, metadata.context.renderer_context_id);
+          plugin_runtime_->CompleteRendererFunctionCall(
+              metadata.context, error_result, nullptr);
         } else {
-          plugin_runtime_->CompleteRendererFunctionCall(metadata, payload);
+          plugin_runtime_->CompleteRendererFunctionCall(
+              metadata.context, metadata.message, payload);
         }
       }
       return true;
     }
-    PendingSharedPayload pending_payload;
-    pending_payload.payload = payload;
-    pending_payload.error_message = error_message;
-    pending_payload.has_error = !decoded;
-    pending_renderer_function_result_payloads_[call_id] = pending_payload;
+    PendingRendererFunctionResultPayload pending_payload;
+    pending_payload.result.context = sender_context;
+    pending_payload.result.payload = payload;
+    pending_payload.result.error_message = error_message;
+    pending_payload.result.has_error = !payload_valid;
+    pending_renderer_function_result_payloads_[result_key] =
+        std::move(pending_payload);
     return true;
   }
   if (message_name == kMuonRendererFunctionResultMessageName) {
     if (plugin_runtime_) {
       const auto args = message->GetArgumentList();
-      const auto needs_shared =
-          args && args->GetSize() >= 4 && args->GetBool(1) &&
-          CefListValueHasMuonSharedBufferPlaceholders(args);
+      if (!args || args->GetSize() != 5 ||
+          args->GetType(0) != VTYPE_INT ||
+          args->GetType(1) != VTYPE_BOOL ||
+          args->GetType(4) != VTYPE_INT) {
+        return true;
+      }
+      const auto sender_context = CreateMuonPluginInvocationContext(
+          browser, frame, args->GetInt(4));
+      const auto needs_shared = args->GetBool(1) &&
+                                CefListValueHasMuonSharedBufferPlaceholders(
+                                    args);
       if (needs_shared) {
         const auto call_id = args->GetInt(0);
+        const auto result_key =
+            CreateMuonRendererFunctionResultKey(sender_context, call_id);
         const auto payload_iterator =
-            pending_renderer_function_result_payloads_.find(call_id);
+            pending_renderer_function_result_payloads_.find(result_key);
         if (payload_iterator ==
             pending_renderer_function_result_payloads_.end()) {
-          pending_renderer_function_result_messages_[call_id] = message;
+          PendingRendererFunctionResultMessage pending_message;
+          pending_message.context = sender_context;
+          pending_message.message = message;
+          pending_renderer_function_result_messages_[result_key] =
+              std::move(pending_message);
           return true;
         }
         const auto pending_payload = payload_iterator->second;
         pending_renderer_function_result_payloads_.erase(payload_iterator);
-        if (pending_payload.has_error) {
+        if (pending_payload.result.has_error) {
           const auto error_result =
               CefProcessMessage::Create(kMuonRendererFunctionResultMessageName);
           const auto error_args = error_result->GetArgumentList();
-          error_args->SetSize(4);
+          error_args->SetSize(5);
           error_args->SetInt(0, call_id);
           error_args->SetBool(1, false);
-          error_args->SetString(2, pending_payload.error_message);
+          error_args->SetString(2,
+                                pending_payload.result.error_message);
           error_args->SetNull(3);
-          plugin_runtime_->CompleteRendererFunctionCall(error_result, nullptr);
+          error_args->SetInt(4, sender_context.renderer_context_id);
+          plugin_runtime_->CompleteRendererFunctionCall(
+              sender_context, error_result, nullptr);
           return true;
         }
         plugin_runtime_->CompleteRendererFunctionCall(
-            message, pending_payload.payload);
+            sender_context, message, pending_payload.result.payload);
         return true;
       }
-      plugin_runtime_->CompleteRendererFunctionCall(message, nullptr);
+      plugin_runtime_->CompleteRendererFunctionCall(
+          sender_context, message, nullptr);
     }
     return true;
   }
   if (message_name == kMuonFunctionContextReleasedMessageName) {
     const auto args = message->GetArgumentList();
-    if (!plugin_runtime_ || !args || args->GetSize() < 1) {
+    if (!args || args->GetSize() != 1 ||
+        args->GetType(0) != VTYPE_INT) {
       return true;
     }
     const auto invocation_context = CreateMuonPluginInvocationContext(
-        browser, frame);
-    plugin_runtime_->ReleaseFunctionContext(invocation_context,
-                                            args->GetInt(0));
-    pending_plugin_calls_.clear();
-    pending_plugin_call_payloads_.clear();
-    pending_renderer_function_result_messages_.clear();
-    pending_renderer_function_result_payloads_.clear();
+        browser, frame, args->GetInt(0));
+    if (plugin_runtime_) {
+      plugin_runtime_->ReleaseFunctionContext(invocation_context,
+                                              args->GetInt(0));
+    }
+    const auto belongs_to_released_context =
+        [&invocation_context](const MuonPluginInvocationContext& candidate) {
+      return candidate.browser_id == invocation_context.browser_id &&
+             candidate.frame_id == invocation_context.frame_id &&
+             candidate.renderer_context_id ==
+                 invocation_context.renderer_context_id;
+    };
+    for (auto iterator = pending_plugin_calls_.begin();
+         iterator != pending_plugin_calls_.end();) {
+      if (belongs_to_released_context(iterator->second.context)) {
+        iterator = pending_plugin_calls_.erase(iterator);
+      } else {
+        ++iterator;
+      }
+    }
+    for (auto iterator = pending_plugin_call_payloads_.begin();
+         iterator != pending_plugin_call_payloads_.end();) {
+      if (belongs_to_released_context(iterator->second.context)) {
+        iterator = pending_plugin_call_payloads_.erase(iterator);
+      } else {
+        ++iterator;
+      }
+    }
+    for (auto iterator =
+             pending_renderer_function_result_messages_.begin();
+         iterator != pending_renderer_function_result_messages_.end();) {
+      if (belongs_to_released_context(iterator->second.context)) {
+        iterator =
+            pending_renderer_function_result_messages_.erase(iterator);
+      } else {
+        ++iterator;
+      }
+    }
+    for (auto iterator =
+             pending_renderer_function_result_payloads_.begin();
+         iterator != pending_renderer_function_result_payloads_.end();) {
+      if (belongs_to_released_context(iterator->second.result.context)) {
+        iterator =
+            pending_renderer_function_result_payloads_.erase(iterator);
+      } else {
+        ++iterator;
+      }
+    }
     return true;
   }
   return false;
@@ -2686,12 +2987,8 @@ bool MuonClient::ResolveTitleBarTrayIconForBrowser(
   if (icon == nullptr || error_message == nullptr) {
     return false;
   }
-  const auto has_current_png =
-      title_bar_icon_has_png_by_browser_.find(browser_id);
   const auto current_icon = title_bar_tray_icons_by_browser_.find(browser_id);
-  if (has_current_png != title_bar_icon_has_png_by_browser_.end() &&
-      has_current_png->second &&
-      current_icon != title_bar_tray_icons_by_browser_.end()) {
+  if (current_icon != title_bar_tray_icons_by_browser_.end()) {
     *icon = current_icon->second;
     return true;
   }
@@ -2706,20 +3003,20 @@ bool MuonClient::ResolveTitleBarTrayIconForBrowser(
 void MuonClient::UpdateFollowingTrayIconForBrowser(
     int browser_id,
     const MuonTitleBarIcon* icon) {
-  if (browser_id <= 0 || icon == nullptr || icon->png_data.empty()) {
-    if (browser_id > 0) {
-      title_bar_icon_has_png_by_browser_[browser_id] = false;
-    }
+  if (browser_id <= 0) {
+    return;
+  }
+  if (icon == nullptr || icon->bitmap == nullptr) {
+    title_bar_tray_icons_by_browser_.erase(browser_id);
     return;
   }
   MuonBrowserTrayIcon tray_icon;
   std::string error_message;
   if (!LoadMuonBrowserTrayIconFromTitleBarIcon(
           *icon, "current title bar icon", &tray_icon, &error_message)) {
-    title_bar_icon_has_png_by_browser_[browser_id] = false;
+    title_bar_tray_icons_by_browser_.erase(browser_id);
     return;
   }
-  title_bar_icon_has_png_by_browser_[browser_id] = true;
   title_bar_tray_icons_by_browser_[browser_id] = tray_icon;
   if (tray_service_) {
     tray_service_->SetFollowingTrayIconForBrowser(browser_id, tray_icon);
@@ -3032,10 +3329,13 @@ void MuonClient::ZoomBrowser(CefRefPtr<CefBrowser> browser,
   }
 }
 
-std::string MuonClient::CreatePendingSharedKey(const std::string& message_name,
-                                                int renderer_context_id,
-                                                int call_id) {
-  return message_name + ":" + std::to_string(renderer_context_id) + ":" +
+std::string MuonClient::CreatePendingSharedKey(
+    const std::string& message_name,
+    const MuonPluginInvocationContext& context,
+    int call_id) {
+  return message_name + ":" + std::to_string(context.browser_id) + ":" +
+         context.frame_id + ":" +
+         std::to_string(context.renderer_context_id) + ":" +
          std::to_string(call_id);
 }
 
@@ -3115,8 +3415,8 @@ void MuonClient::DispatchPluginCall(
   CefRefPtr<MuonClient> self(this);
   if (call.proxy_call) {
     plugin_runtime_->InvokeProxy(
-        call.context, call.function_id, call.call_id, call.encoded_args,
-        std::move(payload),
+        call.context, call.function_id, call.proxy_lease_token, call.call_id,
+        call.encoded_args, std::move(payload),
         [self, frame = call.frame, call_id = call.call_id,
          invocation_context = call.context](
             const MuonPluginCallResult& result) {
@@ -3627,6 +3927,7 @@ void MuonClient::SendPluginResult(const MuonPluginInvocationContext& context,
   }
 
   args->SetInt(2, static_cast<int>(result.value.type));
+  MuonPluginFunctionProxyRegistration function_registration;
   switch (result.value.type) {
     case MUON_TYPE_VOID:
       args->SetNull(3);
@@ -3682,14 +3983,17 @@ void MuonClient::SendPluginResult(const MuonPluginInvocationContext& context,
         args->SetNull(3);
         break;
       }
-      const auto proxy_id = plugin_runtime_
-                                ? plugin_runtime_->RegisterPluginFunctionProxy(
-                                      context, result.value.function_value,
-                                      result.value.function_type)
-                                : 0;
-      if (proxy_id == 0) {
+      auto registration_error = std::string{};
+      if (!plugin_runtime_ ||
+          !plugin_runtime_->RegisterPluginFunctionProxy(
+              context, result.value.function_value,
+              result.value.function_type, &function_registration,
+              &registration_error)) {
         args->SetBool(1, false);
-        args->SetString(2, "Failed to register function result");
+        args->SetString(
+            2, registration_error.empty()
+                   ? "Failed to register function result"
+                   : registration_error);
         args->SetNull(3);
         break;
       }
@@ -3697,7 +4001,11 @@ void MuonClient::SendPluginResult(const MuonPluginInvocationContext& context,
       encoded_function->SetString(kMuonFunctionValueKindKey,
                                   kMuonFunctionValueKindPluginProxy);
       encoded_function->SetInt(kMuonFunctionValueProxyIdKey,
-                               static_cast<int>(proxy_id));
+                               static_cast<int>(
+                                   function_registration.proxy_id));
+      encoded_function->SetString(
+          kMuonFunctionValueLeaseTokenKey,
+          function_registration.lease_token);
       encoded_function->SetString(kMuonFunctionValueTypeKey,
                                   CreateMuonTypeCanonicalKey(
                                       result.value.function_type));

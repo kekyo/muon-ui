@@ -211,6 +211,12 @@ static void CompleteMuonFsDialogsProviderOperation(
 
 static void PostMuonFsDialogsOperation(
     std::unique_ptr<MuonFsDialogsOperationState> state) {
+  if (state->provider_operation &&
+      state->provider_operation->cancel_requested) {
+    MarkProviderOperationCompleted(state->provider_operation);
+    CompleteMuonError(state->completion, "Native dialog was canceled");
+    return;
+  }
   auto* raw_state = state.release();
   auto handle = muon_ui_fs_dialog_operation_handle{};
   const auto started = muon_ui_fs_dialogs_run(
@@ -454,56 +460,108 @@ const getAbortSignal = (options) => {
   return signal;
 };
 
-const runAbortable = (options, nativeCall) => {
-  let signal = null;
-  try {
-    signal = getAbortSignal(options);
-  } catch (error) {
-    return Promise.reject(error);
-  }
+const runAbortable = async (options, nativeCall) => {
+  const signal = getAbortSignal(options);
   if (signal === null) {
-    return nativeCall(null);
+    return await nativeCall(null);
   }
   if (signal.aborted) {
-    return Promise.reject(createAbortReason(signal));
+    throw createAbortReason(signal);
   }
 
-  let nativeCancel = null;
-  let cancelRequested = false;
+  const nativeCancelRecords = new Map();
   let aborted = false;
+  let settled = false;
   let rejectAbort = null;
   const abortPromise = new Promise((_resolve, reject) => {
     rejectAbort = reject;
   });
-  const requestNativeCancel = () => {
-    if (cancelRequested || nativeCancel === null) {
-      return;
-    }
-    cancelRequested = true;
+
+  const invokeNativeCancel = async (record) => {
     try {
-      Promise.resolve(nativeCancel()).catch(() => undefined);
+      await record.cancel();
     } catch (_error) {
     }
   };
-  const onAbort = () => {
+  const requestNativeCancel = async (record) => {
+    if (record.released) {
+      return;
+    }
+    if (record.cancelPromise === null) {
+      record.cancelPromise = invokeNativeCancel(record);
+    }
+    await record.cancelPromise;
+  };
+  const releaseNativeCancel = async (record, shouldCancel) => {
+    if (record.released) {
+      return;
+    }
+    let cancelPromise = null;
+    if (shouldCancel) {
+      cancelPromise = requestNativeCancel(record);
+    }
+    try {
+      record.cancel.release();
+    } catch (_error) {
+    }
+    record.released = true;
+    nativeCancelRecords.delete(record.cancel);
+    if (cancelPromise !== null) {
+      await cancelPromise;
+    }
+  };
+  const getNativeCancelRecord = (cancel) => {
+    const existing = nativeCancelRecords.get(cancel);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const record = {
+      cancel,
+      cancelPromise: null,
+      released: false,
+    };
+    nativeCancelRecords.set(cancel, record);
+    return record;
+  };
+  const onAbort = async () => {
+    if (aborted) {
+      return;
+    }
     aborted = true;
     rejectAbort(createAbortReason(signal));
-    requestNativeCancel();
+    const records = Array.from(nativeCancelRecords.values());
+    for (const record of records) {
+      await requestNativeCancel(record);
+    }
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const abortWatcher = (cancel) => {
-    nativeCancel = cancel;
+  const abortWatcher = async (cancel) => {
+    const record = getNativeCancelRecord(cancel);
+    if (settled) {
+      await releaseNativeCancel(record, aborted || signal.aborted);
+      return;
+    }
     if (aborted || signal.aborted) {
-      requestNativeCancel();
+      await requestNativeCancel(record);
     }
   };
 
-  const nativePromise = Promise.resolve().then(() => nativeCall(abortWatcher));
-  return Promise.race([nativePromise, abortPromise]).finally(() => {
+  const invokeNative = async () => {
+    await Promise.resolve();
+    return await nativeCall(abortWatcher);
+  };
+  try {
+    return await Promise.race([invokeNative(), abortPromise]);
+  } finally {
+    settled = true;
     signal.removeEventListener("abort", onAbort);
-    nativeCancel = null;
-  });
+    const shouldCancel = aborted || signal.aborted;
+    const records = Array.from(nativeCancelRecords.values());
+    for (const record of records) {
+      await releaseNativeCancel(record, shouldCancel);
+    }
+  }
 };
 
 const parseNativeJson = async (source) => JSON.parse(await source);
@@ -940,11 +998,12 @@ static const muon_plugin_function_metadata* const
 
 }  // namespace muon_internal
 
-bool InitializeMuonBuiltinFsDialogs(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinFsDialogs(const muon_plugin_init_context* context,
                                     std::string* error_message) {
   if (error_message == nullptr) {
     return false;
   }
+  const auto* helpers = context == nullptr ? nullptr : context->helpers;
   if (helpers == nullptr) {
     *error_message = "Filesystem dialog helpers are unavailable";
     return false;
@@ -986,9 +1045,9 @@ const muon_plugin_metadata* GetMuonBuiltinFsDialogsPluginMetadata() {
 }
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(
-    const muon_plugin_helpers* helpers) {
+    const muon_plugin_init_context* context) {
   auto error_message = std::string{};
-  if (!InitializeMuonBuiltinFsDialogs(helpers, &error_message)) {
+  if (!InitializeMuonBuiltinFsDialogs(context, &error_message)) {
     return nullptr;
   }
   return GetMuonBuiltinFsDialogsPluginMetadata();

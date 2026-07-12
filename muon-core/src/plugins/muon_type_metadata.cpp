@@ -139,6 +139,15 @@ std::unique_ptr<MuonFunctionSignatureStorage>
 CreateMuonFunctionSignatureStorage(
     const std::vector<MuonTypeMetadata>& arg_types,
     const MuonTypeMetadata& return_type) {
+  return CreateMuonFunctionSignatureStorageForAbi(
+      arg_types, return_type, TRA_FFIC_SIGNATURE_ABI_COMPLETION);
+}
+
+std::unique_ptr<MuonFunctionSignatureStorage>
+CreateMuonFunctionSignatureStorageForAbi(
+    const std::vector<MuonTypeMetadata>& arg_types,
+    const MuonTypeMetadata& return_type,
+    tra_ffic_signature_abi abi) {
   auto storage = std::make_unique<MuonFunctionSignatureStorage>();
   storage->argument_storage.reserve(arg_types.size());
   for (const auto& arg_type : arg_types) {
@@ -152,13 +161,14 @@ CreateMuonFunctionSignatureStorage(
     storage->argument_descriptors.push_back(arg_storage.descriptor);
   }
 
-  storage->signature.abi = TRA_FFIC_SIGNATURE_ABI_COMPLETION;
+  storage->signature.abi = abi;
   storage->signature.arg_count =
       static_cast<uint32_t>(storage->argument_descriptors.size());
   storage->signature.arg_types = storage->argument_descriptors.empty()
                                      ? nullptr
                                      : storage->argument_descriptors.data();
   storage->signature.return_type = &storage->return_storage.descriptor;
+  storage->signature.argument_passing = TRA_FFIC_ARGUMENT_PASSING_STACK;
   return storage;
 }
 

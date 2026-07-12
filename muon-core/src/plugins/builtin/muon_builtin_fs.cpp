@@ -2793,20 +2793,25 @@ class MuonBuiltinFsRuntime final {
     auto completions_enabled = completions_enabled_;
     auto fail = [completion,
                  completions_enabled,
-                 completion_dispatcher](std::string message)
+                 completion_dispatcher,
+                 cancel_function_ref](std::string message)
         -> cardio::promise<void> {
       co_await RunMuonFsCompletionOnDispatcher(
           completion_dispatcher,
-          [completion, completions_enabled, message = std::move(message)] {
-            if (!completions_enabled->load()) {
-              return;
+          [completion,
+           completions_enabled,
+           cancel_function_ref,
+           message = std::move(message)] {
+            if (completions_enabled->load()) {
+              CompleteMuonError(completion, message);
             }
-            CompleteMuonError(completion, message);
+            cancel_function_ref->Release();
           });
     };
     auto complete_operation = [complete_copy = std::move(complete_copy),
                                completions_enabled,
-                               completion_dispatcher](auto&&... args) mutable
+                               completion_dispatcher,
+                               cancel_function_ref](auto&&... args) mutable
         -> cardio::promise<void> {
       auto args_tuple =
           std::make_tuple(std::forward<decltype(args)>(args)...);
@@ -2814,20 +2819,21 @@ class MuonBuiltinFsRuntime final {
           completion_dispatcher,
           [complete_copy = std::move(complete_copy),
            completions_enabled,
+           cancel_function_ref,
            args_tuple = std::move(args_tuple)]() mutable {
-            if (!completions_enabled->load()) {
-              return;
+            if (completions_enabled->load()) {
+              std::apply(
+                  [&complete_copy](auto&&... values) {
+                    if constexpr (sizeof...(values) == 0) {
+                      complete_copy();
+                    } else {
+                      complete_copy(
+                          std::forward<decltype(values)>(values)...);
+                    }
+                  },
+                  std::move(args_tuple));
             }
-            std::apply(
-                [&complete_copy](auto&&... values) {
-                  if constexpr (sizeof...(values) == 0) {
-                    complete_copy();
-                  } else {
-                    complete_copy(
-                        std::forward<decltype(values)>(values)...);
-                  }
-                },
-                std::move(args_tuple));
+            cancel_function_ref->Release();
           });
     };
     auto operation = RunMuonTrafficCardioOperation<Result>(
@@ -3961,56 +3967,108 @@ const getAbortSignal = (options) => {
   return signal;
 };
 
-const runAbortable = (options, nativeCall) => {
-  let signal = null;
-  try {
-    signal = getAbortSignal(options);
-  } catch (error) {
-    return Promise.reject(error);
-  }
+const runAbortable = async (options, nativeCall) => {
+  const signal = getAbortSignal(options);
   if (signal === null) {
-    return nativeCall(null);
+    return await nativeCall(null);
   }
   if (signal.aborted) {
-    return Promise.reject(createAbortReason(signal));
+    throw createAbortReason(signal);
   }
 
-  let nativeCancel = null;
-  let cancelRequested = false;
+  const nativeCancelRecords = new Map();
   let aborted = false;
+  let settled = false;
   let rejectAbort = null;
   const abortPromise = new Promise((_resolve, reject) => {
     rejectAbort = reject;
   });
-  const requestNativeCancel = () => {
-    if (cancelRequested || nativeCancel === null) {
-      return;
-    }
-    cancelRequested = true;
+
+  const invokeNativeCancel = async (record) => {
     try {
-      Promise.resolve(nativeCancel()).catch(() => undefined);
+      await record.cancel();
     } catch (_error) {
     }
   };
-  const onAbort = () => {
+  const requestNativeCancel = async (record) => {
+    if (record.released) {
+      return;
+    }
+    if (record.cancelPromise === null) {
+      record.cancelPromise = invokeNativeCancel(record);
+    }
+    await record.cancelPromise;
+  };
+  const releaseNativeCancel = async (record, shouldCancel) => {
+    if (record.released) {
+      return;
+    }
+    let cancelPromise = null;
+    if (shouldCancel) {
+      cancelPromise = requestNativeCancel(record);
+    }
+    try {
+      record.cancel.release();
+    } catch (_error) {
+    }
+    record.released = true;
+    nativeCancelRecords.delete(record.cancel);
+    if (cancelPromise !== null) {
+      await cancelPromise;
+    }
+  };
+  const getNativeCancelRecord = (cancel) => {
+    const existing = nativeCancelRecords.get(cancel);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const record = {
+      cancel,
+      cancelPromise: null,
+      released: false,
+    };
+    nativeCancelRecords.set(cancel, record);
+    return record;
+  };
+  const onAbort = async () => {
+    if (aborted) {
+      return;
+    }
     aborted = true;
     rejectAbort(createAbortReason(signal));
-    requestNativeCancel();
+    const records = Array.from(nativeCancelRecords.values());
+    for (const record of records) {
+      await requestNativeCancel(record);
+    }
   };
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const abortWatcher = (cancel) => {
-    nativeCancel = cancel;
+  const abortWatcher = async (cancel) => {
+    const record = getNativeCancelRecord(cancel);
+    if (settled) {
+      await releaseNativeCancel(record, aborted || signal.aborted);
+      return;
+    }
     if (aborted || signal.aborted) {
-      requestNativeCancel();
+      await requestNativeCancel(record);
     }
   };
 
-  const nativePromise = Promise.resolve().then(() => nativeCall(abortWatcher));
-  return Promise.race([nativePromise, abortPromise]).finally(() => {
+  const invokeNative = async () => {
+    await Promise.resolve();
+    return await nativeCall(abortWatcher);
+  };
+  try {
+    return await Promise.race([invokeNative(), abortPromise]);
+  } finally {
+    settled = true;
     signal.removeEventListener("abort", onAbort);
-    nativeCancel = null;
-  });
+    const shouldCancel = aborted || signal.aborted;
+    const records = Array.from(nativeCancelRecords.values());
+    for (const record of records) {
+      await releaseNativeCancel(record, shouldCancel);
+    }
+  }
 };
 
 const parseNativeJson = async (source) => JSON.parse(await source);
@@ -4702,11 +4760,12 @@ static const muon_plugin_metadata fs_metadata = {
     fs_namespaces,
 };
 
-bool InitializeMuonBuiltinFs(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,
                               std::string* error_message) {
   if (error_message == nullptr) {
     return false;
   }
+  const auto* helpers = context == nullptr ? nullptr : context->helpers;
   auto runtime =
       std::make_shared<muon_internal::MuonBuiltinFsRuntime>(helpers);
   if (!runtime->Start(error_message)) {

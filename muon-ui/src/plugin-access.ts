@@ -57,6 +57,10 @@ export interface MuonPluginAccessEntryOptions {
    */
   salt?: string;
   /**
+   * Plugin-defined string key-value configuration entries.
+   */
+  config?: Readonly<Record<string, string>>;
+  /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *
    * @remarks Required in simple mode. Validate mode derives the runtime
@@ -168,6 +172,8 @@ const isSha1HexString = (value: string): boolean =>
 const isHexByteString = (value: string): boolean =>
   value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value);
 
+const containsNul = (value: string): boolean => value.includes("\0");
+
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -276,6 +282,38 @@ const readPluginAccessImportOptions = (
   return options;
 };
 
+const readOptionalStringRecord = (
+  object: JsonObject,
+  key: string,
+  configPath: string,
+): Readonly<Record<string, string>> | undefined => {
+  const value = object[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isJsonObject(value)) {
+    throw new Error(`muon.json ${configPath} must be an object.`);
+  }
+  const config: Record<string, string> = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (entryKey.length === 0) {
+      throw new Error(`muon.json ${configPath} key must not be empty.`);
+    }
+    if (containsNul(entryKey)) {
+      throw new Error(`muon.json ${configPath} key must not contain NUL.`);
+    }
+    const valuePath = `${configPath}.${entryKey}`;
+    if (typeof entryValue !== "string") {
+      throw new Error(`muon.json ${valuePath} must be a string.`);
+    }
+    if (containsNul(entryValue)) {
+      throw new Error(`muon.json ${valuePath} must not contain NUL.`);
+    }
+    config[entryKey] = entryValue;
+  }
+  return config;
+};
+
 const readPluginAccessEntryOptions = (
   value: unknown,
   index: number,
@@ -308,6 +346,11 @@ const readPluginAccessEntryOptions = (
     }
   }
   const allow = readOptionalStringArray(value, "allow", `${configPath}.allow`);
+  const config = readOptionalStringRecord(
+    value,
+    "config",
+    `${configPath}.config`,
+  );
 
   const rawImports = value.imports;
   if (rawImports !== undefined && !Array.isArray(rawImports)) {
@@ -330,6 +373,9 @@ const readPluginAccessEntryOptions = (
   }
   if (value.salt !== undefined) {
     options.salt = value.salt;
+  }
+  if (config !== undefined) {
+    options.config = config;
   }
   if (allow !== undefined) {
     options.allow = allow;
@@ -408,11 +454,39 @@ const hasImportSourceSelector = (
   (entry.sources !== undefined && entry.sources.length > 0) ||
   (entry.packages !== undefined && entry.packages.length > 0);
 
+const validatePluginConfig = (rawConfig: unknown, configPath: string): void => {
+  if (rawConfig === undefined) {
+    return;
+  }
+  if (!isJsonObject(rawConfig)) {
+    throw new Error(`muon.json ${configPath} must be an object.`);
+  }
+  for (const [entryKey, entryValue] of Object.entries(rawConfig)) {
+    if (entryKey.length === 0) {
+      throw new Error(`muon.json ${configPath} key must not be empty.`);
+    }
+    if (containsNul(entryKey)) {
+      throw new Error(`muon.json ${configPath} key must not contain NUL.`);
+    }
+    const valuePath = `${configPath}.${entryKey}`;
+    if (typeof entryValue !== "string") {
+      throw new Error(`muon.json ${valuePath} must be a string.`);
+    }
+    if (containsNul(entryValue)) {
+      throw new Error(`muon.json ${valuePath} must not contain NUL.`);
+    }
+  }
+};
+
 const validatePluginAccessOptions = (
   resolved: EffectivePluginAccessOptions,
 ): EffectivePluginAccessOptions => {
   for (const [pluginIndex, plugin] of resolved.plugins.entries()) {
     const pluginPath = `plugin.plugins[${pluginIndex}]`;
+    validatePluginConfig(
+      (plugin as { config?: unknown }).config,
+      `${pluginPath}.config`,
+    );
     if (plugin.name === "internal" && plugin.signature !== undefined) {
       throw new Error(
         `muon.json ${pluginPath}.signature is not supported for internal plugins.`,
@@ -554,6 +628,7 @@ const toValidateRuntimePluginEntries = (
         ? {}
         : { signature: plugin.signature }),
       ...(plugin.salt === undefined ? {} : { salt: plugin.salt }),
+      ...(plugin.config === undefined ? {} : { config: plugin.config }),
       allow,
     };
   });
@@ -565,6 +640,7 @@ const toSimpleRuntimePluginEntries = (
     name: plugin.name,
     ...(plugin.signature === undefined ? {} : { signature: plugin.signature }),
     ...(plugin.salt === undefined ? {} : { salt: plugin.salt }),
+    ...(plugin.config === undefined ? {} : { config: plugin.config }),
     allow: [...getSimplePluginAllow(plugin, pluginIndex)],
   }));
 

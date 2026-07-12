@@ -78,6 +78,45 @@ declare module "muon:browser" {
 }
 
 declare module "muon:executor" {
+  /** Native `void` type descriptor. */
+  export const voidType: MuonAdhocType<void>;
+  /** Native `bool` type descriptor. */
+  export const boolType: MuonAdhocType<boolean>;
+  /** Native signed 8-bit integer type descriptor. */
+  export const int8Type: MuonAdhocType<number>;
+  /** Native unsigned 8-bit integer type descriptor. */
+  export const uint8Type: MuonAdhocType<number>;
+  /** Native signed 16-bit integer type descriptor. */
+  export const int16Type: MuonAdhocType<number>;
+  /** Native unsigned 16-bit integer type descriptor. */
+  export const uint16Type: MuonAdhocType<number>;
+  /** Native signed 32-bit integer type descriptor. */
+  export const int32Type: MuonAdhocType<number>;
+  /** Native unsigned 32-bit integer type descriptor. */
+  export const uint32Type: MuonAdhocType<number>;
+  /** Native signed 64-bit integer type descriptor. */
+  export const int64Type: MuonAdhocType<MuonAdhocIntegerValue>;
+  /** Native unsigned 64-bit integer type descriptor. */
+  export const uint64Type: MuonAdhocType<MuonAdhocIntegerValue>;
+  /** Native 32-bit floating-point type descriptor. */
+  export const float32Type: MuonAdhocType<number>;
+  /** Native 64-bit floating-point type descriptor. */
+  export const float64Type: MuonAdhocType<number>;
+  /** Native UTF-8 string pointer type descriptor. */
+  export const stringType: MuonAdhocType<string | null>;
+  /** Native pointer type descriptor. */
+  export const pointerType: MuonAdhocType<MuonNativePointer | null>;
+  /** Native mutable byte buffer view type descriptor. */
+  export const bufferViewType: MuonAdhocType<Uint8Array>;
+  /** Native `size_t` type descriptor. */
+  export const usizeType: MuonAdhocType<MuonAdhocIntegerValue>;
+  /**
+   * Load a native dynamic library for ad-hoc FFI calls.
+   *
+   * @param path - Path or platform loader name for the library.
+   * @returns A promise for the loaded library handle.
+   */
+  export const loadLibrary: (path: string) => Promise<MuonAdhocLibrary>;
   /**
    * Spawn a child process without invoking a shell.
    *

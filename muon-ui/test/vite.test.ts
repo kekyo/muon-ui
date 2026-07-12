@@ -898,6 +898,11 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
+                config: {
+                  "executor.spawn.allow":
+                    "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+                  "executor.mode": "strict",
+                },
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -980,6 +985,11 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
+                config: {
+                  "executor.spawn.allow":
+                    "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+                  "executor.mode": "strict",
+                },
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -1124,6 +1134,11 @@ describe("muon Vite plugin", () => {
             plugins: [
               {
                 name: "internal",
+                config: {
+                  "executor.spawn.allow":
+                    "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+                  "executor.mode": "strict",
+                },
                 imports: [
                   {
                     sources: ["src/native/**"],
@@ -1164,13 +1179,21 @@ describe("muon Vite plugin", () => {
       ) as {
         plugin: {
           capabilities: { allow: string[] }[];
-          plugins: { name: string; allow: string[] }[];
+          plugins: {
+            name: string;
+            allow: string[];
+            config?: Record<string, string>;
+          }[];
         };
       };
       expect(overrideConfig.plugin.plugins).toEqual([
         {
           name: "internal",
           allow: ["muon.executor.spawn", "muon.browser.reload"],
+          config: {
+            "executor.spawn.allow": "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+            "executor.mode": "strict",
+          },
         },
       ]);
       expect(
@@ -1231,6 +1254,89 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("wait");
     expect(moduleSource).toContain("kill");
     expect(moduleSource).toContain("dispose");
+  });
+
+  it("generates executor loadLibrary virtual module wrappers", async () => {
+    const root = await createTemporaryDirectory("muon-vite-adhoc-library-");
+    await mkdir(join(root, "src", "native"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["muon.executor.loadLibrary"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const runtimeConfig = resolver.getRuntimePluginConfig();
+    const capabilityId = runtimeConfig.capabilities[0]?.id;
+    if (capabilityId === undefined) {
+      throw new Error("capability id was not generated");
+    }
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "native", "library.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    if (typeof moduleSource !== "string") {
+      throw new Error("executor module source was not generated");
+    }
+    expect(moduleSource).toContain(
+      `__muonCall(${JSON.stringify(capabilityId)}, "muon.executor.loadLibrary"`,
+    );
+    expect(moduleSource).toContain("export const loadLibrary = async (path)");
+    expect(moduleSource).toContain('op: "getFunction"');
+    expect(moduleSource).toContain('op: "call"');
+    expect(moduleSource).toContain('op: "release"');
+    expect(moduleSource).toContain('Symbol.for("muon.nativePointer")');
+
+    const modulePath = join(root, "executor.mjs");
+    await writeFile(modulePath, moduleSource);
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __muon_plugin_call?: () => string;
+    };
+    const originalMuonCall = runtimeGlobal.__muon_plugin_call;
+    runtimeGlobal.__muon_plugin_call = () => "{}";
+    try {
+      const moduleExports = (await import(
+        pathToFileURL(modulePath).href
+      )) as Record<string, unknown>;
+      const typeNames = {
+        voidType: "void",
+        boolType: "bool",
+        int8Type: "int8",
+        uint8Type: "uint8",
+        int16Type: "int16",
+        uint16Type: "uint16",
+        int32Type: "int32",
+        uint32Type: "uint32",
+        int64Type: "int64",
+        uint64Type: "uint64",
+        float32Type: "float32",
+        float64Type: "float64",
+        stringType: "string",
+        pointerType: "pointer",
+        bufferViewType: "bufferView",
+        usizeType: "usize",
+      };
+      expect(Object.keys(moduleExports).sort()).toEqual(
+        [...Object.keys(typeNames), "loadLibrary"].sort(),
+      );
+      for (const [exportName, name] of Object.entries(typeNames)) {
+        expect(moduleExports[exportName]).toEqual({ name });
+      }
+    } finally {
+      if (originalMuonCall === undefined) {
+        delete runtimeGlobal.__muon_plugin_call;
+      } else {
+        runtimeGlobal.__muon_plugin_call = originalMuonCall;
+      }
+    }
   });
 
   it("generates browser context menu virtual module wrappers", async () => {
@@ -1331,6 +1437,9 @@ describe("muon Vite plugin", () => {
               name: "foobar",
               signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
               salt: "deadbeef",
+              config: {
+                "foobar.mode": "strict",
+              },
               imports: [
                 {
                   sources: ["src/native/**"],
@@ -1354,6 +1463,7 @@ describe("muon Vite plugin", () => {
             allow: string[];
             signature?: string;
             salt?: string;
+            config?: Record<string, string>;
           }[];
         };
       };
@@ -1363,6 +1473,9 @@ describe("muon Vite plugin", () => {
           allow: ["foobar.run"],
           signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
           salt: "deadbeef",
+          config: {
+            "foobar.mode": "strict",
+          },
         },
       ]);
     } finally {
@@ -1546,6 +1659,42 @@ describe("muon Vite plugin", () => {
         ],
       }),
     ).rejects.toThrow("requires sources or packages");
+  });
+
+  it("rejects plugin config values that are not strings", async () => {
+    const root = await createTemporaryDirectory("muon-vite-plugin-config-");
+    await writeBasicViteProject(root);
+
+    await expect(
+      viteBuild({
+        root,
+        logLevel: "silent",
+        plugins: [
+          muon({
+            open: false,
+            build: false,
+            pluginAccess: {
+              plugins: [
+                {
+                  name: "internal",
+                  config: {
+                    "executor.enabled": true,
+                  },
+                  imports: [
+                    {
+                      sources: ["src/native/**"],
+                      allow: ["muon.executor.spawn"],
+                    },
+                  ],
+                },
+              ],
+            } as unknown as MuonVitePluginAccessOptions,
+          }),
+        ],
+      }),
+    ).rejects.toThrow(
+      "plugin.plugins[0].config.executor.enabled must be a string",
+    );
   });
 
   it("rejects simple-mode plugin entries without allow", async () => {

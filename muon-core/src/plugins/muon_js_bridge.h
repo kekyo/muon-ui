@@ -65,7 +65,48 @@ inline constexpr char kMuonRendererFunctionResultSharedMessageName[] =
     "muon.renderer.function.result.shared";
 
 /**
+ * Process message name used when the browser acquires a renderer function
+ * source lease.
+ */
+inline constexpr char kMuonRendererFunctionSourceAcquireMessageName[] =
+    "muon.renderer.function.source.acquire";
+
+/**
+ * Process message name used when the browser releases a renderer function
+ * source lease.
+ */
+inline constexpr char kMuonRendererFunctionSourceReleaseMessageName[] =
+    "muon.renderer.function.source.release";
+
+/**
+ * Process message name acknowledging consumption of a renderer function
+ * result transfer.
+ */
+inline constexpr char kMuonRendererFunctionResultConsumedMessageName[] =
+    "muon.renderer.function.result.consumed";
+
+/**
+ * Process message name used to release one plugin function proxy lease.
+ */
+inline constexpr char kMuonPluginProxyReleaseMessageName[] =
+    "muon.plugin.proxy.release";
+
+/**
  * Process message name used when a renderer V8 context releases function ids.
  */
 inline constexpr char kMuonFunctionContextReleasedMessageName[] =
     "muon.function.context.released";
+
+#if defined(MUON_TEST_BUILD)
+/**
+ * Test-build process message used to request function wrapper diagnostics.
+ */
+inline constexpr char kMuonFunctionWrapperDiagnosticsRequestMessageName[] =
+    "muon.function.wrapper.diagnostics.request";
+
+/**
+ * Test-build process message used to return function wrapper diagnostics.
+ */
+inline constexpr char kMuonFunctionWrapperDiagnosticsResultMessageName[] =
+    "muon.function.wrapper.diagnostics.result";
+#endif

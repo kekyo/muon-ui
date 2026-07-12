@@ -9,18 +9,26 @@ import type { WindowsE2eEnvironment } from "./windows-environment.js";
 
 export const WINDOWS_AGENT_CONNECTION_TIMEOUT_MS = 30000;
 
+export const requiredWindowsAgentProtocolVersion = "2026-07-07";
+
 export const requiredWindowsAgentFeatureNames = [
   "applications.launch",
   "agent.screenshot",
   "file.exists",
+  "file.manifest",
   "file.mkdir",
+  "file.mkdtemp",
   "file.read",
   "file.remove",
+  "file.rename",
   "file.stat",
   "file.write",
   "input.perform",
   "process.kill",
+  "process.launchManaged",
   "process.list",
+  "process.managedSnapshot",
+  "process.releaseManaged",
   "process.snapshot",
   "window.screenshot",
   "windows",

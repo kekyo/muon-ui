@@ -210,6 +210,19 @@ class MuonClient final : public CefClient,
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
   /**
+   * Releases renderer-owned plugin function state after renderer termination.
+   *
+   * @param browser Browser whose renderer process terminated.
+   * @param status Renderer termination status.
+   * @param error_code Platform or Chromium error code.
+   * @param error_string Human-readable renderer termination error.
+   */
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
+                                 TerminationStatus status,
+                                 int error_code,
+                                 const CefString& error_string) override;
+
+  /**
    * Restores the initial title bar icon when the main-frame address changes.
    *
    * @param browser Browser whose address changed.
@@ -392,6 +405,7 @@ class MuonClient final : public CefClient,
 
  private:
   struct PendingSharedPayload {
+    MuonPluginInvocationContext context;
     std::shared_ptr<MuonSharedBufferPayload> payload;
     std::string error_message;
     bool has_error = false;
@@ -404,7 +418,17 @@ class MuonClient final : public CefClient,
     CefRefPtr<CefListValue> encoded_args;
     int call_id = 0;
     uint32_t function_id = 0;
+    std::string proxy_lease_token;
     bool proxy_call = false;
+  };
+
+  struct PendingRendererFunctionResultMessage {
+    MuonPluginInvocationContext context;
+    CefRefPtr<CefProcessMessage> message;
+  };
+
+  struct PendingRendererFunctionResultPayload {
+    PendingSharedPayload result;
   };
 
   struct ModalBrowserViewDisableState {
@@ -443,9 +467,10 @@ class MuonClient final : public CefClient,
       CefWindowHandle owner_window_handle,
       CefRefPtr<CefListValue>* target,
       std::string* error_message);
-  static std::string CreatePendingSharedKey(const std::string& message_name,
-                                            int renderer_context_id,
-                                            int call_id);
+  static std::string CreatePendingSharedKey(
+      const std::string& message_name,
+      const MuonPluginInvocationContext& context,
+      int call_id);
   static bool IsPluginPageAllowed(
       CefRefPtr<CefFrame> frame,
       const std::shared_ptr<MuonNetworkPolicy>& plugin_page_policy);
@@ -490,6 +515,7 @@ class MuonClient final : public CefClient,
                                          const MuonTitleBarIcon* icon);
   void BeginPendingFsDialogCall(int browser_id);
   void EndPendingFsDialogCall(int browser_id);
+  void ReleaseFunctionBrowserState(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
   void QuitMessageLoopWhenIdle();
   bool PrepareShutdown(int32_t exit_code,
@@ -556,14 +582,13 @@ class MuonClient final : public CefClient,
   bool message_loop_quit_requested_ = false;
   std::map<std::string, PendingPluginCall> pending_plugin_calls_;
   std::map<std::string, PendingSharedPayload> pending_plugin_call_payloads_;
-  std::map<int, CefRefPtr<CefProcessMessage>>
+  std::map<std::string, PendingRendererFunctionResultMessage>
       pending_renderer_function_result_messages_;
-  std::map<int, PendingSharedPayload>
+  std::map<std::string, PendingRendererFunctionResultPayload>
       pending_renderer_function_result_payloads_;
   std::map<int, ModalBrowserViewDisableState>
       modal_browser_view_disable_states_;
   std::map<int, uint64_t> title_bar_icon_update_generations_;
-  std::map<int, bool> title_bar_icon_has_png_by_browser_;
   std::map<int, MuonBrowserTrayIcon> title_bar_tray_icons_by_browser_;
   std::map<int, CefRefPtr<CefURLRequest>> pending_favicon_requests_;
   std::map<int, BrowserContextMenuRegistration> context_menu_registrations_;

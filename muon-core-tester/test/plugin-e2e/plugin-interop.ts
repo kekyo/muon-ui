@@ -6,16 +6,22 @@
 import { expect, it } from "vitest";
 
 import {
+  MUON_APP_URL,
   MUON_PORT,
+  TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   TEST_NETWORK_ALLOW_PATTERNS,
+  TEST_PLUGIN_ALLOW_PATTERNS,
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   describeMuonPluginBridge,
   evaluateRejection,
   expectDebugMuonStartupFailure,
   join,
+  openPopupTarget,
+  readFunctionWrapperDiagnostics,
   startDebugMuon,
   stopMuon,
+  waitForFunctionWrapperDiagnosticBaseline,
   withMuon,
   withTrackedMuon,
 } from "./shared.js";
@@ -63,6 +69,55 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         driver.evaluate("window.muon.test.alpha.alphaAdd(12, 30)"),
       ).resolves.toBe(42);
     });
+  });
+
+  it("passes string config entries to external plugins", async () => {
+    const running = await startDebugMuon(
+      ["muon_test_plugin_alpha"],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      ["muon.test.alpha.alphaName", "muon.test.alpha.alphaConfig"],
+      ["muon_test_plugin_alpha"],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      {},
+      {
+        muon_test_plugin_alpha: {
+          "alpha.config": "configured\nvalue",
+        },
+      },
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await driver.navigate(
+        "data:text/html,<title>muon plugin config</title>",
+        cdpCommandTimeoutMs,
+      );
+      await expect(
+        driver.evaluate("window.muon.test.alpha.alphaConfig()"),
+      ).resolves.toBe("configured\nvalue");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+    }
   });
 
   it("filters external plugin functions by full public path", async () => {
@@ -214,8 +269,27 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           alphaNameUnchanged: true,
           rootExtraType: "undefined",
           functionExtraType: "undefined",
-          alphaKeys: ["alphaAdd", "alphaName"],
-          executorKeys: ["spawn"],
+          alphaKeys: ["alphaAdd", "alphaConfig", "alphaName"],
+          executorKeys: [
+            "boolType",
+            "bufferViewType",
+            "float32Type",
+            "float64Type",
+            "int16Type",
+            "int32Type",
+            "int64Type",
+            "int8Type",
+            "loadLibrary",
+            "pointerType",
+            "spawn",
+            "stringType",
+            "uint16Type",
+            "uint32Type",
+            "uint64Type",
+            "uint8Type",
+            "usizeType",
+            "voidType",
+          ],
           runType: "undefined",
           internalRpcType: "function",
         });
@@ -354,6 +428,99 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
     });
   });
 
+  it("releases fresh renderer callbacks after completed plugin calls", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
+      await expect(
+        driver.evaluate(`(async () => {
+          const references = [];
+          for (let index = 0; index < 3; index += 1) {
+            let callback = () => index;
+            references.push(new WeakRef(callback));
+            const isNull = await window.muon.test.functionLifetime.lifetimeNullPointer(callback);
+            if (isNull) {
+              throw new Error("renderer callback unexpectedly decoded as null");
+            }
+            callback = null;
+          }
+          globalThis.__muonCompletedCallbackReferences = references;
+          return references.length;
+        })()`),
+      ).resolves.toBe(3);
+
+      await driver.send("HeapProfiler.collectGarbage");
+      await expect(
+        driver.evaluate(
+          "globalThis.__muonCompletedCallbackReferences.filter((reference) => reference.deref() !== undefined).length",
+        ),
+      ).resolves.toBe(0);
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "fresh renderer callbacks",
+      );
+    });
+  });
+
+  it("releases duplicated renderer callbacks after overlapping calls", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          let callback = () => undefined;
+          globalThis.__muonOverlappingCallbackReference = new WeakRef(callback);
+          const results = await Promise.all([
+            window.muon.test.functionLifetime.lifetimeOverlapSamePointer(
+              callback,
+              callback,
+            ),
+            window.muon.test.functionLifetime.lifetimeOverlapSamePointer(
+              callback,
+              callback,
+            ),
+          ]);
+          callback = null;
+          return results;
+        })()`),
+      ).resolves.toEqual([true, true]);
+
+      await driver.send("HeapProfiler.collectGarbage");
+      await expect(
+        driver.evaluate(
+          "globalThis.__muonOverlappingCallbackReference.deref() === undefined",
+        ),
+      ).resolves.toBe(true);
+    });
+  });
+
+  it("releases renderer callback transfers after argument encoding fails", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          let callback = () => undefined;
+          globalThis.__muonFailedEncodingCallbackReference = new WeakRef(callback);
+          try {
+            await window.muon.test.functionLifetime.lifetimeSamePointer(
+              callback,
+              1,
+            );
+            return "resolved";
+          } catch (error) {
+            return String(error && error.message ? error.message : error);
+          } finally {
+            callback = null;
+          }
+        })()`),
+      ).resolves.toBe("Invalid argument 1: expected function");
+
+      await driver.send("HeapProfiler.collectGarbage");
+      await expect(
+        driver.evaluate(
+          "globalThis.__muonFailedEncodingCallbackReference.deref() === undefined",
+        ),
+      ).resolves.toBe(true);
+    });
+  });
+
   it("marshals null function values", async () => {
     await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
       const values = await driver.evaluate(`(async () => {
@@ -397,21 +564,80 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
 
   it("lets plugins retain function pointers beyond completion", async () => {
     await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
       const retained = await driver.evaluate(`(async () => {
-        const callback = () => undefined;
+        let callback = () => undefined;
+        globalThis.__muonRetainedCallbackReference = new WeakRef(callback);
         const retained = await window.muon.test.functionLifetime.lifetimeRetain(callback);
         const matched = await window.muon.test.functionLifetime.lifetimeRetainedMatches(callback);
-        await window.muon.test.functionLifetime.lifetimeFinalizeRetained();
-        const asyncRetained = await window.muon.test.functionLifetime.lifetimeAsyncRetainFinalize(
-          callback,
-        );
-        return { retained, matched, asyncRetained };
+        callback = null;
+        return { retained, matched };
       })()`);
+
+      await driver.send("HeapProfiler.collectGarbage");
+      const retainedType = await driver.evaluate(
+        "typeof globalThis.__muonRetainedCallbackReference.deref()",
+      );
+
+      await expect(
+        driver.evaluate(
+          "window.muon.test.functionLifetime.lifetimeFinalizeRetained()",
+        ),
+      ).resolves.toBeUndefined();
+      await driver.send("HeapProfiler.collectGarbage");
+      const released = await driver.evaluate(
+        "globalThis.__muonRetainedCallbackReference.deref() === undefined",
+      );
+
       expect(retained).toEqual({
         retained: true,
         matched: true,
-        asyncRetained: true,
       });
+      expect(retainedType).toBe("function");
+      expect(released).toBe(true);
+
+      await expect(
+        driver.evaluate(`(() => {
+          const callback = () => undefined;
+          return window.muon.test.functionLifetime.lifetimeAsyncRetainFinalize(
+            callback,
+          );
+        })()`),
+      ).resolves.toBe(true);
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "explicitly retained renderer callback",
+      );
+    });
+  });
+
+  it("rejects retained callbacks after their renderer context is released", async () => {
+    await withMuon(["muon_test_plugin_function_lifetime"], async (driver) => {
+      await expect(
+        driver.evaluate(`(async () => {
+          const callback = () => undefined;
+          return await window.muon.test.functionLifetime.lifetimeRetain(callback);
+        })()`),
+      ).resolves.toBe(true);
+
+      await driver.navigate(
+        "data:text/html,<title>muon retained callback released</title>",
+        cdpCommandTimeoutMs,
+      );
+      const rejection = await evaluateRejection(
+        driver,
+        "window.muon.test.functionLifetime.lifetimeInvokeRetained()",
+      );
+      await expect(
+        driver.evaluate(
+          "window.muon.test.functionLifetime.lifetimeFinalizeRetained()",
+        ),
+      ).resolves.toBeUndefined();
+      expect([
+        "Renderer function context is unavailable",
+        "Renderer frame is unavailable",
+      ]).toContain(rejection);
     });
   });
 
@@ -690,11 +916,16 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           },
         );
         const proxy = await window.muon.test.types.returnBufferFunction();
-        const proxyResult = Array.from(
-          new Uint8Array(
-            await proxy(Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17])),
-          ),
-        );
+        let proxyResult = [];
+        try {
+          proxyResult = Array.from(
+            new Uint8Array(
+              await proxy(Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17])),
+            ),
+          );
+        } finally {
+          proxy.release();
+        }
         return {
           checksum,
           transformed,
@@ -727,6 +958,383 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
           "(async () => typeof (await window.muon.test.types.returnVoid()))()",
         ),
       ).resolves.toBe("undefined");
+    });
+  });
+
+  it("releases plugin function proxy wrappers independently", async () => {
+    await withMuon(["muon_test_plugin_types"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
+      const values = await driver.evaluate<{
+        sameObject: boolean;
+        releaseDescriptor: {
+          configurable: boolean;
+          enumerable: boolean;
+          type: string;
+          writable: boolean;
+        } | null;
+        symbolDisposeDescriptor: {
+          configurable: boolean;
+          enumerable: boolean;
+          type: string;
+          writable: boolean;
+        } | null;
+        releaseEnumerated: boolean;
+        releaseFunctionsMatch: boolean;
+        releaseErrors: string[];
+        releasedCall: {
+          isPromise: boolean;
+          message: string;
+          status: string;
+          synchronousThrow: boolean;
+        };
+        reargument: { message: string; status: string };
+        secondCall: { message: string; result: number[]; status: string };
+        secondReleaseError: string;
+        oldDisposeType: string;
+      }>(`(async () => {
+        const first = await window.muon.test.types.returnBufferFunction();
+        const second = await window.muon.test.types.returnBufferFunction();
+        const descriptor = Object.getOwnPropertyDescriptor(first, "release");
+        const releaseDescriptor = descriptor === undefined
+          ? null
+          : {
+              configurable: descriptor.configurable,
+              enumerable: descriptor.enumerable,
+              type: typeof descriptor.value,
+              writable: descriptor.writable,
+            };
+        const symbolDescriptor = Object.getOwnPropertyDescriptor(
+          first,
+          Symbol.dispose,
+        );
+        const symbolDisposeDescriptor = symbolDescriptor === undefined
+          ? null
+          : {
+              configurable: symbolDescriptor.configurable,
+              enumerable: symbolDescriptor.enumerable,
+              type: typeof symbolDescriptor.value,
+              writable: symbolDescriptor.writable,
+            };
+        const releaseErrors = [];
+        try {
+          first.release();
+          first[Symbol.dispose]();
+        } catch (error) {
+          releaseErrors.push(
+            String(error && error.message ? error.message : error),
+          );
+        }
+
+        const releasedCall = {
+          isPromise: false,
+          message: "",
+          status: "",
+          synchronousThrow: false,
+        };
+        try {
+          const result = first(
+            Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17]),
+          );
+          releasedCall.isPromise = result instanceof Promise;
+          try {
+            await result;
+            releasedCall.status = "fulfilled";
+          } catch (error) {
+            releasedCall.status = "rejected";
+            releasedCall.message = String(
+              error && error.message ? error.message : error,
+            );
+          }
+        } catch (error) {
+          releasedCall.synchronousThrow = true;
+          releasedCall.status = "threw";
+          releasedCall.message = String(
+            error && error.message ? error.message : error,
+          );
+        }
+
+        const reargument = { message: "", status: "" };
+        try {
+          await window.muon.test.types.bufferCallbackRoundtrip(first);
+          reargument.status = "fulfilled";
+        } catch (error) {
+          reargument.status = "rejected";
+          reargument.message = String(
+            error && error.message ? error.message : error,
+          );
+        }
+
+        const secondCall = { message: "", result: [], status: "" };
+        try {
+          secondCall.result = Array.from(
+            new Uint8Array(
+              await second(
+                Uint8Array.from([10, 11, 12, 13, 14, 15, 16, 17]),
+              ),
+            ),
+          );
+          secondCall.status = "fulfilled";
+        } catch (error) {
+          secondCall.status = "rejected";
+          secondCall.message = String(
+            error && error.message ? error.message : error,
+          );
+        }
+
+        let secondReleaseError = "";
+        try {
+          second[Symbol.dispose]();
+        } catch (error) {
+          secondReleaseError = String(
+            error && error.message ? error.message : error,
+          );
+        }
+        return {
+          sameObject: first === second,
+          releaseDescriptor,
+          symbolDisposeDescriptor,
+          releaseEnumerated: Object.keys(first).includes("release"),
+          releaseFunctionsMatch: first.release === first[Symbol.dispose],
+          releaseErrors,
+          releasedCall,
+          reargument,
+          secondCall,
+          secondReleaseError,
+          oldDisposeType: typeof first.dispose,
+        };
+      })()`);
+
+      expect(values.sameObject).toBe(false);
+      expect(values.releaseDescriptor).toEqual({
+        configurable: false,
+        enumerable: false,
+        type: "function",
+        writable: false,
+      });
+      expect(values.symbolDisposeDescriptor).toEqual({
+        configurable: false,
+        enumerable: false,
+        type: "function",
+        writable: false,
+      });
+      expect(values.releaseEnumerated).toBe(false);
+      expect(values.releaseFunctionsMatch).toBe(true);
+      expect(values.releaseErrors).toEqual([]);
+      expect(values.releasedCall.synchronousThrow).toBe(false);
+      expect(values.releasedCall.isPromise).toBe(true);
+      expect(values.releasedCall.status).toBe("rejected");
+      expect(values.releasedCall.message.toLowerCase()).toContain("released");
+      expect(values.reargument.status).toBe("rejected");
+      expect(values.reargument.message.toLowerCase()).toContain("released");
+      expect(values.secondCall).toEqual({
+        message: "",
+        result: [27, 28, 29, 30, 31, 32, 33, 34],
+        status: "fulfilled",
+      });
+      expect(values.secondReleaseError).toBe("");
+      expect(values.oldDisposeType).toBe("undefined");
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "released plugin function proxies",
+      );
+    });
+  });
+
+  it("rejects plugin function proxy use from another V8 context", async () => {
+    const pluginNames = ["muon_test_plugin_recursive_functions"];
+    const running = await startDebugMuon(
+      pluginNames,
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {},
+      undefined,
+      TEST_PLUGIN_ALLOW_PATTERNS,
+      pluginNames,
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      ["asset://main/**"],
+    );
+    let driver: CdpDriver | undefined = undefined;
+    const popupDrivers: CdpDriver[] = [];
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await expect(
+        driver.evaluate(`(async () => {
+          let proxy;
+          const roundtrip = await window.muon.test.recursiveFunctions
+            .recursiveFunctionArgRoundtrip((value) => {
+              proxy = value;
+              return value;
+            });
+          if (roundtrip !== 42 || typeof proxy !== "function") {
+            throw new Error("unexpected recursive function result");
+          }
+          globalThis.__muonCrossContextProxy = proxy;
+          return roundtrip;
+        })()`),
+      ).resolves.toBe(42);
+
+      const popupTarget = await openPopupTarget(
+        driver,
+        MUON_APP_URL,
+        "",
+        "muonProxyContext",
+      );
+      const popupDriver = await connectToMuonCdp({
+        port: MUON_PORT,
+        targetId: popupTarget.id,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      popupDrivers.push(popupDriver);
+      const result = await popupDriver.evaluate<{
+        releaseMessage: string;
+        releaseStatus: string;
+        invokeMessage: string;
+        invokeStatus: string;
+        invokeValue: number | null;
+        reargumentMessage: string;
+        reargumentStatus: string;
+        reargumentValue: number | null;
+      }>(`(async () => {
+          if (window.opener === null) {
+            throw new Error("proxy owner window is unavailable");
+          }
+          const proxy = window.opener.__muonCrossContextProxy;
+          if (typeof proxy !== "function") {
+            throw new Error("proxy owner value is unavailable");
+          }
+          const result = {
+            releaseMessage: "",
+            releaseStatus: "fulfilled",
+            invokeMessage: "",
+            invokeStatus: "fulfilled",
+            invokeValue: null,
+            reargumentMessage: "",
+            reargumentStatus: "fulfilled",
+            reargumentValue: null,
+          };
+          try {
+            result.invokeValue = await proxy(41);
+          } catch (error) {
+            result.invokeStatus = "rejected";
+            result.invokeMessage = String(
+              error && error.message ? error.message : error,
+            );
+          }
+          try {
+            result.reargumentValue = await window.muon.test
+              .recursiveFunctions.recursiveInvoke(proxy);
+          } catch (error) {
+            result.reargumentStatus = "rejected";
+            result.reargumentMessage = String(
+              error && error.message ? error.message : error,
+            );
+          }
+          try {
+            proxy.release();
+          } catch (error) {
+            result.releaseStatus = "threw";
+            result.releaseMessage = String(
+              error && error.message ? error.message : error,
+            );
+          }
+          return result;
+        })()`);
+
+      expect(result.invokeStatus).toBe("rejected");
+      expect(result.invokeValue).toBeNull();
+      expect(result.invokeMessage.toLowerCase()).toContain("context");
+      expect(result.reargumentStatus).toBe("rejected");
+      expect(result.reargumentValue).toBeNull();
+      expect(result.reargumentMessage.toLowerCase()).toContain("context");
+      expect(result.releaseStatus).toBe("threw");
+      expect(result.releaseMessage.toLowerCase()).toContain("context");
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      if (driver !== undefined) {
+        try {
+          await driver.evaluate(`(() => {
+            const proxy = globalThis.__muonCrossContextProxy;
+            if (typeof proxy === "function") {
+              proxy.release();
+            }
+            delete globalThis.__muonCrossContextProxy;
+          })()`);
+        } catch {
+          // The owner context may already be unavailable during cleanup.
+        }
+      }
+      for (const popupDriver of popupDrivers) {
+        popupDriver.close();
+      }
+      await stopMuon(running, driver);
+    }
+  });
+
+  it("releases plugin function proxy wrappers after garbage collection", async () => {
+    await withMuon(["muon_test_plugin_recursive_functions"], async (driver) => {
+      const baseline = await readFunctionWrapperDiagnostics(driver);
+      await expect(
+        driver.evaluate(`(() => {
+          globalThis.__muonPluginProxyReady = false;
+          globalThis.__muonPluginProxyError = "";
+          globalThis.__muonPluginProxyType = "";
+          setTimeout(async () => {
+            try {
+              const value = await window.muon.test.recursiveFunctions
+                .recursiveFunctionArgRoundtrip((proxy) => {
+                  globalThis.__muonPluginProxyReference = new WeakRef(proxy);
+                  globalThis.__muonPluginProxyType = typeof proxy;
+                  return proxy;
+                });
+              if (value !== 42) {
+                throw new Error("unexpected recursive function result");
+              }
+            } catch (error) {
+              globalThis.__muonPluginProxyError = String(
+                error && error.message ? error.message : error,
+              );
+            } finally {
+              setTimeout(() => {
+                globalThis.__muonPluginProxyReady = true;
+              }, 0);
+            }
+          }, 0);
+          return "scheduled";
+        })()`),
+      ).resolves.toBe("scheduled");
+
+      let ready = false;
+      for (let attempt = 0; attempt < 20 && !ready; attempt += 1) {
+        ready = await driver.evaluate<boolean>(
+          "globalThis.__muonPluginProxyReady",
+        );
+      }
+      expect(ready).toBe(true);
+      await expect(
+        driver.evaluate("globalThis.__muonPluginProxyError"),
+      ).resolves.toBe("");
+      await expect(
+        driver.evaluate("globalThis.__muonPluginProxyType"),
+      ).resolves.toBe("function");
+
+      let collected = false;
+      for (let attempt = 0; attempt < 3 && !collected; attempt += 1) {
+        await driver.send("HeapProfiler.collectGarbage");
+        collected = await driver.evaluate<boolean>(
+          "globalThis.__muonPluginProxyReference.deref() === undefined",
+        );
+      }
+      expect(collected).toBe(true);
+      await waitForFunctionWrapperDiagnosticBaseline(
+        driver,
+        baseline,
+        "garbage-collected plugin function proxy",
+      );
     });
   });
 

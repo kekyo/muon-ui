@@ -25,7 +25,7 @@ const muon_plugin_metadata* GetMuonBuiltinExecutorPluginMetadata();
 /**
  * Initializes process state for JavaScript-visible built-in executor functions.
  */
-bool InitializeMuonBuiltinExecutor(const muon_plugin_helpers* helpers,
+bool InitializeMuonBuiltinExecutor(const muon_plugin_init_context* context,
                                    cardio::dispatcher* dispatcher,
                                    std::string* error_message);
 

@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+/// <reference lib="esnext.disposable" />
 /// <reference path="./muon-virtual-modules.d.ts" />
 
 export {};
@@ -26,6 +27,50 @@ declare global {
     readonly executor: MuonExecutorApi;
     /** Filesystem operations exposed by the built-in muon filesystem plugin. */
     readonly fs: MuonFsApi;
+  }
+
+  /**
+   * JavaScript proxy for a native function returned by a muon plugin.
+   *
+   * @typeParam TArgs - Arguments accepted by the native function.
+   * @typeParam TResult - Value produced by the native function.
+   * @remarks Calls are asynchronous and return a promise. Release the proxy
+   * deterministically when it is no longer needed. Calling a released proxy
+   * returns a rejected promise, and passing it back to a plugin is a validation
+   * error.
+   */
+  interface MuonPluginFunctionProxy<
+    TArgs extends readonly unknown[],
+    TResult,
+  > extends Releaseable {
+    /**
+     * Invoke the native function.
+     *
+     * @param args - Arguments passed to the native function.
+     * @returns A promise for the native function result.
+     */
+    (...args: TArgs): Promise<TResult>;
+  }
+
+  /** Synchronously releasable resource handle. */
+  interface Releaseable extends Disposable {
+    /**
+     * Release the resource.
+     *
+     * @remarks Release is synchronous and idempotent. This method and
+     * `[Symbol.dispose]` perform the same operation.
+     */
+    readonly release: () => void;
+  }
+
+  /** Asynchronously releasable resource handle. */
+  interface AsyncReleaseable extends AsyncDisposable {
+    /**
+     * Release the resource.
+     *
+     * @returns A promise that resolves after the resource is released.
+     */
+    readonly release: () => Promise<void>;
   }
 
   /** CEF version selection policy used by muon-bootstrap. */
@@ -1476,6 +1521,99 @@ declare global {
     readonly spawn: (
       options: MuonExecutorSpawnOptions,
     ) => Promise<MuonExecutorProcess>;
+    /**
+     * Load a native dynamic library for ad-hoc FFI calls.
+     *
+     * @param path - Path or platform loader name for the library.
+     * @returns A promise for the loaded library handle.
+     * @remarks Calls made through the returned handle are executed on temporary
+     * worker threads. Pointer values are opaque and are not owned by muon.
+     */
+    readonly loadLibrary: (path: string) => Promise<MuonAdhocLibrary>;
+    /** Native `void` type descriptor. */
+    readonly voidType: MuonAdhocType<void>;
+    /** Native `bool` type descriptor. */
+    readonly boolType: MuonAdhocType<boolean>;
+    /** Native signed 8-bit integer type descriptor. */
+    readonly int8Type: MuonAdhocType<number>;
+    /** Native unsigned 8-bit integer type descriptor. */
+    readonly uint8Type: MuonAdhocType<number>;
+    /** Native signed 16-bit integer type descriptor. */
+    readonly int16Type: MuonAdhocType<number>;
+    /** Native unsigned 16-bit integer type descriptor. */
+    readonly uint16Type: MuonAdhocType<number>;
+    /** Native signed 32-bit integer type descriptor. */
+    readonly int32Type: MuonAdhocType<number>;
+    /** Native unsigned 32-bit integer type descriptor. */
+    readonly uint32Type: MuonAdhocType<number>;
+    /** Native signed 64-bit integer type descriptor. */
+    readonly int64Type: MuonAdhocType<MuonAdhocIntegerValue>;
+    /** Native unsigned 64-bit integer type descriptor. */
+    readonly uint64Type: MuonAdhocType<MuonAdhocIntegerValue>;
+    /** Native 32-bit floating-point type descriptor. */
+    readonly float32Type: MuonAdhocType<number>;
+    /** Native 64-bit floating-point type descriptor. */
+    readonly float64Type: MuonAdhocType<number>;
+    /** Native UTF-8 string pointer type descriptor. */
+    readonly stringType: MuonAdhocType<string | null>;
+    /** Native pointer type descriptor. */
+    readonly pointerType: MuonAdhocType<MuonNativePointer | null>;
+    /** Native mutable byte buffer view type descriptor. */
+    readonly bufferViewType: MuonAdhocType<Uint8Array>;
+    /** Native `size_t` type descriptor. */
+    readonly usizeType: MuonAdhocType<MuonAdhocIntegerValue>;
+  }
+
+  /** Integer value accepted by ad-hoc native calls. */
+  type MuonAdhocIntegerValue = number | bigint | string;
+
+  /** Opaque native pointer value returned by ad-hoc native calls. */
+  interface MuonNativePointer {
+    /** Decimal string representation of the native address. */
+    readonly value: string;
+    /**
+     * Return the decimal string representation of the native address.
+     *
+     * @returns The native address as a decimal string.
+     */
+    readonly toString: () => string;
+  }
+
+  /** Type descriptor used by ad-hoc native signatures. */
+  interface MuonAdhocType<TValue = unknown> {
+    /** Stable type name consumed by the muon executor runtime. */
+    readonly name: string;
+  }
+
+  /** Function signature used by ad-hoc native calls. */
+  interface MuonAdhocSignature {
+    /** Native argument type descriptors. */
+    readonly argTypes: readonly MuonAdhocType[];
+    /** Native return type descriptor. */
+    readonly returnType: MuonAdhocType;
+  }
+
+  /** Dynamic library handle used by ad-hoc native calls. */
+  interface MuonAdhocLibrary extends AsyncReleaseable {
+    /**
+     * Resolve a native function from the loaded library.
+     *
+     * @param name - Native symbol name.
+     * @param signature - Native function signature.
+     * @returns A promise for an async JavaScript proxy function.
+     * @remarks The proxy function does not own pointer return values.
+     */
+    readonly getFunction: <T extends (...args: any[]) => Promise<unknown>>(
+      name: string,
+      signature: MuonAdhocSignature,
+    ) => Promise<T>;
+    /**
+     * Release the native library handle.
+     *
+     * @returns A promise that resolves after in-flight calls finish and the
+     * library is unloaded.
+     */
+    readonly release: () => Promise<void>;
   }
 
   /** Options for spawning a child process through muon. */
@@ -1527,7 +1665,7 @@ declare global {
   }
 
   /** Started child process handle. */
-  interface MuonExecutorProcess {
+  interface MuonExecutorProcess extends AsyncReleaseable {
     /** Child process id. */
     readonly processId: number;
     /**
@@ -1563,9 +1701,9 @@ declare global {
      * Release the native handle and terminate the process when it is still
      * running.
      *
-     * @returns A promise that resolves after disposal is requested.
+     * @returns A promise that resolves after release is requested.
      */
-    readonly dispose: () => Promise<void>;
+    readonly release: () => Promise<void>;
   }
 
   /** Completed child process result. */

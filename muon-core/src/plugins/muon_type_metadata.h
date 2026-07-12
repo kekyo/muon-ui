@@ -42,6 +42,7 @@ struct MuonFunctionSignatureStorage {
       0,
       nullptr,
       nullptr,
+      TRA_FFIC_ARGUMENT_PASSING_STACK,
   };
 };
 
@@ -98,6 +99,20 @@ std::unique_ptr<MuonFunctionSignatureStorage>
 CreateMuonFunctionSignatureStorage(
     const std::vector<MuonTypeMetadata>& arg_types,
     const MuonTypeMetadata& return_type);
+
+/**
+ * Creates owned C ABI signature storage from recursive metadata.
+ *
+ * @param arg_types Function argument metadata.
+ * @param return_type Function result metadata.
+ * @param abi Native function ABI used by the signature.
+ * @returns Owned signature storage with stable nested descriptor pointers.
+ */
+std::unique_ptr<MuonFunctionSignatureStorage>
+CreateMuonFunctionSignatureStorageForAbi(
+    const std::vector<MuonTypeMetadata>& arg_types,
+    const MuonTypeMetadata& return_type,
+    tra_ffic_signature_abi abi);
 
 /**
  * Creates owned C ABI type descriptor storage from recursive metadata.

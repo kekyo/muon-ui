@@ -46,6 +46,7 @@ import {
   type AppWindow,
   type KeyboardModifier,
   type RemoteAgent,
+  type RemoteManagedProcess,
 } from "agent-rover";
 import { delay } from "async-primitives";
 import {
@@ -131,11 +132,7 @@ const refreshWindowsRemoteStderr = async (
     return;
   }
   try {
-    running.stderr = (
-      await requireWindowsRemoteContext().agent.files.readFile(
-        remote.stderrPath,
-      )
-    ).toString("utf8");
+    running.stderr = await remote.muonProcess.stderrText();
   } catch {
     // The stderr file may not exist before the process writes to it.
   }
@@ -436,13 +433,11 @@ export interface RunningWindowsRemoteMuon {
   cdpPort: number;
   configPath: string;
   configDirectory: string;
-  relayStderrPath: string;
-  relayStdoutPath: string;
+  muonProcess: RemoteManagedProcess;
+  relayProcess: RemoteManagedProcess;
   relayProcessId: number;
   runId: number;
   profilePath: string;
-  stderrPath: string;
-  stdoutPath: string;
   target: string;
 }
 
@@ -524,6 +519,7 @@ export interface PluginConfigEntry {
   allow: string[];
   signature?: string;
   salt?: string;
+  config?: Record<string, string>;
 }
 
 export interface NetworkAuthorizedOriginConfig {
@@ -1150,17 +1146,13 @@ export const waitForProcessExit = async (
   timeoutMs: number,
 ): Promise<void> => {
   if (running.remoteWindows !== undefined) {
-    const snapshot =
-      await requireWindowsRemoteContext().agent.processes.waitForExit(
-        running.process.pid ?? 0,
-        {
-          intervalMs: 100,
-          timeoutMs,
-        },
-      );
+    const snapshot = await running.remoteWindows.muonProcess.waitForExit({
+      intervalMs: 100,
+      timeoutMs,
+    });
     applyWindowsRemoteProcessSnapshot(
       running.process as WindowsRemoteProcessHandle,
-      snapshot,
+      snapshot.root,
     );
     await refreshWindowsRemoteStderr(running);
     return;
@@ -2129,6 +2121,7 @@ export const createPluginConfigEntries = (
   includeStandardPlugins = true,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): PluginConfigEntry[] => {
   const standardPluginEntries = includeStandardPlugins
     ? STANDARD_PLUGIN_NAMES.flatMap((pluginName) => {
@@ -2148,6 +2141,9 @@ export const createPluginConfigEntries = (
                 ...(pluginSaltByName[pluginName] === undefined
                   ? {}
                   : { salt: pluginSaltByName[pluginName] }),
+                ...(pluginConfigByName[pluginName] === undefined
+                  ? {}
+                  : { config: pluginConfigByName[pluginName] }),
               },
             ];
       })
@@ -2164,6 +2160,9 @@ export const createPluginConfigEntries = (
       ...(pluginSaltByName[pluginName] === undefined
         ? {}
         : { salt: pluginSaltByName[pluginName] }),
+      ...(pluginConfigByName[pluginName] === undefined
+        ? {}
+        : { config: pluginConfigByName[pluginName] }),
     })),
   ];
 };
@@ -2303,15 +2302,14 @@ interface StartWindowsRemoteMuonOptions {
   pluginAllowPatterns: string[];
   pluginSaltByName: Readonly<Record<string, string>>;
   pluginSignatureByName: Readonly<Record<string, string>>;
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>>;
   pluginNames: string[];
   waitForDebugPort: boolean;
 }
 
 interface RunningWindowsRemoteCdpRelay {
   cdpPort: number;
-  processId: number;
-  stderrPath: string;
-  stdoutPath: string;
+  process: RemoteManagedProcess;
 }
 
 interface SelectedWindowsRemoteRuntimeDirectory {
@@ -2405,6 +2403,39 @@ const copyWindowsRemoteArtifactFile = async (
   }
 };
 
+const writeWindowsRemoteArtifactText = async (
+  directory: string,
+  artifactName: string,
+  text: string,
+): Promise<void> => {
+  await nodeWriteFile(nodeJoin(directory, artifactName), text, "utf8");
+};
+
+const writeWindowsRemoteManagedProcessArtifacts = async (
+  directory: string,
+  prefix: string,
+  process: RemoteManagedProcess,
+): Promise<void> => {
+  try {
+    await writeWindowsRemoteArtifactText(
+      directory,
+      `${prefix}-stdout.log`,
+      await process.stdoutText(),
+    );
+  } catch {
+    // The process under test can still hold diagnostic files briefly.
+  }
+  try {
+    await writeWindowsRemoteArtifactText(
+      directory,
+      `${prefix}-stderr.log`,
+      await process.stderrText(),
+    );
+  } catch {
+    // The process under test can still hold diagnostic files briefly.
+  }
+};
+
 const saveWindowsRemoteMuonArtifacts = async (
   running: RunningMuon,
 ): Promise<void> => {
@@ -2439,29 +2470,15 @@ const saveWindowsRemoteMuonArtifacts = async (
     "muon.json",
     remote.configPath,
   );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
+  await writeWindowsRemoteManagedProcessArtifacts(
     artifactDirectory,
-    "muon-stdout.log",
-    remote.stdoutPath,
+    "muon",
+    remote.muonProcess,
   );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
+  await writeWindowsRemoteManagedProcessArtifacts(
     artifactDirectory,
-    "muon-stderr.log",
-    remote.stderrPath,
-  );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
-    artifactDirectory,
-    "relay-stdout.log",
-    remote.relayStdoutPath,
-  );
-  await copyWindowsRemoteArtifactFile(
-    context.agent,
-    artifactDirectory,
-    "relay-stderr.log",
-    remote.relayStderrPath,
+    "relay",
+    remote.relayProcess,
   );
   const runtimeDirectory =
     remote.buildType === "release"
@@ -2561,33 +2578,28 @@ const startWindowsRemoteCdpRelay = async (
   cdpPort: number,
 ): Promise<RunningWindowsRemoteCdpRelay> => {
   const context = requireWindowsRemoteContext();
-  const stdoutPath = join(
-    configDirectory,
-    `muon-cdp-relay-${String(runId)}-stdout.log`,
-  );
-  const stderrPath = join(
-    configDirectory,
-    `muon-cdp-relay-${String(runId)}-stderr.log`,
-  );
-  const processInfo = await context.agent.applications.launch({
+  const processInfo = await context.agent.processes.launchManaged({
     arguments: [String(cdpPort), String(MUON_PORT)],
+    captureStderr: true,
+    captureStdout: true,
     createNoWindow: true,
     path: context.runtime.relayExecutablePath,
-    stderrPath,
-    stdoutPath,
     workingDirectory: join(context.runtime.relayExecutablePath, ".."),
   });
-  await delay(250);
-  const snapshot = await context.agent.processes.snapshot(processInfo.id);
-  if (!snapshot.running) {
-    const stderr = (await context.agent.files.exists(stderrPath))
-      ? (await context.agent.files.readFile(stderrPath)).toString("utf8")
-      : "";
-    throw new Error(
-      `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
-    );
+  try {
+    await delay(250);
+    const snapshot = await processInfo.rootSnapshot();
+    if (!snapshot.running) {
+      const stderr = await processInfo.stderrText();
+      throw new Error(
+        `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
+      );
+    }
+    return { cdpPort, process: processInfo };
+  } catch (error) {
+    await processInfo.releaseAsync();
+    throw error;
   }
-  return { cdpPort, processId: processInfo.id, stderrPath, stdoutPath };
 };
 
 const startWindowsRemoteMuon = async (
@@ -2610,6 +2622,7 @@ const startWindowsRemoteMuon = async (
     options.includeStandardPlugins,
     options.pluginSignatureByName,
     options.pluginSaltByName,
+    options.pluginConfigByName,
   );
   const configDirectory = join(directory, ".muon-test-config");
   const pluginDirectory = join(directory, "test-plugins");
@@ -2643,22 +2656,27 @@ const startWindowsRemoteMuon = async (
     options.logConfig,
     profilePath,
   );
-  const stderrPath = join(configDirectory, `muon-${String(runId)}-stderr.log`);
-  const stdoutPath = join(configDirectory, `muon-${String(runId)}-stdout.log`);
   const cdpPort = allocateWindowsRemoteCdpPort();
   const relay = await startWindowsRemoteCdpRelay(
     configDirectory,
     runId,
     cdpPort,
   );
-  const launched = await context.agent.applications.launch({
-    arguments: ["-c", configPath],
-    environment: createWindowsRemoteEnvironment(options.environment),
-    path: executable,
-    stderrPath,
-    stdoutPath,
-    workingDirectory: directory,
-  });
+  const launched = await (async (): Promise<RemoteManagedProcess> => {
+    try {
+      return await context.agent.processes.launchManaged({
+        arguments: ["-c", configPath],
+        captureStderr: true,
+        captureStdout: true,
+        environment: createWindowsRemoteEnvironment(options.environment),
+        path: executable,
+        workingDirectory: directory,
+      });
+    } catch (error) {
+      await relay.process.releaseAsync();
+      throw error;
+    }
+  })();
   const running: RunningMuon = {
     pluginDirectory: configDirectory,
     process: createWindowsRemoteProcessHandle(launched.id, launched.name),
@@ -2668,13 +2686,11 @@ const startWindowsRemoteMuon = async (
       cdpPort: relay.cdpPort,
       configDirectory,
       configPath,
-      relayStderrPath: relay.stderrPath,
-      relayStdoutPath: relay.stdoutPath,
-      relayProcessId: relay.processId,
+      muonProcess: launched,
+      relayProcess: relay.process,
+      relayProcessId: relay.process.id,
       runId,
       profilePath,
-      stderrPath,
-      stdoutPath,
       target: context.runtime.target,
     },
     stderr: "",
@@ -2730,6 +2746,7 @@ export const startMuon = async (
   logConfig: Record<string, unknown> | undefined = undefined,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -2754,6 +2771,7 @@ export const startMuon = async (
         networkAllowPatterns,
         networkAuthorizedOrigins,
         pluginAllowPatterns,
+        pluginConfigByName,
         pluginSaltByName,
         pluginSignatureByName,
         pluginNames,
@@ -2783,6 +2801,7 @@ export const startMuon = async (
     includeStandardPlugins,
     pluginSignatureByName,
     pluginSaltByName,
+    pluginConfigByName,
   );
   const pluginDirectory = await createPluginDirectory(
     directory,
@@ -2894,6 +2913,7 @@ export const startDebugMuon = async (
   logConfig: Record<string, unknown> | undefined = undefined,
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -2924,6 +2944,7 @@ export const startDebugMuon = async (
     logConfig,
     pluginSignatureByName,
     pluginSaltByName,
+    pluginConfigByName,
   );
 
 export const startDebugMuonBootstrap = async (
@@ -3586,7 +3607,7 @@ export const stopMuon = async (
   }
 
   if (running.remoteWindows !== undefined) {
-    const context = requireWindowsRemoteContext();
+    const remote = running.remoteWindows;
     let exited = false;
     if (driver !== undefined) {
       exited = await waitForProcessExitOrTimeout(running, processExitTimeoutMs);
@@ -3594,7 +3615,7 @@ export const stopMuon = async (
 
     if (!exited && running.process.exitCode === null) {
       try {
-        await context.agent.processes.kill(running.process.pid ?? 0);
+        await remote.muonProcess.kill();
       } catch {
         // The process may already be closed.
       }
@@ -3604,16 +3625,35 @@ export const stopMuon = async (
       await waitForProcessExitOrTimeout(running, 3000);
     }
     try {
-      await context.agent.processes.kill(running.remoteWindows.relayProcessId);
+      await remote.relayProcess.kill();
     } catch {
       // The relay may already be closed.
     }
-    await refreshWindowsRemoteStderr(running);
-    await saveWindowsRemoteMuonArtifacts(running);
-    await rm(running.remoteWindows.configDirectory, {
-      recursive: true,
-      force: true,
-    });
+    let cleanupError: unknown = undefined;
+    try {
+      await refreshWindowsRemoteStderr(running);
+      await saveWindowsRemoteMuonArtifacts(running);
+      await rm(remote.configDirectory, {
+        recursive: true,
+        force: true,
+      });
+    } catch (error) {
+      cleanupError = error;
+    } finally {
+      for (const processInfo of [remote.muonProcess, remote.relayProcess]) {
+        try {
+          await processInfo.releaseAsync();
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+    }
+    if (cleanupError instanceof Error) {
+      throw cleanupError;
+    }
+    if (cleanupError !== undefined) {
+      throw new Error(String(cleanupError));
+    }
     return;
   }
 
@@ -4567,6 +4607,261 @@ export const runBuiltinFsFileUriOperations = async (
   expect(values.watch.afterCloseCount).toBe(values.watch.filenames.length);
   expect(values.invalid.missingStat).not.toBe("");
   expect(values.invalid.unlinkDirectory).not.toBe("");
+};
+
+/** Function wrapper counts exposed by test builds of Muon. */
+export interface FunctionWrapperDiagnosticCounts {
+  /** Live renderer function sources. */
+  sources: number;
+  /** Active native bridge borrows of renderer functions. */
+  borrows: number;
+  /** Live native function proxy sources. */
+  proxies: number;
+  /** Live renderer leases of native function proxies. */
+  proxyLeases: number;
+}
+
+/** FFI closure tracker counts exposed by test builds of Muon. */
+export interface FunctionWrapperFfiClosureDiagnostics {
+  /** Whether FFI closure tracking is enabled for this build. */
+  enabled: boolean;
+  /** Total number of allocated FFI closures. */
+  alloc: number;
+  /** Total number of released FFI closures. */
+  free: number;
+  /** Current number of live FFI closures. */
+  live: number;
+  /** Highest observed number of simultaneously live FFI closures. */
+  highWater: number;
+}
+
+/** Function wrapper lifecycle snapshot exposed by test builds of Muon. */
+export interface FunctionWrapperDiagnostics {
+  /** Counts owned by the calling browser, frame, and V8 context. */
+  owner: FunctionWrapperDiagnosticCounts;
+  /** Counts across the current Muon plugin runtime. */
+  global: FunctionWrapperDiagnosticCounts;
+  /** Process-wide FFI closure tracker counts. */
+  ffiClosures: FunctionWrapperFfiClosureDiagnostics;
+}
+
+const functionWrapperCountKeys = [
+  "borrows",
+  "proxies",
+  "proxyLeases",
+  "sources",
+] as const;
+
+const haveMatchingFunctionWrapperLifecycleCounts = (
+  current: FunctionWrapperDiagnostics,
+  baseline: FunctionWrapperDiagnostics,
+): boolean =>
+  functionWrapperCountKeys.every(
+    (key) =>
+      current.owner[key] === baseline.owner[key] &&
+      current.global[key] === baseline.global[key],
+  ) && current.ffiClosures.live === baseline.ffiClosures.live;
+
+/**
+ * Reads the function wrapper lifecycle snapshot from a test Muon build.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @returns The current owner, global, and FFI closure counts.
+ */
+export const readFunctionWrapperDiagnostics = async (
+  driver: CdpDriver,
+): Promise<FunctionWrapperDiagnostics> =>
+  await driver.evaluate<FunctionWrapperDiagnostics>(
+    "window.muon.__functionWrapperDiagnostics()",
+  );
+
+/**
+ * Verifies the test-only diagnostic API descriptor and result schema.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @returns The snapshot obtained while checking the API.
+ */
+export const expectFunctionWrapperDiagnosticApi = async (
+  driver: CdpDriver,
+): Promise<FunctionWrapperDiagnostics> => {
+  const result = await driver.evaluate<{
+    descriptor: {
+      configurable: boolean;
+      enumerable: boolean;
+      valueType: string;
+      writable: boolean;
+    } | null;
+    diagnostics: FunctionWrapperDiagnostics;
+    ffiClosureKeys: string[];
+    globalKeys: string[];
+    listed: boolean;
+    ownerKeys: string[];
+    resultKeys: string[];
+    returnsPromise: boolean;
+    validCounts: boolean;
+    validFfiClosures: boolean;
+  }>(`(async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window.muon,
+      "__functionWrapperDiagnostics",
+    );
+    const pending = window.muon.__functionWrapperDiagnostics();
+    const diagnostics = await pending;
+    const countValues = [
+      ...Object.values(diagnostics.owner),
+      ...Object.values(diagnostics.global),
+    ];
+    const ffiCountValues = [
+      diagnostics.ffiClosures.alloc,
+      diagnostics.ffiClosures.free,
+      diagnostics.ffiClosures.live,
+      diagnostics.ffiClosures.highWater,
+    ];
+    return {
+      descriptor: descriptor === undefined
+        ? null
+        : {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            valueType: typeof descriptor.value,
+            writable: descriptor.writable,
+          },
+      diagnostics,
+      ffiClosureKeys: Object.keys(diagnostics.ffiClosures).sort(),
+      globalKeys: Object.keys(diagnostics.global).sort(),
+      listed: Object.keys(window.muon).includes(
+        "__functionWrapperDiagnostics",
+      ),
+      ownerKeys: Object.keys(diagnostics.owner).sort(),
+      resultKeys: Object.keys(diagnostics).sort(),
+      returnsPromise: pending instanceof Promise,
+      validCounts: countValues.every(
+        (value) => Number.isSafeInteger(value) && value >= 0,
+      ),
+      validFfiClosures:
+        typeof diagnostics.ffiClosures.enabled === "boolean" &&
+        ffiCountValues.every(
+          (value) => Number.isSafeInteger(value) && value >= 0,
+        ) &&
+        diagnostics.ffiClosures.alloc >= diagnostics.ffiClosures.free &&
+        diagnostics.ffiClosures.live ===
+          diagnostics.ffiClosures.alloc - diagnostics.ffiClosures.free &&
+        diagnostics.ffiClosures.highWater >= diagnostics.ffiClosures.live,
+    };
+  })()`);
+
+  expect(result.descriptor).toEqual({
+    configurable: false,
+    enumerable: false,
+    valueType: "function",
+    writable: false,
+  });
+  expect(result.listed).toBe(false);
+  expect(result.returnsPromise).toBe(true);
+  expect(result.resultKeys).toEqual(["ffiClosures", "global", "owner"]);
+  expect(result.ownerKeys).toEqual([...functionWrapperCountKeys]);
+  expect(result.globalKeys).toEqual([...functionWrapperCountKeys]);
+  expect(result.ffiClosureKeys).toEqual([
+    "alloc",
+    "enabled",
+    "free",
+    "highWater",
+    "live",
+  ]);
+  expect(result.validCounts).toBe(true);
+  expect(result.validFfiClosures).toBe(true);
+  for (const key of functionWrapperCountKeys) {
+    expect(result.diagnostics.owner[key]).toBeLessThanOrEqual(
+      result.diagnostics.global[key],
+    );
+  }
+  return result.diagnostics;
+};
+
+/**
+ * Waits until wrapper lifecycle counts return to a previously observed state.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @param baseline Snapshot to compare against.
+ * @param operationLabel Description included in timeout failures.
+ */
+export const waitForFunctionWrapperDiagnosticBaseline = async (
+  driver: CdpDriver,
+  baseline: FunctionWrapperDiagnostics,
+  operationLabel: string,
+): Promise<void> => {
+  const deadline = Date.now() + targetTimeoutMs;
+  let current = await readFunctionWrapperDiagnostics(driver);
+  while (
+    !haveMatchingFunctionWrapperLifecycleCounts(current, baseline) &&
+    Date.now() < deadline
+  ) {
+    await delay(20);
+    current = await readFunctionWrapperDiagnostics(driver);
+  }
+  if (!haveMatchingFunctionWrapperLifecycleCounts(current, baseline)) {
+    throw new Error(
+      `${operationLabel} did not restore function wrapper counts: ` +
+        `baseline=${JSON.stringify(baseline)} current=${JSON.stringify(current)}`,
+    );
+  }
+};
+
+/**
+ * Exercises the fs and fs-dialogs AbortSignal wrapper paths without exhausting
+ * their wrapper quotas.
+ *
+ * @param driver CDP driver attached to the owner context.
+ * @param existingPath Existing filesystem path used by fs operations.
+ */
+export const runFunctionWrapperAbortLeaseScenarios = async (
+  driver: CdpDriver,
+  existingPath: string,
+): Promise<void> => {
+  const baseline = await expectFunctionWrapperDiagnosticApi(driver);
+
+  for (let index = 0; index < 3; index += 1) {
+    await expect(
+      driver.evaluate<boolean>(`(async () => {
+        const controller = new AbortController();
+        return await window.muon.fs.exists(
+          ${JSON.stringify(existingPath)},
+          { signal: controller.signal },
+        );
+      })()`),
+    ).resolves.toBe(true);
+    await waitForFunctionWrapperDiagnosticBaseline(
+      driver,
+      baseline,
+      `fs AbortSignal call ${index + 1}`,
+    );
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const reason = `function wrapper diagnostic abort ${index + 1}`;
+    await expect(
+      driver.evaluate<string>(`(async () => {
+        const controller = new AbortController();
+        const operation = window.muon.fs.dialogs.selectFile({
+          signal: controller.signal,
+        });
+        queueMicrotask(() => {
+          controller.abort(new Error(${JSON.stringify(reason)}));
+        });
+        try {
+          await operation;
+          return "fulfilled";
+        } catch (error) {
+          return String(error && error.message ? error.message : error);
+        }
+      })()`),
+    ).resolves.toBe(reason);
+    await waitForFunctionWrapperDiagnosticBaseline(
+      driver,
+      baseline,
+      `fs-dialogs AbortSignal call ${index + 1}`,
+    );
+  }
 };
 
 export const runBuiltinFsAbortScenarios = async (

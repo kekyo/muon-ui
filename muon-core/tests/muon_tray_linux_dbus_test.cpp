@@ -5,6 +5,8 @@
  */
 
 #include "browser/muon_tray.h"
+#include "browser/muon_icon.h"
+#include "browser/muon_title_bar.h"
 
 #include <gio/gio.h>
 
@@ -410,11 +412,50 @@ MuonBrowserTrayIcon CreateIcon(uint8_t red,
                                uint8_t green,
                                uint8_t blue,
                                uint8_t alpha) {
+  MuonIconBitmap bitmap;
+  bitmap.pixel_width = 1;
+  bitmap.pixel_height = 1;
+  bitmap.rgba = {red, green, blue, alpha};
   MuonBrowserTrayIcon icon;
-  icon.pixel_width = 1;
-  icon.pixel_height = 1;
-  icon.rgba = {red, green, blue, alpha};
+  icon.bitmap = std::make_shared<const MuonIconBitmap>(std::move(bitmap));
   return icon;
+}
+
+bool TestTitleBarIconBitmapReuse() {
+  MuonIconBitmap bitmap;
+  bitmap.rgba = {1, 2, 3, 4};
+  bitmap.pixel_width = 1;
+  bitmap.pixel_height = 1;
+
+  MuonTitleBarIcon title_bar_icon;
+  title_bar_icon.bitmap =
+      std::make_shared<const MuonIconBitmap>(std::move(bitmap));
+  MuonBrowserTrayIcon tray_icon;
+  std::string error_message;
+  if (!Expect(LoadMuonBrowserTrayIconFromTitleBarIcon(
+                  title_bar_icon, "shared title bar icon", &tray_icon,
+                  &error_message),
+              error_message) ||
+      !Expect(tray_icon.bitmap == title_bar_icon.bitmap,
+              "tray icon did not reuse the decoded title bar bitmap")) {
+    return false;
+  }
+
+  MuonIconBitmap invalid_bitmap;
+  invalid_bitmap.rgba = {1, 2, 3, 4};
+  invalid_bitmap.pixel_width = 2;
+  invalid_bitmap.pixel_height = 2;
+  MuonTitleBarIcon invalid_title_bar_icon;
+  invalid_title_bar_icon.bitmap =
+      std::make_shared<const MuonIconBitmap>(std::move(invalid_bitmap));
+  auto invalid_tray_icon = MuonBrowserTrayIcon{};
+  error_message.clear();
+  return Expect(!LoadMuonBrowserTrayIconFromTitleBarIcon(
+                    invalid_title_bar_icon, "invalid title bar icon",
+                    &invalid_tray_icon, &error_message),
+                "tray icon accepted an invalid decoded bitmap") &&
+         Expect(!invalid_tray_icon.bitmap,
+                "rejected tray icon retained an invalid bitmap");
 }
 
 std::vector<MuonBrowserTrayMenuItem> CreateMenuItems() {
@@ -723,7 +764,8 @@ bool TestLinuxTitleBarFollowingTrayIcons() {
 }  // namespace
 
 int main() {
-  if (!TestLinuxStatusNotifierItemBackend() ||
+  if (!TestTitleBarIconBitmapReuse() ||
+      !TestLinuxStatusNotifierItemBackend() ||
       !TestLinuxTitleBarFollowingTrayIcons()) {
     return 1;
   }

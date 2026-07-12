@@ -51,6 +51,9 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
       },
       {
         "name": "foobar",
+        "config": {
+          "foobar.mode": "strict"
+        },
         "imports": [
           {
             "sources": ["src/native/**"],
@@ -115,6 +118,8 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   ページがfaviconを指定した場合、muonはCEFから通知されるfavicon URLを順に試し、取得と変換に成功した最初の画像をタイトルバーアイコンへ反映します。
   ページ遷移時、faviconが存在しない場合や取得・変換できない場合は、生成済みの初期タイトルバーアイコン、または内蔵muonアイコンへ戻ります。
   favicon URLの取得は通常のページリクエストと同じネットワーク制限の対象です。
+  faviconのレスポンスは画像形式にかかわらず1 MiBまでです。PNGはさらに幅・高さが各256 px以下、総画素数が65,536以下である必要があり、制限を超えた候補は使用せず次の候補または初期アイコンへフォールバックします。
+  この制限はタイトルバー／アプリケーション／トレイ用アイコンのデコード経路だけに適用され、ページ内の通常の`<img>`などはCEFの画像処理に委ねられます。
   `"muon"` タイトルバーではSVGなどブラウザが表示できる画像形式を使用出来ますが、`"native"` タイトルバーではPNGとして読み込める画像だけが使用されます。
   Linuxでの`"native"`の場合は、タイトルバーに関する指定が正しく反映されない場合があります。
 - `keybind` では `devtools`, `reload`, `hardReload`, `fullscreen`, `zoomIn`, `zoomOut`, `resetZoom`, `recycle` を指定出来ます。
@@ -269,6 +274,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `pages`                      | `readonly string[]`           | `["asset://main/**"]`  | プラグイン名前空間や関数をページから参照可能にするURLのリストです。               |
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
+| `plugins[].config`           | `readonly object`             | `{}`                   | プラグイン初期化時に渡す文字列key-value設定です。                                 |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -287,6 +293,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   例えば `muon_fs_dialogs_gtk3.so` を使う場合の `name` は `"muon_fs_dialogs_gtk3"` です。
   `"internal"` は予約名であり、外部プラグイン名としては使用出来ません。
   同じ `name` を複数回指定することは出来ません。
+- `plugins[].config` は、そのプラグインへ初期化時に渡す設定テーブルです。
+  未指定または `{}` の場合は空の設定として扱われます。
+  keyは空文字列不可で、keyとvalueはいずれもNUL文字を含められません。
+  valueに指定できるのは文字列だけです。空文字列や改行を含む文字列は指定できますが、object、array、number、boolean、nullは設定エラーになります。
+  複数行の値やglob/正規表現の区切りなど、値の意味と解釈は各プラグインの責務です。
 - `plugins[].allow` は、`simple` モードでプラグインが持つ関数パスを `window` 階層に公開するためのホワイトリストです。
   `simple` モードでは必須で、`validate` モードでは指定できません。
   `muon.fs.*` のようなパターンを指定出来ます。
@@ -353,4 +364,3 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 > 解説は省略します。
 
 ---
-

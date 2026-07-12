@@ -7,6 +7,7 @@
 #pragma once
 
 #include "app/muon_app_storage.h"
+#include "browser/muon_icon.h"
 
 #include <cstdint>
 #include <functional>
@@ -66,14 +67,8 @@ struct MuonBrowserTrayOptions {
  * Decoded tray icon bitmap.
  */
 struct MuonBrowserTrayIcon {
-  /** Source PNG bytes loaded from muon app storage. */
-  std::vector<uint8_t> png_data;
-  /** RGBA bitmap data decoded from the PNG. */
-  std::vector<uint8_t> rgba;
-  /** Bitmap width in physical pixels. */
-  int pixel_width = 0;
-  /** Bitmap height in physical pixels. */
-  int pixel_height = 0;
+  /** Immutable decoded PNG bitmap shared with native title/app icons. */
+  MuonIconBitmapPtr bitmap;
 };
 
 /**
@@ -237,11 +232,12 @@ bool LoadMuonBrowserTrayIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
 /**
  * Loads a tray icon from an already loaded title bar icon.
  *
- * @param title_bar_icon Title bar icon whose PNG bytes are used for the tray.
+ * @param title_bar_icon Title bar icon whose decoded bitmap is used for the
+ * tray.
  * @param source Diagnostic source label used in error messages.
  * @param icon Receives decoded tray icon data.
  * @param error_message Receives a validation diagnostic.
- * @return true when a tray icon was loaded from PNG data.
+ * @return true when a tray icon reused a valid decoded PNG bitmap.
  */
 bool LoadMuonBrowserTrayIconFromTitleBarIcon(
     const MuonTitleBarIcon& title_bar_icon,

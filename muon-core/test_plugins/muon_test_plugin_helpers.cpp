@@ -217,8 +217,8 @@ static const muon_plugin_metadata helper_metadata = {
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(
-    const muon_plugin_helpers* helpers) {
-  helper_table = helpers;
+    const muon_plugin_init_context* context) {
+  helper_table = context == nullptr ? nullptr : context->helpers;
   helper_error_message[0] = '\0';
   helper_closure_function = nullptr;
   if (helper_table == nullptr ||

@@ -35,6 +35,7 @@ struct MuonPluginValue {
   muon_native_function function_value = nullptr;
   MuonTypeMetadata function_type;
   uint32_t function_proxy_id = 0;
+  std::string function_proxy_lease_token;
   muon_buffer_view buffer_view = {nullptr, 0};
 };
 

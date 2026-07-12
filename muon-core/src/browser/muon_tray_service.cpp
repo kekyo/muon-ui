@@ -6,14 +6,10 @@
 
 #include "browser/muon_tray.h"
 
+#include "browser/muon_icon.h"
 #include "browser/muon_title_bar.h"
 
-#include "include/cef_image.h"
-
-#include <algorithm>
 #include <cstdint>
-#include <cstring>
-#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -29,46 +25,6 @@
 #include <shellapi.h>
 #include <windows.h>
 #endif
-
-static bool DecodeMuonBrowserTrayIconPng(const std::vector<uint8_t>& png_data,
-                                         MuonBrowserTrayIcon* icon) {
-  if (png_data.empty() || icon == nullptr) {
-    return false;
-  }
-  auto image = CefImage::CreateImage();
-  if (!image || !image->AddPNG(1.0f, png_data.data(), png_data.size())) {
-    return false;
-  }
-
-  auto pixel_width = 0;
-  auto pixel_height = 0;
-  auto data = image->GetAsBitmap(1.0f, CEF_COLOR_TYPE_RGBA_8888,
-                                 CEF_ALPHA_TYPE_PREMULTIPLIED, pixel_width,
-                                 pixel_height);
-  if (!data || !data->IsValid() || pixel_width <= 0 || pixel_height <= 0) {
-    return false;
-  }
-
-  const auto width = static_cast<size_t>(pixel_width);
-  const auto height = static_cast<size_t>(pixel_height);
-  if (width > std::numeric_limits<size_t>::max() / height / 4) {
-    return false;
-  }
-  const auto expected_size = width * height * 4;
-  if (data->GetSize() != expected_size) {
-    return false;
-  }
-
-  auto rgba = std::vector<uint8_t>(expected_size);
-  if (data->GetData(rgba.data(), rgba.size(), 0) != rgba.size()) {
-    return false;
-  }
-
-  icon->rgba = std::move(rgba);
-  icon->pixel_width = pixel_width;
-  icon->pixel_height = pixel_height;
-  return true;
-}
 
 bool LoadMuonBrowserTrayIconFromStorage(std::shared_ptr<MuonAppStorage> storage,
                                         const std::string& path,
@@ -97,17 +53,18 @@ bool LoadMuonBrowserTrayIconFromTitleBarIcon(
   }
   error_message->clear();
   const auto diagnostic_source = source.empty() ? "title bar icon" : source;
-  if (title_bar_icon.png_data.empty()) {
+  if (!title_bar_icon.bitmap) {
     *error_message = "Tray icon must be backed by PNG data: " +
                      diagnostic_source;
     return false;
   }
-  MuonBrowserTrayIcon loaded_icon;
-  loaded_icon.png_data = title_bar_icon.png_data;
-  if (!DecodeMuonBrowserTrayIconPng(loaded_icon.png_data, &loaded_icon)) {
-    *error_message = "Tray icon must be a valid PNG: " + diagnostic_source;
+  if (!IsMuonIconBitmapWithinLimits(*title_bar_icon.bitmap)) {
+    *error_message =
+        "Tray icon must have a valid decoded PNG bitmap: " + diagnostic_source;
     return false;
   }
+  MuonBrowserTrayIcon loaded_icon;
+  loaded_icon.bitmap = title_bar_icon.bitmap;
   *icon = std::move(loaded_icon);
   return true;
 }
@@ -714,18 +671,19 @@ static const char* FindLinuxStatusNotifierWatcherInterface(
 static GVariant* CreateLinuxIconPixmap(const MuonBrowserTrayIcon& icon) {
   GVariantBuilder pixmaps;
   g_variant_builder_init(&pixmaps, G_VARIANT_TYPE("a(iiay)"));
-  if (!icon.rgba.empty() && icon.pixel_width > 0 && icon.pixel_height > 0) {
+  if (icon.bitmap && IsMuonIconBitmapWithinLimits(*icon.bitmap)) {
+    const auto& bitmap = *icon.bitmap;
     GVariantBuilder bytes;
     g_variant_builder_init(&bytes, G_VARIANT_TYPE("ay"));
-    for (auto offset = size_t{0}; offset + 3 < icon.rgba.size();
+    for (auto offset = size_t{0}; offset < bitmap.rgba.size();
          offset += 4) {
-      g_variant_builder_add(&bytes, "y", icon.rgba[offset + 3]);
-      g_variant_builder_add(&bytes, "y", icon.rgba[offset]);
-      g_variant_builder_add(&bytes, "y", icon.rgba[offset + 1]);
-      g_variant_builder_add(&bytes, "y", icon.rgba[offset + 2]);
+      g_variant_builder_add(&bytes, "y", bitmap.rgba[offset + 3]);
+      g_variant_builder_add(&bytes, "y", bitmap.rgba[offset]);
+      g_variant_builder_add(&bytes, "y", bitmap.rgba[offset + 1]);
+      g_variant_builder_add(&bytes, "y", bitmap.rgba[offset + 2]);
     }
-    g_variant_builder_add(&pixmaps, "(iiay)", icon.pixel_width,
-                          icon.pixel_height, &bytes);
+    g_variant_builder_add(&pixmaps, "(iiay)", bitmap.pixel_width,
+                          bitmap.pixel_height, &bytes);
   }
   return g_variant_builder_end(&pixmaps);
 }
@@ -1496,13 +1454,14 @@ bool MuonBrowserTrayServiceImpl::EnsureWindowsMessageWindow(
 
 HICON MuonBrowserTrayServiceImpl::CreateWindowsIcon(
     const MuonBrowserTrayIcon& icon) {
-  if (icon.rgba.empty() || icon.pixel_width <= 0 || icon.pixel_height <= 0) {
+  if (!icon.bitmap || !IsMuonIconBitmapWithinLimits(*icon.bitmap)) {
     return nullptr;
   }
+  const auto& bitmap = *icon.bitmap;
   BITMAPV5HEADER header = {};
   header.bV5Size = sizeof(header);
-  header.bV5Width = icon.pixel_width;
-  header.bV5Height = -icon.pixel_height;
+  header.bV5Width = bitmap.pixel_width;
+  header.bV5Height = -bitmap.pixel_height;
   header.bV5Planes = 1;
   header.bV5BitCount = 32;
   header.bV5Compression = BI_BITFIELDS;
@@ -1521,14 +1480,15 @@ HICON MuonBrowserTrayServiceImpl::CreateWindowsIcon(
   }
 
   auto* target = static_cast<uint8_t*>(bits);
-  for (auto offset = size_t{0}; offset + 3 < icon.rgba.size(); offset += 4) {
-    target[offset] = icon.rgba[offset + 2];
-    target[offset + 1] = icon.rgba[offset + 1];
-    target[offset + 2] = icon.rgba[offset];
-    target[offset + 3] = icon.rgba[offset + 3];
+  for (auto offset = size_t{0}; offset < bitmap.rgba.size(); offset += 4) {
+    target[offset] = bitmap.rgba[offset + 2];
+    target[offset + 1] = bitmap.rgba[offset + 1];
+    target[offset + 2] = bitmap.rgba[offset];
+    target[offset + 3] = bitmap.rgba[offset + 3];
   }
 
-  auto mask = CreateBitmap(icon.pixel_width, icon.pixel_height, 1, 1, nullptr);
+  auto mask =
+      CreateBitmap(bitmap.pixel_width, bitmap.pixel_height, 1, 1, nullptr);
   ICONINFO info = {};
   info.fIcon = TRUE;
   info.hbmColor = color;

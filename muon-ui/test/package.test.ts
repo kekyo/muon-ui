@@ -1090,16 +1090,165 @@ void existsResult;
     ).resolves.toBeUndefined();
   });
 
+  it("provides disposable plugin function proxy types", async () => {
+    await expect(
+      runTypeScriptConsumer(`import type {} from "muon-ui";
+
+declare const proxy: MuonPluginFunctionProxy<
+  readonly [number, string],
+  string
+>;
+
+const result: Promise<string> = proxy(123, "value");
+const releaseable: Releaseable = proxy;
+const disposable: Disposable = proxy;
+const released: void = proxy.release();
+const symbolReleased: void = proxy[Symbol.dispose]();
+proxy.release();
+
+// @ts-expect-error release is synchronous.
+const releasePromise: Promise<void> = proxy.release();
+// @ts-expect-error The proxy argument tuple is enforced.
+proxy("123", "value");
+// @ts-expect-error release cannot be replaced.
+proxy.release = () => {};
+// @ts-expect-error The old dispose member is not exposed.
+proxy.dispose();
+
+void result;
+void releaseable;
+void disposable;
+void released;
+void symbolReleased;
+void releasePromise;
+`),
+    ).resolves.toBeUndefined();
+  });
+
   it("provides muon virtual modules through configured TypeScript types", async () => {
     await expect(
       runTypeScriptConsumer(
-        `import { spawn } from "muon:executor";
+        `import * as executorModule from "muon:executor";
+import {
+  boolType,
+  bufferViewType,
+  float32Type,
+  float64Type,
+  int16Type,
+  int32Type,
+  int64Type,
+  int8Type,
+  loadLibrary,
+  pointerType,
+  spawn,
+  stringType,
+  uint16Type,
+  uint32Type,
+  uint64Type,
+  uint8Type,
+  usizeType,
+  voidType,
+} from "muon:executor";
+
+type RemovedTypeName =
+  | "bool"
+  | "int8"
+  | "uint8"
+  | "int16"
+  | "uint16"
+  | "int32"
+  | "uint32"
+  | "int64"
+  | "uint64"
+  | "float32"
+  | "float64"
+  | "pointer"
+  | "bufferView"
+  | "usize";
+type AssertNever<T extends never> = T;
+type ModuleOldNamesAreRemoved = AssertNever<
+  Extract<keyof typeof executorModule, RemovedTypeName>
+>;
+type GlobalOldNamesAreRemoved = AssertNever<
+  Extract<keyof typeof window.muon.executor, RemovedTypeName>
+>;
+
+const typeDescriptors: readonly MuonAdhocType[] = [
+  voidType,
+  boolType,
+  int8Type,
+  uint8Type,
+  int16Type,
+  uint16Type,
+  int32Type,
+  uint32Type,
+  int64Type,
+  uint64Type,
+  float32Type,
+  float64Type,
+  stringType,
+  pointerType,
+  bufferViewType,
+  usizeType,
+];
+const globalTypeDescriptors: readonly MuonAdhocType[] = [
+  window.muon.executor.voidType,
+  window.muon.executor.boolType,
+  window.muon.executor.int8Type,
+  window.muon.executor.uint8Type,
+  window.muon.executor.int16Type,
+  window.muon.executor.uint16Type,
+  window.muon.executor.int32Type,
+  window.muon.executor.uint32Type,
+  window.muon.executor.int64Type,
+  window.muon.executor.uint64Type,
+  window.muon.executor.float32Type,
+  window.muon.executor.float64Type,
+  window.muon.executor.stringType,
+  window.muon.executor.pointerType,
+  window.muon.executor.bufferViewType,
+  window.muon.executor.usizeType,
+];
 
 const run = async (): Promise<void> => {
   const process = await spawn({ command: "node", args: ["--version"] });
+  const releaseable: AsyncReleaseable = process;
+  const disposable: AsyncDisposable = releaseable;
   const result: MuonExecutorSpawnResult = await process.wait();
+  await releaseable.release();
+
+  const library: MuonAdhocLibrary = await loadLibrary("libc.so");
+  const mallocSignature: MuonAdhocSignature = {
+    argTypes: [usizeType],
+    returnType: pointerType,
+  };
+  const freeSignature: MuonAdhocSignature = {
+    argTypes: [pointerType],
+    returnType: voidType,
+  };
+  const addSignature: MuonAdhocSignature = {
+    argTypes: [int32Type, int32Type],
+    returnType: int32Type,
+  };
+  const malloc: (
+    size: MuonAdhocIntegerValue,
+  ) => Promise<MuonNativePointer> = await library.getFunction(
+    "malloc",
+    mallocSignature,
+  );
+  const free: (p: MuonNativePointer) => Promise<void> =
+    await library.getFunction("free", freeSignature);
+  const add: (a: number, b: number) => Promise<number> =
+    await library.getFunction("add", addSignature);
+  const pointerValue = await malloc(123n);
+  await free(pointerValue);
+  await library.release();
+  void disposable;
   void result;
+  void add;
 };
+void globalTypeDescriptors;
+void typeDescriptors;
 void run;
 `,
         ["muon-ui"],

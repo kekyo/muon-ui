@@ -322,6 +322,10 @@ export interface MuonVitePluginAccessEntryOptions {
    */
   readonly salt?: string;
   /**
+   * Plugin-defined string key-value configuration entries.
+   */
+  readonly config?: Readonly<Record<string, string>>;
+  /**
    * Plugin function path globs allowed by the runtime plugin policy.
    *
    * @remarks Required in simple mode. Validate mode derives the runtime

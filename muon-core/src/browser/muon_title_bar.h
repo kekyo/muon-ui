@@ -7,6 +7,7 @@
 #pragma once
 
 #include "app/muon_app_storage.h"
+#include "browser/muon_icon.h"
 
 #include "include/cef_client.h"
 #include "include/cef_image.h"
@@ -107,11 +108,11 @@ struct MuonTitleBarBackgroundColor {
  */
 struct MuonTitleBarIcon {
   /**
-   * PNG bytes used to create native title/app bar images.
+   * Decoded PNG bitmap used to create native title/app bar images.
    *
-   * @remarks Non-PNG icons used by the muon custom title bar leave this empty.
+   * @remarks Non-PNG icons used by the muon custom title bar leave this null.
    */
-  std::vector<uint8_t> png_data;
+  MuonIconBitmapPtr bitmap;
 
   /**
    * Image data URL used by the muon custom title bar.
@@ -237,12 +238,12 @@ bool LoadMuonTitleBarIconFromImageBytes(const uint8_t* data,
 /**
  * Returns the native window icon update behavior for a loaded title bar icon.
  *
- * @param has_native_png_data Whether the icon has PNG data usable by native UI.
+ * @param has_native_bitmap Whether the icon has a bitmap usable by native UI.
  * @param icon_data_url Custom title bar icon data URL.
  * @return Native window/app icon update behavior.
  */
 MuonWindowIconUpdateBehavior GetMuonWindowIconUpdateBehavior(
-    bool has_native_png_data,
+    bool has_native_bitmap,
     const std::string& icon_data_url);
 
 /**

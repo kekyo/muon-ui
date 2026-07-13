@@ -37,6 +37,3 @@ CEFプロファイルは同じアプリケーションステートルートの `
 ポータブル配布物ではビルド時に `browser.profilePath` が `profile` に固定されるため、CEFプロファイルは展開先直下の `profile/` に作成されます。
 runtimeとprofileのためにユーザーステートディレクトリは使用しません。
 ただし、ダウンロード済みCEF tarballのキャッシュは従来通り `MUON_CACHE_DIR` または既定の `~/.cache/muon/` 系ディレクトリに保存されます。
-
----
-

@@ -476,5 +476,3 @@ if (path !== null) {
   console.log(image.byteLength);
 }
 ```
-
----

@@ -54,6 +54,3 @@ await window.opener.muon.fs.writeTextFile(
 - また、いわゆる「モーダルダイアログ的なウインドウ管理」もふさわしくなく、設計時の自由度も劣ります。
   データハンドリングの複雑性もさることながら、URL履歴の管理や異常なページ遷移の回避に労力を要するなど、一見シンプルな解決方法に見えて、実際には別の様々な問題を引き起こします。
 - モーダル画面遷移が必要な場合は、例えばReact MUIの [モーダルコンポーネント](https://mui.com/material-ui/react-modal/) を使用し、アプリケーション全体では [SPA](https://dev.to/seyedahmaddv/how-to-build-a-single-page-application-spa-with-react-285) で実装する手法があります。
-
----
-

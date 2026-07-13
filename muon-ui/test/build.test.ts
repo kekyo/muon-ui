@@ -522,7 +522,7 @@ afterEach(async () => {
 });
 
 describe("muon build", () => {
-  it("creates a CEF-free target distribution with embedded config and signed assets", async () => {
+  it("creates a CEF-free target distribution with embedded config and SHA-256-signed assets", async () => {
     const root = await createTemporaryDirectory("muon-build-app-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     await writeFile(
@@ -600,7 +600,7 @@ describe("muon build", () => {
       await readFile(resolve("..", "images", "muon-256.png")),
     );
     expect(target?.asset.signature).toBe(
-      createHash("sha1").update(archiveContent).update(salt).digest("hex"),
+      createHash("sha256").update(archiveContent).update(salt).digest("hex"),
     );
     expect(target?.asset.salt).toBe("deadbeef");
     expect(target?.embeddedConfig.asset).toEqual({
@@ -2124,7 +2124,7 @@ describe("muon build", () => {
       "<!doctype html><title>config asset app</title>",
     );
     expect(target?.asset.signature).toBe(
-      createHash("sha1")
+      createHash("sha256")
         .update(archiveContent)
         .update(Buffer.from([0x56, 0x78]))
         .digest("hex"),
@@ -2182,7 +2182,7 @@ describe("muon build", () => {
     );
     expect(target?.asset.entryCount).toBe(1);
     expect(target?.asset.signature).toBe(
-      createHash("sha1")
+      createHash("sha256")
         .update(archiveContent)
         .update(Buffer.from([0x9a, 0xbc]))
         .digest("hex"),

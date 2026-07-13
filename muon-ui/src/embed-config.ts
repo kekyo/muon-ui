@@ -206,7 +206,7 @@ const encodeKnownBinaryString = (
   value: string,
 ): Buffer | undefined => {
   if (isPath(path, "asset", "signature")) {
-    return value.length === 40 && isHexString(value)
+    return value.length === 64 && isHexString(value)
       ? decodeHexString(value)
       : undefined;
   }
@@ -214,7 +214,7 @@ const encodeKnownBinaryString = (
     return isHexString(value) ? decodeHexString(value) : undefined;
   }
   if (isPluginSignaturePath(path)) {
-    return value.length === 40 && isHexString(value)
+    return value.length === 64 && isHexString(value)
       ? decodeHexString(value)
       : undefined;
   }

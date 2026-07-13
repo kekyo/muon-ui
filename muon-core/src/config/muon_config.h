@@ -417,7 +417,8 @@ struct MuonPluginEntryConfig {
    */
   bool has_salt = false;
   /**
-   * Expected lowercase SHA-1 signature for the salted external plugin library.
+   * Expected lowercase SHA-256 signature for the salted external plugin
+   * library.
    */
   std::string signature;
   /**
@@ -481,7 +482,8 @@ struct MuonAssetConfig {
    */
   std::filesystem::path from;
   /**
-   * Expected SHA-1 digest for the salted ZIP file specified by asset.sourcePath.
+   * Expected SHA-256 digest for the salted ZIP file specified by
+   * asset.sourcePath.
    *
    * @remarks This value is normalized to lowercase hexadecimal while reading
    * muon.json.

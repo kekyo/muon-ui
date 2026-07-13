@@ -7,7 +7,7 @@
 #include "app/muon_app_storage.h"
 
 #include "config/muon_paths.h"
-#include "muon_sha1.h"
+#include "muon_sha256.h"
 
 #include "include/cef_parser.h"
 
@@ -164,7 +164,7 @@ static std::string JoinZipEntryPath(const std::string& host,
   return entry_path;
 }
 
-using muon_internal::CalculateFileSha1Hex;
+using muon_internal::CalculateFileSha256Hex;
 
 static bool ReadBinaryFile(const std::filesystem::path& path,
                            std::vector<uint8_t>* data) {
@@ -355,9 +355,9 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
     return nullptr;
   }
   error_message->clear();
-  if (has_asset_signature && asset_signature.size() != 40) {
+  if (has_asset_signature && asset_signature.size() != 64) {
     *error_message =
-        "muon.json asset.signature must be a 40-character SHA-1 hex string";
+        "muon.json asset.signature must be a 64-character SHA-256 hex string";
     return nullptr;
   }
   auto normalized_asset_signature = asset_signature;
@@ -365,7 +365,7 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
     for (const auto character : asset_signature) {
       if (!IsHexDigit(character)) {
         *error_message =
-            "muon.json asset.signature must be a 40-character SHA-1 hex "
+            "muon.json asset.signature must be a 64-character SHA-256 hex "
             "string";
         return nullptr;
       }
@@ -408,7 +408,8 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
   if (std::filesystem::is_regular_file(asset_from, error) && !error) {
     if (has_asset_signature) {
       std::string actual_signature;
-      if (!CalculateFileSha1Hex(asset_from, asset_salt, &actual_signature)) {
+      if (!CalculateFileSha256Hex(asset_from, asset_salt,
+                                  &actual_signature)) {
         *error_message = "Failed to read muon.json asset.sourcePath: " +
                          asset_from.string();
         return nullptr;
@@ -422,7 +423,7 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
       if (actual_signature != normalized_asset_signature) {
         *error_message =
             "muon.json asset.signature does not match asset.sourcePath salted "
-            "SHA-1: " +
+            "SHA-256: " +
             asset_from.string();
         return nullptr;
       }

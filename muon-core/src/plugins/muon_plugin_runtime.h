@@ -104,7 +104,7 @@ struct MuonPluginRuntimeLoadEntry {
    */
   bool has_expected_signature = false;
   /**
-   * Expected lowercase SHA-1 signature for this external plugin library.
+   * Expected lowercase SHA-256 signature for this external plugin library.
    */
   std::string expected_signature;
   /**

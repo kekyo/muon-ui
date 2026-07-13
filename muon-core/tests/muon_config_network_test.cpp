@@ -339,8 +339,10 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteRawString(&bytes, "signature");
   WriteTlvBinary(
       &bytes,
-      {0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e,
-       0x25, 0x71, 0x78, 0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d});
+      {0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+       0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+       0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+       0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad});
   WriteRawString(&bytes, "salt");
   WriteTlvBinary(&bytes, {0x0a, 0x10, 0xff});
 
@@ -374,11 +376,61 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteTlvBinary(
       &bytes,
       {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
-       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13});
+       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
+       0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+       0x1e, 0x1f});
   WriteRawString(&bytes, "salt");
   WriteTlvBinary(&bytes, {0xde, 0xad, 0xbe, 0xef});
 
   return bytes;
+}
+
+static std::vector<uint8_t> CreateEmbeddedAssetSignaturePayload(
+    size_t signature_size) {
+  std::vector<uint8_t> bytes;
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "asset");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(&bytes, std::vector<uint8_t>(signature_size, 0x5a));
+  return bytes;
+}
+
+static std::vector<uint8_t> CreateEmbeddedPluginSignaturePayload(
+    size_t signature_size) {
+  std::vector<uint8_t> bytes;
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "plugin");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "plugins");
+  BeginTlvArray(&bytes, 1);
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(&bytes, std::vector<uint8_t>(signature_size, 0x5a));
+  return bytes;
+}
+
+static bool LoadEmbeddedConfigExpectFailure(
+    const std::vector<uint8_t>& payload,
+    const std::filesystem::path& runtime_directory,
+    const std::string& expected_message) {
+  std::vector<uint8_t> slot;
+  std::string error_message;
+  if (!Expect(CreateMuonEmbeddedConfigSlot(payload, &slot, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  MuonConfig config;
+  std::vector<std::filesystem::path> config_paths;
+  auto embedded = false;
+  return Expect(!LoadMuonStartupConfigFromEmbeddedSlot(
+                    {"muon"}, slot.data(), slot.size(), runtime_directory,
+                    &config, &config_paths, &embedded, &error_message),
+                "invalid embedded asset signature was accepted") &&
+         Expect(error_message.find(expected_message) != std::string::npos,
+                "embedded config error did not contain: " +
+                    expected_message);
 }
 
 static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
@@ -658,7 +710,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
 
   const auto allow_path = test_directory / "allow.json";
   if (!Expect(WriteFile(allow_path,
-                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","contextMenu":{"mode":"custom"},"initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"A9993E364706816ABA3E25717850C26C9CD0D89D","salt":"DEADBEEF"}]}})"),
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","contextMenu":{"mode":"custom"},"initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD","salt":"DEADBEEF"}]}})"),
               "failed to write allow config") ||
       !LoadConfigExpectSuccess(allow_path, &config)) {
     return false;
@@ -750,7 +802,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.plugin.plugins[1].has_signature,
                 "external plugin signature was not marked present") &&
          Expect(config.plugin.plugins[1].signature ==
-                    "a9993e364706816aba3e25717850c26c9cd0d89d",
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
                 "external plugin signature was not normalized") &&
          Expect(config.plugin.plugins[1].has_salt,
                 "external plugin salt was not marked present") &&
@@ -767,7 +819,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
          Expect(config.asset.has_signature,
                 "asset.signature was not parsed") &&
          Expect(config.asset.signature ==
-                    "a9993e364706816aba3e25717850c26c9cd0d89d",
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
                 "asset.signature was not normalized") &&
          Expect(config.asset.has_salt, "asset.salt was not parsed") &&
          Expect(config.asset.salt.size() == 3,
@@ -1036,7 +1088,8 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.plugin.plugins[0].has_signature,
                 "embedded plugin signature was not marked present") &&
          Expect(config.plugin.plugins[0].signature ==
-                    "000102030405060708090a0b0c0d0e0f10111213",
+                    "000102030405060708090a0b0c0d0e0f"
+                    "101112131415161718191a1b1c1d1e1f",
                 "embedded binary plugin signature was not restored") &&
          Expect(config.plugin.plugins[0].has_salt,
                 "embedded plugin salt was not marked present") &&
@@ -1055,7 +1108,8 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.asset.has_signature,
                 "embedded asset.signature was not parsed") &&
          Expect(config.asset.signature ==
-                    "a9993e364706816aba3e25717850c26c9cd0d89d",
+                    "ba7816bf8f01cfea414140de5dae2223"
+                    "b00361a396177a9cb410ff61f20015ad",
                 "embedded binary asset.signature was not restored") &&
          Expect(config.asset.has_salt, "embedded asset.salt was not parsed") &&
          Expect(config.asset.salt.size() == 3,
@@ -1063,6 +1117,48 @@ static bool RunEmbeddedConfigLoadingTest(
          Expect(config.asset.salt[0] == 0x0a && config.asset.salt[1] == 0x10 &&
                     config.asset.salt[2] == 0xff,
                 "embedded binary asset.salt was not restored");
+}
+
+static bool RunEmbeddedAssetSignatureLengthValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto runtime_directory =
+      test_directory / "embedded-signature-length-runtime";
+  return LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedAssetSignaturePayload(31), runtime_directory,
+             "Embedded muon config asset.signature must be 32 bytes") &&
+         LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedAssetSignaturePayload(33), runtime_directory,
+             "Embedded muon config asset.signature must be 32 bytes");
+}
+
+static bool RunEmbeddedPluginSignatureLengthValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto runtime_directory =
+      test_directory / "embedded-plugin-signature-length-runtime";
+  return LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedPluginSignaturePayload(31), runtime_directory,
+             "Embedded muon config plugin.plugins[].signature must be 32 "
+             "bytes") &&
+         LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedPluginSignaturePayload(33), runtime_directory,
+             "Embedded muon config plugin.plugins[].signature must be 32 "
+             "bytes");
+}
+
+static bool RunLegacyEmbeddedAssetSha1SignatureRejectionTest(
+    const std::filesystem::path& test_directory) {
+  return LoadEmbeddedConfigExpectFailure(
+      CreateEmbeddedAssetSignaturePayload(20),
+      test_directory / "legacy-embedded-signature-runtime",
+      "Embedded muon config asset.signature must be 32 bytes");
+}
+
+static bool RunLegacyEmbeddedPluginSha1SignatureRejectionTest(
+    const std::filesystem::path& test_directory) {
+  return LoadEmbeddedConfigExpectFailure(
+      CreateEmbeddedPluginSignaturePayload(20),
+      test_directory / "legacy-embedded-plugin-signature-runtime",
+      "Embedded muon config plugin.plugins[].signature must be 32 bytes");
 }
 
 static bool RunEmbeddedConfigEmptySlotTest(
@@ -1117,11 +1213,11 @@ static bool RunConfigOverrideLoadingTest(
   const auto second_path = second_directory / "override.json";
   if (!Expect(WriteFile(
                   first_path,
-                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","pages":["asset://first/**"],"plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","pages":["asset://first/**"],"plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
               "failed to write first override config") ||
       !Expect(WriteFile(
                   second_path,
-                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon"},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","pages":["asset://first/**","asset://second/**"],"plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon"},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","pages":["asset://first/**","asset://second/**"],"plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
               "failed to write second override config")) {
     return false;
   }
@@ -1199,7 +1295,8 @@ static bool RunConfigOverrideLoadingTest(
       !Expect(config.asset.has_signature,
               "merged config did not preserve asset.signature") ||
       !Expect(config.asset.signature ==
-                  "2222222222222222222222222222222222222222",
+                  "22222222222222222222222222222222"
+                  "22222222222222222222222222222222",
               "asset.signature was not overridden by the later config") ||
       !Expect(config.asset.has_salt,
               "merged config did not preserve asset.salt") ||
@@ -1415,6 +1512,18 @@ static bool RunLogConfigLoadingTest(
                 "partial sources plugin override was not parsed");
 }
 
+static bool RunLegacyAssetSha1SignatureRejectionTest(
+    const std::filesystem::path& test_directory) {
+  const auto config_path = test_directory / "legacy-asset-sha1.json";
+  return Expect(
+             WriteFile(config_path,
+                       R"({"asset":{"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}})"),
+             "failed to write legacy asset SHA-1 config") &&
+         LoadConfigExpectFailure(
+             config_path,
+             "asset.signature must be a 64-character SHA-256 hex string");
+}
+
 static bool RunConfigValidationTest(
     const std::filesystem::path& test_directory) {
   const auto invalid_json_path = test_directory / "invalid-json.json";
@@ -1492,6 +1601,8 @@ static bool RunConfigValidationTest(
       test_directory / "invalid-plugin-signature-type.json";
   const auto short_plugin_signature_path =
       test_directory / "short-plugin-signature.json";
+  const auto long_plugin_signature_path =
+      test_directory / "long-plugin-signature.json";
   const auto non_hex_plugin_signature_path =
       test_directory / "non-hex-plugin-signature.json";
   const auto internal_plugin_signature_path =
@@ -1657,16 +1768,25 @@ static bool RunConfigValidationTest(
                           R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":42}]}})"),
                 "failed to write invalid plugin signature type config") &&
          Expect(WriteFile(short_plugin_signature_path,
-                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89"}]}})"),
+                          "{\"plugin\":{\"plugins\":[{\"name\":\"foobar\","
+                          "\"allow\":[\"foobar.*\"],\"signature\":\"" +
+                              std::string(63, 'a') + "\"}]}}"),
                 "failed to write short plugin signature config") &&
+         Expect(WriteFile(long_plugin_signature_path,
+                          "{\"plugin\":{\"plugins\":[{\"name\":\"foobar\","
+                          "\"allow\":[\"foobar.*\"],\"signature\":\"" +
+                              std::string(65, 'a') + "\"}]}}"),
+                "failed to write long plugin signature config") &&
          Expect(WriteFile(non_hex_plugin_signature_path,
-                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89x"}]}})"),
+                          "{\"plugin\":{\"plugins\":[{\"name\":\"foobar\","
+                          "\"allow\":[\"foobar.*\"],\"signature\":\"" +
+                              std::string(63, 'a') + "x\"}]}}"),
                 "failed to write non-hex plugin signature config") &&
          Expect(WriteFile(internal_plugin_signature_path,
-                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"signature":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]}})"),
                 "failed to write internal plugin signature config") &&
          Expect(WriteFile(missing_plugin_salt_path,
-                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}]}})"),
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]}})"),
                 "failed to write missing plugin salt config") &&
          Expect(WriteFile(invalid_plugin_salt_type_path,
                           R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":42}]}})"),
@@ -1716,13 +1836,16 @@ static bool RunConfigValidationTest(
                           R"({"asset":{"signature":42}})"),
                 "failed to write invalid asset.signature type config") &&
          Expect(WriteFile(short_asset_signature_path,
-                          R"({"asset":{"signature":"a9993e364706816aba3e25717850c26c9cd0d89"}})"),
+                          "{\"asset\":{\"signature\":\"" +
+                              std::string(63, 'a') + "\"}}"),
                 "failed to write short asset.signature config") &&
          Expect(WriteFile(long_asset_signature_path,
-                          R"({"asset":{"signature":"a9993e364706816aba3e25717850c26c9cd0d89d0"}})"),
+                          "{\"asset\":{\"signature\":\"" +
+                              std::string(65, 'a') + "\"}}"),
                 "failed to write long asset.signature config") &&
          Expect(WriteFile(non_hex_asset_signature_path,
-                          R"({"asset":{"signature":"a9993e364706816aba3e25717850c26c9cd0d89x"}})"),
+                          "{\"asset\":{\"signature\":\"" +
+                              std::string(63, 'a') + "x\"}}"),
                 "failed to write non-hex asset.signature config") &&
          Expect(WriteFile(invalid_asset_salt_type_path,
                           R"({"asset":{"salt":42}})"),
@@ -1824,10 +1947,13 @@ static bool RunConfigValidationTest(
                                  "plugin.plugins[0].signature must be a string") &&
          LoadConfigExpectFailure(short_plugin_signature_path,
                                  "plugin.plugins[0].signature must be a "
-                                 "40-character SHA-1 hex string") &&
+                                 "64-character SHA-256 hex string") &&
+         LoadConfigExpectFailure(long_plugin_signature_path,
+                                 "plugin.plugins[0].signature must be a "
+                                 "64-character SHA-256 hex string") &&
          LoadConfigExpectFailure(non_hex_plugin_signature_path,
                                  "plugin.plugins[0].signature must be a "
-                                 "40-character SHA-1 hex string") &&
+                                 "64-character SHA-256 hex string") &&
          LoadConfigExpectFailure(internal_plugin_signature_path,
                                  "plugin.plugins[0].signature is not supported "
                                  "for internal") &&
@@ -1875,14 +2001,14 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_asset_signature_type_path,
                                  "asset.signature must be a string") &&
          LoadConfigExpectFailure(short_asset_signature_path,
-                                 "asset.signature must be a 40-character "
-                                 "SHA-1 hex string") &&
+                                 "asset.signature must be a 64-character "
+                                 "SHA-256 hex string") &&
          LoadConfigExpectFailure(long_asset_signature_path,
-                                 "asset.signature must be a 40-character "
-                                 "SHA-1 hex string") &&
+                                 "asset.signature must be a 64-character "
+                                 "SHA-256 hex string") &&
          LoadConfigExpectFailure(non_hex_asset_signature_path,
-                                 "asset.signature must be a 40-character "
-                                 "SHA-1 hex string") &&
+                                 "asset.signature must be a 64-character "
+                                 "SHA-256 hex string") &&
          LoadConfigExpectFailure(invalid_asset_salt_type_path,
                                  "asset.salt must be a string") &&
          LoadConfigExpectFailure(odd_asset_salt_path,
@@ -2640,10 +2766,20 @@ int main() {
                       RunDefaultConfigSearchOrderTest(test_directory) &&
                       RunCommandLineConfigPathTest(test_directory) &&
                       RunEmbeddedConfigLoadingTest(test_directory) &&
+                      RunEmbeddedAssetSignatureLengthValidationTest(
+                          test_directory) &&
+                      RunEmbeddedPluginSignatureLengthValidationTest(
+                          test_directory) &&
+                      RunLegacyEmbeddedAssetSha1SignatureRejectionTest(
+                          test_directory) &&
+                      RunLegacyEmbeddedPluginSha1SignatureRejectionTest(
+                          test_directory) &&
                       RunEmbeddedConfigEmptySlotTest(test_directory) &&
                       RunConfigOverrideLoadingTest(test_directory) &&
                       RunBrowserConfigLoadingTest(test_directory) &&
                       RunLogConfigLoadingTest(test_directory) &&
+                      RunLegacyAssetSha1SignatureRejectionTest(
+                          test_directory) &&
                       RunConfigValidationTest(test_directory) &&
                       RunLogConfigValidationTest(test_directory) &&
                       RunDebuggerConfigValidationTest(test_directory) &&

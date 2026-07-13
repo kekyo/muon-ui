@@ -1408,7 +1408,7 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("muon.browser.setTrayMenu");
   });
 
-  it("preserves plugin signature in generated plugin runtime config", async () => {
+  it("preserves SHA-256 plugin signature in generated plugin runtime config", async () => {
     const root = await createTemporaryDirectory("muon-vite-plugin-signature-");
     const muonDirectory = await createTemporaryDirectory(
       "muon-vite-plugin-signature-runtime-",
@@ -1417,6 +1417,8 @@ describe("muon Vite plugin", () => {
       "muon-vite-plugin-signature-output-",
     );
     const cefDirectory = await writeFakeCefDirectory();
+    const pluginSignature =
+      "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
     await writeBasicViteProject(root);
     await writeProjectMuonConfig(root);
     await writeFakeMuonSource(muonDirectory, outputDirectory);
@@ -1435,7 +1437,7 @@ describe("muon Vite plugin", () => {
           plugins: [
             {
               name: "foobar",
-              signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+              signature: pluginSignature,
               salt: "deadbeef",
               config: {
                 "foobar.mode": "strict",
@@ -1471,7 +1473,7 @@ describe("muon Vite plugin", () => {
         {
           name: "foobar",
           allow: ["foobar.run"],
-          signature: "A9993E364706816ABA3E25717850C26C9CD0D89D",
+          signature: pluginSignature,
           salt: "deadbeef",
           config: {
             "foobar.mode": "strict",

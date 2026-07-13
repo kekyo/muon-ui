@@ -156,7 +156,7 @@ const calculatePluginSignature = async (
     TEST_PLUGIN_DIRECTORY,
     `${pluginName}${PLUGIN_SUFFIX}`,
   );
-  return createHash("sha1")
+  return createHash("sha256")
     .update(await readFile(pluginPath))
     .update(Buffer.from(salt, "hex"))
     .digest("hex");
@@ -1223,6 +1223,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   it("loads an external plugin when its signature matches", async () => {
     const pluginName = "muon_test_plugin_alpha";
     const pluginSalt = "deadbeef";
+    const pluginSignature = await calculatePluginSignature(
+      pluginName,
+      pluginSalt,
+    );
+    expect(pluginSignature).toMatch(/^[0-9a-f]{64}$/);
     const running = await startDebugMuon(
       [pluginName],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -1243,7 +1248,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       undefined,
       undefined,
       {},
-      { [pluginName]: await calculatePluginSignature(pluginName, pluginSalt) },
+      { [pluginName]: pluginSignature },
       { [pluginName]: pluginSalt },
     );
     let driver: CdpDriver | undefined = undefined;
@@ -1273,6 +1278,15 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     const markerPath = join(markerDirectory, "marker.txt");
     const pluginName = "muon_test_plugin_load_marker";
     const pluginSalt = "deadbeef";
+    const correctPluginSignature = await calculatePluginSignature(
+      pluginName,
+      pluginSalt,
+    );
+    const mismatchedFirstNibble = correctPluginSignature[0] === "0" ? "1" : "0";
+    const mismatchedPluginSignature =
+      mismatchedFirstNibble + correctPluginSignature.slice(1);
+    expect(mismatchedPluginSignature).toMatch(/^[0-9a-f]{64}$/);
+    expect(mismatchedPluginSignature).not.toBe(correctPluginSignature);
     const running = await startMuon(
       DEBUG_MUON_DIRECTORY,
       [pluginName],
@@ -1298,7 +1312,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       undefined,
       cdpCommandTimeoutMs,
       undefined,
-      { [pluginName]: "0000000000000000000000000000000000000000" },
+      { [pluginName]: mismatchedPluginSignature },
       { [pluginName]: pluginSalt },
     );
     try {

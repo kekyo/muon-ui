@@ -118,9 +118,9 @@ std::shared_ptr<MuonAppStorage> CreateMuonZipAppStorage(
  * @param has_asset_from Whether asset.sourcePath was explicitly configured.
  * @param asset_from Configured asset.sourcePath path.
  * @param has_asset_signature Whether asset.signature was explicitly configured.
- * @param asset_signature Expected lowercase SHA-1 hex digest for ZIP storage.
+ * @param asset_signature Expected SHA-256 hexadecimal digest for ZIP storage.
  * @param has_asset_salt Whether asset.salt was explicitly configured.
- * @param asset_salt Bytes appended to the ZIP stream for SHA-1 comparison.
+ * @param asset_salt Bytes appended to the ZIP stream for SHA-256 comparison.
  * @param error_message Receives startup validation errors.
  * @return Storage implementation, or null when validation fails.
  */

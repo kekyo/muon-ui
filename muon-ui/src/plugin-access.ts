@@ -49,7 +49,7 @@ export interface MuonPluginAccessEntryOptions {
    */
   name: string;
   /**
-   * Optional expected SHA-1 signature for the external plugin library.
+   * Optional expected SHA-256 signature for the external plugin library.
    */
   signature?: string;
   /**
@@ -166,8 +166,8 @@ const isJsonObject = (value: unknown): value is JsonObject =>
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
-const isSha1HexString = (value: string): boolean =>
-  value.length === 40 && /^[0-9a-fA-F]+$/.test(value);
+const isSha256HexString = (value: string): boolean =>
+  value.length === 64 && /^[0-9a-fA-F]+$/.test(value);
 
 const isHexByteString = (value: string): boolean =>
   value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value);
@@ -329,9 +329,9 @@ const readPluginAccessEntryOptions = (
     if (typeof value.signature !== "string") {
       throw new Error(`muon.json ${configPath}.signature must be a string.`);
     }
-    if (!isSha1HexString(value.signature)) {
+    if (!isSha256HexString(value.signature)) {
       throw new Error(
-        `muon.json ${configPath}.signature must be a 40-character SHA-1 hex string.`,
+        `muon.json ${configPath}.signature must be a 64-character SHA-256 hex string.`,
       );
     }
   }
@@ -483,6 +483,28 @@ const validatePluginAccessOptions = (
 ): EffectivePluginAccessOptions => {
   for (const [pluginIndex, plugin] of resolved.plugins.entries()) {
     const pluginPath = `plugin.plugins[${pluginIndex}]`;
+    const signature: unknown = plugin.signature;
+    if (signature !== undefined) {
+      if (typeof signature !== "string") {
+        throw new Error(`muon.json ${pluginPath}.signature must be a string.`);
+      }
+      if (!isSha256HexString(signature)) {
+        throw new Error(
+          `muon.json ${pluginPath}.signature must be a 64-character SHA-256 hex string.`,
+        );
+      }
+    }
+    const salt: unknown = plugin.salt;
+    if (salt !== undefined) {
+      if (typeof salt !== "string") {
+        throw new Error(`muon.json ${pluginPath}.salt must be a string.`);
+      }
+      if (!isHexByteString(salt)) {
+        throw new Error(
+          `muon.json ${pluginPath}.salt must be a hexadecimal byte string.`,
+        );
+      }
+    }
     validatePluginConfig(
       (plugin as { config?: unknown }).config,
       `${pluginPath}.config`,

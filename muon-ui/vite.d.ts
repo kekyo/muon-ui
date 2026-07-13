@@ -307,9 +307,9 @@ export interface MuonVitePluginAccessEntryOptions {
    */
   readonly name: string;
   /**
-   * Optional expected SHA-1 signature for the external plugin library.
+   * Optional expected SHA-256 signature for the external plugin library.
    *
-   * @remarks This is a 40-character hexadecimal SHA-1 digest of the native
+   * @remarks This is a 64-character hexadecimal SHA-256 digest of the native
    * plugin library bytes followed by `salt`. It is not supported for
    * `internal`.
    */

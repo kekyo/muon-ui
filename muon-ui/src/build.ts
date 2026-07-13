@@ -239,7 +239,7 @@ export interface MuonBuildAssetResult {
    */
   path: string;
   /**
-   * SHA-1 signature for the generated asset archive and salt.
+   * SHA-256 signature for the generated asset archive and salt.
    */
   signature: string;
   /**
@@ -1129,7 +1129,7 @@ const writeAssetArchive = async (
   }
   await writeFile(outputPath, archive);
 
-  const signature = createHash("sha1")
+  const signature = createHash("sha256")
     .update(archive)
     .update(salt)
     .digest("hex");

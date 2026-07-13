@@ -226,7 +226,7 @@ const writeStoredZipArchive = async (
 ): Promise<string> => {
   const archive = createStoredZipArchive(entries);
   await writeFile(path, archive);
-  return createHash("sha1")
+  return createHash("sha256")
     .update(archive)
     .update(Buffer.from(signatureSalt, "hex"))
     .digest("hex");

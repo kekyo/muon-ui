@@ -536,6 +536,26 @@ if(NOT EXISTS "${YYJSON_SOURCE_DIR}/yyjson.c" OR
     "yyjson source is required. Run build.sh to download yyjson or set YYJSON_SOURCE_DIR.")
 endif()
 
+set(MUON_SHA2_SOURCE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../deps/sha2")
+if(NOT EXISTS "${MUON_SHA2_SOURCE_DIR}/sha2.c" OR
+    NOT EXISTS "${MUON_SHA2_SOURCE_DIR}/sha2.h")
+  message(FATAL_ERROR
+    "SHA-2 source is required at ${MUON_SHA2_SOURCE_DIR}.")
+endif()
+add_library(muon_sha2 STATIC
+  "${MUON_SHA2_SOURCE_DIR}/sha2.c"
+  "${MUON_SHA2_SOURCE_DIR}/sha2.h"
+  )
+set_target_properties(muon_sha2 PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+  )
+target_compile_features(muon_sha2 PRIVATE c_std_99)
+target_include_directories(muon_sha2 PUBLIC
+  "${MUON_SHA2_SOURCE_DIR}"
+  )
+MUON_APPLY_SANITIZERS(muon_sha2)
+
 add_library(yyjson STATIC
   "${YYJSON_SOURCE_DIR}/yyjson.c"
   "${YYJSON_SOURCE_DIR}/yyjson.h"
@@ -668,7 +688,7 @@ target_link_libraries(muon_cardio INTERFACE
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
-  src/muon_sha1.cpp
+  src/muon_sha256.cpp
   src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
@@ -721,7 +741,7 @@ set(APP_SOURCES
   )
 set(APP_HEADERS
   src/muon_json_helpers.h
-  src/muon_sha1.h
+  src/muon_sha256.h
   src/muon_string_helpers.h
   src/app/muon_app.h
   src/app/muon_app_scheme.h
@@ -1011,6 +1031,7 @@ set_target_properties(${APP_NAME} PROPERTIES
 target_link_libraries(${APP_NAME} PRIVATE
   muon_ui
   muon_cardio
+  muon_sha2
   libcef_dll_wrapper
   libcef_lib
   yyjson
@@ -1412,7 +1433,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_builtin_fs_gio_read_source_test)
   add_executable(muon_app_scheme_storage_test
     tests/muon_app_scheme_storage_test.cpp
-    src/muon_sha1.cpp
+    src/muon_sha256.cpp
     src/app/muon_app_scheme.cpp
     src/app/muon_app_storage.cpp
     src/config/muon_paths.cpp
@@ -1425,6 +1446,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     )
   target_link_libraries(muon_app_scheme_storage_test PRIVATE
     muon_cardio
+    muon_sha2
     libcef_dll_wrapper
     libcef_lib
     miniz
@@ -1472,7 +1494,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       tests/muon_tray_linux_dbus_test.cpp
       src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
-      src/muon_sha1.cpp
+      src/muon_sha256.cpp
       src/app/muon_app_scheme.cpp
       src/app/muon_app_storage.cpp
       src/browser/muon_tray.cpp
@@ -1492,6 +1514,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       )
     target_link_libraries(muon_tray_linux_dbus_test PRIVATE
       muon_cardio
+      muon_sha2
       libcef_dll_wrapper
       libcef_lib
       yyjson

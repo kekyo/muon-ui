@@ -559,19 +559,17 @@ static cardio::promise<MuonFsFile> OpenRegularFileAsync(
   co_return std::move(result);
 }
 
-static cardio::promise<size_t> GetFileSizeAsync(
+static cardio::promise<uint64_t> GetFileSizeAsync(
     MuonFsIoContext& context,
     MuonFsFile& file,
     cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
   (void)context;
   LARGE_INTEGER file_size = {};
-  if (!GetFileSizeEx(file.handle, &file_size) || file_size.QuadPart < 0 ||
-      static_cast<uintmax_t>(file_size.QuadPart) >
-          static_cast<uintmax_t>(std::numeric_limits<size_t>::max())) {
+  if (!GetFileSizeEx(file.handle, &file_size) || file_size.QuadPart < 0) {
     throw std::runtime_error("File size is invalid");
   }
-  co_return static_cast<size_t>(file_size.QuadPart);
+  co_return static_cast<uint64_t>(file_size.QuadPart);
 }
 
 static cardio::promise<size_t> ReadAtAsync(
@@ -761,11 +759,11 @@ static cardio::promise<MuonFsBufferResult> ReadBytesFromOpenFileAsync(
   auto range_error = std::string{};
   if (!ResolveMuonFsReadFileRange(
           options, size, max_bytes, &range, &range_error)) {
-    throw std::runtime_error(range_error);
+    co_return MuonFsBufferResult(std::move(range_error));
   }
   if (range.length >
       static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-    throw std::runtime_error("Read range is too large");
+    co_return MuonFsBufferResult("Read range is too large");
   }
   auto result =
       AllocateResultBuffer(helpers, static_cast<size_t>(range.length));
@@ -782,7 +780,10 @@ static cardio::promise<MuonFsStringResult> ReadTextFromOpenFileAsync(
     cardio::cancellation cancellation) {
   auto size_promise = GetFileSizeAsync(context, file, cancellation);
   const auto size = co_await size_promise;
-  auto storage = std::vector<uint8_t>(size);
+  if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    throw std::runtime_error("File size is invalid");
+  }
+  auto storage = std::vector<uint8_t>(static_cast<size_t>(size));
   auto buffer = std::span<std::byte>(
       reinterpret_cast<std::byte*>(storage.data()), storage.size());
   auto read_promise = ReadAllAsync(context, file, buffer, 0, cancellation);

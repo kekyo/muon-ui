@@ -15,6 +15,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -270,6 +271,145 @@ static bool TestFilesystemPathHelpers() {
              "NUL file URI path was accepted");
 }
 
+static bool TestReadFileMaxBytesParsing() {
+  auto max_bytes = uint64_t{0};
+  auto error = std::string{};
+  if (!Expect(muon_internal::ParseMuonFsReadFileMaxBytes(
+                  nullptr, &max_bytes, &error),
+              "default readFile maximum was rejected") ||
+      !Expect(max_bytes == muon_internal::kMuonFsDefaultReadFileMaxBytes,
+              "default readFile maximum changed")) {
+    return false;
+  }
+
+  const std::vector<std::pair<std::string, uint64_t>> valid_values = {
+      {"67108864", uint64_t{67108864}},
+      {"0", uint64_t{0}},
+      {"18446744073709551615", std::numeric_limits<uint64_t>::max()},
+      {"00000000000000000016", uint64_t{16}},
+  };
+  for (const auto& [value, expected] : valid_values) {
+    error.clear();
+    if (!Expect(muon_internal::ParseMuonFsReadFileMaxBytes(
+                    value.c_str(), &max_bytes, &error),
+                "valid readFile maximum was rejected: " + value) ||
+        !Expect(max_bytes == expected,
+                "parsed readFile maximum changed: " + value)) {
+      return false;
+    }
+  }
+
+  const std::vector<std::string> invalid_values = {
+      "",          "+1",  "-1",    " 1", "1 ",
+      "1.0",       "1e3", "16MiB", "18446744073709551616",
+  };
+  for (const auto& value : invalid_values) {
+    error.clear();
+    if (!Expect(!muon_internal::ParseMuonFsReadFileMaxBytes(
+                    value.c_str(), &max_bytes, &error),
+                "invalid readFile maximum was accepted: " + value) ||
+        !Expect(error ==
+                    "fs.readFile.maxBytes must be an unsigned decimal byte count",
+                "invalid readFile maximum error changed: " + value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool TestReadFileRangeLimits() {
+  auto error = std::string{};
+  auto range = muon_internal::MuonFsReadRange{};
+  auto options = muon_internal::MuonFsReadOptions{};
+  options.has_length = true;
+  options.length = 17;
+  if (!Expect(!muon_internal::ValidateMuonFsReadFileLength(
+                  options, uint64_t{16}, &error),
+              "explicit readFile length above the maximum was accepted") ||
+      !Expect(error == "readFile length exceeds configured maximum",
+              "explicit readFile maximum error changed")) {
+    return false;
+  }
+
+  options.has_position = true;
+  options.position = 100;
+  error.clear();
+  if (!Expect(!muon_internal::ResolveMuonFsReadFileRange(
+                  options, uint64_t{10}, uint64_t{16}, &range, &error),
+              "oversized explicit length at EOF was accepted") ||
+      !Expect(error == "readFile length exceeds configured maximum",
+              "explicit length did not take precedence over EOF")) {
+    return false;
+  }
+
+  options = {};
+  error.clear();
+  if (!Expect(!muon_internal::ResolveMuonFsReadFileRange(
+                  options, uint64_t{17}, uint64_t{16}, &range, &error),
+              "implicit readFile result above the maximum was accepted") ||
+      !Expect(error == "readFile result exceeds configured maximum",
+              "implicit readFile maximum error changed")) {
+    return false;
+  }
+
+  options.has_position = true;
+  options.position = 10;
+  error.clear();
+  if (!Expect(muon_internal::ResolveMuonFsReadFileRange(
+                  options, uint64_t{10}, uint64_t{16}, &range, &error),
+              "range at EOF was rejected") ||
+      !Expect(range.length == 0, "range at EOF was not empty")) {
+    return false;
+  }
+  options.position = 11;
+  if (!Expect(muon_internal::ResolveMuonFsReadFileRange(
+                  options, uint64_t{10}, uint64_t{16}, &range, &error),
+              "range beyond EOF was rejected") ||
+      !Expect(range.length == 0, "range beyond EOF was not empty")) {
+    return false;
+  }
+
+  options.position = std::numeric_limits<uint64_t>::max() - uint64_t{16};
+  error.clear();
+  if (!Expect(muon_internal::ResolveMuonFsReadFileRange(
+                  options,
+                  std::numeric_limits<uint64_t>::max(),
+                  uint64_t{16},
+                  &range,
+                  &error),
+              "bounded tail range of a huge source was rejected") ||
+      !Expect(range.length == 16, "huge source tail range changed")) {
+    return false;
+  }
+
+  options = {};
+  options.has_length = true;
+  options.length = 0;
+  error.clear();
+  if (!Expect(muon_internal::ResolveMuonFsReadFileRange(
+                  options, uint64_t{17}, uint64_t{0}, &range, &error),
+              "empty readFile range was rejected by a zero maximum") ||
+      !Expect(range.length == 0, "empty readFile range changed")) {
+    return false;
+  }
+  options.length = 1;
+  error.clear();
+  if (!Expect(!muon_internal::ValidateMuonFsReadFileLength(
+                  options, uint64_t{0}, &error),
+              "non-empty readFile range was accepted by a zero maximum") ||
+      !Expect(error == "readFile length exceeds configured maximum",
+              "zero readFile maximum error changed")) {
+    return false;
+  }
+  options = {};
+  error.clear();
+  return Expect(!muon_internal::ResolveMuonFsReadFileRange(
+                    options, uint64_t{1}, uint64_t{0}, &range, &error),
+                "implicit non-empty result was accepted by a zero maximum") &&
+         Expect(error == "readFile result exceeds configured maximum",
+                "zero maximum implicit result error changed");
+}
+
 static bool TestSharedBufferHelpers() {
   const std::vector<MuonSharedBufferEntry> entries = {
       {1, 16, 4},
@@ -288,6 +428,7 @@ static bool TestSharedBufferHelpers() {
 int main() {
   return TestStringHelpers() && TestJsonHelpers() && TestCompletionHelpers() &&
                  TestEnvironmentHelpers() && TestFilesystemPathHelpers() &&
+                 TestReadFileMaxBytesParsing() && TestReadFileRangeLimits() &&
                  TestSharedBufferHelpers()
              ? 0
              : 1;

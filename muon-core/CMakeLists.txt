@@ -709,6 +709,7 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs_gio_read_source.cpp
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
+  src/plugins/builtin/muon_builtin_fs_read_limits.cpp
   src/plugins/muon_function_wrapper_lifecycle.cpp
   src/plugins/muon_plugin_metadata.cpp
   src/plugins/muon_plugin_policy.cpp
@@ -784,6 +785,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     src/plugins/builtin/muon_builtin_fs_dialogs.cpp
     src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
     src/plugins/builtin/muon_builtin_fs_helpers.cpp
+    src/plugins/builtin/muon_builtin_fs_read_limits.cpp
     src/plugins/muon_function_wrapper_lifecycle.cpp
     src/plugins/muon_traffic_cardio_operation.cpp
     tests/muon_traffic_cardio_operation_test.cpp
@@ -796,6 +798,7 @@ elseif(MSVC)
     src/plugins/builtin/muon_builtin_fs_dialogs.cpp
     src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
     src/plugins/builtin/muon_builtin_fs_helpers.cpp
+    src/plugins/builtin/muon_builtin_fs_read_limits.cpp
     src/plugins/muon_function_wrapper_lifecycle.cpp
     src/plugins/muon_traffic_cardio_operation.cpp
     PROPERTIES
@@ -1395,6 +1398,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_builtin_fs_gio_read_source_test
     tests/muon_builtin_fs_gio_read_source_test.cpp
     src/plugins/builtin/muon_builtin_fs_gio_read_source.cpp
+    src/plugins/builtin/muon_builtin_fs_read_limits.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_builtin_fs_gio_read_source_test)
   target_compile_features(muon_builtin_fs_gio_read_source_test PRIVATE cxx_std_20)
@@ -1550,6 +1554,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/muon_string_helpers.cpp
     src/plugins/builtin/muon_builtin_environment_helpers.cpp
     src/plugins/builtin/muon_builtin_fs_helpers.cpp
+    src/plugins/builtin/muon_builtin_fs_read_limits.cpp
     src/plugins/muon_shared_buffer.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_internal_helpers_test)

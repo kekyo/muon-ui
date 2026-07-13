@@ -146,7 +146,13 @@ export const relative = (from: string, to: string): string =>
     ? relativeWindowsPath(from, to)
     : nodeRelative(from, to);
 
-const pathToFileUrlHref = (path: string): string =>
+/**
+ * Converts a local or remote-Windows absolute path to a file URL.
+ *
+ * @param path Filesystem path to convert.
+ * @returns A file URL string for the active E2E platform.
+ */
+export const pathToFileUrlHref = (path: string): string =>
   isWindowsAbsolutePath(path)
     ? pathToWindowsFileUrlHref(path)
     : pathToFileURL(path).href;
@@ -2149,7 +2155,13 @@ export const createPluginConfigEntries = (
       })
     : [];
   return [
-    { name: "internal", allow: allowPatterns },
+    {
+      name: "internal",
+      allow: allowPatterns,
+      ...(pluginConfigByName.internal === undefined
+        ? {}
+        : { config: pluginConfigByName.internal }),
+    },
     ...standardPluginEntries,
     ...pluginNames.map((pluginName) => ({
       name: pluginName,
@@ -2914,14 +2926,16 @@ export const startDebugMuon = async (
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
+  waitForDebugPort = true,
+  useValgrind = shouldUseValgrind,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
     pluginNames,
     networkAllowPatterns,
     pluginAllowPatterns,
-    true,
-    shouldUseValgrind,
+    waitForDebugPort,
+    useValgrind,
     browserConfig,
     environment,
     configuredPluginNames,
@@ -2937,7 +2951,7 @@ export const startDebugMuon = async (
     browserInitialTitleBarVisibility,
     browserInitialTitleBarIcon,
     browserTitleBarType,
-    isWindowsRemoteE2e()
+    isWindowsRemoteE2e() || !waitForDebugPort
       ? undefined
       : getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
     isWindowsRemoteE2e() ? cdpStartupTimeoutMs : bootstrapCdpStartupTimeoutMs,
@@ -3689,11 +3703,65 @@ export const stopMuon = async (
   }
 };
 
+/**
+ * Starts a debug runtime with plugin-specific string configuration.
+ *
+ * @param pluginNames External plugins to load.
+ * @param pluginConfigByName Configuration entries keyed by plugin name.
+ * @param waitForDebugPort Whether to wait for the runtime CDP endpoint.
+ * @param useValgrind Whether to run the runtime under Valgrind.
+ * @returns The running debug runtime.
+ */
+export const startDebugMuonWithPluginConfig = async (
+  pluginNames: string[],
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>>,
+  waitForDebugPort = true,
+  useValgrind = shouldUseValgrind,
+): Promise<RunningMuon> =>
+  await startDebugMuon(
+    pluginNames,
+    TEST_NETWORK_ALLOW_PATTERNS,
+    {},
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    pluginNames,
+    TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    [],
+    null,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    {},
+    pluginConfigByName,
+    waitForDebugPort,
+    useValgrind,
+  );
+
+/**
+ * Runs an operation against a debug runtime and always stops the runtime.
+ *
+ * @param pluginNames External plugins to load.
+ * @param run Operation to run with the connected CDP driver.
+ * @param pluginConfigByName Optional configuration keyed by plugin name.
+ * @returns A promise that resolves after the runtime is stopped.
+ */
 export const withMuon = async (
   pluginNames: string[],
   run: (driver: CdpDriver, running: RunningMuon) => Promise<void>,
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<void> => {
-  const running = await startDebugMuon(pluginNames);
+  const running = await startDebugMuonWithPluginConfig(
+    pluginNames,
+    pluginConfigByName,
+  );
   let driver: CdpDriver | undefined = undefined;
   try {
     driver = await connectToMuonCdp({
@@ -3802,18 +3870,24 @@ export const withTrackedMuon = async (
   expectFfiClosureTrackerBalanced(running.stderr);
 };
 
+/**
+ * Verifies that a debug runtime rejects its plugin configuration at startup.
+ *
+ * @param pluginNames External plugins to load.
+ * @param expectedStderr Diagnostic expected on standard error.
+ * @param pluginConfigByName Configuration entries keyed by plugin name.
+ * @returns A promise that resolves after the failed runtime exits.
+ */
 export const expectDebugMuonStartupFailure = async (
   pluginNames: string[],
   expectedStderr: string,
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<void> => {
-  const running = await startMuon(
-    DEBUG_MUON_DIRECTORY,
+  const running = await startDebugMuonWithPluginConfig(
     pluginNames,
-    TEST_NETWORK_ALLOW_PATTERNS,
-    TEST_PLUGIN_ALLOW_PATTERNS,
+    pluginConfigByName,
     false,
     false,
-    undefined,
   );
   try {
     await waitForProcessExit(running, processExitTimeoutMs);

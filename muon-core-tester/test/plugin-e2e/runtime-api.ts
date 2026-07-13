@@ -44,6 +44,7 @@ import {
   dispatchDevToolsShortcut,
   dispatchKeyboardShortcut,
   evaluateRejection,
+  expectDebugMuonStartupFailure,
   expectNoDevTools,
   expectNoPageLoad,
   expectProcessExitCode,
@@ -60,6 +61,7 @@ import {
   mkdir,
   mkdtemp,
   openPopupTarget,
+  pathToFileUrlHref,
   processExitTimeoutMs,
   readFile,
   rm,
@@ -3804,6 +3806,92 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("enforces the configured readFile byte limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-limit-"));
+    const sourcePath = join(directory, "source.bin");
+    const missingPath = join(directory, "missing.bin");
+    const source = Array.from({ length: 17 }, (_value, index) => index);
+    await writeFile(sourcePath, Buffer.from(source));
+    try {
+      await withMuon(
+        [],
+        async (driver) => {
+          const results = await driver.evaluate<
+            Array<{
+              explicitError: string;
+              implicitError: string;
+              tail: number[];
+            }>
+          >(`(async () => {
+            const captureError = async (operation) => {
+              try {
+                await operation();
+                return "";
+              } catch (error) {
+                return String(error?.message ?? error);
+              }
+            };
+            const targets = ${JSON.stringify([
+              sourcePath,
+              pathToFileUrlHref(sourcePath),
+            ])};
+            const entries = [];
+            for (const target of targets) {
+              const explicitError = await captureError(() =>
+                window.muon.fs.readFile(target, { length: 17 }),
+              );
+              const implicitError = await captureError(() =>
+                window.muon.fs.readFile(target),
+              );
+              const tail = Array.from(
+                new Uint8Array(
+                  await window.muon.fs.readFile(target, {
+                    position: 1,
+                    length: 16,
+                  }),
+                ),
+              );
+              entries.push({ explicitError, implicitError, tail });
+            }
+            return entries;
+          })()`);
+          for (const result of results) {
+            expect(result.explicitError).toContain(
+              "readFile length exceeds configured maximum",
+            );
+            expect(result.implicitError).toContain(
+              "readFile result exceeds configured maximum",
+            );
+            expect(result.tail).toEqual(source.slice(1));
+          }
+
+          await expect(
+            driver.evaluate(`(async () => {
+              const result = await window.muon.fs.readFile(
+                ${JSON.stringify(missingPath)},
+                { length: 0 },
+              );
+              return result.byteLength;
+            })()`),
+          ).resolves.toBe(0);
+        },
+        { internal: { "fs.readFile.maxBytes": "16" } },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid readFile byte limit during startup", async () => {
+    await expectDebugMuonStartupFailure(
+      [],
+      "fs.readFile.maxBytes must be an unsigned decimal byte count",
+      {
+        internal: { "fs.readFile.maxBytes": "16MiB" },
+      },
+    );
   });
 
   it("routes filesystem results to the calling V8 context", async () => {

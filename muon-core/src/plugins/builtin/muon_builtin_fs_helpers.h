@@ -18,10 +18,25 @@
 
 namespace muon_internal {
 
+/** Default per-operation byte limit for readFile. */
+inline constexpr uint64_t kMuonFsDefaultReadFileMaxBytes = uint64_t{67108864};
+
+/** Internal plugin configuration key for the readFile byte limit. */
+inline constexpr char kMuonFsReadFileMaxBytesConfigKey[] =
+    "fs.readFile.maxBytes";
+
 struct MuonFsReadOptions {
   bool has_position = false;
   uint64_t position = 0;
   bool has_length = false;
+  uint64_t length = 0;
+};
+
+/** Resolved readFile range after applying the source size. */
+struct MuonFsReadRange {
+  /** Source offset in bytes. */
+  uint64_t position = 0;
+  /** Number of bytes requested from the source. */
   uint64_t length = 0;
 };
 
@@ -65,6 +80,43 @@ std::string CurrentExceptionMessage();
 bool ParseReadOptions(const char* options_json,
                       MuonFsReadOptions* options,
                       std::string* error_message);
+/**
+ * Parses the internal readFile byte-limit configuration value.
+ *
+ * @param value Decimal byte count, or null when the key is unspecified.
+ * @param max_bytes Receives the parsed limit.
+ * @param error_message Receives a validation error on failure.
+ * @return True when the value is valid.
+ */
+bool ParseMuonFsReadFileMaxBytes(const char* value,
+                                 uint64_t* max_bytes,
+                                 std::string* error_message);
+/**
+ * Validates an explicit readFile length before accessing the source.
+ *
+ * @param options Requested read options.
+ * @param max_bytes Configured per-operation byte limit.
+ * @param error_message Receives a validation error on failure.
+ * @return True when metadata access may proceed.
+ */
+bool ValidateMuonFsReadFileLength(const MuonFsReadOptions& options,
+                                  uint64_t max_bytes,
+                                  std::string* error_message);
+/**
+ * Resolves a readFile range and enforces the configured result limit.
+ *
+ * @param options Requested read options.
+ * @param file_size Source size in bytes.
+ * @param max_bytes Configured per-operation byte limit.
+ * @param range Receives the bounded source range.
+ * @param error_message Receives a validation error on failure.
+ * @return True when the range is valid.
+ */
+bool ResolveMuonFsReadFileRange(const MuonFsReadOptions& options,
+                                uint64_t file_size,
+                                uint64_t max_bytes,
+                                MuonFsReadRange* range,
+                                std::string* error_message);
 bool ParseWriteOptions(const char* options_json,
                        MuonFsWriteOptions* options,
                        std::string* error_message);

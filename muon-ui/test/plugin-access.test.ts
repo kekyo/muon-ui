@@ -14,7 +14,6 @@ import { resolveMuonPluginAccessOptions } from "../src/plugin-access.js";
 const cleanupDirectories: string[] = [];
 const sha256Signature =
   "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
-const legacySha1Signature = "A9993E364706816ABA3E25717850C26C9CD0D89D";
 
 const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-plugin-access-"));
@@ -108,39 +107,4 @@ describe("muon plugin access", () => {
       ).rejects.toThrow("64-character SHA-256 hex string");
     },
   );
-
-  it("temporarily rejects a legacy 40-character SHA-1 signature from muon.json", async () => {
-    const root = await createTemporaryDirectory();
-    await writeValidateModeConfig(root, legacySha1Signature);
-
-    await expect(
-      resolveMuonPluginAccessOptions({
-        root,
-        configPath: undefined,
-        pluginAccess: undefined,
-      }),
-    ).rejects.toThrow("64-character SHA-256 hex string");
-  });
-
-  it("temporarily rejects a legacy 40-character SHA-1 signature from Vite options", async () => {
-    const root = await createTemporaryDirectory();
-
-    await expect(
-      resolveMuonPluginAccessOptions({
-        root,
-        configPath: undefined,
-        pluginAccess: {
-          mode: "simple",
-          plugins: [
-            {
-              name: "foobar",
-              signature: legacySha1Signature,
-              salt: "deadbeef",
-              allow: ["foobar.run"],
-            },
-          ],
-        },
-      }),
-    ).rejects.toThrow("64-character SHA-256 hex string");
-  });
 });

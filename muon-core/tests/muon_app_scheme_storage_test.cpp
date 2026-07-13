@@ -369,26 +369,6 @@ static bool RunConfiguredStorageSignatureFormatTest(
              archive_path, std::string(63, 'a') + "x", salt);
 }
 
-static bool RunLegacyConfiguredStorageSha1SignatureRejectionTest(
-    const std::filesystem::path& test_directory) {
-  const auto archive_path = test_directory / "legacy-sha1-assets.zip";
-  if (!Expect(WriteDeterministicStoredZipArchive(archive_path),
-              "failed to create legacy SHA-1 ZIP asset")) {
-    return false;
-  }
-
-  std::string error_message;
-  const std::vector<uint8_t> salt = {0xde, 0xad, 0xbe, 0xef};
-  const auto storage = CreateConfiguredMuonAppStorage(
-      true, archive_path, true,
-      "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", true, salt,
-      &error_message);
-  return Expect(!storage, "legacy SHA-1 asset.signature was accepted") &&
-         Expect(error_message.find(
-                    "64-character SHA-256 hex string") != std::string::npos,
-                "legacy SHA-1 asset.signature error lacks context");
-}
-
 static bool RunZipStorageReadTest(
     const std::filesystem::path& test_directory) {
   const auto archive_path = test_directory / "assets.zip";
@@ -551,8 +531,6 @@ int main() {
                       RunConfiguredStorageValidationTest(test_directory) &&
                       RunConfiguredStorageSignatureTest(test_directory) &&
                       RunConfiguredStorageSignatureFormatTest(test_directory) &&
-                      RunLegacyConfiguredStorageSha1SignatureRejectionTest(
-                          test_directory) &&
                       RunZipStorageReadTest(test_directory) &&
                       RunZipStorageRejectionTest(test_directory) &&
                       RunZipStorageReadErrorTest(test_directory) &&

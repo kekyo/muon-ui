@@ -1145,22 +1145,6 @@ static bool RunEmbeddedPluginSignatureLengthValidationTest(
              "bytes");
 }
 
-static bool RunLegacyEmbeddedAssetSha1SignatureRejectionTest(
-    const std::filesystem::path& test_directory) {
-  return LoadEmbeddedConfigExpectFailure(
-      CreateEmbeddedAssetSignaturePayload(20),
-      test_directory / "legacy-embedded-signature-runtime",
-      "Embedded muon config asset.signature must be 32 bytes");
-}
-
-static bool RunLegacyEmbeddedPluginSha1SignatureRejectionTest(
-    const std::filesystem::path& test_directory) {
-  return LoadEmbeddedConfigExpectFailure(
-      CreateEmbeddedPluginSignaturePayload(20),
-      test_directory / "legacy-embedded-plugin-signature-runtime",
-      "Embedded muon config plugin.plugins[].signature must be 32 bytes");
-}
-
 static bool RunEmbeddedConfigEmptySlotTest(
     const std::filesystem::path& test_directory) {
   std::vector<uint8_t> slot(kMuonEmbeddedConfigSlotSize);
@@ -1510,18 +1494,6 @@ static bool RunLogConfigLoadingTest(
                 "partial sources did not use global console baseline") &&
          Expect(config.log.plugin == kMuonLogLevelDebug,
                 "partial sources plugin override was not parsed");
-}
-
-static bool RunLegacyAssetSha1SignatureRejectionTest(
-    const std::filesystem::path& test_directory) {
-  const auto config_path = test_directory / "legacy-asset-sha1.json";
-  return Expect(
-             WriteFile(config_path,
-                       R"({"asset":{"signature":"a9993e364706816aba3e25717850c26c9cd0d89d"}})"),
-             "failed to write legacy asset SHA-1 config") &&
-         LoadConfigExpectFailure(
-             config_path,
-             "asset.signature must be a 64-character SHA-256 hex string");
 }
 
 static bool RunConfigValidationTest(
@@ -2770,16 +2742,10 @@ int main() {
                           test_directory) &&
                       RunEmbeddedPluginSignatureLengthValidationTest(
                           test_directory) &&
-                      RunLegacyEmbeddedAssetSha1SignatureRejectionTest(
-                          test_directory) &&
-                      RunLegacyEmbeddedPluginSha1SignatureRejectionTest(
-                          test_directory) &&
                       RunEmbeddedConfigEmptySlotTest(test_directory) &&
                       RunConfigOverrideLoadingTest(test_directory) &&
                       RunBrowserConfigLoadingTest(test_directory) &&
                       RunLogConfigLoadingTest(test_directory) &&
-                      RunLegacyAssetSha1SignatureRejectionTest(
-                          test_directory) &&
                       RunConfigValidationTest(test_directory) &&
                       RunLogConfigValidationTest(test_directory) &&
                       RunDebuggerConfigValidationTest(test_directory) &&

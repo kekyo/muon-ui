@@ -665,8 +665,14 @@ declare global {
      * @param options - Optional read range and abort signal.
      * @returns A promise for an `ArrayBuffer` containing the selected bytes.
      * @remarks `options.position` and `options.length` must be non-negative
-     * safe integers. When `position` is past the end of the file, the returned
-     * buffer is empty.
+     * safe integers. The native per-operation limit is configured by the
+     * internal plugin's `fs.readFile.maxBytes` string value and defaults to
+     * 67108864 bytes (64 MiB). An explicit `length` above the limit rejects
+     * before source access. When `length` is omitted, all bytes from `position`
+     * through the end of the file must fit within the limit; muon never
+     * silently truncates the result. When `position` is past the end of the
+     * file, the returned buffer is empty. The limit applies only to `readFile`,
+     * not to `readTextFile` or an aggregate of concurrent operations.
      */
     readonly readFile: (
       path: string,
@@ -1080,9 +1086,12 @@ declare global {
     /**
      * Maximum number of bytes to read.
      *
-     * @remarks Must be a non-negative safe integer. Omit to read through the end
-     * of the file.
-     * @defaultValue Reads through the end of the file.
+     * @remarks Must be a non-negative safe integer and no greater than the
+     * configured `fs.readFile.maxBytes` limit. Omit to request all bytes through
+     * the end of the file; the operation rejects instead of truncating when the
+     * remaining byte count exceeds that limit.
+     * @defaultValue Reads through the end of the file when the result is within
+     * the configured limit.
      */
     readonly length?: number;
   }

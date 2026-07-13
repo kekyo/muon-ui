@@ -316,7 +316,7 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 
 | 関数                                             | 引数                                                                                                                 | 戻り値                    | 説明                                                                                                                                                       |
 | :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `readFile(path, options?)`                       | `path: string`, `options?: { position?: number, length?: number, signal?: AbortSignal }`                             | `Promise<ArrayBuffer>`    | バイナリファイルを読み込みます。`position` は読み取り開始バイト位置、`length` は最大読み取りバイト数です。どちらも非負のsafe integerである必要があります。 |
+| `readFile(path, options?)`                       | `path: string`, `options?: { position?: number, length?: number, signal?: AbortSignal }`                             | `Promise<ArrayBuffer>`    | バイナリファイルを読み込みます。`position` は読み取り開始バイト位置、`length` は要求する読み取りバイト数です。どちらも非負のsafe integerである必要があります。 |
 | `writeFile(path, data, options?)`                | `path: string`, `data: BufferSource`, `options?: { position?: number, signal?: AbortSignal }`                        | `Promise<void>`           | バイナリデータを書き込みます。`position` 省略時はファイル全体を置き換え、指定時はそのバイト位置へ書き込みます。                                            |
 | `readTextFile(path, encoding, options?)`         | `path: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                                  | `Promise<string>`         | UTF-8テキストファイルを読み込みます。ファイルはNUL文字を含まない有効なUTF-8である必要があります。                                                          |
 | `writeTextFile(path, data, encoding, options?)`  | `path: string`, `data: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                  | `Promise<void>`           | UTF-8テキストとしてファイル全体を置き換えます。                                                                                                            |
@@ -341,6 +341,32 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 | `symlink(target, path, type?, options?)`         | `target: string`, `path: string`, `type?: "file" \| "dir" \| "junction"`, `options?: { signal?: AbortSignal }`       | `Promise<void>`           | シンボリックリンクを作成します。`type` 省略時は `"file"` です。`"dir"` と `"junction"` はディレクトリリンクを作成します。                                  |
 | `symlink(target, path, options)`                 | `target: string`, `path: string`, `options: { signal?: AbortSignal }`                                                | `Promise<void>`           | `options` を第3引数に渡し、ファイルリンクを作成します。                                                                                                    |
 | `watch(path, listener, options?)`                | `path: string`, `listener: (event: MuonFsWatchEvent) => void \| Promise<void>`, `options?: { signal?: AbortSignal }` | `Promise<MuonFsWatcher>`  | パスの変更を監視し、watcherを返します。現在はスナップショットのポーリングで差分を通知します。                                                              |
+
+`readFile()` は、ネイティブ層で1回の操作ごとに読み取り上限を強制します。既定値は64 MiB (`67108864` byte) です。
+明示した `length` が上限を超える場合は、ファイルへのアクセス前にPromiseをrejectします。
+`length` を省略した場合は `position` からファイル末尾までの全byteが上限内である必要があり、上限まで暗黙に切り詰めることはありません。
+`length` が設定上限内で、 `position` がファイル末尾以降の場合は空の `ArrayBuffer` を返します。`length: 0` の場合もファイルへアクセスせず空の `ArrayBuffer` を返します。
+
+上限は `muon.json` の内蔵プラグイン設定で変更できます。JavaScript APIのシグネチャは変わりません。
+
+```json
+{
+  "plugin": {
+    "plugins": [
+      {
+        "name": "internal",
+        "config": {
+          "fs.readFile.maxBytes": "67108864"
+        }
+      }
+    ]
+  }
+}
+```
+
+`fs.readFile.maxBytes` はbyte単位の符号なし10進整数文字列です。空文字列、符号、空白、小数点、指数表記、単位suffixは使用できず、値は `uint64_t` の範囲内である必要があります。先頭ゼロと `"0"` は有効です。
+`"0"` では空のrangeだけが成功します。不正値は既定値へフォールバックせず、内蔵プラグインの初期化を失敗させます。
+この上限は `readFile()` だけに適用され、 `readTextFile()` や複数操作を合計したquotaには適用されません。
 
 `MuonFsStats`:
 

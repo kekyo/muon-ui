@@ -671,8 +671,9 @@ declare global {
      * before source access. When `length` is omitted, all bytes from `position`
      * through the end of the file must fit within the limit; muon never
      * silently truncates the result. When `position` is past the end of the
-     * file, the returned buffer is empty. The limit applies only to `readFile`,
-     * not to `readTextFile` or an aggregate of concurrent operations.
+     * file, the returned buffer is empty. The limit applies only to `readFile`
+     * and not to an aggregate of concurrent operations. `readTextFile` uses
+     * its separate `fs.readTextFile.maxBytes` limit.
      */
     readonly readFile: (
       path: string,
@@ -701,7 +702,13 @@ declare global {
      * @param encoding - Text encoding. Only `"utf8"` and `"utf-8"` are supported.
      * @param options - Optional abort signal.
      * @returns A promise for the decoded text.
-     * @remarks The file must contain valid UTF-8 text without NUL bytes.
+     * @remarks The file must contain valid UTF-8 text without NUL bytes. The
+     * native per-operation raw byte limit is configured by the internal
+     * plugin's `fs.readTextFile.maxBytes` string value and defaults to 67108864
+     * bytes (64 MiB). A source exactly at the limit is accepted; a larger
+     * source rejects instead of being truncated or decoded. This limit is
+     * independent from `fs.readFile.maxBytes` and does not aggregate concurrent
+     * operations.
      */
     readonly readTextFile: (
       path: string,

@@ -39,7 +39,8 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
       {
         "name": "internal",
         "config": {
-          "fs.readFile.maxBytes": "67108864"
+          "fs.readFile.maxBytes": "67108864",
+          "fs.readTextFile.maxBytes": "67108864"
         },
         "imports": [
           {
@@ -279,6 +280,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
 | `plugins[].config`           | `readonly object`             | `{}`                   | プラグイン初期化時に渡す文字列key-value設定です。                                 |
 | `plugins[name="internal"].config["fs.readFile.maxBytes"]` | `string` | `"67108864"` | `muon.fs.readFile` 1回あたりの読み取り上限をbyte単位で指定します。 |
+| `plugins[name="internal"].config["fs.readTextFile.maxBytes"]` | `string` | `"67108864"` | `muon.fs.readTextFile` 1回あたりのraw byte読み取り上限を指定します。 |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -302,13 +304,13 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   keyは空文字列不可で、keyとvalueはいずれもNUL文字を含められません。
   valueに指定できるのは文字列だけです。空文字列や改行を含む文字列は指定できますが、object、array、number、boolean、nullは設定エラーになります。
   複数行の値やglob/正規表現の区切りなど、値の意味と解釈は各プラグインの責務です。
-- 内蔵プラグインの `fs.readFile.maxBytes` は、 `muon.fs.readFile` 1回あたりの上限をbyte単位で指定します。
+- 内蔵プラグインの `fs.readFile.maxBytes` と `fs.readTextFile.maxBytes` は、それぞれ `muon.fs.readFile` と `muon.fs.readTextFile` 1回あたりのraw byte読み取り上限を指定します。
   値はASCII数字だけで構成される符号なし10進整数文字列で、文字列全体が `uint64_t` の範囲内である必要があります。先頭ゼロは使用できます。
   空文字列、符号、空白、小数点、指数表記、単位suffix、overflowは不正です。
-  未指定時は64 MiB (`67108864` byte) です。`"0"` も有効で、空のrangeだけを許可します。
-  不正値は既定値へフォールバックせず、 `fs.readFile.maxBytes must be an unsigned decimal byte count` で内蔵プラグインの初期化に失敗します。
+  どちらも未指定時は64 MiB (`67108864` byte) です。`"0"` も有効で、 `readFile()` では空のrangeだけを、 `readTextFile()` では空のソースだけを許可します。
+  不正値は既定値へフォールバックせず、該当するkey名に続く `must be an unsigned decimal byte count` で内蔵プラグインの初期化に失敗します。
   設定はプラグイン初期化時に確定し、実行中には変更されません。変更後の起動またはrecycleで反映されます。
-  この設定は `readFile()` だけに適用され、 `readTextFile()` や複数操作を合計したquotaには適用されません。
+  2つの設定は独立して対応する関数だけに適用され、複数操作を合計したquotaにはなりません。`readTextFile()` は上限ちょうどまでのソースを許可し、超過時は切り詰めず、UTF-8/NUL検証の前にrejectします。
 - `plugins[].allow` は、`simple` モードでプラグインが持つ関数パスを `window` 階層に公開するためのホワイトリストです。
   `simple` モードでは必須で、`validate` モードでは指定できません。
   `muon.fs.*` のようなパターンを指定出来ます。

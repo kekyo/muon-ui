@@ -318,7 +318,7 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 | :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `readFile(path, options?)`                       | `path: string`, `options?: { position?: number, length?: number, signal?: AbortSignal }`                             | `Promise<ArrayBuffer>`    | バイナリファイルを読み込みます。`position` は読み取り開始バイト位置、`length` は要求する読み取りバイト数です。どちらも非負のsafe integerである必要があります。 |
 | `writeFile(path, data, options?)`                | `path: string`, `data: BufferSource`, `options?: { position?: number, signal?: AbortSignal }`                        | `Promise<void>`           | バイナリデータを書き込みます。`position` 省略時はファイル全体を置き換え、指定時はそのバイト位置へ書き込みます。                                            |
-| `readTextFile(path, encoding, options?)`         | `path: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                                  | `Promise<string>`         | UTF-8テキストファイルを読み込みます。ファイルはNUL文字を含まない有効なUTF-8である必要があります。                                                          |
+| `readTextFile(path, encoding, options?)`         | `path: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                                  | `Promise<string>`         | UTF-8テキストファイルを読み込みます。ファイルはNUL文字を含まない有効なUTF-8で、raw byte数が設定上限以内である必要があります。                                |
 | `writeTextFile(path, data, encoding, options?)`  | `path: string`, `data: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                  | `Promise<void>`           | UTF-8テキストとしてファイル全体を置き換えます。                                                                                                            |
 | `stat(path, options?)`                           | `path: string`, `options?: { signal?: AbortSignal }`                                                                 | `Promise<MuonFsStats>`    | シンボリックリンクをたどってメタデータを返します。パスが存在しない場合はrejectします。                                                                     |
 | `lstat(path, options?)`                          | `path: string`, `options?: { signal?: AbortSignal }`                                                                 | `Promise<MuonFsStats>`    | シンボリックリンクをたどらずにメタデータを返します。                                                                                                       |
@@ -342,10 +342,12 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 | `symlink(target, path, options)`                 | `target: string`, `path: string`, `options: { signal?: AbortSignal }`                                                | `Promise<void>`           | `options` を第3引数に渡し、ファイルリンクを作成します。                                                                                                    |
 | `watch(path, listener, options?)`                | `path: string`, `listener: (event: MuonFsWatchEvent) => void \| Promise<void>`, `options?: { signal?: AbortSignal }` | `Promise<MuonFsWatcher>`  | パスの変更を監視し、watcherを返します。現在はスナップショットのポーリングで差分を通知します。                                                              |
 
-`readFile()` は、ネイティブ層で1回の操作ごとに読み取り上限を強制します。既定値は64 MiB (`67108864` byte) です。
-明示した `length` が上限を超える場合は、ファイルへのアクセス前にPromiseをrejectします。
-`length` を省略した場合は `position` からファイル末尾までの全byteが上限内である必要があり、上限まで暗黙に切り詰めることはありません。
-`length` が設定上限内で、 `position` がファイル末尾以降の場合は空の `ArrayBuffer` を返します。`length: 0` の場合もファイルへアクセスせず空の `ArrayBuffer` を返します。
+- `readFile()` は、ネイティブ層で1回の操作ごとに読み取り上限を強制します。既定値は64 MiB (`67108864` byte) です。
+  明示した `length` が上限を超える場合は、ファイルへのアクセス前に `Promise` をrejectします。
+- `length` を省略した場合は `position` からファイル末尾までの全byteが上限内である必要があり、上限まで暗黙に切り詰めることはありません。
+  `length` が設定上限内で、 `position` がファイル末尾以降の場合は空の `ArrayBuffer` を返します。`length: 0` の場合もファイルへアクセスせず空の `ArrayBuffer` を返します。
+- `readTextFile()` も、ネイティブ層で1回の操作ごとに独立したraw byte読み取り上限を強制します。既定値は64 MiB (`67108864` byte) です。
+  上限ちょうどのソースは読み取れますが、上限を超えるソースは切り詰めず、UTF-8/NUL検証や文字列化の前に `Promise` をrejectします。
 
 上限は `muon.json` の内蔵プラグイン設定で変更できます。JavaScript APIのシグネチャは変わりません。
 
@@ -356,7 +358,8 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
       {
         "name": "internal",
         "config": {
-          "fs.readFile.maxBytes": "67108864"
+          "fs.readFile.maxBytes": "67108864",
+          "fs.readTextFile.maxBytes": "67108864"
         }
       }
     ]
@@ -364,9 +367,9 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 }
 ```
 
-`fs.readFile.maxBytes` はbyte単位の符号なし10進整数文字列です。空文字列、符号、空白、小数点、指数表記、単位suffixは使用できず、値は `uint64_t` の範囲内である必要があります。先頭ゼロと `"0"` は有効です。
-`"0"` では空のrangeだけが成功します。不正値は既定値へフォールバックせず、内蔵プラグインの初期化を失敗させます。
-この上限は `readFile()` だけに適用され、 `readTextFile()` や複数操作を合計したquotaには適用されません。
+`fs.readFile.maxBytes` と `fs.readTextFile.maxBytes` は、それぞれbyte単位の符号なし10進整数文字列です。空文字列、符号、空白、小数点、指数表記、単位suffixは使用できず、値は `uint64_t` の範囲内である必要があります。先頭ゼロと `"0"` は有効です。
+`fs.readFile.maxBytes` が `"0"` の場合は空のrangeだけが成功し、 `fs.readTextFile.maxBytes` が `"0"` の場合は空のソースだけが成功します。不正値は既定値へフォールバックせず、内蔵プラグインの初期化を失敗させます。
+2つの上限は独立しており、それぞれ対応する関数だけに適用されます。どちらも複数操作を合計したquotaではありません。
 
 `MuonFsStats`:
 
@@ -393,7 +396,7 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 
 - `MuonFsWatcher` は `close(): Promise<void>` を持ちます。
 - `close()` は複数回呼んでも問題ありません。
-- `watch()` の `listener` が例外を投げたりrejectされたPromiseを返した場合、そのエラーは無視されます。
+- `watch()` の `listener` が例外を投げたりrejectされた `Promise` を返した場合、そのエラーは無視されます。
   watcher作成前にabortされた場合は `watch()` がrejectされ、作成後にabortされた場合はwatcherが閉じられます。
 
 ```js

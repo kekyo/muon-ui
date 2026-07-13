@@ -25,6 +25,21 @@ inline constexpr uint64_t kMuonFsDefaultReadFileMaxBytes = uint64_t{67108864};
 inline constexpr char kMuonFsReadFileMaxBytesConfigKey[] =
     "fs.readFile.maxBytes";
 
+/** Default per-operation byte limit for readTextFile. */
+inline constexpr uint64_t kMuonFsDefaultReadTextFileMaxBytes =
+    uint64_t{67108864};
+
+/** Internal plugin configuration key for the readTextFile byte limit. */
+inline constexpr char kMuonFsReadTextFileMaxBytesConfigKey[] =
+    "fs.readTextFile.maxBytes";
+
+/** Maximum source read size for each readTextFile stream operation. */
+inline constexpr size_t kMuonFsReadTextFileChunkBytes = size_t{65536};
+
+/** Stable error returned when readTextFile exceeds its byte limit. */
+inline constexpr char kMuonFsReadTextFileLimitError[] =
+    "readTextFile result exceeds configured maximum";
+
 struct MuonFsReadOptions {
   bool has_position = false;
   uint64_t position = 0;
@@ -91,6 +106,18 @@ bool ParseReadOptions(const char* options_json,
 bool ParseMuonFsReadFileMaxBytes(const char* value,
                                  uint64_t* max_bytes,
                                  std::string* error_message);
+
+/**
+ * Parses the internal readTextFile byte-limit configuration value.
+ *
+ * @param value Decimal byte count, or null when the key is unspecified.
+ * @param max_bytes Receives the parsed limit.
+ * @param error_message Receives a validation error on failure.
+ * @return True when the value is valid.
+ */
+bool ParseMuonFsReadTextFileMaxBytes(const char* value,
+                                     uint64_t* max_bytes,
+                                     std::string* error_message);
 /**
  * Validates an explicit readFile length before accessing the source.
  *

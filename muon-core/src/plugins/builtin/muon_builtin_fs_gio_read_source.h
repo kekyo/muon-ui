@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <vector>
 
 namespace muon_internal {
 
@@ -34,6 +35,10 @@ struct MuonFsReadSourceProbe {
   uint64_t read_calls = 0;
   /** Number of source bytes written to result buffers. */
   uint64_t bytes_read = 0;
+  /** Largest buffer size requested by one source read. */
+  uint64_t maximum_requested_read_size = 0;
+  /** Largest number of source bytes retained in a text result. */
+  uint64_t maximum_retained_bytes = 0;
   /** Number of asynchronous stream closes started. */
   uint64_t close_calls = 0;
 };
@@ -43,15 +48,22 @@ using MuonFsReadBufferAllocator =
     std::function<std::span<std::byte>(size_t)>;
 
 /**
- * Loads the complete contents of a GFile asynchronously.
+ * Reads bounded text contents from a GFile asynchronously.
  *
- * @param file File whose contents are loaded.
+ * @param file File whose contents are read.
+ * @param max_bytes Maximum number of bytes retained in the result.
+ * @param chunk_bytes Maximum number of bytes requested by each source read.
  * @param cancellation Cancellation signal for the GIO operation.
  * @param probe Optional test probe that observes source consumption.
- * @return Promise for the copied file contents.
+ * @return Promise for the bounded file contents.
+ *
+ * @remarks One additional source byte may be read to distinguish an exact-size
+ * result from an oversized result. That byte is never retained.
  */
-cardio::promise<cardio::gio::file_contents> LoadMuonFsContentsAsync(
+cardio::promise<std::vector<std::byte>> ReadMuonFsTextContentsAsync(
     GFile* file,
+    uint64_t max_bytes,
+    size_t chunk_bytes,
     cardio::cancellation cancellation,
     MuonFsReadSourceProbe* probe);
 

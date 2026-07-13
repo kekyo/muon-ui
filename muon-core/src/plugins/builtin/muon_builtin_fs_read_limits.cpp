@@ -12,11 +12,13 @@
 
 namespace muon_internal {
 
-bool ParseMuonFsReadFileMaxBytes(const char* value,
-                                 uint64_t* max_bytes,
-                                 std::string* error_message) {
+static bool ParseMuonFsMaxBytes(const char* value,
+                                uint64_t default_max_bytes,
+                                std::string_view config_key,
+                                uint64_t* max_bytes,
+                                std::string* error_message) {
   if (value == nullptr) {
-    *max_bytes = kMuonFsDefaultReadFileMaxBytes;
+    *max_bytes = default_max_bytes;
     return true;
   }
   const auto length = std::char_traits<char>::length(value);
@@ -24,19 +26,39 @@ bool ParseMuonFsReadFileMaxBytes(const char* value,
       !std::all_of(value, value + length, [](char item) {
         return item >= '0' && item <= '9';
       })) {
-    *error_message =
-        "fs.readFile.maxBytes must be an unsigned decimal byte count";
+    *error_message = std::string(config_key) +
+                     " must be an unsigned decimal byte count";
     return false;
   }
   auto parsed = uint64_t{0};
   const auto result = std::from_chars(value, value + length, parsed, 10);
   if (result.ec != std::errc{} || result.ptr != value + length) {
-    *error_message =
-        "fs.readFile.maxBytes must be an unsigned decimal byte count";
+    *error_message = std::string(config_key) +
+                     " must be an unsigned decimal byte count";
     return false;
   }
   *max_bytes = parsed;
   return true;
+}
+
+bool ParseMuonFsReadFileMaxBytes(const char* value,
+                                 uint64_t* max_bytes,
+                                 std::string* error_message) {
+  return ParseMuonFsMaxBytes(value,
+                             kMuonFsDefaultReadFileMaxBytes,
+                             kMuonFsReadFileMaxBytesConfigKey,
+                             max_bytes,
+                             error_message);
+}
+
+bool ParseMuonFsReadTextFileMaxBytes(const char* value,
+                                     uint64_t* max_bytes,
+                                     std::string* error_message) {
+  return ParseMuonFsMaxBytes(value,
+                             kMuonFsDefaultReadTextFileMaxBytes,
+                             kMuonFsReadTextFileMaxBytesConfigKey,
+                             max_bytes,
+                             error_message);
 }
 
 bool ValidateMuonFsReadFileLength(const MuonFsReadOptions& options,

@@ -3908,6 +3908,99 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     );
   });
 
+  it("enforces the configured readTextFile byte limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-text-limit-"));
+    const atLimitPath = join(directory, "at-limit.txt");
+    const overLimitPath = join(directory, "over-limit.txt");
+    const invalidAfterLimitPath = join(directory, "invalid-after-limit.txt");
+    await writeFile(atLimitPath, Buffer.alloc(16, 0x61));
+    await writeFile(overLimitPath, Buffer.alloc(17, 0x61));
+    await writeFile(
+      invalidAfterLimitPath,
+      Buffer.concat([Buffer.alloc(16, 0x61), Buffer.from([0xff])]),
+    );
+    try {
+      await withMuon(
+        [],
+        async (driver) => {
+          const results = await driver.evaluate<
+            Array<{
+              atLimit: string;
+              invalidAfterLimitError: string;
+              overLimitError: string;
+            }>
+          >(`(async () => {
+            const captureError = async (operation) => {
+              try {
+                await operation();
+                return "";
+              } catch (error) {
+                return String(error?.message ?? error);
+              }
+            };
+            const targets = ${JSON.stringify([
+              {
+                atLimit: atLimitPath,
+                overLimit: overLimitPath,
+                invalidAfterLimit: invalidAfterLimitPath,
+              },
+              {
+                atLimit: pathToFileUrlHref(atLimitPath),
+                overLimit: pathToFileUrlHref(overLimitPath),
+                invalidAfterLimit: pathToFileUrlHref(invalidAfterLimitPath),
+              },
+            ])};
+            const entries = [];
+            for (const target of targets) {
+              const atLimit = await window.muon.fs.readTextFile(
+                target.atLimit,
+                "utf8",
+              );
+              const overLimitError = await captureError(() =>
+                window.muon.fs.readTextFile(target.overLimit, "utf8"),
+              );
+              const invalidAfterLimitError = await captureError(() =>
+                window.muon.fs.readTextFile(
+                  target.invalidAfterLimit,
+                  "utf8",
+                ),
+              );
+              entries.push({
+                atLimit,
+                overLimitError,
+                invalidAfterLimitError,
+              });
+            }
+            return entries;
+          })()`);
+          for (const result of results) {
+            expect(result.atLimit).toBe("a".repeat(16));
+            expect(result.overLimitError).toContain(
+              "readTextFile result exceeds configured maximum",
+            );
+            expect(result.invalidAfterLimitError).toContain(
+              "readTextFile result exceeds configured maximum",
+            );
+            expect(result.invalidAfterLimitError).not.toContain("UTF-8");
+          }
+        },
+        { internal: { "fs.readTextFile.maxBytes": "16" } },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid readTextFile byte limit during startup", async () => {
+    await expectDebugMuonStartupFailure(
+      [],
+      "fs.readTextFile.maxBytes must be an unsigned decimal byte count",
+      {
+        internal: { "fs.readTextFile.maxBytes": "16MiB" },
+      },
+    );
+  });
+
   it("routes filesystem results to the calling V8 context", async () => {
     const directory = await mkdtemp(join(tmpdir(), "muon-fs-context-"));
     try {

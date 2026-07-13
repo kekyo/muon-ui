@@ -317,6 +317,54 @@ static bool TestReadFileMaxBytesParsing() {
   return true;
 }
 
+static bool TestReadTextFileMaxBytesParsing() {
+  auto max_bytes = uint64_t{0};
+  auto error = std::string{};
+  if (!Expect(muon_internal::ParseMuonFsReadTextFileMaxBytes(
+                  nullptr, &max_bytes, &error),
+              "default readTextFile maximum was rejected") ||
+      !Expect(
+          max_bytes == muon_internal::kMuonFsDefaultReadTextFileMaxBytes,
+          "default readTextFile maximum changed")) {
+    return false;
+  }
+
+  const std::vector<std::pair<std::string, uint64_t>> valid_values = {
+      {"67108864", uint64_t{67108864}},
+      {"0", uint64_t{0}},
+      {"18446744073709551615", std::numeric_limits<uint64_t>::max()},
+      {"00000000000000000016", uint64_t{16}},
+  };
+  for (const auto& [value, expected] : valid_values) {
+    error.clear();
+    if (!Expect(muon_internal::ParseMuonFsReadTextFileMaxBytes(
+                    value.c_str(), &max_bytes, &error),
+                "valid readTextFile maximum was rejected: " + value) ||
+        !Expect(max_bytes == expected,
+                "parsed readTextFile maximum changed: " + value)) {
+      return false;
+    }
+  }
+
+  const std::vector<std::string> invalid_values = {
+      "",          "+1",  "-1",    " 1", "1 ",
+      "1.0",       "1e3", "16MiB", "18446744073709551616",
+  };
+  for (const auto& value : invalid_values) {
+    error.clear();
+    if (!Expect(!muon_internal::ParseMuonFsReadTextFileMaxBytes(
+                    value.c_str(), &max_bytes, &error),
+                "invalid readTextFile maximum was accepted: " + value) ||
+        !Expect(
+            error ==
+                "fs.readTextFile.maxBytes must be an unsigned decimal byte count",
+            "invalid readTextFile maximum error changed: " + value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool TestReadFileRangeLimits() {
   auto error = std::string{};
   auto range = muon_internal::MuonFsReadRange{};
@@ -428,7 +476,9 @@ static bool TestSharedBufferHelpers() {
 int main() {
   return TestStringHelpers() && TestJsonHelpers() && TestCompletionHelpers() &&
                  TestEnvironmentHelpers() && TestFilesystemPathHelpers() &&
-                 TestReadFileMaxBytesParsing() && TestReadFileRangeLimits() &&
+                 TestReadFileMaxBytesParsing() &&
+                 TestReadTextFileMaxBytesParsing() &&
+                 TestReadFileRangeLimits() &&
                  TestSharedBufferHelpers()
              ? 0
              : 1;

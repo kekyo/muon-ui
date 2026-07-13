@@ -75,45 +75,258 @@ static auto RunGioOperation(Operation operation) -> bool {
   return succeeded;
 }
 
-static auto TestWholeContentsProbe() -> bool {
+static bool TestBoundedTextContentsProbe() {
   auto* directory = g_dir_make_tmp("muon-fs-read-source-test-XXXXXX", nullptr);
   if (!Expect(directory != nullptr, "failed to create temporary directory")) {
     return false;
   }
-  auto* path = g_build_filename(directory, "source.bin", nullptr);
-  constexpr auto contents = std::string_view{"0123456789"};
+  auto* at_limit_path =
+      g_build_filename(directory, "at-limit.bin", nullptr);
+  auto* over_limit_path =
+      g_build_filename(directory, "over-limit.bin", nullptr);
+  auto* empty_path = g_build_filename(directory, "empty.bin", nullptr);
+  auto* split_utf8_path =
+      g_build_filename(directory, "split-utf8.bin", nullptr);
+  constexpr auto at_limit_contents =
+      std::string_view{"0123456789abcdef"};
+  constexpr auto over_limit_contents =
+      std::string_view{"0123456789abcdefg"};
+  constexpr auto split_utf8_contents =
+      std::string_view{"aaa\xe2\x82\xac"};
   auto error = static_cast<GError*>(nullptr);
-  const auto wrote = g_file_set_contents(
-      path, contents.data(), static_cast<gssize>(contents.size()), &error);
-  if (!wrote) {
+  const auto wrote_at_limit = g_file_set_contents(
+      at_limit_path,
+      at_limit_contents.data(),
+      static_cast<gssize>(at_limit_contents.size()),
+      &error);
+  if (!wrote_at_limit) {
     std::cerr << (error == nullptr ? "failed to write source" : error->message)
               << "\n";
     g_clear_error(&error);
-    g_free(path);
+    g_free(split_utf8_path);
+    g_free(empty_path);
+    g_free(over_limit_path);
+    g_free(at_limit_path);
+    g_rmdir(directory);
+    g_free(directory);
+    return false;
+  }
+  const auto wrote_over_limit = g_file_set_contents(
+      over_limit_path,
+      over_limit_contents.data(),
+      static_cast<gssize>(over_limit_contents.size()),
+      &error);
+  if (!wrote_over_limit) {
+    std::cerr << (error == nullptr ? "failed to write source" : error->message)
+              << "\n";
+    g_clear_error(&error);
+    g_remove(at_limit_path);
+    g_free(split_utf8_path);
+    g_free(empty_path);
+    g_free(over_limit_path);
+    g_free(at_limit_path);
+    g_rmdir(directory);
+    g_free(directory);
+    return false;
+  }
+  const auto wrote_empty =
+      g_file_set_contents(empty_path, "", gssize{0}, &error);
+  if (!wrote_empty) {
+    std::cerr << (error == nullptr ? "failed to write empty source"
+                                   : error->message)
+              << "\n";
+    g_clear_error(&error);
+    g_remove(over_limit_path);
+    g_remove(at_limit_path);
+    g_free(split_utf8_path);
+    g_free(empty_path);
+    g_free(over_limit_path);
+    g_free(at_limit_path);
+    g_rmdir(directory);
+    g_free(directory);
+    return false;
+  }
+  const auto wrote_split_utf8 = g_file_set_contents(
+      split_utf8_path,
+      split_utf8_contents.data(),
+      static_cast<gssize>(split_utf8_contents.size()),
+      &error);
+  if (!wrote_split_utf8) {
+    std::cerr << (error == nullptr ? "failed to write split UTF-8 source"
+                                   : error->message)
+              << "\n";
+    g_clear_error(&error);
+    g_remove(empty_path);
+    g_remove(over_limit_path);
+    g_remove(at_limit_path);
+    g_free(split_utf8_path);
+    g_free(empty_path);
+    g_free(over_limit_path);
+    g_free(at_limit_path);
     g_rmdir(directory);
     g_free(directory);
     return false;
   }
 
-  auto* file = g_file_new_for_path(path);
-  auto probe = muon_internal::MuonFsReadSourceProbe{};
-  const auto succeeded = RunGioOperation([file, &probe]()
-      -> cardio::promise<bool> {
-    auto loaded = co_await muon_internal::LoadMuonFsContentsAsync(
-        file, cardio::cancellation{}, &probe);
-    const auto expected = std::string_view{"0123456789"};
+  auto* at_limit_file = g_file_new_for_path(at_limit_path);
+  auto* over_limit_file = g_file_new_for_path(over_limit_path);
+  auto* empty_file = g_file_new_for_path(empty_path);
+  auto* split_utf8_file = g_file_new_for_path(split_utf8_path);
+  const auto succeeded = RunGioOperation(
+      [at_limit_file, over_limit_file, empty_file, split_utf8_file,
+       split_utf8_contents]() -> cardio::promise<bool> {
+    auto succeeded = true;
+    auto probe = muon_internal::MuonFsReadSourceProbe{};
+    const auto loaded =
+        co_await muon_internal::ReadMuonFsTextContentsAsync(
+            at_limit_file,
+            uint64_t{16},
+            size_t{4},
+            cardio::cancellation{},
+            &probe);
     const auto actual = std::string(
-        reinterpret_cast<const char*>(loaded.bytes.data()),
-        loaded.bytes.size());
-    co_return Expect(actual == expected, "loaded contents changed") &&
-              Expect(probe.read_calls == 1, "whole-content read was not observed") &&
-              Expect(probe.bytes_read == expected.size(),
-                     "whole-content byte count changed");
+        reinterpret_cast<const char*>(loaded.data()), loaded.size());
+    succeeded = Expect(actual == "0123456789abcdef",
+                       "bounded text contents changed") &&
+                succeeded;
+    succeeded = Expect(probe.metadata_queries == 0 && probe.open_calls == 1,
+                       "bounded text read performed unexpected setup I/O") &&
+                succeeded;
+    succeeded = Expect(probe.maximum_requested_read_size <= 4,
+                       "bounded text read requested an oversized chunk") &&
+                succeeded;
+    succeeded = Expect(probe.bytes_read == 16 &&
+                           probe.maximum_retained_bytes == 16,
+                       "bounded text read exceeded its exact-size budget") &&
+                succeeded;
+    succeeded = Expect(probe.close_calls == 1,
+                       "bounded text stream was not closed") &&
+                succeeded;
+
+    probe = {};
+    const auto empty =
+        co_await muon_internal::ReadMuonFsTextContentsAsync(
+            empty_file,
+            uint64_t{0},
+            size_t{4},
+            cardio::cancellation{},
+            &probe);
+    succeeded = Expect(empty.empty(), "empty text source returned data") &&
+                succeeded;
+    succeeded = Expect(probe.maximum_requested_read_size <= 4 &&
+                           probe.bytes_read == 0 &&
+                           probe.maximum_retained_bytes == 0 &&
+                           probe.close_calls == 1,
+                       "empty text read exceeded its probe budget") &&
+                succeeded;
+
+    probe = {};
+    const auto split_utf8 =
+        co_await muon_internal::ReadMuonFsTextContentsAsync(
+            split_utf8_file,
+            uint64_t{16},
+            size_t{4},
+            cardio::cancellation{},
+            &probe);
+    const auto split_utf8_actual = std::string(
+        reinterpret_cast<const char*>(split_utf8.data()), split_utf8.size());
+    succeeded =
+        Expect(split_utf8_actual == split_utf8_contents,
+               "chunk-split UTF-8 contents changed") &&
+        succeeded;
+    succeeded = Expect(probe.maximum_requested_read_size <= 4 &&
+                           probe.bytes_read == split_utf8_contents.size() &&
+                           probe.maximum_retained_bytes ==
+                               split_utf8_contents.size() &&
+                           probe.close_calls == 1,
+                       "chunk-split UTF-8 read exceeded its probe budget") &&
+                succeeded;
+
+    probe = {};
+    auto over_limit_error = std::string{};
+    try {
+      (void)co_await muon_internal::ReadMuonFsTextContentsAsync(
+          over_limit_file,
+          uint64_t{16},
+          size_t{4},
+          cardio::cancellation{},
+          &probe);
+    } catch (const std::exception& exception) {
+      over_limit_error = exception.what();
+    }
+    succeeded =
+        Expect(over_limit_error ==
+                   muon_internal::kMuonFsReadTextFileLimitError,
+               "oversized text source was accepted or changed its error") &&
+        succeeded;
+    succeeded = Expect(probe.maximum_requested_read_size <= 4 &&
+                           probe.bytes_read == 17 &&
+                           probe.maximum_retained_bytes == 16,
+                       "oversized text read exceeded its probe budget") &&
+                succeeded;
+    succeeded = Expect(probe.close_calls == 1,
+                       "oversized text stream was not closed") &&
+                succeeded;
+
+    probe = {};
+    auto zero_limit_error = std::string{};
+    try {
+      (void)co_await muon_internal::ReadMuonFsTextContentsAsync(
+          over_limit_file,
+          uint64_t{0},
+          size_t{4},
+          cardio::cancellation{},
+          &probe);
+    } catch (const std::exception& exception) {
+      zero_limit_error = exception.what();
+    }
+    succeeded =
+        Expect(zero_limit_error ==
+                   muon_internal::kMuonFsReadTextFileLimitError,
+               "zero text limit accepted a non-empty source") &&
+        succeeded;
+    succeeded = Expect(probe.bytes_read == 1 &&
+                           probe.maximum_retained_bytes == 0 &&
+                           probe.close_calls == 1,
+                       "zero text limit consumed or retained excess data") &&
+                succeeded;
+
+    probe = {};
+    auto invalid_chunk_error = std::string{};
+    try {
+      (void)co_await muon_internal::ReadMuonFsTextContentsAsync(
+          at_limit_file,
+          uint64_t{16},
+          size_t{0},
+          cardio::cancellation{},
+          &probe);
+    } catch (const std::exception& exception) {
+      invalid_chunk_error = exception.what();
+    }
+    succeeded =
+        Expect(invalid_chunk_error ==
+                   "readTextFile chunk size must be positive",
+               "zero text chunk size was accepted") &&
+        succeeded;
+    succeeded = Expect(probe.open_calls == 0 && probe.read_calls == 0 &&
+                           probe.close_calls == 0,
+                       "invalid text chunk size accessed its source") &&
+                succeeded;
+    co_return succeeded;
   });
 
-  g_object_unref(file);
-  g_remove(path);
-  g_free(path);
+  g_object_unref(split_utf8_file);
+  g_object_unref(empty_file);
+  g_object_unref(over_limit_file);
+  g_object_unref(at_limit_file);
+  g_remove(split_utf8_path);
+  g_remove(empty_path);
+  g_remove(over_limit_path);
+  g_remove(at_limit_path);
+  g_free(split_utf8_path);
+  g_free(empty_path);
+  g_free(over_limit_path);
+  g_free(at_limit_path);
   g_rmdir(directory);
   g_free(directory);
   return succeeded;
@@ -370,5 +583,5 @@ static bool TestRangedReadContract() {
 }
 
 int main() {
-  return TestWholeContentsProbe() && TestRangedReadContract() ? 0 : 1;
+  return TestBoundedTextContentsProbe() && TestRangedReadContract() ? 0 : 1;
 }

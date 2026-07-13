@@ -239,11 +239,12 @@ export interface MuonBuildAssetResult {
    */
   path: string;
   /**
-   * SHA-256 signature for the generated asset archive and salt.
+   * 64-character lowercase hexadecimal SHA-256 digest of the generated asset
+   * archive bytes followed by the decoded salt bytes.
    */
   signature: string;
   /**
-   * Hex encoded salt embedded into muon.json.
+   * Hex-encoded salt embedded into muon.json.
    */
   salt: string;
   /**

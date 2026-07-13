@@ -9,6 +9,7 @@
 #include "muon_json_helpers.h"
 #include "muon_cardio_post.h"
 #include "plugins/builtin/muon_builtin_completion.h"
+#include "plugins/builtin/muon_builtin_fs_gio_read_source.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "plugins/muon_traffic_cardio_operation.h"
 
@@ -1427,52 +1428,6 @@ static cardio::promise<void> MakeSymbolicLinkAsync(
       std::move(cancellation));
 }
 
-static cardio::promise<cardio::gio::file_contents> LoadContentsAsync(
-    GFile* file,
-    cardio::cancellation cancellation) {
-  return cardio::gio::submit<cardio::gio::file_contents>(
-      [file](
-          GCancellable* cancellable,
-          GAsyncReadyCallback callback,
-          gpointer user_data) {
-        g_file_load_contents_async(file, cancellable, callback, user_data);
-      },
-      [](GObject* source_object, GAsyncResult* result, GError** error) {
-        auto* contents = static_cast<char*>(nullptr);
-        auto length = gsize{};
-        auto* etag = static_cast<char*>(nullptr);
-        auto loaded = cardio::gio::file_contents{};
-        const auto succeeded = g_file_load_contents_finish(
-            G_FILE(source_object), result, &contents, &length, &etag, error);
-        if (!succeeded) {
-          if (error != nullptr && *error == nullptr) {
-            g_set_error_literal(
-                error,
-                G_IO_ERROR,
-                G_IO_ERROR_FAILED,
-                "g_file_load_contents_finish failed");
-          }
-          g_free(contents);
-          g_free(etag);
-          return loaded;
-        }
-        loaded.bytes.resize(static_cast<size_t>(length));
-        if (length != 0) {
-          std::memcpy(
-              loaded.bytes.data(),
-              contents,
-              static_cast<size_t>(length));
-        }
-        if (etag != nullptr) {
-          loaded.etag = etag;
-        }
-        g_free(contents);
-        g_free(etag);
-        return loaded;
-      },
-      std::move(cancellation));
-}
-
 static cardio::promise<void> ReplaceContentsBytesAsync(
     GFile* file,
     GBytes* bytes,
@@ -1676,7 +1631,8 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
   (void)context;
   cancellation.throw_if_cancellation_requested();
   auto file = MuonFsGFile(path);
-  auto contents = co_await LoadContentsAsync(file.get(), cancellation);
+  auto contents =
+      co_await LoadMuonFsContentsAsync(file.get(), cancellation, nullptr);
   const auto position = options.has_position ? options.position : uint64_t{0};
   const auto available = position >= contents.bytes.size()
                              ? uint64_t{0}
@@ -1704,7 +1660,8 @@ static cardio::promise<std::string> ReadTextAsync(
   (void)context;
   cancellation.throw_if_cancellation_requested();
   auto file = MuonFsGFile(path);
-  auto contents = co_await LoadContentsAsync(file.get(), cancellation);
+  auto contents =
+      co_await LoadMuonFsContentsAsync(file.get(), cancellation, nullptr);
   if (!IsValidUtf8WithoutNul(
           reinterpret_cast<const uint8_t*>(contents.bytes.data()),
           contents.bytes.size())) {

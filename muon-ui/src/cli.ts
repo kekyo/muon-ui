@@ -13,7 +13,7 @@ import {
 } from "./prepare.js";
 import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import {
-  embedMuonConfigInBootstrapFile,
+  embedMuonConfigInLauncherFile,
   embedMuonConfigInCoreFile,
   embedMuonConfigInRuntime,
   type EmbedMuonConfigResult,
@@ -50,11 +50,11 @@ interface PrepareCommandOptions {
 interface EmbedConfigCommandOptions {
   runtimePath: string | undefined;
   corePath: string | undefined;
-  bootstrapPath: string | undefined;
+  launcherPath: string | undefined;
   config: string | undefined;
   outputRuntimePath: string | undefined;
   output: string | undefined;
-  outputBootstrap: string | undefined;
+  outputLauncher: string | undefined;
   json: boolean | undefined;
 }
 
@@ -197,10 +197,10 @@ const validateEmbedConfigOptions = (
   if (
     options.runtimePath === undefined &&
     options.corePath === undefined &&
-    options.bootstrapPath === undefined
+    options.launcherPath === undefined
   ) {
     throw new Error(
-      "Specify at least one of --runtime-path, --core-path, or --bootstrap-path.",
+      "Specify at least one of --runtime-path, --core-path, or --launcher-path.",
     );
   }
   if (
@@ -213,10 +213,10 @@ const validateEmbedConfigOptions = (
     throw new Error("--output requires --core-path.");
   }
   if (
-    options.bootstrapPath === undefined &&
-    options.outputBootstrap !== undefined
+    options.launcherPath === undefined &&
+    options.outputLauncher !== undefined
   ) {
-    throw new Error("--output-bootstrap requires --bootstrap-path.");
+    throw new Error("--output-launcher requires --launcher-path.");
   }
 };
 
@@ -586,32 +586,32 @@ const runEmbedConfigCommand = async (
             outputRuntimePath: commandOptions.outputRuntimePath,
           })
         : undefined;
-  const bootstrapResult =
-    commandOptions.bootstrapPath === undefined
+  const launcherResult =
+    commandOptions.launcherPath === undefined
       ? undefined
-      : await embedMuonConfigInBootstrapFile({
-          bootstrapPath: commandOptions.bootstrapPath,
+      : await embedMuonConfigInLauncherFile({
+          launcherPath: commandOptions.launcherPath,
           configPath,
-          outputPath: commandOptions.outputBootstrap,
+          outputPath: commandOptions.outputLauncher,
         });
-  if (coreResult !== undefined && bootstrapResult !== undefined) {
+  if (coreResult !== undefined && launcherResult !== undefined) {
     if (commandOptions.json === true) {
       console.log(
         JSON.stringify(
           {
             core: coreResult,
-            bootstrap: bootstrapResult,
+            launcher: launcherResult,
           },
           null,
           2,
         ),
       );
     } else {
-      console.log(`${coreResult.outputPath}\n${bootstrapResult.outputPath}`);
+      console.log(`${coreResult.outputPath}\n${launcherResult.outputPath}`);
     }
     return;
   }
-  const result = coreResult ?? bootstrapResult;
+  const result = coreResult ?? launcherResult;
   if (result === undefined) {
     throw new Error("No embed-config target was specified.");
   }
@@ -778,11 +778,11 @@ const createCliCommand = (): Command => {
     .description("Embed muon.json into muon runtime files")
     .option("--runtime-path <path>", "prepared runtime directory")
     .option("--core-path <path>", "muon-core executable path")
-    .option("--bootstrap-path <path>", "muon-bootstrap executable path")
+    .option("--launcher-path <path>", "muon-launcher executable path")
     .requiredOption("--config <path>", "muon config path")
     .option("--output-runtime-path <path>", "patched runtime output directory")
     .option("--output <path>", "patched muon-core output path")
-    .option("--output-bootstrap <path>", "patched bootstrap output path")
+    .option("--output-launcher <path>", "patched launcher output path")
     .option("--json", "write result as JSON")
     .action(async (options: EmbedConfigCommandOptions) => {
       await runEmbedConfigCommand(options);

@@ -504,7 +504,7 @@ struct MuonAssetConfig {
  */
 struct MuonConfig {
   /**
-   * Default CEF version selection policy used when bootstrap settings omit one.
+   * Default CEF version selection policy used when launcher settings omit one.
    */
   std::string default_version_policy = "tested";
   /**

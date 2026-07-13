@@ -75,7 +75,7 @@ import {
   shiftF9DevToolsShortcut,
   shouldUseValgrind,
   startDebugMuon,
-  startDebugMuonBootstrap,
+  startDebugMuonLauncher,
   startMuon,
   startReleaseMuon,
   stopMuon,
@@ -1092,13 +1092,13 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         driver.evaluate("typeof window.muon.environments.setAutostart"),
       ).resolves.toBe("function");
       await expect(
-        driver.evaluate("typeof window.muon.bootstrap.getSettings"),
+        driver.evaluate("typeof window.muon.launcher.getSettings"),
       ).resolves.toBe("function");
       await expect(
-        driver.evaluate("typeof window.muon.bootstrap.setSettings"),
+        driver.evaluate("typeof window.muon.launcher.setSettings"),
       ).resolves.toBe("function");
       await expect(
-        driver.evaluate("typeof window.muon.bootstrap.triggerUpdate"),
+        driver.evaluate("typeof window.muon.launcher.triggerUpdate"),
       ).resolves.toBe("function");
       await expect(
         driver.evaluate(`typeof window.muon.environments["run"]`),
@@ -1577,30 +1577,30 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
-  it("manages bootstrap update settings through the internal bootstrap API", async () => {
-    const stateHome = await mkdtemp(join(tmpdir(), "muon-bootstrap-state-"));
+  it("manages launcher update settings through the internal launcher API", async () => {
+    const stateHome = await mkdtemp(join(tmpdir(), "muon-launcher-state-"));
     const configPath = join(
       stateHome,
-      "muon-bootstrap",
+      "muon-launcher",
       "runtime",
-      "muon-bootstrap.ini",
+      "muon-launcher.ini",
     );
-    let bootstrapConfigPath = configPath;
-    const bootstrapEnvironment = isWindowsRemoteE2e()
+    let launcherConfigPath = configPath;
+    const launcherEnvironment = isWindowsRemoteE2e()
       ? { LOCALAPPDATA: stateHome }
       : { XDG_STATE_HOME: stateHome };
     try {
       await withMuonEnvironment(
         [],
-        bootstrapEnvironment,
+        launcherEnvironment,
         async (driver, running) => {
           if (running.remoteWindows !== undefined) {
-            bootstrapConfigPath = join(
+            launcherConfigPath = join(
               running.remoteWindows.configDirectory,
               "..",
-              "muon-bootstrap.ini",
+              "muon-launcher.ini",
             );
-            await rm(bootstrapConfigPath, { force: true });
+            await rm(launcherConfigPath, { force: true });
           }
           const values = await driver.evaluate<{
             keys: string[];
@@ -1621,25 +1621,25 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             };
             internalType: string;
           }>(`(async () => {
-            const initial = await window.muon.bootstrap.getSettings();
-            await window.muon.bootstrap.setSettings({
+            const initial = await window.muon.launcher.getSettings();
+            await window.muon.launcher.setSettings({
               cefVersionPolicy: "compat-latest",
               cefExactVersion: "",
               catalogRefreshIntervalSeconds: 123,
             });
-            const updated = await window.muon.bootstrap.getSettings();
-            await window.muon.bootstrap.setSettings({
+            const updated = await window.muon.launcher.getSettings();
+            await window.muon.launcher.setSettings({
               cefVersionPolicy: null,
               catalogRefreshIntervalSeconds: null,
             });
-            const reverted = await window.muon.bootstrap.getSettings();
-            await window.muon.bootstrap.triggerUpdate();
+            const reverted = await window.muon.launcher.getSettings();
+            await window.muon.launcher.triggerUpdate();
             return {
-              keys: Object.keys(window.muon.bootstrap).sort(),
+              keys: Object.keys(window.muon.launcher).sort(),
               initial,
               updated,
               reverted,
-              internalType: typeof window.muon.bootstrap.__triggerUpdate,
+              internalType: typeof window.muon.launcher.__triggerUpdate,
             };
           })()`);
 
@@ -1664,24 +1664,24 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           });
         },
       );
-      const bootstrapConfig = await waitForTextFileContent(
-        bootstrapConfigPath,
+      const launcherConfig = await waitForTextFileContent(
+        launcherConfigPath,
         (content) => content.includes("requested=true"),
-        "bootstrap update request settings",
+        "launcher update request settings",
       );
-      expect(bootstrapConfig).not.toContain("versionPolicy=");
+      expect(launcherConfig).not.toContain("versionPolicy=");
     } finally {
       await rm(stateHome, { force: true, recursive: true });
     }
   });
 
-  it("filters bootstrap functions through the internal plugin policy", async () => {
+  it("filters launcher functions through the internal plugin policy", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
       {},
       undefined,
-      ["muon.bootstrap.getSettings"],
+      ["muon.launcher.getSettings"],
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -1690,17 +1690,17 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
       await driver.navigate(
-        "data:text/html,<title>muon bootstrap partial</title>",
+        "data:text/html,<title>muon launcher partial</title>",
         cdpCommandTimeoutMs,
       );
       await expect(
         driver.evaluate(`(async () => {
-          const settings = await window.muon.bootstrap.getSettings();
+          const settings = await window.muon.launcher.getSettings();
           return {
-            keys: Object.keys(window.muon.bootstrap).sort(),
+            keys: Object.keys(window.muon.launcher).sort(),
             policy: settings.cefVersionPolicy,
-            setSettingsType: typeof window.muon.bootstrap.setSettings,
-            internalType: typeof window.muon.bootstrap.__getSettings,
+            setSettingsType: typeof window.muon.launcher.setSettings,
+            internalType: typeof window.muon.launcher.__getSettings,
           };
         })()`),
       ).resolves.toEqual({
@@ -3640,8 +3640,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     });
   });
 
-  it("recycles the process through the built-in browser API from bootstrap", async () => {
-    const running = await startDebugMuonBootstrap([]);
+  it("recycles the process through the built-in browser API from launcher", async () => {
+    const running = await startDebugMuonLauncher([]);
     let driver: CdpDriver | undefined = undefined;
     try {
       driver = await connectToMuonCdp({
@@ -4029,7 +4029,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   });
 
   it("recycles the process from the configured recycle shortcut", async () => {
-    const running = await startDebugMuonBootstrap(
+    const running = await startDebugMuonLauncher(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
       {},
@@ -4068,7 +4068,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   });
 
   it("recycles the process from the configured Ctrl+F12 shortcut", async () => {
-    const running = await startDebugMuonBootstrap(
+    const running = await startDebugMuonLauncher(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
       {},
@@ -4135,7 +4135,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   linuxIt(
     "recycles from native Ctrl+F12 after focusing a draggable page region",
     async () => {
-      const running = await startDebugMuonBootstrap(
+      const running = await startDebugMuonLauncher(
         [],
         TEST_NETWORK_ALLOW_PATTERNS,
         {},

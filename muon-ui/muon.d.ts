@@ -19,8 +19,8 @@ declare global {
   interface MuonApi {
     /** Browser and native window operations for the current muon window. */
     readonly browser: MuonBrowserApi;
-    /** Bootstrap update controls exposed by muon. */
-    readonly bootstrap: MuonBootstrapApi;
+    /** Launcher update controls exposed by muon. */
+    readonly launcher: MuonLauncherApi;
     /** Environment information exposed by muon. */
     readonly environments: MuonEnvironmentsApi;
     /** Child process execution operations exposed by muon. */
@@ -73,19 +73,19 @@ declare global {
     readonly release: () => Promise<void>;
   }
 
-  /** CEF version selection policy used by muon-bootstrap. */
+  /** CEF version selection policy used by muon-launcher. */
   type MuonCefVersionPolicy =
     | "tested"
     | "same-major-latest"
     | "compat-latest"
     | "exact";
 
-  /** Bootstrap settings used on the next muon-bootstrap startup. */
-  interface MuonBootstrapSettings {
+  /** Launcher settings used on the next muon-launcher startup. */
+  interface MuonLauncherSettings {
     /**
      * CEF version selection policy.
      *
-     * @defaultValue The configured bootstrap default version policy, normally `"tested"`.
+     * @defaultValue The configured launcher default version policy, normally `"tested"`.
      */
     readonly cefVersionPolicy?: MuonCefVersionPolicy;
     /**
@@ -102,8 +102,8 @@ declare global {
     readonly catalogRefreshIntervalSeconds?: number;
   }
 
-  /** Partial bootstrap settings update. */
-  interface MuonBootstrapSettingsPatch {
+  /** Partial launcher settings update. */
+  interface MuonLauncherSettingsPatch {
     /**
      * CEF version selection policy.
      *
@@ -127,25 +127,25 @@ declare global {
     readonly catalogRefreshIntervalSeconds?: number | null;
   }
 
-  /** Bootstrap update controls exposed by muon. */
-  interface MuonBootstrapApi {
+  /** Launcher update controls exposed by muon. */
+  interface MuonLauncherApi {
     /**
-     * Return bootstrap settings used by the next muon-bootstrap startup.
+     * Return launcher settings used by the next muon-launcher startup.
      *
-     * @returns A promise for the effective bootstrap settings.
+     * @returns A promise for the effective launcher settings.
      */
-    readonly getSettings: () => Promise<MuonBootstrapSettings>;
+    readonly getSettings: () => Promise<MuonLauncherSettings>;
     /**
-     * Update bootstrap settings used by the next muon-bootstrap startup.
+     * Update launcher settings used by the next muon-launcher startup.
      *
      * @param settings - Partial settings to persist. Null values clear explicit settings.
      * @returns A promise that resolves when settings are written.
      */
     readonly setSettings: (
-      settings?: MuonBootstrapSettingsPatch,
+      settings?: MuonLauncherSettingsPatch,
     ) => Promise<void>;
     /**
-     * Request a CEF catalog refresh on the next muon-bootstrap startup.
+     * Request a CEF catalog refresh on the next muon-launcher startup.
      *
      * @returns A promise that resolves when the refresh request is persisted.
      */

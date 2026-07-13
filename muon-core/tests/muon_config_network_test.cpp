@@ -504,7 +504,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   const auto default_policy_path =
       test_directory / "default-version-policy.json";
   if (!Expect(WriteFile(default_policy_path,
-                        R"({"bootstrap":{"defaultVersionPolicy":"compat-latest","desktopId":"com.example.App"}})"),
+                        R"({"launcher":{"defaultVersionPolicy":"compat-latest","desktopId":"com.example.App"}})"),
               "failed to write defaultVersionPolicy config") ||
       !LoadConfigExpectSuccess(default_policy_path, &config)) {
     return false;
@@ -894,25 +894,25 @@ static bool RunLaunchSourceProfilePathTest(
 
   SetTestLaunchSource("none");
   const auto state_home = SetTestStateHome(test_directory, "profile-state");
-  SetEnvironmentValue("MUON_BOOTSTRAP_APP_ID", "com.example Bootstrap");
+  SetEnvironmentValue("MUON_LAUNCHER_APP_ID", "com.example Launcher");
   const auto env_path = test_directory / "profile-env.json";
   if (!Expect(WriteFile(env_path, "{}"),
               "failed to write environment appId profile config") ||
       !LoadConfigExpectSuccess(env_path, &config)) {
     return false;
   }
-  if (!Expect(config.app_id == "com.example.Bootstrap",
+  if (!Expect(config.app_id == "com.example.Launcher",
               "environment appId was not used") ||
       !Expect(config.browser.profile ==
                   GetTestDefaultProfilePath(state_home,
-                                            "com.example.Bootstrap"),
+                                            "com.example.Launcher"),
               "environment appId should select state default profile")) {
     return false;
   }
 
   const auto none_path = test_directory / "profile-none.json";
   if (!Expect(WriteFile(none_path,
-                        R"({"bootstrap":{"appId":"com.example.Profile"}})"),
+                        R"({"launcher":{"appId":"com.example.Profile"}})"),
               "failed to write none profile config") ||
       !LoadConfigExpectSuccess(none_path, &config)) {
     return false;
@@ -927,7 +927,7 @@ static bool RunLaunchSourceProfilePathTest(
   SetTestLaunchSource("normal");
   const auto normal_path = test_directory / "profile-normal.json";
   if (!Expect(WriteFile(normal_path,
-                        R"({"bootstrap":{"appId":"com.example.Profile"}})"),
+                        R"({"launcher":{"appId":"com.example.Profile"}})"),
               "failed to write normal profile config") ||
       !LoadConfigExpectSuccess(normal_path, &config)) {
     return false;
@@ -951,7 +951,7 @@ static bool RunLaunchSourceProfilePathTest(
     return false;
   }
 
-  ClearEnvironment("MUON_BOOTSTRAP_APP_ID");
+  ClearEnvironment("MUON_LAUNCHER_APP_ID");
   return true;
 }
 
@@ -1499,8 +1499,8 @@ static bool RunLogConfigLoadingTest(
 static bool RunConfigValidationTest(
     const std::filesystem::path& test_directory) {
   const auto invalid_json_path = test_directory / "invalid-json.json";
-  const auto invalid_bootstrap_path =
-      test_directory / "invalid-bootstrap.json";
+  const auto invalid_launcher_path =
+      test_directory / "invalid-launcher.json";
   const auto invalid_network_path = test_directory / "invalid-network.json";
   const auto invalid_allow_path = test_directory / "invalid-allow.json";
   const auto invalid_entry_path = test_directory / "invalid-entry.json";
@@ -1626,8 +1626,8 @@ static bool RunConfigValidationTest(
       test_directory / "non-hex-asset-salt.json";
   return Expect(WriteFile(invalid_json_path, "{"),
                 "failed to write invalid JSON config") &&
-         Expect(WriteFile(invalid_bootstrap_path, R"({"bootstrap":true})"),
-                "failed to write invalid bootstrap config") &&
+         Expect(WriteFile(invalid_launcher_path, R"({"launcher":true})"),
+                "failed to write invalid launcher config") &&
          Expect(WriteFile(invalid_network_path, R"({"network":true})"),
                 "failed to write invalid network config") &&
          Expect(WriteFile(invalid_allow_path,
@@ -1637,16 +1637,16 @@ static bool RunConfigValidationTest(
                           R"({"network":{"allow":["data:**",42]}})"),
                 "failed to write invalid allow entry config") &&
          Expect(WriteFile(invalid_default_version_policy_type_path,
-                          R"({"bootstrap":{"defaultVersionPolicy":42}})"),
+                          R"({"launcher":{"defaultVersionPolicy":42}})"),
                 "failed to write invalid defaultVersionPolicy type config") &&
          Expect(WriteFile(invalid_default_version_policy_path,
-                          R"({"bootstrap":{"defaultVersionPolicy":"invalid"}})"),
+                          R"({"launcher":{"defaultVersionPolicy":"invalid"}})"),
                 "failed to write invalid defaultVersionPolicy config") &&
          Expect(WriteFile(invalid_desktop_id_type_path,
-                          R"({"bootstrap":{"desktopId":42}})"),
+                          R"({"launcher":{"desktopId":42}})"),
                 "failed to write invalid desktopId type config") &&
          Expect(WriteFile(empty_desktop_id_path,
-                          R"({"bootstrap":{"desktopId":"   "}})"),
+                          R"({"launcher":{"desktopId":"   "}})"),
                 "failed to write empty desktopId config") &&
          Expect(WriteFile(invalid_authorized_origin_path,
                           R"({"network":{"authorizedOrigin":true}})"),
@@ -1829,8 +1829,8 @@ static bool RunConfigValidationTest(
                           R"({"asset":{"salt":"0x"}})"),
                 "failed to write non-hex asset.salt config") &&
          LoadConfigExpectFailure(invalid_json_path, "Invalid muon.json") &&
-         LoadConfigExpectFailure(invalid_bootstrap_path,
-                                 "bootstrap must be an object") &&
+         LoadConfigExpectFailure(invalid_launcher_path,
+                                 "launcher must be an object") &&
          LoadConfigExpectFailure(invalid_network_path,
                                  "network must be an object") &&
          LoadConfigExpectFailure(invalid_allow_path,
@@ -1838,15 +1838,15 @@ static bool RunConfigValidationTest(
          LoadConfigExpectFailure(invalid_entry_path,
                                  "network.allow entries must be strings") &&
          LoadConfigExpectFailure(invalid_default_version_policy_type_path,
-                                 "bootstrap.defaultVersionPolicy must be a "
+                                 "launcher.defaultVersionPolicy must be a "
                                  "string") &&
          LoadConfigExpectFailure(invalid_default_version_policy_path,
-                                 "bootstrap.defaultVersionPolicy has unknown "
+                                 "launcher.defaultVersionPolicy has unknown "
                                  "value") &&
          LoadConfigExpectFailure(invalid_desktop_id_type_path,
-                                 "bootstrap.desktopId must be a string") &&
+                                 "launcher.desktopId must be a string") &&
          LoadConfigExpectFailure(empty_desktop_id_path,
-                                 "bootstrap.desktopId must not be empty") &&
+                                 "launcher.desktopId must not be empty") &&
          LoadConfigExpectFailure(invalid_authorized_origin_path,
                                  "network.authorizedOrigin must be an array") &&
          LoadConfigExpectFailure(invalid_authorized_origin_entry_path,

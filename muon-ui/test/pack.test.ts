@@ -26,7 +26,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTarExtractor } from "tar-vern";
 
 import {
-  createMuonBootstrapEmbeddedConfigSlot,
+  createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { packMuonApp } from "../src/pack.js";
@@ -130,7 +130,7 @@ const fakeTargetDescriptors: Record<
     runtimeExecutableName: string;
     uiLibraryName: string;
     cardioLibraryName: string;
-    bootstrapExecutableName: string;
+    launcherExecutableName: string;
     runtimeHelperExecutableName?: string;
   }
 > = {
@@ -138,34 +138,34 @@ const fakeTargetDescriptors: Record<
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
   },
   "linux-armhf": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
   },
   "linux-arm64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
   },
   "windows-i686": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
   },
   "windows-amd64": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
   },
 };
 
@@ -195,11 +195,11 @@ const createFakeMuonPackageDist = async (
     );
     await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
     await writeExecutable(
-      join(nativeDirectory, descriptor.bootstrapExecutableName),
+      join(nativeDirectory, descriptor.launcherExecutableName),
       Buffer.concat([
-        Buffer.from("bootstrap prefix\n"),
-        createMuonBootstrapEmbeddedConfigSlot(),
-        Buffer.from("\nbootstrap suffix\n"),
+        Buffer.from("launcher prefix\n"),
+        createMuonLauncherEmbeddedConfigSlot(),
+        Buffer.from("\nlauncher suffix\n"),
       ]),
     );
     if (descriptor.runtimeHelperExecutableName !== undefined) {
@@ -207,7 +207,7 @@ const createFakeMuonPackageDist = async (
         join(nativeDirectory, descriptor.runtimeHelperExecutableName),
         Buffer.concat([
           Buffer.from("helper prefix\n"),
-          createMuonBootstrapEmbeddedConfigSlot(),
+          createMuonLauncherEmbeddedConfigSlot(),
           Buffer.from("\nhelper suffix\n"),
         ]),
       );

@@ -165,11 +165,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` は展開先の `<packageName>/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+- ポータブル配布物(.tar.gz)から起動した場合、`muon-launcher` は展開先の `<packageName>/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、展開先ディレクトリ配下の絶対パスを指します。
 - 同じ展開先で再起動した場合は準備済みCEFを再利用します。別のディレクトリへ展開した配布物から起動した場合は、その展開先ごとにCEF準備とdesktop entry更新が行われます。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
-  debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-bootstrap` はユーザーhomeへ新規desktop entryを作成しません。
+  debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-launcher` はユーザーhomeへ新規desktop entryを作成しません。
   既存のmuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリです。
@@ -365,11 +365,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   開発・デバッグ用の設定であり、配布ビルドでは必要な場合だけ有効化してください。
 - `port` は `1024` から `65535` の整数である必要があります。
 
-## bootstrapキー
+## launcherキー
 
 | キー                   | 型       | 既定値     | 概要                                                                                                  |
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
-| `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
+| `defaultVersionPolicy` | `string` | `"tested"` | `muon-launcher.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 > 注釈: ここに挙げられていない `appId` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
 > 解説は省略します。

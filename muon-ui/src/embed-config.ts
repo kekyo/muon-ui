@@ -24,14 +24,14 @@ const muonEmbeddedConfigEmptySlotMarker = Buffer.from([
 ]);
 
 const muonEmbeddedConfigPayloadCapacity = muonEmbeddedConfigSlotSize;
-const muonBootstrapEmbeddedConfigSlotSize = 64 * 1024;
-const muonBootstrapEmbeddedConfigEmptySlotMarker = Buffer.from([
-  0x6d, 0x75, 0x6f, 0x6e, 0x2d, 0x62, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61,
-  0x70, 0x3a, 0x65, 0x6d, 0x62, 0x65, 0x64, 0x2d, 0x63, 0x6f, 0x6e, 0x66, 0x69,
-  0x67, 0x3a, 0x76, 0x31, 0x00, 0x5d,
+const muonLauncherEmbeddedConfigSlotSize = 64 * 1024;
+const muonLauncherEmbeddedConfigEmptySlotMarker = Buffer.from([
+  0x6d, 0x75, 0x6f, 0x6e, 0x2d, 0x6c, 0x61, 0x75, 0x6e, 0x63, 0x68, 0x65, 0x72,
+  0x3a, 0x65, 0x6d, 0x62, 0x65, 0x64, 0x2d, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67,
+  0x3a, 0x76, 0x31, 0x00, 0x5d,
 ]);
-const muonBootstrapEmbeddedConfigPayloadCapacity =
-  muonBootstrapEmbeddedConfigSlotSize;
+const muonLauncherEmbeddedConfigPayloadCapacity =
+  muonLauncherEmbeddedConfigSlotSize;
 
 const tlvNullTag = 0;
 const tlvFalseTag = 1;
@@ -46,7 +46,7 @@ const tlvObjectTag = 7;
  * Result returned by a muon executable config embedding operation.
  */
 export interface EmbedMuonConfigResult {
-  /** Input executable path. For bootstrap embedding this is the bootstrap path. */
+  /** Input executable path. For launcher embedding this is the launcher path. */
   readonly corePath: string;
   /** Written executable path. */
   readonly outputPath: string;
@@ -71,14 +71,14 @@ export interface EmbedMuonConfigCoreOptions {
 }
 
 /**
- * Options for embedding a config into a single muon-bootstrap executable.
+ * Options for embedding a config into a single muon-launcher executable.
  */
-export interface EmbedMuonConfigBootstrapOptions {
-  /** muon-bootstrap executable path to patch. */
-  readonly bootstrapPath: string;
+export interface EmbedMuonConfigLauncherOptions {
+  /** muon-launcher executable path to patch. */
+  readonly launcherPath: string;
   /** muon.json, muon.json5, or muon.jsonc input path. */
   readonly configPath: string;
-  /** Optional output executable path. When omitted, bootstrapPath is updated. */
+  /** Optional output executable path. When omitted, launcherPath is updated. */
   readonly outputPath: string | undefined;
 }
 
@@ -109,9 +109,9 @@ export interface MuonEmbeddedConfigSlot {
 }
 
 /**
- * Unembedded bootstrap config slot found in a muon-bootstrap executable.
+ * Unembedded launcher config slot found in a muon-launcher executable.
  */
-export interface MuonBootstrapEmbeddedConfigSlot {
+export interface MuonLauncherEmbeddedConfigSlot {
   /** Empty slot state. */
   readonly state: "empty";
   /** Byte offset of the slot. */
@@ -311,30 +311,30 @@ export const createMuonEmbeddedConfigSlot = (
 };
 
 /**
- * Creates an empty or payload-filled fixed muon-bootstrap embedded config slot.
+ * Creates an empty or payload-filled fixed muon-launcher embedded config slot.
  *
  * @param payload Optional encoded TLV payload bytes.
  * @returns Fixed-size slot image.
  */
-export const createMuonBootstrapEmbeddedConfigSlot = (
+export const createMuonLauncherEmbeddedConfigSlot = (
   payload: Uint8Array | undefined = undefined,
 ): Buffer => {
   if (
     payload !== undefined &&
-    payload.length > muonBootstrapEmbeddedConfigPayloadCapacity
+    payload.length > muonLauncherEmbeddedConfigPayloadCapacity
   ) {
     throw new Error(
-      `Encoded muon config exceeds the embedded bootstrap slot capacity: ${payload.length} > ${muonBootstrapEmbeddedConfigPayloadCapacity}`,
+      `Encoded muon config exceeds the embedded launcher slot capacity: ${payload.length} > ${muonLauncherEmbeddedConfigPayloadCapacity}`,
     );
   }
 
   if (payload === undefined) {
-    const slot = Buffer.alloc(muonBootstrapEmbeddedConfigSlotSize, 0);
-    muonBootstrapEmbeddedConfigEmptySlotMarker.copy(slot, 0);
+    const slot = Buffer.alloc(muonLauncherEmbeddedConfigSlotSize, 0);
+    muonLauncherEmbeddedConfigEmptySlotMarker.copy(slot, 0);
     return slot;
   }
 
-  const slot = randomBytes(muonBootstrapEmbeddedConfigSlotSize);
+  const slot = randomBytes(muonLauncherEmbeddedConfigSlotSize);
   Buffer.from(payload).copy(slot, 0);
   return slot;
 };
@@ -383,10 +383,10 @@ const collectSlotCandidates = (content: Buffer): MuonEmbeddedConfigSlot[] => {
   );
 };
 
-const isEmptyBootstrapSlotAt = (content: Buffer, offset: number): boolean => {
+const isEmptyLauncherSlotAt = (content: Buffer, offset: number): boolean => {
   if (
     offset < 0 ||
-    offset + muonBootstrapEmbeddedConfigSlotSize > content.length
+    offset + muonLauncherEmbeddedConfigSlotSize > content.length
   ) {
     return false;
   }
@@ -394,15 +394,15 @@ const isEmptyBootstrapSlotAt = (content: Buffer, offset: number): boolean => {
     !content
       .subarray(
         offset,
-        offset + muonBootstrapEmbeddedConfigEmptySlotMarker.length,
+        offset + muonLauncherEmbeddedConfigEmptySlotMarker.length,
       )
-      .equals(muonBootstrapEmbeddedConfigEmptySlotMarker)
+      .equals(muonLauncherEmbeddedConfigEmptySlotMarker)
   ) {
     return false;
   }
   for (
-    let index = muonBootstrapEmbeddedConfigEmptySlotMarker.length;
-    index < muonBootstrapEmbeddedConfigSlotSize;
+    let index = muonLauncherEmbeddedConfigEmptySlotMarker.length;
+    index < muonLauncherEmbeddedConfigSlotSize;
     index += 1
   ) {
     if (content[offset + index] !== 0) {
@@ -412,11 +412,11 @@ const isEmptyBootstrapSlotAt = (content: Buffer, offset: number): boolean => {
   return true;
 };
 
-const inspectUnembeddedBootstrapSlotAt = (
+const inspectUnembeddedLauncherSlotAt = (
   content: Buffer,
   offset: number,
-): MuonBootstrapEmbeddedConfigSlot | undefined => {
-  if (!isEmptyBootstrapSlotAt(content, offset)) {
+): MuonLauncherEmbeddedConfigSlot | undefined => {
+  if (!isEmptyLauncherSlotAt(content, offset)) {
     return undefined;
   }
   return {
@@ -427,19 +427,19 @@ const inspectUnembeddedBootstrapSlotAt = (
   };
 };
 
-const collectBootstrapSlotCandidates = (
+const collectLauncherSlotCandidates = (
   content: Buffer,
-): MuonBootstrapEmbeddedConfigSlot[] => {
-  const candidates = new Map<number, MuonBootstrapEmbeddedConfigSlot>();
+): MuonLauncherEmbeddedConfigSlot[] => {
+  const candidates = new Map<number, MuonLauncherEmbeddedConfigSlot>();
   for (
-    let offset = content.indexOf(muonBootstrapEmbeddedConfigEmptySlotMarker);
+    let offset = content.indexOf(muonLauncherEmbeddedConfigEmptySlotMarker);
     offset >= 0;
     offset = content.indexOf(
-      muonBootstrapEmbeddedConfigEmptySlotMarker,
+      muonLauncherEmbeddedConfigEmptySlotMarker,
       offset + 1,
     )
   ) {
-    const slot = inspectUnembeddedBootstrapSlotAt(content, offset);
+    const slot = inspectUnembeddedLauncherSlotAt(content, offset);
     if (slot !== undefined) {
       candidates.set(slot.offset, slot);
     }
@@ -473,24 +473,24 @@ export const findMuonEmbeddedConfigSlot = (
 };
 
 /**
- * Finds the fixed unembedded config slot in a muon-bootstrap executable image.
+ * Finds the fixed unembedded config slot in a muon-launcher executable image.
  *
- * @param content muon-bootstrap executable bytes.
- * @returns The single detected unembedded bootstrap config slot.
+ * @param content muon-launcher executable bytes.
+ * @returns The single detected unembedded launcher config slot.
  */
-export const findMuonBootstrapEmbeddedConfigSlot = (
+export const findMuonLauncherEmbeddedConfigSlot = (
   content: Uint8Array,
-): MuonBootstrapEmbeddedConfigSlot => {
+): MuonLauncherEmbeddedConfigSlot => {
   const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
-  const candidates = collectBootstrapSlotCandidates(buffer);
+  const candidates = collectLauncherSlotCandidates(buffer);
   if (candidates.length !== 1) {
     throw new Error(
-      `Expected exactly one unembedded muon-bootstrap config slot, found ${candidates.length}.`,
+      `Expected exactly one unembedded muon-launcher config slot, found ${candidates.length}.`,
     );
   }
   const [candidate] = candidates;
   if (candidate === undefined) {
-    throw new Error("Embedded muon-bootstrap config slot was not found.");
+    throw new Error("Embedded muon-launcher config slot was not found.");
   }
   return candidate;
 };
@@ -592,34 +592,34 @@ export const embedMuonConfigInCoreFile = async ({
 };
 
 /**
- * Embeds a muon config into a single muon-bootstrap executable.
+ * Embeds a muon config into a single muon-launcher executable.
  *
- * @param options Bootstrap executable embedding options.
+ * @param options Launcher executable embedding options.
  * @returns Embedding result metadata.
  */
-export const embedMuonConfigInBootstrapFile = async ({
-  bootstrapPath,
+export const embedMuonConfigInLauncherFile = async ({
+  launcherPath,
   configPath,
   outputPath,
-}: EmbedMuonConfigBootstrapOptions): Promise<EmbedMuonConfigResult> => {
+}: EmbedMuonConfigLauncherOptions): Promise<EmbedMuonConfigResult> => {
   const config = await readMuonConfigInput(configPath);
   const payload = encodeMuonConfigTlv(config);
-  const embeddedSlot = createMuonBootstrapEmbeddedConfigSlot(payload);
-  const bootstrapContent = await readFile(bootstrapPath);
-  if (isSignedPeExecutable(bootstrapContent)) {
+  const embeddedSlot = createMuonLauncherEmbeddedConfigSlot(payload);
+  const launcherContent = await readFile(launcherPath);
+  if (isSignedPeExecutable(launcherContent)) {
     throw new Error(
-      "Cannot embed muon config into a signed muon-bootstrap PE executable.",
+      "Cannot embed muon config into a signed muon-launcher PE executable.",
     );
   }
 
-  const slot = findMuonBootstrapEmbeddedConfigSlot(bootstrapContent);
-  const patchedContent = Buffer.from(bootstrapContent);
+  const slot = findMuonLauncherEmbeddedConfigSlot(launcherContent);
+  const patchedContent = Buffer.from(launcherContent);
   embeddedSlot.copy(patchedContent, slot.offset);
-  const resolvedOutputPath = outputPath ?? bootstrapPath;
+  const resolvedOutputPath = outputPath ?? launcherPath;
   await writeFile(resolvedOutputPath, patchedContent);
 
   return {
-    corePath: bootstrapPath,
+    corePath: launcherPath,
     outputPath: resolvedOutputPath,
     slotOffset: slot.offset,
     payloadSize: payload.length,

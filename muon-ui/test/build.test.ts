@@ -24,9 +24,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { build as viteBuild } from "vite";
 
 import {
-  createMuonBootstrapEmbeddedConfigSlot,
+  createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
-  findMuonBootstrapEmbeddedConfigSlot,
+  findMuonLauncherEmbeddedConfigSlot,
   findMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { buildMuonApp, type MuonBuildTarget } from "../src/build.js";
@@ -130,7 +130,7 @@ const fakePackageTargetDescriptors: Record<
     runtimeExecutableName: string;
     uiLibraryName: string;
     cardioLibraryName: string;
-    bootstrapExecutableName: string;
+    launcherExecutableName: string;
     mingwRuntimeFiles: readonly string[];
   }
 > = {
@@ -138,28 +138,28 @@ const fakePackageTargetDescriptors: Record<
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     mingwRuntimeFiles: [],
   },
   "linux-armhf": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     mingwRuntimeFiles: [],
   },
   "linux-arm64": {
     runtimeExecutableName: "muon-core",
     uiLibraryName: "libmuon-ui.so",
     cardioLibraryName: "libcardio.so",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     mingwRuntimeFiles: [],
   },
   "windows-i686": {
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
     mingwRuntimeFiles: [
       "libgcc_s_dw2-1.dll",
       "libstdc++-6.dll",
@@ -170,7 +170,7 @@ const fakePackageTargetDescriptors: Record<
     runtimeExecutableName: "muon-core.exe",
     uiLibraryName: "libmuon-ui.dll",
     cardioLibraryName: "libcardio.dll",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
     mingwRuntimeFiles: [
       "libgcc_s_seh-1.dll",
       "libstdc++-6.dll",
@@ -212,9 +212,9 @@ const createFakeMuonPackageDistForTargets = async (
     await mkdir(join(runtimeDirectory, "assets"), { recursive: true });
     await writeFile(join(runtimeDirectory, "assets", "debug.txt"), "debug\n");
     await writeExecutable(
-      join(nativeDirectory, descriptor.bootstrapExecutableName),
-      createMuonBootstrapEmbeddedConfigSlot(),
-      "bootstrap",
+      join(nativeDirectory, descriptor.launcherExecutableName),
+      createMuonLauncherEmbeddedConfigSlot(),
+      "launcher",
     );
   }
   return packageDirectory;
@@ -608,7 +608,7 @@ describe("muon build", () => {
       signature: target?.asset.signature,
       salt: "deadbeef",
     });
-    expect(target?.embeddedConfig.bootstrap).toEqual({
+    expect(target?.embeddedConfig.launcher).toEqual({
       appId: "scope.muon-sample",
       desktopId: "scope.muon-sample",
     });
@@ -634,7 +634,7 @@ describe("muon build", () => {
       join(root, "dist-muon/linux-amd64", "muon-sample"),
     );
     expect(() => findMuonEmbeddedConfigSlot(embeddedCore)).toThrow("found 0");
-    expect(() => findMuonBootstrapEmbeddedConfigSlot(embeddedLauncher)).toThrow(
+    expect(() => findMuonLauncherEmbeddedConfigSlot(embeddedLauncher)).toThrow(
       "found 0",
     );
   });
@@ -840,14 +840,14 @@ describe("muon build", () => {
     );
     expect(result.appId).toBe("scope.windows-app-id-sample");
     expect(windowsI686?.runtimeAppId).toBe("scope.windows-app-id-sample.i686");
-    expect(windowsI686?.embeddedConfig.bootstrap).toEqual({
+    expect(windowsI686?.embeddedConfig.launcher).toEqual({
       appId: "scope.windows-app-id-sample.i686",
       desktopId: "scope.windows-app-id-sample",
     });
     expect(windowsAmd64?.runtimeAppId).toBe(
       "scope.windows-app-id-sample.amd64",
     );
-    expect(windowsAmd64?.embeddedConfig.bootstrap).toEqual({
+    expect(windowsAmd64?.embeddedConfig.launcher).toEqual({
       appId: "scope.windows-app-id-sample.amd64",
       desktopId: "scope.windows-app-id-sample",
     });
@@ -982,18 +982,18 @@ describe("muon build", () => {
     const seedIconPath = join(root, "icons", "seed.ico");
     const expectedIconPath = join(root, "icons", "expected.ico");
     const coreSlotPath = join(root, "core-slot.bin");
-    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    const launcherSlotPath = join(root, "launcher-slot.bin");
     await writeFile(coreSlotPath, createMuonEmbeddedConfigSlot());
-    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await writeFile(launcherSlotPath, createMuonLauncherEmbeddedConfigSlot());
     await createWindowsCoreResourceFixture(
       join(packageDirectory, "runtime", "windows-amd64", "muon-core.exe"),
       seedIconPath,
       coreSlotPath,
     );
     await createWindowsResourceFixture(
-      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      join(packageDirectory, "native", "windows-amd64", "muon-launcher.exe"),
       seedIconPath,
-      bootstrapSlotPath,
+      launcherSlotPath,
     );
     await writeWindowsIconPngFixture(iconPath);
     await writeFile(
@@ -1101,19 +1101,19 @@ describe("muon build", () => {
     const seedIconPath = join(root, "icons", "seed.ico");
     const expectedIconPath = join(root, "icons", "expected-default.ico");
     const coreSlotPath = join(root, "core-slot.bin");
-    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    const launcherSlotPath = join(root, "launcher-slot.bin");
     await writeFile(stagedDefaultIconPath, await readFile(defaultIconPath));
     await writeFile(coreSlotPath, createMuonEmbeddedConfigSlot());
-    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await writeFile(launcherSlotPath, createMuonLauncherEmbeddedConfigSlot());
     await createWindowsCoreResourceFixture(
       join(packageDirectory, "runtime", "windows-amd64", "muon-core.exe"),
       seedIconPath,
       coreSlotPath,
     );
     await createWindowsResourceFixture(
-      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      join(packageDirectory, "native", "windows-amd64", "muon-launcher.exe"),
       seedIconPath,
-      bootstrapSlotPath,
+      launcherSlotPath,
     );
     await writeFile(
       join(root, "package.json"),
@@ -1217,7 +1217,7 @@ describe("muon build", () => {
     expect(target?.linuxDesktop?.comment).toBe("Config Comment");
     expect(target?.linuxDesktop?.categories).toEqual(["Development"]);
     expect(target?.linuxDesktop?.startupNotify).toBe(true);
-    expect(target?.embeddedConfig.bootstrap).toEqual({
+    expect(target?.embeddedConfig.launcher).toEqual({
       appId: "linux-desktop-sample",
       desktopId: "com.example.config-app",
     });
@@ -1253,18 +1253,18 @@ describe("muon build", () => {
     const seedIconPath = join(root, "icons", "seed.ico");
     const expectedIconPath = join(root, "icons", "expected.ico");
     const coreSlotPath = join(root, "core-slot.bin");
-    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    const launcherSlotPath = join(root, "launcher-slot.bin");
     await writeFile(coreSlotPath, createMuonEmbeddedConfigSlot());
-    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await writeFile(launcherSlotPath, createMuonLauncherEmbeddedConfigSlot());
     await createWindowsCoreResourceFixture(
       join(packageDirectory, "runtime", "windows-amd64", "muon-core.exe"),
       seedIconPath,
       coreSlotPath,
     );
     await createWindowsResourceFixture(
-      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      join(packageDirectory, "native", "windows-amd64", "muon-launcher.exe"),
       seedIconPath,
-      bootstrapSlotPath,
+      launcherSlotPath,
     );
     await writeWindowsIconPngFixture(iconPath, redIconPngData);
     await writeFile(
@@ -1347,18 +1347,18 @@ describe("muon build", () => {
     const seedIconPath = join(root, "icons", "seed.ico");
     const expectedWindowsIconPath = join(root, "icons", "expected-windows.ico");
     const coreSlotPath = join(root, "core-slot.bin");
-    const bootstrapSlotPath = join(root, "bootstrap-slot.bin");
+    const launcherSlotPath = join(root, "launcher-slot.bin");
     await writeFile(coreSlotPath, createMuonEmbeddedConfigSlot());
-    await writeFile(bootstrapSlotPath, createMuonBootstrapEmbeddedConfigSlot());
+    await writeFile(launcherSlotPath, createMuonLauncherEmbeddedConfigSlot());
     await createWindowsCoreResourceFixture(
       join(packageDirectory, "runtime", "windows-amd64", "muon-core.exe"),
       seedIconPath,
       coreSlotPath,
     );
     await createWindowsResourceFixture(
-      join(packageDirectory, "native", "windows-amd64", "muon-bootstrap.exe"),
+      join(packageDirectory, "native", "windows-amd64", "muon-launcher.exe"),
       seedIconPath,
-      bootstrapSlotPath,
+      launcherSlotPath,
     );
     await writeWindowsIconPngFixture(appIconPath, redIconPngData);
     await writeWindowsIconPngFixture(windowsIconPath, blueIconPngData);
@@ -2029,7 +2029,7 @@ describe("muon build", () => {
       browser: {
         initialTitleBarIcon: appIconAssetUrl,
       },
-      bootstrap: {
+      launcher: {
         appId: "missing-config-sample",
         desktopId: "missing-config-sample",
       },

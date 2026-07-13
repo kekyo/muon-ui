@@ -721,7 +721,7 @@ set(APP_SOURCES
   src/network/muon_network_policy.cpp
   src/network/muon_network_request_handler.cpp
   src/plugins/builtin/muon_builtin.cpp
-  src/plugins/builtin/muon_builtin_bootstrap.cpp
+  src/plugins/builtin/muon_builtin_launcher.cpp
   src/plugins/builtin/muon_builtin_environment_helpers.cpp
   src/plugins/builtin/muon_builtin_environments.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
@@ -773,7 +773,7 @@ set(APP_HEADERS
   src/network/muon_network_policy.h
   src/network/muon_network_request_handler.h
   src/plugins/builtin/muon_builtin.h
-  src/plugins/builtin/muon_builtin_bootstrap.h
+  src/plugins/builtin/muon_builtin_launcher.h
   src/plugins/builtin/muon_builtin_completion.h
   src/plugins/builtin/muon_builtin_environment_helpers.h
   src/plugins/builtin/muon_builtin_environments.h

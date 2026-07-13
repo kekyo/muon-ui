@@ -48,7 +48,7 @@ import { spawn } from "muon:executor";
 | `recycle()`           | なし                | `Promise<void>` | muonプロセスを終了し、起動元が対応している場合は自動再起動します。 |
 
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
-- `recycle()` は `muon-bootstrap` や `muon run` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
+- `recycle()` は `muon-launcher` や `muon run` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
 - `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
 - `getWindowBounds()` と `setWindowBounds()` の bounds はブラウザ表示領域ではなく、muonカスタムタイトルバーやネイティブフレームを含むトップレベルウインドウ領域です。
   座標とサイズの単位はCEF Viewsと同じDIP screen coordinatesです。
@@ -125,23 +125,23 @@ await window.muon.browser.shutdown(0);
 await window.muon.browser.recycle();
 ```
 
-## muon.bootstrap名前空間
+## muon.launcher名前空間
 
-`window.muon.bootstrap` は、次回 `muon-bootstrap` 起動時に使われるCEF更新設定を扱います。
-設定はruntimeディレクトリの `muon-bootstrap.ini` に保存され、現在実行中のCEFには影響しません。
+`window.muon.launcher` は、次回 `muon-launcher` 起動時に使われるCEF更新設定を扱います。
+設定はruntimeディレクトリの `muon-launcher.ini` に保存され、現在実行中のCEFには影響しません。
 
 | 関数                    | 引数                                                                           | 戻り値                           | 説明                                                                 |
 | :---------------------- | :----------------------------------------------------------------------------- | :------------------------------- | :------------------------------------------------------------------- |
-| `getSettings()`         | なし                                                                           | `Promise<MuonBootstrapSettings>` | 現在有効なbootstrap設定を返します。                                  |
-| `setSettings(settings)` | `MuonBootstrapSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやカタログ更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
-| `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-bootstrap` 起動時にCEFカタログ更新を試行するよう要求します。 |
+| `getSettings()`         | なし                                                                           | `Promise<MuonLauncherSettings>` | 現在有効なlauncher設定を返します。                                  |
+| `setSettings(settings)` | `MuonLauncherSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやカタログ更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
+| `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-launcher` 起動時にCEFカタログ更新を試行するよう要求します。 |
 
 ```js
-await window.muon.bootstrap.setSettings({
+await window.muon.launcher.setSettings({
   cefVersionPolicy: "compat-latest",
   catalogRefreshIntervalSeconds: 604800,
 });
-await window.muon.bootstrap.triggerUpdate();
+await window.muon.launcher.triggerUpdate();
 ```
 
 ## muon.environments名前空間

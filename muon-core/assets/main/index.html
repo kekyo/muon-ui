@@ -689,35 +689,35 @@
           </div>
         </section>
 
-        <section class="panel" aria-label="Bootstrap API demo">
-          <h2 class="section-title">Bootstrap</h2>
+        <section class="panel" aria-label="Launcher API demo">
+          <h2 class="section-title">Launcher</h2>
           <div class="field-grid">
             <div class="field">
-              <label for="bootstrap-settings">Settings patch JSON</label>
-              <textarea id="bootstrap-settings" class="small" spellcheck="false">{
+              <label for="launcher-settings">Settings patch JSON</label>
+              <textarea id="launcher-settings" class="small" spellcheck="false">{
   "cefVersionPolicy": null,
   "cefExactVersion": null,
   "catalogRefreshIntervalSeconds": null
 }</textarea>
             </div>
             <div class="field">
-              <label for="bootstrap-result">Bootstrap result</label>
-              <textarea id="bootstrap-result" class="small" readonly spellcheck="false"></textarea>
+              <label for="launcher-result">Launcher result</label>
+              <textarea id="launcher-result" class="small" readonly spellcheck="false"></textarea>
             </div>
           </div>
           <div class="actions">
-            <button data-bootstrap-action="getSettings" type="button">
+            <button data-launcher-action="getSettings" type="button">
               Get settings
             </button>
             <button
-              data-bootstrap-action="setSettings"
+              data-launcher-action="setSettings"
               class="danger"
               type="button"
             >
               Set settings
             </button>
             <button
-              data-bootstrap-action="triggerUpdate"
+              data-launcher-action="triggerUpdate"
               class="danger"
               type="button"
             >
@@ -1177,10 +1177,10 @@
       const executorReleaseButton =
         document.querySelector("#executor-release");
       const executorClearButton = document.querySelector("#executor-clear");
-      const bootstrapSettingsInput = document.querySelector(
-        "#bootstrap-settings",
+      const launcherSettingsInput = document.querySelector(
+        "#launcher-settings",
       );
-      const bootstrapResultInput = document.querySelector("#bootstrap-result");
+      const launcherResultInput = document.querySelector("#launcher-result");
       const openConnectedPopupButton = document.querySelector(
         "#open-connected-popup",
       );
@@ -1196,8 +1196,8 @@
       const environmentActionButtons = Array.from(
         document.querySelectorAll("[data-environment-action]"),
       );
-      const bootstrapActionButtons = Array.from(
-        document.querySelectorAll("[data-bootstrap-action]"),
+      const launcherActionButtons = Array.from(
+        document.querySelectorAll("[data-launcher-action]"),
       );
       const browserActionButtons = Array.from(
         document.querySelectorAll("[data-browser-action]"),
@@ -1331,11 +1331,11 @@
           "#executor-clear",
           "Clear: remove log entries without stopping the process",
         );
-        setActionButtonTitles("data-bootstrap-action", {
-          getSettings: "GetSettings: window.muon.bootstrap.getSettings()",
-          setSettings: "SetSettings: window.muon.bootstrap.setSettings(settings)",
+        setActionButtonTitles("data-launcher-action", {
+          getSettings: "GetSettings: window.muon.launcher.getSettings()",
+          setSettings: "SetSettings: window.muon.launcher.setSettings(settings)",
           triggerUpdate:
-            "TriggerUpdate: window.muon.bootstrap.triggerUpdate()",
+            "TriggerUpdate: window.muon.launcher.triggerUpdate()",
         });
         setButtonTitle(
           "#open-connected-popup",
@@ -2503,37 +2503,37 @@
         }
       };
 
-      const bootstrapActions = {
+      const launcherActions = {
         getSettings: async () => {
-          const settings = await window.muon.bootstrap.getSettings();
-          bootstrapSettingsInput.value = JSON.stringify(settings, null, 2);
+          const settings = await window.muon.launcher.getSettings();
+          launcherSettingsInput.value = JSON.stringify(settings, null, 2);
           return settings;
         },
         setSettings: async () => {
-          if (!confirmDanger("Write bootstrap settings?")) {
+          if (!confirmDanger("Write launcher settings?")) {
             return "Canceled";
           }
-          const patch = parseJsonInput(bootstrapSettingsInput, {});
-          await window.muon.bootstrap.setSettings(patch);
-          return "Wrote bootstrap settings";
+          const patch = parseJsonInput(launcherSettingsInput, {});
+          await window.muon.launcher.setSettings(patch);
+          return "Wrote launcher settings";
         },
         triggerUpdate: async () => {
-          if (!confirmDanger("Trigger bootstrap update?")) {
+          if (!confirmDanger("Trigger launcher update?")) {
             return "Canceled";
           }
-          await window.muon.bootstrap.triggerUpdate();
-          return "Triggered bootstrap update";
+          await window.muon.launcher.triggerUpdate();
+          return "Triggered launcher update";
         },
       };
 
-      const runBootstrapAction = async (actionName) => {
-        const action = bootstrapActions[actionName];
+      const runLauncherAction = async (actionName) => {
+        const action = launcherActions[actionName];
         if (typeof action !== "function") {
-          bootstrapResultInput.value = `Unknown action: ${actionName}`;
+          launcherResultInput.value = `Unknown action: ${actionName}`;
           return;
         }
         await runAction({
-          result: bootstrapResultInput,
+          result: launcherResultInput,
           successMessage: `${actionName} completed`,
           task: action,
         });
@@ -2612,9 +2612,9 @@
         }
       });
 
-      for (const button of bootstrapActionButtons) {
+      for (const button of launcherActionButtons) {
         button.addEventListener("click", () => {
-          void runBootstrapAction(button.dataset.bootstrapAction);
+          void runLauncherAction(button.dataset.launcherAction);
         });
       }
 

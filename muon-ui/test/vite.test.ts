@@ -46,7 +46,7 @@ import {
   resolveMuonRuntimePath,
 } from "../src/vite-internals.js";
 import {
-  createMuonBootstrapEmbeddedConfigSlot,
+  createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { createMuonCapabilityModuleResolver } from "../src/capability.js";
@@ -468,9 +468,9 @@ const createFakePackageDirectory = async (root: string): Promise<string> => {
   await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
   await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
   await writeFakePackagedExecutable(
-    join(nativeDirectory, "muon-bootstrap"),
-    createMuonBootstrapEmbeddedConfigSlot(),
-    "bootstrap",
+    join(nativeDirectory, "muon-launcher"),
+    createMuonLauncherEmbeddedConfigSlot(),
+    "launcher",
   );
   return packageDirectory;
 };

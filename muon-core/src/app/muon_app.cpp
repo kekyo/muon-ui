@@ -20,7 +20,7 @@
 #include "log/muon_log.h"
 #include "plugins/muon_js_bridge.h"
 #include "network/muon_network_policy.h"
-#include "plugins/builtin/muon_builtin_bootstrap.h"
+#include "plugins/builtin/muon_builtin_launcher.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_plugin_runtime.h"
 #include "plugins/muon_shared_buffer.h"
@@ -677,7 +677,7 @@ void MuonApp::OnContextInitialized() {
     plugins.push_back(std::move(plugin));
   }
 
-  InitializeMuonBuiltinBootstrap(config_.default_version_policy);
+  InitializeMuonBuiltinLauncher(config_.default_version_policy);
   const auto plugin_runtime =
       CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins));
   if (!plugin_runtime->IsReady()) {

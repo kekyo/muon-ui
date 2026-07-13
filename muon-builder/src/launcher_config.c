@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-#include "bootstrap_config.h"
+#include "launcher_config.h"
 #include "common.h"
 
 #include <ctype.h>
@@ -12,33 +12,33 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE (64 * 1024)
+#define MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE (64 * 1024)
 
 #if defined(__GNUC__) || defined(__clang__)
-#define MUON_BOOTSTRAP_EMBEDDED_CONFIG_USED __attribute__((used))
+#define MUON_LAUNCHER_EMBEDDED_CONFIG_USED __attribute__((used))
 #else
-#define MUON_BOOTSTRAP_EMBEDDED_CONFIG_USED
+#define MUON_LAUNCHER_EMBEDDED_CONFIG_USED
 #endif
 
-static const unsigned char kBootstrapEmbeddedConfigMarker[] = {
-    0x6d, 0x75, 0x6f, 0x6e, 0x2d, 0x62, 0x6f, 0x6f,
-    0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x3a, 0x65,
-    0x6d, 0x62, 0x65, 0x64, 0x2d, 0x63, 0x6f, 0x6e,
-    0x66, 0x69, 0x67, 0x3a, 0x76, 0x31, 0x00, 0x5d};
+static const unsigned char kLauncherEmbeddedConfigMarker[] = {
+    0x6d, 0x75, 0x6f, 0x6e, 0x2d, 0x6c, 0x61, 0x75,
+    0x6e, 0x63, 0x68, 0x65, 0x72, 0x3a, 0x65, 0x6d,
+    0x62, 0x65, 0x64, 0x2d, 0x63, 0x6f, 0x6e, 0x66,
+    0x69, 0x67, 0x3a, 0x76, 0x31, 0x00, 0x5d};
 
-MUON_BOOTSTRAP_EMBEDDED_CONFIG_USED
-unsigned char kMuonBootstrapEmbeddedConfigSlot
-    [MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE] = {
-        0x6d, 0x75, 0x6f, 0x6e, 0x2d, 0x62, 0x6f, 0x6f,
-        0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x3a, 0x65,
-        0x6d, 0x62, 0x65, 0x64, 0x2d, 0x63, 0x6f, 0x6e,
-        0x66, 0x69, 0x67, 0x3a, 0x76, 0x31, 0x00, 0x5d};
+MUON_LAUNCHER_EMBEDDED_CONFIG_USED
+unsigned char kMuonLauncherEmbeddedConfigSlot
+    [MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE] = {
+        0x6d, 0x75, 0x6f, 0x6e, 0x2d, 0x6c, 0x61, 0x75,
+        0x6e, 0x63, 0x68, 0x65, 0x72, 0x3a, 0x65, 0x6d,
+        0x62, 0x65, 0x64, 0x2d, 0x63, 0x6f, 0x6e, 0x66,
+        0x69, 0x67, 0x3a, 0x76, 0x31, 0x00, 0x5d};
 
 typedef struct {
   const unsigned char *bytes;
   size_t size;
   size_t offset;
-} MuonBootstrapTlvReader;
+} MuonLauncherTlvReader;
 
 static char *trim(char *value) {
   while (isspace((unsigned char)*value)) {
@@ -101,20 +101,20 @@ static int is_valid_policy(const char *value) {
 }
 
 static int embedded_slot_is_empty(void) {
-  if (memcmp(kMuonBootstrapEmbeddedConfigSlot, kBootstrapEmbeddedConfigMarker,
-             sizeof(kBootstrapEmbeddedConfigMarker)) != 0) {
+  if (memcmp(kMuonLauncherEmbeddedConfigSlot, kLauncherEmbeddedConfigMarker,
+             sizeof(kLauncherEmbeddedConfigMarker)) != 0) {
     return 0;
   }
-  for (size_t index = sizeof(kBootstrapEmbeddedConfigMarker);
-       index < MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE; index += 1) {
-    if (kMuonBootstrapEmbeddedConfigSlot[index] != 0) {
+  for (size_t index = sizeof(kLauncherEmbeddedConfigMarker);
+       index < MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE; index += 1) {
+    if (kMuonLauncherEmbeddedConfigSlot[index] != 0) {
       return 0;
     }
   }
   return 1;
 }
 
-static int tlv_read_var_uint(MuonBootstrapTlvReader *reader,
+static int tlv_read_var_uint(MuonLauncherTlvReader *reader,
                              unsigned long long *value) {
   unsigned long long result = 0;
   unsigned int shift = 0;
@@ -130,9 +130,9 @@ static int tlv_read_var_uint(MuonBootstrapTlvReader *reader,
   return -1;
 }
 
-static int tlv_skip_value(MuonBootstrapTlvReader *reader);
+static int tlv_skip_value(MuonLauncherTlvReader *reader);
 
-static int tlv_skip_counted_bytes(MuonBootstrapTlvReader *reader) {
+static int tlv_skip_counted_bytes(MuonLauncherTlvReader *reader) {
   unsigned long long length = 0;
   if (tlv_read_var_uint(reader, &length) != 0 ||
       length > (unsigned long long)(reader->size - reader->offset)) {
@@ -142,7 +142,7 @@ static int tlv_skip_counted_bytes(MuonBootstrapTlvReader *reader) {
   return 0;
 }
 
-static int tlv_skip_array(MuonBootstrapTlvReader *reader) {
+static int tlv_skip_array(MuonLauncherTlvReader *reader) {
   unsigned long long count = 0;
   if (tlv_read_var_uint(reader, &count) != 0) {
     return -1;
@@ -155,7 +155,7 @@ static int tlv_skip_array(MuonBootstrapTlvReader *reader) {
   return 0;
 }
 
-static int tlv_skip_object(MuonBootstrapTlvReader *reader) {
+static int tlv_skip_object(MuonLauncherTlvReader *reader) {
   unsigned long long count = 0;
   if (tlv_read_var_uint(reader, &count) != 0) {
     return -1;
@@ -169,7 +169,7 @@ static int tlv_skip_object(MuonBootstrapTlvReader *reader) {
   return 0;
 }
 
-static int tlv_skip_value(MuonBootstrapTlvReader *reader) {
+static int tlv_skip_value(MuonLauncherTlvReader *reader) {
   if (reader->offset >= reader->size) {
     return -1;
   }
@@ -195,7 +195,7 @@ static int tlv_skip_value(MuonBootstrapTlvReader *reader) {
   }
 }
 
-static int tlv_read_raw_key(MuonBootstrapTlvReader *reader,
+static int tlv_read_raw_key(MuonLauncherTlvReader *reader,
                             const char **key,
                             size_t *key_length) {
   unsigned long long length = 0;
@@ -217,7 +217,7 @@ static int tlv_key_equals(const char *key,
          memcmp(key, expected, key_length) == 0;
 }
 
-static int tlv_read_object_value_count(MuonBootstrapTlvReader *reader,
+static int tlv_read_object_value_count(MuonLauncherTlvReader *reader,
                                        unsigned long long *count) {
   if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 7) {
     return -1;
@@ -225,7 +225,7 @@ static int tlv_read_object_value_count(MuonBootstrapTlvReader *reader,
   return tlv_read_var_uint(reader, count);
 }
 
-static int tlv_read_string_value(MuonBootstrapTlvReader *reader,
+static int tlv_read_string_value(MuonLauncherTlvReader *reader,
                                  char **value) {
   if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 4) {
     return -1;
@@ -246,27 +246,27 @@ static int tlv_read_string_value(MuonBootstrapTlvReader *reader,
   return 0;
 }
 
-static int tlv_read_bootstrap_default_version_policy(
-    MuonBootstrapTlvReader *reader,
+static int tlv_read_launcher_default_version_policy(
+    MuonLauncherTlvReader *reader,
     unsigned long long count,
     char **policy) {
   for (unsigned long long index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
     if (tlv_key_equals(key, key_length, "defaultVersionPolicy")) {
       char *value = NULL;
       if (tlv_read_string_value(reader, &value) != 0) {
         muon_print_error(
-            "muon.json bootstrap.defaultVersionPolicy must be a string.\n");
+            "muon.json launcher.defaultVersionPolicy must be a string.\n");
         return -1;
       }
       if (!is_valid_policy(value)) {
         muon_print_error(
-            "muon.json bootstrap.defaultVersionPolicy has unknown value: %s\n",
+            "muon.json launcher.defaultVersionPolicy has unknown value: %s\n",
             value);
         free(value);
         return -1;
@@ -275,41 +275,41 @@ static int tlv_read_bootstrap_default_version_policy(
       return 1;
     }
     if (tlv_skip_value(reader) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
   }
   return 0;
 }
 
-static int tlv_read_bootstrap_app_id(MuonBootstrapTlvReader *reader,
+static int tlv_read_launcher_app_id(MuonLauncherTlvReader *reader,
                                      unsigned long long count,
                                      char **app_id) {
   for (unsigned long long index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
     if (tlv_key_equals(key, key_length, "appId")) {
       char *value = NULL;
       if (tlv_read_string_value(reader, &value) != 0) {
-        muon_print_error("muon.json bootstrap.appId must be a string.\n");
+        muon_print_error("muon.json launcher.appId must be a string.\n");
         return -1;
       }
       *app_id = value;
       return 1;
     }
     if (tlv_skip_value(reader) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
   }
   return 0;
 }
 
-int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
+int muon_launcher_get_embedded_default_version_policy(char **policy) {
   if (policy == NULL) {
     return -1;
   }
@@ -319,37 +319,37 @@ int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
     return *policy == NULL ? -1 : 0;
   }
 
-  MuonBootstrapTlvReader reader = {
-      kMuonBootstrapEmbeddedConfigSlot,
-      MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE,
+  MuonLauncherTlvReader reader = {
+      kMuonLauncherEmbeddedConfigSlot,
+      MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE,
       0};
   unsigned long long count = 0;
   if (tlv_read_object_value_count(&reader, &count) != 0) {
-    muon_print_error("Invalid embedded muon bootstrap config.\n");
+    muon_print_error("Invalid embedded muon launcher config.\n");
     return -1;
   }
   for (unsigned long long index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(&reader, &key, &key_length) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
-    if (tlv_key_equals(key, key_length, "bootstrap")) {
-      unsigned long long bootstrap_count = 0;
-      if (tlv_read_object_value_count(&reader, &bootstrap_count) != 0) {
-        muon_print_error("muon.json bootstrap must be an object.\n");
+    if (tlv_key_equals(key, key_length, "launcher")) {
+      unsigned long long launcher_count = 0;
+      if (tlv_read_object_value_count(&reader, &launcher_count) != 0) {
+        muon_print_error("muon.json launcher must be an object.\n");
         return -1;
       }
-      const int result = tlv_read_bootstrap_default_version_policy(
-          &reader, bootstrap_count, policy);
+      const int result = tlv_read_launcher_default_version_policy(
+          &reader, launcher_count, policy);
       if (result != 0) {
         return result < 0 ? -1 : 0;
       }
       continue;
     }
     if (tlv_skip_value(&reader) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
   }
@@ -357,7 +357,7 @@ int muon_bootstrap_get_embedded_default_version_policy(char **policy) {
   return *policy == NULL ? -1 : 0;
 }
 
-int muon_bootstrap_get_embedded_app_id(char **app_id) {
+int muon_launcher_get_embedded_app_id(char **app_id) {
   if (app_id == NULL) {
     return -1;
   }
@@ -366,52 +366,52 @@ int muon_bootstrap_get_embedded_app_id(char **app_id) {
     return 0;
   }
 
-  MuonBootstrapTlvReader reader = {
-      kMuonBootstrapEmbeddedConfigSlot,
-      MUON_BOOTSTRAP_EMBEDDED_CONFIG_SLOT_SIZE,
+  MuonLauncherTlvReader reader = {
+      kMuonLauncherEmbeddedConfigSlot,
+      MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE,
       0};
   unsigned long long count = 0;
   if (tlv_read_object_value_count(&reader, &count) != 0) {
-    muon_print_error("Invalid embedded muon bootstrap config.\n");
+    muon_print_error("Invalid embedded muon launcher config.\n");
     return -1;
   }
   for (unsigned long long index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(&reader, &key, &key_length) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
-    if (tlv_key_equals(key, key_length, "bootstrap")) {
-      unsigned long long bootstrap_count = 0;
-      if (tlv_read_object_value_count(&reader, &bootstrap_count) != 0) {
-        muon_print_error("muon.json bootstrap must be an object.\n");
+    if (tlv_key_equals(key, key_length, "launcher")) {
+      unsigned long long launcher_count = 0;
+      if (tlv_read_object_value_count(&reader, &launcher_count) != 0) {
+        muon_print_error("muon.json launcher must be an object.\n");
         return -1;
       }
       const int result =
-          tlv_read_bootstrap_app_id(&reader, bootstrap_count, app_id);
+          tlv_read_launcher_app_id(&reader, launcher_count, app_id);
       if (result != 0) {
         return result < 0 ? -1 : 0;
       }
       continue;
     }
     if (tlv_skip_value(&reader) != 0) {
-      muon_print_error("Invalid embedded muon bootstrap config.\n");
+      muon_print_error("Invalid embedded muon launcher config.\n");
       return -1;
     }
   }
   return 0;
 }
 
-void muon_bootstrap_config_init_defaults(MuonBootstrapConfig *config) {
+void muon_launcher_config_init_defaults(MuonLauncherConfig *config) {
   memset(config, 0, sizeof(*config));
   config->cef_version_policy = muon_duplicate_string("tested");
   config->cef_exact_version = muon_duplicate_string("");
   config->catalog_refresh_interval_seconds =
-      MUON_BOOTSTRAP_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS;
+      MUON_LAUNCHER_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS;
 }
 
-void muon_bootstrap_config_free(MuonBootstrapConfig *config) {
+void muon_launcher_config_free(MuonLauncherConfig *config) {
   if (config == NULL) {
     return;
   }
@@ -420,14 +420,14 @@ void muon_bootstrap_config_free(MuonBootstrapConfig *config) {
   memset(config, 0, sizeof(*config));
 }
 
-int muon_bootstrap_config_validate(const MuonBootstrapConfig *config) {
+int muon_launcher_config_validate(const MuonLauncherConfig *config) {
   if (config->cef_version_policy == NULL ||
       !is_valid_policy(config->cef_version_policy)) {
-    muon_print_error("Invalid CEF version policy in muon-bootstrap.ini.\n");
+    muon_print_error("Invalid CEF version policy in muon-launcher.ini.\n");
     return -1;
   }
   if (config->cef_exact_version == NULL) {
-    muon_print_error("Invalid exactVersion in muon-bootstrap.ini.\n");
+    muon_print_error("Invalid exactVersion in muon-launcher.ini.\n");
     return -1;
   }
   if (strcmp(config->cef_version_policy, "exact") == 0 &&
@@ -438,7 +438,7 @@ int muon_bootstrap_config_validate(const MuonBootstrapConfig *config) {
   return 0;
 }
 
-static int apply_entry(MuonBootstrapConfig *config, const char *section,
+static int apply_entry(MuonLauncherConfig *config, const char *section,
                        const char *key, const char *value) {
   if (strcmp(section, "cef") == 0 && strcmp(key, "versionPolicy") == 0) {
     if (!is_valid_policy(value)) {
@@ -479,23 +479,23 @@ static int apply_entry(MuonBootstrapConfig *config, const char *section,
   return 0;
 }
 
-int muon_bootstrap_config_read(const char *runtime_dir,
-                               MuonBootstrapConfig *config) {
-  return muon_bootstrap_config_read_with_default(runtime_dir, "tested", config);
+int muon_launcher_config_read(const char *runtime_dir,
+                               MuonLauncherConfig *config) {
+  return muon_launcher_config_read_with_default(runtime_dir, "tested", config);
 }
 
-int muon_bootstrap_config_read_with_default(const char *runtime_dir,
+int muon_launcher_config_read_with_default(const char *runtime_dir,
                                             const char *default_version_policy,
-                                            MuonBootstrapConfig *config) {
-  muon_bootstrap_config_init_defaults(config);
+                                            MuonLauncherConfig *config) {
+  muon_launcher_config_init_defaults(config);
   if (config->cef_version_policy == NULL ||
       config->cef_exact_version == NULL) {
-    muon_bootstrap_config_free(config);
+    muon_launcher_config_free(config);
     return -1;
   }
-  char *path = muon_path_join(runtime_dir, MUON_BOOTSTRAP_CONFIG_FILE_NAME);
+  char *path = muon_path_join(runtime_dir, MUON_LAUNCHER_CONFIG_FILE_NAME);
   if (path == NULL) {
-    muon_bootstrap_config_free(config);
+    muon_launcher_config_free(config);
     return -1;
   }
   if (!muon_path_exists(path)) {
@@ -505,11 +505,11 @@ int muon_bootstrap_config_read_with_default(const char *runtime_dir,
                    default_version_policy == NULL ? "tested"
                                                   : default_version_policy) !=
             0) {
-      muon_bootstrap_config_free(config);
+      muon_launcher_config_free(config);
       return -1;
     }
-    if (muon_bootstrap_config_validate(config) != 0) {
-      muon_bootstrap_config_free(config);
+    if (muon_launcher_config_validate(config) != 0) {
+      muon_launcher_config_free(config);
       return -1;
     }
     return 0;
@@ -517,7 +517,7 @@ int muon_bootstrap_config_read_with_default(const char *runtime_dir,
   char *content = muon_read_text_file(path);
   free(path);
   if (content == NULL) {
-    muon_bootstrap_config_free(config);
+    muon_launcher_config_free(config);
     return -1;
   }
   char section[32] = "";
@@ -548,7 +548,7 @@ int muon_bootstrap_config_read_with_default(const char *runtime_dir,
     *equals = '\0';
     if (apply_entry(config, section, trim(entry), trim(equals + 1)) != 0) {
       free(content);
-      muon_bootstrap_config_free(config);
+      muon_launcher_config_free(config);
       return -1;
     }
   }
@@ -557,26 +557,26 @@ int muon_bootstrap_config_read_with_default(const char *runtime_dir,
       set_string(&config->cef_version_policy,
                  default_version_policy == NULL ? "tested"
                                                 : default_version_policy) != 0) {
-    muon_bootstrap_config_free(config);
+    muon_launcher_config_free(config);
     return -1;
   }
-  if (muon_bootstrap_config_validate(config) != 0) {
-    muon_bootstrap_config_free(config);
+  if (muon_launcher_config_validate(config) != 0) {
+    muon_launcher_config_free(config);
     return -1;
   }
   return 0;
 }
 
-int muon_bootstrap_config_write(const char *runtime_dir,
-                                const MuonBootstrapConfig *config) {
-  if (muon_bootstrap_config_validate(config) != 0) {
+int muon_launcher_config_write(const char *runtime_dir,
+                                const MuonLauncherConfig *config) {
+  if (muon_launcher_config_validate(config) != 0) {
     return -1;
   }
-  char *path = muon_path_join(runtime_dir, MUON_BOOTSTRAP_CONFIG_FILE_NAME);
+  char *path = muon_path_join(runtime_dir, MUON_LAUNCHER_CONFIG_FILE_NAME);
   char *temporary_path =
       path == NULL ? NULL
                    : muon_create_temporary_path(runtime_dir,
-                                                MUON_BOOTSTRAP_CONFIG_FILE_NAME);
+                                                MUON_LAUNCHER_CONFIG_FILE_NAME);
   if (path == NULL || temporary_path == NULL) {
     free(path);
     free(temporary_path);
@@ -617,7 +617,7 @@ int muon_bootstrap_config_write(const char *runtime_dir,
   }
   char *output = content;
   size_t remaining = (size_t)size + 1;
-#define MUON_WRITE_BOOTSTRAP_CONFIG(...)                                      \
+#define MUON_WRITE_LAUNCHER_CONFIG(...)                                      \
   do {                                                                        \
     const int written = snprintf(output, remaining, __VA_ARGS__);             \
     if (written < 0 || (size_t)written >= remaining) {                        \
@@ -629,20 +629,20 @@ int muon_bootstrap_config_write(const char *runtime_dir,
     output += written;                                                        \
     remaining -= (size_t)written;                                             \
   } while (0)
-  MUON_WRITE_BOOTSTRAP_CONFIG("[cef]\n");
+  MUON_WRITE_LAUNCHER_CONFIG("[cef]\n");
   if (config->has_cef_version_policy) {
-    MUON_WRITE_BOOTSTRAP_CONFIG("versionPolicy=%s\n",
+    MUON_WRITE_LAUNCHER_CONFIG("versionPolicy=%s\n",
                                 config->cef_version_policy);
   }
   if (config->has_cef_exact_version) {
-    MUON_WRITE_BOOTSTRAP_CONFIG("exactVersion=%s\n",
+    MUON_WRITE_LAUNCHER_CONFIG("exactVersion=%s\n",
                                 config->cef_exact_version);
   }
   if (config->has_catalog_refresh_interval_seconds) {
-    MUON_WRITE_BOOTSTRAP_CONFIG("catalogRefreshIntervalSeconds=%llu\n",
+    MUON_WRITE_LAUNCHER_CONFIG("catalogRefreshIntervalSeconds=%llu\n",
                                 config->catalog_refresh_interval_seconds);
   }
-  MUON_WRITE_BOOTSTRAP_CONFIG(
+  MUON_WRITE_LAUNCHER_CONFIG(
       "lastCatalogUpdateUnix=%llu\n"
       "\n"
       "[update]\n"
@@ -651,7 +651,7 @@ int muon_bootstrap_config_write(const char *runtime_dir,
       config->last_catalog_update_unix,
       config->update_requested ? "true" : "false",
       config->update_requested_at_unix);
-#undef MUON_WRITE_BOOTSTRAP_CONFIG
+#undef MUON_WRITE_LAUNCHER_CONFIG
   const int result = muon_write_text_file(temporary_path, content) == 0 &&
                              muon_atomic_replace(temporary_path, path) == 0
                          ? 0

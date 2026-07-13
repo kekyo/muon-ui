@@ -643,7 +643,7 @@ export const cdpStartupTimeoutMs = shouldUseValgrind
   : isWindowsRemoteAtLoad
     ? 60000
     : 30000;
-export const bootstrapCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
+export const launcherCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
 export const cdpCommandTimeoutMs = shouldUseValgrind
   ? 60000
   : isWindowsRemoteAtLoad
@@ -946,18 +946,18 @@ export const getMuonExecutable = (directory: string): string =>
       : "muon-core",
   );
 
-export const getMuonBootstrapExecutable = (directory: string): string =>
+export const getMuonLauncherExecutable = (directory: string): string =>
   join(
     directory,
     isWindowsAbsolutePath(directory) || process.platform === "win32"
-      ? "muon-bootstrap.exe"
-      : "muon-bootstrap",
+      ? "muon-launcher.exe"
+      : "muon-launcher",
   );
 
 const getLocalFallbackAppIdForExecutable = (executable: string): string => {
   const executableName = executable.split(/[\\/]+/u).at(-1) ?? executable;
-  return executableName.toLowerCase().includes("bootstrap")
-    ? "muon-bootstrap"
+  return executableName.toLowerCase().includes("launcher")
+    ? "muon-launcher"
     : "muon-core";
 };
 
@@ -2625,8 +2625,8 @@ const startWindowsRemoteMuon = async (
   );
   const directory = selectedRuntime.directory;
   const executable =
-    options.executablePath?.toLowerCase().includes("bootstrap") === true
-      ? getMuonBootstrapExecutable(directory)
+    options.executablePath?.toLowerCase().includes("launcher") === true
+      ? getMuonLauncherExecutable(directory)
       : getMuonExecutable(directory);
   const pluginConfig = createPluginConfigEntries(
     options.configuredPluginNames,
@@ -2953,15 +2953,15 @@ export const startDebugMuon = async (
     browserTitleBarType,
     isWindowsRemoteE2e() || !waitForDebugPort
       ? undefined
-      : getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
-    isWindowsRemoteE2e() ? cdpStartupTimeoutMs : bootstrapCdpStartupTimeoutMs,
+      : getMuonLauncherExecutable(DEBUG_MUON_DIRECTORY),
+    isWindowsRemoteE2e() ? cdpStartupTimeoutMs : launcherCdpStartupTimeoutMs,
     logConfig,
     pluginSignatureByName,
     pluginSaltByName,
     pluginConfigByName,
   );
 
-export const startDebugMuonBootstrap = async (
+export const startDebugMuonLauncher = async (
   pluginNames: string[],
   networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
   environment: NodeJS.ProcessEnv = {},
@@ -2998,8 +2998,8 @@ export const startDebugMuonBootstrap = async (
     undefined,
     undefined,
     undefined,
-    getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
-    bootstrapCdpStartupTimeoutMs,
+    getMuonLauncherExecutable(DEBUG_MUON_DIRECTORY),
+    launcherCdpStartupTimeoutMs,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>

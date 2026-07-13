@@ -117,7 +117,7 @@ muon({
   Windowsターゲットでは `.exe` が自動的に付与されます。
 - `appId` を省略した場合も、 `package.json` にある `name` からbase IDを生成します。
   `@scope/name` は `scope.name` になり、その他の使用できない文字は `-` に正規化されます。
-  Linuxターゲットでは生成された値をそのまま `bootstrap.appId` として `muon-core` とランチャーに埋め込みます。
+  Linuxターゲットでは生成された値をそのまま `launcher.appId` として `muon-core` とランチャーに埋め込みます。
   Windowsターゲットでは `windows-amd64` に `<appId>.amd64`、`windows-i686` に `<appId>.i686` を埋め込みます。
 - `outputRoot` と `configPath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
   `configPath` を省略した場合は、Vite project rootから `muon.json5`, `muon.jsonc`, `muon.json` の順に探索します。

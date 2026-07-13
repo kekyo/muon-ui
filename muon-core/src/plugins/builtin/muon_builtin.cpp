@@ -6,7 +6,7 @@
 
 #include "plugins/builtin/muon_builtin.h"
 
-#include "plugins/builtin/muon_builtin_bootstrap.h"
+#include "plugins/builtin/muon_builtin_launcher.h"
 #include "plugins/builtin/muon_builtin_environments.h"
 #include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
@@ -15,7 +15,7 @@ static const muon_plugin_namespace* const builtin_namespaces[] = {
     &kMuonBuiltinFsNamespace,
     &kMuonBuiltinEnvironmentsNamespace,
     &kMuonBuiltinExecutorNamespace,
-    &kMuonBuiltinBootstrapNamespace,
+    &kMuonBuiltinLauncherNamespace,
     nullptr,
 };
 

@@ -11,6 +11,7 @@
 
 #include "prepare_progress.h"
 #include "sha1.h"
+#include "sha2.h"
 #include "yyjson.h"
 
 void muon_set_quiet(int quiet);
@@ -66,16 +67,79 @@ int muon_json_get_uint64(yyjson_val *object, const char *key,
 int muon_json_get_string_array(yyjson_val *object, const char *key,
                                char ***values, size_t *count);
 
-void muon_sha1_update_bytes(SHA1_CTX *context, const void *data, size_t size);
-void muon_sha1_update_string(SHA1_CTX *context, const char *value);
-void muon_sha1_digest_to_hex(const uint8_t digest[SHA1_DIGEST_LENGTH],
-                             char output[SHA1_DIGEST_STRING_LENGTH]);
+/**
+ * Adds bytes to an initialized SHA-256 calculation.
+ *
+ * @param context Initialized SHA-256 calculation state.
+ * @param data Bytes to add.
+ * @param size Number of bytes to add.
+ */
+void muon_sha256_update_bytes(SHA256_CTX *context, const void *data,
+                              size_t size);
+
+/**
+ * Adds a null-terminated string to an initialized SHA-256 calculation.
+ *
+ * @param context Initialized SHA-256 calculation state.
+ * @param value String whose bytes are added without the null terminator.
+ */
+void muon_sha256_update_string(SHA256_CTX *context, const char *value);
+
+/**
+ * Encodes a SHA-256 digest as lowercase hexadecimal.
+ *
+ * @param digest SHA-256 digest bytes.
+ * @param output Receives 64 hexadecimal characters and a null terminator.
+ */
+void muon_sha256_digest_to_hex(
+    const uint8_t digest[SHA256_DIGEST_LENGTH],
+    char output[SHA256_DIGEST_STRING_LENGTH]);
+
+/**
+ * Calculates the SHA-256 digest of a file.
+ *
+ * @param path Path to the file.
+ * @param output Receives 64 lowercase hexadecimal characters and a null
+ *     terminator.
+ * @return 0 on success, or -1 when the file cannot be read.
+ */
+int muon_sha256_file_hex(const char *path,
+                         char output[SHA256_DIGEST_STRING_LENGTH]);
+
+/**
+ * Calculates the SHA-1 digest required by the CEF artifact catalog.
+ *
+ * @param path Path to the CEF artifact archive.
+ * @param output Receives 40 lowercase hexadecimal characters and a null
+ *     terminator.
+ * @return 0 on success, or -1 when the file cannot be read.
+ */
 int muon_sha1_file_hex(const char *path,
                        char output[SHA1_DIGEST_STRING_LENGTH]);
-int muon_fingerprint_path_recursive(const char *path, const char *relative,
-                                    char fingerprint[SHA1_DIGEST_STRING_LENGTH]);
-int muon_fingerprint_directory_contents(const char *path,
-                                        char fingerprint[SHA1_DIGEST_STRING_LENGTH]);
+
+/**
+ * Calculates the recursive SHA-256 fingerprint of a path.
+ *
+ * @param path Path to fingerprint.
+ * @param relative Stable relative path recorded in the fingerprint.
+ * @param fingerprint Receives 64 lowercase hexadecimal characters and a null
+ *     terminator.
+ * @return 0 on success, or -1 when the path cannot be read.
+ */
+int muon_fingerprint_path_recursive(
+    const char *path, const char *relative,
+    char fingerprint[SHA256_DIGEST_STRING_LENGTH]);
+
+/**
+ * Calculates the recursive SHA-256 fingerprint of directory contents.
+ *
+ * @param path Directory whose contents are fingerprinted.
+ * @param fingerprint Receives 64 lowercase hexadecimal characters and a null
+ *     terminator.
+ * @return 0 on success, or -1 when the directory cannot be read.
+ */
+int muon_fingerprint_directory_contents(
+    const char *path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]);
 char *muon_create_ready_content(const char *muon_fingerprint,
                                 const char *cef_fingerprint);
 int muon_ready_file_matches(const char *ready_path,

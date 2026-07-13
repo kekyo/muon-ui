@@ -162,6 +162,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
 
 x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${progress_harness_exe}" \
   "${progress_harness_src}" \

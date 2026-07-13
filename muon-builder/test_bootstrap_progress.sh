@@ -368,6 +368,7 @@ INSTALL_CONFIG_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
 	  -I"${SCRIPT_DIR}/src" \
+	  -I"${SCRIPT_DIR}/../deps/sha2" \
 	  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
 	  -o "${OUT_DIR}/bootstrap_state_directory_harness" \
 	  "${BOOTSTRAP_STATE_HARNESS}" \
@@ -636,6 +637,7 @@ rm -rf "${wine_prefix}"
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${OUT_DIR}/bootstrap_state_directory_windows64_harness.exe" \
   "${BOOTSTRAP_STATE_HARNESS}"

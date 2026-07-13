@@ -41,6 +41,8 @@ import {
 } from "./test-muon-builder.js";
 
 const execFileAsync = promisify(execFile);
+const sha256HexPattern = /^[0-9a-f]{64}$/u;
+const emptySha256Fingerprint = "0".repeat(64);
 const cleanupDirectories: string[] = [];
 const suiteCleanupDirectories: string[] = [];
 let prepareExecutablePath = "";
@@ -83,6 +85,15 @@ interface CatalogVersion {
   channel?: string;
   lastModified?: string;
 }
+
+interface ReadyMarker {
+  ready: boolean;
+  muonFingerprint: string;
+  cefFingerprint: string;
+}
+
+const readReadyMarker = async (path: string): Promise<ReadyMarker> =>
+  JSON.parse(await readFile(path, "utf8")) as ReadyMarker;
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -691,6 +702,11 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "assets", "app.txt")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(stagePath, ".muon-ready.json"),
+    );
+    expect(readyMarker.muonFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
   });
 
   it("downloads CEF when cefPath is omitted and stages the prepared cache", async () => {
@@ -728,6 +744,10 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(stagePath, ".muon-ready.json"),
+    );
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
   });
 
   it("resumes an interrupted HTTP CEF archive download", async () => {
@@ -1047,6 +1067,11 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(outputDir, "libcef_dll_wrapper", "CMakeLists.txt")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(outputDir, ".muon-cef-ready.json"),
+    );
+    expect(readyMarker.muonFingerprint).toBe(emptySha256Fingerprint);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
     await expect(listCacheEntries(fixture.cacheDir)).resolves.toEqual([
       "artifacts",
       `artifacts/${fixture.archiveFileName}`,
@@ -1408,6 +1433,11 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(fixture.muonPath, "libcef.so")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(fixture.muonPath, ".muon-cef-ready.json"),
+    );
+    expect(readyMarker.muonFingerprint).toBe(emptySha256Fingerprint);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
 
     await expect(runProgressHarness(harnessPath, fixture)).resolves.toEqual([]);
   });

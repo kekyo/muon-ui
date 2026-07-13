@@ -19,7 +19,8 @@
 
 static const char *kDefaultCefCatalogUrl =
     "https://cef-builds.spotifycdn.com/index.json";
-static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
+static const char *kEmptyFingerprint =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 static const int kCurlDownloadAttemptCount = 4;
 
 static const char *display_target_from_cef_target(const char *target) {
@@ -896,7 +897,7 @@ int muon_prepare_extract_cef_archive_full(const char *archive_path,
                                           const char *output_dir, int force,
                                           size_t *file_count) {
   *file_count = 0;
-  char cef_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+  char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if (muon_fingerprint_path_recursive(archive_path, "", cef_fingerprint) != 0) {
     return -1;
   }

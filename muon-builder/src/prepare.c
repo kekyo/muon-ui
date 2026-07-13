@@ -73,7 +73,8 @@ typedef struct {
   size_t capacity;
 } PrepareNameList;
 
-static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
+static const char *kEmptyFingerprint =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 static const char *muon_cef_target_from_public_target(const char *target) {
   if (target == NULL) {
@@ -718,11 +719,11 @@ static int copy_cef_source(
   return result;
 }
 
-static void finalize_sha1_hex(SHA1_CTX *context,
-                              char output[SHA1_DIGEST_STRING_LENGTH]) {
-  uint8_t digest[SHA1_DIGEST_LENGTH];
-  SHA1Final(digest, context);
-  muon_sha1_digest_to_hex(digest, output);
+static void finalize_sha256_hex(SHA256_CTX *context,
+                                char output[SHA256_DIGEST_STRING_LENGTH]) {
+  uint8_t digest[SHA256_DIGEST_LENGTH];
+  SHA256_Final(digest, context);
+  muon_sha256_digest_to_hex(digest, output);
 }
 
 static void prepare_name_list_free(PrepareNameList *list) {
@@ -851,18 +852,18 @@ static int staging_relative_path_should_skip(const char *relative) {
 
 static int fingerprint_staging_muon_source_recursive(
     const char *path, const char *relative,
-    char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
   if (stat(path, &entry) != 0) {
     muon_print_errno(path);
     return -1;
   }
-  SHA1_CTX context;
-  SHA1Init(&context);
-  muon_sha1_update_string(&context, relative);
-  muon_sha1_update_string(&context, ":");
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  muon_sha256_update_string(&context, relative);
+  muon_sha256_update_string(&context, ":");
   if (S_ISDIR(entry.st_mode)) {
-    muon_sha1_update_string(&context, "directory");
+    muon_sha256_update_string(&context, "directory");
     PrepareNameList children = {0};
     if (read_sorted_prepare_names(path, &children) != 0) {
       prepare_name_list_free(&children);
@@ -884,7 +885,7 @@ static int fingerprint_staging_muon_source_recursive(
         free(child_relative);
         continue;
       }
-      char child_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char child_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       if (fingerprint_staging_muon_source_recursive(
               child_path, child_relative, child_fingerprint) != 0) {
         free(child_path);
@@ -892,28 +893,28 @@ static int fingerprint_staging_muon_source_recursive(
         prepare_name_list_free(&children);
         return -1;
       }
-      muon_sha1_update_string(&context, children.values[index]);
-      muon_sha1_update_string(&context, child_fingerprint);
+      muon_sha256_update_string(&context, children.values[index]);
+      muon_sha256_update_string(&context, child_fingerprint);
       free(child_path);
       free(child_relative);
     }
     prepare_name_list_free(&children);
   } else if (S_ISREG(entry.st_mode)) {
-    char content_fingerprint[SHA1_DIGEST_STRING_LENGTH];
-    if (muon_sha1_file_hex(path, content_fingerprint) != 0) {
+    char content_fingerprint[SHA256_DIGEST_STRING_LENGTH];
+    if (muon_sha256_file_hex(path, content_fingerprint) != 0) {
       return -1;
     }
-    muon_sha1_update_string(&context, "file");
-    muon_sha1_update_string(&context, content_fingerprint);
+    muon_sha256_update_string(&context, "file");
+    muon_sha256_update_string(&context, content_fingerprint);
   } else {
-    muon_sha1_update_string(&context, "other");
+    muon_sha256_update_string(&context, "other");
   }
-  finalize_sha1_hex(&context, fingerprint);
+  finalize_sha256_hex(&context, fingerprint);
   return 0;
 }
 
 static int fingerprint_staging_muon_source(
-    const char *path, char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    const char *path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   return fingerprint_staging_muon_source_recursive(path, "", fingerprint);
 }
 
@@ -986,7 +987,7 @@ static int copy_staging_muon_source(const char *source,
 }
 
 static int fingerprint_cef_source(const char *cef_path,
-                                  char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+                                  char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   char *release_path = muon_path_join(cef_path, "Release");
   char *resource_path = muon_path_join(cef_path, "Resources");
   if (release_path == NULL || resource_path == NULL) {
@@ -998,24 +999,24 @@ static int fingerprint_cef_source(const char *cef_path,
   const int has_resources = muon_path_exists(resource_path);
   int result = 0;
   if (has_release || has_resources) {
-    SHA1_CTX context;
-    SHA1Init(&context);
+    SHA256_CTX context;
+    SHA256_Init(&context);
     if (has_release) {
-      char release_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char release_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       result =
           muon_fingerprint_directory_contents(release_path, release_fingerprint);
-      muon_sha1_update_string(&context, "Release");
-      muon_sha1_update_string(&context, release_fingerprint);
+      muon_sha256_update_string(&context, "Release");
+      muon_sha256_update_string(&context, release_fingerprint);
     }
     if (result == 0 && has_resources) {
-      char resource_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char resource_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       result =
           muon_fingerprint_directory_contents(resource_path, resource_fingerprint);
-      muon_sha1_update_string(&context, "Resources");
-      muon_sha1_update_string(&context, resource_fingerprint);
+      muon_sha256_update_string(&context, "Resources");
+      muon_sha256_update_string(&context, resource_fingerprint);
     }
     if (result == 0) {
-      finalize_sha1_hex(&context, fingerprint);
+      finalize_sha256_hex(&context, fingerprint);
     }
   } else {
     result = muon_fingerprint_directory_contents(cef_path, fingerprint);
@@ -1026,27 +1027,27 @@ static int fingerprint_cef_source(const char *cef_path,
 }
 
 static int fingerprint_archive_metadata(
-    const char *archive_path, char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    const char *archive_path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
   if (stat(archive_path, &entry) != 0) {
     muon_print_errno(archive_path);
     return -1;
   }
-  SHA1_CTX context;
-  SHA1Init(&context);
-  muon_sha1_update_string(&context, archive_path);
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  muon_sha256_update_string(&context, archive_path);
   char metadata[128];
   snprintf(metadata, sizeof(metadata), ":%llu:%lld:%d",
            (unsigned long long)entry.st_size, (long long)entry.st_mtime,
            (int)(entry.st_mode & 0777));
-  muon_sha1_update_string(&context, metadata);
-  finalize_sha1_hex(&context, fingerprint);
+  muon_sha256_update_string(&context, metadata);
+  finalize_sha256_hex(&context, fingerprint);
   return 0;
 }
 
 static int fingerprint_staging_cef_source(
     const char *cef_path, int cef_is_archive,
-    char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   return cef_is_archive ? fingerprint_archive_metadata(cef_path, fingerprint)
                         : fingerprint_cef_source(cef_path, fingerprint);
 }
@@ -1087,8 +1088,8 @@ static int prepare_staging(const PrepareOptions *options,
   if (options->stage_dir == NULL) {
     return set_prepare_result(result, NULL, options->muon_path, cef_path, 0);
   }
-  char muon_fingerprint[SHA1_DIGEST_STRING_LENGTH];
-  char cef_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+  char muon_fingerprint[SHA256_DIGEST_STRING_LENGTH];
+  char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if (fingerprint_staging_muon_source(options->muon_path, muon_fingerprint) !=
           0 ||
       fingerprint_staging_cef_source(cef_path, cef_is_archive,
@@ -1273,7 +1274,7 @@ static int prepare_cef_in_place(const PrepareOptions *options,
                                 const MuonRuntimeInfo *runtime_info,
                                 const char *cef_path, int cef_is_archive,
                                 PrepareResult *result) {
-  char cef_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+  char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if ((cef_is_archive
            ? muon_fingerprint_path_recursive(cef_path, "", cef_fingerprint)
            : fingerprint_cef_source(cef_path, cef_fingerprint)) != 0) {

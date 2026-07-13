@@ -195,6 +195,7 @@ HARNESS_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -DMUON_RUNTIME_HELPER_SOURCE_ROOT=\"${SOURCE_ROOT}\" \
   -DMUON_RUNTIME_HELPER_SYSTEM_ROOT=\"${SYSTEM_ROOT}\" \

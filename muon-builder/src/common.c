@@ -783,7 +783,8 @@ int muon_json_get_string_array(yyjson_val *object, const char *key,
   return 0;
 }
 
-void muon_sha1_update_bytes(SHA1_CTX *context, const void *data, size_t size) {
+static void sha1_update_bytes(SHA1_CTX *context, const void *data,
+                              size_t size) {
   const uint8_t *cursor = (const uint8_t *)data;
   while (size > 0) {
     const unsigned int chunk =
@@ -794,20 +795,17 @@ void muon_sha1_update_bytes(SHA1_CTX *context, const void *data, size_t size) {
   }
 }
 
-void muon_sha1_update_string(SHA1_CTX *context, const char *value) {
-  muon_sha1_update_bytes(context, value, strlen(value));
-}
-
-void muon_sha1_digest_to_hex(const uint8_t digest[SHA1_DIGEST_LENGTH],
-                             char output[SHA1_DIGEST_STRING_LENGTH]) {
+static void sha1_digest_to_hex(
+    const uint8_t digest[SHA1_DIGEST_LENGTH],
+    char output[SHA1_DIGEST_STRING_LENGTH]) {
   for (int index = 0; index < SHA1_DIGEST_LENGTH; index += 1) {
     snprintf(output + index * 2, 3, "%02x", digest[index]);
   }
   output[SHA1_DIGEST_STRING_LENGTH - 1] = '\0';
 }
 
-static int muon_sha1_file_digest(const char *path,
-                                 uint8_t digest[SHA1_DIGEST_LENGTH]) {
+static int sha1_file_digest(const char *path,
+                            uint8_t digest[SHA1_DIGEST_LENGTH]) {
   const int input = muon_open(path, MUON_OPEN_READ_FLAGS, 0);
   if (input < 0) {
     muon_print_errno(path);
@@ -826,7 +824,7 @@ static int muon_sha1_file_digest(const char *path,
     if (read_size == 0) {
       break;
     }
-    muon_sha1_update_bytes(&context, buffer, (size_t)read_size);
+    sha1_update_bytes(&context, buffer, (size_t)read_size);
   }
   if (muon_close(input) != 0) {
     muon_print_errno(path);
@@ -839,24 +837,83 @@ static int muon_sha1_file_digest(const char *path,
 int muon_sha1_file_hex(const char *path,
                        char output[SHA1_DIGEST_STRING_LENGTH]) {
   uint8_t digest[SHA1_DIGEST_LENGTH];
-  if (muon_sha1_file_digest(path, digest) != 0) {
+  if (sha1_file_digest(path, digest) != 0) {
     return -1;
   }
-  muon_sha1_digest_to_hex(digest, output);
+  sha1_digest_to_hex(digest, output);
   return 0;
 }
 
-static void sha1_update_uint64(SHA1_CTX *context, uint64_t value) {
+void muon_sha256_update_bytes(SHA256_CTX *context, const void *data,
+                              size_t size) {
+  SHA256_Update(context, (const uint8_t *)data, size);
+}
+
+void muon_sha256_update_string(SHA256_CTX *context, const char *value) {
+  muon_sha256_update_bytes(context, value, strlen(value));
+}
+
+void muon_sha256_digest_to_hex(
+    const uint8_t digest[SHA256_DIGEST_LENGTH],
+    char output[SHA256_DIGEST_STRING_LENGTH]) {
+  for (int index = 0; index < SHA256_DIGEST_LENGTH; index += 1) {
+    snprintf(output + index * 2, 3, "%02x", digest[index]);
+  }
+  output[SHA256_DIGEST_STRING_LENGTH - 1] = '\0';
+}
+
+static int muon_sha256_file_digest(
+    const char *path, uint8_t digest[SHA256_DIGEST_LENGTH]) {
+  const int input = muon_open(path, MUON_OPEN_READ_FLAGS, 0);
+  if (input < 0) {
+    muon_print_errno(path);
+    return -1;
+  }
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  uint8_t buffer[64 * 1024];
+  for (;;) {
+    const MuonSSize read_size = muon_read(input, buffer, sizeof(buffer));
+    if (read_size < 0) {
+      muon_print_errno(path);
+      muon_close(input);
+      return -1;
+    }
+    if (read_size == 0) {
+      break;
+    }
+    muon_sha256_update_bytes(&context, buffer, (size_t)read_size);
+  }
+  if (muon_close(input) != 0) {
+    muon_print_errno(path);
+    return -1;
+  }
+  SHA256_Final(digest, &context);
+  return 0;
+}
+
+int muon_sha256_file_hex(const char *path,
+                         char output[SHA256_DIGEST_STRING_LENGTH]) {
+  uint8_t digest[SHA256_DIGEST_LENGTH];
+  if (muon_sha256_file_digest(path, digest) != 0) {
+    return -1;
+  }
+  muon_sha256_digest_to_hex(digest, output);
+  return 0;
+}
+
+static void sha256_update_uint64(SHA256_CTX *context, uint64_t value) {
   uint8_t buffer[8];
   for (int index = 0; index < 8; index += 1) {
     buffer[7 - index] = (uint8_t)(value >> (index * 8));
   }
-  muon_sha1_update_bytes(context, buffer, sizeof(buffer));
+  muon_sha256_update_bytes(context, buffer, sizeof(buffer));
 }
 
-static void sha1_update_record_string(SHA1_CTX *context, const char *value) {
-  sha1_update_uint64(context, (uint64_t)strlen(value));
-  muon_sha1_update_string(context, value);
+static void sha256_update_record_string(SHA256_CTX *context,
+                                        const char *value) {
+  sha256_update_uint64(context, (uint64_t)strlen(value));
+  muon_sha256_update_string(context, value);
 }
 
 typedef struct {
@@ -920,18 +977,18 @@ static int read_sorted_directory_names(const char *path, NameList *list) {
 
 int muon_fingerprint_path_recursive(
     const char *path, const char *relative,
-    char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
   if (muon_lstat(path, &entry) != 0) {
     muon_print_errno(path);
     return -1;
   }
-  SHA1_CTX context;
-  SHA1Init(&context);
-  sha1_update_record_string(&context, relative);
-  sha1_update_uint64(&context, (uint64_t)(entry.st_mode & 0777));
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  sha256_update_record_string(&context, relative);
+  sha256_update_uint64(&context, (uint64_t)(entry.st_mode & 0777));
   if (S_ISDIR(entry.st_mode)) {
-    sha1_update_record_string(&context, "directory");
+    sha256_update_record_string(&context, "directory");
     NameList children = {0};
     if (read_sorted_directory_names(path, &children) != 0) {
       name_list_free(&children);
@@ -942,7 +999,7 @@ int muon_fingerprint_path_recursive(
       char *child_relative =
           relative[0] == '\0' ? muon_duplicate_string(children.values[index])
                               : muon_path_join(relative, children.values[index]);
-      char child_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char child_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       if (child_path == NULL || child_relative == NULL ||
           muon_fingerprint_path_recursive(child_path, child_relative,
                                           child_fingerprint) != 0) {
@@ -951,31 +1008,31 @@ int muon_fingerprint_path_recursive(
         name_list_free(&children);
         return -1;
       }
-      sha1_update_record_string(&context, children.values[index]);
-      sha1_update_record_string(&context, child_fingerprint);
+      sha256_update_record_string(&context, children.values[index]);
+      sha256_update_record_string(&context, child_fingerprint);
       free(child_path);
       free(child_relative);
     }
     name_list_free(&children);
   } else if (S_ISREG(entry.st_mode)) {
-    uint8_t content_digest[SHA1_DIGEST_LENGTH];
-    if (muon_sha1_file_digest(path, content_digest) != 0) {
+    uint8_t content_digest[SHA256_DIGEST_LENGTH];
+    if (muon_sha256_file_digest(path, content_digest) != 0) {
       return -1;
     }
-    sha1_update_record_string(&context, "file");
-    muon_sha1_update_bytes(&context, content_digest, sizeof(content_digest));
+    sha256_update_record_string(&context, "file");
+    muon_sha256_update_bytes(&context, content_digest, sizeof(content_digest));
   } else {
-    sha1_update_record_string(&context, "other");
-    sha1_update_uint64(&context, (uint64_t)entry.st_size);
+    sha256_update_record_string(&context, "other");
+    sha256_update_uint64(&context, (uint64_t)entry.st_size);
   }
-  uint8_t digest[SHA1_DIGEST_LENGTH];
-  SHA1Final(digest, &context);
-  muon_sha1_digest_to_hex(digest, fingerprint);
+  uint8_t digest[SHA256_DIGEST_LENGTH];
+  SHA256_Final(digest, &context);
+  muon_sha256_digest_to_hex(digest, fingerprint);
   return 0;
 }
 
 int muon_fingerprint_directory_contents(
-    const char *path, char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    const char *path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   return muon_fingerprint_path_recursive(path, "", fingerprint);
 }
 

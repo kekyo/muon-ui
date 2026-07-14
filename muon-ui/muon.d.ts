@@ -19,8 +19,8 @@ declare global {
   interface MuonApi {
     /** Browser and native window operations for the current muon window. */
     readonly browser: MuonBrowserApi;
-    /** Bootstrap update controls exposed by muon. */
-    readonly bootstrap: MuonBootstrapApi;
+    /** Launcher update controls exposed by muon. */
+    readonly launcher: MuonLauncherApi;
     /** Environment information exposed by muon. */
     readonly environments: MuonEnvironmentsApi;
     /** Child process execution operations exposed by muon. */
@@ -73,19 +73,19 @@ declare global {
     readonly release: () => Promise<void>;
   }
 
-  /** CEF version selection policy used by muon-bootstrap. */
+  /** CEF version selection policy used by muon-launcher. */
   type MuonCefVersionPolicy =
     | "tested"
     | "same-major-latest"
     | "compat-latest"
     | "exact";
 
-  /** Bootstrap settings used on the next muon-bootstrap startup. */
-  interface MuonBootstrapSettings {
+  /** Launcher settings used on the next muon-launcher startup. */
+  interface MuonLauncherSettings {
     /**
      * CEF version selection policy.
      *
-     * @defaultValue The configured bootstrap default version policy, normally `"tested"`.
+     * @defaultValue The configured launcher default version policy, normally `"tested"`.
      */
     readonly cefVersionPolicy?: MuonCefVersionPolicy;
     /**
@@ -102,8 +102,8 @@ declare global {
     readonly catalogRefreshIntervalSeconds?: number;
   }
 
-  /** Partial bootstrap settings update. */
-  interface MuonBootstrapSettingsPatch {
+  /** Partial launcher settings update. */
+  interface MuonLauncherSettingsPatch {
     /**
      * CEF version selection policy.
      *
@@ -127,25 +127,25 @@ declare global {
     readonly catalogRefreshIntervalSeconds?: number | null;
   }
 
-  /** Bootstrap update controls exposed by muon. */
-  interface MuonBootstrapApi {
+  /** Launcher update controls exposed by muon. */
+  interface MuonLauncherApi {
     /**
-     * Return bootstrap settings used by the next muon-bootstrap startup.
+     * Return launcher settings used by the next muon-launcher startup.
      *
-     * @returns A promise for the effective bootstrap settings.
+     * @returns A promise for the effective launcher settings.
      */
-    readonly getSettings: () => Promise<MuonBootstrapSettings>;
+    readonly getSettings: () => Promise<MuonLauncherSettings>;
     /**
-     * Update bootstrap settings used by the next muon-bootstrap startup.
+     * Update launcher settings used by the next muon-launcher startup.
      *
      * @param settings - Partial settings to persist. Null values clear explicit settings.
      * @returns A promise that resolves when settings are written.
      */
     readonly setSettings: (
-      settings?: MuonBootstrapSettingsPatch,
+      settings?: MuonLauncherSettingsPatch,
     ) => Promise<void>;
     /**
-     * Request a CEF catalog refresh on the next muon-bootstrap startup.
+     * Request a CEF catalog refresh on the next muon-launcher startup.
      *
      * @returns A promise that resolves when the refresh request is persisted.
      */
@@ -665,8 +665,15 @@ declare global {
      * @param options - Optional read range and abort signal.
      * @returns A promise for an `ArrayBuffer` containing the selected bytes.
      * @remarks `options.position` and `options.length` must be non-negative
-     * safe integers. When `position` is past the end of the file, the returned
-     * buffer is empty.
+     * safe integers. The native per-operation limit is configured by the
+     * internal plugin's `fs.readFile.maxBytes` string value and defaults to
+     * 67108864 bytes (64 MiB). An explicit `length` above the limit rejects
+     * before source access. When `length` is omitted, all bytes from `position`
+     * through the end of the file must fit within the limit; muon never
+     * silently truncates the result. When `position` is past the end of the
+     * file, the returned buffer is empty. The limit applies only to `readFile`
+     * and not to an aggregate of concurrent operations. `readTextFile` uses
+     * its separate `fs.readTextFile.maxBytes` limit.
      */
     readonly readFile: (
       path: string,
@@ -695,7 +702,13 @@ declare global {
      * @param encoding - Text encoding. Only `"utf8"` and `"utf-8"` are supported.
      * @param options - Optional abort signal.
      * @returns A promise for the decoded text.
-     * @remarks The file must contain valid UTF-8 text without NUL bytes.
+     * @remarks The file must contain valid UTF-8 text without NUL bytes. The
+     * native per-operation raw byte limit is configured by the internal
+     * plugin's `fs.readTextFile.maxBytes` string value and defaults to 67108864
+     * bytes (64 MiB). A source exactly at the limit is accepted; a larger
+     * source rejects instead of being truncated or decoded. This limit is
+     * independent from `fs.readFile.maxBytes` and does not aggregate concurrent
+     * operations.
      */
     readonly readTextFile: (
       path: string,
@@ -1080,9 +1093,12 @@ declare global {
     /**
      * Maximum number of bytes to read.
      *
-     * @remarks Must be a non-negative safe integer. Omit to read through the end
-     * of the file.
-     * @defaultValue Reads through the end of the file.
+     * @remarks Must be a non-negative safe integer and no greater than the
+     * configured `fs.readFile.maxBytes` limit. Omit to request all bytes through
+     * the end of the file; the operation rejects instead of truncating when the
+     * remaining byte count exceeds that limit.
+     * @defaultValue Reads through the end of the file when the result is within
+     * the configured limit.
      */
     readonly length?: number;
   }

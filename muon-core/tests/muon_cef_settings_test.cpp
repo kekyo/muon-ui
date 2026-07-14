@@ -67,7 +67,7 @@ static bool TestCreatesLauncherSafeCefSettings() {
                 "CEF log severity was not propagated");
 }
 
-static bool TestEnablesCefSandboxWhenBootstrapRequestsIt() {
+static bool TestEnablesCefSandboxWhenLauncherRequestsIt() {
   SetEnvironmentValue("MUON_CEF_SANDBOX", "1");
   MuonConfig config;
   config.browser.profile = "profile";
@@ -80,7 +80,7 @@ static bool TestEnablesCefSandboxWhenBootstrapRequestsIt() {
 
 int main() {
   return TestCreatesLauncherSafeCefSettings() &&
-                 TestEnablesCefSandboxWhenBootstrapRequestsIt()
+                 TestEnablesCefSandboxWhenLauncherRequestsIt()
              ? 0
              : 1;
 }

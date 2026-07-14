@@ -9,6 +9,7 @@
 #include "muon_json_helpers.h"
 #include "muon_cardio_post.h"
 #include "plugins/builtin/muon_builtin_completion.h"
+#include "plugins/builtin/muon_builtin_fs_gio_read_source.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 #include "plugins/muon_traffic_cardio_operation.h"
 
@@ -558,19 +559,17 @@ static cardio::promise<MuonFsFile> OpenRegularFileAsync(
   co_return std::move(result);
 }
 
-static cardio::promise<size_t> GetFileSizeAsync(
+static cardio::promise<uint64_t> GetFileSizeAsync(
     MuonFsIoContext& context,
     MuonFsFile& file,
     cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
   (void)context;
   LARGE_INTEGER file_size = {};
-  if (!GetFileSizeEx(file.handle, &file_size) || file_size.QuadPart < 0 ||
-      static_cast<uintmax_t>(file_size.QuadPart) >
-          static_cast<uintmax_t>(std::numeric_limits<size_t>::max())) {
+  if (!GetFileSizeEx(file.handle, &file_size) || file_size.QuadPart < 0) {
     throw std::runtime_error("File size is invalid");
   }
-  co_return static_cast<size_t>(file_size.QuadPart);
+  co_return static_cast<uint64_t>(file_size.QuadPart);
 }
 
 static cardio::promise<size_t> ReadAtAsync(
@@ -752,20 +751,24 @@ static cardio::promise<MuonFsBufferResult> ReadBytesFromOpenFileAsync(
     MuonFsFile& file,
     const muon_plugin_helpers* helpers,
     MuonFsReadOptions options,
+    uint64_t max_bytes,
     cardio::cancellation cancellation) {
   auto size_promise = GetFileSizeAsync(context, file, cancellation);
   const auto size = co_await size_promise;
-  const auto position = options.has_position ? options.position : uint64_t{0};
-  const auto available =
-      position >= size ? uint64_t{0} : static_cast<uint64_t>(size) - position;
-  const auto requested =
-      options.has_length ? std::min(options.length, available) : available;
-  if (requested > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-    throw std::runtime_error("Read range is too large");
+  auto range = MuonFsReadRange{};
+  auto range_error = std::string{};
+  if (!ResolveMuonFsReadFileRange(
+          options, size, max_bytes, &range, &range_error)) {
+    co_return MuonFsBufferResult(std::move(range_error));
   }
-  auto result = AllocateResultBuffer(helpers, static_cast<size_t>(requested));
+  if (range.length >
+      static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    co_return MuonFsBufferResult("Read range is too large");
+  }
+  auto result =
+      AllocateResultBuffer(helpers, static_cast<size_t>(range.length));
   auto read_promise =
-      ReadAllAsync(context, file, result.Bytes(), position, cancellation);
+      ReadAllAsync(context, file, result.Bytes(), range.position, cancellation);
   const auto actual_size = co_await read_promise;
   result.Resize(actual_size);
   co_return std::move(result);
@@ -774,16 +777,64 @@ static cardio::promise<MuonFsBufferResult> ReadBytesFromOpenFileAsync(
 static cardio::promise<MuonFsStringResult> ReadTextFromOpenFileAsync(
     MuonFsIoContext& context,
     MuonFsFile& file,
+    uint64_t max_bytes,
     cardio::cancellation cancellation) {
   auto size_promise = GetFileSizeAsync(context, file, cancellation);
   const auto size = co_await size_promise;
-  auto storage = std::vector<uint8_t>(size);
-  auto buffer = std::span<std::byte>(
-      reinterpret_cast<std::byte*>(storage.data()), storage.size());
-  auto read_promise = ReadAllAsync(context, file, buffer, 0, cancellation);
-  const auto actual_size = co_await read_promise;
-  storage.resize(actual_size);
-  if (!IsValidUtf8WithoutNul(storage.data(), storage.size())) {
+  if (size > max_bytes) {
+    co_return MuonFsStringResult{
+        std::string{}, kMuonFsReadTextFileLimitError};
+  }
+  if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    throw std::runtime_error("File size is invalid");
+  }
+  auto storage = std::vector<std::byte>{};
+  storage.reserve(static_cast<size_t>(size));
+  const auto chunk_bytes = static_cast<size_t>(std::min<uint64_t>(
+      static_cast<uint64_t>(kMuonFsReadTextFileChunkBytes), max_bytes));
+  auto chunk = std::vector<std::byte>(chunk_bytes);
+  auto reached_eof = false;
+  while (static_cast<uint64_t>(storage.size()) < max_bytes) {
+    cancellation.throw_if_cancellation_requested();
+    const auto remaining =
+        max_bytes - static_cast<uint64_t>(storage.size());
+    const auto request_size = static_cast<size_t>(std::min<uint64_t>(
+        static_cast<uint64_t>(chunk.size()), remaining));
+    const auto actual_size = co_await ReadAtAsync(
+        context,
+        file,
+        std::span<std::byte>(chunk.data(), request_size),
+        static_cast<uint64_t>(storage.size()),
+        cancellation);
+    cancellation.throw_if_cancellation_requested();
+    if (actual_size == 0) {
+      reached_eof = true;
+      break;
+    }
+    if (actual_size > request_size) {
+      throw std::runtime_error(
+          "readTextFile source returned too many bytes");
+    }
+    storage.insert(
+        storage.end(), chunk.begin(), chunk.begin() + actual_size);
+  }
+  if (!reached_eof) {
+    auto lookahead = std::byte{};
+    const auto lookahead_size = co_await ReadAtAsync(
+        context,
+        file,
+        std::span<std::byte>(&lookahead, size_t{1}),
+        max_bytes,
+        cancellation);
+    cancellation.throw_if_cancellation_requested();
+    if (lookahead_size != 0) {
+      co_return MuonFsStringResult{
+          std::string{}, kMuonFsReadTextFileLimitError};
+    }
+  }
+  if (!IsValidUtf8WithoutNul(
+          reinterpret_cast<const uint8_t*>(storage.data()),
+          storage.size())) {
     co_return MuonFsStringResult{
         std::string{}, "File is not valid UTF-8 text"};
   }
@@ -798,10 +849,19 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
     std::string path,
     const muon_plugin_helpers* helpers,
     MuonFsReadOptions options,
+    uint64_t max_bytes,
     cardio::cancellation cancellation) {
   auto start_gate = cardio::resolved();
   co_await start_gate;
   try {
+    auto validation_error = std::string{};
+    if (!ValidateMuonFsReadFileLength(
+            options, max_bytes, &validation_error)) {
+      co_return MuonFsBufferResult(validation_error);
+    }
+    if (options.has_length && options.length == 0) {
+      co_return AllocateResultBuffer(helpers, 0);
+    }
     const auto target_path = CreateLocalFilesystemPath(path);
     const auto preflight_error =
         WindowsRegularFilePreflightError(target_path);
@@ -813,9 +873,9 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
         std::move(path),
         MuonFsOpenMode::Read,
         cancellation,
-        [&context, helpers, options, cancellation](MuonFsFile& file) {
+        [&context, helpers, options, max_bytes, cancellation](MuonFsFile& file) {
           return ReadBytesFromOpenFileAsync(
-              context, file, helpers, options, cancellation);
+              context, file, helpers, options, max_bytes, cancellation);
         });
     co_return std::move(co_await result_promise);
   } catch (const std::exception& error) {
@@ -826,6 +886,7 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
 static cardio::promise<MuonFsStringResult> ReadTextAsync(
     MuonFsIoContext& context,
     std::string path,
+    uint64_t max_bytes,
     cardio::cancellation cancellation) {
   auto start_gate = cardio::resolved();
   co_await start_gate;
@@ -841,8 +902,9 @@ static cardio::promise<MuonFsStringResult> ReadTextAsync(
         std::move(path),
         MuonFsOpenMode::Read,
         cancellation,
-        [&context, cancellation](MuonFsFile& file) {
-          return ReadTextFromOpenFileAsync(context, file, cancellation);
+        [&context, max_bytes, cancellation](MuonFsFile& file) {
+          return ReadTextFromOpenFileAsync(
+              context, file, max_bytes, cancellation);
         });
     co_return co_await read_promise;
   } catch (const std::exception& error) {
@@ -1427,52 +1489,6 @@ static cardio::promise<void> MakeSymbolicLinkAsync(
       std::move(cancellation));
 }
 
-static cardio::promise<cardio::gio::file_contents> LoadContentsAsync(
-    GFile* file,
-    cardio::cancellation cancellation) {
-  return cardio::gio::submit<cardio::gio::file_contents>(
-      [file](
-          GCancellable* cancellable,
-          GAsyncReadyCallback callback,
-          gpointer user_data) {
-        g_file_load_contents_async(file, cancellable, callback, user_data);
-      },
-      [](GObject* source_object, GAsyncResult* result, GError** error) {
-        auto* contents = static_cast<char*>(nullptr);
-        auto length = gsize{};
-        auto* etag = static_cast<char*>(nullptr);
-        auto loaded = cardio::gio::file_contents{};
-        const auto succeeded = g_file_load_contents_finish(
-            G_FILE(source_object), result, &contents, &length, &etag, error);
-        if (!succeeded) {
-          if (error != nullptr && *error == nullptr) {
-            g_set_error_literal(
-                error,
-                G_IO_ERROR,
-                G_IO_ERROR_FAILED,
-                "g_file_load_contents_finish failed");
-          }
-          g_free(contents);
-          g_free(etag);
-          return loaded;
-        }
-        loaded.bytes.resize(static_cast<size_t>(length));
-        if (length != 0) {
-          std::memcpy(
-              loaded.bytes.data(),
-              contents,
-              static_cast<size_t>(length));
-        }
-        if (etag != nullptr) {
-          loaded.etag = etag;
-        }
-        g_free(contents);
-        g_free(etag);
-        return loaded;
-      },
-      std::move(cancellation));
-}
-
 static cardio::promise<void> ReplaceContentsBytesAsync(
     GFile* file,
     GBytes* bytes,
@@ -1672,50 +1688,58 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
     std::string path,
     const muon_plugin_helpers* helpers,
     MuonFsReadOptions options,
+    uint64_t max_bytes,
     cardio::cancellation cancellation) {
   (void)context;
   cancellation.throw_if_cancellation_requested();
+  auto validation_error = std::string{};
+  if (!ValidateMuonFsReadFileLength(
+          options, max_bytes, &validation_error)) {
+    throw std::runtime_error(validation_error);
+  }
+  if (options.has_length && options.length == 0) {
+    co_return AllocateResultBuffer(helpers, 0);
+  }
   auto file = MuonFsGFile(path);
-  auto contents = co_await LoadContentsAsync(file.get(), cancellation);
-  const auto position = options.has_position ? options.position : uint64_t{0};
-  const auto available = position >= contents.bytes.size()
-                             ? uint64_t{0}
-                             : static_cast<uint64_t>(contents.bytes.size()) -
-                                   position;
-  const auto requested =
-      options.has_length ? std::min(options.length, available) : available;
-  if (requested > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-    throw std::runtime_error("Read range is too large");
-  }
-  auto result = AllocateResultBuffer(helpers, static_cast<size_t>(requested));
-  if (requested != 0) {
-    std::memcpy(
-        result.Bytes().data(),
-        contents.bytes.data() + static_cast<size_t>(position),
-        static_cast<size_t>(requested));
-  }
+  auto result = AllocateResultBuffer(helpers, 0);
+  const auto actual_size = co_await ReadMuonFsFileRangeAsync(
+      file.get(),
+      options,
+      max_bytes,
+      [&result, helpers](size_t size) -> std::span<std::byte> {
+        result = AllocateResultBuffer(helpers, size);
+        return result.Bytes();
+      },
+      cancellation,
+      nullptr);
+  result.Resize(actual_size);
   co_return std::move(result);
 }
 
 static cardio::promise<std::string> ReadTextAsync(
     MuonFsIoContext& context,
     std::string path,
+    uint64_t max_bytes,
     cardio::cancellation cancellation) {
   (void)context;
   cancellation.throw_if_cancellation_requested();
   auto file = MuonFsGFile(path);
-  auto contents = co_await LoadContentsAsync(file.get(), cancellation);
+  auto contents = co_await ReadMuonFsTextContentsAsync(
+      file.get(),
+      max_bytes,
+      kMuonFsReadTextFileChunkBytes,
+      cancellation,
+      nullptr);
   if (!IsValidUtf8WithoutNul(
-          reinterpret_cast<const uint8_t*>(contents.bytes.data()),
-          contents.bytes.size())) {
+          reinterpret_cast<const uint8_t*>(contents.data()),
+          contents.size())) {
     throw std::runtime_error("File is not valid UTF-8 text");
   }
-  if (contents.bytes.empty()) {
+  if (contents.empty()) {
     co_return std::string{};
   }
   co_return std::string(
-      reinterpret_cast<const char*>(contents.bytes.data()),
-      contents.bytes.size());
+      reinterpret_cast<const char*>(contents.data()), contents.size());
 }
 
 static cardio::promise<void> WriteBytesAsync(
@@ -2720,8 +2744,12 @@ static cardio::promise<void> RunMuonFsCompletionOnDispatcher(
 
 class MuonBuiltinFsRuntime final {
  public:
-  explicit MuonBuiltinFsRuntime(const muon_plugin_helpers* helpers)
+  MuonBuiltinFsRuntime(const muon_plugin_helpers* helpers,
+                       uint64_t read_file_max_bytes,
+                       uint64_t read_text_file_max_bytes)
       : helpers_(helpers),
+        read_file_max_bytes_(read_file_max_bytes),
+        read_text_file_max_bytes_(read_text_file_max_bytes),
         context_(std::make_shared<MuonFsIoContext>()),
         completion_dispatcher_(cardio::unsafe_get_current_dispatcher()),
         completions_enabled_(std::make_shared<std::atomic_bool>(false)) {}
@@ -2857,6 +2885,14 @@ class MuonBuiltinFsRuntime final {
     return helpers_;
   }
 
+  uint64_t read_file_max_bytes() const {
+    return read_file_max_bytes_;
+  }
+
+  uint64_t read_text_file_max_bytes() const {
+    return read_text_file_max_bytes_;
+  }
+
  private:
   struct MuonFsActiveOperation {
     std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
@@ -2882,6 +2918,10 @@ class MuonBuiltinFsRuntime final {
   }
 
   const muon_plugin_helpers* helpers_ = nullptr;
+  const uint64_t read_file_max_bytes_ =
+      kMuonFsDefaultReadFileMaxBytes;
+  const uint64_t read_text_file_max_bytes_ =
+      kMuonFsDefaultReadTextFileMaxBytes;
   std::shared_ptr<MuonFsIoContext> context_;
   cardio::dispatcher* completion_dispatcher_ = nullptr;
   std::shared_ptr<std::atomic_bool> completions_enabled_;
@@ -3054,14 +3094,24 @@ extern "C" void muon_builtin_fs_read_file(
     return;
   }
   const auto* helpers = runtime->helpers();
+  const auto max_bytes = runtime->read_file_max_bytes();
+  if (!ValidateMuonFsReadFileLength(options, max_bytes, &options_error)) {
+    CompleteMuonError(completion, options_error);
+    return;
+  }
   runtime->SubmitOperation<MuonFsBufferResult>(
       completion,
       abort_watcher,
-      [target_path = std::move(target_path), helpers, options](
+      [target_path = std::move(target_path), helpers, options, max_bytes](
           MuonFsIoContext& context,
           cardio::cancellation cancellation) mutable {
         return ReadBytesAsync(
-            context, std::move(target_path), helpers, options, cancellation);
+            context,
+            std::move(target_path),
+            helpers,
+            options,
+            max_bytes,
+            cancellation);
       },
       [completion](MuonFsBufferResult result) mutable {
         result.Complete(completion);
@@ -3132,14 +3182,16 @@ extern "C" void muon_builtin_fs_read_text_file(
     CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
     return;
   }
+  const auto max_bytes = runtime->read_text_file_max_bytes();
 #if defined(_WIN32)
   runtime->SubmitOperation<MuonFsStringResult>(
       completion,
       abort_watcher,
-      [target_path = std::move(target_path)](
+      [target_path = std::move(target_path), max_bytes](
           MuonFsIoContext& context,
           cardio::cancellation cancellation) mutable {
-        return ReadTextAsync(context, std::move(target_path), cancellation);
+        return ReadTextAsync(
+            context, std::move(target_path), max_bytes, cancellation);
       },
       [completion](MuonFsStringResult result) {
         if (result.error.empty()) {
@@ -3152,10 +3204,11 @@ extern "C" void muon_builtin_fs_read_text_file(
   runtime->SubmitOperation<std::string>(
       completion,
       abort_watcher,
-      [target_path = std::move(target_path)](
+      [target_path = std::move(target_path), max_bytes](
           MuonFsIoContext& context,
           cardio::cancellation cancellation) mutable {
-        return ReadTextAsync(context, std::move(target_path), cancellation);
+        return ReadTextAsync(
+            context, std::move(target_path), max_bytes, cancellation);
       },
       [completion](std::string result) {
         CompleteMuonString(completion, std::move(result));
@@ -4766,8 +4819,22 @@ bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,
     return false;
   }
   const auto* helpers = context == nullptr ? nullptr : context->helpers;
-  auto runtime =
-      std::make_shared<muon_internal::MuonBuiltinFsRuntime>(helpers);
+  auto read_file_max_bytes = uint64_t{0};
+  const auto* configured_max = muon_plugin_get_config_value(
+      context, muon_internal::kMuonFsReadFileMaxBytesConfigKey);
+  if (!muon_internal::ParseMuonFsReadFileMaxBytes(
+          configured_max, &read_file_max_bytes, error_message)) {
+    return false;
+  }
+  auto read_text_file_max_bytes = uint64_t{0};
+  const auto* configured_text_max = muon_plugin_get_config_value(
+      context, muon_internal::kMuonFsReadTextFileMaxBytesConfigKey);
+  if (!muon_internal::ParseMuonFsReadTextFileMaxBytes(
+          configured_text_max, &read_text_file_max_bytes, error_message)) {
+    return false;
+  }
+  auto runtime = std::make_shared<muon_internal::MuonBuiltinFsRuntime>(
+      helpers, read_file_max_bytes, read_text_file_max_bytes);
   if (!runtime->Start(error_message)) {
     return false;
   }

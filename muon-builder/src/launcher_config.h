@@ -3,11 +3,11 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-#ifndef MUON_PREPARE_BOOTSTRAP_CONFIG_H
-#define MUON_PREPARE_BOOTSTRAP_CONFIG_H
+#ifndef MUON_PREPARE_LAUNCHER_CONFIG_H
+#define MUON_PREPARE_LAUNCHER_CONFIG_H
 
-#define MUON_BOOTSTRAP_CONFIG_FILE_NAME "muon-bootstrap.ini"
-#define MUON_BOOTSTRAP_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS 604800ULL
+#define MUON_LAUNCHER_CONFIG_FILE_NAME "muon-launcher.ini"
+#define MUON_LAUNCHER_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS 604800ULL
 
 typedef struct {
   /** Effective CEF version selection policy. */
@@ -24,39 +24,39 @@ typedef struct {
   int has_catalog_refresh_interval_seconds;
   /** Last successful CEF catalog update Unix timestamp. */
   unsigned long long last_catalog_update_unix;
-  /** Whether a catalog update was requested for the next bootstrap run. */
+  /** Whether a catalog update was requested for the next launcher run. */
   int update_requested;
   /** Catalog update request Unix timestamp. */
   unsigned long long update_requested_at_unix;
-} MuonBootstrapConfig;
+} MuonLauncherConfig;
 
-void muon_bootstrap_config_init_defaults(MuonBootstrapConfig *config);
-void muon_bootstrap_config_free(MuonBootstrapConfig *config);
-int muon_bootstrap_config_read(const char *runtime_dir,
-                               MuonBootstrapConfig *config);
+void muon_launcher_config_init_defaults(MuonLauncherConfig *config);
+void muon_launcher_config_free(MuonLauncherConfig *config);
+int muon_launcher_config_read(const char *runtime_dir,
+                               MuonLauncherConfig *config);
 /**
- * Reads bootstrap settings, applying default_version_policy when versionPolicy
+ * Reads launcher settings, applying default_version_policy when versionPolicy
  * is not explicitly present.
  */
-int muon_bootstrap_config_read_with_default(const char *runtime_dir,
+int muon_launcher_config_read_with_default(const char *runtime_dir,
                                             const char *default_version_policy,
-                                            MuonBootstrapConfig *config);
-int muon_bootstrap_config_write(const char *runtime_dir,
-                                const MuonBootstrapConfig *config);
-int muon_bootstrap_config_validate(const MuonBootstrapConfig *config);
+                                            MuonLauncherConfig *config);
+int muon_launcher_config_write(const char *runtime_dir,
+                                const MuonLauncherConfig *config);
+int muon_launcher_config_validate(const MuonLauncherConfig *config);
 /**
- * Reads the embedded muon.json bootstrap.defaultVersionPolicy from this
+ * Reads the embedded muon.json launcher.defaultVersionPolicy from this
  * executable.
  *
  * The returned policy is heap-allocated and must be released with free().
  */
-int muon_bootstrap_get_embedded_default_version_policy(char **policy);
+int muon_launcher_get_embedded_default_version_policy(char **policy);
 /**
- * Reads the embedded muon.json bootstrap.appId from this executable.
+ * Reads the embedded muon.json launcher.appId from this executable.
  *
  * The returned app ID is heap-allocated and must be released with free().
  * When the embedded config has no appId, *app_id is set to NULL.
  */
-int muon_bootstrap_get_embedded_app_id(char **app_id);
+int muon_launcher_get_embedded_app_id(char **app_id);
 
 #endif

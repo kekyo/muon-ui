@@ -61,7 +61,7 @@ interface RuntimeConsoleAPICalledParams {
   }>;
 }
 
-const getLocalBootstrapCefLogPath = (
+const getLocalLauncherCefLogPath = (
   localStateHome: string | undefined,
 ): string => {
   const stateHome =
@@ -69,7 +69,7 @@ const getLocalBootstrapCefLogPath = (
     (process.env.XDG_STATE_HOME?.length
       ? process.env.XDG_STATE_HOME
       : join(homedir(), ".local", "state"));
-  return join(stateHome, "muon-bootstrap", "profile", "muon-cef.log");
+  return join(stateHome, "muon-launcher", "profile", "muon-cef.log");
 };
 
 const localIt = isWindowsRemoteE2e() ? it.skip : it;
@@ -226,7 +226,7 @@ const writeStoredZipArchive = async (
 ): Promise<string> => {
   const archive = createStoredZipArchive(entries);
   await writeFile(path, archive);
-  return createHash("sha1")
+  return createHash("sha256")
     .update(archive)
     .update(Buffer.from(signatureSalt, "hex"))
     .digest("hex");
@@ -398,7 +398,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
     ): Promise<void> => {
       if (injectCefLog) {
         await appendFile(
-          getLocalBootstrapCefLogPath(localStateHome),
+          getLocalLauncherCefLogPath(localStateHome),
           "[0529/123456.789:ERROR:muon-e2e.cc(1)] muon e2e cef forward\n",
         );
       }

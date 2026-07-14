@@ -48,7 +48,7 @@ import { spawn } from "muon:executor";
 | `recycle()`           | なし                | `Promise<void>` | muonプロセスを終了し、起動元が対応している場合は自動再起動します。 |
 
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
-- `recycle()` は `muon-bootstrap` や `muon run` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
+- `recycle()` は `muon-launcher` や `muon run` など、起動元がリサイクル終了コードに対応している場合だけ自動再起動します。`shutdown(88)` はリサイクル用の予約終了コードのため拒否されます。
 - `close()` は、対象ウインドウが所有しているモーダルファイルダイアログを中断してからウインドウを閉じます。
 - `getWindowBounds()` と `setWindowBounds()` の bounds はブラウザ表示領域ではなく、muonカスタムタイトルバーやネイティブフレームを含むトップレベルウインドウ領域です。
   座標とサイズの単位はCEF Viewsと同じDIP screen coordinatesです。
@@ -125,23 +125,23 @@ await window.muon.browser.shutdown(0);
 await window.muon.browser.recycle();
 ```
 
-## muon.bootstrap名前空間
+## muon.launcher名前空間
 
-`window.muon.bootstrap` は、次回 `muon-bootstrap` 起動時に使われるCEF更新設定を扱います。
-設定はruntimeディレクトリの `muon-bootstrap.ini` に保存され、現在実行中のCEFには影響しません。
+`window.muon.launcher` は、次回 `muon-launcher` 起動時に使われるCEF更新設定を扱います。
+設定はruntimeディレクトリの `muon-launcher.ini` に保存され、現在実行中のCEFには影響しません。
 
 | 関数                    | 引数                                                                           | 戻り値                           | 説明                                                                 |
 | :---------------------- | :----------------------------------------------------------------------------- | :------------------------------- | :------------------------------------------------------------------- |
-| `getSettings()`         | なし                                                                           | `Promise<MuonBootstrapSettings>` | 現在有効なbootstrap設定を返します。                                  |
-| `setSettings(settings)` | `MuonBootstrapSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやカタログ更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
-| `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-bootstrap` 起動時にCEFカタログ更新を試行するよう要求します。 |
+| `getSettings()`         | なし                                                                           | `Promise<MuonLauncherSettings>` | 現在有効なlauncher設定を返します。                                  |
+| `setSettings(settings)` | `MuonLauncherSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやカタログ更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
+| `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-launcher` 起動時にCEFカタログ更新を試行するよう要求します。 |
 
 ```js
-await window.muon.bootstrap.setSettings({
+await window.muon.launcher.setSettings({
   cefVersionPolicy: "compat-latest",
   catalogRefreshIntervalSeconds: 604800,
 });
-await window.muon.bootstrap.triggerUpdate();
+await window.muon.launcher.triggerUpdate();
 ```
 
 ## muon.environments名前空間
@@ -316,9 +316,9 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 
 | 関数                                             | 引数                                                                                                                 | 戻り値                    | 説明                                                                                                                                                       |
 | :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `readFile(path, options?)`                       | `path: string`, `options?: { position?: number, length?: number, signal?: AbortSignal }`                             | `Promise<ArrayBuffer>`    | バイナリファイルを読み込みます。`position` は読み取り開始バイト位置、`length` は最大読み取りバイト数です。どちらも非負のsafe integerである必要があります。 |
+| `readFile(path, options?)`                       | `path: string`, `options?: { position?: number, length?: number, signal?: AbortSignal }`                             | `Promise<ArrayBuffer>`    | バイナリファイルを読み込みます。`position` は読み取り開始バイト位置、`length` は要求する読み取りバイト数です。どちらも非負のsafe integerである必要があります。 |
 | `writeFile(path, data, options?)`                | `path: string`, `data: BufferSource`, `options?: { position?: number, signal?: AbortSignal }`                        | `Promise<void>`           | バイナリデータを書き込みます。`position` 省略時はファイル全体を置き換え、指定時はそのバイト位置へ書き込みます。                                            |
-| `readTextFile(path, encoding, options?)`         | `path: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                                  | `Promise<string>`         | UTF-8テキストファイルを読み込みます。ファイルはNUL文字を含まない有効なUTF-8である必要があります。                                                          |
+| `readTextFile(path, encoding, options?)`         | `path: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                                  | `Promise<string>`         | UTF-8テキストファイルを読み込みます。ファイルはNUL文字を含まない有効なUTF-8で、raw byte数が設定上限以内である必要があります。                                |
 | `writeTextFile(path, data, encoding, options?)`  | `path: string`, `data: string`, `encoding: "utf8" \| "utf-8"`, `options?: { signal?: AbortSignal }`                  | `Promise<void>`           | UTF-8テキストとしてファイル全体を置き換えます。                                                                                                            |
 | `stat(path, options?)`                           | `path: string`, `options?: { signal?: AbortSignal }`                                                                 | `Promise<MuonFsStats>`    | シンボリックリンクをたどってメタデータを返します。パスが存在しない場合はrejectします。                                                                     |
 | `lstat(path, options?)`                          | `path: string`, `options?: { signal?: AbortSignal }`                                                                 | `Promise<MuonFsStats>`    | シンボリックリンクをたどらずにメタデータを返します。                                                                                                       |
@@ -341,6 +341,35 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 | `symlink(target, path, type?, options?)`         | `target: string`, `path: string`, `type?: "file" \| "dir" \| "junction"`, `options?: { signal?: AbortSignal }`       | `Promise<void>`           | シンボリックリンクを作成します。`type` 省略時は `"file"` です。`"dir"` と `"junction"` はディレクトリリンクを作成します。                                  |
 | `symlink(target, path, options)`                 | `target: string`, `path: string`, `options: { signal?: AbortSignal }`                                                | `Promise<void>`           | `options` を第3引数に渡し、ファイルリンクを作成します。                                                                                                    |
 | `watch(path, listener, options?)`                | `path: string`, `listener: (event: MuonFsWatchEvent) => void \| Promise<void>`, `options?: { signal?: AbortSignal }` | `Promise<MuonFsWatcher>`  | パスの変更を監視し、watcherを返します。現在はスナップショットのポーリングで差分を通知します。                                                              |
+
+- `readFile()` は、ネイティブ層で1回の操作ごとに読み取り上限を強制します。既定値は64 MiB (`67108864` byte) です。
+  明示した `length` が上限を超える場合は、ファイルへのアクセス前に `Promise` をrejectします。
+- `length` を省略した場合は `position` からファイル末尾までの全byteが上限内である必要があり、上限まで暗黙に切り詰めることはありません。
+  `length` が設定上限内で、 `position` がファイル末尾以降の場合は空の `ArrayBuffer` を返します。`length: 0` の場合もファイルへアクセスせず空の `ArrayBuffer` を返します。
+- `readTextFile()` も、ネイティブ層で1回の操作ごとに独立したraw byte読み取り上限を強制します。既定値は64 MiB (`67108864` byte) です。
+  上限ちょうどのソースは読み取れますが、上限を超えるソースは切り詰めず、UTF-8/NUL検証や文字列化の前に `Promise` をrejectします。
+
+上限は `muon.json` の内蔵プラグイン設定で変更できます。JavaScript APIのシグネチャは変わりません。
+
+```json
+{
+  "plugin": {
+    "plugins": [
+      {
+        "name": "internal",
+        "config": {
+          "fs.readFile.maxBytes": "67108864",
+          "fs.readTextFile.maxBytes": "67108864"
+        }
+      }
+    ]
+  }
+}
+```
+
+`fs.readFile.maxBytes` と `fs.readTextFile.maxBytes` は、それぞれbyte単位の符号なし10進整数文字列です。空文字列、符号、空白、小数点、指数表記、単位suffixは使用できず、値は `uint64_t` の範囲内である必要があります。先頭ゼロと `"0"` は有効です。
+`fs.readFile.maxBytes` が `"0"` の場合は空のrangeだけが成功し、 `fs.readTextFile.maxBytes` が `"0"` の場合は空のソースだけが成功します。不正値は既定値へフォールバックせず、内蔵プラグインの初期化を失敗させます。
+2つの上限は独立しており、それぞれ対応する関数だけに適用されます。どちらも複数操作を合計したquotaではありません。
 
 `MuonFsStats`:
 
@@ -367,7 +396,7 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 
 - `MuonFsWatcher` は `close(): Promise<void>` を持ちます。
 - `close()` は複数回呼んでも問題ありません。
-- `watch()` の `listener` が例外を投げたりrejectされたPromiseを返した場合、そのエラーは無視されます。
+- `watch()` の `listener` が例外を投げたりrejectされた `Promise` を返した場合、そのエラーは無視されます。
   watcher作成前にabortされた場合は `watch()` がrejectされ、作成後にabortされた場合はwatcherが閉じられます。
 
 ```js
@@ -450,5 +479,3 @@ if (path !== null) {
   console.log(image.byteLength);
 }
 ```
-
----

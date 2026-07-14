@@ -50,32 +50,32 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
   [
     {
       filePath: "muon.d.ts",
-      parentName: "MuonBootstrapSettings",
+      parentName: "MuonLauncherSettings",
       memberName: "cefVersionPolicy",
     },
     {
       filePath: "muon.d.ts",
-      parentName: "MuonBootstrapSettings",
+      parentName: "MuonLauncherSettings",
       memberName: "cefExactVersion",
     },
     {
       filePath: "muon.d.ts",
-      parentName: "MuonBootstrapSettings",
+      parentName: "MuonLauncherSettings",
       memberName: "catalogRefreshIntervalSeconds",
     },
     {
       filePath: "muon.d.ts",
-      parentName: "MuonBootstrapSettingsPatch",
+      parentName: "MuonLauncherSettingsPatch",
       memberName: "cefVersionPolicy",
     },
     {
       filePath: "muon.d.ts",
-      parentName: "MuonBootstrapSettingsPatch",
+      parentName: "MuonLauncherSettingsPatch",
       memberName: "cefExactVersion",
     },
     {
       filePath: "muon.d.ts",
-      parentName: "MuonBootstrapSettingsPatch",
+      parentName: "MuonLauncherSettingsPatch",
       memberName: "catalogRefreshIntervalSeconds",
     },
     {
@@ -800,8 +800,8 @@ exit 1
     const nativeBuilderStat = await stat(
       resolve("dist/native/linux-amd64/muon-builder"),
     );
-    const nativeBootstrapStat = await stat(
-      resolve("dist/native/linux-amd64/muon-bootstrap"),
+    const nativeLauncherStat = await stat(
+      resolve("dist/native/linux-amd64/muon-launcher"),
     );
     const nativeRuntimeHelperStat = await stat(
       resolve("dist/native/linux-amd64/muon-runtime-helper"),
@@ -813,7 +813,7 @@ exit 1
     expect(packageJson.bin?.muon).toBe("./dist/cli.cjs");
     expect(cliStat.mode & 0o111).not.toBe(0);
     expect(nativeBuilderStat.mode & 0o111).not.toBe(0);
-    expect(nativeBootstrapStat.mode & 0o111).not.toBe(0);
+    expect(nativeLauncherStat.mode & 0o111).not.toBe(0);
     expect(nativeRuntimeHelperStat.mode & 0o111).not.toBe(0);
     expect(nativeDefaultIconStat.size).toBeGreaterThan(0);
     await expect(exists(resolve("dist/cli.mjs"))).resolves.toBe(false);
@@ -822,9 +822,9 @@ exit 1
     await expect(
       exists(resolve("dist", ["muon", "prepare"].join("-"))),
     ).resolves.toBe(false);
-    await expect(exists(resolve("dist/muon-bootstrap"))).resolves.toBe(false);
+    await expect(exists(resolve("dist/muon-launcher"))).resolves.toBe(false);
     await expect(
-      exists(resolve("dist/native/muon-bootstrap.png")),
+      exists(resolve("dist/native/muon-launcher.png")),
     ).resolves.toBe(false);
   });
 
@@ -929,11 +929,12 @@ exit 1
     expect(files).not.toContain("dist/prepare.d.ts");
     expect(files).not.toContain("dist/vite-internals.d.ts");
     expect(files).not.toContain("dist/vite.d.ts");
+    expect(files).toContain("dist/native/linux-amd64/muon-launcher");
     expect(files).not.toContain("dist/runtime/linux-amd64/muon-runtime.json");
     expect(files.some((file) => file.endsWith(".d.ts.map"))).toBe(false);
     expect(files).not.toContain("dist/muon-builder");
     expect(files).not.toContain(`dist/${["muon", "prepare"].join("-")}`);
-    expect(files).not.toContain("dist/muon-bootstrap");
+    expect(files).not.toContain("dist/muon-launcher");
     await expect(readFile(resolve("vite.d.ts"), "utf8")).resolves.not.toContain(
       "sourceMappingURL",
     );

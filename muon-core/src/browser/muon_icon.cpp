@@ -100,3 +100,10 @@ bool AppendMuonBytesWithinLimit(std::vector<uint8_t>* destination,
   destination->insert(destination->end(), bytes, bytes + size);
   return true;
 }
+
+void ReleaseMuonByteBuffer(std::vector<uint8_t>* buffer) {
+  if (buffer == nullptr) {
+    return;
+  }
+  std::vector<uint8_t>().swap(*buffer);
+}

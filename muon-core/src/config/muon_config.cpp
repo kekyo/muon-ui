@@ -27,7 +27,7 @@
 static constexpr char kMuonConfigJson5FileName[] = "muon.json5";
 static constexpr char kMuonConfigJsoncFileName[] = "muon.jsonc";
 static constexpr char kMuonConfigFileName[] = "muon.json";
-static constexpr char kMuonConfigBootstrapKey[] = "bootstrap";
+static constexpr char kMuonConfigLauncherKey[] = "launcher";
 static constexpr char kMuonConfigAppIdKey[] = "appId";
 static constexpr char kMuonConfigDefaultVersionPolicyKey[] =
     "defaultVersionPolicy";
@@ -119,8 +119,8 @@ static constexpr uint8_t kMuonEmbeddedTlvBinaryTag = 5;
 static constexpr uint8_t kMuonEmbeddedTlvArrayTag = 6;
 static constexpr uint8_t kMuonEmbeddedTlvObjectTag = 7;
 static constexpr char kMuonDefaultProfileDirectoryName[] = "profile";
-static constexpr char kMuonBootstrapAppIdEnvironmentName[] =
-    "MUON_BOOTSTRAP_APP_ID";
+static constexpr char kMuonLauncherAppIdEnvironmentName[] =
+    "MUON_LAUNCHER_APP_ID";
 static constexpr char kMuonFallbackApplicationName[] = "muon";
 
 using muon_internal::DecodeAsciiHexByte;
@@ -435,8 +435,8 @@ static bool CreateEmbeddedBinaryJsonValue(
   std::string string_value;
   if (IsEmbeddedPath(path, kMuonConfigAssetKey,
                      kMuonConfigAssetSignatureKey)) {
-    if (size != 20) {
-      *error_message = "Embedded muon config asset.signature must be 20 bytes";
+    if (size != 32) {
+      *error_message = "Embedded muon config asset.signature must be 32 bytes";
       return false;
     }
     string_value = EncodeLowerHex(bytes, size);
@@ -445,9 +445,9 @@ static bool CreateEmbeddedBinaryJsonValue(
     string_value = EncodeLowerHex(bytes, size);
   } else if (IsEmbeddedPluginEntryPath(path,
                                        kMuonConfigPluginEntrySignatureKey)) {
-    if (size != 20) {
+    if (size != 32) {
       *error_message =
-          "Embedded muon config plugin.plugins[].signature must be 20 bytes";
+          "Embedded muon config plugin.plugins[].signature must be 32 bytes";
       return false;
     }
     string_value = EncodeLowerHex(bytes, size);
@@ -663,10 +663,10 @@ static std::string GetStartupApplicationName() {
 }
 
 static std::string GetStartupAppId() {
-  const auto* bootstrap_app_id =
-      std::getenv(kMuonBootstrapAppIdEnvironmentName);
-  if (bootstrap_app_id != nullptr) {
-    const auto app_id = TrimAscii(bootstrap_app_id);
+  const auto* launcher_app_id =
+      std::getenv(kMuonLauncherAppIdEnvironmentName);
+  if (launcher_app_id != nullptr) {
+    const auto app_id = TrimAscii(launcher_app_id);
     if (!app_id.empty()) {
       return app_id;
     }
@@ -2163,26 +2163,26 @@ static bool ReadLogConfig(yyjson_val* root,
          ReadLogSourcesConfig(log, config, level_was_set, error_message);
 }
 
-static bool ReadSha1SignatureString(yyjson_val* value,
-                                    const std::string& config_path,
-                                    std::string* signature,
-                                    std::string* error_message) {
+static bool ReadSha256SignatureString(yyjson_val* value,
+                                      const std::string& config_path,
+                                      std::string* signature,
+                                      std::string* error_message) {
   if (!yyjson_is_str(value)) {
     *error_message = "muon.json " + config_path + " must be a string";
     return false;
   }
   auto normalized_signature = ToLowerAscii(ReadJsonString(value));
-  if (normalized_signature.size() != 40) {
+  if (normalized_signature.size() != 64) {
     *error_message =
         "muon.json " + config_path +
-        " must be a 40-character SHA-1 hex string";
+        " must be a 64-character SHA-256 hex string";
     return false;
   }
   for (const auto character : normalized_signature) {
     if (!IsAsciiHexDigit(character)) {
       *error_message =
           "muon.json " + config_path +
-          " must be a 40-character SHA-1 hex string";
+          " must be a 64-character SHA-256 hex string";
       return false;
     }
   }
@@ -2247,8 +2247,8 @@ static bool ReadAssetConfig(yyjson_val* root,
 
   const auto signature = yyjson_obj_get(asset, kMuonConfigAssetSignatureKey);
   if (signature != nullptr) {
-    if (!ReadSha1SignatureString(signature, "asset.signature",
-                                 &config->asset.signature, error_message)) {
+    if (!ReadSha256SignatureString(signature, "asset.signature",
+                                   &config->asset.signature, error_message)) {
       return false;
     }
     config->asset.has_signature = true;
@@ -2481,8 +2481,10 @@ static bool ReadPluginConfig(yyjson_val* root,
             ".signature is not supported for internal plugins";
         return false;
       }
-      if (!ReadSha1SignatureString(signature_value, config_path + ".signature",
-                                   &plugin_config.signature, error_message)) {
+      if (!ReadSha256SignatureString(signature_value,
+                                     config_path + ".signature",
+                                     &plugin_config.signature,
+                                     error_message)) {
         return false;
       }
       plugin_config.has_signature = true;
@@ -2691,39 +2693,39 @@ static bool MergeJsonObject(yyjson_mut_doc* target_document,
   return true;
 }
 
-static bool ReadBootstrapConfig(yyjson_val* root,
+static bool ReadLauncherConfig(yyjson_val* root,
                                 MuonConfig* config,
                                 std::string* error_message) {
   config->default_version_policy = "tested";
   config->desktop_id = "muon";
   config->app_id = SanitizeAppId(GetStartupAppId());
-  const auto bootstrap = yyjson_obj_get(root, kMuonConfigBootstrapKey);
-  if (bootstrap == nullptr) {
+  const auto launcher = yyjson_obj_get(root, kMuonConfigLauncherKey);
+  if (launcher == nullptr) {
     return true;
   }
-  if (!yyjson_is_obj(bootstrap)) {
-    *error_message = "muon.json bootstrap must be an object";
+  if (!yyjson_is_obj(launcher)) {
+    *error_message = "muon.json launcher must be an object";
     return false;
   }
   const auto desktop_id_value =
-      yyjson_obj_get(bootstrap, kMuonConfigDesktopIdKey);
+      yyjson_obj_get(launcher, kMuonConfigDesktopIdKey);
   if (desktop_id_value != nullptr) {
     if (!yyjson_is_str(desktop_id_value)) {
-      *error_message = "muon.json bootstrap.desktopId must be a string";
+      *error_message = "muon.json launcher.desktopId must be a string";
       return false;
     }
     const auto desktop_id = TrimAscii(yyjson_get_str(desktop_id_value));
     if (desktop_id.empty()) {
-      *error_message = "muon.json bootstrap.desktopId must not be empty";
+      *error_message = "muon.json launcher.desktopId must not be empty";
       return false;
     }
     config->desktop_id = desktop_id;
   }
 
-  const auto app_id_value = yyjson_obj_get(bootstrap, kMuonConfigAppIdKey);
+  const auto app_id_value = yyjson_obj_get(launcher, kMuonConfigAppIdKey);
   if (app_id_value != nullptr) {
     if (!yyjson_is_str(app_id_value)) {
-      *error_message = "muon.json bootstrap.appId must be a string";
+      *error_message = "muon.json launcher.appId must be a string";
       return false;
     }
     const auto app_id = TrimAscii(yyjson_get_str(app_id_value));
@@ -2733,19 +2735,19 @@ static bool ReadBootstrapConfig(yyjson_val* root,
   }
 
   const auto value =
-      yyjson_obj_get(bootstrap, kMuonConfigDefaultVersionPolicyKey);
+      yyjson_obj_get(launcher, kMuonConfigDefaultVersionPolicyKey);
   if (value == nullptr) {
     return true;
   }
   if (!yyjson_is_str(value)) {
     *error_message =
-        "muon.json bootstrap.defaultVersionPolicy must be a string";
+        "muon.json launcher.defaultVersionPolicy must be a string";
     return false;
   }
   const std::string policy(yyjson_get_str(value));
   if (!IsValidCefVersionPolicy(policy)) {
     *error_message =
-        "muon.json bootstrap.defaultVersionPolicy has unknown value: " +
+        "muon.json launcher.defaultVersionPolicy has unknown value: " +
         policy;
     return false;
   }
@@ -2760,7 +2762,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     *error_message = "muon.json root must be an object";
     return false;
   }
-  return ReadBootstrapConfig(root, config, error_message) &&
+  return ReadLauncherConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&
          ReadLogConfig(root, config, error_message) &&
          ReadBrowserConfig(root, config, error_message) &&

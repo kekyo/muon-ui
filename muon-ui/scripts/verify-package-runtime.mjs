@@ -9,35 +9,35 @@ import { join } from "node:path";
 const packageRuntimeTargets = {
   "linux-amd64": {
     nativePrepare: "muon-builder",
-    nativeBootstrap: "muon-bootstrap",
+    nativeLauncher: "muon-launcher",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
   "linux-armhf": {
     nativePrepare: "muon-builder",
-    nativeBootstrap: "muon-bootstrap",
+    nativeLauncher: "muon-launcher",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
   "linux-arm64": {
     nativePrepare: "muon-builder",
-    nativeBootstrap: "muon-bootstrap",
+    nativeLauncher: "muon-launcher",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
   },
   "windows-i686": {
     nativePrepare: "muon-builder.exe",
-    nativeBootstrap: "muon-bootstrap.exe",
+    nativeLauncher: "muon-launcher.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
   },
   "windows-amd64": {
     nativePrepare: "muon-builder.exe",
-    nativeBootstrap: "muon-bootstrap.exe",
+    nativeLauncher: "muon-launcher.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
@@ -71,15 +71,15 @@ const assertHasMatchingFile = async (directory, pattern) => {
 };
 
 await assertMissing(join("dist", "muon-builder"));
-await assertMissing(join("dist", "muon-bootstrap"));
+await assertMissing(join("dist", "muon-launcher"));
 await assertMissing(join("dist", "muon-builder.exe"));
-await assertMissing(join("dist", "muon-bootstrap.exe"));
+await assertMissing(join("dist", "muon-launcher.exe"));
 await assertMissing(join("dist", ["muon", "prepare"].join("-")));
 await assertMissing(join("dist", `${["muon", "prepare"].join("-")}.exe`));
 await assertMissing(join("dist", "native", "linux32"));
 await assertMissing(join("dist", "runtime", "linux32"));
-await assertMissing(join("dist", "native", "muon-bootstrap.ico"));
-await assertMissing(join("dist", "native", "muon-bootstrap.png"));
+await assertMissing(join("dist", "native", "muon-launcher.ico"));
+await assertMissing(join("dist", "native", "muon-launcher.png"));
 await assertExists(join("dist", "native", "muon-256.png"));
 
 for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
@@ -93,7 +93,7 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   ];
 
   await assertExists(join(nativePath, descriptor.nativePrepare));
-  await assertExists(join(nativePath, descriptor.nativeBootstrap));
+  await assertExists(join(nativePath, descriptor.nativeLauncher));
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
   }

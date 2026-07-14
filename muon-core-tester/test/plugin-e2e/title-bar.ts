@@ -3,6 +3,8 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+import type { ServerResponse } from "node:http";
+
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
 import type { AppWindow, ScreenRect } from "agent-rover";
@@ -24,8 +26,11 @@ import {
   shouldUseValgrind,
   startDebugMuon,
   startGestamentDebugMuon,
+  startHttpServer,
   stopMuon,
   stopGestamentMuon,
+  stopHttpServer,
+  TEST_NETWORK_ALLOW_PATTERNS,
   tmpdir,
   delay,
   waitForDocumentTitle,
@@ -88,6 +93,12 @@ interface PageAppRegionHit {
   elements: PageAppRegionHitElement[];
   hasDrag: boolean;
   hasNoDrag: boolean;
+}
+
+interface FaviconResponseProbe {
+  path: string;
+  response: ServerResponse;
+  status: "active" | "completed" | "canceled";
 }
 
 const testWindowTitle = "muon titlebar main";
@@ -172,6 +183,7 @@ const expectedWindowsCloseActiveDarkColor: RgbaPixel = {
   blue: 0x1c,
   alpha: 255,
 };
+const faviconResponseLimitBytes = 1024 * 1024;
 
 const createSolidPng = (
   color: RgbaPixel,
@@ -190,6 +202,75 @@ const createSolidPng = (
 
 const createSolidSvg = (color: RgbaPixel): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="rgb(${color.red},${color.green},${color.blue})"/></svg>`;
+
+const createSizedSvg = (color: RgbaPixel, byteLength: number): Buffer => {
+  const svg = createSolidSvg(color);
+  const svgByteLength = Buffer.byteLength(svg);
+  if (svgByteLength > byteLength) {
+    throw new Error("favicon response size is smaller than the SVG document");
+  }
+  return Buffer.from(`${svg}${" ".repeat(byteLength - svgByteLength)}`);
+};
+
+const trackFaviconResponse = (
+  probes: FaviconResponseProbe[],
+  path: string,
+  response: ServerResponse,
+): FaviconResponseProbe => {
+  const probe: FaviconResponseProbe = {
+    path,
+    response,
+    status: "active",
+  };
+  probes.push(probe);
+  response.once("finish", () => {
+    probe.status = "completed";
+  });
+  response.once("close", () => {
+    if (probe.status === "active") {
+      probe.status = "canceled";
+    }
+  });
+  return probe;
+};
+
+const waitForFaviconResponseStatus = async (
+  probes: FaviconResponseProbe[],
+  path: string,
+  status: FaviconResponseProbe["status"],
+): Promise<void> => {
+  const deadline = Date.now() + cdpCommandTimeoutMs;
+  while (Date.now() < deadline) {
+    if (
+      probes.some((probe) => probe.path === path && probe.status === status)
+    ) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error(
+    `Timed out waiting for ${path} to become ${status}: ${JSON.stringify(
+      probes.map((probe) => ({ path: probe.path, status: probe.status })),
+    )}`,
+  );
+};
+
+const setPageFavicon = async (
+  driver: CdpDriver,
+  faviconUrl: string,
+): Promise<void> => {
+  await driver.evaluate(`(() => {
+    let link = document.getElementById("muon-favicon-response-probe");
+    if (link === null) {
+      link = document.createElement("link");
+      link.id = "muon-favicon-response-probe";
+      link.rel = "icon";
+      link.type = "image/svg+xml";
+      document.head.append(link);
+    }
+    link.href = ${JSON.stringify(faviconUrl)};
+  })()`);
+};
 
 const createOverLimitFaviconPage = (): string =>
   `<!doctype html><title>${testWindowTitle}</title><link rel="icon" type="image/png" href="${overLimitTitleBarIconPath}"><img id="ordinary-over-limit-image" src="${overLimitTitleBarIconPath}"><script>const image=document.getElementById("ordinary-over-limit-image");const report=()=>{document.title=image.naturalWidth===257&&image.naturalHeight===257?${JSON.stringify(
@@ -1437,6 +1518,7 @@ const withTitleBarMuon = async (
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  networkAllowPatterns: string[] = TEST_NETWORK_ALLOW_PATTERNS,
 ): Promise<void> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-titlebar-"));
   const assetRoot = await createTitleBarAssetRoot(directory);
@@ -1447,6 +1529,7 @@ const withTitleBarMuon = async (
     browserInitialTitleBarVisibility,
     browserInitialTitleBarIcon,
     browserTitleBarType,
+    networkAllowPatterns,
   );
   let caughtError: unknown = undefined;
 
@@ -2379,6 +2462,177 @@ titleBarIt(
       undefined,
       initialTitleBarIconPath,
     );
+  },
+);
+
+titleBarIt(
+  "bounds streamed Linux custom title bar favicon responses",
+  async () => {
+    const exactPath = "/favicon-exact.svg";
+    const exactAgainPath = "/favicon-exact-again.svg";
+    const knownOverPath = "/favicon-known-over.svg";
+    const chunkedOverPath = "/favicon-chunked-over.svg";
+    const exactSvg = createSizedSvg(
+      expectedSvgTitleBarIconColor,
+      faviconResponseLimitBytes,
+    );
+    const overSvg = Buffer.concat([exactSvg, Buffer.from(" ")]);
+    const probes: FaviconResponseProbe[] = [];
+    const server = await startHttpServer((request, response) => {
+      const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      if (
+        path !== exactPath &&
+        path !== exactAgainPath &&
+        path !== knownOverPath &&
+        path !== chunkedOverPath
+      ) {
+        response.writeHead(404, { "Content-Type": "text/plain" });
+        response.end("missing\n");
+        return;
+      }
+
+      trackFaviconResponse(probes, path, response);
+      const headers: Record<string, string | number> = {
+        "Cache-Control": "no-store",
+        Connection: "close",
+        "Content-Type": "image/svg+xml",
+      };
+      if (path === knownOverPath) {
+        headers["Content-Length"] = overSvg.length;
+      }
+      response.writeHead(200, headers);
+
+      if (path === exactPath || path === exactAgainPath) {
+        response.write(exactSvg);
+        response.end();
+        return;
+      }
+      if (path === knownOverPath) {
+        response.flushHeaders();
+        response.write(overSvg.subarray(0, 1));
+        return;
+      }
+
+      const writeOverflowByte = (): void => {
+        if (!response.destroyed) {
+          response.write(overSvg.subarray(faviconResponseLimitBytes));
+        }
+      };
+      if (response.write(exactSvg)) {
+        setTimeout(writeOverflowByte, 0);
+      } else {
+        response.once("drain", writeOverflowByte);
+      }
+    });
+
+    try {
+      await withTitleBarMuon(
+        async (driver, running, _env, bounds) => {
+          await runTitleBarStep(
+            "verify initial title bar icon before streamed favicons",
+            async () =>
+              await waitForTitleBarIconColor(
+                running,
+                bounds,
+                expectedInitialTitleBarIconColor,
+              ),
+          );
+          await runTitleBarStep(
+            "accept a chunked favicon exactly at the response limit",
+            async () => {
+              await setPageFavicon(driver, `${server.origin}${exactPath}`);
+              await waitForFaviconResponseStatus(
+                probes,
+                exactPath,
+                "completed",
+              );
+              await waitForTitleBarIconColor(
+                running,
+                bounds,
+                expectedSvgTitleBarIconColor,
+              );
+            },
+          );
+          await runTitleBarStep(
+            "reject a known oversized favicon before body completion",
+            async () => {
+              await setPageFavicon(driver, `${server.origin}${knownOverPath}`);
+              await waitForFaviconResponseStatus(
+                probes,
+                knownOverPath,
+                "canceled",
+              );
+              await waitForTitleBarIconColor(
+                running,
+                bounds,
+                expectedInitialTitleBarIconColor,
+              );
+            },
+          );
+          await runTitleBarStep(
+            "restore a valid streamed favicon after known-size rejection",
+            async () => {
+              await setPageFavicon(driver, `${server.origin}${exactAgainPath}`);
+              await waitForFaviconResponseStatus(
+                probes,
+                exactAgainPath,
+                "completed",
+              );
+              await waitForTitleBarIconColor(
+                running,
+                bounds,
+                expectedSvgTitleBarIconColor,
+              );
+            },
+          );
+          await runTitleBarStep(
+            "reject a chunked favicon one byte above the response limit",
+            async () => {
+              await setPageFavicon(
+                driver,
+                `${server.origin}${chunkedOverPath}`,
+              );
+              await waitForFaviconResponseStatus(
+                probes,
+                chunkedOverPath,
+                "canceled",
+              );
+              await waitForTitleBarIconColor(
+                running,
+                bounds,
+                expectedInitialTitleBarIconColor,
+              );
+            },
+          );
+          await runTitleBarStep(
+            "restore a normal favicon after streamed response rejection",
+            async () => {
+              await setPageFavicon(
+                driver,
+                "asset://main/icons/title-bar-vector.svg",
+              );
+              await waitForTitleBarIconColor(
+                running,
+                bounds,
+                expectedSvgTitleBarIconColor,
+              );
+            },
+          );
+        },
+        configuredTitleBarBackgroundColor,
+        undefined,
+        initialTitleBarIconPath,
+        undefined,
+        [...TEST_NETWORK_ALLOW_PATTERNS, `${server.origin}/**`],
+      );
+    } finally {
+      for (const probe of probes) {
+        if (probe.status === "active") {
+          probe.response.destroy();
+        }
+      }
+      await stopHttpServer(server.server);
+    }
   },
 );
 

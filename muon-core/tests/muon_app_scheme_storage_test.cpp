@@ -251,7 +251,8 @@ static bool RunConfiguredStorageSignatureTest(
   const std::vector<uint8_t> salt = {0xde, 0xad, 0xbe, 0xef};
   const auto storage = CreateConfiguredMuonAppStorage(
       true, archive_path, true,
-      "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", true, salt,
+      "d243085d80934d981fbb4cc8633a2494270728b06c800cc9ec0d53bf88081a35",
+      true, salt,
       &error_message);
   if (!Expect(static_cast<bool>(storage), error_message)) {
     return false;
@@ -259,7 +260,8 @@ static bool RunConfiguredStorageSignatureTest(
 
   const auto empty_salt_storage = CreateConfiguredMuonAppStorage(
       true, archive_path, true,
-      "7b57e267a5023c34cf204accbe85efba1efd2144", true, {},
+      "8153533b173d9190c4d874ee94e35c4b1255309265b632ad41a4091977012c6b",
+      true, {},
       &error_message);
   if (!Expect(static_cast<bool>(empty_salt_storage),
               "explicit empty asset.salt was rejected")) {
@@ -277,7 +279,8 @@ static bool RunConfiguredStorageSignatureTest(
 
   const auto mismatch = CreateConfiguredMuonAppStorage(
       true, archive_path, true,
-      "0b57e267a5023c34cf204accbe85efba1efd2144", true, salt,
+      "0243085d80934d981fbb4cc8633a2494270728b06c800cc9ec0d53bf88081a35",
+      true, salt,
       &error_message);
   if (!Expect(!mismatch, "mismatched asset.signature was accepted") ||
       !Expect(error_message.find("asset.signature") != std::string::npos,
@@ -287,7 +290,8 @@ static bool RunConfiguredStorageSignatureTest(
 
   const auto without_salt = CreateConfiguredMuonAppStorage(
       true, archive_path, true,
-      "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", false, {},
+      "d243085d80934d981fbb4cc8633a2494270728b06c800cc9ec0d53bf88081a35",
+      false, {},
       &error_message);
   if (!Expect(!without_salt,
               "asset.signature without asset.salt was accepted") ||
@@ -297,8 +301,9 @@ static bool RunConfiguredStorageSignatureTest(
   }
 
   const auto without_from = CreateConfiguredMuonAppStorage(
-      false, {}, true, "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", true,
-      salt, &error_message);
+      false, {}, true,
+      "d243085d80934d981fbb4cc8633a2494270728b06c800cc9ec0d53bf88081a35",
+      true, salt, &error_message);
   if (!Expect(!without_from,
               "asset.signature without asset.sourcePath was accepted")) {
     return false;
@@ -311,7 +316,8 @@ static bool RunConfiguredStorageSignatureTest(
   }
   const auto directory = CreateConfiguredMuonAppStorage(
       true, asset_root, true,
-      "a64b4e1c945373908df3a5b79f8000d8beb4e5a7", true, salt,
+      "d243085d80934d981fbb4cc8633a2494270728b06c800cc9ec0d53bf88081a35",
+      true, salt,
       &error_message);
   if (!Expect(!directory,
               "asset.signature with directory asset.sourcePath was accepted")) {
@@ -325,11 +331,42 @@ static bool RunConfiguredStorageSignatureTest(
   }
   const auto broken = CreateConfiguredMuonAppStorage(
       true, broken_path, true,
-      "4c986ce62f046843c0164eeb7dcf8db92fdf55e1", true, salt,
+      "005d2a3368995baf1694f06110947374d3dea2d4bc72b6c676f83073cf229584",
+      true, salt,
       &error_message);
   return Expect(!broken, "signed non-ZIP asset.sourcePath was accepted") &&
          Expect(error_message.find("ZIP") != std::string::npos,
                 "signed non-ZIP error did not mention ZIP");
+}
+
+static bool ExpectConfiguredStorageSignatureFormatFailure(
+    const std::filesystem::path& archive_path,
+    const std::string& signature,
+    const std::vector<uint8_t>& salt) {
+  std::string error_message;
+  const auto storage = CreateConfiguredMuonAppStorage(
+      true, archive_path, true, signature, true, salt, &error_message);
+  return Expect(!storage, "invalid asset.signature format was accepted") &&
+         Expect(error_message.find(
+                    "64-character SHA-256 hex string") != std::string::npos,
+                "invalid asset.signature format error lacks context");
+}
+
+static bool RunConfiguredStorageSignatureFormatTest(
+    const std::filesystem::path& test_directory) {
+  const auto archive_path = test_directory / "signature-format-assets.zip";
+  if (!Expect(WriteDeterministicStoredZipArchive(archive_path),
+              "failed to create signature format ZIP asset")) {
+    return false;
+  }
+
+  const std::vector<uint8_t> salt = {0xde, 0xad, 0xbe, 0xef};
+  return ExpectConfiguredStorageSignatureFormatFailure(
+             archive_path, std::string(63, 'a'), salt) &&
+         ExpectConfiguredStorageSignatureFormatFailure(
+             archive_path, std::string(65, 'a'), salt) &&
+         ExpectConfiguredStorageSignatureFormatFailure(
+             archive_path, std::string(63, 'a') + "x", salt);
 }
 
 static bool RunZipStorageReadTest(
@@ -493,6 +530,7 @@ int main() {
                       RunConfiguredStorageDirectoryTest(test_directory) &&
                       RunConfiguredStorageValidationTest(test_directory) &&
                       RunConfiguredStorageSignatureTest(test_directory) &&
+                      RunConfiguredStorageSignatureFormatTest(test_directory) &&
                       RunZipStorageReadTest(test_directory) &&
                       RunZipStorageRejectionTest(test_directory) &&
                       RunZipStorageReadErrorTest(test_directory) &&

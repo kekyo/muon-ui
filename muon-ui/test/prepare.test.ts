@@ -34,17 +34,19 @@ import {
 } from "vitest";
 
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "../src/prepare.js";
-import { embedMuonConfigInBootstrapFile } from "../src/embed-config.js";
+import { embedMuonConfigInLauncherFile } from "../src/embed-config.js";
 import {
   buildTestMuonBuilder,
   createRuntimeInfoHeader,
 } from "./test-muon-builder.js";
 
 const execFileAsync = promisify(execFile);
+const sha256HexPattern = /^[0-9a-f]{64}$/u;
+const emptySha256Fingerprint = "0".repeat(64);
 const cleanupDirectories: string[] = [];
 const suiteCleanupDirectories: string[] = [];
 let prepareExecutablePath = "";
-let bootstrapExecutablePath = "";
+let launcherExecutablePath = "";
 let embeddedCefArchive:
   | {
       archivePath: string;
@@ -83,6 +85,15 @@ interface CatalogVersion {
   channel?: string;
   lastModified?: string;
 }
+
+interface ReadyMarker {
+  ready: boolean;
+  muonFingerprint: string;
+  cefFingerprint: string;
+}
+
+const readReadyMarker = async (path: string): Promise<ReadyMarker> =>
+  JSON.parse(await readFile(path, "utf8")) as ReadyMarker;
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -184,7 +195,7 @@ beforeAll(async () => {
     }),
   );
   prepareExecutablePath = binaries.prepareExecutablePath;
-  bootstrapExecutablePath = binaries.bootstrapExecutablePath;
+  launcherExecutablePath = binaries.launcherExecutablePath;
 });
 
 afterAll(async () => {
@@ -289,28 +300,28 @@ const createPrepareFixture = async (
   };
 };
 
-const writeBootstrapIni = async (
+const writeLauncherIni = async (
   runtimePath: string,
   content: string,
 ): Promise<void> => {
-  await writeFile(join(runtimePath, "muon-bootstrap.ini"), content);
+  await writeFile(join(runtimePath, "muon-launcher.ini"), content);
 };
 
-const writeEmbeddedBootstrap = async (
+const writeEmbeddedLauncher = async (
   fixture: PrepareFixture,
   config: Record<string, unknown>,
   launcherName = "myapp",
 ): Promise<string> => {
   const configPath = join(fixture.projectPath, `${launcherName}.json`);
-  const appBootstrapPath = join(fixture.muonPath, launcherName);
+  const appLauncherPath = join(fixture.muonPath, launcherName);
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  await embedMuonConfigInBootstrapFile({
-    bootstrapPath: bootstrapExecutablePath,
+  await embedMuonConfigInLauncherFile({
+    launcherPath: launcherExecutablePath,
     configPath,
-    outputPath: appBootstrapPath,
+    outputPath: appLauncherPath,
   });
-  await chmod(appBootstrapPath, 0o755);
-  return appBootstrapPath;
+  await chmod(appLauncherPath, 0o755);
+  return appLauncherPath;
 };
 
 const getLinuxPortableStateRuntimePath = (
@@ -691,6 +702,11 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "assets", "app.txt")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(stagePath, ".muon-ready.json"),
+    );
+    expect(readyMarker.muonFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
   });
 
   it("downloads CEF when cefPath is omitted and stages the prepared cache", async () => {
@@ -728,6 +744,10 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(stagePath, ".muon-ready.json"),
+    );
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
   });
 
   it("resumes an interrupted HTTP CEF archive download", async () => {
@@ -743,7 +763,7 @@ describe("muon-builder", () => {
         archive,
       },
     ]);
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 versionPolicy=exact
@@ -786,7 +806,7 @@ catalogRefreshIntervalSeconds=0
 
   it("uses the embedded tested CEF artifact without refreshing the catalog", async () => {
     const fixture = await createPrepareFixture();
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 versionPolicy=tested
@@ -847,7 +867,7 @@ lastCatalogUpdateUnix=0
         archive: getEmbeddedCefArchive(),
       },
     ]);
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 versionPolicy=same-major-latest
@@ -895,7 +915,7 @@ lastCatalogUpdateUnix=0
         archive: compatible,
       },
     ]);
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 versionPolicy=compat-latest
@@ -932,7 +952,7 @@ lastCatalogUpdateUnix=0
         archive: incompatible,
       },
     ]);
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 versionPolicy=exact
@@ -1047,6 +1067,11 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(outputDir, "libcef_dll_wrapper", "CMakeLists.txt")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(outputDir, ".muon-cef-ready.json"),
+    );
+    expect(readyMarker.muonFingerprint).toBe(emptySha256Fingerprint);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
     await expect(listCacheEntries(fixture.cacheDir)).resolves.toEqual([
       "artifacts",
       `artifacts/${fixture.archiveFileName}`,
@@ -1378,7 +1403,7 @@ lastCatalogUpdateUnix=0
     expect(stderr).toContain("Starting muon...");
   });
 
-  it("reports structured progress for bootstrap in-place CEF preparation", async () => {
+  it("reports structured progress for launcher in-place CEF preparation", async () => {
     const fixture = await createPrepareFixture();
     const harnessPath = await buildProgressHarness(fixture.projectPath);
 
@@ -1408,6 +1433,11 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(fixture.muonPath, "libcef.so")),
     ).resolves.toBeUndefined();
+    const readyMarker = await readReadyMarker(
+      join(fixture.muonPath, ".muon-cef-ready.json"),
+    );
+    expect(readyMarker.muonFingerprint).toBe(emptySha256Fingerprint);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
 
     await expect(runProgressHarness(harnessPath, fixture)).resolves.toEqual([]);
   });
@@ -1505,7 +1535,7 @@ lastCatalogUpdateUnix=0
         },
       ],
     );
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 versionPolicy=exact
@@ -1729,15 +1759,15 @@ lastCatalogUpdateUnix=0
     expect(stderr).toBe("");
   });
 
-  it("bootstraps a portable runtime in the user state directory and forwards the core exit code", async () => {
+  it("launchers a portable runtime in the user state directory and forwards the core exit code", async () => {
     const fixture = await createPrepareFixture();
-    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
-    const dataHome = await createTemporaryDirectory("muon-bootstrap-data-");
+    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
+    const dataHome = await createTemporaryDirectory("muon-launcher-data-");
     const appId = "scope.sample-app";
     const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const desktopEntryPath = getUserDesktopEntryPath(dataHome, appId);
     const outputDirectory = await createTemporaryDirectory(
-      "muon-bootstrap-output-",
+      "muon-launcher-output-",
     );
     const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
     await writeFile(
@@ -1757,12 +1787,12 @@ exit 17
       categories: ["Utility", "Development"],
       startupNotify: false,
     });
-    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
-      bootstrap: { appId },
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
     });
 
     await expect(
-      execFileAsync(appBootstrapPath, ["--alpha", "two words"], {
+      execFileAsync(appLauncherPath, ["--alpha", "two words"], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env: {
@@ -1837,15 +1867,15 @@ exit 19
     ).resolves.toBe("state launcher\n");
   });
 
-  it("bootstraps a portable install in place without using the user state runtime", async () => {
+  it("launchers a portable install in place without using the user state runtime", async () => {
     const fixture = await createPrepareFixture();
     const stateHome = await createTemporaryDirectory(
-      "muon-bootstrap-portable-state-",
+      "muon-launcher-portable-state-",
     );
     const appId = "scope.portable-app";
     const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const outputDirectory = await createTemporaryDirectory(
-      "muon-bootstrap-portable-output-",
+      "muon-launcher-portable-output-",
     );
     const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
     await writeFile(
@@ -1868,12 +1898,12 @@ exit 17
         2,
       )}\n`,
     );
-    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
-      bootstrap: { appId },
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
     });
 
     await expect(
-      execFileAsync(appBootstrapPath, [], {
+      execFileAsync(appLauncherPath, [], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env: {
@@ -1897,13 +1927,13 @@ exit 17
   it("updates the staged runtime and desktop entry from a newer portable distribution", async () => {
     const firstFixture = await createPrepareFixture();
     const secondFixture = await createPrepareFixture();
-    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
-    const dataHome = await createTemporaryDirectory("muon-bootstrap-data-");
+    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
+    const dataHome = await createTemporaryDirectory("muon-launcher-data-");
     const appId = "scope.update-app";
     const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const desktopEntryPath = getUserDesktopEntryPath(dataHome, appId);
     const outputDirectory = await createTemporaryDirectory(
-      "muon-bootstrap-output-",
+      "muon-launcher-output-",
     );
     const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
     await writeFile(
@@ -1922,12 +1952,12 @@ exit 17
       categories: ["Utility"],
       startupNotify: true,
     });
-    const firstBootstrapPath = await writeEmbeddedBootstrap(firstFixture, {
-      bootstrap: { appId },
+    const firstLauncherPath = await writeEmbeddedLauncher(firstFixture, {
+      launcher: { appId },
     });
 
     await expect(
-      execFileAsync(firstBootstrapPath, [], {
+      execFileAsync(firstLauncherPath, [], {
         cwd: firstFixture.projectPath,
         encoding: "utf8",
         env: {
@@ -1963,12 +1993,12 @@ exit 23
       categories: ["Utility", "Development"],
       startupNotify: true,
     });
-    const secondBootstrapPath = await writeEmbeddedBootstrap(secondFixture, {
-      bootstrap: { appId },
+    const secondLauncherPath = await writeEmbeddedLauncher(secondFixture, {
+      launcher: { appId },
     });
 
     await expect(
-      execFileAsync(secondBootstrapPath, [], {
+      execFileAsync(secondLauncherPath, [], {
         cwd: secondFixture.projectPath,
         encoding: "utf8",
         env: {
@@ -1996,8 +2026,8 @@ exit 23
 
   it("does not create user desktop entries for deb installs and updates existing managed entries", async () => {
     const fixture = await createPrepareFixture();
-    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
-    const dataHome = await createTemporaryDirectory("muon-bootstrap-data-");
+    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
+    const dataHome = await createTemporaryDirectory("muon-launcher-data-");
     const appId = "scope.deb-app";
     const desktopId = "scope.deb-app";
     const desktopEntryPath = getUserDesktopEntryPath(dataHome, desktopId);
@@ -2028,8 +2058,8 @@ exit 17
         2,
       )}\n`,
     );
-    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
-      bootstrap: { appId },
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
     });
     const env = {
       ...process.env,
@@ -2040,7 +2070,7 @@ exit 17
     };
 
     await expect(
-      execFileAsync(appBootstrapPath, [], {
+      execFileAsync(appLauncherPath, [], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env,
@@ -2054,7 +2084,7 @@ exit 17
       "[Desktop Entry]\nName=Unmanaged\nExec=/tmp/old\n",
     );
     await expect(
-      execFileAsync(appBootstrapPath, [], {
+      execFileAsync(appLauncherPath, [], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env,
@@ -2069,7 +2099,7 @@ exit 17
       "[Desktop Entry]\nName=Managed\nExec=/tmp/old\nX-muon-Managed=true\n",
     );
     await expect(
-      execFileAsync(appBootstrapPath, [], {
+      execFileAsync(appLauncherPath, [], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env,
@@ -2094,15 +2124,15 @@ exit 17
     );
   });
 
-  it("hides bootstrap preparation diagnostics when a progress window is available", async () => {
+  it("hides launcher preparation diagnostics when a progress window is available", async () => {
     const xvfbRun = await findCommand("xvfb-run");
     if (xvfbRun === undefined) {
       return;
     }
     const fixture = await createPrepareFixture();
-    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
     const outputDirectory = await createTemporaryDirectory(
-      "muon-bootstrap-output-",
+      "muon-launcher-output-",
     );
     const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
     await writeFile(
@@ -2114,8 +2144,8 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
-      bootstrap: { appId: "progress.sample" },
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId: "progress.sample" },
     });
 
     await expect(
@@ -2125,7 +2155,7 @@ exit 17
           "-a",
           "node",
           resolve("..", "scripts/run-xvfb-command.mjs"),
-          appBootstrapPath,
+          appLauncherPath,
         ],
         {
           cwd: fixture.projectPath,
@@ -2144,15 +2174,15 @@ exit 17
     });
   });
 
-  it("uses embedded defaultVersionPolicy when bootstrap ini omits versionPolicy", async () => {
+  it("uses embedded defaultVersionPolicy when launcher ini omits versionPolicy", async () => {
     const compatible = await createFakeCefArchive(createTemporaryDirectory, {
-      archiveFileName: "cef-bootstrap-compatible.tar.bz2",
-      archiveRootName: "cef_binary_bootstrap_compatible_linux64_minimal",
-      libcefContent: "bootstrap compatible cef library\n",
+      archiveFileName: "cef-launcher-compatible.tar.bz2",
+      archiveRootName: "cef_binary_launcher_compatible_linux64_minimal",
+      libcefContent: "launcher compatible cef library\n",
     });
     const fixture = await createPrepareFixture(undefined, [
       {
-        version: "bootstrap-compatible",
+        version: "launcher-compatible",
         chromiumVersion: "199.0.0.0",
         archive: compatible,
       },
@@ -2162,18 +2192,18 @@ exit 17
         archive: getEmbeddedCefArchive(),
       },
     ]);
-    await writeBootstrapIni(
+    await writeLauncherIni(
       fixture.muonPath,
       `[cef]
 catalogRefreshIntervalSeconds=604800
 lastCatalogUpdateUnix=0
 `,
     );
-    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
+    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
     const appId = "compat.sample";
     const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
     const outputDirectory = await createTemporaryDirectory(
-      "muon-bootstrap-output-",
+      "muon-launcher-output-",
     );
     const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
     await writeFile(
@@ -2185,15 +2215,15 @@ exit 17
 `,
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appBootstrapPath = await writeEmbeddedBootstrap(fixture, {
-      bootstrap: {
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: {
         appId,
         defaultVersionPolicy: "compat-latest",
       },
     });
 
     await expect(
-      execFileAsync(appBootstrapPath, [], {
+      execFileAsync(appLauncherPath, [], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env: {
@@ -2207,20 +2237,20 @@ exit 17
 
     await expect(
       readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
-    ).resolves.toBe("bootstrap compatible cef library\n");
+    ).resolves.toBe("launcher compatible cef library\n");
     await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
     await expect(
-      readFile(join(stateRuntimePath, "muon-bootstrap.ini"), "utf8"),
+      readFile(join(stateRuntimePath, "muon-launcher.ini"), "utf8"),
     ).resolves.not.toContain("versionPolicy=");
   });
 
-  it("rejects an invalid embedded defaultVersionPolicy during bootstrap", async () => {
+  it("rejects an invalid embedded defaultVersionPolicy during launcher", async () => {
     const fixture = await createPrepareFixture();
-    const stateHome = await createTemporaryDirectory("muon-bootstrap-state-");
-    const appBootstrapPath = await writeEmbeddedBootstrap(
+    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
+    const appLauncherPath = await writeEmbeddedLauncher(
       fixture,
       {
-        bootstrap: {
+        launcher: {
           appId: "invalid-policy-app",
           defaultVersionPolicy: "invalid",
         },
@@ -2229,7 +2259,7 @@ exit 17
     );
 
     await expect(
-      execFileAsync(appBootstrapPath, [], {
+      execFileAsync(appLauncherPath, [], {
         cwd: fixture.projectPath,
         encoding: "utf8",
         env: {

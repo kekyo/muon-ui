@@ -7,7 +7,7 @@
 #include "plugins/muon_plugin_runtime.h"
 
 #include "muon_cardio_post.h"
-#include "muon_sha1.h"
+#include "muon_sha256.h"
 
 #include "plugins/builtin/muon_builtin.h"
 #include "browser/muon_builtin_browser.h"
@@ -3077,7 +3077,7 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
           impl, "Plugin signature requires plugin salt: " + plugin.plugin);
     }
     std::string actual_signature;
-    if (!muon_internal::CalculateFileSha1Hex(
+    if (!muon_internal::CalculateFileSha256Hex(
             path, plugin.signature_salt, &actual_signature)) {
       return FailMuonPluginStartup(
           impl, "Failed to calculate plugin signature: " + path.string());

@@ -4,7 +4,7 @@
  * https://github.com/kekyo/muon
  */
 
-#include "plugins/builtin/muon_builtin_bootstrap.h"
+#include "plugins/builtin/muon_builtin_launcher.h"
 
 #include "config/muon_paths.h"
 #include "muon_string_helpers.h"
@@ -39,11 +39,11 @@ static const muon_type_descriptor settings_args[] = {
     type_string,
 };
 
-static constexpr auto kBootstrapConfigFileName = "muon-bootstrap.ini";
+static constexpr auto kLauncherConfigFileName = "muon-launcher.ini";
 static constexpr auto kDefaultCatalogRefreshIntervalSeconds =
     uint64_t{604800};
 
-struct BootstrapSettings {
+struct LauncherSettings {
   std::string cef_version_policy = "tested";
   bool has_cef_version_policy = false;
   std::string cef_exact_version;
@@ -107,7 +107,7 @@ static bool ParseBool(const std::string& value, bool* result) {
   return false;
 }
 
-static bool ValidateSettings(const BootstrapSettings& settings,
+static bool ValidateSettings(const LauncherSettings& settings,
                              std::string* error_message) {
   if (!IsValidPolicy(settings.cef_version_policy)) {
     *error_message = "Invalid CEF version policy";
@@ -122,11 +122,11 @@ static bool ValidateSettings(const BootstrapSettings& settings,
   return true;
 }
 
-static std::filesystem::path GetBootstrapConfigPath() {
-  return GetMuonExecutableDirectory() / kBootstrapConfigFileName;
+static std::filesystem::path GetLauncherConfigPath() {
+  return GetMuonExecutableDirectory() / kLauncherConfigFileName;
 }
 
-static bool ApplyEntry(BootstrapSettings* settings,
+static bool ApplyEntry(LauncherSettings* settings,
                        const std::string& section,
                        const std::string& key,
                        const std::string& value,
@@ -177,17 +177,17 @@ static bool ApplyEntry(BootstrapSettings* settings,
   return true;
 }
 
-static bool ReadSettings(BootstrapSettings* settings,
+static bool ReadSettings(LauncherSettings* settings,
                          std::string* error_message) {
-  *settings = BootstrapSettings{};
+  *settings = LauncherSettings{};
   settings->cef_version_policy = GetDefaultVersionPolicy();
-  const auto path = GetBootstrapConfigPath();
+  const auto path = GetLauncherConfigPath();
   if (!std::filesystem::exists(path)) {
     return ValidateSettings(*settings, error_message);
   }
   std::ifstream input(path);
   if (!input) {
-    *error_message = "Failed to read muon-bootstrap.ini";
+    *error_message = "Failed to read muon-launcher.ini";
     return false;
   }
   std::string section;
@@ -215,7 +215,7 @@ static bool ReadSettings(BootstrapSettings* settings,
   return ValidateSettings(*settings, error_message);
 }
 
-static std::string CreateSettingsIni(const BootstrapSettings& settings) {
+static std::string CreateSettingsIni(const LauncherSettings& settings) {
   std::ostringstream output;
   output << "[cef]\n";
   if (settings.has_cef_version_policy) {
@@ -237,19 +237,19 @@ static std::string CreateSettingsIni(const BootstrapSettings& settings) {
   return output.str();
 }
 
-static bool WriteSettings(const BootstrapSettings& settings,
+static bool WriteSettings(const LauncherSettings& settings,
                           std::string* error_message) {
   if (!ValidateSettings(settings, error_message)) {
     return false;
   }
-  const auto path = GetBootstrapConfigPath();
+  const auto path = GetLauncherConfigPath();
   const auto temporary_path =
       path.parent_path() /
       (path.filename().string() + ".tmp." +
        std::to_string(CurrentTimeSeconds()));
   std::ofstream output(temporary_path, std::ios::binary | std::ios::trunc);
   if (!output) {
-    *error_message = "Failed to write muon-bootstrap.ini";
+    *error_message = "Failed to write muon-launcher.ini";
     return false;
   }
   output << CreateSettingsIni(settings);
@@ -257,7 +257,7 @@ static bool WriteSettings(const BootstrapSettings& settings,
   if (!output) {
     std::error_code remove_error;
     std::filesystem::remove(temporary_path, remove_error);
-    *error_message = "Failed to write muon-bootstrap.ini";
+    *error_message = "Failed to write muon-launcher.ini";
     return false;
   }
   std::error_code error;
@@ -270,7 +270,7 @@ static bool WriteSettings(const BootstrapSettings& settings,
   if (error) {
     std::error_code remove_error;
     std::filesystem::remove(temporary_path, remove_error);
-    *error_message = "Failed to replace muon-bootstrap.ini";
+    *error_message = "Failed to replace muon-launcher.ini";
     return false;
   }
   error_message->clear();
@@ -292,14 +292,14 @@ static bool AddString(yyjson_mut_doc* document,
                                     value.size());
 }
 
-static bool CreateSettingsJson(const BootstrapSettings& settings,
+static bool CreateSettingsJson(const LauncherSettings& settings,
                                std::string* result,
                                std::string* error_message) {
   auto* document = yyjson_mut_doc_new(nullptr);
   auto* root = document == nullptr ? nullptr : yyjson_mut_obj(document);
   if (document == nullptr || root == nullptr) {
     yyjson_mut_doc_free(document);
-    *error_message = "Failed to create bootstrap settings JSON";
+    *error_message = "Failed to create launcher settings JSON";
     return false;
   }
   yyjson_mut_doc_set_root(document, root);
@@ -311,14 +311,14 @@ static bool CreateSettingsJson(const BootstrapSettings& settings,
                                "catalogRefreshIntervalSeconds",
                                settings.catalog_refresh_interval_seconds)) {
     yyjson_mut_doc_free(document);
-    *error_message = "Failed to build bootstrap settings JSON";
+    *error_message = "Failed to build launcher settings JSON";
     return false;
   }
   size_t json_size = 0;
   auto* json = yyjson_mut_write(document, YYJSON_WRITE_NOFLAG, &json_size);
   yyjson_mut_doc_free(document);
   if (json == nullptr) {
-    *error_message = "Failed to serialize bootstrap settings JSON";
+    *error_message = "Failed to serialize launcher settings JSON";
     return false;
   }
   result->assign(json, json_size);
@@ -373,7 +373,7 @@ static bool ReadJsonUint64(yyjson_val* object,
   return true;
 }
 
-static bool ApplySettingsPatch(BootstrapSettings* settings,
+static bool ApplySettingsPatch(LauncherSettings* settings,
                                const char* patch_json,
                                std::string* error_message) {
   std::string patch(patch_json);
@@ -383,7 +383,7 @@ static bool ApplySettingsPatch(BootstrapSettings* settings,
   auto* root = document == nullptr ? nullptr : yyjson_doc_get_root(document);
   if (document == nullptr || root == nullptr || !yyjson_is_obj(root)) {
     yyjson_doc_free(document);
-    *error_message = "Bootstrap settings patch must be a JSON object";
+    *error_message = "Launcher settings patch must be a JSON object";
     return false;
   }
   auto state = JsonPatchFieldState::Absent;
@@ -430,9 +430,9 @@ static bool ApplySettingsPatch(BootstrapSettings* settings,
   return ValidateSettings(*settings, error_message);
 }
 
-extern "C" void muon_builtin_bootstrap_get_settings(
+extern "C" void muon_builtin_launcher_get_settings(
     muon_completion_func completion) {
-  BootstrapSettings settings;
+  LauncherSettings settings;
   std::string error_message;
   if (!ReadSettings(&settings, &error_message)) {
     CompleteMuonError(completion, error_message);
@@ -446,10 +446,10 @@ extern "C" void muon_builtin_bootstrap_get_settings(
   CompleteMuonString(completion, json);
 }
 
-extern "C" void muon_builtin_bootstrap_set_settings(
+extern "C" void muon_builtin_launcher_set_settings(
     muon_completion_func completion,
     const char* settings_json) {
-  BootstrapSettings settings;
+  LauncherSettings settings;
   std::string error_message;
   if (settings_json == nullptr ||
       !ReadSettings(&settings, &error_message) ||
@@ -461,9 +461,9 @@ extern "C" void muon_builtin_bootstrap_set_settings(
   CompleteMuonVoid(completion);
 }
 
-extern "C" void muon_builtin_bootstrap_trigger_update(
+extern "C" void muon_builtin_launcher_trigger_update(
     muon_completion_func completion) {
-  BootstrapSettings settings;
+  LauncherSettings settings;
   std::string error_message;
   if (!ReadSettings(&settings, &error_message)) {
     CompleteMuonError(completion, error_message);
@@ -481,7 +481,7 @@ extern "C" void muon_builtin_bootstrap_trigger_update(
 static const muon_plugin_function_metadata get_settings_function = {
     "__getSettings",
     reinterpret_cast<muon_native_function>(
-        &muon_builtin_bootstrap_get_settings),
+        &muon_builtin_launcher_get_settings),
     {0, nullptr, &type_string},
     "getSettings",
 };
@@ -489,7 +489,7 @@ static const muon_plugin_function_metadata get_settings_function = {
 static const muon_plugin_function_metadata set_settings_function = {
     "__setSettings",
     reinterpret_cast<muon_native_function>(
-        &muon_builtin_bootstrap_set_settings),
+        &muon_builtin_launcher_set_settings),
     {1, settings_args, &type_void},
     "setSettings",
 };
@@ -497,19 +497,19 @@ static const muon_plugin_function_metadata set_settings_function = {
 static const muon_plugin_function_metadata trigger_update_function = {
     "__triggerUpdate",
     reinterpret_cast<muon_native_function>(
-        &muon_builtin_bootstrap_trigger_update),
+        &muon_builtin_launcher_trigger_update),
     {0, nullptr, &type_void},
     "triggerUpdate",
 };
 
-static const muon_plugin_function_metadata* const bootstrap_functions[] = {
+static const muon_plugin_function_metadata* const launcher_functions[] = {
     &get_settings_function,
     &set_settings_function,
     &trigger_update_function,
     nullptr,
 };
 
-static constexpr char bootstrap_setup_script[] = R"JS(
+static constexpr char launcher_setup_script[] = R"JS(
 const parseNativeJson = async (source) => JSON.parse(await source);
 const properties = {};
 if (isAllowed("getSettings")) {
@@ -541,28 +541,28 @@ Object.defineProperties(namespace, properties);
 
 }  // namespace muon_internal
 
-void InitializeMuonBuiltinBootstrap(const std::string& default_version_policy) {
+void InitializeMuonBuiltinLauncher(const std::string& default_version_policy) {
   muon_internal::g_default_version_policy =
       muon_internal::IsValidPolicy(default_version_policy)
           ? default_version_policy
           : "tested";
 }
 
-const muon_plugin_namespace kMuonBuiltinBootstrapNamespace = {
-    "muon.bootstrap",
-    muon_internal::bootstrap_setup_script,
-    muon_internal::bootstrap_functions,
+const muon_plugin_namespace kMuonBuiltinLauncherNamespace = {
+    "muon.launcher",
+    muon_internal::launcher_setup_script,
+    muon_internal::launcher_functions,
 };
 
-static const muon_plugin_namespace* const bootstrap_namespaces[] = {
-    &kMuonBuiltinBootstrapNamespace,
+static const muon_plugin_namespace* const launcher_namespaces[] = {
+    &kMuonBuiltinLauncherNamespace,
     nullptr,
 };
 
-static const muon_plugin_metadata bootstrap_metadata = {
-    bootstrap_namespaces,
+static const muon_plugin_metadata launcher_metadata = {
+    launcher_namespaces,
 };
 
-const muon_plugin_metadata* GetMuonBuiltinBootstrapPluginMetadata() {
-  return &bootstrap_metadata;
+const muon_plugin_metadata* GetMuonBuiltinLauncherPluginMetadata() {
+  return &launcher_metadata;
 }

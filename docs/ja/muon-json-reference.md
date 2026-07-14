@@ -38,6 +38,10 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
     "plugins": [
       {
         "name": "internal",
+        "config": {
+          "fs.readFile.maxBytes": "67108864",
+          "fs.readTextFile.maxBytes": "67108864"
+        },
         "imports": [
           {
             "sources": ["src/native/**"],
@@ -162,11 +166,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
-- ポータブル配布物(.tar.gz)から起動した場合、`muon-bootstrap` は展開先の `<packageName>/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
+- ポータブル配布物(.tar.gz)から起動した場合、`muon-launcher` は展開先の `<packageName>/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
   このdesktop entryの `Exec`, `TryExec`, `Icon` は、展開先ディレクトリ配下の絶対パスを指します。
 - 同じ展開先で再起動した場合は準備済みCEFを再利用します。別のディレクトリへ展開した配布物から起動した場合は、その展開先ごとにCEF準備とdesktop entry更新が行われます。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
-  debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-bootstrap` はユーザーhomeへ新規desktop entryを作成しません。
+  debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-launcher` はユーザーhomeへ新規desktop entryを作成しません。
   既存のmuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリです。
@@ -275,6 +279,8 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `plugins`                    | `readonly object[]`           | `[]`                   | 有効化するプラグインのリストです。                                                |
 | `plugins[].name`             | `string`                      | なし                   | 有効化するプラグイン名です。                                                      |
 | `plugins[].config`           | `readonly object`             | `{}`                   | プラグイン初期化時に渡す文字列key-value設定です。                                 |
+| `plugins[name="internal"].config["fs.readFile.maxBytes"]` | `string` | `"67108864"` | `muon.fs.readFile` 1回あたりの読み取り上限をbyte単位で指定します。 |
+| `plugins[name="internal"].config["fs.readTextFile.maxBytes"]` | `string` | `"67108864"` | `muon.fs.readTextFile` 1回あたりのraw byte読み取り上限を指定します。 |
 | `plugins[].allow`            | `readonly string[]`           | なし                   | `simple` モードで公開する関数パスの許可リストです。                               |
 | `plugins[].imports`          | `readonly object[]`           | なし                   | `validate` モードで使用するimport元ごとの許可リストです。                         |
 | `plugins[].imports[].sources`  | `readonly string[]`         | なし                   | プロジェクトルートからの相対importerパスglobです。                                |
@@ -298,6 +304,13 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   keyは空文字列不可で、keyとvalueはいずれもNUL文字を含められません。
   valueに指定できるのは文字列だけです。空文字列や改行を含む文字列は指定できますが、object、array、number、boolean、nullは設定エラーになります。
   複数行の値やglob/正規表現の区切りなど、値の意味と解釈は各プラグインの責務です。
+- 内蔵プラグインの `fs.readFile.maxBytes` と `fs.readTextFile.maxBytes` は、それぞれ `muon.fs.readFile` と `muon.fs.readTextFile` 1回あたりのraw byte読み取り上限を指定します。
+  値はASCII数字だけで構成される符号なし10進整数文字列で、文字列全体が `uint64_t` の範囲内である必要があります。先頭ゼロは使用できます。
+  空文字列、符号、空白、小数点、指数表記、単位suffix、overflowは不正です。
+  どちらも未指定時は64 MiB (`67108864` byte) です。`"0"` も有効で、 `readFile()` では空のrangeだけを、 `readTextFile()` では空のソースだけを許可します。
+  不正値は既定値へフォールバックせず、該当するkey名に続く `must be an unsigned decimal byte count` で内蔵プラグインの初期化に失敗します。
+  設定はプラグイン初期化時に確定し、実行中には変更されません。変更後の起動またはrecycleで反映されます。
+  2つの設定は独立して対応する関数だけに適用され、複数操作を合計したquotaにはなりません。`readTextFile()` は上限ちょうどまでのソースを許可し、超過時は切り詰めず、UTF-8/NUL検証の前にrejectします。
 - `plugins[].allow` は、`simple` モードでプラグインが持つ関数パスを `window` 階層に公開するためのホワイトリストです。
   `simple` モードでは必須で、`validate` モードでは指定できません。
   `muon.fs.*` のようなパターンを指定出来ます。
@@ -354,13 +367,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   開発・デバッグ用の設定であり、配布ビルドでは必要な場合だけ有効化してください。
 - `port` は `1024` から `65535` の整数である必要があります。
 
-## bootstrapキー
+## launcherキー
 
 | キー                   | 型       | 既定値     | 概要                                                                                                  |
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
-| `defaultVersionPolicy` | `string` | `"tested"` | `muon-bootstrap.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
+| `defaultVersionPolicy` | `string` | `"tested"` | `muon-launcher.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 > 注釈: ここに挙げられていない `appId` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
 > 解説は省略します。
-
----

@@ -26,34 +26,34 @@ MUON_BUILDER_VERSION=1.2.3-beta \
   MUON_BUILDER_GIT_COMMIT_HASH=builder-test-hash \
   bash "${SCRIPT_DIR}/build.sh" check Release windows-amd64
 
-bootstrap_executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap.exe"
-bootstrap_dump="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-bootstrap-resources.txt"
-x86_64-w64-mingw32-objdump -x "${bootstrap_executable}" > "${bootstrap_dump}"
+launcher_executable="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-launcher.exe"
+launcher_dump="${SCRIPT_DIR}/.run/check-windows-amd64-release/muon-launcher-resources.txt"
+x86_64-w64-mingw32-objdump -x "${launcher_executable}" > "${launcher_dump}"
 sed -n '/The \.rsrc Resource Directory section:/,/Sections:/p' \
-  "${bootstrap_dump}" > "${bootstrap_dump}.section"
-if grep -Fq 'Entry: ID: 0x000003' "${bootstrap_dump}.section" ||
-    grep -Fq 'Entry: ID: 0x00000e' "${bootstrap_dump}.section"; then
-  echo "muon-bootstrap.exe contains deprecated windres icon resources." >&2
+  "${launcher_dump}" > "${launcher_dump}.section"
+if grep -Fq 'Entry: ID: 0x000003' "${launcher_dump}.section" ||
+    grep -Fq 'Entry: ID: 0x00000e' "${launcher_dump}.section"; then
+  echo "muon-launcher.exe contains deprecated windres icon resources." >&2
   exit 1
 fi
-if ! grep -Fq 'Entry: ID: 0x000010' "${bootstrap_dump}.section" ||
-    ! grep -Fq 'Entry: ID: 0x000018' "${bootstrap_dump}.section"; then
-  echo "muon-bootstrap.exe is missing Windows version or manifest resources." >&2
+if ! grep -Fq 'Entry: ID: 0x000010' "${launcher_dump}.section" ||
+    ! grep -Fq 'Entry: ID: 0x000018' "${launcher_dump}.section"; then
+  echo "muon-launcher.exe is missing Windows version or manifest resources." >&2
   exit 1
 fi
 node "${SCRIPT_DIR}/scripts/assert-windows-version.mjs" \
-  "${bootstrap_executable}" \
+  "${launcher_executable}" \
   --file-version \
   1.2.3.0 \
   --product-version \
   1.2.3.0 \
   "ProductName=muon" \
   "CompanyName=Kouji Matsui. (@kekyo@mi.kekyo.net)" \
-  "FileDescription=muon Bootstrap" \
+  "FileDescription=muon Launcher" \
   "FileVersion=1.2.3-beta" \
   "ProductVersion=1.2.3-beta" \
-  "InternalName=muon-bootstrap" \
-  "OriginalFilename=muon-bootstrap.exe" \
+  "InternalName=muon-launcher" \
+  "OriginalFilename=muon-launcher.exe" \
   "PrivateBuild=builder-test-hash" \
   "Comments=https://muon-ui.com/ target=windows-amd64; cef=; cefTarget=; cefApi=" \
   "SpecialBuild=cefArtifact=; distribution=; apiHash="
@@ -162,6 +162,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
 
 x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${progress_harness_exe}" \
   "${progress_harness_src}" \

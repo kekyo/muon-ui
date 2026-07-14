@@ -27,7 +27,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MuonBuildTarget } from "../src/build.js";
 import {
-  createMuonBootstrapEmbeddedConfigSlot,
+  createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
 import { packMuonApp } from "../src/pack.js";
@@ -425,11 +425,11 @@ const createRemoteFakeLinuxPackageDist = async (
   );
   await writeRemoteFile(
     agent,
-    joinWindowsPath(nativeDirectory, descriptor.bootstrapExecutableName),
+    joinWindowsPath(nativeDirectory, descriptor.launcherExecutableName),
     Buffer.concat([
-      Buffer.from("bootstrap prefix\n"),
-      createMuonBootstrapEmbeddedConfigSlot(),
-      Buffer.from("\nbootstrap suffix\n"),
+      Buffer.from("launcher prefix\n"),
+      createMuonLauncherEmbeddedConfigSlot(),
+      Buffer.from("\nlauncher suffix\n"),
     ]),
   );
   await copyLocalFileToRemote(
@@ -481,11 +481,11 @@ const createFakeMuonPackageDist = async (
     await writeFile(join(runtimeDirectory, "libcardio.dll"), "cardio\n");
     await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
     await writeExecutable(
-      join(nativeDirectory, "muon-bootstrap.exe"),
+      join(nativeDirectory, "muon-launcher.exe"),
       Buffer.concat([
-        Buffer.from("bootstrap prefix\n"),
-        createMuonBootstrapEmbeddedConfigSlot(),
-        Buffer.from("\nbootstrap suffix\n"),
+        Buffer.from("launcher prefix\n"),
+        createMuonLauncherEmbeddedConfigSlot(),
+        Buffer.from("\nlauncher suffix\n"),
       ]),
     );
   }

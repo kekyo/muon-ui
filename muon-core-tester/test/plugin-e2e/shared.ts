@@ -146,7 +146,13 @@ export const relative = (from: string, to: string): string =>
     ? relativeWindowsPath(from, to)
     : nodeRelative(from, to);
 
-const pathToFileUrlHref = (path: string): string =>
+/**
+ * Converts a local or remote-Windows absolute path to a file URL.
+ *
+ * @param path Filesystem path to convert.
+ * @returns A file URL string for the active E2E platform.
+ */
+export const pathToFileUrlHref = (path: string): string =>
   isWindowsAbsolutePath(path)
     ? pathToWindowsFileUrlHref(path)
     : pathToFileURL(path).href;
@@ -637,7 +643,7 @@ export const cdpStartupTimeoutMs = shouldUseValgrind
   : isWindowsRemoteAtLoad
     ? 60000
     : 30000;
-export const bootstrapCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
+export const launcherCdpStartupTimeoutMs = shouldUseValgrind ? 180000 : 120000;
 export const cdpCommandTimeoutMs = shouldUseValgrind
   ? 60000
   : isWindowsRemoteAtLoad
@@ -940,18 +946,18 @@ export const getMuonExecutable = (directory: string): string =>
       : "muon-core",
   );
 
-export const getMuonBootstrapExecutable = (directory: string): string =>
+export const getMuonLauncherExecutable = (directory: string): string =>
   join(
     directory,
     isWindowsAbsolutePath(directory) || process.platform === "win32"
-      ? "muon-bootstrap.exe"
-      : "muon-bootstrap",
+      ? "muon-launcher.exe"
+      : "muon-launcher",
   );
 
 const getLocalFallbackAppIdForExecutable = (executable: string): string => {
   const executableName = executable.split(/[\\/]+/u).at(-1) ?? executable;
-  return executableName.toLowerCase().includes("bootstrap")
-    ? "muon-bootstrap"
+  return executableName.toLowerCase().includes("launcher")
+    ? "muon-launcher"
     : "muon-core";
 };
 
@@ -2149,7 +2155,13 @@ export const createPluginConfigEntries = (
       })
     : [];
   return [
-    { name: "internal", allow: allowPatterns },
+    {
+      name: "internal",
+      allow: allowPatterns,
+      ...(pluginConfigByName.internal === undefined
+        ? {}
+        : { config: pluginConfigByName.internal }),
+    },
     ...standardPluginEntries,
     ...pluginNames.map((pluginName) => ({
       name: pluginName,
@@ -2613,8 +2625,8 @@ const startWindowsRemoteMuon = async (
   );
   const directory = selectedRuntime.directory;
   const executable =
-    options.executablePath?.toLowerCase().includes("bootstrap") === true
-      ? getMuonBootstrapExecutable(directory)
+    options.executablePath?.toLowerCase().includes("launcher") === true
+      ? getMuonLauncherExecutable(directory)
       : getMuonExecutable(directory);
   const pluginConfig = createPluginConfigEntries(
     options.configuredPluginNames,
@@ -2914,14 +2926,16 @@ export const startDebugMuon = async (
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
+  waitForDebugPort = true,
+  useValgrind = shouldUseValgrind,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
     pluginNames,
     networkAllowPatterns,
     pluginAllowPatterns,
-    true,
-    shouldUseValgrind,
+    waitForDebugPort,
+    useValgrind,
     browserConfig,
     environment,
     configuredPluginNames,
@@ -2937,17 +2951,17 @@ export const startDebugMuon = async (
     browserInitialTitleBarVisibility,
     browserInitialTitleBarIcon,
     browserTitleBarType,
-    isWindowsRemoteE2e()
+    isWindowsRemoteE2e() || !waitForDebugPort
       ? undefined
-      : getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
-    isWindowsRemoteE2e() ? cdpStartupTimeoutMs : bootstrapCdpStartupTimeoutMs,
+      : getMuonLauncherExecutable(DEBUG_MUON_DIRECTORY),
+    isWindowsRemoteE2e() ? cdpStartupTimeoutMs : launcherCdpStartupTimeoutMs,
     logConfig,
     pluginSignatureByName,
     pluginSaltByName,
     pluginConfigByName,
   );
 
-export const startDebugMuonBootstrap = async (
+export const startDebugMuonLauncher = async (
   pluginNames: string[],
   networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
   environment: NodeJS.ProcessEnv = {},
@@ -2984,8 +2998,8 @@ export const startDebugMuonBootstrap = async (
     undefined,
     undefined,
     undefined,
-    getMuonBootstrapExecutable(DEBUG_MUON_DIRECTORY),
-    bootstrapCdpStartupTimeoutMs,
+    getMuonLauncherExecutable(DEBUG_MUON_DIRECTORY),
+    launcherCdpStartupTimeoutMs,
   );
 
 export const startReleaseMuon = async (): Promise<RunningMuon> =>
@@ -3008,6 +3022,7 @@ export const startGestamentDebugMuon = async (
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  networkAllowPatterns: string[] = TEST_NETWORK_ALLOW_PATTERNS,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -3016,7 +3031,7 @@ export const startGestamentDebugMuon = async (
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,
-    TEST_NETWORK_ALLOW_PATTERNS,
+    networkAllowPatterns,
     pluginPath,
     createPluginConfigEntries([], TEST_PLUGIN_ALLOW_PATTERNS),
     undefined,
@@ -3689,11 +3704,65 @@ export const stopMuon = async (
   }
 };
 
+/**
+ * Starts a debug runtime with plugin-specific string configuration.
+ *
+ * @param pluginNames External plugins to load.
+ * @param pluginConfigByName Configuration entries keyed by plugin name.
+ * @param waitForDebugPort Whether to wait for the runtime CDP endpoint.
+ * @param useValgrind Whether to run the runtime under Valgrind.
+ * @returns The running debug runtime.
+ */
+export const startDebugMuonWithPluginConfig = async (
+  pluginNames: string[],
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>>,
+  waitForDebugPort = true,
+  useValgrind = shouldUseValgrind,
+): Promise<RunningMuon> =>
+  await startDebugMuon(
+    pluginNames,
+    TEST_NETWORK_ALLOW_PATTERNS,
+    {},
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    pluginNames,
+    TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    [],
+    null,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    {},
+    pluginConfigByName,
+    waitForDebugPort,
+    useValgrind,
+  );
+
+/**
+ * Runs an operation against a debug runtime and always stops the runtime.
+ *
+ * @param pluginNames External plugins to load.
+ * @param run Operation to run with the connected CDP driver.
+ * @param pluginConfigByName Optional configuration keyed by plugin name.
+ * @returns A promise that resolves after the runtime is stopped.
+ */
 export const withMuon = async (
   pluginNames: string[],
   run: (driver: CdpDriver, running: RunningMuon) => Promise<void>,
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<void> => {
-  const running = await startDebugMuon(pluginNames);
+  const running = await startDebugMuonWithPluginConfig(
+    pluginNames,
+    pluginConfigByName,
+  );
   let driver: CdpDriver | undefined = undefined;
   try {
     driver = await connectToMuonCdp({
@@ -3802,18 +3871,24 @@ export const withTrackedMuon = async (
   expectFfiClosureTrackerBalanced(running.stderr);
 };
 
+/**
+ * Verifies that a debug runtime rejects its plugin configuration at startup.
+ *
+ * @param pluginNames External plugins to load.
+ * @param expectedStderr Diagnostic expected on standard error.
+ * @param pluginConfigByName Configuration entries keyed by plugin name.
+ * @returns A promise that resolves after the failed runtime exits.
+ */
 export const expectDebugMuonStartupFailure = async (
   pluginNames: string[],
   expectedStderr: string,
+  pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
 ): Promise<void> => {
-  const running = await startMuon(
-    DEBUG_MUON_DIRECTORY,
+  const running = await startDebugMuonWithPluginConfig(
     pluginNames,
-    TEST_NETWORK_ALLOW_PATTERNS,
-    TEST_PLUGIN_ALLOW_PATTERNS,
+    pluginConfigByName,
     false,
     false,
-    undefined,
   );
   try {
     await waitForProcessExit(running, processExitTimeoutMs);

@@ -197,5 +197,3 @@ JavaScript object identityが同一であることを保証しません。
 そのcallbackに `release()` や `[Symbol.dispose]()` は追加されません。
 `MuonAdhocLibrary.getFunction()` が返す関数もこのプロキシとは異なり、
 ライブラリ自体を `MuonAdhocLibrary.release()` で解放します。
-
----

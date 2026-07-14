@@ -73,6 +73,3 @@ npx muon build --icon icons/app.png --linux-name "My App"
 
 > 注釈: muon CLIを使用してビルドを行う場合は、virtual moduleの解決 (`import`によるmuonプラグインの参照) が出来ません。
 > 従って、muonプラグインの参照モード `validate` は使用できず、常に `simple` モードを使用する必要があります。
-
----
-

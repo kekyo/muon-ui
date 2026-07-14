@@ -2,11 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT_DIR="${SCRIPT_DIR}/.run/test-bootstrap-progress"
-HARNESS="${OUT_DIR}/bootstrap_progress_harness.c"
-BOOTSTRAP_STATE_HARNESS="${OUT_DIR}/bootstrap_state_directory_harness.c"
-WIN_FALLBACK_HARNESS="${OUT_DIR}/bootstrap_progress_windows_fallback_harness.c"
-WIN_UI_HARNESS="${OUT_DIR}/bootstrap_progress_windows_ui_harness.c"
+OUT_DIR="${SCRIPT_DIR}/.run/test-launcher-progress"
+HARNESS="${OUT_DIR}/launcher_progress_harness.c"
+LAUNCHER_STATE_HARNESS="${OUT_DIR}/launcher_state_directory_harness.c"
+WIN_FALLBACK_HARNESS="${OUT_DIR}/launcher_progress_windows_fallback_harness.c"
+WIN_UI_HARNESS="${OUT_DIR}/launcher_progress_windows_ui_harness.c"
 mkdir -p "${OUT_DIR}"
 
 bash "${SCRIPT_DIR}/build_yyjson.sh"
@@ -19,8 +19,8 @@ cat >"${HARNESS}" <<'HARNESS_EOF'
 #include <stdio.h>
 #include <string.h>
 
-#define MUON_BOOTSTRAP_PROGRESS_TEST
-#include "../../src/bootstrap_progress.c"
+#define MUON_LAUNCHER_PROGRESS_TEST
+#include "../../src/launcher_progress.c"
 
 static int assert_equal_uint16(const char *name, unsigned short actual,
                                unsigned short expected) {
@@ -64,18 +64,18 @@ static int assert_progress_text(const char *name,
   event.current = current;
   event.total = total;
   event.determinate = determinate;
-  muon_bootstrap_progress_test_format_event(&event, text, sizeof(text));
+  muon_launcher_progress_test_format_event(&event, text, sizeof(text));
   return assert_string(name, text, expected);
 }
 
 int main(void) {
   const unsigned short range = 210;
   const unsigned short first =
-      muon_bootstrap_progress_test_pulse_position(1000000000ULL, range);
+      muon_launcher_progress_test_pulse_position(1000000000ULL, range);
   const unsigned short burst =
-      muon_bootstrap_progress_test_pulse_position(1000000000ULL, range);
+      muon_launcher_progress_test_pulse_position(1000000000ULL, range);
   const unsigned short later =
-      muon_bootstrap_progress_test_pulse_position(1200000000ULL, range);
+      muon_launcher_progress_test_pulse_position(1200000000ULL, range);
   int failed = 0;
   failed |= assert_equal_uint16("same timestamp", burst, first);
   failed |= assert_in_range("first", first, 0, range);
@@ -109,13 +109,13 @@ HARNESS_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
-  -o "${OUT_DIR}/bootstrap_progress_harness" \
+  -o "${OUT_DIR}/launcher_progress_harness" \
   "${HARNESS}" \
   $(pkg-config --cflags --libs xcb) \
   -pthread
-"${OUT_DIR}/bootstrap_progress_harness"
+"${OUT_DIR}/launcher_progress_harness"
 
-cat >"${BOOTSTRAP_STATE_HARNESS}" <<'HARNESS_EOF'
+cat >"${LAUNCHER_STATE_HARNESS}" <<'HARNESS_EOF'
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -124,8 +124,8 @@ cat >"${BOOTSTRAP_STATE_HARNESS}" <<'HARNESS_EOF'
 #include <stdlib.h>
 #include <string.h>
 
-#define main muon_bootstrap_original_main
-#include "../../src/muon_bootstrap.c"
+#define main muon_launcher_original_main
+#include "../../src/muon_launcher.c"
 #undef main
 
 char *muon_substring(const char *start, size_t length) {
@@ -211,31 +211,31 @@ yyjson_doc *muon_json_read_file(const char *path) {
 #endif
 }
 
-int muon_bootstrap_get_embedded_app_id(char **app_id) {
+int muon_launcher_get_embedded_app_id(char **app_id) {
   *app_id = NULL;
   return 0;
 }
 
-void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_init(MuonLauncherProgress *progress) {
   progress->backend = NULL;
 }
 
-int muon_bootstrap_progress_is_available(const MuonBootstrapProgress *progress) {
+int muon_launcher_progress_is_available(const MuonLauncherProgress *progress) {
   (void)progress;
   return 0;
 }
 
-void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
+void muon_launcher_progress_update(MuonLauncherProgress *progress,
                                     const MuonPrepareProgress *event) {
   (void)progress;
   (void)event;
 }
 
-void muon_bootstrap_progress_fail(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_fail(MuonLauncherProgress *progress) {
   (void)progress;
 }
 
-void muon_bootstrap_progress_dispose(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_dispose(MuonLauncherProgress *progress) {
   (void)progress;
 }
 
@@ -322,9 +322,9 @@ int main(void) {
     failed = 1;
   }
 #ifndef _WIN32
-  const char *install_test_dir = getenv("MUON_BOOTSTRAP_INSTALL_TEST_DIR");
+  const char *install_test_dir = getenv("MUON_LAUNCHER_INSTALL_TEST_DIR");
   if (install_test_dir == NULL || install_test_dir[0] == '\0') {
-    fprintf(stderr, "MUON_BOOTSTRAP_INSTALL_TEST_DIR was not set\n");
+    fprintf(stderr, "MUON_LAUNCHER_INSTALL_TEST_DIR was not set\n");
     failed = 1;
   } else {
     MuonInstallConfig config;
@@ -368,12 +368,13 @@ INSTALL_CONFIG_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
 	  -I"${SCRIPT_DIR}/src" \
+	  -I"${SCRIPT_DIR}/../deps/sha2" \
 	  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
-	  -o "${OUT_DIR}/bootstrap_state_directory_harness" \
-	  "${BOOTSTRAP_STATE_HARNESS}" \
+	  -o "${OUT_DIR}/launcher_state_directory_harness" \
+	  "${LAUNCHER_STATE_HARNESS}" \
 	  "${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src/yyjson.c"
-MUON_BOOTSTRAP_INSTALL_TEST_DIR="${install_config_dir}" \
-  "${OUT_DIR}/bootstrap_state_directory_harness"
+MUON_LAUNCHER_INSTALL_TEST_DIR="${install_config_dir}" \
+  "${OUT_DIR}/launcher_state_directory_harness"
 
 cat >"${WIN_FALLBACK_HARNESS}" <<'HARNESS_EOF'
 #define WIN32_LEAN_AND_MEAN
@@ -388,27 +389,27 @@ static BOOL WINAPI muon_test_init_common_controls_ex(
 }
 
 #define InitCommonControlsEx muon_test_init_common_controls_ex
-#define MUON_BOOTSTRAP_PROGRESS_TEST
-#include "../../src/bootstrap_progress.c"
+#define MUON_LAUNCHER_PROGRESS_TEST
+#include "../../src/launcher_progress.c"
 #undef InitCommonControlsEx
 
 static int wait_for_progress_window(void) {
   for (int attempt = 0; attempt < 100; attempt += 1) {
-    HWND window = FindWindowA("MuonBootstrapProgressWindow", "muon");
+    HWND window = FindWindowA("MuonLauncherProgressWindow", "muon");
     if (window != NULL && IsWindowVisible(window)) {
       return 0;
     }
     Sleep(20);
   }
-  fprintf(stderr, "bootstrap progress window was not shown\n");
+  fprintf(stderr, "launcher progress window was not shown\n");
   return 1;
 }
 
 int main(void) {
-  MuonBootstrapProgress progress;
-  muon_bootstrap_progress_init(&progress);
-  if (!muon_bootstrap_progress_is_available(&progress)) {
-    fprintf(stderr, "bootstrap progress backend is unavailable\n");
+  MuonLauncherProgress progress;
+  muon_launcher_progress_init(&progress);
+  if (!muon_launcher_progress_is_available(&progress)) {
+    fprintf(stderr, "launcher progress backend is unavailable\n");
     return 1;
   }
   MuonPrepareProgress event;
@@ -417,9 +418,9 @@ int main(void) {
   event.current = 1;
   event.total = 100;
   event.determinate = 1;
-  muon_bootstrap_progress_update(&progress, &event);
+  muon_launcher_progress_update(&progress, &event);
   const int result = wait_for_progress_window();
-  muon_bootstrap_progress_dispose(&progress);
+  muon_launcher_progress_dispose(&progress);
   return result;
 }
 HARNESS_EOF
@@ -431,8 +432,8 @@ cat >"${WIN_UI_HARNESS}" <<'HARNESS_EOF'
 #include <windows.h>
 #include <commctrl.h>
 
-#define MUON_BOOTSTRAP_PROGRESS_TEST
-#include "../../src/bootstrap_progress.c"
+#define MUON_LAUNCHER_PROGRESS_TEST
+#include "../../src/launcher_progress.c"
 
 #define MUON_EXPECTED_PROGRESS_HEIGHT 6
 
@@ -472,14 +473,14 @@ static void collect_controls(HWND window, ProgressControls *controls) {
 
 static int wait_for_progress_window(HWND *window) {
   for (int attempt = 0; attempt < 100; attempt += 1) {
-    HWND candidate = FindWindowA("MuonBootstrapProgressWindow", "muon");
+    HWND candidate = FindWindowA("MuonLauncherProgressWindow", "muon");
     if (candidate != NULL && IsWindowVisible(candidate)) {
       *window = candidate;
       return 0;
     }
     Sleep(20);
   }
-  fprintf(stderr, "bootstrap progress window was not shown\n");
+  fprintf(stderr, "launcher progress window was not shown\n");
   return 1;
 }
 
@@ -578,10 +579,10 @@ static int wait_for_label_text(HWND label, const char *expected) {
 }
 
 int main(void) {
-  MuonBootstrapProgress progress;
-  muon_bootstrap_progress_init(&progress);
-  if (!muon_bootstrap_progress_is_available(&progress)) {
-    fprintf(stderr, "bootstrap progress backend is unavailable\n");
+  MuonLauncherProgress progress;
+  muon_launcher_progress_init(&progress);
+  if (!muon_launcher_progress_is_available(&progress)) {
+    fprintf(stderr, "launcher progress backend is unavailable\n");
     return 1;
   }
 
@@ -591,7 +592,7 @@ int main(void) {
   event.current = 25;
   event.total = 100;
   event.determinate = 1;
-  muon_bootstrap_progress_update(&progress, &event);
+  muon_launcher_progress_update(&progress, &event);
 
   HWND window = NULL;
   ProgressControls controls;
@@ -619,14 +620,14 @@ int main(void) {
   event.current = 42;
   event.total = 0;
   event.determinate = 0;
-  muon_bootstrap_progress_update(&progress, &event);
+  muon_launcher_progress_update(&progress, &event);
   if (!failed) {
     failed |= wait_for_mode(window, 1, &controls);
     failed |= wait_for_label_text(controls.label,
                                   "Installing CEF runtime... 42 files");
   }
 
-  muon_bootstrap_progress_dispose(&progress);
+  muon_launcher_progress_dispose(&progress);
   return failed;
 }
 HARNESS_EOF
@@ -636,45 +637,46 @@ rm -rf "${wine_prefix}"
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
-  -o "${OUT_DIR}/bootstrap_state_directory_windows64_harness.exe" \
-  "${BOOTSTRAP_STATE_HARNESS}"
+  -o "${OUT_DIR}/launcher_state_directory_windows64_harness.exe" \
+  "${LAUNCHER_STATE_HARNESS}"
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
-  wine "${OUT_DIR}/bootstrap_state_directory_windows64_harness.exe"
+  wine "${OUT_DIR}/launcher_state_directory_windows64_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
-  -o "${OUT_DIR}/bootstrap_progress_windows64_fallback_harness.exe" \
+  -o "${OUT_DIR}/launcher_progress_windows64_fallback_harness.exe" \
   "${WIN_FALLBACK_HARNESS}" \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
-  wine "${OUT_DIR}/bootstrap_progress_windows64_fallback_harness.exe"
+  wine "${OUT_DIR}/launcher_progress_windows64_fallback_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
-  -o "${OUT_DIR}/bootstrap_progress_windows64_ui_harness.exe" \
+  -o "${OUT_DIR}/launcher_progress_windows64_ui_harness.exe" \
   "${WIN_UI_HARNESS}" \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
-  wine "${OUT_DIR}/bootstrap_progress_windows64_ui_harness.exe"
+  wine "${OUT_DIR}/launcher_progress_windows64_ui_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
-  -o "${OUT_DIR}/bootstrap_progress_windows32_fallback_harness.exe" \
+  -o "${OUT_DIR}/launcher_progress_windows32_fallback_harness.exe" \
   "${WIN_FALLBACK_HARNESS}" \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
-  wine "${OUT_DIR}/bootstrap_progress_windows32_fallback_harness.exe"
+  wine "${OUT_DIR}/launcher_progress_windows32_fallback_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
-  -o "${OUT_DIR}/bootstrap_progress_windows32_ui_harness.exe" \
+  -o "${OUT_DIR}/launcher_progress_windows32_ui_harness.exe" \
   "${WIN_UI_HARNESS}" \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
-  wine "${OUT_DIR}/bootstrap_progress_windows32_ui_harness.exe"
+  wine "${OUT_DIR}/launcher_progress_windows32_ui_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -w

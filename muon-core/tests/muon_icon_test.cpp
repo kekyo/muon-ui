@@ -193,6 +193,21 @@ static bool TestBoundedByteAppend() {
                 "rejected overflowing append changed bytes");
 }
 
+static bool TestReleaseByteBuffer() {
+  auto data = std::vector<uint8_t>{1, 2, 3, 4};
+  data.reserve(4096);
+  ReleaseMuonByteBuffer(&data);
+  if (!Expect(data.empty(), "released byte buffer retained elements") ||
+      !Expect(data.capacity() == 0,
+              "released byte buffer retained allocated storage")) {
+    return false;
+  }
+  data.push_back(5);
+  ReleaseMuonByteBuffer(nullptr);
+  return Expect(data == std::vector<uint8_t>({5}),
+                "released byte buffer could not be reused");
+}
+
 static MuonIconBitmap CreateBitmap(int pixel_width,
                                    int pixel_height,
                                    size_t byte_length) {
@@ -227,7 +242,8 @@ static bool TestDecodedIconBitmapLimits() {
 
 int main() {
   return TestIconPngMetadataBudget() && TestProductionIconPngLimits() &&
-                 TestBoundedByteAppend() && TestDecodedIconBitmapLimits()
+                 TestBoundedByteAppend() && TestReleaseByteBuffer() &&
+                 TestDecodedIconBitmapLimits()
              ? 0
              : 1;
 }

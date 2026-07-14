@@ -13,7 +13,7 @@
 
 #include "prepare.h"
 #include "prepare_cef.h"
-#include "bootstrap_config.h"
+#include "launcher_config.h"
 #include "common.h"
 #include "muon_runtime_info_generated.h"
 
@@ -42,14 +42,14 @@ typedef struct {
   int has_cef_version_policy;
   char *cef_exact_version;
   int has_cef_exact_version;
-  char *bootstrap_config_dir;
+  char *launcher_config_dir;
   char *cache_dir;
   unsigned long long catalog_refresh_interval_seconds;
   int has_catalog_refresh_interval_seconds;
   unsigned long long last_catalog_update_unix;
   int update_requested;
   unsigned long long update_requested_at_unix;
-  int write_bootstrap_config;
+  int write_launcher_config;
   int catalog_updated;
   int force;
   int quiet;
@@ -73,7 +73,8 @@ typedef struct {
   size_t capacity;
 } PrepareNameList;
 
-static const char *kEmptyFingerprint = "0000000000000000000000000000000000000000";
+static const char *kEmptyFingerprint =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 static const char *muon_cef_target_from_public_target(const char *target) {
   if (target == NULL) {
@@ -137,11 +138,11 @@ static void *get_prepare_progress_user_data(const PrepareOptions *options) {
   return options->progress_callback == NULL ? NULL : (void *)options;
 }
 
-static void set_default_bootstrap_options(PrepareOptions *options) {
+static void set_default_launcher_options(PrepareOptions *options) {
   options->cef_version_policy = muon_duplicate_string("tested");
   options->cef_exact_version = muon_duplicate_string("");
   options->catalog_refresh_interval_seconds =
-      MUON_BOOTSTRAP_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS;
+      MUON_LAUNCHER_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS;
 }
 
 static int is_quiet_requested(int argc, char **argv) {
@@ -452,8 +453,8 @@ static char *default_cache_dir(void) {
   return result;
 }
 
-static int bootstrap_config_exists(const char *runtime_dir) {
-  char *path = muon_path_join(runtime_dir, MUON_BOOTSTRAP_CONFIG_FILE_NAME);
+static int launcher_config_exists(const char *runtime_dir) {
+  char *path = muon_path_join(runtime_dir, MUON_LAUNCHER_CONFIG_FILE_NAME);
   if (path == NULL) {
     return 0;
   }
@@ -462,8 +463,8 @@ static int bootstrap_config_exists(const char *runtime_dir) {
   return exists;
 }
 
-static int apply_bootstrap_config(PrepareOptions *options,
-                                  const MuonBootstrapConfig *config) {
+static int apply_launcher_config(PrepareOptions *options,
+                                  const MuonLauncherConfig *config) {
   char *policy = muon_duplicate_string(config->cef_version_policy);
   char *exact_version = muon_duplicate_string(config->cef_exact_version);
   if (policy == NULL || exact_version == NULL) {
@@ -487,15 +488,15 @@ static int apply_bootstrap_config(PrepareOptions *options,
   return 0;
 }
 
-static int read_bootstrap_config_with_embedded_default(
+static int read_launcher_config_with_embedded_default(
     const char *runtime_dir,
-    MuonBootstrapConfig *config) {
+    MuonLauncherConfig *config) {
   char *default_version_policy = NULL;
-  if (muon_bootstrap_get_embedded_default_version_policy(
+  if (muon_launcher_get_embedded_default_version_policy(
           &default_version_policy) != 0) {
     return -1;
   }
-  const int result = muon_bootstrap_config_read_with_default(
+  const int result = muon_launcher_config_read_with_default(
       runtime_dir, default_version_policy, config);
   free(default_version_policy);
   return result;
@@ -503,7 +504,7 @@ static int read_bootstrap_config_with_embedded_default(
 
 static int apply_embedded_default_policy_if_needed(PrepareOptions *options) {
   char *default_version_policy = NULL;
-  if (muon_bootstrap_get_embedded_default_version_policy(
+  if (muon_launcher_get_embedded_default_version_policy(
           &default_version_policy) != 0) {
     return -1;
   }
@@ -521,43 +522,43 @@ static int apply_embedded_default_policy_if_needed(PrepareOptions *options) {
   return 0;
 }
 
-static int load_bootstrap_config_if_present(PrepareOptions *options) {
+static int load_launcher_config_if_present(PrepareOptions *options) {
   const char *config_dir = NULL;
-  if (options->stage_dir != NULL && bootstrap_config_exists(options->stage_dir)) {
+  if (options->stage_dir != NULL && launcher_config_exists(options->stage_dir)) {
     config_dir = options->stage_dir;
-  } else if (bootstrap_config_exists(options->muon_path)) {
+  } else if (launcher_config_exists(options->muon_path)) {
     config_dir = options->muon_path;
   }
   if (config_dir == NULL) {
     return apply_embedded_default_policy_if_needed(options);
   }
-  MuonBootstrapConfig config;
-  if (read_bootstrap_config_with_embedded_default(config_dir, &config) != 0) {
+  MuonLauncherConfig config;
+  if (read_launcher_config_with_embedded_default(config_dir, &config) != 0) {
     return -1;
   }
-  const int result = apply_bootstrap_config(options, &config);
-  muon_bootstrap_config_free(&config);
+  const int result = apply_launcher_config(options, &config);
+  muon_launcher_config_free(&config);
   if (result == 0) {
-    options->write_bootstrap_config = 1;
-    options->bootstrap_config_dir = muon_duplicate_string(config_dir);
-    if (options->bootstrap_config_dir == NULL) {
+    options->write_launcher_config = 1;
+    options->launcher_config_dir = muon_duplicate_string(config_dir);
+    if (options->launcher_config_dir == NULL) {
       return -1;
     }
   }
   return result;
 }
 
-static int save_bootstrap_config_if_needed(const PrepareOptions *options) {
-  if (!options->write_bootstrap_config) {
+static int save_launcher_config_if_needed(const PrepareOptions *options) {
+  if (!options->write_launcher_config) {
     return 0;
   }
   const char *config_dir =
-      options->bootstrap_config_dir == NULL ? options->muon_path
-                                            : options->bootstrap_config_dir;
-  MuonBootstrapConfig config;
-  muon_bootstrap_config_init_defaults(&config);
+      options->launcher_config_dir == NULL ? options->muon_path
+                                            : options->launcher_config_dir;
+  MuonLauncherConfig config;
+  muon_launcher_config_init_defaults(&config);
   if (config.cef_version_policy == NULL || config.cef_exact_version == NULL) {
-    muon_bootstrap_config_free(&config);
+    muon_launcher_config_free(&config);
     return -1;
   }
   free(config.cef_version_policy);
@@ -575,11 +576,11 @@ static int save_bootstrap_config_if_needed(const PrepareOptions *options) {
   config.update_requested = options->update_requested;
   config.update_requested_at_unix = options->update_requested_at_unix;
   if (config.cef_version_policy == NULL || config.cef_exact_version == NULL) {
-    muon_bootstrap_config_free(&config);
+    muon_launcher_config_free(&config);
     return -1;
   }
-  const int result = muon_bootstrap_config_write(config_dir, &config);
-  muon_bootstrap_config_free(&config);
+  const int result = muon_launcher_config_write(config_dir, &config);
+  muon_launcher_config_free(&config);
   return result;
 }
 
@@ -718,11 +719,11 @@ static int copy_cef_source(
   return result;
 }
 
-static void finalize_sha1_hex(SHA1_CTX *context,
-                              char output[SHA1_DIGEST_STRING_LENGTH]) {
-  uint8_t digest[SHA1_DIGEST_LENGTH];
-  SHA1Final(digest, context);
-  muon_sha1_digest_to_hex(digest, output);
+static void finalize_sha256_hex(SHA256_CTX *context,
+                                char output[SHA256_DIGEST_STRING_LENGTH]) {
+  uint8_t digest[SHA256_DIGEST_LENGTH];
+  SHA256_Final(digest, context);
+  muon_sha256_digest_to_hex(digest, output);
 }
 
 static void prepare_name_list_free(PrepareNameList *list) {
@@ -820,7 +821,7 @@ static int staging_root_entry_is_generated_runtime_state(const char *name) {
   static const char *const generated_entries[] = {
       ".muon-ready.json",
       ".muon-test-config",
-      "muon-bootstrap.ini",
+      "muon-launcher.ini",
       "muon-cef.log",
       "muon-close-debug.log",
       "muon-runtime-helper",
@@ -851,18 +852,18 @@ static int staging_relative_path_should_skip(const char *relative) {
 
 static int fingerprint_staging_muon_source_recursive(
     const char *path, const char *relative,
-    char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
   if (stat(path, &entry) != 0) {
     muon_print_errno(path);
     return -1;
   }
-  SHA1_CTX context;
-  SHA1Init(&context);
-  muon_sha1_update_string(&context, relative);
-  muon_sha1_update_string(&context, ":");
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  muon_sha256_update_string(&context, relative);
+  muon_sha256_update_string(&context, ":");
   if (S_ISDIR(entry.st_mode)) {
-    muon_sha1_update_string(&context, "directory");
+    muon_sha256_update_string(&context, "directory");
     PrepareNameList children = {0};
     if (read_sorted_prepare_names(path, &children) != 0) {
       prepare_name_list_free(&children);
@@ -884,7 +885,7 @@ static int fingerprint_staging_muon_source_recursive(
         free(child_relative);
         continue;
       }
-      char child_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char child_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       if (fingerprint_staging_muon_source_recursive(
               child_path, child_relative, child_fingerprint) != 0) {
         free(child_path);
@@ -892,28 +893,28 @@ static int fingerprint_staging_muon_source_recursive(
         prepare_name_list_free(&children);
         return -1;
       }
-      muon_sha1_update_string(&context, children.values[index]);
-      muon_sha1_update_string(&context, child_fingerprint);
+      muon_sha256_update_string(&context, children.values[index]);
+      muon_sha256_update_string(&context, child_fingerprint);
       free(child_path);
       free(child_relative);
     }
     prepare_name_list_free(&children);
   } else if (S_ISREG(entry.st_mode)) {
-    char content_fingerprint[SHA1_DIGEST_STRING_LENGTH];
-    if (muon_sha1_file_hex(path, content_fingerprint) != 0) {
+    char content_fingerprint[SHA256_DIGEST_STRING_LENGTH];
+    if (muon_sha256_file_hex(path, content_fingerprint) != 0) {
       return -1;
     }
-    muon_sha1_update_string(&context, "file");
-    muon_sha1_update_string(&context, content_fingerprint);
+    muon_sha256_update_string(&context, "file");
+    muon_sha256_update_string(&context, content_fingerprint);
   } else {
-    muon_sha1_update_string(&context, "other");
+    muon_sha256_update_string(&context, "other");
   }
-  finalize_sha1_hex(&context, fingerprint);
+  finalize_sha256_hex(&context, fingerprint);
   return 0;
 }
 
 static int fingerprint_staging_muon_source(
-    const char *path, char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    const char *path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   return fingerprint_staging_muon_source_recursive(path, "", fingerprint);
 }
 
@@ -986,7 +987,7 @@ static int copy_staging_muon_source(const char *source,
 }
 
 static int fingerprint_cef_source(const char *cef_path,
-                                  char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+                                  char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   char *release_path = muon_path_join(cef_path, "Release");
   char *resource_path = muon_path_join(cef_path, "Resources");
   if (release_path == NULL || resource_path == NULL) {
@@ -998,24 +999,24 @@ static int fingerprint_cef_source(const char *cef_path,
   const int has_resources = muon_path_exists(resource_path);
   int result = 0;
   if (has_release || has_resources) {
-    SHA1_CTX context;
-    SHA1Init(&context);
+    SHA256_CTX context;
+    SHA256_Init(&context);
     if (has_release) {
-      char release_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char release_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       result =
           muon_fingerprint_directory_contents(release_path, release_fingerprint);
-      muon_sha1_update_string(&context, "Release");
-      muon_sha1_update_string(&context, release_fingerprint);
+      muon_sha256_update_string(&context, "Release");
+      muon_sha256_update_string(&context, release_fingerprint);
     }
     if (result == 0 && has_resources) {
-      char resource_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+      char resource_fingerprint[SHA256_DIGEST_STRING_LENGTH];
       result =
           muon_fingerprint_directory_contents(resource_path, resource_fingerprint);
-      muon_sha1_update_string(&context, "Resources");
-      muon_sha1_update_string(&context, resource_fingerprint);
+      muon_sha256_update_string(&context, "Resources");
+      muon_sha256_update_string(&context, resource_fingerprint);
     }
     if (result == 0) {
-      finalize_sha1_hex(&context, fingerprint);
+      finalize_sha256_hex(&context, fingerprint);
     }
   } else {
     result = muon_fingerprint_directory_contents(cef_path, fingerprint);
@@ -1026,27 +1027,27 @@ static int fingerprint_cef_source(const char *cef_path,
 }
 
 static int fingerprint_archive_metadata(
-    const char *archive_path, char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    const char *archive_path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
   if (stat(archive_path, &entry) != 0) {
     muon_print_errno(archive_path);
     return -1;
   }
-  SHA1_CTX context;
-  SHA1Init(&context);
-  muon_sha1_update_string(&context, archive_path);
+  SHA256_CTX context;
+  SHA256_Init(&context);
+  muon_sha256_update_string(&context, archive_path);
   char metadata[128];
   snprintf(metadata, sizeof(metadata), ":%llu:%lld:%d",
            (unsigned long long)entry.st_size, (long long)entry.st_mtime,
            (int)(entry.st_mode & 0777));
-  muon_sha1_update_string(&context, metadata);
-  finalize_sha1_hex(&context, fingerprint);
+  muon_sha256_update_string(&context, metadata);
+  finalize_sha256_hex(&context, fingerprint);
   return 0;
 }
 
 static int fingerprint_staging_cef_source(
     const char *cef_path, int cef_is_archive,
-    char fingerprint[SHA1_DIGEST_STRING_LENGTH]) {
+    char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   return cef_is_archive ? fingerprint_archive_metadata(cef_path, fingerprint)
                         : fingerprint_cef_source(cef_path, fingerprint);
 }
@@ -1087,8 +1088,8 @@ static int prepare_staging(const PrepareOptions *options,
   if (options->stage_dir == NULL) {
     return set_prepare_result(result, NULL, options->muon_path, cef_path, 0);
   }
-  char muon_fingerprint[SHA1_DIGEST_STRING_LENGTH];
-  char cef_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+  char muon_fingerprint[SHA256_DIGEST_STRING_LENGTH];
+  char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if (fingerprint_staging_muon_source(options->muon_path, muon_fingerprint) !=
           0 ||
       fingerprint_staging_cef_source(cef_path, cef_is_archive,
@@ -1273,7 +1274,7 @@ static int prepare_cef_in_place(const PrepareOptions *options,
                                 const MuonRuntimeInfo *runtime_info,
                                 const char *cef_path, int cef_is_archive,
                                 PrepareResult *result) {
-  char cef_fingerprint[SHA1_DIGEST_STRING_LENGTH];
+  char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if ((cef_is_archive
            ? muon_fingerprint_path_recursive(cef_path, "", cef_fingerprint)
            : fingerprint_cef_source(cef_path, cef_fingerprint)) != 0) {
@@ -1529,7 +1530,7 @@ static void print_usage(void) {
 static int parse_runtime_arguments(int argc, char **argv, int start_index,
                                    PrepareOptions *options) {
   memset(options, 0, sizeof(*options));
-  set_default_bootstrap_options(options);
+  set_default_launcher_options(options);
   for (int index = start_index; index < argc; index += 1) {
     if (strcmp(argv[index], "--muon-path") == 0 && index + 1 < argc) {
       options->muon_path = argv[++index];
@@ -1579,13 +1580,13 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
       options->cef_exact_version == NULL) {
     return -1;
   }
-  return load_bootstrap_config_if_present(options);
+  return load_launcher_config_if_present(options);
 }
 
 static int parse_buildtime_arguments(int argc, char **argv, int start_index,
                                      PrepareOptions *options) {
   memset(options, 0, sizeof(*options));
-  set_default_bootstrap_options(options);
+  set_default_launcher_options(options);
   for (int index = start_index; index < argc; index += 1) {
     if (strcmp(argv[index], "--version") == 0 && index + 1 < argc) {
       options->cef_version = argv[++index];
@@ -1656,7 +1657,7 @@ int muon_prepare_in_place_with_progress(
   options.quiet = quiet;
   options.progress_callback = progress_callback;
   options.progress_user_data = progress_user_data;
-  set_default_bootstrap_options(&options);
+  set_default_launcher_options(&options);
   if (options.muon_path == NULL || options.target == NULL ||
       options.cache_dir == NULL || options.cef_version_policy == NULL ||
       options.cef_exact_version == NULL ||
@@ -1668,9 +1669,9 @@ int muon_prepare_in_place_with_progress(
     free(options.cef_exact_version);
     return 1;
   }
-  MuonBootstrapConfig bootstrap_config;
-  if (read_bootstrap_config_with_embedded_default(options.muon_path,
-                                                 &bootstrap_config) != 0) {
+  MuonLauncherConfig launcher_config;
+  if (read_launcher_config_with_embedded_default(options.muon_path,
+                                                 &launcher_config) != 0) {
     free(options.muon_path);
     free(options.target);
     free(options.cache_dir);
@@ -1678,8 +1679,8 @@ int muon_prepare_in_place_with_progress(
     free(options.cef_exact_version);
     return 1;
   }
-  if (apply_bootstrap_config(&options, &bootstrap_config) != 0) {
-    muon_bootstrap_config_free(&bootstrap_config);
+  if (apply_launcher_config(&options, &launcher_config) != 0) {
+    muon_launcher_config_free(&launcher_config);
     free(options.muon_path);
     free(options.target);
     free(options.cache_dir);
@@ -1687,8 +1688,8 @@ int muon_prepare_in_place_with_progress(
     free(options.cef_exact_version);
     return 1;
   }
-  muon_bootstrap_config_free(&bootstrap_config);
-  options.write_bootstrap_config = 1;
+  muon_launcher_config_free(&launcher_config);
+  options.write_launcher_config = 1;
   const MuonRuntimeInfo *runtime_info = get_embedded_runtime_info();
   PrepareResult result = {0};
   char *cef_path = NULL;
@@ -1720,7 +1721,7 @@ int muon_prepare_in_place_with_progress(
   if (prepare_cef_in_place(&options, runtime_info, cef_path, 1, &result) != 0) {
     goto cleanup_paths;
   }
-  if (save_bootstrap_config_if_needed(&options) != 0) {
+  if (save_launcher_config_if_needed(&options) != 0) {
     goto cleanup_paths;
   }
   exit_code = 0;
@@ -1742,7 +1743,7 @@ cleanup_paths:
   free(options.cache_dir);
   free(options.cef_version_policy);
   free(options.cef_exact_version);
-  free(options.bootstrap_config_dir);
+  free(options.launcher_config_dir);
   return exit_code;
 }
 
@@ -1774,25 +1775,25 @@ int muon_prepare_staged_with_progress(
   options.quiet = quiet;
   options.progress_callback = progress_callback;
   options.progress_user_data = progress_user_data;
-  set_default_bootstrap_options(&options);
+  set_default_launcher_options(&options);
   if (options.muon_path == NULL || options.stage_dir == NULL ||
       options.target == NULL || options.cache_dir == NULL ||
       options.cef_version_policy == NULL || options.cef_exact_version == NULL ||
       validate_public_target(options.target) != 0 ||
-      load_bootstrap_config_if_present(&options) != 0) {
+      load_launcher_config_if_present(&options) != 0) {
     free(options.muon_path);
     free(options.stage_dir);
     free(options.target);
     free(options.cache_dir);
     free(options.cef_version_policy);
     free(options.cef_exact_version);
-    free(options.bootstrap_config_dir);
+    free(options.launcher_config_dir);
     return 1;
   }
-  free(options.bootstrap_config_dir);
-  options.bootstrap_config_dir = muon_duplicate_string(options.stage_dir);
-  options.write_bootstrap_config = 1;
-  if (options.bootstrap_config_dir == NULL) {
+  free(options.launcher_config_dir);
+  options.launcher_config_dir = muon_duplicate_string(options.stage_dir);
+  options.write_launcher_config = 1;
+  if (options.launcher_config_dir == NULL) {
     free(options.muon_path);
     free(options.stage_dir);
     free(options.target);
@@ -1832,7 +1833,7 @@ int muon_prepare_staged_with_progress(
   if (prepare_staging(&options, runtime_info, cef_path, 1, &result) != 0) {
     goto cleanup_paths;
   }
-  if (save_bootstrap_config_if_needed(&options) != 0) {
+  if (save_launcher_config_if_needed(&options) != 0) {
     goto cleanup_paths;
   }
   exit_code = 0;
@@ -1855,7 +1856,7 @@ cleanup_paths:
   free(options.cache_dir);
   free(options.cef_version_policy);
   free(options.cef_exact_version);
-  free(options.bootstrap_config_dir);
+  free(options.launcher_config_dir);
   return exit_code;
 }
 
@@ -1911,7 +1912,7 @@ static int run_runtime_command(int argc, char **argv, int start_index) {
                       &result) != 0) {
     goto cleanup_paths;
   }
-  if (save_bootstrap_config_if_needed(&options) != 0) {
+  if (save_launcher_config_if_needed(&options) != 0) {
     goto cleanup_paths;
   }
   if (options.json) {
@@ -1929,7 +1930,7 @@ cleanup_paths:
   free(result.cef_path);
   free(options.cef_version_policy);
   free(options.cef_exact_version);
-  free(options.bootstrap_config_dir);
+  free(options.launcher_config_dir);
   return exit_code;
 }
 

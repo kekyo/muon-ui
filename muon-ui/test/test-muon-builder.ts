@@ -21,7 +21,7 @@ interface RuntimeInfoHeaderOptions {
 
 export interface TestMuonBuilderBinaries {
   prepareExecutablePath: string;
-  bootstrapExecutablePath: string;
+  launcherExecutablePath: string;
 }
 
 const cString = (value: string): string => JSON.stringify(value);
@@ -170,7 +170,7 @@ export const buildTestMuonBuilder = async (
   ]);
 
   const prepareExecutablePath = join(outDir, "muon-builder");
-  const bootstrapExecutablePath = join(outDir, "muon-bootstrap");
+  const launcherExecutablePath = join(outDir, "muon-launcher");
   await execFileAsync("make", [
     "-C",
     prepareRoot,
@@ -180,20 +180,20 @@ export const buildTestMuonBuilder = async (
     `OUT_DIR=${outDir}`,
     `YYJSON_SOURCE_DIR=${yyjsonSourceDir}`,
     `PREPARE_TARGET=${prepareExecutablePath}`,
-    `BOOTSTRAP_TARGET=${bootstrapExecutablePath}`,
+    `LAUNCHER_TARGET=${launcherExecutablePath}`,
     `VERSION_HEADER=${versionHeader}`,
     `RUNTIME_INFO_HEADER=${runtimeInfoHeaderPath}`,
     `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux-amd64\\"`,
-    "BOOTSTRAP_CPPFLAGS=",
+    "LAUNCHER_CPPFLAGS=",
     "CFLAGS=-std=c99 -O0 -g -Wall -Wextra -pedantic",
     "LDFLAGS=-static",
-    "BOOTSTRAP_LDFLAGS=",
+    "LAUNCHER_LDFLAGS=",
     `LDLIBS=${libarchiveLib} ${bzip2Lib}`,
-    "BOOTSTRAP_LDLIBS=-lxcb",
+    "LAUNCHER_LDLIBS=-lxcb",
   ]);
 
   return {
     prepareExecutablePath,
-    bootstrapExecutablePath,
+    launcherExecutablePath,
   };
 };

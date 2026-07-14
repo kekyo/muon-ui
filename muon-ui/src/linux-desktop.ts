@@ -73,7 +73,7 @@ export interface ResolvedMuonLinuxDesktop {
   iconPath: string;
   /** File name written into target distributions for the normalized icon. */
   iconFileName: string;
-  /** File name written into target distributions for bootstrap desktop metadata. */
+  /** File name written into target distributions for launcher desktop metadata. */
   configFileName: string;
 }
 

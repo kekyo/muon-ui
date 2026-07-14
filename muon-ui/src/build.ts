@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
 import { parse } from "json5";
 import {
-  embedMuonConfigInBootstrapFile,
+  embedMuonConfigInLauncherFile,
   embedMuonConfigInRuntime,
 } from "./embed-config.js";
 import { getDefaultMuonPrepareTarget } from "./prepare.js";
@@ -239,11 +239,12 @@ export interface MuonBuildAssetResult {
    */
   path: string;
   /**
-   * SHA-1 signature for the generated asset archive and salt.
+   * 64-character lowercase hexadecimal SHA-256 digest of the generated asset
+   * archive bytes followed by the decoded salt bytes.
    */
   signature: string;
   /**
-   * Hex encoded salt embedded into muon.json.
+   * Hex-encoded salt embedded into muon.json.
    */
   salt: string;
   /**
@@ -269,7 +270,7 @@ export interface MuonBuildTargetResult {
    */
   outputPath: string;
   /**
-   * Absolute path of the app launcher copied from muon-bootstrap.
+   * Absolute path of the app launcher copied from muon-launcher.
    */
   launcherPath: string;
   /**
@@ -846,11 +847,11 @@ const buildMuonTarget = async (input: {
     "runtime",
     input.target,
   );
-  const sourceBootstrapPath = join(
+  const sourceLauncherPath = join(
     input.packageDirectory,
     "native",
     input.target,
-    descriptor.bootstrapExecutableName,
+    descriptor.launcherExecutableName,
   );
   const sourceRuntimeHelperPath =
     input.includeRuntimeHelper &&
@@ -884,7 +885,7 @@ const buildMuonTarget = async (input: {
 
   await verifyTargetInputs({
     sourceRuntimePath,
-    sourceBootstrapPath,
+    sourceLauncherPath,
     sourceRuntimeHelperPath,
     descriptor,
     target: input.target,
@@ -897,7 +898,7 @@ const buildMuonTarget = async (input: {
     join(outputPath, descriptor.runtimeExecutableName),
     executableMode,
   );
-  await copyFile(sourceBootstrapPath, launcherPath);
+  await copyFile(sourceLauncherPath, launcherPath);
   await chmod(launcherPath, executableMode);
   if (
     sourceRuntimeHelperPath !== undefined &&
@@ -938,14 +939,14 @@ const buildMuonTarget = async (input: {
       configPath,
       outputRuntimePath: undefined,
     });
-    await embedMuonConfigInBootstrapFile({
-      bootstrapPath: launcherPath,
+    await embedMuonConfigInLauncherFile({
+      launcherPath: launcherPath,
       configPath,
       outputPath: undefined,
     });
     if (runtimeHelperPath !== undefined) {
-      await embedMuonConfigInBootstrapFile({
-        bootstrapPath: runtimeHelperPath,
+      await embedMuonConfigInLauncherFile({
+        launcherPath: runtimeHelperPath,
         configPath,
         outputPath: undefined,
       });
@@ -1014,7 +1015,7 @@ const buildMuonTarget = async (input: {
 
 const verifyTargetInputs = async (input: {
   sourceRuntimePath: string;
-  sourceBootstrapPath: string;
+  sourceLauncherPath: string;
   sourceRuntimeHelperPath: string | undefined;
   descriptor: MuonTargetDescriptor;
   target: MuonBuildTarget;
@@ -1024,8 +1025,8 @@ const verifyTargetInputs = async (input: {
     `muon runtime for ${input.target}`,
   );
   await assertFile(
-    input.sourceBootstrapPath,
-    `muon bootstrap for ${input.target}`,
+    input.sourceLauncherPath,
+    `muon launcher for ${input.target}`,
   );
   if (input.sourceRuntimeHelperPath !== undefined) {
     await assertFile(
@@ -1129,7 +1130,7 @@ const writeAssetArchive = async (
   }
   await writeFile(outputPath, archive);
 
-  const signature = createHash("sha1")
+  const signature = createHash("sha256")
     .update(archive)
     .update(salt)
     .digest("hex");
@@ -1274,9 +1275,9 @@ const createEmbeddedConfig = (
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
     throw new Error("muon.json asset must be an object when present.");
   }
-  const sourceBootstrap = sourceConfig.bootstrap;
-  if (sourceBootstrap !== undefined && !isJsonObject(sourceBootstrap)) {
-    throw new Error("muon.json bootstrap must be an object when present.");
+  const sourceLauncher = sourceConfig.launcher;
+  if (sourceLauncher !== undefined && !isJsonObject(sourceLauncher)) {
+    throw new Error("muon.json launcher must be an object when present.");
   }
 
   const runtimeConfig = stripBuildOnlyAppIconConfig(
@@ -1311,8 +1312,8 @@ const createEmbeddedConfig = (
       signature: asset.signature,
       salt: asset.salt,
     },
-    bootstrap: {
-      ...(sourceBootstrap ?? {}),
+    launcher: {
+      ...(sourceLauncher ?? {}),
       appId,
       desktopId,
     },

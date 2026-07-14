@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "bootstrap_progress.h"
+#include "launcher_progress.h"
 
 #define MUON_PROGRESS_WIDTH 360
 #define MUON_PROGRESS_HEIGHT 110
@@ -73,7 +73,7 @@ static unsigned long long progress_position(const MuonPrepareProgress *event,
   return (event->current * width) / event->total;
 }
 
-#if !defined(_WIN32) || defined(MUON_BOOTSTRAP_PROGRESS_TEST)
+#if !defined(_WIN32) || defined(MUON_LAUNCHER_PROGRESS_TEST)
 static uint16_t pulse_position_from_elapsed(
     unsigned long long elapsed_nanoseconds, uint16_t range) {
   if (range == 0) {
@@ -91,13 +91,13 @@ static uint16_t pulse_position_from_elapsed(
 }
 #endif
 
-#ifdef MUON_BOOTSTRAP_PROGRESS_TEST
-unsigned short muon_bootstrap_progress_test_pulse_position(
+#ifdef MUON_LAUNCHER_PROGRESS_TEST
+unsigned short muon_launcher_progress_test_pulse_position(
     unsigned long long elapsed_nanoseconds, unsigned short range) {
   return pulse_position_from_elapsed(elapsed_nanoseconds, (uint16_t)range);
 }
 
-void muon_bootstrap_progress_test_format_event(
+void muon_launcher_progress_test_format_event(
     const MuonPrepareProgress *event, char *output, size_t output_size) {
   format_progress_status(event, output, output_size);
 }
@@ -121,7 +121,7 @@ typedef struct {
   int stop_requested;
   int shown;
   int marquee_running;
-} MuonBootstrapProgressBackend;
+} MuonLauncherProgressBackend;
 
 static LRESULT CALLBACK progress_window_proc(HWND window, UINT message,
                                              WPARAM wparam, LPARAM lparam) {
@@ -144,12 +144,12 @@ static int register_progress_window_class(HINSTANCE instance) {
   window_class.lpfnWndProc = progress_window_proc;
   window_class.hInstance = instance;
   window_class.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-  window_class.lpszClassName = "MuonBootstrapProgressWindow";
+  window_class.lpszClassName = "MuonLauncherProgressWindow";
   return RegisterClassA(&window_class) != 0 ||
          GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
-static int ensure_window(MuonBootstrapProgressBackend *backend) {
+static int ensure_window(MuonLauncherProgressBackend *backend) {
   if (backend->shown) {
     return 1;
   }
@@ -166,7 +166,7 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
       (GetSystemMetrics(SM_CYSCREEN) - MUON_PROGRESS_HEIGHT) / 2;
   backend->window = CreateWindowExA(
       WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-      "MuonBootstrapProgressWindow", "muon", WS_CAPTION, x, y,
+      "MuonLauncherProgressWindow", "muon", WS_CAPTION, x, y,
       MUON_PROGRESS_WIDTH, MUON_PROGRESS_HEIGHT, NULL, NULL, backend->instance,
       NULL);
   if (backend->window == NULL) {
@@ -215,7 +215,7 @@ static int ensure_window(MuonBootstrapProgressBackend *backend) {
   return 1;
 }
 
-static void set_progress_mode(MuonBootstrapProgressBackend *backend,
+static void set_progress_mode(MuonLauncherProgressBackend *backend,
                               int marquee) {
   if (backend->determinate_progress_bar == NULL ||
       backend->marquee_progress_bar == NULL) {
@@ -239,7 +239,7 @@ static void set_progress_mode(MuonBootstrapProgressBackend *backend,
   }
 }
 
-static void dispose_window(MuonBootstrapProgressBackend *backend) {
+static void dispose_window(MuonLauncherProgressBackend *backend) {
   if (backend->marquee_progress_bar != NULL && backend->marquee_running) {
     SendMessageA(backend->marquee_progress_bar, PBM_SETMARQUEE, FALSE, 0);
   }
@@ -262,7 +262,7 @@ static void pump_messages(void) {
   }
 }
 
-static void update_window_controls(MuonBootstrapProgressBackend *backend,
+static void update_window_controls(MuonLauncherProgressBackend *backend,
                                    const MuonPrepareProgress *event,
                                    const char *status) {
   SetWindowTextA(backend->status_label, status);
@@ -281,8 +281,8 @@ static void update_window_controls(MuonBootstrapProgressBackend *backend,
 }
 
 static DWORD WINAPI progress_thread_main(LPVOID parameter) {
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)parameter;
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)parameter;
   for (;;) {
     MsgWaitForMultipleObjects(1, &backend->update_event, FALSE,
                               MUON_PROGRESS_FRAME_MILLISECONDS, QS_ALLINPUT);
@@ -322,10 +322,10 @@ static DWORD WINAPI progress_thread_main(LPVOID parameter) {
   return 0;
 }
 
-void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_init(MuonLauncherProgress *progress) {
   progress->backend = NULL;
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)calloc(1, sizeof(*backend));
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)calloc(1, sizeof(*backend));
   if (backend == NULL) {
     return;
   }
@@ -349,14 +349,14 @@ void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
   progress->backend = backend;
 }
 
-int muon_bootstrap_progress_is_available(const MuonBootstrapProgress *progress) {
+int muon_launcher_progress_is_available(const MuonLauncherProgress *progress) {
   return progress->backend != NULL;
 }
 
-void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
+void muon_launcher_progress_update(MuonLauncherProgress *progress,
                                     const MuonPrepareProgress *event) {
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)progress->backend;
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)progress->backend;
   if (backend == NULL) {
     return;
   }
@@ -369,19 +369,19 @@ void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
   SetEvent(backend->update_event);
 }
 
-void muon_bootstrap_progress_fail(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_fail(MuonLauncherProgress *progress) {
   MuonPrepareProgress event;
   event.phase = MUON_PREPARE_PROGRESS_PHASE_FAILED;
   event.status = "Failed to prepare CEF.";
   event.current = 0;
   event.total = 0;
   event.determinate = 0;
-  muon_bootstrap_progress_update(progress, &event);
+  muon_launcher_progress_update(progress, &event);
 }
 
-void muon_bootstrap_progress_dispose(MuonBootstrapProgress *progress) {
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)progress->backend;
+void muon_launcher_progress_dispose(MuonLauncherProgress *progress) {
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)progress->backend;
   if (backend == NULL) {
     return;
   }
@@ -416,7 +416,7 @@ typedef struct {
   int has_event;
   int stop_requested;
   int shown;
-} MuonBootstrapProgressBackend;
+} MuonLauncherProgressBackend;
 
 static xcb_atom_t intern_atom(xcb_connection_t *connection, const char *name) {
   xcb_intern_atom_cookie_t cookie =
@@ -439,7 +439,7 @@ typedef struct {
   uint32_t status;
 } MotifWmHints;
 
-static void hide_window_decorations(MuonBootstrapProgressBackend *backend) {
+static void hide_window_decorations(MuonLauncherProgressBackend *backend) {
   const xcb_atom_t motif_hints =
       intern_atom(backend->connection, "_MOTIF_WM_HINTS");
   if (motif_hints == XCB_ATOM_NONE) {
@@ -451,13 +451,13 @@ static void hide_window_decorations(MuonBootstrapProgressBackend *backend) {
                       sizeof(hints) / sizeof(uint32_t), &hints);
 }
 
-static void set_foreground(MuonBootstrapProgressBackend *backend,
+static void set_foreground(MuonLauncherProgressBackend *backend,
                            uint32_t color) {
   const uint32_t values[] = {color};
   xcb_change_gc(backend->connection, backend->gc, XCB_GC_FOREGROUND, values);
 }
 
-static void fill_rect(MuonBootstrapProgressBackend *backend, uint32_t color,
+static void fill_rect(MuonLauncherProgressBackend *backend, uint32_t color,
                       int16_t x, int16_t y, uint16_t width,
                       uint16_t height) {
   xcb_rectangle_t rectangle;
@@ -479,7 +479,7 @@ static unsigned long long monotonic_nanoseconds(void) {
          (unsigned long long)now.tv_nsec;
 }
 
-static void draw_progress(MuonBootstrapProgressBackend *backend,
+static void draw_progress(MuonLauncherProgressBackend *backend,
                           const MuonPrepareProgress *event,
                           const char *status) {
   const uint16_t bar_x = 24;
@@ -515,7 +515,7 @@ static void draw_progress(MuonBootstrapProgressBackend *backend,
   xcb_flush(backend->connection);
 }
 
-static void pump_events(MuonBootstrapProgressBackend *backend) {
+static void pump_events(MuonLauncherProgressBackend *backend) {
   xcb_generic_event_t *event = NULL;
   while ((event = xcb_poll_for_event(backend->connection)) != NULL) {
     const uint8_t type = event->response_type & 0x7f;
@@ -531,7 +531,7 @@ static void pump_events(MuonBootstrapProgressBackend *backend) {
   }
 }
 
-static int ensure_window(MuonBootstrapProgressBackend *backend) {
+static int ensure_window(MuonLauncherProgressBackend *backend) {
   if (backend->shown) {
     return 1;
   }
@@ -588,7 +588,7 @@ static void add_frame_delay(struct timespec *deadline) {
   }
 }
 
-static void wait_for_next_frame(MuonBootstrapProgressBackend *backend) {
+static void wait_for_next_frame(MuonLauncherProgressBackend *backend) {
   struct timespec deadline;
   if (clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
     return;
@@ -602,8 +602,8 @@ static void wait_for_next_frame(MuonBootstrapProgressBackend *backend) {
 }
 
 static void *progress_thread_main(void *parameter) {
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)parameter;
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)parameter;
   for (;;) {
     MuonPrepareProgress event;
     char status[sizeof(backend->status)];
@@ -653,7 +653,7 @@ static void *progress_thread_main(void *parameter) {
   return NULL;
 }
 
-void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_init(MuonLauncherProgress *progress) {
   progress->backend = NULL;
   xcb_connection_t *connection = xcb_connect(NULL, NULL);
   if (connection == NULL || xcb_connection_has_error(connection) != 0) {
@@ -668,8 +668,8 @@ void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
     xcb_disconnect(connection);
     return;
   }
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)calloc(1, sizeof(*backend));
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)calloc(1, sizeof(*backend));
   if (backend == NULL) {
     xcb_disconnect(connection);
     return;
@@ -698,14 +698,14 @@ void muon_bootstrap_progress_init(MuonBootstrapProgress *progress) {
   progress->backend = backend;
 }
 
-int muon_bootstrap_progress_is_available(const MuonBootstrapProgress *progress) {
+int muon_launcher_progress_is_available(const MuonLauncherProgress *progress) {
   return progress->backend != NULL;
 }
 
-void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
+void muon_launcher_progress_update(MuonLauncherProgress *progress,
                                     const MuonPrepareProgress *event) {
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)progress->backend;
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)progress->backend;
   if (backend == NULL) {
     return;
   }
@@ -718,19 +718,19 @@ void muon_bootstrap_progress_update(MuonBootstrapProgress *progress,
   pthread_mutex_unlock(&backend->mutex);
 }
 
-void muon_bootstrap_progress_fail(MuonBootstrapProgress *progress) {
+void muon_launcher_progress_fail(MuonLauncherProgress *progress) {
   MuonPrepareProgress event;
   event.phase = MUON_PREPARE_PROGRESS_PHASE_FAILED;
   event.status = "Failed to prepare CEF.";
   event.current = 0;
   event.total = 0;
   event.determinate = 0;
-  muon_bootstrap_progress_update(progress, &event);
+  muon_launcher_progress_update(progress, &event);
 }
 
-void muon_bootstrap_progress_dispose(MuonBootstrapProgress *progress) {
-  MuonBootstrapProgressBackend *backend =
-      (MuonBootstrapProgressBackend *)progress->backend;
+void muon_launcher_progress_dispose(MuonLauncherProgress *progress) {
+  MuonLauncherProgressBackend *backend =
+      (MuonLauncherProgressBackend *)progress->backend;
   if (backend == NULL) {
     return;
   }

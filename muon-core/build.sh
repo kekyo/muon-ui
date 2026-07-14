@@ -48,13 +48,13 @@ builder_executable_name() {
   esac
 }
 
-bootstrap_executable_name() {
+launcher_executable_name() {
   case "$1" in
     windows-i686|windows-amd64)
-      printf '%s\n' muon-bootstrap.exe
+      printf '%s\n' muon-launcher.exe
       ;;
     *)
-      printf '%s\n' muon-bootstrap
+      printf '%s\n' muon-launcher
       ;;
   esac
 }
@@ -429,11 +429,11 @@ MUON_RUNTIME_INFO_HEADER="${BUILD_DIR}/generated/muon_runtime_info_generated.h" 
     "${BUILD_TYPE}" \
     "${TARGET_NAME}"
 
-BOOTSTRAP_EXECUTABLE_NAME="$(bootstrap_executable_name "${TARGET_NAME}")"
+LAUNCHER_EXECUTABLE_NAME="$(launcher_executable_name "${TARGET_NAME}")"
 BUILDER_OUTPUT_DIR="$(builder_output_dir "${BUILD_USAGE}" "${TARGET_NAME}" "${BUILD_TYPE}")"
 cp -f \
-  "${BUILDER_OUTPUT_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
-  "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}"
+  "${BUILDER_OUTPUT_DIR}/${LAUNCHER_EXECUTABLE_NAME}" \
+  "${RUNTIME_DIR}/${LAUNCHER_EXECUTABLE_NAME}"
 
 if [[ "${TARGET_NAME}" == windows-* ]]; then
   verify_windows_version_resource \
@@ -442,8 +442,8 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
     "muon-core" \
     "muon-core.exe"
   verify_windows_version_resource \
-    "${RUNTIME_DIR}/${BOOTSTRAP_EXECUTABLE_NAME}" \
-    "muon Bootstrap" \
-    "muon-bootstrap" \
-    "${BOOTSTRAP_EXECUTABLE_NAME}"
+    "${RUNTIME_DIR}/${LAUNCHER_EXECUTABLE_NAME}" \
+    "muon Launcher" \
+    "muon-launcher" \
+    "${LAUNCHER_EXECUTABLE_NAME}"
 fi

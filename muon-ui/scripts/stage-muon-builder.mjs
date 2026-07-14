@@ -17,7 +17,7 @@ import { dirname, resolve } from "node:path";
 const targetDescriptors = {
   "linux-amd64": {
     prepareExecutableName: "muon-builder",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     devSourceDirectory: ".run/dev-linux-amd64-debug",
     distSourceDirectory: "dist-linux-amd64",
@@ -31,7 +31,7 @@ const targetDescriptors = {
   },
   "linux-armhf": {
     prepareExecutableName: "muon-builder",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     devSourceDirectory: ".run/dev-linux-armhf-debug",
     distSourceDirectory: "dist-linux-armhf",
@@ -45,7 +45,7 @@ const targetDescriptors = {
   },
   "linux-arm64": {
     prepareExecutableName: "muon-builder",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     devSourceDirectory: ".run/dev-linux-arm64-debug",
     distSourceDirectory: "dist-linux-arm64",
@@ -59,7 +59,7 @@ const targetDescriptors = {
   },
   "windows-i686": {
     prepareExecutableName: "muon-builder.exe",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
     runtimeHelperExecutableName: undefined,
     devSourceDirectory: ".run/dev-windows-i686-debug",
     distSourceDirectory: "dist-windows-i686",
@@ -78,7 +78,7 @@ const targetDescriptors = {
   },
   "windows-amd64": {
     prepareExecutableName: "muon-builder.exe",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
     runtimeHelperExecutableName: undefined,
     devSourceDirectory: ".run/dev-windows-amd64-debug",
     distSourceDirectory: "dist-windows-amd64",
@@ -175,11 +175,11 @@ const stageTarget = async (target, source) => {
     getSourceDirectory(target, source),
     descriptor.prepareExecutableName,
   );
-  const bootstrapSourcePath = resolve(
+  const launcherSourcePath = resolve(
     "..",
     "muon-builder",
     getSourceDirectory(target, source),
-    descriptor.bootstrapExecutableName,
+    descriptor.launcherExecutableName,
   );
   const runtimeHelperSourcePath =
     descriptor.runtimeHelperExecutableName === undefined
@@ -196,11 +196,11 @@ const stageTarget = async (target, source) => {
     target,
     descriptor.prepareExecutableName,
   );
-  const bootstrapDestinationPath = resolve(
+  const launcherDestinationPath = resolve(
     "dist",
     "native",
     target,
-    descriptor.bootstrapExecutableName,
+    descriptor.launcherExecutableName,
   );
   const runtimeHelperDestinationPath =
     descriptor.runtimeHelperExecutableName === undefined
@@ -213,7 +213,7 @@ const stageTarget = async (target, source) => {
         );
   try {
     await stat(prepareSourcePath);
-    await stat(bootstrapSourcePath);
+    await stat(launcherSourcePath);
     if (runtimeHelperSourcePath !== undefined) {
       await stat(runtimeHelperSourcePath);
     }
@@ -227,9 +227,10 @@ const stageTarget = async (target, source) => {
     );
   }
 
+  await rm(dirname(nativeDestinationPath), { recursive: true, force: true });
   await mkdir(dirname(nativeDestinationPath), { recursive: true });
   await copyFile(prepareSourcePath, nativeDestinationPath);
-  await copyFile(bootstrapSourcePath, bootstrapDestinationPath);
+  await copyFile(launcherSourcePath, launcherDestinationPath);
   if (
     runtimeHelperSourcePath !== undefined &&
     runtimeHelperDestinationPath !== undefined
@@ -238,7 +239,7 @@ const stageTarget = async (target, source) => {
   }
   if (process.platform !== "win32") {
     await chmod(nativeDestinationPath, 0o755);
-    await chmod(bootstrapDestinationPath, 0o755);
+    await chmod(launcherDestinationPath, 0o755);
     if (runtimeHelperDestinationPath !== undefined) {
       await chmod(runtimeHelperDestinationPath, 0o755);
     }

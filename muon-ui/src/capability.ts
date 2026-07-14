@@ -64,11 +64,19 @@ export interface MuonRuntimePluginEntryConfig {
    */
   name: string;
   /**
-   * Optional expected SHA-1 signature for the external plugin library.
+   * Optional 64-character hexadecimal SHA-256 digest of the final external
+   * `.so` or `.dll` file bytes followed by the decoded `salt` bytes.
+   *
+   * @remarks Calculate this after all library post-processing, including
+   * stripping and code signing. It is not supported for `internal`.
    */
   signature?: string;
   /**
-   * Optional hexadecimal salt appended before checking the plugin signature.
+   * Optional hex-encoded salt whose decoded bytes are appended when checking
+   * the plugin signature.
+   *
+   * @remarks Required when `signature` is specified. It is not supported for
+   * `internal`.
    */
   salt?: string;
   /**

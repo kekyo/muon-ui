@@ -8,6 +8,3 @@ nsisの既定のインストール先は `%LOCALAPPDATA%\Programs\<packageName>-
 表示名、Start Menu shortcut、アンインストールentryには `<packageName> (<arch>)` を使用します。
 アンインストール時には `%LOCALAPPDATA%\<appId>.<arch>` のruntime stateも削除します。
 `<arch>` は `amd64` または `i686` です。
-
----
-

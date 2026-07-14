@@ -44,6 +44,7 @@ import {
   dispatchDevToolsShortcut,
   dispatchKeyboardShortcut,
   evaluateRejection,
+  expectDebugMuonStartupFailure,
   expectNoDevTools,
   expectNoPageLoad,
   expectProcessExitCode,
@@ -60,6 +61,7 @@ import {
   mkdir,
   mkdtemp,
   openPopupTarget,
+  pathToFileUrlHref,
   processExitTimeoutMs,
   readFile,
   rm,
@@ -73,7 +75,7 @@ import {
   shiftF9DevToolsShortcut,
   shouldUseValgrind,
   startDebugMuon,
-  startDebugMuonBootstrap,
+  startDebugMuonLauncher,
   startMuon,
   startReleaseMuon,
   stopMuon,
@@ -154,7 +156,7 @@ const calculatePluginSignature = async (
     TEST_PLUGIN_DIRECTORY,
     `${pluginName}${PLUGIN_SUFFIX}`,
   );
-  return createHash("sha1")
+  return createHash("sha256")
     .update(await readFile(pluginPath))
     .update(Buffer.from(salt, "hex"))
     .digest("hex");
@@ -1090,13 +1092,13 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         driver.evaluate("typeof window.muon.environments.setAutostart"),
       ).resolves.toBe("function");
       await expect(
-        driver.evaluate("typeof window.muon.bootstrap.getSettings"),
+        driver.evaluate("typeof window.muon.launcher.getSettings"),
       ).resolves.toBe("function");
       await expect(
-        driver.evaluate("typeof window.muon.bootstrap.setSettings"),
+        driver.evaluate("typeof window.muon.launcher.setSettings"),
       ).resolves.toBe("function");
       await expect(
-        driver.evaluate("typeof window.muon.bootstrap.triggerUpdate"),
+        driver.evaluate("typeof window.muon.launcher.triggerUpdate"),
       ).resolves.toBe("function");
       await expect(
         driver.evaluate(`typeof window.muon.environments["run"]`),
@@ -1221,6 +1223,11 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   it("loads an external plugin when its signature matches", async () => {
     const pluginName = "muon_test_plugin_alpha";
     const pluginSalt = "deadbeef";
+    const pluginSignature = await calculatePluginSignature(
+      pluginName,
+      pluginSalt,
+    );
+    expect(pluginSignature).toMatch(/^[0-9a-f]{64}$/);
     const running = await startDebugMuon(
       [pluginName],
       TEST_NETWORK_ALLOW_PATTERNS,
@@ -1241,7 +1248,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       undefined,
       undefined,
       {},
-      { [pluginName]: await calculatePluginSignature(pluginName, pluginSalt) },
+      { [pluginName]: pluginSignature },
       { [pluginName]: pluginSalt },
     );
     let driver: CdpDriver | undefined = undefined;
@@ -1271,6 +1278,15 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     const markerPath = join(markerDirectory, "marker.txt");
     const pluginName = "muon_test_plugin_load_marker";
     const pluginSalt = "deadbeef";
+    const correctPluginSignature = await calculatePluginSignature(
+      pluginName,
+      pluginSalt,
+    );
+    const mismatchedFirstNibble = correctPluginSignature[0] === "0" ? "1" : "0";
+    const mismatchedPluginSignature =
+      mismatchedFirstNibble + correctPluginSignature.slice(1);
+    expect(mismatchedPluginSignature).toMatch(/^[0-9a-f]{64}$/);
+    expect(mismatchedPluginSignature).not.toBe(correctPluginSignature);
     const running = await startMuon(
       DEBUG_MUON_DIRECTORY,
       [pluginName],
@@ -1296,7 +1312,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       undefined,
       cdpCommandTimeoutMs,
       undefined,
-      { [pluginName]: "0000000000000000000000000000000000000000" },
+      { [pluginName]: mismatchedPluginSignature },
       { [pluginName]: pluginSalt },
     );
     try {
@@ -1561,30 +1577,30 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
-  it("manages bootstrap update settings through the internal bootstrap API", async () => {
-    const stateHome = await mkdtemp(join(tmpdir(), "muon-bootstrap-state-"));
+  it("manages launcher update settings through the internal launcher API", async () => {
+    const stateHome = await mkdtemp(join(tmpdir(), "muon-launcher-state-"));
     const configPath = join(
       stateHome,
-      "muon-bootstrap",
+      "muon-launcher",
       "runtime",
-      "muon-bootstrap.ini",
+      "muon-launcher.ini",
     );
-    let bootstrapConfigPath = configPath;
-    const bootstrapEnvironment = isWindowsRemoteE2e()
+    let launcherConfigPath = configPath;
+    const launcherEnvironment = isWindowsRemoteE2e()
       ? { LOCALAPPDATA: stateHome }
       : { XDG_STATE_HOME: stateHome };
     try {
       await withMuonEnvironment(
         [],
-        bootstrapEnvironment,
+        launcherEnvironment,
         async (driver, running) => {
           if (running.remoteWindows !== undefined) {
-            bootstrapConfigPath = join(
+            launcherConfigPath = join(
               running.remoteWindows.configDirectory,
               "..",
-              "muon-bootstrap.ini",
+              "muon-launcher.ini",
             );
-            await rm(bootstrapConfigPath, { force: true });
+            await rm(launcherConfigPath, { force: true });
           }
           const values = await driver.evaluate<{
             keys: string[];
@@ -1605,25 +1621,25 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
             };
             internalType: string;
           }>(`(async () => {
-            const initial = await window.muon.bootstrap.getSettings();
-            await window.muon.bootstrap.setSettings({
+            const initial = await window.muon.launcher.getSettings();
+            await window.muon.launcher.setSettings({
               cefVersionPolicy: "compat-latest",
               cefExactVersion: "",
               catalogRefreshIntervalSeconds: 123,
             });
-            const updated = await window.muon.bootstrap.getSettings();
-            await window.muon.bootstrap.setSettings({
+            const updated = await window.muon.launcher.getSettings();
+            await window.muon.launcher.setSettings({
               cefVersionPolicy: null,
               catalogRefreshIntervalSeconds: null,
             });
-            const reverted = await window.muon.bootstrap.getSettings();
-            await window.muon.bootstrap.triggerUpdate();
+            const reverted = await window.muon.launcher.getSettings();
+            await window.muon.launcher.triggerUpdate();
             return {
-              keys: Object.keys(window.muon.bootstrap).sort(),
+              keys: Object.keys(window.muon.launcher).sort(),
               initial,
               updated,
               reverted,
-              internalType: typeof window.muon.bootstrap.__triggerUpdate,
+              internalType: typeof window.muon.launcher.__triggerUpdate,
             };
           })()`);
 
@@ -1648,24 +1664,24 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           });
         },
       );
-      const bootstrapConfig = await waitForTextFileContent(
-        bootstrapConfigPath,
+      const launcherConfig = await waitForTextFileContent(
+        launcherConfigPath,
         (content) => content.includes("requested=true"),
-        "bootstrap update request settings",
+        "launcher update request settings",
       );
-      expect(bootstrapConfig).not.toContain("versionPolicy=");
+      expect(launcherConfig).not.toContain("versionPolicy=");
     } finally {
       await rm(stateHome, { force: true, recursive: true });
     }
   });
 
-  it("filters bootstrap functions through the internal plugin policy", async () => {
+  it("filters launcher functions through the internal plugin policy", async () => {
     const running = await startDebugMuon(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
       {},
       undefined,
-      ["muon.bootstrap.getSettings"],
+      ["muon.launcher.getSettings"],
     );
     let driver: CdpDriver | undefined = undefined;
     try {
@@ -1674,17 +1690,17 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
       await driver.navigate(
-        "data:text/html,<title>muon bootstrap partial</title>",
+        "data:text/html,<title>muon launcher partial</title>",
         cdpCommandTimeoutMs,
       );
       await expect(
         driver.evaluate(`(async () => {
-          const settings = await window.muon.bootstrap.getSettings();
+          const settings = await window.muon.launcher.getSettings();
           return {
-            keys: Object.keys(window.muon.bootstrap).sort(),
+            keys: Object.keys(window.muon.launcher).sort(),
             policy: settings.cefVersionPolicy,
-            setSettingsType: typeof window.muon.bootstrap.setSettings,
-            internalType: typeof window.muon.bootstrap.__getSettings,
+            setSettingsType: typeof window.muon.launcher.setSettings,
+            internalType: typeof window.muon.launcher.__getSettings,
           };
         })()`),
       ).resolves.toEqual({
@@ -3624,8 +3640,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     });
   });
 
-  it("recycles the process through the built-in browser API from bootstrap", async () => {
-    const running = await startDebugMuonBootstrap([]);
+  it("recycles the process through the built-in browser API from launcher", async () => {
+    const running = await startDebugMuonLauncher([]);
     let driver: CdpDriver | undefined = undefined;
     try {
       driver = await connectToMuonCdp({
@@ -3806,6 +3822,185 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
+  it("enforces the configured readFile byte limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-limit-"));
+    const sourcePath = join(directory, "source.bin");
+    const missingPath = join(directory, "missing.bin");
+    const source = Array.from({ length: 17 }, (_value, index) => index);
+    await writeFile(sourcePath, Buffer.from(source));
+    try {
+      await withMuon(
+        [],
+        async (driver) => {
+          const results = await driver.evaluate<
+            Array<{
+              explicitError: string;
+              implicitError: string;
+              tail: number[];
+            }>
+          >(`(async () => {
+            const captureError = async (operation) => {
+              try {
+                await operation();
+                return "";
+              } catch (error) {
+                return String(error?.message ?? error);
+              }
+            };
+            const targets = ${JSON.stringify([
+              sourcePath,
+              pathToFileUrlHref(sourcePath),
+            ])};
+            const entries = [];
+            for (const target of targets) {
+              const explicitError = await captureError(() =>
+                window.muon.fs.readFile(target, { length: 17 }),
+              );
+              const implicitError = await captureError(() =>
+                window.muon.fs.readFile(target),
+              );
+              const tail = Array.from(
+                new Uint8Array(
+                  await window.muon.fs.readFile(target, {
+                    position: 1,
+                    length: 16,
+                  }),
+                ),
+              );
+              entries.push({ explicitError, implicitError, tail });
+            }
+            return entries;
+          })()`);
+          for (const result of results) {
+            expect(result.explicitError).toContain(
+              "readFile length exceeds configured maximum",
+            );
+            expect(result.implicitError).toContain(
+              "readFile result exceeds configured maximum",
+            );
+            expect(result.tail).toEqual(source.slice(1));
+          }
+
+          await expect(
+            driver.evaluate(`(async () => {
+              const result = await window.muon.fs.readFile(
+                ${JSON.stringify(missingPath)},
+                { length: 0 },
+              );
+              return result.byteLength;
+            })()`),
+          ).resolves.toBe(0);
+        },
+        { internal: { "fs.readFile.maxBytes": "16" } },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid readFile byte limit during startup", async () => {
+    await expectDebugMuonStartupFailure(
+      [],
+      "fs.readFile.maxBytes must be an unsigned decimal byte count",
+      {
+        internal: { "fs.readFile.maxBytes": "16MiB" },
+      },
+    );
+  });
+
+  it("enforces the configured readTextFile byte limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "muon-fs-text-limit-"));
+    const atLimitPath = join(directory, "at-limit.txt");
+    const overLimitPath = join(directory, "over-limit.txt");
+    const invalidAfterLimitPath = join(directory, "invalid-after-limit.txt");
+    await writeFile(atLimitPath, Buffer.alloc(16, 0x61));
+    await writeFile(overLimitPath, Buffer.alloc(17, 0x61));
+    await writeFile(
+      invalidAfterLimitPath,
+      Buffer.concat([Buffer.alloc(16, 0x61), Buffer.from([0xff])]),
+    );
+    try {
+      await withMuon(
+        [],
+        async (driver) => {
+          const results = await driver.evaluate<
+            Array<{
+              atLimit: string;
+              invalidAfterLimitError: string;
+              overLimitError: string;
+            }>
+          >(`(async () => {
+            const captureError = async (operation) => {
+              try {
+                await operation();
+                return "";
+              } catch (error) {
+                return String(error?.message ?? error);
+              }
+            };
+            const targets = ${JSON.stringify([
+              {
+                atLimit: atLimitPath,
+                overLimit: overLimitPath,
+                invalidAfterLimit: invalidAfterLimitPath,
+              },
+              {
+                atLimit: pathToFileUrlHref(atLimitPath),
+                overLimit: pathToFileUrlHref(overLimitPath),
+                invalidAfterLimit: pathToFileUrlHref(invalidAfterLimitPath),
+              },
+            ])};
+            const entries = [];
+            for (const target of targets) {
+              const atLimit = await window.muon.fs.readTextFile(
+                target.atLimit,
+                "utf8",
+              );
+              const overLimitError = await captureError(() =>
+                window.muon.fs.readTextFile(target.overLimit, "utf8"),
+              );
+              const invalidAfterLimitError = await captureError(() =>
+                window.muon.fs.readTextFile(
+                  target.invalidAfterLimit,
+                  "utf8",
+                ),
+              );
+              entries.push({
+                atLimit,
+                overLimitError,
+                invalidAfterLimitError,
+              });
+            }
+            return entries;
+          })()`);
+          for (const result of results) {
+            expect(result.atLimit).toBe("a".repeat(16));
+            expect(result.overLimitError).toContain(
+              "readTextFile result exceeds configured maximum",
+            );
+            expect(result.invalidAfterLimitError).toContain(
+              "readTextFile result exceeds configured maximum",
+            );
+            expect(result.invalidAfterLimitError).not.toContain("UTF-8");
+          }
+        },
+        { internal: { "fs.readTextFile.maxBytes": "16" } },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid readTextFile byte limit during startup", async () => {
+    await expectDebugMuonStartupFailure(
+      [],
+      "fs.readTextFile.maxBytes must be an unsigned decimal byte count",
+      {
+        internal: { "fs.readTextFile.maxBytes": "16MiB" },
+      },
+    );
+  });
+
   it("routes filesystem results to the calling V8 context", async () => {
     const directory = await mkdtemp(join(tmpdir(), "muon-fs-context-"));
     try {
@@ -3927,7 +4122,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   });
 
   it("recycles the process from the configured recycle shortcut", async () => {
-    const running = await startDebugMuonBootstrap(
+    const running = await startDebugMuonLauncher(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
       {},
@@ -3966,7 +4161,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   });
 
   it("recycles the process from the configured Ctrl+F12 shortcut", async () => {
-    const running = await startDebugMuonBootstrap(
+    const running = await startDebugMuonLauncher(
       [],
       TEST_NETWORK_ALLOW_PATTERNS,
       {},
@@ -4033,7 +4228,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   linuxIt(
     "recycles from native Ctrl+F12 after focusing a draggable page region",
     async () => {
-      const running = await startDebugMuonBootstrap(
+      const running = await startDebugMuonLauncher(
         [],
         TEST_NETWORK_ALLOW_PATTERNS,
         {},

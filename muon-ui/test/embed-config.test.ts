@@ -12,11 +12,11 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  createMuonBootstrapEmbeddedConfigSlot,
+  createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
-  embedMuonConfigInBootstrapFile,
+  embedMuonConfigInLauncherFile,
   embedMuonConfigInCoreFile,
-  findMuonBootstrapEmbeddedConfigSlot,
+  findMuonLauncherEmbeddedConfigSlot,
   findMuonEmbeddedConfigSlot,
   muonEmbeddedConfigSlotSize,
 } from "../src/embed-config.js";
@@ -44,18 +44,18 @@ const createFakeCore = async (directory: string): Promise<string> => {
   return corePath;
 };
 
-const createFakeBootstrap = async (directory: string): Promise<string> => {
-  const bootstrapPath = join(directory, "muon-bootstrap");
-  const slot = createMuonBootstrapEmbeddedConfigSlot();
+const createFakeLauncher = async (directory: string): Promise<string> => {
+  const launcherPath = join(directory, "muon-launcher");
+  const slot = createMuonLauncherEmbeddedConfigSlot();
   await writeFile(
-    bootstrapPath,
+    launcherPath,
     Buffer.concat([
-      Buffer.from("fake bootstrap prefix\n"),
+      Buffer.from("fake launcher prefix\n"),
       slot,
-      Buffer.from("\nfake bootstrap suffix\n"),
+      Buffer.from("\nfake launcher suffix\n"),
     ]),
   );
-  return bootstrapPath;
+  return launcherPath;
 };
 
 const writeConfig = async (
@@ -77,13 +77,17 @@ describe("muon embedded config", () => {
   it("embeds JSON5 config into the fixed muon-core slot", async () => {
     const directory = await createTemporaryDirectory();
     const corePath = await createFakeCore(directory);
+    const assetSignature =
+      "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F";
+    const pluginSignature =
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     const configPath = await writeConfig(
       directory,
       `{
         // JSON5 input must be accepted by the packaging CLI.
         asset: {
           sourcePath: 'assets.zip',
-          signature: 'A9993E364706816ABA3E25717850C26C9CD0D89D',
+          signature: '${assetSignature}',
           salt: '0A10ff',
         },
         browser: {
@@ -95,7 +99,7 @@ describe("muon embedded config", () => {
             {
               name: 'foobar',
               allow: ['foobar.*'],
-              signature: '000102030405060708090a0b0c0d0e0f10111213',
+              signature: '${pluginSignature}',
               salt: 'deadbeef',
             },
           ],
@@ -119,20 +123,18 @@ describe("muon embedded config", () => {
     expect(result.payloadSize).toBeGreaterThan(0);
     expect(result.slotOffset).toBe("fake executable prefix\n".length);
     expect(() => findMuonEmbeddedConfigSlot(content)).toThrow("found 0");
-    expect(payload.indexOf(Buffer.from("A9993E364706816ABA3E257"))).toBe(-1);
+    expect(payload.indexOf(Buffer.from(assetSignature, "utf8"))).toBe(-1);
     expect(payload.indexOf(Buffer.from("0A10ff"))).toBe(-1);
-    expect(payload.indexOf(Buffer.from("00010203040506070809"))).toBe(-1);
+    expect(payload.indexOf(Buffer.from(pluginSignature, "utf8"))).toBe(-1);
     expect(payload.indexOf(Buffer.from("deadbeef"))).toBe(-1);
+    expect(
+      payload.indexOf(Buffer.from(assetSignature, "hex")),
+    ).toBeGreaterThanOrEqual(0);
     expect(
       payload.indexOf(Buffer.from([0x0a, 0x10, 0xff])),
     ).toBeGreaterThanOrEqual(0);
     expect(
-      payload.indexOf(
-        Buffer.from([
-          0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
-          0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
-        ]),
-      ),
+      payload.indexOf(Buffer.from(pluginSignature, "hex")),
     ).toBeGreaterThanOrEqual(0);
     expect(
       payload.indexOf(Buffer.from([0xde, 0xad, 0xbe, 0xef])),
@@ -234,29 +236,29 @@ describe("muon embedded config", () => {
     expect(() => findMuonEmbeddedConfigSlot(content)).toThrow("found 0");
   });
 
-  it("embeds JSON5 config into the fixed muon-bootstrap slot", async () => {
+  it("embeds JSON5 config into the fixed muon-launcher slot", async () => {
     const directory = await createTemporaryDirectory();
-    const bootstrapPath = await createFakeBootstrap(directory);
+    const launcherPath = await createFakeLauncher(directory);
     const configPath = await writeConfig(
       directory,
-      `{ bootstrap: { defaultVersionPolicy: 'compat-latest' } }\n`,
+      `{ launcher: { defaultVersionPolicy: 'compat-latest' } }\n`,
     );
 
-    const result = await embedMuonConfigInBootstrapFile({
-      bootstrapPath,
+    const result = await embedMuonConfigInLauncherFile({
+      launcherPath,
       configPath,
       outputPath: undefined,
     });
-    const content = await readFile(bootstrapPath);
+    const content = await readFile(launcherPath);
     const payload = content.subarray(
       result.slotOffset,
       result.slotOffset + result.payloadSize,
     );
 
-    expect(result.outputPath).toBe(bootstrapPath);
+    expect(result.outputPath).toBe(launcherPath);
     expect(result.payloadSize).toBeGreaterThan(0);
-    expect(result.slotOffset).toBe("fake bootstrap prefix\n".length);
-    expect(() => findMuonBootstrapEmbeddedConfigSlot(content)).toThrow(
+    expect(result.slotOffset).toBe("fake launcher prefix\n".length);
+    expect(() => findMuonLauncherEmbeddedConfigSlot(content)).toThrow(
       "found 0",
     );
     expect(
@@ -269,26 +271,26 @@ describe("muon embedded config", () => {
     expect(tail.equals(Buffer.alloc(tail.length, 0))).toBe(false);
   });
 
-  it("writes an embedded bootstrap config to a separate output path", async () => {
+  it("writes an embedded launcher config to a separate output path", async () => {
     const directory = await createTemporaryDirectory();
-    const bootstrapPath = await createFakeBootstrap(directory);
-    const outputPath = join(directory, "patched-bootstrap");
+    const launcherPath = await createFakeLauncher(directory);
+    const outputPath = join(directory, "patched-launcher");
     const configPath = await writeConfig(
       directory,
-      `{ bootstrap: { defaultVersionPolicy: 'same-major-latest' } }\n`,
+      `{ launcher: { defaultVersionPolicy: 'same-major-latest' } }\n`,
     );
-    const original = await readFile(bootstrapPath);
+    const original = await readFile(launcherPath);
 
     const { stdout } = await execFileAsync(
       process.execPath,
       [
         resolve("dist/cli.cjs"),
         "embed-config",
-        "--bootstrap-path",
-        bootstrapPath,
+        "--launcher-path",
+        launcherPath,
         "--config",
         configPath,
-        "--output-bootstrap",
+        "--output-launcher",
         outputPath,
         "--json",
       ],
@@ -302,11 +304,11 @@ describe("muon embedded config", () => {
 
     expect(result.outputPath).toBe(outputPath);
     expect(result.payloadSize).toBeGreaterThan(0);
-    expect((await readFile(bootstrapPath)).equals(original)).toBe(true);
+    expect((await readFile(launcherPath)).equals(original)).toBe(true);
     expect(
       patched.indexOf(Buffer.from("same-major-latest")),
     ).toBeGreaterThanOrEqual(0);
-    expect(() => findMuonBootstrapEmbeddedConfigSlot(patched)).toThrow(
+    expect(() => findMuonLauncherEmbeddedConfigSlot(patched)).toThrow(
       "found 0",
     );
   });

@@ -57,15 +57,15 @@ export interface MuonTargetDescriptor {
    */
   runtimeExecutableName: string;
   /**
-   * muon-bootstrap executable file name for this target.
+   * muon-launcher executable file name for this target.
    */
-  bootstrapExecutableName: string;
+  launcherExecutableName: string;
   /**
    * Optional privileged runtime helper executable file name.
    */
   runtimeHelperExecutableName?: string;
   /**
-   * Launcher file suffix for app bootstrap executables.
+   * Launcher file suffix for app launcher executables.
    */
   launcherExtension: string;
   /**
@@ -97,7 +97,7 @@ const targetDescriptors = {
     arch: "amd64",
     distributionDirectoryName: "dist-muon/linux-amd64",
     runtimeExecutableName: "muon-core",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
@@ -109,7 +109,7 @@ const targetDescriptors = {
     arch: "armhf",
     distributionDirectoryName: "dist-muon/linux-armhf",
     runtimeExecutableName: "muon-core",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
@@ -121,7 +121,7 @@ const targetDescriptors = {
     arch: "arm64",
     distributionDirectoryName: "dist-muon/linux-arm64",
     runtimeExecutableName: "muon-core",
-    bootstrapExecutableName: "muon-bootstrap",
+    launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
     runtimeFiles: ["muon-core", "libmuon-ui.so", "libcardio.so"],
@@ -133,7 +133,7 @@ const targetDescriptors = {
     arch: "i686",
     distributionDirectoryName: "dist-muon/windows-i686",
     runtimeExecutableName: "muon-core.exe",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
     launcherExtension: ".exe",
     runtimeFiles: ["muon-core.exe", "libmuon-ui.dll", "libcardio.dll"],
     optionalRuntimeFilePatterns: [
@@ -149,7 +149,7 @@ const targetDescriptors = {
     arch: "amd64",
     distributionDirectoryName: "dist-muon/windows-amd64",
     runtimeExecutableName: "muon-core.exe",
-    bootstrapExecutableName: "muon-bootstrap.exe",
+    launcherExecutableName: "muon-launcher.exe",
     launcherExtension: ".exe",
     runtimeFiles: ["muon-core.exe", "libmuon-ui.dll", "libcardio.dll"],
     optionalRuntimeFilePatterns: [

@@ -151,6 +151,8 @@ class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
   MuonBrowserTrayRecord* FindRecord(int browser_id,
                                     const std::string& tray_id);
   std::string CreateGeneratedTrayId(int browser_id);
+  size_t CountRecordsForBrowser(int browser_id) const;
+  bool CheckCreateCapacity(int browser_id, std::string* error_message) const;
   bool UsePlatformHooks() const;
   bool RunHookedCreateRecord(MuonBrowserTrayRecord* record,
                              std::string* error_message);
@@ -465,6 +467,35 @@ std::string MuonBrowserTrayServiceImpl::CreateGeneratedTrayId(int browser_id) {
   }
 }
 
+size_t MuonBrowserTrayServiceImpl::CountRecordsForBrowser(
+    int browser_id) const {
+  size_t count = 0;
+  for (const auto& entry : records_) {
+    if (entry.first.browser_id == browser_id) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool MuonBrowserTrayServiceImpl::CheckCreateCapacity(
+    int browser_id,
+    std::string* error_message) const {
+  if (CountRecordsForBrowser(browser_id) >= limits_.max_per_browser) {
+    if (error_message != nullptr) {
+      *error_message = "Browser tray limit exceeded";
+    }
+    return false;
+  }
+  if (records_.size() >= limits_.max_global) {
+    if (error_message != nullptr) {
+      *error_message = "Global tray limit exceeded";
+    }
+    return false;
+  }
+  return true;
+}
+
 bool MuonBrowserTrayServiceImpl::UsePlatformHooks() const {
   return static_cast<bool>(platform_hooks_.create_record);
 }
@@ -521,15 +552,22 @@ bool MuonBrowserTrayServiceImpl::CreateTray(
   if (tray_id == nullptr || error_message == nullptr) {
     return false;
   }
-  auto normalized_id =
-      options.id.empty() ? CreateGeneratedTrayId(browser_id) : options.id;
-  if (!IsValidMuonBrowserTrayId(normalized_id)) {
-    *error_message = "Tray id is invalid: " + normalized_id;
+  auto normalized_id = options.id;
+  if (!normalized_id.empty()) {
+    if (!IsValidMuonBrowserTrayId(normalized_id)) {
+      *error_message = "Tray id is invalid: " + normalized_id;
+      return false;
+    }
+    if (records_.find({browser_id, normalized_id}) != records_.end()) {
+      *error_message = "Tray id is duplicated: " + normalized_id;
+      return false;
+    }
+  }
+  if (!CheckCreateCapacity(browser_id, error_message)) {
     return false;
   }
-  if (records_.find({browser_id, normalized_id}) != records_.end()) {
-    *error_message = "Tray id is duplicated: " + normalized_id;
-    return false;
+  if (normalized_id.empty()) {
+    normalized_id = CreateGeneratedTrayId(browser_id);
   }
 
   auto record = std::make_unique<MuonBrowserTrayRecord>();

@@ -325,7 +325,11 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
   どちらも指定しないimportルールは設定エラーです。
 - `plugins[].imports[].allow` は `validate` モードでそのimport元に許可する関数パスです。
   必須かつ空配列不可です。
-  virtual moduleがexportできるのは具体的な関数名のみです。`muon.executor.*` のようなwildcardだけで許可しても、具体的なexportを作れないためVite側でエラーになります。
+  `plugins[].allow` と同じglob構文を使用でき、runtime側の権限検証には指定したglobがそのまま渡されます。
+  一方、`muon:executor` などのvirtual moduleのnamed exportを生成するときは、Vite側で具体的な関数パスに展開されます。
+  内蔵プラグインの関数一覧はmuon-uiが持つcatalogから展開され、外部プラグインのwildcardはVite dev/build時に `muon-plugin-inspector` がプラグインをロードして `muon_init_plugin()` のmetadataから収集します。
+  inspectorは `plugins[].config` と `signature`/`salt` を使用して初期化と署名検証を行いますが、公開関数の本体は呼び出しません。
+  wildcardが1件も具体的なnamed exportに展開できない場合は、Vite側でエラーになります。
 
 > 注釈: ここに挙げられていない `capabilities`, `signature`, `salt` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
 > 解説は省略します。

@@ -67,6 +67,7 @@ muon Viteプラグインはこの設定を読み取り、muonプラグインへ�
   keyとvalueはいずれも文字列で、valueにobject、array、number、boolean、nullは指定できません。
   未指定の場合は空の設定として扱われます。値の意味はプラグインごとに異なります。
 - `imports` で、 `sources` に指定したパスに一致するソースファイルからのみ、`allow` に指定したmuonプラグイン関数のインポート (TypeScript/JavaScriptの `import` による参照)を許可します。
+  `allow` には `muon.executor.spawn` のような完全な関数パスだけでなく、`muon.executor.*` や `muon.**` のようなglobも指定できます。
 
 次に、TypeScriptコンパイラに対して、型定義を参照できるようにします。
 `tsconfig.json` で `compilerOptions.types` に対して、muonの型定義も明示的に加えて下さい:

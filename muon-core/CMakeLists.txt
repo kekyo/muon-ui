@@ -730,6 +730,7 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
   src/plugins/builtin/muon_builtin_fs_read_limits.cpp
+  src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
   src/plugins/muon_function_wrapper_lifecycle.cpp
   src/plugins/muon_plugin_metadata.cpp
   src/plugins/muon_plugin_policy.cpp
@@ -782,6 +783,7 @@ set(APP_HEADERS
   src/plugins/builtin/muon_builtin_fs_gio_read_source.h
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.h
   src/plugins/builtin/muon_builtin_fs_helpers.h
+  src/plugins/builtin/muon_builtin_fs_watch_registry.h
   src/plugins/muon_js_bridge.h
   src/plugins/muon_function_wrapper_lifecycle.h
   src/plugins/muon_plugin_metadata.h
@@ -1431,6 +1433,17 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${MUON_CARDIO_GLIB_TARGETS}
     )
   MUON_APPLY_SANITIZERS(muon_builtin_fs_gio_read_source_test)
+  add_executable(muon_builtin_fs_watch_registry_test
+    tests/muon_builtin_fs_watch_registry_test.cpp
+    src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_builtin_fs_watch_registry_test)
+  target_compile_features(muon_builtin_fs_watch_registry_test PRIVATE
+    cxx_std_20)
+  target_include_directories(muon_builtin_fs_watch_registry_test PRIVATE
+    src
+    )
+  MUON_APPLY_SANITIZERS(muon_builtin_fs_watch_registry_test)
   add_executable(muon_app_scheme_storage_test
     tests/muon_app_scheme_storage_test.cpp
     src/muon_sha256.cpp
@@ -1757,6 +1770,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME builtin_fs_gio_read_source
     COMMAND muon_builtin_fs_gio_read_source_test
+    )
+  add_test(
+    NAME builtin_fs_watch_registry
+    COMMAND muon_builtin_fs_watch_registry_test
     )
   add_test(
     NAME traffic_type_metadata

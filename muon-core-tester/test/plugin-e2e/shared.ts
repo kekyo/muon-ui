@@ -4032,6 +4032,7 @@ export const runBuiltinFsAdditionalOperations = async (
       missingForced: boolean;
     };
     watch: { filenames: string[]; afterCloseCount: number };
+    watchLimit: { accepted: number; rejectedMessage: string };
     invalid: {
       missingStat: string;
       badOptions: string;
@@ -4261,6 +4262,43 @@ export const runBuiltinFsAdditionalOperations = async (
   })()`,
   );
 
+  const watchLimit = await evaluateStep<
+    AdditionalOperationValues["watchLimit"]
+  >(
+    "additional watch limit",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const watchPath = rootPath + "/watch-limit";
+    await window.muon.fs.mkdir(watchPath);
+    const watchers = [];
+    const rejection = async (operation) => {
+      try {
+        await operation();
+        return "";
+      } catch (error) {
+        return String(error && error.message ? error.message : error);
+      }
+    };
+    try {
+      for (let index = 0; index < 16; index += 1) {
+        watchers.push(await window.muon.fs.watch(watchPath, () => undefined));
+      }
+      const rejectedMessage = await rejection(async () => {
+        watchers.push(await window.muon.fs.watch(watchPath, () => undefined));
+      });
+      return {
+        accepted: watchers.length,
+        rejectedMessage,
+      };
+    } finally {
+      for (const watcher of watchers.reverse()) {
+        await watcher.close();
+      }
+      await window.muon.fs.rmdir(watchPath);
+    }
+  })()`,
+  );
+
   const removed = await evaluateStep<AdditionalOperationValues["removed"]>(
     "additional cleanup",
     `(async () => {
@@ -4333,6 +4371,7 @@ export const runBuiltinFsAdditionalOperations = async (
     removed,
     symlink,
     watch,
+    watchLimit,
   };
 
   expect(values.stat).toMatchObject({
@@ -4383,6 +4422,10 @@ export const runBuiltinFsAdditionalOperations = async (
   });
   expect(values.watch.filenames).toContain("watched.txt");
   expect(values.watch.afterCloseCount).toBe(values.watch.filenames.length);
+  expect(values.watchLimit).toEqual({
+    accepted: 16,
+    rejectedMessage: "Filesystem watcher limit exceeded",
+  });
   expect(values.invalid.missingStat).not.toBe("");
   expect(values.invalid.badOptions).toContain("options.position");
   expect(values.invalid.unlinkDirectory).not.toBe("");

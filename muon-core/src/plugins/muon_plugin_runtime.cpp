@@ -3864,6 +3864,7 @@ static void ReleaseMuonFunctionOwner(MuonPluginRuntimeImpl* impl,
     return;
   }
   ReleaseMuonBuiltinExecutorContext(renderer_context_id);
+  ReleaseMuonBuiltinFsContext(renderer_context_id);
   impl->active_function_owners.erase(owner_id);
   std::vector<MuonRendererFunctionSource*> sources;
   const auto owner_iterator =

@@ -11,6 +11,7 @@
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_fs_gio_read_source.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
+#include "plugins/builtin/muon_builtin_fs_watch_registry.h"
 #include "plugins/muon_traffic_cardio_operation.h"
 
 #include <cardio.h>
@@ -60,6 +61,8 @@ static constexpr char kMuonBuiltinFsGenericError[] =
     "Filesystem operation failed";
 static constexpr char kMuonBuiltinFsAbortError[] =
     "The operation was aborted";
+static constexpr char kMuonBuiltinFsWatchLeaseUnavailableError[] =
+    "Filesystem watcher lease is unavailable";
 
 static const muon_type_descriptor type_void = {
     MUON_TYPE_VOID,
@@ -73,6 +76,11 @@ static const muon_type_descriptor type_bool = {
 
 static const muon_type_descriptor type_string = {
     MUON_TYPE_STRING,
+    nullptr,
+};
+
+static const muon_type_descriptor type_u32 = {
+    MUON_TYPE_U32,
     nullptr,
 };
 
@@ -218,6 +226,18 @@ static MuonFsBufferResult AllocateResultBuffer(
 struct MuonFsStringResult {
   std::string value;
   std::string error;
+};
+
+enum class MuonFsWatchRpcOperation {
+  kAcquire,
+  kRelease,
+  kSnapshot,
+};
+
+struct MuonFsWatchRpcRequest {
+  MuonFsWatchRpcOperation operation = MuonFsWatchRpcOperation::kAcquire;
+  std::string path;
+  std::string token;
 };
 
 #if defined(_WIN32)
@@ -2777,6 +2797,7 @@ class MuonBuiltinFsRuntime final {
   void Stop() {
     running_ = false;
     completions_enabled_->store(false);
+    watch_registry_.ReleaseAll();
     for (auto& operation : active_) {
       operation.cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
     }
@@ -2893,6 +2914,31 @@ class MuonBuiltinFsRuntime final {
     return read_text_file_max_bytes_;
   }
 
+  std::optional<MuonBuiltinFsWatchLease> TryAcquireWatchLease(
+      int renderer_context_id,
+      std::string* error_message) {
+    if (!running_) {
+      if (error_message != nullptr) {
+        *error_message = kMuonBuiltinFsShutdownError;
+      }
+      return std::nullopt;
+    }
+    return watch_registry_.TryAcquire(renderer_context_id, error_message);
+  }
+
+  bool IsWatchLeaseActive(int renderer_context_id,
+                          const std::string& token) const {
+    return watch_registry_.IsActive(renderer_context_id, token);
+  }
+
+  bool ReleaseWatchLease(int renderer_context_id, const std::string& token) {
+    return watch_registry_.Release(renderer_context_id, token);
+  }
+
+  void ReleaseWatchContext(int renderer_context_id) {
+    watch_registry_.ReleaseContext(renderer_context_id);
+  }
+
  private:
   struct MuonFsActiveOperation {
     std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
@@ -2925,6 +2971,7 @@ class MuonBuiltinFsRuntime final {
   std::shared_ptr<MuonFsIoContext> context_;
   cardio::dispatcher* completion_dispatcher_ = nullptr;
   std::shared_ptr<std::atomic_bool> completions_enabled_;
+  MuonBuiltinFsWatchRegistry watch_registry_;
   std::vector<MuonFsActiveOperation> active_;
   bool running_ = false;
 };
@@ -3054,13 +3101,9 @@ static bool RegisterAbortWatcher(
   return true;
 }
 
-static bool ValidatePathArgument(muon_completion_func completion,
-                                 const char* path,
-                                 std::string* target) {
-  if (path == nullptr) {
-    CompleteMuonError(completion, "Path is required");
-    return false;
-  }
+static bool ValidatePathValue(muon_completion_func completion,
+                              const std::string& path,
+                              std::string* target) {
   *target = path;
   if (target->empty()) {
     CompleteMuonError(completion, "Path is required");
@@ -3071,6 +3114,99 @@ static bool ValidatePathArgument(muon_completion_func completion,
     return false;
   }
   return true;
+}
+
+static bool ValidatePathArgument(muon_completion_func completion,
+                                 const char* path,
+                                 std::string* target) {
+  if (path == nullptr) {
+    CompleteMuonError(completion, "Path is required");
+    return false;
+  }
+  return ValidatePathValue(completion, path, target);
+}
+
+static std::string CreateWatchLeaseResultJson(const std::string& token) {
+  std::string result = "{\"token\":";
+  AppendJsonString(&result, token);
+  result += "}";
+  return result;
+}
+
+static bool ReadWatchRpcString(yyjson_val* root,
+                               const char* key,
+                               std::string* target,
+                               std::string* error_message) {
+  auto* value = yyjson_obj_get(root, key);
+  if (!yyjson_is_str(value)) {
+    *error_message = std::string("Request ") + key + " is required";
+    return false;
+  }
+  *target = ReadJsonString(value);
+  return true;
+}
+
+static bool ReadWatchRpcToken(yyjson_val* root,
+                              std::string* target,
+                              std::string* error_message) {
+  if (!ReadWatchRpcString(root, "token", target, error_message)) {
+    *error_message = kMuonBuiltinFsWatchLeaseUnavailableError;
+    return false;
+  }
+  if (target->empty() || ContainsNul(*target)) {
+    *error_message = kMuonBuiltinFsWatchLeaseUnavailableError;
+    return false;
+  }
+  return true;
+}
+
+static bool ParseWatchRpcRequest(const char* request_json,
+                                 MuonFsWatchRpcRequest* request,
+                                 std::string* error_message) {
+  if (request_json == nullptr) {
+    *error_message = "Request JSON is required";
+    return false;
+  }
+  yyjson_read_err read_error = {};
+  auto document = MuonJsonDocument(yyjson_read_opts(
+      const_cast<char*>(request_json), std::strlen(request_json),
+      YYJSON_READ_NOFLAG, nullptr, &read_error));
+  if (document.get() == nullptr) {
+    *error_message = "Request JSON is invalid";
+    return false;
+  }
+  auto* root = yyjson_doc_get_root(document.get());
+  if (!yyjson_is_obj(root)) {
+    *error_message = "Request JSON root must be an object";
+    return false;
+  }
+
+  auto operation = std::string{};
+  if (!ReadWatchRpcString(root, "operation", &operation, error_message)) {
+    return false;
+  }
+  if (operation == "acquire") {
+    request->operation = MuonFsWatchRpcOperation::kAcquire;
+    return true;
+  }
+  if (operation == "release") {
+    request->operation = MuonFsWatchRpcOperation::kRelease;
+    return ReadWatchRpcToken(root, &request->token, error_message);
+  }
+  if (operation == "snapshot") {
+    request->operation = MuonFsWatchRpcOperation::kSnapshot;
+    if (!ReadWatchRpcToken(root, &request->token, error_message)) {
+      return false;
+    }
+    if (!ReadWatchRpcString(root, "path", &request->path, error_message)) {
+      *error_message = "Path is required";
+      return false;
+    }
+    return true;
+  }
+
+  *error_message = "Unsupported filesystem watcher operation";
+  return false;
 }
 
 extern "C" void muon_builtin_fs_read_file(
@@ -3893,17 +4029,50 @@ extern "C" void muon_builtin_fs_symlink(
 #endif
 }
 
-extern "C" void muon_builtin_fs_watch_snapshot(
+extern "C" void muon_builtin_fs_watch_rpc(
     muon_completion_func completion,
-    const char* path,
+    const char* request_json,
+    uint32_t renderer_context_id,
     muon_native_function abort_watcher) {
-  auto target_path = std::string{};
-  if (!ValidatePathArgument(completion, path, &target_path)) {
+  auto request = MuonFsWatchRpcRequest{};
+  auto error_message = std::string{};
+  if (!ParseWatchRpcRequest(request_json, &request, &error_message)) {
+    CompleteMuonError(completion, error_message);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
     CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  const auto context_id = static_cast<int>(renderer_context_id);
+  switch (request.operation) {
+    case MuonFsWatchRpcOperation::kAcquire: {
+      const auto lease =
+          runtime->TryAcquireWatchLease(context_id, &error_message);
+      if (!lease.has_value()) {
+        CompleteMuonError(completion, error_message);
+        return;
+      }
+      CompleteMuonString(completion,
+                         CreateWatchLeaseResultJson(lease->token));
+      return;
+    }
+    case MuonFsWatchRpcOperation::kRelease:
+      (void)runtime->ReleaseWatchLease(context_id, request.token);
+      CompleteMuonString(completion, "{}");
+      return;
+    case MuonFsWatchRpcOperation::kSnapshot:
+      break;
+  }
+
+  if (!runtime->IsWatchLeaseActive(context_id, request.token)) {
+    CompleteMuonError(completion,
+                      kMuonBuiltinFsWatchLeaseUnavailableError);
+    return;
+  }
+  auto target_path = std::string{};
+  if (!ValidatePathValue(completion, request.path, &target_path)) {
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -3935,6 +4104,12 @@ static const muon_type_descriptor write_file_args[] = {
 
 static const muon_type_descriptor path_abort_args[] = {
     type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor watch_rpc_args[] = {
+    type_string,
+    type_u32,
     type_abort_watcher_function,
 };
 
@@ -4569,35 +4744,96 @@ if (isAllowed("watch")) {
       if (signal !== null && signal.aborted) {
         throw createAbortReason(signal);
       }
-      let snapshot = normalizeWatchSnapshot(
-        await runAbortable(options, (abortWatcher) =>
-          parseNativeJson(namespace.__watchSnapshot(path, abortWatcher)),
-        ),
-      );
+      const runWatchRpc = async (request, operationOptions) =>
+        await runAbortable(operationOptions, (abortWatcher) =>
+          parseNativeJson(
+            namespace.__watchRpc(JSON.stringify(request), 0, abortWatcher),
+          ),
+        );
+      const lease = await runWatchRpc({ operation: "acquire" }, undefined);
+      const leaseToken = lease.token;
+      let released = false;
+      const releaseLease = async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        try {
+          await runWatchRpc(
+            { operation: "release", token: leaseToken },
+            undefined,
+          );
+        } catch (_error) {}
+      };
+      if (signal !== null && signal.aborted) {
+        await releaseLease();
+        throw createAbortReason(signal);
+      }
+      let snapshot;
+      try {
+        snapshot = normalizeWatchSnapshot(
+          await runWatchRpc(
+            { operation: "snapshot", path, token: leaseToken },
+            options,
+          ),
+        );
+      } catch (error) {
+        await releaseLease();
+        throw error;
+      }
       let closed = false;
       let polling = false;
       let timer = null;
+      let pollAbortController = null;
+      let closePromise = null;
       const close = async () => {
+        if (closePromise !== null) {
+          await closePromise;
+          return;
+        }
+        closePromise = (async () => {
+          if (closed) {
+            return;
+          }
+          closed = true;
+          if (timer !== null) {
+            clearInterval(timer);
+            timer = null;
+          }
+          if (pollAbortController !== null) {
+            pollAbortController.abort();
+            pollAbortController = null;
+          }
+          if (signal !== null) {
+            signal.removeEventListener("abort", onAbort);
+          }
+          await releaseLease();
+        })();
+        await closePromise;
+      };
+      const onAbort = () => {
+        void close();
+      };
+      const poll = async () => {
         if (closed) {
           return;
         }
-        closed = true;
-        if (timer !== null) {
-          clearInterval(timer);
-          timer = null;
-        }
-        if (signal !== null) {
-          signal.removeEventListener("abort", close);
-        }
-      };
-      const poll = async () => {
-        if (closed || polling) {
+        if (polling) {
           return;
         }
         polling = true;
+        pollAbortController =
+          typeof AbortController === "function" ? new AbortController() : null;
+        const pollOptions =
+          pollAbortController === null
+            ? undefined
+            : { signal: pollAbortController.signal };
         try {
           const next = normalizeWatchSnapshot(
-            await parseNativeJson(namespace.__watchSnapshot(path, null)),
+            await runWatchRpc(
+              { operation: "snapshot", path, token: leaseToken },
+              pollOptions,
+            ),
           );
           if (closed) {
             return;
@@ -4615,6 +4851,7 @@ if (isAllowed("watch")) {
           });
           await close();
         } finally {
+          pollAbortController = null;
           polling = false;
         }
       };
@@ -4622,7 +4859,11 @@ if (isAllowed("watch")) {
         void poll();
       }, 100);
       if (signal !== null) {
-        signal.addEventListener("abort", close, { once: true });
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          await close();
+          throw createAbortReason(signal);
+        }
       }
       return { close };
     },
@@ -4762,10 +5003,9 @@ static const muon_plugin_function_metadata fs_functions[] = {
         "symlink",
     },
     {
-        "__watchSnapshot",
-        reinterpret_cast<muon_native_function>(
-            &muon_builtin_fs_watch_snapshot),
-        {2, path_abort_args, &type_string},
+        "__watchRpc",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_watch_rpc),
+        {3, watch_rpc_args, &type_string},
         "watch",
     },
 };
@@ -4851,6 +5091,14 @@ void ShutdownMuonBuiltinFs() {
   if (!runtime->HasPendingOperations()) {
     muon_internal::g_runtime.reset();
   }
+}
+
+void ReleaseMuonBuiltinFsContext(int renderer_context_id) {
+  const auto runtime = muon_internal::g_runtime;
+  if (!runtime) {
+    return;
+  }
+  runtime->ReleaseWatchContext(renderer_context_id);
 }
 
 const muon_plugin_metadata* GetMuonBuiltinFsPluginMetadata() {

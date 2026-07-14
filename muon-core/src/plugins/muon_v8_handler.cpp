@@ -42,6 +42,7 @@ static constexpr char kMuonPluginProxyMarkerPropertyName[] =
 static constexpr char kMuonExecutorSpawnFunctionPath[] = "muon.executor.spawn";
 static constexpr char kMuonExecutorLoadLibraryFunctionPath[] =
     "muon.executor.loadLibrary";
+static constexpr char kMuonBuiltinFsWatchFunctionPath[] = "muon.fs.watch";
 static constexpr double kMuonTwoTo63 = 9223372036854775808.0;
 static constexpr double kMuonTwoTo64 = 18446744073709551616.0;
 #if defined(MUON_TEST_BUILD)
@@ -901,6 +902,10 @@ bool MuonV8Handler::ExecutePluginCall(
        function_name == kMuonExecutorLoadLibraryFunctionPath) &&
       encoded_args->GetSize() >= 3) {
     encoded_args->SetDouble(2, static_cast<double>(context_id_));
+  }
+  if (function_name == kMuonBuiltinFsWatchFunctionPath &&
+      encoded_args->GetSize() >= 2) {
+    encoded_args->SetDouble(1, static_cast<double>(context_id_));
   }
 
   const auto context = CefV8Context::GetCurrentContext();

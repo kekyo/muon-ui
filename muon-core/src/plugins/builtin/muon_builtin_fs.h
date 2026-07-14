@@ -26,6 +26,11 @@ bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,
 void ShutdownMuonBuiltinFs();
 
 /**
+ * Releases filesystem state owned by a released renderer V8 context.
+ */
+void ReleaseMuonBuiltinFsContext(int renderer_context_id);
+
+/**
  * JavaScript-visible namespace metadata for built-in filesystem functions.
  */
 extern const muon_plugin_namespace kMuonBuiltinFsNamespace;

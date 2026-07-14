@@ -110,7 +110,7 @@ struct MuonBrowserTrayRecord {
 
 class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
  public:
-  explicit MuonBrowserTrayServiceImpl(std::string linux_desktop_id);
+  explicit MuonBrowserTrayServiceImpl(MuonBrowserTrayServiceOptions options);
   ~MuonBrowserTrayServiceImpl() override;
 
   bool CreateTray(int browser_id,
@@ -144,11 +144,20 @@ class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
   std::map<MuonBrowserTrayKey, std::unique_ptr<MuonBrowserTrayRecord>> records_;
   uint64_t next_generated_id_ = 1;
   uint64_t next_platform_id_ = 1;
+  MuonBrowserTrayLimits limits_;
+  MuonBrowserTrayPlatformHooks platform_hooks_;
   std::string linux_desktop_id_;
 
   MuonBrowserTrayRecord* FindRecord(int browser_id,
                                     const std::string& tray_id);
   std::string CreateGeneratedTrayId(int browser_id);
+  bool UsePlatformHooks() const;
+  bool RunHookedCreateRecord(MuonBrowserTrayRecord* record,
+                             std::string* error_message);
+  void RunHookedDestroyRecord(MuonBrowserTrayRecord* record);
+  void RunHookedUpdateIcon(MuonBrowserTrayRecord* record);
+  void RunHookedUpdateTooltip(MuonBrowserTrayRecord* record);
+  void RunHookedUpdateMenu(MuonBrowserTrayRecord* record);
   bool ActivateMenuItem(MuonBrowserTrayRecord* record, int menu_serial);
   void DispatchActivation(MuonBrowserTrayRecord* record,
                           MuonBrowserTrayEventType type,
@@ -266,8 +275,10 @@ class MuonBrowserTrayServiceImpl final : public MuonBrowserTrayService {
 };
 
 MuonBrowserTrayServiceImpl::MuonBrowserTrayServiceImpl(
-    std::string linux_desktop_id)
-    : linux_desktop_id_(std::move(linux_desktop_id)) {
+    MuonBrowserTrayServiceOptions options)
+    : limits_(options.limits),
+      platform_hooks_(std::move(options.platform_hooks)),
+      linux_desktop_id_(std::move(options.linux_desktop_id)) {
 #if defined(__linux__)
   static constexpr char kSniXml[] = R"XML(
 <node>
@@ -452,6 +463,52 @@ std::string MuonBrowserTrayServiceImpl::CreateGeneratedTrayId(int browser_id) {
       return candidate;
     }
   }
+}
+
+bool MuonBrowserTrayServiceImpl::UsePlatformHooks() const {
+  return static_cast<bool>(platform_hooks_.create_record);
+}
+
+bool MuonBrowserTrayServiceImpl::RunHookedCreateRecord(
+    MuonBrowserTrayRecord* record,
+    std::string* error_message) {
+  if (record == nullptr || !platform_hooks_.create_record) {
+    return false;
+  }
+  return platform_hooks_.create_record(record->browser_id, record->tray_id,
+                                       error_message);
+}
+
+void MuonBrowserTrayServiceImpl::RunHookedDestroyRecord(
+    MuonBrowserTrayRecord* record) {
+  if (record == nullptr || !platform_hooks_.destroy_record) {
+    return;
+  }
+  platform_hooks_.destroy_record(record->browser_id, record->tray_id);
+}
+
+void MuonBrowserTrayServiceImpl::RunHookedUpdateIcon(
+    MuonBrowserTrayRecord* record) {
+  if (record == nullptr || !platform_hooks_.update_icon) {
+    return;
+  }
+  platform_hooks_.update_icon(record->browser_id, record->tray_id);
+}
+
+void MuonBrowserTrayServiceImpl::RunHookedUpdateTooltip(
+    MuonBrowserTrayRecord* record) {
+  if (record == nullptr || !platform_hooks_.update_tooltip) {
+    return;
+  }
+  platform_hooks_.update_tooltip(record->browser_id, record->tray_id);
+}
+
+void MuonBrowserTrayServiceImpl::RunHookedUpdateMenu(
+    MuonBrowserTrayRecord* record) {
+  if (record == nullptr || !platform_hooks_.update_menu) {
+    return;
+  }
+  platform_hooks_.update_menu(record->browser_id, record->tray_id);
 }
 
 bool MuonBrowserTrayServiceImpl::CreateTray(
@@ -722,6 +779,9 @@ GDBusInterfaceInfo* MuonBrowserTrayServiceImpl::GetLinuxSniInterfaceInfo(
 bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
     MuonBrowserTrayRecord* record,
     std::string* error_message) {
+  if (UsePlatformHooks()) {
+    return RunHookedCreateRecord(record, error_message);
+  }
   if (record == nullptr || error_message == nullptr) {
     return false;
   }
@@ -837,6 +897,10 @@ bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
 
 void MuonBrowserTrayServiceImpl::PlatformDestroyRecord(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedDestroyRecord(record);
+    return;
+  }
   if (record == nullptr) {
     return;
   }
@@ -933,16 +997,28 @@ void MuonBrowserTrayServiceImpl::EmitLinuxSniSignal(
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateIcon(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateIcon(record);
+    return;
+  }
   EmitLinuxSniSignal(record, "NewIcon", nullptr);
 }
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateTooltip(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateTooltip(record);
+    return;
+  }
   EmitLinuxSniSignal(record, "NewToolTip", nullptr);
 }
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateMenu(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateMenu(record);
+    return;
+  }
   if (record == nullptr || record->linux_connection == nullptr) {
     return;
   }
@@ -1548,6 +1624,9 @@ bool MuonBrowserTrayServiceImpl::AddOrModifyWindowsIcon(
 bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
     MuonBrowserTrayRecord* record,
     std::string* error_message) {
+  if (UsePlatformHooks()) {
+    return RunHookedCreateRecord(record, error_message);
+  }
   if (record == nullptr) {
     return false;
   }
@@ -1557,6 +1636,10 @@ bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
 
 void MuonBrowserTrayServiceImpl::PlatformDestroyRecord(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedDestroyRecord(record);
+    return;
+  }
   if (record == nullptr || windows_message_window_ == nullptr) {
     return;
   }
@@ -1573,12 +1656,20 @@ void MuonBrowserTrayServiceImpl::PlatformDestroyRecord(
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateIcon(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateIcon(record);
+    return;
+  }
   std::string ignored_error;
   (void)AddOrModifyWindowsIcon(record, NIM_MODIFY, &ignored_error);
 }
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateTooltip(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateTooltip(record);
+    return;
+  }
   if (record == nullptr || windows_message_window_ == nullptr) {
     return;
   }
@@ -1596,6 +1687,10 @@ void MuonBrowserTrayServiceImpl::PlatformUpdateTooltip(
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateMenu(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateMenu(record);
+    return;
+  }
   (void)record;
 }
 
@@ -1702,6 +1797,9 @@ LRESULT CALLBACK MuonBrowserTrayServiceImpl::WindowsWndProc(HWND hwnd,
 bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
     MuonBrowserTrayRecord* record,
     std::string* error_message) {
+  if (UsePlatformHooks()) {
+    return RunHookedCreateRecord(record, error_message);
+  }
   (void)record;
   if (error_message != nullptr) {
     *error_message = "System tray is not supported on this platform";
@@ -1711,27 +1809,49 @@ bool MuonBrowserTrayServiceImpl::PlatformCreateRecord(
 
 void MuonBrowserTrayServiceImpl::PlatformDestroyRecord(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedDestroyRecord(record);
+    return;
+  }
   (void)record;
 }
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateIcon(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateIcon(record);
+    return;
+  }
   (void)record;
 }
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateTooltip(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateTooltip(record);
+    return;
+  }
   (void)record;
 }
 
 void MuonBrowserTrayServiceImpl::PlatformUpdateMenu(
     MuonBrowserTrayRecord* record) {
+  if (UsePlatformHooks()) {
+    RunHookedUpdateMenu(record);
+    return;
+  }
   (void)record;
 }
 #endif
 
 std::unique_ptr<MuonBrowserTrayService> CreateMuonBrowserTrayService(
     std::string linux_desktop_id) {
-  return std::make_unique<MuonBrowserTrayServiceImpl>(
-      std::move(linux_desktop_id));
+  MuonBrowserTrayServiceOptions options;
+  options.linux_desktop_id = std::move(linux_desktop_id);
+  return CreateMuonBrowserTrayService(std::move(options));
+}
+
+std::unique_ptr<MuonBrowserTrayService> CreateMuonBrowserTrayService(
+    MuonBrowserTrayServiceOptions options) {
+  return std::make_unique<MuonBrowserTrayServiceImpl>(std::move(options));
 }

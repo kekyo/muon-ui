@@ -331,6 +331,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonVitePluginOptions",
+      memberName: "exitWithServer",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
       memberName: "build",
     },
   ];
@@ -1267,6 +1272,7 @@ const plugin = muon({
   cefPath: "../muon-core/.cef/cef_binary_fake_linux64_minimal",
   open: false,
   enableDebugger: false,
+  exitWithServer: false,
   build: {
     targets: ["linux-amd64"],
     iconPath: "icons/app.png",

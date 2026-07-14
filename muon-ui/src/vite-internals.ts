@@ -419,10 +419,27 @@ export const startMuonViteBrowserBridge = async ({
 
   let currentChild: ChildProcess | undefined = undefined;
   let closing = false;
+  let serverCloseRequested = false;
   let supervisorPromise: Promise<void> | undefined = undefined;
 
   const setCurrentChild = (child: ChildProcess | undefined): void => {
     currentChild = child;
+  };
+
+  const closeServerAfterMuonExit = (): void => {
+    if (
+      closing ||
+      serverCloseRequested ||
+      pluginOptions.exitWithServer === false
+    ) {
+      return;
+    }
+    serverCloseRequested = true;
+    void server.close().catch((error: unknown) => {
+      server.config.logger.warn(
+        `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
+      );
+    });
   };
 
   const runSupervisor = async (): Promise<void> => {
@@ -464,6 +481,9 @@ export const startMuonViteBrowserBridge = async ({
           environment,
           setCurrentChild,
         );
+        if (!closing && exitCode !== muonRecycleExitCode) {
+          closeServerAfterMuonExit();
+        }
       } catch (error) {
         if (!closing) {
           server.config.logger.warn(

@@ -325,6 +325,56 @@ const writeFakeControlledRecyclingMuonSource = async (
   await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
 };
 
+const writeFakeControlledMuonExecutable = async (
+  runtimeDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  await mkdir(runtimeDirectory, { recursive: true });
+  const escapedOutputDirectory = outputDirectory.replaceAll("'", "'\\''");
+  const executable = getMuonExecutablePath(runtimeDirectory, "linux");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "${escapedOutputDirectory}/args.txt"
+pwd > "${escapedOutputDirectory}/cwd.txt"
+override_config=''
+previous=''
+for argument in "$@"; do
+  if [[ "$previous" == '-c' ]]; then
+    override_config="$argument"
+  fi
+  previous="$argument"
+done
+if [[ -z "$override_config" ]]; then
+  echo 'missing override config' >&2
+  exit 1
+fi
+cp "$override_config" "${escapedOutputDirectory}/override.json"
+touch "${escapedOutputDirectory}/ready"
+for _ in $(seq 1 200); do
+  if [[ -f "${escapedOutputDirectory}/continue" ]]; then
+    touch "${escapedOutputDirectory}/exited"
+    exit 0
+  fi
+  sleep 0.05
+done
+echo 'timed out waiting for normal exit continuation' >&2
+exit 1
+`,
+  );
+  await chmod(executable, 0o755);
+};
+
+const writeFakeControlledMuonSource = async (
+  muonDirectory: string,
+  outputDirectory: string,
+): Promise<void> => {
+  await writeFakeControlledMuonExecutable(muonDirectory, outputDirectory);
+  await mkdir(join(muonDirectory, "plugins"), { recursive: true });
+  await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
+};
+
 const writeFakeConfigUpdatingRecyclingMuonSource = async (
   muonDirectory: string,
   outputDirectory: string,
@@ -506,6 +556,7 @@ interface StartServerPluginOptions {
   stagePath: string | undefined;
   enableDebugger: boolean | undefined;
   open: boolean | undefined;
+  exitWithServer?: boolean;
   pluginAccess?: false | MuonVitePluginAccessOptions;
 }
 
@@ -537,6 +588,9 @@ const startServer = async (
       ? {}
       : { enableDebugger: pluginOptions.enableDebugger }),
     ...(pluginOptions.open === undefined ? {} : { open: pluginOptions.open }),
+    ...(pluginOptions.exitWithServer === undefined
+      ? {}
+      : { exitWithServer: pluginOptions.exitWithServer }),
     ...(pluginOptions.pluginAccess === undefined
       ? {}
       : { pluginAccess: pluginOptions.pluginAccess }),
@@ -1934,6 +1988,7 @@ describe("muon Vite plugin", () => {
         stagePath: undefined,
         enableDebugger: undefined,
         open: undefined,
+        exitWithServer: false,
       },
       undefined,
     );
@@ -2007,6 +2062,77 @@ describe("muon Vite plugin", () => {
     await server.close();
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
+  });
+
+  it("closes the Vite server when muon exits by default", async () => {
+    const root = await createTemporaryDirectory("muon-vite-exit-default-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeControlledMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+      },
+      undefined,
+    );
+    let closed = false;
+    server.httpServer?.once("close", () => {
+      closed = true;
+    });
+    await wait(() => existsSync(join(outputDirectory, "ready")));
+
+    await writeFile(join(outputDirectory, "continue"), "");
+
+    await wait(() => closed);
+  });
+
+  it("keeps the Vite server open after muon exits when exitWithServer is false", async () => {
+    const root = await createTemporaryDirectory("muon-vite-exit-disabled-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeControlledMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+        exitWithServer: false,
+      },
+      undefined,
+    );
+    const baseUrl = server.resolvedUrls?.local[0];
+    if (baseUrl === undefined) {
+      throw new Error("Vite base URL was not resolved.");
+    }
+    await wait(() => existsSync(join(outputDirectory, "ready")));
+
+    await writeFile(join(outputDirectory, "continue"), "");
+    await wait(() => existsSync(join(outputDirectory, "exited")));
+
+    const response = await fetch(baseUrl);
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain("muon vite test");
+    await server.close();
   });
 
   it("refreshes the generated Vite override when muon requests recycle", async () => {
@@ -2143,6 +2269,7 @@ describe("muon Vite plugin", () => {
         stagePath: undefined,
         enableDebugger: undefined,
         open: undefined,
+        exitWithServer: false,
       },
       true,
     );
@@ -2327,6 +2454,7 @@ describe("muon Vite plugin", () => {
         stagePath: undefined,
         enableDebugger: undefined,
         open: undefined,
+        exitWithServer: false,
       },
       "/path?x=1",
     );
@@ -2866,7 +2994,7 @@ describe("muon run CLI", () => {
         'import muon from "__MUON_VITE_URL__";',
         "export default {",
         "  plugins: [",
-        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, build: false }),`,
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, exitWithServer: false, build: false }),`,
         "  ],",
         "};",
       ].join("\n"),

@@ -356,6 +356,15 @@ export interface MuonVitePluginOptions {
   enableDebugger?: boolean;
 
   /**
+   * Close the Vite dev server when the launched muon process exits.
+   *
+   * @remarks Vite build and `muon run` ignore this option. Recycle exits keep
+   * the Vite dev server running so muon can restart.
+   * @defaultValue `true`
+   */
+  exitWithServer?: boolean;
+
+  /**
    * Plugin access mode and virtual module capability imports.
    *
    * @remarks Omit this option to use the `plugin` section from `muon.json`.

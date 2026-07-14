@@ -399,6 +399,8 @@ Linux以外の環境では、通常の `muon.fs` 関数はローカルファイ�
 - `close()` は複数回呼んでも問題ありません。
 - `watch()` の `listener` が例外を投げたりrejectされた `Promise` を返した場合、そのエラーは無視されます。
   watcher作成前にabortされた場合は `watch()` がrejectされ、作成後にabortされた場合はwatcherが閉じられます。
+- 1つのrenderer V8 contextが同時に保持できるfilesystem watcherは16個までです。
+  上限を超える `watch()` は初回スナップショットを開始する前に `"Filesystem watcher limit exceeded"` でrejectされます。
 
 ```js
 await window.muon.fs.writeTextFile("/tmp/muon-note.txt", "hello\n", "utf8");

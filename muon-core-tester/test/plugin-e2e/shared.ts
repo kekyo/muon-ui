@@ -3022,6 +3022,7 @@ export const startGestamentDebugMuon = async (
     | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
+  networkAllowPatterns: string[] = TEST_NETWORK_ALLOW_PATTERNS,
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
@@ -3030,7 +3031,7 @@ export const startGestamentDebugMuon = async (
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,
-    TEST_NETWORK_ALLOW_PATTERNS,
+    networkAllowPatterns,
     pluginPath,
     createPluginConfigEntries([], TEST_PLUGIN_ALLOW_PATTERNS),
     undefined,

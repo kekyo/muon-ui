@@ -119,3 +119,10 @@ bool AppendMuonBytesWithinLimit(std::vector<uint8_t>* destination,
                                 const void* data,
                                 size_t size,
                                 size_t max_size);
+
+/**
+ * Releases all byte storage retained by a buffer.
+ *
+ * @param buffer Buffer whose elements and allocated storage are released.
+ */
+void ReleaseMuonByteBuffer(std::vector<uint8_t>* buffer);

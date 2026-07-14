@@ -147,9 +147,11 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
   void OnDownloadProgress(CefRefPtr<CefURLRequest> request,
                           int64_t current,
                           int64_t total) override {
-    (void)request;
-    (void)current;
-    (void)total;
+    const auto limit = static_cast<int64_t>(
+        kMuonIconPngDecodeLimits.max_encoded_bytes);
+    if (current > limit || total > limit) {
+      FailAndCancel(request);
+    }
   }
 
   void OnDownloadData(CefRefPtr<CefURLRequest> request,
@@ -161,11 +163,7 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
     if (!AppendMuonBytesWithinLimit(
             &data_, data, data_length,
             kMuonIconPngDecodeLimits.max_encoded_bytes)) {
-      response_over_budget_ = true;
-      data_.clear();
-      if (request) {
-        request->Cancel();
-      }
+      FailAndCancel(request);
     }
   }
 
@@ -185,6 +183,17 @@ class MuonFaviconUrlRequestClient final : public CefURLRequestClient {
   }
 
  private:
+  void FailAndCancel(CefRefPtr<CefURLRequest> request) {
+    if (response_over_budget_) {
+      return;
+    }
+    response_over_budget_ = true;
+    ReleaseMuonByteBuffer(&data_);
+    if (request) {
+      request->Cancel();
+    }
+  }
+
   Completion completion_;
   std::vector<uint8_t> data_;
   bool response_over_budget_ = false;

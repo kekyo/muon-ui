@@ -19,6 +19,7 @@ const targetDescriptors = {
     prepareExecutableName: "muon-builder",
     launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
+    pluginInspectorExecutableName: "muon-plugin-inspector",
     devSourceDirectory: ".run/dev-linux-amd64-debug",
     distSourceDirectory: "dist-linux-amd64",
     runtimeSourceDirectory: "dist-linux-amd64",
@@ -33,6 +34,7 @@ const targetDescriptors = {
     prepareExecutableName: "muon-builder",
     launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
+    pluginInspectorExecutableName: "muon-plugin-inspector",
     devSourceDirectory: ".run/dev-linux-armhf-debug",
     distSourceDirectory: "dist-linux-armhf",
     runtimeSourceDirectory: "dist-linux-armhf",
@@ -47,6 +49,7 @@ const targetDescriptors = {
     prepareExecutableName: "muon-builder",
     launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
+    pluginInspectorExecutableName: "muon-plugin-inspector",
     devSourceDirectory: ".run/dev-linux-arm64-debug",
     distSourceDirectory: "dist-linux-arm64",
     runtimeSourceDirectory: "dist-linux-arm64",
@@ -61,6 +64,7 @@ const targetDescriptors = {
     prepareExecutableName: "muon-builder.exe",
     launcherExecutableName: "muon-launcher.exe",
     runtimeHelperExecutableName: undefined,
+    pluginInspectorExecutableName: "muon-plugin-inspector.exe",
     devSourceDirectory: ".run/dev-windows-i686-debug",
     distSourceDirectory: "dist-windows-i686",
     runtimeSourceDirectory: "dist-windows-i686",
@@ -80,6 +84,7 @@ const targetDescriptors = {
     prepareExecutableName: "muon-builder.exe",
     launcherExecutableName: "muon-launcher.exe",
     runtimeHelperExecutableName: undefined,
+    pluginInspectorExecutableName: "muon-plugin-inspector.exe",
     devSourceDirectory: ".run/dev-windows-amd64-debug",
     distSourceDirectory: "dist-windows-amd64",
     runtimeSourceDirectory: "dist-windows-amd64",
@@ -190,6 +195,12 @@ const stageTarget = async (target, source) => {
           getSourceDirectory(target, source),
           descriptor.runtimeHelperExecutableName,
         );
+  const pluginInspectorSourcePath = resolve(
+    "..",
+    "muon-builder",
+    getSourceDirectory(target, source),
+    descriptor.pluginInspectorExecutableName,
+  );
   const nativeDestinationPath = resolve(
     "dist",
     "native",
@@ -211,12 +222,19 @@ const stageTarget = async (target, source) => {
           target,
           descriptor.runtimeHelperExecutableName,
         );
+  const pluginInspectorDestinationPath = resolve(
+    "dist",
+    "native",
+    target,
+    descriptor.pluginInspectorExecutableName,
+  );
   try {
     await stat(prepareSourcePath);
     await stat(launcherSourcePath);
     if (runtimeHelperSourcePath !== undefined) {
       await stat(runtimeHelperSourcePath);
     }
+    await stat(pluginInspectorSourcePath);
   } catch {
     const buildCommand =
       source === "dist"
@@ -231,6 +249,7 @@ const stageTarget = async (target, source) => {
   await mkdir(dirname(nativeDestinationPath), { recursive: true });
   await copyFile(prepareSourcePath, nativeDestinationPath);
   await copyFile(launcherSourcePath, launcherDestinationPath);
+  await copyFile(pluginInspectorSourcePath, pluginInspectorDestinationPath);
   if (
     runtimeHelperSourcePath !== undefined &&
     runtimeHelperDestinationPath !== undefined
@@ -240,6 +259,7 @@ const stageTarget = async (target, source) => {
   if (process.platform !== "win32") {
     await chmod(nativeDestinationPath, 0o755);
     await chmod(launcherDestinationPath, 0o755);
+    await chmod(pluginInspectorDestinationPath, 0o755);
     if (runtimeHelperDestinationPath !== undefined) {
       await chmod(runtimeHelperDestinationPath, 0o755);
     }

@@ -3,13 +3,14 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { resolveMuonPluginAccessOptions } from "../src/plugin-access.js";
+import { collectMuonPluginFunctionPathsForAccess } from "../src/plugin-inspector.js";
 
 const cleanupDirectories: string[] = [];
 const sha256Signature =
@@ -77,6 +78,82 @@ describe("muon plugin access", () => {
         allow: ["foobar.run"],
       },
     ]);
+  });
+
+  it("skips the native inspector when external validate imports are exact", async () => {
+    const root = await createTemporaryDirectory();
+    await writeValidateModeConfig(root, sha256Signature);
+
+    const resolved = await resolveMuonPluginAccessOptions({
+      root,
+      configPath: undefined,
+      pluginAccess: undefined,
+    });
+
+    await expect(
+      collectMuonPluginFunctionPathsForAccess(resolved, {
+        ...process.env,
+        MUON_PLUGIN_INSPECTOR_PATH: join(root, "missing-inspector"),
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("collects external wildcard import function paths through the native inspector", async () => {
+    const root = await createTemporaryDirectory();
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          plugin: {
+            mode: "validate",
+            path: "native-plugins",
+            plugins: [
+              {
+                name: "foobar",
+                imports: [
+                  {
+                    sources: ["src/native/**"],
+                    allow: ["foobar.native.*"],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const inspectorPath = join(root, "fake-inspector.mjs");
+    await writeFile(
+      inspectorPath,
+      [
+        "#!/usr/bin/env node",
+        'import { readFile } from "node:fs/promises";',
+        "const inputPath = process.argv[2];",
+        'const input = JSON.parse(await readFile(inputPath, "utf8"));',
+        'if (input.path.endsWith("/native-plugins") && input.plugins?.[0]?.name === "foobar") {',
+        '  process.stdout.write(JSON.stringify({ plugins: [{ name: "foobar", functions: ["foobar.native.run"] }] }));',
+        "} else {",
+        "  process.exit(17);",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await chmod(inspectorPath, 0o755);
+
+    const resolved = await resolveMuonPluginAccessOptions({
+      root,
+      configPath: undefined,
+      pluginAccess: undefined,
+    });
+
+    await expect(
+      collectMuonPluginFunctionPathsForAccess(resolved, {
+        ...process.env,
+        MUON_PLUGIN_INSPECTOR_PATH: inspectorPath,
+      }),
+    ).resolves.toEqual(["foobar.native.run"]);
   });
 
   it.each([

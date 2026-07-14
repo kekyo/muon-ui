@@ -811,6 +811,9 @@ exit 1
     const nativeRuntimeHelperStat = await stat(
       resolve("dist/native/linux-amd64/muon-runtime-helper"),
     );
+    const nativePluginInspectorStat = await stat(
+      resolve("dist/native/linux-amd64/muon-plugin-inspector"),
+    );
     const nativeDefaultIconStat = await stat(
       resolve("dist/native/muon-256.png"),
     );
@@ -820,6 +823,7 @@ exit 1
     expect(nativeBuilderStat.mode & 0o111).not.toBe(0);
     expect(nativeLauncherStat.mode & 0o111).not.toBe(0);
     expect(nativeRuntimeHelperStat.mode & 0o111).not.toBe(0);
+    expect(nativePluginInspectorStat.mode & 0o111).not.toBe(0);
     expect(nativeDefaultIconStat.size).toBeGreaterThan(0);
     await expect(exists(resolve("dist/cli.mjs"))).resolves.toBe(false);
     await expect(exists(resolve("dist/vite.d.ts"))).resolves.toBe(false);
@@ -935,6 +939,7 @@ exit 1
     expect(files).not.toContain("dist/vite-internals.d.ts");
     expect(files).not.toContain("dist/vite.d.ts");
     expect(files).toContain("dist/native/linux-amd64/muon-launcher");
+    expect(files).toContain("dist/native/linux-amd64/muon-plugin-inspector");
     expect(files).not.toContain("dist/runtime/linux-amd64/muon-runtime.json");
     expect(files.some((file) => file.endsWith(".d.ts.map"))).toBe(false);
     expect(files).not.toContain("dist/muon-builder");

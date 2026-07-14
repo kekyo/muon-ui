@@ -19,6 +19,7 @@ import {
   type MuonPluginAccessOptions,
   type MuonResolvedPluginAccessOptions,
 } from "./plugin-access.js";
+import { collectMuonPluginFunctionPathsForAccess } from "./plugin-inspector.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import {
   attachMuonVitePluginOptions,
@@ -419,12 +420,14 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
           }
         : {}),
     });
+    const pluginFunctionPaths =
+      await collectMuonPluginFunctionPathsForAccess(resolvedPluginAccess);
     capabilityResolver =
       resolvedPluginAccess.mode === "validate"
-        ? createMuonCapabilityModuleResolver(
-            config.root,
-            resolvedPluginAccess.capabilityOptions,
-          )
+        ? createMuonCapabilityModuleResolver(config.root, {
+            ...resolvedPluginAccess.capabilityOptions,
+            functionPaths: pluginFunctionPaths,
+          })
         : undefined;
     loadedCapabilityRuntimePluginConfig = undefined;
   };

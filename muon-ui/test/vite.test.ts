@@ -1310,6 +1310,151 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("dispose");
   });
 
+  it("expands wildcard capability allows into executor virtual module exports", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-vite-capability-wildcard-",
+    );
+    await mkdir(join(root, "src", "native"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["muon.**"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const runtimeConfig = resolver.getRuntimePluginConfig();
+    expect(runtimeConfig.capabilities.map((entry) => entry.allow)).toEqual([
+      ["muon.**"],
+    ]);
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "native", "executor.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    if (typeof moduleSource !== "string") {
+      throw new Error("executor module source was not generated");
+    }
+    expect(moduleSource).toContain("export const spawn = async (options = {})");
+    expect(moduleSource).toContain("export const loadLibrary = async (path)");
+    expect(
+      moduleSource.match(/export const spawn = async \(options = \{\}\)/gu) ??
+        [],
+    ).toHaveLength(1);
+  });
+
+  it("expands external plugin wildcard allows into matching virtual module exports", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-vite-external-capability-wildcard-",
+    );
+    await mkdir(join(root, "src", "native"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      functionPaths: [
+        "foobar.native.run",
+        "foobar.native.stop",
+        "foobar.other.hidden",
+      ],
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["foobar.native.*"],
+          pluginName: "foobar",
+        },
+      ],
+    });
+
+    const runtimeConfig = resolver.getRuntimePluginConfig();
+    expect(runtimeConfig.capabilities.map((entry) => entry.allow)).toEqual([
+      ["foobar.native.*"],
+    ]);
+
+    const resolved = resolver.resolveId(
+      "foobar:native",
+      join(root, "src", "native", "plugin.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    if (typeof moduleSource !== "string") {
+      throw new Error("external plugin module source was not generated");
+    }
+    expect(moduleSource).toContain(
+      "export const run = async (...args) =>\n  await __muonCall",
+    );
+    expect(moduleSource).toContain("foobar.native.run");
+    expect(moduleSource).toContain("foobar.native.stop");
+    expect(moduleSource).not.toContain("foobar.other.hidden");
+  });
+
+  it("deduplicates virtual module exports from exact and wildcard allows", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-vite-capability-deduplicate-",
+    );
+    await mkdir(join(root, "src", "native"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      functionPaths: ["test.namespace.alpha", "test.namespace.beta"],
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["test.namespace.alpha", "test.namespace.*"],
+          pluginName: "test",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "test:namespace",
+      join(root, "src", "native", "plugin.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    if (typeof moduleSource !== "string") {
+      throw new Error("test plugin module source was not generated");
+    }
+    expect(
+      moduleSource.match(/export const alpha = async/gu) ?? [],
+    ).toHaveLength(1);
+    expect(
+      moduleSource.match(/export const beta = async/gu) ?? [],
+    ).toHaveLength(1);
+  });
+
+  it("reports wildcard capability allows that do not resolve to exports", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-vite-capability-empty-wildcard-",
+    );
+    await mkdir(join(root, "src", "native"), { recursive: true });
+
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      functionPaths: ["other.namespace.alpha"],
+      imports: [
+        {
+          sources: ["src/native/**"],
+          allow: ["test.namespace.*"],
+          pluginName: "test",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "test:namespace",
+      join(root, "src", "native", "plugin.ts"),
+    );
+    expect(resolved).toBeDefined();
+    expect(() =>
+      resolved === undefined ? undefined : resolver.load(resolved.id),
+    ).toThrow("muon capability import has no matching function exports");
+  });
+
   it("generates executor loadLibrary virtual module wrappers", async () => {
     const root = await createTemporaryDirectory("muon-vite-adhoc-library-");
     await mkdir(join(root, "src", "native"), { recursive: true });

@@ -62,6 +62,7 @@ import { spawn } from "muon:executor";
   `when` には `editable`, `selection`, `link`, `image`, `canCopy`, `canPaste` のboolean条件を指定出来ます。
   `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
 - `createTray()` はブラウザウインドウ単位でトレイ項目を保持し、main frame navigation、ブラウザ終了、`removeTray()` で削除されます。
+  live中のトレイ項目はブラウザウインドウごとに16個、プロセス全体で64個までです。上限を超える作成要求はネイティブリソースを確保する前に拒否されます。
   `options.id` を省略するとmuonが一意なIDを生成して返します。
   `id` は空文字、制御文字、`muon.` 始まり、`standard.` 始まりを使用出来ません。
   メニュー項目は通常項目、`type: "separator"`、`type: "checkbox"`、`type: "radio"` に対応します。

@@ -167,25 +167,26 @@ TypeScriptを使用してコードを記述する場合は、 `muon:executor` �
 
 ### プラグイン関数プロキシの解放
 
-ネイティブプラグイン関数が関数値を返す場合、JavaScript側では
+ネイティブプラグイン関数が関数オブジェクトを返す場合、JavaScript側では
 `MuonPluginFunctionProxy<TArgs, TResult>` として受け取ります。
 通常のプラグイン関数と同様に、プロキシの呼び出しも常に `Promise` を返します。
 
-プロキシを使い終えたら、同期的で冪等な `release()` を `finally` から呼び出して下さい:
+プロキシを使い終えたら、`release()` を呼び出して下さい:
 
-```ts
-declare const proxy: MuonPluginFunctionProxy<readonly [string], number>;
+```typescript
+// ネイティブプラグイン関数が関数オブジェクトを返した
+const proxy = ...;
 
 try {
   const result = await proxy("value");
   console.log(result);
 } finally {
+  // 不要な関数オブジェクトを解放
   proxy.release();
 }
 ```
 
 プロキシは `Releaseable` を実装しており、`release()` と `[Symbol.dispose]()` は同じ解放処理を行います。
-そのため、explicit resource managementを利用できる環境では `using` 宣言でも解放できます。
 
 `release()` の呼び出し後にプロキシを呼び出すと、rejected `Promise` が返ります。
 また、解放済みのプロキシを別のプラグイン関数の引数として渡すと、引数のvalidation errorになります。
@@ -193,8 +194,9 @@ GCによるfinalizerとV8 contextのcleanupも解放を補助しますが、い�
 決定的な解放の代わりとして依存しないで下さい。
 
 別々のネイティブ戻り値から得たプロキシは、同じネイティブ関数を表していても、
-JavaScript object identityが同一であることを保証しません。
-一方、rendererからプラグインへ通常のJavaScript callbackを引数として渡す場合、
-そのcallbackに `release()` や `[Symbol.dispose]()` は追加されません。
+JavaScriptオブジェクトとして同一であることを保証しません。
+
+一方、rendererからプラグインへ通常のJavaScriptコールバックを引数として渡す場合、
+そのコールバックに `release()` や `[Symbol.dispose]()` は追加されません。
 `MuonAdhocLibrary.getFunction()` が返す関数もこのプロキシとは異なり、
 ライブラリ自体を `MuonAdhocLibrary.release()` で解放します。

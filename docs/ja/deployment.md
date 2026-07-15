@@ -2,7 +2,9 @@
 
 ## 配布用ビルド
 
-実際にmuonアプリを配布する場合、アプリの名称やクレジットなどを追加する必要があります。
+muonアプリの実装がある程度出来上がってくると、これをどのようにユーザーに配布できるか、ということが気になってくるでしょう。
+muonを使っていれば、配布用のファイル群を生成するのも簡単ですが、その前に、アプリの名称やクレジットなどを追加する必要があります。
+
 これらは NPMパッケージの慣例に習って、 `package.json` に記述すれば、それが反映されます。
 例えば:
 
@@ -22,11 +24,12 @@
 ```
 
 のように記述することで、muonアプリの名称・バージョン・説明を反映させることが出来ます。
+
 `files` に通常ファイルを指定すると、条件を満たすものは配布ディレクトリ直下へ追加コピーされます。
 上記の例では `README.md` と `LICENSE` が含まれます。
 `dist` のようにアセット元として解決されたパスは追加コピー対象から除外されます。
 
-muon Viteプラグインを設定した状態で `npm run build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
+準備が出来たら `npm run build` を実行すると、Viteの通常ビルドに続いてmuon配布用ディレクトリも生成されます。
 
 ```bash
 npm run build
@@ -35,7 +38,31 @@ npm run build
 > 注釈: これは `package.json` の `scripts` に定義された `vite build` の別名です。
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
-既定では、muonがサポートする全ターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力されます。
+既定では、muonがサポートする全ターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力されます:
+
+```text
+dist-muon/
+├── linux-amd64/
+│   ├── assets.zip
+│   ├── :
+│   └── vite-project
+├── linux-arm64/
+│   ├── assets.zip
+│   ├── :
+│   └── vite-project
+├── linux-armhf/
+│   ├── assets.zip
+│   ├── :
+│   └── vite-project
+├── windows-amd64/
+│   ├── assets.zip
+│   ├── :
+│   └── vite-project.exe
+└── windows-i686/
+    ├── assets.zip
+    ├── :
+    └── vite-project.exe
+```
 
 ビルドするターゲットや出力先を細かく指定したい場合は、Viteプラグインの引数 `build` で指定出来ます:
 
@@ -90,7 +117,7 @@ npx muon pack
 - muon Viteプラグインが無い場合は `vite build` を実行せず、既に存在するアセットを使用します。
 
 その後、指定した形式ごとに `artifacts/` へ最終配布物を出力します。
-`deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `./.muon/pack/` 配下に生成されます。
+`deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `.muon/pack/` 配下に生成されます。
 
 `muon pack` にオプションを指定しない場合は、すべてのターゲットに対応したファイル群を生成します。
 以下にオプション指定の例を示します:
@@ -124,4 +151,4 @@ npx muon pack --target windows-amd64 --type nsis
 - CLIオプションは、 `muon build` で指定できる `--icon`, `--windows-icon`, `--linux-desktop-id` などと同様に指定可能です。
   `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書き出来ます。
 - `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
-  例えば [screw-up 1.35.0](https://github.com/kekyo/screw-up/) 以降でGit由来のバージョンを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。
+  例えば [screw-up](https://github.com/kekyo/screw-up/) 以降でGit由来のバージョンを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。

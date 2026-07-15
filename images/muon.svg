@@ -11,8 +11,23 @@
    id="svg27680"
    width="512"
    height="512"
+   sodipodi:docname="muon.svg"
+   inkscape:export-filename="muon-256.svg"
+   inkscape:export-xdpi="192"
+   inkscape:export-ydpi="192"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
-   xmlns:svg="http://www.w3.org/2000/svg"><defs
+   xmlns:svg="http://www.w3.org/2000/svg"><sodipodi:namedview
+   id="namedview20"
+   pagecolor="#ffffff"
+   bordercolor="#000000"
+   borderopacity="0.25"
+   inkscape:showpageshadow="2"
+   inkscape:pageopacity="0.0"
+   inkscape:pagecheckerboard="0"
+   inkscape:deskcolor="#d1d1d1"
+   showgrid="false" /><defs
    id="defs27684" />
 
 
@@ -84,21 +99,5 @@
    r="8.467"
    id="circle27665-6"
    style="fill:#cecdff;fill-opacity:1" />
-</g><g
-   id="Layer_10"
-   transform="matrix(0.16325633,1.1329204,1.1329204,-0.16325633,-33.040556,13.236716)">
-	<path
-   fill="#8280d8"
-   d="m 65.01,117.532 c 0,-2.349 -0.541,-4.567 -1.481,-6.56 -4.183,6.999 -7.985,14.253 -11.359,21.742 7.285,-1.227 12.84,-7.548 12.84,-15.182 z"
-   id="path27674"
-   style="fill:#5da2f8" />
-</g><g
-   id="Layer_11"
-   transform="matrix(0.16325633,1.1329204,1.1329204,-0.16325633,-33.040556,13.236716)">
-	<path
-   fill="#9180d6"
-   d="m 404.772,363.442 c -4.86,-8.299 -13.863,-13.877 -24.175,-13.877 -15.465,0 -28.002,12.537 -28.002,28.002 0,8.702 3.97,16.477 10.197,21.613 15.499,-10.074 29.612,-22.098 41.98,-35.738 z"
-   id="path27677"
-   style="fill:#5d81f6" />
 </g>
 </svg>

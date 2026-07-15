@@ -23,6 +23,7 @@
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
 #include "include/cef_drag_handler.h"
+#include "include/cef_frame_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_urlrequest.h"
 #include "include/views/cef_browser_view.h"
@@ -32,6 +33,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,7 @@ class MuonClient final : public CefClient,
                           public CefKeyboardHandler,
                           public CefDialogHandler,
                           public CefDragHandler,
+                          public CefFrameHandler,
                           public CefRequestHandler,
                           public MuonWindowCloseHandler {
  public:
@@ -119,6 +122,11 @@ class MuonClient final : public CefClient,
    * Returns this object as the drag event handler.
    */
   CefRefPtr<CefDragHandler> GetDragHandler() override;
+
+  /**
+   * Returns this object as the frame lifetime handler.
+   */
+  CefRefPtr<CefFrameHandler> GetFrameHandler() override;
 
   /**
    * Returns this object as the request handler.
@@ -221,6 +229,15 @@ class MuonClient final : public CefClient,
                                  TerminationStatus status,
                                  int error_code,
                                  const CefString& error_string) override;
+
+  /**
+   * Releases browser-side function wrapper state owned by a destroyed frame.
+   *
+   * @param browser Browser that owns the frame.
+   * @param frame Frame being destroyed.
+   */
+  void OnFrameDestroyed(CefRefPtr<CefBrowser> browser,
+                        CefRefPtr<CefFrame> frame) override;
 
   /**
    * Restores the initial title bar icon when the main-frame address changes.
@@ -396,12 +413,31 @@ class MuonClient final : public CefClient,
                                         CefRefPtr<CefWindow> window) override;
 
   /**
+   * Defers closing the owner window until a non-modal filesystem dialog finishes.
+   *
+   * @param browser Browser that started the keep-alive dialog.
+   * @param window Window whose close request should be retried later.
+   * @return true when the close request was deferred.
+   */
+  bool RequestCloseAfterKeepAliveFsDialog(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefWindow> window) override;
+
+  /**
    * Returns whether the browser owns a pending filesystem dialog call.
    *
    * @param browser_id Browser identifier to query.
    * @return true when at least one filesystem dialog is still pending.
    */
   bool HasPendingFsDialogCallForBrowser(int browser_id) const override;
+
+  /**
+   * Returns whether the browser has a pending keep-alive filesystem dialog call.
+   *
+   * @param browser_id Browser identifier to query.
+   * @return true when at least one non-modal filesystem dialog is still pending.
+   */
+  bool HasPendingKeepAliveFsDialogCallForBrowser(int browser_id) const override;
 
  private:
   struct PendingSharedPayload {
@@ -513,9 +549,19 @@ class MuonClient final : public CefClient,
                                          std::string* error_message) const;
   void UpdateFollowingTrayIconForBrowser(int browser_id,
                                          const MuonTitleBarIcon* icon);
-  void BeginPendingFsDialogCall(int browser_id);
-  void EndPendingFsDialogCall(int browser_id);
+  enum class PendingFsDialogPolicy {
+    KeepAliveOnly,
+    CancelOnOwnerClose,
+  };
+
+  void BeginPendingFsDialogCall(int browser_id, PendingFsDialogPolicy policy);
+  void EndPendingFsDialogCall(int browser_id, PendingFsDialogPolicy policy);
   void ReleaseFunctionBrowserState(int browser_id);
+  void ReleaseFunctionBrowserStateNow(int browser_id);
+  void ReleaseFunctionFrameState(int browser_id, const std::string& frame_id);
+  void ReleaseFunctionFrameStateNow(int browser_id,
+                                    const std::string& frame_id);
+  void FlushDeferredFunctionReleasesForBrowser(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
   void QuitMessageLoopWhenIdle();
   bool PrepareShutdown(int32_t exit_code,
@@ -551,6 +597,9 @@ class MuonClient final : public CefClient,
                                  std::string* error_message) const;
   void RejectPluginCall(const PendingPluginCall& call,
                         const std::string& error_message);
+  bool IsPluginResultTargetAvailable(
+      const MuonPluginInvocationContext& context,
+      CefRefPtr<CefFrame> frame) const;
   void SendPluginResult(const MuonPluginInvocationContext& context,
                         CefRefPtr<CefFrame> frame,
                         int call_id,
@@ -576,7 +625,12 @@ class MuonClient final : public CefClient,
   std::map<int, CefRefPtr<CefBrowser>> browsers_by_id_;
   int pending_fs_dialog_calls_ = 0;
   std::map<int, int> pending_fs_dialog_calls_by_browser_;
+  std::map<int, int> pending_keep_alive_fs_dialog_calls_by_browser_;
+  std::set<int> deferred_function_browser_releases_;
+  std::map<int, std::set<std::string>> deferred_function_frame_releases_;
   std::map<int, CefRefPtr<CefWindow>> close_windows_after_pending_fs_dialogs_;
+  std::map<int, CefRefPtr<CefWindow>>
+      close_windows_after_keep_alive_fs_dialogs_;
   bool quit_message_loop_after_pending_fs_dialogs_ = false;
   int quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
   bool message_loop_quit_requested_ = false;

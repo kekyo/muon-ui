@@ -97,6 +97,58 @@ const resolveOrUndefined = async <T>(
   }
 };
 
+type TimedOperationResult<T> =
+  | {
+      status: "completed";
+      value: T;
+    }
+  | {
+      error: unknown;
+      status: "failed";
+    };
+
+const runTimedOperation = async <T>(
+  operation: () => Promise<T>,
+): Promise<TimedOperationResult<T>> => {
+  try {
+    return {
+      status: "completed",
+      value: await operation(),
+    };
+  } catch (error) {
+    return {
+      error,
+      status: "failed",
+    };
+  }
+};
+
+const waitForTimeout = async (
+  timeoutMs: number,
+): Promise<{ status: "timeout" }> => {
+  await delay(timeoutMs);
+  return { status: "timeout" };
+};
+
+const runOperationWithTimeout = async <T>(
+  label: string,
+  timeoutMs: number,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const result = await Promise.race([
+    runTimedOperation(operation),
+    waitForTimeout(timeoutMs),
+  ]);
+
+  if (result.status === "timeout") {
+    throw new Error(`${label} timed out after ${String(timeoutMs)}ms`);
+  }
+  if (result.status === "failed") {
+    throw result.error;
+  }
+  return result.value;
+};
+
 const usesWindowsPath = (paths: readonly string[]): boolean =>
   paths.some((path) => isWindowsAbsolutePath(path));
 
@@ -323,6 +375,24 @@ const closeActiveCdpDrivers = (): void => {
     }
   }
   activeCdpDrivers.clear();
+};
+
+const closeBrowserForCleanup = async (driver: CdpDriver): Promise<void> => {
+  const closeRequest = runTimedOperation(async () => {
+    await driver.send("Browser.close", undefined);
+  });
+  const result = await Promise.race([
+    closeRequest,
+    waitForTimeout(isWindowsRemoteAtLoad ? 5000 : 1000),
+  ]);
+
+  if (result.status === "timeout") {
+    driver.close();
+    await Promise.race([closeRequest, waitForTimeout(1000)]);
+    return;
+  }
+
+  driver.close();
 };
 
 const isMuonTitleBarUrl = (url: string): boolean =>
@@ -660,6 +730,8 @@ export const processExitTimeoutMs = shouldUseValgrind
   : isWindowsRemoteAtLoad
     ? 30000
     : 5000;
+const windowsRemoteAgentOperationTimeoutMs = 30000;
+const windowsRemoteProcessOperationTimeoutMs = 10000;
 export const runningProcesses: RunningMuon[] = [];
 let sharedLocalStateDirectory: string | undefined = undefined;
 export const execFileAsync = promisify(execFile);
@@ -2551,7 +2623,11 @@ const isWindowsProcessPathInside = (
 
 export const cleanupWindowsRemoteTestProcesses = async (): Promise<void> => {
   const context = requireWindowsRemoteContext();
-  const processes = await context.agent.processes.list();
+  const processes = await runOperationWithTimeout(
+    "Windows remote process list",
+    windowsRemoteAgentOperationTimeoutMs,
+    async () => await context.agent.processes.list(),
+  );
   const relayPath = normalizeWindowsProcessPath(
     context.runtime.relayExecutablePath,
   );
@@ -2573,11 +2649,23 @@ export const cleanupWindowsRemoteTestProcesses = async (): Promise<void> => {
       continue;
     }
     try {
-      await context.agent.processes.kill(processInfo.id);
-      await context.agent.processes.waitForExit(processInfo.id, {
-        intervalMs: 100,
-        timeoutMs: 3000,
-      });
+      await runOperationWithTimeout(
+        "Windows remote stale process kill",
+        windowsRemoteProcessOperationTimeoutMs,
+        async () => {
+          await context.agent.processes.kill(processInfo.id);
+        },
+      );
+      await runOperationWithTimeout(
+        "Windows remote stale process wait",
+        windowsRemoteProcessOperationTimeoutMs,
+        async () => {
+          await context.agent.processes.waitForExit(processInfo.id, {
+            intervalMs: 100,
+            timeoutMs: 3000,
+          });
+        },
+      );
     } catch {
       // The stale test process may have exited between list and kill.
     }
@@ -2590,26 +2678,60 @@ const startWindowsRemoteCdpRelay = async (
   cdpPort: number,
 ): Promise<RunningWindowsRemoteCdpRelay> => {
   const context = requireWindowsRemoteContext();
-  const processInfo = await context.agent.processes.launchManaged({
-    arguments: [String(cdpPort), String(MUON_PORT)],
-    captureStderr: true,
-    captureStdout: true,
-    createNoWindow: true,
-    path: context.runtime.relayExecutablePath,
-    workingDirectory: join(context.runtime.relayExecutablePath, ".."),
-  });
+  const processInfo = await runOperationWithTimeout(
+    "Windows CDP relay launch",
+    windowsRemoteAgentOperationTimeoutMs,
+    async () =>
+      await context.agent.processes.launchManaged({
+        arguments: [String(cdpPort), String(MUON_PORT)],
+        captureStderr: true,
+        captureStdout: true,
+        createNoWindow: true,
+        path: context.runtime.relayExecutablePath,
+        workingDirectory: join(context.runtime.relayExecutablePath, ".."),
+      }),
+  );
   try {
     await delay(250);
-    const snapshot = await processInfo.rootSnapshot();
+    const snapshot = await runOperationWithTimeout(
+      "Windows CDP relay snapshot",
+      windowsRemoteProcessOperationTimeoutMs,
+      async () => await processInfo.rootSnapshot(),
+    );
     if (!snapshot.running) {
-      const stderr = await processInfo.stderrText();
+      const stderr = await runOperationWithTimeout(
+        "Windows CDP relay stderr",
+        windowsRemoteProcessOperationTimeoutMs,
+        async () => await processInfo.stderrText(),
+      );
       throw new Error(
         `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
       );
     }
     return { cdpPort, process: processInfo };
   } catch (error) {
-    await processInfo.releaseAsync();
+    try {
+      await runOperationWithTimeout(
+        "Windows CDP relay kill after launch failure",
+        windowsRemoteProcessOperationTimeoutMs,
+        async () => {
+          await processInfo.kill();
+        },
+      );
+    } catch {
+      // The relay may already be closed.
+    }
+    try {
+      await runOperationWithTimeout(
+        "Windows CDP relay release after launch failure",
+        windowsRemoteProcessOperationTimeoutMs,
+        async () => {
+          await processInfo.releaseAsync();
+        },
+      );
+    } catch {
+      // Releasing is a remote agent bookkeeping step only.
+    }
     throw error;
   }
 };
@@ -2644,51 +2766,98 @@ const startWindowsRemoteMuon = async (
     configDirectory,
     `.profile-${String(runId).padStart(4, "0")}`,
   );
-  await cleanupWindowsRemoteTestProcesses();
-  await rm(configDirectory, { recursive: true, force: true });
+  await runOperationWithTimeout(
+    "Windows remote stale process cleanup",
+    windowsRemoteAgentOperationTimeoutMs,
+    async () => {
+      await cleanupWindowsRemoteTestProcesses();
+    },
+  );
+  await runOperationWithTimeout(
+    "Windows remote config directory cleanup",
+    windowsRemoteAgentOperationTimeoutMs,
+    async () => {
+      await rm(configDirectory, { recursive: true, force: true });
+    },
+  );
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
-  const configPath = await writeMuonConfig(
-    configDirectory,
-    options.networkAllowPatterns,
-    pluginPath,
-    pluginConfig,
-    options.browserConfig,
-    options.browserPluginAllowPatterns,
-    options.waitForDebugPort,
-    options.networkAuthorizedOrigins,
-    options.browserAllowUnsafeJavaScriptParentAccess,
-    options.browserInitialWindowState,
-    options.assetSourcePath,
-    options.assetSignature,
-    options.assetSalt,
-    options.browserBackgroundColor,
-    options.browserInitialTitleBarVisibility,
-    options.browserInitialTitleBarIcon,
-    options.browserTitleBarType,
-    options.logConfig,
-    profilePath,
+  const configPath = await runOperationWithTimeout(
+    "Windows remote config write",
+    windowsRemoteAgentOperationTimeoutMs,
+    async () =>
+      await writeMuonConfig(
+        configDirectory,
+        options.networkAllowPatterns,
+        pluginPath,
+        pluginConfig,
+        options.browserConfig,
+        options.browserPluginAllowPatterns,
+        options.waitForDebugPort,
+        options.networkAuthorizedOrigins,
+        options.browserAllowUnsafeJavaScriptParentAccess,
+        options.browserInitialWindowState,
+        options.assetSourcePath,
+        options.assetSignature,
+        options.assetSalt,
+        options.browserBackgroundColor,
+        options.browserInitialTitleBarVisibility,
+        options.browserInitialTitleBarIcon,
+        options.browserTitleBarType,
+        options.logConfig,
+        profilePath,
+      ),
   );
   const cdpPort = allocateWindowsRemoteCdpPort();
-  const relay = await startWindowsRemoteCdpRelay(
-    configDirectory,
-    runId,
-    cdpPort,
-  );
-  const launched = await (async (): Promise<RemoteManagedProcess> => {
-    try {
-      return await context.agent.processes.launchManaged({
-        arguments: ["-c", configPath],
-        captureStderr: true,
-        captureStdout: true,
-        environment: createWindowsRemoteEnvironment(options.environment),
-        path: executable,
-        workingDirectory: directory,
-      });
-    } catch (error) {
-      await relay.process.releaseAsync();
-      throw error;
+  let relay: RunningWindowsRemoteCdpRelay | undefined = undefined;
+  let launched: RemoteManagedProcess;
+  try {
+    relay = await runOperationWithTimeout(
+      "Windows CDP relay start",
+      windowsRemoteAgentOperationTimeoutMs,
+      async () =>
+        await startWindowsRemoteCdpRelay(configDirectory, runId, cdpPort),
+    );
+    launched = await runOperationWithTimeout(
+      "Windows remote muon launch",
+      windowsRemoteAgentOperationTimeoutMs,
+      async () =>
+        await context.agent.processes.launchManaged({
+          arguments: ["-c", configPath],
+          captureStderr: true,
+          captureStdout: true,
+          environment: createWindowsRemoteEnvironment(options.environment),
+          path: executable,
+          workingDirectory: directory,
+        }),
+    );
+  } catch (error) {
+    if (relay !== undefined) {
+      const failedRelay = relay;
+      try {
+        await runOperationWithTimeout(
+          "Windows CDP relay kill after muon launch failure",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await failedRelay.process.kill();
+          },
+        );
+      } catch {
+        // The relay may already be closed.
+      }
+      try {
+        await runOperationWithTimeout(
+          "Windows CDP relay release after muon launch failure",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await failedRelay.process.releaseAsync();
+          },
+        );
+      } catch {
+        // Releasing is a remote agent bookkeeping step only.
+      }
     }
-  })();
+    throw error;
+  }
   const running: RunningMuon = {
     pluginDirectory: configDirectory,
     process: createWindowsRemoteProcessHandle(launched.id, launched.name),
@@ -2713,7 +2882,17 @@ const startWindowsRemoteMuon = async (
     try {
       await waitForCdp(cdpTimeoutMs);
     } catch (error) {
-      await refreshWindowsRemoteStderr(running);
+      try {
+        await runOperationWithTimeout(
+          "Windows remote startup stderr refresh",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await refreshWindowsRemoteStderr(running);
+          },
+        );
+      } catch {
+        // Preserve the original startup error.
+      }
       try {
         await stopMuon(running, undefined);
       } catch (stopError) {
@@ -3613,25 +3792,28 @@ export const stopMuon = async (
   }
 
   if (driver !== undefined) {
-    try {
-      await driver.send("Browser.close", undefined);
-    } catch {
-      // The process may already be exiting.
-    }
-    driver.close();
+    await closeBrowserForCleanup(driver);
   }
 
   if (running.remoteWindows !== undefined) {
     const remote = running.remoteWindows;
     let exited = false;
+    let cleanupError: unknown = undefined;
     if (driver !== undefined) {
       exited = await waitForProcessExitOrTimeout(running, processExitTimeoutMs);
     }
 
     if (!exited && running.process.exitCode === null) {
       try {
-        await remote.muonProcess.kill();
-      } catch {
+        await runOperationWithTimeout(
+          "Windows remote muon kill",
+          10000,
+          async () => {
+            await remote.muonProcess.kill();
+          },
+        );
+      } catch (error) {
+        cleanupError ??= error;
         // The process may already be closed.
       }
     }
@@ -3640,26 +3822,45 @@ export const stopMuon = async (
       await waitForProcessExitOrTimeout(running, 3000);
     }
     try {
-      await remote.relayProcess.kill();
+      await runOperationWithTimeout(
+        "Windows remote relay kill",
+        10000,
+        async () => {
+          await remote.relayProcess.kill();
+        },
+      );
     } catch {
       // The relay may already be closed.
     }
-    let cleanupError: unknown = undefined;
     try {
-      await refreshWindowsRemoteStderr(running);
-      await saveWindowsRemoteMuonArtifacts(running);
-      await rm(remote.configDirectory, {
-        recursive: true,
-        force: true,
-      });
+      await runOperationWithTimeout(
+        "Windows remote stderr refresh",
+        10000,
+        async () => {
+          await refreshWindowsRemoteStderr(running);
+        },
+      );
+      await runOperationWithTimeout(
+        "Windows remote artifact save",
+        30000,
+        async () => {
+          await saveWindowsRemoteMuonArtifacts(running);
+        },
+      );
     } catch (error) {
       cleanupError = error;
     } finally {
       for (const processInfo of [remote.muonProcess, remote.relayProcess]) {
         try {
-          await processInfo.releaseAsync();
-        } catch (error) {
-          cleanupError ??= error;
+          await runOperationWithTimeout(
+            "Windows remote managed process release",
+            5000,
+            async () => {
+              await processInfo.releaseAsync();
+            },
+          );
+        } catch {
+          // Releasing the managed process is a remote agent cleanup step only.
         }
       }
     }
@@ -4032,6 +4233,7 @@ export const runBuiltinFsAdditionalOperations = async (
       missingForced: boolean;
     };
     watch: { filenames: string[]; afterCloseCount: number };
+    watchLimit: { accepted: number; rejectedMessage: string };
     invalid: {
       missingStat: string;
       badOptions: string;
@@ -4261,6 +4463,43 @@ export const runBuiltinFsAdditionalOperations = async (
   })()`,
   );
 
+  const watchLimit = await evaluateStep<
+    AdditionalOperationValues["watchLimit"]
+  >(
+    "additional watch limit",
+    `(async () => {
+    const rootPath = ${JSON.stringify(rootPath)};
+    const watchPath = rootPath + "/watch-limit";
+    await window.muon.fs.mkdir(watchPath);
+    const watchers = [];
+    const rejection = async (operation) => {
+      try {
+        await operation();
+        return "";
+      } catch (error) {
+        return String(error && error.message ? error.message : error);
+      }
+    };
+    try {
+      for (let index = 0; index < 16; index += 1) {
+        watchers.push(await window.muon.fs.watch(watchPath, () => undefined));
+      }
+      const rejectedMessage = await rejection(async () => {
+        watchers.push(await window.muon.fs.watch(watchPath, () => undefined));
+      });
+      return {
+        accepted: watchers.length,
+        rejectedMessage,
+      };
+    } finally {
+      for (const watcher of watchers.reverse()) {
+        await watcher.close();
+      }
+      await window.muon.fs.rmdir(watchPath);
+    }
+  })()`,
+  );
+
   const removed = await evaluateStep<AdditionalOperationValues["removed"]>(
     "additional cleanup",
     `(async () => {
@@ -4333,6 +4572,7 @@ export const runBuiltinFsAdditionalOperations = async (
     removed,
     symlink,
     watch,
+    watchLimit,
   };
 
   expect(values.stat).toMatchObject({
@@ -4383,6 +4623,10 @@ export const runBuiltinFsAdditionalOperations = async (
   });
   expect(values.watch.filenames).toContain("watched.txt");
   expect(values.watch.afterCloseCount).toBe(values.watch.filenames.length);
+  expect(values.watchLimit).toEqual({
+    accepted: 16,
+    rejectedMessage: "Filesystem watcher limit exceeded",
+  });
   expect(values.invalid.missingStat).not.toBe("");
   expect(values.invalid.badOptions).toContain("options.position");
   expect(values.invalid.unlinkDirectory).not.toBe("");

@@ -280,6 +280,28 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
         close_handler_ != nullptr &&
         close_handler_->HasPendingFsDialogCallForBrowser(
             browser->GetIdentifier());
+    const auto has_pending_keep_alive_fs_dialog =
+        close_handler_ != nullptr &&
+        close_handler_->HasPendingKeepAliveFsDialogCallForBrowser(
+            browser->GetIdentifier());
+    if (has_pending_keep_alive_fs_dialog) {
+      const auto deferred =
+          close_handler_->RequestCloseAfterKeepAliveFsDialog(browser, window);
+      std::ostringstream log;
+      log << "WindowDelegate CanClose defer keep_alive_fs_dialog this="
+          << FormatMuonCloseDebugPointer(this)
+          << " window=" << FormatMuonCloseDebugPointer(window.get())
+          << " browser=" << FormatMuonCloseDebugPointer(browser.get())
+          << " host=" << FormatMuonCloseDebugPointer(host.get())
+          << " browser_id=" << browser->GetIdentifier()
+          << " valid=" << FormatMuonCloseDebugBool(valid)
+          << " ready_before_try="
+          << FormatMuonCloseDebugBool(ready_to_be_closed)
+          << " deferred=" << FormatMuonCloseDebugBool(deferred)
+          << " return=false";
+      AppendMuonCloseDebugLog(log.str());
+      return false;
+    }
     const auto result = host && host->TryCloseBrowser();
     const auto pending_fs_dialog_close_requested =
         !result && has_pending_fs_dialog &&
@@ -297,6 +319,8 @@ bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
         << " try_close_result=" << FormatMuonCloseDebugBool(result)
         << " pending_fs_dialog="
         << FormatMuonCloseDebugBool(has_pending_fs_dialog)
+        << " pending_keep_alive_fs_dialog="
+        << FormatMuonCloseDebugBool(has_pending_keep_alive_fs_dialog)
         << " pending_fs_dialog_close_requested="
         << FormatMuonCloseDebugBool(pending_fs_dialog_close_requested)
         << " return=" << FormatMuonCloseDebugBool(result);

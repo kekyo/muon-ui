@@ -17,10 +17,12 @@
 #include "plugins/muon_function_wrapper_lifecycle.h"
 #include "plugins/muon_js_bridge.h"
 #include "config/muon_paths.h"
+#include "log/muon_close_debug_log.h"
 #include "log/muon_log.h"
 #include "plugins/muon_shared_buffer.h"
 
 #include "include/cef_command_line.h"
+#include "include/cef_browser.h"
 #include "include/cef_shared_process_message_builder.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
@@ -103,6 +105,7 @@ struct MuonFunctionProxy {
 
 struct MuonFunctionOwner {
   int browser_id = 0;
+  std::string frame_id;
   int renderer_context_id = 0;
 };
 
@@ -1483,11 +1486,41 @@ static bool CreateMuonTrafficFunctionRef(
   return true;
 }
 
+static bool IsMuonRendererInvocationFrameAvailable(
+    const MuonPluginInvocationContext& context) {
+  if (!context.frame || !context.frame->IsValid()) {
+    return false;
+  }
+  const auto browser = context.frame->GetBrowser();
+  if (!browser || !browser->IsValid() ||
+      browser->GetIdentifier() != context.browser_id) {
+    std::string log =
+        "MuonPluginRuntime skip renderer message reason=detached_frame"
+        " browser_id=" +
+        std::to_string(context.browser_id);
+    AppendMuonCloseDebugLog(log);
+    return false;
+  }
+  if (context.frame_id.empty()) {
+    return true;
+  }
+  const auto current_frame = browser->GetFrameByIdentifier(context.frame_id);
+  if (!current_frame || !current_frame->IsValid()) {
+    std::string log =
+        "MuonPluginRuntime skip renderer message reason=frame_unavailable"
+        " browser_id=" +
+        std::to_string(context.browser_id) + " frame_id=" + context.frame_id;
+    AppendMuonCloseDebugLog(log);
+    return false;
+  }
+  return true;
+}
+
 static void SendMuonRendererFunctionSourceLeaseMessage(
     const MuonRendererFunctionSource& source,
     const char* message_name) {
   if (!source.context_valid || !source.renderer_lease_active ||
-      !source.context.frame || !source.context.frame->IsValid()) {
+      !IsMuonRendererInvocationFrameAvailable(source.context)) {
     return;
   }
   const auto message = CefProcessMessage::Create(message_name);
@@ -2004,8 +2037,8 @@ static void CompleteMuonPendingRendererFunctionCall(
     return;
   }
   auto* source = pending_call->source;
-  if (source != nullptr && source->context_valid && source->context.frame &&
-      source->context.frame->IsValid()) {
+  if (source != nullptr && source->context_valid &&
+      IsMuonRendererInvocationFrameAvailable(source->context)) {
     const auto message =
         CefProcessMessage::Create(kMuonRendererFunctionResultConsumedMessageName);
     const auto args = message->GetArgumentList();
@@ -2171,6 +2204,7 @@ static void InvokeMuonRendererFunctionClosure(
     return;
   }
 
+  const auto expects_result = completion != nullptr;
   if (source->impl->next_renderer_call_id == 0 ||
       source->impl->next_renderer_call_id >
           static_cast<uint32_t>(std::numeric_limits<int>::max())) {
@@ -2218,7 +2252,8 @@ static void InvokeMuonRendererFunctionClosure(
 
   const auto task_posted = CefPostTask(
       TID_UI, new MuonFunctionTask([impl = source->impl, call_id,
-                                     encoded_values, shared_message]() {
+                                     encoded_values, shared_message,
+                                     expects_result]() {
     auto pending_iterator =
         impl->pending_renderer_function_calls.find(call_id);
     if (pending_iterator == impl->pending_renderer_function_calls.end()) {
@@ -2226,7 +2261,7 @@ static void InvokeMuonRendererFunctionClosure(
     }
     auto* source = pending_iterator->second.source;
     if (source == nullptr || !source->context_valid ||
-        !source->context.frame || !source->context.frame->IsValid()) {
+        !IsMuonRendererInvocationFrameAvailable(source->context)) {
       MuonPendingRendererFunctionCall pending_call;
       pending_call = std::move(pending_iterator->second);
       impl->pending_renderer_function_calls.erase(pending_iterator);
@@ -2260,19 +2295,23 @@ static void InvokeMuonRendererFunctionClosure(
       }
     }
 
-    message_args->SetSize(5);
+    message_args->SetSize(6);
     message_args->SetInt(0, static_cast<int>(call_id));
     message_args->SetInt(1, source->renderer_context_id);
     message_args->SetInt(2, source->function_id);
     message_args->SetList(3, encoded_args);
     message_args->SetDictionary(4, CreateMuonTypeMetadataDictionary(
                                        source->function_type));
+    message_args->SetBool(5, expects_result);
     if (shared_message.message) {
       source->context.frame->SendProcessMessage(
           PID_RENDERER, shared_message.message);
     }
     source->context.frame->SendProcessMessage(PID_RENDERER, message);
     pending_iterator->second.proxy_transfers.Commit();
+    if (!expects_result) {
+      impl->pending_renderer_function_calls.erase(pending_iterator);
+    }
   }));
   if (!task_posted) {
     MuonPendingRendererFunctionCall failed_call;
@@ -2378,6 +2417,7 @@ static bool GetOrCreateMuonRendererFunction(
   const auto owner_id = CreateMuonFunctionOwnerId(context, renderer_context_id);
   impl->active_function_owners[owner_id] = {
       context.browser_id,
+      context.frame_id,
       renderer_context_id,
   };
   const auto source_id =
@@ -3391,6 +3431,7 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
   impl_->active_function_owners[CreateMuonFunctionOwnerId(
       context, context.renderer_context_id)] = {
       context.browser_id,
+      context.frame_id,
       context.renderer_context_id,
   };
   MuonDecodedArguments decoded_args;
@@ -3864,6 +3905,7 @@ static void ReleaseMuonFunctionOwner(MuonPluginRuntimeImpl* impl,
     return;
   }
   ReleaseMuonBuiltinExecutorContext(renderer_context_id);
+  ReleaseMuonBuiltinFsContext(renderer_context_id);
   impl->active_function_owners.erase(owner_id);
   std::vector<MuonRendererFunctionSource*> sources;
   const auto owner_iterator =
@@ -3931,6 +3973,25 @@ void MuonPluginRuntime::ReleaseFunctionContext(
   ReleaseMuonFunctionOwner(
       impl_.get(), CreateMuonFunctionOwnerId(context, renderer_context_id),
       renderer_context_id);
+}
+
+void MuonPluginRuntime::ReleaseFunctionFrame(int browser_id,
+                                             const std::string& frame_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0 || frame_id.empty()) {
+    return;
+  }
+  auto owners = std::vector<std::pair<std::string, int>>{};
+  for (const auto& owner_entry : impl_->active_function_owners) {
+    if (owner_entry.second.browser_id == browser_id &&
+        owner_entry.second.frame_id == frame_id) {
+      owners.emplace_back(owner_entry.first,
+                          owner_entry.second.renderer_context_id);
+    }
+  }
+  for (const auto& owner : owners) {
+    ReleaseMuonFunctionOwner(impl_.get(), owner.first, owner.second);
+  }
 }
 
 void MuonPluginRuntime::ReleaseFunctionBrowser(int browser_id) {

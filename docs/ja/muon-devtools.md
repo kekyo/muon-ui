@@ -41,7 +41,7 @@ CDP (Chrome DevTools Protocol)というリモートデバック機能を使用�
 muonは自力でDevToolsを表示できるので、わざわざCDPを使ってリモートDevToolsを表示させる必要性は薄いのですが、
 CDPが使用できると他のデバッガも使用できるようになります。
 
-例えば、vscodeの構成ファイルである `.vscode/launch.json` に以下の定義を加えることで、デバッグセッションを開始出来ます:
+例えば、vscodeの構成ファイルである `.vscode/launch.json` に以下の定義を加えることで、vscodeでデバッグセッションを開始出来ます:
 
 ```json
 {

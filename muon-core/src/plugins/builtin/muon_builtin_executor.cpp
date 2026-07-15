@@ -2204,6 +2204,12 @@ static void CloseFd(int* fd) {
   }
 }
 
+static int TakeFd(int* fd) {
+  const auto taken = *fd;
+  *fd = -1;
+  return taken;
+}
+
 static std::vector<std::string> SplitPathList(const std::string& path) {
   std::vector<std::string> entries;
   auto begin = size_t{0};
@@ -2262,11 +2268,8 @@ static std::map<std::string, std::string> CreateMergedEnvironment(
 }
 
 static void WakePlatformProcess(const std::shared_ptr<ExecutorProcess>& process) {
-  int fd = -1;
-  {
-    std::lock_guard<std::mutex> lock(process->mutex);
-    fd = process->wake_write_fd;
-  }
+  std::lock_guard<std::mutex> lock(process->mutex);
+  const auto fd = process->wake_write_fd;
   if (fd < 0) {
     return;
   }
@@ -2432,10 +2435,17 @@ static void RunPosixWaitThread(std::shared_ptr<ExecutorProcess> process) {
 }
 
 static void RunPosixProcessThread(std::shared_ptr<ExecutorProcess> process) {
-  auto stdin_fd = process->stdin_fd;
-  auto stdout_fd = process->stdout_fd;
-  auto stderr_fd = process->stderr_fd;
-  auto wake_read_fd = process->wake_read_fd;
+  int stdin_fd = -1;
+  int stdout_fd = -1;
+  int stderr_fd = -1;
+  int wake_read_fd = -1;
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    stdin_fd = TakeFd(&process->stdin_fd);
+    stdout_fd = TakeFd(&process->stdout_fd);
+    stderr_fd = TakeFd(&process->stderr_fd);
+    wake_read_fd = TakeFd(&process->wake_read_fd);
+  }
   auto stdin_open = stdin_fd >= 0;
   auto stdout_open = stdout_fd >= 0;
   auto stderr_open = stderr_fd >= 0;
@@ -2589,10 +2599,6 @@ static void RunPosixProcessThread(std::shared_ptr<ExecutorProcess> process) {
   CloseFd(&wake_read_fd);
   {
     std::lock_guard<std::mutex> lock(process->mutex);
-    CloseFd(&process->stdin_fd);
-    CloseFd(&process->stdout_fd);
-    CloseFd(&process->stderr_fd);
-    CloseFd(&process->wake_read_fd);
     CloseFd(&process->wake_write_fd);
     process->stdin_closed = true;
   }

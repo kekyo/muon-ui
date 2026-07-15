@@ -6,7 +6,10 @@
 
 #include "plugins/muon_traffic_cardio_operation.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -39,6 +42,13 @@ struct MoveOnlyResult {
   }
 
   int value = 0;
+};
+
+struct StartNewHeartbeatProbe {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool worker_started = false;
+  bool release_worker = false;
 };
 
 static bool Expect(bool condition, const std::string& message) {
@@ -136,6 +146,81 @@ static cardio::promise<void> ResolveCompletionGateAfterProbe(
   *operation_ready_before_completion = operation->is_ready();
   completion_gate->resolve();
   co_await cardio::promises::delay(1);
+  group->shutdown();
+}
+
+static cardio::promise<void> ObserveStartNewContinuationDispatcherAsync(
+    cardio::dispatcher* expected_dispatcher,
+    bool* worker_has_dispatcher,
+    bool* worker_uses_independent_dispatcher,
+    bool* continuation_on_expected_dispatcher,
+    cardio::dispatcher_group* group) {
+  const auto worker_result = co_await cardio::promises::start_new(
+      [expected_dispatcher] {
+        auto* worker_dispatcher = cardio::unsafe_get_current_dispatcher();
+        return std::pair<bool, bool>{
+            worker_dispatcher != nullptr,
+            worker_dispatcher != expected_dispatcher};
+      });
+  *worker_has_dispatcher = worker_result.first;
+  *worker_uses_independent_dispatcher = worker_result.second;
+  *continuation_on_expected_dispatcher =
+      cardio::unsafe_get_current_dispatcher() == expected_dispatcher;
+  group->shutdown();
+}
+
+static cardio::promise<void> ReleaseStartNewHeartbeatProbeAfterDelay(
+    StartNewHeartbeatProbe* probe,
+    cardio::dispatcher_group* group) {
+  co_await cardio::promises::delay(5000);
+  {
+    auto lock = std::lock_guard<std::mutex>(probe->mutex);
+    probe->release_worker = true;
+  }
+  probe->condition.notify_all();
+  group->shutdown();
+}
+
+static cardio::promise<void> ObserveStartNewHeartbeatAsync(
+    StartNewHeartbeatProbe* probe,
+    int* heartbeat_count,
+    bool* worker_completed,
+    cardio::dispatcher_group* group) {
+  auto worker = cardio::promises::start_new([probe] {
+    {
+      auto lock = std::lock_guard<std::mutex>(probe->mutex);
+      probe->worker_started = true;
+    }
+    probe->condition.notify_all();
+
+    auto lock = std::unique_lock<std::mutex>(probe->mutex);
+    return probe->condition.wait_for(
+        lock,
+        std::chrono::seconds(5),
+        [probe] { return probe->release_worker; });
+  });
+
+  while (true) {
+    {
+      auto lock = std::lock_guard<std::mutex>(probe->mutex);
+      if (probe->worker_started) {
+        break;
+      }
+    }
+    co_await cardio::promises::delay(1);
+  }
+
+  while (*heartbeat_count < 3 && !worker.is_ready()) {
+    ++*heartbeat_count;
+    co_await cardio::promises::delay(1);
+  }
+
+  {
+    auto lock = std::lock_guard<std::mutex>(probe->mutex);
+    probe->release_worker = true;
+  }
+  probe->condition.notify_all();
+  *worker_completed = co_await worker;
   group->shutdown();
 }
 
@@ -455,13 +540,66 @@ static bool RunEmptyExceptionMessageTest() {
                 "empty exception operation returned wrong error");
 }
 
+static bool RunStartNewContinuationDispatcherTest() {
+  auto group = cardio::dispatcher_group(
+      cardio::exit_condition::exit_by_manual);
+  auto host = cardio::dispatcher_host(group);
+  auto* dispatcher = cardio::unsafe_get_current_dispatcher();
+  auto worker_has_dispatcher = false;
+  auto worker_uses_independent_dispatcher = false;
+  auto continuation_on_expected_dispatcher = false;
+  auto timeout = ShutdownAfterDelay(&group);
+  auto operation = ObserveStartNewContinuationDispatcherAsync(
+      dispatcher,
+      &worker_has_dispatcher,
+      &worker_uses_independent_dispatcher,
+      &continuation_on_expected_dispatcher,
+      &group);
+  (void)timeout;
+
+  host.park();
+
+  return Expect(operation.is_ready(),
+                "start_new dispatcher operation did not finish") &&
+         Expect(worker_has_dispatcher,
+                "start_new worker did not have a dispatcher") &&
+         Expect(worker_uses_independent_dispatcher,
+                "start_new worker reused the caller dispatcher") &&
+         Expect(continuation_on_expected_dispatcher,
+                "start_new continuation did not resume on the caller dispatcher");
+}
+
+static bool RunStartNewHeartbeatTest() {
+  auto group = cardio::dispatcher_group(
+      cardio::exit_condition::exit_by_manual);
+  auto host = cardio::dispatcher_host(group);
+  auto probe = StartNewHeartbeatProbe{};
+  auto heartbeat_count = 0;
+  auto worker_completed = false;
+  auto timeout = ReleaseStartNewHeartbeatProbeAfterDelay(&probe, &group);
+  auto operation = ObserveStartNewHeartbeatAsync(
+      &probe, &heartbeat_count, &worker_completed, &group);
+  (void)timeout;
+
+  host.park();
+
+  return Expect(operation.is_ready(),
+                "start_new heartbeat operation did not finish") &&
+         Expect(heartbeat_count >= 3,
+                "dispatcher did not tick while start_new worker was blocked") &&
+         Expect(worker_completed,
+                "start_new worker was not released by the dispatcher");
+}
+
 int main() {
   return RunValueCompletionTest() && RunVoidCompletionTest() &&
                  RunMoveOnlyCompletionTest() &&
                  RunAsyncCompletionWaitTest() && RunPreCanceledOperationTest() &&
                  RunRunningCancellationTest() && RunExceptionMessageTest() &&
                  RunSuspendedExceptionMessageTest() &&
-                 RunEmptyExceptionMessageTest()
+                 RunEmptyExceptionMessageTest() &&
+                 RunStartNewContinuationDispatcherTest() &&
+                 RunStartNewHeartbeatTest()
              ? 0
              : 1;
 }

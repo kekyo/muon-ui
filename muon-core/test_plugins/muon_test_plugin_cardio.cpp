@@ -8,6 +8,15 @@
 
 #include <cardio.h>
 
+#include <atomic>
+
+static std::atomic_bool dispatcher_available_at_init = false;
+
+extern "C" void dispatcher_available_at_init_call(muon_completion_func comp) {
+  const auto result = dispatcher_available_at_init.load();
+  comp(&result, nullptr);
+}
+
 extern "C" void dispatcher_available(muon_completion_func comp) {
   const auto result = cardio::unsafe_get_current_dispatcher() != nullptr;
   comp(&result, nullptr);
@@ -20,6 +29,13 @@ static const muon_type_descriptor type_bool = {
 
 static const muon_plugin_function_metadata cardio_functions[] = {
     {
+        "dispatcherAvailableAtInit",
+        reinterpret_cast<muon_native_function>(
+            &dispatcher_available_at_init_call),
+        {0, nullptr, &type_bool},
+        nullptr,
+    },
+    {
         "dispatcherAvailable",
         reinterpret_cast<muon_native_function>(&dispatcher_available),
         {0, nullptr, &type_bool},
@@ -29,6 +45,7 @@ static const muon_plugin_function_metadata cardio_functions[] = {
 
 static const muon_plugin_function_metadata* const cardio_functions_pointers[] = {
     &cardio_functions[0],
+    &cardio_functions[1],
     nullptr,
 };
 
@@ -52,5 +69,7 @@ static const muon_plugin_metadata cardio_metadata = {
 extern "C" const muon_plugin_metadata* muon_init_plugin(
     const muon_plugin_init_context* context) {
   (void)context;
+  dispatcher_available_at_init.store(
+      cardio::unsafe_get_current_dispatcher() != nullptr);
   return &cardio_metadata;
 }

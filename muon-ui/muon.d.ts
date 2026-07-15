@@ -1002,7 +1002,8 @@ declare global {
      * @returns A promise for a watcher handle.
      * @remarks muon currently watches by polling snapshots. Listener exceptions
      * and rejected promises are ignored. Aborting before the watcher is created
-     * rejects; aborting after creation closes the watcher.
+     * rejects; aborting after creation closes the watcher. A renderer V8
+     * context can hold up to 16 active filesystem watchers.
      */
     readonly watch: (
       path: string,

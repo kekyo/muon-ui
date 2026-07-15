@@ -8,9 +8,11 @@
 
 #include "muon_json_helpers.h"
 #include "muon_cardio_post.h"
+#include "log/muon_close_debug_log.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_fs_gio_read_source.h"
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
+#include "plugins/builtin/muon_builtin_fs_watch_registry.h"
 #include "plugins/muon_traffic_cardio_operation.h"
 
 #include <cardio.h>
@@ -23,6 +25,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -60,6 +63,8 @@ static constexpr char kMuonBuiltinFsGenericError[] =
     "Filesystem operation failed";
 static constexpr char kMuonBuiltinFsAbortError[] =
     "The operation was aborted";
+static constexpr char kMuonBuiltinFsWatchLeaseUnavailableError[] =
+    "Filesystem watcher lease is unavailable";
 
 static const muon_type_descriptor type_void = {
     MUON_TYPE_VOID,
@@ -73,6 +78,19 @@ static const muon_type_descriptor type_bool = {
 
 static const muon_type_descriptor type_string = {
     MUON_TYPE_STRING,
+    nullptr,
+};
+
+static std::atomic<uint64_t> g_muon_fs_operation_sequence{0};
+
+static void AppendMuonFsDiagnosticLog(uint64_t operation_id,
+                                      std::string message) {
+  AppendMuonCloseDebugLog(
+      "MuonFs op=" + std::to_string(operation_id) + " " + std::move(message));
+}
+
+static const muon_type_descriptor type_u32 = {
+    MUON_TYPE_U32,
     nullptr,
 };
 
@@ -220,6 +238,18 @@ struct MuonFsStringResult {
   std::string error;
 };
 
+enum class MuonFsWatchRpcOperation {
+  kAcquire,
+  kRelease,
+  kSnapshot,
+};
+
+struct MuonFsWatchRpcRequest {
+  MuonFsWatchRpcOperation operation = MuonFsWatchRpcOperation::kAcquire;
+  std::string path;
+  std::string token;
+};
+
 #if defined(_WIN32)
 #ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
 #define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
@@ -234,6 +264,8 @@ enum class MuonFsOpenMode {
   WriteAt,
 };
 
+struct MuonFsIoContext;
+
 static void CloseWindowsFileSync(HANDLE& file) {
   if (file != INVALID_HANDLE_VALUE) {
     CloseHandle(file);
@@ -244,8 +276,11 @@ static void CloseWindowsFileSync(HANDLE& file) {
 struct MuonFsFile {
   MuonFsFile() = default;
 
-  explicit MuonFsFile(HANDLE source_handle)
-      : handle(source_handle) {}
+  explicit MuonFsFile(
+      HANDLE source_handle,
+      std::shared_ptr<MuonFsIoContext> source_context = nullptr)
+      : handle(source_handle),
+        io_context(std::move(source_context)) {}
 
   ~MuonFsFile() {
     CloseWindowsFileSync(handle);
@@ -255,12 +290,14 @@ struct MuonFsFile {
   MuonFsFile& operator=(const MuonFsFile&) = delete;
 
   MuonFsFile(MuonFsFile&& other) noexcept
-      : handle(other.Release()) {}
+      : handle(other.Release()),
+        io_context(std::move(other.io_context)) {}
 
   MuonFsFile& operator=(MuonFsFile&& other) noexcept {
     if (this != &other) {
       CloseWindowsFileSync(handle);
       handle = other.Release();
+      io_context = std::move(other.io_context);
     }
     return *this;
   }
@@ -276,6 +313,7 @@ struct MuonFsFile {
   }
 
   HANDLE handle = INVALID_HANDLE_VALUE;
+  std::shared_ptr<MuonFsIoContext> io_context;
 };
 
 struct MuonFsSymbolicLinkReparseData {
@@ -304,12 +342,78 @@ struct MuonFsMountPointReparseData {
 #endif
 
 struct MuonFsIoContext {
+#if defined(_WIN32)
+  cardio::io_completion_port iocp;
+#endif
 };
 
 #if defined(_WIN32)
 
 static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
                                             MuonFsFile& file);
+
+template <typename Result>
+struct MuonWindowsBlockingOutcome {
+  std::optional<Result> value;
+  std::string error;
+};
+
+static std::string CaptureWindowsBlockingErrorMessage() {
+  try {
+    throw;
+  } catch (const std::exception& error) {
+    const auto* message = error.what();
+    return message == nullptr || message[0] == '\0'
+               ? kMuonBuiltinFsGenericError
+               : message;
+  } catch (...) {
+    return kMuonBuiltinFsGenericError;
+  }
+}
+
+template <typename Task>
+static auto RunWindowsBlockingFsAsync(Task&& task)
+    -> cardio::promise<std::invoke_result_t<std::decay_t<Task>&>> {
+  using TaskStorage = std::decay_t<Task>;
+  using Result = std::invoke_result_t<TaskStorage&>;
+
+  if constexpr (std::is_void_v<Result>) {
+    auto worker = cardio::promises::start_new(
+        [task = TaskStorage(std::forward<Task>(task))]() mutable {
+          try {
+            std::invoke(task);
+            return std::string{};
+          } catch (...) {
+            return CaptureWindowsBlockingErrorMessage();
+          }
+        });
+    auto error = co_await worker;
+    if (!error.empty()) {
+      throw std::runtime_error(std::move(error));
+    }
+    co_return;
+  } else {
+    auto worker = cardio::promises::start_new(
+        [task = TaskStorage(std::forward<Task>(task))]() mutable {
+          auto outcome = MuonWindowsBlockingOutcome<Result>{};
+          try {
+            outcome.value.emplace(std::invoke(task));
+          } catch (...) {
+            outcome.error = CaptureWindowsBlockingErrorMessage();
+          }
+          return outcome;
+        });
+    auto outcome = std::move(co_await worker);
+    if (!outcome.error.empty()) {
+      throw std::runtime_error(std::move(outcome.error));
+    }
+    if (!outcome.value) {
+      throw std::runtime_error(
+          "Windows blocking filesystem operation returned no value");
+    }
+    co_return std::move(*outcome.value);
+  }
+}
 
 static size_t ClampNativeIoSize(size_t size) {
   return size > static_cast<size_t>(std::numeric_limits<unsigned>::max())
@@ -494,18 +598,6 @@ static std::string TryCreateWindowsSymbolicLink(
   return CreateWindowsFilesystemErrorMessage("symlink", link_path, error);
 }
 
-static void SetWindowsFileOffset(HANDLE file, uint64_t offset) {
-  if (offset > static_cast<uint64_t>(std::numeric_limits<LONGLONG>::max())) {
-    throw std::runtime_error("File offset is too large");
-  }
-  LARGE_INTEGER target = {};
-  target.QuadPart = static_cast<LONGLONG>(offset);
-  if (!SetFilePointerEx(file, target, nullptr, FILE_BEGIN)) {
-    throw std::runtime_error(
-        WindowsErrorMessage("SetFilePointerEx failed", GetLastError()));
-  }
-}
-
 static void ValidateWindowsRegularFile(HANDLE file) {
   if (GetFileType(file) != FILE_TYPE_DISK) {
     throw std::runtime_error("Path is not a regular file");
@@ -521,14 +613,18 @@ static void ValidateWindowsRegularFile(HANDLE file) {
   }
 }
 
-static cardio::promise<MuonFsFile> OpenRegularFileAsync(
-    MuonFsIoContext& context,
-    std::string path,
-    MuonFsOpenMode mode,
-    cardio::cancellation cancellation) {
-  (void)context;
+static MuonFsFile OpenRegularFileSync(std::string path,
+                                      MuonFsOpenMode mode,
+                                      cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
-  const auto wide_path = CreateLocalFilesystemPath(path).wstring();
+  const auto target_path = CreateLocalFilesystemPath(path);
+  if (mode == MuonFsOpenMode::Read) {
+    const auto preflight_error = WindowsRegularFilePreflightError(target_path);
+    if (!preflight_error.empty()) {
+      throw std::runtime_error(preflight_error);
+    }
+  }
+  const auto wide_path = target_path.wstring();
   const auto access =
       mode == MuonFsOpenMode::Read ? GENERIC_READ : GENERIC_WRITE;
   const auto disposition = mode == MuonFsOpenMode::Read
@@ -542,13 +638,14 @@ static cardio::promise<MuonFsFile> OpenRegularFileAsync(
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
       nullptr,
       disposition,
-      FILE_ATTRIBUTE_NORMAL,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
       nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     throw std::runtime_error(
         WindowsErrorMessage("CreateFileW failed", GetLastError()));
   }
   auto result = MuonFsFile(file);
+  result.io_context = std::make_shared<MuonFsIoContext>();
   try {
     ValidateWindowsRegularFile(result.handle);
   } catch (...) {
@@ -556,7 +653,57 @@ static cardio::promise<MuonFsFile> OpenRegularFileAsync(
     throw;
   }
   cancellation.throw_if_cancellation_requested();
-  co_return std::move(result);
+  return result;
+}
+
+static cardio::promise<MuonFsFile> OpenRegularFileAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    MuonFsOpenMode mode,
+    cardio::cancellation cancellation) {
+  (void)context;
+  AppendMuonFsDiagnosticLog(
+      0,
+      "open_regular_file start dispatcher=" +
+          FormatMuonCloseDebugPointer(cardio::unsafe_get_current_dispatcher()));
+  try {
+    auto file = std::move(co_await RunWindowsBlockingFsAsync(
+        [path = std::move(path), mode, cancellation]() mutable {
+          AppendMuonFsDiagnosticLog(
+              0,
+              "open_regular_file worker_start dispatcher=" +
+                  FormatMuonCloseDebugPointer(
+                      cardio::unsafe_get_current_dispatcher()));
+          auto result = OpenRegularFileSync(std::move(path), mode, cancellation);
+          AppendMuonFsDiagnosticLog(0, "open_regular_file worker_success");
+          return result;
+        }));
+    AppendMuonFsDiagnosticLog(0, "open_regular_file complete");
+    co_return std::move(file);
+  } catch (const std::exception& error) {
+    AppendMuonFsDiagnosticLog(
+        0, std::string("open_regular_file error message=") + error.what());
+    throw;
+  } catch (...) {
+    AppendMuonFsDiagnosticLog(0, "open_regular_file error unknown");
+    throw;
+  }
+}
+
+static cardio::promise<std::string> RegularFileReadPreflightAsync(
+    MuonFsIoContext& context,
+    std::string path,
+    cardio::cancellation cancellation) {
+  (void)context;
+  auto preflight = RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto target_path = CreateLocalFilesystemPath(path);
+        const auto error = WindowsRegularFilePreflightError(target_path);
+        cancellation.throw_if_cancellation_requested();
+        return error;
+      });
+  co_return std::move(co_await preflight);
 }
 
 static cardio::promise<uint64_t> GetFileSizeAsync(
@@ -565,11 +712,16 @@ static cardio::promise<uint64_t> GetFileSizeAsync(
     cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
   (void)context;
-  LARGE_INTEGER file_size = {};
-  if (!GetFileSizeEx(file.handle, &file_size) || file_size.QuadPart < 0) {
-    throw std::runtime_error("File size is invalid");
-  }
-  co_return static_cast<uint64_t>(file_size.QuadPart);
+  auto* handle = file.handle;
+  co_return co_await RunWindowsBlockingFsAsync([handle, cancellation] {
+    cancellation.throw_if_cancellation_requested();
+    LARGE_INTEGER file_size = {};
+    if (!GetFileSizeEx(handle, &file_size) || file_size.QuadPart < 0) {
+      throw std::runtime_error("File size is invalid");
+    }
+    cancellation.throw_if_cancellation_requested();
+    return static_cast<uint64_t>(file_size.QuadPart);
+  });
 }
 
 static cardio::promise<size_t> ReadAtAsync(
@@ -583,20 +735,48 @@ static cardio::promise<size_t> ReadAtAsync(
   if (buffer.empty()) {
     co_return size_t{0};
   }
-  const auto size = ClampNativeIoSize(buffer.size());
-  SetWindowsFileOffset(file.handle, offset);
-  auto read_size = DWORD{};
-  if (!ReadFile(
-          file.handle,
-          buffer.data(),
-          static_cast<DWORD>(size),
-          &read_size,
-          nullptr)) {
-    throw std::runtime_error(
-        WindowsErrorMessage("ReadFile failed", GetLastError()));
+  if (!file.io_context) {
+    throw std::runtime_error("Windows file IOCP context is unavailable");
   }
-  cancellation.throw_if_cancellation_requested();
-  co_return static_cast<size_t>(read_size);
+  const auto size = ClampNativeIoSize(buffer.size());
+  AppendMuonFsDiagnosticLog(
+      0,
+      "iocp_read start handle=" +
+          std::to_string(reinterpret_cast<uintptr_t>(file.handle)) +
+          " offset=" + std::to_string(offset) +
+          " size=" + std::to_string(size));
+  try {
+    const auto read_size = co_await cardio::iocps::read(
+        file.io_context->iocp, file.handle, buffer.subspan(0, size), offset,
+        cancellation);
+    AppendMuonFsDiagnosticLog(
+        0,
+        "iocp_read complete handle=" +
+            std::to_string(reinterpret_cast<uintptr_t>(file.handle)) +
+            " offset=" + std::to_string(offset) +
+            " size=" + std::to_string(size) +
+            " result=" + std::to_string(read_size));
+    cancellation.throw_if_cancellation_requested();
+    co_return read_size;
+  } catch (const std::system_error& error) {
+    if (error.code().value() == static_cast<int>(ERROR_HANDLE_EOF)) {
+      AppendMuonFsDiagnosticLog(
+          0,
+          "iocp_read eof handle=" +
+              std::to_string(reinterpret_cast<uintptr_t>(file.handle)) +
+              " offset=" + std::to_string(offset) +
+              " size=" + std::to_string(size));
+      cancellation.throw_if_cancellation_requested();
+      co_return size_t{0};
+    }
+    AppendMuonFsDiagnosticLog(
+        0,
+        "iocp_read error handle=" +
+            std::to_string(reinterpret_cast<uintptr_t>(file.handle)) +
+            " offset=" + std::to_string(offset) +
+            " size=" + std::to_string(size) + " message=" + error.what());
+    throw;
+  }
 }
 
 static cardio::promise<size_t> WriteAtAsync(
@@ -610,20 +790,28 @@ static cardio::promise<size_t> WriteAtAsync(
   if (buffer.empty()) {
     co_return size_t{0};
   }
-  const auto size = ClampNativeIoSize(buffer.size());
-  SetWindowsFileOffset(file.handle, offset);
-  auto written = DWORD{};
-  if (!WriteFile(
-          file.handle,
-          buffer.data(),
-          static_cast<DWORD>(size),
-          &written,
-          nullptr)) {
-    throw std::runtime_error(
-        WindowsErrorMessage("WriteFile failed", GetLastError()));
+  if (!file.io_context) {
+    throw std::runtime_error("Windows file IOCP context is unavailable");
   }
+  const auto size = ClampNativeIoSize(buffer.size());
+  AppendMuonFsDiagnosticLog(
+      0,
+      "iocp_write start handle=" +
+          std::to_string(reinterpret_cast<uintptr_t>(file.handle)) +
+          " offset=" + std::to_string(offset) +
+          " size=" + std::to_string(size));
+  const auto written = co_await cardio::iocps::write(
+      file.io_context->iocp, file.handle, buffer.subspan(0, size), offset,
+      cancellation);
+  AppendMuonFsDiagnosticLog(
+      0,
+      "iocp_write complete handle=" +
+          std::to_string(reinterpret_cast<uintptr_t>(file.handle)) +
+          " offset=" + std::to_string(offset) +
+          " size=" + std::to_string(size) +
+          " result=" + std::to_string(written));
   cancellation.throw_if_cancellation_requested();
-  co_return static_cast<size_t>(written);
+  co_return written;
 }
 
 static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
@@ -632,8 +820,10 @@ static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
     co_return;
   }
   (void)context;
-  CloseWindowsFileSync(file.handle);
-  co_return;
+  auto handle = file.Release();
+  co_await RunWindowsBlockingFsAsync([handle]() mutable {
+    CloseWindowsFileSync(handle);
+  });
 }
 
 template <typename Result, typename Body>
@@ -788,50 +978,15 @@ static cardio::promise<MuonFsStringResult> ReadTextFromOpenFileAsync(
   if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
     throw std::runtime_error("File size is invalid");
   }
-  auto storage = std::vector<std::byte>{};
-  storage.reserve(static_cast<size_t>(size));
-  const auto chunk_bytes = static_cast<size_t>(std::min<uint64_t>(
-      static_cast<uint64_t>(kMuonFsReadTextFileChunkBytes), max_bytes));
-  auto chunk = std::vector<std::byte>(chunk_bytes);
-  auto reached_eof = false;
-  while (static_cast<uint64_t>(storage.size()) < max_bytes) {
-    cancellation.throw_if_cancellation_requested();
-    const auto remaining =
-        max_bytes - static_cast<uint64_t>(storage.size());
-    const auto request_size = static_cast<size_t>(std::min<uint64_t>(
-        static_cast<uint64_t>(chunk.size()), remaining));
-    const auto actual_size = co_await ReadAtAsync(
-        context,
-        file,
-        std::span<std::byte>(chunk.data(), request_size),
-        static_cast<uint64_t>(storage.size()),
-        cancellation);
-    cancellation.throw_if_cancellation_requested();
-    if (actual_size == 0) {
-      reached_eof = true;
-      break;
-    }
-    if (actual_size > request_size) {
-      throw std::runtime_error(
-          "readTextFile source returned too many bytes");
-    }
-    storage.insert(
-        storage.end(), chunk.begin(), chunk.begin() + actual_size);
-  }
-  if (!reached_eof) {
-    auto lookahead = std::byte{};
-    const auto lookahead_size = co_await ReadAtAsync(
-        context,
-        file,
-        std::span<std::byte>(&lookahead, size_t{1}),
-        max_bytes,
-        cancellation);
-    cancellation.throw_if_cancellation_requested();
-    if (lookahead_size != 0) {
-      co_return MuonFsStringResult{
-          std::string{}, kMuonFsReadTextFileLimitError};
-    }
-  }
+  auto storage = std::vector<std::byte>(static_cast<size_t>(size));
+  const auto actual_size = co_await ReadAllAsync(
+      context,
+      file,
+      std::span<std::byte>(storage.data(), storage.size()),
+      0,
+      cancellation);
+  cancellation.throw_if_cancellation_requested();
+  storage.resize(actual_size);
   if (!IsValidUtf8WithoutNul(
           reinterpret_cast<const uint8_t*>(storage.data()),
           storage.size())) {
@@ -854,6 +1009,12 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
   auto start_gate = cardio::resolved();
   co_await start_gate;
   try {
+    AppendMuonFsDiagnosticLog(
+        0,
+        "read_bytes enter dispatcher=" +
+            FormatMuonCloseDebugPointer(
+                cardio::unsafe_get_current_dispatcher()));
+    cancellation.throw_if_cancellation_requested();
     auto validation_error = std::string{};
     if (!ValidateMuonFsReadFileLength(
             options, max_bytes, &validation_error)) {
@@ -862,12 +1023,14 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
     if (options.has_length && options.length == 0) {
       co_return AllocateResultBuffer(helpers, 0);
     }
-    const auto target_path = CreateLocalFilesystemPath(path);
-    const auto preflight_error =
-        WindowsRegularFilePreflightError(target_path);
+    cancellation.throw_if_cancellation_requested();
+    auto preflight_promise = RegularFileReadPreflightAsync(
+        context, path, cancellation);
+    const auto preflight_error = co_await preflight_promise;
     if (!preflight_error.empty()) {
       co_return MuonFsBufferResult(preflight_error);
     }
+    cancellation.throw_if_cancellation_requested();
     auto result_promise = WithOpenRegularFileAsync<MuonFsBufferResult>(
         context,
         std::move(path),
@@ -891,12 +1054,14 @@ static cardio::promise<MuonFsStringResult> ReadTextAsync(
   auto start_gate = cardio::resolved();
   co_await start_gate;
   try {
-    const auto target_path = CreateLocalFilesystemPath(path);
-    const auto preflight_error =
-        WindowsRegularFilePreflightError(target_path);
+    cancellation.throw_if_cancellation_requested();
+    auto preflight_promise = RegularFileReadPreflightAsync(
+        context, path, cancellation);
+    const auto preflight_error = co_await preflight_promise;
     if (!preflight_error.empty()) {
       co_return MuonFsStringResult{std::string{}, preflight_error};
     }
+    cancellation.throw_if_cancellation_requested();
     auto read_promise = WithOpenRegularFileAsync<MuonFsStringResult>(
         context,
         std::move(path),
@@ -1832,33 +1997,37 @@ static cardio::promise<MuonFsStringResult> StatAsync(
     bool follow_symlink,
     cardio::cancellation cancellation) {
   (void)context;
-  auto start_gate = cardio::resolved();
-  co_await start_gate;
-  cancellation.throw_if_cancellation_requested();
-  try {
-    const auto target_path = CreateLocalFilesystemPath(path);
-    const auto preflight_error = WindowsStatPreflightError(target_path);
-    if (!preflight_error.empty()) {
-      co_return MuonFsStringResult{std::string{}, preflight_error};
-    }
-    const auto result = CreateStatusJson(target_path, follow_symlink);
-    cancellation.throw_if_cancellation_requested();
-    co_return MuonFsStringResult{result, std::string{}};
-  } catch (const std::exception& error) {
-    co_return MuonFsStringResult{std::string{}, error.what()};
-  }
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), follow_symlink, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        try {
+          const auto target_path = CreateLocalFilesystemPath(path);
+          const auto preflight_error = WindowsStatPreflightError(target_path);
+          if (!preflight_error.empty()) {
+            return MuonFsStringResult{std::string{}, preflight_error};
+          }
+          const auto result = CreateStatusJson(target_path, follow_symlink);
+          cancellation.throw_if_cancellation_requested();
+          return MuonFsStringResult{result, std::string{}};
+        } catch (const std::exception& error) {
+          return MuonFsStringResult{std::string{}, error.what()};
+        }
+      });
 }
 
 static cardio::promise<bool> ExistsAsync(MuonFsIoContext& context,
                                          std::string path,
                                          cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  std::error_code error;
-  const auto result = std::filesystem::exists(
-      CreateLocalFilesystemPath(path), error);
-  cancellation.throw_if_cancellation_requested();
-  co_return !error && result;
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        std::error_code error;
+        const auto result = std::filesystem::exists(
+            CreateLocalFilesystemPath(path), error);
+        cancellation.throw_if_cancellation_requested();
+        return !error && result;
+      });
 }
 
 static cardio::promise<bool> AccessAsync(MuonFsIoContext& context,
@@ -1866,10 +2035,14 @@ static cardio::promise<bool> AccessAsync(MuonFsIoContext& context,
                                          MuonFsAccessOptions options,
                                          cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  const auto result = CanAccessPath(CreateLocalFilesystemPath(path), options);
-  cancellation.throw_if_cancellation_requested();
-  co_return result;
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), options, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto result = CanAccessPath(
+            CreateLocalFilesystemPath(path), options);
+        cancellation.throw_if_cancellation_requested();
+        return result;
+      });
 }
 
 static cardio::promise<std::string> ReaddirAsync(
@@ -1878,29 +2051,32 @@ static cardio::promise<std::string> ReaddirAsync(
     MuonFsReaddirOptions options,
     cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  auto result = std::string("[");
-  auto first = true;
-  std::error_code error;
-  const auto target = CreateLocalFilesystemPath(path);
-  for (const auto& entry : std::filesystem::directory_iterator(target,
-                                                               error)) {
-    ThrowFilesystemError("readdir", target, error);
-    cancellation.throw_if_cancellation_requested();
-    if (!first) {
-      result += ",";
-    }
-    first = false;
-    if (options.with_file_types) {
-      result += CreateDirentJson(entry);
-    } else {
-      AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
-    }
-  }
-  ThrowFilesystemError("readdir", target, error);
-  result += "]";
-  cancellation.throw_if_cancellation_requested();
-  co_return result;
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), options, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        auto result = std::string("[");
+        auto first = true;
+        std::error_code error;
+        const auto target = CreateLocalFilesystemPath(path);
+        for (const auto& entry : std::filesystem::directory_iterator(target,
+                                                                     error)) {
+          ThrowFilesystemError("readdir", target, error);
+          cancellation.throw_if_cancellation_requested();
+          if (!first) {
+            result += ",";
+          }
+          first = false;
+          if (options.with_file_types) {
+            result += CreateDirentJson(entry);
+          } else {
+            AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
+          }
+        }
+        ThrowFilesystemError("readdir", target, error);
+        result += "]";
+        cancellation.throw_if_cancellation_requested();
+        return result;
+      });
 }
 
 static cardio::promise<void> MkdirAsync(MuonFsIoContext& context,
@@ -1908,22 +2084,24 @@ static cardio::promise<void> MkdirAsync(MuonFsIoContext& context,
                                         MuonFsMkdirOptions options,
                                         cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  std::error_code error;
-  const auto target = CreateLocalFilesystemPath(path);
-  if (options.recursive) {
-    std::filesystem::create_directories(target, error);
-    ThrowFilesystemError("mkdir", target, error);
-    cancellation.throw_if_cancellation_requested();
-    co_return;
-  }
-  const auto created = std::filesystem::create_directory(target, error);
-  ThrowFilesystemError("mkdir", target, error);
-  if (!created) {
-    throw std::runtime_error("Path already exists");
-  }
-  cancellation.throw_if_cancellation_requested();
-  co_return;
+  co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), options, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        std::error_code error;
+        const auto target = CreateLocalFilesystemPath(path);
+        if (options.recursive) {
+          std::filesystem::create_directories(target, error);
+          ThrowFilesystemError("mkdir", target, error);
+          cancellation.throw_if_cancellation_requested();
+          return;
+        }
+        const auto created = std::filesystem::create_directory(target, error);
+        ThrowFilesystemError("mkdir", target, error);
+        if (!created) {
+          throw std::runtime_error("Path already exists");
+        }
+        cancellation.throw_if_cancellation_requested();
+      });
 }
 
 static cardio::promise<void> RmAsync(MuonFsIoContext& context,
@@ -1931,28 +2109,30 @@ static cardio::promise<void> RmAsync(MuonFsIoContext& context,
                                      MuonFsRmOptions options,
                                      cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  const auto target = CreateLocalFilesystemPath(path);
-  std::error_code error;
-  const auto status = std::filesystem::symlink_status(target, error);
-  if (error || status.type() == std::filesystem::file_type::not_found) {
-    if (options.force) {
-      co_return;
-    }
-    ThrowFilesystemError("rm", target, error);
-    throw std::runtime_error("Path does not exist");
-  }
-  if (std::filesystem::is_directory(status) && !options.recursive) {
-    throw std::runtime_error("Path is a directory");
-  }
-  if (options.recursive && !std::filesystem::is_symlink(status)) {
-    std::filesystem::remove_all(target, error);
-  } else {
-    std::filesystem::remove(target, error);
-  }
-  ThrowFilesystemError("rm", target, error);
-  cancellation.throw_if_cancellation_requested();
-  co_return;
+  co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), options, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto target = CreateLocalFilesystemPath(path);
+        std::error_code error;
+        const auto status = std::filesystem::symlink_status(target, error);
+        if (error || status.type() == std::filesystem::file_type::not_found) {
+          if (options.force) {
+            return;
+          }
+          ThrowFilesystemError("rm", target, error);
+          throw std::runtime_error("Path does not exist");
+        }
+        if (std::filesystem::is_directory(status) && !options.recursive) {
+          throw std::runtime_error("Path is a directory");
+        }
+        if (options.recursive && !std::filesystem::is_symlink(status)) {
+          std::filesystem::remove_all(target, error);
+        } else {
+          std::filesystem::remove(target, error);
+        }
+        ThrowFilesystemError("rm", target, error);
+        cancellation.throw_if_cancellation_requested();
+      });
 }
 
 static cardio::promise<std::string> UnlinkAsync(
@@ -1960,43 +2140,46 @@ static cardio::promise<std::string> UnlinkAsync(
     std::string path,
     cardio::cancellation cancellation) {
   (void)context;
-  auto start_gate = cardio::resolved();
-  co_await start_gate;
-  try {
-    cancellation.throw_if_cancellation_requested();
-    const auto target = CreateLocalFilesystemPath(path);
-    std::error_code error;
-    const auto status = std::filesystem::symlink_status(target, error);
-    ThrowFilesystemError("unlink", target, error);
-    if (std::filesystem::is_directory(status)) {
-      co_return "Path is a directory";
-    }
-    std::filesystem::remove(target, error);
-    ThrowFilesystemError("unlink", target, error);
-    cancellation.throw_if_cancellation_requested();
-  } catch (const std::exception& error) {
-    co_return std::string{error.what()};
-  }
-  co_return std::string{};
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        try {
+          cancellation.throw_if_cancellation_requested();
+          const auto target = CreateLocalFilesystemPath(path);
+          std::error_code error;
+          const auto status = std::filesystem::symlink_status(target, error);
+          ThrowFilesystemError("unlink", target, error);
+          if (std::filesystem::is_directory(status)) {
+            return std::string{"Path is a directory"};
+          }
+          std::filesystem::remove(target, error);
+          ThrowFilesystemError("unlink", target, error);
+          cancellation.throw_if_cancellation_requested();
+        } catch (const std::exception& error) {
+          return std::string{error.what()};
+        }
+        return std::string{};
+      });
 }
 
 static cardio::promise<void> RmdirAsync(MuonFsIoContext& context,
                                         std::string path,
                                         cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  const auto target = CreateLocalFilesystemPath(path);
-  std::error_code error;
-  const auto status = std::filesystem::symlink_status(target, error);
-  ThrowFilesystemError("rmdir", target, error);
-  if (!std::filesystem::is_directory(status) ||
-      std::filesystem::is_symlink(status)) {
-    throw std::runtime_error("Path is not a directory");
-  }
-  std::filesystem::remove(target, error);
-  ThrowFilesystemError("rmdir", target, error);
-  cancellation.throw_if_cancellation_requested();
-  co_return;
+  co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto target = CreateLocalFilesystemPath(path);
+        std::error_code error;
+        const auto status = std::filesystem::symlink_status(target, error);
+        ThrowFilesystemError("rmdir", target, error);
+        if (!std::filesystem::is_directory(status) ||
+            std::filesystem::is_symlink(status)) {
+          throw std::runtime_error("Path is not a directory");
+        }
+        std::filesystem::remove(target, error);
+        ThrowFilesystemError("rmdir", target, error);
+        cancellation.throw_if_cancellation_requested();
+      });
 }
 
 static cardio::promise<void> RenameAsync(MuonFsIoContext& context,
@@ -2004,14 +2187,18 @@ static cardio::promise<void> RenameAsync(MuonFsIoContext& context,
                                          std::string new_path,
                                          cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  std::error_code error;
-  std::filesystem::rename(
-      CreateLocalFilesystemPath(old_path),
-      CreateLocalFilesystemPath(new_path), error);
-  ThrowFilesystemError("rename", CreateLocalFilesystemPath(old_path), error);
-  cancellation.throw_if_cancellation_requested();
-  co_return;
+  co_await RunWindowsBlockingFsAsync(
+      [old_path = std::move(old_path),
+       new_path = std::move(new_path),
+       cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto old_target = CreateLocalFilesystemPath(old_path);
+        std::error_code error;
+        std::filesystem::rename(
+            old_target, CreateLocalFilesystemPath(new_path), error);
+        ThrowFilesystemError("rename", old_target, error);
+        cancellation.throw_if_cancellation_requested();
+      });
 }
 
 static cardio::promise<std::string> CopyFileAsync(
@@ -2021,38 +2208,42 @@ static cardio::promise<std::string> CopyFileAsync(
     MuonFsCopyOptions options,
     cardio::cancellation cancellation) {
   (void)context;
-  auto start_gate = cardio::resolved();
-  co_await start_gate;
-  cancellation.throw_if_cancellation_requested();
-  try {
-    ThrowIfNotRegularFile(CreateLocalFilesystemPath(source),
-                          "Source is not a regular file");
-    const auto destination_path = CreateLocalFilesystemPath(destination);
-    if (!options.overwrite) {
-      std::error_code exists_error;
-      const auto destination_exists =
-          std::filesystem::exists(destination_path, exists_error);
-      ThrowFilesystemError("copyFile", destination_path, exists_error);
-      if (destination_exists) {
-        co_return std::string{"Destination already exists"};
-      }
-    }
-    const auto copy_options =
-        options.overwrite ? std::filesystem::copy_options::overwrite_existing
-                          : std::filesystem::copy_options::none;
-    std::error_code error;
-    const auto copied = std::filesystem::copy_file(
-        CreateLocalFilesystemPath(source),
-        destination_path, copy_options, error);
-    ThrowFilesystemError("copyFile", CreateLocalFilesystemPath(source), error);
-    if (!copied && !options.overwrite) {
-      co_return std::string{"Destination already exists"};
-    }
-  } catch (const std::exception& error) {
-    co_return std::string{error.what()};
-  }
-  cancellation.throw_if_cancellation_requested();
-  co_return std::string{};
+  co_return co_await RunWindowsBlockingFsAsync(
+      [source = std::move(source),
+       destination = std::move(destination),
+       options,
+       cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        try {
+          const auto source_path = CreateLocalFilesystemPath(source);
+          ThrowIfNotRegularFile(source_path, "Source is not a regular file");
+          const auto destination_path = CreateLocalFilesystemPath(destination);
+          if (!options.overwrite) {
+            std::error_code exists_error;
+            const auto destination_exists =
+                std::filesystem::exists(destination_path, exists_error);
+            ThrowFilesystemError("copyFile", destination_path, exists_error);
+            if (destination_exists) {
+              return std::string{"Destination already exists"};
+            }
+          }
+          const auto copy_options =
+              options.overwrite
+                  ? std::filesystem::copy_options::overwrite_existing
+                  : std::filesystem::copy_options::none;
+          std::error_code error;
+          const auto copied = std::filesystem::copy_file(
+              source_path, destination_path, copy_options, error);
+          ThrowFilesystemError("copyFile", source_path, error);
+          if (!copied && !options.overwrite) {
+            return std::string{"Destination already exists"};
+          }
+        } catch (const std::exception& error) {
+          return std::string{error.what()};
+        }
+        cancellation.throw_if_cancellation_requested();
+        return std::string{};
+      });
 }
 
 static cardio::promise<void> AppendBytesAsync(
@@ -2061,21 +2252,23 @@ static cardio::promise<void> AppendBytesAsync(
     std::span<const std::byte> source,
     cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  auto stream = std::ofstream(
-      CreateLocalFilesystemPath(path), std::ios::binary | std::ios::app);
-  if (!stream.is_open()) {
-    throw std::runtime_error("Failed to open file");
-  }
-  if (!source.empty()) {
-    stream.write(reinterpret_cast<const char*>(source.data()),
-                 static_cast<std::streamsize>(source.size()));
-  }
-  if (!stream.good()) {
-    throw std::runtime_error("Failed to append file");
-  }
-  cancellation.throw_if_cancellation_requested();
-  co_return;
+  co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), source, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        auto stream = std::ofstream(
+            CreateLocalFilesystemPath(path), std::ios::binary | std::ios::app);
+        if (!stream.is_open()) {
+          throw std::runtime_error("Failed to open file");
+        }
+        if (!source.empty()) {
+          stream.write(reinterpret_cast<const char*>(source.data()),
+                       static_cast<std::streamsize>(source.size()));
+        }
+        if (!stream.good()) {
+          throw std::runtime_error("Failed to append file");
+        }
+        cancellation.throw_if_cancellation_requested();
+      });
 }
 
 static cardio::promise<void> AppendOwnedBytesAsync(
@@ -2104,13 +2297,15 @@ static cardio::promise<void> TruncateAsync(MuonFsIoContext& context,
                                            uint64_t length,
                                            cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  std::error_code error;
-  const auto target = CreateLocalFilesystemPath(path);
-  std::filesystem::resize_file(target, length, error);
-  ThrowFilesystemError("truncate", target, error);
-  cancellation.throw_if_cancellation_requested();
-  co_return;
+  co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), length, cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        std::error_code error;
+        const auto target = CreateLocalFilesystemPath(path);
+        std::filesystem::resize_file(target, length, error);
+        ThrowFilesystemError("truncate", target, error);
+        cancellation.throw_if_cancellation_requested();
+      });
 }
 
 static cardio::promise<std::string> RealpathAsync(
@@ -2118,13 +2313,16 @@ static cardio::promise<std::string> RealpathAsync(
     std::string path,
     cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  std::error_code error;
-  const auto target = CreateLocalFilesystemPath(path);
-  const auto canonical = std::filesystem::canonical(target, error);
-  ThrowFilesystemError("realpath", target, error);
-  cancellation.throw_if_cancellation_requested();
-  co_return PathToUtf8String(canonical);
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        std::error_code error;
+        const auto target = CreateLocalFilesystemPath(path);
+        const auto canonical = std::filesystem::canonical(target, error);
+        ThrowFilesystemError("realpath", target, error);
+        cancellation.throw_if_cancellation_requested();
+        return PathToUtf8String(canonical);
+      });
 }
 
 static cardio::promise<std::string> ReadlinkAsync(
@@ -2132,11 +2330,14 @@ static cardio::promise<std::string> ReadlinkAsync(
     std::string path,
     cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  const auto link_path = CreateLocalFilesystemPath(path);
-  const auto target = ReadWindowsSymbolicLinkTarget(link_path);
-  cancellation.throw_if_cancellation_requested();
-  co_return PathToUtf8String(std::filesystem::path(target));
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto link_path = CreateLocalFilesystemPath(path);
+        const auto target = ReadWindowsSymbolicLinkTarget(link_path);
+        cancellation.throw_if_cancellation_requested();
+        return PathToUtf8String(std::filesystem::path(target));
+      });
 }
 
 static cardio::promise<std::string> SymlinkAsync(
@@ -2146,27 +2347,32 @@ static cardio::promise<std::string> SymlinkAsync(
     std::string type,
     cardio::cancellation cancellation) {
   (void)context;
-  auto start_gate = cardio::resolved();
-  co_await start_gate;
-  cancellation.throw_if_cancellation_requested();
-  const auto target_path = CreateLocalFilesystemPath(target);
-  const auto link_path = CreateLocalFilesystemPath(path);
-  if (type == "dir" || type == "junction") {
-    const auto error = TryCreateWindowsSymbolicLink(
-        target_path, link_path, SYMBOLIC_LINK_FLAG_DIRECTORY);
-    if (!error.empty()) {
-      co_return error;
-    }
-  } else if (type.empty() || type == "file") {
-    const auto error = TryCreateWindowsSymbolicLink(target_path, link_path, 0);
-    if (!error.empty()) {
-      co_return error;
-    }
-  } else {
-    co_return "Symlink type must be file, dir, or junction";
-  }
-  cancellation.throw_if_cancellation_requested();
-  co_return std::string{};
+  co_return co_await RunWindowsBlockingFsAsync(
+      [target = std::move(target),
+       path = std::move(path),
+       type = std::move(type),
+       cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto target_path = CreateLocalFilesystemPath(target);
+        const auto link_path = CreateLocalFilesystemPath(path);
+        if (type == "dir" || type == "junction") {
+          const auto error = TryCreateWindowsSymbolicLink(
+              target_path, link_path, SYMBOLIC_LINK_FLAG_DIRECTORY);
+          if (!error.empty()) {
+            return error;
+          }
+        } else if (type.empty() || type == "file") {
+          const auto error =
+              TryCreateWindowsSymbolicLink(target_path, link_path, 0);
+          if (!error.empty()) {
+            return error;
+          }
+        } else {
+          return std::string{"Symlink type must be file, dir, or junction"};
+        }
+        cancellation.throw_if_cancellation_requested();
+        return std::string{};
+      });
 }
 
 static cardio::promise<std::string> WatchSnapshotAsync(
@@ -2174,35 +2380,38 @@ static cardio::promise<std::string> WatchSnapshotAsync(
     std::string path,
     cardio::cancellation cancellation) {
   (void)context;
-  cancellation.throw_if_cancellation_requested();
-  const auto target = CreateLocalFilesystemPath(path);
-  std::error_code error;
-  const auto status = std::filesystem::symlink_status(target, error);
-  ThrowFilesystemError("watch", target, error);
-  auto result = std::string("{\"root\":");
-  result += CreateStatusJson(target, false);
-  result += ",\"entries\":";
-  if (std::filesystem::is_directory(status) &&
-      !std::filesystem::is_symlink(status)) {
-    result += "[";
-    auto first = true;
-    for (const auto& entry : std::filesystem::directory_iterator(target,
-                                                                 error)) {
-      ThrowFilesystemError("watch", target, error);
-      if (!first) {
-        result += ",";
-      }
-      first = false;
-      result += CreateDirentJson(entry);
-    }
-    ThrowFilesystemError("watch", target, error);
-    result += "]";
-  } else {
-    result += "[]";
-  }
-  result += "}";
-  cancellation.throw_if_cancellation_requested();
-  co_return result;
+  co_return co_await RunWindowsBlockingFsAsync(
+      [path = std::move(path), cancellation]() mutable {
+        cancellation.throw_if_cancellation_requested();
+        const auto target = CreateLocalFilesystemPath(path);
+        std::error_code error;
+        const auto status = std::filesystem::symlink_status(target, error);
+        ThrowFilesystemError("watch", target, error);
+        auto result = std::string("{\"root\":");
+        result += CreateStatusJson(target, false);
+        result += ",\"entries\":";
+        if (std::filesystem::is_directory(status) &&
+            !std::filesystem::is_symlink(status)) {
+          result += "[";
+          auto first = true;
+          for (const auto& entry : std::filesystem::directory_iterator(target,
+                                                                       error)) {
+            ThrowFilesystemError("watch", target, error);
+            if (!first) {
+              result += ",";
+            }
+            first = false;
+            result += CreateDirentJson(entry);
+          }
+          ThrowFilesystemError("watch", target, error);
+          result += "]";
+        } else {
+          result += "[]";
+        }
+        result += "}";
+        cancellation.throw_if_cancellation_requested();
+        return result;
+      });
 }
 
 #else
@@ -2718,28 +2927,18 @@ template <typename Task>
 static cardio::promise<void> RunMuonFsCompletionOnDispatcher(
     cardio::dispatcher* dispatcher,
     Task&& task) {
-  if (dispatcher == nullptr) {
+  auto* current_dispatcher = cardio::unsafe_get_current_dispatcher();
+  if (dispatcher == nullptr || dispatcher == current_dispatcher) {
     std::forward<Task>(task)();
     co_return;
   }
-  if (dispatcher == cardio::unsafe_get_current_dispatcher()) {
-    std::forward<Task>(task)();
-    co_return;
+  if (current_dispatcher == nullptr) {
+    throw std::runtime_error(
+        "muon filesystem completion dispatcher is unavailable");
   }
-
-  auto done_source = std::make_shared<cardio::promise_source<void>>();
-  auto done = done_source->get_promise();
-  FireAndForgetOnDispatcher(
-      dispatcher,
-      [task = std::forward<Task>(task), done_source]() mutable {
-        try {
-          task();
-          done_source->resolve();
-        } catch (...) {
-          done_source->reject(std::current_exception());
-        }
-      });
-  co_await done;
+  co_await cardio::switch_to(*dispatcher);
+  std::forward<Task>(task)();
+  co_return;
 }
 
 class MuonBuiltinFsRuntime final {
@@ -2769,6 +2968,20 @@ class MuonBuiltinFsRuntime final {
       *error_message = "muon filesystem helpers are unavailable";
       return false;
     }
+#if defined(_WIN32)
+    try {
+      if (!context_) {
+        context_ = std::make_shared<MuonFsIoContext>();
+      }
+    } catch (const std::exception& error) {
+      *error_message = error.what();
+      return false;
+    }
+#endif
+    if (completion_dispatcher_ == nullptr) {
+      *error_message = "muon filesystem dispatcher is unavailable";
+      return false;
+    }
     completions_enabled_->store(true);
     running_ = true;
     return true;
@@ -2777,6 +2990,7 @@ class MuonBuiltinFsRuntime final {
   void Stop() {
     running_ = false;
     completions_enabled_->store(false);
+    watch_registry_.ReleaseAll();
     for (auto& operation : active_) {
       operation.cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
     }
@@ -2793,8 +3007,18 @@ class MuonBuiltinFsRuntime final {
                        muon_native_function abort_watcher,
                        Start&& start,
                        Complete&& complete) {
+    const auto operation_id =
+        g_muon_fs_operation_sequence.fetch_add(1, std::memory_order_relaxed) +
+        1;
+    AppendMuonFsDiagnosticLog(
+        operation_id,
+        "submit running=" + std::string(FormatMuonCloseDebugBool(running_)) +
+            " dispatcher=" +
+            FormatMuonCloseDebugPointer(completion_dispatcher_) +
+            " active=" + std::to_string(active_.size()));
     PruneActiveOperations();
     if (!running_) {
+      AppendMuonFsDiagnosticLog(operation_id, "reject_not_running");
       CompleteMuonError(completion, kMuonBuiltinFsShutdownError);
       return;
     }
@@ -2804,6 +3028,9 @@ class MuonBuiltinFsRuntime final {
     if (!RegisterAbortWatcher(
             helpers_, abort_watcher, cancellation, &cancel_function,
             &abort_error)) {
+      AppendMuonFsDiagnosticLog(
+          operation_id,
+          "abort_watcher_error message=" + abort_error);
       CompleteMuonError(completion, abort_error);
       return;
     }
@@ -2811,6 +3038,7 @@ class MuonBuiltinFsRuntime final {
         std::make_shared<MuonFsPluginFunctionRef>(helpers_, cancel_function);
     if (!running_) {
       cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
+      AppendMuonFsDiagnosticLog(operation_id, "reject_stopped_after_abort");
       CompleteMuonError(completion, kMuonBuiltinFsShutdownError);
       return;
     }
@@ -2822,14 +3050,22 @@ class MuonBuiltinFsRuntime final {
     auto fail = [completion,
                  completions_enabled,
                  completion_dispatcher,
-                 cancel_function_ref](std::string message)
+                 cancel_function_ref,
+                 operation_id](std::string message)
         -> cardio::promise<void> {
+      AppendMuonFsDiagnosticLog(
+          operation_id,
+          "fail_ready dispatcher=" +
+              FormatMuonCloseDebugPointer(completion_dispatcher) +
+              " message=" + message);
       co_await RunMuonFsCompletionOnDispatcher(
           completion_dispatcher,
           [completion,
            completions_enabled,
            cancel_function_ref,
+           operation_id,
            message = std::move(message)] {
+            AppendMuonFsDiagnosticLog(operation_id, "fail_dispatch");
             if (completions_enabled->load()) {
               CompleteMuonError(completion, message);
             }
@@ -2839,16 +3075,23 @@ class MuonBuiltinFsRuntime final {
     auto complete_operation = [complete_copy = std::move(complete_copy),
                                completions_enabled,
                                completion_dispatcher,
-                               cancel_function_ref](auto&&... args) mutable
+                               cancel_function_ref,
+                               operation_id](auto&&... args) mutable
         -> cardio::promise<void> {
       auto args_tuple =
           std::make_tuple(std::forward<decltype(args)>(args)...);
+      AppendMuonFsDiagnosticLog(
+          operation_id,
+          "complete_ready dispatcher=" +
+              FormatMuonCloseDebugPointer(completion_dispatcher));
       co_await RunMuonFsCompletionOnDispatcher(
           completion_dispatcher,
           [complete_copy = std::move(complete_copy),
            completions_enabled,
            cancel_function_ref,
+           operation_id,
            args_tuple = std::move(args_tuple)]() mutable {
+            AppendMuonFsDiagnosticLog(operation_id, "complete_dispatch");
             if (completions_enabled->load()) {
               std::apply(
                   [&complete_copy](auto&&... values) {
@@ -2867,9 +3110,33 @@ class MuonBuiltinFsRuntime final {
     auto operation = RunMuonTrafficCardioOperation<Result>(
         cancellation,
         kMuonBuiltinFsGenericError,
-        [context, start = std::move(start_copy)](
-            cardio::cancellation cancellation_signal) mutable {
-          return start(*context, cancellation_signal);
+        [context, start = std::move(start_copy), operation_id](
+            cardio::cancellation cancellation_signal) mutable
+            -> cardio::promise<Result> {
+          AppendMuonFsDiagnosticLog(
+              operation_id,
+              "body_start dispatcher=" + FormatMuonCloseDebugPointer(
+                                             cardio::unsafe_get_current_dispatcher()));
+          try {
+            auto body = start(*context, cancellation_signal);
+            if constexpr (std::is_void_v<Result>) {
+              co_await body;
+              AppendMuonFsDiagnosticLog(operation_id, "body_success");
+              co_return;
+            } else {
+              auto result = std::move(co_await body);
+              AppendMuonFsDiagnosticLog(operation_id, "body_success");
+              co_return std::move(result);
+            }
+          } catch (const std::exception& error) {
+            AppendMuonFsDiagnosticLog(
+                operation_id,
+                std::string("body_error message=") + error.what());
+            throw;
+          } catch (...) {
+            AppendMuonFsDiagnosticLog(operation_id, "body_error unknown");
+            throw;
+          }
         },
         std::move(complete_operation),
         std::move(fail));
@@ -2877,6 +3144,7 @@ class MuonBuiltinFsRuntime final {
         cancellation, std::move(operation), std::move(cancel_function_ref)});
     if (!running_) {
       active_.back().cancellation->ForceCancel(kMuonBuiltinFsShutdownError);
+      AppendMuonFsDiagnosticLog(operation_id, "cancel_after_submit");
     }
     PruneActiveOperationsLocked();
   }
@@ -2893,6 +3161,31 @@ class MuonBuiltinFsRuntime final {
     return read_text_file_max_bytes_;
   }
 
+  std::optional<MuonBuiltinFsWatchLease> TryAcquireWatchLease(
+      int renderer_context_id,
+      std::string* error_message) {
+    if (!running_) {
+      if (error_message != nullptr) {
+        *error_message = kMuonBuiltinFsShutdownError;
+      }
+      return std::nullopt;
+    }
+    return watch_registry_.TryAcquire(renderer_context_id, error_message);
+  }
+
+  bool IsWatchLeaseActive(int renderer_context_id,
+                          const std::string& token) const {
+    return watch_registry_.IsActive(renderer_context_id, token);
+  }
+
+  bool ReleaseWatchLease(int renderer_context_id, const std::string& token) {
+    return watch_registry_.Release(renderer_context_id, token);
+  }
+
+  void ReleaseWatchContext(int renderer_context_id) {
+    watch_registry_.ReleaseContext(renderer_context_id);
+  }
+
  private:
   struct MuonFsActiveOperation {
     std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
@@ -2901,6 +3194,13 @@ class MuonBuiltinFsRuntime final {
   };
 
   void ResetIoContext() {
+#if defined(_WIN32)
+    if (running_) {
+      context_ = std::make_shared<MuonFsIoContext>();
+    } else {
+      context_.reset();
+    }
+#endif
   }
 
   void PruneActiveOperations() {
@@ -2908,6 +3208,7 @@ class MuonBuiltinFsRuntime final {
   }
 
   void PruneActiveOperationsLocked() {
+    const auto active_before = active_.size();
     active_.erase(
         std::remove_if(active_.begin(),
                        active_.end(),
@@ -2915,6 +3216,9 @@ class MuonBuiltinFsRuntime final {
                          return operation.completion.is_ready();
                        }),
         active_.end());
+    if (active_before != 0 && active_.empty()) {
+      ResetIoContext();
+    }
   }
 
   const muon_plugin_helpers* helpers_ = nullptr;
@@ -2925,6 +3229,7 @@ class MuonBuiltinFsRuntime final {
   std::shared_ptr<MuonFsIoContext> context_;
   cardio::dispatcher* completion_dispatcher_ = nullptr;
   std::shared_ptr<std::atomic_bool> completions_enabled_;
+  MuonBuiltinFsWatchRegistry watch_registry_;
   std::vector<MuonFsActiveOperation> active_;
   bool running_ = false;
 };
@@ -2936,12 +3241,6 @@ static std::shared_ptr<MuonBuiltinFsRuntime> GetRuntime() {
 }
 
 struct MuonFsAbortCallbackState {
-  std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
-};
-
-struct MuonFsAbortWatcherCompletionState {
-  const muon_plugin_helpers* helpers = nullptr;
-  muon_completion_func completion = nullptr;
   std::shared_ptr<MuonTrafficCardioCancellation> cancellation;
 };
 
@@ -2958,26 +3257,6 @@ extern "C" void muon_builtin_fs_cancel_task(muon_completion_func completion,
   CompleteMuonVoid(completion);
 }
 
-static void CompleteMuonFsAbortWatcherSetup(
-    void* raw_state,
-    const muon_completion_error* error) {
-  auto* state = static_cast<MuonFsAbortWatcherCompletionState*>(raw_state);
-  if (state == nullptr) {
-    return;
-  }
-  if (error != nullptr && state->cancellation) {
-    state->cancellation->Cancel(error->message[0] == '\0'
-                                    ? kMuonBuiltinFsAbortError
-                                    : error->message);
-  }
-  if (state->helpers != nullptr &&
-      state->helpers->__release_plugin_function_pointer_impl != nullptr &&
-      state->completion != nullptr) {
-    state->helpers->release_plugin_function_pointer(state->completion);
-  }
-  delete state;
-}
-
 static bool RegisterAbortWatcher(
     const muon_plugin_helpers* helpers,
     muon_native_function abort_watcher,
@@ -2992,7 +3271,6 @@ static bool RegisterAbortWatcher(
   }
   if (helpers == nullptr ||
       helpers->__register_closure_impl == nullptr ||
-      helpers->__create_completion_function_impl == nullptr ||
       helpers->__release_plugin_function_pointer_impl == nullptr) {
     *error_message = "AbortSignal helper is unavailable";
     return false;
@@ -3020,36 +3298,29 @@ static bool RegisterAbortWatcher(
     return false;
   }
 
-  auto* completion_state = new MuonFsAbortWatcherCompletionState;
-  completion_state->helpers = helpers;
-  completion_state->cancellation = cancellation;
-  char completion_error_storage[MUON_COMPLETION_ERROR_MESSAGE_CAPACITY] = "";
-  auto completion_error = muon_error_buffer{
-      completion_error_storage,
-      static_cast<uint32_t>(sizeof(completion_error_storage)),
-  };
-  if (!helpers->create_completion_function(
-          &type_void,
-          &CompleteMuonFsAbortWatcherSetup,
-          completion_state,
-          &completion_state->completion,
-          &completion_error)) {
-    helpers->release_plugin_function_pointer(cancel_function);
-    delete completion_state;
-    *error_message = completion_error_storage[0] == '\0'
-                         ? "AbortSignal watcher completion registration failed"
-                         : completion_error_storage;
-    return false;
-  }
-
   using AbortWatcherFunction = void (*)(muon_completion_func,
                                         muon_native_function);
-  reinterpret_cast<AbortWatcherFunction>(abort_watcher)(
-      completion_state->completion, cancel_function);
+  reinterpret_cast<AbortWatcherFunction>(abort_watcher)(nullptr,
+                                                        cancel_function);
   if (cancel_function_out != nullptr) {
     *cancel_function_out = cancel_function;
   } else {
     helpers->release_plugin_function_pointer(cancel_function);
+  }
+  return true;
+}
+
+static bool ValidatePathValue(muon_completion_func completion,
+                              const std::string& path,
+                              std::string* target) {
+  *target = path;
+  if (target->empty()) {
+    CompleteMuonError(completion, "Path is required");
+    return false;
+  }
+  if (ContainsNul(*target)) {
+    CompleteMuonError(completion, "Path must not contain NUL");
+    return false;
   }
   return true;
 }
@@ -3061,16 +3332,90 @@ static bool ValidatePathArgument(muon_completion_func completion,
     CompleteMuonError(completion, "Path is required");
     return false;
   }
-  *target = path;
-  if (target->empty()) {
-    CompleteMuonError(completion, "Path is required");
+  return ValidatePathValue(completion, path, target);
+}
+
+static std::string CreateWatchLeaseResultJson(const std::string& token) {
+  std::string result = "{\"token\":";
+  AppendJsonString(&result, token);
+  result += "}";
+  return result;
+}
+
+static bool ReadWatchRpcString(yyjson_val* root,
+                               const char* key,
+                               std::string* target,
+                               std::string* error_message) {
+  auto* value = yyjson_obj_get(root, key);
+  if (!yyjson_is_str(value)) {
+    *error_message = std::string("Request ") + key + " is required";
     return false;
   }
-  if (ContainsNul(*target)) {
-    CompleteMuonError(completion, "Path must not contain NUL");
+  *target = ReadJsonString(value);
+  return true;
+}
+
+static bool ReadWatchRpcToken(yyjson_val* root,
+                              std::string* target,
+                              std::string* error_message) {
+  if (!ReadWatchRpcString(root, "token", target, error_message)) {
+    *error_message = kMuonBuiltinFsWatchLeaseUnavailableError;
+    return false;
+  }
+  if (target->empty() || ContainsNul(*target)) {
+    *error_message = kMuonBuiltinFsWatchLeaseUnavailableError;
     return false;
   }
   return true;
+}
+
+static bool ParseWatchRpcRequest(const char* request_json,
+                                 MuonFsWatchRpcRequest* request,
+                                 std::string* error_message) {
+  if (request_json == nullptr) {
+    *error_message = "Request JSON is required";
+    return false;
+  }
+  yyjson_read_err read_error = {};
+  auto document = MuonJsonDocument(yyjson_read_opts(
+      const_cast<char*>(request_json), std::strlen(request_json),
+      YYJSON_READ_NOFLAG, nullptr, &read_error));
+  if (document.get() == nullptr) {
+    *error_message = "Request JSON is invalid";
+    return false;
+  }
+  auto* root = yyjson_doc_get_root(document.get());
+  if (!yyjson_is_obj(root)) {
+    *error_message = "Request JSON root must be an object";
+    return false;
+  }
+
+  auto operation = std::string{};
+  if (!ReadWatchRpcString(root, "operation", &operation, error_message)) {
+    return false;
+  }
+  if (operation == "acquire") {
+    request->operation = MuonFsWatchRpcOperation::kAcquire;
+    return true;
+  }
+  if (operation == "release") {
+    request->operation = MuonFsWatchRpcOperation::kRelease;
+    return ReadWatchRpcToken(root, &request->token, error_message);
+  }
+  if (operation == "snapshot") {
+    request->operation = MuonFsWatchRpcOperation::kSnapshot;
+    if (!ReadWatchRpcToken(root, &request->token, error_message)) {
+      return false;
+    }
+    if (!ReadWatchRpcString(root, "path", &request->path, error_message)) {
+      *error_message = "Path is required";
+      return false;
+    }
+    return true;
+  }
+
+  *error_message = "Unsupported filesystem watcher operation";
+  return false;
 }
 
 extern "C" void muon_builtin_fs_read_file(
@@ -3893,17 +4238,50 @@ extern "C" void muon_builtin_fs_symlink(
 #endif
 }
 
-extern "C" void muon_builtin_fs_watch_snapshot(
+extern "C" void muon_builtin_fs_watch_rpc(
     muon_completion_func completion,
-    const char* path,
+    const char* request_json,
+    uint32_t renderer_context_id,
     muon_native_function abort_watcher) {
-  auto target_path = std::string{};
-  if (!ValidatePathArgument(completion, path, &target_path)) {
+  auto request = MuonFsWatchRpcRequest{};
+  auto error_message = std::string{};
+  if (!ParseWatchRpcRequest(request_json, &request, &error_message)) {
+    CompleteMuonError(completion, error_message);
     return;
   }
   const auto runtime = GetRuntime();
   if (!runtime) {
     CompleteMuonError(completion, kMuonBuiltinFsUnavailableError);
+    return;
+  }
+  const auto context_id = static_cast<int>(renderer_context_id);
+  switch (request.operation) {
+    case MuonFsWatchRpcOperation::kAcquire: {
+      const auto lease =
+          runtime->TryAcquireWatchLease(context_id, &error_message);
+      if (!lease.has_value()) {
+        CompleteMuonError(completion, error_message);
+        return;
+      }
+      CompleteMuonString(completion,
+                         CreateWatchLeaseResultJson(lease->token));
+      return;
+    }
+    case MuonFsWatchRpcOperation::kRelease:
+      (void)runtime->ReleaseWatchLease(context_id, request.token);
+      CompleteMuonString(completion, "{}");
+      return;
+    case MuonFsWatchRpcOperation::kSnapshot:
+      break;
+  }
+
+  if (!runtime->IsWatchLeaseActive(context_id, request.token)) {
+    CompleteMuonError(completion,
+                      kMuonBuiltinFsWatchLeaseUnavailableError);
+    return;
+  }
+  auto target_path = std::string{};
+  if (!ValidatePathValue(completion, request.path, &target_path)) {
     return;
   }
   runtime->SubmitOperation<std::string>(
@@ -3935,6 +4313,12 @@ static const muon_type_descriptor write_file_args[] = {
 
 static const muon_type_descriptor path_abort_args[] = {
     type_string,
+    type_abort_watcher_function,
+};
+
+static const muon_type_descriptor watch_rpc_args[] = {
+    type_string,
+    type_u32,
     type_abort_watcher_function,
 };
 
@@ -4056,9 +4440,8 @@ const runAbortable = async (options, nativeCall) => {
     if (record.released) {
       return;
     }
-    let cancelPromise = null;
     if (shouldCancel) {
-      cancelPromise = requestNativeCancel(record);
+      await requestNativeCancel(record);
     }
     try {
       record.cancel.release();
@@ -4066,9 +4449,6 @@ const runAbortable = async (options, nativeCall) => {
     }
     record.released = true;
     nativeCancelRecords.delete(record.cancel);
-    if (cancelPromise !== null) {
-      await cancelPromise;
-    }
   };
   const getNativeCancelRecord = (cancel) => {
     const existing = nativeCancelRecords.get(cancel);
@@ -4109,10 +4489,14 @@ const runAbortable = async (options, nativeCall) => {
 
   const invokeNative = async () => {
     await Promise.resolve();
+    if (aborted || signal.aborted) {
+      throw createAbortReason(signal);
+    }
     return await nativeCall(abortWatcher);
   };
+  const nativePromise = invokeNative();
   try {
-    return await Promise.race([invokeNative(), abortPromise]);
+    return await Promise.race([nativePromise, abortPromise]);
   } finally {
     settled = true;
     signal.removeEventListener("abort", onAbort);
@@ -4569,35 +4953,88 @@ if (isAllowed("watch")) {
       if (signal !== null && signal.aborted) {
         throw createAbortReason(signal);
       }
-      let snapshot = normalizeWatchSnapshot(
-        await runAbortable(options, (abortWatcher) =>
-          parseNativeJson(namespace.__watchSnapshot(path, abortWatcher)),
-        ),
-      );
+      const runWatchRpc = async (request, operationOptions) =>
+        await runAbortable(operationOptions, (abortWatcher) =>
+          parseNativeJson(
+            namespace.__watchRpc(JSON.stringify(request), 0, abortWatcher),
+          ),
+        );
+      const lease = await runWatchRpc({ operation: "acquire" }, undefined);
+      const leaseToken = lease.token;
+      let released = false;
+      const releaseLease = async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        try {
+          await runWatchRpc(
+            { operation: "release", token: leaseToken },
+            undefined,
+          );
+        } catch (_error) {}
+      };
+      if (signal !== null && signal.aborted) {
+        await releaseLease();
+        throw createAbortReason(signal);
+      }
+      let snapshot;
+      try {
+        snapshot = normalizeWatchSnapshot(
+          await runWatchRpc(
+            { operation: "snapshot", path, token: leaseToken },
+            options,
+          ),
+        );
+      } catch (error) {
+        await releaseLease();
+        throw error;
+      }
       let closed = false;
       let polling = false;
+      let pollPromise = null;
       let timer = null;
-      const close = async () => {
-        if (closed) {
+      let closePromise = null;
+      const beginClose = async (waitForPoll) => {
+        if (closePromise !== null) {
+          await closePromise;
           return;
         }
-        closed = true;
-        if (timer !== null) {
-          clearInterval(timer);
-          timer = null;
-        }
-        if (signal !== null) {
-          signal.removeEventListener("abort", close);
-        }
+        const pendingPoll = waitForPoll ? pollPromise : null;
+        closePromise = (async () => {
+          if (closed) {
+            return;
+          }
+          closed = true;
+          if (timer !== null) {
+            clearInterval(timer);
+            timer = null;
+          }
+          if (signal !== null) {
+            signal.removeEventListener("abort", onAbort);
+          }
+          if (pendingPoll !== null) {
+            try {
+              await pendingPoll;
+            } catch (_error) {}
+          }
+          await releaseLease();
+        })();
+        await closePromise;
       };
-      const poll = async () => {
-        if (closed || polling) {
-          return;
-        }
-        polling = true;
+      const close = async () => {
+        await beginClose(true);
+      };
+      const onAbort = () => {
+        void close();
+      };
+      const runPoll = async () => {
         try {
           const next = normalizeWatchSnapshot(
-            await parseNativeJson(namespace.__watchSnapshot(path, null)),
+            await runWatchRpc(
+              { operation: "snapshot", path, token: leaseToken },
+              undefined,
+            ),
           );
           if (closed) {
             return;
@@ -4613,8 +5050,25 @@ if (isAllowed("watch")) {
             filename: null,
             message: String(error && error.message ? error.message : error),
           });
-          await close();
+          await beginClose(false);
+        }
+      };
+      const poll = async () => {
+        if (closed) {
+          return;
+        }
+        if (polling) {
+          return;
+        }
+        polling = true;
+        const currentPoll = runPoll();
+        pollPromise = currentPoll;
+        try {
+          await currentPoll;
         } finally {
+          if (pollPromise === currentPoll) {
+            pollPromise = null;
+          }
           polling = false;
         }
       };
@@ -4622,7 +5076,11 @@ if (isAllowed("watch")) {
         void poll();
       }, 100);
       if (signal !== null) {
-        signal.addEventListener("abort", close, { once: true });
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          await close();
+          throw createAbortReason(signal);
+        }
       }
       return { close };
     },
@@ -4762,10 +5220,9 @@ static const muon_plugin_function_metadata fs_functions[] = {
         "symlink",
     },
     {
-        "__watchSnapshot",
-        reinterpret_cast<muon_native_function>(
-            &muon_builtin_fs_watch_snapshot),
-        {2, path_abort_args, &type_string},
+        "__watchRpc",
+        reinterpret_cast<muon_native_function>(&muon_builtin_fs_watch_rpc),
+        {3, watch_rpc_args, &type_string},
         "watch",
     },
 };
@@ -4851,6 +5308,14 @@ void ShutdownMuonBuiltinFs() {
   if (!runtime->HasPendingOperations()) {
     muon_internal::g_runtime.reset();
   }
+}
+
+void ReleaseMuonBuiltinFsContext(int renderer_context_id) {
+  const auto runtime = muon_internal::g_runtime;
+  if (!runtime) {
+    return;
+  }
+  runtime->ReleaseWatchContext(renderer_context_id);
 }
 
 const muon_plugin_metadata* GetMuonBuiltinFsPluginMetadata() {

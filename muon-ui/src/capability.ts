@@ -39,6 +39,15 @@ export interface MuonCapabilityOptions {
    * Capability imports allowed by importer path.
    */
   imports?: readonly MuonCapabilityImportOptions[];
+  /**
+   * Known public plugin function paths available for wildcard export expansion.
+   *
+   * @remarks Exact `imports[].allow` entries do not require this catalog.
+   * Wildcard entries are expanded against these paths only when generating
+   * virtual module named exports; runtime permission policies keep the original
+   * wildcard patterns.
+   */
+  functionPaths?: readonly string[];
 }
 
 /**
@@ -186,6 +195,7 @@ interface ResolvedRule {
   rule: MuonCapabilityImportOptions;
   namespace: string;
   moduleName: string;
+  functionPaths: readonly string[];
 }
 
 const virtualModulePrefix = "\0muon-capability:";
@@ -193,6 +203,75 @@ const capabilityIdByteLength = 16;
 const moduleNamePattern =
   /^[A-Za-z_$][A-Za-z0-9_$]*:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/u;
 const jsIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const defaultMuonCapabilityFunctionPaths = [
+  "muon.browser.reload",
+  "muon.browser.hardReload",
+  "muon.browser.toggleFullscreen",
+  "muon.browser.enterFullscreen",
+  "muon.browser.exitFullscreen",
+  "muon.browser.zoomIn",
+  "muon.browser.zoomOut",
+  "muon.browser.resetZoom",
+  "muon.browser.show",
+  "muon.browser.hide",
+  "muon.browser.focus",
+  "muon.browser.blur",
+  "muon.browser.minimize",
+  "muon.browser.maximize",
+  "muon.browser.restore",
+  "muon.browser.setTitleBarVisibility",
+  "muon.browser.setTitleBarIcon",
+  "muon.browser.getWindowBounds",
+  "muon.browser.setWindowBounds",
+  "muon.browser.setContextMenuItems",
+  "muon.browser.clearContextMenuItems",
+  "muon.browser.createTray",
+  "muon.browser.setTrayMenu",
+  "muon.browser.setTrayIcon",
+  "muon.browser.setTrayTooltip",
+  "muon.browser.removeTray",
+  "muon.browser.close",
+  "muon.browser.shutdown",
+  "muon.browser.recycle",
+  "muon.environments.getVariables",
+  "muon.environments.getCommandLine",
+  "muon.environments.getProcessId",
+  "muon.environments.getRuntimeInfo",
+  "muon.environments.getAutostart",
+  "muon.environments.setAutostart",
+  "muon.executor.spawn",
+  "muon.executor.loadLibrary",
+  "muon.fs.readFile",
+  "muon.fs.writeFile",
+  "muon.fs.readTextFile",
+  "muon.fs.writeTextFile",
+  "muon.fs.stat",
+  "muon.fs.lstat",
+  "muon.fs.exists",
+  "muon.fs.access",
+  "muon.fs.readdir",
+  "muon.fs.mkdir",
+  "muon.fs.rm",
+  "muon.fs.unlink",
+  "muon.fs.rmdir",
+  "muon.fs.rename",
+  "muon.fs.copyFile",
+  "muon.fs.appendFile",
+  "muon.fs.appendTextFile",
+  "muon.fs.truncate",
+  "muon.fs.realpath",
+  "muon.fs.readlink",
+  "muon.fs.symlink",
+  "muon.fs.watch",
+  "muon.fs.dialogs.selectFile",
+  "muon.fs.dialogs.selectFiles",
+  "muon.fs.dialogs.selectDirectory",
+  "muon.fs.dialogs.selectDirectories",
+  "muon.fs.dialogs.selectSaveFile",
+  "muon.launcher.getSettings",
+  "muon.launcher.setSettings",
+  "muon.launcher.triggerUpdate",
+] as const;
 
 const normalizePath = (path: string): string =>
   (path.split("?")[0] ?? "").replaceAll("\\", "/");
@@ -246,6 +325,8 @@ const globToRegExp = (glob: string, separator: string): RegExp => {
 
 const isGlobMatch = (glob: string, value: string, separator: string): boolean =>
   globToRegExp(glob, separator).test(value);
+
+const containsGlob = (value: string): boolean => value.includes("*");
 
 const toRootRelativeImporter = (root: string, importer: string): string =>
   normalizePath(relative(root, importer));
@@ -339,11 +420,46 @@ const getExactExportName = (
 const getExportedFunctions = (
   namespace: string,
   allow: readonly string[],
-): [string, string][] =>
-  allow.flatMap((functionPath) => {
+  functionPaths: readonly string[],
+): [string, string][] => {
+  const exportedFunctions = new Map<string, string>();
+  const addExport = (functionPath: string): void => {
     const exportName = getExactExportName(namespace, functionPath);
-    return exportName === undefined ? [] : [[exportName, functionPath]];
-  });
+    if (exportName !== undefined && !exportedFunctions.has(exportName)) {
+      exportedFunctions.set(exportName, functionPath);
+    }
+  };
+
+  for (const entry of allow) {
+    if (!containsGlob(entry)) {
+      addExport(entry);
+      continue;
+    }
+    for (const functionPath of functionPaths) {
+      if (isGlobMatch(entry, functionPath, ".")) {
+        addExport(functionPath);
+      }
+    }
+  }
+  return Array.from(exportedFunctions.entries());
+};
+
+const createFunctionPathCatalog = (
+  functionPaths: readonly string[] | undefined,
+): readonly string[] => {
+  const catalog: string[] = [];
+  const seen = new Set<string>();
+  for (const functionPath of [
+    ...defaultMuonCapabilityFunctionPaths,
+    ...(functionPaths ?? []),
+  ]) {
+    if (!seen.has(functionPath)) {
+      seen.add(functionPath);
+      catalog.push(functionPath);
+    }
+  }
+  return catalog;
+};
 
 const createRuleRuntimeEntry = (
   rule: MuonCapabilityImportOptions,
@@ -1142,10 +1258,14 @@ const createModuleSource = (rule: ResolvedRule): string => {
   const exportedFunctions = getExportedFunctions(
     rule.namespace,
     rule.rule.allow,
+    rule.functionPaths,
   );
   if (exportedFunctions.length === 0) {
+    const hasWildcardAllow = rule.rule.allow.some(containsGlob);
     throw new Error(
-      `muon capability import has no exact function exports: ${rule.moduleName}`,
+      hasWildcardAllow
+        ? `muon capability import has no matching function exports: ${rule.moduleName}`
+        : `muon capability import has no exact function exports: ${rule.moduleName}`,
     );
   }
 
@@ -1222,6 +1342,7 @@ export const createMuonCapabilityModuleResolver = (
   options: MuonCapabilityOptions | undefined,
 ): MuonCapabilityModuleResolver => {
   const rules = [...(options?.imports ?? [])];
+  const functionPaths = createFunctionPathCatalog(options?.functionPaths);
   for (const rule of rules) {
     validateCapabilityRule(rule);
   }
@@ -1268,6 +1389,7 @@ export const createMuonCapabilityModuleResolver = (
         rule,
         namespace: parsed.namespace,
         moduleName: parsed.moduleName,
+        functionPaths,
       };
     }
 
@@ -1306,6 +1428,7 @@ export const createMuonCapabilityModuleResolver = (
         rule,
         namespace: source.namespace,
         moduleName: source.moduleName,
+        functionPaths,
       });
     },
     getRuntimePluginConfig: () => ({

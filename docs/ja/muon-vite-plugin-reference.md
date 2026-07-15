@@ -27,11 +27,12 @@ export default defineConfig({
 | `cefPath`        | `string`              | muon-builderの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にmuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のmuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
+| `exitWithServer` | `boolean`             | `true`                      | muon-coreが通常終了した時にVite dev serverも終了するかどうかです。   |
 | `pluginAccess`   | `false \| object`     | `muon.json` の `plugin` 設定 | プラグインAPIの露出方式とvirtual module importの上書き設定です。     |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
-- `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger` は `vite dev` に影響します。
-  `muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` と `build.configPath` を読み取り、 `open` は無視します。
+- `muonPath`, `cefPath`, `stagePath`, `open`, `enableDebugger`, `exitWithServer` は `vite dev` に影響します。
+  `muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` と `build.configPath` を読み取り、 `open` と `exitWithServer` は無視します。
   `vite build` ではこれらの開発起動用オプションは無視されます。
 - `build: false` は、`--assets` を省略した `muon run` のVite-backed起動ではエラーになります。
   `--assets` を明示した場合はVite-backed起動を使用しないため、指定アセットを従来どおり起動します。
@@ -41,6 +42,8 @@ export default defineConfig({
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでmuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
+- `exitWithServer` を省略または `true` にした場合、muon-coreが通常終了するとVite dev serverも終了します。
+  muonのリサイクル再起動ではVite dev serverは終了しません。
 
 ## pluginAccessキー
 

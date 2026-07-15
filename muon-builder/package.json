@@ -7,7 +7,7 @@
     "build:dist": "bash ./build.sh dist Release linux-amd64 && bash ./build.sh dist Release windows-i686 && bash ./build.sh dist Release windows-amd64",
     "build:target": "bash ./build.sh",
     "clean": "rm -rf .run dist dist-debug dist-linux-amd64 dist-linux-amd64-debug dist-linux-armhf dist-linux-armhf-debug dist-linux-arm64 dist-linux-arm64-debug dist-windows-i686 dist-windows-i686-debug dist-windows-amd64 dist-windows-amd64-debug dist-linux64 dist-linux64-debug dist-linuxarm dist-linuxarm-debug dist-linuxarm64 dist-linuxarm64-debug dist-windows32 dist-windows32-debug dist-windows64 dist-windows64-debug",
-    "test": "bash ./test_sha256.sh && bash ./test_launcher_progress.sh && bash ./test_runtime_helper.sh && bash ./build.sh test Release linux-amd64 && ./.run/test-linux-amd64-release/muon-builder --help 2>&1 | grep -q \"Usage: muon-builder\" && ./.run/test-linux-amd64-release/muon-runtime-helper 2>&1 | grep -q \"effective root is required\" && node ./scripts/test-resource-update.mjs ./.run/test-linux-amd64-release/muon-builder && bash ./test_wine_extract.sh"
+    "test": "bash ./test_sha256.sh && bash ./test_launcher_progress.sh && bash ./test_runtime_helper.sh && bash ./build.sh test Release linux-amd64 && ./.run/test-linux-amd64-release/muon-builder --help 2>&1 | grep -q \"Usage: muon-builder\" && ./.run/test-linux-amd64-release/muon-runtime-helper 2>&1 | grep -q \"effective root is required\" && bash ./test_plugin_inspector.sh ./.run/test-linux-amd64-release/muon-plugin-inspector && node ./scripts/test-resource-update.mjs ./.run/test-linux-amd64-release/muon-builder && bash ./test_wine_extract.sh"
   },
   "devDependencies": {
     "screw-up": ">=1.35.0"

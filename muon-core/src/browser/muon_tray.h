@@ -9,6 +9,7 @@
 #include "app/muon_app_storage.h"
 #include "browser/muon_icon.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -106,6 +107,52 @@ struct MuonBrowserTrayEvent {
  */
 using MuonBrowserTrayEventCallback =
     std::function<void(const MuonBrowserTrayEvent&)>;
+
+/**
+ * System tray resource limits for the browser tray service.
+ */
+struct MuonBrowserTrayLimits {
+  /** Maximum live tray items owned by one browser. */
+  size_t max_per_browser = 16;
+  /** Maximum live tray items owned by the whole process. */
+  size_t max_global = 64;
+};
+
+/**
+ * Test-only platform hook set for the browser tray service.
+ *
+ * @remarks When create_record is set, the service uses these hooks instead of
+ * native D-Bus or Shell tray resources.
+ */
+struct MuonBrowserTrayPlatformHooks {
+  /** Creates platform state for one tray record. */
+  std::function<bool(int browser_id,
+                     const std::string& tray_id,
+                     std::string* error_message)>
+      create_record;
+  /** Destroys platform state for one tray record. */
+  std::function<void(int browser_id, const std::string& tray_id)>
+      destroy_record;
+  /** Observes an icon update for one tray record. */
+  std::function<void(int browser_id, const std::string& tray_id)> update_icon;
+  /** Observes a tooltip update for one tray record. */
+  std::function<void(int browser_id, const std::string& tray_id)>
+      update_tooltip;
+  /** Observes a menu update for one tray record. */
+  std::function<void(int browser_id, const std::string& tray_id)> update_menu;
+};
+
+/**
+ * Internal construction options for the browser tray service.
+ */
+struct MuonBrowserTrayServiceOptions {
+  /** Desktop id used for Linux tray metadata. */
+  std::string linux_desktop_id;
+  /** Live tray resource limits. */
+  MuonBrowserTrayLimits limits;
+  /** Optional test-only platform hooks. */
+  MuonBrowserTrayPlatformHooks platform_hooks;
+};
 
 /**
  * Platform-neutral system tray service.
@@ -253,3 +300,12 @@ bool LoadMuonBrowserTrayIconFromTitleBarIcon(
  */
 std::unique_ptr<MuonBrowserTrayService> CreateMuonBrowserTrayService(
     std::string linux_desktop_id);
+
+/**
+ * Creates a platform tray service with internal construction options.
+ *
+ * @param options Internal service options.
+ * @return Platform tray service implementation.
+ */
+std::unique_ptr<MuonBrowserTrayService> CreateMuonBrowserTrayService(
+    MuonBrowserTrayServiceOptions options);

@@ -123,6 +123,14 @@ export interface MuonResolvedPluginAccessOptions {
    * Runtime config fields added around generated capability policies.
    */
   runtimeOverlay: MuonPluginAccessRuntimeOverlay;
+  /**
+   * Resolved external plugin directory used by build-time inspectors.
+   */
+  pluginPath: string;
+  /**
+   * Effective plugin entries from muon.json and Vite options.
+   */
+  plugins: readonly MuonPluginAccessEntryOptions[];
 }
 
 /**
@@ -693,7 +701,9 @@ const mergePluginAccessOptions = (
   base: MuonPluginAccessOptions,
   override: MuonPluginAccessOptions | undefined,
 ): EffectivePluginAccessOptions => ({
-  ...(override?.path === undefined ? {} : { path: override.path }),
+  ...((override?.path ?? base.path) === undefined
+    ? {}
+    : { path: override?.path ?? base.path }),
   mode: override?.mode ?? base.mode ?? "validate",
   pages: override?.pages ?? base.pages ?? defaultPluginPages,
   plugins: override?.plugins ?? base.plugins ?? [],
@@ -719,6 +729,19 @@ const createRuntimeOverlay = (
     ...(path === undefined ? {} : { path }),
     ...(plugins === undefined ? {} : { plugins }),
   };
+};
+
+const resolveInspectorPluginPath = (
+  root: string,
+  configPath: string | undefined,
+  resolved: EffectivePluginAccessOptions,
+  override: false | MuonPluginAccessOptions | undefined,
+): string => {
+  if (override !== false && override?.path !== undefined) {
+    return resolve(root, override.path);
+  }
+  const basePath = configPath === undefined ? root : resolve(configPath, "..");
+  return resolve(basePath, resolved.path ?? "./plugins");
 };
 
 /**
@@ -757,6 +780,13 @@ export const resolveMuonPluginAccessOptions = async ({
       pages: resolved.pages,
       capabilityOptions: { imports: [] },
       runtimeOverlay: createRuntimeOverlay(root, resolved, pluginAccess),
+      pluginPath: resolveInspectorPluginPath(
+        root,
+        resolvedConfigPath,
+        resolved,
+        pluginAccess,
+      ),
+      plugins: resolved.plugins,
     };
   }
 
@@ -772,5 +802,12 @@ export const resolveMuonPluginAccessOptions = async ({
     pages: resolved.pages,
     capabilityOptions,
     runtimeOverlay: createRuntimeOverlay(root, resolved, pluginAccess),
+    pluginPath: resolveInspectorPluginPath(
+      root,
+      resolvedConfigPath,
+      resolved,
+      pluginAccess,
+    ),
+    plugins: resolved.plugins,
   };
 };

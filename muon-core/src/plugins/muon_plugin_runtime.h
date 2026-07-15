@@ -290,6 +290,14 @@ class MuonPluginRuntime final {
                               int renderer_context_id);
 
   /**
+   * Releases function sources and proxy leases owned by one browser frame.
+   *
+   * @param browser_id Browser whose frame was destroyed.
+   * @param frame_id Frame identifier assigned by CEF.
+   */
+  void ReleaseFunctionFrame(int browser_id, const std::string& frame_id);
+
+  /**
    * Releases all function sources and proxy leases owned by one browser.
    *
    * @param browser_id Browser whose renderer process was closed or terminated.

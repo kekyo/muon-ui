@@ -10,6 +10,7 @@ const packageRuntimeTargets = {
   "linux-amd64": {
     nativePrepare: "muon-builder",
     nativeLauncher: "muon-launcher",
+    nativePluginInspector: "muon-plugin-inspector",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
@@ -17,6 +18,7 @@ const packageRuntimeTargets = {
   "linux-armhf": {
     nativePrepare: "muon-builder",
     nativeLauncher: "muon-launcher",
+    nativePluginInspector: "muon-plugin-inspector",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
@@ -24,6 +26,7 @@ const packageRuntimeTargets = {
   "linux-arm64": {
     nativePrepare: "muon-builder",
     nativeLauncher: "muon-launcher",
+    nativePluginInspector: "muon-plugin-inspector",
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
@@ -31,6 +34,7 @@ const packageRuntimeTargets = {
   "windows-i686": {
     nativePrepare: "muon-builder.exe",
     nativeLauncher: "muon-launcher.exe",
+    nativePluginInspector: "muon-plugin-inspector.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
@@ -38,6 +42,7 @@ const packageRuntimeTargets = {
   "windows-amd64": {
     nativePrepare: "muon-builder.exe",
     nativeLauncher: "muon-launcher.exe",
+    nativePluginInspector: "muon-plugin-inspector.exe",
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
@@ -94,6 +99,7 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
 
   await assertExists(join(nativePath, descriptor.nativePrepare));
   await assertExists(join(nativePath, descriptor.nativeLauncher));
+  await assertExists(join(nativePath, descriptor.nativePluginInspector));
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
   }

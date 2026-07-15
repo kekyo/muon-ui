@@ -40,7 +40,6 @@
 #include "yyjson.h"
 
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -68,6 +67,22 @@ static bool IsMuonKnownPopupTargetUrl(const std::string& url) {
 
 static std::string GetMuonPopupNavigationUrl(const std::string& target_url) {
   return IsMuonKnownPopupTargetUrl(target_url) ? target_url : "about:blank";
+}
+
+static void QuitMuonMessageLoopOnce(const char* source) {
+  static bool quit_executed = false;
+  CEF_REQUIRE_UI_THREAD();
+  if (quit_executed) {
+    std::ostringstream log;
+    log << source << " skip reason=already_quit";
+    AppendMuonCloseDebugLog(log.str());
+    return;
+  }
+  quit_executed = true;
+  std::ostringstream log;
+  log << source << " Execute CefQuitMessageLoop";
+  AppendMuonCloseDebugLog(log.str());
+  CefQuitMessageLoop();
 }
 
 class CloseMuonWindowTask final : public CefTask {
@@ -103,8 +118,7 @@ class QuitMuonMessageLoopTask final : public CefTask {
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
 
-    AppendMuonCloseDebugLog("QuitMessageLoopTask Execute CefQuitMessageLoop");
-    CefQuitMessageLoop();
+    QuitMuonMessageLoopOnce("QuitMessageLoopTask");
   }
 
  private:
@@ -1128,6 +1142,10 @@ CefRefPtr<CefDragHandler> MuonClient::GetDragHandler() {
   return this;
 }
 
+CefRefPtr<CefFrameHandler> MuonClient::GetFrameHandler() {
+  return this;
+}
+
 CefRefPtr<CefRequestHandler> MuonClient::GetRequestHandler() {
   return this;
 }
@@ -1306,6 +1324,20 @@ void MuonClient::ReleaseFunctionBrowserState(int browser_id) {
   if (browser_id <= 0) {
     return;
   }
+  if (HasPendingKeepAliveFsDialogCallForBrowser(browser_id)) {
+    deferred_function_browser_releases_.insert(browser_id);
+    return;
+  }
+  ReleaseFunctionBrowserStateNow(browser_id);
+}
+
+void MuonClient::ReleaseFunctionBrowserStateNow(int browser_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0) {
+    return;
+  }
+  deferred_function_browser_releases_.erase(browser_id);
+  deferred_function_frame_releases_.erase(browser_id);
   if (plugin_runtime_) {
     plugin_runtime_->ReleaseFunctionBrowser(browser_id);
   }
@@ -1348,6 +1380,103 @@ void MuonClient::ReleaseFunctionBrowserState(int browser_id) {
   }
 }
 
+void MuonClient::ReleaseFunctionFrameState(int browser_id,
+                                           const std::string& frame_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0 || frame_id.empty()) {
+    return;
+  }
+  if (HasPendingKeepAliveFsDialogCallForBrowser(browser_id)) {
+    deferred_function_frame_releases_[browser_id].insert(frame_id);
+    return;
+  }
+  ReleaseFunctionFrameStateNow(browser_id, frame_id);
+}
+
+void MuonClient::ReleaseFunctionFrameStateNow(int browser_id,
+                                              const std::string& frame_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0 || frame_id.empty()) {
+    return;
+  }
+  if (plugin_runtime_) {
+    plugin_runtime_->ReleaseFunctionFrame(browser_id, frame_id);
+  }
+  const auto belongs_to_frame =
+      [browser_id, &frame_id](const MuonPluginInvocationContext& context) {
+        return context.browser_id == browser_id && context.frame_id == frame_id;
+      };
+  for (auto iterator = pending_plugin_calls_.begin();
+       iterator != pending_plugin_calls_.end();) {
+    if (belongs_to_frame(iterator->second.context)) {
+      iterator = pending_plugin_calls_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = pending_plugin_call_payloads_.begin();
+       iterator != pending_plugin_call_payloads_.end();) {
+    if (belongs_to_frame(iterator->second.context)) {
+      iterator = pending_plugin_call_payloads_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = pending_renderer_function_result_messages_.begin();
+       iterator != pending_renderer_function_result_messages_.end();) {
+    if (belongs_to_frame(iterator->second.context)) {
+      iterator = pending_renderer_function_result_messages_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+  for (auto iterator = pending_renderer_function_result_payloads_.begin();
+       iterator != pending_renderer_function_result_payloads_.end();) {
+    if (belongs_to_frame(iterator->second.result.context)) {
+      iterator = pending_renderer_function_result_payloads_.erase(iterator);
+    } else {
+      ++iterator;
+    }
+  }
+}
+
+bool MuonClient::HasPendingKeepAliveFsDialogCallForBrowser(
+    int browser_id) const {
+  if (browser_id <= 0) {
+    return false;
+  }
+  const auto pending =
+      pending_keep_alive_fs_dialog_calls_by_browser_.find(browser_id);
+  return pending != pending_keep_alive_fs_dialog_calls_by_browser_.end() &&
+         pending->second > 0;
+}
+
+void MuonClient::FlushDeferredFunctionReleasesForBrowser(int browser_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_id <= 0 ||
+      HasPendingKeepAliveFsDialogCallForBrowser(browser_id)) {
+    return;
+  }
+
+  const auto browser_release =
+      deferred_function_browser_releases_.find(browser_id);
+  if (browser_release != deferred_function_browser_releases_.end()) {
+    ReleaseFunctionBrowserStateNow(browser_id);
+    return;
+  }
+
+  auto frame_release = deferred_function_frame_releases_.find(browser_id);
+  if (frame_release == deferred_function_frame_releases_.end()) {
+    return;
+  }
+  auto frame_ids = std::vector<std::string>(
+      frame_release->second.begin(), frame_release->second.end());
+  deferred_function_frame_releases_.erase(frame_release);
+  for (const auto& frame_id : frame_ids) {
+    ReleaseFunctionFrameStateNow(browser_id, frame_id);
+  }
+}
+
 void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   const auto browser_id = browser->GetIdentifier();
@@ -1379,6 +1508,8 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   pending_favicon_requests_.erase(browser_id);
   title_bar_icon_update_generations_.erase(browser_id);
   title_bar_tray_icons_by_browser_.erase(browser_id);
+  close_windows_after_pending_fs_dialogs_.erase(browser_id);
+  close_windows_after_keep_alive_fs_dialogs_.erase(browser_id);
   ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
   ClearTrayRegistrationsForBrowser(browser_id);
@@ -1416,15 +1547,32 @@ void MuonClient::OnRenderProcessTerminated(
   ReleaseFunctionBrowserState(browser_id);
 }
 
-void MuonClient::BeginPendingFsDialogCall(int browser_id) {
+void MuonClient::OnFrameDestroyed(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefFrame> frame) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser || !frame) {
+    return;
+  }
+  ReleaseFunctionFrameState(
+      browser->GetIdentifier(), frame->GetIdentifier().ToString());
+}
+
+void MuonClient::BeginPendingFsDialogCall(
+    int browser_id,
+    PendingFsDialogPolicy policy) {
   CEF_REQUIRE_UI_THREAD();
   pending_fs_dialog_calls_ += 1;
-  if (browser_id > 0) {
+  if (policy == PendingFsDialogPolicy::CancelOnOwnerClose && browser_id > 0) {
     pending_fs_dialog_calls_by_browser_[browser_id] += 1;
+  } else if (policy == PendingFsDialogPolicy::KeepAliveOnly &&
+             browser_id > 0) {
+    pending_keep_alive_fs_dialog_calls_by_browser_[browser_id] += 1;
   }
 }
 
-void MuonClient::EndPendingFsDialogCall(int browser_id) {
+void MuonClient::EndPendingFsDialogCall(
+    int browser_id,
+    PendingFsDialogPolicy policy) {
   CEF_REQUIRE_UI_THREAD();
   {
     std::ostringstream log;
@@ -1442,7 +1590,7 @@ void MuonClient::EndPendingFsDialogCall(int browser_id) {
   if (pending_fs_dialog_calls_ > 0) {
     pending_fs_dialog_calls_ -= 1;
   }
-  if (browser_id > 0) {
+  if (policy == PendingFsDialogPolicy::CancelOnOwnerClose && browser_id > 0) {
     const auto iterator =
         pending_fs_dialog_calls_by_browser_.find(browser_id);
     if (iterator != pending_fs_dialog_calls_by_browser_.end()) {
@@ -1451,14 +1599,33 @@ void MuonClient::EndPendingFsDialogCall(int browser_id) {
         pending_fs_dialog_calls_by_browser_.erase(iterator);
       }
     }
+  } else if (policy == PendingFsDialogPolicy::KeepAliveOnly &&
+             browser_id > 0) {
+    const auto iterator =
+        pending_keep_alive_fs_dialog_calls_by_browser_.find(browser_id);
+    if (iterator != pending_keep_alive_fs_dialog_calls_by_browser_.end()) {
+      iterator->second -= 1;
+      if (iterator->second <= 0) {
+        pending_keep_alive_fs_dialog_calls_by_browser_.erase(iterator);
+      }
+    }
   }
   CefRefPtr<CefWindow> close_window_after_pending;
-  if (browser_id > 0 && !HasPendingFsDialogCallForBrowser(browser_id)) {
+  if (policy == PendingFsDialogPolicy::CancelOnOwnerClose && browser_id > 0 &&
+      !HasPendingFsDialogCallForBrowser(browser_id)) {
     const auto close_iterator =
         close_windows_after_pending_fs_dialogs_.find(browser_id);
     if (close_iterator != close_windows_after_pending_fs_dialogs_.end()) {
       close_window_after_pending = close_iterator->second;
       close_windows_after_pending_fs_dialogs_.erase(close_iterator);
+    }
+  } else if (policy == PendingFsDialogPolicy::KeepAliveOnly && browser_id > 0 &&
+             !HasPendingKeepAliveFsDialogCallForBrowser(browser_id)) {
+    const auto close_iterator =
+        close_windows_after_keep_alive_fs_dialogs_.find(browser_id);
+    if (close_iterator != close_windows_after_keep_alive_fs_dialogs_.end()) {
+      close_window_after_pending = close_iterator->second;
+      close_windows_after_keep_alive_fs_dialogs_.erase(close_iterator);
     }
   }
   if (close_window_after_pending && close_window_after_pending->IsValid()) {
@@ -1469,6 +1636,10 @@ void MuonClient::EndPendingFsDialogCall(int browser_id) {
         << FormatMuonCloseDebugPointer(close_window_after_pending.get());
     AppendMuonCloseDebugLog(log.str());
     close_window_after_pending->Close();
+  }
+  if (policy == PendingFsDialogPolicy::KeepAliveOnly && browser_id > 0 &&
+      !browsers_by_id_.empty()) {
+    FlushDeferredFunctionReleasesForBrowser(browser_id);
   }
   if (pending_fs_dialog_calls_ == 0) {
     if (quit_message_loop_after_pending_fs_dialogs_) {
@@ -1532,6 +1703,30 @@ bool MuonClient::RequestCloseAfterPendingFsDialog(
   return true;
 }
 
+bool MuonClient::RequestCloseAfterKeepAliveFsDialog(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefWindow> window) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser || !window) {
+    return false;
+  }
+  const auto browser_id = browser->GetIdentifier();
+  if (!HasPendingKeepAliveFsDialogCallForBrowser(browser_id)) {
+    return false;
+  }
+  close_windows_after_keep_alive_fs_dialogs_[browser_id] = window;
+  if (window->IsValid()) {
+    window->Hide();
+  }
+  std::ostringstream log;
+  log << "MuonClient RequestCloseAfterKeepAliveFsDialog browser_id="
+      << browser_id
+      << " window=" << FormatMuonCloseDebugPointer(window.get())
+      << " pending_fs=" << pending_fs_dialog_calls_;
+  AppendMuonCloseDebugLog(log.str());
+  return true;
+}
+
 bool MuonClient::HasPendingFsDialogCallForBrowser(int browser_id) const {
   CEF_REQUIRE_UI_THREAD();
   const auto pending = pending_fs_dialog_calls_by_browser_.find(browser_id);
@@ -1562,9 +1757,7 @@ void MuonClient::RequestMessageLoopQuit(bool post_task) {
     CefPostTask(TID_UI, new QuitMuonMessageLoopTask());
     return;
   }
-  AppendMuonCloseDebugLog(
-      "MuonClient RequestMessageLoopQuit direct CefQuitMessageLoop");
-  CefQuitMessageLoop();
+  QuitMuonMessageLoopOnce("MuonClient RequestMessageLoopQuit direct");
 }
 
 void MuonClient::QuitMessageLoopWhenIdle() {
@@ -3463,23 +3656,62 @@ void MuonClient::DispatchPluginCall(
   }
   const auto track_fs_dialog_call = fs_dialog_call;
   const auto fs_dialog_browser_id = call.context.browser_id;
+  const auto fs_dialog_policy = fs_dialog_modal
+                                    ? PendingFsDialogPolicy::CancelOnOwnerClose
+                                    : PendingFsDialogPolicy::KeepAliveOnly;
+  CefRefPtr<CefFrame> result_frame = call.frame;
+  if (track_fs_dialog_call &&
+      fs_dialog_policy == PendingFsDialogPolicy::KeepAliveOnly) {
+    result_frame = nullptr;
+  }
   if (track_fs_dialog_call) {
-    BeginPendingFsDialogCall(fs_dialog_browser_id);
+    BeginPendingFsDialogCall(fs_dialog_browser_id, fs_dialog_policy);
   }
   plugin_runtime_->Invoke(
       call.context, call.function_id, call.call_id, invoke_args,
       std::move(payload),
-      [self, frame = call.frame, call_id = call.call_id,
+      [self, frame = result_frame, call_id = call.call_id,
        invocation_context = call.context,
        modal_browser_id,
        track_fs_dialog_call,
-       fs_dialog_browser_id](const MuonPluginCallResult& result) {
+       fs_dialog_browser_id,
+       fs_dialog_policy](const MuonPluginCallResult& result) {
         if (modal_browser_id != 0) {
           self->EndModalBrowserViewDisable(modal_browser_id);
         }
-        self->SendPluginResult(invocation_context, frame, call_id, result);
+        const auto caller_browser_is_alive =
+            self->browsers_by_id_.find(invocation_context.browser_id) !=
+            self->browsers_by_id_.end();
+        const auto should_send_result =
+            !track_fs_dialog_call ||
+            fs_dialog_policy == PendingFsDialogPolicy::CancelOnOwnerClose ||
+            caller_browser_is_alive;
+        if (should_send_result) {
+          auto target_frame = frame;
+          if (!target_frame && caller_browser_is_alive) {
+            const auto browser_iterator =
+                self->browsers_by_id_.find(invocation_context.browser_id);
+            if (browser_iterator != self->browsers_by_id_.end() &&
+                browser_iterator->second) {
+              if (!invocation_context.frame_id.empty()) {
+                target_frame = browser_iterator->second->GetFrameByIdentifier(
+                    invocation_context.frame_id);
+              }
+              if (!target_frame) {
+                target_frame = browser_iterator->second->GetMainFrame();
+              }
+            }
+          }
+          self->SendPluginResult(
+              invocation_context, target_frame, call_id, result);
+        } else {
+          std::ostringstream log;
+          log << "MuonClient DispatchPluginCall skip_detached_fs_dialog_result"
+              << " browser_id=" << invocation_context.browser_id;
+          AppendMuonCloseDebugLog(log.str());
+        }
         if (track_fs_dialog_call) {
-          self->EndPendingFsDialogCall(fs_dialog_browser_id);
+          self->EndPendingFsDialogCall(fs_dialog_browser_id, fs_dialog_policy);
         }
       });
 }
@@ -3913,12 +4145,53 @@ void MuonClient::RejectPluginCall(const PendingPluginCall& call,
   SendPluginResult(call.context, call.frame, call.call_id, result);
 }
 
+bool MuonClient::IsPluginResultTargetAvailable(
+    const MuonPluginInvocationContext& context,
+    CefRefPtr<CefFrame> frame) const {
+  CEF_REQUIRE_UI_THREAD();
+  if (!frame || !frame->IsValid()) {
+    return false;
+  }
+  const auto browser_iterator = browsers_by_id_.find(context.browser_id);
+  if (browser_iterator == browsers_by_id_.end() ||
+      !browser_iterator->second || !browser_iterator->second->IsValid()) {
+    std::ostringstream log;
+    log << "MuonClient SendPluginResult skip reason=browser_unavailable"
+        << " browser_id=" << context.browser_id;
+    AppendMuonCloseDebugLog(log.str());
+    return false;
+  }
+  const auto frame_browser = frame->GetBrowser();
+  if (!frame_browser || !frame_browser->IsValid() ||
+      frame_browser->GetIdentifier() != context.browser_id) {
+    std::ostringstream log;
+    log << "MuonClient SendPluginResult skip reason=detached_frame"
+        << " browser_id=" << context.browser_id;
+    AppendMuonCloseDebugLog(log.str());
+    return false;
+  }
+  if (context.frame_id.empty()) {
+    return true;
+  }
+  const auto current_frame =
+      browser_iterator->second->GetFrameByIdentifier(context.frame_id);
+  if (!current_frame || !current_frame->IsValid()) {
+    std::ostringstream log;
+    log << "MuonClient SendPluginResult skip reason=frame_unavailable"
+        << " browser_id=" << context.browser_id
+        << " frame_id=" << context.frame_id;
+    AppendMuonCloseDebugLog(log.str());
+    return false;
+  }
+  return true;
+}
+
 void MuonClient::SendPluginResult(const MuonPluginInvocationContext& context,
                                    CefRefPtr<CefFrame> frame,
                                    int call_id,
                                    const MuonPluginCallResult& result) {
   CEF_REQUIRE_UI_THREAD();
-  if (!frame || !frame->IsValid()) {
+  if (!IsPluginResultTargetAvailable(context, frame)) {
     return;
   }
 

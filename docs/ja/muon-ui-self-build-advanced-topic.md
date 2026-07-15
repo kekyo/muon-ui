@@ -69,6 +69,6 @@ podman run --rm --platform linux/arm64 docker.io/library/debian:trixie-slim unam
 npm run pack
 ```
 
-このパッケージスクリプトは `./build_package.sh` に委譲します。パッケージ生成オプションを直接渡したい場合は、`./build_package.sh` を直接実行することも出来ます。
+このパッケージスクリプトは `build_package.sh` に委譲します。パッケージ生成オプションを直接渡したい場合は、`build_package.sh` を直接実行することも出来ます。
 
 - サポートされているすべてのアーキテクチャ向けにネイティブコードをビルドおよびテストするため、非常に長い時間がかかります（30分以上かかる可能性があります）。

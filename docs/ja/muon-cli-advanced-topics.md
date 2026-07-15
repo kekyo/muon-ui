@@ -1,6 +1,7 @@
 # muon CLI (Advanced topics)
 
-muonは基本的にViteプラグインと共に使用することを想定していますが、Viteプラグインを使用しないで開発することも出来ます。その場合は、 `muon` CLIコマンドを使用します。
+muonは基本的にViteプラグインと共に使用することを想定していますが、Viteプラグインを使用しないで開発することも出来ます。
+その場合は、 `muon` CLIコマンドを使用します。
 
 ## muon runで直接起動
 
@@ -42,7 +43,7 @@ npx muon build
 `vite.config.*` にmuon Viteプラグインが含まれている場合、 `muon build` は `muon({ ... })` の引数を読み取り、 `vite build` と同じビルド設定を使用します。
 但し、CLIオプションを指定した場合は、そのパラメータはオーバーライドされます。
 
-muon Viteプラグインが無い場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
+muon Viteプラグインが構成されていない場合、 `muon build` はコンテンツビルド用のnpm scriptや `vite build` を自動実行せず、既に存在するアセットを配布用ディレクトリにまとめます。
 この場合のアセット元は、`--assets`、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます（`muon run` 同様）。
 
 `asset.sourcePath` は設定ファイルが置かれているディレクトリからの相対パス、または絶対パスとして扱われます。

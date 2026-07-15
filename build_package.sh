@@ -345,6 +345,10 @@ validate_linux_artifacts() {
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
+      "muon-ui/dist/native/${target_name}/muon-plugin-inspector" \
+      "${expected_class}" \
+      "${expected_machine}"
+    validate_readelf_header \
       "muon-ui/dist/runtime/${target_name}/muon-core" \
       "${expected_class}" \
       "${expected_machine}"
@@ -439,16 +443,21 @@ verify_package_file_list() {
   require_pack_file "dist/native/linux-amd64/muon-builder"
   require_pack_file "dist/native/linux-amd64/muon-launcher"
   require_pack_file "dist/native/linux-amd64/muon-runtime-helper"
+  require_pack_file "dist/native/linux-amd64/muon-plugin-inspector"
   require_pack_file "dist/native/linux-armhf/muon-builder"
   require_pack_file "dist/native/linux-armhf/muon-launcher"
   require_pack_file "dist/native/linux-armhf/muon-runtime-helper"
+  require_pack_file "dist/native/linux-armhf/muon-plugin-inspector"
   require_pack_file "dist/native/linux-arm64/muon-builder"
   require_pack_file "dist/native/linux-arm64/muon-launcher"
   require_pack_file "dist/native/linux-arm64/muon-runtime-helper"
+  require_pack_file "dist/native/linux-arm64/muon-plugin-inspector"
   require_pack_file "dist/native/windows-i686/muon-builder.exe"
   require_pack_file "dist/native/windows-i686/muon-launcher.exe"
+  require_pack_file "dist/native/windows-i686/muon-plugin-inspector.exe"
   require_pack_file "dist/native/windows-amd64/muon-builder.exe"
   require_pack_file "dist/native/windows-amd64/muon-launcher.exe"
+  require_pack_file "dist/native/windows-amd64/muon-plugin-inspector.exe"
   require_pack_file "dist/runtime/linux-amd64/libcardio.so"
   require_pack_file "dist/runtime/linux-armhf/libcardio.so"
   require_pack_file "dist/runtime/linux-arm64/libcardio.so"

@@ -186,6 +186,8 @@ const isMuonVitePluginOptions = (
     (value.open === undefined || typeof value.open === "boolean") &&
     (value.enableDebugger === undefined ||
       typeof value.enableDebugger === "boolean") &&
+    (value.exitWithServer === undefined ||
+      typeof value.exitWithServer === "boolean") &&
     (value.pluginAccess === undefined ||
       value.pluginAccess === false ||
       isMuonVitePluginAccessOptions(value.pluginAccess)) &&

@@ -730,6 +730,7 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
   src/plugins/builtin/muon_builtin_fs_read_limits.cpp
+  src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
   src/plugins/muon_function_wrapper_lifecycle.cpp
   src/plugins/muon_plugin_metadata.cpp
   src/plugins/muon_plugin_policy.cpp
@@ -782,6 +783,7 @@ set(APP_HEADERS
   src/plugins/builtin/muon_builtin_fs_gio_read_source.h
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.h
   src/plugins/builtin/muon_builtin_fs_helpers.h
+  src/plugins/builtin/muon_builtin_fs_watch_registry.h
   src/plugins/muon_js_bridge.h
   src/plugins/muon_function_wrapper_lifecycle.h
   src/plugins/muon_plugin_metadata.h
@@ -1431,6 +1433,17 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${MUON_CARDIO_GLIB_TARGETS}
     )
   MUON_APPLY_SANITIZERS(muon_builtin_fs_gio_read_source_test)
+  add_executable(muon_builtin_fs_watch_registry_test
+    tests/muon_builtin_fs_watch_registry_test.cpp
+    src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_builtin_fs_watch_registry_test)
+  target_compile_features(muon_builtin_fs_watch_registry_test PRIVATE
+    cxx_std_20)
+  target_include_directories(muon_builtin_fs_watch_registry_test PRIVATE
+    src
+    )
+  MUON_APPLY_SANITIZERS(muon_builtin_fs_watch_registry_test)
   add_executable(muon_app_scheme_storage_test
     tests/muon_app_scheme_storage_test.cpp
     src/muon_sha256.cpp
@@ -1526,6 +1539,42 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       ${CMAKE_DL_LIBS}
       )
     MUON_APPLY_SANITIZERS(muon_tray_linux_dbus_test)
+    add_executable(muon_tray_quota_test
+      tests/muon_tray_quota_test.cpp
+      src/muon_json_helpers.cpp
+      src/muon_string_helpers.cpp
+      src/muon_sha256.cpp
+      src/app/muon_app_scheme.cpp
+      src/app/muon_app_storage.cpp
+      src/browser/muon_tray.cpp
+      src/browser/muon_tray_service.cpp
+      src/browser/muon_icon.cpp
+      src/browser/muon_title_bar.cpp
+      src/config/muon_linux_display_backend.cpp
+      src/config/muon_paths.cpp
+      src/log/muon_close_debug_log.cpp
+      )
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_tray_quota_test)
+    target_compile_features(muon_tray_quota_test PRIVATE cxx_std_20)
+    target_include_directories(muon_tray_quota_test PRIVATE
+      include
+      src
+      "${TRA_FFIC_ROOT_RESOLVED}/include"
+      )
+    target_link_libraries(muon_tray_quota_test PRIVATE
+      muon_cardio
+      muon_sha2
+      libcef_dll_wrapper
+      libcef_lib
+      yyjson
+      miniz
+      ${LIBFFI_TARGET}
+      ${MUON_NATIVE_WHEEL_TARGETS}
+      ${MUON_CARDIO_GLIB_TARGETS}
+      ${CEF_STANDARD_LIBS}
+      ${CMAKE_DL_LIBS}
+      )
+    MUON_APPLY_SANITIZERS(muon_tray_quota_test)
   endif()
   add_executable(muon_default_title_bar_icon_generated_test
     tests/muon_default_title_bar_icon_generated_test.cpp
@@ -1723,6 +1772,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     COMMAND muon_builtin_fs_gio_read_source_test
     )
   add_test(
+    NAME builtin_fs_watch_registry
+    COMMAND muon_builtin_fs_watch_registry_test
+    )
+  add_test(
     NAME traffic_type_metadata
     COMMAND muon_traffic_type_metadata_test
     )
@@ -1738,6 +1791,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     add_test(
       NAME tray_linux_dbus
       COMMAND muon_tray_linux_dbus_test
+      )
+    add_test(
+      NAME tray_quota
+      COMMAND muon_tray_quota_test
       )
   endif()
   add_test(

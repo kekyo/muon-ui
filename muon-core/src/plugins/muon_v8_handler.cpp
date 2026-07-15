@@ -10,6 +10,7 @@
 #include "plugins/muon_js_bridge.h"
 #include "plugins/muon_shared_buffer.h"
 
+#include "include/cef_browser.h"
 #include "include/cef_frame.h"
 #include "include/cef_process_message.h"
 #include "include/cef_shared_process_message_builder.h"
@@ -73,6 +74,29 @@ static int AcquireMuonV8ContextId() {
   g_next_muon_v8_context_id =
       context_id == std::numeric_limits<int>::max() ? 0 : context_id + 1;
   return context_id;
+}
+
+static bool CanSendMuonRendererMessageToBrowser(
+    CefRefPtr<CefV8Context> context,
+    CefRefPtr<CefFrame> frame) {
+  if (!frame || !frame->IsValid()) {
+    return false;
+  }
+  CefRefPtr<CefBrowser> browser;
+  if (context) {
+    if (!context->IsValid()) {
+      return false;
+    }
+    browser = context->GetBrowser();
+    const auto context_frame = context->GetFrame();
+    if (!context_frame || !context_frame->IsValid() ||
+        context_frame->GetIdentifier() != frame->GetIdentifier()) {
+      return false;
+    }
+  } else {
+    browser = frame->GetBrowser();
+  }
+  return browser && browser->IsValid();
 }
 
 class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
@@ -167,7 +191,7 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
   }
 
   void ReleaseForContextRelease() {
-    ReleaseLease();
+    released_ = true;
     handler_ = nullptr;
     context_ = nullptr;
     frame_ = nullptr;
@@ -194,7 +218,7 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
       return;
     }
     released_ = true;
-    if (!frame_ || !frame_->IsValid()) {
+    if (!CanSendMuonRendererMessageToBrowser(context_, frame_)) {
       return;
     }
     const auto message =
@@ -772,7 +796,7 @@ bool MuonV8Handler::Execute(const CefString& name,
       return true;
     }
     const auto frame = context_ ? context_->GetFrame() : nullptr;
-    if (!frame || !frame->IsValid()) {
+    if (!CanSendMuonRendererMessageToBrowser(context_, frame)) {
       RejectPromise(promise, "muon frame is not available");
       return true;
     }
@@ -910,7 +934,7 @@ bool MuonV8Handler::ExecutePluginCall(
 
   const auto context = CefV8Context::GetCurrentContext();
   const auto frame = context ? context->GetFrame() : nullptr;
-  if (!frame || !frame->IsValid()) {
+  if (!CanSendMuonRendererMessageToBrowser(context, frame)) {
     RejectPromise(promise, "muon frame is not available");
     return true;
   }
@@ -952,6 +976,11 @@ bool MuonV8Handler::ExecutePluginCall(
   } else if (is_capability_call) {
     message_args->SetString(4, capability_id);
     message_args->SetString(5, capability_function_path);
+  }
+  if (!CanSendMuonRendererMessageToBrowser(context_, frame)) {
+    pending_promises_.erase(call_id);
+    RejectPromise(promise, "muon frame is not available");
+    return true;
   }
   if (shared_message.message) {
     frame->SendProcessMessage(PID_BROWSER, shared_message.message);
@@ -1712,6 +1741,18 @@ bool MuonV8Handler::InvokeRendererFunctionCallMessage(
     return true;
   }
   const auto call_id = message_args->GetInt(0);
+  const auto expects_result =
+      message_args->GetSize() < 6 ||
+      message_args->GetType(5) != VTYPE_BOOL ||
+      message_args->GetBool(5);
+  const auto send_function_result = [this, call_id, expects_result](
+                                        const MuonTypeMetadata& return_type,
+                                        CefRefPtr<CefV8Value> value,
+                                        const CefString& exception) {
+    if (expects_result) {
+      SendFunctionResult(call_id, return_type, value, exception);
+    }
+  };
   if (message_args->GetInt(1) != context_id_) {
     return true;
   }
@@ -1725,8 +1766,10 @@ bool MuonV8Handler::InvokeRendererFunctionCallMessage(
     }
   }
   if (!function || !function->IsFunction()) {
-    SendFunctionResult(call_id, CreateMuonPrimitiveType(MUON_TYPE_VOID),
-                       nullptr, "Renderer function is unavailable");
+    send_function_result(
+        CreateMuonPrimitiveType(MUON_TYPE_VOID),
+        nullptr,
+        "Renderer function is unavailable");
     return true;
   }
 
@@ -1735,22 +1778,28 @@ bool MuonV8Handler::InvokeRendererFunctionCallMessage(
                                        &function_type) ||
       function_type.type != MUON_TYPE_FUNCTION ||
       function_type.function_return_type.empty()) {
-    SendFunctionResult(call_id, CreateMuonPrimitiveType(MUON_TYPE_VOID),
-                       nullptr, "Renderer function type is invalid");
+    send_function_result(
+        CreateMuonPrimitiveType(MUON_TYPE_VOID),
+        nullptr,
+        "Renderer function type is invalid");
     return true;
   }
 
   const auto encoded_args = message_args->GetList(3);
   if (!encoded_args ||
       encoded_args->GetSize() != function_type.function_arg_types.size()) {
-    SendFunctionResult(call_id, function_type.function_return_type[0], nullptr,
-                       "Renderer function argument count is invalid");
+    send_function_result(
+        function_type.function_return_type[0],
+        nullptr,
+        "Renderer function argument count is invalid");
     return true;
   }
 
   if (!context_ || !context_->IsValid() || !context_->Enter()) {
-    SendFunctionResult(call_id, function_type.function_return_type[0], nullptr,
-                       "Renderer context is unavailable");
+    send_function_result(
+        function_type.function_return_type[0],
+        nullptr,
+        "Renderer context is unavailable");
     return true;
   }
 
@@ -1766,8 +1815,10 @@ bool MuonV8Handler::InvokeRendererFunctionCallMessage(
   const auto retval = function->ExecuteFunctionWithContext(
       context_, context_->GetGlobal(), v8_args);
   const auto return_type = function_type.function_return_type[0];
-  SendFunctionResult(call_id, return_type, retval,
-                     retval ? CefString() : CefString("Renderer function failed"));
+  send_function_result(
+      return_type,
+      retval,
+      retval ? CefString() : CefString("Renderer function failed"));
   context_->Exit();
   return true;
 }
@@ -1777,7 +1828,7 @@ bool MuonV8Handler::SendFunctionResult(int call_id,
                                         CefRefPtr<CefV8Value> value,
                                         const CefString& exception) {
   const auto frame = context_ ? context_->GetFrame() : nullptr;
-  if (!frame) {
+  if (!CanSendMuonRendererMessageToBrowser(context_, frame)) {
     return false;
   }
 

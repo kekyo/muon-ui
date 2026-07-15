@@ -33,12 +33,32 @@ class MuonWindowCloseHandler {
       CefRefPtr<CefWindow> window) = 0;
 
   /**
+   * Defers closing the owner window until a non-modal filesystem dialog finishes.
+   *
+   * @param browser Browser that started the keep-alive dialog.
+   * @param window Window whose close request should be retried later.
+   * @return true when the close request was deferred.
+   */
+  virtual bool RequestCloseAfterKeepAliveFsDialog(
+      CefRefPtr<CefBrowser> browser,
+      CefRefPtr<CefWindow> window) = 0;
+
+  /**
    * Returns whether the browser owns a pending filesystem dialog call.
    *
    * @param browser_id Browser identifier to query.
    * @return true when at least one filesystem dialog is still pending.
    */
   virtual bool HasPendingFsDialogCallForBrowser(int browser_id) const = 0;
+
+  /**
+   * Returns whether the browser has a pending keep-alive filesystem dialog call.
+   *
+   * @param browser_id Browser identifier to query.
+   * @return true when at least one non-modal filesystem dialog is still pending.
+   */
+  virtual bool HasPendingKeepAliveFsDialogCallForBrowser(
+      int browser_id) const = 0;
 
  protected:
   ~MuonWindowCloseHandler() = default;

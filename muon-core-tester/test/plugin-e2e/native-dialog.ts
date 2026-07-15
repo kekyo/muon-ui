@@ -132,8 +132,9 @@ const expectGestamentMuonExitedNormally = async (
   app: GtkApp,
 ): Promise<void> => {
   const output = await waitForGestamentMuonExit(app, processExitTimeoutMs);
-  expect(output.exitCode).toBe(0);
-  expect(output.exitSignal).toBeNull();
+  const detail = `exitSignal=${String(output.exitSignal)} stderr:\n${output.stderr}`;
+  expect(output.exitCode, detail).toBe(0);
+  expect(output.exitSignal, detail).toBeNull();
 };
 
 const moveDialogAwayFromBrowserClickPoint = async (
@@ -823,22 +824,20 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           title,
         });
 
-        const match = await findGestamentNativeWindow(
+        await closeOwnerBrowserWindow(running.driver);
+        await delay(500);
+        const remainingMatch = await findGestamentNativeWindow(
           running.app,
           title,
           cdpCommandTimeoutMs,
         );
+        expect(remainingMatch).toBeDefined();
         const dialogButton = await findGestamentNativeDialogButtonByLabel(
           running.app,
-          match.window,
+          remainingMatch.window,
           buttonLabel,
           cdpCommandTimeoutMs,
         );
-        await closeOwnerBrowserWindow(running.driver);
-        await delay(500);
-        await expect(
-          findGestamentNativeWindow(running.app, title, cdpCommandTimeoutMs),
-        ).resolves.toBeDefined();
 
         await dialogButton.click();
         await expectGestamentMuonExitedNormally(running.app);

@@ -236,7 +236,7 @@ TODO:
 ### その他
 
 - [muon-uiセルフビルド](./docs/ja/muon-ui-self-build-advanced-topic.md)
-- [制約](./docs/ja/constraints.md)
+- [制約](./docs/ja/limitation.md)
 
 ---
 

@@ -1,0 +1,46 @@
+# Accessing external networks
+
+As explained earlier, muon's various features become available through a whitelist model.
+Network access, which is one of the most important parts of CEF, is also filtered according to a whitelist.
+
+Add an allow list to `muon.json` as follows to access external networks:
+
+```json
+{
+  "network": {
+    "allow": [
+      "asset://main/**"
+    ]
+  },
+}
+```
+
+Adding URLs to `network.allow` allows access to those URLs.
+When omitted, the default is `"asset://**"`, which allows access to all local assets, meaning the pages you placed for the muon build.
+
+For example, if you intentionally set an empty list (`network.allow: []`), all network access, including local assets, is disabled and nothing can be displayed.
+However, if you try this and launch the Vite server and muon with `npm run dev`, the app will still display correctly.
+This is because the Vite server URL is temporarily added to the `network.allow` list when `npm run dev` is used.
+Be careful: building with an empty list generates an invalid muon app.
+
+- Note: Inline data URLs such as `data:...` are also subject to `network.allow`.
+  When using the `data:` protocol, explicitly add an allow pattern such as `data:image/**` to `network.allow`.
+
+If your page references an external server, for example when only image data in an `<img>` tag references external `https://img.example.com/images/...`, add valid URLs like this:
+
+```json
+{
+  "network": {
+    "allow": [
+      "asset://main/**",
+      "https://img.example.com/images/**"
+    ]
+  },
+}
+```
+
+This allows only local assets and that external server to be referenced.
+
+- This applies not only to images, but to all network access, including CSS files, `iframe` tags, `fetch` API access, and WebSocket connections.
+  You must add every required URL.
+- These URLs can use a pseudo-glob format. `*` does not cross `:`, `/`, `?`, or `#` separators, while `**` matches all following characters.

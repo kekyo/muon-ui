@@ -1352,6 +1352,9 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
   it("shares the cardio dispatcher state with external plugins", async () => {
     await withMuon(["muon_test_plugin_cardio"], async (driver) => {
       await expect(
+        driver.evaluate("window.muon.test.cardio.dispatcherAvailableAtInit()"),
+      ).resolves.toBe(true);
+      await expect(
         driver.evaluate("window.muon.test.cardio.dispatcherAvailable()"),
       ).resolves.toBe(true);
     });

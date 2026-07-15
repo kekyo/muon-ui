@@ -478,9 +478,12 @@ const sendWindowsTrayCallback = async (
 ): Promise<void> => {
   const keysBlock = selectFirstMenuItem
     ? `
-Add-Type -AssemblyName System.Windows.Forms
 Start-Sleep -Milliseconds 300
-[System.Windows.Forms.SendKeys]::SendWait('{DOWN}{ENTER}')
+[MuonTrayTestNative]::SetCursorPos(190, 172) | Out-Null
+Start-Sleep -Milliseconds 100
+[MuonTrayTestNative]::mouse_event([UInt32]0x0002, [UInt32]0, [UInt32]0, [UInt32]0, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 50
+[MuonTrayTestNative]::mouse_event([UInt32]0x0004, [UInt32]0, [UInt32]0, [UInt32]0, [UIntPtr]::Zero)
 Start-Sleep -Milliseconds 300
 `
     : "";
@@ -501,6 +504,9 @@ public static class MuonTrayTestNative {
 
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetCursorPos(int x, int y);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern void mouse_event(UInt32 dwFlags, UInt32 dx, UInt32 dy, UInt32 dwData, UIntPtr dwExtraInfo);
 }
 "@
 

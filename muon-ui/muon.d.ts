@@ -1484,6 +1484,12 @@ declare global {
   /** Environment information exposed by muon. */
   interface MuonEnvironmentsApi {
     /**
+     * Return the merged application configuration from muon config files.
+     *
+     * @returns A promise for a copy of the application string key-value map.
+     */
+    readonly getConfigValues: () => Promise<Record<string, string>>;
+    /**
      * Return the current process environment variables.
      *
      * @returns A promise for a key-value map of environment variables.

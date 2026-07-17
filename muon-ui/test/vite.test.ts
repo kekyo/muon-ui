@@ -1434,6 +1434,32 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("dispose");
   });
 
+  it("generates a parsed application config export for validate mode", async () => {
+    const root = await createTemporaryDirectory("muon-vite-config-capability-");
+    await mkdir(join(root, "src"), { recursive: true });
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/**"],
+          allow: ["muon.environments.getConfigValues"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:environments",
+      join(root, "src", "config.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toContain(
+      "export const getConfigValues = async () => JSON.parse(await __muonCall(",
+    );
+    expect(moduleSource).toContain('"muon.environments.getConfigValues", [])');
+  });
+
   it("expands wildcard capability allows into executor virtual module exports", async () => {
     const root = await createTemporaryDirectory(
       "muon-vite-capability-wildcard-",

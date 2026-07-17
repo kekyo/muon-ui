@@ -2273,6 +2273,7 @@ export const writeMuonConfig = async (
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   logConfig: Record<string, unknown> | undefined = undefined,
   browserProfilePath: string | undefined = undefined,
+  applicationConfig: Readonly<Record<string, string>> = {},
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -2286,6 +2287,9 @@ export const writeMuonConfig = async (
     network,
     plugin,
   };
+  if (Object.keys(applicationConfig).length > 0) {
+    config.config = applicationConfig;
+  }
   if (logConfig !== undefined) {
     config.log = logConfig;
   }
@@ -2362,6 +2366,7 @@ export const writeMuonConfig = async (
 };
 
 interface StartWindowsRemoteMuonOptions {
+  applicationConfig: Readonly<Record<string, string>>;
   assetSalt: string | undefined;
   assetSignature: string | undefined;
   assetSourcePath: string | undefined;
@@ -2805,6 +2810,7 @@ const startWindowsRemoteMuon = async (
         options.browserTitleBarType,
         options.logConfig,
         profilePath,
+        options.applicationConfig,
       ),
   );
   const cdpPort = allocateWindowsRemoteCdpPort();
@@ -2938,10 +2944,12 @@ export const startMuon = async (
   pluginSignatureByName: Readonly<Record<string, string>> = {},
   pluginSaltByName: Readonly<Record<string, string>> = {},
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
+  applicationConfig: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
       {
+        applicationConfig,
         assetSalt,
         assetSignature,
         assetSourcePath,
@@ -3020,6 +3028,8 @@ export const startMuon = async (
     browserInitialTitleBarIcon,
     browserTitleBarType,
     logConfig,
+    undefined,
+    applicationConfig,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -3107,6 +3117,7 @@ export const startDebugMuon = async (
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
   waitForDebugPort = true,
   useValgrind = shouldUseValgrind,
+  applicationConfig: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -3138,6 +3149,7 @@ export const startDebugMuon = async (
     pluginSignatureByName,
     pluginSaltByName,
     pluginConfigByName,
+    applicationConfig,
   );
 
 export const startDebugMuonLauncher = async (
@@ -3912,6 +3924,7 @@ export const stopMuon = async (
  * @param pluginConfigByName Configuration entries keyed by plugin name.
  * @param waitForDebugPort Whether to wait for the runtime CDP endpoint.
  * @param useValgrind Whether to run the runtime under Valgrind.
+ * @param applicationConfig Application configuration exposed to the page.
  * @returns The running debug runtime.
  */
 export const startDebugMuonWithPluginConfig = async (
@@ -3919,6 +3932,7 @@ export const startDebugMuonWithPluginConfig = async (
   pluginConfigByName: Readonly<Record<string, Record<string, string>>>,
   waitForDebugPort = true,
   useValgrind = shouldUseValgrind,
+  applicationConfig: Readonly<Record<string, string>> = {},
 ): Promise<RunningMuon> =>
   await startDebugMuon(
     pluginNames,
@@ -3945,6 +3959,7 @@ export const startDebugMuonWithPluginConfig = async (
     pluginConfigByName,
     waitForDebugPort,
     useValgrind,
+    applicationConfig,
   );
 
 /**
@@ -3953,16 +3968,21 @@ export const startDebugMuonWithPluginConfig = async (
  * @param pluginNames External plugins to load.
  * @param run Operation to run with the connected CDP driver.
  * @param pluginConfigByName Optional configuration keyed by plugin name.
+ * @param applicationConfig Application configuration exposed to the page.
  * @returns A promise that resolves after the runtime is stopped.
  */
 export const withMuon = async (
   pluginNames: string[],
   run: (driver: CdpDriver, running: RunningMuon) => Promise<void>,
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
+  applicationConfig: Readonly<Record<string, string>> = {},
 ): Promise<void> => {
   const running = await startDebugMuonWithPluginConfig(
     pluginNames,
     pluginConfigByName,
+    true,
+    shouldUseValgrind,
+    applicationConfig,
   );
   let driver: CdpDriver | undefined = undefined;
   try {

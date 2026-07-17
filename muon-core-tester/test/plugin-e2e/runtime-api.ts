@@ -1089,6 +1089,9 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         driver.evaluate("typeof window.muon.environments.getVariables"),
       ).resolves.toBe("function");
       await expect(
+        driver.evaluate("typeof window.muon.environments.getConfigValues"),
+      ).resolves.toBe("function");
+      await expect(
         driver.evaluate("typeof window.muon.environments.getAutostart"),
       ).resolves.toBe("function");
       await expect(
@@ -1476,6 +1479,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         expect(values.keys).toEqual([
           "getAutostart",
           "getCommandLine",
+          "getConfigValues",
           "getProcessId",
           "getRuntimeInfo",
           "getVariables",
@@ -2028,6 +2032,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           keys: [
             "getAutostart",
             "getCommandLine",
+            "getConfigValues",
             "getProcessId",
             "getRuntimeInfo",
             "getVariables",
@@ -2066,6 +2071,27 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         expect(values.processId).toBeGreaterThan(0);
         expect(values.runResult.processId).toBeGreaterThan(0);
       },
+    );
+  });
+
+  it("returns independent application config values", async () => {
+    await withMuon(
+      [],
+      async (driver) => {
+        await expect(
+          driver.evaluate(`(async () => {
+            const first = await window.muon.environments.getConfigValues();
+            first.apiBaseUrl = "changed";
+            const second = await window.muon.environments.getConfigValues();
+            return { first, second };
+          })()`),
+        ).resolves.toEqual({
+          first: { apiBaseUrl: "changed", empty: "" },
+          second: { apiBaseUrl: "https://api.example", empty: "" },
+        });
+      },
+      {},
+      { apiBaseUrl: "https://api.example", empty: "" },
     );
   });
 

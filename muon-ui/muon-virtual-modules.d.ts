@@ -3,6 +3,11 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
+declare module "muon:environments" {
+  /** Return the merged application configuration from muon config files. */
+  export const getConfigValues: () => Promise<Record<string, string>>;
+}
+
 declare module "muon:browser" {
   /** Reload the current page. */
   export const reload: () => Promise<void>;

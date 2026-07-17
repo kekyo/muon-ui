@@ -619,6 +619,9 @@ interface CommandResult {
 
 const getCliPath = (): string => resolve("dist", "cli.cjs");
 
+const getViteCliPath = (): string =>
+  resolve("..", "node_modules", "vite", "bin", "vite.js");
+
 const getMuonCoreDevSupervisorPath = (): string =>
   resolve("..", "muon-core", "scripts", "run-dev-supervisor.mjs");
 
@@ -630,6 +633,39 @@ const runMuonCli = async (
     const result = await execFileAsync(
       process.execPath,
       [getCliPath(), ...args],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: process.env,
+      },
+    );
+    return {
+      exitCode: 0,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  } catch (error) {
+    const execError = error as Error & {
+      code?: number;
+      stdout?: string;
+      stderr?: string;
+    };
+    return {
+      exitCode: execError.code ?? 1,
+      stdout: execError.stdout ?? "",
+      stderr: execError.stderr ?? "",
+    };
+  }
+};
+
+const runViteCli = async (
+  root: string,
+  args: readonly string[],
+): Promise<CommandResult> => {
+  try {
+    const result = await execFileAsync(
+      process.execPath,
+      [getViteCliPath(), ...args],
       {
         cwd: root,
         encoding: "utf8",
@@ -701,6 +737,48 @@ const writeMuonViteConfig = async (
   await writeFile(
     join(root, "vite.config.mjs"),
     source.replaceAll("__MUON_VITE_URL__", vitePluginUrl),
+  );
+};
+
+const writeNoMuonViteCliConfig = async (
+  root: string,
+  readyPath: string,
+): Promise<void> => {
+  await writeMuonViteConfig(
+    root,
+    [
+      'import { writeFileSync } from "node:fs";',
+      'import muon from "__MUON_VITE_URL__";',
+      "",
+      "let originalClose;",
+      "",
+      "export default {",
+      "  plugins: [",
+      "    {",
+      '      name: "capture-vite-close",',
+      '      enforce: "pre",',
+      "      configureServer: (server) => {",
+      "        originalClose = server.close;",
+      "      },",
+      "    },",
+      "    muon({ open: true }),",
+      "    {",
+      '      name: "verify-vite-only-server",',
+      '      enforce: "post",',
+      "      configureServer: (server) => {",
+      "        if (server.close !== originalClose) {",
+      '          throw new Error("muon Vite development bridge remained active");',
+      "        }",
+      '        server.httpServer?.once("listening", () => {',
+      `          writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+      "          process.exit(0);",
+      "        });",
+      "      },",
+      "    },",
+      "  ],",
+      "};",
+      "",
+    ].join("\n"),
   );
 };
 
@@ -918,6 +996,52 @@ describe("muon Vite plugin", () => {
       ".muon/\ndist-muon/\nartifacts/\n",
     );
     await expect(access(join(root, ".muon"))).rejects.toThrow();
+  });
+
+  it("starts only the Vite server when --no-muon follows the argument separator", async () => {
+    const root = await createTemporaryDirectory("muon-vite-no-muon-cli-");
+    const readyPath = join(root, "vite-ready.txt");
+    await writeBasicViteProject(root);
+    await writeNoMuonViteCliConfig(root, readyPath);
+
+    const result = await runViteCli(root, [
+      "dev",
+      "--port",
+      "0",
+      "--",
+      "--no-muon",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(
+      "muon Vite development bridge remained active",
+    );
+    await expect(readFile(readyPath, "utf8")).resolves.toBe("ready");
+    await expect(readFile(join(root, ".gitignore"), "utf8")).resolves.toBe(
+      ".muon/\ndist-muon/\nartifacts/\n",
+    );
+    await expect(access(join(root, ".muon"))).rejects.toThrow();
+  });
+
+  it("does not disable muon for unrelated Vite additional arguments", async () => {
+    const root = await createTemporaryDirectory("muon-vite-other-cli-arg-");
+    const readyPath = join(root, "vite-ready.txt");
+    await writeBasicViteProject(root);
+    await writeNoMuonViteCliConfig(root, readyPath);
+
+    const result = await runViteCli(root, [
+      "dev",
+      "--port",
+      "0",
+      "--",
+      "--not-no-muon",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "muon Vite development bridge remained active",
+    );
+    await expect(access(readyPath)).rejects.toThrow();
   });
 
   it("resolves validate-mode executor virtual modules from allowed importers", async () => {

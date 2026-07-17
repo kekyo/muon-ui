@@ -151,6 +151,7 @@ await window.muon.launcher.triggerUpdate();
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |
 | `getVariables()` | none | `Promise<Record<string, string>>` | Returns the current process environment variables. |
+| `getConfigValues()` | none | `Promise<Record<string, string>>` | Returns the effective top-level application `config` values. |
 | `getCommandLine()` | none | `Promise<string[]>` | Returns the command line recorded when muon started. Includes `argv[0]` when available. |
 | `getProcessId()` | none | `Promise<number>` | Returns the native muon process ID. |
 | `getRuntimeInfo()` | none | `Promise<MuonRuntimeInfo>` | Returns muon-core build information, referenced CEF information, and running CEF information. |
@@ -164,6 +165,7 @@ await window.muon.launcher.triggerUpdate();
 
 ```js
 const variables = await window.muon.environments.getVariables();
+const config = await window.muon.environments.getConfigValues();
 const commandLine = await window.muon.environments.getCommandLine();
 const processId = await window.muon.environments.getProcessId();
 const runtimeInfo = await window.muon.environments.getRuntimeInfo();
@@ -172,6 +174,15 @@ const autostart = await window.muon.environments.getAutostart();
 if (autostart !== true) {
   await window.muon.environments.setAutostart(true);
 }
+```
+
+In `validate` mode, allow `muon.environments.getConfigValues` for the importer and use the `muon:environments` virtual module:
+
+```ts
+import { getConfigValues } from "muon:environments";
+
+const config = await getConfigValues();
+const baseUrl = config.apiBaseUrl;
 ```
 
 ## muon.executor namespace

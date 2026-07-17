@@ -28,6 +28,7 @@ export default defineConfig({
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にmuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のmuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `exitWithServer` | `boolean`             | `true`                      | muon-coreが通常終了した時にVite dev serverも終了するかどうかです。   |
+| `dev`            | `object`              | `{}`                        | Vite開発起動のmuonプロセスだけに適用する上書き設定です。             |
 | `pluginAccess`   | `false \| object`     | `muon.json` の `plugin` 設定 | プラグインAPIの露出方式とvirtual module importの上書き設定です。     |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
 
@@ -44,6 +45,48 @@ export default defineConfig({
   配布ビルドでmuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
 - `exitWithServer` を省略または `true` にした場合、muon-coreが通常終了するとVite dev serverも終了します。
   muonのリサイクル再起動ではVite dev serverは終了しません。
+
+## devキー
+
+`dev.config` は、`vite dev` で起動するmuonプロセスだけにアプリケーション `config` の値を渡します。
+これらの値は、プロジェクトの `muon.json` より後に読み込まれる開発用生成設定へ書き込まれます。
+従って、同じキーはプロジェクト設定を上書きし、その他のキーは追加されます。
+
+```ts
+import { defineConfig } from "vite";
+import muon from "muon-ui/vite";
+
+export default defineConfig({
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:5000",
+      },
+    },
+  },
+  plugins: [
+    muon({
+      dev: {
+        config: {
+          apiBaseUrl: "/api",
+        },
+      },
+    }),
+  ],
+});
+```
+
+```json
+{
+  "config": {
+    "apiBaseUrl": "https://api.example.com"
+  }
+}
+```
+
+アプリケーションコードは、`muon.environments.getConfigValues()` で選択された値を取得します。
+`dev.config` は `vite build`、`muon run`、配布物、インストール後のパッケージでは無視され、これらの起動形式では通常の `muon.json` の値を使用します。
+`dev.config` の値はすべて文字列で、rendererコードから参照できるため、秘密情報を含めないで下さい。
 
 ## Viteサーバーのみを起動する
 

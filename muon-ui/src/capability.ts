@@ -234,6 +234,7 @@ const defaultMuonCapabilityFunctionPaths = [
   "muon.browser.shutdown",
   "muon.browser.recycle",
   "muon.environments.getVariables",
+  "muon.environments.getConfigValues",
   "muon.environments.getCommandLine",
   "muon.environments.getProcessId",
   "muon.environments.getRuntimeInfo",
@@ -1254,6 +1255,12 @@ const createGenericFunctionExport = (
 ): string => `export const ${exportName} = async (...args) =>
   await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, args);`;
 
+const createEnvironmentsGetConfigValuesExport = (
+  capabilityId: string,
+  functionPath: string,
+): string =>
+  `export const getConfigValues = async () => JSON.parse(await __muonCall(${JSON.stringify(capabilityId)}, ${JSON.stringify(functionPath)}, []));`;
+
 const createModuleSource = (rule: ResolvedRule): string => {
   const exportedFunctions = getExportedFunctions(
     rule.namespace,
@@ -1285,6 +1292,12 @@ const createModuleSource = (rule: ResolvedRule): string => {
         exportName === "removeTray"),
   );
   const exports = exportedFunctions.map(([exportName, functionPath]) => {
+    if (
+      rule.namespace === "muon.environments" &&
+      exportName === "getConfigValues"
+    ) {
+      return createEnvironmentsGetConfigValuesExport(rule.id, functionPath);
+    }
     if (rule.namespace === "muon.executor" && exportName === "spawn") {
       return createExecutorSpawnExport(rule.id, functionPath);
     }

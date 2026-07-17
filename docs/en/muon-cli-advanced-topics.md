@@ -12,6 +12,7 @@ npx muon run
 ```
 
 - `muon run` does not start the Vite development server. Therefore, HMR does not work with `muon run`.
+- When Vite `server.proxy` contains one or more entries, `muon run` writes a warning to stderr because that proxy is available only through the Vite development server and is not used by the launched app.
 - When `--assets` is specified explicitly, the specified local assets are launched directly as before.
 - When `--assets` is omitted and `vite.config.*` contains exactly one muon Vite plugin, `muon run` runs `vite build` before startup.
   It reads Vite's `build.outDir` and `base`, places the build output under `.muon/run/assets/main/`, and launches muon with `.muon/run/assets` as `asset.sourcePath`.

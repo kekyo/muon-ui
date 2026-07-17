@@ -386,16 +386,15 @@ struct MuonNetworkConfig {
 };
 
 /**
- * One string key-value plugin configuration entry from
- * plugin.plugins[].config in muon.json.
+ * One string key-value configuration entry from muon.json.
  */
-struct MuonPluginConfigEntry {
+struct MuonStringConfigEntry {
   /**
-   * Plugin-defined configuration key.
+   * Configuration key.
    */
   std::string key;
   /**
-   * Plugin-defined configuration value.
+   * Configuration value.
    */
   std::string value;
 };
@@ -437,7 +436,7 @@ struct MuonPluginEntryConfig {
   /**
    * Plugin-defined string key-value configuration entries.
    */
-  std::vector<MuonPluginConfigEntry> config;
+  std::vector<MuonStringConfigEntry> config;
 };
 
 /**
@@ -515,6 +514,11 @@ struct MuonConfig {
    * Stable application identifier used for runtime state directories.
    */
   std::string app_id = "muon";
+  /**
+   * Application-defined string key-value configuration exposed through the
+   * built-in environments plugin.
+   */
+  std::vector<MuonStringConfigEntry> config;
   /**
    * Browser asset storage configuration.
    */

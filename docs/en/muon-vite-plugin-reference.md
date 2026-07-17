@@ -29,6 +29,7 @@ export default defineConfig({
 | `stagePath` | `string` | `".muon/<public-target>"` | Directory where the muon runtime is staged for development launch. |
 | `enableDebugger` | `boolean` | `true` | Enables CDP, the `F12` muon DevTools keybind, and the `Ctrl+F12` recycle keybind during development launch. |
 | `exitWithServer` | `boolean` | `true` | Whether to stop the Vite dev server when muon-core exits normally. |
+| `dev` | `object` | `{}` | Overrides applied only to the muon process launched by Vite development. |
 | `pluginAccess` | `false \| object` | `plugin` setting from `muon.json` | Override settings for plugin API exposure and virtual module imports. |
 | `build` | `boolean \| object` | `true` | Whether to generate distribution directories after `vite build`, or options used during generation. |
 
@@ -45,6 +46,48 @@ export default defineConfig({
   To enable muon DevTools in distribution builds, configure `cdp` and `browser.keybind` in `muon.json` instead of the Vite plugin argument.
 - When `exitWithServer` is omitted or `true`, the Vite dev server also exits when muon-core exits normally.
   muon recycle restart does not stop the Vite dev server.
+
+## dev key
+
+`dev.config` supplies application `config` values only to the muon process launched with `vite dev`.
+These values are written to the generated development configuration, which is loaded after the project `muon.json`.
+Matching keys therefore override the project values, and other keys are added.
+
+```ts
+import { defineConfig } from "vite";
+import muon from "muon-ui/vite";
+
+export default defineConfig({
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:5000",
+      },
+    },
+  },
+  plugins: [
+    muon({
+      dev: {
+        config: {
+          apiBaseUrl: "/api",
+        },
+      },
+    }),
+  ],
+});
+```
+
+```json
+{
+  "config": {
+    "apiBaseUrl": "https://api.example.com"
+  }
+}
+```
+
+Application code reads the selected value through `muon.environments.getConfigValues()`.
+`dev.config` is ignored by `vite build`, `muon run`, distribution output, and installed packages; those launch forms use the regular `muon.json` value.
+All `dev.config` values must be strings and are visible to renderer code, so they must not contain secrets.
 
 ## Starting only the Vite server
 

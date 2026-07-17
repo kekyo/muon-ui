@@ -48,6 +48,7 @@ type JsonObject = Record<string, unknown>;
 interface LoadedViteMuonOptions {
   root: string;
   pluginOptions: MuonVitePluginOptions | undefined;
+  viteServerProxyConfigured: boolean;
 }
 
 interface PreparedViteRunAssets {
@@ -57,6 +58,11 @@ interface PreparedViteRunAssets {
   assetSourcePath: string;
   browserStartPage: string | undefined;
   runtimePluginConfig: MuonRuntimePluginConfig;
+  viteServerProxyConfigured: boolean;
+}
+
+interface InternalMuonDevOptions extends MuonDevOptions {
+  warning?: (message: string) => void;
 }
 
 interface ProjectConfigResolution {
@@ -238,6 +244,9 @@ const isMissingVitePackageError = (error: unknown): boolean => {
   );
 };
 
+const hasViteServerProxyConfiguration = (proxy: unknown): boolean =>
+  typeof proxy === "object" && proxy !== null && Object.keys(proxy).length > 0;
+
 const loadViteMuonOptions = async (
   cwd: string,
 ): Promise<LoadedViteMuonOptions> => {
@@ -249,6 +258,7 @@ const loadViteMuonOptions = async (
       return {
         root: resolve(cwd),
         pluginOptions: undefined,
+        viteServerProxyConfigured: false,
       };
     }
     throw error;
@@ -269,6 +279,7 @@ const loadViteMuonOptions = async (
     return {
       root: resolve(cwd),
       pluginOptions: undefined,
+      viteServerProxyConfigured: false,
     };
   }
 
@@ -292,6 +303,9 @@ const loadViteMuonOptions = async (
   return {
     root,
     pluginOptions: muonPlugins[0],
+    viteServerProxyConfigured: hasViteServerProxyConfiguration(
+      config.server?.proxy,
+    ),
   };
 };
 
@@ -391,6 +405,7 @@ const prepareViteRunAssets = async (
     assetSourcePath,
     browserStartPage: packagedAssetOptions.browserStartPage,
     runtimePluginConfig,
+    viteServerProxyConfigured: project.viteServerProxyConfigured,
   };
 };
 
@@ -638,6 +653,7 @@ const runMuonExecutable = async (
 const runMuonDevOnce = async (
   options: MuonDevOptions,
   cwd: string,
+  reportViteServerProxyWarning: () => void,
 ): Promise<MuonDevResult> => {
   const preparedViteAssets =
     options.assetSourcePath === undefined
@@ -649,7 +665,12 @@ const runMuonDevOnce = async (
       : {
           root: preparedViteAssets.root,
           pluginOptions: preparedViteAssets.pluginOptions,
+          viteServerProxyConfigured:
+            preparedViteAssets.viteServerProxyConfigured,
         };
+  if (loadedViteOptions.viteServerProxyConfigured) {
+    reportViteServerProxyWarning();
+  }
   const root = loadedViteOptions.root;
   const pluginOptions = loadedViteOptions.pluginOptions;
   const platform = options.platform ?? process.platform;
@@ -762,9 +783,20 @@ export const runMuonDev = async (
   options: MuonDevOptions = {},
 ): Promise<MuonDevResult> => {
   const cwd = resolve(options.root ?? process.cwd());
+  const warning = (options as InternalMuonDevOptions).warning;
+  let viteServerProxyWarningReported = false;
+  const reportViteServerProxyWarning = (): void => {
+    if (viteServerProxyWarningReported) {
+      return;
+    }
+    warning?.(
+      "Vite server proxy configuration is only available during Vite development and is not used by muon run.",
+    );
+    viteServerProxyWarningReported = true;
+  };
   let result: MuonDevResult;
   do {
-    result = await runMuonDevOnce(options, cwd);
+    result = await runMuonDevOnce(options, cwd, reportViteServerProxyWarning);
   } while (result.exitCode === muonRecycleExitCode);
   return result;
 };

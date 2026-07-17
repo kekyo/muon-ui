@@ -27,6 +27,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace muon_internal {
 
@@ -58,6 +60,8 @@ static constexpr char kRuntimeInfoKey[] = "cefRuntime";
 static constexpr char kRuntimeInfoVersionKey[] = "version";
 static constexpr char kRuntimeInfoApiVersionKey[] = "apiVersion";
 static constexpr char kRuntimeInfoApiHashKey[] = "apiHash";
+
+static std::vector<std::pair<std::string, std::string>> g_config_values;
 
 static std::string CreateCefRuntimeVersion(const cef_version_info_t& info,
                                            const char* commit_hash) {
@@ -202,6 +206,11 @@ extern "C" void muon_builtin_environments_get_variables(
       completion, CreateJsonStringObject(GetMuonEnvironmentEntries()));
 }
 
+extern "C" void muon_builtin_environments_get_config_values(
+    muon_completion_func completion) {
+  CompleteMuonString(completion, CreateJsonStringObject(g_config_values));
+}
+
 extern "C" void muon_builtin_environments_get_command_line(
     muon_completion_func completion) {
   CompleteMuonString(completion,
@@ -281,6 +290,14 @@ static const muon_plugin_function_metadata get_variables_function = {
     "getVariables",
 };
 
+static const muon_plugin_function_metadata get_config_values_function = {
+    "__getConfigValues",
+    reinterpret_cast<muon_native_function>(
+        &muon_builtin_environments_get_config_values),
+    {0, nullptr, &type_string},
+    "getConfigValues",
+};
+
 static const muon_plugin_function_metadata get_command_line_function = {
     "__getCommandLine",
     reinterpret_cast<muon_native_function>(
@@ -323,6 +340,7 @@ static const muon_plugin_function_metadata set_autostart_function = {
 
 static const muon_plugin_function_metadata* const environment_functions[] = {
     &get_variables_function,
+    &get_config_values_function,
     &get_command_line_function,
     &get_process_id_function,
     &get_runtime_info_function,
@@ -340,6 +358,14 @@ if (isAllowed("getVariables")) {
     configurable: false,
     writable: false,
     value: async () => parseNativeJson(namespace.__getVariables()),
+  };
+}
+if (isAllowed("getConfigValues")) {
+  properties.getConfigValues = {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: async () => parseNativeJson(namespace.__getConfigValues()),
   };
 }
 if (isAllowed("getCommandLine")) {
@@ -389,6 +415,15 @@ Object.defineProperties(namespace, properties);
 )JS";
 
 }  // namespace muon_internal
+
+void InitializeMuonBuiltinEnvironments(
+    const std::vector<MuonStringConfigEntry>& config) {
+  muon_internal::g_config_values.clear();
+  muon_internal::g_config_values.reserve(config.size());
+  for (const auto& entry : config) {
+    muon_internal::g_config_values.emplace_back(entry.key, entry.value);
+  }
+}
 
 const muon_plugin_namespace kMuonBuiltinEnvironmentsNamespace = {
     "muon.environments",

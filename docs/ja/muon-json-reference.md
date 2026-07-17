@@ -18,6 +18,9 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 ```json
 {
   "iconPath": "icons/app.png",
+  "config": {
+    "apiBaseUrl": "https://api.example.com"
+  },
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
@@ -48,7 +51,10 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
         "imports": [
           {
             "sources": ["src/native/**"],
-            "allow": ["muon.environments.getCommandLine"]
+            "allow": [
+              "muon.environments.getConfigValues",
+              "muon.environments.getCommandLine"
+            ]
           },
           {
             "packages": ["@example/trusted-muon-helper"],
@@ -79,15 +85,37 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 
 ## トップレベルキー
 
-| キー       | 型       | 既定値           | 概要                                                                 |
-| :--------- | :------- | :--------------- | :------------------------------------------------------------------- |
-| `iconPath` | `string` | muon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                        |
+| キー       | 型                | 既定値           | 概要                                                                 |
+| :--------- | :---------------- | :--------------- | :------------------------------------------------------------------- |
+| `iconPath` | `string`          | muon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                        |
+| `config`   | `readonly object` | `{}`             | rendererコードから参照できるアプリケーション用の文字列key-value設定です。 |
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
 - `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
   内部的には、 `asset://main/.muon/app-icon.png"` に配置されます。従って、既存アセットに同じエントリがある場合はビルドエラーになります。
 - Windowsだけ、またはLinuxだけ別アイコンにしたい場合は、それぞれ `windows.resource.iconPath`、`linux.desktop.iconPath` をoverrideとして指定します。
 - 実行中に通常ブラウザウインドウのタイトルバーアイコンだけを変更する場合は、`window.muon.browser.setTitleBarIcon()` を使用します。
+
+## configキー
+
+`config` は、アプリケーション用の設定を文字列key-valueとして保持します。キーと値はどちらも文字列でなければならず、muonはその内容の意味を解釈しません。
+muonアプリは、実効値のオブジェクトを `muon.environments.getConfigValues()` で取得します。
+
+muonアプリ起動時に複数の設定ファイルを指定した場合、各ファイルの `config` はコマンドラインの指定順で合成されます。
+同じキーは後の値で上書きされ、競合しないキーは追加されます。
+削除を表す構文はないため、後の設定から前のキーを削除することは出来ません。
+
+```json
+{
+  "config": {
+    "apiBaseUrl": "https://api.example.com",
+    "environmentName": "production"
+  }
+}
+```
+
+すべての値はmuonアプリから取得できるため、パスワード、tokenなどの秘密情報を `config` に保存しないで下さい。
+`plugin.plugins[].config` は別の設定テーブルであり、対応するネイティブプラグインの初期化時だけ渡されます。
 
 ## browserキー
 

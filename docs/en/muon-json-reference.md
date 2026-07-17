@@ -19,6 +19,9 @@ The following is an example of `muon.json`:
 ```json
 {
   "iconPath": "icons/app.png",
+  "config": {
+    "apiBaseUrl": "https://api.example.com"
+  },
   "browser": {
     "initialWindowState": "normal",
     "backgroundColor": "system",
@@ -49,7 +52,10 @@ The following is an example of `muon.json`:
         "imports": [
           {
             "sources": ["src/native/**"],
-            "allow": ["muon.environments.getCommandLine"]
+            "allow": [
+              "muon.environments.getConfigValues",
+              "muon.environments.getCommandLine"
+            ]
           },
           {
             "packages": ["@example/trusted-muon-helper"],
@@ -83,6 +89,7 @@ The following is an example of `muon.json`:
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
 | `iconPath` | `string` | muon default icon | PNG file used as the static application icon. |
+| `config` | `readonly object` | `{}` | Application string key-value settings available to renderer code. |
 
 - `iconPath` accepts only `.png`. Relative paths are resolved from the directory where `muon.json` is located.
 - `iconPath` is the shared source for Windows PE/NSIS, Linux desktop, and the startup title-bar icon.
@@ -90,6 +97,27 @@ The following is an example of `muon.json`:
   Therefore, if an existing asset has the same entry, the build fails.
 - To use separate icons only for Windows or only for Linux, specify `windows.resource.iconPath` or `linux.desktop.iconPath` respectively as overrides.
 - To change only the title-bar icon of a normal browser window at runtime, use `window.muon.browser.setTitleBarIcon()`.
+
+## config key
+
+`config` stores application settings as string key-value pairs. Keys and values must both be strings, and muon does not assign meaning to their contents.
+The muon app reads the effective object with `muon.environments.getConfigValues()`.
+
+When muon app starts with multiple configuration files, their `config` objects are merged in command-line order.
+A later value replaces an earlier value with the same key, and keys that do not conflict are added.
+There is no deletion syntax, so a later configuration cannot remove an earlier key.
+
+```json
+{
+  "config": {
+    "apiBaseUrl": "https://api.example.com",
+    "environmentName": "production"
+  }
+}
+```
+
+Because all values are available to renderer code, do not store passwords, tokens, or other secrets in `config`.
+`plugin.plugins[].config` is a separate setting table passed only to the corresponding native plugin during initialization.
 
 ## browser key
 

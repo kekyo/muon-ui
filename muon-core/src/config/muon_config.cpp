@@ -28,6 +28,7 @@ static constexpr char kMuonConfigJson5FileName[] = "muon.json5";
 static constexpr char kMuonConfigJsoncFileName[] = "muon.jsonc";
 static constexpr char kMuonConfigFileName[] = "muon.json";
 static constexpr char kMuonConfigLauncherKey[] = "launcher";
+static constexpr char kMuonConfigApplicationConfigKey[] = "config";
 static constexpr char kMuonConfigAppIdKey[] = "appId";
 static constexpr char kMuonConfigDefaultVersionPolicyKey[] =
     "defaultVersionPolicy";
@@ -2329,21 +2330,20 @@ static bool ContainsNulByte(const std::string& value) {
   return value.find('\0') != std::string::npos;
 }
 
-static bool ReadPluginEntryStringConfig(
-    yyjson_val* entry,
-    const std::string& config_path,
-    std::vector<MuonPluginConfigEntry>* target,
+static bool ReadStringConfig(
+    yyjson_val* parent,
+    const char* config_key,
+    const std::string& config_value_path,
+    std::vector<MuonStringConfigEntry>* target,
     std::string* error_message) {
   if (target == nullptr || error_message == nullptr) {
     return false;
   }
   target->clear();
-  const auto config_value =
-      yyjson_obj_get(entry, kMuonConfigPluginEntryConfigKey);
+  const auto config_value = yyjson_obj_get(parent, config_key);
   if (config_value == nullptr) {
     return true;
   }
-  const auto config_value_path = config_path + ".config";
   if (!yyjson_is_obj(config_value)) {
     *error_message = "muon.json " + config_value_path + " must be an object";
     return false;
@@ -2387,6 +2387,13 @@ static bool ReadPluginEntryStringConfig(
     target->push_back({std::move(key_string), std::move(value_string)});
   }
   return true;
+}
+
+static bool ReadApplicationConfig(yyjson_val* root,
+                                  MuonConfig* config,
+                                  std::string* error_message) {
+  return ReadStringConfig(root, kMuonConfigApplicationConfigKey, "config",
+                          &config->config, error_message);
 }
 
 static bool ReadPluginConfig(yyjson_val* root,
@@ -2525,9 +2532,9 @@ static bool ReadPluginConfig(yyjson_val* root,
                                  &plugin_config.allow, error_message)) {
       return false;
     }
-    if (!ReadPluginEntryStringConfig(entry, config_path,
-                                     &plugin_config.config,
-                                     error_message)) {
+    if (!ReadStringConfig(entry, kMuonConfigPluginEntryConfigKey,
+                          config_path + ".config", &plugin_config.config,
+                          error_message)) {
       return false;
     }
     config->plugin.plugins.push_back(std::move(plugin_config));
@@ -2763,6 +2770,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     return false;
   }
   return ReadLauncherConfig(root, config, error_message) &&
+         ReadApplicationConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&
          ReadLogConfig(root, config, error_message) &&
          ReadBrowserConfig(root, config, error_message) &&

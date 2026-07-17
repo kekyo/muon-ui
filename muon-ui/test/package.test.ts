@@ -336,6 +336,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonVitePluginOptions",
+      memberName: "dev",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
       memberName: "build",
     },
   ];
@@ -1267,6 +1272,23 @@ void run;
     ).resolves.toBeUndefined();
   });
 
+  it("provides application config types for simple and validate modes", async () => {
+    await expect(
+      runTypeScriptConsumer(
+        `import { getConfigValues } from "muon:environments";
+
+const fromWindow: Promise<Record<string, string>> =
+  window.muon.environments.getConfigValues();
+const fromModule: Promise<Record<string, string>> = getConfigValues();
+
+void fromWindow;
+void fromModule;
+`,
+        ["muon-ui"],
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("provides the Vite plugin with separated muon and CEF paths", async () => {
     await expect(
       runTypeScriptConsumer(`import muon from "muon-ui/vite";
@@ -1278,6 +1300,12 @@ const plugin = muon({
   open: false,
   enableDebugger: false,
   exitWithServer: false,
+  dev: {
+    config: {
+      apiBaseUrl: "/api",
+      environmentName: "vite-development",
+    },
+  },
   build: {
     targets: ["linux-amd64"],
     iconPath: "icons/app.png",

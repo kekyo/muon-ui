@@ -93,6 +93,17 @@ static bool LoadConfigFilesExpectFailure(
                 "config files error did not contain: " + expected_message);
 }
 
+static const std::string* FindStringConfigValue(
+    const std::vector<MuonStringConfigEntry>& entries,
+    const std::string& key) {
+  for (const auto& entry : entries) {
+    if (entry.key == key) {
+      return &entry.value;
+    }
+  }
+  return nullptr;
+}
+
 static void SetTestLaunchSource(const std::string& launch_source) {
   std::string executable = "muon";
   std::string switch_argument =
@@ -1328,6 +1339,89 @@ static bool RunConfigOverrideLoadingTest(
          LoadConfigFilesExpectFailure(
              {test_directory / "missing-search" / "muon.json"},
              "does not exist");
+}
+
+static bool RunApplicationConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  const auto empty_path = test_directory / "application-config-empty.json";
+  const auto first_path = test_directory / "application-config-first.json";
+  const auto second_path = test_directory / "application-config-second.json";
+  const auto invalid_object_path =
+      test_directory / "application-config-invalid-object.json";
+  const auto invalid_value_path =
+      test_directory / "application-config-invalid-value.json";
+  const auto empty_key_path =
+      test_directory / "application-config-empty-key.json";
+  const auto nul_key_path =
+      test_directory / "application-config-nul-key.json";
+  const auto nul_value_path =
+      test_directory / "application-config-nul-value.json";
+  const auto duplicate_key_path =
+      test_directory / "application-config-duplicate-key.json";
+  if (!Expect(WriteFile(empty_path, R"({"config":{}})"),
+              "failed to write empty application config") ||
+      !Expect(WriteFile(
+                  first_path,
+                  R"({"config":{"apiBaseUrl":"https://api.example","preserved":"first","empty":"not-empty"}})"),
+              "failed to write first application config") ||
+      !Expect(WriteFile(
+                  second_path,
+                  R"({"config":{"apiBaseUrl":"/api","added":"second","empty":""}})"),
+              "failed to write second application config") ||
+      !Expect(WriteFile(invalid_object_path, R"({"config":true})"),
+              "failed to write invalid application config object") ||
+      !Expect(WriteFile(invalid_value_path,
+                        R"({"config":{"apiBaseUrl":42}})"),
+              "failed to write invalid application config value") ||
+      !Expect(WriteFile(empty_key_path, R"({"config":{"":"value"}})"),
+              "failed to write empty application config key") ||
+      !Expect(WriteFile(nul_key_path,
+                        R"({"config":{"api\u0000BaseUrl":"value"}})"),
+              "failed to write NUL application config key") ||
+      !Expect(WriteFile(nul_value_path,
+                        R"({"config":{"apiBaseUrl":"value\u0000"}})"),
+              "failed to write NUL application config value") ||
+      !Expect(WriteFile(
+                  duplicate_key_path,
+                  R"({"config":{"apiBaseUrl":"first","apiBaseUrl":"second"}})"),
+              "failed to write duplicate application config key")) {
+    return false;
+  }
+
+  MuonConfig config;
+  if (!LoadConfigExpectSuccess(empty_path, &config) ||
+      !Expect(config.config.empty(),
+              "empty application config produced entries") ||
+      !LoadConfigFilesExpectSuccess({first_path, second_path}, &config)) {
+    return false;
+  }
+
+  const auto api_base_url = FindStringConfigValue(config.config, "apiBaseUrl");
+  const auto preserved = FindStringConfigValue(config.config, "preserved");
+  const auto added = FindStringConfigValue(config.config, "added");
+  const auto empty = FindStringConfigValue(config.config, "empty");
+  return Expect(config.config.size() == 4,
+                "merged application config entry count changed") &&
+         Expect(api_base_url != nullptr && *api_base_url == "/api",
+                "later application config value did not override") &&
+         Expect(preserved != nullptr && *preserved == "first",
+                "earlier application config value was not preserved") &&
+         Expect(added != nullptr && *added == "second",
+                "later application config value was not added") &&
+         Expect(empty != nullptr && empty->empty(),
+                "empty application config value did not override") &&
+         LoadConfigExpectFailure(invalid_object_path,
+                                 "config must be an object") &&
+         LoadConfigExpectFailure(invalid_value_path,
+                                 "config.apiBaseUrl must be a string") &&
+         LoadConfigExpectFailure(empty_key_path,
+                                 "config key must not be empty") &&
+         LoadConfigExpectFailure(nul_key_path,
+                                 "config key must not contain NUL") &&
+         LoadConfigExpectFailure(nul_value_path,
+                                 "config.apiBaseUrl must not contain NUL") &&
+         LoadConfigExpectFailure(duplicate_key_path,
+                                 "config has duplicate key: apiBaseUrl");
 }
 
 static bool RunBrowserConfigLoadingTest(
@@ -2744,6 +2838,7 @@ int main() {
                           test_directory) &&
                       RunEmbeddedConfigEmptySlotTest(test_directory) &&
                       RunConfigOverrideLoadingTest(test_directory) &&
+                      RunApplicationConfigLoadingTest(test_directory) &&
                       RunBrowserConfigLoadingTest(test_directory) &&
                       RunLogConfigLoadingTest(test_directory) &&
                       RunConfigValidationTest(test_directory) &&

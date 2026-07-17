@@ -12,6 +12,7 @@ npx muon run
 ```
 
 - `muon run` はViteの開発サーバーを起動しません。そのため、`muon run`ではHMRは動作しません。
+- Viteの `server.proxy` に1件以上の定義がある場合、proxyはVite開発サーバー経由でのみ使用でき、起動したアプリでは機能しないため、`muon run` はstderrへ警告を出力します。
 - `--assets` を明示した場合は、従来どおり指定されたローカルアセットを直接起動します。
 - `--assets` を省略し、`vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は起動前に `vite build` を実行します。
   Viteの `build.outDir` と `base` を読み取り、ビルド出力を `.muon/run/assets/main/` 配下に配置してから、その `.muon/run/assets` を `asset.sourcePath` としてmuonを起動します。

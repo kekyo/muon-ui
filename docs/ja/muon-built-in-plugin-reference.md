@@ -152,6 +152,7 @@ await window.muon.launcher.triggerUpdate();
 | 関数                    | 引数               | 戻り値                            | 説明                                                                                                            |
 | :---------------------- | :----------------- | :-------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
 | `getVariables()`        | なし               | `Promise<Record<string, string>>` | 現在のプロセス環境変数を返します。                                                                              |
+| `getConfigValues()`     | なし               | `Promise<Record<string, string>>` | トップレベルのアプリケーション `config` の実効値を返します。                                                    |
 | `getCommandLine()`      | なし               | `Promise<string[]>`               | muon起動時に記録されたコマンドラインを返します。利用可能な場合は `argv[0]` も含みます。                         |
 | `getProcessId()`        | なし               | `Promise<number>`                 | ネイティブmuonプロセスIDを返します。                                                                            |
 | `getRuntimeInfo()`      | なし               | `Promise<MuonRuntimeInfo>`        | muon-coreのビルド情報、参照CEF情報、実行中CEF情報を返します。                                                    |
@@ -165,6 +166,7 @@ await window.muon.launcher.triggerUpdate();
 
 ```js
 const variables = await window.muon.environments.getVariables();
+const config = await window.muon.environments.getConfigValues();
 const commandLine = await window.muon.environments.getCommandLine();
 const processId = await window.muon.environments.getProcessId();
 const runtimeInfo = await window.muon.environments.getRuntimeInfo();
@@ -173,6 +175,15 @@ const autostart = await window.muon.environments.getAutostart();
 if (autostart !== true) {
   await window.muon.environments.setAutostart(true);
 }
+```
+
+`validate` モードでは、import元に `muon.environments.getConfigValues` を許可して、`muon:environments` virtual moduleを使用します:
+
+```ts
+import { getConfigValues } from "muon:environments";
+
+const config = await getConfigValues();
+const baseUrl = config.apiBaseUrl;
 ```
 
 ## muon.executor名前空間

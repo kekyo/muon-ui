@@ -231,7 +231,7 @@ muonをより詳しく知りたい場合は、以下のドキュメントを参�
 
 ### muonプラグインの実装
 
-TODO:
+- [muonプラグイン開発](./docs/ja/muon-plugin-develop.md)
 
 ### その他
 

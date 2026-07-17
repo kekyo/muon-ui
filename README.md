@@ -236,7 +236,7 @@ See the following documents for more detailed information about muon.
 
 ### Implementing muon plugins
 
-TODO:
+- [Developing muon plugins](./docs/en/muon-plugin-develop.md)
 
 ### Other
 

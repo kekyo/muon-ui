@@ -2824,6 +2824,43 @@ describe("muon Vite plugin", () => {
 });
 
 describe("muon run CLI", () => {
+  it("warns when Vite server proxy configuration is unavailable to direct run", async () => {
+    const root = await createTemporaryDirectory("muon-dev-vite-proxy-");
+    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeRunViteApplication(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    await writeMuonViteConfig(
+      root,
+      [
+        'import muon from "__MUON_VITE_URL__";',
+        "export default {",
+        '  build: { outDir: "web-dist" },',
+        "  server: {",
+        "    proxy: {",
+        '      "/private-api-route": "http://127.0.0.1:5000",',
+        "    },",
+        "  },",
+        "  plugins: [",
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)} }),`,
+        "  ],",
+        "};",
+      ].join("\n"),
+    );
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-dev-cache-");
+
+    const result = await runMuonCli(root, ["run", "--json"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "Warning: Vite server proxy configuration is only available during Vite development and is not used by muon run.\n",
+    );
+    expect(result.stderr).not.toContain("/private-api-route");
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+  });
+
   it("builds Vite assets before direct run when a muon plugin config is present", async () => {
     const root = await createTemporaryDirectory("muon-dev-vite-assets-");
     const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");

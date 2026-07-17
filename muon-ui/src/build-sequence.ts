@@ -43,6 +43,8 @@ export interface MuonBuildSequenceProject {
   viteOutputDirectory: string | undefined;
   /** muon Vite plugin options if the project config contains the plugin. */
   pluginOptions: MuonVitePluginOptions | undefined;
+  /** Whether the resolved Vite config contains server proxy entries. */
+  viteServerProxyConfigured: boolean;
 }
 
 /**
@@ -77,6 +79,9 @@ const resolveViteOutputDirectory = (config: ResolvedConfig): string => {
     ? config.build.outDir
     : resolve(config.root, config.build.outDir);
 };
+
+const hasViteServerProxyConfiguration = (proxy: unknown): boolean =>
+  typeof proxy === "object" && proxy !== null && Object.keys(proxy).length > 0;
 
 const findMuonVitePluginOptions = async (
   plugins: unknown,
@@ -117,6 +122,7 @@ export const loadMuonBuildSequenceProject = async (
         viteBase: undefined,
         viteOutputDirectory: undefined,
         pluginOptions: undefined,
+        viteServerProxyConfigured: false,
       };
     }
     throw error;
@@ -136,6 +142,9 @@ export const loadMuonBuildSequenceProject = async (
       viteBase: undefined,
       viteOutputDirectory: undefined,
       pluginOptions: undefined,
+      viteServerProxyConfigured: hasViteServerProxyConfiguration(
+        resolvedConfig.server.proxy,
+      ),
     };
   }
 
@@ -145,6 +154,9 @@ export const loadMuonBuildSequenceProject = async (
     viteBase: resolvedConfig.base,
     viteOutputDirectory: resolveViteOutputDirectory(resolvedConfig),
     pluginOptions,
+    viteServerProxyConfigured: hasViteServerProxyConfiguration(
+      resolvedConfig.server.proxy,
+    ),
   };
 };
 

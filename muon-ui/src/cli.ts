@@ -139,6 +139,10 @@ interface InternalMuonPackOptions extends MuonPackOptions {
   progress?: MuonProgressCallback;
 }
 
+interface InternalMuonDevOptions extends MuonDevOptions {
+  warning?: (message: string) => void;
+}
+
 const readTargetValues = (value: string): string[] => {
   return value
     .split(",")
@@ -519,6 +523,9 @@ const runDevCommand = async (
     root: process.cwd(),
     environment: process.env,
     quietPrepare: commandOptions.json === true,
+  };
+  (devOptions as InternalMuonDevOptions).warning = (message): void => {
+    console.warn(`Warning: ${message}`);
   };
 
   if (commandOptions.muonPath !== undefined) {

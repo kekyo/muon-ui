@@ -40,6 +40,7 @@ interface MuonRuntimePaths {
 }
 
 interface MuonOverrideConfig {
+  config?: Record<string, string>;
   cdp?: {
     enable: true;
   };
@@ -243,10 +244,12 @@ const getWebSocketOrigin = (startUrl: string): string => {
 const createMuonOverrideConfig = (
   startUrl: string,
   enableDebugger: boolean,
+  config: Readonly<Record<string, string>> | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
+    ...(config === undefined ? {} : { config: { ...config } }),
     ...(enableDebugger
       ? {
           cdp: {
@@ -292,6 +295,7 @@ const writeMuonOverrideConfig = (
       createMuonOverrideConfig(
         startUrl,
         pluginOptions.enableDebugger !== false,
+        pluginOptions.dev?.config,
         runtimePluginConfig,
       ),
       null,

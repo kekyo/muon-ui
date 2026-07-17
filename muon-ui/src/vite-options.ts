@@ -172,6 +172,10 @@ const isMuonVitePluginAccessOptions = (value: unknown): boolean => {
   );
 };
 
+const isMuonViteDevOptions = (value: unknown): boolean =>
+  isRecord(value) &&
+  (value.config === undefined || isStringRecord(value.config));
+
 const isMuonVitePluginOptions = (
   value: unknown,
 ): value is MuonVitePluginOptions => {
@@ -188,6 +192,7 @@ const isMuonVitePluginOptions = (
       typeof value.enableDebugger === "boolean") &&
     (value.exitWithServer === undefined ||
       typeof value.exitWithServer === "boolean") &&
+    (value.dev === undefined || isMuonViteDevOptions(value.dev)) &&
     (value.pluginAccess === undefined ||
       value.pluginAccess === false ||
       isMuonVitePluginAccessOptions(value.pluginAccess)) &&

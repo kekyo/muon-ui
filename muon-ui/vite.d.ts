@@ -362,6 +362,21 @@ export interface MuonVitePluginAccessOptions {
 }
 
 /**
+ * Options applied only while the muon Vite development server is running.
+ */
+export interface MuonViteDevOptions {
+  /**
+   * Application config values appended to the generated Vite development config.
+   *
+   * @remarks These values override matching top-level `config` keys from the
+   * project muon config because the generated config is loaded last. Vite build
+   * and `muon run` ignore these values.
+   * @defaultValue `{}`
+   */
+  readonly config?: Readonly<Record<string, string>>;
+}
+
+/**
  * Options for the muon Vite development plugin.
  */
 export interface MuonVitePluginOptions {
@@ -417,6 +432,13 @@ export interface MuonVitePluginOptions {
    * @defaultValue `true`
    */
   readonly exitWithServer?: boolean;
+
+  /**
+   * Options used only for Vite development startup.
+   *
+   * @defaultValue `{}`
+   */
+  readonly dev?: MuonViteDevOptions;
 
   /**
    * Plugin access mode and virtual module capability imports.

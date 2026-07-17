@@ -336,6 +336,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonVitePluginOptions",
+      memberName: "dev",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
       memberName: "build",
     },
   ];
@@ -1295,6 +1300,12 @@ const plugin = muon({
   open: false,
   enableDebugger: false,
   exitWithServer: false,
+  dev: {
+    config: {
+      apiBaseUrl: "/api",
+      environmentName: "vite-development",
+    },
+  },
   build: {
     targets: ["linux-amd64"],
     iconPath: "icons/app.png",

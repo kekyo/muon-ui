@@ -558,6 +558,9 @@ interface StartServerPluginOptions {
   open: boolean | undefined;
   exitWithServer?: boolean;
   pluginAccess?: false | MuonVitePluginAccessOptions;
+  dev?: {
+    config?: Readonly<Record<string, string>>;
+  };
 }
 
 const startServer = async (
@@ -594,6 +597,7 @@ const startServer = async (
     ...(pluginOptions.pluginAccess === undefined
       ? {}
       : { pluginAccess: pluginOptions.pluginAccess }),
+    ...(pluginOptions.dev === undefined ? {} : { dev: pluginOptions.dev }),
   };
   const server = await createServer({
     root,
@@ -2359,6 +2363,49 @@ describe("muon Vite plugin", () => {
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
   });
 
+  it("adds application config overrides to Vite development startup", async () => {
+    const root = await createTemporaryDirectory("muon-vite-dev-config-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+        dev: {
+          config: {
+            apiBaseUrl: "/api",
+            environmentName: "vite-development",
+          },
+        },
+      },
+      undefined,
+    );
+    try {
+      await wait(() => existsSync(join(outputDirectory, "override.json")));
+      const overrideConfig = JSON.parse(
+        await readFile(join(outputDirectory, "override.json"), "utf8"),
+      ) as { config?: Record<string, string> };
+
+      expect(overrideConfig.config).toEqual({
+        apiBaseUrl: "/api",
+        environmentName: "vite-development",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("closes the Vite server when muon exits by default", async () => {
     const root = await createTemporaryDirectory("muon-vite-exit-default-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
@@ -3289,7 +3336,7 @@ describe("muon run CLI", () => {
         'import muon from "__MUON_VITE_URL__";',
         "export default {",
         "  plugins: [",
-        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, exitWithServer: false, build: false }),`,
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, exitWithServer: false, dev: { config: { apiBaseUrl: "/api" } }, build: false }),`,
         "  ],",
         "};",
       ].join("\n"),
@@ -3314,6 +3361,7 @@ describe("muon run CLI", () => {
       await readFile(join(outputDirectory, "override.json"), "utf8"),
     ) as {
       asset: { sourcePath: string };
+      config?: unknown;
       cdp?: unknown;
       browser?: { keybind?: unknown };
     };
@@ -3324,6 +3372,7 @@ describe("muon run CLI", () => {
       devResult.overrideConfigPath,
     ]);
     expect(overrideConfig.asset.sourcePath).toBe(assetsPath);
+    expect(overrideConfig.config).toBeUndefined();
     expect(overrideConfig.cdp).toBeUndefined();
     expect(overrideConfig.browser?.keybind).toBeUndefined();
   });

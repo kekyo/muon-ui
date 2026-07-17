@@ -3,8 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  copyFile as nodeCopyFile,
   mkdtemp as nodeMkdtemp,
   readFile as nodeReadFile,
   rm as nodeRm,
@@ -15,6 +16,7 @@ import { join as nodeJoin } from "node:path";
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
 
+import { embedMuonConfigInCoreFile } from "../../../muon-ui/src/embed-config.js";
 import {
   MUON_PORT,
   MUON_APP_URL,
@@ -53,6 +55,7 @@ import {
   f12DevToolsShortcut,
   f5ReloadShortcut,
   getCurrentTargetIds,
+  getMuonExecutable,
   getOuterSize,
   getWindowBounds,
   join,
@@ -101,6 +104,7 @@ import {
   withMuonBrowserConfig,
   withMuonEnvironment,
   writeFile,
+  type RunningMuon,
 } from "./shared.js";
 import {
   getWindowsRemoteContext,
@@ -1073,6 +1077,41 @@ const buildWindowsAdhocTestLibrary = async (): Promise<AdhocLibraryBuild> => {
 
 describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   const linuxIt = isLocalLinuxE2e ? it : it.skip;
+
+  const startEmbeddedConfigMuon = async (
+    executablePath: string,
+    externalApplicationConfig: Readonly<Record<string, string>>,
+  ): Promise<RunningMuon> =>
+    await startMuon(
+      DEBUG_MUON_DIRECTORY,
+      [],
+      TEST_NETWORK_ALLOW_PATTERNS,
+      ["muon.environments.getConfigValues"],
+      true,
+      shouldUseValgrind,
+      undefined,
+      {},
+      [],
+      TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+      [],
+      null,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      executablePath,
+      cdpStartupTimeoutMs,
+      undefined,
+      {},
+      {},
+      {},
+      externalApplicationConfig,
+    );
 
   it("starts with internal plugins and exposes configured APIs", async () => {
     await withMuon([], async (driver) => {
@@ -2094,6 +2133,88 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       { apiBaseUrl: "https://api.example", empty: "" },
     );
   });
+
+  linuxIt(
+    "returns application config values embedded in muon-core",
+    async () => {
+      const configDirectory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-embedded-application-config-"),
+      );
+      const embeddedCorePath = join(
+        DEBUG_MUON_DIRECTORY,
+        `muon-core-embedded-${randomUUID()}`,
+      );
+      const configPath = nodeJoin(configDirectory, "muon.json");
+      const embeddedApplicationConfig = {
+        apiBaseUrl: "https://embedded.api.example",
+        empty: "",
+      };
+      await nodeCopyFile(
+        getMuonExecutable(DEBUG_MUON_DIRECTORY),
+        embeddedCorePath,
+      );
+      await nodeWriteFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            config: embeddedApplicationConfig,
+            network: { allow: TEST_NETWORK_ALLOW_PATTERNS },
+            plugin: {
+              mode: "simple",
+              pages: TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+              plugins: [
+                {
+                  name: "internal",
+                  allow: ["muon.environments.getConfigValues"],
+                },
+              ],
+            },
+            cdp: { enable: true, port: MUON_PORT },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await embedMuonConfigInCoreFile({
+        corePath: embeddedCorePath,
+        configPath,
+        outputPath: undefined,
+      });
+
+      let running: RunningMuon | undefined = undefined;
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        running = await startEmbeddedConfigMuon(embeddedCorePath, {
+          apiBaseUrl: "https://external.api.example",
+          externalOnly: "ignored",
+        });
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon embedded config test</title>",
+          cdpCommandTimeoutMs,
+        );
+
+        await expect(
+          driver.evaluate("window.muon.environments.getConfigValues()"),
+        ).resolves.toEqual(embeddedApplicationConfig);
+      } finally {
+        try {
+          if (running !== undefined) {
+            await stopMuon(running, driver);
+          } else {
+            driver?.close();
+          }
+        } finally {
+          await nodeRm(embeddedCorePath, { force: true });
+          await nodeRm(configDirectory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it("streams child process output and writes stdin incrementally", async () => {
     const spawnOptions = createExecutorStreamingSpawnOptions();

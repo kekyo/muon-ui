@@ -47,6 +47,16 @@ interface InternalMuonBuildOptions extends MuonBuildOptions {
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const muonViteDisableArgument = "--no-muon";
+
+const isMuonDisabledByViteArguments = (argv: readonly string[]): boolean => {
+  const separatorIndex = argv.indexOf("--");
+  return (
+    separatorIndex >= 0 &&
+    argv.slice(separatorIndex + 1).includes(muonViteDisableArgument)
+  );
+};
+
 /**
  * Windows PE and NSIS resource metadata options.
  */
@@ -468,9 +478,12 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       return source;
     },
     configureServer: async (server) => {
+      const pluginOptions = isMuonDisabledByViteArguments(process.argv)
+        ? { ...options, open: false }
+        : options;
       await startMuonViteBrowserBridge({
         server,
-        pluginOptions: options,
+        pluginOptions,
         refreshRuntimePluginConfig,
         platform: process.platform,
         architecture: process.arch,

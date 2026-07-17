@@ -45,6 +45,42 @@ export default defineConfig({
 - `exitWithServer` を省略または `true` にした場合、muon-coreが通常終了するとVite dev serverも終了します。
   muonのリサイクル再起動ではVite dev serverは終了しません。
 
+## Viteサーバーのみを起動する
+
+muonを起動せず、通常のVite dev serverのみを起動する場合は、Viteの引数終端を表す `--` より後ろに `--no-muon` を指定します。
+
+```console
+vite dev -- --no-muon
+```
+
+ポートなどのViteオプションは `--` より前に指定します。`--` より後ろの引数はViteオプションとして解釈されません。
+
+```console
+vite dev --port 3000 -- --no-muon
+```
+
+`--no-muon` は `vite dev` の開発用ランタイム準備とmuon起動のみを無効化し、`muon({ open: true })` よりも優先されます。virtual module、watch設定、muon設定の読み込みなど、muon Viteプラグインのその他の機能は有効なままで、`.gitignore` のmuon出力項目も更新されます。`vite build` の動作には影響しません。
+
+`package.json` のscriptが `"dev": "vite dev"` の場合、npmからはViteへ引数終端も渡すため、次のように実行します。
+
+```console
+npm run dev -- -- --no-muon
+```
+
+Viteサーバーのみを起動するscriptを用意する場合は、引数終端をscript側に含められます。
+
+```json
+{
+  "scripts": {
+    "dev:vite": "vite dev --"
+  }
+}
+```
+
+```console
+npm run dev:vite -- --no-muon
+```
+
 ## pluginAccessキー
 
 `pluginAccess` は、`muon.json` の `plugin` 設定と同じ形で、Vite側から一部を上書きするための設定です。

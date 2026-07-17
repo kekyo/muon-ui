@@ -46,6 +46,42 @@ export default defineConfig({
 - When `exitWithServer` is omitted or `true`, the Vite dev server also exits when muon-core exits normally.
   muon recycle restart does not stop the Vite dev server.
 
+## Starting only the Vite server
+
+To start the normal Vite dev server without launching muon, specify `--no-muon` after `--`, Vite's end-of-options separator.
+
+```console
+vite dev -- --no-muon
+```
+
+Specify Vite options such as the port before `--`. Arguments after `--` are not interpreted as Vite options.
+
+```console
+vite dev --port 3000 -- --no-muon
+```
+
+`--no-muon` disables only development runtime preparation and the muon launch for `vite dev`, and takes precedence over `muon({ open: true })`. Other muon Vite plugin behavior, including virtual modules, watch settings, and muon configuration loading, remains enabled, and the muon output entries in `.gitignore` are still updated. It does not affect `vite build`.
+
+When the `package.json` script is `"dev": "vite dev"`, pass the end-of-options separator through npm as follows.
+
+```console
+npm run dev -- -- --no-muon
+```
+
+For a script dedicated to starting only the Vite server, the end-of-options separator can be included in the script itself.
+
+```json
+{
+  "scripts": {
+    "dev:vite": "vite dev --"
+  }
+}
+```
+
+```console
+npm run dev:vite -- --no-muon
+```
+
 ## pluginAccess key
 
 `pluginAccess` has the same shape as the `plugin` setting in `muon.json`, and is used to override some settings from the Vite side.

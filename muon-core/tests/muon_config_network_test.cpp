@@ -10,6 +10,8 @@
 #include "network/muon_network_policy.h"
 #include "plugins/muon_plugin_policy.h"
 
+#include "include/internal/cef_types.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -1339,6 +1341,98 @@ static bool RunConfigOverrideLoadingTest(
          LoadConfigFilesExpectFailure(
              {test_directory / "missing-search" / "muon.json"},
              "does not exist");
+}
+
+static bool RunLocalAccessConfigTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  const auto local_access_path = test_directory / "local-access.json";
+  if (!Expect(
+          WriteFile(
+              local_access_path,
+              R"({"network":{"localAccess":{"loopbackOrigins":[{"scheme":"ASSET","domain":"MAIN"}],"localNetworkOrigins":[{"scheme":"https","domain":"ROUTER.EXAMPLE","port":8443}]}}})"),
+          "failed to write local access config") ||
+      !LoadConfigExpectSuccess(local_access_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.network.local_access.loopback_origins.size() == 1,
+              "network.localAccess.loopbackOrigins was not parsed") ||
+      !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[0],
+                              "asset", "main", 0,
+                              "network.localAccess.loopbackOrigins") ||
+      !Expect(config.network.local_access.local_network_origins.size() == 1,
+              "network.localAccess.localNetworkOrigins was not parsed") ||
+      !ExpectAuthorizedOrigin(
+          config.network.local_access.local_network_origins[0], "https",
+          "router.example", 8443,
+          "network.localAccess.localNetworkOrigins")) {
+    return false;
+  }
+
+  const auto empty_path = test_directory / "empty-local-access.json";
+  if (!Expect(WriteFile(empty_path, R"({"network":{"localAccess":{}}})"),
+              "failed to write empty local access config") ||
+      !LoadConfigExpectSuccess(empty_path, &config) ||
+      !Expect(config.network.local_access.loopback_origins.empty(),
+              "empty loopbackOrigins default was not empty") ||
+      !Expect(config.network.local_access.local_network_origins.empty(),
+              "empty localNetworkOrigins default was not empty")) {
+    return false;
+  }
+
+  const auto first_path = test_directory / "local-access-first.json";
+  const auto second_path = test_directory / "local-access-second.json";
+  if (!Expect(
+          WriteFile(
+              first_path,
+              R"({"network":{"localAccess":{"loopbackOrigins":[{"scheme":"asset","domain":"main"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"}]}}})"),
+          "failed to write first local access override") ||
+      !Expect(
+          WriteFile(
+              second_path,
+              R"({"network":{"localAccess":{"loopbackOrigins":[{"domain":"main","scheme":"asset"},{"scheme":"https","domain":"second.example"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"second.example"}]}}})"),
+          "failed to write second local access override") ||
+      !LoadConfigFilesExpectSuccess({first_path, second_path}, &config)) {
+    return false;
+  }
+  if (!Expect(config.network.local_access.loopback_origins.size() == 2,
+              "loopbackOrigins was not merged by equality") ||
+      !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[0],
+                              "asset", "main", 0,
+                              "merged loopback origin") ||
+      !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[1],
+                              "https", "second.example", 0,
+                              "appended loopback origin") ||
+      !Expect(config.network.local_access.local_network_origins.size() == 2,
+              "localNetworkOrigins was not merged by equality")) {
+    return false;
+  }
+
+  const auto invalid_object_path =
+      test_directory / "invalid-local-access-object.json";
+  const auto invalid_loopback_path =
+      test_directory / "invalid-loopback-origins.json";
+  const auto invalid_local_network_path =
+      test_directory / "invalid-local-network-origins.json";
+  return Expect(WriteFile(invalid_object_path,
+                          R"({"network":{"localAccess":true}})"),
+                "failed to write invalid local access object") &&
+         Expect(WriteFile(
+                    invalid_loopback_path,
+                    R"({"network":{"localAccess":{"loopbackOrigins":true}}})"),
+                "failed to write invalid loopback origins") &&
+         Expect(WriteFile(
+                    invalid_local_network_path,
+                    R"({"network":{"localAccess":{"localNetworkOrigins":[{"scheme":"http"}]}}})"),
+                "failed to write invalid local network origins") &&
+         LoadConfigExpectFailure(invalid_object_path,
+                                 "network.localAccess must be an object") &&
+         LoadConfigExpectFailure(
+             invalid_loopback_path,
+             "network.localAccess.loopbackOrigins must be an array") &&
+         LoadConfigExpectFailure(
+             invalid_local_network_path,
+             "network.localAccess.localNetworkOrigins[0].domain is required");
 }
 
 static bool RunApplicationConfigLoadingTest(
@@ -2673,6 +2767,76 @@ static bool RunNetworkAuthorizedOriginPolicyTest() {
                 "subdomain of authorized origin was allowed");
 }
 
+static bool RunLocalAccessPermissionPolicyTest() {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonNetworkPolicy(
+                  {"asset://main/**"}, {},
+                  {{"asset", "main", 0}, {"https", "loopback.example", 0}},
+                  {{"asset", "main", 0}, {"https", "lan.example", 8443}},
+                  &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  const auto loopback =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOOPBACK_NETWORK);
+  const auto local_network =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOCAL_NETWORK);
+  const auto legacy =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOCAL_NETWORK_ACCESS);
+  const auto unrelated = static_cast<uint32_t>(CEF_PERMISSION_TYPE_CLIPBOARD);
+
+  return Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", loopback) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured loopback permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", local_network) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured local network permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", loopback | local_network) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured combined permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", legacy) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured legacy permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "https://loopback.example", loopback) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "default HTTPS port did not match loopback origin") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "https://lan.example:8443", local_network) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "explicit local network port did not match") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "https://loopback.example", legacy) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "legacy permission did not require both origin lists") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://other", loopback) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "unconfigured loopback origin was accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", loopback | unrelated) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "mixed local and unrelated permissions were accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", unrelated) ==
+                    MuonLocalAccessPermissionDecision::kUnhandled,
+                "unrelated permission was handled") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", 0) ==
+                    MuonLocalAccessPermissionDecision::kUnhandled,
+                "empty permission request was handled") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "not an origin", loopback) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "invalid requesting origin was accepted");
+}
+
 static bool ExpectInvalidNetworkGlob(
     const std::vector<std::string>& allow_patterns) {
   std::shared_ptr<MuonNetworkPolicy> policy;
@@ -2838,6 +3002,7 @@ int main() {
                           test_directory) &&
                       RunEmbeddedConfigEmptySlotTest(test_directory) &&
                       RunConfigOverrideLoadingTest(test_directory) &&
+                      RunLocalAccessConfigTest(test_directory) &&
                       RunApplicationConfigLoadingTest(test_directory) &&
                       RunBrowserConfigLoadingTest(test_directory) &&
                       RunLogConfigLoadingTest(test_directory) &&
@@ -2850,6 +3015,7 @@ int main() {
                       RunDefaultNetworkPolicyPatternTest() &&
                       RunNetworkPolicyEmptyTest() &&
                       RunNetworkAuthorizedOriginPolicyTest() &&
+                      RunLocalAccessPermissionPolicyTest() &&
                       RunInvalidNetworkGlobTest() &&
                       RunInvalidPluginPagesGlobTest() &&
                       RunInvalidUnsafeParentAccessGlobTest() &&

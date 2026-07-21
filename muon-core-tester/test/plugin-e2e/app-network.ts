@@ -48,6 +48,7 @@ import {
 } from "./shared.js";
 import { isWindowsRemoteE2e } from "./windows-context.js";
 import type { CdpDriver, RuntimeEvaluateResponse } from "./shared.js";
+import type { NetworkLocalAccessConfig } from "./shared.js";
 
 interface StoredZipEntry {
   name: string;
@@ -73,6 +74,58 @@ const getLocalLauncherCefLogPath = (
 };
 
 const localIt = isWindowsRemoteE2e() ? it.skip : it;
+
+const startDebugMuonWithLocalAccess = async (
+  networkAllowPatterns: string[],
+  networkLocalAccess: NetworkLocalAccessConfig | undefined,
+) =>
+  await startDebugMuon(
+    [],
+    networkAllowPatterns,
+    {},
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    [],
+    TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    [],
+    null,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    {},
+    {},
+    true,
+    false,
+    {},
+    networkLocalAccess,
+  );
+
+const fetchLocalAccessResult = async (
+  driver: CdpDriver,
+  url: string,
+): Promise<{ kind: string; status?: number; body?: string }> =>
+  await driver.evaluate(`
+    Promise.race([
+      fetch(${JSON.stringify(url)})
+        .then(async (response) => ({
+          kind: "response",
+          status: response.status,
+          body: await response.text(),
+        }))
+        .catch(() => ({ kind: "rejected" })),
+      new Promise((resolve) => {
+        setTimeout(() => resolve({ kind: "timeout" }), 3000);
+      }),
+    ])
+  `);
 
 const waitForConsoleMessage = async (
   driver: CdpDriver,
@@ -1687,6 +1740,107 @@ try {
       for (const popupDriver of popupDrivers) {
         popupDriver.close();
       }
+      await stopMuon(running, driver);
+      await stopHttpServer(server.server);
+    }
+  });
+
+  it("allows configured local HTTP access from the asset origin", async () => {
+    let hits = 0;
+    const server = await startHttpServer((_request, response) => {
+      hits += 1;
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.setHeader("Content-Type", "text/plain");
+      response.end("local access ok");
+    });
+    const running = await startDebugMuonWithLocalAccess(
+      [...TEST_NETWORK_ALLOW_PATTERNS, `${server.origin}/**`],
+      {
+        loopbackOrigins: [{ scheme: "asset", domain: "main" }],
+        localNetworkOrigins: [{ scheme: "asset", domain: "main" }],
+      },
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await expect(
+        fetchLocalAccessResult(driver, `${server.origin}/api`),
+      ).resolves.toEqual({
+        kind: "response",
+        status: 200,
+        body: "local access ok",
+      });
+      expect(hits).toBe(1);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+      await stopHttpServer(server.server);
+    }
+  });
+
+  it("denies unconfigured local HTTP access without leaving fetch pending", async () => {
+    let hits = 0;
+    const server = await startHttpServer((_request, response) => {
+      hits += 1;
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.end("unexpected");
+    });
+    const running = await startDebugMuonWithLocalAccess(
+      [...TEST_NETWORK_ALLOW_PATTERNS, `${server.origin}/**`],
+      undefined,
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      await expect(
+        fetchLocalAccessResult(driver, `${server.origin}/api`),
+      ).resolves.toEqual({ kind: "rejected" });
+      expect(hits).toBe(0);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
+      await stopMuon(running, driver);
+      await stopHttpServer(server.server);
+    }
+  });
+
+  it("keeps network.allow mandatory for configured local HTTP access", async () => {
+    let hits = 0;
+    const server = await startHttpServer((_request, response) => {
+      hits += 1;
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.end("unexpected");
+    });
+    const running = await startDebugMuonWithLocalAccess(
+      TEST_NETWORK_ALLOW_PATTERNS,
+      {
+        loopbackOrigins: [{ scheme: "asset", domain: "main" }],
+        localNetworkOrigins: [{ scheme: "asset", domain: "main" }],
+      },
+    );
+    let driver: CdpDriver | undefined = undefined;
+    try {
+      driver = await connectToMuonCdp({
+        port: MUON_PORT,
+        timeoutMs: cdpCommandTimeoutMs,
+      });
+      const result = await fetchLocalAccessResult(
+        driver,
+        `${server.origin}/api`,
+      );
+      expect(result).not.toMatchObject({ status: 200 });
+      expect(result.kind).not.toBe("timeout");
+      expect(hits).toBe(0);
+    } catch (error) {
+      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+    } finally {
       await stopMuon(running, driver);
       await stopHttpServer(server.server);
     }

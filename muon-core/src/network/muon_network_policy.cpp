@@ -10,6 +10,7 @@
 #include "muon_string_helpers.h"
 
 #include "include/cef_parser.h"
+#include "include/internal/cef_types.h"
 
 #include <cctype>
 #include <utility>
@@ -30,6 +31,8 @@ struct MuonNormalizedOrigin {
 struct MuonNetworkPolicy::Impl {
   std::vector<MuonGlob> allow_globs;
   std::vector<MuonNormalizedOrigin> authorized_origins;
+  std::vector<MuonNormalizedOrigin> loopback_origins;
+  std::vector<MuonNormalizedOrigin> local_network_origins;
 };
 
 static bool ParseMuonUrlOrigin(const std::string& url,
@@ -84,6 +87,60 @@ bool MuonNetworkPolicy::IsAllowedRequest(
     return false;
   }
   return IsAuthorizedOriginUrl(request_initiator);
+}
+
+static bool ContainsMuonOrigin(
+    const std::vector<MuonNormalizedOrigin>& configured_origins,
+    const MuonNormalizedOrigin& requesting_origin) {
+  for (const auto& configured_origin : configured_origins) {
+    if (IsSameMuonOrigin(requesting_origin, configured_origin)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+MuonLocalAccessPermissionDecision
+MuonNetworkPolicy::GetLocalAccessPermissionDecision(
+    const std::string& requesting_origin,
+    uint32_t requested_permissions) const {
+  const auto legacy_permission =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOCAL_NETWORK_ACCESS);
+  const auto local_network_permission =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOCAL_NETWORK);
+  const auto loopback_permission =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOOPBACK_NETWORK);
+  const auto local_access_permissions = legacy_permission |
+                                        local_network_permission |
+                                        loopback_permission;
+  if ((requested_permissions & local_access_permissions) == 0) {
+    return MuonLocalAccessPermissionDecision::kUnhandled;
+  }
+  if ((requested_permissions & ~local_access_permissions) != 0 || !impl_) {
+    return MuonLocalAccessPermissionDecision::kDeny;
+  }
+
+  MuonNormalizedOrigin origin;
+  if (!ParseMuonUrlOrigin(requesting_origin, &origin)) {
+    return MuonLocalAccessPermissionDecision::kDeny;
+  }
+  const auto allows_loopback = ContainsMuonOrigin(impl_->loopback_origins,
+                                                  origin);
+  const auto allows_local_network = ContainsMuonOrigin(
+      impl_->local_network_origins, origin);
+  if ((requested_permissions & loopback_permission) != 0 &&
+      !allows_loopback) {
+    return MuonLocalAccessPermissionDecision::kDeny;
+  }
+  if ((requested_permissions & local_network_permission) != 0 &&
+      !allows_local_network) {
+    return MuonLocalAccessPermissionDecision::kDeny;
+  }
+  if ((requested_permissions & legacy_permission) != 0 &&
+      (!allows_loopback || !allows_local_network)) {
+    return MuonLocalAccessPermissionDecision::kDeny;
+  }
+  return MuonLocalAccessPermissionDecision::kAccept;
 }
 
 static bool ParseMuonPortString(const std::string& value, int* port) {
@@ -164,24 +221,23 @@ static bool IsSameMuonOrigin(const MuonNormalizedOrigin& left,
          left.port == right.port;
 }
 
-static bool AppendMuonAuthorizedOrigins(
-    const std::vector<MuonAuthorizedOriginConfig>& authorized_origins,
+static bool AppendMuonOrigins(
+    const std::vector<MuonAuthorizedOriginConfig>& configured_origins,
+    const std::string& config_path,
     std::vector<MuonNormalizedOrigin>* normalized_origins,
     std::string* error_message) {
   if (normalized_origins == nullptr || error_message == nullptr) {
     return false;
   }
-  for (const auto& origin : authorized_origins) {
+  for (const auto& origin : configured_origins) {
     if (origin.scheme.empty() || origin.domain.empty()) {
-      *error_message =
-          "Invalid network.authorizedOrigin entry: scheme and domain are "
-          "required";
+      *error_message = "Invalid " + config_path +
+                       " entry: scheme and domain are required";
       return false;
     }
     if (origin.port < 0 || origin.port > 65535) {
-      *error_message =
-          "Invalid network.authorizedOrigin entry: port must be from 1 to "
-          "65535";
+      *error_message = "Invalid " + config_path +
+                       " entry: port must be from 1 to 65535";
       return false;
     }
     normalized_origins->push_back(NormalizeMuonAuthorizedOrigin(origin));
@@ -219,6 +275,8 @@ bool CreateMuonUrlPolicy(const std::vector<std::string>& allow_patterns,
 bool CreateMuonNetworkPolicy(
     const std::vector<std::string>& allow_patterns,
     const std::vector<MuonAuthorizedOriginConfig>& authorized_origins,
+    const std::vector<MuonAuthorizedOriginConfig>& loopback_origins,
+    const std::vector<MuonAuthorizedOriginConfig>& local_network_origins,
     std::shared_ptr<MuonNetworkPolicy>* policy,
     std::string* error_message) {
   if (policy == nullptr || error_message == nullptr) {
@@ -228,9 +286,16 @@ bool CreateMuonNetworkPolicy(
                            error_message)) {
     return false;
   }
-  if (!AppendMuonAuthorizedOrigins(
-          authorized_origins, &(*policy)->impl_->authorized_origins,
-          error_message)) {
+  if (!AppendMuonOrigins(authorized_origins, "network.authorizedOrigin",
+                         &(*policy)->impl_->authorized_origins,
+                         error_message) ||
+      !AppendMuonOrigins(loopback_origins,
+                         "network.localAccess.loopbackOrigins",
+                         &(*policy)->impl_->loopback_origins, error_message) ||
+      !AppendMuonOrigins(local_network_origins,
+                         "network.localAccess.localNetworkOrigins",
+                         &(*policy)->impl_->local_network_origins,
+                         error_message)) {
     policy->reset();
     return false;
   }
@@ -239,7 +304,17 @@ bool CreateMuonNetworkPolicy(
 
 bool CreateMuonNetworkPolicy(
     const std::vector<std::string>& allow_patterns,
+    const std::vector<MuonAuthorizedOriginConfig>& authorized_origins,
     std::shared_ptr<MuonNetworkPolicy>* policy,
     std::string* error_message) {
-  return CreateMuonNetworkPolicy(allow_patterns, {}, policy, error_message);
+  return CreateMuonNetworkPolicy(allow_patterns, authorized_origins, {}, {},
+                                 policy, error_message);
+}
+
+bool CreateMuonNetworkPolicy(
+    const std::vector<std::string>& allow_patterns,
+    std::shared_ptr<MuonNetworkPolicy>* policy,
+    std::string* error_message) {
+  return CreateMuonNetworkPolicy(allow_patterns, {}, {}, {}, policy,
+                                 error_message);
 }

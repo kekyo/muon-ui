@@ -1146,6 +1146,33 @@ CefRefPtr<CefFrameHandler> MuonClient::GetFrameHandler() {
   return this;
 }
 
+CefRefPtr<CefPermissionHandler> MuonClient::GetPermissionHandler() {
+  return this;
+}
+
+bool MuonClient::OnShowPermissionPrompt(
+    CefRefPtr<CefBrowser> browser,
+    uint64_t prompt_id,
+    const CefString& requesting_origin,
+    uint32_t requested_permissions,
+    CefRefPtr<CefPermissionPromptCallback> callback) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)browser;
+  (void)prompt_id;
+  if (!network_policy_ || !callback) {
+    return false;
+  }
+  const auto decision = network_policy_->GetLocalAccessPermissionDecision(
+      requesting_origin.ToString(), requested_permissions);
+  if (decision == MuonLocalAccessPermissionDecision::kUnhandled) {
+    return false;
+  }
+  callback->Continue(decision == MuonLocalAccessPermissionDecision::kAccept
+                         ? CEF_PERMISSION_RESULT_ACCEPT
+                         : CEF_PERMISSION_RESULT_DENY);
+  return true;
+}
+
 CefRefPtr<CefRequestHandler> MuonClient::GetRequestHandler() {
   return this;
 }

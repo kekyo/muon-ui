@@ -76,6 +76,11 @@ static constexpr char kMuonConfigNetworkAuthorizedOriginKey[] =
 static constexpr char kMuonConfigNetworkAuthorizedOriginSchemeKey[] = "scheme";
 static constexpr char kMuonConfigNetworkAuthorizedOriginDomainKey[] = "domain";
 static constexpr char kMuonConfigNetworkAuthorizedOriginPortKey[] = "port";
+static constexpr char kMuonConfigNetworkLocalAccessKey[] = "localAccess";
+static constexpr char kMuonConfigNetworkLoopbackOriginsKey[] =
+    "loopbackOrigins";
+static constexpr char kMuonConfigNetworkLocalNetworkOriginsKey[] =
+    "localNetworkOrigins";
 static constexpr char kMuonConfigPluginKey[] = "plugin";
 static constexpr char kMuonConfigPluginPathKey[] = "path";
 static constexpr char kMuonConfigPluginModeKey[] = "mode";
@@ -2278,13 +2283,34 @@ static bool ReadNetworkConfig(yyjson_val* root,
     *error_message = "muon.json network must be an object";
     return false;
   }
-  return ReadStringArray(network, kMuonConfigNetworkAllowKey,
-                         "network.allow", &config->network.allow,
-                         error_message) &&
+  if (!ReadStringArray(network, kMuonConfigNetworkAllowKey, "network.allow",
+                       &config->network.allow, error_message) ||
+      !ReadAuthorizedOriginArray(network,
+                                 kMuonConfigNetworkAuthorizedOriginKey,
+                                 "network.authorizedOrigin",
+                                 &config->network.authorized_origin,
+                                 error_message)) {
+    return false;
+  }
+
+  const auto local_access =
+      yyjson_obj_get(network, kMuonConfigNetworkLocalAccessKey);
+  if (local_access == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_obj(local_access)) {
+    *error_message = "muon.json network.localAccess must be an object";
+    return false;
+  }
+  return ReadAuthorizedOriginArray(
+             local_access, kMuonConfigNetworkLoopbackOriginsKey,
+             "network.localAccess.loopbackOrigins",
+             &config->network.local_access.loopback_origins, error_message) &&
          ReadAuthorizedOriginArray(
-             network, kMuonConfigNetworkAuthorizedOriginKey,
-             "network.authorizedOrigin",
-             &config->network.authorized_origin, error_message);
+             local_access, kMuonConfigNetworkLocalNetworkOriginsKey,
+             "network.localAccess.localNetworkOrigins",
+             &config->network.local_access.local_network_origins,
+             error_message);
 }
 
 static bool ReadDebuggerConfig(yyjson_val* root,

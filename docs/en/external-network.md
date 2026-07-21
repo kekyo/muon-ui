@@ -44,3 +44,29 @@ This allows only local assets and that external server to be referenced.
 - This applies not only to images, but to all network access, including CSS files, `iframe` tags, `fetch` API access, and WebSocket connections.
   You must add every required URL.
 - These URLs can use a pseudo-glob format. `*` does not cross `:`, `/`, `?`, or `#` separators, while `**` matches all following characters.
+
+## Accessing the local network
+
+Chromium requests Local Network Access permission for requests to loopback or local network endpoints.
+Allow the destination URL with `network.allow`, and specify the requesting origin with `network.localAccess`.
+
+```json
+{
+  "network": {
+    "allow": [
+      "asset://main/**",
+      "http://localhost:5171/**"
+    ],
+    "localAccess": {
+      "loopbackOrigins": [
+        { "scheme": "asset", "domain": "main" }
+      ],
+      "localNetworkOrigins": []
+    }
+  }
+}
+```
+
+Use `loopbackOrigins` for localhost and loopback addresses, and `localNetworkOrigins` for hosts on the LAN.
+Both lists use exact requesting-origin matching and do not accept wildcards.
+Permission requests from unconfigured origins are explicitly denied.

@@ -644,6 +644,9 @@ void MuonApp::OnContextInitialized() {
   std::string error_message;
   if (!CreateMuonNetworkPolicy(config_.network.allow,
                                config_.network.authorized_origin,
+                               config_.network.local_access.loopback_origins,
+                               config_.network.local_access
+                                   .local_network_origins,
                                &network_policy, &error_message)) {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,

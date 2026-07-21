@@ -354,7 +354,7 @@ struct MuonDebuggerConfig {
 };
 
 /**
- * One network.authorizedOrigin entry from muon.json.
+ * One exact network origin entry from muon.json.
  */
 struct MuonAuthorizedOriginConfig {
   /**
@@ -372,6 +372,20 @@ struct MuonAuthorizedOriginConfig {
 };
 
 /**
+ * Local network access permission section from muon.json.
+ */
+struct MuonLocalAccessConfig {
+  /**
+   * Origins permitted to access loopback network endpoints.
+   */
+  std::vector<MuonAuthorizedOriginConfig> loopback_origins;
+  /**
+   * Origins permitted to access local network endpoints.
+   */
+  std::vector<MuonAuthorizedOriginConfig> local_network_origins;
+};
+
+/**
  * Network section from muon.json.
  */
 struct MuonNetworkConfig {
@@ -383,6 +397,10 @@ struct MuonNetworkConfig {
    * Origins that authorize top-level navigation targets and initiated requests.
    */
   std::vector<MuonAuthorizedOriginConfig> authorized_origin;
+  /**
+   * Origin permissions for loopback and local network access.
+   */
+  MuonLocalAccessConfig local_access;
 };
 
 /**

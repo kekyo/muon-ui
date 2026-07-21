@@ -604,6 +604,11 @@ export interface NetworkAuthorizedOriginConfig {
   port?: number;
 }
 
+export interface NetworkLocalAccessConfig {
+  loopbackOrigins: NetworkAuthorizedOriginConfig[];
+  localNetworkOrigins: NetworkAuthorizedOriginConfig[];
+}
+
 export interface RunningHttpServer {
   server: Server;
   origin: string;
@@ -2274,10 +2279,14 @@ export const writeMuonConfig = async (
   logConfig: Record<string, unknown> | undefined = undefined,
   browserProfilePath: string | undefined = undefined,
   applicationConfig: Readonly<Record<string, string>> = {},
+  networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
     network.authorizedOrigin = networkAuthorizedOrigins;
+  }
+  if (networkLocalAccess !== undefined) {
+    network.localAccess = networkLocalAccess;
   }
   const plugin: Record<string, unknown> = {
     path: pluginPath,
@@ -2388,6 +2397,7 @@ interface StartWindowsRemoteMuonOptions {
   logConfig: Record<string, unknown> | undefined;
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
+  networkLocalAccess: NetworkLocalAccessConfig | undefined;
   pluginAllowPatterns: string[];
   pluginSaltByName: Readonly<Record<string, string>>;
   pluginSignatureByName: Readonly<Record<string, string>>;
@@ -2811,6 +2821,7 @@ const startWindowsRemoteMuon = async (
         options.logConfig,
         profilePath,
         options.applicationConfig,
+        options.networkLocalAccess,
       ),
   );
   const cdpPort = allocateWindowsRemoteCdpPort();
@@ -2945,6 +2956,7 @@ export const startMuon = async (
   pluginSaltByName: Readonly<Record<string, string>> = {},
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
   applicationConfig: Readonly<Record<string, string>> = {},
+  networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -2969,6 +2981,7 @@ export const startMuon = async (
         logConfig,
         networkAllowPatterns,
         networkAuthorizedOrigins,
+        networkLocalAccess,
         pluginAllowPatterns,
         pluginConfigByName,
         pluginSaltByName,
@@ -3030,6 +3043,7 @@ export const startMuon = async (
     logConfig,
     undefined,
     applicationConfig,
+    networkLocalAccess,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -3118,6 +3132,7 @@ export const startDebugMuon = async (
   waitForDebugPort = true,
   useValgrind = shouldUseValgrind,
   applicationConfig: Readonly<Record<string, string>> = {},
+  networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -3150,6 +3165,7 @@ export const startDebugMuon = async (
     pluginSaltByName,
     pluginConfigByName,
     applicationConfig,
+    networkLocalAccess,
   );
 
 export const startDebugMuonLauncher = async (

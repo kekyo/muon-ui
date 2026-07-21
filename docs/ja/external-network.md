@@ -44,3 +44,29 @@
 - 画像だけではなく、すべてのネットワークアクセス（CSSファイルへのアクセスや `iframe` タグや `fetch` APIを使用したアクセス、WebSocketなど）が対象となるため、
   必要なURLをすべて追加する必要があります。
 - このURLでは、擬似的なglobフォーマットを使用出来ます。`*` は `:`, `/`, `?`, `#` の区切りを越えませんが、`**`は以降のすべての文字にマッチします。
+
+## ローカルネットワークにアクセスする
+
+ChromiumはloopbackまたはローカルネットワークへのリクエストにLocal Network Access権限を要求します。
+`network.allow`に宛先URLを追加したうえで、リクエスト元のオリジンを`network.localAccess`に指定してください。
+
+```json
+{
+  "network": {
+    "allow": [
+      "asset://main/**",
+      "http://localhost:5171/**"
+    ],
+    "localAccess": {
+      "loopbackOrigins": [
+        { "scheme": "asset", "domain": "main" }
+      ],
+      "localNetworkOrigins": []
+    }
+  }
+}
+```
+
+`loopbackOrigins`はlocalhostやloopbackアドレス向け、`localNetworkOrigins`はLAN上のホスト向けです。
+どちらもページ側のオリジンを完全一致で指定し、ワイルドカードは使用出来ません。
+未指定の権限要求は明示的に拒否されます。

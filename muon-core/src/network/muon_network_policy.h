@@ -8,9 +8,28 @@
 
 #include "config/muon_config.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+/**
+ * Result of applying network.localAccess to a CEF permission request.
+ */
+enum class MuonLocalAccessPermissionDecision {
+  /**
+   * The request does not contain a local access permission.
+   */
+  kUnhandled,
+  /**
+   * Every requested local access permission is allowed.
+   */
+  kAccept,
+  /**
+   * At least one requested permission must be denied.
+   */
+  kDeny,
+};
 
 /**
  * URL allow policy backed by glob allow patterns.
@@ -51,6 +70,17 @@ class MuonNetworkPolicy final {
                         bool is_top_level_navigation,
                         const std::string& request_initiator) const;
 
+  /**
+   * Applies network.localAccess to a CEF permission request.
+   *
+   * @param requesting_origin Origin requesting the permissions.
+   * @param requested_permissions CEF permission request bit mask.
+   * @return Whether the request is unhandled, accepted, or denied.
+   */
+  MuonLocalAccessPermissionDecision GetLocalAccessPermissionDecision(
+      const std::string& requesting_origin,
+      uint32_t requested_permissions) const;
+
  private:
   struct Impl;
 
@@ -66,6 +96,8 @@ class MuonNetworkPolicy final {
   friend bool CreateMuonNetworkPolicy(
       const std::vector<std::string>& allow_patterns,
       const std::vector<MuonAuthorizedOriginConfig>& authorized_origins,
+      const std::vector<MuonAuthorizedOriginConfig>& loopback_origins,
+      const std::vector<MuonAuthorizedOriginConfig>& local_network_origins,
       std::shared_ptr<MuonNetworkPolicy>* policy,
       std::string* error_message);
   friend bool CreateMuonNetworkPolicy(
@@ -97,6 +129,24 @@ bool CreateMuonUrlPolicy(const std::vector<std::string>& allow_patterns,
  * @param policy Receives the compiled policy.
  * @param error_message Receives a validation error on failure.
  * @return true when all patterns were compiled.
+ */
+bool CreateMuonNetworkPolicy(
+    const std::vector<std::string>& allow_patterns,
+    const std::vector<MuonAuthorizedOriginConfig>& authorized_origins,
+    const std::vector<MuonAuthorizedOriginConfig>& loopback_origins,
+    const std::vector<MuonAuthorizedOriginConfig>& local_network_origins,
+    std::shared_ptr<MuonNetworkPolicy>* policy,
+    std::string* error_message);
+
+/**
+ * Compiles a network policy without local access permissions.
+ *
+ * @param allow_patterns Glob patterns applied to full request URLs.
+ * @param authorized_origins Exact origins that authorize navigation targets and
+ * initiated requests.
+ * @param policy Receives the compiled policy.
+ * @param error_message Receives a validation error on failure.
+ * @return true when all patterns and origins were compiled.
  */
 bool CreateMuonNetworkPolicy(
     const std::vector<std::string>& allow_patterns,

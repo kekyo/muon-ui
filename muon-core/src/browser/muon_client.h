@@ -24,6 +24,7 @@
 #include "include/cef_display_handler.h"
 #include "include/cef_drag_handler.h"
 #include "include/cef_frame_handler.h"
+#include "include/cef_permission_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_urlrequest.h"
 #include "include/views/cef_browser_view.h"
@@ -50,6 +51,7 @@ class MuonClient final : public CefClient,
                           public CefDialogHandler,
                           public CefDragHandler,
                           public CefFrameHandler,
+                          public CefPermissionHandler,
                           public CefRequestHandler,
                           public MuonWindowCloseHandler {
  public:
@@ -127,6 +129,28 @@ class MuonClient final : public CefClient,
    * Returns this object as the frame lifetime handler.
    */
   CefRefPtr<CefFrameHandler> GetFrameHandler() override;
+
+  /**
+   * Returns this object as the permission handler.
+   */
+  CefRefPtr<CefPermissionHandler> GetPermissionHandler() override;
+
+  /**
+   * Resolves configured loopback and local network permission prompts.
+   *
+   * @param browser Browser that owns the prompt.
+   * @param prompt_id Identifier for the permission prompt.
+   * @param requesting_origin Origin requesting permissions.
+   * @param requested_permissions Requested CEF permission bit mask.
+   * @param callback Callback used to complete handled prompts.
+   * @return true when a local access prompt was completed.
+   */
+  bool OnShowPermissionPrompt(
+      CefRefPtr<CefBrowser> browser,
+      uint64_t prompt_id,
+      const CefString& requesting_origin,
+      uint32_t requested_permissions,
+      CefRefPtr<CefPermissionPromptCallback> callback) override;
 
   /**
    * Returns this object as the request handler.

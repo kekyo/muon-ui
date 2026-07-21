@@ -289,6 +289,8 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 | :-- | :--- | :------ | :------ |
 | `allow` | `readonly string[]` | `["asset://**"]` | List of URL patterns allowed to load. |
 | `authorizedOrigin` | `readonly object[]` | `[]` | Allows additional network access for requests originating from specified origins. |
+| `localAccess.loopbackOrigins` | `readonly object[]` | `[]` | Origins granted permission to access the loopback network. |
+| `localAccess.localNetworkOrigins` | `readonly object[]` | `[]` | Origins granted permission to access the local network. |
 
 - `allow` is a whitelist.
   If an empty array is specified, all network access, including local assets, is disallowed.
@@ -302,6 +304,9 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
   - `domain` cannot contain `:`, `/`, `?`, `#`, or `*`.
   - If `port` is specified, it must be an integer from `1` through `65535`.
   - This setting behaves similarly to privilege delegation, so specify only origins that can be trusted as request origins, such as trusted authentication providers.
+- Elements of `localAccess.loopbackOrigins` and `localAccess.localNetworkOrigins` use the same exact `scheme`, `domain`, and `port` matching.
+  These lists control only the Local Network Access permission requested by CEF, so destination URLs must also be allowed by `allow`.
+  The combined legacy Local Network Access permission is accepted only when the same origin is present in both lists.
 
 ## plugin key
 

@@ -336,6 +336,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
     {
       filePath: "vite.d.ts",
       parentName: "MuonVitePluginOptions",
+      memberName: "allowInsecureLocalhost",
+    },
+    {
+      filePath: "vite.d.ts",
+      parentName: "MuonVitePluginOptions",
       memberName: "dev",
     },
     {

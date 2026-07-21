@@ -19,10 +19,12 @@ npx muon run
   例えば `base: "/foo/"` の場合、出力は `.muon/run/assets/main/foo/` に配置され、`muon.json` に `browser.startPage` が無ければ `asset://main/foo/index.html` を開きます。
 - Viteやmuon Viteプラグインが無い場合は、`--assets` オプション、 `muon.json` の `asset.sourcePath`、 `assets/` の順に解決されます。
   `asset://main/index.html` の場合は、 `assets/main/index.html` を参照することに注意して下さい。URLのホスト名部分がサブディレクトリとして扱われます。
-- `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger` と `build.configPath` を読み取ります。
+- `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger`, `allowInsecureLocalhost` と `build.configPath` を読み取ります。
 - CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` は `muon run` では無視されます。
   `build: false` は `--assets` を省略したVite-backed起動ではエラーになりますが、`--assets` を明示した場合は従来どおり指定アセットを起動します。
 - muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
+- localhostの開発用HTTPS証明書エラーを無視するには `--allow-insecure-localhost` を指定します。
+  このオプションは `muon run` とViteプラグインだけで使用でき、配布用のmuon-launcherへ直接渡すと起動前に拒否されます。
 
 Viteプラグインを使用する場合と異なり、アセットホスト名部分によるページ管理の分割を自然に行うことが出来ます。
 例えば、 `asset://main/index.html` と `asset://sub/index.html` は、CEFが異なるオリジンとして扱います。

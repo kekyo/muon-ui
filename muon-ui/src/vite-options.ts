@@ -190,6 +190,8 @@ const isMuonVitePluginOptions = (
     (value.open === undefined || typeof value.open === "boolean") &&
     (value.enableDebugger === undefined ||
       typeof value.enableDebugger === "boolean") &&
+    (value.allowInsecureLocalhost === undefined ||
+      typeof value.allowInsecureLocalhost === "boolean") &&
     (value.exitWithServer === undefined ||
       typeof value.exitWithServer === "boolean") &&
     (value.dev === undefined || isMuonViteDevOptions(value.dev)) &&

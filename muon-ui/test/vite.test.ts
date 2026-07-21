@@ -555,6 +555,7 @@ interface StartServerPluginOptions {
   cefPath: string | undefined;
   stagePath: string | undefined;
   enableDebugger: boolean | undefined;
+  allowInsecureLocalhost?: boolean;
   open: boolean | undefined;
   exitWithServer?: boolean;
   pluginAccess?: false | MuonVitePluginAccessOptions;
@@ -590,6 +591,9 @@ const startServer = async (
     ...(pluginOptions.enableDebugger === undefined
       ? {}
       : { enableDebugger: pluginOptions.enableDebugger }),
+    ...(pluginOptions.allowInsecureLocalhost === undefined
+      ? {}
+      : { allowInsecureLocalhost: pluginOptions.allowInsecureLocalhost }),
     ...(pluginOptions.open === undefined ? {} : { open: pluginOptions.open }),
     ...(pluginOptions.exitWithServer === undefined
       ? {}
@@ -2499,6 +2503,7 @@ describe("muon Vite plugin", () => {
         cefPath: cefDirectory,
         stagePath: undefined,
         enableDebugger: undefined,
+        allowInsecureLocalhost: true,
         open: undefined,
       },
       undefined,
@@ -2532,6 +2537,19 @@ describe("muon Vite plugin", () => {
         allow: ["muon.browser.recycle"],
       },
     ]);
+
+    for (const launchIndex of [1, 2]) {
+      const argumentsForLaunch = (
+        await readFile(join(outputDirectory, `args-${launchIndex}.txt`), "utf8")
+      )
+        .trim()
+        .split("\n");
+      expect(
+        argumentsForLaunch.filter(
+          (argument) => argument === "--allow-insecure-localhost",
+        ),
+      ).toHaveLength(1);
+    }
 
     await server.close();
   });
@@ -3306,6 +3324,7 @@ describe("muon run CLI", () => {
       cefDirectory,
       "--assets",
       assetsPath,
+      "--allow-insecure-localhost",
       "--json",
     ]);
 
@@ -3319,12 +3338,20 @@ describe("muon run CLI", () => {
     await expect(
       readFile(join(outputDirectory, "recycle-count.txt"), "utf8"),
     ).resolves.toBe("2\n");
-    expect(await readCapturedArguments(outputDirectory)).toEqual([
-      "-c",
-      join(root, "muon.json"),
-      "-c",
-      devResult.overrideConfigPath,
-    ]);
+    for (const launchIndex of [1, 2]) {
+      const argumentsForLaunch = (
+        await readFile(join(outputDirectory, `args-${launchIndex}.txt`), "utf8")
+      )
+        .trim()
+        .split("\n");
+      expect(argumentsForLaunch).toEqual([
+        "-c",
+        join(root, "muon.json"),
+        "-c",
+        devResult.overrideConfigPath,
+        "--allow-insecure-localhost",
+      ]);
+    }
   });
 
   it("restarts muon from the muon-core dev supervisor", async () => {
@@ -3373,7 +3400,7 @@ describe("muon run CLI", () => {
         'import muon from "__MUON_VITE_URL__";',
         "export default {",
         "  plugins: [",
-        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, open: false, exitWithServer: false, dev: { config: { apiBaseUrl: "/api" } }, build: false }),`,
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, allowInsecureLocalhost: true, open: false, exitWithServer: false, dev: { config: { apiBaseUrl: "/api" } }, build: false }),`,
         "  ],",
         "};",
       ].join("\n"),
@@ -3407,6 +3434,7 @@ describe("muon run CLI", () => {
     expect(await readCapturedArguments(outputDirectory)).toEqual([
       "-c",
       devResult.overrideConfigPath,
+      "--allow-insecure-localhost",
     ]);
     expect(overrideConfig.asset.sourcePath).toBe(assetsPath);
     expect(overrideConfig.config).toBeUndefined();
@@ -3439,7 +3467,7 @@ describe("muon run CLI", () => {
         'import muon from "__MUON_VITE_URL__";',
         "export default {",
         "  plugins: [",
-        `    muon({ muonPath: ${JSON.stringify(pluginMuonDirectory)}, cefPath: ${JSON.stringify(pluginCefDirectory)}, stagePath: "plugin-stage", enableDebugger: true }),`,
+        `    muon({ muonPath: ${JSON.stringify(pluginMuonDirectory)}, cefPath: ${JSON.stringify(pluginCefDirectory)}, stagePath: "plugin-stage", enableDebugger: true, allowInsecureLocalhost: false }),`,
         "  ],",
         "};",
       ].join("\n"),
@@ -3458,6 +3486,7 @@ describe("muon run CLI", () => {
       "--assets",
       assetsPath,
       "--no-debugger",
+      "--allow-insecure-localhost",
       "--json",
     ]);
 
@@ -3476,6 +3505,11 @@ describe("muon run CLI", () => {
     expect(devResult.stagePath).toBe(cliStagePath);
     expect(overrideConfig.cdp).toBeUndefined();
     expect(overrideConfig.browser?.keybind).toBeUndefined();
+    expect(await readCapturedArguments(cliOutputDirectory)).toEqual([
+      "-c",
+      join(root, ".muon", "run", "muon.run.json"),
+      "--allow-insecure-localhost",
+    ]);
     await expect(
       access(join(pluginOutputDirectory, "override.json")),
     ).rejects.toThrow();

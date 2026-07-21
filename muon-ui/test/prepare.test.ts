@@ -1759,6 +1759,45 @@ lastCatalogUpdateUnix=0
     expect(stderr).toBe("");
   });
 
+  it("rejects the insecure localhost switch at the launcher boundary", async () => {
+    for (const [index, argument] of [
+      "--allow-insecure-localhost",
+      "--allow-insecure-localhost=true",
+    ].entries()) {
+      const fixture = await createPrepareFixture();
+      const stateHome = await createTemporaryDirectory(
+        "muon-launcher-reject-state-",
+      );
+      const appId = `scope.reject-insecure-${index}`;
+      const stateRuntimePath = getLinuxPortableStateRuntimePath(
+        stateHome,
+        appId,
+      );
+      const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+        launcher: { appId },
+      });
+
+      await expect(
+        execFileAsync(appLauncherPath, [argument], {
+          cwd: fixture.projectPath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MUON_CACHE_DIR: fixture.cacheDir,
+            MUON_CEF_CATALOG_URL: fixture.catalogPath,
+            XDG_STATE_HOME: stateHome,
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining(
+          "muon-launcher: --allow-insecure-localhost is not supported",
+        ),
+      });
+      await expect(access(stateRuntimePath)).rejects.toThrow();
+    }
+  });
+
   it("launchers a portable runtime in the user state directory and forwards the core exit code", async () => {
     const fixture = await createPrepareFixture();
     const stateHome = await createTemporaryDirectory("muon-launcher-state-");

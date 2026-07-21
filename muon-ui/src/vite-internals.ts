@@ -369,15 +369,23 @@ const createMuonConfigArguments = (
 const waitForMuonProcess = async (
   muonExecutablePath: string,
   configArguments: readonly string[],
+  allowInsecureLocalhost: boolean,
   environment: NodeJS.ProcessEnv,
   setCurrentChild: (child: ChildProcess | undefined) => void,
 ): Promise<number> => {
-  const child = spawn(muonExecutablePath, [...configArguments], {
-    cwd: dirname(muonExecutablePath),
-    env: environment,
-    stdio: "ignore",
-    windowsHide: false,
-  });
+  const child = spawn(
+    muonExecutablePath,
+    [
+      ...configArguments,
+      ...(allowInsecureLocalhost ? ["--allow-insecure-localhost"] : []),
+    ],
+    {
+      cwd: dirname(muonExecutablePath),
+      env: environment,
+      stdio: "ignore",
+      windowsHide: false,
+    },
+  );
   setCurrentChild(child);
   try {
     return await new Promise<number>((resolvePromise, reject) => {
@@ -482,6 +490,7 @@ export const startMuonViteBrowserBridge = async ({
             projectConfigPath,
             paths.overrideConfigPath,
           ),
+          pluginOptions.allowInsecureLocalhost === true,
           environment,
           setCurrentChild,
         );

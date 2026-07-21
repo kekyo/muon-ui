@@ -63,6 +63,7 @@ interface PreparedViteRunAssets {
 
 interface InternalMuonDevOptions extends MuonDevOptions {
   warning?: (message: string) => void;
+  allowInsecureLocalhost?: boolean;
 }
 
 interface ProjectConfigResolution {
@@ -633,9 +634,13 @@ const writeMuonDevOverrideConfig = async (
 const runMuonExecutable = async (
   muonExecutablePath: string,
   configPaths: readonly string[],
+  allowInsecureLocalhost: boolean,
   environment: NodeJS.ProcessEnv,
 ): Promise<number> => {
-  const args = configPaths.flatMap((configPath) => ["-c", configPath]);
+  const args = [
+    ...configPaths.flatMap((configPath) => ["-c", configPath]),
+    ...(allowInsecureLocalhost ? ["--allow-insecure-localhost"] : []),
+  ];
   const child = spawn(muonExecutablePath, args, {
     cwd: dirname(muonExecutablePath),
     env: environment,
@@ -696,6 +701,10 @@ const runMuonDevOnce = async (
         : resolveFromRoot(root, pluginOptions.stagePath);
   const enableDebugger =
     options.enableDebugger ?? pluginOptions?.enableDebugger ?? true;
+  const allowInsecureLocalhost =
+    (options as InternalMuonDevOptions).allowInsecureLocalhost ??
+    pluginOptions?.allowInsecureLocalhost ??
+    false;
   const projectConfig = await resolveProjectConfig(
     root,
     options.configPath ?? preparedViteAssets?.configPath,
@@ -754,6 +763,7 @@ const runMuonDevOnce = async (
   const exitCode = await runMuonExecutable(
     muonExecutablePath,
     configPaths,
+    allowInsecureLocalhost,
     environment,
   );
 

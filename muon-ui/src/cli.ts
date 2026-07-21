@@ -128,6 +128,7 @@ interface DevCommandOptions {
   config: string | undefined;
   assets: string | undefined;
   debugger: boolean | undefined;
+  allowInsecureLocalhost: boolean | undefined;
   json: boolean | undefined;
 }
 
@@ -141,6 +142,7 @@ interface InternalMuonPackOptions extends MuonPackOptions {
 
 interface InternalMuonDevOptions extends MuonDevOptions {
   warning?: (message: string) => void;
+  allowInsecureLocalhost?: boolean;
 }
 
 const readTargetValues = (value: string): string[] => {
@@ -546,6 +548,9 @@ const runDevCommand = async (
   if (command.getOptionValueSource("debugger") === "cli") {
     devOptions.enableDebugger = commandOptions.debugger === true;
   }
+  if (commandOptions.allowInsecureLocalhost === true) {
+    (devOptions as InternalMuonDevOptions).allowInsecureLocalhost = true;
+  }
 
   const result = await runMuonDev(devOptions);
   if (commandOptions.json === true) {
@@ -753,6 +758,10 @@ const createCliCommand = (): Command => {
     .option("--config <path>", "muon config path")
     .option("--assets <path>", "development asset directory")
     .option("--no-debugger", "disable muon debugger defaults")
+    .option(
+      "--allow-insecure-localhost",
+      "ignore invalid HTTPS certificates for localhost",
+    )
     .option("--json", "write result as JSON")
     .action(async (options: DevCommandOptions) => {
       await runDevCommand(options, devCommand);

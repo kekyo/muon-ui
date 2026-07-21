@@ -1135,6 +1135,20 @@ static void on_prepare_progress(const MuonPrepareProgress *progress,
 }
 
 int main(int argc, char **argv) {
+  static const char insecure_localhost_switch[] =
+      "--allow-insecure-localhost";
+  for (int index = 1; index < argc; index += 1) {
+    const char *argument = argv[index];
+    const size_t switch_length = strlen(insecure_localhost_switch);
+    if (strcmp(argument, insecure_localhost_switch) == 0 ||
+        (strncmp(argument, insecure_localhost_switch, switch_length) == 0 &&
+         argument[switch_length] == '=')) {
+      fprintf(stderr,
+              "muon-launcher: --allow-insecure-localhost is not supported.\n");
+      return 1;
+    }
+  }
+
   char *launcher_path = get_launcher_path(argv[0]);
   char *source_runtime_dir =
       launcher_path == NULL ? NULL : parent_directory(launcher_path);

@@ -19,10 +19,12 @@ npx muon run
   For example, with `base: "/foo/"`, output is placed in `.muon/run/assets/main/foo/`, and if `muon.json` has no `browser.startPage`, muon opens `asset://main/foo/index.html`.
 - If Vite or the muon Vite plugin is absent, assets are resolved in the order `--assets`, `asset.sourcePath` in `muon.json`, then `assets/`.
   Note that `asset://main/index.html` refers to `assets/main/index.html`. The URL host portion is treated as a subdirectory.
-- When `vite.config.*` contains exactly one muon Vite plugin, `muon run` reads `muonPath`, `cefPath`, `stagePath`, `enableDebugger`, and `build.configPath`.
+- When `vite.config.*` contains exactly one muon Vite plugin, `muon run` reads `muonPath`, `cefPath`, `stagePath`, `enableDebugger`, `allowInsecureLocalhost`, and `build.configPath`.
 - CLI options take precedence when the same items are specified, and `open` is ignored by `muon run`.
   `build: false` is an error for Vite-backed launch when `--assets` is omitted, but when `--assets` is specified explicitly, the specified assets are launched as before.
 - Specify `--no-debugger` to disable development defaults for muon DevTools, the recycle keybind, and CDP.
+- Specify `--allow-insecure-localhost` to ignore localhost HTTPS certificate errors during development.
+  This option is available only through `muon run` and the Vite plugin; passing it directly to a distribution muon-launcher is rejected before startup.
 
 Unlike when using the Vite plugin, you can naturally split page management by asset host name.
 For example, CEF treats `asset://main/index.html` and `asset://sub/index.html` as different origins.

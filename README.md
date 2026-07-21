@@ -79,22 +79,17 @@ With the minimal setup, installing the NPM package and adding one line to the co
 
 ---
 
-## Getting started with muon
+## Getting started with muon (Quick version)
 
-Let's create an application with muon, a muon app.
-It is very easy not only to create a new application, but also to turn an existing web application into a muon app.
-
-To show this, start by preparing a very ordinary web application project.
-For example, use a [Vite template](https://vite.dev/guide/) to create "my-muon-app":
+Let's get started by creating an application with muon (a muon app).
+Use a [Vite template](https://vite.dev/guide/) to create "my-muon-app" as you normally would:
 
 ```bash
 npm create vite@latest my-muon-app -- --template react-ts
 ```
 
-This example uses React + TypeScript, but of course other choices are fine.
-Using TypeScript is recommended. The reason is explained later.
-
-Install the required packages and run the application with the following commands:
+This example uses React + TypeScript, but of course other choices are fine. Be sure to enable TypeScript.
+Then run:
 
 ```bash
 cd my-muon-app
@@ -102,43 +97,18 @@ npm install
 npm run dev
 ```
 
-The Vite development server starts, and you can click the link to show the page in a browser.
-muon has not been introduced yet. This is still a plain Vite project.
+This starts the Vite development server, and you can click the link to view the page in a browser.
 
-Now add muon to this project. The required work is only:
-
-1. Install the muon package.
-2. Configure the muon Vite plugin.
-
-Both steps are very simple.
-
-### Install the muon package
-
-Install the muon package, officially named `muon-ui`, into `devDependencies`:
+Now add muon to this project:
 
 ```bash
 npm install -D muon-ui
 ```
 
-The muon package includes the following:
-
-- muon CLI
-- muon Vite plugin
-- TypeScript type definitions for muon built-in plugins
-- Platform-specific muon binary assets
-
 The CEF binary itself is not included in the NPM package.
-CEF is downloaded from the official CDN when it becomes necessary.
+CEF is downloaded from the official CDN when it is needed.
 
-### Configure the muon Vite plugin
-
-Installing the muon package almost completes the preparation, but you should enable the muon Vite plugin so that HMR (Hot Module Replacement) and muon app builds are available.
-
-For anyone unfamiliar with HMR, Vite acts as a development server, lets a browser show the page, and updates the display almost in real time when the page is edited.
-In other words, it is a very useful feature that automatically previews edit results.
-
-The muon Vite plugin supports HMR by launching muon instead of a browser and making HMR work inside the muon app.
-Add the following code to `vite.config.ts` to enable it:
+Next, add the muon Vite plugin to Vite so that you can build your muon app. Add the following code to `vite.config.ts`:
 
 ```ts
 import { defineConfig } from 'vite'
@@ -153,45 +123,27 @@ export default defineConfig({
 })
 ```
 
-Add `muon()` to the `plugins` array in the `defineConfig()` argument.
-This enables the muon Vite plugin. Preparation is now complete.
-
-Launch muon:
+Everything is now ready. Launch muon:
 
 ```bash
 npm run dev
 ```
 
-The muon window and your page should appear.
+The muon window should appear with your page!
 
 ![Get started](./images/get-started.png)
-
-Try changing the page source code and confirm that HMR works just as well as it did in the browser.
-For example, change the `<h1>Get started</h1>` line in `src/App.tsx` to `<h1>Get started with muon!</h1>` and save it.
-The display in the muon window should update immediately without restarting.
-
-Clicking the "Count is 0" counter button in the center of the page should increase the count.
-This confirms that React from the Vite template is working correctly.
 
 If you click a button such as "Explore Vite", a new window opens and shows the following disappointing page:
 
 ![Forbidden](./images/forbidden.png)
 
-This is exactly the evidence that muon's network-access whitelist filter is working.
-The button tries to show the official Vite site (`https://vite.dev/`), but by default muon only permits access to local assets.
-Content from other sites is blocked.
-The way to configure this whitelist is explained in detail in another chapter.
+This is proof that one of muon's key features, the network access whitelist filter, is working. Access to content on other sites is blocked.
 
 You can also launch muon DevTools with the `F12` key:
 
 ![muon DevTools](./images/devtools.png)
 
-CDP (Chrome DevTools Protocol) is also enabled, so you can control the app with Playwright or debug it with VS Code. See the relevant chapter for details.
-
-You can recycle-restart muon with `Ctrl+F12`.
-Recycle restart is useful when you changed something that HMR cannot apply, such as `muon.json`.
-
-### Packaging
+CDP (Chrome DevTools Protocol) is also enabled, so you can control the app with Playwright or debug it with VS Code (see the relevant chapter for details).
 
 Packaging a muon app is also simple:
 
@@ -199,8 +151,7 @@ Packaging a muon app is also simple:
 npx muon pack
 ```
 
-This generates Linux and Windows packages in deb and nsis formats under the `artifacts/` directory.
-For more details, see the following documents.
+This generates Linux and Windows packages (in deb and NSIS formats) in the `artifacts/` directory.
 
 ---
 
@@ -210,7 +161,7 @@ See the following documents for more detailed information about muon.
 
 ### User guides
 
-- [Application distribution](./docs/en/deployment.md)
+- [Getting started with muon](./docs/en/getting-started.md)
 - [CEF download and update](./docs/en/cef-download-and-update.md)
 - [muon DevTools](./docs/en/muon-devtools.md)
 - [Local asset configuration](./docs/en/local-assets.md)

@@ -77,22 +77,17 @@ Chromium/Chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 
 ---
 
-## muonを始める
+## muonを始める (高速バージョン)
 
 早速muonでアプリケーション（muonアプリ）を作ってみましょう。
-新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するのも非常に簡単です。
-
-これを明らかにするため、まずは、ごく一般的なウェブアプリケーションプロジェクトを用意する事から始めましょう。
-例えば、 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を作りましょう:
+[Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を「普通に」作りましょう:
 
 ```bash
 npm create vite@latest my-muon-app -- --template react-ts
 ```
 
-ここではReact+TypeScriptを選択しましたが、もちろん他の選択肢でもOKです。
-TypeScriptは使用したほうが良いでしょう。理由は後で説明します。
-
-そして、以下のコマンドで必要なパッケージのインストールを行って、アプリケーションを実行します:
+ここではReact+TypeScriptを選択しましたが、もちろん他の選択肢でもOKです。TypeScriptは有効化してください。
+そして:
 
 ```bash
 cd my-muon-app
@@ -101,42 +96,16 @@ npm run dev
 ```
 
 これで、Viteの開発サーバーが起動するので、リンクをクリックしてブラウザでページを表示出来ます。
-まだmuonは導入していません。素のViteプロジェクトです。
 
-このプロジェクトにmuonを導入します。必要な作業は:
-
-1. muonパッケージをインストール
-2. muon Viteプラグインを構成
-
-だけです。しかも、それぞれ非常に簡単です。
-
-### muonパッケージをインストール
-
-muonパッケージ(正式名: `muon-ui`)は、 `devDependencies` にインストールします:
+このプロジェクトにmuonを導入します:
 
 ```bash
 npm install -D muon-ui
 ```
 
-muonパッケージには、以下の要素を含みます:
-
-- muon CLI
-- muon Viteプラグイン
-- muon内蔵プラグインのTypeScript型定義
-- プラットフォーム別のmuonバイナリアセット
-
 CEF本体バイナリは、NPMパッケージに含まれません。CEFは必要になった時点で、公式CDNからダウンロードされます。
 
-### muon Viteプラグインを構成
-
-muonパッケージを導入しただけでほぼ準備は整っていますが、muonのViteプラグインを有効化して、
-HMR (Hot Module Replacement) とmuonアプリのビルドを使用出来るようにします。
-
-HMRを知らない人に簡単に説明すると、開発中にViteが擬似的なサーバーとなって、ブラウザにページを表示可能にし、かつ、ページを編集した時にほぼリアルタイムで表示を更新してくれます。
-つまり、編集結果を自動的にプレビュー表示する、非常に便利な機能です。
-
-muonのViteプラグインはHMRに対応していて、ブラウザの代わりにmuonを起動して、muonアプリ上でHMRを機能させます。
-これを有効化するために、`vite.config.ts` に以下のコードを追加します:
+その後、Viteにmuon Viteプラグインを追加して、muonビルドできるようにします。 `vite.config.ts` に以下のコードを追加します:
 
 ```ts
 import { defineConfig } from 'vite'
@@ -151,33 +120,21 @@ export default defineConfig({
 })
 ```
 
-`defineConfig()` 引数の `plugins` 配列に、`muon()` を加えて下さい。これでmuon Viteプラグインが有効化されます。これで準備は完了です。
-
-いよいよmuonを起動します:
+これで準備は完了です。いよいよmuonを起動します:
 
 ```bash
 npm run dev
 ```
 
-で、muonのウインドウとあなたのページが表示されるはずです!
+で、muonのウインドウとViteテンプレートプロジェクトのページが表示されるはずです!
 
 ![Get started](./images/get-started.png)
 
-ページのソースコードを変更して、ブラウザで表示させていた時と遜色なく、HMRが機能することを確認してみて下さい。
-例えば、 `src/App.tsx` 内の `<h1>Get started</h1>` の行を `<h1>Get started with muon!</h1>` に書き換えて保存すれば、
-再起動すること無く瞬時にmuonウインドウ側の表示も書き換わるはずです。
-
-そして、このページの中央に配置されてるカウンタボタン "Count is 0" をクリックすると、カウント値が増加することが確認できるはずです。
-これで、ViteテンプレートのReactが正しく動作していることが確認出来ます。
-
-また、 "Explore Vite" のようなボタンをクリックした場合、新たなウインドウが開いて、以下のような「がっかり」するページが表示されます:
+"Explore Vite" のようなボタンをクリックした場合、新たなウインドウが開いて、以下のような「がっかり」するページが表示されます:
 
 ![Forbidden](./images/forbidden.png)
 
-そして、これこそが、muonの特徴である、ネットワークアクセスのホワイトリストフィルタが機能している証拠です。
-このボタンは、Viteの公式サイト(`https://vite.dev/`)を表示しようとしますが、muonの既定では「ローカルのアセットのみ」アクセスが許可されているので、
-それ以外のサイトコンテンツへのアクセスが遮断されているのです。
-このホワイトリストの指定方法は別章で詳しく示します。
+そして、これこそが、muonの特徴である、ネットワークアクセスのホワイトリストフィルタが機能している証拠です。別サイトコンテンツへのアクセスが遮断されているのです。
 
 また、`F12` キーでmuon DevToolsを起動出来ます:
 
@@ -185,17 +142,13 @@ npm run dev
 
 CDP (Chrome DevTools Protocol) も有効化されているので、Playwrightで操作したりvscodeでデバッグが可能です（詳しくば別章を参照）。
 
-`Ctrl+F12` キーでmuonをリサイクル再起動出来ます。リサイクル再起動は、 `muon.json` の変更など、HMRで反映できない更新を行った場合に使用出来ます。
-
-### パッケージ化
-
 muonアプリのパッケージ化を行うのも簡単です:
 
 ```bash
 npx muon pack
 ```
 
-これで、LinuxとWindowsの各パッケージ(deb, nsis形式)が生成され、 `artifacts/` ディレクトリに生成されます。より詳しくは、以下のドキュメントを参照してください。
+これで、LinuxとWindowsの各パッケージ(deb, nsis形式)が生成され、 `artifacts/` ディレクトリに生成されます。
 
 ---
 
@@ -205,7 +158,7 @@ muonをより詳しく知りたい場合は、以下のドキュメントを参�
 
 ### ユーザーガイド
 
-- [アプリケーションの配布](./docs/ja/deployment.md)
+- [muonを始める](./docs/ja/getting-started.md)
 - [CEFのダウンロードと更新](./docs/ja/cef-download-and-update.md)
 - [muon DevTools](./docs/ja/muon-devtools.md)
 - [ローカルアセットの構成](./docs/ja/local-assets.md)

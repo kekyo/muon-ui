@@ -16,7 +16,8 @@ Add an allow list to `muon.json` as follows to access external networks:
 ```
 
 Adding URLs to `network.allow` allows access to those URLs.
-When omitted, the default is `"asset://**"`, which allows access to all local assets, meaning the pages you placed for the muon build.
+When omitted, the default is `["asset://**", "data:image/**"]`, which allows access to all local assets and inline image data.
+Specifying `network.allow` replaces this default list rather than extending it.
 
 For example, if you intentionally set an empty list (`network.allow: []`), all network access, including local assets, is disabled and nothing can be displayed.
 However, if you try this and launch the Vite server and muon with `npm run dev`, the app will still display correctly.
@@ -24,7 +25,7 @@ This is because the Vite server URL is temporarily added to the `network.allow` 
 Be careful: building with an empty list generates an invalid muon app.
 
 - Note: Inline data URLs such as `data:...` are also subject to `network.allow`.
-  When using the `data:` protocol, explicitly add an allow pattern such as `data:image/**` to `network.allow`.
+  The default allows only image data through `data:image/**`. If you explicitly configure `network.allow` and still need inline images, include this pattern in the configured list.
 
 If your page references an external server, for example when only image data in an `<img>` tag references external `https://img.example.com/images/...`, add valid URLs like this:
 

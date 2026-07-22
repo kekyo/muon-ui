@@ -392,7 +392,7 @@ struct MuonNetworkConfig {
   /**
    * Glob patterns that allow full request URLs.
    */
-  std::vector<std::string> allow = {"asset://**"};
+  std::vector<std::string> allow = {"asset://**", "data:image/**"};
   /**
    * Origins that authorize top-level navigation targets and initiated requests.
    */

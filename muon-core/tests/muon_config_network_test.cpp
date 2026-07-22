@@ -278,6 +278,16 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
                         message + " recycle shortcut");
 }
 
+static bool ExpectDefaultNetworkAllow(const MuonNetworkConfig& network,
+                                      const std::string& message) {
+  return Expect(network.allow.size() == 2,
+                message + " allowlist count changed") &&
+         Expect(network.allow[0] == "asset://**",
+                message + " asset pattern changed") &&
+         Expect(network.allow[1] == "data:image/**",
+                message + " image data pattern changed");
+}
+
 static bool ExpectDebuggerConfig(const MuonDebuggerConfig& cdp,
                                  bool enable,
                                  int port,
@@ -455,10 +465,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   if (!LoadConfigExpectSuccess(test_directory / "missing.json", &config)) {
     return false;
   }
-  if (!Expect(config.network.allow.size() == 1,
-              "missing muon.json did not produce the default allowlist") ||
-      !Expect(config.network.allow[0] == "asset://**",
-              "missing muon.json default network allowlist is wrong") ||
+  if (!ExpectDefaultNetworkAllow(config.network, "missing muon.json") ||
       !Expect(!config.asset.has_from,
               "missing muon.json configured asset.sourcePath") ||
       !Expect(!config.asset.has_signature,
@@ -492,10 +499,7 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !LoadConfigExpectSuccess(no_network_path, &config)) {
     return false;
   }
-  if (!Expect(config.network.allow.size() == 1,
-              "missing network.allow did not produce the default allowlist") ||
-      !Expect(config.network.allow[0] == "asset://**",
-              "missing network.allow default pattern is wrong") ||
+  if (!ExpectDefaultNetworkAllow(config.network, "missing network.allow") ||
       !Expect(config.network.authorized_origin.empty(),
               "missing network.authorizedOrigin default list is not empty") ||
       !ExpectBrowserDefaults(config.browser, default_profile,
@@ -551,10 +555,8 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !LoadConfigExpectSuccess(network_without_allow_path, &config)) {
     return false;
   }
-  if (!Expect(config.network.allow.size() == 1,
-              "network object without allow did not keep the default") ||
-      !Expect(config.network.allow[0] == "asset://**",
-              "network object without allow default pattern is wrong") ||
+  if (!ExpectDefaultNetworkAllow(config.network,
+                                 "network object without allow") ||
       !Expect(config.browser.plugin.allow.size() == 1,
               "network object without allow changed plugin page allowlist") ||
       !Expect(config.browser.plugin.allow[0] == "asset://main/**",
@@ -661,10 +663,8 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   if (!Expect(config.browser.plugin.allow.empty(),
               "explicit empty plugin.pages did not override the "
               "default") ||
-      !Expect(config.network.allow.size() == 1,
-              "explicit empty plugin.pages changed network allowlist") ||
-      !Expect(config.network.allow[0] == "asset://**",
-              "explicit empty plugin.pages changed network pattern")) {
+      !ExpectDefaultNetworkAllow(config.network,
+                                 "explicit empty plugin.pages")) {
     return false;
   }
 
@@ -709,12 +709,8 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
       !LoadConfigExpectSuccess(empty_authorized_origin_path, &config)) {
     return false;
   }
-  if (!Expect(config.network.allow.size() == 1,
-              "explicit empty network.authorizedOrigin changed network "
-              "allowlist") ||
-      !Expect(config.network.allow[0] == "asset://**",
-              "explicit empty network.authorizedOrigin changed network "
-              "pattern") ||
+  if (!ExpectDefaultNetworkAllow(config.network,
+                                 "explicit empty network.authorizedOrigin") ||
       !Expect(config.network.authorized_origin.empty(),
               "explicit empty network.authorizedOrigin did not produce an "
               "empty list")) {
@@ -2685,9 +2681,14 @@ static bool RunNetworkPolicyTest() {
 }
 
 static bool RunDefaultNetworkPolicyPatternTest() {
+  const MuonNetworkConfig network;
+  if (!ExpectDefaultNetworkAllow(network, "default network")) {
+    return false;
+  }
+
   std::shared_ptr<MuonNetworkPolicy> policy;
   std::string error_message;
-  if (!Expect(CreateMuonNetworkPolicy({"asset://**"}, &policy, &error_message),
+  if (!Expect(CreateMuonNetworkPolicy(network.allow, &policy, &error_message),
               error_message)) {
     return false;
   }
@@ -2696,8 +2697,10 @@ static bool RunDefaultNetworkPolicyPatternTest() {
                 "default network allowlist rejected the main asset namespace") &&
          Expect(policy->IsAllowedUrl("asset://other/index.html"),
                 "default network allowlist rejected another asset namespace") &&
+         Expect(policy->IsAllowedUrl("data:image/png;base64,iVBORw0KGgo="),
+                "default network allowlist rejected image data") &&
          Expect(!policy->IsAllowedUrl("data:text/html,<title>ok</title>"),
-                "default network allowlist allowed a non-asset URL");
+                "default network allowlist allowed non-image data");
 }
 
 static bool RunNetworkPolicyEmptyTest() {

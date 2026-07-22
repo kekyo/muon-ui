@@ -287,14 +287,14 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
-| `allow` | `readonly string[]` | `["asset://**"]` | List of URL patterns allowed to load. |
+| `allow` | `readonly string[]` | `["asset://**", "data:image/**"]` | List of URL patterns allowed to load. |
 | `authorizedOrigin` | `readonly object[]` | `[]` | Allows additional network access for requests originating from specified origins. |
 | `localAccess.loopbackOrigins` | `readonly object[]` | `[]` | Origins granted permission to access the loopback network. |
 | `localAccess.localNetworkOrigins` | `readonly object[]` | `[]` | Origins granted permission to access the local network. |
 
 - `allow` is a whitelist.
   If an empty array is specified, all network access, including local assets, is disallowed.
-  `data:` protocol URLs are not exceptions. When loading inline data URLs, narrow the MIME type, such as `data:image/**`.
+  `data:` protocol URLs are also subject to this list. The default permits image data through `data:image/**`; an explicit `allow` array replaces that default, so include the pattern when it is still needed.
   `data:**` also includes `data:text/html,...`, so if HTML generated from untrusted input is loaded, it may lead to arbitrary HTML or JavaScript execution, UI spoofing, or access to allowed networks.
   URL patterns can use `*` and `**`.
   `*` does not cross `:`, `/`, `?`, or `#` separators, while `**` matches all following characters.

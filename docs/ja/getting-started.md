@@ -273,12 +273,12 @@ npx muon pack --target windows-amd64 --type nsis
 - Electronは[Chromiumのマルチプロセスモデル](https://www.electronjs.org/docs/latest/tutorial/process-model)を継承しています。
   開発者が用意したエントリポイントはNode.js環境のmain processで実行され、そこで`BrowserWindow`を作成して、ページをChromiumのrenderer processへロードします。
   ページ内JavaScriptは、通常preload scriptを介して公開されたIPC APIでmain processと連携します。
-- muonでは、C++で実装されたmuon coreがCEFを初期化します。
-  CEFのbrowser processがアプリケーションのライフサイクル、ウインドウ、native plugin runtimeを管理し、開発者が記述するアプリケーションの主な起点はrenderer processへロードされるページです。
-  native pluginの関数はCEF IPCを経由する非同期APIとしてページへ公開されるため、開発者がNode.jsのmain processを用意する必要はありません。
-- `node.project`を構成した場合だけ、browser process内のnative Node pluginが有効になります。
+- muonでは、muon-coreプロセスがCEFを初期化します。
+  CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
+  muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
+- Node.jsプラグインを構成した場合だけ、Node.jsプロセスが有効になります。
   最初の`importModule()`で別プロセスのNode.js sidecarを遅延起動し、以降の呼び出しを中継します。
-  sidecarはUIを生成または所有せず、処理のオフロードやNode.js ecosystemの機能を利用するためのオプションです。
+  sidecarはUIを生成または所有せず、処理のオフロードやNode.jsエコシステムの機能を利用するためのオプションです。
 
 Electron:
 
@@ -296,28 +296,22 @@ muon:
 flowchart LR
   subgraph Browser["CEF browser process"]
     Core["muon core<br/>C++ / CEF"]
-    Runtime["Native plugin runtime"]
-    NodePlugin["Optional native Node plugin"]
+    Runtime["muon plugin runtime"]
     Core --- Runtime
-    Runtime ---|"Plugin ABI / tra-ffic"| NodePlugin
   end
   subgraph Renderers["CEF renderer process(es)"]
     Page["Application page<br/>JavaScript"]
   end
-  Node["Optional Node.js sidecar<br/>Separate process"]
   Core -->|"Create window and load page"| Page
   Page <-->|"CEF IPC / asynchronous facades"| Runtime
-  NodePlugin <-->|"Lazy start / sidecar IPC"| Node
 ```
 
 開発者から見ると、muonアプリの主な起点は読み込まれたページであり、一般的なViteやReactのウェブアプリケーションと同じ開発手法を使用出来ます。
-内部的には設定、policy、plugin runtimeなどの初期化がウインドウ作成に先行しますが、開発者がこれらをmain process用JavaScriptとして実装する必要はありません。
+内部的には設定、ホワイトリスト、プラグインランタイムなどの初期化がウインドウ作成に先行しますが、開発者がこれらをメインプロセス用JavaScriptとして実装する必要はありません。
 このページ中心のモデルにより、ウェブアプリ開発を知っていればmuonアプリ開発を始められます。
 
-これは、すべての処理をrenderer processへ配置しなければならない、という意味ではありません。
-別のbackendを採用しない場合、ドメインロジックやデータリポジトリ実装もページのbundleに含まれますが、必要に応じてnative plugin、[Node.js sidecar](./nodejs-sidecar.md)、リモートWeb APIへ責務を分離出来ます。
+これは、すべての処理をページ内のJavaScriptへ実装しなければならない、という意味ではありません。
+例えば、ドメインロジックやデータリポジトリ実装もページのbundleに含まれますが、必要に応じてmuonプラグイン、[Node.js sidecar](./nodejs-sidecar.md)、リモートWeb APIへ責務を分離出来ます。
 Node.js sidecarを使用すれば、UIと関係のないNode.jsコードを別プロセスの通常のNode.jsプロジェクトとして構成出来ます。
 
-大きなbackend実装をmuonアプリへ同梱する前に、クラウドサービスやホストされた仮想マシン上のWeb APIとして実装すべきかも検討してください。
-ページからWeb APIへアクセスする場合は、通常のCORSなどのブラウザ要件に加えて、必要なendpointだけを[`network.allow`](./external-network.md)で許可します。
-`network.allow`が制御するのはCEFによるページのnetwork requestであり、Node.js sidecar内のnetwork accessには適用されません。
+大きなバックエンド実装をmuonアプリへ同梱する前に、クラウドサービスやホストされた仮想マシン上のWeb APIとして実装すべきかも検討してください。

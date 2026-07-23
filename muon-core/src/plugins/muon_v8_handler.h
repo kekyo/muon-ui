@@ -154,6 +154,7 @@ class MuonV8Handler final : public CefV8Handler {
 
  private:
   friend class MuonPluginFunctionProxyState;
+  friend class MuonRendererPromiseHandler;
 
   struct FunctionTransfers {
     explicit FunctionTransfers(MuonV8Handler* owner = nullptr);
@@ -251,6 +252,10 @@ class MuonV8Handler final : public CefV8Handler {
   bool InvokeRendererFunctionCallMessage(
       CefRefPtr<CefProcessMessage> message,
       std::shared_ptr<MuonSharedBufferPayload> shared_payload);
+  bool AwaitRendererFunctionPromise(
+      int call_id,
+      const MuonTypeMetadata& return_type,
+      CefRefPtr<CefV8Value> promise);
   bool SendFunctionResult(int call_id,
                           const MuonTypeMetadata& return_type,
                           CefRefPtr<CefV8Value> value,

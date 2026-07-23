@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -249,6 +250,106 @@ class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
 
   IMPLEMENT_REFCOUNTING(MuonPluginFunctionProxyState);
   DISALLOW_COPY_AND_ASSIGN(MuonPluginFunctionProxyState);
+};
+
+struct MuonRendererPromiseResultState {
+  CefRefPtr<MuonV8Handler> handler;
+  MuonTypeMetadata return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
+  int call_id = 0;
+  bool completed = false;
+};
+
+static std::string GetMuonRendererPromiseRejectionMessage(
+    CefRefPtr<CefV8Value> value) {
+  if (!value) {
+    return "Renderer function Promise was rejected";
+  }
+  if (value->IsString()) {
+    const auto message = value->GetStringValue().ToString();
+    return message.empty() ? "Renderer function Promise was rejected"
+                           : message;
+  }
+  if (value->IsObject()) {
+    const auto message_value = value->GetValue("message");
+    if (value->HasException()) {
+      (void)value->ClearException();
+      return "Renderer function Promise was rejected";
+    }
+    if (message_value && message_value->IsString()) {
+      const auto message = message_value->GetStringValue().ToString();
+      if (!message.empty()) {
+        return message;
+      }
+    }
+  }
+  return "Renderer function Promise was rejected";
+}
+
+class MuonRendererPromiseHandler final : public CefV8Handler {
+ public:
+  enum class Outcome {
+    Resolve,
+    Reject,
+  };
+
+  /**
+   * Creates one Promise settlement handler for a renderer function call.
+   *
+   * @param state State shared by the resolve and reject handlers.
+   * @param outcome Settlement represented by this handler.
+   */
+  MuonRendererPromiseHandler(
+      std::shared_ptr<MuonRendererPromiseResultState> state,
+      Outcome outcome)
+      : state_(std::move(state)), outcome_(outcome) {}
+
+  /**
+   * Forwards one Promise settlement to the browser-side function call.
+   *
+   * @param name CEF-created handler function name.
+   * @param object JavaScript receiver object.
+   * @param arguments Promise settlement arguments.
+   * @param retval Undefined result returned to the chained Promise.
+   * @param exception Exception output, which remains empty.
+   * @return true because this handler always consumes the invocation.
+   */
+  bool Execute(const CefString& name,
+               CefRefPtr<CefV8Value> object,
+               const CefV8ValueList& arguments,
+               CefRefPtr<CefV8Value>& retval,
+               CefString& exception) override {
+    CEF_REQUIRE_RENDERER_THREAD();
+    (void)name;
+    (void)object;
+    (void)exception;
+    retval = CefV8Value::CreateUndefined();
+    if (!state_ || state_->completed || !state_->handler) {
+      return true;
+    }
+    const auto handler = state_->handler;
+    state_->completed = true;
+    state_->handler = nullptr;
+    if (outcome_ == Outcome::Resolve) {
+      const auto value =
+          arguments.empty() ? CefV8Value::CreateUndefined() : arguments[0];
+      handler->SendFunctionResult(
+          state_->call_id, state_->return_type, value, CefString());
+      return true;
+    }
+    const auto value =
+        arguments.empty() ? CefRefPtr<CefV8Value>() : arguments[0];
+    handler->SendFunctionResult(
+        state_->call_id, state_->return_type, nullptr,
+        GetMuonRendererPromiseRejectionMessage(value));
+    return true;
+  }
+
+ private:
+  std::shared_ptr<MuonRendererPromiseResultState> state_;
+  Outcome outcome_;
+
+  IMPLEMENT_REFCOUNTING(MuonRendererPromiseHandler);
+  DISALLOW_COPY_AND_ASSIGN(MuonRendererPromiseHandler);
 };
 
 static bool GetNumericV8Value(CefRefPtr<CefV8Value> value, double* number) {
@@ -1815,11 +1916,86 @@ bool MuonV8Handler::InvokeRendererFunctionCallMessage(
   const auto retval = function->ExecuteFunctionWithContext(
       context_, context_->GetGlobal(), v8_args);
   const auto return_type = function_type.function_return_type[0];
+  if (expects_result && retval && retval->IsPromise()) {
+    AwaitRendererFunctionPromise(call_id, return_type, retval);
+    context_->Exit();
+    return true;
+  }
   send_function_result(
       return_type,
       retval,
       retval ? CefString() : CefString("Renderer function failed"));
   context_->Exit();
+  return true;
+}
+
+bool MuonV8Handler::AwaitRendererFunctionPromise(
+    int call_id,
+    const MuonTypeMetadata& return_type,
+    CefRefPtr<CefV8Value> promise) {
+  if (!promise || !promise->IsPromise() || !context_ ||
+      !context_->IsValid()) {
+    SendFunctionResult(call_id, return_type, nullptr,
+                       "Renderer function returned an invalid Promise");
+    return false;
+  }
+  const auto then_function = promise->GetValue("then");
+  if (promise->HasException()) {
+    auto error_message =
+        std::string("Failed to read renderer function Promise.then");
+    const auto exception = promise->GetException();
+    if (exception && !exception->GetMessage().empty()) {
+      error_message = exception->GetMessage().ToString();
+    }
+    (void)promise->ClearException();
+    SendFunctionResult(
+        call_id, return_type, nullptr, error_message);
+    return false;
+  }
+  if (!then_function || !then_function->IsFunction()) {
+    SendFunctionResult(call_id, return_type, nullptr,
+                       "Renderer function Promise has no callable then");
+    return false;
+  }
+
+  auto state = std::make_shared<MuonRendererPromiseResultState>();
+  state->handler = this;
+  state->return_type = return_type;
+  state->call_id = call_id;
+  const auto resolve_function = CefV8Value::CreateFunction(
+      "__muon_renderer_promise_resolve",
+      new MuonRendererPromiseHandler(
+          state, MuonRendererPromiseHandler::Outcome::Resolve));
+  const auto reject_function = CefV8Value::CreateFunction(
+      "__muon_renderer_promise_reject",
+      new MuonRendererPromiseHandler(
+          state, MuonRendererPromiseHandler::Outcome::Reject));
+  if (!resolve_function || !reject_function) {
+    state->completed = true;
+    state->handler = nullptr;
+    SendFunctionResult(call_id, return_type, nullptr,
+                       "Failed to create renderer Promise handlers");
+    return false;
+  }
+  const auto chained_promise = then_function->ExecuteFunctionWithContext(
+      context_, promise, {resolve_function, reject_function});
+  auto observation_error =
+      std::string("Failed to observe renderer function Promise");
+  if (then_function->HasException()) {
+    const auto exception = then_function->GetException();
+    if (exception && !exception->GetMessage().empty()) {
+      observation_error = exception->GetMessage().ToString();
+    }
+    (void)then_function->ClearException();
+  }
+  if ((!chained_promise || !chained_promise->IsPromise()) &&
+      !state->completed) {
+    state->completed = true;
+    state->handler = nullptr;
+    SendFunctionResult(
+        call_id, return_type, nullptr, observation_error);
+    return false;
+  }
   return true;
 }
 

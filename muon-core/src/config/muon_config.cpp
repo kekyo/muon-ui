@@ -96,6 +96,9 @@ static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
 static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
 static constexpr char kMuonConfigPluginEntryConfigKey[] = "config";
 static constexpr char kMuonInternalPluginName[] = "internal";
+static constexpr char kMuonNodePluginName[] = "node";
+static constexpr char kMuonConfigNodeKey[] = "node";
+static constexpr char kMuonConfigNodeProjectKey[] = "project";
 static constexpr char kMuonConfigLogKey[] = "log";
 static constexpr char kMuonConfigLogLevelKey[] = "level";
 static constexpr char kMuonConfigLogOutputKey[] = "output";
@@ -222,6 +225,8 @@ struct MuonConfigPathBases final {
   bool has_log_output_path = false;
   std::filesystem::path plugin_path;
   bool has_plugin_path = false;
+  std::filesystem::path node_project;
+  bool has_node_project = false;
   std::filesystem::path asset_from;
   bool has_asset_from = false;
 };
@@ -836,6 +841,11 @@ static bool HasPluginPath(yyjson_val* root) {
   return GetObjectValue(plugin, kMuonConfigPluginPathKey) != nullptr;
 }
 
+static bool HasNodeProject(yyjson_val* root) {
+  const auto node = GetObjectValue(root, kMuonConfigNodeKey);
+  return GetObjectValue(node, kMuonConfigNodeProjectKey) != nullptr;
+}
+
 static bool HasAssetFromPath(yyjson_val* root) {
   const auto asset = GetObjectValue(root, kMuonConfigAssetKey);
   return GetObjectValue(asset, kMuonConfigAssetSourcePathKey) != nullptr;
@@ -866,6 +876,10 @@ static void UpdateConfigPathBases(
     path_bases->plugin_path = base_directory;
     path_bases->has_plugin_path = true;
   }
+  if (HasNodeProject(root)) {
+    path_bases->node_project = base_directory;
+    path_bases->has_node_project = true;
+  }
   if (HasAssetFromPath(root)) {
     path_bases->asset_from = base_directory;
     path_bases->has_asset_from = true;
@@ -889,6 +903,10 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
   if (HasPluginPath(root) && path_bases.has_plugin_path) {
     config->plugin.path =
         ResolveConfigRelativePath(path_bases.plugin_path, config->plugin.path);
+  }
+  if (HasNodeProject(root) && path_bases.has_node_project) {
+    config->node.project = ResolveConfigRelativePath(
+        path_bases.node_project, config->node.project);
   }
   if (HasAssetFromPath(root) && path_bases.has_asset_from) {
     config->asset.from =
@@ -2422,6 +2440,32 @@ static bool ReadApplicationConfig(yyjson_val* root,
                           &config->config, error_message);
 }
 
+static bool ReadNodeConfig(yyjson_val* root,
+                           MuonConfig* config,
+                           std::string* error_message) {
+  const auto node = yyjson_obj_get(root, kMuonConfigNodeKey);
+  if (node == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_obj(node)) {
+    *error_message = "muon.json node must be an object";
+    return false;
+  }
+
+  const auto project = yyjson_obj_get(node, kMuonConfigNodeProjectKey);
+  if (project == nullptr || !yyjson_is_str(project)) {
+    *error_message = "muon.json node.project must be a string";
+    return false;
+  }
+  config->node.project = ReadJsonString(project);
+  if (config->node.project.empty()) {
+    *error_message = "muon.json node.project must not be empty";
+    return false;
+  }
+  config->node.has_project = true;
+  return true;
+}
+
 static bool ReadPluginConfig(yyjson_val* root,
                              MuonConfig* config,
                              std::string* error_message) {
@@ -2495,6 +2539,12 @@ static bool ReadPluginConfig(yyjson_val* root,
     MuonPluginEntryConfig plugin_config;
     plugin_config.name = ReadJsonString(name_value);
     if (!ValidateMuonPluginEntryName(plugin_config.name, error_message)) {
+      return false;
+    }
+    if (plugin_config.name == kMuonNodePluginName) {
+      *error_message =
+          "muon.json plugin.plugins entry name 'node' is reserved; "
+          "configure top-level node.project instead";
       return false;
     }
     if (plugin_names.find(plugin_config.name) != plugin_names.end()) {
@@ -2797,6 +2847,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
   }
   return ReadLauncherConfig(root, config, error_message) &&
          ReadApplicationConfig(root, config, error_message) &&
+         ReadNodeConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&
          ReadLogConfig(root, config, error_message) &&
          ReadBrowserConfig(root, config, error_message) &&

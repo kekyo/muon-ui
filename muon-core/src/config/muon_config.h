@@ -475,6 +475,22 @@ struct MuonPluginConfig {
 };
 
 /**
+ * Node.js sidecar host section from muon.json.
+ */
+struct MuonNodeConfig {
+  /**
+   * Whether node.project was explicitly configured.
+   */
+  bool has_project = false;
+  /**
+   * Node.js project directory used as the sidecar module resolution root.
+   *
+   * @remarks Relative paths are resolved from the containing config file.
+   */
+  std::filesystem::path project;
+};
+
+/**
  * Asset storage section from muon.json.
  */
 struct MuonAssetConfig {
@@ -561,6 +577,10 @@ struct MuonConfig {
    * Native plugin load configuration.
    */
   MuonPluginConfig plugin;
+  /**
+   * Optional Node.js sidecar host configuration.
+   */
+  MuonNodeConfig node;
 };
 
 /**

@@ -395,6 +395,15 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         ),
       ).resolves.toBe(43);
       await expect(
+        driver.evaluate(`window.muon.test.helpers.helperCompletionAdd(
+          async (value) => {
+            await Promise.resolve();
+            return value * 2;
+          },
+          21
+        )`),
+      ).resolves.toBe(43);
+      await expect(
         evaluateRejection(
           driver,
           "window.muon.test.helpers.helperCompletionAdd(() => 'wrong', 5)",
@@ -403,9 +412,15 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
       await expect(
         evaluateRejection(
           driver,
-          "window.muon.test.helpers.helperCompletionAdd(() => Promise.reject(new Error('helper rejected')), 5)",
+          "window.muon.test.helpers.helperCompletionAdd(async () => 'wrong', 5)",
         ),
       ).resolves.toBe("Renderer function returned a non-i32 value");
+      await expect(
+        evaluateRejection(
+          driver,
+          "window.muon.test.helpers.helperCompletionAdd(() => Promise.reject(new Error('helper rejected')), 5)",
+        ),
+      ).resolves.toBe("helper rejected");
     });
   });
 

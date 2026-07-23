@@ -14,8 +14,10 @@
 #include "browser/muon_client.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_title_bar_loader.h"
+#include "browser/muon_window_delegate.h"
 #include "config/muon_config.h"
 #include "config/muon_linux_display_backend.h"
+#include "config/muon_paths.h"
 #include "config/muon_startup.h"
 #include "log/muon_log.h"
 #include "plugins/muon_js_bridge.h"
@@ -26,7 +28,6 @@
 #include "plugins/muon_plugin_runtime.h"
 #include "plugins/muon_shared_buffer.h"
 #include "plugins/muon_v8_handler.h"
-#include "browser/muon_window_delegate.h"
 
 #include "include/cef_frame.h"
 #include "include/cef_process_message.h"
@@ -41,6 +42,14 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+static constexpr char kMuonNodePluginName[] = "node";
+static constexpr char kMuonNodePluginAllowPattern[] = "muon.node.*";
+static constexpr char kMuonNodeProjectConfigKey[] = "project";
+static constexpr char kMuonNodeBridgeConfigKey[] = "bridge";
+static constexpr char kMuonNodeMetadataOnlyConfigKey[] = "metadataOnly";
+static constexpr char kMuonNodeBridgeFileName[] = "node-bridge.mjs";
+static constexpr char kMuonBundledPluginDirectoryName[] = "plugins";
 
 class MuonNamespaceMarker final : public CefBaseRefCounted {
  public:
@@ -124,6 +133,46 @@ static CefString CreateCefPathString(const std::filesystem::path& path) {
   value.FromString(path.string());
 #endif
   return value;
+}
+
+static bool AppendMuonNodePlugin(
+    const MuonConfig& config,
+    std::vector<MuonPluginRuntimeLoadEntry>* plugins,
+    std::string* error_message) {
+  if (!config.node.has_project) {
+    return true;
+  }
+  if (plugins == nullptr || error_message == nullptr) {
+    return false;
+  }
+
+  std::shared_ptr<MuonPluginPolicy> plugin_policy;
+  if (!CreateMuonPluginPolicy({kMuonNodePluginAllowPattern}, &plugin_policy,
+                              error_message)) {
+    return false;
+  }
+
+  const auto plugin_directory =
+      (GetMuonExecutableDirectory() / kMuonBundledPluginDirectoryName)
+          .lexically_normal();
+  const auto bridge_path =
+      (plugin_directory / kMuonNodeBridgeFileName).lexically_normal();
+  MuonPluginRuntimeLoadEntry plugin;
+  plugin.plugin = kMuonNodePluginName;
+  plugin.has_library_directory = true;
+  plugin.library_directory = plugin_directory;
+  plugin.plugin_policy = std::move(plugin_policy);
+  plugin.config.push_back(
+      {kMuonNodeProjectConfigKey,
+       CreateCefPathString(config.node.project).ToString()});
+  plugin.config.push_back(
+      {kMuonNodeBridgeConfigKey, CreateCefPathString(bridge_path).ToString()});
+  plugin.config.push_back(
+      {kMuonNodeMetadataOnlyConfigKey,
+       config.browser.plugin.mode == kMuonBrowserPluginModeValidate ? "1"
+                                                                    : "0"});
+  plugins->push_back(std::move(plugin));
+  return true;
 }
 
 static void AppendMuonConfigPathArguments(
@@ -303,10 +352,25 @@ static bool IsMuonInternalFunctionName(const std::string& name) {
   return name.rfind("__", 0) == 0;
 }
 
-static CefV8Value::PropertyAttribute GetMuonFunctionPropertyAttribute(
+static bool IsMuonNodeBridgePrivateFunction(
+    const std::string& plugin_namespace,
     const std::string& name) {
-  auto attribute = V8_PROPERTY_ATTRIBUTE_READONLY |
-                   V8_PROPERTY_ATTRIBUTE_DONTDELETE;
+  if (plugin_namespace != "muon.node") {
+    return false;
+  }
+  return name == "__importModule" || name == "__call" ||
+         name == "__release";
+}
+
+static CefV8Value::PropertyAttribute GetMuonFunctionPropertyAttribute(
+    const std::string& plugin_namespace,
+    const std::string& name) {
+  auto attribute = static_cast<int>(V8_PROPERTY_ATTRIBUTE_READONLY);
+  // The Node setup script captures its raw bridge functions in a closure and
+  // deletes their renderer-visible properties before namespaces are frozen.
+  if (!IsMuonNodeBridgePrivateFunction(plugin_namespace, name)) {
+    attribute |= V8_PROPERTY_ATTRIBUTE_DONTDELETE;
+  }
   if (IsMuonInternalFunctionName(name)) {
     attribute |= V8_PROPERTY_ATTRIBUTE_DONTENUM;
   }
@@ -680,6 +744,13 @@ void MuonApp::OnContextInitialized() {
     }
     plugins.push_back(std::move(plugin));
   }
+  if (!AppendMuonNodePlugin(config_, &plugins, &error_message)) {
+    exit_code_ = 1;
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                   "muon startup failed: " + error_message);
+    CefQuitMessageLoop();
+    return;
+  }
 
   InitializeMuonBuiltinLauncher(config_.default_version_policy);
   InitializeMuonBuiltinEnvironments(config_.config);
@@ -877,7 +948,8 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
         function.js_name,
         CefV8Value::CreateFunction(CreateMuonV8FunctionName(function.id),
                                    handler),
-        GetMuonFunctionPropertyAttribute(function.js_name));
+        GetMuonFunctionPropertyAttribute(function.plugin_namespace,
+                                         function.js_name));
   }
   for (const auto& plugin_namespace : renderer_metadata_.namespaces) {
     CefRefPtr<CefV8Value> namespace_object;
@@ -952,6 +1024,14 @@ void MuonApp::OnContextReleased(CefRefPtr<CefBrowser> browser,
     return;
   }
 
+  if (frame && frame->IsValid()) {
+    const auto message =
+        CefProcessMessage::Create(kMuonFunctionContextReleasedMessageName);
+    const auto args = message->GetArgumentList();
+    args->SetSize(1);
+    args->SetInt(0, handler_iterator->second->GetContextId());
+    frame->SendProcessMessage(PID_BROWSER, message);
+  }
   handler_iterator->second->RejectAllPendingPromises();
   handler_iterator->second->ReleaseFunctionReferences();
   v8_handlers_by_context_.erase(handler_iterator);

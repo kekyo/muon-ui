@@ -100,6 +100,14 @@ struct MuonPluginRuntimeLoadEntry {
    */
   std::string plugin;
   /**
+   * Whether library_directory overrides the runtime-wide plugin directory.
+   */
+  bool has_library_directory = false;
+  /**
+   * Directory containing this framework-managed plugin library.
+   */
+  std::filesystem::path library_directory;
+  /**
    * Whether expected_signature is configured for this external plugin.
    */
   bool has_expected_signature = false;

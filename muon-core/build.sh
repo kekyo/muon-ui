@@ -105,6 +105,30 @@ generate_core_version_header() {
     "${output_path}" >/dev/null
 }
 
+ensure_muon_node_bridge() {
+  local bridge_path="${PROJECT_ROOT}/muon-node/dist/node-bridge.mjs"
+  local bridge_is_stale="0"
+  if [[ ! -f "${bridge_path}" ]] ||
+      [[ -n "$(find \
+        "${PROJECT_ROOT}/muon-node/src" \
+        "${PROJECT_ROOT}/muon-node/package.json" \
+        "${PROJECT_ROOT}/muon-node/tsconfig.json" \
+        "${PROJECT_ROOT}/muon-node/vite.config.ts" \
+        "${PROJECT_ROOT}/package-lock.json" \
+        -type f -newer "${bridge_path}" -print -quit)" ]]; then
+    bridge_is_stale="1"
+  fi
+  if [[ "${MUON_NODE_BRIDGE_PREBUILT:-0}" != "1" &&
+      "${bridge_is_stale}" == "1" ]]; then
+    command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
+    npm run build --workspace muon-node
+  fi
+  if [[ ! -f "${bridge_path}" ]]; then
+    echo "muon-node bridge was not generated: ${bridge_path}" >&2
+    exit 1
+  fi
+}
+
 read_c_string_define() {
   local header_path="$1"
   local define_name="$2"
@@ -311,6 +335,8 @@ case "${TARGET_NAME}" in
     LIBFFI_ARGS=("-DLIBFFI_ROOT=${OUTPUT_ROOT}/.deps/libffi-mingw64")
     ;;
 esac
+
+ensure_muon_node_bridge
 
 bash "${SCRIPT_DIR}/build_yyjson.sh"
 YYJSON_ARGS=("-DYYJSON_SOURCE_DIR=${OUTPUT_ROOT}/.deps/src/yyjson-${YYJSON_VERSION}/src")

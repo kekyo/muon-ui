@@ -102,6 +102,7 @@ int main() {
       kMuonRuntimeInfo.cef_reference_artifact.size == 0) {
     return 10;
   }
+  auto contains_node_plugin_directory = false;
   for (size_t index = 0; index < kMuonRuntimeInfo.core_payload_count;
        index += 1) {
     const char* item = kMuonRuntimeInfo.core_payload[index];
@@ -111,6 +112,16 @@ int main() {
     if (std::strcmp(item, "muon-runtime.json") == 0) {
       return 12;
     }
+    if (std::strcmp(item, "node") == 0 ||
+        std::strcmp(item, "node.exe") == 0) {
+      return 17;
+    }
+    if (std::strcmp(item, "plugins") == 0) {
+      contains_node_plugin_directory = true;
+    }
+  }
+  if (!contains_node_plugin_directory) {
+    return 18;
   }
   return 0;
 }

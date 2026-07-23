@@ -1,0 +1,9 @@
+{
+  "name": "muon-node-e2e-project",
+  "private": true,
+  "type": "module",
+  "main": "./backend.mjs",
+  "engines": {
+    "node": ">=18"
+  }
+}

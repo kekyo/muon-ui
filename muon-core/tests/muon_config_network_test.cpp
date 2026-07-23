@@ -866,6 +866,81 @@ static bool RunConfigJson5LoadingTest(
                 "JSON5 network.allow pattern changed");
 }
 
+static bool RunNodeConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  const auto without_node_path = test_directory / "without-node.json";
+  if (!Expect(WriteFile(without_node_path, R"({})"),
+              "failed to write config without node") ||
+      !LoadConfigExpectSuccess(without_node_path, &config) ||
+      !Expect(!config.node.has_project,
+              "config without node enabled the Node host")) {
+    return false;
+  }
+
+  const auto node_path = test_directory / "with-node.json";
+  if (!Expect(
+          WriteFile(node_path,
+                    R"({"node":{"project":"projects/backend"}})"),
+          "failed to write node config") ||
+      !LoadConfigExpectSuccess(node_path, &config) ||
+      !Expect(config.node.has_project,
+              "node.project did not enable the Node host") ||
+      !Expect(config.node.project ==
+                  test_directory / "projects/backend",
+              "node.project was not resolved from the config directory")) {
+    return false;
+  }
+
+  const auto absolute_project =
+      (test_directory / "absolute-backend").lexically_normal();
+  const auto absolute_node_path = test_directory / "absolute-node.json";
+  if (!Expect(
+          WriteFile(
+              absolute_node_path,
+              "{\"node\":{\"project\":\"" +
+                  absolute_project.generic_string() + "\"}}"),
+          "failed to write absolute node config") ||
+      !LoadConfigExpectSuccess(absolute_node_path, &config) ||
+      !Expect(config.node.has_project,
+              "absolute node.project did not enable the Node host") ||
+      !Expect(config.node.project == absolute_project,
+              "absolute node.project was changed")) {
+    return false;
+  }
+
+  const auto invalid_node_path = test_directory / "invalid-node.json";
+  const auto missing_project_path =
+      test_directory / "node-without-project.json";
+  const auto empty_project_path =
+      test_directory / "node-empty-project.json";
+  const auto numeric_project_path =
+      test_directory / "node-numeric-project.json";
+  return Expect(WriteFile(invalid_node_path, R"({"node":[]})"),
+                "failed to write invalid node config") &&
+         LoadConfigExpectFailure(invalid_node_path,
+                                 "muon.json node must be an object") &&
+         Expect(WriteFile(missing_project_path, R"({"node":{}})"),
+                "failed to write node config without project") &&
+         LoadConfigExpectFailure(
+             missing_project_path,
+             "muon.json node.project must be a string") &&
+         Expect(
+             WriteFile(empty_project_path,
+                       R"({"node":{"project":""}})"),
+             "failed to write empty node.project config") &&
+         LoadConfigExpectFailure(
+             empty_project_path,
+             "muon.json node.project must not be empty") &&
+         Expect(
+             WriteFile(numeric_project_path,
+                       R"({"node":{"project":42}})"),
+             "failed to write numeric node.project config") &&
+         LoadConfigExpectFailure(
+             numeric_project_path,
+             "muon.json node.project must be a string");
+}
+
 static bool ExpectDebugConfig(const std::filesystem::path& path,
                               const std::string& message) {
   MuonConfig config;
@@ -2994,6 +3069,7 @@ int main() {
 
   const auto passed = RunConfigLoadingTest(test_directory) &&
                       RunConfigJson5LoadingTest(test_directory) &&
+                      RunNodeConfigLoadingTest(test_directory) &&
                       RunDebugConfigLoadingTest() &&
                       RunLaunchSourceProfilePathTest(test_directory) &&
                       RunDefaultConfigSearchOrderTest(test_directory) &&

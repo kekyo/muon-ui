@@ -871,6 +871,80 @@ else()
 endif()
 MUON_APPLY_SANITIZERS(muon_ui)
 
+set(MUON_NODE_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/../muon-node")
+set(MUON_NODE_PLUGIN_SOURCE
+  "${MUON_NODE_ROOT}/native/node_plugin.cpp")
+set(MUON_NODE_BRIDGE_SOURCE
+  "${MUON_NODE_ROOT}/dist/node-bridge.mjs")
+if(NOT EXISTS "${MUON_NODE_PLUGIN_SOURCE}")
+  message(FATAL_ERROR
+    "muon-node native plugin source is required: ${MUON_NODE_PLUGIN_SOURCE}")
+endif()
+if(NOT EXISTS "${MUON_NODE_BRIDGE_SOURCE}")
+  message(FATAL_ERROR
+    "muon-node bridge is required. Run `npm run build --workspace muon-node` before configuring muon-core.")
+endif()
+
+set(MUON_NODE_PLUGIN_OUTPUT_DIR
+  "${MUON_RUNTIME_DIR}/plugins")
+set(MUON_NODE_PLUGIN_LIBRARY_NAME
+  "node${CMAKE_SHARED_MODULE_SUFFIX}")
+add_library(muon_node_plugin MODULE
+  "${MUON_NODE_PLUGIN_SOURCE}"
+  include/muon_plugin_api.h
+  )
+set_target_properties(muon_node_plugin PROPERTIES
+  OUTPUT_NAME "node"
+  PREFIX ""
+  LIBRARY_OUTPUT_DIRECTORY "${MUON_NODE_PLUGIN_OUTPUT_DIR}"
+  RUNTIME_OUTPUT_DIRECTORY "${MUON_NODE_PLUGIN_OUTPUT_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+  WINDOWS_EXPORT_ALL_SYMBOLS ON
+  )
+if(UNIX AND NOT APPLE)
+  set_target_properties(muon_node_plugin PROPERTIES
+    BUILD_WITH_INSTALL_RPATH ON
+    INSTALL_RPATH "\$ORIGIN/.."
+    )
+endif()
+target_compile_features(muon_node_plugin PRIVATE cxx_std_20)
+target_include_directories(muon_node_plugin PRIVATE
+  include
+  )
+target_link_libraries(muon_node_plugin PRIVATE
+  muon_cardio
+  yyjson
+  )
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(muon_node_plugin PRIVATE
+    -fexceptions
+    )
+elseif(MSVC)
+  target_compile_options(muon_node_plugin PRIVATE
+    /EHsc
+    )
+endif()
+if(WIN32)
+  target_compile_definitions(muon_node_plugin PRIVATE
+    NOMINMAX
+    NTDDI_VERSION=0x0A00000A
+    WIN32_LEAN_AND_MEAN
+    WINVER=0x0A00
+    _WIN32_WINNT=0x0A00
+    )
+  target_link_libraries(muon_node_plugin PRIVATE
+    bcrypt
+    )
+endif()
+if(MINGW)
+  target_link_options(muon_node_plugin PRIVATE
+    -static-libgcc
+    -static-libstdc++
+    )
+endif()
+MUON_APPLY_SANITIZERS(muon_node_plugin)
+
 set(APP_EXECUTABLE_NAME "${APP_NAME}${CMAKE_EXECUTABLE_SUFFIX}")
 set(MUON_LICENSE_FILE_NAME "CREDITS.md")
 set(MUON_LEGACY_LICENSE_FILE_NAME "THIRD_PARTY_NOTICES.md")
@@ -878,6 +952,7 @@ set(MUON_CORE_PAYLOAD_ITEMS
   "${APP_EXECUTABLE_NAME}"
   "libmuon-ui${CMAKE_SHARED_LIBRARY_SUFFIX}"
   "${MUON_CARDIO_RUNTIME_LIBRARY_NAME}"
+  "plugins"
   )
 if(MUON_RUNTIME_INCLUDE_APP_FILES)
   list(APPEND MUON_CORE_PAYLOAD_ITEMS
@@ -1210,6 +1285,7 @@ foreach(MUON_RUNTIME_CEF_FILE ${CEF_RESOURCE_FILES})
 endforeach()
 set(MUON_RUNTIME_COPY_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/../${MUON_LICENSE_FILE_NAME}"
+  "${MUON_NODE_BRIDGE_SOURCE}"
   "${MUON_RUNTIME_INFO_HEADER_PATH}"
   )
 if(MUON_RUNTIME_INCLUDE_APP_FILES)
@@ -1263,6 +1339,11 @@ if(MINGW)
     )
 endif()
 list(APPEND MUON_RUNTIME_COPY_COMMANDS
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+    "${MUON_NODE_PLUGIN_OUTPUT_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${MUON_NODE_BRIDGE_SOURCE}"
+    "${MUON_NODE_PLUGIN_OUTPUT_DIR}/node-bridge.mjs"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:cardio_shared>"
     "${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}"
@@ -1279,6 +1360,7 @@ add_custom_target(muon_runtime_files ALL
 add_dependencies(muon_runtime_files ${APP_NAME})
 add_dependencies(muon_runtime_files muon_ui)
 add_dependencies(muon_runtime_files cardio_shared)
+add_dependencies(muon_runtime_files muon_node_plugin)
 if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
   add_custom_target(muon_runtime_config_template
     DEPENDS "${MUON_CONFIG_TEMPLATE}"
@@ -1287,6 +1369,16 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
 endif()
 
 enable_testing()
+add_test(
+  NAME runtime_contains_node_plugin
+  COMMAND bash -c
+    "test -f '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' && test -f '${MUON_NODE_PLUGIN_OUTPUT_DIR}/node-bridge.mjs'"
+  )
+add_test(
+  NAME runtime_omits_node_executable
+  COMMAND bash -c
+    "test ! -e '${MUON_RUNTIME_DIR}/node' && test ! -e '${MUON_RUNTIME_DIR}/node.exe' && test ! -e '${MUON_RUNTIME_DIR}/node-runtime.tar.xz'"
+  )
 if(CMAKE_GENERATOR STREQUAL "Ninja")
   add_test(
     NAME cef_exceptions_enabled
@@ -1318,6 +1410,16 @@ if(WIN32)
     NAME runtime_cardio_uses_static_mingw_runtime
     COMMAND bash -c
       "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt'"
+    )
+  add_test(
+    NAME runtime_node_plugin_uses_static_mingw_runtime
+    COMMAND bash -c
+      "'${CMAKE_OBJDUMP}' -p '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt'"
+    )
+  add_test(
+    NAME runtime_node_plugin_exports_entry_point
+    COMMAND bash -c
+      "'${CMAKE_OBJDUMP}' -p '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' | grep -Fq 'muon_init_plugin'"
     )
   add_test(
     NAME runtime_contains_muon_ui_mingw_runtime
@@ -1359,6 +1461,16 @@ else()
     NAME runtime_muon_links_cardio
     COMMAND bash -c
       "readelf -d '${MUON_RUNTIME_DIR}/${APP_EXECUTABLE_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-cardio-dynamic.txt' && grep -Fq 'Shared library: [${MUON_CARDIO_RUNTIME_LIBRARY_NAME}]' '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-cardio-dynamic.txt'"
+    )
+  add_test(
+    NAME runtime_node_plugin_exports_entry_point
+    COMMAND bash -c
+      "readelf --dyn-syms --wide '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' | grep -Eq 'GLOBAL[[:space:]]+DEFAULT[[:space:]]+[0-9]+[[:space:]]+muon_init_plugin$'"
+    )
+  add_test(
+    NAME runtime_node_plugin_links_cardio
+    COMMAND bash -c
+      "readelf -d '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' | grep -Fq 'Shared library: [${MUON_CARDIO_RUNTIME_LIBRARY_NAME}]'"
     )
 endif()
 if(MUON_RUNTIME_INCLUDE_APP_FILES)

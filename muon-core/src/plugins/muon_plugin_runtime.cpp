@@ -3325,8 +3325,10 @@ static bool LoadConfiguredMuonPluginLibraries(MuonPluginRuntimeImpl* impl) {
     if (!plugin.plugin_policy->HasAllowPatterns()) {
       continue;
     }
-    const auto path =
-        ResolveMuonPluginLibraryPath(impl->plugin_directory, plugin.plugin);
+    const auto path = ResolveMuonPluginLibraryPath(
+        plugin.has_library_directory ? plugin.library_directory
+                                     : impl->plugin_directory,
+        plugin.plugin);
     if (!LoadMuonPluginLibrary(impl, path, plugin, *plugin.plugin_policy)) {
       return false;
     }

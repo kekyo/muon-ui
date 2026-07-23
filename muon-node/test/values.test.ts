@@ -1,0 +1,497 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  initializeBridgePeer,
+  requireSuccessValue,
+  type BridgePeer,
+  type WireCallbackRequest,
+  type WireMessage,
+  type WireResponse,
+} from './support/bridge-peer.js';
+import { createProjectFixture } from './support/project-fixture.js';
+
+interface ImportedModule {
+  moduleId: string;
+}
+
+interface MessageObservation {
+  kind: 'message';
+  message: WireMessage;
+}
+
+interface CompletionObservation {
+  kind: 'completed';
+}
+
+interface EventLoopBarrier {
+  kind: 'eventLoopBarrier';
+}
+
+const importBackend = async (peer: BridgePeer): Promise<ImportedModule> =>
+  requireSuccessValue(
+    await peer.request('importModule', {
+      specifier: './backend.js',
+    })
+  ) as ImportedModule;
+
+const call = async (
+  peer: BridgePeer,
+  moduleId: string,
+  exportName: string,
+  argumentsValue: readonly unknown[]
+) =>
+  await peer.request('call', {
+    moduleId,
+    exportName,
+    arguments: argumentsValue,
+  });
+
+const observeMessage = async (
+  operation: Promise<WireMessage>
+): Promise<MessageObservation> => ({
+  kind: 'message',
+  message: await operation,
+});
+
+const observeCompletion = async (
+  operation: Promise<void>
+): Promise<CompletionObservation> => {
+  await operation;
+  return {
+    kind: 'completed',
+  };
+};
+
+// This is an event-loop ordering barrier, not a wall-clock deadline. Protocol
+// work triggered by the preceding in-memory write must complete before it.
+const reachNextEventLoopTurn = async (): Promise<EventLoopBarrier> => {
+  await new Promise<void>((resolvePromise) => {
+    setImmediate(() => {
+      resolvePromise();
+    });
+  });
+  return {
+    kind: 'eventLoopBarrier',
+  };
+};
+
+const findResponse = (
+  messages: readonly WireMessage[],
+  id: string
+): WireResponse | undefined =>
+  messages.find(
+    (message): message is WireResponse =>
+      message.kind === 'response' && message.id === id
+  );
+
+describe('muon Node wire values', () => {
+  it('round-trips supported primitive values', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const values = [null, false, true, 0, -42.5, 'text'] as const;
+      for (const value of values) {
+        expect(
+          requireSuccessValue(
+            await call(peer, backend.moduleId, 'echo', [value])
+          )
+        ).toBe(value);
+      }
+      const undefinedValue = {
+        kind: 'undefined',
+      };
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echo', [undefinedValue])
+        )
+      ).toEqual(undefinedValue);
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('round-trips signed and unsigned 64-bit tagged values', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const signed = {
+        kind: 'i64',
+        value: '-9223372036854775808',
+      };
+      const unsigned = {
+        kind: 'u64',
+        value: '18446744073709551615',
+      };
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echoI64', [signed])
+        )
+      ).toEqual(signed);
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echoU64', [unsigned])
+        )
+      ).toEqual(unsigned);
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('copies buffer values through a base64 tagged frame value', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const buffer = {
+        kind: 'buffer',
+        data: Buffer.from([0, 1, 2, 127, 128, 255]).toString('base64'),
+      };
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'copyBuffer', [buffer])
+        )
+      ).toEqual(buffer);
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('copies Uint8Array and other ArrayBuffer view results within their view bounds', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'returnUint8Array', [])
+        )
+      ).toEqual({
+        kind: 'buffer',
+        data: Buffer.from([0, 1, 2]).toString('base64'),
+      });
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'returnDataView', [])
+        )
+      ).toEqual({
+        kind: 'buffer',
+        data: Buffer.from([3, 4, 5]).toString('base64'),
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('rejects an oversized success response without closing the bridge', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+
+      await expect(
+        call(peer, backend.moduleId, 'returnOversizedBuffer', [])
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'ERR_MUON_NODE_FRAME_TOO_LARGE',
+        },
+      });
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echo', ['still-ready'])
+        )
+      ).toBe('still-ready');
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('invokes and awaits a remote function callback', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const callId = peer.sendRequest('call', {
+        moduleId: backend.moduleId,
+        exportName: 'invokeCallback',
+        arguments: [
+          {
+            kind: 'function',
+            handle: 'renderer-callback-1',
+          },
+          'callback input',
+        ],
+      });
+
+      const callbackMessage = await peer.nextMessage();
+      expect(callbackMessage).toMatchObject({
+        kind: 'callback',
+        id: expect.any(String),
+        handle: 'renderer-callback-1',
+        arguments: ['callback input'],
+      });
+      const callback = callbackMessage as WireCallbackRequest;
+      peer.send({
+        kind: 'callbackResult',
+        id: callback.id,
+        ok: true,
+        value: 'callback result',
+      });
+
+      expect(requireSuccessValue(await peer.nextResponse(callId))).toBe(
+        'callback result'
+      );
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('allows a renderer callback to await another Node call', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const outerCallId = peer.sendRequest('call', {
+        moduleId: backend.moduleId,
+        exportName: 'invokeCallback',
+        arguments: [
+          {
+            kind: 'function',
+            handle: 'renderer-reentrant-callback',
+          },
+          'outer input',
+        ],
+      });
+
+      const callbackMessage = await peer.nextMessage();
+      expect(callbackMessage).toMatchObject({
+        kind: 'callback',
+        id: expect.any(String),
+        handle: 'renderer-reentrant-callback',
+        arguments: ['outer input'],
+      });
+      const callback = callbackMessage as WireCallbackRequest;
+
+      const nestedCallId = peer.sendRequest('call', {
+        moduleId: backend.moduleId,
+        exportName: 'echo',
+        arguments: ['nested result'],
+      });
+      const nextMessageOperation = peer.nextMessage();
+      const observation = await Promise.race([
+        observeMessage(nextMessageOperation),
+        reachNextEventLoopTurn(),
+      ]);
+
+      peer.send({
+        kind: 'callbackResult',
+        id: callback.id,
+        ok: true,
+        value: 'outer result',
+      });
+
+      const messages: WireMessage[] = [];
+      if (observation.kind === 'message') {
+        messages.push(observation.message);
+      } else {
+        messages.push(await nextMessageOperation);
+      }
+      while (
+        findResponse(messages, nestedCallId) === undefined ||
+        findResponse(messages, outerCallId) === undefined
+      ) {
+        messages.push(await peer.nextMessage());
+      }
+
+      expect(observation).toMatchObject({
+        kind: 'message',
+        message: {
+          kind: 'response',
+          id: nestedCallId,
+          ok: true,
+          value: 'nested result',
+        },
+      });
+      expect(findResponse(messages, outerCallId)).toMatchObject({
+        ok: true,
+        value: 'outer result',
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('closes without waiting for a pending Node call', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      peer.sendRequest('call', {
+        moduleId: backend.moduleId,
+        exportName: 'invokeCallback',
+        arguments: [
+          {
+            kind: 'function',
+            handle: 'renderer-pending-close',
+          },
+          'pending close',
+        ],
+      });
+      await expect(peer.nextMessage()).resolves.toMatchObject({
+        kind: 'callback',
+        handle: 'renderer-pending-close',
+        arguments: ['pending close'],
+      });
+
+      const closeOperation = peer.close();
+      const observation = await Promise.race([
+        observeCompletion(closeOperation),
+        reachNextEventLoopTurn(),
+      ]);
+
+      await closeOperation;
+      expect(observation).toEqual({
+        kind: 'completed',
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('acknowledges shutdown without waiting for a pending Node call', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      peer.sendRequest('call', {
+        moduleId: backend.moduleId,
+        exportName: 'invokeCallback',
+        arguments: [
+          {
+            kind: 'function',
+            handle: 'renderer-pending-shutdown',
+          },
+          'pending shutdown',
+        ],
+      });
+      await expect(peer.nextMessage()).resolves.toMatchObject({
+        kind: 'callback',
+        handle: 'renderer-pending-shutdown',
+        arguments: ['pending shutdown'],
+      });
+
+      const shutdownId = peer.sendRequest('shutdown', {});
+      const nextMessageOperation = peer.nextMessage();
+      const observation = await Promise.race([
+        observeMessage(nextMessageOperation),
+        reachNextEventLoopTurn(),
+      ]);
+
+      const messages: WireMessage[] = [];
+      if (observation.kind === 'message') {
+        messages.push(observation.message);
+      } else {
+        messages.push(await nextMessageOperation);
+      }
+      while (findResponse(messages, shutdownId) === undefined) {
+        messages.push(await peer.nextMessage());
+      }
+
+      expect(observation).toMatchObject({
+        kind: 'message',
+        message: {
+          kind: 'response',
+          id: shutdownId,
+          ok: true,
+          value: {
+            shutdown: true,
+          },
+        },
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('rejects arbitrary objects in arguments and results', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+
+      await expect(
+        call(peer, backend.moduleId, 'echo', [
+          {
+            unsupported: true,
+          },
+        ])
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
+        },
+      });
+      await expect(
+        call(peer, backend.moduleId, 'returnObject', [])
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
+        },
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('invalidates a module handle after release', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+
+      await expect(
+        peer.request('release', {
+          kind: 'module',
+          handle: backend.moduleId,
+        })
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          released: true,
+        },
+      });
+      await expect(
+        call(peer, backend.moduleId, 'echo', ['after release'])
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'ERR_MUON_NODE_RELEASED_HANDLE',
+        },
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+});

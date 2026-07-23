@@ -1,0 +1,14 @@
+{
+  "name": "muon-node-test-project",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./backend.js",
+  "dependencies": {
+    "fixture-bare-cjs": "1.0.0",
+    "fixture-bare-esm": "1.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

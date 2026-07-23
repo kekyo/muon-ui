@@ -9,6 +9,7 @@ import type { InlineConfig, ResolvedConfig } from "vite";
 
 import {
   buildMuonApp,
+  resolveMuonNodeProjectForBuildConfig,
   type MuonBuildOptions,
   type MuonBuildResult,
 } from "./build.js";
@@ -21,6 +22,7 @@ import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
 import { mergeMuonLinuxDesktopOptions } from "./linux-desktop.js";
 import type { MuonProgressCallback } from "./progress.js";
+import { assertMuonNodeProjectViteBuildIsSafe } from "./node-project.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
@@ -41,6 +43,8 @@ export interface MuonBuildSequenceProject {
   viteBase: string | undefined;
   /** Absolute Vite output directory used as muon app assets. */
   viteOutputDirectory: string | undefined;
+  /** Absolute Vite public directory copied into output, when enabled. */
+  vitePublicDirectory: string | undefined;
   /** muon Vite plugin options if the project config contains the plugin. */
   pluginOptions: MuonVitePluginOptions | undefined;
   /** Whether the resolved Vite config contains server proxy entries. */
@@ -83,6 +87,23 @@ const resolveViteOutputDirectory = (config: ResolvedConfig): string => {
 const hasViteServerProxyConfiguration = (proxy: unknown): boolean =>
   typeof proxy === "object" && proxy !== null && Object.keys(proxy).length > 0;
 
+const withSuppressedMuonViteBuild = async <T>(
+  action: () => Promise<T>,
+): Promise<T> => {
+  const previous =
+    process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
+  process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = "1";
+  try {
+    return await action();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
+    } else {
+      process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = previous;
+    }
+  }
+};
+
 const findMuonVitePluginOptions = async (
   plugins: unknown,
 ): Promise<MuonVitePluginOptions | undefined> => {
@@ -121,6 +142,7 @@ export const loadMuonBuildSequenceProject = async (
         viteBuildRoot: resolvedCwd,
         viteBase: undefined,
         viteOutputDirectory: undefined,
+        vitePublicDirectory: undefined,
         pluginOptions: undefined,
         viteServerProxyConfigured: false,
       };
@@ -128,11 +150,14 @@ export const loadMuonBuildSequenceProject = async (
     throw error;
   }
 
-  const resolvedConfig = await vite.resolveConfig(
-    { root: resolvedCwd, logLevel: "silent" } satisfies InlineConfig,
-    "build",
-    "production",
-    "production",
+  const resolvedConfig = await withSuppressedMuonViteBuild(
+    async () =>
+      await vite.resolveConfig(
+        { root: resolvedCwd, logLevel: "silent" } satisfies InlineConfig,
+        "build",
+        "production",
+        "production",
+      ),
   );
   const pluginOptions = await findMuonVitePluginOptions(resolvedConfig.plugins);
   if (pluginOptions === undefined) {
@@ -141,6 +166,7 @@ export const loadMuonBuildSequenceProject = async (
       viteBuildRoot: resolvedCwd,
       viteBase: undefined,
       viteOutputDirectory: undefined,
+      vitePublicDirectory: undefined,
       pluginOptions: undefined,
       viteServerProxyConfigured: hasViteServerProxyConfiguration(
         resolvedConfig.server.proxy,
@@ -153,6 +179,8 @@ export const loadMuonBuildSequenceProject = async (
     viteBuildRoot: resolvedCwd,
     viteBase: resolvedConfig.base,
     viteOutputDirectory: resolveViteOutputDirectory(resolvedConfig),
+    vitePublicDirectory:
+      resolvedConfig.publicDir === "" ? undefined : resolvedConfig.publicDir,
     pluginOptions,
     viteServerProxyConfigured: hasViteServerProxyConfiguration(
       resolvedConfig.server.proxy,
@@ -174,18 +202,9 @@ export const resolveMuonViteBuildOptions = (
 
 const runViteBuild = async (root: string): Promise<void> => {
   const vite = await import("vite");
-  const previous =
-    process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
-  process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = "1";
-  try {
+  await withSuppressedMuonViteBuild(async () => {
     await vite.build({ root, logLevel: "silent" } satisfies InlineConfig);
-  } finally {
-    if (previous === undefined) {
-      delete process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
-    } else {
-      process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = previous;
-    }
-  }
+  });
 };
 
 const hasExplicitTargets = (options: MuonBuildSequenceOptions): boolean =>
@@ -289,6 +308,17 @@ export const runMuonBuildSequence = async (
       throw new Error("Vite output directory could not be resolved.");
     }
     Object.assign(buildOptions, pluginBuildOptions);
+    const effectiveConfigPath =
+      options.configPath ?? pluginBuildOptions.configPath;
+    const nodeProject = await resolveMuonNodeProjectForBuildConfig(
+      project.root,
+      effectiveConfigPath,
+    );
+    await assertMuonNodeProjectViteBuildIsSafe(
+      nodeProject,
+      project.viteOutputDirectory,
+      project.vitePublicDirectory ?? "",
+    );
     const packagedAssetOptions = createVitePackagedAssetOptions(
       project.viteBase ?? "/",
     );

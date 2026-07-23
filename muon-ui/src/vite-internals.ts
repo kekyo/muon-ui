@@ -17,6 +17,12 @@ import { ensureMuonGitignoreEntry } from "./gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonVitePluginOptions } from "./vite.js";
+import {
+  assertMuonNodeHostArtifacts,
+  assertMuonNodeProjectStagingIsSafe,
+  resolveMuonNodeProject,
+  stageMuonNodeProject,
+} from "./node-project.js";
 
 export interface MuonLaunchScriptOptions {
   muonExecutablePath: string;
@@ -39,8 +45,16 @@ interface MuonRuntimePaths {
   overrideConfigPath: string;
 }
 
+interface MuonProjectConfigResolution {
+  path: string | undefined;
+  config: Record<string, unknown> | undefined;
+}
+
 interface MuonOverrideConfig {
   config?: Record<string, string>;
+  node?: {
+    project: string;
+  };
   cdp?: {
     enable: true;
   };
@@ -246,10 +260,18 @@ const createMuonOverrideConfig = (
   enableDebugger: boolean,
   config: Readonly<Record<string, string>> | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig,
+  nodeProjectPath: string | undefined,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
     ...(config === undefined ? {} : { config: { ...config } }),
+    ...(nodeProjectPath === undefined
+      ? {}
+      : {
+          node: {
+            project: nodeProjectPath,
+          },
+        }),
     ...(enableDebugger
       ? {
           cdp: {
@@ -283,6 +305,7 @@ const writeMuonOverrideConfig = (
   overrideConfigPath: string,
   pluginOptions: MuonVitePluginOptions,
   runtimePluginConfig: MuonRuntimePluginConfig,
+  nodeProjectPath: string | undefined,
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
@@ -297,6 +320,7 @@ const writeMuonOverrideConfig = (
         pluginOptions.enableDebugger !== false,
         pluginOptions.dev?.config,
         runtimePluginConfig,
+        nodeProjectPath,
       ),
       null,
       2,
@@ -328,9 +352,9 @@ const isJsonObject = (value: unknown): value is Record<string, unknown> =>
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const resolveProjectConfigPath = async (
+const resolveProjectConfig = async (
   server: ViteDevServer,
-): Promise<string | undefined> => {
+): Promise<MuonProjectConfigResolution> => {
   for (const fileName of defaultProjectConfigFileNames) {
     const candidatePath = join(server.config.root, fileName);
     if (!(await fileExists(candidatePath))) {
@@ -342,19 +366,28 @@ const resolveProjectConfigPath = async (
       if (!isJsonObject(parsed)) {
         throw new Error("muon config root must be an object");
       }
-      return candidatePath;
+      return {
+        path: candidatePath,
+        config: parsed,
+      };
     } catch (error) {
       server.config.logger.warn(
         `muon project config will be ignored because it could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
       );
-      return undefined;
+      return {
+        path: undefined,
+        config: undefined,
+      };
     }
   }
 
   server.config.logger.warn(
     `muon project config was not found in ${server.config.root}; launching with generated Vite config only.`,
   );
-  return undefined;
+  return {
+    path: undefined,
+    config: undefined,
+  };
 };
 
 const createMuonConfigArguments = (
@@ -458,6 +491,14 @@ export const startMuonViteBrowserBridge = async ({
     let exitCode = muonRecycleExitCode;
     while (!closing && exitCode === muonRecycleExitCode) {
       try {
+        const projectConfig = await resolveProjectConfig(server);
+        const nodeProject = await resolveMuonNodeProject(
+          projectConfig.config,
+          projectConfig.path === undefined
+            ? server.config.root
+            : dirname(projectConfig.path),
+        );
+        await assertMuonNodeProjectStagingIsSafe(nodeProject, stagePath);
         const preparedRuntime = await runMuonPrepare({
           muonPath,
           cefPath,
@@ -474,12 +515,22 @@ export const startMuonViteBrowserBridge = async ({
           throw new Error("muon-builder did not return a staged runtime path.");
         }
         const runtimePluginConfig = await refreshRuntimePluginConfig();
-        const projectConfigPath = await resolveProjectConfigPath(server);
+        const nodeProjectPath = await stageMuonNodeProject(
+          nodeProject,
+          preparedRuntime.stagePath,
+        );
+        if (nodeProjectPath !== undefined) {
+          await assertMuonNodeHostArtifacts(
+            preparedRuntime.stagePath,
+            platform,
+          );
+        }
         const configWritten = writeMuonOverrideConfig(
           server,
           paths.overrideConfigPath,
           pluginOptions,
           runtimePluginConfig,
+          nodeProjectPath,
         );
         if (!configWritten || closing) {
           return;
@@ -487,7 +538,7 @@ export const startMuonViteBrowserBridge = async ({
         exitCode = await waitForMuonProcess(
           getMuonExecutablePath(preparedRuntime.stagePath, platform),
           createMuonConfigArguments(
-            projectConfigPath,
+            projectConfig.path,
             paths.overrideConfigPath,
           ),
           pluginOptions.allowInsecureLocalhost === true,

@@ -6,7 +6,11 @@
 import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";
 
-import { buildMuonApp, type MuonBuildOptions } from "./build.js";
+import {
+  buildMuonApp,
+  resolveMuonNodeProjectForBuildConfig,
+  type MuonBuildOptions,
+} from "./build.js";
 import {
   createMuonCapabilityModuleResolver,
   type MuonCapabilityModuleResolver,
@@ -32,6 +36,11 @@ import {
   type MuonProgressCallback,
 } from "./progress.js";
 import type { MuonWindowsCodeSigningOptions } from "./windows-code-signing.js";
+import {
+  assertMuonNodeProjectViteBuildIsSafe,
+  assertMuonNodeProjectVitePublicDirectoryIsSafe,
+  type ResolvedMuonNodeProject,
+} from "./node-project.js";
 
 export type {
   MuonWindowsCodeSigningOptions,
@@ -499,6 +508,39 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     configResolved: async (config): Promise<void> => {
       resolvedConfig = config;
       await refreshPluginAccess(config);
+      if (
+        process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] !== "1"
+      ) {
+        let nodeProject: ResolvedMuonNodeProject | undefined = undefined;
+        try {
+          nodeProject = await resolveMuonNodeProjectForBuildConfig(
+            config.root,
+            resolveMuonConfigPathForViteCommand(config, options),
+          );
+        } catch (error) {
+          if (config.command !== "serve") {
+            throw error;
+          }
+          config.logger.warn(
+            `muon Node project preflight will be ignored because the project config could not be read or parsed: ${getErrorMessage(error)}`,
+          );
+        }
+        if (config.command === "build") {
+          const outputDirectory = isAbsolute(config.build.outDir)
+            ? config.build.outDir
+            : resolve(config.root, config.build.outDir);
+          await assertMuonNodeProjectViteBuildIsSafe(
+            nodeProject,
+            outputDirectory,
+            config.publicDir,
+          );
+        } else {
+          await assertMuonNodeProjectVitePublicDirectoryIsSafe(
+            nodeProject,
+            config.publicDir,
+          );
+        }
+      }
     },
     resolveId: (source, importer) =>
       capabilityResolver?.resolveId(source, importer)?.id,

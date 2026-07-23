@@ -166,6 +166,7 @@ See the following documents for more detailed information about muon.
 - [muon DevTools](./docs/en/muon-devtools.md)
 - [Local asset configuration](./docs/en/local-assets.md)
 - [Using muon plugins](./docs/en/muon-plugins.md)
+- [Using the Node.js sidecar](./docs/en/nodejs-sidecar.md)
 - [Accessing external networks](./docs/en/external-network.md)
 
 ### Advanced topics

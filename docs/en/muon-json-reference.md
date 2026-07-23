@@ -90,6 +90,7 @@ The following is an example of `muon.json`:
 | :-- | :--- | :------ | :------ |
 | `iconPath` | `string` | muon default icon | PNG file used as the static application icon. |
 | `config` | `readonly object` | `{}` | Application string key-value settings available to renderer code. |
+| `node` | `object` | none | Optional Node.js sidecar project. |
 
 - `iconPath` accepts only `.png`. Relative paths are resolved from the directory where `muon.json` is located.
 - `iconPath` is the shared source for Windows PE/NSIS, Linux desktop, and the startup title-bar icon.
@@ -118,6 +119,23 @@ There is no deletion syntax, so a later configuration cannot remove an earlier k
 
 Because all values are available to renderer code, do not store passwords, tokens, or other secrets in `config`.
 `plugin.plugins[].config` is a separate setting table passed only to the corresponding native plugin during initialization.
+
+## node key
+
+Set `node.project` to the directory of an ordinary Node.js project to enable the out-of-process Node.js sidecar. A relative path is resolved from the directory of the configuration file that defines it; an absolute path is also accepted.
+
+```json
+{
+  "node": {
+    "project": "./backend"
+  },
+  "plugin": {
+    "mode": "simple"
+  }
+}
+```
+
+When `node` is present, `project` must be a non-empty string. The MVP's `window.muon.node` API requires `plugin.mode: "simple"`; validate mode loads metadata without exposing the API or starting Node.js. The reserved `node` plugin cannot be configured directly through `plugin.plugins[]`. See [Using the Node.js sidecar](./nodejs-sidecar.md) for development, build, distribution, system Node.js selection, API, and value restrictions.
 
 ## browser key
 

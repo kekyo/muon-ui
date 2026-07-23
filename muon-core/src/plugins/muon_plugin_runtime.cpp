@@ -81,6 +81,13 @@ class MuonFunctionTask final : public CefTask {
 struct MuonDynamicLibrary {
   std::filesystem::path path;
   void* handle = nullptr;
+  muon_plugin_stop_func stop = nullptr;
+};
+
+enum class MuonPluginRuntimeStopState {
+  Running,
+  Stopping,
+  Stopped,
 };
 
 struct MuonRegisteredFunction {
@@ -370,6 +377,10 @@ struct MuonPluginRuntimeImpl {
   std::filesystem::path plugin_directory;
   std::vector<MuonPluginRuntimeLoadEntry> plugins;
   std::vector<MuonDynamicLibrary> libraries;
+  MuonPluginRuntimeStopState stop_state =
+      MuonPluginRuntimeStopState::Running;
+  size_t next_stop_library_index = 0;
+  std::vector<MuonPluginRuntime::StopCompletion> stop_completions;
   std::vector<MuonFsDialogsCancelOwnerBrowserFunction>
       fs_dialogs_cancel_owner_functions;
   std::vector<std::unique_ptr<MuonRegisteredFunction>> registered_functions;
@@ -2878,12 +2889,14 @@ static void InvokeMuonTrafficFunction(
 static void KeepOrCloseMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
                                           const std::filesystem::path& path,
                                           void* handle,
-                                          size_t initial_function_count) {
+                                          size_t initial_function_count,
+                                          muon_plugin_stop_func stop) {
   if (impl != nullptr &&
       impl->registered_functions.size() > initial_function_count) {
     MuonDynamicLibrary library;
     library.path = path;
     library.handle = handle;
+    library.stop = stop;
     impl->libraries.push_back(library);
     const auto cancel_owner =
         GetMuonFsDialogsCancelOwnerBrowserFunction(handle);
@@ -2893,6 +2906,63 @@ static void KeepOrCloseMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
     return;
   }
   CloseMuonDynamicLibrary(handle);
+}
+
+struct MuonPluginStopCallbackState {
+  MuonPluginRuntimeImpl* impl = nullptr;
+};
+
+static void ContinueMuonPluginStop(MuonPluginRuntimeImpl* impl);
+
+static void CompleteMuonPluginStop(void* user_data) {
+  auto state = std::unique_ptr<MuonPluginStopCallbackState>(
+      static_cast<MuonPluginStopCallbackState*>(user_data));
+  if (!state || state->impl == nullptr) {
+    return;
+  }
+  auto* impl = state->impl;
+  if (CefCurrentlyOn(TID_UI)) {
+    ContinueMuonPluginStop(impl);
+    return;
+  }
+  auto* dispatcher = impl->main_dispatcher;
+  if (dispatcher == nullptr) {
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                   "Cannot complete plugin shutdown without the muon main "
+                   "dispatcher");
+    return;
+  }
+  muon_internal::FireAndForgetOnDispatcher(
+      dispatcher, [impl]() { ContinueMuonPluginStop(impl); });
+}
+
+static void ContinueMuonPluginStop(MuonPluginRuntimeImpl* impl) {
+  CEF_REQUIRE_UI_THREAD();
+  if (impl == nullptr ||
+      impl->stop_state != MuonPluginRuntimeStopState::Stopping) {
+    return;
+  }
+  while (impl->next_stop_library_index > 0) {
+    impl->next_stop_library_index -= 1;
+    const auto stop =
+        impl->libraries[impl->next_stop_library_index].stop;
+    if (stop == nullptr) {
+      continue;
+    }
+    auto state = std::make_unique<MuonPluginStopCallbackState>();
+    state->impl = impl;
+    stop(&CompleteMuonPluginStop, state.release());
+    return;
+  }
+
+  impl->stop_state = MuonPluginRuntimeStopState::Stopped;
+  auto completions = std::move(impl->stop_completions);
+  impl->stop_completions.clear();
+  for (auto& completion : completions) {
+    if (completion) {
+      completion();
+    }
+  }
 }
 
 static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
@@ -3166,7 +3236,8 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
     return FailMuonPluginStartup(impl, error_message);
   }
 
-  KeepOrCloseMuonPluginLibrary(impl, path, handle, initial_function_count);
+  KeepOrCloseMuonPluginLibrary(
+      impl, path, handle, initial_function_count, metadata->stop);
   return true;
 }
 
@@ -3383,6 +3454,29 @@ std::string MuonPluginRuntime::GetStartupError() const {
   return impl_->startup_error;
 }
 
+void MuonPluginRuntime::Stop(StopCompletion completion) {
+  CEF_REQUIRE_UI_THREAD();
+  if (completion) {
+    impl_->stop_completions.push_back(std::move(completion));
+  }
+  if (impl_->stop_state == MuonPluginRuntimeStopState::Stopped) {
+    auto completions = std::move(impl_->stop_completions);
+    impl_->stop_completions.clear();
+    for (auto& stopped_completion : completions) {
+      if (stopped_completion) {
+        stopped_completion();
+      }
+    }
+    return;
+  }
+  if (impl_->stop_state == MuonPluginRuntimeStopState::Stopping) {
+    return;
+  }
+  impl_->stop_state = MuonPluginRuntimeStopState::Stopping;
+  impl_->next_stop_library_index = impl_->libraries.size();
+  ContinueMuonPluginStop(impl_.get());
+}
+
 CefRefPtr<CefDictionaryValue> MuonPluginRuntime::CreateRendererMetadata()
     const {
   return CreateMuonRendererMetadata(impl_->renderer_namespaces,
@@ -3418,6 +3512,13 @@ void MuonPluginRuntime::Invoke(const MuonPluginInvocationContext& context,
                                     shared_payload,
                                 Completion completion) {
   CEF_REQUIRE_UI_THREAD();
+  if (impl_->stop_state != MuonPluginRuntimeStopState::Running) {
+    MuonPluginCallResult result;
+    result.success = false;
+    result.error_message = "Plugin runtime is shutting down";
+    completion(result);
+    return;
+  }
   const auto function_iterator = impl_->functions_by_id.find(function_id);
   if (function_iterator == impl_->functions_by_id.end()) {
     MuonPluginCallResult result;
@@ -3487,6 +3588,13 @@ void MuonPluginRuntime::InvokeProxy(
     std::shared_ptr<MuonSharedBufferPayload> shared_payload,
     Completion completion) {
   CEF_REQUIRE_UI_THREAD();
+  if (impl_->stop_state != MuonPluginRuntimeStopState::Running) {
+    MuonPluginCallResult result;
+    result.success = false;
+    result.error_message = "Plugin runtime is shutting down";
+    completion(result);
+    return;
+  }
   const auto owner_id = CreateMuonFunctionOwnerId(
       context, context.renderer_context_id);
   MuonFunctionProxy proxy;

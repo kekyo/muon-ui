@@ -47,6 +47,7 @@ static const muon_plugin_namespace* const single_namespace_namespace_pointers[] 
 
 static const muon_plugin_metadata single_namespace_metadata = {
     single_namespace_namespace_pointers,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

@@ -48,6 +48,7 @@ static const muon_plugin_namespace *const plugin_namespaces[] = {
 
 static const muon_plugin_metadata plugin_metadata = {
     plugin_namespaces,
+    NULL,
 };
 
 const muon_plugin_metadata *muon_init_plugin(

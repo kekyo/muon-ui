@@ -68,6 +68,7 @@ static const muon_plugin_namespace* const load_marker_namespaces_pointers[] = {
 
 static const muon_plugin_metadata load_marker_metadata = {
     load_marker_namespaces_pointers,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

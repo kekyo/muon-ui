@@ -146,6 +146,11 @@ class MuonPluginRuntime final {
   using Completion = std::function<void(const MuonPluginCallResult& result)>;
 
   /**
+   * Completion callback used after all loaded plugins finish stopping.
+   */
+  using StopCompletion = std::function<void()>;
+
+  /**
    * Creates a plugin runtime and loads explicit plugins from plugin_directory.
    *
    * @param plugin_directory Directory containing plugin shared libraries.
@@ -173,6 +178,16 @@ class MuonPluginRuntime final {
    * Returns the plugin startup validation error, when one occurred.
    */
   std::string GetStartupError() const;
+
+  /**
+   * Stops loaded plugins asynchronously.
+   *
+   * Repeated calls are coalesced. Every supplied completion runs on the
+   * browser UI thread after all plugin stop callbacks have completed.
+   *
+   * @param completion Callback invoked after plugin shutdown completes.
+   */
+  void Stop(StopCompletion completion);
 
   /**
    * Creates the renderer startup metadata dictionary.

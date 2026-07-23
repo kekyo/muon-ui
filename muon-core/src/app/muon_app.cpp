@@ -685,12 +685,15 @@ void MuonApp::OnContextInitialized() {
   InitializeMuonBuiltinEnvironments(config_.config);
   const auto plugin_runtime =
       CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins));
+  const auto stop_plugins_and_quit = [plugin_runtime]() {
+    plugin_runtime->Stop([plugin_runtime]() { CefQuitMessageLoop(); });
+  };
   if (!plugin_runtime->IsReady()) {
     exit_code_ = 1;
     error_message = plugin_runtime->GetStartupError();
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                    "muon startup failed: " + error_message);
-    CefQuitMessageLoop();
+    stop_plugins_and_quit();
     return;
   }
   const auto app_storage = CreateConfiguredMuonAppStorage(
@@ -701,7 +704,7 @@ void MuonApp::OnContextInitialized() {
     exit_code_ = 1;
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                    "muon startup failed: " + error_message);
-    CefQuitMessageLoop();
+    stop_plugins_and_quit();
     return;
   }
   if (!CefRegisterSchemeHandlerFactory(
@@ -712,7 +715,7 @@ void MuonApp::OnContextInitialized() {
         "Failed to register asset scheme handler factory";
     LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                    std::string("muon startup failed: ") + error_message);
-    CefQuitMessageLoop();
+    stop_plugins_and_quit();
     return;
   }
   auto has_initial_title_bar_icon = false;
@@ -724,7 +727,7 @@ void MuonApp::OnContextInitialized() {
       exit_code_ = 1;
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                      "muon startup failed: " + error_message);
-      CefQuitMessageLoop();
+      stop_plugins_and_quit();
       return;
     }
     has_initial_title_bar_icon = true;
@@ -734,7 +737,7 @@ void MuonApp::OnContextInitialized() {
       exit_code_ = 1;
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
                      "muon startup failed: " + error_message);
-      CefQuitMessageLoop();
+      stop_plugins_and_quit();
       return;
     }
     has_initial_title_bar_icon = true;

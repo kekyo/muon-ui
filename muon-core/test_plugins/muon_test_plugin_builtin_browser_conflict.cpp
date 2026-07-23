@@ -45,6 +45,7 @@ static const muon_plugin_namespace* const builtin_browser_conflict_namespaces_po
 
 static const muon_plugin_metadata builtin_browser_conflict_metadata = {
     builtin_browser_conflict_namespaces_pointers,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

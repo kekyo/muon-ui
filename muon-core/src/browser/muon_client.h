@@ -587,6 +587,7 @@ class MuonClient final : public CefClient,
                                     const std::string& frame_id);
   void FlushDeferredFunctionReleasesForBrowser(int browser_id);
   void RequestMessageLoopQuit(bool post_task);
+  void CompleteMessageLoopQuitRequest(bool post_task);
   void QuitMessageLoopWhenIdle();
   bool PrepareShutdown(int32_t exit_code,
                        std::vector<CefRefPtr<CefBrowser>>* browsers,

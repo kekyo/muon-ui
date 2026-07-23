@@ -438,6 +438,7 @@ static const muon_plugin_namespace* const environment_namespaces[] = {
 
 static const muon_plugin_metadata environment_metadata = {
     environment_namespaces,
+    nullptr,
 };
 
 const muon_plugin_metadata* GetMuonBuiltinEnvironmentsPluginMetadata() {

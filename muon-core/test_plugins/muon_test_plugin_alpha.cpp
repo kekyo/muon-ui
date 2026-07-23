@@ -87,6 +87,7 @@ static const muon_plugin_namespace* const alpha_namespaces_pointers[] = {
 
 static const muon_plugin_metadata alpha_metadata = {
     alpha_namespaces_pointers,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

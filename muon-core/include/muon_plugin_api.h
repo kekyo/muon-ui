@@ -691,6 +691,31 @@ typedef struct muon_plugin_namespace {
 } muon_plugin_namespace;
 
 /**
+ * @brief Completion callback for asynchronous plugin shutdown.
+ *
+ * @param user_data Opaque value supplied by the muon host.
+ *
+ * @remarks A plugin stop function must invoke this callback exactly once after
+ * all plugin-owned asynchronous operations and resources are stopped. The
+ * callback may be invoked before the stop function returns.
+ */
+typedef void (*muon_plugin_stop_completion)(void* user_data);
+
+/**
+ * @brief Starts asynchronous shutdown for a plugin.
+ *
+ * @param completion Non-null host callback to invoke exactly once.
+ * @param user_data Opaque host value passed to `completion`.
+ *
+ * @remarks muon calls this function at most once and keeps the plugin library,
+ * host helpers, and cardio dispatcher available until `completion` is invoked.
+ * New work must not be started after this function is called.
+ */
+typedef void (*muon_plugin_stop_func)(
+    muon_plugin_stop_completion completion,
+    void* user_data);
+
+/**
  * @brief Metadata returned by a plugin entry point.
  */
 typedef struct muon_plugin_metadata {
@@ -702,6 +727,12 @@ typedef struct muon_plugin_metadata {
    * returned metadata.
    */
   const muon_plugin_namespace* const* namespaces;
+  /**
+   * Optional asynchronous shutdown function.
+   *
+   * May be null when the plugin owns no resources that require shutdown.
+   */
+  muon_plugin_stop_func stop;
 } muon_plugin_metadata;
 
 /**

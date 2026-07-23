@@ -55,6 +55,8 @@ Node組み込みモジュールは`node:` prefixを必須とします。例え�
 
 `undefined`は明示的な値と`void`の戻り値の両方を表します。binary入力はviewの範囲だけがコピーされ、rendererへ返るbinary値は`Uint8Array`に正規化されます。任意のobject、class instance、Nodeのhandleやpointerは渡せません。Node側のexport値が対応外のobjectである場合、そのexportはfacadeへ追加されません。関数が対応外の値を引数または戻り値に使用すると、その呼び出しはrejectされます。callbackはNode関数の呼び出しがsettleするまで有効です。`$release`はfacade制御用、`then`はPromiseのthenable同化を防ぐための予約名であり、いずれかをexportするmoduleはimportできません。
 
+`$release()`が解放するのは、bridgeが保持するdescriptor、proxy、remote callbackの参照だけです。Nodeモジュール内で作成されたserver、timer、watcherなどのresourceを停止または破棄しません。
+
 encode後のIPC frameは1件あたり16 MiBに制限されます。JSON framingとbase64展開分も上限に含まれるため、利用できるbinary payloadはこれより小さく、他の引数にも依存します。一つのsidecarが受け付けるpending requestは最大1,024件であり、上限を超えた呼び出しは先行requestがsettleするまでrejectされます。
 
 ## Node.js実行ファイル
@@ -82,4 +84,4 @@ muonのallow policyはrendererからNodeプラグインへ入る境界に適用�
 - Node bridgeの`node-bridge.mjs`
 - staging済みの`node-project/`
 
-muon frameworkはNode.js実行ファイル、Node配布archive、download cacheを追加しません（Nodeプロジェクト内へ開発者自身が置いたファイルは通常のプロジェクト内容としてコピーされます）。アプリ終了時、muonはsidecarへshutdownを要求し、終了を非同期に待ってからプラグインをunloadします。応答しないsidecarは猶予時間後にterminateされ、最終的に強制終了されます。Linuxでは子プロセス終了の非同期監視に`pidfd_open`を使用するため、Linux kernel 5.3以降が必要です。POSIXでのterminate対象はsidecar process自体であり、プロジェクトコードが生成したchild processの停止は開発者が管理します。
+muon frameworkはNode.js実行ファイル、Node配布archive、download cacheを追加しません（Nodeプロジェクト内へ開発者自身が置いたファイルは通常のプロジェクト内容としてコピーされます）。アプリ終了時、muonはsidecarへshutdownを要求し、終了を非同期に待ってからプラグインをunloadします。bridgeとtransportを閉じた後、Node.jsにactive handleが残っていてもsidecarは明示的に終了します。muonはプロジェクト固有のcleanup APIを自動的に発見、呼び出し、awaitしません。resourceをgracefulにcleanupする必要がある場合は、アプリケーションコードが該当APIを呼び出してawaitしてください。応答しないsidecarは猶予時間後にterminateされ、最終的に強制終了されます。Linuxでは子プロセス終了の非同期監視に`pidfd_open`を使用するため、Linux kernel 5.3以降が必要です。POSIXでのterminate対象はsidecar process自体であり、プロジェクトコードが生成したchild processの停止は開発者が管理します。

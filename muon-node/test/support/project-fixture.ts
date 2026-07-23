@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { cp, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

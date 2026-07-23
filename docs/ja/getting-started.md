@@ -276,7 +276,7 @@ npx muon pack --target windows-amd64 --type nsis
 - muonでは、muon-coreプロセスがCEFを初期化します。
   CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
   muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
-- Node.jsプラグインを構成した場合だけ、Node.jsプロセスが有効になります。
+- muonは、Node.jsプラグインを構成した場合だけ、Node.jsプロセスが有効になります。
   最初の`importModule()`で別プロセスのNode.js sidecarを遅延起動し、以降の呼び出しを中継します。
   sidecarはUIを生成または所有せず、処理のオフロードやNode.jsエコシステムの機能を利用するためのオプションです。
 

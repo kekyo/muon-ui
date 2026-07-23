@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 export type WindowsE2eTargetName = "windows-i686" | "windows-amd64";
 export type WindowsE2ePlatform = "win32" | "win64";

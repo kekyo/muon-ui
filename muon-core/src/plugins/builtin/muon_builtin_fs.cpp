@@ -1,7 +1,7 @@
 /* muon - Multi-platform GUI application framework that uses CEF as its backend
  * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
  * Under MIT.
- * https://github.com/kekyo/muon
+ * https://github.com/kekyo/muon-ui
  */
 
 #include "plugins/builtin/muon_builtin_fs.h"
@@ -5268,6 +5268,7 @@ static const muon_plugin_namespace* const fs_namespaces[] = {
 
 static const muon_plugin_metadata fs_metadata = {
     fs_namespaces,
+    nullptr,
 };
 
 bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,

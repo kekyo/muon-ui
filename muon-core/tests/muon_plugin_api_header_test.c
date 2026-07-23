@@ -1,7 +1,7 @@
 /* muon - Multi-platform GUI application framework that uses CEF as its backend
  * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
  * Under MIT.
- * https://github.com/kekyo/muon
+ * https://github.com/kekyo/muon-ui
  */
 
 #include "muon_plugin_api.h"
@@ -26,6 +26,16 @@ static void sample_function(muon_completion_func completion, int32_t value) {
 
 static void sample_finalizer(void* user_data) {
   (void)user_data;
+}
+
+static void sample_stop_completion(void* user_data) {
+  uint8_t* completed = (uint8_t*)user_data;
+  *completed = 1;
+}
+
+static void sample_stop(muon_plugin_stop_completion completion,
+                        void* user_data) {
+  completion(user_data);
 }
 
 static uint8_t sample_register_pure_function(
@@ -159,6 +169,7 @@ int main(void) {
   };
   const muon_plugin_metadata metadata = {
       namespace_pointers,
+      &sample_stop,
   };
   muon_plugin_helper_register_pure_function register_pure = 0;
   muon_plugin_helper_register_closure register_closure = 0;
@@ -202,6 +213,8 @@ int main(void) {
       config_entries,
   };
   muon_init_plugin_func init_plugin = 0;
+  muon_plugin_stop_func stop_plugin = metadata.stop;
+  uint8_t stop_completed = 0;
   const char* config_value =
       muon_plugin_get_config_value(&init_context, "sample.key");
 
@@ -229,6 +242,10 @@ int main(void) {
   (void)shared_buffer;
   (void)log_level;
   (void)init_plugin;
+  stop_plugin(&sample_stop_completion, &stop_completed);
+  if (stop_completed == 0) {
+    return 1;
+  }
   if (config_value == 0 || config_value[0] != 'v') {
     return 1;
   }

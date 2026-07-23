@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
@@ -32,6 +32,14 @@ import {
   getMuonExecutablePath,
   resolveMuonRuntimePath,
 } from "./vite-internals.js";
+import {
+  assertMuonNodeHostArtifacts,
+  assertMuonNodeProjectAssetSourceIsSafe,
+  assertMuonNodeProjectStagingIsSafe,
+  assertMuonNodeProjectViteBuildIsSafe,
+  resolveMuonNodeProject,
+  stageMuonNodeProject,
+} from "./node-project.js";
 import {
   flattenVitePluginOptions,
   getMuonVitePluginOptions,
@@ -74,6 +82,9 @@ interface ProjectConfigResolution {
 interface MuonDevOverrideConfig {
   asset?: {
     sourcePath: string;
+  };
+  node?: {
+    project: string;
   };
   cdp?: {
     enable: true;
@@ -377,6 +388,7 @@ const copyViteOutputAsRunAssets = async (
 
 const prepareViteRunAssets = async (
   cwd: string,
+  configPath: string | undefined,
 ): Promise<PreparedViteRunAssets | undefined> => {
   const project = await loadMuonBuildSequenceProject(cwd);
   if (project.pluginOptions === undefined) {
@@ -388,7 +400,27 @@ const prepareViteRunAssets = async (
     project.viteBase ?? "/",
   );
   const assetSourcePath = join(project.root, ".muon", "run", "assets");
+  const effectiveConfigPath = configPath ?? buildOptions.configPath;
+  const projectConfig = await resolveProjectConfig(
+    project.root,
+    effectiveConfigPath,
+  );
+  const nodeProject = await resolveMuonNodeProject(
+    projectConfig.config,
+    projectConfig.configPath === undefined
+      ? project.root
+      : dirname(projectConfig.configPath),
+  );
 
+  if (project.viteOutputDirectory === undefined) {
+    throw new Error("Vite output directory could not be resolved.");
+  }
+  await assertMuonNodeProjectViteBuildIsSafe(
+    nodeProject,
+    project.viteOutputDirectory,
+    project.vitePublicDirectory ?? "",
+  );
+  await assertMuonNodeProjectAssetSourceIsSafe(nodeProject, assetSourcePath);
   await rm(assetSourcePath, { recursive: true, force: true });
   const runtimePluginConfig = await getRuntimePluginConfigFromViteBuild(
     project.viteBuildRoot,
@@ -402,7 +434,7 @@ const prepareViteRunAssets = async (
   return {
     root: project.root,
     pluginOptions: project.pluginOptions,
-    configPath: buildOptions.configPath,
+    configPath: effectiveConfigPath,
     assetSourcePath,
     browserStartPage: packagedAssetOptions.browserStartPage,
     runtimePluginConfig,
@@ -580,6 +612,7 @@ const createMuonDevOverrideConfig = (
   enableDebugger: boolean,
   browserStartPage: string | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig | undefined,
+  nodeProjectPath: string | undefined,
 ): MuonDevOverrideConfig => {
   const browser =
     browserStartPage === undefined && !enableDebugger
@@ -604,6 +637,13 @@ const createMuonDevOverrideConfig = (
       : {
           asset: {
             sourcePath: assetSourcePath,
+          },
+        }),
+    ...(nodeProjectPath === undefined
+      ? {}
+      : {
+          node: {
+            project: nodeProjectPath,
           },
         }),
     ...(enableDebugger
@@ -662,7 +702,7 @@ const runMuonDevOnce = async (
 ): Promise<MuonDevResult> => {
   const preparedViteAssets =
     options.assetSourcePath === undefined
-      ? await prepareViteRunAssets(cwd)
+      ? await prepareViteRunAssets(cwd, options.configPath)
       : undefined;
   const loadedViteOptions =
     preparedViteAssets === undefined
@@ -709,6 +749,12 @@ const runMuonDevOnce = async (
     root,
     options.configPath ?? preparedViteAssets?.configPath,
   );
+  const nodeProject = await resolveMuonNodeProject(
+    projectConfig.config,
+    projectConfig.configPath === undefined
+      ? root
+      : dirname(projectConfig.configPath),
+  );
   const asset =
     preparedViteAssets === undefined
       ? await resolveAssetSource(root, options.assetSourcePath, projectConfig)
@@ -723,6 +769,11 @@ const runMuonDevOnce = async (
       : undefined;
   const overrideConfigPath = join(root, ".muon", "run", "muon.run.json");
 
+  await assertMuonNodeProjectStagingIsSafe(nodeProject, stagePath);
+  await assertMuonNodeProjectAssetSourceIsSafe(
+    nodeProject,
+    asset.assetSourcePath,
+  );
   await ensureMuonGitignoreEntry(root);
 
   const preparedRuntime = await runMuonPrepare({
@@ -740,6 +791,13 @@ const runMuonDevOnce = async (
   if (preparedRuntime.stagePath === undefined) {
     throw new Error("muon-builder did not return a staged runtime path.");
   }
+  const nodeProjectPath = await stageMuonNodeProject(
+    nodeProject,
+    preparedRuntime.stagePath,
+  );
+  if (nodeProjectPath !== undefined) {
+    await assertMuonNodeHostArtifacts(preparedRuntime.stagePath, platform);
+  }
 
   await writeMuonDevOverrideConfig(
     overrideConfigPath,
@@ -748,6 +806,7 @@ const runMuonDevOnce = async (
       enableDebugger,
       browserStartPage,
       preparedViteAssets?.runtimePluginConfig,
+      nodeProjectPath,
     ),
   );
   const muonExecutablePath = getMuonExecutablePath(

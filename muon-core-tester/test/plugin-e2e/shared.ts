@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -596,6 +596,21 @@ export interface PluginConfigEntry {
   signature?: string;
   salt?: string;
   config?: Record<string, string>;
+}
+
+/**
+ * Capability policy exposed to validate-mode plugin calls.
+ */
+export interface PluginCapabilityConfigEntry {
+  /**
+   * Opaque capability identifier supplied by generated application code.
+   */
+  id: string;
+
+  /**
+   * Public plugin function paths authorized for the capability.
+   */
+  allow: string[];
 }
 
 export interface NetworkAuthorizedOriginConfig {
@@ -2280,6 +2295,8 @@ export const writeMuonConfig = async (
   browserProfilePath: string | undefined = undefined,
   applicationConfig: Readonly<Record<string, string>> = {},
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
+  nodeProject: string | undefined = undefined,
+  pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
   if (networkAuthorizedOrigins.length > 0) {
@@ -2292,12 +2309,18 @@ export const writeMuonConfig = async (
     path: pluginPath,
     plugins,
   };
+  if (pluginCapabilities.length > 0) {
+    plugin.capabilities = pluginCapabilities;
+  }
   const config: Record<string, unknown> = {
     network,
     plugin,
   };
   if (Object.keys(applicationConfig).length > 0) {
     config.config = applicationConfig;
+  }
+  if (nodeProject !== undefined) {
+    config.node = { project: nodeProject };
   }
   if (logConfig !== undefined) {
     config.log = logConfig;
@@ -2398,7 +2421,9 @@ interface StartWindowsRemoteMuonOptions {
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
   networkLocalAccess: NetworkLocalAccessConfig | undefined;
+  nodeProject: string | undefined;
   pluginAllowPatterns: string[];
+  pluginCapabilities: readonly PluginCapabilityConfigEntry[];
   pluginSaltByName: Readonly<Record<string, string>>;
   pluginSignatureByName: Readonly<Record<string, string>>;
   pluginConfigByName: Readonly<Record<string, Record<string, string>>>;
@@ -2822,6 +2847,8 @@ const startWindowsRemoteMuon = async (
         profilePath,
         options.applicationConfig,
         options.networkLocalAccess,
+        options.nodeProject,
+        options.pluginCapabilities,
       ),
   );
   const cdpPort = allocateWindowsRemoteCdpPort();
@@ -2957,6 +2984,8 @@ export const startMuon = async (
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
   applicationConfig: Readonly<Record<string, string>> = {},
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
+  nodeProject: string | undefined = undefined,
+  pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -2982,7 +3011,9 @@ export const startMuon = async (
         networkAllowPatterns,
         networkAuthorizedOrigins,
         networkLocalAccess,
+        nodeProject,
         pluginAllowPatterns,
+        pluginCapabilities,
         pluginConfigByName,
         pluginSaltByName,
         pluginSignatureByName,
@@ -3044,6 +3075,8 @@ export const startMuon = async (
     undefined,
     applicationConfig,
     networkLocalAccess,
+    nodeProject,
+    pluginCapabilities,
   );
   const args = shouldForceX11Ozone
     ? [
@@ -3133,6 +3166,8 @@ export const startDebugMuon = async (
   useValgrind = shouldUseValgrind,
   applicationConfig: Readonly<Record<string, string>> = {},
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
+  nodeProject: string | undefined = undefined,
+  pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -3166,7 +3201,94 @@ export const startDebugMuon = async (
     pluginConfigByName,
     applicationConfig,
     networkLocalAccess,
+    nodeProject,
+    pluginCapabilities,
   );
+
+/**
+ * Options used to start a debug runtime with a Node project.
+ */
+export interface StartDebugMuonWithNodeProjectOptions {
+  /**
+   * Page patterns that receive the simple plugin facade, or null to keep
+   * validate mode.
+   */
+  browserPluginAllowPatterns?: string[] | null;
+
+  /**
+   * Environment inherited by the runtime and Node sidecar.
+   */
+  environment?: NodeJS.ProcessEnv;
+
+  /**
+   * Network request patterns authorized for the test application.
+   */
+  networkAllowPatterns?: string[];
+
+  /**
+   * Local network access policy for the test application.
+   */
+  networkLocalAccess?: NetworkLocalAccessConfig;
+
+  /**
+   * Absolute Node project directory used by the test runtime.
+   */
+  nodeProject: string;
+
+  /**
+   * Capability policies used by validate-mode calls.
+   */
+  pluginCapabilities?: readonly PluginCapabilityConfigEntry[];
+}
+
+/**
+ * Starts a debug runtime with a Node project configured.
+ *
+ * @param options Runtime and Node project configuration.
+ * @returns The running debug runtime.
+ */
+export const startDebugMuonWithNodeProject = async (
+  options: StartDebugMuonWithNodeProjectOptions,
+): Promise<RunningMuon> => {
+  const {
+    browserPluginAllowPatterns = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    environment = {},
+    networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
+    networkLocalAccess = undefined,
+    nodeProject,
+    pluginCapabilities = [],
+  } = options;
+  return await startDebugMuon(
+    [],
+    networkAllowPatterns,
+    environment,
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    [],
+    browserPluginAllowPatterns,
+    [],
+    null,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    {},
+    {},
+    true,
+    shouldUseValgrind,
+    {},
+    networkLocalAccess,
+    nodeProject,
+    pluginCapabilities,
+  );
+};
 
 export const startDebugMuonLauncher = async (
   pluginNames: string[],

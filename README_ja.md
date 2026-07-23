@@ -163,6 +163,7 @@ muonをより詳しく知りたい場合は、以下のドキュメントを参�
 - [muon DevTools](./docs/ja/muon-devtools.md)
 - [ローカルアセットの構成](./docs/ja/local-assets.md)
 - [muonプラグインを使用する](./docs/ja/muon-plugins.md)
+- [Node.js sidecarを使用する](./docs/ja/nodejs-sidecar.md)
 - [外部ネットワークにアクセスする](./docs/ja/external-network.md)
 
 ### Advanced topics

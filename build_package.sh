@@ -218,6 +218,7 @@ build_linux_target() {
     -e "MUON_BUILDER_VERSION=${MUON_BUILDER_VERSION}" \
     -e "MUON_BUILDER_GIT_COMMIT_HASH=${MUON_BUILDER_GIT_COMMIT_HASH}" \
     -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
+    -e "MUON_NODE_BRIDGE_PREBUILT=1" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
     -e "MUON_CACHE_DIR=/workspace/.deps/muon-cache" \
@@ -360,6 +361,10 @@ validate_linux_artifacts() {
       "muon-ui/dist/runtime/${target_name}/libcardio.so" \
       "${expected_class}" \
       "${expected_machine}"
+    validate_readelf_header \
+      "muon-ui/dist/runtime/${target_name}/plugins/node.so" \
+      "${expected_class}" \
+      "${expected_machine}"
   done
 }
 
@@ -381,12 +386,17 @@ build_dist() {
   export MUON_BUILDER_VERSION
   export MUON_BUILDER_GIT_COMMIT_HASH
   export MUON_CORE_VERSION_HEADER
+  export MUON_NODE_BRIDGE_PREBUILT
   MUON_BUILDER_VERSION="$(package_version "muon-builder/package.json")"
   MUON_BUILDER_GIT_COMMIT_HASH="$(git_commit_hash)"
   generate_core_version_header
   MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_HOST}"
 
   assert_native_dependency_checkouts
+
+  printf 'Building shared Node bridge\n'
+  npm run build --workspace muon-node
+  MUON_NODE_BRIDGE_PREBUILT=1
 
   printf 'Preparing shared native source dependencies\n'
   bash muon-core/build_yyjson.sh
@@ -434,6 +444,13 @@ verify_package_file_list() {
     fi
   }
 
+  reject_pack_file_match() {
+    local pattern="$1"
+    if grep -Eq "${pattern}" <<< "${files}"; then
+      fail "${source_name} includes unexpected file matching: ${pattern}"
+    fi
+  }
+
   require_pack_file "muon.d.ts"
   require_pack_file "vite.d.ts"
   require_pack_file "dist/cli.cjs"
@@ -463,6 +480,16 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linux-arm64/libcardio.so"
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"
   require_pack_file "dist/runtime/windows-amd64/libcardio.dll"
+  require_pack_file "dist/runtime/linux-amd64/plugins/node.so"
+  require_pack_file "dist/runtime/linux-amd64/plugins/node-bridge.mjs"
+  require_pack_file "dist/runtime/linux-armhf/plugins/node.so"
+  require_pack_file "dist/runtime/linux-armhf/plugins/node-bridge.mjs"
+  require_pack_file "dist/runtime/linux-arm64/plugins/node.so"
+  require_pack_file "dist/runtime/linux-arm64/plugins/node-bridge.mjs"
+  require_pack_file "dist/runtime/windows-i686/plugins/node.dll"
+  require_pack_file "dist/runtime/windows-i686/plugins/node-bridge.mjs"
+  require_pack_file "dist/runtime/windows-amd64/plugins/node.dll"
+  require_pack_file "dist/runtime/windows-amd64/plugins/node-bridge.mjs"
   require_pack_file_match '^dist/runtime/windows-i686/libgcc_s_.*-1\.dll$'
   require_pack_file "dist/runtime/windows-i686/libstdc++-6.dll"
   require_pack_file_match '^dist/runtime/windows-amd64/libgcc_s_.*-1\.dll$'
@@ -477,6 +504,8 @@ verify_package_file_list() {
   reject_pack_file "dist/runtime/windows-i686/muon-runtime.json"
   reject_pack_file "dist/runtime/windows-amd64/muon-runtime.json"
   reject_pack_file "dist/runtime/linux32/muon-runtime.json"
+  reject_pack_file_match '^dist/runtime/[^/]+/(.*/)?node(\.exe)?$'
+  reject_pack_file_match '^dist/runtime/[^/]+/(.*/)?node([-_.][^/]*)?\.(7z|tar|tar\.(bz2|gz|xz)|tgz|zip)$'
 
   if grep -Eq '^dist/.*\.d\.ts$' <<< "${files}"; then
     fail "${source_name} includes dist declaration files."

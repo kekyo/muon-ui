@@ -1,7 +1,7 @@
 /* muon - Multi-platform GUI application framework that uses CEF as its backend
  * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
  * Under MIT.
- * https://github.com/kekyo/muon
+ * https://github.com/kekyo/muon-ui
  */
 
 #pragma once
@@ -154,6 +154,7 @@ class MuonV8Handler final : public CefV8Handler {
 
  private:
   friend class MuonPluginFunctionProxyState;
+  friend class MuonRendererPromiseHandler;
 
   struct FunctionTransfers {
     explicit FunctionTransfers(MuonV8Handler* owner = nullptr);
@@ -251,6 +252,10 @@ class MuonV8Handler final : public CefV8Handler {
   bool InvokeRendererFunctionCallMessage(
       CefRefPtr<CefProcessMessage> message,
       std::shared_ptr<MuonSharedBufferPayload> shared_payload);
+  bool AwaitRendererFunctionPromise(
+      int call_id,
+      const MuonTypeMetadata& return_type,
+      CefRefPtr<CefV8Value> promise);
   bool SendFunctionResult(int call_id,
                           const MuonTypeMetadata& return_type,
                           CefRefPtr<CefV8Value> value,

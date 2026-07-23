@@ -89,6 +89,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | :--------- | :---------------- | :--------------- | :------------------------------------------------------------------- |
 | `iconPath` | `string`          | muon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                        |
 | `config`   | `readonly object` | `{}`             | rendererコードから参照できるアプリケーション用の文字列key-value設定です。 |
+| `node`     | `object`          | なし             | オプションのNode.js sidecarプロジェクトです。                        |
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
 - `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
@@ -116,6 +117,23 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 
 すべての値はmuonアプリから取得できるため、パスワード、tokenなどの秘密情報を `config` に保存しないで下さい。
 `plugin.plugins[].config` は別の設定テーブルであり、対応するネイティブプラグインの初期化時だけ渡されます。
+
+## nodeキー
+
+`node.project`に通常のNode.jsプロジェクトのディレクトリを指定すると、out-of-process Node.js sidecarが有効になります。相対パスは、この値を定義した設定ファイルのディレクトリから解決され、絶対パスも指定できます。
+
+```json
+{
+  "node": {
+    "project": "./backend"
+  },
+  "plugin": {
+    "mode": "simple"
+  }
+}
+```
+
+`node`を指定する場合、`project`は空ではないstringでなければなりません。MVPの`window.muon.node` APIには`plugin.mode: "simple"`が必要です。validate modeはmetadataだけをloadし、APIを公開せずNode.jsも起動しません。`plugin.plugins[]`で`node`という名前を直接指定することはできません。開発、ビルド、配布、system Node.jsの選択、APIと値の制約については[Node.js sidecarを使用する](./nodejs-sidecar.md)を参照してください。
 
 ## browserキー
 

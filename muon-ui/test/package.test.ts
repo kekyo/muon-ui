@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
 import {
@@ -610,6 +610,86 @@ describe("muon-ui package root export", () => {
     expect(workspaceHelp.stdout).toContain("Usage: ./build_package.sh");
   });
 
+  it("stages the Node plugin payload without bundling a Node runtime", async () => {
+    const root = await mkdtemp(join(tmpdir(), "muon-package-node-stage-"));
+    cleanupDirectories.push(root);
+    const workspaceDirectory = join(root, "muon-ui");
+    const builderDirectory = join(root, "muon-builder", "dist-linux-amd64");
+    const runtimeDirectory = join(root, "muon-core", "dist-linux-amd64");
+    await mkdir(join(workspaceDirectory, "scripts"), { recursive: true });
+    await mkdir(join(workspaceDirectory, "dist"), { recursive: true });
+    await mkdir(join(root, "images"), { recursive: true });
+    await mkdir(builderDirectory, { recursive: true });
+    await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
+    await copyFile(
+      resolve("scripts", "stage-muon-builder.mjs"),
+      join(workspaceDirectory, "scripts", "stage-muon-builder.mjs"),
+    );
+    await writeFile(join(workspaceDirectory, "dist", "cli.cjs"), "");
+    await writeFile(join(root, "images", "muon-256.png"), "icon\n");
+    for (const executableName of [
+      "muon-builder",
+      "muon-launcher",
+      "muon-runtime-helper",
+      "muon-plugin-inspector",
+    ]) {
+      await writeExecutableScript(
+        join(builderDirectory, executableName),
+        `${executableName}\n`,
+      );
+    }
+    await writeExecutableScript(
+      join(runtimeDirectory, "muon-core"),
+      "muon-core\n",
+    );
+    await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "muon-ui\n");
+    await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
+    await writeFile(join(runtimeDirectory, "CREDITS.md"), "credits\n");
+    await writeFile(
+      join(runtimeDirectory, "plugins", "node.so"),
+      "node plugin\n",
+    );
+    await writeFile(
+      join(runtimeDirectory, "plugins", "node-bridge.mjs"),
+      "node bridge\n",
+    );
+    await writeExecutableScript(join(runtimeDirectory, "node"), "node\n");
+    await writeFile(
+      join(runtimeDirectory, "node-v24.0.0-linux-x64.tar.xz"),
+      "node archive\n",
+    );
+
+    await execFileAsync(
+      process.execPath,
+      ["scripts/stage-muon-builder.mjs", "--target", "linux-amd64", "--dist"],
+      {
+        cwd: workspaceDirectory,
+      },
+    );
+
+    const stagedRuntimeDirectory = join(
+      workspaceDirectory,
+      "dist",
+      "runtime",
+      "linux-amd64",
+    );
+    await expect(
+      readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
+    ).resolves.toBe("node plugin\n");
+    await expect(
+      readFile(
+        join(stagedRuntimeDirectory, "plugins", "node-bridge.mjs"),
+        "utf8",
+      ),
+    ).resolves.toBe("node bridge\n");
+    await expect(exists(join(stagedRuntimeDirectory, "node"))).resolves.toBe(
+      false,
+    );
+    await expect(
+      exists(join(stagedRuntimeDirectory, "node-v24.0.0-linux-x64.tar.xz")),
+    ).resolves.toBe(false);
+  });
+
   it("uses vendored native dependency checkouts for package builds by default", async () => {
     const root = await createFakePackageBuildRoot();
     const binDirectory = join(root, "bin");
@@ -697,6 +777,7 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
     expect(containerInvocation).toContain(
       "MUON_CORE_VERSION_HEADER=/workspace/muon-core/.build/package/muon_core_version_generated.h",
     );
+    expect(containerInvocation).toContain("MUON_NODE_BRIDGE_PREBUILT=1");
     await expect(
       readFile(
         join(
@@ -709,9 +790,9 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
         "utf8",
       ),
     ).resolves.toContain('#define MUON_CORE_VERSION "1.2.3"');
-    await expect(readFile(npmLog, "utf8")).resolves.toContain(
-      "generate:runtime-version-header",
-    );
+    const npmInvocations = await readFile(npmLog, "utf8");
+    expect(npmInvocations).toContain("generate:runtime-version-header");
+    expect(npmInvocations).toContain("run build --workspace muon-node");
   });
 
   it("reports the failed Linux package target and log path", async () => {
@@ -756,6 +837,9 @@ if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; t
 #define MUON_CORE_GIT_COMMIT_DATE "2026-07-01T00:00:00+09:00"
 #endif
 HEADER
+  exit 0
+fi
+if [[ "\${1:-}" == "run" && "\${2:-}" == "build" && " $* " == *" --workspace muon-node "* ]]; then
   exit 0
 fi
 printf 'Unexpected fake npm invocation: %s\\n' "$*" >&2
@@ -1142,6 +1226,46 @@ void disposable;
 void released;
 void symbolReleased;
 void releasePromise;
+`),
+    ).resolves.toBeUndefined();
+  });
+
+  it("provides types for the optional descriptor-backed Node API", async () => {
+    await expect(
+      runTypeScriptConsumer(`import type {} from "muon-ui";
+
+interface FsPromisesExports {
+  readonly readFile: (path: string, encoding: string) => Promise<string>;
+}
+
+const nodeApi: MuonNodeApi | undefined = window.muon.node;
+const callback: MuonNodeCallback = async (value) => String(value);
+const value: MuonNodeValue = Uint8Array.from([1, 2, 3]);
+const argument: MuonNodeArgument = callback;
+const arrayBufferArgument: MuonNodeArgument = new ArrayBuffer(8);
+const typedArrayArgument: MuonNodeArgument = new Int32Array([1, 2, 3]);
+
+const run = async (): Promise<void> => {
+  if (nodeApi === undefined) {
+    return;
+  }
+  const fs: MuonNodeModule<FsPromisesExports> =
+    await nodeApi.importModule<FsPromisesExports>("node:fs/promises");
+  const text: string = await fs.readFile("file.txt", "utf8");
+  await fs.$release();
+  void text;
+};
+
+// @ts-expect-error Arbitrary objects cannot cross the Node bridge.
+const unsupportedValue: MuonNodeValue = { unsupported: true };
+
+void argument;
+void arrayBufferArgument;
+void callback;
+void run;
+void typedArrayArgument;
+void unsupportedValue;
+void value;
 `),
     ).resolves.toBeUndefined();
   });

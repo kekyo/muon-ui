@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { expect, it } from "vitest";
 
@@ -17,12 +17,17 @@ import {
   evaluateRejection,
   expectDebugMuonStartupFailure,
   join,
+  mkdtemp,
   openPopupTarget,
+  readFile,
   readFunctionWrapperDiagnostics,
+  rm,
   startDebugMuon,
   stopMuon,
+  tmpdir,
   waitForFunctionWrapperDiagnosticBaseline,
   withMuon,
+  withMuonEnvironment,
   withTrackedMuon,
 } from "./shared.js";
 import type { CdpDriver } from "./shared.js";
@@ -390,6 +395,15 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         ),
       ).resolves.toBe(43);
       await expect(
+        driver.evaluate(`window.muon.test.helpers.helperCompletionAdd(
+          async (value) => {
+            await Promise.resolve();
+            return value * 2;
+          },
+          21
+        )`),
+      ).resolves.toBe(43);
+      await expect(
         evaluateRejection(
           driver,
           "window.muon.test.helpers.helperCompletionAdd(() => 'wrong', 5)",
@@ -398,9 +412,15 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
       await expect(
         evaluateRejection(
           driver,
-          "window.muon.test.helpers.helperCompletionAdd(() => Promise.reject(new Error('helper rejected')), 5)",
+          "window.muon.test.helpers.helperCompletionAdd(async () => 'wrong', 5)",
         ),
       ).resolves.toBe("Renderer function returned a non-i32 value");
+      await expect(
+        evaluateRejection(
+          driver,
+          "window.muon.test.helpers.helperCompletionAdd(() => Promise.reject(new Error('helper rejected')), 5)",
+        ),
+      ).resolves.toBe("helper rejected");
     });
   });
 
@@ -1358,6 +1378,31 @@ describeMuonPluginBridge("muon plugin bridge - plugin interop", () => {
         driver.evaluate("window.muon.test.cardio.dispatcherAvailable()"),
       ).resolves.toBe(true);
     });
+  });
+
+  it("waits for asynchronous plugin shutdown before unloading", async () => {
+    const markerDirectory = await mkdtemp(
+      join(tmpdir(), "muon-plugin-stop-marker-"),
+    );
+    const markerPath = join(markerDirectory, "marker.txt");
+    try {
+      await withMuonEnvironment(
+        ["muon_test_plugin_cardio"],
+        { MUON_TEST_PLUGIN_STOP_MARKER: markerPath },
+        async (driver) => {
+          await expect(
+            driver.evaluate(
+              "window.muon.test.cardio.dispatcherAvailableAtInit()",
+            ),
+          ).resolves.toBe(true);
+        },
+      );
+      await expect(readFile(markerPath, "utf8")).resolves.toBe(
+        "stop-started\nstop-completed\nunloaded\n",
+      );
+    } finally {
+      await rm(markerDirectory, { recursive: true, force: true });
+    }
   });
 
   it("balances libffi completion closures after repeated completions", async () => {

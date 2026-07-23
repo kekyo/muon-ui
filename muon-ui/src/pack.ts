@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { spawn } from "node:child_process";
 import { type Stats } from "node:fs";
@@ -74,6 +74,10 @@ import {
   quoteDesktopExecArgument,
   type MuonLinuxDesktopOptions,
 } from "./linux-desktop.js";
+import {
+  assertMuonNodeProjectPackCleanupIsSafe,
+  resolveMuonNodeProject,
+} from "./node-project.js";
 import type { MuonProgressCallback } from "./progress.js";
 
 const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
@@ -1421,7 +1425,20 @@ export const packMuonApp = async (
   (buildOptions as InternalMuonBuildSequenceOptions).environment = environment;
   const windowsResourceConfig = await readMuonConfigForWindowsResource(
     root,
-    options.configPath,
+    options.configPath ?? pluginBuildOptions.configPath,
+  );
+  const nodeProject = await resolveMuonNodeProject(
+    windowsResourceConfig.config,
+    windowsResourceConfig.directory,
+  );
+  await assertMuonNodeProjectPackCleanupIsSafe(nodeProject, packageBuildRoot);
+  await assertMuonNodeProjectPackCleanupIsSafe(
+    nodeProject,
+    join(artifactsRoot, "deb"),
+  );
+  await assertMuonNodeProjectPackCleanupIsSafe(
+    nodeProject,
+    join(artifactsRoot, "nsis"),
   );
   const windowsResource = await resolveMuonWindowsResource({
     root,

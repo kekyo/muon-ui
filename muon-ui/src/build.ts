@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { constants, type Stats } from "node:fs";
 import {
@@ -68,6 +68,15 @@ import {
 import { appIconAssetEntryName, appIconAssetUrl } from "./app-icon.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonProgressCallback } from "./progress.js";
+import {
+  assertMuonNodeProjectAssetSourceIsSafe,
+  assertMuonNodeProjectStagingIsSafe,
+  createPackagedMuonNodeConfig,
+  resolveMuonNodeProject,
+  stageMuonNodeHostArtifacts,
+  stageMuonNodeProject,
+  type ResolvedMuonNodeProject,
+} from "./node-project.js";
 
 const defaultConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const appConfigSourcePath = "./assets.zip";
@@ -355,9 +364,25 @@ export const buildMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
-  const sourceConfig = applyRuntimePluginConfig(
+  const nodeProject = await resolveMuonNodeProject(
     buildConfig.config,
-    options.runtimePluginConfig ?? { mode: "simple" },
+    buildConfig.directory,
+  );
+  for (const target of targets) {
+    await assertMuonNodeProjectStagingIsSafe(
+      nodeProject,
+      join(
+        outputRoot,
+        getMuonTargetDescriptor(target).distributionDirectoryName,
+      ),
+    );
+  }
+  const sourceConfig = createPackagedMuonNodeConfig(
+    applyRuntimePluginConfig(
+      buildConfig.config,
+      options.runtimePluginConfig ?? { mode: "simple" },
+    ),
+    nodeProject,
   );
   assertNoUserInitialTitleBarIcon(sourceConfig);
   const resolvedBuildConfig: BuildConfig = {
@@ -369,6 +394,10 @@ export const buildMuonApp = async (
     options.assetSourcePath,
     options.assetPrefix,
     resolvedBuildConfig,
+  );
+  await assertMuonNodeProjectAssetSourceIsSafe(
+    nodeProject,
+    assetInput.sourcePath,
   );
   const windowsResource = await resolveMuonWindowsResource({
     root,
@@ -442,6 +471,7 @@ export const buildMuonApp = async (
       windowsCodeSigning,
       linuxDesktop,
       distributionFiles,
+      nodeProject,
       salt,
       environment,
       browserStartPage: options.browserStartPage,
@@ -720,6 +750,26 @@ const readBuildConfig = async (
   };
 };
 
+/**
+ * Resolves the Node project selected by a build-oriented muon configuration.
+ *
+ * @param root Project root used to locate a default or relative config path.
+ * @param configPath Explicit muon config path, or `undefined` to use the
+ * default config lookup.
+ * @returns The resolved Node project, or `undefined` when Node hosting is not
+ * enabled.
+ */
+export const resolveMuonNodeProjectForBuildConfig = async (
+  root: string,
+  configPath: string | undefined,
+): Promise<ResolvedMuonNodeProject | undefined> => {
+  const buildConfig = await readBuildConfig(root, configPath);
+  return await resolveMuonNodeProject(
+    buildConfig.config,
+    buildConfig.directory,
+  );
+};
+
 const applyRuntimePluginConfig = (
   sourceConfig: JsonObject,
   runtimePluginConfig: MuonRuntimePluginConfig | undefined,
@@ -834,6 +884,7 @@ const buildMuonTarget = async (input: {
   windowsCodeSigning: ResolvedMuonWindowsCodeSigning | undefined;
   linuxDesktop: ResolvedMuonLinuxDesktop;
   distributionFiles: readonly DistributionFile[];
+  nodeProject: ResolvedMuonNodeProject | undefined;
   salt: Buffer;
   environment: NodeJS.ProcessEnv;
   browserStartPage: string | undefined;
@@ -906,6 +957,14 @@ const buildMuonTarget = async (input: {
   ) {
     await copyFile(sourceRuntimeHelperPath, runtimeHelperPath);
     await chmod(runtimeHelperPath, executableMode);
+  }
+  if (input.nodeProject !== undefined) {
+    await stageMuonNodeHostArtifacts(
+      sourceRuntimePath,
+      outputPath,
+      descriptor.os,
+    );
+    await stageMuonNodeProject(input.nodeProject, outputPath);
   }
   await copyDistributionFiles(input.distributionFiles, outputPath);
 

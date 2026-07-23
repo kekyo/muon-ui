@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -12,6 +12,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -199,6 +200,29 @@ const createFakeMuonPackageDistForTargets = async (
     await writeFile(
       join(runtimeDirectory, descriptor.cardioLibraryName),
       "cardio\n",
+    );
+    const nodePluginFileName = target.startsWith("windows-")
+      ? "node.dll"
+      : "node.so";
+    await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
+    await writeFile(
+      join(runtimeDirectory, "plugins", nodePluginFileName),
+      `${target} node plugin\n`,
+    );
+    await writeFile(
+      join(runtimeDirectory, "plugins", "node-bridge.mjs"),
+      "export const bridgeFixture = true;\n",
+    );
+    await writeFile(
+      join(
+        runtimeDirectory,
+        target.startsWith("windows-") ? "node.exe" : "node",
+      ),
+      "node executable must not be copied\n",
+    );
+    await writeFile(
+      join(runtimeDirectory, "node-runtime.tar.xz"),
+      "node archive must not be copied\n",
     );
     for (const fileName of descriptor.mingwRuntimeFiles) {
       await writeFile(
@@ -589,6 +613,15 @@ describe("muon build", () => {
     await expect(
       exists(join(root, "dist-muon/linux-amd64", "libcef.so")),
     ).resolves.toBe(false);
+    await expect(
+      exists(join(root, "dist-muon/linux-amd64", "plugins", "node.so")),
+    ).resolves.toBe(false);
+    await expect(
+      exists(join(root, "dist-muon/linux-amd64", "plugins", "node-bridge.mjs")),
+    ).resolves.toBe(false);
+    await expect(
+      exists(join(root, "dist-muon/linux-amd64", "node-project")),
+    ).resolves.toBe(false);
 
     const archivePath = join(root, "dist-muon/linux-amd64", "assets.zip");
     const archiveContent = await readFile(archivePath);
@@ -637,6 +670,369 @@ describe("muon build", () => {
     expect(() => findMuonLauncherEmbeddedConfigSlot(embeddedLauncher)).toThrow(
       "found 0",
     );
+  });
+
+  it("stages a configured Node project outside assets using the config directory as its base", async () => {
+    const root = await createTemporaryDirectory("muon-build-node-project-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const backendDirectory = join(root, "settings", "backend");
+    const linkedDependencyDirectory = join(
+      root,
+      "settings",
+      "linked-dependency",
+    );
+    const dependencyDirectory = join(
+      backendDirectory,
+      "node_modules",
+      "fixture-dependency",
+    );
+    await mkdir(join(backendDirectory, "node_modules"), { recursive: true });
+    await mkdir(linkedDependencyDirectory, { recursive: true });
+    await symlink(
+      linkedDependencyDirectory,
+      dependencyDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(
+      join(root, "assets", "index.html"),
+      "<!doctype html><title>node project app</title>",
+    );
+    const backendPackageJson = `${JSON.stringify(
+      {
+        name: "muon-node-project-fixture",
+        type: "module",
+        main: "./main.js",
+        imports: {
+          "#message": "./message.js",
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    await writeFile(join(backendDirectory, "package.json"), backendPackageJson);
+    await writeFile(
+      join(backendDirectory, "main.js"),
+      [
+        'import message from "#message";',
+        'import dependency from "fixture-dependency";',
+        "process.stdout.write(`${message}:${dependency}\\n`);",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(backendDirectory, "message.js"),
+      'export default "project";\n',
+    );
+    await writeFile(
+      join(linkedDependencyDirectory, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "fixture-dependency",
+          type: "module",
+          exports: "./index.js",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(
+      join(linkedDependencyDirectory, "index.js"),
+      'export default "dependency";\n',
+    );
+    await writeFile(
+      join(root, "settings", "muon.json"),
+      `${JSON.stringify(
+        {
+          node: {
+            project: "./backend",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      configPath: "settings/muon.json",
+      assetSourcePath: "assets",
+      assetSalt: Buffer.from("1234", "hex"),
+    });
+
+    const outputPath = join(root, "dist-muon", "linux-amd64");
+    const stagedProjectPath = join(outputPath, "node-project");
+    await rm(linkedDependencyDirectory, { recursive: true, force: true });
+    const execution = await execFileAsync(process.execPath, [
+      stagedProjectPath,
+    ]);
+    expect(execution.stdout).toBe("project:dependency\n");
+    await expect(
+      readFile(join(stagedProjectPath, "package.json"), "utf8"),
+    ).resolves.toBe(backendPackageJson);
+    await expect(
+      readFile(join(outputPath, "plugins", "node.so"), "utf8"),
+    ).resolves.toBe("linux-amd64 node plugin\n");
+    await expect(
+      readFile(join(outputPath, "plugins", "node-bridge.mjs"), "utf8"),
+    ).resolves.toBe("export const bridgeFixture = true;\n");
+    expect(result.targets[0]?.embeddedConfig.node).toEqual({
+      project: "./node-project",
+    });
+    const assetEntries = await readZipEntries(join(outputPath, "assets.zip"));
+    expect(
+      [...assetEntries.keys()].some((entry) =>
+        entry.startsWith("node-project/"),
+      ),
+    ).toBe(false);
+    await expect(exists(join(outputPath, "node"))).resolves.toBe(false);
+    await expect(exists(join(outputPath, "node.exe"))).resolves.toBe(false);
+    await expect(exists(join(outputPath, "node-runtime.tar.xz"))).resolves.toBe(
+      false,
+    );
+  });
+
+  it("rejects a Node project inside a symlinked output runtime before deleting its source", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-node-output-source-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const actualOutputRoot = join(root, "actual-output");
+    const runtimeDirectory = join(actualOutputRoot, "dist-muon", "linux-amd64");
+    const backendDirectory = join(runtimeDirectory, "backend");
+    const markerPath = join(backendDirectory, "source-marker.txt");
+    const outputRootLink = join(root, "output-link");
+    await mkdir(backendDirectory, { recursive: true });
+    await writeFile(
+      join(backendDirectory, "package.json"),
+      `${JSON.stringify({ name: "output-source", type: "module" })}\n`,
+    );
+    await writeFile(markerPath, "preserve source\n");
+    await symlink(
+      actualOutputRoot,
+      outputRootLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(
+      join(root, "assets", "index.html"),
+      "<!doctype html><title>output overlap</title>",
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          node: {
+            project: backendDirectory,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        outputRoot: outputRootLink,
+        assetSourcePath: "assets",
+      }),
+    ).rejects.toThrow(
+      "muon Node project and runtime directory must not overlap",
+    );
+    await expect(readFile(markerPath, "utf8")).resolves.toBe(
+      "preserve source\n",
+    );
+  });
+
+  it("canonicalizes the nearest existing output ancestor before creating a runtime", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-node-output-ancestor-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const backendDirectory = join(root, "backend");
+    const generatedOutputDirectory = join(backendDirectory, "generated-output");
+    const outputRootLink = join(root, "output-link");
+    const runtimeDirectory = join(
+      generatedOutputDirectory,
+      "dist-muon",
+      "linux-amd64",
+    );
+    await mkdir(generatedOutputDirectory, { recursive: true });
+    await writeFile(
+      join(backendDirectory, "package.json"),
+      `${JSON.stringify({ name: "ancestor-source", type: "module" })}\n`,
+    );
+    await writeFile(
+      join(backendDirectory, "source-marker.txt"),
+      "preserve source\n",
+    );
+    await symlink(
+      generatedOutputDirectory,
+      outputRootLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(
+      join(root, "assets", "index.html"),
+      "<!doctype html><title>ancestor overlap</title>",
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          node: {
+            project: "./backend",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        outputRoot: outputRootLink,
+        assetSourcePath: "assets",
+      }),
+    ).rejects.toThrow(
+      "muon Node project and runtime directory must not overlap",
+    );
+    await expect(exists(runtimeDirectory)).resolves.toBe(false);
+  });
+
+  it.each([
+    ["the Node project is inside assets", "project-inside-assets"],
+    ["assets are inside the Node project", "assets-inside-project"],
+  ])(
+    "rejects overlapping Node and asset trees when %s",
+    async (_label, kind) => {
+      const root = await createTemporaryDirectory(
+        "muon-build-node-assets-overlap-",
+      );
+      const packageDirectory = await createFakeMuonPackageDist(root);
+      const backendDirectory =
+        kind === "project-inside-assets"
+          ? join(root, "assets", "backend")
+          : join(root, "backend");
+      const assetDirectory =
+        kind === "project-inside-assets"
+          ? join(root, "assets")
+          : join(backendDirectory, "assets");
+      const markerPath = join(backendDirectory, "source-marker.txt");
+      await mkdir(assetDirectory, { recursive: true });
+      await mkdir(backendDirectory, { recursive: true });
+      await writeFile(
+        join(backendDirectory, "package.json"),
+        `${JSON.stringify({ name: "asset-overlap", type: "module" })}\n`,
+      );
+      await writeFile(markerPath, "preserve source\n");
+      await writeFile(
+        join(assetDirectory, "index.html"),
+        "<!doctype html><title>asset overlap</title>",
+      );
+      await writeFile(
+        join(root, "muon.json"),
+        `${JSON.stringify(
+          {
+            node: {
+              project: backendDirectory,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await expect(
+        buildMuonApp({
+          root,
+          packageDirectory,
+          targets: ["linux-amd64"],
+          assetSourcePath: assetDirectory,
+        }),
+      ).rejects.toThrow("muon Node project and asset source must not overlap");
+      await expect(readFile(markerPath, "utf8")).resolves.toBe(
+        "preserve source\n",
+      );
+    },
+  );
+
+  it.each([
+    ["a non-object node config", true, "muon.json node must be an object"],
+    [
+      "a missing project path",
+      {},
+      "muon.json node.project is required when node is present",
+    ],
+    [
+      "a non-string project path",
+      { project: 42 },
+      "muon.json node.project must be a string",
+    ],
+    [
+      "an empty project path",
+      { project: "   " },
+      "muon.json node.project must not be empty",
+    ],
+  ])("rejects %s", async (_label, node, expectedMessage) => {
+    const root = await createTemporaryDirectory("muon-build-invalid-node-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(
+      join(root, "assets", "index.html"),
+      "<!doctype html><title>invalid node config</title>",
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify({ node }, null, 2)}\n`,
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        assetSourcePath: "assets",
+      }),
+    ).rejects.toThrow(expectedMessage);
+  });
+
+  it("rejects a Node project without package.json", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-node-package-json-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    await mkdir(join(root, "backend"), { recursive: true });
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(
+      join(root, "backend", "index.mjs"),
+      'export const value = "missing package";\n',
+    );
+    await writeFile(
+      join(root, "assets", "index.html"),
+      "<!doctype html><title>missing package json</title>",
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify({ node: { project: "./backend" } }, null, 2)}\n`,
+    );
+
+    await expect(
+      buildMuonApp({
+        root,
+        packageDirectory,
+        targets: ["linux-amd64"],
+        assetSourcePath: "assets",
+      }),
+    ).rejects.toThrow("muon Node project package.json does not exist");
   });
 
   it("builds every supported target by default when targets are omitted", async () => {
@@ -1918,6 +2314,60 @@ describe("muon build", () => {
       "muon build is disabled by muon({ build: false })",
     );
   });
+
+  it.each([
+    ["the Vite plugin build config", false],
+    ["the CLI config override", true],
+  ])(
+    "rejects an outDir-overlapping Node project from %s before Vite deletes it",
+    async (_label, useCliConfig) => {
+      const root = await createTemporaryDirectory(
+        "muon-build-cli-node-outdir-",
+      );
+      const packageDirectory = await createFakeMuonPackageDist(root);
+      const backendDirectory = join(root, "web-dist", "backend");
+      const markerPath = join(backendDirectory, "source-marker.txt");
+      await writeViteMuonBuildProject(
+        root,
+        JSON.stringify({
+          configPath: "settings/plugin-muon.json",
+          packageDirectory,
+          targets: ["linux-amd64"],
+        }),
+      );
+      await mkdir(join(root, "settings"), { recursive: true });
+      await mkdir(backendDirectory, { recursive: true });
+      await writeFile(
+        join(backendDirectory, "package.json"),
+        `${JSON.stringify({ name: "build-outdir-source", type: "module" })}\n`,
+      );
+      await writeFile(markerPath, "preserve source\n");
+      await writeFile(
+        join(root, "settings", "plugin-muon.json"),
+        `${JSON.stringify(
+          useCliConfig
+            ? { network: { allow: ["asset://main/**"] } }
+            : { node: { project: backendDirectory } },
+          null,
+          2,
+        )}\n`,
+      );
+      await writeFile(
+        join(root, "settings", "cli-muon.json"),
+        `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
+      );
+
+      await expect(
+        runMuonCli(root, [
+          "build",
+          ...(useCliConfig ? ["--config", "settings/cli-muon.json"] : []),
+        ]),
+      ).rejects.toThrow("muon Node project");
+      await expect(readFile(markerPath, "utf8")).resolves.toBe(
+        "preserve source\n",
+      );
+    },
+  );
 
   it("packages Vite output under asset://main/ during vite build", async () => {
     const root = await createTemporaryDirectory("muon-build-vite-");

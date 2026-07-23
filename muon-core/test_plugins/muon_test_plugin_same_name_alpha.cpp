@@ -1,7 +1,7 @@
 /* muon - Multi-platform GUI application framework that uses CEF as its backend
  * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
  * Under MIT.
- * https://github.com/kekyo/muon
+ * https://github.com/kekyo/muon-ui
  */
 
 #include "muon_plugin_api.h"
@@ -45,6 +45,7 @@ static const muon_plugin_namespace* const same_name_alpha_namespaces_pointers[] 
 
 static const muon_plugin_metadata same_name_alpha_metadata = {
     same_name_alpha_namespaces_pointers,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

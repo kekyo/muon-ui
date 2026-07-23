@@ -266,3 +266,58 @@ npx muon pack --target windows-amd64 --type nsis
   `packageName`, `version`, `description`, and `author` use `package.json` as their defaults and can be overridden by CLI options.
 - In `muon pack`, the value of `--package-version` is also used as the `package.json.version` fallback for the Windows resource version.
   For example, when applying a Git-derived version with [screw-up](https://github.com/kekyo/screw-up/), specify `npx muon pack --package-version "$(screw-up format -e '{version}')"`.
+
+---
+
+## A note on muon's architecture
+
+By this point, you should understand the basics of implementing a muon app.
+Some readers may already be familiar with Electron, so it is worth briefly explaining how their internal architectures differ.
+
+The key difference is the entry point for developer-authored application code and the layer that manages the UI lifecycle.
+
+- Electron inherits [Chromium's multi-process model](https://www.electronjs.org/docs/latest/tutorial/process-model).
+  The developer-provided entry point runs in the main process, which has a Node.js environment. It creates `BrowserWindow` instances and loads pages into Chromium renderer processes.
+  JavaScript in a page normally coordinates with the main process through IPC APIs exposed by a preload script.
+- In muon, the muon-core process initializes CEF.
+  The CEF browser process manages the application lifecycle, windows, and muon plugin runtime, while the primary entry point for developer-authored application code is the page loaded into a CEF renderer process.
+  muon plugin functions are exposed to the page as asynchronous APIs over CEF IPC.
+- Node.js integration is enabled only when the Node.js plugin is configured.
+  The first `importModule()` lazily starts a separate Node.js sidecar process, and subsequent calls are relayed to it.
+  The sidecar neither creates nor owns the UI; it is an option for offloading work or using functionality from the Node.js ecosystem.
+
+Electron:
+
+```mermaid
+flowchart LR
+  Main["Main process<br/>Node.js + Electron APIs"]
+  Renderer["Chromium renderer process(es)<br/>Page JavaScript"]
+  Main -->|"Create BrowserWindow<br/>and load pages"| Renderer
+  Main <-->|"IPC, usually exposed through preload"| Renderer
+```
+
+muon:
+
+```mermaid
+flowchart LR
+  subgraph Browser["CEF browser process"]
+    Core["muon core<br/>C++ / CEF"]
+    Runtime["muon plugin runtime"]
+    Core --- Runtime
+  end
+  subgraph Renderers["CEF renderer process(es)"]
+    Page["Application page<br/>JavaScript"]
+  end
+  Core -->|"Create window and load page"| Page
+  Page <-->|"CEF IPC / asynchronous facades"| Runtime
+```
+
+From a developer's perspective, the primary entry point of a muon app is the loaded page, so the same development techniques used for ordinary Vite or React web applications apply.
+Internally, configuration, policies, the plugin runtime, and other components are initialized before the window is created, but the developer does not have to implement these steps as main-process JavaScript.
+This page-centered model lets developers who know web development start building muon apps directly.
+
+This does not mean that every operation must be placed in the renderer process.
+When no separate backend is selected, domain logic and data repository implementations are also included in the page bundle, but responsibilities can be moved to muon plugins, the [Node.js sidecar](./nodejs-sidecar.md), or a remote Web API when necessary.
+The Node.js sidecar lets non-UI Node.js code be structured as an ordinary Node.js project in a separate process.
+
+Before bundling a large backend implementation into a muon app, consider whether it should instead be implemented as a Web API hosted by a cloud service or virtual machine.

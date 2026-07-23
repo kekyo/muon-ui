@@ -17,7 +17,7 @@ Application replacement is extremely complex, and it has always been a hard prob
 The causes vary widely, so there is no magic solution that makes everything easy.
 Even so, everyone wants to modernize with as little cost as possible.
 
-muon (pronounced "muon") is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework).
+muon (/ˈmjuːɒn/) is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework).
 You have probably heard of similar projects such as [Electron](https://www.electronjs.org/).
 
 Roughly speaking, muon is framework software in the same category.
@@ -73,35 +73,36 @@ With the minimal setup, installing the NPM package and adding one line to the co
 
 ---
 
-## How to enable muon on your project
+## Getting started with muon (Quick version)
 
-### Install the muon package
+Let's get started by creating an application with muon (a muon app).
+Use a [Vite template](https://vite.dev/guide/) to create "my-muon-app" as you normally would:
 
-Install the muon package, officially named `muon-ui`, into `devDependencies`:
+```bash
+npm create vite@latest my-muon-app -- --template react-ts
+```
+
+This example uses React + TypeScript, but of course other choices are fine. Be sure to enable TypeScript.
+Then run:
+
+```bash
+cd my-muon-app
+npm install
+npm run dev
+```
+
+This starts the Vite development server, and you can click the link to view the page in a browser.
+
+Now add muon to this project:
 
 ```bash
 npm install -D muon-ui
 ```
 
-The muon package includes the following:
-
-- muon CLI
-- muon Vite plugin
-- TypeScript type definitions for muon built-in plugins
-- Platform-specific muon binary assets
-
 The CEF binary itself is not included in the NPM package.
-CEF is downloaded from the official CDN when it becomes necessary.
+CEF is downloaded from the official CDN when it is needed.
 
-### Configure the muon Vite plugin
-
-Installing the muon package almost completes the preparation, but you should enable the muon Vite plugin so that HMR (Hot Module Replacement) and muon app builds are available.
-
-For anyone unfamiliar with HMR, Vite acts as a development server, lets a browser show the page, and updates the display almost in real time when the page is edited.
-In other words, it is a very useful feature that automatically previews edit results.
-
-The muon Vite plugin supports HMR by launching muon instead of a browser and making HMR work inside the muon app.
-Add the following code to `vite.config.ts` to enable it:
+Next, add the muon Vite plugin to Vite so that you can build your muon app. Add the following code to `vite.config.ts`:
 
 ```ts
 import { defineConfig } from 'vite'
@@ -116,8 +117,13 @@ export default defineConfig({
 })
 ```
 
-Add `muon()` to the `plugins` array in the `defineConfig()` argument.
-This enables the muon Vite plugin. Preparation is now complete.
+Everything is now ready. Launch muon:
+
+```bash
+npm run dev
+```
+
+The muon window should appear with your page!
 
 ---
 

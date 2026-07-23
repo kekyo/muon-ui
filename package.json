@@ -24,6 +24,7 @@
   ],
   "workspaces": [
     "muon-builder",
+    "muon-node",
     "muon-ui",
     "muon-core",
     "muon-core-tester"

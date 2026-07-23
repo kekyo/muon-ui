@@ -1,7 +1,7 @@
 /* muon - Multi-platform GUI application framework that uses CEF as its backend
  * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
  * Under MIT.
- * https://github.com/kekyo/muon
+ * https://github.com/kekyo/muon-ui
  */
 
 #include "browser/muon_client.h"
@@ -234,8 +234,10 @@ static CefRefPtr<CefWindow> GetMuonWindowForCloseBrowser(
 class CloseMuonBrowsersForShutdownTask final : public CefTask {
  public:
   explicit CloseMuonBrowsersForShutdownTask(
-      std::vector<CefRefPtr<CefBrowser>> browsers)
-      : browsers_(std::move(browsers)) {}
+      std::vector<CefRefPtr<CefBrowser>> browsers,
+      std::function<void()> quit_when_no_browser)
+      : browsers_(std::move(browsers)),
+        quit_when_no_browser_(std::move(quit_when_no_browser)) {}
 
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
@@ -288,13 +290,16 @@ class CloseMuonBrowsersForShutdownTask final : public CefTask {
     }
     if (!started_close) {
       AppendMuonCloseDebugLog(
-          "ShutdownCloseTask no_started_close CefQuitMessageLoop");
-      CefQuitMessageLoop();
+          "ShutdownCloseTask no_started_close request message loop quit");
+      if (quit_when_no_browser_) {
+        quit_when_no_browser_();
+      }
     }
   }
 
  private:
   std::vector<CefRefPtr<CefBrowser>> browsers_;
+  std::function<void()> quit_when_no_browser_;
 
   IMPLEMENT_REFCOUNTING(CloseMuonBrowsersForShutdownTask);
   DISALLOW_COPY_AND_ASSIGN(CloseMuonBrowsersForShutdownTask);
@@ -1778,6 +1783,18 @@ void MuonClient::RequestMessageLoopQuit(bool post_task) {
     return;
   }
   message_loop_quit_requested_ = true;
+  if (plugin_runtime_) {
+    auto self = CefRefPtr<MuonClient>(this);
+    plugin_runtime_->Stop([self, post_task]() {
+      self->CompleteMessageLoopQuitRequest(post_task);
+    });
+    return;
+  }
+  CompleteMessageLoopQuitRequest(post_task);
+}
+
+void MuonClient::CompleteMessageLoopQuitRequest(bool post_task) {
+  CEF_REQUIRE_UI_THREAD();
   if (post_task) {
     AppendMuonCloseDebugLog(
         "MuonClient RequestMessageLoopQuit post QuitMessageLoopTask");
@@ -2299,8 +2316,12 @@ bool MuonClient::HandleBrowserShortcut(CefRefPtr<CefBrowser> browser,
       return true;
     }
     if (should_start_shutdown) {
+      auto self = CefRefPtr<MuonClient>(this);
       CefPostTask(TID_UI,
-                  new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
+                  new CloseMuonBrowsersForShutdownTask(
+                      std::move(browsers), [self]() {
+                        self->RequestMessageLoopQuit(false);
+                      }));
     }
     return true;
   }
@@ -4130,8 +4151,12 @@ void MuonClient::DispatchBuiltinBrowserCall(
         log << "MuonClient BuiltinShutdown post ShutdownCloseTask browsers="
             << browsers.size() << " exit_code=" << exit_code;
         AppendMuonCloseDebugLog(log.str());
+        auto self = CefRefPtr<MuonClient>(this);
         CefPostTask(TID_UI,
-                    new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
+                    new CloseMuonBrowsersForShutdownTask(
+                        std::move(browsers), [self]() {
+                          self->RequestMessageLoopQuit(false);
+                        }));
       }
       break;
     }
@@ -4153,8 +4178,12 @@ void MuonClient::DispatchBuiltinBrowserCall(
         log << "MuonClient BuiltinRecycle post ShutdownCloseTask browsers="
             << browsers.size();
         AppendMuonCloseDebugLog(log.str());
+        auto self = CefRefPtr<MuonClient>(this);
         CefPostTask(TID_UI,
-                    new CloseMuonBrowsersForShutdownTask(std::move(browsers)));
+                    new CloseMuonBrowsersForShutdownTask(
+                        std::move(browsers), [self]() {
+                          self->RequestMessageLoopQuit(false);
+                        }));
       }
       break;
     }

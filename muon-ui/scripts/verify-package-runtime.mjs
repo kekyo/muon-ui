@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import { access, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ const packageRuntimeTargets = {
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
+    nodePluginLibrary: "node.so",
   },
   "linux-armhf": {
     nativePrepare: "muon-builder",
@@ -22,6 +23,7 @@ const packageRuntimeTargets = {
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
+    nodePluginLibrary: "node.so",
   },
   "linux-arm64": {
     nativePrepare: "muon-builder",
@@ -30,6 +32,7 @@ const packageRuntimeTargets = {
     coreExecutable: "muon-core",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
+    nodePluginLibrary: "node.so",
   },
   "windows-i686": {
     nativePrepare: "muon-builder.exe",
@@ -38,6 +41,7 @@ const packageRuntimeTargets = {
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
+    nodePluginLibrary: "node.dll",
   },
   "windows-amd64": {
     nativePrepare: "muon-builder.exe",
@@ -46,6 +50,7 @@ const packageRuntimeTargets = {
     coreExecutable: "muon-core.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
+    nodePluginLibrary: "node.dll",
   },
 };
 
@@ -75,6 +80,28 @@ const assertHasMatchingFile = async (directory, pattern) => {
   }
 };
 
+const nodeArchivePattern =
+  /^node(?:[-_.][^/]*)?\.(?:7z|tar|tar\.bz2|tar\.gz|tar\.xz|tgz|zip)$/i;
+
+const assertOmitsBundledNodeRuntime = async (directory) => {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    if (
+      entry.name === "node" ||
+      entry.name === "node.exe" ||
+      nodeArchivePattern.test(entry.name)
+    ) {
+      throw new Error(
+        `Unexpected bundled Node runtime file exists: ${entryPath}`,
+      );
+    }
+    if (entry.isDirectory()) {
+      await assertOmitsBundledNodeRuntime(entryPath);
+    }
+  }
+};
+
 await assertMissing(join("dist", "muon-builder"));
 await assertMissing(join("dist", "muon-launcher"));
 await assertMissing(join("dist", "muon-builder.exe"));
@@ -94,6 +121,8 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
     descriptor.coreExecutable,
     descriptor.uiLibrary,
     descriptor.cardioLibrary,
+    join("plugins", descriptor.nodePluginLibrary),
+    join("plugins", "node-bridge.mjs"),
     "CREDITS.md",
   ];
 
@@ -111,4 +140,5 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   await assertMissing(join(runtimePath, "muon-runtime.json"));
   await assertMissing(join(runtimePath, "muon.json"));
   await assertMissing(join(runtimePath, "assets"));
+  await assertOmitsBundledNodeRuntime(runtimePath);
 }

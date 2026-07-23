@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 import {
   chmod,
@@ -27,6 +27,8 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
+      "plugins/node.so",
+      "plugins/node-bridge.mjs",
       "CREDITS.md",
     ],
   },
@@ -42,6 +44,8 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
+      "plugins/node.so",
+      "plugins/node-bridge.mjs",
       "CREDITS.md",
     ],
   },
@@ -57,6 +61,8 @@ const targetDescriptors = {
       "muon-core",
       "libmuon-ui.so",
       "libcardio.so",
+      "plugins/node.so",
+      "plugins/node-bridge.mjs",
       "CREDITS.md",
     ],
   },
@@ -72,6 +78,8 @@ const targetDescriptors = {
       "muon-core.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
+      "plugins/node.dll",
+      "plugins/node-bridge.mjs",
       "CREDITS.md",
     ],
     runtimeOptionalPayloadPatterns: [
@@ -92,6 +100,8 @@ const targetDescriptors = {
       "muon-core.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
+      "plugins/node.dll",
+      "plugins/node-bridge.mjs",
       "CREDITS.md",
     ],
     runtimeOptionalPayloadPatterns: [
@@ -294,7 +304,9 @@ const stageRuntimeTarget = async (target) => {
     if (typeof item !== "string" || item === "" || item.includes("..")) {
       throw new Error(`Invalid runtime payload item for ${target}: ${item}`);
     }
-    await cp(resolve(sourcePath, item), resolve(destinationPath, item), {
+    const destinationItemPath = resolve(destinationPath, item);
+    await mkdir(dirname(destinationItemPath), { recursive: true });
+    await cp(resolve(sourcePath, item), destinationItemPath, {
       recursive: true,
       preserveTimestamps: true,
     });

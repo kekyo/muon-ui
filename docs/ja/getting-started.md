@@ -260,3 +260,58 @@ npx muon pack --target windows-amd64 --type nsis
   `packageName`, `version`, `description`, `author` は `package.json` を既定値に使い、CLIオプションで上書き出来ます。
 - `muon pack` では `--package-version` の指定値がWindows resource versionの `package.json.version` fallbackとしても使われます。
   例えば [screw-up](https://github.com/kekyo/screw-up/) 以降でGit由来のバージョンを適用する場合は、 `npx muon pack --package-version "$(screw-up format -e '{version}')"` のように指定出来ます。
+
+---
+
+## 補足: muonのアーキテクチャ
+
+ここまでの解説で、muonアプリを実装する基本は伝わったと思います。
+これを読んでいる読者はElectronも触ったことがあるかも知れないので、ここで両者の内部構造の違いを簡単に説明します。
+
+決定的な違いは、開発者が記述するアプリケーションコードの起点と、UIのライフサイクルを管理する層です。
+
+- Electronは[Chromiumのマルチプロセスモデル](https://www.electronjs.org/docs/latest/tutorial/process-model)を継承しています。
+  開発者が用意したエントリポイントはNode.js環境のmain processで実行され、そこで`BrowserWindow`を作成して、ページをChromiumのrenderer processへロードします。
+  ページ内JavaScriptは、通常preload scriptを介して公開されたIPC APIでmain processと連携します。
+- muonでは、muon-coreプロセスがCEFを初期化します。
+  CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
+  muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
+- muonは、Node.jsプラグインを構成した場合だけ、Node.jsプロセスが有効になります。
+  最初の`importModule()`で別プロセスのNode.js sidecarを遅延起動し、以降の呼び出しを中継します。
+  sidecarはUIを生成または所有せず、処理のオフロードやNode.jsエコシステムの機能を利用するためのオプションです。
+
+Electron:
+
+```mermaid
+flowchart LR
+  Main["Main process<br/>Node.js + Electron APIs"]
+  Renderer["Chromium renderer process(es)<br/>Page JavaScript"]
+  Main -->|"Create BrowserWindow<br/>and load pages"| Renderer
+  Main <-->|"IPC, usually exposed through preload"| Renderer
+```
+
+muon:
+
+```mermaid
+flowchart LR
+  subgraph Browser["CEF browser process"]
+    Core["muon core<br/>C++ / CEF"]
+    Runtime["muon plugin runtime"]
+    Core --- Runtime
+  end
+  subgraph Renderers["CEF renderer process(es)"]
+    Page["Application page<br/>JavaScript"]
+  end
+  Core -->|"Create window and load page"| Page
+  Page <-->|"CEF IPC / asynchronous facades"| Runtime
+```
+
+開発者から見ると、muonアプリの主な起点は読み込まれたページであり、一般的なViteやReactのウェブアプリケーションと同じ開発手法を使用出来ます。
+内部的には設定、ホワイトリスト、プラグインランタイムなどの初期化がウインドウ作成に先行しますが、開発者がこれらをメインプロセス用JavaScriptとして実装する必要はありません。
+このページ中心のモデルにより、ウェブアプリ開発を知っていればmuonアプリ開発を始められます。
+
+これは、すべての処理をページ内のJavaScriptへ実装しなければならない、という意味ではありません。
+例えば、ドメインロジックやデータリポジトリ実装もページのbundleに含まれますが、必要に応じてmuonプラグイン、[Node.js sidecar](./nodejs-sidecar.md)、リモートWeb APIへ責務を分離出来ます。
+Node.js sidecarを使用すれば、UIと関係のないNode.jsコードを別プロセスの通常のNode.jsプロジェクトとして構成出来ます。
+
+大きなバックエンド実装をmuonアプリへ同梱する前に、クラウドサービスやホストされた仮想マシン上のWeb APIとして実装すべきかも検討してください。

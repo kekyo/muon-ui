@@ -1,7 +1,7 @@
 // muon - Multi-platform GUI application framework that uses CEF as its backend
 // Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
 // Under MIT.
-// https://github.com/kekyo/muon
+// https://github.com/kekyo/muon-ui
 
 /// <reference lib="esnext.disposable" />
 /// <reference path="./muon-virtual-modules.d.ts" />
@@ -27,6 +27,104 @@ declare global {
     readonly executor: MuonExecutorApi;
     /** Filesystem operations exposed by the built-in muon filesystem plugin. */
     readonly fs: MuonFsApi;
+    /**
+     * Optional out-of-process Node.js runtime.
+     *
+     * @remarks Present only when `node.project` is configured and
+     * `plugin.mode` is `"simple"` in `muon.json`.
+     */
+    readonly node?: MuonNodeApi;
+  }
+
+  /**
+   * Scalar, void, or normalized copied binary value returned by the Node
+   * sidecar.
+   *
+   * @remarks Numbers must be finite and cannot be negative zero. Binary
+   * results are always returned as a `Uint8Array`.
+   */
+  type MuonNodeValue =
+    | undefined
+    | null
+    | boolean
+    | number
+    | string
+    | bigint
+    | Uint8Array;
+
+  /**
+   * Copied binary input accepted by the Node sidecar bridge.
+   *
+   * @remarks Every encoded IPC frame is limited to 16 MiB. JSON and base64
+   * overhead count toward that limit, so the maximum binary payload is lower.
+   */
+  type MuonNodeBinaryArgument = ArrayBuffer | ArrayBufferView;
+
+  /** Argument accepted by a function exported from a hosted Node module. */
+  type MuonNodeArgument =
+    | MuonNodeValue
+    | MuonNodeBinaryArgument
+    | MuonNodeCallback;
+
+  /** Value accepted when a renderer callback settles. */
+  type MuonNodeCallbackResult = MuonNodeValue | MuonNodeBinaryArgument;
+
+  /**
+   * Renderer callback passed to code hosted by the Node sidecar.
+   *
+   * @param args - Values supplied by the Node function.
+   * @returns A supported bridge value, synchronously or asynchronously.
+   * @remarks The callback remains valid only until the exported Node function
+   * call settles.
+   */
+  type MuonNodeCallback = (
+    ...args: readonly MuonNodeValue[]
+  ) => MuonNodeCallbackResult | Promise<MuonNodeCallbackResult>;
+
+  /**
+   * Function exported by a hosted Node module.
+   *
+   * @param args - Primitive values, bigint values, copied buffers, or callbacks.
+   * @returns A promise for a supported bridge value.
+   * @remarks Every encoded IPC frame is limited to 16 MiB, including JSON and
+   * base64 overhead. One runtime accepts at most 1,024 pending requests.
+   */
+  type MuonNodeFunction = (
+    ...args: readonly MuonNodeArgument[]
+  ) => Promise<MuonNodeValue>;
+
+  /**
+   * Descriptor-backed facade for one imported Node module.
+   *
+   * @typeParam TExports - Expected exported members of the imported module.
+   * @remarks The facade is a renderer-local frozen object. Arbitrary Node
+   * objects never cross the process boundary.
+   */
+  type MuonNodeModule<TExports extends object = Record<string, any>> =
+    Readonly<TExports> & {
+      /**
+       * Release the sidecar module handle.
+       *
+       * @returns A promise that resolves after the handle is released.
+       */
+      readonly $release: () => Promise<void>;
+    };
+
+  /** Out-of-process Node.js runtime exposed by the optional Node plugin. */
+  interface MuonNodeApi {
+    /**
+     * Import a Node built-in or a module resolved from the configured project.
+     *
+     * @typeParam TExports - Expected exported members for static typing.
+     * @param specifier - A strict `node:` built-in specifier, project-relative
+     * specifier, or bare package specifier.
+     * @returns A descriptor-backed module facade.
+     * @remarks Built-ins without the `node:` prefix are rejected. Objects other
+     * than copied binary values are not supported as arguments or results.
+     */
+    readonly importModule: <TExports extends object = Record<string, any>>(
+      specifier: string,
+    ) => Promise<MuonNodeModule<TExports>>;
   }
 
   /**

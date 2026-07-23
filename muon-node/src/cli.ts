@@ -41,6 +41,18 @@ const finishWritable = async (output: Writable): Promise<void> => {
   });
 };
 
+const writeStandardError = async (message: string): Promise<void> => {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    process.stderr.write(message, (error) => {
+      if (error !== null && error !== undefined) {
+        rejectPromise(error);
+        return;
+      }
+      resolvePromise();
+    });
+  });
+};
+
 const parseInheritedFileDescriptor = (source: string): number => {
   if (!/^[0-9]+$/.test(source)) {
     throw new Error('MUON_NODE_FD must be a decimal file descriptor.');
@@ -161,9 +173,13 @@ const runSidecar = async (): Promise<void> => {
 
 try {
   await runSidecar();
+  process.exit(0);
 } catch (error) {
   const message =
     error instanceof Error ? (error.stack ?? error.message) : String(error);
-  process.stderr.write(`muon Node sidecar failed: ${message}\n`);
-  process.exitCode = 1;
+  try {
+    await writeStandardError(`muon Node sidecar failed: ${message}\n`);
+  } finally {
+    process.exit(1);
+  }
 }

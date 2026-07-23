@@ -23,7 +23,7 @@ Application replacement is extremely complex, and it has always been a hard prob
 The causes vary widely, so there is no magic solution that makes everything easy.
 Even so, everyone wants to modernize with as little cost as possible.
 
-muon (pronounced "muon") is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework).
+muon (/ˈmjuːɒn/) is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework).
 You have probably heard of similar projects such as [Electron](https://www.electronjs.org/).
 
 Roughly speaking, muon is framework software in the same category.

@@ -56,20 +56,20 @@ localIt(
     );
     const markerPath = join(markerDirectory, "starts.txt");
     try {
-      const running = await startDebugMuonWithNodeProject(
-        nodeProjectDirectory,
-        {
+      const running = await startDebugMuonWithNodeProject({
+        nodeProject: nodeProjectDirectory,
+        environment: {
           MUON_NODE_EXECUTABLE: process.execPath,
           MUON_NODE_TEST_START_MARKER: markerPath,
         },
-        null,
-        [
+        browserPluginAllowPatterns: null,
+        pluginCapabilities: [
           {
             id: nodeImportCapabilityId,
             allow: [nodeImportFunctionPath],
           },
         ],
-      );
+      });
       let driver: CdpDriver | undefined = undefined;
       try {
         driver = await connectToValidateTestPage();

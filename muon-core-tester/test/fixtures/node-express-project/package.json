@@ -1,0 +1,13 @@
+{
+  "name": "muon-node-express-e2e-project",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./server.mjs",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "dependencies": {
+    "express": "5.2.1"
+  }
+}

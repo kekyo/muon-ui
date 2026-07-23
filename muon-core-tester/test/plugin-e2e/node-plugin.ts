@@ -61,11 +61,11 @@ const withNodeRuntime = async (
   run: (driver: CdpDriver, running: RunningMuon) => Promise<void>,
   browserPluginAllowPatterns: string[] | null = ["asset://main/**", "data:**"],
 ): Promise<void> => {
-  const running = await startDebugMuonWithNodeProject(
-    nodeProjectDirectory,
+  const running = await startDebugMuonWithNodeProject({
+    nodeProject: nodeProjectDirectory,
     environment,
     browserPluginAllowPatterns,
-  );
+  });
   let driver: CdpDriver | undefined = undefined;
   try {
     driver = await connectToNodeTestPage();
@@ -553,8 +553,11 @@ localIt(
 localIt("stops the Node child before the plugin library unloads", async () => {
   const markerDirectory = await mkdtemp(join(tmpdir(), "muon-node-stop-"));
   const exitMarkerPath = join(markerDirectory, "exit.txt");
-  const running = await startDebugMuonWithNodeProject(nodeProjectDirectory, {
-    MUON_NODE_EXECUTABLE: process.execPath,
+  const running = await startDebugMuonWithNodeProject({
+    nodeProject: nodeProjectDirectory,
+    environment: {
+      MUON_NODE_EXECUTABLE: process.execPath,
+    },
   });
   let driver: CdpDriver | undefined = undefined;
   try {

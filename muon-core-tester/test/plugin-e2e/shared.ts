@@ -3206,26 +3206,61 @@ export const startDebugMuon = async (
   );
 
 /**
- * Starts a debug runtime with the optional Node host configured.
+ * Options used to start a debug runtime with a Node project.
+ */
+export interface StartDebugMuonWithNodeProjectOptions {
+  /**
+   * Page patterns that receive the simple plugin facade, or null to keep
+   * validate mode.
+   */
+  browserPluginAllowPatterns?: string[] | null;
+
+  /**
+   * Environment inherited by the runtime and Node sidecar.
+   */
+  environment?: NodeJS.ProcessEnv;
+
+  /**
+   * Network request patterns authorized for the test application.
+   */
+  networkAllowPatterns?: string[];
+
+  /**
+   * Local network access policy for the test application.
+   */
+  networkLocalAccess?: NetworkLocalAccessConfig;
+
+  /**
+   * Absolute Node project directory used by the test runtime.
+   */
+  nodeProject: string;
+
+  /**
+   * Capability policies used by validate-mode calls.
+   */
+  pluginCapabilities?: readonly PluginCapabilityConfigEntry[];
+}
+
+/**
+ * Starts a debug runtime with a Node project configured.
  *
- * @param nodeProject Absolute Node project directory used by the test runtime.
- * @param environment Environment inherited by the runtime and Node sidecar.
- * @param browserPluginAllowPatterns Page patterns for simple plugin exposure,
- * or null to keep validate mode.
- * @param pluginCapabilities Capability policies used by validate-mode calls.
+ * @param options Runtime and Node project configuration.
  * @returns The running debug runtime.
  */
 export const startDebugMuonWithNodeProject = async (
-  nodeProject: string,
-  environment: NodeJS.ProcessEnv = {},
-  browserPluginAllowPatterns:
-    | string[]
-    | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
-  pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
-): Promise<RunningMuon> =>
-  await startDebugMuon(
+  options: StartDebugMuonWithNodeProjectOptions,
+): Promise<RunningMuon> => {
+  const {
+    browserPluginAllowPatterns = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    environment = {},
+    networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
+    networkLocalAccess = undefined,
+    nodeProject,
+    pluginCapabilities = [],
+  } = options;
+  return await startDebugMuon(
     [],
-    TEST_NETWORK_ALLOW_PATTERNS,
+    networkAllowPatterns,
     environment,
     undefined,
     TEST_PLUGIN_ALLOW_PATTERNS,
@@ -3249,10 +3284,11 @@ export const startDebugMuonWithNodeProject = async (
     true,
     shouldUseValgrind,
     {},
-    undefined,
+    networkLocalAccess,
     nodeProject,
     pluginCapabilities,
   );
+};
 
 export const startDebugMuonLauncher = async (
   pluginNames: string[],

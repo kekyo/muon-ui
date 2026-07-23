@@ -20,6 +20,7 @@
     "@types/pngjs": "^6.0.5",
     "agent-rover": "^0.2.0",
     "async-primitives": ">=1.7.0",
+    "express": "5.2.1",
     "gestament": ">=1.4.0",
     "pngjs": "^7.0.0",
     "prettier-max": ">=1.16.0",

@@ -59,7 +59,6 @@ localIt(
       const running = await startDebugMuonWithNodeProject({
         nodeProject: nodeProjectDirectory,
         environment: {
-          MUON_NODE_EXECUTABLE: process.execPath,
           MUON_NODE_TEST_START_MARKER: markerPath,
         },
         browserPluginAllowPatterns: null,

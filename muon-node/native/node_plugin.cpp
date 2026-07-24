@@ -113,6 +113,7 @@ struct MuonNodeRuntime {
   bool metadata_only = false;
   std::string project_root;
   std::string bridge_path;
+  std::string executable_path;
   std::string session_token;
   std::string failure_message;
   uint64_t next_request_id = 1;
@@ -1253,107 +1254,6 @@ static bool IsMuonNodeWindowsEnvironmentEntry(
              entry.substr(0, name.size()), name) == CSTR_EQUAL;
 }
 
-static bool TryGetMuonNodeWindowsEnvironmentVariable(
-    const wchar_t* name,
-    std::wstring* value) {
-  if (name == nullptr || value == nullptr) {
-    throw std::invalid_argument(
-        "Node environment variable destination is unavailable");
-  }
-  for (;;) {
-    SetLastError(ERROR_SUCCESS);
-    const auto required =
-        GetEnvironmentVariableW(name, nullptr, 0);
-    if (required == 0) {
-      const auto error = GetLastError();
-      if (error == ERROR_ENVVAR_NOT_FOUND) {
-        value->clear();
-        return false;
-      }
-      if (error == ERROR_SUCCESS) {
-        value->clear();
-        return true;
-      }
-      throw std::system_error(
-          static_cast<int>(error), std::system_category(),
-          "GetEnvironmentVariableW failed for Node sidecar");
-    }
-    std::vector<wchar_t> buffer(required);
-    SetLastError(ERROR_SUCCESS);
-    const auto length = GetEnvironmentVariableW(
-        name, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length == 0) {
-      const auto error = GetLastError();
-      if (error == ERROR_ENVVAR_NOT_FOUND) {
-        value->clear();
-        return false;
-      }
-      if (error == ERROR_SUCCESS) {
-        value->clear();
-        return true;
-      }
-      throw std::system_error(
-          static_cast<int>(error), std::system_category(),
-          "GetEnvironmentVariableW failed for Node sidecar");
-    }
-    if (length >= buffer.size()) {
-      continue;
-    }
-    value->assign(buffer.data(), length);
-    return true;
-  }
-}
-
-static std::wstring ResolveMuonNodeWindowsExecutable() {
-  std::wstring configured_executable;
-  if (TryGetMuonNodeWindowsEnvironmentVariable(
-          L"MUON_NODE_EXECUTABLE", &configured_executable)) {
-    const auto executable_path =
-        std::filesystem::path(configured_executable);
-    if (configured_executable.empty() ||
-        !executable_path.is_absolute()) {
-      throw std::runtime_error(
-          "MUON_NODE_EXECUTABLE must be an absolute path");
-    }
-    return executable_path.wstring();
-  }
-
-  std::wstring search_path;
-  if (!TryGetMuonNodeWindowsEnvironmentVariable(
-          L"PATH", &search_path) ||
-      search_path.empty()) {
-    throw std::runtime_error(
-        "PATH is unavailable while locating the Node executable");
-  }
-  std::vector<wchar_t> buffer(MAX_PATH);
-  for (;;) {
-    // Resolve only against the explicit PATH value. Passing a null
-    // lpApplicationName to CreateProcessW would add application and current
-    // directories ahead of PATH.
-    SetLastError(ERROR_SUCCESS);
-    const auto length = SearchPathW(
-        search_path.c_str(), L"node.exe", nullptr,
-        static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
-    if (length == 0) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to locate node.exe in PATH");
-    }
-    if (length >= buffer.size()) {
-      buffer.resize(static_cast<size_t>(length) + 1);
-      continue;
-    }
-    const auto executable_path = std::filesystem::absolute(
-        std::filesystem::path(
-            std::wstring(buffer.data(), length)));
-    if (!executable_path.is_absolute()) {
-      throw std::runtime_error(
-          "SearchPathW did not resolve an absolute Node executable");
-    }
-    return executable_path.wstring();
-  }
-}
-
 static std::vector<wchar_t> CreateMuonNodeWindowsEnvironment(
     const std::wstring& pipe_name,
     const std::wstring& token) {
@@ -1505,7 +1405,8 @@ static cardio::promise<void> StartMuonNodeProcess(
         "CreateNamedPipeW failed for Node sidecar");
   }
 
-  const auto executable = ResolveMuonNodeWindowsExecutable();
+  const auto executable =
+      ConvertMuonNodeUtf8ToWide(runtime->executable_path);
   const auto bridge = ConvertMuonNodeUtf8ToWide(runtime->bridge_path);
   auto command_line =
       QuoteMuonNodeWindowsArgument(executable) + L" " +
@@ -1579,7 +1480,7 @@ static cardio::promise<void> StartMuonNodeProcess(
             &process) == FALSE) {
       throw std::system_error(
           static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to start Node executable");
+          "Failed to start Node executable " + runtime->executable_path);
     }
 
     DeleteProcThreadAttributeList(attribute_list);
@@ -1746,22 +1647,9 @@ static cardio::promise<void> StartMuonNodeProcess(
         "Failed to configure the Node IPC socket");
   }
 
-  const auto* configured_executable =
-      std::getenv("MUON_NODE_EXECUTABLE");
-  auto executable = std::string("node");
-  auto use_path_search = true;
-  if (configured_executable != nullptr) {
-    const auto path = std::filesystem::path(configured_executable);
-    if (!path.is_absolute()) {
-      close_sockets();
-      throw std::runtime_error(
-          "MUON_NODE_EXECUTABLE must be an absolute path");
-    }
-    executable = path.string();
-    use_path_search = false;
-  }
   auto arguments_storage =
-      std::vector<std::string>{executable, runtime->bridge_path};
+      std::vector<std::string>{runtime->executable_path,
+                               runtime->bridge_path};
   std::vector<char*> arguments;
   for (auto& argument : arguments_storage) {
     arguments.push_back(argument.data());
@@ -1776,21 +1664,16 @@ static cardio::promise<void> StartMuonNodeProcess(
   environment.push_back(nullptr);
 
   pid_t process_id = -1;
-  const auto spawn_error =
-      use_path_search
-          ? posix_spawnp(
-                &process_id, executable.c_str(), &actions, nullptr,
-                arguments.data(), environment.data())
-          : posix_spawn(
-                &process_id, executable.c_str(), &actions, nullptr,
-                arguments.data(), environment.data());
+  const auto spawn_error = posix_spawn(
+      &process_id, runtime->executable_path.c_str(), &actions, nullptr,
+      arguments.data(), environment.data());
   (void)::close(child_socket);
   if (spawn_error != 0) {
     (void)::close(runtime->socket_fd);
     runtime->socket_fd = -1;
     throw std::system_error(
         spawn_error, std::generic_category(),
-        "Failed to start Node executable " + executable);
+        "Failed to start Node executable " + runtime->executable_path);
   }
 #if defined(SYS_pidfd_open)
   const auto process_fd =
@@ -2558,10 +2441,29 @@ static const muon_plugin_metadata kMuonNodeMetadata = {
     &StopMuonNodePlugin,
 };
 
+static bool IsMuonNodeExecutablePathAbsolute(
+    const char* executable) noexcept {
+  if (executable == nullptr || executable[0] == '\0') {
+    return false;
+  }
+  try {
+#if defined(_WIN32)
+    return std::filesystem::path(
+               ConvertMuonNodeUtf8ToWide(executable))
+        .is_absolute();
+#else
+    return std::filesystem::path(executable).is_absolute();
+#endif
+  } catch (...) {
+    return false;
+  }
+}
+
 /**
  * Initializes the optional out-of-process Node.js plugin.
  *
- * @param context Host helpers and resolved project/bridge configuration.
+ * @param context Host helpers and resolved project, bridge, and executable
+ * configuration.
  * @return Static Node plugin metadata, or null when configuration is invalid.
  *
  * @remarks Initialization only records metadata and paths. The Node.js process
@@ -2576,10 +2478,13 @@ extern "C" const muon_plugin_metadata* muon_init_plugin(
       muon_plugin_get_config_value(context, "project");
   const auto* bridge =
       muon_plugin_get_config_value(context, "bridge");
+  const auto* executable =
+      muon_plugin_get_config_value(context, "executable");
   const auto* metadata_only =
       muon_plugin_get_config_value(context, "metadataOnly");
   if (project == nullptr || project[0] == '\0' ||
       bridge == nullptr || bridge[0] == '\0' ||
+      !IsMuonNodeExecutablePathAbsolute(executable) ||
       metadata_only == nullptr ||
       (std::strcmp(metadata_only, "0") != 0 &&
        std::strcmp(metadata_only, "1") != 0)) {
@@ -2591,5 +2496,6 @@ extern "C" const muon_plugin_metadata* muon_init_plugin(
       std::strcmp(metadata_only, "1") == 0;
   g_muon_node_runtime->project_root = project;
   g_muon_node_runtime->bridge_path = bridge;
+  g_muon_node_runtime->executable_path = executable;
   return &kMuonNodeMetadata;
 }

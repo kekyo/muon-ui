@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { realpath } from "node:fs/promises";
+import { realpath, rename } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { expect, it } from "vitest";
@@ -15,6 +15,7 @@ import {
   connectToMuonCdp,
   constants,
   evaluateRejection,
+  getBundledNodeExecutable,
   join,
   listProcessGroupCommandLines,
   mkdtemp,
@@ -96,7 +97,7 @@ localIt(
   "loads metadata in validate mode without starting the Node sidecar",
   async () => {
     await withNodeRuntime(
-      { MUON_NODE_EXECUTABLE: process.execPath },
+      {},
       async (driver, running) => {
         await expect(driver.evaluate("typeof window.muon")).resolves.toBe(
           "undefined",
@@ -121,7 +122,6 @@ localIt(
     try {
       await withNodeRuntime(
         {
-          MUON_NODE_EXECUTABLE: process.execPath,
           MUON_NODE_TEST_START_MARKER: markerPath,
         },
         async (driver, running) => {
@@ -170,50 +170,45 @@ localIt(
 );
 
 localIt(
-  "resolves the Node executable from PATH when no override exists",
+  "imports built-in modules through the bundled Node runtime",
   async () => {
-    await withNodeRuntime(
-      { MUON_NODE_EXECUTABLE: undefined },
-      async (driver) => {
-        const packageJsonPath = join(nodeProjectDirectory, "package.json");
-        const packageJson = await driver.evaluate<string>(`(async () => {
+    await withNodeRuntime({}, async (driver) => {
+      const packageJsonPath = join(nodeProjectDirectory, "package.json");
+      const packageJson = await driver.evaluate<string>(`(async () => {
         const fs = await window.muon.node.importModule("node:fs/promises");
         return await fs.readFile(${JSON.stringify(packageJsonPath)}, "utf8");
       })()`);
-        expect(JSON.parse(packageJson)).toMatchObject({
-          name: "muon-node-e2e-project",
-          type: "module",
-        });
-      },
-    );
+      expect(JSON.parse(packageJson)).toMatchObject({
+        name: "muon-node-e2e-project",
+        type: "module",
+      });
+    });
   },
 );
 
 localIt(
   "creates a descriptor facade and marshals supported values and callbacks",
   async () => {
-    await withNodeRuntime(
-      { MUON_NODE_EXECUTABLE: process.execPath },
-      async (driver) => {
-        const values = await driver.evaluate<{
-          readonly callback: string;
-          readonly callbackError: string;
-          readonly concurrentReleaseWaited: boolean;
-          readonly copied: readonly number[];
-          readonly descriptorValue: string;
-          readonly frozen: boolean;
-          readonly hasUnsupportedExport: boolean;
-          readonly internalFunctionsHidden: boolean;
-          readonly negativeZeroError: string;
-          readonly prototypeIsNull: boolean;
-          readonly releasedError: string;
-          readonly resultObjectError: string;
-          readonly signed: string;
-          readonly unsigned: string;
-          readonly undefinedDescriptor: boolean;
-          readonly undefinedRoundTrip: string;
-          readonly unsupportedArgumentError: string;
-        }>(`(async () => {
+    await withNodeRuntime({}, async (driver) => {
+      const values = await driver.evaluate<{
+        readonly callback: string;
+        readonly callbackError: string;
+        readonly concurrentReleaseWaited: boolean;
+        readonly copied: readonly number[];
+        readonly descriptorValue: string;
+        readonly frozen: boolean;
+        readonly hasUnsupportedExport: boolean;
+        readonly internalFunctionsHidden: boolean;
+        readonly negativeZeroError: string;
+        readonly prototypeIsNull: boolean;
+        readonly releasedError: string;
+        readonly resultObjectError: string;
+        readonly signed: string;
+        readonly unsigned: string;
+        readonly undefinedDescriptor: boolean;
+        readonly undefinedRoundTrip: string;
+        readonly unsupportedArgumentError: string;
+      }>(`(async () => {
           const backend =
             await window.muon.node.importModule("./backend.mjs");
           let unsupportedArgumentError = "";
@@ -306,46 +301,32 @@ localIt(
           return result;
         })()`);
 
-        expect(values).toEqual({
-          callback: "renderer:callback",
-          callbackError: "renderer callback failure",
-          concurrentReleaseWaited: true,
-          copied: [0, 1, 127, 255],
-          descriptorValue: "descriptor",
-          frozen: true,
-          hasUnsupportedExport: false,
-          internalFunctionsHidden: true,
-          negativeZeroError: expect.stringMatching(/finite|negative zero/iu),
-          prototypeIsNull: true,
-          releasedError: expect.stringMatching(/released/iu),
-          resultObjectError: expect.stringMatching(/primitive|buffer/iu),
-          signed: "-9223372036854775808",
-          unsigned: "18446744073709551615",
-          undefinedDescriptor: true,
-          undefinedRoundTrip: "undefined",
-          unsupportedArgumentError: expect.stringMatching(/primitive|buffer/iu),
-        });
-        await expect(
-          driver.evaluate(`(async () => {
+      expect(values).toEqual({
+        callback: "renderer:callback",
+        callbackError: "renderer callback failure",
+        concurrentReleaseWaited: true,
+        copied: [0, 1, 127, 255],
+        descriptorValue: "descriptor",
+        frozen: true,
+        hasUnsupportedExport: false,
+        internalFunctionsHidden: true,
+        negativeZeroError: expect.stringMatching(/finite|negative zero/iu),
+        prototypeIsNull: true,
+        releasedError: expect.stringMatching(/released/iu),
+        resultObjectError: expect.stringMatching(/primitive|buffer/iu),
+        signed: "-9223372036854775808",
+        unsigned: "18446744073709551615",
+        undefinedDescriptor: true,
+        undefinedRoundTrip: "undefined",
+        unsupportedArgumentError: expect.stringMatching(/primitive|buffer/iu),
+      });
+      await expect(
+        driver.evaluate(`(async () => {
             const backend =
               await window.muon.node.importModule("./backend.mjs");
             return await backend.currentWorkingDirectory();
           })()`),
-        ).resolves.toBe(await realpath(nodeProjectDirectory));
-      },
-    );
-  },
-);
-
-localIt(
-  "rejects a relative MUON_NODE_EXECUTABLE without PATH fallback",
-  async () => {
-    await withNodeRuntime({ MUON_NODE_EXECUTABLE: "node" }, async (driver) => {
-      const error = await evaluateRejection(
-        driver,
-        'window.muon.node.importModule("./backend.mjs")',
-      );
-      expect(error).toMatch(/MUON_NODE_EXECUTABLE.*absolute/iu);
+      ).resolves.toBe(await realpath(nodeProjectDirectory));
     });
   },
 );
@@ -353,12 +334,10 @@ localIt(
 localIt(
   "rejects an oversized renderer callback result without leaving the Node call pending",
   async () => {
-    await withNodeRuntime(
-      { MUON_NODE_EXECUTABLE: process.execPath },
-      async (driver) => {
-        const error = await evaluateRejection(
-          driver,
-          `(async () => {
+    await withNodeRuntime({}, async (driver) => {
+      const error = await evaluateRejection(
+        driver,
+        `(async () => {
             const backend =
               await window.muon.node.importModule("./backend.mjs");
             return await backend.invokeCallback(
@@ -366,22 +345,19 @@ localIt(
               "oversized"
             );
           })()`,
-        );
-        expect(error).toMatch(/callback|frame|large|size/iu);
-      },
-    );
+      );
+      expect(error).toMatch(/callback|frame|large|size/iu);
+    });
   },
 );
 
 localIt(
   "keeps renderer callback handles distinct across browser contexts",
   async () => {
-    await withNodeRuntime(
-      { MUON_NODE_EXECUTABLE: process.execPath },
-      async (driver) => {
-        let popupDriver: CdpDriver | undefined = undefined;
-        try {
-          await driver.evaluate(`(() => {
+    await withNodeRuntime({}, async (driver) => {
+      let popupDriver: CdpDriver | undefined = undefined;
+      try {
+        await driver.evaluate(`(() => {
             let releaseMainCallback = () => undefined;
             let markMainCallbackStarted = () => undefined;
             window.__releaseMainCallback = (value) =>
@@ -404,19 +380,19 @@ localIt(
             })();
             return "scheduled";
           })()`);
-          await driver.evaluate("window.__mainCallbackStarted");
+        await driver.evaluate("window.__mainCallbackStarted");
 
-          const popupTarget = await openPopupTarget(
-            driver,
-            "data:text/html,muon-node-callback-popup",
-          );
-          popupDriver = await connectToMuonCdp({
-            port: MUON_PORT,
-            targetId: popupTarget.id,
-            timeoutMs: cdpCommandTimeoutMs,
-          });
-          await expect(
-            popupDriver.evaluate(`(async () => {
+        const popupTarget = await openPopupTarget(
+          driver,
+          "data:text/html,muon-node-callback-popup",
+        );
+        popupDriver = await connectToMuonCdp({
+          port: MUON_PORT,
+          targetId: popupTarget.id,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await expect(
+          popupDriver.evaluate(`(async () => {
               const backend =
                 await window.muon.node.importModule("./backend.mjs");
               return await backend.invokeCallback(
@@ -424,43 +400,40 @@ localIt(
                 "popup"
               );
             })()`),
-          ).resolves.toBe("popup:popup");
+        ).resolves.toBe("popup:popup");
 
-          await driver.evaluate('window.__releaseMainCallback("main:main")');
-          await expect(driver.evaluate("window.__mainNodeCall")).resolves.toBe(
-            "main:main",
-          );
-        } finally {
-          await driver.evaluate(`(() => {
+        await driver.evaluate('window.__releaseMainCallback("main:main")');
+        await expect(driver.evaluate("window.__mainNodeCall")).resolves.toBe(
+          "main:main",
+        );
+      } finally {
+        await driver.evaluate(`(() => {
             if (typeof window.__releaseMainCallback === "function") {
               window.__releaseMainCallback("main:cleanup");
             }
           })()`);
-          popupDriver?.close();
-        }
-      },
-    );
+        popupDriver?.close();
+      }
+    });
   },
 );
 
 localIt(
   "rejects a pending Node callback when its renderer context is released",
   async () => {
-    await withNodeRuntime(
-      { MUON_NODE_EXECUTABLE: process.execPath },
-      async (driver) => {
-        let popupDriver: CdpDriver | undefined = undefined;
-        try {
-          const popupTarget = await openPopupTarget(
-            driver,
-            "data:text/html,muon-node-callback-release-popup",
-          );
-          popupDriver = await connectToMuonCdp({
-            port: MUON_PORT,
-            targetId: popupTarget.id,
-            timeoutMs: cdpCommandTimeoutMs,
-          });
-          await popupDriver.evaluate(`(async () => {
+    await withNodeRuntime({}, async (driver) => {
+      let popupDriver: CdpDriver | undefined = undefined;
+      try {
+        const popupTarget = await openPopupTarget(
+          driver,
+          "data:text/html,muon-node-callback-release-popup",
+        );
+        popupDriver = await connectToMuonCdp({
+          port: MUON_PORT,
+          targetId: popupTarget.id,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await popupDriver.evaluate(`(async () => {
             const backend =
               await window.muon.node.importModule("./backend.mjs");
             let markCallbackStarted = () => undefined;
@@ -476,43 +449,50 @@ localIt(
             return "started";
           })()`);
 
-          await popupDriver.send("Page.close");
-          popupDriver.close();
-          popupDriver = undefined;
+        await popupDriver.send("Page.close");
+        popupDriver.close();
+        popupDriver = undefined;
 
-          const message = await driver.evaluate<string>(`(async () => {
+        const message = await driver.evaluate<string>(`(async () => {
             const backend =
               await window.muon.node.importModule("./backend.mjs");
             return await backend.waitForObservedCallbackFailure();
           })()`);
-          expect(message).toMatch(/context.*released/iu);
+        expect(message).toMatch(/context.*released/iu);
+      } finally {
+        popupDriver?.close();
+      }
+    });
+  },
+);
+
+localIt(
+  "does not fall back when the bundled Node executable is missing",
+  async () => {
+    await withNodeRuntime(
+      { MUON_NODE_EXECUTABLE: process.execPath },
+      async (driver, running) => {
+        const executable = getBundledNodeExecutable(running);
+        const unavailableExecutable = `${executable}.unavailable-${String(
+          process.pid,
+        )}`;
+        await rename(executable, unavailableExecutable);
+        try {
+          await expect(
+            driver.evaluate("typeof window.muon.node.importModule"),
+          ).resolves.toBe("function");
+          const error = await evaluateRejection(
+            driver,
+            'window.muon.node.importModule("./backend.mjs")',
+          );
+          expect(error).toContain(executable);
         } finally {
-          popupDriver?.close();
+          await rename(unavailableExecutable, executable);
         }
       },
     );
   },
 );
-
-localIt("reports a missing Node executable on the first import", async () => {
-  const missingExecutable = join(
-    tmpdir(),
-    `missing-muon-node-${String(process.pid)}`,
-  );
-  await withNodeRuntime(
-    { MUON_NODE_EXECUTABLE: missingExecutable },
-    async (driver) => {
-      await expect(
-        driver.evaluate("typeof window.muon.node.importModule"),
-      ).resolves.toBe("function");
-      const error = await evaluateRejection(
-        driver,
-        'window.muon.node.importModule("./backend.mjs")',
-      );
-      expect(error).toContain(missingExecutable);
-    },
-  );
-});
 
 localIt(
   "keeps a crashed Node sidecar failure sticky without restart",
@@ -522,7 +502,6 @@ localIt(
     try {
       await withNodeRuntime(
         {
-          MUON_NODE_EXECUTABLE: process.execPath,
           MUON_NODE_TEST_START_MARKER: markerPath,
         },
         async (driver) => {
@@ -555,9 +534,6 @@ localIt("stops the Node child before the plugin library unloads", async () => {
   const exitMarkerPath = join(markerDirectory, "exit.txt");
   const running = await startDebugMuonWithNodeProject({
     nodeProject: nodeProjectDirectory,
-    environment: {
-      MUON_NODE_EXECUTABLE: process.execPath,
-    },
   });
   let driver: CdpDriver | undefined = undefined;
   try {

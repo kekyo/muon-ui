@@ -7,11 +7,13 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
   access as nodeAccess,
   appendFile as nodeAppendFile,
+  chmod as nodeChmod,
   constants,
   copyFile as nodeCopyFile,
   mkdir as nodeMkdir,
   mkdtemp as nodeMkdtemp,
   readFile as nodeReadFile,
+  rename as nodeRename,
   rm as nodeRm,
   stat,
   writeFile as nodeWriteFile,
@@ -521,6 +523,10 @@ export interface RunningMuon {
   process: MuonProcessHandle;
   pluginDirectory: string;
   remoteWindows?: RunningWindowsRemoteMuon;
+  /**
+   * Effective directory containing the running Muon executable.
+   */
+  runtimeDirectory: string | undefined;
   stateDirectory?: string;
   stderr: string;
   usesValgrind: boolean;
@@ -714,6 +720,44 @@ export const TEST_PLUGIN_DIRECTORY =
         windowsRemoteContextAtLoad.runtime.debugRuntimeDirectory,
         "test-plugins",
       );
+
+/**
+ * Gets the framework-managed Node executable path for a running Muon process.
+ *
+ * @param running Running Muon process.
+ * @returns Absolute path used to launch the Node sidecar.
+ * @throws Error when the effective runtime directory is unavailable.
+ */
+export const getBundledNodeExecutable = (running: RunningMuon): string => {
+  if (running.runtimeDirectory === undefined) {
+    throw new Error("Muon runtime directory is unavailable");
+  }
+  return join(
+    running.runtimeDirectory,
+    "runtimes",
+    "node",
+    "bin",
+    process.platform === "win32" ? "node.exe" : "node",
+  );
+};
+
+const prepareBundledNodeExecutable = async (
+  running: RunningMuon,
+): Promise<void> => {
+  if (process.platform !== "linux" || isWindowsRemoteE2e()) {
+    return;
+  }
+  const executable = getBundledNodeExecutable(running);
+  const temporaryExecutable = `${executable}.tmp-${String(process.pid)}`;
+  await nodeMkdir(nodeDirname(executable), { recursive: true });
+  try {
+    await nodeCopyFile(process.execPath, temporaryExecutable);
+    await nodeChmod(temporaryExecutable, 0o755);
+    await nodeRename(temporaryExecutable, executable);
+  } finally {
+    await nodeRm(temporaryExecutable, { force: true });
+  }
+};
 export const PLUGIN_SUFFIX = isWindowsRemoteE2e()
   ? ".dll"
   : process.platform === "win32"
@@ -2918,6 +2962,7 @@ const startWindowsRemoteMuon = async (
       profilePath,
       target: context.runtime.target,
     },
+    runtimeDirectory: directory,
     stderr: "",
     usesValgrind: false,
   };
@@ -3105,6 +3150,12 @@ export const startMuon = async (
   const running: RunningMuon = {
     process: child,
     pluginDirectory,
+    runtimeDirectory:
+      getLocalFallbackAppIdForExecutable(executable) === "muon-launcher"
+        ? stateDirectory === undefined || stateDirectory === ""
+          ? undefined
+          : join(stateDirectory, "muon-launcher", "runtime")
+        : directory,
     stderr: "",
     usesValgrind: useValgrind,
   };
@@ -3258,7 +3309,7 @@ export const startDebugMuonWithNodeProject = async (
     nodeProject,
     pluginCapabilities = [],
   } = options;
-  return await startDebugMuon(
+  const running = await startDebugMuon(
     [],
     networkAllowPatterns,
     environment,
@@ -3288,6 +3339,13 @@ export const startDebugMuonWithNodeProject = async (
     nodeProject,
     pluginCapabilities,
   );
+  try {
+    await prepareBundledNodeExecutable(running);
+    return running;
+  } catch (error) {
+    await stopMuon(running, undefined);
+    throw error;
+  }
 };
 
 export const startDebugMuonLauncher = async (

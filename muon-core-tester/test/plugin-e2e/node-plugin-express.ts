@@ -17,6 +17,7 @@ import {
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   execFileAsync,
+  getBundledNodeExecutable,
   join,
   listProcessGroupCommandLines,
   mkdtemp,
@@ -39,6 +40,7 @@ const forcedKillWarning = "Node sidecar did not terminate; killing it";
 interface ExpressProbeResult {
   readonly contentType: string | null;
   readonly descriptorProcessId: number;
+  readonly executablePath: string;
   readonly framework: string;
   readonly listeningAfterStop: boolean;
   readonly port: number;
@@ -120,7 +122,10 @@ linuxIt(
 
       const running = await startDebugMuonWithNodeProject({
         nodeProject,
-        environment: { MUON_NODE_EXECUTABLE: process.execPath },
+        environment: {
+          MUON_NODE_EXECUTABLE: join(temporaryDirectory, "unavailable-node"),
+          PATH: join(temporaryDirectory, "unavailable-path"),
+        },
         browserPluginAllowPatterns: ["asset://main/**"],
         networkAllowPatterns: [
           "asset://main/**",
@@ -155,6 +160,7 @@ linuxIt(
             Object.assign(result, {
               contentType: response.headers.get("content-type"),
               descriptorProcessId,
+              executablePath: await backend.executablePath(),
               framework: body.framework,
               port,
               responseProcessId: body.processId,
@@ -174,6 +180,7 @@ linuxIt(
 
         expect(result.status).toBe(200);
         expect(result.contentType).toMatch(/^application\/json(?:;|$)/);
+        expect(result.executablePath).toBe(getBundledNodeExecutable(running));
         expect(result.framework).toBe("express");
         expect(result.value).toBe(expectedValue);
         expect(result.port).toBeGreaterThan(0);
@@ -210,7 +217,6 @@ linuxIt(
 
       const running = await startDebugMuonWithNodeProject({
         nodeProject,
-        environment: { MUON_NODE_EXECUTABLE: process.execPath },
         browserPluginAllowPatterns: ["asset://main/**"],
       });
       let driver: CdpDriver | undefined = undefined;

@@ -47,9 +47,18 @@ static constexpr char kMuonNodePluginName[] = "node";
 static constexpr char kMuonNodePluginAllowPattern[] = "muon.node.*";
 static constexpr char kMuonNodeProjectConfigKey[] = "project";
 static constexpr char kMuonNodeBridgeConfigKey[] = "bridge";
+static constexpr char kMuonNodeExecutableConfigKey[] = "executable";
 static constexpr char kMuonNodeMetadataOnlyConfigKey[] = "metadataOnly";
 static constexpr char kMuonNodeBridgeFileName[] = "node-bridge.mjs";
 static constexpr char kMuonBundledPluginDirectoryName[] = "plugins";
+static constexpr char kMuonBundledRuntimeDirectoryName[] = "runtimes";
+static constexpr char kMuonNodeRuntimeDirectoryName[] = "node";
+static constexpr char kMuonNodeRuntimeBinDirectoryName[] = "bin";
+#if defined(_WIN32)
+static constexpr char kMuonNodeExecutableFileName[] = "node.exe";
+#else
+static constexpr char kMuonNodeExecutableFileName[] = "node";
+#endif
 
 class MuonNamespaceMarker final : public CefBaseRefCounted {
  public:
@@ -152,11 +161,17 @@ static bool AppendMuonNodePlugin(
     return false;
   }
 
+  const auto executable_directory = GetMuonExecutableDirectory();
   const auto plugin_directory =
-      (GetMuonExecutableDirectory() / kMuonBundledPluginDirectoryName)
+      (executable_directory / kMuonBundledPluginDirectoryName)
           .lexically_normal();
   const auto bridge_path =
       (plugin_directory / kMuonNodeBridgeFileName).lexically_normal();
+  const auto executable_path =
+      (executable_directory / kMuonBundledRuntimeDirectoryName /
+       kMuonNodeRuntimeDirectoryName / kMuonNodeRuntimeBinDirectoryName /
+       kMuonNodeExecutableFileName)
+          .lexically_normal();
   MuonPluginRuntimeLoadEntry plugin;
   plugin.plugin = kMuonNodePluginName;
   plugin.has_library_directory = true;
@@ -167,6 +182,9 @@ static bool AppendMuonNodePlugin(
        CreateCefPathString(config.node.project).ToString()});
   plugin.config.push_back(
       {kMuonNodeBridgeConfigKey, CreateCefPathString(bridge_path).ToString()});
+  plugin.config.push_back(
+      {kMuonNodeExecutableConfigKey,
+       CreateCefPathString(executable_path).ToString()});
   plugin.config.push_back(
       {kMuonNodeMetadataOnlyConfigKey,
        config.browser.plugin.mode == kMuonBrowserPluginModeValidate ? "1"

@@ -66,6 +66,10 @@ slow_writer_exe="${temp_dir}/slow-writer.exe"
 progress_harness_src="${temp_dir}/process-progress-harness.c"
 progress_harness_exe="${temp_dir}/process-progress-harness.exe"
 progress_output="${temp_dir}/process-progress-output.bin"
+node_harness_src="${temp_dir}/node-runtime-harness.c"
+node_harness_exe="${temp_dir}/node-runtime-harness.exe"
+node_archive_path="${temp_dir}/node-v24.4.0-win-x64.zip"
+node_runtime_root="${temp_dir}/node-runtime-root"
 source_dir="${temp_dir}/source"
 cache_dir="${temp_dir}/cache"
 output_dir="${temp_dir}/output"
@@ -157,6 +161,39 @@ int main(int argc, char **argv) {
 }
 C_EOF
 
+cat > "${node_harness_src}" <<'C_EOF'
+#include <stdio.h>
+
+#include "prepare_node.h"
+
+int main(int argc, char **argv) {
+  if (argc != 3) {
+    return 64;
+  }
+  MuonNodeArtifact artifact = {
+      .version = "v24.4.0",
+      .catalog_file = "win-x64-zip",
+      .archive_target = "win-x64",
+      .file_name = "node-v24.4.0-win-x64.zip",
+      .url = "",
+      .sha256 = "",
+      .lts = "Krypton",
+  };
+  size_t file_count = 0;
+  const int result = muon_prepare_install_node_runtime_progress(
+      argv[1], "windows-amd64", &artifact, argv[2], &file_count, NULL, NULL);
+  if (result != 0) {
+    return 1;
+  }
+  if (file_count != 2) {
+    fprintf(stderr, "unexpected Node runtime file count: %llu\n",
+            (unsigned long long)file_count);
+    return 2;
+  }
+  return 0;
+}
+C_EOF
+
 x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -o "${slow_writer_exe}" "${slow_writer_src}"
 
@@ -168,7 +205,19 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   "${progress_harness_src}" \
   "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-builder.a" \
   "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
-  "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a"
+  "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a" \
+  "${SCRIPT_DIR}/.deps/build/zlib-windows64/install/lib/libzs.a"
+
+x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
+  -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../deps/sha2" \
+  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
+  -o "${node_harness_exe}" \
+  "${node_harness_src}" \
+  "${SCRIPT_DIR}/.run/check-windows-amd64-release/libmuon-builder.a" \
+  "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
+  "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a" \
+  "${SCRIPT_DIR}/.deps/build/zlib-windows64/install/lib/libzs.a"
 
 slow_writer_windows="$(winepath -w "${slow_writer_exe}")"
 progress_output_windows="$(winepath -w "${progress_output}")"
@@ -177,6 +226,74 @@ WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
     "${slow_writer_windows}" \
     "${progress_output_windows}" > "${temp_dir}/progress.log"
 WINEPREFIX="${wine_prefix}" wineserver -w
+
+node - "${node_archive_path}" <<'NODE'
+const AdmZip = require("adm-zip");
+const { writeFileSync } = require("node:fs");
+
+const [archivePath] = process.argv.slice(2);
+const archive = new AdmZip();
+const root = "node-v24.4.0-win-x64";
+archive.addFile(
+  `${root}/node.exe`,
+  Buffer.from("fake windows Node executable\n".repeat(64)),
+);
+archive.addFile(`${root}/LICENSE`, Buffer.from("fake Node license\n"));
+archive.addFile(`${root}/README.md`, Buffer.from("not installed\n"));
+writeFileSync(archivePath, archive.toBuffer());
+NODE
+
+mkdir -p "${node_runtime_root}"
+node_archive_windows="$(winepath -w "${node_archive_path}")"
+node_runtime_root_windows="$(winepath -w "${node_runtime_root}")"
+WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
+  wine "${node_harness_exe}" \
+    "${node_archive_windows}" \
+    "${node_runtime_root_windows}"
+WINEPREFIX="${wine_prefix}" wineserver -w
+
+node - "${node_runtime_root}" <<'NODE'
+const { readFileSync, readdirSync } = require("node:fs");
+const { join, relative } = require("node:path");
+
+const [runtimeRoot] = process.argv.slice(2);
+const listFiles = (directory) => {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFiles(path));
+    } else if (entry.isFile()) {
+      files.push(relative(runtimeRoot, path).replaceAll("\\", "/"));
+    }
+  }
+  return files.sort();
+};
+
+const expectedNode = "fake windows Node executable\n".repeat(64);
+if (
+  readFileSync(join(runtimeRoot, "runtimes/node/bin/node.exe"), "utf8") !==
+  expectedNode
+) {
+  throw new Error("Wine Node extraction did not preserve node.exe content.");
+}
+if (
+  readFileSync(join(runtimeRoot, "runtimes/node/LICENSE"), "utf8") !==
+  "fake Node license\n"
+) {
+  throw new Error("Wine Node extraction did not preserve LICENSE content.");
+}
+const files = listFiles(runtimeRoot);
+const expectedFiles = [
+  "runtimes/node/LICENSE",
+  "runtimes/node/bin/node.exe",
+];
+if (JSON.stringify(files) !== JSON.stringify(expectedFiles)) {
+  throw new Error(
+    `Wine Node extraction produced unexpected files: ${JSON.stringify(files)}`,
+  );
+}
+NODE
 
 mkdir -p "${archive_root}/Release" "${archive_root}/Resources/locales"
 printf 'cef library\r\n' > "${archive_root}/Release/libcef.dll"

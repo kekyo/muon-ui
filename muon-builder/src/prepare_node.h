@@ -153,6 +153,35 @@ int muon_prepare_ensure_node_archive_cache_progress(
     void *progress_user_data);
 
 /**
+ * Selectively installs an official Node.js archive into a runtime namespace.
+ *
+ * @param archive_path Verified official Node.js archive to read.
+ * @param target Public muon runtime target.
+ * @param artifact Selected official artifact metadata. Its target identifiers
+ *     and file name must exactly match `target`.
+ * @param runtime_root Application runtime root that receives
+ *     `runtimes/node`.
+ * @param file_count Receives the number of installed files on success, or zero
+ *     on failure. May be `NULL`.
+ * @param progress_callback Optional progress callback.
+ * @param progress_user_data Opaque progress callback state.
+ * @return 0 after atomically installing the Node executable and `LICENSE`, or
+ *     non-zero when metadata or archive contents are invalid or installation
+ *     fails.
+ *
+ * Archive paths are validated before entries are considered for extraction.
+ * Only regular, non-link entries at the two official paths are accepted, and
+ * each path must occur exactly once. Other safe entries are ignored. An
+ * existing installed runtime remains active until the candidate is complete
+ * and is restored if the atomic replacement cannot be committed.
+ */
+int muon_prepare_install_node_runtime_progress(
+    const char *archive_path, const char *target,
+    const MuonNodeArtifact *artifact, const char *runtime_root,
+    size_t *file_count, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data);
+
+/**
  * Frees fields owned by Node.js artifact metadata.
  *
  * @param artifact Artifact metadata to release.

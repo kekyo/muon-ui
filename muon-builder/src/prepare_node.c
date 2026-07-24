@@ -7,7 +7,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+#include "archive.h"
+#include "archive_entry.h"
 #include "prepare_node.h"
 #include "common.h"
 
@@ -1210,5 +1219,436 @@ int muon_prepare_ensure_node_archive_cache_progress(
   free(artifacts_root);
   free(version_directory);
   free(temporary_path);
+  return result;
+}
+
+static int node_install_chmod(const char *path, int mode) {
+#ifdef _WIN32
+  return _chmod(path, mode);
+#else
+  return chmod(path, (mode_t)mode);
+#endif
+}
+
+static int node_archive_path_has_drive_prefix(const char *path) {
+  const char first = path[0];
+  return ((first >= 'A' && first <= 'Z') ||
+          (first >= 'a' && first <= 'z')) &&
+         path[1] == ':';
+}
+
+static int validate_node_archive_entry_path(const char *path,
+                                            int file_type) {
+  if (path == NULL || path[0] == '\0' || path[0] == '/' ||
+      node_archive_path_has_drive_prefix(path)) {
+    muon_print_error("Unsafe Node.js archive entry path: %s\n",
+                     path == NULL ? "(null)" : path);
+    return -1;
+  }
+
+  size_t path_length = strlen(path);
+  for (size_t index = 0; index < path_length; index += 1) {
+    if (path[index] == '\\') {
+      muon_print_error("Unsafe Node.js archive entry path: %s\n", path);
+      return -1;
+    }
+  }
+
+  /*
+   * Tar directory names conventionally end in '/'. Treat that marker as part
+   * of the entry type, while still rejecting every other empty path segment.
+   */
+  if (path[path_length - 1] == '/') {
+    if (!S_ISDIR(file_type)) {
+      muon_print_error("Unsafe Node.js archive entry path: %s\n", path);
+      return -1;
+    }
+    path_length -= 1;
+  }
+  if (path_length == 0) {
+    muon_print_error("Unsafe Node.js archive entry path: %s\n", path);
+    return -1;
+  }
+
+  size_t segment_start = 0;
+  for (size_t index = 0; index <= path_length; index += 1) {
+    if (index != path_length && path[index] != '/') {
+      continue;
+    }
+    const size_t segment_length = index - segment_start;
+    if (segment_length == 0 ||
+        (segment_length == 1 && path[segment_start] == '.') ||
+        (segment_length == 2 && path[segment_start] == '.' &&
+         path[segment_start + 1] == '.')) {
+      muon_print_error("Unsafe Node.js archive entry path: %s\n", path);
+      return -1;
+    }
+    segment_start = index + 1;
+  }
+  return 0;
+}
+
+static const char *node_archive_entry_path(struct archive_entry *entry) {
+  const char *path = archive_entry_pathname_utf8(entry);
+  return path == NULL ? archive_entry_pathname(entry) : path;
+}
+
+static int print_node_archive_error(struct archive *reader,
+                                    const char *context) {
+  const char *message = archive_error_string(reader);
+  muon_print_error("%s: %s\n", context,
+                   message == NULL ? "archive error" : message);
+  return -1;
+}
+
+static int write_node_archive_entry(
+    struct archive *reader, const char *destination, int mode,
+    size_t *installed_file_count,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
+  FILE *output = fopen(destination, "wb");
+  if (output == NULL) {
+    muon_print_errno(destination);
+    return -1;
+  }
+
+  int result = 0;
+  char buffer[64 * 1024];
+  for (;;) {
+    const la_ssize_t read_size =
+        archive_read_data(reader, buffer, sizeof(buffer));
+    if (read_size < 0) {
+      result =
+          print_node_archive_error(reader, "Failed to read Node.js archive");
+      break;
+    }
+    if (read_size == 0) {
+      break;
+    }
+    if (fwrite(buffer, 1, (size_t)read_size, output) !=
+        (size_t)read_size) {
+      muon_print_errno(destination);
+      result = -1;
+      break;
+    }
+  }
+  if (fclose(output) != 0 && result == 0) {
+    muon_print_errno(destination);
+    result = -1;
+  }
+  if (result != 0) {
+    return -1;
+  }
+  if (node_install_chmod(destination, mode) != 0) {
+    muon_print_errno(destination);
+    return -1;
+  }
+
+  *installed_file_count += 1;
+  muon_report_progress(
+      progress_callback, progress_user_data,
+      MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+      "Installing Node.js runtime...",
+      (unsigned long long)*installed_file_count, 2, 1);
+  return 0;
+}
+
+static int node_archive_format_matches(struct archive *reader,
+                                       int expects_zip) {
+  const int format = archive_format(reader) & ARCHIVE_FORMAT_BASE_MASK;
+  const int expected_format =
+      expects_zip ? ARCHIVE_FORMAT_ZIP : ARCHIVE_FORMAT_TAR;
+  const int filter = archive_filter_code(reader, 0);
+  const int expected_filter =
+      expects_zip ? ARCHIVE_FILTER_NONE : ARCHIVE_FILTER_GZIP;
+  if (format == expected_format && filter == expected_filter) {
+    return 1;
+  }
+  muon_print_error(
+      "Node.js archive format or compression does not match its target.\n");
+  return 0;
+}
+
+static int skip_node_archive_entry(struct archive *reader) {
+  const int status = archive_read_data_skip(reader);
+  /*
+   * libarchive documents ARCHIVE_WARN as a successful operation with a
+   * non-critical error. The entry has been consumed in both success cases.
+   */
+  if (status == ARCHIVE_OK || status == ARCHIVE_WARN) {
+    return 0;
+  }
+  return print_node_archive_error(reader,
+                                  "Failed to skip Node.js archive entry");
+}
+
+static int extract_node_runtime_files(
+    const char *archive_path, int expects_zip,
+    const char *expected_node_path, const char *expected_license_path,
+    const char *node_destination, const char *license_destination,
+    size_t *installed_file_count,
+    MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
+  struct archive *reader = archive_read_new();
+  if (reader == NULL) {
+    return -1;
+  }
+  if (archive_read_support_filter_gzip(reader) != ARCHIVE_OK ||
+      archive_read_support_format_tar(reader) != ARCHIVE_OK ||
+      archive_read_support_format_zip(reader) != ARCHIVE_OK ||
+      archive_read_open_filename(reader, archive_path, 64 * 1024) !=
+          ARCHIVE_OK) {
+    print_node_archive_error(reader, "Failed to open Node.js archive");
+    archive_read_free(reader);
+    return -1;
+  }
+
+  int result = 0;
+  int checked_format = 0;
+  int found_node = 0;
+  int found_license = 0;
+  struct archive_entry *entry = NULL;
+  for (;;) {
+    const int status = archive_read_next_header(reader, &entry);
+    if (status == ARCHIVE_EOF) {
+      break;
+    }
+    if (status != ARCHIVE_OK) {
+      result = print_node_archive_error(
+          reader, "Failed to read Node.js archive header");
+      break;
+    }
+    if (!checked_format) {
+      checked_format = 1;
+      if (!node_archive_format_matches(reader, expects_zip)) {
+        result = -1;
+        break;
+      }
+    }
+
+    const char *path = node_archive_entry_path(entry);
+    const int file_type = archive_entry_filetype(entry);
+    if (validate_node_archive_entry_path(path, file_type) != 0) {
+      result = -1;
+      break;
+    }
+
+    int *found = NULL;
+    const char *destination = NULL;
+    int mode = 0;
+    if (strcmp(path, expected_node_path) == 0) {
+      found = &found_node;
+      destination = node_destination;
+      mode = 0755;
+    } else if (strcmp(path, expected_license_path) == 0) {
+      found = &found_license;
+      destination = license_destination;
+      mode = 0644;
+    }
+    if (found == NULL) {
+      if (skip_node_archive_entry(reader) != 0) {
+        result = -1;
+        break;
+      }
+      continue;
+    }
+
+    if (*found != 0 || !S_ISREG(file_type) ||
+        archive_entry_hardlink(entry) != NULL ||
+        archive_entry_symlink(entry) != NULL) {
+      muon_print_error("Invalid Node.js archive target entry: %s\n", path);
+      result = -1;
+      break;
+    }
+    *found = 1;
+    if (write_node_archive_entry(
+            reader, destination, mode, installed_file_count,
+            progress_callback, progress_user_data) != 0) {
+      result = -1;
+      break;
+    }
+  }
+
+  if (result == 0 && (!checked_format || !found_node || !found_license)) {
+    muon_print_error(
+        "Node.js archive must contain one executable and one LICENSE.\n");
+    result = -1;
+  }
+  if (archive_read_free(reader) != ARCHIVE_OK && result == 0) {
+    result = -1;
+  }
+  return result;
+}
+
+static int validate_node_install_artifact(
+    const char *target, const MuonNodeArtifact *artifact,
+    MuonNodeTargetInfo *target_info) {
+  if (target == NULL || artifact == NULL || artifact->version == NULL ||
+      artifact->catalog_file == NULL || artifact->archive_target == NULL ||
+      artifact->file_name == NULL ||
+      muon_prepare_get_node_target_info(target, target_info) != 0) {
+    muon_print_error("Invalid Node.js runtime installation metadata.\n");
+    return -1;
+  }
+
+  MuonNodeSemVersion version;
+  char *expected_file_name = NULL;
+  int result = -1;
+  if (parse_semver(artifact->version, 1, &version) != 0 ||
+      version.prerelease_length != 0 ||
+      strcmp(artifact->catalog_file, target_info->catalog_file) != 0 ||
+      strcmp(artifact->archive_target, target_info->archive_target) != 0) {
+    goto complete;
+  }
+  expected_file_name =
+      create_node_archive_file_name(artifact->version, target_info);
+  if (expected_file_name != NULL &&
+      strcmp(artifact->file_name, expected_file_name) == 0) {
+    result = 0;
+  }
+
+complete:
+  if (result != 0) {
+    muon_print_error(
+        "Node.js artifact metadata does not match target %s.\n", target);
+  }
+  free(expected_file_name);
+  return result;
+}
+
+static int replace_node_runtime_atomically(const char *temporary_root,
+                                           const char *node_root,
+                                           const char *backup_root) {
+  if (muon_remove_recursive(backup_root) != 0) {
+    return -1;
+  }
+  const int had_existing_runtime = muon_path_exists(node_root);
+  if (had_existing_runtime &&
+      muon_atomic_replace(node_root, backup_root) != 0) {
+    return -1;
+  }
+  if (muon_atomic_replace(temporary_root, node_root) != 0) {
+    if (had_existing_runtime &&
+        muon_atomic_replace(backup_root, node_root) != 0) {
+      muon_print_error(
+          "Failed to restore the previous Node.js runtime from %s.\n",
+          backup_root);
+    }
+    return -1;
+  }
+
+  /*
+   * The new runtime is committed once the second rename succeeds. A failure
+   * while deleting the old backup must not turn a valid installation into a
+   * reported failure or discard either complete runtime.
+   */
+  if (had_existing_runtime) {
+    muon_remove_recursive(backup_root);
+  }
+  return 0;
+}
+
+int muon_prepare_install_node_runtime_progress(
+    const char *archive_path, const char *target,
+    const MuonNodeArtifact *artifact, const char *runtime_root,
+    size_t *file_count, MuonPrepareProgressCallback progress_callback,
+    void *progress_user_data) {
+  if (file_count != NULL) {
+    *file_count = 0;
+  }
+  MuonNodeTargetInfo target_info;
+  if (archive_path == NULL || archive_path[0] == '\0' ||
+      runtime_root == NULL || runtime_root[0] == '\0' ||
+      validate_node_install_artifact(target, artifact, &target_info) != 0) {
+    return -1;
+  }
+
+  const int expects_zip = strcmp(target_info.archive_suffix, ".zip") == 0;
+  const int root_length =
+      snprintf(NULL, 0, "node-%s-%s", artifact->version,
+               artifact->archive_target);
+  if (root_length < 0) {
+    return -1;
+  }
+  char *archive_root = (char *)malloc((size_t)root_length + 1);
+  if (archive_root == NULL) {
+    return -1;
+  }
+  snprintf(archive_root, (size_t)root_length + 1, "node-%s-%s",
+           artifact->version, artifact->archive_target);
+
+  char *expected_node_path =
+      muon_path_join(archive_root, expects_zip ? "node.exe" : "bin/node");
+  char *expected_license_path = muon_path_join(archive_root, "LICENSE");
+  char *runtimes_root = muon_path_join(runtime_root, "runtimes");
+  char *node_root =
+      runtimes_root == NULL ? NULL : muon_path_join(runtimes_root, "node");
+  char *temporary_root =
+      runtimes_root == NULL
+          ? NULL
+          : muon_create_temporary_path(runtimes_root, "node-install");
+  char *backup_root =
+      runtimes_root == NULL
+          ? NULL
+          : muon_create_temporary_path(runtimes_root, "node-backup");
+  char *temporary_bin =
+      temporary_root == NULL ? NULL : muon_path_join(temporary_root, "bin");
+  char *node_destination =
+      temporary_root == NULL
+          ? NULL
+          : muon_path_join(temporary_root,
+                           target_info.executable_relative_path);
+  char *license_destination =
+      temporary_root == NULL
+          ? NULL
+          : muon_path_join(temporary_root, "LICENSE");
+
+  int result = -1;
+  size_t installed_file_count = 0;
+  if (expected_node_path == NULL || expected_license_path == NULL ||
+      runtimes_root == NULL || node_root == NULL || temporary_root == NULL ||
+      backup_root == NULL || temporary_bin == NULL ||
+      node_destination == NULL || license_destination == NULL ||
+      muon_ensure_directory(runtimes_root) != 0) {
+    goto complete;
+  }
+  if (muon_remove_recursive(temporary_root) != 0) {
+    goto complete;
+  }
+  if (muon_ensure_directory(temporary_bin) != 0) {
+    goto complete;
+  }
+
+  muon_report_progress(
+      progress_callback, progress_user_data,
+      MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+      "Installing Node.js runtime...", 0, 2, 1);
+  if (extract_node_runtime_files(
+          archive_path, expects_zip, expected_node_path,
+          expected_license_path, node_destination, license_destination,
+          &installed_file_count, progress_callback, progress_user_data) != 0 ||
+      replace_node_runtime_atomically(temporary_root, node_root,
+                                      backup_root) != 0) {
+    goto complete;
+  }
+  if (file_count != NULL) {
+    *file_count = installed_file_count;
+  }
+  result = 0;
+
+complete:
+  if (result != 0) {
+    if (temporary_root != NULL) {
+      muon_remove_recursive(temporary_root);
+    }
+  }
+  free(archive_root);
+  free(expected_node_path);
+  free(expected_license_path);
+  free(runtimes_root);
+  free(node_root);
+  free(temporary_root);
+  free(backup_root);
+  free(temporary_bin);
+  free(node_destination);
+  free(license_destination);
   return result;
 }

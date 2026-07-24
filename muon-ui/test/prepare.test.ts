@@ -22,6 +22,15 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
+
+import AdmZip from "adm-zip";
+import {
+  createDirectoryItem,
+  createFileItem,
+  createTarPacker,
+  type EntryItem,
+} from "tar-vern";
 
 import {
   afterAll,
@@ -123,6 +132,29 @@ interface TestNodeRuntimeRequirement {
   comparatorSets: readonly (readonly string[])[];
 }
 
+interface FakeTarDirectoryEntry {
+  kind: "directory";
+  path: string;
+  mode: number;
+}
+
+interface FakeTarFileEntry {
+  kind: "file";
+  path: string;
+  content: Buffer;
+  mode: number;
+  symlinkTarget: string | undefined;
+}
+
+type FakeTarEntry = FakeTarDirectoryEntry | FakeTarFileEntry;
+
+interface FakeNodeTarArchiveOptions {
+  includeLicense: boolean;
+  nodeIsSymlink: boolean;
+  includeNpmSymlink: boolean;
+  includeTraversalEntry: boolean;
+}
+
 interface ReadyMarker {
   ready: boolean;
   muonFingerprint: string;
@@ -217,6 +249,198 @@ const createFakeNodeArtifact = (
     content,
     sha256: createHash("sha256").update(content).digest("hex"),
   };
+};
+
+const fakeNodeVersion = "v24.4.0";
+const createFakeNodeExecutableContent = (version: string): Buffer =>
+  Buffer.from(`#!/bin/sh\nprintf '%s\\n' 'fake-node-${version}'\n`);
+const fakeNodeLicenseContent = Buffer.from("Fake Node.js license\n");
+const fakeTarDate = new Date("2026-01-01T00:00:00.000Z");
+
+const createFakeTarEntryItems = async function* (
+  entries: readonly FakeTarEntry[],
+): AsyncGenerator<EntryItem, void, unknown> {
+  for (const entry of entries) {
+    const metadata = {
+      mode: entry.mode,
+      uname: "root",
+      gname: "root",
+      uid: 0,
+      gid: 0,
+      date: fakeTarDate,
+    };
+    if (entry.kind === "directory") {
+      yield await createDirectoryItem(entry.path, "none", metadata);
+    } else {
+      yield await createFileItem(entry.path, entry.content, metadata);
+    }
+  }
+};
+
+const collectTarPacker = async (
+  entries: readonly FakeTarEntry[],
+): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of createTarPacker(
+    createFakeTarEntryItems(entries),
+    "none",
+  )) {
+    chunks.push(
+      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array),
+    );
+  }
+  return Buffer.concat(chunks);
+};
+
+const readTarHeaderField = (
+  header: Buffer,
+  offset: number,
+  length: number,
+): string => {
+  const field = header.subarray(offset, offset + length);
+  const terminator = field.indexOf(0);
+  return field
+    .subarray(0, terminator === -1 ? field.length : terminator)
+    .toString("utf8");
+};
+
+// tar-vern emits regular files, so zero-length placeholders are rewritten into
+// POSIX symlink headers to model the links present in official Node archives.
+const replaceTarEntryWithSymlink = (
+  archive: Buffer,
+  path: string,
+  target: string,
+): void => {
+  if (Buffer.byteLength(target) > 100) {
+    throw new Error(`Test symlink target is too long: ${target}`);
+  }
+  let offset = 0;
+  while (offset + 512 <= archive.length) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((value) => value === 0)) {
+      break;
+    }
+    const name = readTarHeaderField(header, 0, 100);
+    const prefix = readTarHeaderField(header, 345, 155);
+    const entryPath = prefix === "" ? name : `${prefix}/${name}`;
+    const sizeText = readTarHeaderField(header, 124, 12).trim();
+    const size = sizeText === "" ? 0 : Number.parseInt(sizeText, 8);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`Invalid generated tar size for ${entryPath}`);
+    }
+    if (entryPath === path) {
+      header[156] = "2".charCodeAt(0);
+      header.fill(0, 157, 257);
+      header.write(target, 157, 100, "utf8");
+      header.fill(0x20, 148, 156);
+      let checksum = 0;
+      for (const value of header.values()) {
+        checksum += value;
+      }
+      const octalChecksum = checksum.toString(8).padStart(6, "0");
+      if (octalChecksum.length !== 6) {
+        throw new Error(`Generated tar checksum is too large for ${path}`);
+      }
+      header.write(octalChecksum, 148, 6, "ascii");
+      header[154] = 0;
+      header[155] = 0x20;
+      return;
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  throw new Error(`Generated tar entry was not found: ${path}`);
+};
+
+const createFakeNodeTarGzArtifact = async (
+  version: string,
+  options: FakeNodeTarArchiveOptions,
+): Promise<FakeNodeArtifact> => {
+  const archiveRoot = `node-${version}-linux-x64`;
+  const nodePath = `${archiveRoot}/bin/node`;
+  const entries: FakeTarEntry[] = [
+    { kind: "directory", path: archiveRoot, mode: 0o700 },
+    { kind: "directory", path: `${archiveRoot}/bin`, mode: 0o700 },
+    {
+      kind: "file",
+      path: nodePath,
+      content: options.nodeIsSymlink
+        ? Buffer.alloc(0)
+        : createFakeNodeExecutableContent(version),
+      mode: 0o600,
+      symlinkTarget: options.nodeIsSymlink ? "../lib/node-real" : undefined,
+    },
+  ];
+  if (options.includeLicense) {
+    entries.push({
+      kind: "file",
+      path: `${archiveRoot}/LICENSE`,
+      content: fakeNodeLicenseContent,
+      mode: 0o777,
+      symlinkTarget: undefined,
+    });
+  }
+  entries.push({
+    kind: "file",
+    path: `${archiveRoot}/README.md`,
+    content: Buffer.from("Ignored Node.js documentation\n"),
+    mode: 0o666,
+    symlinkTarget: undefined,
+  });
+  if (options.includeNpmSymlink) {
+    entries.push({
+      kind: "file",
+      path: `${archiveRoot}/bin/npm`,
+      content: Buffer.alloc(0),
+      mode: 0o777,
+      symlinkTarget: "../lib/node_modules/npm/bin/npm-cli.js",
+    });
+  }
+  if (options.includeTraversalEntry) {
+    entries.push({
+      kind: "file",
+      path: `${archiveRoot}/../../node-runtime-escape.txt`,
+      content: Buffer.from("must not escape\n"),
+      mode: 0o666,
+      symlinkTarget: undefined,
+    });
+  }
+
+  const tar = await collectTarPacker(entries);
+  for (const entry of entries) {
+    if (entry.kind === "file" && entry.symlinkTarget !== undefined) {
+      replaceTarEntryWithSymlink(tar, entry.path, entry.symlinkTarget);
+    }
+  }
+  return createFakeNodeArtifact(
+    version,
+    "linux-x64",
+    "linux-x64",
+    gzipSync(tar),
+  );
+};
+
+const createFakeNodeZipArtifact = (): FakeNodeArtifact => {
+  const archiveRoot = `node-${fakeNodeVersion}-win-x64`;
+  const nodePath = `${archiveRoot}/node.exe`;
+  const zip = new AdmZip();
+  zip.addFile(nodePath, Buffer.from("MZfake-node.exe\n"), "", 0o777);
+  zip.addFile(`${archiveRoot}/LICENSE`, fakeNodeLicenseContent, "", 0o777);
+  zip.addFile(
+    `${archiveRoot}/README.md`,
+    Buffer.from("Ignored Node.js documentation\n"),
+    "",
+    0o666,
+  );
+  const nodeEntry = zip.getEntry(nodePath);
+  if (nodeEntry === null || nodeEntry.header.method !== 8) {
+    throw new Error("The fake Node.js executable must use ZIP deflate.");
+  }
+  return createFakeNodeArtifact(
+    fakeNodeVersion,
+    "win-x64",
+    "win-x64-zip",
+    zip.toBuffer(),
+  );
 };
 
 const createFakeNodeRelease = (
@@ -575,6 +799,15 @@ const buildNodeTargetHarness = async (root: string): Promise<string> => {
     "libarchive",
     "libarchive.a",
   );
+  const zlibLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "zlib-linux64",
+    "install",
+    "lib",
+    "libz.a",
+  );
   await writeFile(
     harnessPath,
     `#include <stdio.h>
@@ -610,8 +843,100 @@ int main(int argc, char **argv) {
     join(dirname(prepareExecutablePath), "libmuon-builder.a"),
     libarchiveLib,
     bzip2Lib,
+    zlibLib,
   ]);
   return executablePath;
+};
+
+const buildNodeInstallHarness = async (root: string): Promise<string> => {
+  const harnessPath = join(root, "prepare-node-install-harness.c");
+  const executablePath = join(root, "prepare-node-install-harness");
+  const prepareRoot = resolve("..", "muon-builder");
+  const bzip2Lib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "bzip2-linux64",
+    "libbz2.a",
+  );
+  const libarchiveLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "libarchive-linux64",
+    "libarchive",
+    "libarchive.a",
+  );
+  const zlibLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "zlib-linux64",
+    "install",
+    "lib",
+    "libz.a",
+  );
+  await writeFile(
+    harnessPath,
+    `#include <stdio.h>
+#include <string.h>
+#include "prepare_node.h"
+
+int main(int argc, char **argv) {
+  MuonNodeArtifact artifact;
+  size_t file_count = 0;
+  int result;
+  if (argc != 6) {
+    return 64;
+  }
+  memset(&artifact, 0, sizeof(artifact));
+  artifact.version = "v24.4.0";
+  artifact.catalog_file =
+      strcmp(argv[2], "windows-amd64") == 0 ? "win-x64-zip" : "linux-x64";
+  artifact.archive_target = argv[4];
+  artifact.file_name = argv[5];
+  result = muon_prepare_install_node_runtime_progress(
+      argv[1], argv[2], &artifact, argv[3], &file_count, NULL, NULL);
+  if (result != 0) {
+    return 1;
+  }
+  printf("%zu\\n", file_count);
+  return 0;
+}
+`,
+  );
+  await execFileAsync("gcc", [
+    harnessPath,
+    "-std=c99",
+    "-Wall",
+    "-Wextra",
+    "-pedantic",
+    "-I",
+    join(prepareRoot, "src"),
+    "-o",
+    executablePath,
+    join(dirname(prepareExecutablePath), "libmuon-builder.a"),
+    libarchiveLib,
+    bzip2Lib,
+    zlibLib,
+  ]);
+  return executablePath;
+};
+
+const runNodeInstallHarness = async (
+  harnessPath: string,
+  fixture: PrepareFixture,
+  artifact: FakeNodeArtifact,
+  target: string,
+  runtimeRoot: string,
+) => {
+  const archivePath = join(fixture.projectPath, artifact.fileName);
+  await writeFile(archivePath, artifact.content);
+  return await execFileAsync(
+    harnessPath,
+    [archivePath, target, runtimeRoot, artifact.nodeTarget, artifact.fileName],
+    { encoding: "utf8" },
+  );
 };
 
 const buildProgressHarness = async (root: string): Promise<string> => {
@@ -632,6 +957,15 @@ const buildProgressHarness = async (root: string): Promise<string> => {
     "libarchive-linux64",
     "libarchive",
     "libarchive.a",
+  );
+  const zlibLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "zlib-linux64",
+    "install",
+    "lib",
+    "libz.a",
   );
   await writeFile(
     harnessPath,
@@ -689,6 +1023,7 @@ int main(int argc, char **argv) {
     join(dirname(prepareExecutablePath), "libmuon-builder.a"),
     libarchiveLib,
     bzip2Lib,
+    zlibLib,
   ]);
   return executablePath;
 };
@@ -1866,7 +2201,12 @@ lastCatalogUpdateUnix=0
 
     it("selects the latest matching LTS for a wildcard requirement", async () => {
       const fixture = await createPrepareFixture();
-      const selectedArtifact = createFakeNodeArtifact("v24.4.0");
+      const selectedArtifact = await createFakeNodeTarGzArtifact("v24.4.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
       const distribution = createFakeNodeDistribution([
         createFakeNodeRelease("v26.1.0", false),
         createFakeNodeRelease("v24.2.0", "Krypton"),
@@ -1910,7 +2250,12 @@ lastCatalogUpdateUnix=0
 
     it("falls back to the latest matching non-LTS release across comparator sets", async () => {
       const fixture = await createPrepareFixture();
-      const selectedArtifact = createFakeNodeArtifact("v24.9.0");
+      const selectedArtifact = await createFakeNodeTarGzArtifact("v24.9.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
       const distribution = createFakeNodeDistribution([
         createFakeNodeRelease("v24.2.0", "Krypton"),
         createFakeNodeRelease("v25.0.0", false),
@@ -2049,7 +2394,12 @@ lastCatalogUpdateUnix=0
 
     it("reuses the catalog, checksum, and verified artifact without a server", async () => {
       const fixture = await createPrepareFixture();
-      const artifact = createFakeNodeArtifact("v24.4.0");
+      const artifact = await createFakeNodeTarGzArtifact("v24.4.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
       const release = createFakeNodeRelease("v24.4.0", "Krypton", artifact);
       const server = await startNodeDistributionServer(
         createFakeNodeDistribution([release]),
@@ -2141,6 +2491,182 @@ lastCatalogUpdateUnix=0
       await expect(
         access(join(fixture.cacheDir, "artifacts", "node")),
       ).rejects.toThrow();
+    });
+  });
+
+  describe("Node runtime installation", () => {
+    let installHarnessPath = "";
+
+    const getInstallHarnessPath = async (): Promise<string> => {
+      if (installHarnessPath === "") {
+        installHarnessPath = await buildNodeInstallHarness(
+          await createSuiteTemporaryDirectory("muon-node-install-harness-"),
+        );
+      }
+      return installHarnessPath;
+    };
+
+    it("downloads and installs only the Node executable and license into the runtime namespace", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: true,
+        includeTraversalEntry: false,
+      });
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([
+          createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+        ]),
+      );
+
+      const result = await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        createNodeRequirement("*", [[]]),
+      );
+      const stagePath = requireStagePath(result);
+      const nodeRoot = join(stagePath, "runtimes", "node");
+      const nodePath = join(nodeRoot, "bin", "node");
+      const licensePath = join(nodeRoot, "LICENSE");
+
+      expect(await listCacheEntries(nodeRoot)).toEqual([
+        "LICENSE",
+        "bin",
+        "bin/node",
+      ]);
+      await expect(readFile(nodePath)).resolves.toEqual(
+        createFakeNodeExecutableContent(fakeNodeVersion),
+      );
+      await expect(readFile(licensePath)).resolves.toEqual(
+        fakeNodeLicenseContent,
+      );
+      expect((await stat(nodePath)).mode & 0o777).toBe(0o755);
+      expect((await stat(licensePath)).mode & 0o777).toBe(0o644);
+      const { stdout } = await execFileAsync(nodePath, [], {
+        encoding: "utf8",
+      });
+      expect(stdout.trim()).toBe("fake-node-v24.4.0");
+      await expect(access(join(stagePath, "bin", "node"))).rejects.toThrow();
+      expect(
+        server
+          .getRequests()
+          .filter(
+            ({ method, pathname }) =>
+              method === "GET" &&
+              pathname === `/${artifact.version}/${artifact.fileName}`,
+          ),
+      ).toHaveLength(1);
+    });
+
+    it("extracts a deflated Windows ZIP into the normalized Node runtime layout", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = createFakeNodeZipArtifact();
+      const runtimeRoot = join(fixture.projectPath, "windows-runtime");
+
+      const { stdout } = await runNodeInstallHarness(
+        await getInstallHarnessPath(),
+        fixture,
+        artifact,
+        "windows-amd64",
+        runtimeRoot,
+      );
+      const nodeRoot = join(runtimeRoot, "runtimes", "node");
+
+      expect(stdout.trim()).toBe("2");
+      expect(await listCacheEntries(nodeRoot)).toEqual([
+        "LICENSE",
+        "bin",
+        "bin/node.exe",
+      ]);
+      await expect(
+        readFile(join(nodeRoot, "bin", "node.exe")),
+      ).resolves.toEqual(Buffer.from("MZfake-node.exe\n"));
+      await expect(readFile(join(nodeRoot, "LICENSE"))).resolves.toEqual(
+        fakeNodeLicenseContent,
+      );
+    });
+
+    it("validates every archive path and rejects a trailing traversal entry", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: true,
+      });
+      const runtimeRoot = join(fixture.projectPath, "traversal-runtime");
+
+      await expect(
+        runNodeInstallHarness(
+          await getInstallHarnessPath(),
+          fixture,
+          artifact,
+          "linux-amd64",
+          runtimeRoot,
+        ),
+      ).rejects.toThrow();
+
+      expect(
+        await listDirectoryEntriesIfPresent(
+          join(runtimeRoot, "runtimes", "node"),
+        ),
+      ).toEqual([]);
+      await expect(
+        access(join(fixture.projectPath, "node-runtime-escape.txt")),
+      ).rejects.toThrow();
+    });
+
+    it("rejects a symbolic link in place of the target Node executable", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: true,
+        nodeIsSymlink: true,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const runtimeRoot = join(fixture.projectPath, "symlink-runtime");
+
+      await expect(
+        runNodeInstallHarness(
+          await getInstallHarnessPath(),
+          fixture,
+          artifact,
+          "linux-amd64",
+          runtimeRoot,
+        ),
+      ).rejects.toThrow();
+      expect(
+        await listDirectoryEntriesIfPresent(
+          join(runtimeRoot, "runtimes", "node"),
+        ),
+      ).toEqual([]);
+    });
+
+    it("rejects an archive without the Node.js license", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: false,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const runtimeRoot = join(fixture.projectPath, "missing-license-runtime");
+
+      await expect(
+        runNodeInstallHarness(
+          await getInstallHarnessPath(),
+          fixture,
+          artifact,
+          "linux-amd64",
+          runtimeRoot,
+        ),
+      ).rejects.toThrow();
+      expect(
+        await listDirectoryEntriesIfPresent(
+          join(runtimeRoot, "runtimes", "node"),
+        ),
+      ).toEqual([]);
     });
   });
 

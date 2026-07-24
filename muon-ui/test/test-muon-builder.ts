@@ -137,6 +137,15 @@ export const buildTestMuonBuilder = async (
     "bzip2-linux64",
     "libbz2.a",
   );
+  const zlibInstallDir = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "zlib-linux64",
+    "install",
+  );
+  const zlibIncludeDir = join(zlibInstallDir, "include");
+  const zlibLib = join(zlibInstallDir, "lib", "libz.a");
   const libarchiveIncludeDir = join(
     prepareRoot,
     ".deps",
@@ -161,12 +170,21 @@ export const buildTestMuonBuilder = async (
     "ranlib",
   ]);
   await execFileAsync("bash", [
+    join(prepareRoot, "build_zlib.sh"),
+    "linux64",
+    "gcc",
+    "ar",
+    "ranlib",
+  ]);
+  await execFileAsync("bash", [
     join(prepareRoot, "build_libarchive.sh"),
     "linux64",
     "gcc",
     "ar",
     "ranlib",
     bzip2Lib,
+    zlibIncludeDir,
+    zlibLib,
   ]);
 
   const prepareExecutablePath = join(outDir, "muon-builder");
@@ -183,12 +201,12 @@ export const buildTestMuonBuilder = async (
     `LAUNCHER_TARGET=${launcherExecutablePath}`,
     `VERSION_HEADER=${versionHeader}`,
     `RUNTIME_INFO_HEADER=${runtimeInfoHeaderPath}`,
-    `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux-amd64\\"`,
+    `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -I${zlibIncludeDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux-amd64\\"`,
     "LAUNCHER_CPPFLAGS=",
     "CFLAGS=-std=c99 -O0 -g -Wall -Wextra -pedantic",
     "LDFLAGS=-static",
     "LAUNCHER_LDFLAGS=",
-    `LDLIBS=${libarchiveLib} ${bzip2Lib}`,
+    `LDLIBS=${libarchiveLib} ${bzip2Lib} ${zlibLib}`,
     "LAUNCHER_LDLIBS=-lxcb",
   ]);
 

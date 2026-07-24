@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ "$#" -ne 5 ]]; then
-  echo "Usage: $0 <target> <cc> <ar> <ranlib> <bzip2-lib>" >&2
+if [[ "$#" -ne 7 ]]; then
+  echo "Usage: $0 <target> <cc> <ar> <ranlib> <bzip2-lib> <zlib-include> <zlib-lib>" >&2
   exit 1
 fi
 
@@ -13,6 +13,8 @@ CC_VALUE="$2"
 AR_VALUE="$3"
 RANLIB_VALUE="$4"
 BZIP2_LIBRARY="$5"
+ZLIB_INCLUDE_DIR="$6"
+ZLIB_LIBRARY="$7"
 
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
@@ -30,17 +32,19 @@ LIBARCHIVE_PACKAGE="libarchive-${LIBARCHIVE_VERSION}.tar.xz"
 LIBARCHIVE_URL="https://github.com/libarchive/libarchive/releases/download/v${LIBARCHIVE_VERSION}/${LIBARCHIVE_PACKAGE}"
 LIBARCHIVE_SHA256="d3a8ba457ae25c27c84fd2830a2efdcc5b1d40bf585d4eb0d35f47e99e5d4774"
 BZIP2_VERSION="1.0.8"
+ZLIB_VERSION="1.3.2"
 DEPS_DIR="${SCRIPT_DIR}/.deps"
 ARCHIVE="${DEPS_DIR}/${LIBARCHIVE_PACKAGE}"
 SOURCE_DIR="${DEPS_DIR}/src/libarchive-${LIBARCHIVE_VERSION}"
 BZIP2_SOURCE_DIR="${DEPS_DIR}/src/bzip2-${BZIP2_VERSION}"
 BUILD_DIR="${DEPS_DIR}/build/libarchive-${TARGET_NAME}"
 LIBRARY="${BUILD_DIR}/libarchive/libarchive.a"
-STAMP="${BUILD_DIR}/.built"
+STAMP="${BUILD_DIR}/.built-recipe"
 LOCK_DIR="${DEPS_DIR}/.locks/libarchive-${LIBARCHIVE_VERSION}.lock"
 TMP_ARCHIVE="${ARCHIVE}.$$"
 TMP_SOURCE_DIR="${SOURCE_DIR}.tmp.$$"
 LOCK_HELD=0
+RECIPE="libarchive-${LIBARCHIVE_VERSION}|bzip2-${BZIP2_VERSION}|zlib-${ZLIB_VERSION}|static-v1|${CC_PATH}|${AR_PATH}|${RANLIB_PATH}|${BZIP2_LIBRARY}|${ZLIB_INCLUDE_DIR}|${ZLIB_LIBRARY}|${CFLAGS:-}"
 
 cleanup() {
   rm -f "${TMP_ARCHIVE}"
@@ -107,7 +111,12 @@ if [[ ! -f "${SOURCE_DIR}/.extracted" ]]; then
 fi
 release_lock
 
-if [[ -f "${STAMP}" && -f "${LIBRARY}" ]]; then
+if [[ -f "${STAMP}" &&
+      -f "${LIBRARY}" &&
+      -f "${BUILD_DIR}/config.h" &&
+      "$(cat "${STAMP}")" == "${RECIPE}" &&
+      "$(sed -n 's/^#define HAVE_LIBZ 1$/yes/p' "${BUILD_DIR}/config.h")" == "yes" &&
+      "$(sed -n 's/^#define HAVE_ZLIB_H 1$/yes/p' "${BUILD_DIR}/config.h")" == "yes" ]]; then
   exit 0
 fi
 
@@ -125,7 +134,9 @@ cmake_args=(
   -DENABLE_BZip2=ON
   -DBZIP2_INCLUDE_DIR="${BZIP2_SOURCE_DIR}"
   -DBZIP2_LIBRARIES="${BZIP2_LIBRARY}"
-  -DENABLE_ZLIB=OFF
+  -DENABLE_ZLIB=ON
+  -DZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR}"
+  -DZLIB_LIBRARY="${ZLIB_LIBRARY}"
   -DENABLE_LZMA=OFF
   -DENABLE_ZSTD=OFF
   -DENABLE_LZ4=OFF
@@ -165,4 +176,9 @@ if [[ ! -f "${LIBRARY}" ]]; then
   echo "libarchive static library was not produced: ${LIBRARY}" >&2
   exit 1
 fi
-touch "${STAMP}"
+if [[ "$(sed -n 's/^#define HAVE_LIBZ 1$/yes/p' "${BUILD_DIR}/config.h")" != "yes" ||
+      "$(sed -n 's/^#define HAVE_ZLIB_H 1$/yes/p' "${BUILD_DIR}/config.h")" != "yes" ]]; then
+  echo "libarchive was built without zlib support" >&2
+  exit 1
+fi
+printf '%s\n' "${RECIPE}" > "${STAMP}"

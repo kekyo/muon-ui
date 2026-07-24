@@ -724,18 +724,19 @@ describe("muon-builder", () => {
     expect(result.cefPath).not.toBe(fixture.cefPath);
     expect(result.cefPath.endsWith("cef.tar.bz2")).toBe(true);
     expect(result.cefPath).toBe(
-      join(fixture.cacheDir, "artifacts", fixture.archiveFileName),
+      join(fixture.cacheDir, "artifacts", "cef", fixture.archiveFileName),
     );
     await expect(
       findCachedFile(fixture.cacheDir, fixture.archiveFileName),
     ).resolves.toBe(result.cefPath);
     await expect(access(result.cefPath)).resolves.toBeUndefined();
     await expect(
-      access(join(fixture.cacheDir, "catalog.json")),
+      access(join(fixture.cacheDir, "cef-catalog.json")),
     ).rejects.toThrow();
     await expect(listCacheEntries(fixture.cacheDir)).resolves.toEqual([
       "artifacts",
-      `artifacts/${fixture.archiveFileName}`,
+      "artifacts/cef",
+      `artifacts/cef/${fixture.archiveFileName}`,
     ]);
     await expect(access(join(stagePath, "libcef.so"))).resolves.toBeUndefined();
     await expect(
@@ -765,10 +766,12 @@ describe("muon-builder", () => {
     ]);
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
+      `[runtime]
+catalogRefreshIntervalSeconds=0
+
+[cef]
 versionPolicy=exact
 exactVersion=http-retry-cef
-catalogRefreshIntervalSeconds=0
 `,
     );
     const server = await startInterruptingArchiveServer(
@@ -808,9 +811,11 @@ catalogRefreshIntervalSeconds=0
     const fixture = await createPrepareFixture();
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
-versionPolicy=tested
+      `[runtime]
 catalogRefreshIntervalSeconds=604800
+
+[cef]
+versionPolicy=tested
 lastCatalogUpdateUnix=0
 `,
     );
@@ -823,10 +828,10 @@ lastCatalogUpdateUnix=0
     });
 
     expect(result.cefPath).toBe(
-      join(fixture.cacheDir, "artifacts", fixture.archiveFileName),
+      join(fixture.cacheDir, "artifacts", "cef", fixture.archiveFileName),
     );
     await expect(
-      access(join(fixture.cacheDir, "catalog.json")),
+      access(join(fixture.cacheDir, "cef-catalog.json")),
     ).rejects.toThrow();
     await expect(
       readFile(join(result.stagePath ?? "", "libcef.so"), "utf8"),
@@ -869,9 +874,11 @@ lastCatalogUpdateUnix=0
     ]);
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
-versionPolicy=same-major-latest
+      `[runtime]
 catalogRefreshIntervalSeconds=604800
+
+[cef]
+versionPolicy=same-major-latest
 lastCatalogUpdateUnix=0
 `,
     );
@@ -884,7 +891,7 @@ lastCatalogUpdateUnix=0
     });
 
     expect(result.cefPath).toBe(
-      join(fixture.cacheDir, "artifacts", latestSameMajor.fileName),
+      join(fixture.cacheDir, "artifacts", "cef", latestSameMajor.fileName),
     );
     await expect(
       readFile(join(result.stagePath ?? "", "libcef.so"), "utf8"),
@@ -917,9 +924,11 @@ lastCatalogUpdateUnix=0
     ]);
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
-versionPolicy=compat-latest
+      `[runtime]
 catalogRefreshIntervalSeconds=604800
+
+[cef]
+versionPolicy=compat-latest
 lastCatalogUpdateUnix=0
 `,
     );
@@ -932,7 +941,7 @@ lastCatalogUpdateUnix=0
     });
 
     expect(result.cefPath).toBe(
-      join(fixture.cacheDir, "artifacts", compatible.fileName),
+      join(fixture.cacheDir, "artifacts", "cef", compatible.fileName),
     );
     await expect(
       readFile(join(result.stagePath ?? "", "libcef.so"), "utf8"),
@@ -954,10 +963,12 @@ lastCatalogUpdateUnix=0
     ]);
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
+      `[runtime]
+catalogRefreshIntervalSeconds=604800
+
+[cef]
 versionPolicy=exact
 exactVersion=exact-incompatible
-catalogRefreshIntervalSeconds=604800
 lastCatalogUpdateUnix=0
 `,
     );
@@ -994,7 +1005,7 @@ lastCatalogUpdateUnix=0
 
     expect(result.stagePath).toBe(fixture.stageDir);
     expect(result.cefPath).toBe(
-      join(fixture.cacheDir, "artifacts", fixture.archiveFileName),
+      join(fixture.cacheDir, "artifacts", "cef", fixture.archiveFileName),
     );
     await expect(access(join(stagePath, "libcef.so"))).resolves.toBeUndefined();
     await expect(
@@ -1045,7 +1056,7 @@ lastCatalogUpdateUnix=0
     };
     expect(result.cefPath).toBe(outputDir);
     expect(result.archivePath).toBe(
-      join(fixture.cacheDir, "artifacts", fixture.archiveFileName),
+      join(fixture.cacheDir, "artifacts", "cef", fixture.archiveFileName),
     );
     expect(result.version).toBe("fake-cef");
     expect(result.target).toBe("linux-amd64");
@@ -1074,8 +1085,9 @@ lastCatalogUpdateUnix=0
     expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
     await expect(listCacheEntries(fixture.cacheDir)).resolves.toEqual([
       "artifacts",
-      `artifacts/${fixture.archiveFileName}`,
-      "catalog.json",
+      "artifacts/cef",
+      `artifacts/cef/${fixture.archiveFileName}`,
+      "cef-catalog.json",
     ]);
   });
 
@@ -1166,8 +1178,9 @@ lastCatalogUpdateUnix=0
     ).resolves.toBeUndefined();
     await expect(listCacheEntries(fixture.cacheDir)).resolves.toEqual([
       "artifacts",
-      `artifacts/${fixture.archiveFileName}`,
-      "catalog.json",
+      "artifacts/cef",
+      `artifacts/cef/${fixture.archiveFileName}`,
+      "cef-catalog.json",
     ]);
   });
 
@@ -1537,10 +1550,12 @@ lastCatalogUpdateUnix=0
     );
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
+      `[runtime]
+catalogRefreshIntervalSeconds=604800
+
+[cef]
 versionPolicy=exact
 exactVersion=fake-cef-download
-catalogRefreshIntervalSeconds=604800
 lastCatalogUpdateUnix=0
 `,
     );
@@ -2233,8 +2248,10 @@ exit 17
     ]);
     await writeLauncherIni(
       fixture.muonPath,
-      `[cef]
+      `[runtime]
 catalogRefreshIntervalSeconds=604800
+
+[cef]
 lastCatalogUpdateUnix=0
 `,
     );
@@ -2280,7 +2297,9 @@ exit 17
     await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
     await expect(
       readFile(join(stateRuntimePath, "muon-launcher.ini"), "utf8"),
-    ).resolves.not.toContain("versionPolicy=");
+    ).resolves.toMatch(
+      /^\[runtime\]\ncatalogRefreshIntervalSeconds=604800\n\n\[cef\]\nlastCatalogUpdateUnix=\d+\n\n\[node\]\nlastCatalogUpdateUnix=0\n\n\[update\]\nrequested=false\nrequestedAtUnix=0\n$/,
+    );
   });
 
   it("rejects an invalid embedded defaultVersionPolicy during launcher", async () => {

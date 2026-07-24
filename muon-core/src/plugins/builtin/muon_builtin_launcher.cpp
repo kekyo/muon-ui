@@ -50,8 +50,8 @@ struct LauncherSettings {
   bool has_cef_exact_version = false;
   uint64_t catalog_refresh_interval_seconds =
       kDefaultCatalogRefreshIntervalSeconds;
-  bool has_catalog_refresh_interval_seconds = false;
-  uint64_t last_catalog_update_unix = 0;
+  uint64_t cef_last_catalog_update_unix = 0;
+  uint64_t node_last_catalog_update_unix = 0;
   bool update_requested = false;
   uint64_t update_requested_at_unix = 0;
 };
@@ -145,16 +145,22 @@ static bool ApplyEntry(LauncherSettings* settings,
     settings->has_cef_exact_version = true;
     return true;
   }
-  if (section == "cef" && key == "catalogRefreshIntervalSeconds") {
+  if (section == "runtime" && key == "catalogRefreshIntervalSeconds") {
     if (!ParseUint64(value, &settings->catalog_refresh_interval_seconds)) {
       *error_message = "Invalid catalogRefreshIntervalSeconds";
       return false;
     }
-    settings->has_catalog_refresh_interval_seconds = true;
     return true;
   }
   if (section == "cef" && key == "lastCatalogUpdateUnix") {
-    if (!ParseUint64(value, &settings->last_catalog_update_unix)) {
+    if (!ParseUint64(value, &settings->cef_last_catalog_update_unix)) {
+      *error_message = "Invalid lastCatalogUpdateUnix";
+      return false;
+    }
+    return true;
+  }
+  if (section == "node" && key == "lastCatalogUpdateUnix") {
+    if (!ParseUint64(value, &settings->node_last_catalog_update_unix)) {
       *error_message = "Invalid lastCatalogUpdateUnix";
       return false;
     }
@@ -217,6 +223,9 @@ static bool ReadSettings(LauncherSettings* settings,
 
 static std::string CreateSettingsIni(const LauncherSettings& settings) {
   std::ostringstream output;
+  output << "[runtime]\n";
+  output << "catalogRefreshIntervalSeconds="
+         << settings.catalog_refresh_interval_seconds << "\n\n";
   output << "[cef]\n";
   if (settings.has_cef_version_policy) {
     output << "versionPolicy=" << settings.cef_version_policy << "\n";
@@ -224,11 +233,10 @@ static std::string CreateSettingsIni(const LauncherSettings& settings) {
   if (settings.has_cef_exact_version) {
     output << "exactVersion=" << settings.cef_exact_version << "\n";
   }
-  if (settings.has_catalog_refresh_interval_seconds) {
-    output << "catalogRefreshIntervalSeconds="
-           << settings.catalog_refresh_interval_seconds << "\n";
-  }
-  output << "lastCatalogUpdateUnix=" << settings.last_catalog_update_unix
+  output << "lastCatalogUpdateUnix=" << settings.cef_last_catalog_update_unix
+         << "\n\n";
+  output << "[node]\n";
+  output << "lastCatalogUpdateUnix=" << settings.node_last_catalog_update_unix
          << "\n\n";
   output << "[update]\n";
   output << "requested=" << (settings.update_requested ? "true" : "false")
@@ -420,11 +428,9 @@ static bool ApplySettingsPatch(LauncherSettings* settings,
   }
   if (state == JsonPatchFieldState::Value) {
     settings->catalog_refresh_interval_seconds = uint_value;
-    settings->has_catalog_refresh_interval_seconds = true;
   } else if (state == JsonPatchFieldState::Null) {
     settings->catalog_refresh_interval_seconds =
         kDefaultCatalogRefreshIntervalSeconds;
-    settings->has_catalog_refresh_interval_seconds = false;
   }
   yyjson_doc_free(document);
   return ValidateSettings(*settings, error_message);

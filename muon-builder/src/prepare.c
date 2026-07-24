@@ -45,12 +45,11 @@ typedef struct {
   char *launcher_config_dir;
   char *cache_dir;
   unsigned long long catalog_refresh_interval_seconds;
-  int has_catalog_refresh_interval_seconds;
-  unsigned long long last_catalog_update_unix;
+  unsigned long long cef_last_catalog_update_unix;
+  unsigned long long node_last_catalog_update_unix;
   int update_requested;
   unsigned long long update_requested_at_unix;
   int write_launcher_config;
-  int catalog_updated;
   int force;
   int quiet;
   int json;
@@ -480,9 +479,10 @@ static int apply_launcher_config(PrepareOptions *options,
   options->has_cef_exact_version = config->has_cef_exact_version;
   options->catalog_refresh_interval_seconds =
       config->catalog_refresh_interval_seconds;
-  options->has_catalog_refresh_interval_seconds =
-      config->has_catalog_refresh_interval_seconds;
-  options->last_catalog_update_unix = config->last_catalog_update_unix;
+  options->cef_last_catalog_update_unix =
+      config->cef_last_catalog_update_unix;
+  options->node_last_catalog_update_unix =
+      config->node_last_catalog_update_unix;
   options->update_requested = config->update_requested;
   options->update_requested_at_unix = config->update_requested_at_unix;
   return 0;
@@ -570,9 +570,10 @@ static int save_launcher_config_if_needed(const PrepareOptions *options) {
   config.has_cef_exact_version = options->has_cef_exact_version;
   config.catalog_refresh_interval_seconds =
       options->catalog_refresh_interval_seconds;
-  config.has_catalog_refresh_interval_seconds =
-      options->has_catalog_refresh_interval_seconds;
-  config.last_catalog_update_unix = options->last_catalog_update_unix;
+  config.cef_last_catalog_update_unix =
+      options->cef_last_catalog_update_unix;
+  config.node_last_catalog_update_unix =
+      options->node_last_catalog_update_unix;
   config.update_requested = options->update_requested;
   config.update_requested_at_unix = options->update_requested_at_unix;
   if (config.cef_version_policy == NULL || config.cef_exact_version == NULL) {
@@ -584,8 +585,9 @@ static int save_launcher_config_if_needed(const PrepareOptions *options) {
   return result;
 }
 
-static int catalog_exists(const char *cache_dir) {
-  char *catalog_path = muon_path_join(cache_dir, "catalog.json");
+static int cef_catalog_exists(const char *cache_dir) {
+  char *catalog_path =
+      muon_path_join(cache_dir, MUON_PREPARE_CEF_CATALOG_FILE_NAME);
   if (catalog_path == NULL) {
     return 0;
   }
@@ -598,8 +600,8 @@ static int policy_uses_catalog(const PrepareOptions *options) {
   return strcmp(options->cef_version_policy, "tested") != 0;
 }
 
-static int catalog_refresh_due(const PrepareOptions *options) {
-  if (!catalog_exists(options->cache_dir)) {
+static int cef_catalog_refresh_due(const PrepareOptions *options) {
+  if (!cef_catalog_exists(options->cache_dir)) {
     return 1;
   }
   if (options->force || options->update_requested) {
@@ -609,34 +611,36 @@ static int catalog_refresh_due(const PrepareOptions *options) {
     return 0;
   }
   const unsigned long long now = muon_current_unix_time();
-  return options->last_catalog_update_unix == 0 ||
-         now >= options->last_catalog_update_unix +
+  return options->cef_last_catalog_update_unix == 0 ||
+         now >= options->cef_last_catalog_update_unix +
                     options->catalog_refresh_interval_seconds;
 }
 
-static int ensure_catalog_cache(const PrepareOptions *options,
-                                int catalog_required) {
+static int ensure_cef_catalog_cache(const PrepareOptions *options,
+                                    int catalog_required) {
   PrepareOptions *mutable_options = (PrepareOptions *)options;
-  mutable_options->catalog_updated = 0;
-  if (!catalog_refresh_due(options)) {
+  if (!cef_catalog_refresh_due(options)) {
     return 0;
   }
   int updated = 0;
   if (options->progress_callback != NULL) {
     mutable_options->progress_emitted = 1;
   }
-  const int result = muon_prepare_ensure_catalog_cache_with_status_progress(
-      options->cache_dir, 1, &updated, get_prepare_progress_callback(options),
-      get_prepare_progress_user_data(options));
-  mutable_options->catalog_updated = updated;
+  const int result =
+      muon_prepare_ensure_cef_catalog_cache_with_status_progress(
+          options->cache_dir, 1, &updated,
+          get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options));
   if (updated) {
-    mutable_options->last_catalog_update_unix = muon_current_unix_time();
+    mutable_options->cef_last_catalog_update_unix = muon_current_unix_time();
     mutable_options->update_requested = 0;
     mutable_options->update_requested_at_unix = 0;
   }
-  return result == 0 || (!catalog_required && catalog_exists(options->cache_dir))
-             ? 0
-             : -1;
+  if (result == 0 ||
+      (!catalog_required && cef_catalog_exists(options->cache_dir))) {
+    return 0;
+  }
+  return -1;
 }
 
 static MuonCefReference create_cef_reference(
@@ -1709,7 +1713,7 @@ int muon_prepare_in_place_with_progress(
   const int catalog_required = strcmp(options.cef_version_policy, "exact") == 0;
   if ((policy_uses_catalog(&options) || options.force ||
        options.update_requested) &&
-      ensure_catalog_cache(&options, catalog_required) != 0) {
+      ensure_cef_catalog_cache(&options, catalog_required) != 0) {
     if (catalog_required) {
       goto cleanup_paths;
     }
@@ -1821,7 +1825,7 @@ int muon_prepare_staged_with_progress(
   const int catalog_required = strcmp(options.cef_version_policy, "exact") == 0;
   if ((policy_uses_catalog(&options) || options.force ||
        options.update_requested) &&
-      ensure_catalog_cache(&options, catalog_required) != 0) {
+      ensure_cef_catalog_cache(&options, catalog_required) != 0) {
     if (catalog_required) {
       goto cleanup_paths;
     }
@@ -1898,7 +1902,7 @@ static int run_runtime_command(int argc, char **argv, int start_index) {
   if (cef_is_archive &&
       (policy_uses_catalog(&options) || options.force ||
        options.update_requested) &&
-      ensure_catalog_cache(&options, catalog_required) != 0) {
+      ensure_cef_catalog_cache(&options, catalog_required) != 0) {
     if (catalog_required) {
       goto cleanup_paths;
     }
@@ -1951,7 +1955,8 @@ static int run_buildtime_command(int argc, char **argv, int start_index) {
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_artifact;
   }
-  if (muon_prepare_ensure_catalog_cache(options.cache_dir, options.force) != 0) {
+  if (muon_prepare_ensure_cef_catalog_cache(options.cache_dir,
+                                            options.force) != 0) {
     goto cleanup_artifact;
   }
   if (muon_prepare_resolve_cef_artifact(options.cache_dir,

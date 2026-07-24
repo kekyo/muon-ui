@@ -458,17 +458,20 @@ static int apply_entry(MuonLauncherConfig *config, const char *section,
     config->has_cef_exact_version = 1;
     return 0;
   }
-  if (strcmp(section, "cef") == 0 &&
+  if (strcmp(section, "runtime") == 0 &&
       strcmp(key, "catalogRefreshIntervalSeconds") == 0) {
     if (parse_uint64(value, &config->catalog_refresh_interval_seconds) != 0) {
       return -1;
     }
-    config->has_catalog_refresh_interval_seconds = 1;
     return 0;
   }
   if (strcmp(section, "cef") == 0 &&
       strcmp(key, "lastCatalogUpdateUnix") == 0) {
-    return parse_uint64(value, &config->last_catalog_update_unix);
+    return parse_uint64(value, &config->cef_last_catalog_update_unix);
+  }
+  if (strcmp(section, "node") == 0 &&
+      strcmp(key, "lastCatalogUpdateUnix") == 0) {
+    return parse_uint64(value, &config->node_last_catalog_update_unix);
   }
   if (strcmp(section, "update") == 0 && strcmp(key, "requested") == 0) {
     return parse_bool(value, &config->update_requested);
@@ -582,7 +585,13 @@ int muon_launcher_config_write(const char *runtime_dir,
     free(temporary_path);
     return -1;
   }
-  int size = snprintf(NULL, 0, "[cef]\n");
+  int size =
+      snprintf(NULL, 0,
+               "[runtime]\n"
+               "catalogRefreshIntervalSeconds=%llu\n"
+               "\n"
+               "[cef]\n",
+               config->catalog_refresh_interval_seconds);
   if (config->has_cef_version_policy) {
     size += snprintf(NULL, 0, "versionPolicy=%s\n",
                      config->cef_version_policy);
@@ -591,17 +600,17 @@ int muon_launcher_config_write(const char *runtime_dir,
     size +=
         snprintf(NULL, 0, "exactVersion=%s\n", config->cef_exact_version);
   }
-  if (config->has_catalog_refresh_interval_seconds) {
-    size += snprintf(NULL, 0, "catalogRefreshIntervalSeconds=%llu\n",
-                     config->catalog_refresh_interval_seconds);
-  }
   size += snprintf(NULL, 0,
+                   "lastCatalogUpdateUnix=%llu\n"
+                   "\n"
+                   "[node]\n"
                    "lastCatalogUpdateUnix=%llu\n"
                    "\n"
                    "[update]\n"
                    "requested=%s\n"
                    "requestedAtUnix=%llu\n",
-                   config->last_catalog_update_unix,
+                   config->cef_last_catalog_update_unix,
+                   config->node_last_catalog_update_unix,
                    config->update_requested ? "true" : "false",
                    config->update_requested_at_unix);
   if (size < 0) {
@@ -629,7 +638,12 @@ int muon_launcher_config_write(const char *runtime_dir,
     output += written;                                                        \
     remaining -= (size_t)written;                                             \
   } while (0)
-  MUON_WRITE_LAUNCHER_CONFIG("[cef]\n");
+  MUON_WRITE_LAUNCHER_CONFIG(
+      "[runtime]\n"
+      "catalogRefreshIntervalSeconds=%llu\n"
+      "\n"
+      "[cef]\n",
+      config->catalog_refresh_interval_seconds);
   if (config->has_cef_version_policy) {
     MUON_WRITE_LAUNCHER_CONFIG("versionPolicy=%s\n",
                                 config->cef_version_policy);
@@ -638,17 +652,17 @@ int muon_launcher_config_write(const char *runtime_dir,
     MUON_WRITE_LAUNCHER_CONFIG("exactVersion=%s\n",
                                 config->cef_exact_version);
   }
-  if (config->has_catalog_refresh_interval_seconds) {
-    MUON_WRITE_LAUNCHER_CONFIG("catalogRefreshIntervalSeconds=%llu\n",
-                                config->catalog_refresh_interval_seconds);
-  }
   MUON_WRITE_LAUNCHER_CONFIG(
+      "lastCatalogUpdateUnix=%llu\n"
+      "\n"
+      "[node]\n"
       "lastCatalogUpdateUnix=%llu\n"
       "\n"
       "[update]\n"
       "requested=%s\n"
       "requestedAtUnix=%llu\n",
-      config->last_catalog_update_unix,
+      config->cef_last_catalog_update_unix,
+      config->node_last_catalog_update_unix,
       config->update_requested ? "true" : "false",
       config->update_requested_at_unix);
 #undef MUON_WRITE_LAUNCHER_CONFIG

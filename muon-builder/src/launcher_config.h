@@ -20,10 +20,10 @@ typedef struct {
   int has_cef_exact_version;
   /** Effective catalog refresh interval in seconds. */
   unsigned long long catalog_refresh_interval_seconds;
-  /** Whether catalog_refresh_interval_seconds was explicitly present in the ini file. */
-  int has_catalog_refresh_interval_seconds;
   /** Last successful CEF catalog update Unix timestamp. */
-  unsigned long long last_catalog_update_unix;
+  unsigned long long cef_last_catalog_update_unix;
+  /** Last successful Node.js catalog update Unix timestamp. */
+  unsigned long long node_last_catalog_update_unix;
   /** Whether a catalog update was requested for the next launcher run. */
   int update_requested;
   /** Catalog update request Unix timestamp. */

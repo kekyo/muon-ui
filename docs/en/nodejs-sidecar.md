@@ -15,7 +15,7 @@ muon's Node.js feature is optional and runs Node.js in a process separate from t
 
 A relative `project` is resolved from the directory containing `muon.json`; an absolute path is also accepted. It points to an ordinary Node.js project containing its `package.json`, source files, and installed runtime dependencies. The MVP exposes its descriptor facade through `window.muon.node`, so operational use requires `plugin.mode: "simple"`.
 
-The project's `package.json` is copied without conversion. The Node.js module loader interprets `type`, `main`, `exports`, and `imports`; the developer's package manager owns `dependencies`; and the muon Node bridge validates `engines.node`. Keep muon-specific settings under `node` in `muon.json`.
+The project's `package.json` is copied without conversion. The Node.js module loader interprets `type`, `main`, `exports`, and `imports`, while the developer's package manager owns `dependencies`. Specify `engines.node` in the same place as in an ordinary Node.js project. muon validates that this range overlaps the Node bridge compatibility range and normalizes their intersection as the runtime requirement. When `engines.node` is omitted, only the Node bridge compatibility range constrains the runtime. Keep muon-specific settings under `node` in `muon.json`.
 
 muon does not run a package manager. Prepare dependencies in the Node project before `muon build` or `muon pack`. The complete project is staged as `node-project/` outside `assets.zip`; symbolic links are dereferenced. The staging boundary is the configured project directory, so dependencies hoisted into an ancestor workspace are not copied unless the project contains a link to them. Ensure that every runtime dependency is represented inside `node.project`. Symbolic-link cycles are unsupported and fail the build. Configurations where the Node project overlaps the asset source, the Vite `outDir` or `publicDir`, an output directory, or a pack work directory are rejected before Vite copies or deletes files, preventing source deletion and duplicate packaging.
 
@@ -41,25 +41,29 @@ Only `undefined`, `null`, booleans, finite numbers other than negative zero, str
 
 Each encoded IPC frame is limited to 16 MiB. JSON framing and base64 expansion count toward the limit, so the usable binary payload is smaller and depends on the other arguments. One sidecar accepts at most 1,024 pending requests; additional calls are rejected until earlier requests settle.
 
-## Node.js executable
+## Managed Node.js runtime
 
-The MVP does not bundle Node.js. At runtime muon selects:
+muon does not search for a system-installed Node.js executable. Instead, it uses a Node.js runtime managed for each application. When a Node.js project is configured and the effective plugin mode is `simple`, runtime preparation occurs before `vite dev` and `muon run` startup. In a distribution, `muon-launcher` prepares the runtime on the first launch and whenever else preparation is required. A prepared runtime is reused while the ready fingerprint containing the selected Node.js archive's SHA-256 matches; if a catalog refresh changes the selected version, the runtime is prepared again. `muon build` and `muon pack` do not download or install Node.js; they embed the normalized runtime requirement needed for selection into the artifact.
 
-1. the absolute path in `MUON_NODE_EXECUTABLE`, when set; or
-2. `node` from `PATH` (`node.exe` on Windows).
+The runtime version is selected from the intersection of `engines.node` in the Node project's `package.json` and the Node bridge compatibility range. When `engines.node` is omitted, muon selects the newest compatible LTS release. If none matches, preparation fails without falling back to a non-LTS release. When `engines.node` is specified, muon likewise prefers the greatest matching LTS release and falls back to the greatest matching release of any kind only when no LTS release matches.
 
-A relative override is rejected without a `PATH` fallback, and no shell is used. The sidecar itself requires Node.js `^20.19.0 || >=22.12.0` and validates that range before project initialization. When `package.json` contains `engines.node`, the sidecar also validates the project's range.
+Release metadata comes from the official Node.js distribution index at `https://nodejs.org/dist/index.json`. muon obtains the artifact-specific digest from that version's `SHASUMS256.txt` and verifies the downloaded archive with SHA-256 before extracting it. Only these two files are installed; npm, Corepack, and other files in the official archive are omitted:
+
+- `runtimes/node/LICENSE`
+- `runtimes/node/bin/node` (`runtimes/node/bin/node.exe` on Windows)
+
+The Node plugin receives an absolute path to this executable constructed from the directory containing the running `muon-core` executable. It directly starts only that path, with no environment-variable override or `PATH` fallback. If the managed runtime is missing, sidecar startup fails instead of silently using another Node.js installation.
 
 The sidecar starts lazily on the first import, and concurrent imports coalesce onto one process per app. Before project code is loaded, its working directory is changed to the configured project root. A runtime failure is sticky until app shutdown; the MVP does not restart the process.
 
 ## Validation and permissions
 
-Validate mode checks configuration, plugin metadata, exposed functions, and allow-policy consistency. It neither exposes `window.muon.node`, starts Node.js, nor executes project code. Use simple mode to call the MVP API. Missing system Node.js, engine mismatches, module resolution, and runtime code errors are checked only after switching to simple mode and making the first import.
+Validate mode checks configuration, plugin metadata, exposed functions, and allow-policy consistency. It does not expose `window.muon.node`, download or install a Node.js runtime, start the Node sidecar, or execute project code. Use simple mode to call the MVP API. The Node project's `package.json` and `engines.node` syntax, and the intersection with the Node bridge compatibility range, are validated during configuration resolution or the build. Managed-runtime preparation, module resolution, and Node code runtime errors are not checked in validate mode. This boundary prevents validation alone from downloading a runtime or executing developer code.
 
 The muon allow policy controls the renderer-to-plugin boundary. It does not restrict filesystem, network, or child-process operations performed inside Node.js. The application developer is responsible for trusting the Node project and its dependencies.
 
 ## Packaging and shutdown
 
-For an opted-in app, `muon build` and `muon pack` include the platform `node.so` or `node.dll`, `node-bridge.mjs`, and staged `node-project/`. The framework does not add a Node executable, distribution archive, or download cache; a file deliberately placed inside the developer's Node project is still copied as ordinary project content.
+For an opted-in app, `muon build` and `muon pack` include the platform `node.so` or `node.dll`, `node-bridge.mjs`, staged `node-project/`, and the normalized runtime requirement stored in the internal `launcher.nodeRuntime` field. `launcher.nodeRuntime` is generated by muon; specifying it directly in user `muon.json` is a build error. The build/pack artifact does not contain a Node executable, distribution archive, or download cache; a file deliberately placed inside the developer's Node project is still copied as ordinary project content. The launcher later prepares the required executable from the official distribution source.
 
 During app shutdown, muon requests sidecar shutdown and waits asynchronously before unloading the plugin. After closing the bridge and transport, the sidecar exits explicitly even when Node.js still has active handles. muon does not discover, call, or await project-specific cleanup APIs; application code must call and await any such API when graceful resource cleanup is required. An unresponsive sidecar is terminated after a grace period and then forcibly killed if necessary. On Linux, asynchronous child-exit observation uses `pidfd_open` and therefore requires Linux kernel 5.3 or later. POSIX termination targets the sidecar process itself; project code is responsible for stopping any child processes that it creates.

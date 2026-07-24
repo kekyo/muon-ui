@@ -135,7 +135,13 @@ Set `node.project` to the directory of an ordinary Node.js project to enable the
 }
 ```
 
-When `node` is present, `project` must be a non-empty string. The MVP's `window.muon.node` API requires `plugin.mode: "simple"`; validate mode loads metadata without exposing the API or starting Node.js. The reserved `node` plugin cannot be configured directly through `plugin.plugins[]`. See [Using the Node.js sidecar](./nodejs-sidecar.md) for development, build, distribution, system Node.js selection, API, and value restrictions.
+When `node` is present, `project` must be a non-empty string. It refers to an ordinary Node.js project: manage `type`, `main`, `exports`, `imports`, `dependencies`, and `engines.node` in `package.json` using normal Node.js conventions. No muon-specific extension is required in the Node project's `package.json`.
+
+When `engines.node` is specified, muon normalizes its intersection with the Node bridge compatibility range and embeds it in the artifact as the internal `launcher.nodeRuntime` value. When it is omitted, the Node bridge compatibility range is used and the newest matching LTS release is selected. If none matches, preparation fails without falling back to a non-LTS release. When `engines.node` is specified, muon selects the greatest matching LTS release, or the greatest matching release of any kind when no LTS release matches. The launcher uses the official Node.js `https://nodejs.org/dist/index.json` and the selected version's `SHASUMS256.txt`, verifies the archive with SHA-256, and prepares it under `runtimes/node/`.
+
+`muon build` and `muon pack` include the Node project, `node.so` or `node.dll`, `node-bridge.mjs`, and the normalized runtime requirement. They do not include a Node.js executable, distribution archive, or download cache. When the runtime requirement is required for execution, the executable is prepared before development startup, by `muon run`, or by the distribution launcher. Only `runtimes/node/LICENSE` and `runtimes/node/bin/node` (`node.exe` on Windows) are installed; npm and Corepack are omitted. The Node plugin uses only the absolute path to this executable, with no environment-variable or `PATH` fallback.
+
+The MVP's `window.muon.node` API requires `plugin.mode: "simple"`. Validate mode loads metadata without exposing the API, downloading or installing a Node.js runtime, starting the Node sidecar, or executing project code. The reserved `node` plugin cannot be configured directly through `plugin.plugins[]`. See [Using the Node.js sidecar](./nodejs-sidecar.md) for development, build, distribution, runtime selection, API, and value restrictions.
 
 ## browser key
 
@@ -435,4 +441,4 @@ Logs are not output for sources set to `off`.
 | `defaultVersionPolicy` | `string` | `"tested"` | CEF version policy used when `versionPolicy` is not saved in `muon-launcher.ini`. |
 
 > Note: `appId`, which is not listed here, is automatically calculated and inserted during `muon build` or `muon pack`.
-> Its explanation is omitted.
+> When `node.project` is present, the normalized requirement generated from the Node project and Node bridge is also inserted as the internal `nodeRuntime` value. Specifying `launcher.nodeRuntime` as a user setting is a build error.

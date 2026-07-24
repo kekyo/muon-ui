@@ -25,6 +25,9 @@ npx muon run
 - Specify `--no-debugger` to disable development defaults for muon DevTools, the recycle keybind, and CDP.
 - Specify `--allow-insecure-localhost` to ignore localhost HTTPS certificate errors during development.
   This option is available only through `muon run` and the Vite plugin; passing it directly to a distribution muon-launcher is rejected before startup.
+- Before launch, `muon run` invokes muon-builder to prepare CEF and, when `node.project` is used in `simple` mode, the required official Node.js runtime.
+  When both downloads are needed, they run concurrently, and Node.js is placed at `runtimes/node/bin/node` under the stage directory (`runtimes/node/bin/node.exe` on Windows).
+  There is no CLI option for a Node.js executable. The Node plugin uses only this absolute path and does not fall back to an environment variable or `PATH`.
 
 Unlike when using the Vite plugin, you can naturally split page management by asset host name.
 For example, CEF treats `asset://main/index.html` and `asset://sub/index.html` as different origins.
@@ -55,6 +58,11 @@ If the asset source is a directory, it is packed into `assets.zip`.
 If it is a ZIP file, it is copied as `assets.zip` in the distribution destination and signed.
 Also, if regular files such as `README.md` and `LICENSE` are specified in `files` in `package.json`, files that satisfy the conditions are copied directly under the distribution destination directory.
 If the muon Vite plugin's `build.distributionFiles` is specified, that list is used instead of `files` in `package.json`.
+
+For an application with `node.project`, `muon build` and `muon pack` copy the target platform's `node.so` or `node.dll`, `node-bridge.mjs`, and the Node project into the output, and embed the normalized Node runtime requirement into the launcher.
+They do not include a Node.js executable, distribution archive, or download cache in build or pack output.
+The distribution `muon-launcher` prepares CEF and the required Node.js runtime at startup. A normal installation places them in a runtime directory separate from the application root; a portable distribution places them directly in the extracted directory, so the prepared portable runtime also contains the required Node.js runtime.
+A running Node.js runtime is not replaced; updates take effect during the next launcher startup. The sidecar starts only the prepared `runtimes/node/bin/node` (`.exe` on Windows) and does not fall back to an environment variable or `PATH`.
 
 Specify a target such as `--target linux-amd64`, or use `--all` to generate all bundled targets.
 When there is no muon Vite plugin, the default target for `muon build` is the running host target.

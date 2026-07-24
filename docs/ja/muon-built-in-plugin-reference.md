@@ -128,14 +128,14 @@ await window.muon.browser.recycle();
 
 ## muon.launcher名前空間
 
-`window.muon.launcher` は、次回 `muon-launcher` 起動時に使われるCEF更新設定を扱います。
-設定はruntimeディレクトリの `muon-launcher.ini` に保存され、現在実行中のCEFには影響しません。
+`window.muon.launcher` は、次回 `muon-launcher` 起動時に使われるruntime catalog更新設定を扱います。
+設定はruntimeディレクトリの `muon-launcher.ini` に保存され、現在実行中のCEFやNode.js sidecarには影響しません。
 
 | 関数                    | 引数                                                                           | 戻り値                           | 説明                                                                 |
 | :---------------------- | :----------------------------------------------------------------------------- | :------------------------------- | :------------------------------------------------------------------- |
 | `getSettings()`         | なし                                                                           | `Promise<MuonLauncherSettings>` | 現在有効なlauncher設定を返します。                                  |
-| `setSettings(settings)` | `MuonLauncherSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやカタログ更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
-| `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-launcher` 起動時にCEFカタログ更新を試行するよう要求します。 |
+| `setSettings(settings)` | `MuonLauncherSettingsPatch`                                                   | `Promise<void>`                  | 次回起動時に使うCEF version policyやruntime catalog更新間隔を保存します。`null` を指定した項目は明示設定を削除します。 |
+| `triggerUpdate()`       | なし                                                                           | `Promise<void>`                  | 次回 `muon-launcher` 起動時に、適用対象のCEFとNode.jsのcatalog更新を試行するよう要求します。 |
 
 ```js
 await window.muon.launcher.setSettings({
@@ -144,6 +144,10 @@ await window.muon.launcher.setSettings({
 });
 await window.muon.launcher.triggerUpdate();
 ```
+
+- `cefVersionPolicy` と `cefExactVersion` はCEF専用です。Node.jsのversionは、ビルド時にlauncherへ埋め込まれたNode runtime requirementから選択され、このAPIにはNode.js用のversion policy設定はありません。
+- `catalogRefreshIntervalSeconds` と `triggerUpdate()` は、次回のruntime準備で適用対象となるcatalogに共通で作用します。Node.js catalogは、アプリが実行にNode.jsを必要とする場合だけ適用対象になります。
+- catalog更新やruntimeの置き換えは実行中に行われません。現在のCEFとNode.js sidecarはそのまま動作し、変更は次回のlauncher起動時に反映されます。
 
 ## muon.environments名前空間
 

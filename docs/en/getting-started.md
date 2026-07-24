@@ -46,8 +46,8 @@ The muon package includes the following:
 - TypeScript type definitions for muon built-in plugins
 - Platform-specific muon binary assets
 
-The CEF binary itself is not included in the NPM package.
-CEF is downloaded from the official CDN when it becomes necessary.
+The CEF binary itself and the Node.js runtime used by the optional Node.js integration are not included in the NPM package.
+CEF is downloaded from the official CDN when it becomes necessary, while the Node.js runtime is downloaded from the official Node.js distribution site only when a Node.js project is configured and the effective plugin mode is `simple`.
 
 ## Configure the muon Vite plugin
 
@@ -149,6 +149,8 @@ npm run build
 > Note: This is an alias for `vite build` defined in the `scripts` section of `package.json`.
 
 The files output to Vite's `build.outDir` are collected into `assets.zip`.
+When a Node.js project is configured, that project, the bridge to muon, and the required Node.js version constraint are also included in the distribution directory.
+The Node.js runtime itself is not included at build time. Only when the runtime requirement is required for execution does the muon launcher prepare it on first launch at the distribution destination.
 By default, muon builds all supported targets and outputs them under the `dist-muon/` directory:
 
 ```text
@@ -253,7 +255,7 @@ npx muon pack --target windows-amd64 --type nsis
 - `zip` is only available for Windows targets and creates a portable ZIP containing each `<packageName>/<target>` directory.
 - `tgz` or `tar.gz` is only available for Linux targets and creates a portable gzip-compressed tar archive containing each `<packageName>/<target>` directory.
   `tgz` is an alias for `tar.gz`, and the output filename is always `*.tar.gz`.
-  Portable distributions do not include CEF binaries. On first launch, CEF is prepared directly under the extracted `<packageName>/<target>` directory.
+  Portable distributions do not include CEF binaries or the Node.js runtime itself. On first launch, CEF is prepared directly under the extracted `<packageName>/<target>` directory, and the Node.js runtime is prepared under `runtimes/node/` only when required.
   The profile is also stored in `profile/` under the same directory.
 - `deb` is only available for Linux targets and requires `dpkg-deb` on the runtime `PATH`.
   On Debian/Ubuntu, install it with `sudo apt install dpkg-deb`.
@@ -316,8 +318,11 @@ From a developer's perspective, the primary entry point of a muon app is the loa
 Internally, configuration, policies, the plugin runtime, and other components are initialized before the window is created, but the developer does not have to implement these steps as main-process JavaScript.
 This page-centered model lets developers who know web development start building muon apps directly.
 
-This does not mean that every operation must be placed in the renderer process.
-When no separate backend is selected, domain logic and data repository implementations are also included in the page bundle, but responsibilities can be moved to muon plugins, the [Node.js sidecar](./nodejs-sidecar.md), or a remote Web API when necessary.
-The Node.js sidecar lets non-UI Node.js code be structured as an ordinary Node.js project in a separate process.
+This does not mean that all processing must be implemented in JavaScript within the page.
+For example, while domain logic and data repository implementations are included in the page’s bundle, you can decouple responsibilities to remote Web APIs, [Node.js sidecars](./nodejs-sidecar.md), external applications, and [Muon plugin implementations](./muon-plugin-develop.md) as needed.
 
-Before bundling a large backend implementation into a muon app, consider whether it should instead be implemented as a Web API hosted by a cloud service or virtual machine.
+- Consider whether you should implement these as cloud services or Web APIs running on hosted virtual machines.
+- By using a Node.js sidecar, you can configure Node.js code unrelated to the UI as a standard Node.js project running in a separate process.
+  You can also use more feature-rich NPM libraries supported by Node.js.
+- Using the [`muon.executor` plugin](./muon-built-in-plugin-reference.md), you can call external programs to perform processing.
+- If you want to tightly integrate with OS-native features, you can also implement a Muon plugin.

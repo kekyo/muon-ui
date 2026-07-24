@@ -38,6 +38,8 @@ const supportedNodeRange = __MUON_NODE_SUPPORTED_ENGINE_RANGE__;
 export interface MuonNodeRuntimeRequirement {
   /** Whether the application must fail when no matching Node runtime exists. */
   readonly required: boolean;
+  /** Whether `package.json` explicitly contains `engines.node`. */
+  readonly engineRangeSpecified: boolean;
   /** Original `package.json` `engines.node` text, or `*` when omitted. */
   readonly engineRange: string;
   /**
@@ -55,6 +57,8 @@ export interface MuonNodeRuntimeRequirement {
 export interface ResolvedMuonNodeProject {
   /** Absolute source directory copied into a muon runtime. */
   readonly sourcePath: string;
+  /** Whether `package.json` explicitly contains `engines.node`. */
+  readonly engineRangeSpecified: boolean;
   /** Original `package.json` `engines.node` text, or `*` when omitted. */
   readonly engineRange: string;
   /**
@@ -95,7 +99,12 @@ const intersectNodeEngineRanges = (
 
 const readNodeEngineRequirement = async (
   packageJsonPath: string,
-): Promise<Pick<ResolvedMuonNodeProject, "engineRange" | "comparatorSets">> => {
+): Promise<
+  Pick<
+    ResolvedMuonNodeProject,
+    "engineRangeSpecified" | "engineRange" | "comparatorSets"
+  >
+> => {
   let source: string;
   try {
     source = await readFile(packageJsonPath, "utf8");
@@ -146,7 +155,11 @@ const readNodeEngineRequirement = async (
       "package.json engines.node does not overlap the muon Node bridge range",
     );
   }
-  return { engineRange, comparatorSets };
+  return {
+    engineRangeSpecified: nodeValue !== undefined,
+    engineRange,
+    comparatorSets,
+  };
 };
 
 /**
@@ -164,6 +177,7 @@ export const createMuonNodeRuntimeRequirement = (
     ? undefined
     : {
         required,
+        engineRangeSpecified: project.engineRangeSpecified,
         engineRange: project.engineRange,
         comparatorSets: project.comparatorSets,
       };

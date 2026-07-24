@@ -144,6 +144,7 @@ interface ConcurrentRuntimeDistributionServer {
 
 interface TestNodeRuntimeRequirement {
   required: boolean;
+  engineRangeSpecified: boolean;
   engineRange: string;
   comparatorSets: readonly (readonly string[])[];
 }
@@ -523,6 +524,7 @@ const createNodeRequirement = (
   comparatorSets: readonly (readonly string[])[],
 ): TestNodeRuntimeRequirement => ({
   required: true,
+  engineRangeSpecified: engineRange !== "*",
   engineRange,
   comparatorSets,
 });
@@ -1166,7 +1168,8 @@ int main(void) {
           &requirement, &present) != 0) {
     return 1;
   }
-  printf("%d|%d|%s|%llu\\n", present, requirement.required,
+  printf("%d|%d|%d|%s|%llu\\n", present, requirement.required,
+         requirement.engine_range_specified,
          requirement.engine_range == NULL ? "" : requirement.engine_range,
          (unsigned long long)requirement.set_count);
   muon_prepare_free_node_runtime_requirement(&requirement);
@@ -1257,6 +1260,7 @@ const createDuplicateNodeRuntimeFieldPayload = (): Buffer =>
           encodeTestObject([
             ["required", encodeTestBoolean(true)],
             ["required", encodeTestBoolean(false)],
+            ["engineRangeSpecified", encodeTestBoolean(false)],
             ["engineRange", encodeTestString("*")],
           ]),
         ],
@@ -1654,7 +1658,7 @@ describe("embedded Node runtime requirement", () => {
       encoding: "utf8",
     });
 
-    expect(stdout.trim()).toBe("1|1|*|1");
+    expect(stdout.trim()).toBe("1|1|0|*|1");
   });
 
   it.each([
@@ -1665,6 +1669,7 @@ describe("embedded Node runtime requirement", () => {
           nodeRuntime: {
             required: true,
             engineRange: "*",
+            comparatorSets: [[]],
           },
         },
       }),
@@ -1690,7 +1695,7 @@ describe("embedded Node runtime requirement", () => {
         launcher: {
           nodeRuntime: {
             ...createNodeRequirement("*", [[]]),
-            required: "true",
+            engineRangeSpecified: "true",
           },
         },
       }),
@@ -2819,6 +2824,64 @@ requestedAtUnix=0
           .getRequests()
           .some(({ pathname }) => pathname.startsWith("/v26.1.0/")),
       ).toBe(false);
+    });
+
+    it("does not use a non-LTS fallback when package.json omits engines.node", async () => {
+      const fixture = await createPrepareFixture();
+      const distribution = createFakeNodeDistribution([
+        createFakeNodeRelease("v25.1.0", false),
+        createFakeNodeRelease("v24.9.0", false),
+      ]);
+      const server = await startNodeDistributionServer(distribution);
+      const requirement = {
+        ...createNodeRequirement("*", [[]]),
+        engineRangeSpecified: false,
+      };
+      let message = "";
+
+      try {
+        await prepareNodeFixture(fixture, server.baseUrl, requirement);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toContain(
+        "No Node.js LTS release matches target linux-amd64",
+      );
+      expect(message).toContain("engines.node (omitted)");
+    });
+
+    it("uses a non-LTS fallback for an explicit wildcard engines.node", async () => {
+      const fixture = await createPrepareFixture();
+      const selectedArtifact = await createFakeNodeTarGzArtifact("v25.1.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const distribution = createFakeNodeDistribution([
+        createFakeNodeRelease("v24.9.0", false),
+        createFakeNodeRelease("v25.1.0", false, selectedArtifact),
+      ]);
+      const server = await startNodeDistributionServer(distribution);
+      const requirement = {
+        ...createNodeRequirement("*", [[]]),
+        engineRangeSpecified: true,
+      };
+
+      await prepareNodeFixture(fixture, server.baseUrl, requirement);
+
+      await expect(
+        readFile(
+          join(
+            fixture.cacheDir,
+            "artifacts",
+            "node",
+            selectedArtifact.version,
+            selectedArtifact.fileName,
+          ),
+        ),
+      ).resolves.toEqual(selectedArtifact.content);
     });
 
     it("falls back to the latest matching non-LTS release across comparator sets", async () => {

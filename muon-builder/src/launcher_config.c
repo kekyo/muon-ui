@@ -427,10 +427,11 @@ static int tlv_read_node_runtime_requirement(
     MuonLauncherTlvReader *reader,
     size_t count,
     MuonNodeRuntimeRequirement *requirement) {
-  if (count != 3) {
+  if (count != 4) {
     return -1;
   }
   int has_required = 0;
+  int has_engine_range_specified = 0;
   int has_engine_range = 0;
   int has_comparator_sets = 0;
   for (size_t index = 0; index < count; index += 1) {
@@ -445,6 +446,15 @@ static int tlv_read_node_runtime_requirement(
         return -1;
       }
       has_required = 1;
+      continue;
+    }
+    if (tlv_key_equals(key, key_length, "engineRangeSpecified")) {
+      if (has_engine_range_specified ||
+          tlv_read_boolean_value(
+              reader, &requirement->engine_range_specified) != 0) {
+        return -1;
+      }
+      has_engine_range_specified = 1;
       continue;
     }
     if (tlv_key_equals(key, key_length, "engineRange")) {
@@ -466,7 +476,11 @@ static int tlv_read_node_runtime_requirement(
     }
     return -1;
   }
-  return !has_required || !has_engine_range || !has_comparator_sets ? -1 : 0;
+  if (!has_required || !has_engine_range_specified ||
+      !has_engine_range || !has_comparator_sets) {
+    return -1;
+  }
+  return 0;
 }
 
 static int tlv_read_launcher_node_runtime(

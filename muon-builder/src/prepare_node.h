@@ -44,6 +44,8 @@ typedef struct {
 typedef struct {
   /** Non-zero when absence of a compatible Node.js runtime is fatal. */
   int required;
+  /** Non-zero when `package.json` explicitly specified `engines.node`. */
+  int engine_range_specified;
   /** Owned original `package.json` `engines.node` diagnostic text. */
   char *engine_range;
   /** Owned normalized comparator sets forming an outer OR expression. */
@@ -137,9 +139,10 @@ int muon_prepare_ensure_node_catalog_cache_with_status_progress(
  * @return 0 on success, or non-zero for invalid catalog data or when no
  *     compatible target release exists.
  *
- * Matching LTS releases are preferred. If none match, every matching release
- * is considered. Within the selected group, the greatest semantic version is
- * selected.
+ * When `engines.node` was omitted, only matching LTS releases are considered.
+ * When it was specified, matching LTS releases are preferred and every
+ * matching release is considered only if no LTS release matches. Within the
+ * selected group, the greatest semantic version is selected.
  */
 int muon_prepare_resolve_node_artifact(
     const char *cache_dir, const char *target,

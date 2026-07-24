@@ -907,6 +907,7 @@ describe("muon build", () => {
       launcher: {
         nodeRuntime: {
           required: true,
+          engineRangeSpecified: true,
           engineRange: ">=20 <23 || ^24.3.0",
           comparatorSets: [
             [">=20.19.0", "<21.0.0-0", ">=20.0.0", "<23.0.0-0"],
@@ -941,9 +942,6 @@ describe("muon build", () => {
       `${JSON.stringify(
         {
           name: "muon-node-validate-fixture",
-          engines: {
-            node: "^24.3.0",
-          },
         },
         null,
         2,
@@ -985,8 +983,9 @@ describe("muon build", () => {
       launcher: {
         nodeRuntime: {
           required: false,
-          engineRange: "^24.3.0",
-          comparatorSets: [[">=22.12.0", ">=24.3.0", "<25.0.0-0"]],
+          engineRangeSpecified: false,
+          engineRange: "*",
+          comparatorSets: [[">=20.19.0", "<21.0.0-0"], [">=22.12.0"]],
         },
       },
     });

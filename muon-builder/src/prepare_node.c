@@ -421,6 +421,8 @@ int muon_prepare_validate_node_runtime_requirement(
     const MuonNodeRuntimeRequirement *requirement) {
   if (requirement == NULL ||
       (requirement->required != 0 && requirement->required != 1) ||
+      (requirement->engine_range_specified != 0 &&
+       requirement->engine_range_specified != 1) ||
       requirement->engine_range == NULL ||
       requirement->engine_range[0] == '\0' ||
       requirement->sets == NULL || requirement->set_count == 0) {
@@ -465,7 +467,7 @@ int muon_prepare_parse_node_runtime_requirement(
       (char *)json, strlen(json), YYJSON_READ_NOFLAG, NULL, &read_error);
   yyjson_val *root =
       document == NULL ? NULL : yyjson_doc_get_root(document);
-  if (root == NULL || !yyjson_is_obj(root) || yyjson_obj_size(root) != 3) {
+  if (root == NULL || !yyjson_is_obj(root) || yyjson_obj_size(root) != 4) {
     muon_print_error("Invalid Node.js runtime requirement JSON%s%s.\n",
                      document == NULL ? ": " : "",
                      document == NULL && read_error.msg != NULL
@@ -476,12 +478,17 @@ int muon_prepare_parse_node_runtime_requirement(
   }
 
   yyjson_val *required_value = NULL;
+  yyjson_val *engine_range_specified_value = NULL;
   yyjson_val *engine_range_value = NULL;
   yyjson_val *sets_value = NULL;
   if (object_get_single_value(root, "required", &required_value) != 0 ||
+      object_get_single_value(
+          root, "engineRangeSpecified",
+          &engine_range_specified_value) != 0 ||
       object_get_single_value(root, "engineRange", &engine_range_value) != 0 ||
       object_get_single_value(root, "comparatorSets", &sets_value) != 0 ||
       !yyjson_is_bool(required_value) ||
+      !yyjson_is_bool(engine_range_specified_value) ||
       !json_value_is_c_string(engine_range_value) ||
       yyjson_get_len(engine_range_value) == 0 || !yyjson_is_arr(sets_value) ||
       yyjson_arr_size(sets_value) == 0) {
@@ -491,6 +498,8 @@ int muon_prepare_parse_node_runtime_requirement(
   }
 
   requirement->required = yyjson_get_bool(required_value) ? 1 : 0;
+  requirement->engine_range_specified =
+      yyjson_get_bool(engine_range_specified_value) ? 1 : 0;
   requirement->engine_range =
       muon_duplicate_string(yyjson_get_str(engine_range_value));
   requirement->set_count = yyjson_arr_size(sets_value);
@@ -977,13 +986,24 @@ int muon_prepare_resolve_node_artifact(
     }
   }
 
-  const MuonNodeReleaseSelection *selected =
-      best_lts.version == NULL ? &best_any : &best_lts;
+  const MuonNodeReleaseSelection *selected = &best_lts;
+  if (selected->version == NULL &&
+      requirement->engine_range_specified != 0) {
+    selected = &best_any;
+  }
   if (result == 0 && selected->version == NULL) {
-    muon_print_error(
-        "No Node.js release matches target %s and engines.node %s.\n", target,
-        requirement->engine_range == NULL ? "(unknown)"
-                                          : requirement->engine_range);
+    if (requirement->engine_range_specified == 0) {
+      muon_print_error(
+          "No Node.js LTS release matches target %s and engines.node "
+          "(omitted).\n",
+          target);
+    } else {
+      muon_print_error(
+          "No Node.js release matches target %s and engines.node %s.\n",
+          target,
+          requirement->engine_range == NULL ? "(unknown)"
+                                            : requirement->engine_range);
+    }
     result = -1;
   }
   if (result == 0) {

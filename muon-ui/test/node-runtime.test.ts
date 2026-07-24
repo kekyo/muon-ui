@@ -27,12 +27,14 @@ const bridgeEngineComparatorSets = [
 
 interface ResolvedNodeRuntimeProject {
   sourcePath: string;
+  engineRangeSpecified: boolean;
   engineRange: string;
   comparatorSets: readonly (readonly string[])[];
 }
 
 interface NodeRuntimeRequirement {
   required: boolean;
+  engineRangeSpecified: boolean;
   engineRange: string;
   comparatorSets: readonly (readonly string[])[];
 }
@@ -86,6 +88,26 @@ describe("muon Node runtime requirement", () => {
       `${JSON.stringify({ name: "no-engine-project" }, null, 2)}\n`,
     );
 
+    expect(project.engineRangeSpecified).toBe(false);
+    expect(project.engineRange).toBe("*");
+    expect(project.comparatorSets).toEqual(bridgeEngineComparatorSets);
+  });
+
+  it("distinguishes an explicit wildcard from an omitted engines.node", async () => {
+    const project = await resolveNodeRuntimeProject(
+      `${JSON.stringify(
+        {
+          name: "wildcard-engine-project",
+          engines: {
+            node: "*",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    expect(project.engineRangeSpecified).toBe(true);
     expect(project.engineRange).toBe("*");
     expect(project.comparatorSets).toEqual(bridgeEngineComparatorSets);
   });
@@ -104,6 +126,7 @@ describe("muon Node runtime requirement", () => {
       )}\n`,
     );
 
+    expect(project.engineRangeSpecified).toBe(true);
     expect(project.engineRange).toBe(">=20 <23 || ^24.3.0");
     expect(project.comparatorSets).toEqual([
       [">=20.19.0", "<21.0.0-0", ">=20.0.0", "<23.0.0-0"],
@@ -180,6 +203,7 @@ describe("muon Node runtime requirement", () => {
     await chmod(executablePath, 0o755);
     const requirement: NodeRuntimeRequirement = {
       required: true,
+      engineRangeSpecified: true,
       engineRange: ">=20 <23",
       comparatorSets: [
         [">=20.19.0", "<21.0.0-0", ">=20.0.0", "<23.0.0-0"],

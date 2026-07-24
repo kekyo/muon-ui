@@ -525,7 +525,7 @@ runtime_source_windows="$(winepath -w "${runtime_source_dir}")"
 runtime_stage_windows="$(winepath -w "${runtime_stage_dir}")"
 runtime_cache_windows="$(winepath -w "${runtime_cache_dir}")"
 cef_source_windows="$(winepath -w "${archive_root}")"
-node_requirement='{"required":true,"engineRange":"*","comparatorSets":[[]]}'
+node_requirement='{"required":true,"engineRangeSpecified":false,"engineRange":"*","comparatorSets":[[]]}'
 runtime_wine_log="${temp_dir}/runtime-wine.log"
 
 if ! WINEDEBUG=+seh WINEPREFIX="${wine_prefix}" \

@@ -43,7 +43,7 @@ $(OUT_DIR)/prepare_node.o: src/prepare_node.c src/prepare_node.h src/prepare_pro
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 
-$(OUT_DIR)/launcher_config.o: src/launcher_config.c src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h
+$(OUT_DIR)/launcher_config.o: src/launcher_config.c src/launcher_config.h src/prepare_node.h src/prepare_progress.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 

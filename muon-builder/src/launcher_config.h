@@ -6,6 +6,8 @@
 #ifndef MUON_PREPARE_LAUNCHER_CONFIG_H
 #define MUON_PREPARE_LAUNCHER_CONFIG_H
 
+#include "prepare_node.h"
+
 #define MUON_LAUNCHER_CONFIG_FILE_NAME "muon-launcher.ini"
 #define MUON_LAUNCHER_DEFAULT_CATALOG_REFRESH_INTERVAL_SECONDS 604800ULL
 
@@ -58,5 +60,22 @@ int muon_launcher_get_embedded_default_version_policy(char **policy);
  * When the embedded config has no appId, *app_id is set to NULL.
  */
 int muon_launcher_get_embedded_app_id(char **app_id);
+
+/**
+ * Reads the embedded muon.json launcher.nodeRuntime from this executable.
+ *
+ * @param requirement Receives owned requirement fields when present. The
+ *     output is always safe to pass to
+ *     muon_prepare_free_node_runtime_requirement().
+ * @param present Receives non-zero when launcher.nodeRuntime is present.
+ * @return 0 on success, or non-zero when the embedded TLV or requirement
+ *     schema is invalid.
+ *
+ * @remarks The returned requirement fields must be released with
+ *     muon_prepare_free_node_runtime_requirement(). Bytes after the counted
+ *     root TLV value belong to fixed-slot padding and are not decoded.
+ */
+int muon_launcher_get_embedded_node_runtime_requirement(
+    MuonNodeRuntimeRequirement *requirement, int *present);
 
 #endif

@@ -201,12 +201,12 @@ export const buildTestMuonBuilder = async (
     `LAUNCHER_TARGET=${launcherExecutablePath}`,
     `VERSION_HEADER=${versionHeader}`,
     `RUNTIME_INFO_HEADER=${runtimeInfoHeaderPath}`,
-    `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -I${zlibIncludeDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux-amd64\\"`,
+    `CPPFLAGS=-I${generatedDir} -I${yyjsonSourceDir} -I${libarchiveIncludeDir} -I${bzip2SourceDir} -I${zlibIncludeDir} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\"linux-amd64\\" -pthread`,
     "LAUNCHER_CPPFLAGS=",
     "CFLAGS=-std=c99 -O0 -g -Wall -Wextra -pedantic",
     "LDFLAGS=-static",
     "LAUNCHER_LDFLAGS=",
-    `LDLIBS=${libarchiveLib} ${bzip2Lib} ${zlibLib}`,
+    `LDLIBS=${libarchiveLib} ${bzip2Lib} ${zlibLib} -pthread`,
     "LAUNCHER_LDLIBS=-lxcb",
   ]);
 

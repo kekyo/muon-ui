@@ -38,7 +38,8 @@ typedef struct {
 } MuonNodeComparatorSet;
 
 /**
- * Owned Node.js runtime requirement decoded from the launcher JSON argument.
+ * Owned normalized Node.js runtime requirement decoded from JSON input or an
+ * embedded launcher configuration.
  */
 typedef struct {
   /** Non-zero when absence of a compatible Node.js runtime is fatal. */
@@ -50,6 +51,16 @@ typedef struct {
   /** Number of comparator sets. */
   size_t set_count;
 } MuonNodeRuntimeRequirement;
+
+/**
+ * Validates an owned normalized Node.js runtime requirement.
+ *
+ * @param requirement Requirement to validate.
+ * @return 0 when every field and normalized comparator is valid, or non-zero
+ *     otherwise.
+ */
+int muon_prepare_validate_node_runtime_requirement(
+    const MuonNodeRuntimeRequirement *requirement);
 
 /**
  * Owned metadata for one selected official Node.js archive.

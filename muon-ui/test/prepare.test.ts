@@ -43,7 +43,12 @@ import {
 } from "vitest";
 
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "../src/prepare.js";
-import { embedMuonConfigInLauncherFile } from "../src/embed-config.js";
+import {
+  createMuonLauncherEmbeddedConfigSlot,
+  embedMuonConfigInLauncherFile,
+  encodeMuonConfigTlv,
+  findMuonLauncherEmbeddedConfigSlot,
+} from "../src/embed-config.js";
 import {
   buildTestMuonBuilder,
   createRuntimeInfoHeader,
@@ -52,6 +57,9 @@ import {
 const execFileAsync = promisify(execFile);
 const sha256HexPattern = /^[0-9a-f]{64}$/u;
 const emptySha256Fingerprint = "0".repeat(64);
+const futureCatalogTimestamp = 4_102_444_800;
+const runtimeReadyMarkerFileName = ".muon-runtime-ready.json";
+const legacyRuntimeReadyMarkerFileName = ".muon-ready.json";
 const cleanupDirectories: string[] = [];
 const suiteCleanupDirectories: string[] = [];
 const nodeDistributionServers: FakeNodeDistributionServer[] = [];
@@ -126,6 +134,14 @@ interface FakeNodeDistributionServer {
   close(): Promise<void>;
 }
 
+interface ConcurrentRuntimeDistributionServer {
+  baseUrl: string;
+  getRequests(): readonly FakeNodeDistributionRequest[];
+  catalogBarrierReached(): boolean;
+  archiveBarrierReached(): boolean;
+  close(): Promise<void>;
+}
+
 interface TestNodeRuntimeRequirement {
   required: boolean;
   engineRange: string;
@@ -161,8 +177,19 @@ interface ReadyMarker {
   cefFingerprint: string;
 }
 
+interface RuntimeReadyMarker extends ReadyMarker {
+  nodeFingerprint: string;
+}
+
 const readReadyMarker = async (path: string): Promise<ReadyMarker> =>
   JSON.parse(await readFile(path, "utf8")) as ReadyMarker;
+
+const readRuntimeReadyMarker = async (
+  runtimePath: string,
+): Promise<RuntimeReadyMarker> =>
+  JSON.parse(
+    await readFile(join(runtimePath, runtimeReadyMarkerFileName), "utf8"),
+  ) as RuntimeReadyMarker;
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -643,6 +670,55 @@ const writeLauncherIni = async (
   await writeFile(join(runtimePath, "muon-launcher.ini"), content);
 };
 
+const readLauncherCatalogState = async (
+  runtimePath: string,
+): Promise<{
+  cefLastCatalogUpdateUnix: number;
+  nodeLastCatalogUpdateUnix: number;
+  updateRequested: boolean;
+  updateRequestedAtUnix: number;
+}> => {
+  const values = new Map<string, string>();
+  let section = "";
+  const content = await readFile(
+    join(runtimePath, "muon-launcher.ini"),
+    "utf8",
+  );
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const sectionMatch = /^\[([^\]]+)\]$/u.exec(line);
+    if (sectionMatch !== null) {
+      section = sectionMatch[1] ?? "";
+      continue;
+    }
+    const separator = line.indexOf("=");
+    if (line === "" || separator < 1) {
+      continue;
+    }
+    values.set(
+      `${section}.${line.slice(0, separator)}`,
+      line.slice(separator + 1),
+    );
+  }
+  const readInteger = (key: string): number => {
+    const value = values.get(key);
+    if (value === undefined || !/^\d+$/u.test(value)) {
+      throw new Error(`Invalid launcher state integer: ${key}`);
+    }
+    return Number.parseInt(value, 10);
+  };
+  const requested = values.get("update.requested");
+  if (requested !== "true" && requested !== "false") {
+    throw new Error("Invalid launcher update.requested state.");
+  }
+  return {
+    cefLastCatalogUpdateUnix: readInteger("cef.lastCatalogUpdateUnix"),
+    nodeLastCatalogUpdateUnix: readInteger("node.lastCatalogUpdateUnix"),
+    updateRequested: requested === "true",
+    updateRequestedAtUnix: readInteger("update.requestedAtUnix"),
+  };
+};
+
 const writeEmbeddedLauncher = async (
   fixture: PrepareFixture,
   config: Record<string, unknown>,
@@ -1024,6 +1100,7 @@ int main(int argc, char **argv) {
     libarchiveLib,
     bzip2Lib,
     zlibLib,
+    "-pthread",
   ]);
   return executablePath;
 };
@@ -1044,6 +1121,160 @@ const runProgressHarness = async (
     },
   );
   return stdout.trim() === "" ? [] : stdout.trim().split(/\r?\n/);
+};
+
+const buildEmbeddedNodeRuntimeHarness = async (
+  root: string,
+): Promise<string> => {
+  const harnessPath = join(root, "embedded-node-runtime-harness.c");
+  const executablePath = join(root, "embedded-node-runtime-harness");
+  const prepareRoot = resolve("..", "muon-builder");
+  const bzip2Lib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "bzip2-linux64",
+    "libbz2.a",
+  );
+  const libarchiveLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "libarchive-linux64",
+    "libarchive",
+    "libarchive.a",
+  );
+  const zlibLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "zlib-linux64",
+    "install",
+    "lib",
+    "libz.a",
+  );
+  await writeFile(
+    harnessPath,
+    `#include <stdio.h>
+
+#include "launcher_config.h"
+
+int main(void) {
+  MuonNodeRuntimeRequirement requirement;
+  int present = 0;
+  if (muon_launcher_get_embedded_node_runtime_requirement(
+          &requirement, &present) != 0) {
+    return 1;
+  }
+  printf("%d|%d|%s|%llu\\n", present, requirement.required,
+         requirement.engine_range == NULL ? "" : requirement.engine_range,
+         (unsigned long long)requirement.set_count);
+  muon_prepare_free_node_runtime_requirement(&requirement);
+  return 0;
+}
+`,
+  );
+  await execFileAsync("gcc", [
+    harnessPath,
+    "-std=c99",
+    "-Wall",
+    "-Wextra",
+    "-pedantic",
+    "-I",
+    join(prepareRoot, "src"),
+    "-o",
+    executablePath,
+    join(dirname(prepareExecutablePath), "libmuon-builder.a"),
+    libarchiveLib,
+    bzip2Lib,
+    zlibLib,
+    "-pthread",
+  ]);
+  return executablePath;
+};
+
+const writeEmbeddedNodeRuntimeHarness = async (
+  harnessPath: string,
+  payload: Uint8Array,
+  outputPath: string,
+): Promise<void> => {
+  const content = await readFile(harnessPath);
+  const slot = findMuonLauncherEmbeddedConfigSlot(content);
+  const patched = Buffer.from(content);
+  createMuonLauncherEmbeddedConfigSlot(payload).copy(patched, slot.offset);
+  await writeFile(outputPath, patched);
+  await chmod(outputPath, 0o755);
+};
+
+const encodeTestVarUint = (value: number): Buffer => {
+  const bytes: number[] = [];
+  let remaining = value;
+  do {
+    let byte = remaining & 0x7f;
+    remaining = Math.floor(remaining / 128);
+    if (remaining !== 0) {
+      byte |= 0x80;
+    }
+    bytes.push(byte);
+  } while (remaining !== 0);
+  return Buffer.from(bytes);
+};
+
+const encodeTestRawString = (value: string): Buffer => {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([encodeTestVarUint(bytes.length), bytes]);
+};
+
+const encodeTestString = (value: string): Buffer =>
+  Buffer.concat([Buffer.from([4]), encodeTestRawString(value)]);
+
+const encodeTestBoolean = (value: boolean): Buffer =>
+  Buffer.from([value ? 2 : 1]);
+
+const encodeTestArray = (values: readonly Buffer[]): Buffer =>
+  Buffer.concat([
+    Buffer.from([6]),
+    encodeTestVarUint(values.length),
+    ...values,
+  ]);
+
+const encodeTestObject = (
+  entries: readonly (readonly [string, Buffer])[],
+): Buffer =>
+  Buffer.concat([
+    Buffer.from([7]),
+    encodeTestVarUint(entries.length),
+    ...entries.flatMap(([key, value]) => [encodeTestRawString(key), value]),
+  ]);
+
+const createDuplicateNodeRuntimeFieldPayload = (): Buffer =>
+  encodeTestObject([
+    [
+      "launcher",
+      encodeTestObject([
+        [
+          "nodeRuntime",
+          encodeTestObject([
+            ["required", encodeTestBoolean(true)],
+            ["required", encodeTestBoolean(false)],
+            ["engineRange", encodeTestString("*")],
+          ]),
+        ],
+      ]),
+    ],
+  ]);
+
+const createDeepUnknownLauncherPayload = (): Buffer => {
+  let nested: unknown = null;
+  for (let depth = 0; depth < 128; depth += 1) {
+    nested = [nested];
+  }
+  return encodeMuonConfigTlv({
+    unknown: nested,
+    launcher: {
+      nodeRuntime: createNodeRequirement("*", [[]]),
+    },
+  });
 };
 
 const closeServer = async (server: Server): Promise<void> => {
@@ -1112,6 +1343,115 @@ const startNodeDistributionServer = async (
   };
   nodeDistributionServers.push(result);
   return result;
+};
+
+const startConcurrentRuntimeDistributionServer = async (
+  fixture: PrepareFixture,
+  distribution: FakeNodeDistribution,
+): Promise<ConcurrentRuntimeDistributionServer> => {
+  const requests: FakeNodeDistributionRequest[] = [];
+  const files = new Map(distribution.files);
+  const cefArchive = getEmbeddedCefArchive();
+  const nodeArchivePath = [...distribution.files.keys()].find(
+    (path) => path.endsWith(".tar.gz") || path.endsWith(".zip"),
+  );
+  if (nodeArchivePath === undefined) {
+    throw new Error("Expected one Node runtime archive in the distribution.");
+  }
+  files.set("/source-catalog.json", await readFile(fixture.catalogPath));
+  files.set(`/${cefArchive.fileName}`, await readFile(cefArchive.archivePath));
+
+  const barriers = [
+    {
+      paths: new Set(["/source-catalog.json", "/index.json"]),
+      arrived: new Set<string>(),
+      pending: [] as (() => void)[],
+      reached: false,
+    },
+    {
+      paths: new Set([`/${cefArchive.fileName}`, nodeArchivePath]),
+      arrived: new Set<string>(),
+      pending: [] as (() => void)[],
+      reached: false,
+    },
+  ];
+  let closing = false;
+
+  const server = createServer((request, response) => {
+    const method = request.method ?? "GET";
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    requests.push({ method, pathname });
+    const content = files.get(pathname);
+    if (content === undefined) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const writeResponse = (): void => {
+      if (closing) {
+        response.writeHead(503);
+        response.end();
+        return;
+      }
+      response.writeHead(200, {
+        "Accept-Ranges": "bytes",
+        "Content-Length": content.length,
+        "Content-Type":
+          pathname.endsWith(".json") || pathname.endsWith(".txt")
+            ? "application/json"
+            : "application/octet-stream",
+      });
+      if (method === "HEAD") {
+        response.end();
+      } else {
+        response.end(content);
+      }
+    };
+    const barrier = barriers.find(({ paths }) => paths.has(pathname));
+    if (barrier === undefined || method !== "GET") {
+      writeResponse();
+      return;
+    }
+
+    barrier.arrived.add(pathname);
+    barrier.pending.push(writeResponse);
+    if (barrier.arrived.size !== barrier.paths.size) {
+      return;
+    }
+    barrier.reached = true;
+    for (const respond of barrier.pending) {
+      respond();
+    }
+    barrier.pending.length = 0;
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await closeServer(server);
+    throw new Error("Expected a TCP test server address.");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    getRequests: () => [...requests],
+    catalogBarrierReached: () => barriers[0]?.reached === true,
+    archiveBarrierReached: () => barriers[1]?.reached === true,
+    close: async (): Promise<void> => {
+      closing = true;
+      for (const barrier of barriers) {
+        for (const respond of barrier.pending) {
+          respond();
+        }
+        barrier.pending.length = 0;
+      }
+      await closeServer(server);
+    },
+  };
 };
 
 const startInterruptingArchiveServer = async (
@@ -1284,6 +1624,120 @@ describe("muon prepare target resolution", () => {
   });
 });
 
+describe("embedded Node runtime requirement", () => {
+  let harnessPath = "";
+
+  beforeAll(async () => {
+    harnessPath = await buildEmbeddedNodeRuntimeHarness(
+      await createSuiteTemporaryDirectory(
+        "muon-embedded-node-runtime-harness-",
+      ),
+    );
+  });
+
+  it("decodes a normalized requirement without reading random slot padding", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-embedded-node-runtime-valid-",
+    );
+    const executablePath = join(root, "harness");
+    await writeEmbeddedNodeRuntimeHarness(
+      harnessPath,
+      encodeMuonConfigTlv({
+        launcher: {
+          nodeRuntime: createNodeRequirement("*", [[]]),
+        },
+      }),
+      executablePath,
+    );
+
+    const { stdout } = await execFileAsync(executablePath, [], {
+      encoding: "utf8",
+    });
+
+    expect(stdout.trim()).toBe("1|1|*|1");
+  });
+
+  it.each([
+    {
+      name: "a missing field",
+      payload: encodeMuonConfigTlv({
+        launcher: {
+          nodeRuntime: {
+            required: true,
+            engineRange: "*",
+          },
+        },
+      }),
+    },
+    {
+      name: "an unknown field",
+      payload: encodeMuonConfigTlv({
+        launcher: {
+          nodeRuntime: {
+            ...createNodeRequirement("*", [[]]),
+            extra: true,
+          },
+        },
+      }),
+    },
+    {
+      name: "a duplicate field",
+      payload: createDuplicateNodeRuntimeFieldPayload(),
+    },
+    {
+      name: "a field with the wrong type",
+      payload: encodeMuonConfigTlv({
+        launcher: {
+          nodeRuntime: {
+            ...createNodeRequirement("*", [[]]),
+            required: "true",
+          },
+        },
+      }),
+    },
+    {
+      name: "an embedded NUL",
+      payload: encodeMuonConfigTlv({
+        launcher: {
+          nodeRuntime: createNodeRequirement("*\u0000invalid", [[]]),
+        },
+      }),
+    },
+    {
+      name: "an invalid normalized comparator",
+      payload: encodeMuonConfigTlv({
+        launcher: {
+          nodeRuntime: createNodeRequirement("*", [["not-a-comparator"]]),
+        },
+      }),
+    },
+    {
+      name: "a non-canonical varuint",
+      payload: Buffer.from([7, 0x80, 0]),
+    },
+    {
+      name: "an overflowing varuint",
+      payload: Buffer.from([
+        7, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 2,
+      ]),
+    },
+    {
+      name: "excessively nested unknown data",
+      payload: createDeepUnknownLauncherPayload(),
+    },
+  ])("rejects $name", async ({ payload }) => {
+    const root = await createTemporaryDirectory(
+      "muon-embedded-node-runtime-invalid-",
+    );
+    const executablePath = join(root, "harness");
+    await writeEmbeddedNodeRuntimeHarness(harnessPath, payload, executablePath);
+
+    await expect(
+      execFileAsync(executablePath, [], { encoding: "utf8" }),
+    ).rejects.toMatchObject({ code: 1 });
+  });
+});
+
 describe("muon-builder", () => {
   it("stages explicit CEF Release/Resources files and the whole muon directory", async () => {
     const fixture = await createPrepareFixture();
@@ -1309,11 +1763,27 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "assets", "app.txt")),
     ).resolves.toBeUndefined();
-    const readyMarker = await readReadyMarker(
-      join(stagePath, ".muon-ready.json"),
-    );
+    const readyMarker = await readRuntimeReadyMarker(stagePath);
     expect(readyMarker.muonFingerprint).toMatch(sha256HexPattern);
     expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.nodeFingerprint).toBe(emptySha256Fingerprint);
+  });
+
+  it("does not publish a ready stage when launcher state cannot be committed", async () => {
+    const fixture = await createPrepareFixture();
+    const launcherStateBlocker = join(
+      fixture.cefPath,
+      "Release",
+      "muon-launcher.ini",
+    );
+    await mkdir(launcherStateBlocker, { recursive: true });
+    await writeFile(join(launcherStateBlocker, "blocker"), "not a file\n");
+
+    await expect(prepareFixture(fixture)).rejects.toThrow();
+
+    await expect(
+      access(join(fixture.stageDir, runtimeReadyMarkerFileName)),
+    ).rejects.toThrow();
   });
 
   it("downloads CEF when cefPath is omitted and stages the prepared cache", async () => {
@@ -1352,10 +1822,9 @@ describe("muon-builder", () => {
     await expect(
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
-    const readyMarker = await readReadyMarker(
-      join(stagePath, ".muon-ready.json"),
-    );
+    const readyMarker = await readRuntimeReadyMarker(stagePath);
     expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.nodeFingerprint).toBe(emptySha256Fingerprint);
   });
 
   it("resumes an interrupted HTTP CEF archive download", async () => {
@@ -2055,11 +2524,10 @@ lastCatalogUpdateUnix=0
     await expect(
       access(join(fixture.muonPath, "libcef.so")),
     ).resolves.toBeUndefined();
-    const readyMarker = await readReadyMarker(
-      join(fixture.muonPath, ".muon-cef-ready.json"),
-    );
+    const readyMarker = await readRuntimeReadyMarker(fixture.muonPath);
     expect(readyMarker.muonFingerprint).toBe(emptySha256Fingerprint);
     expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.nodeFingerprint).toBe(emptySha256Fingerprint);
 
     await expect(runProgressHarness(harnessPath, fixture)).resolves.toEqual([]);
   });
@@ -2196,6 +2664,111 @@ lastCatalogUpdateUnix=0
           encoding: "utf8",
         });
         expect(stdout.trim()).toBe(expected);
+      }
+    });
+
+    it("downloads CEF and Node runtime inputs concurrently with serialized progress events", async () => {
+      const fixture = await createPrepareFixture(undefined, [
+        {
+          version: "fake-cef-concurrent",
+          chromiumVersion: "100.0.0.0",
+          archive: getEmbeddedCefArchive(),
+        },
+      ]);
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const server = await startConcurrentRuntimeDistributionServer(
+        fixture,
+        createFakeNodeDistribution([
+          createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+        ]),
+      );
+      await writeLauncherIni(
+        fixture.muonPath,
+        `[runtime]
+catalogRefreshIntervalSeconds=604800
+
+[cef]
+versionPolicy=exact
+exactVersion=fake-cef-concurrent
+lastCatalogUpdateUnix=0
+
+[node]
+lastCatalogUpdateUnix=0
+
+[update]
+requested=false
+requestedAtUnix=0
+`,
+      );
+
+      try {
+        const { stdout, stderr } = await execFileAsync(
+          prepareExecutablePath,
+          [
+            "runtime",
+            "--muon-path",
+            fixture.muonPath,
+            "--stage-dir",
+            fixture.stageDir,
+            "--target",
+            "linux-amd64",
+            "--cache-dir",
+            fixture.cacheDir,
+            "--node-runtime-requirement",
+            JSON.stringify(createNodeRequirement("*", [[]])),
+            "--progress-json",
+            "--json",
+          ],
+          {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              MUON_CEF_CATALOG_URL: `${server.baseUrl}/source-catalog.json`,
+              MUON_NODE_DIST_URL: server.baseUrl,
+            },
+            timeout: 60_000,
+          },
+        );
+        const result = JSON.parse(stdout) as { stagePath: string };
+        expect(result.stagePath).toBe(fixture.stageDir);
+        expect(server.catalogBarrierReached()).toBe(true);
+        expect(server.archiveBarrierReached()).toBe(true);
+        const progressLines = stderr
+          .split(/\r?\n/u)
+          .filter((line) => line.includes('"phase"'));
+        const progressEvents = progressLines.map(
+          (line) =>
+            JSON.parse(line) as {
+              phase: string;
+              status: string;
+            },
+        );
+        expect(progressEvents).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              phase: "downloading",
+              status: "Checking for CEF updates...",
+            }),
+            expect.objectContaining({
+              phase: "downloading",
+              status: "Checking for Node.js updates...",
+            }),
+          ]),
+        );
+        await expect(
+          access(join(fixture.stageDir, "libcef.so")),
+        ).resolves.toBeUndefined();
+        await expect(
+          readFile(join(fixture.stageDir, "runtimes", "node", "bin", "node")),
+        ).resolves.toEqual(createFakeNodeExecutableContent(fakeNodeVersion));
+      } finally {
+        await server.close();
       }
     });
 
@@ -2452,6 +3025,44 @@ lastCatalogUpdateUnix=0
       });
     });
 
+    it("does not refresh the Node catalog again within the configured interval", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact("v24.4.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const release = createFakeNodeRelease("v24.4.0", "Krypton", artifact);
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([release]),
+      );
+      const requirement = createNodeRequirement("*", [[]]);
+
+      await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        requirement,
+        fixture.stageDir,
+      );
+      const second = await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        requirement,
+        fixture.stageDir,
+      );
+
+      expect(second.cacheHit).toBe(true);
+      expect(
+        server
+          .getRequests()
+          .filter(
+            ({ method, pathname }) =>
+              method === "GET" && pathname === "/index.json",
+          ),
+      ).toHaveLength(1);
+    });
+
     it("does not request Node metadata when no runtime requirement is provided", async () => {
       const fixture = await createPrepareFixture();
       const server = await startNodeDistributionServer(
@@ -2491,6 +3102,168 @@ lastCatalogUpdateUnix=0
       await expect(
         access(join(fixture.cacheDir, "artifacts", "node")),
       ).rejects.toThrow();
+    });
+
+    it("clears a shared update request only after both runtime catalogs are refreshed", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([
+          createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+        ]),
+      );
+      const requirement = createNodeRequirement("*", [[]]);
+      await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        requirement,
+        join(fixture.projectPath, ".muon", "update-warmup"),
+      );
+      await copyFile(
+        fixture.catalogPath,
+        join(fixture.cacheDir, "cef-catalog.json"),
+      );
+      const nodeCatalogRequestsBefore = server
+        .getRequests()
+        .filter(({ pathname }) => pathname === "/index.json").length;
+      await writeLauncherIni(
+        fixture.muonPath,
+        `[runtime]
+catalogRefreshIntervalSeconds=604800
+
+[cef]
+versionPolicy=exact
+exactVersion=fake-cef
+lastCatalogUpdateUnix=${futureCatalogTimestamp}
+
+[node]
+lastCatalogUpdateUnix=${futureCatalogTimestamp}
+
+[update]
+requested=true
+requestedAtUnix=123
+`,
+      );
+      const sourceLauncherConfig = await readFile(
+        join(fixture.muonPath, "muon-launcher.ini"),
+        "utf8",
+      );
+
+      await runMuonPrepare({
+        muonPath: fixture.muonPath,
+        cefPath: undefined,
+        stageDir: fixture.stageDir,
+        target: "linux-amd64",
+        cacheDir: fixture.cacheDir,
+        nodeRuntimeRequirement: requirement,
+        force: false,
+        quiet: false,
+        prepareExecutablePath,
+        environment: {
+          ...process.env,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          MUON_NODE_DIST_URL: server.baseUrl,
+        },
+        cwd: process.cwd(),
+      });
+
+      const state = await readLauncherCatalogState(fixture.stageDir);
+      expect(state.cefLastCatalogUpdateUnix).toBeGreaterThan(0);
+      expect(state.cefLastCatalogUpdateUnix).toBeLessThan(
+        futureCatalogTimestamp,
+      );
+      expect(state.nodeLastCatalogUpdateUnix).toBeGreaterThan(0);
+      expect(state.nodeLastCatalogUpdateUnix).toBeLessThan(
+        futureCatalogTimestamp,
+      );
+      expect(state.updateRequested).toBe(false);
+      expect(state.updateRequestedAtUnix).toBe(0);
+      await expect(
+        readFile(join(fixture.muonPath, "muon-launcher.ini"), "utf8"),
+      ).resolves.toBe(sourceLauncherConfig);
+      expect(
+        server
+          .getRequests()
+          .filter(({ pathname }) => pathname === "/index.json").length,
+      ).toBeGreaterThan(nodeCatalogRequestsBefore);
+    });
+
+    it("retains a shared update request when one catalog refresh falls back to cache", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([
+          createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+        ]),
+      );
+      const requirement = createNodeRequirement("*", [[]]);
+
+      await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        requirement,
+        fixture.stageDir,
+      );
+      await copyFile(
+        fixture.catalogPath,
+        join(fixture.cacheDir, "cef-catalog.json"),
+      );
+      await server.close();
+      await writeLauncherIni(
+        fixture.stageDir,
+        `[runtime]
+catalogRefreshIntervalSeconds=604800
+
+[cef]
+versionPolicy=exact
+exactVersion=fake-cef
+lastCatalogUpdateUnix=${futureCatalogTimestamp}
+
+[node]
+lastCatalogUpdateUnix=${futureCatalogTimestamp}
+
+[update]
+requested=true
+requestedAtUnix=123
+`,
+      );
+
+      await runMuonPrepare({
+        muonPath: fixture.muonPath,
+        cefPath: undefined,
+        stageDir: fixture.stageDir,
+        target: "linux-amd64",
+        cacheDir: fixture.cacheDir,
+        nodeRuntimeRequirement: requirement,
+        force: false,
+        quiet: false,
+        prepareExecutablePath,
+        environment: {
+          ...process.env,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          MUON_NODE_DIST_URL: server.baseUrl,
+        },
+        cwd: process.cwd(),
+      });
+
+      const state = await readLauncherCatalogState(fixture.stageDir);
+      expect(state.cefLastCatalogUpdateUnix).toBeGreaterThan(0);
+      expect(state.cefLastCatalogUpdateUnix).toBeLessThan(
+        futureCatalogTimestamp,
+      );
+      expect(state.nodeLastCatalogUpdateUnix).toBe(futureCatalogTimestamp);
+      expect(state.updateRequested).toBe(true);
+      expect(state.updateRequestedAtUnix).toBe(123);
     });
   });
 
@@ -2557,6 +3330,67 @@ lastCatalogUpdateUnix=0
               pathname === `/${artifact.version}/${artifact.fileName}`,
           ),
       ).toHaveLength(1);
+    });
+
+    it("rebuilds a staged runtime when the selected Node artifact changes", async () => {
+      const fixture = await createPrepareFixture();
+      const firstArtifact = await createFakeNodeTarGzArtifact("v22.18.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const secondArtifact = await createFakeNodeTarGzArtifact("v24.4.0", {
+        includeLicense: true,
+        nodeIsSymlink: false,
+        includeNpmSymlink: false,
+        includeTraversalEntry: false,
+      });
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([
+          createFakeNodeRelease(firstArtifact.version, "Jod", firstArtifact),
+          createFakeNodeRelease(
+            secondArtifact.version,
+            "Krypton",
+            secondArtifact,
+          ),
+        ]),
+      );
+
+      const first = await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        createNodeRequirement(firstArtifact.version.slice(1), [
+          [firstArtifact.version.slice(1)],
+        ]),
+      );
+      const stagePath = requireStagePath(first);
+      const nodePath = join(stagePath, "runtimes", "node", "bin", "node");
+      const firstMarker = await readRuntimeReadyMarker(stagePath);
+      await writeFile(join(stagePath, "cached-only.txt"), "cached\n");
+
+      const second = await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        createNodeRequirement(secondArtifact.version.slice(1), [
+          [secondArtifact.version.slice(1)],
+        ]),
+      );
+      const secondMarker = await readRuntimeReadyMarker(stagePath);
+
+      expect(firstMarker.nodeFingerprint).toBe(firstArtifact.sha256);
+      expect(second.stagePath).toBe(stagePath);
+      expect(second.cacheHit).toBe(false);
+      expect(secondMarker.nodeFingerprint).toBe(secondArtifact.sha256);
+      expect(secondMarker.nodeFingerprint).not.toBe(
+        firstMarker.nodeFingerprint,
+      );
+      await expect(readFile(nodePath)).resolves.toEqual(
+        createFakeNodeExecutableContent(secondArtifact.version),
+      );
+      await expect(
+        access(join(stagePath, "cached-only.txt")),
+      ).rejects.toThrow();
     });
 
     it("extracts a deflated Windows ZIP into the normalized Node runtime layout", async () => {
@@ -2680,7 +3514,7 @@ lastCatalogUpdateUnix=0
 
     expect(results[0]?.stagePath).toBe(results[1]?.stagePath);
     await expect(
-      access(join(results[0]?.stagePath ?? "", ".muon-ready.json")),
+      access(join(results[0]?.stagePath ?? "", runtimeReadyMarkerFileName)),
     ).resolves.toBeUndefined();
   });
 
@@ -2760,6 +3594,59 @@ lastCatalogUpdateUnix=0
     await expect(
       readFile(join(stagePath, "cached-only.txt"), "utf8"),
     ).resolves.toBe("cached\n");
+  });
+
+  it("ignores generated runtime directories and legacy and current ready markers in the source runtime", async () => {
+    const fixture = await createPrepareFixture();
+    const sourceNodePath = join(
+      fixture.muonPath,
+      "runtimes",
+      "node",
+      "bin",
+      "node",
+    );
+    const legacyMarkerPath = join(
+      fixture.muonPath,
+      legacyRuntimeReadyMarkerFileName,
+    );
+    const currentMarkerPath = join(
+      fixture.muonPath,
+      runtimeReadyMarkerFileName,
+    );
+    const cefMarkerPath = join(fixture.muonPath, ".muon-cef-ready.json");
+    await mkdir(dirname(sourceNodePath), { recursive: true });
+    await writeFile(sourceNodePath, "source Node v1\n");
+    await writeFile(legacyMarkerPath, "source legacy marker v1\n");
+    await writeFile(currentMarkerPath, "source current marker v1\n");
+    await writeFile(cefMarkerPath, "source CEF marker v1\n");
+
+    const first = await prepareFixture(fixture);
+    const stagePath = requireStagePath(first);
+    await writeFile(join(stagePath, "cached-only.txt"), "cached\n");
+    await writeFile(sourceNodePath, "source Node v2\n");
+    await writeFile(legacyMarkerPath, "source legacy marker v2\n");
+    await writeFile(currentMarkerPath, "source current marker v2\n");
+    await writeFile(cefMarkerPath, "source CEF marker v2\n");
+
+    const second = await prepareFixture(fixture);
+    const readyMarker = await readRuntimeReadyMarker(stagePath);
+
+    expect(second.stagePath).toBe(stagePath);
+    expect(second.cacheHit).toBe(true);
+    await expect(
+      readFile(join(stagePath, "cached-only.txt"), "utf8"),
+    ).resolves.toBe("cached\n");
+    await expect(access(join(stagePath, "runtimes"))).rejects.toThrow();
+    await expect(
+      access(join(stagePath, legacyRuntimeReadyMarkerFileName)),
+    ).rejects.toThrow();
+    await expect(
+      access(join(stagePath, ".muon-cef-ready.json")),
+    ).rejects.toThrow();
+    expect(readyMarker.ready).toBe(true);
+    expect(readyMarker.muonFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.cefFingerprint).toMatch(sha256HexPattern);
+    expect(readyMarker.nodeFingerprint).toBe(emptySha256Fingerprint);
   });
 
   it("rebuilds the staged runtime when source content changes with the same mtime", async () => {
@@ -2911,6 +3798,67 @@ lastCatalogUpdateUnix=0
       });
       await expect(access(stateRuntimePath)).rejects.toThrow();
     }
+  });
+
+  it("installs Node into a staged runtime from the embedded launcher requirement", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-launcher-node-state-",
+    );
+    const dataHome = await createTemporaryDirectory("muon-launcher-node-data-");
+    const appId = "scope.node-staged-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
+    const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+      includeLicense: true,
+      nodeIsSymlink: false,
+      includeNpmSymlink: false,
+      includeTraversalEntry: false,
+    });
+    const server = await startNodeDistributionServer(
+      createFakeNodeDistribution([
+        createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+      ]),
+    );
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      "#!/usr/bin/env bash\nexit 0\n",
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: {
+        appId,
+        nodeRuntime: createNodeRequirement("*", [[]]),
+      },
+    });
+
+    await execFileAsync(appLauncherPath, [], {
+      cwd: fixture.projectPath,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MUON_CACHE_DIR: fixture.cacheDir,
+        MUON_CEF_CATALOG_URL: fixture.catalogPath,
+        MUON_NODE_DIST_URL: server.baseUrl,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+      },
+    });
+
+    const nodePath = join(stateRuntimePath, "runtimes", "node", "bin", "node");
+    await expect(readFile(nodePath)).resolves.toEqual(
+      createFakeNodeExecutableContent(fakeNodeVersion),
+    );
+    const readyMarker = await readRuntimeReadyMarker(stateRuntimePath);
+    expect(readyMarker.nodeFingerprint).toBe(artifact.sha256);
+    expect(
+      server
+        .getRequests()
+        .filter(
+          ({ method, pathname }) =>
+            method === "GET" &&
+            pathname === `/${artifact.version}/${artifact.fileName}`,
+        ),
+    ).toHaveLength(1);
   });
 
   it("launchers a portable runtime in the user state directory and forwards the core exit code", async () => {
@@ -3076,6 +4024,246 @@ exit 17
       readFile(join(fixture.muonPath, "libcef.so"), "utf8"),
     ).resolves.toBe("cef library\n");
     await expect(access(join(stateRuntimePath, "muon-core"))).rejects.toThrow();
+  });
+
+  it("installs Node into a portable in-place runtime from the embedded launcher requirement", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-launcher-node-portable-state-",
+    );
+    const dataHome = await createTemporaryDirectory(
+      "muon-launcher-node-portable-data-",
+    );
+    const appId = "scope.node-portable-app";
+    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
+    const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+      includeLicense: true,
+      nodeIsSymlink: false,
+      includeNpmSymlink: false,
+      includeTraversalEntry: false,
+    });
+    const server = await startNodeDistributionServer(
+      createFakeNodeDistribution([
+        createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+      ]),
+    );
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      "#!/usr/bin/env bash\nexit 0\n",
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: {
+        appId,
+        nodeRuntime: createNodeRequirement("*", [[]]),
+      },
+    });
+
+    await execFileAsync(appLauncherPath, [], {
+      cwd: fixture.projectPath,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MUON_CACHE_DIR: fixture.cacheDir,
+        MUON_CEF_CATALOG_URL: fixture.catalogPath,
+        MUON_NODE_DIST_URL: server.baseUrl,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+      },
+    });
+
+    const nodePath = join(fixture.muonPath, "runtimes", "node", "bin", "node");
+    await expect(readFile(nodePath)).resolves.toEqual(
+      createFakeNodeExecutableContent(fakeNodeVersion),
+    );
+    await expect(access(join(stateRuntimePath, "muon-core"))).rejects.toThrow();
+    const readyMarker = await readRuntimeReadyMarker(fixture.muonPath);
+    expect(readyMarker.nodeFingerprint).toBe(artifact.sha256);
+    expect(
+      server
+        .getRequests()
+        .filter(
+          ({ method, pathname }) =>
+            method === "GET" &&
+            pathname === `/${artifact.version}/${artifact.fileName}`,
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("removes a generated Node runtime when a portable in-place launcher no longer requires it", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-launcher-node-removal-state-",
+    );
+    const appId = "scope.node-removal-app";
+    const artifact = await createFakeNodeTarGzArtifact(fakeNodeVersion, {
+      includeLicense: true,
+      nodeIsSymlink: false,
+      includeNpmSymlink: false,
+      includeTraversalEntry: false,
+    });
+    const server = await startNodeDistributionServer(
+      createFakeNodeDistribution([
+        createFakeNodeRelease(fakeNodeVersion, "Krypton", artifact),
+      ]),
+    );
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      "#!/usr/bin/env bash\nexit 0\n",
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: {
+        appId,
+        nodeRuntime: createNodeRequirement("*", [[]]),
+      },
+    });
+    const environment = {
+      ...process.env,
+      MUON_CACHE_DIR: fixture.cacheDir,
+      MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      MUON_NODE_DIST_URL: server.baseUrl,
+      XDG_STATE_HOME: stateHome,
+    };
+
+    await execFileAsync(appLauncherPath, [], {
+      cwd: fixture.projectPath,
+      encoding: "utf8",
+      env: environment,
+    });
+    await expect(
+      access(join(fixture.muonPath, "runtimes", "node", "bin", "node")),
+    ).resolves.toBeUndefined();
+
+    await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
+    });
+    await execFileAsync(appLauncherPath, [], {
+      cwd: fixture.projectPath,
+      encoding: "utf8",
+      env: environment,
+    });
+
+    await expect(
+      access(join(fixture.muonPath, "runtimes", "node")),
+    ).rejects.toThrow();
+    const readyMarker = await readRuntimeReadyMarker(fixture.muonPath);
+    expect(readyMarker.nodeFingerprint).toBe(emptySha256Fingerprint);
+  });
+
+  it("invalidates the in-place ready marker before a runtime update can fail", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-launcher-node-failure-state-",
+    );
+    const appId = "scope.node-failure-app";
+    const firstArtifact = await createFakeNodeTarGzArtifact("v22.18.0", {
+      includeLicense: true,
+      nodeIsSymlink: false,
+      includeNpmSymlink: false,
+      includeTraversalEntry: false,
+    });
+    const invalidArtifact = await createFakeNodeTarGzArtifact("v24.4.0", {
+      includeLicense: false,
+      nodeIsSymlink: false,
+      includeNpmSymlink: false,
+      includeTraversalEntry: false,
+    });
+    const server = await startNodeDistributionServer(
+      createFakeNodeDistribution([
+        createFakeNodeRelease(firstArtifact.version, "Jod", firstArtifact),
+        createFakeNodeRelease(
+          invalidArtifact.version,
+          "Krypton",
+          invalidArtifact,
+        ),
+      ]),
+    );
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      "#!/usr/bin/env bash\nexit 0\n",
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+      launcher: {
+        appId,
+        nodeRuntime: createNodeRequirement(firstArtifact.version.slice(1), [
+          [firstArtifact.version.slice(1)],
+        ]),
+      },
+    });
+    const environment = {
+      ...process.env,
+      MUON_CACHE_DIR: fixture.cacheDir,
+      MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      MUON_NODE_DIST_URL: server.baseUrl,
+      XDG_STATE_HOME: stateHome,
+    };
+
+    await execFileAsync(appLauncherPath, [], {
+      cwd: fixture.projectPath,
+      encoding: "utf8",
+      env: environment,
+    });
+    await expect(
+      access(join(fixture.muonPath, runtimeReadyMarkerFileName)),
+    ).resolves.toBeUndefined();
+
+    await writeEmbeddedLauncher(fixture, {
+      launcher: {
+        appId,
+        nodeRuntime: createNodeRequirement(invalidArtifact.version.slice(1), [
+          [invalidArtifact.version.slice(1)],
+        ]),
+      },
+    });
+    await expect(
+      execFileAsync(appLauncherPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env: environment,
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    await expect(
+      access(join(fixture.muonPath, runtimeReadyMarkerFileName)),
+    ).rejects.toThrow();
+    await expect(
+      readFile(join(fixture.muonPath, "runtimes", "node", "bin", "node")),
+    ).resolves.toEqual(createFakeNodeExecutableContent(firstArtifact.version));
   });
 
   it("updates the staged runtime and desktop entry from a newer portable distribution", async () => {
@@ -3414,6 +4602,47 @@ exit 17
         },
       },
       "invalid-policy-app",
+    );
+
+    await expect(
+      execFileAsync(appLauncherPath, [], {
+        cwd: fixture.projectPath,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MUON_CACHE_DIR: fixture.cacheDir,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: stateHome,
+        },
+      }),
+    ).rejects.toThrow(/defaultVersionPolicy|CEF version policy/);
+  });
+
+  it("rejects an invalid embedded defaultVersionPolicy during portable in-place launcher", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-launcher-in-place-state-",
+    );
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      `${JSON.stringify(
+        {
+          type: "portable",
+          runtimeMode: "in-place",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const appLauncherPath = await writeEmbeddedLauncher(
+      fixture,
+      {
+        launcher: {
+          appId: "invalid-in-place-policy-app",
+          defaultVersionPolicy: "invalid",
+        },
+      },
+      "invalid-in-place-policy-app",
     );
 
     await expect(

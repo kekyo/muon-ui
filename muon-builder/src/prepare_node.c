@@ -417,6 +417,38 @@ void muon_prepare_free_node_runtime_requirement(
   memset(requirement, 0, sizeof(*requirement));
 }
 
+int muon_prepare_validate_node_runtime_requirement(
+    const MuonNodeRuntimeRequirement *requirement) {
+  if (requirement == NULL ||
+      (requirement->required != 0 && requirement->required != 1) ||
+      requirement->engine_range == NULL ||
+      requirement->engine_range[0] == '\0' ||
+      requirement->sets == NULL || requirement->set_count == 0) {
+    muon_print_error("Invalid Node.js runtime requirement schema.\n");
+    return -1;
+  }
+  for (size_t set_index = 0; set_index < requirement->set_count;
+       set_index += 1) {
+    const MuonNodeComparatorSet *set = &requirement->sets[set_index];
+    if ((set->count == 0 && set->comparators != NULL) ||
+        (set->count != 0 && set->comparators == NULL)) {
+      muon_print_error("Invalid Node.js runtime requirement schema.\n");
+      return -1;
+    }
+    for (size_t comparator_index = 0; comparator_index < set->count;
+         comparator_index += 1) {
+      MuonParsedNodeComparator parsed;
+      const char *comparator = set->comparators[comparator_index];
+      if (comparator == NULL || comparator[0] == '\0' ||
+          parse_comparator(comparator, &parsed) != 0) {
+        muon_print_error("Invalid normalized Node.js comparator.\n");
+        return -1;
+      }
+    }
+  }
+  return 0;
+}
+
 int muon_prepare_parse_node_runtime_requirement(
     const char *json, MuonNodeRuntimeRequirement *requirement) {
   if (requirement == NULL) {
@@ -498,10 +530,8 @@ int muon_prepare_parse_node_runtime_requirement(
     yyjson_val *comparator_value = NULL;
     yyjson_arr_foreach(set_value, comparator_index, comparator_max,
                        comparator_value) {
-      MuonParsedNodeComparator parsed;
       if (!json_value_is_c_string(comparator_value) ||
-          yyjson_get_len(comparator_value) == 0 ||
-          parse_comparator(yyjson_get_str(comparator_value), &parsed) != 0) {
+          yyjson_get_len(comparator_value) == 0) {
         muon_print_error("Invalid normalized Node.js comparator.\n");
         yyjson_doc_free(document);
         muon_prepare_free_node_runtime_requirement(requirement);
@@ -518,6 +548,10 @@ int muon_prepare_parse_node_runtime_requirement(
   }
 
   yyjson_doc_free(document);
+  if (muon_prepare_validate_node_runtime_requirement(requirement) != 0) {
+    muon_prepare_free_node_runtime_requirement(requirement);
+    return -1;
+  }
   return 0;
 }
 
@@ -574,7 +608,7 @@ static int copy_url_to_file(
   if (strncmp(url, "http://", 7) == 0 ||
       strncmp(url, "https://", 8) == 0) {
     return run_curl_download(url, destination,
-                             progress_callback == NULL ? "-fL" : "-fsSL",
+                             progress_callback == NULL ? "-fL" : "-fsL",
                              status, progress_callback, progress_user_data);
   }
   const char *source =

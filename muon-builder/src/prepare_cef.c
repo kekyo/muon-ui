@@ -147,7 +147,7 @@ static int copy_url_to_file_progress(
     const char *status,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
-    return run_curl_download(url, destination, "-fsSL", size, status,
+    return run_curl_download(url, destination, "-fsL", size, status,
                              progress_callback, progress_user_data);
   }
   const char *source = url;

@@ -30,13 +30,14 @@
 int muon_prepare_main(int argc, char **argv);
 
 /**
- * Prepares CEF files inside an existing portable muon runtime directory.
+ * Prepares CEF and any embedded required runtimes inside an existing portable
+ * muon runtime directory.
  *
  * @param muon_path Directory containing muon-core runtime files.
  * @param target Public runtime target such as linux-amd64, linux-armhf,
  * linux-arm64, windows-i686, or windows-amd64.
  * @param cache_dir Cache directory. Pass NULL to use the default cache.
- * @param force Non-zero to rebuild cached CEF files and runtime placement.
+ * @param force Non-zero to refresh runtime caches and rebuild placement.
  * @param quiet Non-zero to suppress progress messages.
  * @return 0 when the runtime is ready; non-zero on failure.
  */
@@ -44,14 +45,14 @@ int muon_prepare_in_place(const char *muon_path, const char *target,
                           const char *cache_dir, int force, int quiet);
 
 /**
- * Prepares CEF files inside an existing portable muon runtime directory and
- * reports progress events to the caller.
+ * Prepares CEF and any embedded required runtimes inside an existing portable
+ * muon runtime directory and reports progress events to the caller.
  *
  * @param muon_path Directory containing muon-core runtime files.
  * @param target Public runtime target such as linux-amd64, linux-armhf,
  * linux-arm64, windows-i686, or windows-amd64.
  * @param cache_dir Cache directory. Pass NULL to use the default cache.
- * @param force Non-zero to rebuild cached CEF files and runtime placement.
+ * @param force Non-zero to refresh runtime caches and rebuild placement.
  * @param quiet Non-zero to suppress diagnostic text output.
  * @param progress_callback Callback receiving progress events, or NULL.
  * @param progress_user_data Opaque value passed to progress_callback.
@@ -63,15 +64,15 @@ int muon_prepare_in_place_with_progress(
     void *progress_user_data);
 
 /**
- * Prepares CEF and muon runtime files in a separate staging directory and
- * reports progress events to the caller.
+ * Prepares CEF, muon files, and any embedded required runtimes in a separate
+ * staging directory and reports progress events to the caller.
  *
  * @param muon_path Directory containing source muon-core runtime files.
  * @param stage_dir Directory where executable runtime files are staged.
  * @param target Public runtime target such as linux-amd64, linux-armhf,
  * linux-arm64, windows-i686, or windows-amd64.
  * @param cache_dir Cache directory. Pass NULL to use the default cache.
- * @param force Non-zero to rebuild cached CEF files and runtime placement.
+ * @param force Non-zero to refresh runtime caches and rebuild placement.
  * @param quiet Non-zero to suppress diagnostic text output.
  * @param progress_callback Callback receiving progress events, or NULL.
  * @param progress_user_data Opaque value passed to progress_callback.

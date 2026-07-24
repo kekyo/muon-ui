@@ -122,13 +122,17 @@ command -v "${RANLIB}" >/dev/null || { echo "${RANLIB} is required" >&2; exit 1;
 if [[ "${TARGET_NAME}" == windows-* ]]; then
   command -v "${WINDRES}" >/dev/null || { echo "${WINDRES} is required" >&2; exit 1; }
 fi
+THREAD_CPPFLAGS_EXTRA=""
+THREAD_LDLIBS_EXTRA=""
 LAUNCHER_CPPFLAGS_EXTRA=""
 LAUNCHER_LDLIBS_EXTRA=""
 case "${TARGET_NAME}" in
   linux-*)
     command -v pkg-config >/dev/null || { echo "pkg-config is required" >&2; exit 1; }
-    LAUNCHER_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb) -pthread"
-    LAUNCHER_LDLIBS_EXTRA="$(pkg-config --libs xcb) -pthread"
+    THREAD_CPPFLAGS_EXTRA="-pthread"
+    THREAD_LDLIBS_EXTRA="-pthread"
+    LAUNCHER_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb)"
+    LAUNCHER_LDLIBS_EXTRA="$(pkg-config --libs xcb)"
     ;;
   windows-*)
     LAUNCHER_LDLIBS_EXTRA="-lcomctl32 -lgdi32"
@@ -404,6 +408,9 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
 fi
 
 CPPFLAGS_VALUE="-I${VERSION_DIR} -I${YYJSON_SOURCE_DIR} -I${LIBARCHIVE_INCLUDE_DIR} -I${BZIP2_SOURCE_DIR} -I${ZLIB_INCLUDE_DIR} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\\"${TARGET_NAME}\\\""
+if [[ -n "${THREAD_CPPFLAGS_EXTRA}" ]]; then
+  CPPFLAGS_VALUE="${CPPFLAGS_VALUE} ${THREAD_CPPFLAGS_EXTRA}"
+fi
 if [[ -n "${CPPFLAGS:-}" ]]; then
   CPPFLAGS_VALUE="${CPPFLAGS_VALUE} ${CPPFLAGS}"
 fi
@@ -413,6 +420,9 @@ if [[ -n "${LAUNCHER_CPPFLAGS:-}" ]]; then
 fi
 
 LDLIBS_VALUE="${LIBARCHIVE_LIB} ${BZIP2_LIB} ${ZLIB_LIB}"
+if [[ -n "${THREAD_LDLIBS_EXTRA}" ]]; then
+  LDLIBS_VALUE="${LDLIBS_VALUE} ${THREAD_LDLIBS_EXTRA}"
+fi
 if [[ -n "${LDLIBS:-}" ]]; then
   LDLIBS_VALUE="${LDLIBS_VALUE} ${LDLIBS}"
 fi

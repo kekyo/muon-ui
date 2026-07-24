@@ -24,18 +24,22 @@ SHA2_SOURCE_DIR ?= ../deps/sha2
 SHA2_CPPFLAGS := -I"$(SHA2_SOURCE_DIR)"
 LDLIBS ?=
 
-PREPARE_OBJECTS := $(OUT_DIR)/prepare.o $(OUT_DIR)/prepare_cef.o $(OUT_DIR)/launcher_config.o $(OUT_DIR)/common.o $(OUT_DIR)/sha1.o $(OUT_DIR)/sha2.o $(OUT_DIR)/yyjson.o
+PREPARE_OBJECTS := $(OUT_DIR)/prepare.o $(OUT_DIR)/prepare_cef.o $(OUT_DIR)/prepare_node.o $(OUT_DIR)/launcher_config.o $(OUT_DIR)/common.o $(OUT_DIR)/sha1.o $(OUT_DIR)/sha2.o $(OUT_DIR)/yyjson.o
 PREPARE_RESOURCE_OBJECTS := $(OUT_DIR)/muon_prepare_resource.o $(OUT_DIR)/engraver.o
 
 .PHONY: all clean
 
 all: $(LIB_TARGET) $(PREPARE_TARGET) $(LAUNCHER_TARGET) $(RUNTIME_HELPER_TARGET) $(PLUGIN_INSPECTOR_TARGET)
 
-$(OUT_DIR)/prepare.o: src/prepare.c src/prepare.h src/prepare_progress.h src/prepare_cef.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(VERSION_HEADER) $(RUNTIME_INFO_HEADER)
+$(OUT_DIR)/prepare.o: src/prepare.c src/prepare.h src/prepare_progress.h src/prepare_cef.h src/prepare_node.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(VERSION_HEADER) $(RUNTIME_INFO_HEADER)
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 
 $(OUT_DIR)/prepare_cef.o: src/prepare_cef.c src/prepare_cef.h src/prepare_progress.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(VERSION_HEADER)
+	mkdir -p "$(OUT_DIR)"
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
+
+$(OUT_DIR)/prepare_node.o: src/prepare_node.c src/prepare_node.h src/prepare_progress.h src/common.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 

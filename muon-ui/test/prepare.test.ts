@@ -45,6 +45,7 @@ const sha256HexPattern = /^[0-9a-f]{64}$/u;
 const emptySha256Fingerprint = "0".repeat(64);
 const cleanupDirectories: string[] = [];
 const suiteCleanupDirectories: string[] = [];
+const nodeDistributionServers: FakeNodeDistributionServer[] = [];
 let prepareExecutablePath = "";
 let launcherExecutablePath = "";
 let embeddedCefArchive:
@@ -84,6 +85,42 @@ interface CatalogVersion {
   };
   channel?: string;
   lastModified?: string;
+}
+
+interface FakeNodeArtifact {
+  version: string;
+  nodeTarget: string;
+  catalogFile: string;
+  fileName: string;
+  content: Buffer;
+  sha256: string;
+}
+
+interface FakeNodeRelease {
+  version: string;
+  lts: string | false;
+  artifacts: readonly FakeNodeArtifact[];
+}
+
+interface FakeNodeDistribution {
+  files: ReadonlyMap<string, Buffer>;
+}
+
+interface FakeNodeDistributionRequest {
+  method: string;
+  pathname: string;
+}
+
+interface FakeNodeDistributionServer {
+  baseUrl: string;
+  getRequests(): readonly FakeNodeDistributionRequest[];
+  close(): Promise<void>;
+}
+
+interface TestNodeRuntimeRequirement {
+  required: boolean;
+  engineRange: string;
+  comparatorSets: readonly (readonly string[])[];
 }
 
 interface ReadyMarker {
@@ -163,6 +200,81 @@ const createFakeCefArchive = async (
     size: (await stat(archivePath)).size,
   };
 };
+
+const createFakeNodeArtifact = (
+  version: string,
+  nodeTarget = "linux-x64",
+  catalogFile = "linux-x64",
+  content = Buffer.from(`fake Node archive ${version} ${nodeTarget}\n`),
+): FakeNodeArtifact => {
+  const extension = catalogFile.endsWith("-zip") ? ".zip" : ".tar.gz";
+  const fileName = `node-${version}-${nodeTarget}${extension}`;
+  return {
+    version,
+    nodeTarget,
+    catalogFile,
+    fileName,
+    content,
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
+};
+
+const createFakeNodeRelease = (
+  version: string,
+  lts: string | false,
+  artifact = createFakeNodeArtifact(version),
+): FakeNodeRelease => ({
+  version,
+  lts,
+  artifacts: [artifact],
+});
+
+const createFakeNodeDistribution = (
+  releases: readonly FakeNodeRelease[],
+  checksumOverrides: ReadonlyMap<string, string> = new Map(),
+): FakeNodeDistribution => {
+  const files = new Map<string, Buffer>();
+  files.set(
+    "/index.json",
+    Buffer.from(
+      `${JSON.stringify(
+        releases.map((release) => ({
+          version: release.version,
+          date: "2026-01-01",
+          files: release.artifacts.map((artifact) => artifact.catalogFile),
+          lts: release.lts,
+          security: release.version === "v24.4.0",
+        })),
+        null,
+        2,
+      )}\n`,
+    ),
+  );
+  for (const release of releases) {
+    const checksumContent =
+      checksumOverrides.get(release.version) ??
+      release.artifacts
+        .map((artifact) => `${artifact.sha256}  ${artifact.fileName}\n`)
+        .join("");
+    files.set(
+      `/${release.version}/SHASUMS256.txt`,
+      Buffer.from(checksumContent),
+    );
+    for (const artifact of release.artifacts) {
+      files.set(`/${release.version}/${artifact.fileName}`, artifact.content);
+    }
+  }
+  return { files };
+};
+
+const createNodeRequirement = (
+  engineRange: string,
+  comparatorSets: readonly (readonly string[])[],
+): TestNodeRuntimeRequirement => ({
+  required: true,
+  engineRange,
+  comparatorSets,
+});
 
 const getEmbeddedCefArchive = (): {
   archivePath: string;
@@ -411,6 +523,29 @@ const prepareFixture = async (
     cwd: process.cwd(),
   });
 
+const prepareNodeFixture = async (
+  fixture: PrepareFixture,
+  nodeDistUrl: string,
+  nodeRuntimeRequirement: TestNodeRuntimeRequirement | undefined,
+  stageDir = fixture.stageDir,
+) =>
+  await runMuonPrepare({
+    muonPath: fixture.muonPath,
+    cefPath: fixture.cefPath,
+    stageDir,
+    target: "linux-amd64",
+    cacheDir: fixture.cacheDir,
+    force: false,
+    quiet: false,
+    prepareExecutablePath,
+    environment: {
+      ...process.env,
+      MUON_NODE_DIST_URL: nodeDistUrl,
+    },
+    cwd: process.cwd(),
+    nodeRuntimeRequirement,
+  });
+
 const requireStagePath = (
   result: Awaited<ReturnType<typeof prepareFixture>>,
 ): string => {
@@ -420,6 +555,64 @@ const requireStagePath = (
 
 const sanitizePrepareLockKey = (value: string): string =>
   value.replace(/[^A-Za-z0-9._-]/g, "_");
+
+const buildNodeTargetHarness = async (root: string): Promise<string> => {
+  const harnessPath = join(root, "prepare-node-target-harness.c");
+  const executablePath = join(root, "prepare-node-target-harness");
+  const prepareRoot = resolve("..", "muon-builder");
+  const bzip2Lib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "bzip2-linux64",
+    "libbz2.a",
+  );
+  const libarchiveLib = join(
+    prepareRoot,
+    ".deps",
+    "build",
+    "libarchive-linux64",
+    "libarchive",
+    "libarchive.a",
+  );
+  await writeFile(
+    harnessPath,
+    `#include <stdio.h>
+#include "prepare_node.h"
+
+int main(int argc, char **argv) {
+  MuonNodeTargetInfo info;
+  if (argc != 2) {
+    return 64;
+  }
+  if (muon_prepare_get_node_target_info(argv[1], &info) != 0) {
+    return 1;
+  }
+  printf("%s|%s|%s|%s\\n",
+         info.catalog_file,
+         info.archive_target,
+         info.archive_suffix,
+         info.executable_relative_path);
+  return 0;
+}
+`,
+  );
+  await execFileAsync("gcc", [
+    harnessPath,
+    "-std=c99",
+    "-Wall",
+    "-Wextra",
+    "-pedantic",
+    "-I",
+    join(prepareRoot, "src"),
+    "-o",
+    executablePath,
+    join(dirname(prepareExecutablePath), "libmuon-builder.a"),
+    libarchiveLib,
+    bzip2Lib,
+  ]);
+  return executablePath;
+};
 
 const buildProgressHarness = async (root: string): Promise<string> => {
   const harnessPath = join(root, "prepare-progress-harness.c");
@@ -528,6 +721,62 @@ const closeServer = async (server: Server): Promise<void> => {
       resolveClose();
     });
   });
+};
+
+const startNodeDistributionServer = async (
+  distribution: FakeNodeDistribution,
+): Promise<FakeNodeDistributionServer> => {
+  const requests: FakeNodeDistributionRequest[] = [];
+  const server = createServer((request, response) => {
+    const method = request.method ?? "GET";
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    requests.push({ method, pathname });
+    const content = distribution.files.get(pathname);
+    if (content === undefined) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    response.writeHead(200, {
+      "Accept-Ranges": "bytes",
+      "Content-Length": content.length,
+      "Content-Type":
+        pathname.endsWith(".json") || pathname.endsWith(".txt")
+          ? "application/json"
+          : "application/octet-stream",
+    });
+    if (method === "HEAD") {
+      response.end();
+    } else {
+      response.end(content);
+    }
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await closeServer(server);
+    throw new Error("Expected a TCP test server address.");
+  }
+  let closed = false;
+  const result: FakeNodeDistributionServer = {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    getRequests: () => [...requests],
+    close: async (): Promise<void> => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      await closeServer(server);
+    },
+  };
+  nodeDistributionServers.push(result);
+  return result;
 };
 
 const startInterruptingArchiveServer = async (
@@ -639,7 +888,28 @@ const listCacheEntries = async (root: string): Promise<string[]> => {
   return entries.sort();
 };
 
+const listDirectoryEntriesIfPresent = async (
+  directory: string,
+): Promise<string[]> => {
+  try {
+    return (await readdir(directory)).sort();
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [];
+    }
+    throw error;
+  }
+};
+
 afterEach(async () => {
+  for (const server of nodeDistributionServers.splice(0)) {
+    await server.close();
+  }
   for (const directory of cleanupDirectories.splice(0)) {
     await rm(directory, { recursive: true, force: true });
   }
@@ -1572,6 +1842,306 @@ lastCatalogUpdateUnix=0
         quiet: false,
       }),
     ).rejects.toThrow(/sha1 mismatch/);
+  });
+
+  describe("Node runtime distribution", () => {
+    it("maps every public muon target to its official Node distribution", async () => {
+      const fixture = await createPrepareFixture();
+      const harnessPath = await buildNodeTargetHarness(fixture.projectPath);
+      const expectations = [
+        ["linux-amd64", "linux-x64|linux-x64|.tar.gz|bin/node"],
+        ["linux-armhf", "linux-armv7l|linux-armv7l|.tar.gz|bin/node"],
+        ["linux-arm64", "linux-arm64|linux-arm64|.tar.gz|bin/node"],
+        ["windows-i686", "win-x86-zip|win-x86|.zip|bin/node.exe"],
+        ["windows-amd64", "win-x64-zip|win-x64|.zip|bin/node.exe"],
+      ] as const;
+
+      for (const [target, expected] of expectations) {
+        const { stdout } = await execFileAsync(harnessPath, [target], {
+          encoding: "utf8",
+        });
+        expect(stdout.trim()).toBe(expected);
+      }
+    });
+
+    it("selects the latest matching LTS for a wildcard requirement", async () => {
+      const fixture = await createPrepareFixture();
+      const selectedArtifact = createFakeNodeArtifact("v24.4.0");
+      const distribution = createFakeNodeDistribution([
+        createFakeNodeRelease("v26.1.0", false),
+        createFakeNodeRelease("v24.2.0", "Krypton"),
+        createFakeNodeRelease("v22.19.0", "Jod"),
+        createFakeNodeRelease("v24.4.0", "Krypton", selectedArtifact),
+      ]);
+      const server = await startNodeDistributionServer(distribution);
+
+      await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        createNodeRequirement("*", [[]]),
+      );
+
+      const selectedPath = join(
+        fixture.cacheDir,
+        "artifacts",
+        "node",
+        selectedArtifact.version,
+        selectedArtifact.fileName,
+      );
+      await expect(readFile(selectedPath)).resolves.toEqual(
+        selectedArtifact.content,
+      );
+      expect(
+        server
+          .getRequests()
+          .filter(
+            ({ method, pathname }) =>
+              method === "GET" &&
+              pathname ===
+                `/${selectedArtifact.version}/${selectedArtifact.fileName}`,
+          ),
+      ).toHaveLength(1);
+      expect(
+        server
+          .getRequests()
+          .some(({ pathname }) => pathname.startsWith("/v26.1.0/")),
+      ).toBe(false);
+    });
+
+    it("falls back to the latest matching non-LTS release across comparator sets", async () => {
+      const fixture = await createPrepareFixture();
+      const selectedArtifact = createFakeNodeArtifact("v24.9.0");
+      const distribution = createFakeNodeDistribution([
+        createFakeNodeRelease("v24.2.0", "Krypton"),
+        createFakeNodeRelease("v25.0.0", false),
+        createFakeNodeRelease("v20.20.0", false),
+        createFakeNodeRelease("v22.19.0", "Jod"),
+        createFakeNodeRelease("v24.9.0", false, selectedArtifact),
+        createFakeNodeRelease("v24.3.0", false),
+      ]);
+      const server = await startNodeDistributionServer(distribution);
+
+      await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        createNodeRequirement(">=20 <21 || >=24.3 <25", [
+          [">=20.0.0", "<21.0.0-0"],
+          [">=24.3.0", "<25.0.0-0"],
+        ]),
+      );
+
+      await expect(
+        readFile(
+          join(
+            fixture.cacheDir,
+            "artifacts",
+            "node",
+            selectedArtifact.version,
+            selectedArtifact.fileName,
+          ),
+        ),
+      ).resolves.toEqual(selectedArtifact.content);
+      expect(
+        server
+          .getRequests()
+          .some(({ pathname }) => pathname.startsWith("/v25.0.0/")),
+      ).toBe(false);
+    });
+
+    it("reports the target and engine range when no release matches", async () => {
+      const fixture = await createPrepareFixture();
+      const distribution = createFakeNodeDistribution([
+        createFakeNodeRelease("v24.4.0", "Krypton"),
+        createFakeNodeRelease("v26.1.0", false),
+      ]);
+      const server = await startNodeDistributionServer(distribution);
+      let message = "";
+
+      try {
+        await prepareNodeFixture(
+          fixture,
+          server.baseUrl,
+          createNodeRequirement(">=30", [[">=30.0.0"]]),
+        );
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toContain("linux-amd64");
+      expect(message).toContain(">=30");
+    });
+
+    it.each([
+      {
+        name: "duplicate exact checksum lines",
+        createChecksum: (artifact: FakeNodeArtifact): string => {
+          const line = `${artifact.sha256}  ${artifact.fileName}\n`;
+          return `${line}${line}`;
+        },
+      },
+      {
+        name: "a checksum line with one separator space",
+        createChecksum: (artifact: FakeNodeArtifact): string =>
+          `${artifact.sha256} ${artifact.fileName}\n`,
+      },
+    ])(
+      "rejects $name before requesting the Node artifact",
+      async ({ createChecksum }) => {
+        const fixture = await createPrepareFixture();
+        const artifact = createFakeNodeArtifact("v24.4.0");
+        const release = createFakeNodeRelease("v24.4.0", "Krypton", artifact);
+        const distribution = createFakeNodeDistribution(
+          [release],
+          new Map([[release.version, createChecksum(artifact)]]),
+        );
+        const server = await startNodeDistributionServer(distribution);
+
+        await expect(
+          prepareNodeFixture(
+            fixture,
+            server.baseUrl,
+            createNodeRequirement("*", [[]]),
+          ),
+        ).rejects.toThrow();
+
+        expect(
+          server
+            .getRequests()
+            .filter(
+              ({ method, pathname }) =>
+                method === "GET" &&
+                pathname === `/${artifact.version}/${artifact.fileName}`,
+            ),
+        ).toEqual([]);
+      },
+    );
+
+    it("does not retain an artifact whose SHA-256 does not match", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = createFakeNodeArtifact("v24.4.0");
+      const release = createFakeNodeRelease("v24.4.0", "Krypton", artifact);
+      const distribution = createFakeNodeDistribution(
+        [release],
+        new Map([
+          [release.version, `${"0".repeat(64)}  ${artifact.fileName}\n`],
+        ]),
+      );
+      const server = await startNodeDistributionServer(distribution);
+      const versionCacheDirectory = join(
+        fixture.cacheDir,
+        "artifacts",
+        "node",
+        artifact.version,
+      );
+
+      await expect(
+        prepareNodeFixture(
+          fixture,
+          server.baseUrl,
+          createNodeRequirement("*", [[]]),
+        ),
+      ).rejects.toThrow(/sha-?256/i);
+
+      expect(
+        await listDirectoryEntriesIfPresent(versionCacheDirectory),
+      ).toEqual([]);
+    });
+
+    it("reuses the catalog, checksum, and verified artifact without a server", async () => {
+      const fixture = await createPrepareFixture();
+      const artifact = createFakeNodeArtifact("v24.4.0");
+      const release = createFakeNodeRelease("v24.4.0", "Krypton", artifact);
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([release]),
+      );
+      const requirement = createNodeRequirement("*", [[]]);
+
+      await prepareNodeFixture(
+        fixture,
+        server.baseUrl,
+        requirement,
+        join(fixture.projectPath, ".muon", "online"),
+      );
+
+      await expect(
+        access(join(fixture.cacheDir, "node-catalog.json")),
+      ).resolves.toBeUndefined();
+      await expect(
+        readFile(
+          join(
+            fixture.cacheDir,
+            "node-checksums",
+            artifact.version,
+            "SHASUMS256.txt",
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe(`${artifact.sha256}  ${artifact.fileName}\n`);
+      await expect(
+        readFile(
+          join(
+            fixture.cacheDir,
+            "artifacts",
+            "node",
+            artifact.version,
+            artifact.fileName,
+          ),
+        ),
+      ).resolves.toEqual(artifact.content);
+
+      await server.close();
+      await expect(
+        prepareNodeFixture(
+          fixture,
+          server.baseUrl,
+          requirement,
+          join(fixture.projectPath, ".muon", "offline"),
+        ),
+      ).resolves.toMatchObject({
+        stagePath: join(fixture.projectPath, ".muon", "offline"),
+      });
+    });
+
+    it("does not request Node metadata when no runtime requirement is provided", async () => {
+      const fixture = await createPrepareFixture();
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([
+          createFakeNodeRelease("v24.4.0", "Krypton"),
+        ]),
+      );
+
+      await prepareNodeFixture(fixture, server.baseUrl, undefined);
+
+      expect(server.getRequests()).toEqual([]);
+      await expect(
+        access(join(fixture.cacheDir, "node-catalog.json")),
+      ).rejects.toThrow();
+      await expect(
+        access(join(fixture.cacheDir, "artifacts", "node")),
+      ).rejects.toThrow();
+    });
+
+    it("does not request Node metadata when the runtime is not required", async () => {
+      const fixture = await createPrepareFixture();
+      const server = await startNodeDistributionServer(
+        createFakeNodeDistribution([
+          createFakeNodeRelease("v24.4.0", "Krypton"),
+        ]),
+      );
+
+      await prepareNodeFixture(fixture, server.baseUrl, {
+        ...createNodeRequirement("*", [[]]),
+        required: false,
+      });
+
+      expect(server.getRequests()).toEqual([]);
+      await expect(
+        access(join(fixture.cacheDir, "node-catalog.json")),
+      ).rejects.toThrow();
+      await expect(
+        access(join(fixture.cacheDir, "artifacts", "node")),
+      ).rejects.toThrow();
+    });
   });
 
   it("returns the same staged runtime for concurrent calls", async () => {

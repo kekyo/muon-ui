@@ -7,7 +7,14 @@ import prettierMax from 'prettier-max';
 import screwUp from 'screw-up';
 import { defineConfig } from 'vitest/config';
 
+import packageJson from './package.json' with { type: 'json' };
+
 export default defineConfig({
+  define: {
+    __MUON_NODE_SUPPORTED_ENGINE_RANGE__: JSON.stringify(
+      packageJson.engines.node
+    ),
+  },
   plugins: [
     prettierMax(),
     screwUp({

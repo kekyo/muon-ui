@@ -44,6 +44,7 @@ typedef struct {
   int has_cef_exact_version;
   char *launcher_config_dir;
   char *cache_dir;
+  char *node_runtime_requirement_json;
   unsigned long long catalog_refresh_interval_seconds;
   unsigned long long cef_last_catalog_update_unix;
   unsigned long long node_last_catalog_update_unix;
@@ -1523,6 +1524,7 @@ static void print_usage(void) {
       "Usage: muon-builder <command> [options]\n"
       "       muon-builder runtime --muon-path <path> [--cef-path <path>] "
       "[--stage-dir <path>] [--target <target>] [--cache-dir <path>] "
+      "[--node-runtime-requirement <json>] "
       "[--force] [--quiet|-q] [--json]\n"
       "       muon-builder buildtime --version <cefVersion> --target <target> "
       "--output-dir <path> [--cache-dir <path>] [--force] [--quiet|-q] "
@@ -1546,6 +1548,9 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
       options->target = argv[++index];
     } else if (strcmp(argv[index], "--cache-dir") == 0 && index + 1 < argc) {
       options->cache_dir = argv[++index];
+    } else if (strcmp(argv[index], "--node-runtime-requirement") == 0 &&
+               index + 1 < argc) {
+      options->node_runtime_requirement_json = argv[++index];
     } else if (strcmp(argv[index], "--force") == 0) {
       options->force = 1;
     } else if (strcmp(argv[index], "--quiet") == 0 ||

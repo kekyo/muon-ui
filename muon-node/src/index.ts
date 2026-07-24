@@ -22,8 +22,10 @@ import { resolve as resolveImport } from 'import-meta-resolve';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValidRange from 'semver/ranges/valid.js';
 
+declare const __MUON_NODE_SUPPORTED_ENGINE_RANGE__: string;
+
 const protocolName = 'muon-node/1';
-const supportedNodeRange = '^20.19.0 || >=22.12.0';
+const supportedNodeRange = __MUON_NODE_SUPPORTED_ENGINE_RANGE__;
 const maximumFramePayloadLength = 16 * 1024 * 1024;
 const signed64Minimum = -(2n ** 63n);
 const signed64Maximum = 2n ** 63n - 1n;

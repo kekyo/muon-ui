@@ -503,6 +503,7 @@ const runPrepareCommand = async (
       commandOptions.target ??
       getDefaultMuonPrepareTarget(process.platform, process.arch),
     cacheDir: commandOptions.cacheDir,
+    nodeRuntimeRequirement: undefined,
     force: commandOptions.force === true,
     quiet: commandOptions.quiet === true,
     prepareExecutablePath: undefined,

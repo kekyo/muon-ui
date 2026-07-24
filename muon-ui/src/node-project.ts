@@ -3,7 +3,15 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { copyFile, cp, mkdir, realpath, rm, stat } from "node:fs/promises";
+import {
+  copyFile,
+  cp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+} from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -13,18 +21,152 @@ import {
   resolve,
 } from "node:path";
 
+import SemverRange from "semver/classes/range.js";
+
+declare const __MUON_NODE_SUPPORTED_ENGINE_RANGE__: string;
+
 type JsonObject = Record<string, unknown>;
 
 const stagedNodeProjectDirectoryName = "node-project";
 const nodeBridgeFileName = "node-bridge.mjs";
+const supportedNodeRange = __MUON_NODE_SUPPORTED_ENGINE_RANGE__;
+
+/**
+ * Node runtime constraint passed from the JavaScript build layer to a native
+ * launcher or runtime preparer.
+ */
+export interface MuonNodeRuntimeRequirement {
+  /** Whether the application must fail when no matching Node runtime exists. */
+  readonly required: boolean;
+  /** Original `package.json` `engines.node` text, or `*` when omitted. */
+  readonly engineRange: string;
+  /**
+   * Normalized comparator sets accepted by both the project and muon bridge.
+   *
+   * @remarks The outer array is an OR expression and each inner array is an
+   * AND expression. An empty inner array represents a wildcard set.
+   */
+  readonly comparatorSets: readonly (readonly string[])[];
+}
 
 /**
  * Node project selected by the `node.project` muon configuration.
  */
 export interface ResolvedMuonNodeProject {
   /** Absolute source directory copied into a muon runtime. */
-  sourcePath: string;
+  readonly sourcePath: string;
+  /** Original `package.json` `engines.node` text, or `*` when omitted. */
+  readonly engineRange: string;
+  /**
+   * Normalized comparator sets accepted by both the project and muon bridge.
+   */
+  readonly comparatorSets: readonly (readonly string[])[];
 }
+
+const normalizeComparatorSet = (
+  comparators: SemverRange["set"][number],
+): string[] =>
+  comparators
+    .map((comparator) => comparator.value)
+    .filter((comparator) => comparator !== "");
+
+const comparatorSetsIntersect = (
+  left: readonly string[],
+  right: readonly string[],
+): boolean =>
+  new SemverRange(left.join(" ")).intersects(new SemverRange(right.join(" ")));
+
+const intersectNodeEngineRanges = (
+  projectRange: SemverRange,
+): readonly (readonly string[])[] => {
+  const bridgeRange = new SemverRange(supportedNodeRange);
+  const comparatorSets: string[][] = [];
+  for (const bridgeComparators of bridgeRange.set) {
+    const bridgeSet = normalizeComparatorSet(bridgeComparators);
+    for (const projectComparators of projectRange.set) {
+      const projectSet = normalizeComparatorSet(projectComparators);
+      if (comparatorSetsIntersect(bridgeSet, projectSet)) {
+        comparatorSets.push([...bridgeSet, ...projectSet]);
+      }
+    }
+  }
+  return comparatorSets;
+};
+
+const readNodeEngineRequirement = async (
+  packageJsonPath: string,
+): Promise<Pick<ResolvedMuonNodeProject, "engineRange" | "comparatorSets">> => {
+  let source: string;
+  try {
+    source = await readFile(packageJsonPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `muon Node project package.json could not be read: ${packageJsonPath}: ${getErrorMessage(error)}`,
+    );
+  }
+
+  let packageJson: unknown;
+  try {
+    packageJson = JSON.parse(source) as unknown;
+  } catch (error) {
+    throw new Error(
+      `muon Node project package.json could not be parsed: ${packageJsonPath}: ${getErrorMessage(error)}`,
+    );
+  }
+  if (!isJsonObject(packageJson)) {
+    throw new Error(
+      `muon Node project package.json must contain an object: ${packageJsonPath}`,
+    );
+  }
+
+  const enginesValue = packageJson.engines;
+  if (enginesValue !== undefined && !isJsonObject(enginesValue)) {
+    throw new Error("package.json engines must be an object");
+  }
+  const nodeValue = enginesValue?.node;
+  if (
+    nodeValue !== undefined &&
+    (typeof nodeValue !== "string" || nodeValue.trim().length === 0)
+  ) {
+    throw new Error("package.json engines.node must be a non-empty string");
+  }
+
+  const engineRange = nodeValue ?? "*";
+  let projectRange: SemverRange;
+  try {
+    projectRange = new SemverRange(engineRange);
+  } catch {
+    throw new Error(
+      `package.json engines.node is not a valid range: ${engineRange}`,
+    );
+  }
+  const comparatorSets = intersectNodeEngineRanges(projectRange);
+  if (comparatorSets.length === 0) {
+    throw new Error(
+      "package.json engines.node does not overlap the muon Node bridge range",
+    );
+  }
+  return { engineRange, comparatorSets };
+};
+
+/**
+ * Creates the native runtime constraint for a resolved Node project.
+ *
+ * @param project Resolved Node project, or `undefined` when Node is disabled.
+ * @param required Whether absence of a matching runtime is fatal.
+ * @returns The launcher/runtime requirement, or `undefined` for a non-Node app.
+ */
+export const createMuonNodeRuntimeRequirement = (
+  project: ResolvedMuonNodeProject | undefined,
+  required: boolean,
+): MuonNodeRuntimeRequirement | undefined =>
+  project === undefined
+    ? undefined
+    : {
+        required,
+        engineRange: project.engineRange,
+        comparatorSets: project.comparatorSets,
+      };
 
 /**
  * Resolves and validates an optional Node project from muon configuration.
@@ -70,7 +212,10 @@ export const resolveMuonNodeProject = async (
     );
   }
 
-  return { sourcePath };
+  return {
+    sourcePath,
+    ...(await readNodeEngineRequirement(packageJsonPath)),
+  };
 };
 
 /**
@@ -293,6 +438,9 @@ const isMissingPathError = (error: unknown): boolean => {
   const code = (error as NodeJS.ErrnoException).code;
   return code === "ENOENT" || code === "ENOTDIR";
 };
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 // Output paths often do not exist yet. Resolve their closest existing
 // ancestor so symlink aliases cannot bypass overlap checks, then append the

@@ -685,6 +685,37 @@ target_link_libraries(muon_cardio INTERFACE
   ${MUON_CARDIO_GLIB_TARGETS}
   )
 
+if(WIN32)
+  add_library(muon_windows_job_process STATIC
+    src/platform/muon_windows_job_process.cpp
+    src/platform/muon_windows_job_process.h
+    )
+  set_target_properties(muon_windows_job_process PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    )
+  target_compile_features(muon_windows_job_process PRIVATE cxx_std_20)
+  target_compile_definitions(muon_windows_job_process PRIVATE
+    NOMINMAX
+    NTDDI_VERSION=0x0A00000A
+    WIN32_LEAN_AND_MEAN
+    WINVER=0x0A00
+    _WIN32_WINNT=0x0A00
+    )
+  target_include_directories(muon_windows_job_process PUBLIC
+    src/platform
+    )
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(muon_windows_job_process PRIVATE
+      -fexceptions
+      )
+  elseif(MSVC)
+    target_compile_options(muon_windows_job_process PRIVATE
+      /EHsc
+      )
+  endif()
+  MUON_APPLY_SANITIZERS(muon_windows_job_process)
+endif()
+
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
@@ -935,6 +966,7 @@ if(WIN32)
     )
   target_link_libraries(muon_node_plugin PRIVATE
     bcrypt
+    muon_windows_job_process
     )
 endif()
 if(MINGW)

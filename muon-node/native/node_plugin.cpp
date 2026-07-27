@@ -6,6 +6,10 @@
 
 #include "muon_plugin_api.h"
 
+#if defined(_WIN32)
+#include "muon_windows_job_process.h"
+#endif
+
 #include <cardio.h>
 #include <yyjson.h>
 
@@ -143,9 +147,7 @@ struct MuonNodeRuntime {
   std::vector<std::shared_ptr<MuonNodeHostInvocation>> release_invocations;
 #if defined(_WIN32)
   HANDLE pipe = INVALID_HANDLE_VALUE;
-  HANDLE process = nullptr;
-  HANDLE job = nullptr;
-  DWORD process_id = 0;
+  MuonWindowsJobProcess process{};
 #else
   int socket_fd = -1;
   int process_fd = -1;
@@ -695,15 +697,7 @@ static void CloseMuonNodeProcessHandles(MuonNodeRuntime* runtime) {
     return;
   }
 #if defined(_WIN32)
-  if (runtime->process != nullptr) {
-    (void)CloseHandle(runtime->process);
-    runtime->process = nullptr;
-  }
-  if (runtime->job != nullptr) {
-    (void)CloseHandle(runtime->job);
-    runtime->job = nullptr;
-  }
-  runtime->process_id = 0;
+  CloseMuonWindowsJobProcess(&runtime->process);
 #else
   if (runtime->process_fd >= 0) {
     (void)::close(runtime->process_fd);
@@ -720,9 +714,8 @@ static void TerminateMuonNodeProcess(MuonNodeRuntime* runtime,
     return;
   }
 #if defined(_WIN32)
-  if (runtime->process != nullptr) {
-    (void)TerminateProcess(runtime->process, force ? 137u : 143u);
-  }
+  (void)TerminateMuonWindowsJobProcess(
+      &runtime->process, force ? 137u : 143u);
 #else
   if (runtime->process_id > 0) {
     (void)::kill(runtime->process_id, force ? SIGKILL : SIGTERM);
@@ -1475,11 +1468,6 @@ static cardio::promise<void> StartMuonNodeProcess(
 
   std::array<HANDLE, 3> inherited_standard_handles{
       nullptr, nullptr, nullptr};
-  std::vector<std::byte> attribute_storage;
-  LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = nullptr;
-  auto attribute_list_initialized = false;
-  PROCESS_INFORMATION process{};
-  HANDLE job = nullptr;
   try {
     inherited_standard_handles[0] =
         CreateMuonNodeInheritedStandardHandle(
@@ -1491,107 +1479,35 @@ static cardio::promise<void> StartMuonNodeProcess(
         CreateMuonNodeInheritedStandardHandle(
             STD_ERROR_HANDLE, GENERIC_WRITE);
 
-    SIZE_T attribute_size = 0;
-    // The sizing call fails by design and reports the required byte count.
-    (void)InitializeProcThreadAttributeList(
-        nullptr, 1, 0, &attribute_size);
-    if (attribute_size == 0) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to size the Node process attribute list");
-    }
-    attribute_storage.resize(attribute_size);
-    attribute_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-        attribute_storage.data());
-    if (InitializeProcThreadAttributeList(
-            attribute_list, 1, 0, &attribute_size) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to initialize the Node process attribute list");
-    }
-    attribute_list_initialized = true;
-    if (UpdateProcThreadAttribute(
-            attribute_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            inherited_standard_handles.data(),
-            sizeof(HANDLE) * inherited_standard_handles.size(),
-            nullptr, nullptr) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to restrict Node inherited handles");
-    }
-
-    STARTUPINFOEXW startup{};
-    startup.StartupInfo.cb = sizeof(startup);
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = inherited_standard_handles[0];
-    startup.StartupInfo.hStdOutput = inherited_standard_handles[1];
-    startup.StartupInfo.hStdError = inherited_standard_handles[2];
-    startup.lpAttributeList = attribute_list;
-    if (CreateProcessW(
-            executable.c_str(), command_line_buffer.data(),
-            nullptr, nullptr, TRUE,
-            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW |
-                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
-            environment.data(), nullptr, &startup.StartupInfo,
-            &process) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to start Node executable " + runtime->executable_path);
-    }
-
-    DeleteProcThreadAttributeList(attribute_list);
-    attribute_list_initialized = false;
-    attribute_list = nullptr;
+    MuonWindowsJobProcessLaunchOptions launch_options{};
+    launch_options.application_name = executable.c_str();
+    launch_options.command_line = command_line_buffer.data();
+    launch_options.environment = environment.data();
+    launch_options.creation_flags =
+        CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+    launch_options.startup_info.dwFlags = STARTF_USESTDHANDLES;
+    launch_options.startup_info.hStdInput =
+        inherited_standard_handles[0];
+    launch_options.startup_info.hStdOutput =
+        inherited_standard_handles[1];
+    launch_options.startup_info.hStdError =
+        inherited_standard_handles[2];
+    launch_options.inherited_handles =
+        inherited_standard_handles.data();
+    launch_options.inherited_handle_count =
+        inherited_standard_handles.size();
+    launch_options.lifetime =
+        MuonWindowsJobProcessLifetime::KillOnOwnerClose;
+    runtime->process =
+        LaunchMuonWindowsJobProcess(launch_options);
     for (auto& handle : inherited_standard_handles) {
       CloseMuonNodeWindowsHandle(&handle);
     }
-
-    job = CreateJobObjectW(nullptr, nullptr);
-    if (job == nullptr) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "CreateJobObjectW failed for Node sidecar");
-    }
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags =
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (SetInformationJobObject(
-            job, JobObjectExtendedLimitInformation, &limits,
-            sizeof(limits)) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to configure the Node sidecar job object");
-    }
-    if (AssignProcessToJobObject(job, process.hProcess) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to assign the Node sidecar job object");
-    }
-    if (ResumeThread(process.hThread) ==
-        (std::numeric_limits<DWORD>::max)()) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to resume the Node sidecar process");
-    }
-    CloseMuonNodeWindowsHandle(&process.hThread);
-
-    runtime->process = std::exchange(process.hProcess, nullptr);
-    runtime->job = std::exchange(job, nullptr);
-    runtime->process_id = process.dwProcessId;
     runtime->process_started = true;
   } catch (...) {
-    if (attribute_list_initialized) {
-      DeleteProcThreadAttributeList(attribute_list);
-    }
     for (auto& handle : inherited_standard_handles) {
       CloseMuonNodeWindowsHandle(&handle);
     }
-    if (process.hProcess != nullptr) {
-      (void)TerminateProcess(process.hProcess, 137u);
-    }
-    CloseMuonNodeWindowsHandle(&job);
-    CloseMuonNodeWindowsHandle(&process.hThread);
-    CloseMuonNodeWindowsHandle(&process.hProcess);
     throw;
   }
   // Observe pre-connect exits so ConnectNamedPipe cannot strand startup.
@@ -1607,8 +1523,8 @@ static cardio::promise<void> StartMuonNodeProcess(
         static_cast<int>(GetLastError()), std::system_category(),
         "GetNamedPipeClientProcessId failed for Node sidecar");
   }
-  if (runtime->process_id == 0 ||
-      pipe_client_process_id != runtime->process_id) {
+  if (runtime->process.process_id == 0 ||
+      pipe_client_process_id != runtime->process.process_id) {
     throw std::runtime_error(
         "Node IPC pipe was connected by an unexpected process");
   }
@@ -1790,12 +1706,14 @@ static cardio::promise<void> MonitorMuonNodeProcess(
   auto exit_status_available = false;
   try {
 #if defined(_WIN32)
-    if (runtime->process == nullptr) {
+    if (runtime->process.process == nullptr) {
       throw std::runtime_error("Node process handle is unavailable");
     }
-    (void)co_await cardio::from_win32_handle(runtime->process);
+    (void)co_await cardio::from_win32_handle(
+        runtime->process.process);
     DWORD native_exit_code = 0;
-    if (GetExitCodeProcess(runtime->process, &native_exit_code) == FALSE) {
+    if (GetExitCodeProcess(
+            runtime->process.process, &native_exit_code) == FALSE) {
       throw std::system_error(
           static_cast<int>(GetLastError()), std::system_category(),
           "GetExitCodeProcess failed for Node sidecar");

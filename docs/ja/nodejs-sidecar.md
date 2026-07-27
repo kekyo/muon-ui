@@ -70,11 +70,14 @@ Node組み込みモジュールは`node:` prefixを必須とします。例え�
 プロセス境界を通過できる値は次のものに限定されます。
 
 - `undefined`、`null`、boolean、負のゼロを除く有限のnumber、string
+- plain object、密なarray、`null`、boolean、負のゼロを除く有限のnumber、stringから構成されるJSON data
 - signed 64-bitまたはunsigned 64-bit範囲の`bigint`
 - コピーされる`ArrayBuffer`とすべての`ArrayBufferView`
 - Node関数へ直接渡す一時的なcallback関数
 
-`undefined`は明示的な値と`void`の戻り値の両方を表します。binary入力はviewの範囲だけがコピーされ、rendererへ返るbinary値は`Uint8Array`に正規化されます。任意のobject、class instance、Nodeのhandleやpointerは渡せません。Node側のexport値が対応外のobjectである場合、そのexportはfacadeへ追加されません。関数が対応外の値を引数または戻り値に使用すると、その呼び出しはrejectされます。callbackはNode関数の呼び出しがsettleするまで有効です。`$release`はfacade制御用、`then`はPromiseのthenable同化を防ぐための予約名であり、いずれかをexportするmoduleはimportできません。
+JSON objectとarrayは、独立した値のsnapshotとしてserializeされます。objectのprototypeは`Object.prototype`または`null`で、列挙可能なown string-keyed data propertyだけを含む必要があります。arrayのprototypeは`Array.prototype`で、lengthまでの全indexを持ち、追加propertyを持たない必要があります。循環参照、accessor、symbol property、array組み込みの`length`以外の非列挙property、custom prototype、class instance、`Date`、`Map`、`Set`、およびJSON container内の`undefined`、`bigint`、binary、function、非有限numberは拒否されます。非循環の共有参照は出現箇所ごとにコピーされ、prototype、property descriptor、参照同一性は保持されません。
+
+`undefined`は明示的な値と`void`の戻り値の両方を表します。binary入力はviewの範囲だけがコピーされ、rendererへ返るbinary値は`Uint8Array`に正規化されます。Nodeのhandleやpointerは渡せません。moduleがexportするJSON objectまたはarrayの定数はfacadeへ追加されず、JSON objectとarrayを使用できるのは関数またはcallbackの引数と戻り値だけです。対応外の値を使用した呼び出しはrejectされます。callbackはNode関数の呼び出しがsettleするまで有効です。`$release`はfacade制御用、`then`はPromiseのthenable同化を防ぐための予約名であり、いずれかをexportするmoduleはimportできません。
 
 module facadeの`$release()`が解放するのは、bridgeが保持するdescriptor、proxy、remote callbackの参照だけです。Nodeモジュール内で作成されたserver、timer、watcherなどのresourceを停止または破棄せず、sidecar processも終了しません。
 
@@ -88,7 +91,7 @@ const backend = await node.importModule(".");
 await backend.run();
 ```
 
-encode後のIPC frameは1件あたり16 MiBに制限されます。JSON framingとbase64展開分も上限に含まれるため、利用できるbinary payloadはこれより小さく、他の引数にも依存します。一つのsidecarが受け付けるpending requestは最大1,024件であり、上限を超えた呼び出しは先行requestがsettleするまでrejectされます。
+encode後のIPC frameは1件あたり16 MiBに制限されます。JSON framingとbase64展開分も上限に含まれるため、利用できるJSONまたはbinary payloadはこれより小さく、他の引数にも依存します。JSON snapshotの検証、serialize、copyは、renderer由来の値ではrenderer main thread上、Node由来の値ではsidecarのNode.js event loop上で同期的に行われます。大きなdataにはbinary値または別のstreaming手段を使用してください。一つのsidecarが受け付けるpending requestは最大1,024件であり、上限を超えた呼び出しは先行requestがsettleするまでrejectされます。
 
 ## 管理されるNode.jsランタイム
 

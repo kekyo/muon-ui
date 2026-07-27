@@ -56,7 +56,17 @@ An instance's `importModule()` returns a frozen renderer-local facade built from
 
 Built-ins require the explicit `node:` prefix. Project-relative specifiers and bare packages resolvable from the configured project are also accepted. `importModule(".")` loads the project's `package.json` `main` entry, or Node.js's directory-entry default when `main` is omitted.
 
-Only `undefined`, `null`, booleans, finite numbers other than negative zero, strings, signed or unsigned 64-bit `bigint` values, copied `ArrayBuffer` and `ArrayBufferView` values, and temporary callback functions can cross the process boundary. `undefined` represents both an explicit value and a `void` result. Only the selected view range is copied, and binary results are normalized to `Uint8Array` in the renderer. Arbitrary objects, class instances, Node handles, and pointers are rejected. A callback remains valid until the exported Node function call settles. `$release` is reserved for facade lifecycle control, and `then` is reserved to prevent promise thenable assimilation, so a module exporting either name cannot be imported.
+The following top-level values can cross the process boundary:
+
+- `undefined`, `null`, booleans, finite numbers other than negative zero, and strings
+- JSON data composed of plain objects, dense arrays, `null`, booleans, finite numbers other than negative zero, and strings
+- signed or unsigned 64-bit `bigint` values
+- copied `ArrayBuffer` and `ArrayBufferView` values
+- temporary callback functions passed directly to a Node function
+
+JSON objects and arrays are serialized as independent value snapshots. Objects must have `Object.prototype` or `null` as their prototype and contain only enumerable own string-keyed data properties. Arrays must use `Array.prototype`, contain every index through their length, and have no additional properties. Cycles, accessors, symbol properties, non-enumerable properties other than an array's built-in `length`, custom prototypes, class instances, `Date`, `Map`, `Set`, and nested `undefined`, `bigint`, binary, function, or non-finite number values are rejected. Repeated non-cyclic references are copied independently; prototypes, property descriptors, and reference identity are not preserved.
+
+`undefined` represents both an explicit value and a `void` result. Only the selected binary view range is copied, and binary results are normalized to `Uint8Array` in the renderer. Node handles and pointers cannot cross the bridge. JSON object and array constants exported by a module are not added to its facade; JSON objects and arrays are supported only as function or callback arguments and results. A callback remains valid until the exported Node function call settles. `$release` is reserved for facade lifecycle control, and `then` is reserved to prevent promise thenable assimilation, so a module exporting either name cannot be imported.
 
 A module facade's `$release()` releases only the descriptor, proxy, and remote-callback references maintained by the bridge. It does not stop or dispose of resources created inside the Node module, such as servers, timers, or watchers, and it does not stop the sidecar process.
 
@@ -70,7 +80,7 @@ const backend = await node.importModule(".");
 await backend.run();
 ```
 
-Each encoded IPC frame is limited to 16 MiB. JSON framing and base64 expansion count toward the limit, so the usable binary payload is smaller and depends on the other arguments. One sidecar accepts at most 1,024 pending requests; additional calls are rejected until earlier requests settle.
+Each encoded IPC frame is limited to 16 MiB. JSON framing and base64 expansion count toward the limit, so the usable JSON or binary payload is smaller and depends on the other arguments. JSON snapshots are validated, serialized, and copied synchronously: renderer-originated values on the renderer main thread and Node-originated values on the sidecar's Node.js event loop. Use binary values or another streaming mechanism for large data. One sidecar accepts at most 1,024 pending requests; additional calls are rejected until earlier requests settle.
 
 ## Managed Node.js runtime
 

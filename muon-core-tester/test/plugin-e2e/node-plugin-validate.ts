@@ -3,8 +3,6 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { resolve } from "node:path";
-
 import { expect, it } from "vitest";
 
 import {
@@ -14,8 +12,10 @@ import {
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   constants,
+  getNodeProjectFixtureDirectory,
+  getNodeSidecarCommandMarker,
   join,
-  listProcessGroupCommandLines,
+  listMuonProcessCommandLines,
   mkdtemp,
   readFile,
   rm,
@@ -23,20 +23,11 @@ import {
   stopMuon,
   tmpdir,
 } from "./shared.js";
-import type { CdpDriver, RunningMuon } from "./shared.js";
-import { isWindowsRemoteE2e } from "./windows-context.js";
+import type { CdpDriver } from "./shared.js";
 
-const localIt = isWindowsRemoteE2e() ? it.skip : it;
-const nodeProjectDirectory = resolve("test/fixtures/node-project");
-const nodeBridgeCommandMarker = "node-bridge.mjs";
-
-const requireProcessGroupId = (running: RunningMuon): number => {
-  const processGroupId = running.process.pid;
-  if (processGroupId === undefined) {
-    throw new Error("Muon process group id is unavailable");
-  }
-  return processGroupId;
-};
+const nodeProjectDirectory = getNodeProjectFixtureDirectory();
+const nodeSidecarCommandMarker = getNodeSidecarCommandMarker();
+const nodeIt = it;
 
 const readMarkerLines = async (path: string): Promise<string[]> =>
   (await readFile(path, "utf8")).split("\n").filter((line) => line !== "");
@@ -50,7 +41,7 @@ const connectToValidateTestPage = async (): Promise<CdpDriver> => {
   return driver;
 };
 
-localIt(
+nodeIt(
   "runs a Node instance through the validate-mode virtual module facade",
   async () => {
     const markerDirectory = await mkdtemp(
@@ -116,12 +107,11 @@ localIt(
         expect(internalCapabilityError).toContain("cannot be called directly");
         await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
 
-        const processGroupId = requireProcessGroupId(running);
         const commandLinesBeforeCall =
-          await listProcessGroupCommandLines(processGroupId);
+          await listMuonProcessCommandLines(running);
         expect(
           commandLinesBeforeCall.some((line) =>
-            line.includes(nodeBridgeCommandMarker),
+            line.includes(nodeSidecarCommandMarker),
           ),
         ).toBe(false);
 
@@ -219,10 +209,10 @@ localIt(
         })()`);
 
         const commandLinesAfterCall =
-          await listProcessGroupCommandLines(processGroupId);
+          await listMuonProcessCommandLines(running);
         expect(
           commandLinesAfterCall.filter((line) =>
-            line.includes(nodeBridgeCommandMarker),
+            line.includes(nodeSidecarCommandMarker),
           ),
         ).toHaveLength(0);
         expect(await readMarkerLines(markerPath)).toEqual([

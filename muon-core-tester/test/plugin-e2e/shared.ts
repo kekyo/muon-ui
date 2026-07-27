@@ -13,6 +13,7 @@ import {
   mkdir as nodeMkdir,
   mkdtemp as nodeMkdtemp,
   readFile as nodeReadFile,
+  realpath as nodeRealpath,
   rename as nodeRename,
   rm as nodeRm,
   stat,
@@ -325,6 +326,36 @@ export const rm = async (
     }
     throw error;
   }
+};
+
+/**
+ * Resolves a local path through the host filesystem.
+ *
+ * @param path Local or remote-Windows path.
+ * @returns Canonical local path, or the unchanged absolute Windows path.
+ * @remarks Remote Windows fixtures are staged without links, and agent-rover
+ * does not expose a remote realpath operation.
+ */
+export const realpath = async (path: string): Promise<string> =>
+  isWindowsAbsolutePath(path) ? path : await nodeRealpath(path);
+
+/**
+ * Renames a local or remote-Windows filesystem entry.
+ *
+ * @param from Existing path.
+ * @param to Destination path on the same filesystem.
+ */
+export const rename = async (from: string, to: string): Promise<void> => {
+  const fromIsWindows = isWindowsAbsolutePath(from);
+  const toIsWindows = isWindowsAbsolutePath(to);
+  if (fromIsWindows !== toIsWindows) {
+    throw new Error("Cannot rename across local and remote filesystems");
+  }
+  if (!fromIsWindows) {
+    await nodeRename(from, to);
+    return;
+  }
+  await requireWindowsRemoteContext().agent.files.rename(from, to);
 };
 
 const applyRemoteCdpOptions = (
@@ -737,9 +768,38 @@ export const getBundledNodeExecutable = (running: RunningMuon): string => {
     "runtimes",
     "node",
     "bin",
-    process.platform === "win32" ? "node.exe" : "node",
+    process.platform === "win32" || running.remoteWindows !== undefined
+      ? "node.exe"
+      : "node",
   );
 };
+
+/**
+ * Gets the Node.js project fixture path for the active E2E platform.
+ *
+ * @returns Local fixture path or its staged remote-Windows path.
+ */
+export const getNodeProjectFixtureDirectory = (): string =>
+  getWindowsRemoteContext()?.runtime.nodeProjectDirectory ??
+  resolve("test", "fixtures", "node-project");
+
+/**
+ * Gets the Express project fixture path for the active E2E platform.
+ *
+ * @returns Local fixture source path or its dependency-installed
+ * remote-Windows path.
+ */
+export const getNodeExpressProjectFixtureDirectory = (): string =>
+  getWindowsRemoteContext()?.runtime.nodeExpressProjectDirectory ??
+  resolve("test", "fixtures", "node-express-project");
+
+/**
+ * Gets a command-line marker that identifies Node sidecars in process lists.
+ *
+ * @returns Platform-specific process marker.
+ */
+export const getNodeSidecarCommandMarker = (): string =>
+  isWindowsRemoteE2e() ? "node.exe" : "node-bridge.mjs";
 
 const prepareBundledNodeExecutable = async (
   running: RunningMuon,
@@ -1397,6 +1457,30 @@ export const listProcessGroupCommandLines = async (
       const commandLine = match[2];
       return commandLine === undefined ? [] : [commandLine];
     });
+};
+
+/**
+ * Lists the root and descendant process command markers for a running Muon.
+ *
+ * @param running Running Muon process.
+ * @returns Process paths and names on remote Windows, or process-group command
+ * lines on the local host.
+ */
+export const listMuonProcessCommandLines = async (
+  running: RunningMuon,
+): Promise<string[]> => {
+  if (running.remoteWindows !== undefined) {
+    const snapshot = await running.remoteWindows.muonProcess.snapshot();
+    return [snapshot.root, ...snapshot.processes]
+      .filter((processInfo) => processInfo.running)
+      .map((processInfo) => `${processInfo.path} ${processInfo.name}`);
+  }
+
+  const processGroupId = running.process.pid;
+  if (processGroupId === undefined) {
+    throw new Error("Muon process group id is unavailable");
+  }
+  return await listProcessGroupCommandLines(processGroupId);
 };
 
 export const parseXpropWindowTitle = (output: string): string | undefined => {

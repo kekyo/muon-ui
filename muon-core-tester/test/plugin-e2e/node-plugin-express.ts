@@ -3,11 +3,8 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
 import { cp } from "node:fs/promises";
 import { createConnection } from "node:net";
-import { resolve } from "node:path";
 
 import { expect, it } from "vitest";
 
@@ -18,21 +15,29 @@ import {
   connectToMuonCdp,
   execFileAsync,
   getBundledNodeExecutable,
+  getNodeExpressProjectFixtureDirectory,
+  getNodeSidecarCommandMarker,
+  expectProcessExitCode,
   join,
-  listProcessGroupCommandLines,
+  listMuonProcessCommandLines,
   mkdtemp,
+  processExitTimeoutMs,
   rm,
   startDebugMuonWithNodeProject,
   stopMuon,
   tmpdir,
+  waitForProcessExit,
 } from "./shared.js";
-import type { CdpDriver, RunningMuon } from "./shared.js";
-import { isWindowsRemoteE2e } from "./windows-context.js";
+import type { CdpDriver } from "./shared.js";
+import {
+  isWindowsRemoteE2e,
+  requireWindowsRemoteContext,
+} from "./windows-context.js";
 
-const linuxIt =
-  process.platform === "linux" && !isWindowsRemoteE2e() ? it : it.skip;
-const expressFixtureDirectory = resolve("test/fixtures/node-express-project");
-const nodeBridgeCommandMarker = "node-bridge.mjs";
+const nodeIt =
+  process.platform === "linux" || isWindowsRemoteE2e() ? it : it.skip;
+const expressFixtureDirectory = getNodeExpressProjectFixtureDirectory();
+const nodeSidecarCommandMarker = getNodeSidecarCommandMarker();
 const forcedTerminationWarning =
   "Node sidecar did not stop gracefully; terminating it";
 const forcedKillWarning = "Node sidecar did not terminate; killing it";
@@ -50,25 +55,13 @@ interface ExpressProbeResult {
   readonly value: string;
 }
 
-const requireProcessGroupId = (running: RunningMuon): number => {
-  const processGroupId = running.process.pid;
-  if (processGroupId === undefined) {
-    throw new Error("Muon process group id is unavailable");
-  }
-  return processGroupId;
-};
-
-const requireLocalMuonProcess = (running: RunningMuon): ChildProcess => {
-  if (running.remoteWindows !== undefined || !("stderr" in running.process)) {
-    throw new Error("Expected a local Muon child process");
-  }
-  return running.process;
-};
-
 const expectLoopbackPortUnavailable = async (port: number): Promise<void> => {
   // stopMuon waits for process exit, so one connection attempt is conclusive.
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    const socket = createConnection({ host: "127.0.0.1", port });
+    const host = isWindowsRemoteE2e()
+      ? requireWindowsRemoteContext().httpHost
+      : "127.0.0.1";
+    const socket = createConnection({ host, port });
     let settled = false;
     const settle = (operation: () => void): void => {
       if (settled) {
@@ -105,20 +98,24 @@ const expectLoopbackPortUnavailable = async (port: number): Promise<void> => {
   });
 };
 
-linuxIt(
+nodeIt(
   "serves a Muon asset request from an independent Express project",
   async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "muon-node-express-"),
     );
-    const nodeProject = join(temporaryDirectory, "project");
+    const nodeProject = isWindowsRemoteE2e()
+      ? expressFixtureDirectory
+      : join(temporaryDirectory, "project");
     try {
-      await cp(expressFixtureDirectory, nodeProject, { recursive: true });
-      await execFileAsync(
-        "npm",
-        ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
-        { cwd: nodeProject },
-      );
+      if (!isWindowsRemoteE2e()) {
+        await cp(expressFixtureDirectory, nodeProject, { recursive: true });
+        await execFileAsync(
+          "npm",
+          ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
+          { cwd: nodeProject },
+        );
+      }
 
       const running = await startDebugMuonWithNodeProject({
         nodeProject,
@@ -201,20 +198,24 @@ linuxIt(
   },
 );
 
-linuxIt(
+nodeIt(
   "terminates the Node sidecar when an Express listener remains open",
   async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "muon-node-express-lifecycle-"),
     );
-    const nodeProject = join(temporaryDirectory, "project");
+    const nodeProject = isWindowsRemoteE2e()
+      ? expressFixtureDirectory
+      : join(temporaryDirectory, "project");
     try {
-      await cp(expressFixtureDirectory, nodeProject, { recursive: true });
-      await execFileAsync(
-        "npm",
-        ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
-        { cwd: nodeProject },
-      );
+      if (!isWindowsRemoteE2e()) {
+        await cp(expressFixtureDirectory, nodeProject, { recursive: true });
+        await execFileAsync(
+          "npm",
+          ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
+          { cwd: nodeProject },
+        );
+      }
 
       const running = await startDebugMuonWithNodeProject({
         nodeProject,
@@ -223,41 +224,60 @@ linuxIt(
       let driver: CdpDriver | undefined = undefined;
       let stopped = false;
       try {
-        const processGroupId = requireProcessGroupId(running);
         driver = await connectToMuonCdp({
           port: MUON_PORT,
           timeoutMs: cdpCommandTimeoutMs,
         });
         await driver.navigate(MUON_APP_URL, cdpCommandTimeoutMs);
 
-        const port = await driver.evaluate<number>(`(async () => {
+        const sidecar = await driver.evaluate<{
+          readonly port: number;
+          readonly processId: number;
+        }>(`(async () => {
           window.__expressNode = await window.muon.node.createNode();
           const backend = await window.__expressNode.importModule(".");
-          return await backend.startServer();
+          return {
+            port: await backend.startServer(),
+            processId: await backend.processId(),
+          };
         })()`);
-        expect(port).toBeGreaterThan(0);
+        expect(sidecar.port).toBeGreaterThan(0);
         expect(
-          (await listProcessGroupCommandLines(processGroupId)).some((line) =>
-            line.includes(nodeBridgeCommandMarker),
+          (await listMuonProcessCommandLines(running)).some((line) =>
+            line.includes(nodeSidecarCommandMarker),
           ),
         ).toBe(true);
 
-        const processCloseOperation = once(
-          requireLocalMuonProcess(running),
-          "close",
+        const processCloseOperation = waitForProcessExit(
+          running,
+          processExitTimeoutMs,
         );
         await Promise.all([stopMuon(running, driver), processCloseOperation]);
         stopped = true;
         driver = undefined;
 
+        await expectProcessExitCode(running, 0);
         expect(running.stderr).not.toContain(forcedTerminationWarning);
         expect(running.stderr).not.toContain(forcedKillWarning);
-        expect(
-          (await listProcessGroupCommandLines(processGroupId)).some((line) =>
-            line.includes(nodeBridgeCommandMarker),
-          ),
-        ).toBe(false);
-        await expectLoopbackPortUnavailable(port);
+        if (isWindowsRemoteE2e()) {
+          await requireWindowsRemoteContext().agent.processes.waitForExit(
+            sidecar.processId,
+            {
+              intervalMs: 100,
+              message: `Node sidecar ${String(
+                sidecar.processId,
+              )} survived Muon shutdown`,
+              timeoutMs: processExitTimeoutMs,
+            },
+          );
+        } else {
+          expect(
+            (await listMuonProcessCommandLines(running)).some((line) =>
+              line.includes(nodeSidecarCommandMarker),
+            ),
+          ).toBe(false);
+        }
+        await expectLoopbackPortUnavailable(sidecar.port);
       } catch (error) {
         throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
       } finally {

@@ -3,9 +3,6 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { realpath, rename } from "node:fs/promises";
-import { resolve } from "node:path";
-
 import { expect, it } from "vitest";
 
 import {
@@ -16,11 +13,15 @@ import {
   constants,
   evaluateRejection,
   getBundledNodeExecutable,
+  getNodeProjectFixtureDirectory,
+  getNodeSidecarCommandMarker,
   join,
-  listProcessGroupCommandLines,
+  listMuonProcessCommandLines,
   mkdtemp,
   openPopupTarget,
   readFile,
+  realpath,
+  rename,
   rm,
   startDebugMuonWithNodeProject,
   stopMuon,
@@ -28,11 +29,10 @@ import {
   withMuon,
 } from "./shared.js";
 import type { CdpDriver, RunningMuon } from "./shared.js";
-import { isWindowsRemoteE2e } from "./windows-context.js";
 
-const localIt = isWindowsRemoteE2e() ? it.skip : it;
-const nodeProjectDirectory = resolve("test/fixtures/node-project");
-const nodeBridgeCommandMarker = "node-bridge.mjs";
+const nodeProjectDirectory = getNodeProjectFixtureDirectory();
+const nodeSidecarCommandMarker = getNodeSidecarCommandMarker();
+const nodeIt = it;
 
 const connectToNodeTestPage = async (): Promise<CdpDriver> => {
   const driver = await connectToMuonCdp({
@@ -44,14 +44,6 @@ const connectToNodeTestPage = async (): Promise<CdpDriver> => {
     cdpCommandTimeoutMs,
   );
   return driver;
-};
-
-const requireProcessGroupId = (running: RunningMuon): number => {
-  const processGroupId = running.process.pid;
-  if (processGroupId === undefined) {
-    throw new Error("Muon process group id is unavailable");
-  }
-  return processGroupId;
 };
 
 const readMarkerLines = async (path: string): Promise<string[]> =>
@@ -82,7 +74,7 @@ const withNodeRuntime = async (
   }
 };
 
-localIt(
+nodeIt(
   "does not expose muon.node without a top-level node config",
   async () => {
     await withMuon([], async (driver) => {
@@ -93,7 +85,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "loads metadata in validate mode without starting the Node sidecar",
   async () => {
     await withNodeRuntime(
@@ -102,11 +94,9 @@ localIt(
         await expect(driver.evaluate("typeof window.muon")).resolves.toBe(
           "undefined",
         );
-        const commandLines = await listProcessGroupCommandLines(
-          requireProcessGroupId(running),
-        );
+        const commandLines = await listMuonProcessCommandLines(running);
         expect(
-          commandLines.some((line) => line.includes(nodeBridgeCommandMarker)),
+          commandLines.some((line) => line.includes(nodeSidecarCommandMarker)),
         ).toBe(false);
       },
       null,
@@ -114,7 +104,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "creates isolated Node sidecars and releases each instance independently",
   async () => {
     const markerDirectory = await mkdtemp(join(tmpdir(), "muon-node-start-"));
@@ -127,12 +117,11 @@ localIt(
         },
         async (driver, running) => {
           await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
-          const processGroupId = requireProcessGroupId(running);
           const commandLinesBeforeImport =
-            await listProcessGroupCommandLines(processGroupId);
+            await listMuonProcessCommandLines(running);
           expect(
             commandLinesBeforeImport.some((line) =>
-              line.includes(nodeBridgeCommandMarker),
+              line.includes(nodeSidecarCommandMarker),
             ),
           ).toBe(false);
           await expect(
@@ -242,10 +231,10 @@ localIt(
           );
 
           const commandLinesAfterImport =
-            await listProcessGroupCommandLines(processGroupId);
+            await listMuonProcessCommandLines(running);
           expect(
             commandLinesAfterImport.filter((line) =>
-              line.includes(nodeBridgeCommandMarker),
+              line.includes(nodeSidecarCommandMarker),
             ),
           ).toHaveLength(0);
         },
@@ -256,7 +245,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "imports built-in modules through the bundled Node runtime",
   async () => {
     await withNodeRuntime({}, async (driver) => {
@@ -281,7 +270,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "creates a descriptor facade and marshals supported scalar and JSON values",
   async () => {
     await withNodeRuntime({}, async (driver) => {
@@ -759,7 +748,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "rejects an oversized renderer callback result without leaving the Node call pending",
   async () => {
     await withNodeRuntime({}, async (driver) => {
@@ -784,7 +773,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "keeps renderer callback handles distinct across browser contexts",
   async () => {
     await withNodeRuntime({}, async (driver) => {
@@ -862,7 +851,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "releases a context-owned Node instance without affecting another context",
   async () => {
     const markerDirectory = await mkdtemp(
@@ -936,15 +925,15 @@ localIt(
             driver.evaluate("window.__mainBackend.incrementState()"),
           ).resolves.toBe(1);
           expect(
-            (
-              await listProcessGroupCommandLines(requireProcessGroupId(running))
-            ).filter((line) => line.includes(nodeBridgeCommandMarker)),
+            (await listMuonProcessCommandLines(running)).filter((line) =>
+              line.includes(nodeSidecarCommandMarker),
+            ),
           ).toHaveLength(1);
           await driver.evaluate("window.__mainNode.release()");
           expect(
-            (
-              await listProcessGroupCommandLines(requireProcessGroupId(running))
-            ).filter((line) => line.includes(nodeBridgeCommandMarker)),
+            (await listMuonProcessCommandLines(running)).filter((line) =>
+              line.includes(nodeSidecarCommandMarker),
+            ),
           ).toHaveLength(0);
         } finally {
           await driver.evaluate(`(async () => {
@@ -961,7 +950,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "does not fall back when the bundled Node executable is missing",
   async () => {
     await withNodeRuntime(
@@ -989,7 +978,7 @@ localIt(
   },
 );
 
-localIt(
+nodeIt(
   "isolates a crashed Node sidecar from subsequently created instances",
   async () => {
     const markerDirectory = await mkdtemp(join(tmpdir(), "muon-node-crash-"));
@@ -1054,7 +1043,7 @@ localIt(
   },
 );
 
-localIt("stops the Node child before the plugin library unloads", async () => {
+nodeIt("stops the Node child before the plugin library unloads", async () => {
   const markerDirectory = await mkdtemp(join(tmpdir(), "muon-node-stop-"));
   const exitMarkerPath = join(markerDirectory, "exit.txt");
   const running = await startDebugMuonWithNodeProject({

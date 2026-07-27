@@ -3,10 +3,12 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import type { RemoteAgent } from "agent-rover";
 
@@ -20,6 +22,7 @@ import {
 const hashBuffer = (buffer: Buffer): string =>
   createHash("sha256").update(buffer).digest("hex");
 
+const execFileAsync = promisify(execFile);
 const windowsNodePrepareTimeoutMs = 600000;
 const windowsNodeRuntimeRequirement = JSON.stringify({
   comparatorSets: [[">=20.19.0", "<21.0.0-0"], [">=22.12.0"]],
@@ -241,7 +244,10 @@ const stageWindowsNodeSupport = async (
   remoteTargetRoot: string,
   debugRuntimeDirectory: string,
   releaseRuntimeDirectory: string,
-): Promise<string> => {
+): Promise<{
+  nodeExpressProjectDirectory: string;
+  nodeProjectDirectory: string;
+}> => {
   const remotePreparedNodeDirectory = await runWindowsNodeRuntimePrepare(
     agent,
     target,
@@ -283,7 +289,43 @@ const stageWindowsNodeSupport = async (
     resolve("test", "fixtures", "node-project"),
     nodeProjectDirectory,
   );
-  return nodeProjectDirectory;
+
+  const localExpressRoot = await mkdtemp(
+    join(tmpdir(), `muon-${target.target}-express-`),
+  );
+  const localExpressProjectDirectory = join(localExpressRoot, "project");
+  const nodeExpressProjectDirectory = joinWindowsPath(
+    remoteTargetRoot,
+    "node-express-project",
+  );
+  try {
+    await cp(
+      resolve("test", "fixtures", "node-express-project"),
+      localExpressProjectDirectory,
+      { recursive: true },
+    );
+    await execFileAsync(
+      "npm",
+      ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
+      { cwd: localExpressProjectDirectory },
+    );
+    await rm(join(localExpressProjectDirectory, "node_modules", ".bin"), {
+      recursive: true,
+      force: true,
+    });
+    await stageWindowsRuntimeDirectory(
+      agent,
+      localExpressProjectDirectory,
+      nodeExpressProjectDirectory,
+    );
+  } finally {
+    await rm(localExpressRoot, { recursive: true, force: true });
+  }
+
+  return {
+    nodeExpressProjectDirectory,
+    nodeProjectDirectory,
+  };
 };
 
 /**
@@ -329,13 +371,14 @@ export const stageWindowsRuntime = async (
     resolve("..", target.releaseRuntimeDirectory),
     releaseRuntimeDirectory,
   );
-  const nodeProjectDirectory = await stageWindowsNodeSupport(
-    agent,
-    target,
-    remoteTargetRoot,
-    debugRuntimeDirectory,
-    releaseRuntimeDirectory,
-  );
+  const { nodeExpressProjectDirectory, nodeProjectDirectory } =
+    await stageWindowsNodeSupport(
+      agent,
+      target,
+      remoteTargetRoot,
+      debugRuntimeDirectory,
+      releaseRuntimeDirectory,
+    );
   const stagedRelayExecutablePath = await stageRelayExecutable(
     agent,
     target,
@@ -344,6 +387,7 @@ export const stageWindowsRuntime = async (
 
   return {
     debugRuntimeDirectory,
+    nodeExpressProjectDirectory,
     nodeProjectDirectory,
     releaseRuntimeDirectory,
     relayExecutablePath: stagedRelayExecutablePath,

@@ -132,6 +132,7 @@ const createFakeWindowsRemoteContext = (
   httpHost: "192.0.2.1",
   runtime: {
     debugRuntimeDirectory: String.raw`C:\muon-e2e\windows-amd64\debug`,
+    nodeExpressProjectDirectory: String.raw`C:\muon-e2e\windows-amd64\node-express-project`,
     nodeProjectDirectory: String.raw`C:\muon-e2e\windows-amd64\node-project`,
     releaseRuntimeDirectory: String.raw`C:\muon-e2e\windows-amd64\release`,
     relayExecutablePath: String.raw`C:\muon-e2e\windows-amd64\muon-cdp-relay.exe`,

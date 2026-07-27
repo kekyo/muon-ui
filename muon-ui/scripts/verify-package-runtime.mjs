@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { access, readdir } from "node:fs/promises";
+import { access, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRuntimeTargets = {
@@ -15,6 +15,7 @@ const packageRuntimeTargets = {
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
     nodePluginLibrary: "node.so",
+    executorSupervisor: "muon-executor-supervisor",
   },
   "linux-armhf": {
     nativePrepare: "muon-builder",
@@ -24,6 +25,7 @@ const packageRuntimeTargets = {
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
     nodePluginLibrary: "node.so",
+    executorSupervisor: "muon-executor-supervisor",
   },
   "linux-arm64": {
     nativePrepare: "muon-builder",
@@ -33,6 +35,7 @@ const packageRuntimeTargets = {
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
     nodePluginLibrary: "node.so",
+    executorSupervisor: "muon-executor-supervisor",
   },
   "windows-i686": {
     nativePrepare: "muon-builder.exe",
@@ -69,6 +72,13 @@ const assertMissing = async (path) => {
     return;
   }
   throw new Error(`Unexpected package runtime file exists: ${path}`);
+};
+
+const assertExecutable = async (path) => {
+  const metadata = await stat(path);
+  if ((metadata.mode & 0o111) === 0) {
+    throw new Error(`Expected package runtime file is not executable: ${path}`);
+  }
 };
 
 const assertHasMatchingFile = async (directory, pattern) => {
@@ -123,6 +133,9 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
     descriptor.cardioLibrary,
     join("plugins", descriptor.nodePluginLibrary),
     join("plugins", "node-bridge.mjs"),
+    ...(descriptor.executorSupervisor === undefined
+      ? []
+      : [descriptor.executorSupervisor]),
     "CREDITS.md",
   ];
 
@@ -131,6 +144,9 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   await assertExists(join(nativePath, descriptor.nativePluginInspector));
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
+  }
+  if (descriptor.executorSupervisor !== undefined) {
+    await assertExecutable(join(runtimePath, descriptor.executorSupervisor));
   }
   if (target.startsWith("windows-")) {
     await assertHasMatchingFile(runtimePath, /^libgcc_s_.*-1\.dll$/);

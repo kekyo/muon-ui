@@ -956,10 +956,12 @@ const buildMuonTarget = async (input: {
   await rm(outputPath, { recursive: true, force: true });
   await mkdir(outputPath, { recursive: true, mode: directoryMode });
   await copyRuntimeFiles(sourceRuntimePath, outputPath, descriptor);
-  await chmod(
-    join(outputPath, descriptor.runtimeExecutableName),
-    executableMode,
-  );
+  for (const executableName of [
+    descriptor.runtimeExecutableName,
+    ...descriptor.runtimeAuxiliaryExecutableNames,
+  ]) {
+    await chmod(join(outputPath, executableName), executableMode);
+  }
   await copyFile(sourceLauncherPath, launcherPath);
   await chmod(launcherPath, executableMode);
   if (

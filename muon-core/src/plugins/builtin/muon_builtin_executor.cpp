@@ -14,18 +14,29 @@
 #include "yyjson.h"
 
 #if defined(_WIN32)
+#include "muon_windows_job_process.h"
+
 #include <windows.h>
 #else
+#if defined(__linux__)
+#include "config/muon_paths.h"
+#include "process/muon_linux_executor_supervisor.h"
+#endif
+
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#if defined(__linux__)
+#include <sys/ioctl.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <cmath>
@@ -58,6 +69,7 @@ struct RunOptions {
   bool has_cwd = false;
   std::map<std::string, std::string> env;
   bool has_env = false;
+  bool daemon = false;
 };
 
 enum class SpawnRpcOperation {
@@ -123,6 +135,7 @@ struct ExecutorProcess {
   cardio::dispatcher* dispatcher = nullptr;
   bool capture_stdout = true;
   bool capture_stderr = true;
+  bool daemon = false;
 
   std::mutex mutex;
   std::deque<ExecutorCommand> commands;
@@ -143,13 +156,28 @@ struct ExecutorProcess {
   muon_native_function stderr_callback = nullptr;
 
 #if defined(_WIN32)
-  HANDLE process_handle = nullptr;
-  HANDLE thread_handle = nullptr;
+  MuonWindowsJobProcess windows_process{};
+  HANDLE io_cancel_event = nullptr;
   HANDLE stdin_write = nullptr;
   HANDLE stdout_read = nullptr;
   HANDLE stderr_read = nullptr;
   std::condition_variable command_cv;
-  bool command_thread_exited = false;
+  std::condition_variable io_threads_cv;
+  size_t io_threads_running = 0;
+  bool io_cancel_requested = false;
+  std::string io_cancel_error;
+#elif defined(__linux__)
+  pid_t supervisor_process_id = -1;
+  pid_t target_process_group_id = -1;
+  bool termination_requested = false;
+  bool process_group_force_kill_issued = false;
+  bool supervisor_cleanup_delegated = false;
+  int control_fd = -1;
+  int stdin_fd = -1;
+  int stdout_fd = -1;
+  int stderr_fd = -1;
+  int wake_read_fd = -1;
+  int wake_write_fd = -1;
 #else
   pid_t child = -1;
   int stdin_fd = -1;
@@ -460,6 +488,12 @@ static bool ParseStartOptions(yyjson_val* value,
     *error_message = "options must be an object";
     return false;
   }
+  const auto daemon = yyjson_obj_get(value, "daemon");
+  if (daemon != nullptr && !yyjson_is_bool(daemon)) {
+    *error_message = "daemon must be a boolean";
+    return false;
+  }
+  options->daemon = daemon == nullptr ? false : yyjson_get_bool(daemon);
   return ReadRequiredString(value, "command", &options->command,
                             error_message) &&
          ReadStringArray(value, "args", &options->args, error_message) &&
@@ -1910,6 +1944,176 @@ static void CloseWindowsHandle(HANDLE* handle) {
   }
 }
 
+static HANDLE TakeWindowsHandle(HANDLE* handle) {
+  const auto taken = *handle;
+  *handle = nullptr;
+  return taken;
+}
+
+static bool DuplicateWindowsHandle(HANDLE source,
+                                   HANDLE* duplicate,
+                                   std::string* error_message) {
+  *duplicate = nullptr;
+  if (DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                      duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) == FALSE) {
+    *error_message = "Failed to duplicate process I/O cancellation handle";
+    return false;
+  }
+  return true;
+}
+
+static std::wstring CreateWindowsPipeName() {
+  static std::atomic<uint64_t> next_pipe_id{1};
+  auto name = std::wstring(L"\\\\.\\pipe\\muon-executor-");
+  name += std::to_wstring(GetCurrentProcessId());
+  name.push_back(L'-');
+  name += std::to_wstring(next_pipe_id.fetch_add(1));
+  return name;
+}
+
+// Anonymous pipe handles cannot be opened for overlapped I/O. The child keeps
+// a synchronous inheritable client handle while the owning parent I/O thread
+// uses the overlapped server handle.
+static bool CreateWindowsOverlappedPipe(bool parent_reads,
+                                        HANDLE* parent_handle,
+                                        HANDLE* child_handle,
+                                        std::string* error_message) {
+  *parent_handle = nullptr;
+  *child_handle = nullptr;
+  const auto pipe_name = CreateWindowsPipeName();
+  const auto parent_access =
+      (parent_reads ? PIPE_ACCESS_INBOUND : PIPE_ACCESS_OUTBOUND) |
+      FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE;
+  auto parent = CreateNamedPipeW(
+      pipe_name.c_str(), parent_access,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 64 * 1024,
+      64 * 1024, 0, nullptr);
+  if (parent == INVALID_HANDLE_VALUE) {
+    *error_message = "Failed to create process pipe";
+    return false;
+  }
+
+  auto connect_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (connect_event == nullptr) {
+    CloseHandle(parent);
+    *error_message = "Failed to create process pipe connection event";
+    return false;
+  }
+  OVERLAPPED connect_overlapped = {};
+  connect_overlapped.hEvent = connect_event;
+  const auto connect_started = ConnectNamedPipe(parent, &connect_overlapped);
+  auto connect_error =
+      connect_started == FALSE ? GetLastError() : ERROR_SUCCESS;
+  if (connect_started == FALSE && connect_error != ERROR_IO_PENDING &&
+      connect_error != ERROR_PIPE_CONNECTED) {
+    CloseHandle(connect_event);
+    CloseHandle(parent);
+    *error_message = "Failed to connect process pipe";
+    return false;
+  }
+
+  SECURITY_ATTRIBUTES security_attributes = {};
+  security_attributes.nLength = sizeof(security_attributes);
+  security_attributes.bInheritHandle = TRUE;
+  const auto child_access = parent_reads ? GENERIC_WRITE : GENERIC_READ;
+  auto child =
+      CreateFileW(pipe_name.c_str(), child_access, 0, &security_attributes,
+                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (child == INVALID_HANDLE_VALUE) {
+    if (connect_error == ERROR_IO_PENDING) {
+      (void)CancelIoEx(parent, &connect_overlapped);
+      DWORD ignored = 0;
+      (void)GetOverlappedResult(parent, &connect_overlapped, &ignored, TRUE);
+    }
+    CloseHandle(connect_event);
+    CloseHandle(parent);
+    *error_message = "Failed to open process pipe";
+    return false;
+  }
+
+  if (connect_error == ERROR_IO_PENDING) {
+    DWORD ignored = 0;
+    if (GetOverlappedResult(parent, &connect_overlapped, &ignored, TRUE) ==
+        FALSE) {
+      CloseHandle(child);
+      CloseHandle(connect_event);
+      CloseHandle(parent);
+      *error_message = "Failed to connect process pipe";
+      return false;
+    }
+  }
+  CloseHandle(connect_event);
+  *parent_handle = parent;
+  *child_handle = child;
+  return true;
+}
+
+// The I/O threads own and close the three pipe handles. These fields are only
+// non-owning references protected by the process mutex so cancellation never
+// races a CloseHandle call from another thread.
+static void CancelWindowsProcessIoLocked(
+    const std::shared_ptr<ExecutorProcess>& process,
+    const std::string& error_message) {
+  process->io_cancel_requested = true;
+  if (process->io_cancel_error.empty()) {
+    process->io_cancel_error = error_message;
+  }
+  if (process->io_cancel_event != nullptr) {
+    (void)SetEvent(process->io_cancel_event);
+  }
+  if (process->stdin_write != nullptr) {
+    (void)CancelIoEx(process->stdin_write, nullptr);
+  }
+  if (process->stdout_read != nullptr) {
+    (void)CancelIoEx(process->stdout_read, nullptr);
+  }
+  if (process->stderr_read != nullptr) {
+    (void)CancelIoEx(process->stderr_read, nullptr);
+  }
+}
+
+static void WaitForWindowsIoThreads(
+    const std::shared_ptr<ExecutorProcess>& process) {
+  std::unique_lock<std::mutex> lock(process->mutex);
+  process->io_threads_cv.wait(
+      lock, [&process]() { return process->io_threads_running == 0; });
+}
+
+enum class WindowsPipeKind {
+  kStdin,
+  kStdout,
+  kStderr,
+};
+
+static void FinishWindowsIoThread(
+    const std::shared_ptr<ExecutorProcess>& process,
+    HANDLE pipe,
+    WindowsPipeKind kind) {
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    auto* process_pipe =
+        kind == WindowsPipeKind::kStdin
+            ? &process->stdin_write
+            : (kind == WindowsPipeKind::kStdout
+                   ? &process->stdout_read
+                   : &process->stderr_read);
+    if (*process_pipe == pipe) {
+      *process_pipe = nullptr;
+    }
+    if (kind == WindowsPipeKind::kStdin) {
+      process->stdin_closed = true;
+    }
+  }
+  CloseWindowsHandle(&pipe);
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    if (process->io_threads_running > 0) {
+      process->io_threads_running -= 1;
+    }
+  }
+  process->io_threads_cv.notify_all();
+}
+
 static void AppendProcessOutput(const std::shared_ptr<ExecutorProcess>& process,
                                 bool is_stdout,
                                 const uint8_t* data,
@@ -1940,18 +2144,133 @@ static void AppendProcessOutput(const std::shared_ptr<ExecutorProcess>& process,
   }
 }
 
+static void DrainWindowsPipeOutput(
+    const std::shared_ptr<ExecutorProcess>& process,
+    HANDLE pipe,
+    HANDLE operation_event,
+    bool is_stdout,
+    std::vector<uint8_t>* buffer) {
+  DWORD available = 0;
+  if (PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) == FALSE) {
+    return;
+  }
+  // Drain only the bytes already buffered when the root exited. A daemon
+  // descendant may keep writing indefinitely after the root process is gone.
+  while (available > 0) {
+    const auto requested =
+        std::min<DWORD>(available, static_cast<DWORD>(buffer->size()));
+    (void)ResetEvent(operation_event);
+    OVERLAPPED overlapped = {};
+    overlapped.hEvent = operation_event;
+    DWORD read_size = 0;
+    if (ReadFile(pipe, buffer->data(), requested, nullptr,
+                 &overlapped) == FALSE) {
+      if (GetLastError() != ERROR_IO_PENDING ||
+          GetOverlappedResult(pipe, &overlapped, &read_size, TRUE) == FALSE) {
+        return;
+      }
+    } else if (GetOverlappedResult(
+                   pipe, &overlapped, &read_size, FALSE) == FALSE) {
+      return;
+    }
+    if (read_size == 0) {
+      return;
+    }
+    AppendProcessOutput(process, is_stdout, buffer->data(),
+                        static_cast<size_t>(read_size));
+    available =
+        read_size >= available ? 0 : available - read_size;
+  }
+}
+
+static HANDLE CreateWindowsProcessOperationEvent() {
+#if defined(MUON_TEST_BUILD)
+  static std::atomic<bool> failure_injected{false};
+  const auto* failure_requested =
+      std::getenv("MUON_TEST_EXECUTOR_FAIL_OPERATION_EVENT_ONCE");
+  if (failure_requested != nullptr &&
+      std::strcmp(failure_requested, "1") == 0 &&
+      !failure_injected.exchange(true)) {
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return nullptr;
+  }
+#endif
+  return CreateEventW(nullptr, TRUE, FALSE, nullptr);
+}
+
 static void RunWindowsPipeReader(std::shared_ptr<ExecutorProcess> process,
                                  HANDLE pipe,
+                                 HANDLE cancel_event,
+                                 HANDLE operation_event,
                                  bool is_stdout) {
   std::vector<uint8_t> buffer(4096);
-  DWORD read_size = 0;
-  while (ReadFile(pipe, buffer.data(), static_cast<DWORD>(buffer.size()),
-                  &read_size, nullptr) &&
-         read_size > 0) {
+  while (WaitForSingleObject(cancel_event, 0) != WAIT_OBJECT_0) {
+    (void)ResetEvent(operation_event);
+    OVERLAPPED overlapped = {};
+    overlapped.hEvent = operation_event;
+    DWORD read_size = 0;
+    if (ReadFile(pipe, buffer.data(), static_cast<DWORD>(buffer.size()),
+                 nullptr, &overlapped) != FALSE) {
+      if (GetOverlappedResult(
+              pipe, &overlapped, &read_size, FALSE) == FALSE) {
+        break;
+      }
+      if (read_size == 0) {
+        break;
+      }
+      AppendProcessOutput(process, is_stdout, buffer.data(),
+                          static_cast<size_t>(read_size));
+      continue;
+    }
+
+    const auto read_error = GetLastError();
+    if (read_error == ERROR_BROKEN_PIPE || read_error == ERROR_NO_DATA) {
+      break;
+    }
+    if (read_error != ERROR_IO_PENDING) {
+      break;
+    }
+
+    const HANDLE wait_handles[] = {
+        operation_event,
+        cancel_event,
+    };
+    const auto wait_result =
+        WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+    if (wait_result == WAIT_OBJECT_0 + 1) {
+      (void)CancelIoEx(pipe, &overlapped);
+      if (GetOverlappedResult(pipe, &overlapped, &read_size, TRUE) != FALSE &&
+          read_size > 0) {
+        AppendProcessOutput(process, is_stdout, buffer.data(),
+                            static_cast<size_t>(read_size));
+      }
+      break;
+    }
+    if (wait_result != WAIT_OBJECT_0 ||
+        GetOverlappedResult(pipe, &overlapped, &read_size, FALSE) == FALSE ||
+        read_size == 0) {
+      break;
+    }
     AppendProcessOutput(process, is_stdout, buffer.data(),
                         static_cast<size_t>(read_size));
   }
-  CloseHandle(pipe);
+  if (WaitForSingleObject(cancel_event, 0) == WAIT_OBJECT_0) {
+    auto should_drain = false;
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      should_drain = !process->disposed;
+    }
+    if (should_drain) {
+      DrainWindowsPipeOutput(process, pipe, operation_event, is_stdout,
+                             &buffer);
+    }
+  }
+  CloseWindowsHandle(&operation_event);
+  CloseWindowsHandle(&cancel_event);
+  FinishWindowsIoThread(
+      process, pipe,
+      is_stdout ? WindowsPipeKind::kStdout
+                : WindowsPipeKind::kStderr);
 }
 
 static void CompleteWriteCommand(
@@ -1968,19 +2287,32 @@ static void CompleteWriteCommand(
   }
 }
 
-static void RunWindowsCommandThread(std::shared_ptr<ExecutorProcess> process) {
+static void RunWindowsCommandThread(std::shared_ptr<ExecutorProcess> process,
+                                    HANDLE pipe,
+                                    HANDLE cancel_event,
+                                    HANDLE operation_event) {
+  auto thread_error = std::string{};
   while (true) {
     ExecutorCommand command;
     {
       std::unique_lock<std::mutex> lock(process->mutex);
       process->command_cv.wait(lock, [&process]() {
         return !process->commands.empty() || process->exited ||
-               process->disposed;
+               process->disposed || process->io_cancel_requested;
       });
+      if (process->io_cancel_requested) {
+        thread_error =
+            process->io_cancel_error.empty()
+                ? "stdin is closed"
+                : process->io_cancel_error;
+        break;
+      }
       if (process->commands.empty()) {
         if (process->exited || process->disposed) {
-          process->command_thread_exited = true;
-          return;
+          thread_error = process->disposed
+                             ? "executor process is disposed"
+                             : "executor process has exited";
+          break;
         }
         continue;
       }
@@ -1988,67 +2320,179 @@ static void RunWindowsCommandThread(std::shared_ptr<ExecutorProcess> process) {
       process->commands.pop_front();
     }
 
-    if (command.kind == ExecutorCommand::Kind::kCloseStdin) {
-      HANDLE handle = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(process->mutex);
-        handle = process->stdin_write;
-        process->stdin_write = nullptr;
-        process->stdin_closed = true;
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      if (process->io_cancel_requested) {
+        thread_error =
+            process->io_cancel_error.empty()
+                ? "stdin is closed"
+                : process->io_cancel_error;
       }
-      CloseWindowsHandle(&handle);
+    }
+    if (!thread_error.empty()) {
+      CompleteWriteCommand(process, command, thread_error);
+      break;
+    }
+
+    if (command.kind == ExecutorCommand::Kind::kCloseStdin) {
       CompleteWriteCommand(process, command, "");
-      continue;
+      thread_error = "stdin is closed";
+      break;
     }
 
     auto error_message = std::string{};
-    HANDLE handle = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(process->mutex);
-      handle = process->stdin_write;
-    }
-    if (handle == nullptr) {
-      error_message = "stdin is closed";
-    } else if (!command.data.empty()) {
+    if (!command.data.empty()) {
       auto offset = size_t{0};
       while (offset < command.data.size()) {
+        if (WaitForSingleObject(cancel_event, 0) == WAIT_OBJECT_0) {
+          std::lock_guard<std::mutex> lock(process->mutex);
+          error_message =
+              process->io_cancel_error.empty()
+                  ? "stdin is closed"
+                  : process->io_cancel_error;
+          break;
+        }
         const auto remaining = std::min<size_t>(
             command.data.size() - offset, std::numeric_limits<DWORD>::max());
+        (void)ResetEvent(operation_event);
+        OVERLAPPED overlapped = {};
+        overlapped.hEvent = operation_event;
         DWORD written = 0;
-        if (!WriteFile(handle, command.data.data() + offset,
-                       static_cast<DWORD>(remaining), &written, nullptr)) {
+        if (WriteFile(pipe, command.data.data() + offset,
+                      static_cast<DWORD>(remaining), nullptr,
+                      &overlapped) == FALSE) {
+          const auto write_error = GetLastError();
+          if (write_error != ERROR_IO_PENDING) {
+            error_message =
+                write_error == ERROR_BROKEN_PIPE ||
+                        write_error == ERROR_NO_DATA
+                    ? "stdin is closed"
+                    : "Failed to write stdin";
+            break;
+          }
+          const HANDLE wait_handles[] = {
+              operation_event,
+              cancel_event,
+          };
+          const auto wait_result =
+              WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+          if (wait_result == WAIT_OBJECT_0 + 1) {
+            (void)CancelIoEx(pipe, &overlapped);
+            DWORD ignored = 0;
+            (void)GetOverlappedResult(pipe, &overlapped, &ignored, TRUE);
+            std::lock_guard<std::mutex> lock(process->mutex);
+            error_message =
+                process->io_cancel_error.empty()
+                    ? "stdin is closed"
+                    : process->io_cancel_error;
+            break;
+          }
+          if (wait_result != WAIT_OBJECT_0 ||
+              GetOverlappedResult(pipe, &overlapped, &written, FALSE) ==
+                  FALSE) {
+            error_message = "Failed to write stdin";
+            break;
+          }
+        } else if (GetOverlappedResult(
+                       pipe, &overlapped, &written, FALSE) == FALSE) {
+          error_message = "Failed to write stdin";
+          break;
+        }
+        if (written == 0) {
           error_message = "Failed to write stdin";
           break;
         }
         offset += static_cast<size_t>(written);
       }
     }
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      if (error_message.empty() && process->io_cancel_requested) {
+        error_message =
+            process->io_cancel_error.empty()
+                ? "stdin is closed"
+                : process->io_cancel_error;
+      }
+    }
     CompleteWriteCommand(process, command, error_message);
+    if (!error_message.empty()) {
+      thread_error = error_message;
+      break;
+    }
   }
-}
 
-static void RunWindowsWaitThread(std::shared_ptr<ExecutorProcess> process) {
-  WaitForSingleObject(process->process_handle, INFINITE);
-  DWORD exit_code = 0;
-  GetExitCodeProcess(process->process_handle, &exit_code);
-  CloseWindowsHandle(&process->stdin_write);
-  CloseWindowsHandle(&process->thread_handle);
-  CloseWindowsHandle(&process->process_handle);
+  std::deque<ExecutorCommand> pending_commands;
   {
     std::lock_guard<std::mutex> lock(process->mutex);
-    process->stdin_closed = true;
+    pending_commands.swap(process->commands);
+  }
+  if (thread_error.empty()) {
+    thread_error = "stdin is closed";
+  }
+  for (const auto& command : pending_commands) {
+    CompleteWriteCommand(process, command, thread_error);
+  }
+  CloseWindowsHandle(&operation_event);
+  CloseWindowsHandle(&cancel_event);
+  FinishWindowsIoThread(process, pipe, WindowsPipeKind::kStdin);
+}
+
+static void RunWindowsWaitThread(std::shared_ptr<ExecutorProcess> process,
+                                 HANDLE cancel_event) {
+  const auto waited_process = process->windows_process.process;
+  HANDLE wait_handles[2] = {
+      waited_process,
+      cancel_event,
+  };
+  const auto wait_result =
+      WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+  if (wait_result == WAIT_OBJECT_0 + 1) {
+    auto process_handle = HANDLE{nullptr};
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      if (process->windows_process.process == waited_process) {
+        process_handle =
+            TakeWindowsHandle(&process->windows_process.process);
+      }
+    }
+    CloseWindowsHandle(&process_handle);
+    CloseWindowsHandle(&cancel_event);
+    return;
+  }
+
+  DWORD exit_code = 0;
+  auto failure_message = std::string{};
+  if (wait_result != WAIT_OBJECT_0 ||
+      GetExitCodeProcess(waited_process, &exit_code) == FALSE) {
+    failure_message = "Failed to wait for process";
+  }
+  auto process_handle = HANDLE{nullptr};
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    if (!process->daemon && process->windows_process.job != nullptr) {
+      (void)TerminateMuonWindowsJobProcess(
+          &process->windows_process, 1u);
+    }
+    CancelWindowsProcessIoLocked(process, "executor process has exited");
   }
   process->command_cv.notify_all();
-  MarkProcessExited(process, static_cast<int32_t>(exit_code), "");
+  WaitForWindowsIoThreads(process);
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    if (process->windows_process.process == waited_process) {
+      process_handle =
+          TakeWindowsHandle(&process->windows_process.process);
+    }
+  }
+  CloseWindowsHandle(&process_handle);
+  CloseWindowsHandle(&cancel_event);
+  MarkProcessExited(
+      process, static_cast<int32_t>(exit_code), failure_message);
 }
 
 static bool StartPlatformProcess(const RunOptions& options,
                                  const std::shared_ptr<ExecutorProcess>& process,
                                  std::string* error_message) {
-  SECURITY_ATTRIBUTES security_attributes = {};
-  security_attributes.nLength = sizeof(security_attributes);
-  security_attributes.bInheritHandle = TRUE;
-
   HANDLE stdin_read = nullptr;
   HANDLE stdin_write = nullptr;
   HANDLE stdout_read = nullptr;
@@ -2063,16 +2507,15 @@ static bool StartPlatformProcess(const RunOptions& options,
     CloseWindowsHandle(&stderr_read);
     CloseWindowsHandle(&stderr_write);
   };
-  if (!CreatePipe(&stdin_read, &stdin_write, &security_attributes, 0) ||
-      !CreatePipe(&stdout_read, &stdout_write, &security_attributes, 0) ||
-      !CreatePipe(&stderr_read, &stderr_write, &security_attributes, 0)) {
+  if (!CreateWindowsOverlappedPipe(
+          false, &stdin_write, &stdin_read, error_message) ||
+      !CreateWindowsOverlappedPipe(
+          true, &stdout_read, &stdout_write, error_message) ||
+      !CreateWindowsOverlappedPipe(
+          true, &stderr_read, &stderr_write, error_message)) {
     close_pipe_handles();
-    *error_message = "Failed to create process pipes";
     return false;
   }
-  SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
-  SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
-  SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
 
   std::wstring command;
   if (!MuonUtf8ToWide(options.command, &command)) {
@@ -2117,38 +2560,220 @@ static bool StartPlatformProcess(const RunOptions& options,
     environment_pointer = environment_block.data();
     creation_flags |= CREATE_UNICODE_ENVIRONMENT;
   }
+  if (options.daemon) {
+    creation_flags |= CREATE_NO_WINDOW;
+  }
 
-  STARTUPINFOW startup_info = {};
-  startup_info.cb = sizeof(startup_info);
-  startup_info.dwFlags = STARTF_USESTDHANDLES;
-  startup_info.hStdInput = stdin_read;
-  startup_info.hStdOutput = stdout_write;
-  startup_info.hStdError = stderr_write;
-  PROCESS_INFORMATION process_info = {};
-  const auto created = CreateProcessW(
-      nullptr, mutable_command_line.data(), nullptr, nullptr, TRUE,
-      creation_flags, environment_pointer, cwd_pointer, &startup_info,
-      &process_info);
-  CloseWindowsHandle(&stdin_read);
-  CloseWindowsHandle(&stdout_write);
-  CloseWindowsHandle(&stderr_write);
-  if (!created) {
+  auto io_cancel_event =
+      CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (io_cancel_event == nullptr) {
     close_pipe_handles();
-    *error_message = "Failed to start process";
+    *error_message = "Failed to create process I/O cancellation";
+    return false;
+  }
+  HANDLE stdin_cancel_event = nullptr;
+  HANDLE stdout_cancel_event = nullptr;
+  HANDLE stderr_cancel_event = nullptr;
+  HANDLE wait_cancel_event = nullptr;
+  auto close_cancel_handles = [&]() {
+    CloseWindowsHandle(&io_cancel_event);
+    CloseWindowsHandle(&stdin_cancel_event);
+    CloseWindowsHandle(&stdout_cancel_event);
+    CloseWindowsHandle(&stderr_cancel_event);
+    CloseWindowsHandle(&wait_cancel_event);
+  };
+  if (!DuplicateWindowsHandle(io_cancel_event, &stdin_cancel_event,
+                              error_message) ||
+      !DuplicateWindowsHandle(io_cancel_event, &stdout_cancel_event,
+                              error_message) ||
+      !DuplicateWindowsHandle(io_cancel_event, &stderr_cancel_event,
+                              error_message) ||
+      !DuplicateWindowsHandle(io_cancel_event, &wait_cancel_event,
+                              error_message)) {
+    close_cancel_handles();
+    close_pipe_handles();
     return false;
   }
 
-  process->process_id = process_info.dwProcessId;
-  process->process_handle = process_info.hProcess;
-  process->thread_handle = process_info.hThread;
+  auto stdin_operation_event = CreateWindowsProcessOperationEvent();
+  auto stdout_operation_event = CreateWindowsProcessOperationEvent();
+  auto stderr_operation_event = CreateWindowsProcessOperationEvent();
+  auto close_operation_events = [&]() {
+    CloseWindowsHandle(&stdin_operation_event);
+    CloseWindowsHandle(&stdout_operation_event);
+    CloseWindowsHandle(&stderr_operation_event);
+  };
+  if (stdin_operation_event == nullptr ||
+      stdout_operation_event == nullptr ||
+      stderr_operation_event == nullptr) {
+    close_operation_events();
+    close_cancel_handles();
+    close_pipe_handles();
+    *error_message = "Failed to create process I/O worker event";
+    return false;
+  }
+
+  const HANDLE inherited_handles[] = {
+      stdin_read,
+      stdout_write,
+      stderr_write,
+  };
+  MuonWindowsJobProcessLaunchOptions launch_options;
+  launch_options.command_line = mutable_command_line.data();
+  launch_options.current_directory = cwd_pointer;
+  launch_options.environment = environment_pointer;
+  launch_options.creation_flags = creation_flags;
+  launch_options.startup_info.dwFlags = STARTF_USESTDHANDLES;
+  launch_options.startup_info.hStdInput = stdin_read;
+  launch_options.startup_info.hStdOutput = stdout_write;
+  launch_options.startup_info.hStdError = stderr_write;
+  launch_options.inherited_handles = inherited_handles;
+  launch_options.inherited_handle_count = 3;
+  launch_options.lifetime =
+      options.daemon
+          ? MuonWindowsJobProcessLifetime::Detached
+          : MuonWindowsJobProcessLifetime::KillOnOwnerClose;
+  auto windows_process = MuonWindowsJobProcess{};
+  auto launch_error = MuonWindowsJobProcessLaunchError{};
+  if (!LaunchMuonWindowsJobProcess(
+          launch_options, &windows_process, &launch_error)) {
+    close_operation_events();
+    close_cancel_handles();
+    close_pipe_handles();
+    *error_message = "Failed to start process";
+    if (launch_error.message != nullptr) {
+      *error_message += ": ";
+      *error_message += launch_error.message;
+    }
+    if (launch_error.windows_error != ERROR_SUCCESS) {
+      *error_message += ": ";
+      *error_message += std::error_code(
+                            static_cast<int>(launch_error.windows_error),
+                            std::system_category())
+                            .message();
+    }
+    return false;
+  }
+  CloseWindowsHandle(&stdin_read);
+  CloseWindowsHandle(&stdout_write);
+  CloseWindowsHandle(&stderr_write);
+
+  process->process_id = windows_process.process_id;
+  process->windows_process = windows_process;
+  process->io_cancel_event = io_cancel_event;
   process->stdin_write = stdin_write;
   process->stdout_read = stdout_read;
   process->stderr_read = stderr_read;
+  const auto stdin_worker_pipe = stdin_write;
+  const auto stdout_worker_pipe = stdout_read;
+  const auto stderr_worker_pipe = stderr_read;
+  windows_process = MuonWindowsJobProcess{};
+  io_cancel_event = nullptr;
+  stdin_write = nullptr;
+  stdout_read = nullptr;
+  stderr_read = nullptr;
 
-  std::thread(RunWindowsPipeReader, process, stdout_read, true).detach();
-  std::thread(RunWindowsPipeReader, process, stderr_read, false).detach();
-  std::thread(RunWindowsCommandThread, process).detach();
-  std::thread(RunWindowsWaitThread, process).detach();
+  // Each thread owns its pipe handle and a duplicate of the shared manual-reset
+  // cancellation event. The process retains only cancellable references.
+  std::array<std::thread, 4> workers;
+  auto start_io_worker = [&](size_t index, auto operation) {
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      process->io_threads_running += 1;
+    }
+    try {
+      workers[index] = std::thread(std::move(operation));
+    } catch (...) {
+      {
+        std::lock_guard<std::mutex> lock(process->mutex);
+        process->io_threads_running -= 1;
+      }
+      process->io_threads_cv.notify_all();
+      throw;
+    }
+  };
+  try {
+    start_io_worker(0, [process, stdout_worker_pipe, stdout_cancel_event,
+                        stdout_operation_event]() {
+      RunWindowsPipeReader(
+          process, stdout_worker_pipe, stdout_cancel_event,
+          stdout_operation_event, true);
+    });
+    stdout_cancel_event = nullptr;
+    stdout_operation_event = nullptr;
+    start_io_worker(1, [process, stderr_worker_pipe, stderr_cancel_event,
+                        stderr_operation_event]() {
+      RunWindowsPipeReader(
+          process, stderr_worker_pipe, stderr_cancel_event,
+          stderr_operation_event, false);
+    });
+    stderr_cancel_event = nullptr;
+    stderr_operation_event = nullptr;
+    start_io_worker(2, [process, stdin_worker_pipe, stdin_cancel_event,
+                        stdin_operation_event]() {
+      RunWindowsCommandThread(
+          process, stdin_worker_pipe, stdin_cancel_event,
+          stdin_operation_event);
+    });
+    stdin_cancel_event = nullptr;
+    stdin_operation_event = nullptr;
+    workers[3] =
+        std::thread(RunWindowsWaitThread, process, wait_cancel_event);
+    wait_cancel_event = nullptr;
+    for (auto& worker : workers) {
+      worker.detach();
+    }
+  } catch (...) {
+    auto job_termination_succeeded = false;
+    auto kill_on_close_enabled = false;
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      job_termination_succeeded = TerminateMuonWindowsJobProcess(
+          &process->windows_process, 1u);
+      if (!job_termination_succeeded) {
+        kill_on_close_enabled = EnableMuonWindowsJobKillOnClose(
+            &process->windows_process);
+        if (process->windows_process.process != nullptr) {
+          (void)TerminateProcess(
+              process->windows_process.process, 1u);
+        }
+      }
+      CancelWindowsProcessIoLocked(
+          process, "executor process setup failed");
+    }
+    process->command_cv.notify_all();
+    for (auto& worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+    WaitForWindowsIoThreads(process);
+
+    auto remaining_process = MuonWindowsJobProcess{};
+    auto remaining_cancel_event = HANDLE{nullptr};
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      CloseWindowsHandle(&process->stdin_write);
+      CloseWindowsHandle(&process->stdout_read);
+      CloseWindowsHandle(&process->stderr_read);
+      remaining_cancel_event =
+          TakeWindowsHandle(&process->io_cancel_event);
+      remaining_process = process->windows_process;
+      process->windows_process = MuonWindowsJobProcess{};
+      process->process_id = 0;
+    }
+    CloseWindowsHandle(&remaining_cancel_event);
+    CloseMuonWindowsJobProcess(&remaining_process);
+    close_operation_events();
+    close_cancel_handles();
+    close_pipe_handles();
+    *error_message = "Failed to start process I/O workers";
+    if (!job_termination_succeeded && !kill_on_close_enabled) {
+      *error_message +=
+          "; process tree cleanup could not be guaranteed";
+    }
+    return false;
+  }
   return true;
 }
 
@@ -2158,15 +2783,39 @@ static void WakePlatformProcess(const std::shared_ptr<ExecutorProcess>& process)
 
 static void RequestPlatformTerminate(
     const std::shared_ptr<ExecutorProcess>& process) {
-  HANDLE handle = nullptr;
+  std::lock_guard<std::mutex> lock(process->mutex);
+  if (process->windows_process.job != nullptr) {
+    if (!TerminateMuonWindowsJobProcess(
+            &process->windows_process, 1u)) {
+      (void)EnableMuonWindowsJobKillOnClose(
+          &process->windows_process);
+      if (process->windows_process.process != nullptr) {
+        (void)TerminateProcess(
+            process->windows_process.process, 1u);
+      }
+    }
+  }
+  process->command_cv.notify_all();
+}
+
+static void ReleasePlatformProcessConnection(
+    const std::shared_ptr<ExecutorProcess>& process) {
+  auto job_process = MuonWindowsJobProcess{};
   {
     std::lock_guard<std::mutex> lock(process->mutex);
-    handle = process->process_handle;
+    CancelWindowsProcessIoLocked(process, "executor process is disposed");
+    job_process.job =
+        TakeWindowsHandle(&process->windows_process.job);
   }
-  if (handle != nullptr) {
-    TerminateProcess(handle, 1);
+  process->command_cv.notify_all();
+  WaitForWindowsIoThreads(process);
+  auto cancel_event = HANDLE{nullptr};
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    cancel_event = TakeWindowsHandle(&process->io_cancel_event);
   }
-  WakePlatformProcess(process);
+  CloseWindowsHandle(&cancel_event);
+  CloseMuonWindowsJobProcess(&job_process);
 }
 
 #else
@@ -2210,6 +2859,7 @@ static int TakeFd(int* fd) {
   return taken;
 }
 
+#if !defined(__linux__)
 static std::vector<std::string> SplitPathList(const std::string& path) {
   std::vector<std::string> entries;
   auto begin = size_t{0};
@@ -2251,6 +2901,7 @@ static std::vector<std::string> CreateCommandCandidates(
   }
   return candidates;
 }
+#endif
 
 static std::map<std::string, std::string> CreateMergedEnvironment(
     const RunOptions& options) {
@@ -2282,8 +2933,31 @@ static void WakePlatformProcess(const std::shared_ptr<ExecutorProcess>& process)
   }
 }
 
+#if defined(__linux__)
+static void TerminatePosixProcessGroupIfRequired(
+    const std::shared_ptr<ExecutorProcess>& process);
+#endif
+
 static void RequestPlatformTerminate(
     const std::shared_ptr<ExecutorProcess>& process) {
+#if defined(__linux__)
+  auto control_fd = -1;
+  auto supervisor_available = false;
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    process->termination_requested = true;
+    control_fd = process->control_fd;
+    supervisor_available = process->supervisor_cleanup_delegated;
+    if (control_fd >= 0) {
+      std::string ignored_error;
+      supervisor_available = SendMuonExecutorSupervisorKill(
+          control_fd, &ignored_error);
+    }
+  }
+  if (!supervisor_available) {
+    TerminatePosixProcessGroupIfRequired(process);
+  }
+#else
   pid_t child = -1;
   {
     std::lock_guard<std::mutex> lock(process->mutex);
@@ -2292,7 +2966,17 @@ static void RequestPlatformTerminate(
   if (child > 0) {
     kill(child, SIGTERM);
   }
+#endif
   WakePlatformProcess(process);
+}
+
+static void ReleasePlatformProcessConnection(
+    const std::shared_ptr<ExecutorProcess>& process) {
+#if defined(__linux__)
+  WakePlatformProcess(process);
+#else
+  (void)process;
+#endif
 }
 
 static void AppendProcessOutput(const std::shared_ptr<ExecutorProcess>& process,
@@ -2414,6 +3098,528 @@ static void RejectPosixWrites(
     CompleteErrorOnDispatcher(process, completion, message);
   }
 }
+
+#if defined(__linux__)
+static constexpr size_t kPosixOutputReadBudgetBytes = 64 * 1024;
+
+static void ReadAndClosePosixOutput(
+    const std::shared_ptr<ExecutorProcess>& process,
+    bool is_stdout,
+    int* fd,
+    bool* open,
+    size_t read_budget) {
+  auto remaining = read_budget;
+  while (*open && remaining > 0) {
+    uint8_t buffer[4096];
+    const auto requested = std::min(remaining, sizeof(buffer));
+    const auto read_size = read(*fd, buffer, requested);
+    if (read_size > 0) {
+      AppendProcessOutput(
+          process, is_stdout, buffer, static_cast<size_t>(read_size));
+      remaining -= static_cast<size_t>(read_size);
+      continue;
+    }
+    if (read_size < 0 && errno == EINTR) {
+      continue;
+    }
+    if (read_size < 0 &&
+        (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return;
+    }
+    CloseFd(fd);
+    *open = false;
+  }
+}
+
+static size_t GetBufferedPosixOutputSize(int fd) {
+  auto buffered_bytes = int{0};
+  if (fd >= 0 &&
+      ioctl(fd, FIONREAD, &buffered_bytes) == 0 &&
+      buffered_bytes >= 0) {
+    return static_cast<size_t>(buffered_bytes);
+  }
+  return kPosixOutputReadBudgetBytes;
+}
+
+static void ClosePosixControlConnection(
+    const std::shared_ptr<ExecutorProcess>& process,
+    int* control_fd) {
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    if (process->control_fd == *control_fd) {
+      process->control_fd = -1;
+    }
+  }
+  CloseFd(control_fd);
+}
+
+static void ForceKillPosixProcessGroup(pid_t process_group_id) {
+  if (process_group_id > 0) {
+    (void)kill(-process_group_id, SIGKILL);
+  }
+}
+
+static void TerminatePosixProcessGroupIfRequired(
+    const std::shared_ptr<ExecutorProcess>& process) {
+  auto should_terminate = false;
+  auto target_process_group_id = pid_t{-1};
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    should_terminate =
+        (!process->daemon || process->termination_requested) &&
+        !process->process_group_force_kill_issued;
+    target_process_group_id = process->target_process_group_id;
+    if (should_terminate && target_process_group_id > 0) {
+      process->process_group_force_kill_issued = true;
+    }
+  }
+  if (should_terminate && target_process_group_id > 0) {
+    ForceKillPosixProcessGroup(target_process_group_id);
+  }
+}
+
+static bool ReadPosixSupervisorMessage(
+    const std::shared_ptr<ExecutorProcess>& process,
+    int* control_fd,
+    bool* root_running,
+    int32_t* exit_code,
+    std::string* failure_message) {
+  MuonExecutorSupervisorMessage message;
+  std::string receive_error;
+  const auto result = ReceiveMuonExecutorSupervisorMessage(
+      *control_fd, &message, &receive_error);
+  if (result == MuonExecutorSupervisorReceiveResult::kClosed) {
+    auto disposed = false;
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      disposed = process->disposed;
+    }
+    if (*root_running && !disposed) {
+      *failure_message =
+          "Executor supervisor closed before the process exited";
+      *root_running = false;
+    }
+    ClosePosixControlConnection(process, control_fd);
+    TerminatePosixProcessGroupIfRequired(process);
+    return false;
+  }
+  if (result == MuonExecutorSupervisorReceiveResult::kError) {
+    *failure_message = receive_error.empty()
+                           ? "Failed to read executor supervisor"
+                           : receive_error;
+    *root_running = false;
+    ClosePosixControlConnection(process, control_fd);
+    TerminatePosixProcessGroupIfRequired(process);
+    return false;
+  }
+
+  switch (message.type) {
+    case MuonExecutorSupervisorMessageType::kAck:
+      return true;
+    case MuonExecutorSupervisorMessageType::kExit:
+      *exit_code = message.value;
+      *root_running = false;
+      return true;
+    case MuonExecutorSupervisorMessageType::kError:
+      *failure_message =
+          message.text.empty() ? "Executor supervisor failed"
+                               : message.text;
+      *root_running = false;
+      ClosePosixControlConnection(process, control_fd);
+      TerminatePosixProcessGroupIfRequired(process);
+      return false;
+    case MuonExecutorSupervisorMessageType::kConfig:
+    case MuonExecutorSupervisorMessageType::kReady:
+    case MuonExecutorSupervisorMessageType::kKill:
+      *failure_message =
+          "Executor supervisor returned an unexpected message";
+      *root_running = false;
+      ClosePosixControlConnection(process, control_fd);
+      TerminatePosixProcessGroupIfRequired(process);
+      return false;
+  }
+  return false;
+}
+
+static bool ReapPosixSupervisor(pid_t process_id) {
+  if (process_id <= 0) {
+    return false;
+  }
+  int status = 0;
+  while (true) {
+    const auto result = waitpid(process_id, &status, 0);
+    if (result == process_id) {
+      return !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+    }
+    if (result < 0 && errno == EINTR) {
+      continue;
+    }
+    return true;
+  }
+}
+
+static void RunPosixProcessThread(std::shared_ptr<ExecutorProcess> process) {
+  int stdin_fd = -1;
+  int stdout_fd = -1;
+  int stderr_fd = -1;
+  int wake_read_fd = -1;
+  int control_fd = -1;
+  pid_t supervisor_process_id = -1;
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    stdin_fd = TakeFd(&process->stdin_fd);
+    stdout_fd = TakeFd(&process->stdout_fd);
+    stderr_fd = TakeFd(&process->stderr_fd);
+    wake_read_fd = TakeFd(&process->wake_read_fd);
+    control_fd = process->control_fd;
+    supervisor_process_id = process->supervisor_process_id;
+    process->supervisor_process_id = -1;
+  }
+  auto stdin_open = stdin_fd >= 0;
+  auto stdout_open = stdout_fd >= 0;
+  auto stderr_open = stderr_fd >= 0;
+  auto root_running = true;
+  auto exit_reported = false;
+  auto exit_code = int32_t{-1};
+  std::deque<StdinWrite> writes;
+  std::vector<muon_completion_func> close_completions;
+  std::string failure_message;
+
+  while (true) {
+    auto disposed = false;
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      disposed = process->disposed;
+    }
+    if (disposed) {
+      auto terminate_daemon = false;
+      {
+        std::lock_guard<std::mutex> lock(process->mutex);
+        if (process->daemon) {
+          terminate_daemon = process->termination_requested;
+        } else {
+          process->supervisor_cleanup_delegated = true;
+        }
+      }
+      if (terminate_daemon) {
+        TerminatePosixProcessGroupIfRequired(process);
+      }
+      ClosePosixControlConnection(process, &control_fd);
+      break;
+    }
+
+    if (root_running) {
+      ProcessPosixCommands(
+          process, &stdin_open, &writes, &close_completions);
+      TryClosePosixStdin(
+          process, &stdin_open, &stdin_fd, writes,
+          &close_completions);
+    } else {
+      if (stdin_open) {
+        CloseFd(&stdin_fd);
+        stdin_open = false;
+        {
+          std::lock_guard<std::mutex> lock(process->mutex);
+          process->stdin_closed = true;
+        }
+      }
+      RejectPosixWrites(
+          process, &writes, "executor process has exited");
+      RejectCloseRequests(
+          process, &close_completions,
+          "executor process has exited");
+      const auto buffered_stdout =
+          GetBufferedPosixOutputSize(stdout_fd);
+      const auto buffered_stderr =
+          GetBufferedPosixOutputSize(stderr_fd);
+      ReadAndClosePosixOutput(
+          process, true, &stdout_fd, &stdout_open,
+          buffered_stdout);
+      ReadAndClosePosixOutput(
+          process, false, &stderr_fd, &stderr_open,
+          buffered_stderr);
+      CloseFd(&stdout_fd);
+      CloseFd(&stderr_fd);
+      stdout_open = false;
+      stderr_open = false;
+      if (!exit_reported) {
+        exit_reported = true;
+        MarkProcessExited(process, exit_code, failure_message);
+      }
+      if (!process->daemon || control_fd < 0) {
+        ClosePosixControlConnection(process, &control_fd);
+        break;
+      }
+    }
+
+    std::vector<pollfd> poll_fds;
+    enum class PollSource {
+      kWake,
+      kStdin,
+      kStdout,
+      kStderr,
+      kControl,
+    };
+    std::vector<PollSource> poll_sources;
+    if (wake_read_fd >= 0) {
+      poll_fds.push_back({wake_read_fd, POLLIN, 0});
+      poll_sources.push_back(PollSource::kWake);
+    }
+    if (stdin_open && !writes.empty()) {
+      poll_fds.push_back({stdin_fd, POLLOUT, 0});
+      poll_sources.push_back(PollSource::kStdin);
+    }
+    if (stdout_open) {
+      poll_fds.push_back({stdout_fd, POLLIN, 0});
+      poll_sources.push_back(PollSource::kStdout);
+    }
+    if (stderr_open) {
+      poll_fds.push_back({stderr_fd, POLLIN, 0});
+      poll_sources.push_back(PollSource::kStderr);
+    }
+    if (control_fd >= 0) {
+      poll_fds.push_back({control_fd, POLLIN, 0});
+      poll_sources.push_back(PollSource::kControl);
+    }
+    if (poll_fds.empty()) {
+      failure_message =
+          "Executor process connection closed unexpectedly";
+      root_running = false;
+      continue;
+    }
+
+    if (poll(poll_fds.data(), poll_fds.size(), -1) < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      failure_message = "Failed to poll process pipes";
+      RequestPlatformTerminate(process);
+      root_running = false;
+      continue;
+    }
+
+    for (auto index = size_t{0}; index < poll_fds.size(); ++index) {
+      const auto events = poll_fds[index].revents;
+      if (events == 0) {
+        continue;
+      }
+      switch (poll_sources[index]) {
+        case PollSource::kWake:
+          DrainWakePipe(wake_read_fd);
+          break;
+        case PollSource::kStdin:
+          while (stdin_open && !writes.empty()) {
+            auto& write_request = writes.front();
+            if (write_request.offset >= write_request.data.size()) {
+              CompleteEmptyJsonOnDispatcher(
+                  process, write_request.completion);
+              writes.pop_front();
+              continue;
+            }
+            const auto remaining =
+                write_request.data.size() - write_request.offset;
+            const auto written =
+                write(
+                    stdin_fd,
+                    write_request.data.data() + write_request.offset,
+                    remaining);
+            if (written > 0) {
+              write_request.offset += static_cast<size_t>(written);
+              continue;
+            }
+            if (written < 0 &&
+                (errno == EAGAIN || errno == EWOULDBLOCK ||
+                 errno == EINTR)) {
+              break;
+            }
+            CloseFd(&stdin_fd);
+            stdin_open = false;
+            {
+              std::lock_guard<std::mutex> lock(process->mutex);
+              process->stdin_closed = true;
+            }
+            RejectPosixWrites(process, &writes, "stdin is closed");
+            RejectCloseRequests(
+                process, &close_completions, "stdin is closed");
+            break;
+          }
+          break;
+        case PollSource::kStdout:
+          ReadAndClosePosixOutput(
+              process, true, &stdout_fd, &stdout_open,
+              kPosixOutputReadBudgetBytes);
+          break;
+        case PollSource::kStderr:
+          ReadAndClosePosixOutput(
+              process, false, &stderr_fd, &stderr_open,
+              kPosixOutputReadBudgetBytes);
+          break;
+        case PollSource::kControl:
+          (void)ReadPosixSupervisorMessage(
+              process, &control_fd, &root_running, &exit_code,
+              &failure_message);
+          break;
+      }
+    }
+  }
+
+  CloseFd(&stdin_fd);
+  CloseFd(&stdout_fd);
+  CloseFd(&stderr_fd);
+  ClosePosixControlConnection(process, &control_fd);
+  CloseFd(&wake_read_fd);
+  {
+    std::lock_guard<std::mutex> lock(process->mutex);
+    CloseFd(&process->wake_write_fd);
+    process->stdin_closed = true;
+  }
+  RejectPosixWrites(
+      process, &writes, "executor process has exited");
+  RejectCloseRequests(
+      process, &close_completions, "executor process has exited");
+  if (supervisor_process_id > 0) {
+    if (ReapPosixSupervisor(supervisor_process_id)) {
+      TerminatePosixProcessGroupIfRequired(process);
+    } else {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      process->target_process_group_id = -1;
+    }
+  }
+}
+
+static bool StartPlatformProcess(const RunOptions& options,
+                                 const std::shared_ptr<ExecutorProcess>& process,
+                                 std::string* error_message) {
+  int stdin_pipe[2] = {-1, -1};
+  int stdout_pipe[2] = {-1, -1};
+  int stderr_pipe[2] = {-1, -1};
+  int wake_pipe[2] = {-1, -1};
+  if (!CreateCloseOnExecPipe(stdin_pipe, error_message) ||
+      !CreateCloseOnExecPipe(stdout_pipe, error_message) ||
+      !CreateCloseOnExecPipe(stderr_pipe, error_message) ||
+      !CreateCloseOnExecPipe(wake_pipe, error_message)) {
+    CloseFd(&stdin_pipe[0]);
+    CloseFd(&stdin_pipe[1]);
+    CloseFd(&stdout_pipe[0]);
+    CloseFd(&stdout_pipe[1]);
+    CloseFd(&stderr_pipe[0]);
+    CloseFd(&stderr_pipe[1]);
+    CloseFd(&wake_pipe[0]);
+    CloseFd(&wake_pipe[1]);
+    return false;
+  }
+
+  MuonLinuxExecutorSupervisorLaunchOptions launch_options;
+  launch_options.supervisor_path =
+      (GetMuonExecutableDirectory() / "muon-executor-supervisor").string();
+  launch_options.config.command = options.command;
+  launch_options.config.arguments = options.args;
+  launch_options.config.cwd = options.cwd;
+  launch_options.config.has_cwd = options.has_cwd;
+  launch_options.config.has_environment = options.has_env;
+  launch_options.config.daemon = options.daemon;
+  if (options.has_env) {
+    const auto merged_environment = CreateMergedEnvironment(options);
+    launch_options.config.environment.reserve(
+        merged_environment.size());
+    for (const auto& entry : merged_environment) {
+      launch_options.config.environment.push_back(
+          entry.first + "=" + entry.second);
+    }
+  }
+  launch_options.target_stdin_fd = stdin_pipe[0];
+  launch_options.target_stdout_fd = stdout_pipe[1];
+  launch_options.target_stderr_fd = stderr_pipe[1];
+
+  MuonLinuxExecutorSupervisorConnection connection;
+  if (!LaunchMuonLinuxExecutorSupervisor(
+          launch_options, &connection, error_message)) {
+    CloseFd(&stdin_pipe[0]);
+    CloseFd(&stdin_pipe[1]);
+    CloseFd(&stdout_pipe[0]);
+    CloseFd(&stdout_pipe[1]);
+    CloseFd(&stderr_pipe[0]);
+    CloseFd(&stderr_pipe[1]);
+    CloseFd(&wake_pipe[0]);
+    CloseFd(&wake_pipe[1]);
+    return false;
+  }
+  CloseFd(&stdin_pipe[0]);
+  CloseFd(&stdout_pipe[1]);
+  CloseFd(&stderr_pipe[1]);
+  if (!SetNonBlocking(stdin_pipe[1], error_message) ||
+      !SetNonBlocking(stdout_pipe[0], error_message) ||
+      !SetNonBlocking(stderr_pipe[0], error_message) ||
+      !SetNonBlocking(wake_pipe[0], error_message) ||
+      !SetNonBlocking(wake_pipe[1], error_message)) {
+    std::string ignored_error;
+    (void)SendMuonExecutorSupervisorKill(
+        connection.control_fd, &ignored_error);
+    CloseFd(&connection.control_fd);
+    CloseFd(&stdin_pipe[1]);
+    CloseFd(&stdout_pipe[0]);
+    CloseFd(&stderr_pipe[0]);
+    CloseFd(&wake_pipe[0]);
+    CloseFd(&wake_pipe[1]);
+    ForceKillPosixProcessGroup(connection.target_process_group_id);
+    (void)ReapPosixSupervisor(connection.supervisor_process_id);
+    return false;
+  }
+
+  process->supervisor_process_id =
+      connection.supervisor_process_id;
+  process->target_process_group_id =
+      connection.target_process_group_id;
+  process->control_fd = connection.control_fd;
+  process->process_id =
+      static_cast<uint32_t>(connection.target_process_id);
+  process->stdin_fd = stdin_pipe[1];
+  process->stdout_fd = stdout_pipe[0];
+  process->stderr_fd = stderr_pipe[0];
+  process->wake_read_fd = wake_pipe[0];
+  process->wake_write_fd = wake_pipe[1];
+
+  auto worker = std::thread{};
+  try {
+    worker = std::thread(RunPosixProcessThread, process);
+  } catch (...) {
+    std::string ignored_error;
+    (void)SendMuonExecutorSupervisorKill(
+        process->control_fd, &ignored_error);
+    CloseFd(&process->control_fd);
+    CloseFd(&process->stdin_fd);
+    CloseFd(&process->stdout_fd);
+    CloseFd(&process->stderr_fd);
+    CloseFd(&process->wake_read_fd);
+    CloseFd(&process->wake_write_fd);
+    ForceKillPosixProcessGroup(process->target_process_group_id);
+    (void)ReapPosixSupervisor(process->supervisor_process_id);
+    process->supervisor_process_id = -1;
+    process->target_process_group_id = -1;
+    process->process_id = 0;
+    *error_message = "Failed to start process I/O worker";
+    return false;
+  }
+  try {
+    worker.detach();
+  } catch (...) {
+    {
+      std::lock_guard<std::mutex> lock(process->mutex);
+      process->disposed = true;
+      process->termination_requested = true;
+    }
+    WakePlatformProcess(process);
+    if (worker.joinable()) {
+      worker.join();
+    }
+    process->process_id = 0;
+    *error_message = "Failed to detach process I/O worker";
+    return false;
+  }
+  return true;
+}
+
+#else
 
 static void RunPosixWaitThread(std::shared_ptr<ExecutorProcess> process) {
   int status = 0;
@@ -2746,6 +3952,8 @@ static bool StartPlatformProcess(const RunOptions& options,
 
 #endif
 
+#endif
+
 static bool StartExecutorProcess(const SpawnRpcRequest& request,
                                  int renderer_context_id,
                                  muon_native_function owner_callback,
@@ -2775,6 +3983,7 @@ static bool StartExecutorProcess(const SpawnRpcRequest& request,
   process->dispatcher = runtime->dispatcher;
   process->capture_stdout = request.capture_stdout;
   process->capture_stderr = request.capture_stderr;
+  process->daemon = request.options.daemon;
   process->owner_callback = owner_callback;
   process->stdout_callback = stdout_callback;
   process->stderr_callback = stderr_callback;
@@ -2900,7 +4109,7 @@ static void DisposeExecutorProcess(
   auto should_terminate = false;
   {
     std::lock_guard<std::mutex> lock(process->mutex);
-    if (!process->exited) {
+    if (!process->exited && !process->daemon) {
       should_terminate = true;
     }
     process->disposed = true;
@@ -2919,6 +4128,7 @@ static void DisposeExecutorProcess(
   if (should_terminate) {
     RequestPlatformTerminate(process);
   }
+  ReleasePlatformProcessConnection(process);
 }
 
 static bool LoadAdhocLibrary(const LibraryRpcRequest& request,
@@ -3609,6 +4819,7 @@ if (isAllowed("spawn")) {
             args: options.args,
             cwd: options.cwd,
             env: options.env,
+            daemon: options.daemon,
           },
           captureStdout: stdoutCallback === null,
           captureStderr: stderrCallback === null,
@@ -3655,17 +4866,19 @@ if (isAllowed("spawn")) {
             return waitPromise;
           }
           waitPromise = (async () => {
-            const result = __muonExecutorDecodeWaitResult(
-              await __muonExecutorRpc({ op: "wait", handleId }),
-            );
-            if (!released) {
-              released = true;
-              __muonExecutorActiveProcesses.delete(handle);
-              try {
-                await __muonExecutorRpc({ op: "dispose", handleId });
-              } catch {}
+            try {
+              return __muonExecutorDecodeWaitResult(
+                await __muonExecutorRpc({ op: "wait", handleId }),
+              );
+            } finally {
+              if (!released) {
+                released = true;
+                __muonExecutorActiveProcesses.delete(handle);
+                try {
+                  await __muonExecutorRpc({ op: "dispose", handleId });
+                } catch {}
+              }
             }
-            return result;
           })();
           return waitPromise;
         },

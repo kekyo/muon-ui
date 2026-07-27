@@ -1498,8 +1498,17 @@ static cardio::promise<void> StartMuonNodeProcess(
         inherited_standard_handles.size();
     launch_options.lifetime =
         MuonWindowsJobProcessLifetime::KillOnOwnerClose;
-    runtime->process =
-        LaunchMuonWindowsJobProcess(launch_options);
+    auto launch_error = MuonWindowsJobProcessLaunchError{};
+    if (!LaunchMuonWindowsJobProcess(
+            launch_options, &runtime->process, &launch_error)) {
+      const auto* message =
+          launch_error.message == nullptr
+              ? "Failed to launch Node sidecar"
+              : launch_error.message;
+      throw std::system_error(
+          static_cast<int>(launch_error.windows_error),
+          std::system_category(), message);
+    }
     for (auto& handle : inherited_standard_handles) {
       CloseMuonNodeWindowsHandle(&handle);
     }

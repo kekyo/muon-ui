@@ -12,6 +12,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -303,11 +304,21 @@ const createFakeMuonPackageDistForTargets = async (
     const nativeDirectory = join(packageDirectory, "native", target);
     await mkdir(runtimeDirectory, { recursive: true });
     await mkdir(nativeDirectory, { recursive: true });
+    const runtimeExecutablePath = join(
+      runtimeDirectory,
+      descriptor.runtimeExecutableName,
+    );
     await writeExecutable(
-      join(runtimeDirectory, descriptor.runtimeExecutableName),
+      runtimeExecutablePath,
       createMuonEmbeddedConfigSlot(),
       "core",
     );
+    if (target.startsWith("linux-")) {
+      await chmod(runtimeExecutablePath, 0o644);
+      const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
+      await writeFile(supervisorPath, `${target} executor supervisor\n`);
+      await chmod(supervisorPath, 0o644);
+    }
     await writeFile(join(runtimeDirectory, descriptor.uiLibraryName), "ui\n");
     await writeFile(
       join(runtimeDirectory, descriptor.cardioLibraryName),
@@ -1271,6 +1282,25 @@ describe("muon build", () => {
         join(root, "dist-muon/windows-amd64", "default-targets-sample.exe"),
       ),
     ).resolves.toBe(true);
+    for (const target of [
+      "linux-amd64",
+      "linux-armhf",
+      "linux-arm64",
+    ] as const) {
+      expect(
+        (await stat(join(root, "dist-muon", target, "muon-core"))).mode & 0o777,
+      ).toBe(0o755);
+      const supervisorPath = join(
+        root,
+        "dist-muon",
+        target,
+        "muon-executor-supervisor",
+      );
+      await expect(readFile(supervisorPath, "utf8")).resolves.toBe(
+        `${target} executor supervisor\n`,
+      );
+      expect((await stat(supervisorPath)).mode & 0o777).toBe(0o755);
+    }
   });
 
   it("copies MinGW runtime DLLs into Windows target distributions", async () => {

@@ -1791,6 +1791,18 @@ declare global {
      */
     readonly args?: readonly string[];
     /**
+     * Detach the process tree from muon's lifecycle when the handle is released.
+     *
+     * @remarks When `false`, muon owns the process tree and terminates it after
+     * the root process exits or when the handle, its context, or muon itself is
+     * released. When `true`, those releases close muon's standard-I/O
+     * connections and detach the process tree without sending it a termination
+     * signal. Call `kill()` before releasing the handle to explicitly terminate
+     * a daemon process tree.
+     * @defaultValue `false`
+     */
+    readonly daemon?: boolean;
+    /**
      * Receives stdout chunks as the child process writes them.
      *
      * @remarks When specified, `wait()` omits `stdout` from its result. The
@@ -1846,21 +1858,31 @@ declare global {
      *
      * @returns A promise for the completed child process result.
      * @remarks The same promise is reused for repeated calls. It resolves even
-     * when the child exits with a non-zero exit code.
+     * when the child exits with a non-zero exit code. Completion observes the
+     * root process only. After it exits, descendants of a non-daemon process are
+     * terminated, while descendants of a daemon process may continue running.
+     * Waiting also releases the handle and therefore detaches a daemon process
+     * tree.
      */
     readonly wait: () => Promise<MuonExecutorSpawnResult>;
     /**
      * Request process termination.
      *
      * @returns A promise that resolves when the termination request is issued.
-     * @remarks POSIX uses `SIGTERM`; Windows uses `TerminateProcess(..., 1)`.
+     * @remarks Terminates the process tree for both daemon and non-daemon
+     * processes. This operation is only available while the handle remains
+     * connected.
      */
     readonly kill: () => Promise<void>;
     /**
-     * Release the native handle and terminate the process when it is still
-     * running.
+     * Release the native handle.
      *
      * @returns A promise that resolves after release is requested.
+     * @remarks For a non-daemon process, release terminates the process tree.
+     * For a daemon process, release detaches the process tree without sending a
+     * termination signal. In either mode, muon closes its standard-I/O
+     * connections and callbacks; a surviving process can therefore observe EOF
+     * or write failures.
      */
     readonly release: () => Promise<void>;
   }

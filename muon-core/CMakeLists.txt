@@ -716,6 +716,35 @@ if(WIN32)
   MUON_APPLY_SANITIZERS(muon_windows_job_process)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(muon_executor_supervisor_protocol STATIC
+    src/process/muon_executor_supervisor_protocol.cpp
+    src/process/muon_executor_supervisor_protocol.h
+    )
+  target_compile_features(muon_executor_supervisor_protocol
+    PRIVATE cxx_std_20)
+  target_include_directories(muon_executor_supervisor_protocol PUBLIC
+    src
+    )
+  MUON_APPLY_SANITIZERS(muon_executor_supervisor_protocol)
+
+  add_executable(muon_executor_supervisor
+    src/process/muon_executor_supervisor_main.cpp
+    )
+  set_target_properties(muon_executor_supervisor PROPERTIES
+    OUTPUT_NAME "muon-executor-supervisor"
+    RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}"
+    )
+  target_compile_features(muon_executor_supervisor PRIVATE cxx_std_20)
+  target_include_directories(muon_executor_supervisor PRIVATE
+    src
+    )
+  target_link_libraries(muon_executor_supervisor PRIVATE
+    muon_executor_supervisor_protocol
+    )
+  MUON_APPLY_SANITIZERS(muon_executor_supervisor)
+endif()
+
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
@@ -830,6 +859,15 @@ set(APP_HEADERS
   src/ui/muon_ui_title_bar.h
   include/muon_plugin_api.h
   )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND APP_SOURCES
+    src/process/muon_linux_executor_supervisor.cpp
+    )
+  list(APPEND APP_HEADERS
+    src/process/muon_executor_supervisor_protocol.h
+    src/process/muon_linux_executor_supervisor.h
+    )
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(
@@ -986,6 +1024,11 @@ set(MUON_CORE_PAYLOAD_ITEMS
   "${MUON_CARDIO_RUNTIME_LIBRARY_NAME}"
   "plugins"
   )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND MUON_CORE_PAYLOAD_ITEMS
+    "muon-executor-supervisor${CMAKE_EXECUTABLE_SUFFIX}"
+    )
+endif()
 if(MUON_RUNTIME_INCLUDE_APP_FILES)
   list(APPEND MUON_CORE_PAYLOAD_ITEMS
     "muon.json"
@@ -1154,9 +1197,14 @@ if(WIN32)
   target_link_libraries(${APP_NAME} PRIVATE
     advapi32
     comctl32
+    muon_windows_job_process
     ole32
     shell32
     uuid
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(${APP_NAME} PRIVATE
+    muon_executor_supervisor_protocol
     )
 endif()
 target_include_directories(${APP_NAME} PRIVATE
@@ -1393,6 +1441,9 @@ add_dependencies(muon_runtime_files ${APP_NAME})
 add_dependencies(muon_runtime_files muon_ui)
 add_dependencies(muon_runtime_files cardio_shared)
 add_dependencies(muon_runtime_files muon_node_plugin)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_dependencies(muon_runtime_files muon_executor_supervisor)
+endif()
 if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
   add_custom_target(muon_runtime_config_template
     DEPENDS "${MUON_CONFIG_TEMPLATE}"
@@ -1647,6 +1698,22 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     )
   MUON_APPLY_SANITIZERS(muon_builtin_browser_test)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(muon_executor_supervisor_sigchld_test
+      tests/muon_executor_supervisor_sigchld_test.cpp
+      src/process/muon_linux_executor_supervisor.cpp
+      )
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_executor_supervisor_sigchld_test)
+    target_compile_features(muon_executor_supervisor_sigchld_test PRIVATE
+      cxx_std_20)
+    target_include_directories(muon_executor_supervisor_sigchld_test PRIVATE
+      src
+      )
+    target_link_libraries(muon_executor_supervisor_sigchld_test PRIVATE
+      muon_executor_supervisor_protocol
+      )
+    add_dependencies(muon_executor_supervisor_sigchld_test
+      muon_executor_supervisor)
+    MUON_APPLY_SANITIZERS(muon_executor_supervisor_sigchld_test)
     add_executable(muon_tray_linux_dbus_test
       tests/muon_tray_linux_dbus_test.cpp
       src/muon_json_helpers.cpp
@@ -1932,6 +1999,15 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     COMMAND muon_builtin_browser_test
     )
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(
+      NAME executor_supervisor_inherited_sigchld
+      COMMAND muon_executor_supervisor_sigchld_test
+        "$<TARGET_FILE:muon_executor_supervisor>"
+        "$<TARGET_FILE:muon_executor_supervisor_sigchld_test>"
+      )
+    set_tests_properties(executor_supervisor_inherited_sigchld PROPERTIES
+      TIMEOUT 15
+      )
     add_test(
       NAME tray_linux_dbus
       COMMAND muon_tray_linux_dbus_test

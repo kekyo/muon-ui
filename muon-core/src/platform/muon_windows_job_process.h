@@ -63,18 +63,30 @@ struct MuonWindowsJobProcess {
 };
 
 /**
+ * Describes why a process could not be launched inside its job object.
+ */
+struct MuonWindowsJobProcessLaunchError {
+  /** Win32 error code associated with the failed operation. */
+  DWORD windows_error = ERROR_SUCCESS;
+  /** Static description of the operation or validation that failed. */
+  const char* message = nullptr;
+};
+
+/**
  * Creates a process atomically inside a dedicated job object.
  *
  * @param options Process creation and job lifetime options.
- * @return Handles that own the process and its job.
- * @throws std::invalid_argument If the command line or inherited handles are
- *     invalid.
- * @throws std::system_error If a Win32 operation fails. When the calling
- *     process belongs to a job, this function requests breakaway and fails if
- *     the parent job does not permit it.
+ * @param process Receives handles that own the process and its job. Must point
+ *     to an empty value.
+ * @param error Receives a Win32 error code and static failure description.
+ * @return true when the process was launched; otherwise false. A detached
+ *     launch from a calling process that belongs to a job requests breakaway
+ *     and fails if the parent job does not permit it.
  */
-MuonWindowsJobProcess LaunchMuonWindowsJobProcess(
-    const MuonWindowsJobProcessLaunchOptions& options);
+[[nodiscard]] bool LaunchMuonWindowsJobProcess(
+    const MuonWindowsJobProcessLaunchOptions& options,
+    MuonWindowsJobProcess* process,
+    MuonWindowsJobProcessLaunchError* error) noexcept;
 
 /**
  * Terminates every process currently associated with a job.
@@ -87,6 +99,17 @@ MuonWindowsJobProcess LaunchMuonWindowsJobProcess(
 [[nodiscard]] bool TerminateMuonWindowsJobProcess(
     const MuonWindowsJobProcess* process,
     unsigned int exit_code) noexcept;
+
+/**
+ * Adds kill-on-close behavior to an existing process job.
+ *
+ * @param process Process and job handles returned by
+ *     LaunchMuonWindowsJobProcess.
+ * @return true when the existing limits were preserved and
+ *     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE is active; otherwise false.
+ */
+[[nodiscard]] bool EnableMuonWindowsJobKillOnClose(
+    const MuonWindowsJobProcess* process) noexcept;
 
 /**
  * Closes the process and job handles.

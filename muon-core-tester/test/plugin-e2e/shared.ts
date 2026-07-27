@@ -1288,16 +1288,25 @@ export const waitForProcessExit = async (
   timeoutMs: number,
 ): Promise<void> => {
   if (running.remoteWindows !== undefined) {
-    const snapshot = await running.remoteWindows.muonProcess.waitForExit({
-      intervalMs: 100,
-      timeoutMs,
-    });
-    applyWindowsRemoteProcessSnapshot(
-      running.process as WindowsRemoteProcessHandle,
-      snapshot.root,
-    );
-    await refreshWindowsRemoteStderr(running);
-    return;
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const snapshot = await running.remoteWindows.muonProcess.rootSnapshot();
+      applyWindowsRemoteProcessSnapshot(
+        running.process as WindowsRemoteProcessHandle,
+        snapshot,
+      );
+      if (!snapshot.running) {
+        await refreshWindowsRemoteStderr(running);
+        return;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `Timed out waiting for muon to exit after ${String(timeoutMs)}ms`,
+        );
+      }
+      await delay(Math.min(100, remainingMs));
+    }
   }
 
   if (
@@ -2461,6 +2470,7 @@ interface StartWindowsRemoteMuonOptions {
   environment: NodeJS.ProcessEnv;
   executablePath: string | undefined;
   includeStandardPlugins: boolean;
+  killTreeOnRelease: boolean;
   logConfig: Record<string, unknown> | undefined;
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
@@ -2914,6 +2924,9 @@ const startWindowsRemoteMuon = async (
           captureStderr: true,
           captureStdout: true,
           environment: createWindowsRemoteEnvironment(options.environment),
+          // Daemon lifecycle tests disable the outer job so descendants can
+          // break away and remain observable after Muon exits.
+          killTreeOnRelease: options.killTreeOnRelease,
           path: executable,
           workingDirectory: directory,
         }),
@@ -3031,6 +3044,7 @@ export const startMuon = async (
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
   nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
+  windowsRemoteKillTreeOnRelease = true,
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -3052,6 +3066,7 @@ export const startMuon = async (
         environment,
         executablePath,
         includeStandardPlugins,
+        killTreeOnRelease: windowsRemoteKillTreeOnRelease,
         logConfig,
         networkAllowPatterns,
         networkAuthorizedOrigins,
@@ -3219,6 +3234,7 @@ export const startDebugMuon = async (
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
   nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
+  windowsRemoteKillTreeOnRelease = true,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -3254,6 +3270,7 @@ export const startDebugMuon = async (
     networkLocalAccess,
     nodeProject,
     pluginCapabilities,
+    windowsRemoteKillTreeOnRelease,
   );
 
 /**
@@ -4202,11 +4219,38 @@ export const withMuonEnvironment = async (
   pluginNames: string[],
   environment: NodeJS.ProcessEnv,
   run: (driver: CdpDriver, running: RunningMuon) => Promise<void>,
+  windowsRemoteKillTreeOnRelease = true,
 ): Promise<void> => {
   const running = await startDebugMuon(
     pluginNames,
     TEST_NETWORK_ALLOW_PATTERNS,
     environment,
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    pluginNames,
+    TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    [],
+    null,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    {},
+    {},
+    true,
+    shouldUseValgrind,
+    {},
+    undefined,
+    undefined,
+    [],
+    windowsRemoteKillTreeOnRelease,
   );
   let driver: CdpDriver | undefined = undefined;
   try {

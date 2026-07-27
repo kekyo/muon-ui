@@ -25,6 +25,7 @@ const targetDescriptors = {
     runtimeSourceDirectory: "dist-linux-amd64",
     runtimePayload: [
       "muon-core",
+      "muon-executor-supervisor",
       "libmuon-ui.so",
       "libcardio.so",
       "plugins/node.so",
@@ -42,6 +43,7 @@ const targetDescriptors = {
     runtimeSourceDirectory: "dist-linux-armhf",
     runtimePayload: [
       "muon-core",
+      "muon-executor-supervisor",
       "libmuon-ui.so",
       "libcardio.so",
       "plugins/node.so",
@@ -59,6 +61,7 @@ const targetDescriptors = {
     runtimeSourceDirectory: "dist-linux-arm64",
     runtimePayload: [
       "muon-core",
+      "muon-executor-supervisor",
       "libmuon-ui.so",
       "libcardio.so",
       "plugins/node.so",

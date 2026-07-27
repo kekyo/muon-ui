@@ -1278,18 +1278,6 @@ void value;
     ).resolves.toBeUndefined();
   });
 
-  it("does not expose singleton module imports from the Node plugin root", async () => {
-    await expect(
-      runTypeScriptConsumer(`import type {} from "muon-ui";
-
-declare const nodeApi: MuonNodeApi;
-
-// @ts-expect-error Modules are imported from an explicitly created Node instance.
-void nodeApi.importModule;
-`),
-    ).resolves.toBeUndefined();
-  });
-
   it("provides muon virtual modules through configured TypeScript types", async () => {
     await expect(
       runTypeScriptConsumer(

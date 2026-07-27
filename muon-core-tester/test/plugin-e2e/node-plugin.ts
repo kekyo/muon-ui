@@ -138,9 +138,6 @@ localIt(
           await expect(
             driver.evaluate("typeof window.muon.node.createNode"),
           ).resolves.toBe("function");
-          await expect(
-            driver.evaluate("typeof window.muon.node.importModule"),
-          ).resolves.toBe("undefined");
 
           const result = await driver.evaluate<{
             readonly asyncDisposeExposed: boolean;

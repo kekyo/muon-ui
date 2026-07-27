@@ -128,7 +128,7 @@ await window.muon.browser.recycle();
 ## muon.launcher namespace
 
 `window.muon.launcher` handles runtime catalog update settings used the next time `muon-launcher` starts.
-Settings are saved in `muon-launcher.ini` in the runtime directory and do not affect the currently running CEF or Node.js sidecar.
+Settings are saved in `muon-launcher.ini` in the runtime directory and do not affect the currently running CEF or Node.js sidecars.
 
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |
@@ -146,7 +146,7 @@ await window.muon.launcher.triggerUpdate();
 
 - `cefVersionPolicy` and `cefExactVersion` apply only to CEF. The Node.js version is selected from the Node runtime requirement embedded into the launcher at build time; this API exposes no Node.js version-policy setting.
 - `catalogRefreshIntervalSeconds` and `triggerUpdate()` apply to every catalog that is applicable during the next runtime preparation. The Node.js catalog is applicable only when the application requires Node.js at runtime.
-- Catalog updates and runtime replacement are not performed while the application is running. The current CEF and Node.js sidecar continue unchanged, and updates take effect during the next launcher startup.
+- Catalog updates and runtime replacement are not performed while the application is running. The current CEF and all Node.js sidecars continue unchanged, and updates take effect during the next launcher startup.
 
 ## muon.environments namespace
 

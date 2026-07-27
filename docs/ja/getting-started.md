@@ -47,7 +47,7 @@ muonパッケージには、以下の要素を含みます:
 - プラットフォーム別のmuonバイナリアセット
 
 CEF本体バイナリと、オプションのNode.js連携で使用するNode.jsランタイムは、NPMパッケージに含まれません。
-CEFは必要になった時点で公式CDNから、Node.jsランタイムはNode.jsプロジェクトを構成して実効プラグインモードが`simple`となる場合だけ公式配布サイトからダウンロードされます。
+CEFは必要になった時点で公式CDNから、Node.jsランタイムは`node.project`でNode.jsプロジェクトを構成した場合だけ、プラグインモードにかかわらず公式配布サイトからダウンロードされます。
 
 ## muon Viteプラグインを構成
 
@@ -279,8 +279,8 @@ npx muon pack --target windows-amd64 --type nsis
 - muonでは、muon-coreプロセスがCEFを初期化します。
   CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
   muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
-- muonは、Node.jsプラグインを構成した場合だけ、Node.jsプロセスが有効になります。
-  最初の`importModule()`で別プロセスのNode.js sidecarを遅延起動し、以降の呼び出しを中継します。
+- muonは、`node.project`でNode.jsプロジェクトを構成した場合だけ、Node.js連携が有効になります。
+  `createNode()`を呼ぶたびに別プロセスのNode.js sidecarを一つ起動し、そのinstanceの`importModule()`以降の呼び出しを中継します。複数のinstanceは互いに分離されています。
   sidecarはUIを生成または所有せず、処理のオフロードやNode.jsエコシステムの機能を利用するためのオプションです。
 
 Electron:

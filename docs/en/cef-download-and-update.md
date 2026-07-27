@@ -5,7 +5,7 @@ When a vulnerability is found in CEF, the CEF binaries need to be updated.
 If a muon app directly included those binaries, updating CEF would require updating the entire muon app distribution.
 
 To reduce muon app distribution size and simplify CEF binary updates, muon downloads the required CEF binaries when the muon app starts and prepares the runtime environment.
-For an app that configures a Node.js project and whose effective plugin mode is `simple`, the same preparation process also downloads the required Node.js runtime.
+For an app that configures a Node.js project through `node.project`, the same preparation process also downloads the required Node.js runtime regardless of plugin mode.
 `muon build` and `muon pack` include the Node.js project, the muon Node bridge, and the runtime requirement in their output, but do not include the Node.js executable itself.
 
 When you run `npm run dev`, build `muon-core`, or distribute generated build output and an end user starts the muon app, required CEF binaries are automatically downloaded from the official CEF distribution site if they are not present locally.

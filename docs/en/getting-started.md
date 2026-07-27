@@ -47,7 +47,7 @@ The muon package includes the following:
 - Platform-specific muon binary assets
 
 The CEF binary itself and the Node.js runtime used by the optional Node.js integration are not included in the NPM package.
-CEF is downloaded from the official CDN when it becomes necessary, while the Node.js runtime is downloaded from the official Node.js distribution site only when a Node.js project is configured and the effective plugin mode is `simple`.
+CEF is downloaded from the official CDN when it becomes necessary, while the Node.js runtime is downloaded from the official Node.js distribution site only when a Node.js project is configured through `node.project`, regardless of plugin mode.
 
 ## Configure the muon Vite plugin
 
@@ -284,8 +284,8 @@ The key difference is the entry point for developer-authored application code an
 - In muon, the muon-core process initializes CEF.
   The CEF browser process manages the application lifecycle, windows, and muon plugin runtime, while the primary entry point for developer-authored application code is the page loaded into a CEF renderer process.
   muon plugin functions are exposed to the page as asynchronous APIs over CEF IPC.
-- Node.js integration is enabled only when the Node.js plugin is configured.
-  The first `importModule()` lazily starts a separate Node.js sidecar process, and subsequent calls are relayed to it.
+- Node.js integration is enabled only when a Node.js project is configured through `node.project`.
+  Each `createNode()` call starts one separate Node.js sidecar process, and calls through that instance's `importModule()` are relayed to it. Multiple instances are isolated from one another.
   The sidecar neither creates nor owns the UI; it is an option for offloading work or using functionality from the Node.js ecosystem.
 
 Electron:

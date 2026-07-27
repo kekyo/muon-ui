@@ -147,7 +147,7 @@ await window.muon.launcher.triggerUpdate();
 
 - `cefVersionPolicy` と `cefExactVersion` はCEF専用です。Node.jsのversionは、ビルド時にlauncherへ埋め込まれたNode runtime requirementから選択され、このAPIにはNode.js用のversion policy設定はありません。
 - `catalogRefreshIntervalSeconds` と `triggerUpdate()` は、次回のruntime準備で適用対象となるcatalogに共通で作用します。Node.js catalogは、アプリが実行にNode.jsを必要とする場合だけ適用対象になります。
-- catalog更新やruntimeの置き換えは実行中に行われません。現在のCEFとNode.js sidecarはそのまま動作し、変更は次回のlauncher起動時に反映されます。
+- catalog更新やruntimeの置き換えは実行中に行われません。現在のCEFとすべてのNode.js sidecarはそのまま動作し、変更は次回のlauncher起動時に反映されます。
 
 ## muon.environments名前空間
 

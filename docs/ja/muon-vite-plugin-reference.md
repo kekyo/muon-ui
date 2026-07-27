@@ -41,7 +41,7 @@ export default defineConfig({
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
 - `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<public-target>` を使用します。
 - `cefPath` を省略した場合は、muon-builderが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
-- `node.project` が設定され、実効plugin modeが `simple` の場合、`vite dev` はそのプロジェクトの正規化済みNode runtime requirementをmuon-builderへ渡します。
+- `node.project` が設定されている場合、`vite dev` はplugin modeにかかわらず、そのプロジェクトの正規化済みNode runtime requirementをmuon-builderへ渡します。
   muon-builderはCEFと必要な公式Node.js runtimeを準備し、Node.jsをstage directoryの `runtimes/node/bin/node`（Windowsでは `runtimes/node/bin/node.exe`）へ配置します。両方のdownloadが必要な場合は並行して実行されます。
   Node.js実行ファイルのpathを指定するViteプラグインオプションはありません。Node pluginはこの配置先を絶対pathで起動し、環境変数や `PATH` へfallbackしません。
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
@@ -135,7 +135,7 @@ npm run dev:vite -- --no-muon
 `pluginAccess` は、`muon.json` の `plugin` 設定と同じ形で、Vite側から一部を上書きするための設定です。
 省略した場合は `muon.json` の `plugin` 設定をそのまま使用し、`plugin.mode` の省略時は `"validate"` として扱います。
 `validate` モードでは `window.muon` は公開されず、プラグイン関数は許可されたvirtual module importからだけ呼び出せます。
-`node.project` が設定されていても、`validate` モードではNode.js runtimeのdownload、install、sidecar起動を行いません。
+`node.project` が設定されている場合、`validate` モードでもNode.js runtimeを準備し、`muon:node` virtual moduleから `createNode()` を呼ぶとsidecarを起動します。`muon:node`に `pluginAccess.plugins[].imports` やallow設定は不要です。
 開発サーバーではNodeプロジェクトと`engines.node`のrangeがVite config解決時にpreflightされ、失敗は警告として報告される場合があります。build時にはエラーとして検証されます。
 
 ```ts
@@ -185,7 +185,7 @@ muon({
 
 `node.project` を設定したアプリでは、`muon build` と `muon pack` が対象platformの `node.so` または `node.dll`、`node-bridge.mjs`、Nodeプロジェクト、正規化済みNode runtime requirementを成果物へ埋め込みます。
 Node.js実行ファイル、配布archive、download cacheは成果物に含めません。
-配布用 `muon-launcher` は起動時にCEFと、`simple` モードで必要となるNode.js runtimeを準備します。
+配布用 `muon-launcher` は起動時にCEFと、`node.project`によって必要となるNode.js runtimeを準備します。
 portable配布物では展開先へ直接準備され、実行時のNode.jsは常に `runtimes/node/bin/node`（Windowsでは `.exe`）から起動されます。実行中のNode.js runtimeを置き換えるhot updateや、環境変数または `PATH` へのfallbackはありません。
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |

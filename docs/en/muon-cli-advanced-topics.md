@@ -25,7 +25,7 @@ npx muon run
 - Specify `--no-debugger` to disable development defaults for muon DevTools, the recycle keybind, and CDP.
 - Specify `--allow-insecure-localhost` to ignore localhost HTTPS certificate errors during development.
   This option is available only through `muon run` and the Vite plugin; passing it directly to a distribution muon-launcher is rejected before startup.
-- Before launch, `muon run` invokes muon-builder to prepare CEF and, when `node.project` is used in `simple` mode, the required official Node.js runtime.
+- Before launch, `muon run` invokes muon-builder to prepare CEF and, when `node.project` is configured, the required official Node.js runtime. Node.js runtime preparation applies in both `simple` and `validate` modes.
   When both downloads are needed, they run concurrently, and Node.js is placed at `runtimes/node/bin/node` under the stage directory (`runtimes/node/bin/node.exe` on Windows).
   There is no CLI option for a Node.js executable. The Node plugin uses only this absolute path and does not fall back to an environment variable or `PATH`.
 
@@ -85,5 +85,5 @@ npx muon build --icon icons/app.png --linux-name "My App"
   `--linux-icon` is an icon override only for Linux targets.
   The same values can also be specified in `linux.desktop` in `muon.json`.
 
-> Note: When building with the muon CLI, virtual module resolution for muon plugin references through `import` is not available.
-> Therefore, muon plugin reference mode `validate` cannot be used, and `simple` mode must always be used.
+> Note: When generated assets are collected directly by the muon CLI without the Vite plugin, the CLI itself does not resolve virtual modules for plugin references through `import`.
+> Bundle code that uses the validate-mode `muon:node` module with Vite first. To access Node.js integration from assets that do not pass through Vite, use `window.muon.node.createNode()` in `simple` mode.

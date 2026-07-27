@@ -215,6 +215,7 @@ If these capabilities are not needed, do not include them in the `muon.json` whi
 | `args` | `readonly string[]` | Command-line arguments. No shell interpretation is performed, and each element is passed to the child process as-is. |
 | `cwd` | `string` | Working directory for the child process. |
 | `env` | `Record<string, string>` | Environment variable overrides. Merged with the current process environment. Keys cannot be empty strings or contain `=` or NUL characters. |
+| `daemon` | `boolean` | Whether to launch the process as a daemon. Defaults to `false` when omitted. |
 | `onStdout` | `(chunk: Uint8Array) => void` | Receives stdout chunks sequentially. If specified, `stdout` is not included in the `wait()` result. |
 | `onStderr` | `(chunk: Uint8Array) => void` | Receives stderr chunks sequentially. If specified, `stderr` is not included in the `wait()` result. |
 
@@ -225,9 +226,9 @@ If these capabilities are not needed, do not include them in the `muon.json` whi
 | `processId` | `number` | Child process ID that was launched. |
 | `writeStdin(data)` | `(data: string \| BufferSource) => Promise<void>` | Writes to stdin sequentially. Strings are encoded as UTF-8 and processed in call order. |
 | `closeStdin()` | `() => Promise<void>` | Closes stdin after processing pending writes. |
-| `wait()` | `() => Promise<MuonExecutorSpawnResult>` | Waits for the child process to exit. Reuses the same Promise. |
-| `kill()` | `() => Promise<void>` | Requests child process termination. Uses `SIGTERM` on POSIX and `TerminateProcess(..., 1)` on Windows. |
-| `release()` | `() => Promise<void>` | Releases the native handle and requests termination if still running. |
+| `wait()` | `() => Promise<MuonExecutorSpawnResult>` | Waits for the root process to exit. Reuses the same Promise. |
+| `kill()` | `() => Promise<void>` | Requests termination of the entire process tree managed by the connected handle. |
+| `release()` | `() => Promise<void>` | Releases the native handle. Process handling depends on `daemon`. |
 
 `MuonExecutorSpawnResult`:
 
@@ -237,6 +238,22 @@ If these capabilities are not needed, do not include them in the `muon.json` whi
 | `exitCode` | `number` | Child process exit code. The Promise resolves even on non-zero exits. |
 | `stdout` | `Uint8Array` | Bytes collected as stdout when `onStdout` is not specified. |
 | `stderr` | `Uint8Array` | Bytes collected as stderr when `onStderr` is not specified. |
+
+With `daemon: false`, muon owns the launched process tree.
+It terminates the remaining process tree when the root process exits naturally, `release()` is called, the context is released, or muon exits.
+
+With `daemon: true`, `release()`, context release, and muon exit detach a running process tree without sending it a signal.
+In either mode, `wait()` resolves based on the root process exit and automatically releases the handle.
+Therefore, with `daemon: true`, descendants that remain after the root process exits are detached.
+However, while the handle is connected, `kill()` terminates the entire process tree in either mode.
+
+Releasing a handle also closes muon's standard I/O endpoints and callbacks.
+A detached process may observe EOF on stdin or write failures on stdout or stderr.
+A released process cannot be reconnected.
+
+On Linux, the process tree consists of processes in the process group created at launch.
+A process that removes itself from that group is outside muon's control.
+On Windows, managed processes are members of a Job Object.
 
 ```js
 const child = await window.muon.executor.spawn({
@@ -250,6 +267,18 @@ await child.closeStdin();
 
 const result = await child.wait();
 console.log(result.exitCode);
+```
+
+For example, specify `daemon: true` to keep a process running after muon exits:
+
+```js
+const service = await window.muon.executor.spawn({
+  command: "node",
+  args: ["service.js"],
+  daemon: true,
+});
+
+await service.release();
 ```
 
 ### Loading and running dynamic libraries

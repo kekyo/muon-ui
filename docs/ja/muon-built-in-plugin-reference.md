@@ -215,6 +215,7 @@ const baseUrl = config.apiBaseUrl;
 | `args`     | `readonly string[]`            | コマンドライン引数です。シェル解釈は行われず、各要素がそのまま子プロセスへ渡されます。                        |
 | `cwd`      | `string`                       | 子プロセスの作業ディレクトリです。                                                                            |
 | `env`      | `Record<string, string>`       | 環境変数の上書き値です。現在のプロセス環境とマージされます。キーは空文字列、`=`, NUL文字を含められません。    |
+| `daemon`   | `boolean`                      | デーモンとして起動するかを指定します。省略時は `false` です。                                                  |
 | `onStdout` | `(chunk: Uint8Array) => void`  | 標準出力のチャンクを逐次受け取ります。指定した場合、`wait()` の結果に `stdout` は含まれません。                |
 | `onStderr` | `(chunk: Uint8Array) => void`  | 標準エラーのチャンクを逐次受け取ります。指定した場合、`wait()` の結果に `stderr` は含まれません。              |
 
@@ -225,9 +226,9 @@ const baseUrl = config.apiBaseUrl;
 | `processId`          | `number`                                             | 起動した子プロセスIDです。                                                           |
 | `writeStdin(data)`   | `(data: string \| BufferSource) => Promise<void>`    | 標準入力へ逐次書き込みます。文字列はUTF-8としてエンコードされ、呼び出し順に処理されます。 |
 | `closeStdin()`       | `() => Promise<void>`                                | 未完了の書き込みを処理した後、標準入力を閉じます。                                   |
-| `wait()`             | `() => Promise<MuonExecutorSpawnResult>`             | 子プロセスの終了を待ちます。同じPromiseを再利用します。                              |
-| `kill()`             | `() => Promise<void>`                                | 子プロセスの終了を要求します。POSIXでは `SIGTERM`、Windowsでは `TerminateProcess(..., 1)` を使用します。 |
-| `release()`          | `() => Promise<void>`                                | ネイティブハンドルを解放し、実行中なら終了を要求します。                             |
+| `wait()`             | `() => Promise<MuonExecutorSpawnResult>`             | ルートプロセスの終了を待ちます。同じPromiseを再利用します。                          |
+| `kill()`             | `() => Promise<void>`                                | 接続中のハンドルが管理するプロセスツリー全体の終了を要求します。                     |
+| `release()`          | `() => Promise<void>`                                | ネイティブハンドルを解放します。プロセスの扱いは `daemon` によって異なります。       |
 
 `MuonExecutorSpawnResult`:
 
@@ -237,6 +238,22 @@ const baseUrl = config.apiBaseUrl;
 | `exitCode`  | `number`     | 子プロセスの終了コードです。非0終了でもPromiseは解決されます。       |
 | `stdout`    | `Uint8Array` | `onStdout` が指定されていない場合に、標準出力として収集されたバイト列です。 |
 | `stderr`    | `Uint8Array` | `onStderr` が指定されていない場合に、標準エラーとして収集されたバイト列です。 |
+
+`daemon: false` の場合、muonは起動したプロセスツリーを所有します。
+ルートプロセスの自然終了、`release()`、コンテキストの解放、またはmuonの終了時に、残っているプロセスツリーを終了します。
+
+`daemon: true` の場合、`release()`、コンテキストの解放、またはmuonの終了時にシグナルを送らず、実行中のプロセスツリーをデタッチします。
+`wait()` はどちらのモードでもルートプロセスの終了を基準として解決され、ハンドルを自動的に解放します。
+従って `daemon: true` では、ルートプロセスの終了後も残っている子孫プロセスはデタッチされます。
+ただし、ハンドルが接続されている間の `kill()` は、どちらのモードでもプロセスツリー全体を終了します。
+
+ハンドルの解放時にはmuon側の標準入出力とコールバックも閉じられます。
+デタッチされたプロセスは標準入力のEOFや、標準出力・標準エラーへの書き込み失敗を観測する場合があります。
+解放したプロセスへ再接続することは出来ません。
+
+Linuxでは、起動時に作成した同一プロセスグループ内をプロセスツリーとして扱います。
+プロセス自身がそのグループから離脱した場合は管理対象外です。
+WindowsではJob Objectに属するプロセスが管理対象です。
 
 ```js
 const child = await window.muon.executor.spawn({
@@ -250,6 +267,18 @@ await child.closeStdin();
 
 const result = await child.wait();
 console.log(result.exitCode);
+```
+
+例えば、muonの終了後もプロセスを継続させる場合は `daemon: true` を指定します:
+
+```js
+const service = await window.muon.executor.spawn({
+  command: "node",
+  args: ["service.js"],
+  daemon: true,
+});
+
+await service.release();
 ```
 
 ### 動的ライブラリのロードと実行

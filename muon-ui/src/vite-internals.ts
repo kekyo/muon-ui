@@ -509,7 +509,7 @@ export const startMuonViteBrowserBridge = async ({
           cacheDir: environment.MUON_CACHE_DIR,
           nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(
             nodeProject,
-            runtimePluginConfig.mode === "simple",
+            true,
           ),
           force: false,
           quiet: false,

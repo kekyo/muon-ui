@@ -46,6 +46,7 @@ static const muon_plugin_namespace* const invalid_namespace_namespaces_pointers[
 static const muon_plugin_metadata invalid_namespace_metadata = {
     invalid_namespace_namespaces_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

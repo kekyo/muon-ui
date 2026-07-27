@@ -568,6 +568,7 @@ static const muon_plugin_namespace* const launcher_namespaces[] = {
 static const muon_plugin_metadata launcher_metadata = {
     launcher_namespaces,
     nullptr,
+    nullptr,
 };
 
 const muon_plugin_metadata* GetMuonBuiltinLauncherPluginMetadata() {

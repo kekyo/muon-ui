@@ -115,10 +115,11 @@ localIt(
 );
 
 localIt(
-  "starts one Node sidecar lazily for concurrent module imports",
+  "creates isolated Node sidecars and releases each instance independently",
   async () => {
     const markerDirectory = await mkdtemp(join(tmpdir(), "muon-node-start-"));
     const markerPath = join(markerDirectory, "starts.txt");
+    const firstExitMarkerPath = join(markerDirectory, "first-exit.txt");
     try {
       await withNodeRuntime(
         {
@@ -135,24 +136,113 @@ localIt(
             ),
           ).toBe(false);
           await expect(
-            driver.evaluate("typeof window.muon.node.importModule"),
+            driver.evaluate("typeof window.muon.node.createNode"),
           ).resolves.toBe("function");
+          await expect(
+            driver.evaluate("typeof window.muon.node.importModule"),
+          ).resolves.toBe("undefined");
 
-          const processIds = await driver.evaluate<number[]>(`(async () => {
-            const [backend, secondary] = await Promise.all([
-              window.muon.node.importModule("./backend.mjs"),
-              window.muon.node.importModule("./secondary.mjs"),
+          const result = await driver.evaluate<{
+            readonly asyncDisposeExposed: boolean;
+            readonly concurrentReleaseCompleted: boolean;
+            readonly firstProcessId: number;
+            readonly firstReleasedError: string;
+            readonly firstState: readonly number[];
+            readonly pendingError: string;
+            readonly secondProcessId: number;
+            readonly secondState: readonly number[];
+          }>(`(async () => {
+            const [firstNode, secondNode] = await Promise.all([
+              window.muon.node.createNode(),
+              window.muon.node.createNode(),
             ]);
-            return await Promise.all([
-              backend.processId(),
-              secondary.processId(),
+            const [firstBackend, secondBackend] = await Promise.all([
+              firstNode.importModule("./backend.mjs"),
+              secondNode.importModule("./backend.mjs"),
             ]);
+            let notifyPendingStarted = () => undefined;
+            const pendingStarted = new Promise((resolve) => {
+              notifyPendingStarted = resolve;
+            });
+            const pendingOutcome = (async () => {
+              try {
+                await firstBackend.remainPending(async () => {
+                  notifyPendingStarted();
+                });
+                return "";
+              } catch (error) {
+                return String(error instanceof Error ? error.message : error);
+              }
+            })();
+            try {
+              const firstProcessId = await firstBackend.processId();
+              const secondProcessId = await secondBackend.processId();
+              const firstState = [
+                await firstBackend.incrementState(),
+                await firstBackend.incrementState(),
+              ];
+              const secondState = [await secondBackend.incrementState()];
+              const asyncDisposeExposed =
+                typeof Symbol.asyncDispose !== "symbol" ||
+                typeof firstNode[Symbol.asyncDispose] === "function";
+              await firstBackend.installExitMarker(
+                ${JSON.stringify(firstExitMarkerPath)}
+              );
+              await pendingStarted;
+
+              let firstReleaseCompleted = false;
+              const firstRelease = (async () => {
+                await firstNode.release();
+                firstReleaseCompleted = true;
+              })();
+              await firstNode.release();
+              const concurrentReleaseCompleted = firstReleaseCompleted;
+              await firstRelease;
+
+              let firstReleasedError = "";
+              try {
+                await firstBackend.incrementState();
+              } catch (error) {
+                firstReleasedError = String(
+                  error instanceof Error ? error.message : error
+                );
+              }
+              secondState.push(await secondBackend.incrementState());
+              return {
+                asyncDisposeExposed,
+                concurrentReleaseCompleted,
+                firstProcessId,
+                firstReleasedError,
+                firstState,
+                pendingError: await pendingOutcome,
+                secondProcessId,
+                secondState,
+              };
+            } finally {
+              if (typeof Symbol.asyncDispose === "symbol") {
+                await secondNode[Symbol.asyncDispose]();
+              } else {
+                await secondNode.release();
+              }
+            }
           })()`);
-          expect(processIds).toHaveLength(2);
-          expect(processIds[0]).toBe(processIds[1]);
-          expect(await readMarkerLines(markerPath)).toEqual([
-            String(processIds[0]),
-          ]);
+          expect(result.asyncDisposeExposed).toBe(true);
+          expect(result.firstProcessId).toBeGreaterThan(0);
+          expect(result.secondProcessId).toBeGreaterThan(0);
+          expect(result.firstProcessId).not.toBe(result.secondProcessId);
+          expect(result.firstState).toEqual([1, 2]);
+          expect(result.secondState).toEqual([1, 2]);
+          expect(result.concurrentReleaseCompleted).toBe(true);
+          expect(result.pendingError).toBe(
+            "Node instance was released before the request completed",
+          );
+          expect(result.firstReleasedError).toMatch(/released/iu);
+          expect((await readMarkerLines(markerPath)).sort()).toEqual(
+            [result.firstProcessId, result.secondProcessId].map(String).sort(),
+          );
+          await expect(readFile(firstExitMarkerPath, "utf8")).resolves.toBe(
+            "exited\n",
+          );
 
           const commandLinesAfterImport =
             await listProcessGroupCommandLines(processGroupId);
@@ -160,7 +250,7 @@ localIt(
             commandLinesAfterImport.filter((line) =>
               line.includes(nodeBridgeCommandMarker),
             ),
-          ).toHaveLength(1);
+          ).toHaveLength(0);
         },
       );
     } finally {
@@ -175,8 +265,16 @@ localIt(
     await withNodeRuntime({}, async (driver) => {
       const packageJsonPath = join(nodeProjectDirectory, "package.json");
       const packageJson = await driver.evaluate<string>(`(async () => {
-        const fs = await window.muon.node.importModule("node:fs/promises");
-        return await fs.readFile(${JSON.stringify(packageJsonPath)}, "utf8");
+        const node = await window.muon.node.createNode();
+        try {
+          const fs = await node.importModule("node:fs/promises");
+          return await fs.readFile(
+            ${JSON.stringify(packageJsonPath)},
+            "utf8"
+          );
+        } finally {
+          await node.release();
+        }
       })()`);
       expect(JSON.parse(packageJson)).toMatchObject({
         name: "muon-node-e2e-project",
@@ -209,8 +307,10 @@ localIt(
         readonly undefinedRoundTrip: string;
         readonly unsupportedArgumentError: string;
       }>(`(async () => {
+          const node = await window.muon.node.createNode();
+          try {
           const backend =
-            await window.muon.node.importModule("./backend.mjs");
+            await node.importModule("./backend.mjs");
           let unsupportedArgumentError = "";
           try {
             await backend.echo({ unsupported: true });
@@ -250,9 +350,11 @@ localIt(
             hasUnsupportedExport:
               Object.hasOwn(backend, "unsupportedExport"),
             internalFunctionsHidden: [
+              "__createNode",
               "__importModule",
               "__call",
-              "__release",
+              "__releaseModule",
+              "__releaseNode",
               "__completeCallback",
             ].every((name) => !Object.hasOwn(window.muon.node, name)),
             negativeZeroError,
@@ -299,6 +401,9 @@ localIt(
             );
           }
           return result;
+          } finally {
+            await node.release();
+          }
         })()`);
 
       expect(values).toEqual({
@@ -322,9 +427,14 @@ localIt(
       });
       await expect(
         driver.evaluate(`(async () => {
+            const node = await window.muon.node.createNode();
+            try {
             const backend =
-              await window.muon.node.importModule("./backend.mjs");
+              await node.importModule("./backend.mjs");
             return await backend.currentWorkingDirectory();
+            } finally {
+              await node.release();
+            }
           })()`),
       ).resolves.toBe(await realpath(nodeProjectDirectory));
     });
@@ -338,12 +448,17 @@ localIt(
       const error = await evaluateRejection(
         driver,
         `(async () => {
+            const node = await window.muon.node.createNode();
+            try {
             const backend =
-              await window.muon.node.importModule("./backend.mjs");
+              await node.importModule("./backend.mjs");
             return await backend.invokeCallback(
               () => "x".repeat(16 * 1024 * 1024),
               "oversized"
             );
+            } finally {
+              await node.release();
+            }
           })()`,
       );
       expect(error).toMatch(/callback|frame|large|size/iu);
@@ -366,8 +481,9 @@ localIt(
               markMainCallbackStarted = resolve;
             });
             window.__mainNodeCall = (async () => {
+              window.__mainNode = await window.muon.node.createNode();
               const backend =
-                await window.muon.node.importModule("./backend.mjs");
+                await window.__mainNode.importModule("./backend.mjs");
               return await backend.invokeCallback(
                 (value) => {
                   markMainCallbackStarted();
@@ -393,12 +509,17 @@ localIt(
         });
         await expect(
           popupDriver.evaluate(`(async () => {
+              const node = await window.muon.node.createNode();
+              try {
               const backend =
-                await window.muon.node.importModule("./backend.mjs");
+                await node.importModule("./backend.mjs");
               return await backend.invokeCallback(
                 async (value) => "popup:" + value,
                 "popup"
               );
+              } finally {
+                await node.release();
+              }
             })()`),
         ).resolves.toBe("popup:popup");
 
@@ -412,6 +533,11 @@ localIt(
               window.__releaseMainCallback("main:cleanup");
             }
           })()`);
+        await driver.evaluate(`(async () => {
+            if (window.__mainNode !== undefined) {
+              await window.__mainNode.release();
+            }
+          })()`);
         popupDriver?.close();
       }
     });
@@ -419,50 +545,101 @@ localIt(
 );
 
 localIt(
-  "rejects a pending Node callback when its renderer context is released",
+  "releases a context-owned Node instance without affecting another context",
   async () => {
-    await withNodeRuntime({}, async (driver) => {
-      let popupDriver: CdpDriver | undefined = undefined;
-      try {
-        const popupTarget = await openPopupTarget(
-          driver,
-          "data:text/html,muon-node-callback-release-popup",
-        );
-        popupDriver = await connectToMuonCdp({
-          port: MUON_PORT,
-          targetId: popupTarget.id,
-          timeoutMs: cdpCommandTimeoutMs,
-        });
-        await popupDriver.evaluate(`(async () => {
-            const backend =
-              await window.muon.node.importModule("./backend.mjs");
-            let markCallbackStarted = () => undefined;
-            const callbackStarted = new Promise((resolve) => {
-              markCallbackStarted = resolve;
-            });
-            window.__pendingNodeCallback =
-              backend.observeCallbackFailure(async () => {
-                markCallbackStarted();
-                await new Promise(() => undefined);
+    const markerDirectory = await mkdtemp(
+      join(tmpdir(), "muon-node-context-release-"),
+    );
+    const exitMarkerPath = join(markerDirectory, "popup-exit.txt");
+    try {
+      await withNodeRuntime({}, async (driver, running) => {
+        let popupDriver: CdpDriver | undefined = undefined;
+        try {
+          const mainProcessId = await driver.evaluate<number>(`(async () => {
+              window.__mainNode = await window.muon.node.createNode();
+              window.__mainBackend =
+                await window.__mainNode.importModule("./backend.mjs");
+              window.__popupExitObserved =
+                window.__mainBackend.waitForFile(
+                  ${JSON.stringify(exitMarkerPath)}
+                );
+              return await window.__mainBackend.processId();
+            })()`);
+          const popupTarget = await openPopupTarget(
+            driver,
+            "data:text/html,muon-node-callback-release-popup",
+          );
+          popupDriver = await connectToMuonCdp({
+            port: MUON_PORT,
+            targetId: popupTarget.id,
+            timeoutMs: cdpCommandTimeoutMs,
+          });
+          const popupProcessId = await popupDriver.evaluate<number>(
+            `(async () => {
+              window.__popupNode = await window.muon.node.createNode();
+              const backend =
+                await window.__popupNode.importModule("./backend.mjs");
+              await backend.installExitMarker(
+                ${JSON.stringify(exitMarkerPath)}
+              );
+              let markPendingStarted = () => undefined;
+              const pendingStarted = new Promise((resolve) => {
+                markPendingStarted = resolve;
               });
-            await callbackStarted;
-            return "started";
-          })()`);
+              window.__pendingNodeCall = (async () => {
+                try {
+                  await backend.remainPending(async () => {
+                    markPendingStarted();
+                  });
+                  return "";
+                } catch (error) {
+                  return String(
+                    error instanceof Error ? error.message : error
+                  );
+                }
+              })();
+              await pendingStarted;
+              return await backend.processId();
+            })()`,
+          );
+          expect(popupProcessId).not.toBe(mainProcessId);
 
-        await popupDriver.send("Page.close");
-        popupDriver.close();
-        popupDriver = undefined;
+          await popupDriver.send("Page.close");
+          popupDriver.close();
+          popupDriver = undefined;
 
-        const message = await driver.evaluate<string>(`(async () => {
-            const backend =
-              await window.muon.node.importModule("./backend.mjs");
-            return await backend.waitForObservedCallbackFailure();
-          })()`);
-        expect(message).toMatch(/context.*released/iu);
-      } finally {
-        popupDriver?.close();
-      }
-    });
+          await expect(
+            driver.evaluate("window.__popupExitObserved"),
+          ).resolves.toBe(true);
+          await expect(readFile(exitMarkerPath, "utf8")).resolves.toBe(
+            "exited\n",
+          );
+          await expect(
+            driver.evaluate("window.__mainBackend.incrementState()"),
+          ).resolves.toBe(1);
+          expect(
+            (
+              await listProcessGroupCommandLines(requireProcessGroupId(running))
+            ).filter((line) => line.includes(nodeBridgeCommandMarker)),
+          ).toHaveLength(1);
+          await driver.evaluate("window.__mainNode.release()");
+          expect(
+            (
+              await listProcessGroupCommandLines(requireProcessGroupId(running))
+            ).filter((line) => line.includes(nodeBridgeCommandMarker)),
+          ).toHaveLength(0);
+        } finally {
+          await driver.evaluate(`(async () => {
+              if (window.__mainNode !== undefined) {
+                await window.__mainNode.release();
+              }
+            })()`);
+          popupDriver?.close();
+        }
+      });
+    } finally {
+      await rm(markerDirectory, { recursive: true, force: true });
+    }
   },
 );
 
@@ -479,11 +656,11 @@ localIt(
         await rename(executable, unavailableExecutable);
         try {
           await expect(
-            driver.evaluate("typeof window.muon.node.importModule"),
+            driver.evaluate("typeof window.muon.node.createNode"),
           ).resolves.toBe("function");
           const error = await evaluateRejection(
             driver,
-            'window.muon.node.importModule("./backend.mjs")',
+            "window.muon.node.createNode()",
           );
           expect(error).toContain(executable);
         } finally {
@@ -495,7 +672,7 @@ localIt(
 );
 
 localIt(
-  "keeps a crashed Node sidecar failure sticky without restart",
+  "isolates a crashed Node sidecar from subsequently created instances",
   async () => {
     const markerDirectory = await mkdtemp(join(tmpdir(), "muon-node-crash-"));
     const markerPath = join(markerDirectory, "starts.txt");
@@ -505,22 +682,52 @@ localIt(
           MUON_NODE_TEST_START_MARKER: markerPath,
         },
         async (driver) => {
-          const crashError = await evaluateRejection(
-            driver,
-            `(async () => {
-            const backend =
-              await window.muon.node.importModule("./backend.mjs");
-            return await backend.crash();
-          })()`,
-          );
-          expect(crashError).not.toBe("");
-
-          const retryError = await evaluateRejection(
-            driver,
-            'window.muon.node.importModule("./secondary.mjs")',
-          );
-          expect(retryError).not.toBe("");
-          expect(await readMarkerLines(markerPath)).toHaveLength(1);
+          const result = await driver.evaluate<{
+            readonly crashError: string;
+            readonly replacementProcessId: number;
+            readonly retryError: string;
+          }>(`(async () => {
+              const crashedNode = await window.muon.node.createNode();
+              let replacementNode;
+              try {
+                const backend =
+                  await crashedNode.importModule("./backend.mjs");
+                let crashError = "";
+                try {
+                  await backend.crash();
+                } catch (error) {
+                  crashError = String(
+                    error instanceof Error ? error.message : error
+                  );
+                }
+                let retryError = "";
+                try {
+                  await crashedNode.importModule("./secondary.mjs");
+                } catch (error) {
+                  retryError = String(
+                    error instanceof Error ? error.message : error
+                  );
+                }
+                replacementNode = await window.muon.node.createNode();
+                const replacementBackend =
+                  await replacementNode.importModule("./backend.mjs");
+                return {
+                  crashError,
+                  replacementProcessId:
+                    await replacementBackend.processId(),
+                  retryError,
+                };
+              } finally {
+                await crashedNode.release();
+                if (replacementNode !== undefined) {
+                  await replacementNode.release();
+                }
+              }
+            })()`);
+          expect(result.crashError).not.toBe("");
+          expect(result.retryError).not.toBe("");
+          expect(result.replacementProcessId).toBeGreaterThan(0);
+          expect(await readMarkerLines(markerPath)).toHaveLength(2);
         },
       );
     } finally {
@@ -539,14 +746,42 @@ localIt("stops the Node child before the plugin library unloads", async () => {
   try {
     driver = await connectToNodeTestPage();
     await expect(
-      driver.evaluate(`(async () => {
+      driver.evaluate<{
+        readonly installed: boolean;
+        readonly pendingError: string;
+      }>(`(async () => {
+        window.__node = await window.muon.node.createNode();
         const backend =
-          await window.muon.node.importModule("./backend.mjs");
-        return await backend.installExitMarker(
+          await window.__node.importModule("./backend.mjs");
+        const installed = await backend.installExitMarker(
           ${JSON.stringify(exitMarkerPath)}
         );
+        let notifyCallbackStarted = () => undefined;
+        const callbackStarted = new Promise((resolve) => {
+          notifyCallbackStarted = resolve;
+        });
+        const pendingOutcome = (async () => {
+          try {
+            await backend.invokeCallback(async () => {
+              notifyCallbackStarted();
+              await new Promise(() => undefined);
+            }, "pending-at-context-release");
+            return "";
+          } catch (error) {
+            return String(error instanceof Error ? error.message : error);
+          }
+        })();
+        await callbackStarted;
+        await window.__node.release();
+        return {
+          installed,
+          pendingError: await pendingOutcome,
+        };
       })()`),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({
+      installed: true,
+      pendingError: "Node instance was released before the request completed",
+    });
   } finally {
     await stopMuon(running, driver);
   }

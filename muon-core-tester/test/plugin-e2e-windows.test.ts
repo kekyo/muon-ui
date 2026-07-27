@@ -124,4 +124,5 @@ if (windowsE2eEnvironment.status === "configured") {
   await import("./plugin-e2e/runtime-api.js");
   await import("./plugin-e2e/plugin-interop.js");
   await import("./plugin-e2e/native-dialog.js");
+  await import("./plugin-e2e/node-plugin-windows-job.js");
 }

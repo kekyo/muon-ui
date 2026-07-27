@@ -57,6 +57,15 @@ const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 const muonViteDisableArgument = "--no-muon";
+const muonNodeModuleSpecifier = "muon:node";
+const muonNodeVirtualModuleId = "\0muon-node";
+const muonNodeVirtualModuleSource = `const __muonNodeApi = globalThis.__muon_node_api;
+if (typeof __muonNodeApi?.createNode !== "function") {
+  throw new Error("muon Node bridge is not available.");
+}
+
+export const createNode = __muonNodeApi.createNode.bind(__muonNodeApi);
+`;
 
 const isMuonDisabledByViteArguments = (argv: readonly string[]): boolean => {
   const separatorIndex = argv.indexOf("--");
@@ -452,6 +461,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     undefined;
   let loadedCapabilityRuntimePluginConfig: MuonRuntimePluginConfig | undefined =
     undefined;
+  let nodeVirtualModuleEnabled = false;
 
   const getRuntimePluginConfig = (): MuonRuntimePluginConfig =>
     resolveMuonRuntimePluginConfig(capabilityResolver, resolvedPluginAccess);
@@ -508,23 +518,25 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     configResolved: async (config): Promise<void> => {
       resolvedConfig = config;
       await refreshPluginAccess(config);
+      let nodeProject: ResolvedMuonNodeProject | undefined = undefined;
+      try {
+        nodeProject = await resolveMuonNodeProjectForBuildConfig(
+          config.root,
+          resolveMuonConfigPathForViteCommand(config, options),
+        );
+      } catch (error) {
+        if (config.command !== "serve") {
+          throw error;
+        }
+        config.logger.warn(
+          `muon Node project preflight will be ignored because the project config could not be read or parsed: ${getErrorMessage(error)}`,
+        );
+      }
+      nodeVirtualModuleEnabled =
+        resolvedPluginAccess?.mode === "validate" && nodeProject !== undefined;
       if (
         process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] !== "1"
       ) {
-        let nodeProject: ResolvedMuonNodeProject | undefined = undefined;
-        try {
-          nodeProject = await resolveMuonNodeProjectForBuildConfig(
-            config.root,
-            resolveMuonConfigPathForViteCommand(config, options),
-          );
-        } catch (error) {
-          if (config.command !== "serve") {
-            throw error;
-          }
-          config.logger.warn(
-            `muon Node project preflight will be ignored because the project config could not be read or parsed: ${getErrorMessage(error)}`,
-          );
-        }
         if (config.command === "build") {
           const outputDirectory = isAbsolute(config.build.outDir)
             ? config.build.outDir
@@ -542,9 +554,16 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
         }
       }
     },
-    resolveId: (source, importer) =>
-      capabilityResolver?.resolveId(source, importer)?.id,
+    resolveId: (source, importer) => {
+      if (source === muonNodeModuleSpecifier) {
+        return nodeVirtualModuleEnabled ? muonNodeVirtualModuleId : undefined;
+      }
+      return capabilityResolver?.resolveId(source, importer)?.id;
+    },
     load: (id) => {
+      if (nodeVirtualModuleEnabled && id === muonNodeVirtualModuleId) {
+        return muonNodeVirtualModuleSource;
+      }
       const source = capabilityResolver?.load(id);
       if (source !== undefined) {
         loadedCapabilityRuntimePluginConfig = getRuntimePluginConfig();

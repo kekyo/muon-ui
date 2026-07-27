@@ -45,10 +45,13 @@
 
 static constexpr char kMuonNodePluginName[] = "node";
 static constexpr char kMuonNodePluginAllowPattern[] = "muon.node.*";
+static constexpr char kMuonNodePluginNamespace[] = "muon.node";
+static constexpr char kMuonNodeApiGlobalName[] = "__muon_node_api";
+static constexpr char kMuonNodeInternalCapabilityId[] =
+    "__muon_node_internal";
 static constexpr char kMuonNodeProjectConfigKey[] = "project";
 static constexpr char kMuonNodeBridgeConfigKey[] = "bridge";
 static constexpr char kMuonNodeExecutableConfigKey[] = "executable";
-static constexpr char kMuonNodeMetadataOnlyConfigKey[] = "metadataOnly";
 static constexpr char kMuonNodeBridgeFileName[] = "node-bridge.mjs";
 static constexpr char kMuonBundledPluginDirectoryName[] = "plugins";
 static constexpr char kMuonBundledRuntimeDirectoryName[] = "runtimes";
@@ -185,10 +188,6 @@ static bool AppendMuonNodePlugin(
   plugin.config.push_back(
       {kMuonNodeExecutableConfigKey,
        CreateCefPathString(executable_path).ToString()});
-  plugin.config.push_back(
-      {kMuonNodeMetadataOnlyConfigKey,
-       config.browser.plugin.mode == kMuonBrowserPluginModeValidate ? "1"
-                                                                    : "0"});
   plugins->push_back(std::move(plugin));
   return true;
 }
@@ -373,11 +372,12 @@ static bool IsMuonInternalFunctionName(const std::string& name) {
 static bool IsMuonNodeBridgePrivateFunction(
     const std::string& plugin_namespace,
     const std::string& name) {
-  if (plugin_namespace != "muon.node") {
+  if (plugin_namespace != kMuonNodePluginNamespace) {
     return false;
   }
-  return name == "__importModule" || name == "__call" ||
-         name == "__release";
+  return name == "__createNode" || name == "__importModule" ||
+         name == "__call" || name == "__releaseModule" ||
+         name == "__releaseNode";
 }
 
 static CefV8Value::PropertyAttribute GetMuonFunctionPropertyAttribute(
@@ -468,28 +468,14 @@ static bool AddMuonPluginFreezeRootName(
   return true;
 }
 
-static bool FreezeMuonPluginDefinitions(
+static bool FreezeMuonPluginValues(
     CefRefPtr<CefV8Context> context,
-    const MuonRendererMetadata& metadata,
+    const CefV8ValueList& roots,
     std::string* error_message) {
   if (!context || error_message == nullptr) {
     return false;
   }
-
-  std::set<std::string> root_names;
-  for (const auto& plugin_namespace : metadata.namespaces) {
-    if (!AddMuonPluginFreezeRootName(plugin_namespace.plugin_namespace,
-                                     &root_names, error_message)) {
-      return false;
-    }
-  }
-  for (const auto& function : metadata.functions) {
-    if (!AddMuonPluginFreezeRootName(function.plugin_namespace, &root_names,
-                                     error_message)) {
-      return false;
-    }
-  }
-  if (root_names.empty()) {
+  if (roots.empty()) {
     return true;
   }
 
@@ -497,16 +483,6 @@ static bool FreezeMuonPluginDefinitions(
   if (!global) {
     *error_message = "Plugin global object is unavailable";
     return false;
-  }
-
-  CefV8ValueList roots;
-  for (const auto& root_name : root_names) {
-    const auto root = global->GetValue(root_name);
-    if (!IsMuonNamespaceObject(root)) {
-      *error_message = "Plugin namespace root is unavailable: " + root_name;
-      return false;
-    }
-    roots.push_back(root);
   }
 
   const auto source = std::string(R"JS(
@@ -559,6 +535,112 @@ for (let index = 0; index < arguments.length; index += 1) {
     freeze_function->ClearException();
     return false;
   }
+  return true;
+}
+
+static bool FreezeMuonPluginDefinitions(
+    CefRefPtr<CefV8Context> context,
+    const MuonRendererMetadata& metadata,
+    std::string* error_message) {
+  if (!context || error_message == nullptr) {
+    return false;
+  }
+
+  std::set<std::string> root_names;
+  for (const auto& plugin_namespace : metadata.namespaces) {
+    if (!AddMuonPluginFreezeRootName(plugin_namespace.plugin_namespace,
+                                     &root_names, error_message)) {
+      return false;
+    }
+  }
+  for (const auto& function : metadata.functions) {
+    if (!AddMuonPluginFreezeRootName(function.plugin_namespace, &root_names,
+                                     error_message)) {
+      return false;
+    }
+  }
+  if (root_names.empty()) {
+    return true;
+  }
+
+  const auto global = context->GetGlobal();
+  if (!global) {
+    *error_message = "Plugin global object is unavailable";
+    return false;
+  }
+  CefV8ValueList roots;
+  for (const auto& root_name : root_names) {
+    const auto root = global->GetValue(root_name);
+    if (!IsMuonNamespaceObject(root)) {
+      *error_message = "Plugin namespace root is unavailable: " + root_name;
+      return false;
+    }
+    roots.push_back(root);
+  }
+  return FreezeMuonPluginValues(context, roots, error_message);
+}
+
+static bool CreateMuonValidateNodeApi(
+    CefRefPtr<CefV8Context> context,
+    const MuonRendererMetadata& metadata,
+    CefRefPtr<MuonV8Handler> handler,
+    CefRefPtr<CefV8Value>* node_api,
+    std::string* error_message) {
+  if (!context || !handler || node_api == nullptr ||
+      error_message == nullptr) {
+    return false;
+  }
+  *node_api = nullptr;
+
+  const MuonNamespaceMetadata* node_namespace = nullptr;
+  for (const auto& plugin_namespace : metadata.namespaces) {
+    if (plugin_namespace.plugin_namespace == kMuonNodePluginNamespace) {
+      node_namespace = &plugin_namespace;
+      break;
+    }
+  }
+  if (node_namespace == nullptr) {
+    return true;
+  }
+
+  const auto namespace_object = CreateMuonNamespaceObject();
+  if (!namespace_object) {
+    *error_message = "Failed to create the validate-mode Node API";
+    return false;
+  }
+  for (const auto& function : metadata.functions) {
+    if (function.plugin_namespace != kMuonNodePluginNamespace) {
+      continue;
+    }
+    if (namespace_object->HasValue(function.js_name)) {
+      *error_message =
+          "Node function conflicts with existing member: " +
+          CreateMuonFunctionPublicPath(function);
+      return false;
+    }
+    if (!namespace_object->SetValue(
+            function.js_name,
+            CefV8Value::CreateFunction(CreateMuonV8FunctionName(function.id),
+                                       handler),
+            GetMuonFunctionPropertyAttribute(function.plugin_namespace,
+                                             function.js_name))) {
+      *error_message =
+          "Failed to create Node function: " +
+          CreateMuonFunctionPublicPath(function);
+      return false;
+    }
+  }
+  if (!ExecuteMuonNamespaceSetupScript(context, namespace_object,
+                                       *node_namespace)) {
+    *error_message = "Node namespace setup failed";
+    return false;
+  }
+  CefV8ValueList roots;
+  roots.push_back(namespace_object);
+  if (!FreezeMuonPluginValues(context, roots, error_message)) {
+    return false;
+  }
+  *node_api = namespace_object;
   return true;
 }
 
@@ -642,6 +724,21 @@ MuonApp::MuonApp(const MuonConfig& config,
       break;
     }
     plugin_capability_policies_[capability.id] = capability_policy;
+  }
+  if (config_.node.has_project) {
+    std::shared_ptr<MuonPluginPolicy> node_capability_policy;
+    std::string node_capability_error;
+    if (!CreateMuonPluginPolicy(
+            {kMuonNodePluginAllowPattern}, &node_capability_policy,
+            &node_capability_error)) {
+      if (plugin_capability_policy_error_.empty()) {
+        plugin_capability_policy_error_ =
+            "Invalid internal Node capability: " + node_capability_error;
+      }
+    } else {
+      plugin_capability_policies_[kMuonNodeInternalCapabilityId] =
+          std::move(node_capability_policy);
+    }
   }
 }
 
@@ -930,10 +1027,29 @@ void MuonApp::OnContextCreated(CefRefPtr<CefBrowser> browser,
     const auto bridge_attribute = static_cast<CefV8Value::PropertyAttribute>(
         V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE |
         V8_PROPERTY_ATTRIBUTE_DONTENUM);
-    global->SetValue(
-        kMuonV8CapabilityCallFunctionName,
-        CefV8Value::CreateFunction(kMuonV8CapabilityCallFunctionName, handler),
-        bridge_attribute);
+    CefRefPtr<CefV8Value> node_api;
+    std::string error_message;
+    if (!CreateMuonValidateNodeApi(context, renderer_metadata_, handler,
+                                   &node_api, &error_message)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError, error_message);
+      return;
+    }
+    if (!global->SetValue(
+            kMuonV8CapabilityCallFunctionName,
+            CefV8Value::CreateFunction(kMuonV8CapabilityCallFunctionName,
+                                       handler),
+            bridge_attribute)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Failed to create the muon capability bridge");
+      return;
+    }
+    if (node_api &&
+        !global->SetValue(kMuonNodeApiGlobalName, node_api,
+                          bridge_attribute)) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                     "Failed to expose the validate-mode Node API");
+      return;
+    }
     v8_handlers_by_context_[handler->GetContextId()] = handler;
     return;
   }

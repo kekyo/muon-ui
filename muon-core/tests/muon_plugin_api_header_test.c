@@ -6,6 +6,10 @@
 
 #include "muon_plugin_api.h"
 
+#include <string.h>
+
+static uint8_t sample_renderer_owner_token_matched = 0;
+
 static void sample_completion(const void* result, const char* error_message) {
   (void)result;
   (void)error_message;
@@ -36,6 +40,12 @@ static void sample_stop_completion(void* user_data) {
 static void sample_stop(muon_plugin_stop_completion completion,
                         void* user_data) {
   completion(user_data);
+}
+
+static void sample_renderer_context_released(const char* owner_token) {
+  sample_renderer_owner_token_matched =
+      owner_token != 0 &&
+      strcmp(owner_token, "7:frame-token:42") == 0;
 }
 
 static uint8_t sample_register_pure_function(
@@ -170,6 +180,7 @@ int main(void) {
   const muon_plugin_metadata metadata = {
       namespace_pointers,
       &sample_stop,
+      &sample_renderer_context_released,
   };
   muon_plugin_helper_register_pure_function register_pure = 0;
   muon_plugin_helper_register_closure register_closure = 0;
@@ -214,6 +225,8 @@ int main(void) {
   };
   muon_init_plugin_func init_plugin = 0;
   muon_plugin_stop_func stop_plugin = metadata.stop;
+  muon_plugin_renderer_context_released_func renderer_context_released =
+      metadata.renderer_context_released;
   uint8_t stop_completed = 0;
   const char* config_value =
       muon_plugin_get_config_value(&init_context, "sample.key");
@@ -244,6 +257,10 @@ int main(void) {
   (void)init_plugin;
   stop_plugin(&sample_stop_completion, &stop_completed);
   if (stop_completed == 0) {
+    return 1;
+  }
+  renderer_context_released("7:frame-token:42");
+  if (sample_renderer_owner_token_matched == 0) {
     return 1;
   }
   if (config_value == 0 || config_value[0] != 'v') {

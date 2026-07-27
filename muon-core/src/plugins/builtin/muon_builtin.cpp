@@ -22,6 +22,7 @@ static const muon_plugin_namespace* const builtin_namespaces[] = {
 static const muon_plugin_metadata builtin_metadata = {
     builtin_namespaces,
     nullptr,
+    nullptr,
 };
 
 const muon_plugin_metadata* GetMuonBuiltinPluginMetadata() {

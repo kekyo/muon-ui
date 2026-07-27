@@ -14,6 +14,8 @@ import type { WindowsE2eTargetName } from "./windows-matrix.js";
 
 export interface WindowsRemoteRuntime {
   debugRuntimeDirectory: string;
+  /** Absolute directory containing the staged Node.js e2e project. */
+  nodeProjectDirectory: string;
   releaseRuntimeDirectory: string;
   relayExecutablePath: string;
   target: WindowsE2eTargetName;

@@ -1230,15 +1230,17 @@ void releasePromise;
     ).resolves.toBeUndefined();
   });
 
-  it("provides types for the optional descriptor-backed Node API", async () => {
+  it("provides types for descriptor-backed modules from a Node instance", async () => {
     await expect(
-      runTypeScriptConsumer(`import type {} from "muon-ui";
+      runTypeScriptConsumer(`import { createNode } from "muon:node";
+import type {} from "muon-ui";
 
 interface FsPromisesExports {
   readonly readFile: (path: string, encoding: string) => Promise<string>;
 }
 
 const nodeApi: MuonNodeApi | undefined = window.muon.node;
+const validateCreateNode: MuonNodeApi["createNode"] = createNode;
 const callback: MuonNodeCallback = async (value) => String(value);
 const value: MuonNodeValue = Uint8Array.from([1, 2, 3]);
 const argument: MuonNodeArgument = callback;
@@ -1249,10 +1251,15 @@ const run = async (): Promise<void> => {
   if (nodeApi === undefined) {
     return;
   }
+  const node: MuonNodeInstance = await nodeApi.createNode();
+  const releaseable: AsyncReleaseable = node;
   const fs: MuonNodeModule<FsPromisesExports> =
-    await nodeApi.importModule<FsPromisesExports>("node:fs/promises");
+    await node.importModule<FsPromisesExports>("node:fs/promises");
   const text: string = await fs.readFile("file.txt", "utf8");
   await fs.$release();
+  await node.release();
+  await node[Symbol.asyncDispose]();
+  void releaseable;
   void text;
 };
 
@@ -1265,7 +1272,20 @@ void callback;
 void run;
 void typedArrayArgument;
 void unsupportedValue;
+void validateCreateNode;
 void value;
+`),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not expose singleton module imports from the Node plugin root", async () => {
+    await expect(
+      runTypeScriptConsumer(`import type {} from "muon-ui";
+
+declare const nodeApi: MuonNodeApi;
+
+// @ts-expect-error Modules are imported from an explicitly created Node instance.
+void nodeApi.importModule;
 `),
     ).resolves.toBeUndefined();
   });

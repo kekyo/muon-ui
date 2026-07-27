@@ -304,7 +304,8 @@ class MuonPluginRuntime final {
       const std::string& lease_token);
 
   /**
-   * Releases function sources owned by a renderer V8 context.
+   * Notifies loaded plugins and releases function sources owned by a renderer
+   * V8 context.
    *
    * @param context Renderer context that was released.
    * @param renderer_context_id Id assigned by the renderer process.

@@ -82,6 +82,8 @@ struct MuonDynamicLibrary {
   std::filesystem::path path;
   void* handle = nullptr;
   muon_plugin_stop_func stop = nullptr;
+  muon_plugin_renderer_context_released_func renderer_context_released =
+      nullptr;
 };
 
 enum class MuonPluginRuntimeStopState {
@@ -2890,13 +2892,16 @@ static void KeepOrCloseMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
                                           const std::filesystem::path& path,
                                           void* handle,
                                           size_t initial_function_count,
-                                          muon_plugin_stop_func stop) {
+                                          muon_plugin_stop_func stop,
+                                          muon_plugin_renderer_context_released_func
+                                              renderer_context_released) {
   if (impl != nullptr &&
       impl->registered_functions.size() > initial_function_count) {
     MuonDynamicLibrary library;
     library.path = path;
     library.handle = handle;
     library.stop = stop;
+    library.renderer_context_released = renderer_context_released;
     impl->libraries.push_back(library);
     const auto cancel_owner =
         GetMuonFsDialogsCancelOwnerBrowserFunction(handle);
@@ -3237,7 +3242,8 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
   }
 
   KeepOrCloseMuonPluginLibrary(
-      impl, path, handle, initial_function_count, metadata->stop);
+      impl, path, handle, initial_function_count, metadata->stop,
+      metadata->renderer_context_released);
   return true;
 }
 
@@ -4013,6 +4019,15 @@ static void ReleaseMuonFunctionOwner(MuonPluginRuntimeImpl* impl,
                                      int renderer_context_id) {
   if (impl == nullptr) {
     return;
+  }
+  const auto active_owner =
+      impl->active_function_owners.find(owner_id);
+  if (active_owner != impl->active_function_owners.end()) {
+    for (const auto& library : impl->libraries) {
+      if (library.renderer_context_released != nullptr) {
+        library.renderer_context_released(owner_id.c_str());
+      }
+    }
   }
   ReleaseMuonBuiltinExecutorContext(renderer_context_id);
   ReleaseMuonBuiltinFsContext(renderer_context_id);

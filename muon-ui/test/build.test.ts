@@ -930,7 +930,7 @@ describe("muon build", () => {
     );
   });
 
-  it("marks a staged Node runtime as optional in validate plugin mode", async () => {
+  it("requires a staged Node runtime in validate plugin mode", async () => {
     const root = await createTemporaryDirectory(
       "muon-build-node-validate-mode-",
     );
@@ -982,7 +982,7 @@ describe("muon build", () => {
     ).toMatchObject({
       launcher: {
         nodeRuntime: {
-          required: false,
+          required: true,
           engineRangeSpecified: false,
           engineRange: "*",
           comparatorSets: [[">=20.19.0", "<21.0.0-0"], [">=22.12.0"]],

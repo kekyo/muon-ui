@@ -111,6 +111,7 @@ static const muon_plugin_namespace* const cardio_namespaces_pointers[] = {
 static const muon_plugin_metadata cardio_metadata = {
     cardio_namespaces_pointers,
     &stop_cardio_plugin,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

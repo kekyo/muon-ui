@@ -1133,6 +1133,63 @@ describe("muon Vite plugin", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("resolves the validate-mode Node virtual module when a Node project is configured", async () => {
+    const root = await createTemporaryDirectory("muon-vite-node-capability-");
+    const backendDirectory = join(root, "backend");
+    await mkdir(join(root, "src"), { recursive: true });
+    await mkdir(backendDirectory, { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<script type="module" src="/src/main.ts"></script>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      [
+        'import { createNode } from "muon:node";',
+        "const run = async () => {",
+        "  const node = await createNode();",
+        "  await node.release();",
+        "};",
+        "void run();",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(backendDirectory, "package.json"),
+      `${JSON.stringify({ name: "muon-node-capability-fixture" }, null, 2)}\n`,
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          node: {
+            project: "./backend",
+          },
+          plugin: {
+            mode: "validate",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await viteBuild({
+      root,
+      logLevel: "silent",
+      plugins: [
+        muon({
+          open: false,
+          build: false,
+        }),
+      ],
+    });
+
+    await expect(
+      access(join(root, "dist", "index.html")),
+    ).resolves.toBeUndefined();
+  });
+
   it("packages Vite base-path output under the matching asset URL root", async () => {
     const root = await createTemporaryDirectory("muon-vite-base-pack-");
     const packageDirectory = await createFakePackageDirectory(root);

@@ -146,7 +146,8 @@ linuxIt(
 
         const expectedValue = "muon express sidecar";
         const result = await driver.evaluate<ExpressProbeResult>(`(async () => {
-          const backend = await window.muon.node.importModule(".");
+          const node = await window.muon.node.createNode();
+          const backend = await node.importModule(".");
           const result = {};
           try {
             const port = await backend.startServer();
@@ -172,7 +173,7 @@ linuxIt(
               await backend.stopServer();
               result.listeningAfterStop = await backend.isListening();
             } finally {
-              result.releasedValueType = typeof (await backend.$release());
+              result.releasedValueType = typeof (await node.release());
             }
           }
           return result;
@@ -230,7 +231,8 @@ linuxIt(
         await driver.navigate(MUON_APP_URL, cdpCommandTimeoutMs);
 
         const port = await driver.evaluate<number>(`(async () => {
-          const backend = await window.muon.node.importModule(".");
+          window.__expressNode = await window.muon.node.createNode();
+          const backend = await window.__expressNode.importModule(".");
           return await backend.startServer();
         })()`);
         expect(port).toBeGreaterThan(0);

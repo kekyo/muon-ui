@@ -227,11 +227,6 @@ const resolveFromRoot = (root: string, path: string): string =>
 const isJsonObject = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isSimpleRuntimePluginMode = (config: JsonObject | undefined): boolean => {
-  const plugin = config?.plugin;
-  return isJsonObject(plugin) && plugin.mode === "simple";
-};
-
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -761,10 +756,6 @@ const runMuonDevOnce = async (
       ? root
       : dirname(projectConfig.configPath),
   );
-  const nodeRuntimeRequired =
-    preparedViteAssets?.runtimePluginConfig === undefined
-      ? isSimpleRuntimePluginMode(projectConfig.config)
-      : preparedViteAssets.runtimePluginConfig.mode === "simple";
   const asset =
     preparedViteAssets === undefined
       ? await resolveAssetSource(root, options.assetSourcePath, projectConfig)
@@ -792,10 +783,7 @@ const runMuonDevOnce = async (
     stageDir: stagePath,
     target,
     cacheDir: environment.MUON_CACHE_DIR,
-    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(
-      nodeProject,
-      nodeRuntimeRequired,
-    ),
+    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(nodeProject, true),
     force: false,
     quiet: options.quietPrepare === true,
     prepareExecutablePath: undefined,

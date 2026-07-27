@@ -46,6 +46,7 @@ static const muon_plugin_namespace* const duplicate_namespace_namespaces_pointer
 static const muon_plugin_metadata duplicate_namespace_metadata = {
     duplicate_namespace_namespaces_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

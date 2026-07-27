@@ -377,7 +377,7 @@ export const buildMuonApp = async (
   };
   const nodeRuntimeRequirement = createMuonNodeRuntimeRequirement(
     nodeProject,
-    runtimePluginConfig.mode === "simple",
+    true,
   );
   for (const target of targets) {
     await assertMuonNodeProjectStagingIsSafe(

@@ -45,6 +45,10 @@ static constexpr char kMuonExecutorSpawnFunctionPath[] = "muon.executor.spawn";
 static constexpr char kMuonExecutorLoadLibraryFunctionPath[] =
     "muon.executor.loadLibrary";
 static constexpr char kMuonBuiltinFsWatchFunctionPath[] = "muon.fs.watch";
+static constexpr char kMuonNodePluginNamespace[] = "muon.node";
+static constexpr char kMuonNodeFunctionPathPrefix[] = "muon.node.";
+static constexpr char kMuonNodeInternalCapabilityId[] =
+    "__muon_node_internal";
 static constexpr double kMuonTwoTo63 = 9223372036854775808.0;
 static constexpr double kMuonTwoTo64 = 18446744073709551616.0;
 #if defined(MUON_TEST_BUILD)
@@ -98,6 +102,30 @@ static bool CanSendMuonRendererMessageToBrowser(
     browser = frame->GetBrowser();
   }
   return browser && browser->IsValid();
+}
+
+static bool CreateMuonRendererOwnerToken(
+    CefRefPtr<CefV8Context> context,
+    int renderer_context_id,
+    std::string* owner_token) {
+  if (!context || renderer_context_id <= 0 || owner_token == nullptr ||
+      !context->IsValid()) {
+    return false;
+  }
+  const auto browser = context->GetBrowser();
+  const auto frame = context->GetFrame();
+  if (!browser || !browser->IsValid() || !frame || !frame->IsValid()) {
+    return false;
+  }
+  *owner_token =
+      std::to_string(browser->GetIdentifier()) + ":" +
+      frame->GetIdentifier().ToString() + ":" +
+      std::to_string(renderer_context_id);
+  return true;
+}
+
+static bool IsMuonNodeFunctionPath(const std::string& function_path) {
+  return function_path.rfind(kMuonNodeFunctionPathPrefix, 0) == 0;
 }
 
 class MuonPluginFunctionProxyState final : public CefBaseRefCounted {
@@ -957,6 +985,12 @@ bool MuonV8Handler::Execute(const CefString& name,
       RejectPromise(promise, "Invalid muon capability call");
       return true;
     }
+    if (capability_id == kMuonNodeInternalCapabilityId) {
+      RejectPromise(
+          promise,
+          "The internal muon Node capability cannot be called directly");
+      return true;
+    }
     const auto public_function_iterator =
         function_indexes_by_public_path_.find(capability_function_path);
     if (public_function_iterator == function_indexes_by_public_path_.end()) {
@@ -985,6 +1019,16 @@ bool MuonV8Handler::Execute(const CefString& name,
   arg_types = function.arg_types;
   return_type = function.return_type;
   function_id = function.id;
+  // Node interoperability is enabled by top-level node configuration rather
+  // than user-defined validate-mode capabilities. Route its private raw
+  // bridge through the host-created capability so browser validation remains
+  // identical to every other validate-mode plugin call.
+  if (!is_capability_call &&
+      function.plugin_namespace == kMuonNodePluginNamespace) {
+    is_capability_call = true;
+    capability_id = kMuonNodeInternalCapabilityId;
+    capability_function_path = function_name;
+  }
 
   return ExecutePluginCall(
       function_name, arg_types, return_type, function_id, std::string{},
@@ -1023,6 +1067,12 @@ bool MuonV8Handler::ExecutePluginCall(
     RejectPromise(promise, error_message);
     return true;
   }
+  const auto context = CefV8Context::GetCurrentContext();
+  const auto frame = context ? context->GetFrame() : nullptr;
+  if (!CanSendMuonRendererMessageToBrowser(context, frame)) {
+    RejectPromise(promise, "muon frame is not available");
+    return true;
+  }
   if ((function_name == kMuonExecutorSpawnFunctionPath ||
        function_name == kMuonExecutorLoadLibraryFunctionPath) &&
       encoded_args->GetSize() >= 3) {
@@ -1032,12 +1082,14 @@ bool MuonV8Handler::ExecutePluginCall(
       encoded_args->GetSize() >= 2) {
     encoded_args->SetDouble(1, static_cast<double>(context_id_));
   }
-
-  const auto context = CefV8Context::GetCurrentContext();
-  const auto frame = context ? context->GetFrame() : nullptr;
-  if (!CanSendMuonRendererMessageToBrowser(context, frame)) {
-    RejectPromise(promise, "muon frame is not available");
-    return true;
+  if (IsMuonNodeFunctionPath(function_name) &&
+      encoded_args->GetSize() >= 1) {
+    auto owner_token = std::string{};
+    if (!CreateMuonRendererOwnerToken(context, context_id_, &owner_token)) {
+      RejectPromise(promise, "muon Node owner context is unavailable");
+      return true;
+    }
+    encoded_args->SetString(0, owner_token);
   }
 
   MuonCreatedSharedBufferMessage shared_message;

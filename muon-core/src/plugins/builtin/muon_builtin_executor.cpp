@@ -3830,6 +3830,7 @@ static const muon_plugin_namespace* const executor_namespaces[] = {
 static const muon_plugin_metadata executor_metadata = {
     executor_namespaces,
     nullptr,
+    nullptr,
 };
 
 const muon_plugin_metadata* GetMuonBuiltinExecutorPluginMetadata() {

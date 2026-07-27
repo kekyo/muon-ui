@@ -90,6 +90,7 @@ static const muon_plugin_namespace* const beta_namespaces_pointers[] = {
 static const muon_plugin_metadata beta_metadata = {
     beta_namespaces_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

@@ -51,6 +51,7 @@ static const muon_plugin_namespace* const
 static const muon_plugin_metadata builtin_fs_dialogs_conflict_metadata = {
     builtin_fs_dialogs_conflict_namespace_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

@@ -113,12 +113,27 @@ declare global {
   /** Out-of-process Node.js runtime exposed by the optional Node plugin. */
   interface MuonNodeApi {
     /**
+     * Create an isolated out-of-process Node.js runtime.
+     *
+     * @returns A promise for a releaseable Node.js runtime instance.
+     */
+    readonly createNode: () => Promise<MuonNodeInstance>;
+  }
+
+  /**
+   * One isolated out-of-process Node.js runtime instance.
+   *
+   * @remarks Release the instance when it is no longer needed. Releasing it
+   * terminates the corresponding sidecar process and cancels pending calls.
+   */
+  interface MuonNodeInstance extends AsyncReleaseable {
+    /**
      * Import a Node built-in or a module resolved from the configured project.
      *
      * @typeParam TExports - Expected exported members for static typing.
      * @param specifier - A strict `node:` built-in specifier, project-relative
      * specifier, or bare package specifier.
-     * @returns A descriptor-backed module facade.
+     * @returns A descriptor-backed module facade owned by this instance.
      * @remarks Built-ins without the `node:` prefix are rejected. Objects other
      * than copied binary values are not supported as arguments or results.
      */

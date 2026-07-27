@@ -282,48 +282,240 @@ localIt(
 );
 
 localIt(
-  "creates a descriptor facade and marshals supported values and callbacks",
+  "creates a descriptor facade and marshals supported scalar and JSON values",
   async () => {
     await withNodeRuntime({}, async (driver) => {
       const values = await driver.evaluate<{
+        readonly accessorError: string;
+        readonly accessorGetterCalls: number;
+        readonly arrayPropertyError: string;
         readonly callback: string;
+        readonly callbackAfterInvalidJson: string;
         readonly callbackError: string;
+        readonly callbackInvalidJsonError: string;
+        readonly callbackJson: {
+          readonly copied: boolean;
+          readonly original: unknown;
+          readonly returned: unknown;
+        };
+        readonly circularArgumentError: string;
+        readonly circularFunctionAvailable: boolean;
+        readonly circularResultError: string;
         readonly concurrentReleaseWaited: boolean;
         readonly copied: readonly number[];
+        readonly dateArgumentError: string;
         readonly descriptorValue: string;
+        readonly fakeArrayBufferError: string;
+        readonly fakeArrayBufferRecovery: string;
         readonly frozen: boolean;
         readonly hasUnsupportedExport: boolean;
         readonly internalFunctionsHidden: boolean;
+        readonly jsonValue: {
+          readonly copied: boolean;
+          readonly nestedCopied: boolean;
+          readonly original: unknown;
+          readonly returned: unknown;
+        };
         readonly negativeZeroError: string;
+        readonly nestedBigIntError: string;
+        readonly nestedBufferError: string;
         readonly prototypeIsNull: boolean;
+        readonly prototypeProperty: unknown;
         readonly releasedError: string;
-        readonly resultObjectError: string;
+        readonly reservedTags: readonly unknown[];
+        readonly returnedObject: unknown;
         readonly signed: string;
+        readonly sparseArrayError: string;
+        readonly topLevelArray: unknown;
         readonly unsigned: string;
         readonly undefinedDescriptor: boolean;
         readonly undefinedRoundTrip: string;
-        readonly unsupportedArgumentError: string;
       }>(`(async () => {
           const node = await window.muon.node.createNode();
           try {
           const backend =
             await node.importModule("./backend.mjs");
-          let unsupportedArgumentError = "";
+
+          const jsonArgument = {
+            nested: {
+              items: [
+                "unchanged",
+                { source: "renderer" },
+              ],
+            },
+          };
+          const jsonResult = await backend.mutateJsonValue(jsonArgument);
+
+          const topLevelArrayArgument = [
+            "root",
+            { nested: [1, true, null] },
+          ];
+          const topLevelArrayResult =
+            await backend.echo(topLevelArrayArgument);
+
+          const callbackArgument = {
+            nested: {
+              items: [
+                { source: "node" },
+                ["preserved", 42, true, null],
+              ],
+            },
+          };
+          const callbackResult = await backend.invokeCallback(
+            async (value) => {
+              value.nested.items[0].source = "renderer callback";
+              return {
+                received: value,
+                response: ["callback", { accepted: true }],
+              };
+            },
+            callbackArgument
+          );
+
+          const reservedTags = await Promise.all([
+            { kind: "i64", value: "123" },
+            { kind: "buffer", data: "not-a-buffer" },
+            { kind: "function", handle: 123 },
+            { kind: "json", value: { nested: true } },
+          ].map(async (value) => await backend.echo(value)));
+
+          const prototypeArgument = JSON.parse(
+            '{"__proto__":{"muonNodeE2ePolluted":true},"safe":true}'
+          );
+          const nodePrototypeInspection =
+            await backend.inspectPrototypeProperty(prototypeArgument);
+          const prototypeResult = await backend.echo(prototypeArgument);
+          const prototypeProperty = {
+            node: nodePrototypeInspection,
+            rendererHasOwnPrototypeProperty:
+              Object.hasOwn(prototypeResult, "__proto__"),
+            rendererObjectPrototypePolluted:
+              Object.prototype.muonNodeE2ePolluted === true,
+            rendererPrototypeIsObjectPrototype:
+              Object.getPrototypeOf(prototypeResult) === Object.prototype,
+            rendererPrototypeProperty: prototypeResult["__proto__"],
+          };
+
+          let circularArgumentError = "";
+          const circularArgument = {};
+          circularArgument.self = circularArgument;
           try {
-            await backend.echo({ unsupported: true });
+            await backend.echo(circularArgument);
           } catch (error) {
-            unsupportedArgumentError = String(
+            circularArgumentError = String(
               error instanceof Error ? error.message : error
             );
           }
-          let resultObjectError = "";
+
+          const circularFunctionAvailable =
+            typeof backend.returnCircularObject === "function";
+          let circularResultError = "";
           try {
-            await backend.returnObject();
+            await backend.returnCircularObject();
           } catch (error) {
-            resultObjectError = String(
+            circularResultError = String(
               error instanceof Error ? error.message : error
             );
           }
+
+          let sparseArrayError = "";
+          const sparseArray = [];
+          sparseArray.length = 2;
+          sparseArray[1] = "present";
+          try {
+            await backend.echo(sparseArray);
+          } catch (error) {
+            sparseArrayError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+
+          let arrayPropertyError = "";
+          const arrayWithProperty = ["value"];
+          arrayWithProperty.extra = true;
+          try {
+            await backend.echo(arrayWithProperty);
+          } catch (error) {
+            arrayPropertyError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+
+          let nestedBigIntError = "";
+          try {
+            await backend.echo({ nested: 1n });
+          } catch (error) {
+            nestedBigIntError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+
+          let nestedBufferError = "";
+          try {
+            await backend.echo({
+              nested: Uint8Array.from([1, 2, 3]),
+            });
+          } catch (error) {
+            nestedBufferError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+
+          let dateArgumentError = "";
+          try {
+            await backend.echo(new Date(0));
+          } catch (error) {
+            dateArgumentError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+
+          let accessorGetterCalls = 0;
+          let accessorError = "";
+          const accessorValue = {};
+          Object.defineProperty(accessorValue, "value", {
+            enumerable: true,
+            get: () => {
+              accessorGetterCalls += 1;
+              return "unexpected";
+            },
+          });
+          try {
+            await backend.echo(accessorValue);
+          } catch (error) {
+            accessorError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+
+          let fakeArrayBufferError = "";
+          try {
+            await backend.echo(Object.create(ArrayBuffer.prototype));
+          } catch (error) {
+            fakeArrayBufferError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+          const fakeArrayBufferRecovery =
+            await backend.echo("after fake ArrayBuffer");
+
+          let callbackInvalidJsonError = "";
+          try {
+            await backend.invokeCallback(
+              async () => ({ nested: 1n }),
+              "invalid JSON callback result"
+            );
+          } catch (error) {
+            callbackInvalidJsonError = String(
+              error instanceof Error ? error.message : error
+            );
+          }
+          const callbackAfterInvalidJson =
+            await backend.invokeCallback(
+              async (value) => "after:" + value,
+              "invalid JSON"
+            );
+
           let negativeZeroError = "";
           try {
             await backend.echo(-0);
@@ -333,16 +525,34 @@ localIt(
             );
           }
           const result = {
+            accessorError,
+            accessorGetterCalls,
+            arrayPropertyError,
             callback: await backend.invokeCallback(
               async (value) => "renderer:" + value,
               "callback"
             ),
+            callbackAfterInvalidJson,
             callbackError: "",
+            callbackInvalidJsonError,
+            callbackJson: {
+              copied:
+                callbackArgument !== callbackResult.received &&
+                callbackArgument.nested !== callbackResult.received.nested,
+              original: callbackArgument,
+              returned: callbackResult,
+            },
+            circularArgumentError,
+            circularFunctionAvailable,
+            circularResultError,
             concurrentReleaseWaited: false,
             copied: Array.from(
               await backend.copyBuffer(Uint8Array.from([0, 1, 127, 255]))
             ),
+            dateArgumentError,
             descriptorValue: backend.descriptorValue,
+            fakeArrayBufferError,
+            fakeArrayBufferRecovery,
             frozen: Object.isFrozen(backend),
             hasUnsupportedExport:
               Object.hasOwn(backend, "unsupportedExport"),
@@ -354,11 +564,32 @@ localIt(
               "__releaseNode",
               "__completeCallback",
             ].every((name) => !Object.hasOwn(window.muon.node, name)),
+            jsonValue: {
+              copied:
+                jsonArgument !== jsonResult,
+              nestedCopied:
+                jsonArgument.nested !== jsonResult.nested &&
+                jsonArgument.nested.items !== jsonResult.nested.items,
+              original: jsonArgument,
+              returned: jsonResult,
+            },
             negativeZeroError,
+            nestedBigIntError,
+            nestedBufferError,
             prototypeIsNull: Object.getPrototypeOf(backend) === null,
+            prototypeProperty,
             releasedError: "",
-            resultObjectError,
+            reservedTags,
+            returnedObject: await backend.returnObject(),
             signed: (await backend.echo(-9223372036854775808n)).toString(),
+            sparseArrayError,
+            topLevelArray: {
+              copied:
+                topLevelArrayArgument !== topLevelArrayResult &&
+                topLevelArrayArgument[1] !== topLevelArrayResult[1],
+              original: topLevelArrayArgument,
+              returned: topLevelArrayResult,
+            },
             unsigned:
               (await backend.echo(18446744073709551615n)).toString(),
             undefinedDescriptor:
@@ -367,7 +598,6 @@ localIt(
             undefinedRoundTrip: typeof (
               await backend.invokeCallback((value) => value, undefined)
             ),
-            unsupportedArgumentError,
           };
           try {
             await backend.invokeCallback(async () => {
@@ -404,23 +634,114 @@ localIt(
         })()`);
 
       expect(values).toEqual({
+        accessorError: expect.stringMatching(
+          /JSON|accessor|data property|unsupported/iu,
+        ),
+        accessorGetterCalls: 0,
+        arrayPropertyError: expect.stringMatching(
+          /JSON|array|property|unsupported/iu,
+        ),
         callback: "renderer:callback",
+        callbackAfterInvalidJson: "after:invalid JSON",
         callbackError: "renderer callback failure",
+        callbackInvalidJsonError: expect.stringMatching(
+          /bigint|JSON|callback|unsupported/iu,
+        ),
+        callbackJson: {
+          copied: true,
+          original: {
+            nested: {
+              items: [{ source: "node" }, ["preserved", 42, true, null]],
+            },
+          },
+          returned: {
+            received: {
+              nested: {
+                items: [
+                  { source: "renderer callback" },
+                  ["preserved", 42, true, null],
+                ],
+              },
+            },
+            response: ["callback", { accepted: true }],
+          },
+        },
+        circularArgumentError: expect.stringMatching(
+          /circular|cycle|cyclic|JSON|unsupported/iu,
+        ),
+        circularFunctionAvailable: true,
+        circularResultError: expect.stringMatching(
+          /circular|cycle|cyclic|JSON|unsupported/iu,
+        ),
         concurrentReleaseWaited: true,
         copied: [0, 1, 127, 255],
+        dateArgumentError: expect.stringMatching(
+          /JSON|object|plain|unsupported/iu,
+        ),
         descriptorValue: "descriptor",
+        fakeArrayBufferError: expect.stringMatching(
+          /ArrayBuffer|binary|inspect|JSON|unsupported/iu,
+        ),
+        fakeArrayBufferRecovery: "after fake ArrayBuffer",
         frozen: true,
         hasUnsupportedExport: false,
         internalFunctionsHidden: true,
+        jsonValue: {
+          copied: true,
+          nestedCopied: true,
+          original: {
+            nested: {
+              items: ["unchanged", { source: "renderer" }],
+            },
+          },
+          returned: {
+            nested: {
+              items: ["unchanged", { source: "node" }],
+            },
+            nodeOnly: ["added", { accepted: true }],
+          },
+        },
         negativeZeroError: expect.stringMatching(/finite|negative zero/iu),
+        nestedBigIntError: expect.stringMatching(/bigint|JSON|unsupported/iu),
+        nestedBufferError: expect.stringMatching(
+          /buffer|binary|JSON|unsupported/iu,
+        ),
         prototypeIsNull: true,
+        prototypeProperty: {
+          node: {
+            hasOwnPrototypeProperty: true,
+            objectPrototypePolluted: false,
+            prototypeProperty: {
+              muonNodeE2ePolluted: true,
+            },
+          },
+          rendererHasOwnPrototypeProperty: true,
+          rendererObjectPrototypePolluted: false,
+          rendererPrototypeIsObjectPrototype: true,
+          rendererPrototypeProperty: {
+            muonNodeE2ePolluted: true,
+          },
+        },
         releasedError: expect.stringMatching(/released/iu),
-        resultObjectError: expect.stringMatching(/primitive|buffer/iu),
+        reservedTags: [
+          { kind: "i64", value: "123" },
+          { kind: "buffer", data: "not-a-buffer" },
+          { kind: "function", handle: 123 },
+          { kind: "json", value: { nested: true } },
+        ],
+        returnedObject: { unsupported: true },
         signed: "-9223372036854775808",
+        sparseArrayError: expect.stringMatching(
+          /array|hole|JSON|unsupported/iu,
+        ),
+        topLevelArray: {
+          copied: true,
+          original: ["root", { nested: [1, true, null] }],
+          returned: ["root", { nested: [1, true, null] }],
+        },
         unsigned: "18446744073709551615",
         undefinedDescriptor: true,
         undefinedRoundTrip: "undefined",
-        unsupportedArgumentError: expect.stringMatching(/primitive|buffer/iu),
       });
       await expect(
         driver.evaluate(`(async () => {

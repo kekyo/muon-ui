@@ -30,27 +30,38 @@ declare global {
     /**
      * Optional out-of-process Node.js runtime.
      *
-     * @remarks Present only when `node.project` is configured and
-     * `plugin.mode` is `"simple"` in `muon.json`.
+     * @remarks Present on `window.muon` only when `node.project` is configured
+     * and `plugin.mode` is `"simple"` in `muon.json`. Validate mode exposes
+     * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
   }
 
   /**
-   * Scalar, void, or normalized copied binary value returned by the Node
-   * sidecar.
+   * JSON data copied across the Node sidecar process boundary.
    *
-   * @remarks Numbers must be finite and cannot be negative zero. Binary
-   * results are always returned as a `Uint8Array`.
+   * @remarks Numbers must be finite and cannot be negative zero. Objects must
+   * be plain records and arrays must be dense. Nested `undefined`, `bigint`,
+   * binary, and function values are unsupported. The readonly containers
+   * accept readonly inputs such as `as const`; returned values are not frozen.
+   * Object identity, prototypes, and property descriptors are not preserved.
    */
-  type MuonNodeValue =
-    | undefined
+  type MuonNodeJsonValue =
     | null
     | boolean
     | number
     | string
-    | bigint
-    | Uint8Array;
+    | readonly MuonNodeJsonValue[]
+    | { readonly [key: string]: MuonNodeJsonValue };
+
+  /**
+   * JSON data, scalar extension, void, or normalized copied binary value
+   * returned by the Node sidecar.
+   *
+   * @remarks `undefined`, `bigint`, and binary values are supported only at
+   * the top level. Binary results are always returned as a `Uint8Array`.
+   */
+  type MuonNodeValue = undefined | MuonNodeJsonValue | bigint | Uint8Array;
 
   /**
    * Copied binary input accepted by the Node sidecar bridge.
@@ -60,13 +71,22 @@ declare global {
    */
   type MuonNodeBinaryArgument = ArrayBuffer | ArrayBufferView;
 
-  /** Argument accepted by a function exported from a hosted Node module. */
+  /**
+   * Argument accepted by a function exported from a hosted Node module.
+   *
+   * @remarks JSON objects and arrays are copied by value. Callback functions,
+   * `undefined`, `bigint`, and binary values cannot be nested inside them.
+   */
   type MuonNodeArgument =
     | MuonNodeValue
     | MuonNodeBinaryArgument
     | MuonNodeCallback;
 
-  /** Value accepted when a renderer callback settles. */
+  /**
+   * Value accepted when a renderer callback settles.
+   *
+   * @remarks JSON objects and arrays are copied by value.
+   */
   type MuonNodeCallbackResult = MuonNodeValue | MuonNodeBinaryArgument;
 
   /**
@@ -84,7 +104,8 @@ declare global {
   /**
    * Function exported by a hosted Node module.
    *
-   * @param args - Primitive values, bigint values, copied buffers, or callbacks.
+   * @param args - JSON values, primitive extensions, copied buffers, or
+   * callbacks.
    * @returns A promise for a supported bridge value.
    * @remarks Every encoded IPC frame is limited to 16 MiB, including JSON and
    * base64 overhead. One runtime accepts at most 1,024 pending requests.
@@ -97,8 +118,9 @@ declare global {
    * Descriptor-backed facade for one imported Node module.
    *
    * @typeParam TExports - Expected exported members of the imported module.
-   * @remarks The facade is a renderer-local frozen object. Arbitrary Node
-   * objects never cross the process boundary.
+   * @remarks The facade is a renderer-local frozen object. JSON data returned
+   * by exported functions is copied by value; Node object identity and
+   * prototypes never cross the process boundary.
    */
   type MuonNodeModule<TExports extends object = Record<string, any>> =
     Readonly<TExports> & {
@@ -134,8 +156,9 @@ declare global {
      * @param specifier - A strict `node:` built-in specifier, project-relative
      * specifier, or bare package specifier.
      * @returns A descriptor-backed module facade owned by this instance.
-     * @remarks Built-ins without the `node:` prefix are rejected. Objects other
-     * than copied binary values are not supported as arguments or results.
+     * @remarks Built-ins without the `node:` prefix are rejected. JSON objects
+     * and arrays are copied when used as function or callback arguments and
+     * results, but JSON object and array constants are omitted from the facade.
      */
     readonly importModule: <TExports extends object = Record<string, any>>(
       specifier: string,

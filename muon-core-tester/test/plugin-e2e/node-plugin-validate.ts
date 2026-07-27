@@ -126,14 +126,88 @@ localIt(
         ).toBe(false);
 
         const outcome = await driver.evaluate<{
+          readonly callbackJson: {
+            readonly copied: boolean;
+            readonly original: unknown;
+            readonly returned: unknown;
+          };
+          readonly hasUnsupportedExport: boolean;
+          readonly invalidJsonError: string;
+          readonly jsonValue: {
+            readonly copied: boolean;
+            readonly original: unknown;
+            readonly returned: unknown;
+          };
           readonly processId: number;
+          readonly reservedTags: readonly unknown[];
           readonly state: readonly number[];
         }>(`(async () => {
           const node = await globalThis.__muon_node_api.createNode();
           try {
             const backend = await node.importModule("./backend.mjs");
+
+            const jsonArgument = {
+              nested: {
+                items: ["validate", { source: "renderer" }],
+              },
+            };
+            const jsonResult = await backend.mutateJsonValue(jsonArgument);
+
+            const callbackArgument = {
+              nested: {
+                items: [
+                  { source: "node" },
+                  ["validate", 42, false, null],
+                ],
+              },
+            };
+            const callbackResult = await backend.invokeCallback(
+              async (value) => {
+                value.nested.items[0].source = "validate callback";
+                return {
+                  received: value,
+                  response: ["callback", { accepted: true }],
+                };
+              },
+              callbackArgument
+            );
+
+            const reservedTags = await Promise.all([
+              { kind: "i64", value: "123" },
+              { kind: "buffer", data: "not-a-buffer" },
+              { kind: "function", handle: 123 },
+              { kind: "json", value: { nested: true } },
+            ].map(async (value) => await backend.echo(value)));
+
+            let invalidJsonError = "";
+            try {
+              await backend.echo({ nested: 1n });
+            } catch (error) {
+              invalidJsonError = String(
+                error instanceof Error ? error.message : error
+              );
+            }
+
             return {
+              callbackJson: {
+                copied:
+                  callbackArgument !== callbackResult.received &&
+                  callbackArgument.nested !== callbackResult.received.nested,
+                original: callbackArgument,
+                returned: callbackResult,
+              },
+              hasUnsupportedExport:
+                Object.hasOwn(backend, "unsupportedExport"),
+              invalidJsonError,
+              jsonValue: {
+                copied:
+                  jsonArgument !== jsonResult &&
+                  jsonArgument.nested !== jsonResult.nested,
+                original: jsonArgument,
+                returned: jsonResult,
+              },
               processId: await backend.processId(),
+              reservedTags,
               state: [
                 await backend.incrementState(),
                 await backend.incrementState(),
@@ -154,7 +228,48 @@ localIt(
         expect(await readMarkerLines(markerPath)).toEqual([
           String(outcome.processId),
         ]);
+        expect(outcome.callbackJson).toEqual({
+          copied: true,
+          original: {
+            nested: {
+              items: [{ source: "node" }, ["validate", 42, false, null]],
+            },
+          },
+          returned: {
+            received: {
+              nested: {
+                items: [
+                  { source: "validate callback" },
+                  ["validate", 42, false, null],
+                ],
+              },
+            },
+            response: ["callback", { accepted: true }],
+          },
+        });
+        expect(outcome.hasUnsupportedExport).toBe(false);
+        expect(outcome.invalidJsonError).toMatch(/bigint|JSON|unsupported/iu);
+        expect(outcome.jsonValue).toEqual({
+          copied: true,
+          original: {
+            nested: {
+              items: ["validate", { source: "renderer" }],
+            },
+          },
+          returned: {
+            nested: {
+              items: ["validate", { source: "node" }],
+            },
+            nodeOnly: ["added", { accepted: true }],
+          },
+        });
         expect(outcome.processId).toBeGreaterThan(0);
+        expect(outcome.reservedTags).toEqual([
+          { kind: "i64", value: "123" },
+          { kind: "buffer", data: "not-a-buffer" },
+          { kind: "function", handle: 123 },
+          { kind: "json", value: { nested: true } },
+        ]);
         expect(outcome.state).toEqual([1, 2]);
       } catch (error) {
         if (error instanceof Error) {

@@ -1243,9 +1243,42 @@ const nodeApi: MuonNodeApi | undefined = window.muon.node;
 const validateCreateNode: MuonNodeApi["createNode"] = createNode;
 const callback: MuonNodeCallback = async (value) => String(value);
 const value: MuonNodeValue = Uint8Array.from([1, 2, 3]);
+const jsonValue: MuonNodeJsonValue = {
+  enabled: true,
+  nested: {
+    count: 3,
+    labels: ["first", "second"] as const,
+  },
+};
+const nestedJsonValue: MuonNodeValue = {
+  records: [
+    { id: 1, value: null },
+    { id: 2, value: "second" },
+  ] as const,
+};
+const readonlyJsonArray: MuonNodeValue = [
+  "first",
+  { nested: [true, null, 42] as const },
+] as const;
 const argument: MuonNodeArgument = callback;
+const jsonArgument: MuonNodeArgument = {
+  request: {
+    ids: [1, 2, 3] as const,
+  },
+};
 const arrayBufferArgument: MuonNodeArgument = new ArrayBuffer(8);
 const typedArrayArgument: MuonNodeArgument = new Int32Array([1, 2, 3]);
+const jsonCallbackResult: MuonNodeCallbackResult = {
+  response: ["accepted", { complete: true }] as const,
+};
+const jsonCallback: MuonNodeCallback = async () => [
+  "accepted",
+  { complete: true },
+] as const;
+
+class UnsupportedClass {
+  readonly value = "unsupported";
+}
 
 const run = async (): Promise<void> => {
   if (nodeApi === undefined) {
@@ -1263,15 +1296,36 @@ const run = async (): Promise<void> => {
   void text;
 };
 
-// @ts-expect-error Arbitrary objects cannot cross the Node bridge.
-const unsupportedValue: MuonNodeValue = { unsupported: true };
+// @ts-expect-error BigInt is supported only as a top-level bridge value.
+const nestedBigInt: MuonNodeValue = { unsupported: 1n };
+// @ts-expect-error Undefined is supported only as a top-level bridge value.
+const nestedUndefined: MuonNodeValue = { unsupported: undefined };
+// @ts-expect-error Binary values are supported only as top-level bridge values.
+const nestedBuffer: MuonNodeValue = { unsupported: Uint8Array.from([1, 2, 3]) };
+// @ts-expect-error Functions cannot be nested in copied JSON values.
+const nestedFunction: MuonNodeValue = { unsupported: (value: number): number => value };
+// @ts-expect-error Date instances are not copied JSON values.
+const nestedDate: MuonNodeValue = { unsupported: new Date() };
+// @ts-expect-error Class instances are not copied JSON values.
+const nestedClass: MuonNodeValue = { unsupported: new UnsupportedClass() };
 
 void argument;
 void arrayBufferArgument;
 void callback;
+void jsonArgument;
+void jsonCallback;
+void jsonCallbackResult;
+void jsonValue;
+void nestedBigInt;
+void nestedBuffer;
+void nestedClass;
+void nestedDate;
+void nestedFunction;
+void nestedJsonValue;
+void nestedUndefined;
+void readonlyJsonArray;
 void run;
 void typedArrayArgument;
-void unsupportedValue;
 void validateCreateNode;
 void value;
 `),

@@ -19,6 +19,11 @@ interface ImportedModule {
   moduleId: string;
 }
 
+interface JsonWireValue {
+  kind: 'json';
+  value: unknown;
+}
+
 interface MessageObservation {
   kind: 'message';
   message: WireMessage;
@@ -50,6 +55,11 @@ const call = async (
     exportName,
     arguments: argumentsValue,
   });
+
+const jsonWireValue = (value: unknown): JsonWireValue => ({
+  kind: 'json',
+  value,
+});
 
 const observeMessage = async (
   operation: Promise<WireMessage>
@@ -196,20 +206,65 @@ describe('muon Node wire values', () => {
     }
   });
 
-  it('rejects an oversized success response without closing the bridge', async () => {
+  it('copies ArrayBuffer results created in another JavaScript realm', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'returnCrossRealmArrayBuffer', [])
+        )
+      ).toEqual({
+        kind: 'buffer',
+        data: Buffer.from([0, 1, 127, 255]).toString('base64'),
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('rejects objects that imitate ArrayBuffer instances', async () => {
     const project = await createProjectFixture();
     const peer = await initializeBridgePeer(project.root);
     try {
       const backend = await importBackend(peer);
 
       await expect(
-        call(peer, backend.moduleId, 'returnOversizedBuffer', [])
+        call(peer, backend.moduleId, 'returnFakeArrayBuffer', [])
       ).resolves.toMatchObject({
         ok: false,
         error: {
-          code: 'ERR_MUON_NODE_FRAME_TOO_LARGE',
+          code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
         },
       });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('rejects oversized binary and JSON responses without closing the bridge', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+
+      for (const exportName of [
+        'returnOversizedBuffer',
+        'returnOversizedJsonValue',
+      ]) {
+        await expect(
+          call(peer, backend.moduleId, exportName, [])
+        ).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: 'ERR_MUON_NODE_FRAME_TOO_LARGE',
+          },
+        });
+      }
       expect(
         requireSuccessValue(
           await call(peer, backend.moduleId, 'echo', ['still-ready'])
@@ -255,6 +310,59 @@ describe('muon Node wire values', () => {
 
       expect(requireSuccessValue(await peer.nextResponse(callId))).toBe(
         'callback result'
+      );
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('copies strict JSON values through a remote function callback', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const argument = jsonWireValue({
+        nested: {
+          source: 'renderer',
+        },
+        values: [1, true, null],
+      });
+      const result = jsonWireValue({
+        nested: {
+          source: 'renderer-callback',
+        },
+        values: ['callback', false, null],
+      });
+      const callId = peer.sendRequest('call', {
+        moduleId: backend.moduleId,
+        exportName: 'invokeCallback',
+        arguments: [
+          {
+            kind: 'function',
+            handle: 'renderer-json-callback',
+          },
+          argument,
+        ],
+      });
+
+      const callbackMessage = await peer.nextMessage();
+      expect(callbackMessage).toMatchObject({
+        kind: 'callback',
+        id: expect.any(String),
+        handle: 'renderer-json-callback',
+        arguments: [argument],
+      });
+      const callback = callbackMessage as WireCallbackRequest;
+      peer.send({
+        kind: 'callbackResult',
+        id: callback.id,
+        ok: true,
+        value: result,
+      });
+
+      expect(requireSuccessValue(await peer.nextResponse(callId))).toEqual(
+        result
       );
     } finally {
       await peer.close();
@@ -432,32 +540,292 @@ describe('muon Node wire values', () => {
     }
   });
 
-  it('rejects arbitrary objects in arguments and results', async () => {
+  it('copies strict JSON objects and arrays in arguments and results', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const argument = jsonWireValue({
+        nested: {
+          enabled: true,
+          metadata: {
+            name: 'muon',
+          },
+        },
+        values: [1, -42.5, 'text', false, null, ['nested']],
+      });
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echo', [argument])
+        )
+      ).toEqual(argument);
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'returnObject', [])
+        )
+      ).toEqual(
+        jsonWireValue({
+          nested: {
+            enabled: true,
+          },
+          values: [1, 'two', null, { leaf: false }],
+        })
+      );
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'returnNullPrototypeObject', [])
+        )
+      ).toEqual(
+        jsonWireValue({
+          supported: true,
+        })
+      );
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('copies a top-level JSON array through an argument and result', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const value = jsonWireValue([
+        'root',
+        {
+          nested: [1, true, null],
+        },
+        ['leaf'],
+      ]);
+
+      expect(
+        requireSuccessValue(await call(peer, backend.moduleId, 'echo', [value]))
+      ).toEqual(value);
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('rejects raw aggregates and malformed JSON envelopes without closing the bridge', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const invalidValues = [
+        {
+          raw: 'object',
+        },
+        ['raw-array'],
+        {
+          kind: 'json',
+        },
+        {
+          kind: 'json',
+          value: null,
+        },
+        {
+          kind: 'json',
+          value: 'not-an-aggregate',
+        },
+      ] as const;
+
+      for (const invalidValue of invalidValues) {
+        await expect(
+          call(peer, backend.moduleId, 'echo', [invalidValue])
+        ).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
+          },
+        });
+      }
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echo', ['still-ready'])
+        )
+      ).toBe('still-ready');
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('copies JSON values before Node mutates them', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const sourceValue = {
+        changed: false,
+        values: ['renderer'],
+      };
+      const argument = jsonWireValue(sourceValue);
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'mutateJsonValue', [argument])
+        )
+      ).toEqual(
+        jsonWireValue({
+          changed: true,
+          values: ['renderer', 'node'],
+        })
+      );
+      expect(sourceValue).toEqual({
+        changed: false,
+        values: ['renderer'],
+      });
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('copies repeated non-cyclic references as independent JSON values', async () => {
     const project = await createProjectFixture();
     const peer = await initializeBridgePeer(project.root);
     try {
       const backend = await importBackend(peer);
 
-      await expect(
-        call(peer, backend.moduleId, 'echo', [
-          {
-            unsupported: true,
+      const result = requireSuccessValue(
+        await call(peer, backend.moduleId, 'returnSharedJsonValue', [])
+      ) as JsonWireValue;
+      expect(result).toEqual(
+        jsonWireValue({
+          first: {
+            source: 'shared',
           },
-        ])
-      ).resolves.toMatchObject({
-        ok: false,
-        error: {
-          code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
-        },
+          second: {
+            source: 'shared',
+          },
+        })
+      );
+      const resultValue = result.value as {
+        first: unknown;
+        second: unknown;
+      };
+      expect(resultValue.first).not.toBe(resultValue.second);
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('treats reserved wire tag shapes inside JSON values as user data', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const value = jsonWireValue({
+        values: [
+          {
+            kind: 'i64',
+            value: '1',
+          },
+          {
+            kind: 'buffer',
+            data: 'AQID',
+          },
+          {
+            kind: 'function',
+            handle: 'not-a-callback',
+          },
+          {
+            kind: 'json',
+            value: {
+              nested: true,
+            },
+          },
+        ],
       });
-      await expect(
-        call(peer, backend.moduleId, 'returnObject', [])
-      ).resolves.toMatchObject({
-        ok: false,
-        error: {
-          code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
-        },
-      });
+
+      expect(
+        requireSuccessValue(await call(peer, backend.moduleId, 'echo', [value]))
+      ).toEqual(value);
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('preserves a __proto__ data property without prototype pollution', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const value = JSON.parse(
+        '{"__proto__":{"muonNodePolluted":true},"safe":true}'
+      ) as unknown;
+
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'inspectPrototypeProperty', [
+            jsonWireValue(value),
+          ])
+        )
+      ).toEqual(
+        jsonWireValue({
+          hasOwnPrototypeProperty: true,
+          prototypeProperty: {
+            muonNodePolluted: true,
+          },
+          objectPrototypePolluted: false,
+        })
+      );
+      expect(
+        (Object.prototype as { muonNodePolluted?: boolean }).muonNodePolluted
+      ).toBeUndefined();
+    } finally {
+      await peer.close();
+      await project.dispose();
+    }
+  });
+
+  it('rejects values outside the strict JSON subset without closing the bridge', async () => {
+    const project = await createProjectFixture();
+    const peer = await initializeBridgePeer(project.root);
+    try {
+      const backend = await importBackend(peer);
+      const invalidKinds = [
+        'cycle',
+        'sparse-array',
+        'array-property',
+        'custom-prototype',
+        'date',
+        'map',
+        'set',
+        'accessor',
+        'symbol-property',
+        'non-enumerable',
+        'nested-undefined',
+        'nested-bigint',
+        'nested-buffer',
+        'nested-function',
+        'nested-symbol',
+        'nan',
+        'infinity',
+        'negative-zero',
+        'proxy',
+      ] as const;
+
+      for (const invalidKind of invalidKinds) {
+        await expect(
+          call(peer, backend.moduleId, 'returnInvalidJsonValue', [invalidKind])
+        ).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: 'ERR_MUON_NODE_UNSUPPORTED_VALUE',
+          },
+        });
+      }
+      expect(
+        requireSuccessValue(
+          await call(peer, backend.moduleId, 'echo', ['still-ready'])
+        )
+      ).toBe('still-ready');
     } finally {
       await peer.close();
       await project.dispose();

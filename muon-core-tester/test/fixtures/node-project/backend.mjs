@@ -26,6 +26,18 @@ export const copyBuffer = (value) => Buffer.from(value);
 
 export const invokeCallback = async (callback, value) => await callback(value);
 
+export const mutateJsonValue = (value) => {
+  value.nested.items[1].source = "node";
+  value.nodeOnly = ["added", { accepted: true }];
+  return value;
+};
+
+export const inspectPrototypeProperty = (value) => ({
+  hasOwnPrototypeProperty: Object.hasOwn(value, "__proto__"),
+  prototypeProperty: value["__proto__"],
+  objectPrototypePolluted: Object.prototype.muonNodeE2ePolluted === true,
+});
+
 export const currentWorkingDirectory = () => process.cwd();
 
 export const incrementState = () => {
@@ -53,6 +65,12 @@ export const waitForObservedCallbackFailure = async () =>
   await observedCallbackFailure;
 
 export const returnObject = () => ({ unsupported: true });
+
+export const returnCircularObject = () => {
+  const value = { circular: undefined };
+  value.circular = value;
+  return value;
+};
 
 export const unsupportedExport = { unsupported: true };
 

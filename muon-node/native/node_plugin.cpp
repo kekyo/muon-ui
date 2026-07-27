@@ -2466,16 +2466,38 @@ const unsigned64Maximum = 2n ** 64n - 1n;
 let nextCallbackHandle = 1;
 const callbacks = new Map();
 
-const encodeBase64 = (value) => {
-  const bytes = value instanceof ArrayBuffer
-    ? new Uint8Array(value)
-    : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength"
+).get;
+
+// ArrayBuffer.prototype can be imitated, so verify the internal slot with the
+// intrinsic getter instead of relying on instanceof.
+const hasArrayBufferInternalSlot = (value) => {
+  try {
+    Reflect.apply(arrayBufferByteLengthGetter, value, []);
+    return true;
+  } catch {
+    return false;
   }
-  return btoa(binary);
+};
+
+const encodeBase64 = (value, isArrayBufferValue) => {
+  try {
+    const bytes = isArrayBufferValue
+      ? new Uint8Array(value)
+      : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(
+        ...bytes.subarray(offset, offset + chunkSize)
+      );
+    }
+    return btoa(binary);
+  } catch {
+    throw new TypeError("The Node bridge value could not be inspected safely");
+  }
 };
 
 const decodeBase64 = (source) => {
@@ -2487,13 +2509,132 @@ const decodeBase64 = (source) => {
   return bytes;
 };
 
+const cloneJsonValue = (value, activeValues) => {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new TypeError("Unsupported strict JSON number");
+    }
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("Unsupported strict JSON value");
+  }
+  if (activeValues.has(value)) {
+    throw new TypeError("Circular strict JSON value");
+  }
+
+  const isArray = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    (isArray && prototype !== Array.prototype) ||
+    (!isArray && prototype !== Object.prototype && prototype !== null)
+  ) {
+    throw new TypeError("Unsupported strict JSON object");
+  }
+
+  activeValues.add(value);
+  try {
+    const ownKeys = Reflect.ownKeys(value);
+    if (isArray) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (
+        lengthDescriptor === undefined ||
+        !Object.hasOwn(lengthDescriptor, "value") ||
+        lengthDescriptor.enumerable ||
+        typeof lengthDescriptor.value !== "number" ||
+        !Number.isInteger(lengthDescriptor.value) ||
+        lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > 0xffffffff ||
+        ownKeys.length !== lengthDescriptor.value + 1 ||
+        ownKeys.some((key) => typeof key !== "string")
+      ) {
+        throw new TypeError("Unsupported strict JSON array");
+      }
+
+      const stringKeys = new Set(ownKeys);
+      if (!stringKeys.has("length")) {
+        throw new TypeError("Unsupported strict JSON array");
+      }
+      const result = [];
+      for (let index = 0; index < lengthDescriptor.value; index += 1) {
+        const key = String(index);
+        if (!stringKeys.has(key)) {
+          throw new TypeError("Unsupported strict JSON array");
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (
+          descriptor === undefined ||
+          !descriptor.enumerable ||
+          !Object.hasOwn(descriptor, "value")
+        ) {
+          throw new TypeError("Unsupported strict JSON array");
+        }
+        Object.defineProperty(result, key, {
+          configurable: true,
+          enumerable: true,
+          value: cloneJsonValue(descriptor.value, activeValues),
+          writable: true,
+        });
+      }
+      return result;
+    }
+
+    const result = {};
+    for (const key of ownKeys) {
+      if (typeof key !== "string") {
+        throw new TypeError("Unsupported strict JSON object");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !Object.hasOwn(descriptor, "value")
+      ) {
+        throw new TypeError("Unsupported strict JSON object");
+      }
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: cloneJsonValue(descriptor.value, activeValues),
+        writable: true,
+      });
+    }
+    return result;
+  } finally {
+    activeValues.delete(value);
+  }
+};
+
+const cloneJsonAggregate = (value, errorMessage) => {
+  try {
+    if (value === null || typeof value !== "object") {
+      throw new TypeError("Strict JSON aggregate expected");
+    }
+    return cloneJsonValue(value, new WeakSet());
+  } catch {
+    throw new TypeError(errorMessage);
+  }
+};
+
 const decodeValue = (value) => {
   if (
     value === null ||
     typeof value === "boolean" ||
-    typeof value === "number" ||
     typeof value === "string"
   ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new TypeError("Unsupported value returned by the Node runtime");
+    }
     return value;
   }
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -2507,6 +2648,12 @@ const decodeValue = (value) => {
   }
   if (value.kind === "buffer" && typeof value.data === "string") {
     return decodeBase64(value.data);
+  }
+  if (value.kind === "json" && Object.hasOwn(value, "value")) {
+    return cloneJsonAggregate(
+      value.value,
+      "Unsupported strict JSON value returned by the Node runtime"
+    );
   }
   throw new TypeError("Unsupported value returned by the Node runtime");
 };
@@ -2544,8 +2691,18 @@ const encodeValue = (
     }
     throw new RangeError("BigInt is outside the supported i64/u64 range");
   }
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-    return { kind: "buffer", data: encodeBase64(value) };
+  const isArrayBufferValue = hasArrayBufferInternalSlot(value);
+  let isArrayBufferView = false;
+  try {
+    isArrayBufferView = ArrayBuffer.isView(value);
+  } catch {
+    throw new TypeError("The Node bridge value could not be inspected safely");
+  }
+  if (isArrayBufferValue || isArrayBufferView) {
+    return {
+      kind: "buffer",
+      data: encodeBase64(value, isArrayBufferValue),
+    };
   }
   if (typeof value === "function" && allowFunction) {
     const handle = `${callbackHandlePrefix}:renderer-${nextCallbackHandle}`;
@@ -2554,8 +2711,17 @@ const encodeValue = (
     callbackHandles.push(handle);
     return { kind: "function", handle };
   }
+  if (value !== null && typeof value === "object") {
+    return {
+      kind: "json",
+      value: cloneJsonAggregate(
+        value,
+        "Only strict JSON objects and arrays can cross the Node bridge"
+      ),
+    };
+  }
   throw new TypeError(
-    "Only primitives, BigInt, buffers, and callback functions can cross the Node bridge"
+    "Only strict JSON values, BigInt, buffers, and callback functions can cross the Node bridge"
   );
 };
 

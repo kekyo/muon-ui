@@ -8,7 +8,9 @@ import screwUp from "screw-up";
 import { defineConfig } from "vitest/config";
 
 const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
-const testTimeout = isValgrindRun ? 600000 : 60000;
+// Local launcher startup may legitimately use its 120-second runtime staging
+// timeout. Keep the enclosing test alive long enough to finish cleanup.
+const testTimeout = isValgrindRun ? 600000 : 180000;
 
 export default defineConfig({
   plugins: [prettierMax(), screwUp()],

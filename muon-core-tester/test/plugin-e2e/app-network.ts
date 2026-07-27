@@ -613,7 +613,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
       }>(`(async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const waitForControls = async () => {
-          const deadline = Date.now() + 3000;
+          const deadline = Date.now() + ${String(targetTimeoutMs)};
           while (Date.now() < deadline) {
             const pathInput = document.querySelector("#path");
             const contentInput = document.querySelector("#content");
@@ -649,7 +649,7 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         } = await waitForControls();
 
         const waitForStatus = async (expected) => {
-          const deadline = Date.now() + 3000;
+          const deadline = Date.now() + ${String(targetTimeoutMs)};
           while (Date.now() < deadline) {
             if (statusOutput.textContent === expected) {
               return;
@@ -1029,26 +1029,36 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
+      await expect(
+        driver.evaluate(`(async () => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const deadline = Date.now() + ${String(targetTimeoutMs)};
+          while (Date.now() < deadline) {
+            if (
+              document.querySelector("#open-connected-popup") instanceof
+              HTMLButtonElement
+            ) {
+              return true;
+            }
+            await delay(25);
+          }
+          throw new Error("Default popup demo button is missing");
+        })()`),
+      ).resolves.toBe(true);
       const previousTargetIds = await getCurrentTargetIds();
       const response = await driver.send<RuntimeEvaluateResponse>(
         "Runtime.evaluate",
         {
-          expression: `(async () => {
-            const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-            const deadline = Date.now() + 3000;
-            while (Date.now() < deadline) {
-              const button = document.querySelector("#open-connected-popup");
-              if (button instanceof HTMLButtonElement) {
-                button.click();
-                return "clicked";
-              }
-              await delay(25);
+          expression: `(() => {
+            const button = document.querySelector("#open-connected-popup");
+            if (!(button instanceof HTMLButtonElement)) {
+              throw new Error("Default popup demo button is missing");
             }
-            throw new Error("Default popup demo button is missing");
+            button.click();
+            return "clicked";
           })()`,
           returnByValue: true,
           userGesture: true,
-          awaitPromise: true,
         },
       );
       if (response.exceptionDetails !== undefined) {

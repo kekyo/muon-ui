@@ -663,12 +663,6 @@ target_link_libraries(cardio_shared PRIVATE
   Threads::Threads
   ${MUON_CARDIO_GLIB_TARGETS}
   )
-if(MINGW)
-  target_link_options(cardio_shared PRIVATE
-    -static-libgcc
-    -static-libstdc++
-    )
-endif()
 MUON_APPLY_SANITIZERS(cardio_shared)
 
 add_library(muon_cardio INTERFACE)
@@ -1005,12 +999,6 @@ if(WIN32)
   target_link_libraries(muon_node_plugin PRIVATE
     bcrypt
     muon_windows_job_process
-    )
-endif()
-if(MINGW)
-  target_link_options(muon_node_plugin PRIVATE
-    -static-libgcc
-    -static-libstdc++
     )
 endif()
 MUON_APPLY_SANITIZERS(muon_node_plugin)
@@ -1409,14 +1397,19 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES)
     )
 endif()
 if(MINGW)
-  list(APPEND MUON_RUNTIME_COPY_COMMANDS
-    COMMAND ${CMAKE_COMMAND}
-      "-DINPUT=$<TARGET_FILE:muon_ui>"
-      "-DOUTPUT_DIR=${MUON_RUNTIME_DIR}"
-      "-DOBJDUMP=${CMAKE_OBJDUMP}"
-      "-DCANDIDATES=${MUON_MINGW_RUNTIME_DLLS_ARG}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_mingw_runtime_imports.cmake"
-    )
+  foreach(MUON_MINGW_RUNTIME_TARGET
+      muon_ui
+      cardio_shared
+      muon_node_plugin)
+    list(APPEND MUON_RUNTIME_COPY_COMMANDS
+      COMMAND ${CMAKE_COMMAND}
+        "-DINPUT=$<TARGET_FILE:${MUON_MINGW_RUNTIME_TARGET}>"
+        "-DOUTPUT_DIR=${MUON_RUNTIME_DIR}"
+        "-DOBJDUMP=${CMAKE_OBJDUMP}"
+        "-DCANDIDATES=${MUON_MINGW_RUNTIME_DLLS_ARG}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_mingw_runtime_imports.cmake"
+      )
+  endforeach()
 endif()
 list(APPEND MUON_RUNTIME_COPY_COMMANDS
   COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -1490,14 +1483,14 @@ if(WIN32)
       "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${APP_EXECUTABLE_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt' && grep -Fq 'DLL Name: ${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt'"
     )
   add_test(
-    NAME runtime_cardio_uses_static_mingw_runtime
+    NAME runtime_cardio_uses_packaged_mingw_runtime
     COMMAND bash -c
-      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt'"
+      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && grep -Eq 'DLL Name: libgcc_s_.*-1\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && grep -Fq 'DLL Name: libstdc++-6.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && while IFS= read -r dll; do test -f '${MUON_RUNTIME_DIR}/'\"$dll\"; done < <(sed -n 's/.*DLL Name: \\(libgcc_s_.*-1\\.dll\\|libstdc++-6\\.dll\\|libwinpthread-1\\.dll\\).*/\\1/p' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt')"
     )
   add_test(
-    NAME runtime_node_plugin_uses_static_mingw_runtime
+    NAME runtime_node_plugin_uses_packaged_mingw_runtime
     COMMAND bash -c
-      "'${CMAKE_OBJDUMP}' -p '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt'"
+      "'${CMAKE_OBJDUMP}' -p '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && grep -Eq 'DLL Name: libgcc_s_.*-1\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && grep -Fq 'DLL Name: libstdc++-6.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && while IFS= read -r dll; do test -f '${MUON_RUNTIME_DIR}/'\"$dll\"; done < <(sed -n 's/.*DLL Name: \\(libgcc_s_.*-1\\.dll\\|libstdc++-6\\.dll\\|libwinpthread-1\\.dll\\).*/\\1/p' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt')"
     )
   add_test(
     NAME runtime_node_plugin_exports_entry_point

@@ -1507,7 +1507,9 @@ static cardio::promise<void> StartMuonNodeProcess(
               : launch_error.message;
       throw std::system_error(
           static_cast<int>(launch_error.windows_error),
-          std::system_category(), message);
+          std::system_category(),
+          "Failed to start Node executable " +
+              runtime->executable_path + ": " + message);
     }
     for (auto& handle : inherited_standard_handles) {
       CloseMuonNodeWindowsHandle(&handle);
@@ -2899,6 +2901,21 @@ extern "C" const muon_plugin_metadata* muon_init_plugin(
   if (context == nullptr || context->helpers == nullptr) {
     return nullptr;
   }
+#if defined(_WIN32)
+  // cardio may retain final promise-cleanup callbacks after the plugin reports
+  // that its logical operations have stopped. Muon loads this plugin once for
+  // the application lifetime, so keep its callback code mapped until process
+  // termination instead of allowing FreeLibrary to unmap an active return
+  // address during shutdown.
+  auto pinned_module = HMODULE{};
+  if (GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+              GET_MODULE_HANDLE_EX_FLAG_PIN,
+          reinterpret_cast<LPCWSTR>(&muon_init_plugin),
+          &pinned_module) == FALSE) {
+    return nullptr;
+  }
+#endif
   const auto* project =
       muon_plugin_get_config_value(context, "project");
   const auto* bridge =

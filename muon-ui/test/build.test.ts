@@ -686,7 +686,12 @@ describe("muon build", () => {
       `${JSON.stringify(
         {
           asset: { sourcePath: "./old-assets" },
-          network: { allow: ["asset://main/**"] },
+          network: {
+            allow: ["asset://main/**"],
+            localAccess: {
+              allowInsecureLocalhost: true,
+            },
+          },
         },
         null,
         2,
@@ -770,6 +775,12 @@ describe("muon build", () => {
     });
     expect(target?.embeddedConfig.browser).toEqual({
       initialTitleBarIcon: appIconAssetUrl,
+    });
+    expect(target?.embeddedConfig.network).toEqual({
+      allow: ["asset://main/**"],
+      localAccess: {
+        allowInsecureLocalhost: true,
+      },
     });
     await expect(
       readFile(join(root, "dist-muon/linux-amd64", "muon-desktop-icon.png")),

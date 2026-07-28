@@ -307,6 +307,7 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 | :----------------- | :----------------- | :-------------- | :----------------------------------------------------------------------------------- |
 | `allow`            | `readonly string[]` | `["asset://**", "data:image/**"]` | 読み込みを許可するURLパターンのリストです。                                          |
 | `authorizedOrigin` | `readonly object[]` | `[]`            | 指定オリジンから発生したリクエストに、追加のネットワークアクセスを許可します。       |
+| `localAccess.allowInsecureLocalhost` | `boolean` | `false` | localhostの無効なHTTPS証明書エラーを無視します。 |
 | `localAccess.loopbackOrigins` | `readonly object[]` | `[]` | loopbackネットワークへのアクセス権限を与えるオリジンです。 |
 | `localAccess.localNetworkOrigins` | `readonly object[]` | `[]` | ローカルネットワークへのアクセス権限を与えるオリジンです。 |
 
@@ -325,6 +326,11 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 - `localAccess.loopbackOrigins` と `localAccess.localNetworkOrigins` の各要素も、同じ `scheme`, `domain`, `port` 形式で完全一致します。
   CEFがページへ要求するLocal Network Access権限だけを制御するため、実際の宛先URLは `allow` でも許可する必要があります。
   旧CEFの統合Local Network Access権限は、同じオリジンが両方のリストに存在する場合だけ許可されます。
+- `localAccess.allowInsecureLocalhost` は、ブラウザプロセスでChromiumのlocalhost限定の証明書エラー回避を有効にします。
+  `allow` による宛先の許可やLocal Network Access権限の付与は行いません。
+  無効な開発用証明書を使うlocalhostのHTTPS endpointへ接続する必要がある場合を除き、無効のままにしてください。
+  他のscalar設定と同様に、後から読み込まれたconfigの値が先の値を上書きし、すべてのconfigで省略した場合の実効値は `false` です。
+  `muon build` は `muon.json` の値を埋め込むため、配布用ビルドにも適用されます。
 
 ## pluginキー
 

@@ -71,3 +71,6 @@ Allow the destination URL with `network.allow`, and specify the requesting origi
 Use `loopbackOrigins` for localhost and loopback addresses, and `localNetworkOrigins` for hosts on the LAN.
 Both lists use exact requesting-origin matching and do not accept wildcards.
 Permission requests from unconfigured origins are explicitly denied.
+
+`network.localAccess.allowInsecureLocalhost` is independent from these permissions and from `network.allow`.
+It only changes invalid HTTPS certificate handling for localhost.

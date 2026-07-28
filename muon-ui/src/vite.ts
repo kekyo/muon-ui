@@ -400,12 +400,15 @@ export interface MuonVitePluginOptions {
   enableDebugger?: boolean;
 
   /**
-   * Ignore invalid HTTPS certificates for localhost during development startup.
+   * Override whether invalid HTTPS certificates for localhost are ignored
+   * during development startup.
    *
-   * @remarks This passes Chromium's `--allow-insecure-localhost` switch to
-   * muon. Vite build ignores this option, while `muon run` inherits it unless
-   * the command-line switch is specified explicitly.
-   * @defaultValue `false`
+   * @remarks When specified, this writes
+   * `network.localAccess.allowInsecureLocalhost` to the generated development
+   * config loaded after the project `muon.json`. The `muon run`
+   * `--allow-insecure-localhost` flag overrides this option. Vite build ignores
+   * this option, and distribution builds use `muon.json`.
+   * @defaultValue The project `muon.json` value, or `false` when absent.
    */
   allowInsecureLocalhost?: boolean;
 

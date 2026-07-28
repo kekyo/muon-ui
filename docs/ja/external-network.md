@@ -71,3 +71,6 @@ Chromiumはloopbackまたはローカルネットワークへのリクエスト�
 `loopbackOrigins`はlocalhostやloopbackアドレス向け、`localNetworkOrigins`はLAN上のホスト向けです。
 どちらもページ側のオリジンを完全一致で指定し、ワイルドカードは使用出来ません。
 未指定の権限要求は明示的に拒否されます。
+
+`network.localAccess.allowInsecureLocalhost` は、これらの権限や `network.allow` とは独立した設定です。
+localhostの無効なHTTPS証明書の扱いだけを変更します。

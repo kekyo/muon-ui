@@ -8,6 +8,7 @@
 
 #include "config/muon_config.h"
 #include "include/cef_app.h"
+#include "include/cef_command_line.h"
 
 #include <filesystem>
 
@@ -23,3 +24,16 @@ CefSettings CreateMuonCefSettings(
     const MuonConfig& config,
     const std::filesystem::path& executable_directory,
     const std::filesystem::path& cef_log_path);
+
+/**
+ * Applies network-related CEF command-line switches for the browser process.
+ *
+ * @param config Loaded muon runtime configuration.
+ * @param process_type CEF process type. An empty value identifies the browser
+ * process.
+ * @param command_line Mutable process command line.
+ */
+void ConfigureMuonCefNetworkCommandLine(
+    const MuonConfig& config,
+    const CefString& process_type,
+    CefRefPtr<CefCommandLine> command_line);

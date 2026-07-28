@@ -78,9 +78,46 @@ static bool TestEnablesCefSandboxWhenLauncherRequestsIt() {
                 "CEF sandbox was not enabled for system setuid runtime");
 }
 
+static bool TestConfiguresInsecureLocalhostCommandLine() {
+  MuonConfig enabled_config;
+  enabled_config.network.local_access.allow_insecure_localhost = true;
+  auto browser_command_line = CefCommandLine::CreateCommandLine();
+  ConfigureMuonCefNetworkCommandLine(enabled_config, CefString(),
+                                     browser_command_line);
+  if (!Expect(browser_command_line->HasSwitch("allow-insecure-localhost"),
+              "enabled insecure localhost switch was not added")) {
+    return false;
+  }
+
+  auto renderer_command_line = CefCommandLine::CreateCommandLine();
+  ConfigureMuonCefNetworkCommandLine(enabled_config, CefString("renderer"),
+                                     renderer_command_line);
+  if (!Expect(!renderer_command_line->HasSwitch("allow-insecure-localhost"),
+              "insecure localhost switch was added to a child process")) {
+    return false;
+  }
+
+  MuonConfig disabled_config;
+  auto disabled_command_line = CefCommandLine::CreateCommandLine();
+  ConfigureMuonCefNetworkCommandLine(disabled_config, CefString(),
+                                     disabled_command_line);
+  if (!Expect(!disabled_command_line->HasSwitch("allow-insecure-localhost"),
+              "disabled insecure localhost switch was added")) {
+    return false;
+  }
+
+  disabled_command_line->AppendSwitch("allow-insecure-localhost");
+  ConfigureMuonCefNetworkCommandLine(disabled_config, CefString(),
+                                     disabled_command_line);
+  return Expect(disabled_command_line->HasSwitch("allow-insecure-localhost"),
+                "disabled config removed an existing insecure localhost "
+                "switch");
+}
+
 int main() {
   return TestCreatesLauncherSafeCefSettings() &&
-                 TestEnablesCefSandboxWhenLauncherRequestsIt()
+                 TestEnablesCefSandboxWhenLauncherRequestsIt() &&
+                 TestConfiguresInsecureLocalhostCommandLine()
              ? 0
              : 1;
 }

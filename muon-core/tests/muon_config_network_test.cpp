@@ -353,7 +353,7 @@ static void BeginTlvArray(std::vector<uint8_t>* bytes, size_t entry_count) {
 
 static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   std::vector<uint8_t> bytes;
-  BeginTlvObject(&bytes, 4);
+  BeginTlvObject(&bytes, 5);
 
   WriteRawString(&bytes, "asset");
   BeginTlvObject(&bytes, 3);
@@ -381,6 +381,13 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteRawString(&bytes, "cdp");
   BeginTlvObject(&bytes, 1);
   WriteRawString(&bytes, "enable");
+  WriteTlvBool(&bytes, true);
+
+  WriteRawString(&bytes, "network");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "localAccess");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "allowInsecureLocalhost");
   WriteTlvBool(&bytes, true);
 
   WriteRawString(&bytes, "plugin");
@@ -1158,6 +1165,10 @@ static bool RunEmbeddedConfigLoadingTest(
                                     0x3a, 0xbc,
                                     "embedded browser.backgroundColor") &&
          Expect(config.cdp.enable, "embedded cdp.enable was not parsed") &&
+         Expect(
+             config.network.local_access.allow_insecure_localhost,
+             "embedded network.localAccess.allowInsecureLocalhost was not "
+             "parsed") &&
          Expect(config.plugin.path == runtime_directory / "plugins",
                 "embedded plugin.path was not resolved from executable "
                 "directory") &&
@@ -1421,12 +1432,14 @@ static bool RunLocalAccessConfigTest(
   if (!Expect(
           WriteFile(
               local_access_path,
-              R"({"network":{"localAccess":{"loopbackOrigins":[{"scheme":"ASSET","domain":"MAIN"}],"localNetworkOrigins":[{"scheme":"https","domain":"ROUTER.EXAMPLE","port":8443}]}}})"),
+              R"({"network":{"localAccess":{"allowInsecureLocalhost":true,"loopbackOrigins":[{"scheme":"ASSET","domain":"MAIN"}],"localNetworkOrigins":[{"scheme":"https","domain":"ROUTER.EXAMPLE","port":8443}]}}})"),
           "failed to write local access config") ||
       !LoadConfigExpectSuccess(local_access_path, &config)) {
     return false;
   }
-  if (!Expect(config.network.local_access.loopback_origins.size() == 1,
+  if (!Expect(config.network.local_access.allow_insecure_localhost,
+              "network.localAccess.allowInsecureLocalhost was not parsed") ||
+      !Expect(config.network.local_access.loopback_origins.size() == 1,
               "network.localAccess.loopbackOrigins was not parsed") ||
       !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[0],
                               "asset", "main", 0,
@@ -1444,6 +1457,8 @@ static bool RunLocalAccessConfigTest(
   if (!Expect(WriteFile(empty_path, R"({"network":{"localAccess":{}}})"),
               "failed to write empty local access config") ||
       !LoadConfigExpectSuccess(empty_path, &config) ||
+      !Expect(!config.network.local_access.allow_insecure_localhost,
+              "empty allowInsecureLocalhost default was not false") ||
       !Expect(config.network.local_access.loopback_origins.empty(),
               "empty loopbackOrigins default was not empty") ||
       !Expect(config.network.local_access.local_network_origins.empty(),
@@ -1456,17 +1471,19 @@ static bool RunLocalAccessConfigTest(
   if (!Expect(
           WriteFile(
               first_path,
-              R"({"network":{"localAccess":{"loopbackOrigins":[{"scheme":"asset","domain":"main"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"}]}}})"),
+              R"({"network":{"localAccess":{"allowInsecureLocalhost":true,"loopbackOrigins":[{"scheme":"asset","domain":"main"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"}]}}})"),
           "failed to write first local access override") ||
       !Expect(
           WriteFile(
               second_path,
-              R"({"network":{"localAccess":{"loopbackOrigins":[{"domain":"main","scheme":"asset"},{"scheme":"https","domain":"second.example"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"second.example"}]}}})"),
+              R"({"network":{"localAccess":{"allowInsecureLocalhost":false,"loopbackOrigins":[{"domain":"main","scheme":"asset"},{"scheme":"https","domain":"second.example"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"second.example"}]}}})"),
           "failed to write second local access override") ||
       !LoadConfigFilesExpectSuccess({first_path, second_path}, &config)) {
     return false;
   }
-  if (!Expect(config.network.local_access.loopback_origins.size() == 2,
+  if (!Expect(!config.network.local_access.allow_insecure_localhost,
+              "later allowInsecureLocalhost false did not override true") ||
+      !Expect(config.network.local_access.loopback_origins.size() == 2,
               "loopbackOrigins was not merged by equality") ||
       !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[0],
                               "asset", "main", 0,
@@ -1485,6 +1502,8 @@ static bool RunLocalAccessConfigTest(
       test_directory / "invalid-loopback-origins.json";
   const auto invalid_local_network_path =
       test_directory / "invalid-local-network-origins.json";
+  const auto invalid_allow_insecure_localhost_path =
+      test_directory / "invalid-allow-insecure-localhost.json";
   return Expect(WriteFile(invalid_object_path,
                           R"({"network":{"localAccess":true}})"),
                 "failed to write invalid local access object") &&
@@ -1496,6 +1515,10 @@ static bool RunLocalAccessConfigTest(
                     invalid_local_network_path,
                     R"({"network":{"localAccess":{"localNetworkOrigins":[{"scheme":"http"}]}}})"),
                 "failed to write invalid local network origins") &&
+         Expect(WriteFile(
+                    invalid_allow_insecure_localhost_path,
+                    R"({"network":{"localAccess":{"allowInsecureLocalhost":"true"}}})"),
+                "failed to write invalid allowInsecureLocalhost") &&
          LoadConfigExpectFailure(invalid_object_path,
                                  "network.localAccess must be an object") &&
          LoadConfigExpectFailure(
@@ -1503,7 +1526,10 @@ static bool RunLocalAccessConfigTest(
              "network.localAccess.loopbackOrigins must be an array") &&
          LoadConfigExpectFailure(
              invalid_local_network_path,
-             "network.localAccess.localNetworkOrigins[0].domain is required");
+             "network.localAccess.localNetworkOrigins[0].domain is required") &&
+         LoadConfigExpectFailure(
+             invalid_allow_insecure_localhost_path,
+             "network.localAccess.allowInsecureLocalhost must be a boolean");
 }
 
 static bool RunApplicationConfigLoadingTest(

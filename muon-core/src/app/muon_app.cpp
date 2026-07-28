@@ -16,6 +16,7 @@
 #include "browser/muon_title_bar_loader.h"
 #include "browser/muon_window_delegate.h"
 #include "config/muon_config.h"
+#include "config/muon_cef_settings.h"
 #include "config/muon_linux_display_backend.h"
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
@@ -758,10 +759,10 @@ void MuonApp::OnRegisterCustomSchemes(
 void MuonApp::OnBeforeCommandLineProcessing(
     const CefString& process_type,
     CefRefPtr<CefCommandLine> command_line) {
-  (void)process_type;
   if (!command_line) {
     return;
   }
+  ConfigureMuonCefNetworkCommandLine(config_, process_type, command_line);
   ConfigureMuonCefLinuxDisplayCommandLine(command_line);
   CefString cef_log_path;
 #if defined(_WIN32)

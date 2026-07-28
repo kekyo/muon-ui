@@ -6,6 +6,10 @@
 
 #include "muon_plugin_api.h"
 
+#if defined(_WIN32)
+#include "muon_windows_job_process.h"
+#endif
+
 #include <cardio.h>
 #include <yyjson.h>
 
@@ -101,6 +105,7 @@ struct MuonNodeCallbackLease {
 };
 
 struct MuonNodeRuntime;
+struct MuonNodeManager;
 
 struct MuonNodeRendererCallbackState {
   MuonNodeRuntime* runtime = nullptr;
@@ -110,9 +115,12 @@ struct MuonNodeRendererCallbackState {
 
 struct MuonNodeRuntime {
   MuonNodeRuntimeState state = MuonNodeRuntimeState::Disabled;
-  bool metadata_only = false;
+  MuonNodeManager* manager = nullptr;
+  std::string instance_id;
+  std::string renderer_owner_token;
   std::string project_root;
   std::string bridge_path;
+  std::string executable_path;
   std::string session_token;
   std::string failure_message;
   uint64_t next_request_id = 1;
@@ -135,13 +143,11 @@ struct MuonNodeRuntime {
   bool shutdown_sent = false;
   // Plugin unload must wait for host completion closures still entering this DLL.
   size_t active_renderer_callbacks = 0;
-  muon_plugin_stop_completion stop_completion = nullptr;
-  void* stop_user_data = nullptr;
+  std::shared_ptr<MuonNodeHostInvocation> create_invocation;
+  std::vector<std::shared_ptr<MuonNodeHostInvocation>> release_invocations;
 #if defined(_WIN32)
   HANDLE pipe = INVALID_HANDLE_VALUE;
-  HANDLE process = nullptr;
-  HANDLE job = nullptr;
-  DWORD process_id = 0;
+  MuonWindowsJobProcess process{};
 #else
   int socket_fd = -1;
   int process_fd = -1;
@@ -149,7 +155,18 @@ struct MuonNodeRuntime {
 #endif
 };
 
-static std::unique_ptr<MuonNodeRuntime> g_muon_node_runtime;
+struct MuonNodeManager {
+  std::string project_root;
+  std::string bridge_path;
+  std::string executable_path;
+  uint64_t next_instance_id = 1;
+  std::map<std::string, std::shared_ptr<MuonNodeRuntime>> runtimes;
+  bool stopping = false;
+  muon_plugin_stop_completion stop_completion = nullptr;
+  void* stop_user_data = nullptr;
+};
+
+static std::unique_ptr<MuonNodeManager> g_muon_node_manager;
 
 static void LogMuonNodeMessage(muon_log_level level,
                                const std::string& message) {
@@ -321,6 +338,7 @@ static void CompleteAllMuonNodeHostInvocations(
   }
 }
 
+static void MaybeCompleteMuonNodeManagerStop(MuonNodeManager* manager);
 static void MaybeCompleteMuonNodeStop(MuonNodeRuntime* runtime);
 static void FailMuonNodeRuntime(MuonNodeRuntime* runtime,
                                 const std::string& error_message);
@@ -679,15 +697,7 @@ static void CloseMuonNodeProcessHandles(MuonNodeRuntime* runtime) {
     return;
   }
 #if defined(_WIN32)
-  if (runtime->process != nullptr) {
-    (void)CloseHandle(runtime->process);
-    runtime->process = nullptr;
-  }
-  if (runtime->job != nullptr) {
-    (void)CloseHandle(runtime->job);
-    runtime->job = nullptr;
-  }
-  runtime->process_id = 0;
+  CloseMuonWindowsJobProcess(&runtime->process);
 #else
   if (runtime->process_fd >= 0) {
     (void)::close(runtime->process_fd);
@@ -704,9 +714,8 @@ static void TerminateMuonNodeProcess(MuonNodeRuntime* runtime,
     return;
   }
 #if defined(_WIN32)
-  if (runtime->process != nullptr) {
-    (void)TerminateProcess(runtime->process, force ? 137u : 143u);
-  }
+  (void)TerminateMuonWindowsJobProcess(
+      &runtime->process, force ? 137u : 143u);
 #else
   if (runtime->process_id > 0) {
     (void)::kill(runtime->process_id, force ? SIGKILL : SIGTERM);
@@ -729,13 +738,31 @@ static void CompleteMuonNodePendingRequests(
   }
 }
 
+static void MaybeCompleteMuonNodeManagerStop(MuonNodeManager* manager) {
+  if (manager == nullptr || !manager->stopping) {
+    return;
+  }
+  for (const auto& entry : manager->runtimes) {
+    if (entry.second &&
+        (entry.second->state != MuonNodeRuntimeState::Stopped ||
+         entry.second->active_renderer_callbacks != 0)) {
+      return;
+    }
+  }
+  const auto completion =
+      std::exchange(manager->stop_completion, nullptr);
+  auto* user_data = std::exchange(manager->stop_user_data, nullptr);
+  if (completion != nullptr) {
+    completion(user_data);
+  }
+}
+
 static void MaybeCompleteMuonNodeStop(MuonNodeRuntime* runtime) {
   if (runtime == nullptr ||
       runtime->state != MuonNodeRuntimeState::Stopping ||
       runtime->startup_active || runtime->reader_active ||
       runtime->writer_active || runtime->process_monitor_active ||
       runtime->shutdown_timer_active ||
-      runtime->active_renderer_callbacks != 0 ||
       (runtime->process_started && !runtime->process_exited)) {
     return;
   }
@@ -745,11 +772,13 @@ static void MaybeCompleteMuonNodeStop(MuonNodeRuntime* runtime) {
   runtime->callback_leases.clear();
   runtime->pending_callback_requests.clear();
   runtime->state = MuonNodeRuntimeState::Stopped;
-  const auto completion = std::exchange(runtime->stop_completion, nullptr);
-  auto* user_data = std::exchange(runtime->stop_user_data, nullptr);
-  if (completion != nullptr) {
-    completion(user_data);
+  auto release_invocations = std::move(runtime->release_invocations);
+  runtime->release_invocations.clear();
+  for (const auto& invocation : release_invocations) {
+    CompleteMuonNodeHostInvocation(
+        runtime, invocation, true, "", "");
   }
+  MaybeCompleteMuonNodeManagerStop(runtime->manager);
 }
 
 static void FailMuonNodeRuntime(MuonNodeRuntime* runtime,
@@ -765,6 +794,12 @@ static void FailMuonNodeRuntime(MuonNodeRuntime* runtime,
   }
   if (runtime->state != MuonNodeRuntimeState::Stopping) {
     runtime->state = MuonNodeRuntimeState::Failed;
+  }
+  if (runtime->create_invocation) {
+    const auto invocation =
+        std::exchange(runtime->create_invocation, nullptr);
+    CompleteMuonNodeHostInvocation(
+        runtime, invocation, false, "", runtime->failure_message);
   }
   CompleteAllMuonNodeHostInvocations(runtime, runtime->failure_message);
   CompleteMuonNodePendingRequests(runtime, runtime->failure_message);
@@ -832,11 +867,16 @@ static void CompleteMuonNodeRendererCallback(
   if (runtime != nullptr && runtime->active_renderer_callbacks > 0) {
     runtime->active_renderer_callbacks -= 1;
     MaybeCompleteMuonNodeStop(runtime);
+    MaybeCompleteMuonNodeManagerStop(runtime->manager);
   }
 }
 
 static void HandleMuonNodeCallbackMessage(MuonNodeRuntime* runtime,
                                           yyjson_val* root) {
+  if (runtime == nullptr ||
+      runtime->state != MuonNodeRuntimeState::Ready) {
+    return;
+  }
   auto* id = yyjson_obj_get(root, "id");
   auto* handle = yyjson_obj_get(root, "handle");
   auto* arguments = yyjson_obj_get(root, "arguments");
@@ -938,6 +978,10 @@ static void HandleMuonNodeResponseMessage(MuonNodeRuntime* runtime,
   const auto id_value = std::string(yyjson_get_str(id), yyjson_get_len(id));
   const auto pending = runtime->pending_requests.find(id_value);
   if (pending == runtime->pending_requests.end()) {
+    if (runtime->state == MuonNodeRuntimeState::Stopping ||
+        runtime->state == MuonNodeRuntimeState::Stopped) {
+      return;
+    }
     throw std::runtime_error(
         "Node IPC returned an unknown request id: " + id_value);
   }
@@ -1159,6 +1203,12 @@ static void CompleteMuonNodeInitialization(
   LogMuonNodeMessage(
       MUON_LOG_LEVEL_INFO,
       "Node sidecar is ready for project " + runtime->project_root);
+  if (runtime->create_invocation) {
+    const auto invocation =
+        std::exchange(runtime->create_invocation, nullptr);
+    CompleteMuonNodeHostInvocation(
+        runtime, invocation, true, runtime->instance_id, "");
+  }
   DrainMuonNodeQueuedCommands(runtime);
 }
 
@@ -1251,107 +1301,6 @@ static bool IsMuonNodeWindowsEnvironmentEntry(
   }
   return CompareMuonNodeWindowsStrings(
              entry.substr(0, name.size()), name) == CSTR_EQUAL;
-}
-
-static bool TryGetMuonNodeWindowsEnvironmentVariable(
-    const wchar_t* name,
-    std::wstring* value) {
-  if (name == nullptr || value == nullptr) {
-    throw std::invalid_argument(
-        "Node environment variable destination is unavailable");
-  }
-  for (;;) {
-    SetLastError(ERROR_SUCCESS);
-    const auto required =
-        GetEnvironmentVariableW(name, nullptr, 0);
-    if (required == 0) {
-      const auto error = GetLastError();
-      if (error == ERROR_ENVVAR_NOT_FOUND) {
-        value->clear();
-        return false;
-      }
-      if (error == ERROR_SUCCESS) {
-        value->clear();
-        return true;
-      }
-      throw std::system_error(
-          static_cast<int>(error), std::system_category(),
-          "GetEnvironmentVariableW failed for Node sidecar");
-    }
-    std::vector<wchar_t> buffer(required);
-    SetLastError(ERROR_SUCCESS);
-    const auto length = GetEnvironmentVariableW(
-        name, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length == 0) {
-      const auto error = GetLastError();
-      if (error == ERROR_ENVVAR_NOT_FOUND) {
-        value->clear();
-        return false;
-      }
-      if (error == ERROR_SUCCESS) {
-        value->clear();
-        return true;
-      }
-      throw std::system_error(
-          static_cast<int>(error), std::system_category(),
-          "GetEnvironmentVariableW failed for Node sidecar");
-    }
-    if (length >= buffer.size()) {
-      continue;
-    }
-    value->assign(buffer.data(), length);
-    return true;
-  }
-}
-
-static std::wstring ResolveMuonNodeWindowsExecutable() {
-  std::wstring configured_executable;
-  if (TryGetMuonNodeWindowsEnvironmentVariable(
-          L"MUON_NODE_EXECUTABLE", &configured_executable)) {
-    const auto executable_path =
-        std::filesystem::path(configured_executable);
-    if (configured_executable.empty() ||
-        !executable_path.is_absolute()) {
-      throw std::runtime_error(
-          "MUON_NODE_EXECUTABLE must be an absolute path");
-    }
-    return executable_path.wstring();
-  }
-
-  std::wstring search_path;
-  if (!TryGetMuonNodeWindowsEnvironmentVariable(
-          L"PATH", &search_path) ||
-      search_path.empty()) {
-    throw std::runtime_error(
-        "PATH is unavailable while locating the Node executable");
-  }
-  std::vector<wchar_t> buffer(MAX_PATH);
-  for (;;) {
-    // Resolve only against the explicit PATH value. Passing a null
-    // lpApplicationName to CreateProcessW would add application and current
-    // directories ahead of PATH.
-    SetLastError(ERROR_SUCCESS);
-    const auto length = SearchPathW(
-        search_path.c_str(), L"node.exe", nullptr,
-        static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
-    if (length == 0) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to locate node.exe in PATH");
-    }
-    if (length >= buffer.size()) {
-      buffer.resize(static_cast<size_t>(length) + 1);
-      continue;
-    }
-    const auto executable_path = std::filesystem::absolute(
-        std::filesystem::path(
-            std::wstring(buffer.data(), length)));
-    if (!executable_path.is_absolute()) {
-      throw std::runtime_error(
-          "SearchPathW did not resolve an absolute Node executable");
-    }
-    return executable_path.wstring();
-  }
 }
 
 static std::vector<wchar_t> CreateMuonNodeWindowsEnvironment(
@@ -1505,7 +1454,8 @@ static cardio::promise<void> StartMuonNodeProcess(
         "CreateNamedPipeW failed for Node sidecar");
   }
 
-  const auto executable = ResolveMuonNodeWindowsExecutable();
+  const auto executable =
+      ConvertMuonNodeUtf8ToWide(runtime->executable_path);
   const auto bridge = ConvertMuonNodeUtf8ToWide(runtime->bridge_path);
   auto command_line =
       QuoteMuonNodeWindowsArgument(executable) + L" " +
@@ -1518,11 +1468,6 @@ static cardio::promise<void> StartMuonNodeProcess(
 
   std::array<HANDLE, 3> inherited_standard_handles{
       nullptr, nullptr, nullptr};
-  std::vector<std::byte> attribute_storage;
-  LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = nullptr;
-  auto attribute_list_initialized = false;
-  PROCESS_INFORMATION process{};
-  HANDLE job = nullptr;
   try {
     inherited_standard_handles[0] =
         CreateMuonNodeInheritedStandardHandle(
@@ -1534,107 +1479,46 @@ static cardio::promise<void> StartMuonNodeProcess(
         CreateMuonNodeInheritedStandardHandle(
             STD_ERROR_HANDLE, GENERIC_WRITE);
 
-    SIZE_T attribute_size = 0;
-    // The sizing call fails by design and reports the required byte count.
-    (void)InitializeProcThreadAttributeList(
-        nullptr, 1, 0, &attribute_size);
-    if (attribute_size == 0) {
+    MuonWindowsJobProcessLaunchOptions launch_options{};
+    launch_options.application_name = executable.c_str();
+    launch_options.command_line = command_line_buffer.data();
+    launch_options.environment = environment.data();
+    launch_options.creation_flags =
+        CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+    launch_options.startup_info.dwFlags = STARTF_USESTDHANDLES;
+    launch_options.startup_info.hStdInput =
+        inherited_standard_handles[0];
+    launch_options.startup_info.hStdOutput =
+        inherited_standard_handles[1];
+    launch_options.startup_info.hStdError =
+        inherited_standard_handles[2];
+    launch_options.inherited_handles =
+        inherited_standard_handles.data();
+    launch_options.inherited_handle_count =
+        inherited_standard_handles.size();
+    launch_options.lifetime =
+        MuonWindowsJobProcessLifetime::KillOnOwnerClose;
+    auto launch_error = MuonWindowsJobProcessLaunchError{};
+    if (!LaunchMuonWindowsJobProcess(
+            launch_options, &runtime->process, &launch_error)) {
+      const auto* message =
+          launch_error.message == nullptr
+              ? "Failed to launch Node sidecar"
+              : launch_error.message;
       throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to size the Node process attribute list");
+          static_cast<int>(launch_error.windows_error),
+          std::system_category(),
+          "Failed to start Node executable " +
+              runtime->executable_path + ": " + message);
     }
-    attribute_storage.resize(attribute_size);
-    attribute_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-        attribute_storage.data());
-    if (InitializeProcThreadAttributeList(
-            attribute_list, 1, 0, &attribute_size) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to initialize the Node process attribute list");
-    }
-    attribute_list_initialized = true;
-    if (UpdateProcThreadAttribute(
-            attribute_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            inherited_standard_handles.data(),
-            sizeof(HANDLE) * inherited_standard_handles.size(),
-            nullptr, nullptr) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to restrict Node inherited handles");
-    }
-
-    STARTUPINFOEXW startup{};
-    startup.StartupInfo.cb = sizeof(startup);
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = inherited_standard_handles[0];
-    startup.StartupInfo.hStdOutput = inherited_standard_handles[1];
-    startup.StartupInfo.hStdError = inherited_standard_handles[2];
-    startup.lpAttributeList = attribute_list;
-    if (CreateProcessW(
-            executable.c_str(), command_line_buffer.data(),
-            nullptr, nullptr, TRUE,
-            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW |
-                CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
-            environment.data(), nullptr, &startup.StartupInfo,
-            &process) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to start Node executable");
-    }
-
-    DeleteProcThreadAttributeList(attribute_list);
-    attribute_list_initialized = false;
-    attribute_list = nullptr;
     for (auto& handle : inherited_standard_handles) {
       CloseMuonNodeWindowsHandle(&handle);
     }
-
-    job = CreateJobObjectW(nullptr, nullptr);
-    if (job == nullptr) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "CreateJobObjectW failed for Node sidecar");
-    }
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags =
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (SetInformationJobObject(
-            job, JobObjectExtendedLimitInformation, &limits,
-            sizeof(limits)) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to configure the Node sidecar job object");
-    }
-    if (AssignProcessToJobObject(job, process.hProcess) == FALSE) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to assign the Node sidecar job object");
-    }
-    if (ResumeThread(process.hThread) ==
-        (std::numeric_limits<DWORD>::max)()) {
-      throw std::system_error(
-          static_cast<int>(GetLastError()), std::system_category(),
-          "Failed to resume the Node sidecar process");
-    }
-    CloseMuonNodeWindowsHandle(&process.hThread);
-
-    runtime->process = std::exchange(process.hProcess, nullptr);
-    runtime->job = std::exchange(job, nullptr);
-    runtime->process_id = process.dwProcessId;
     runtime->process_started = true;
   } catch (...) {
-    if (attribute_list_initialized) {
-      DeleteProcThreadAttributeList(attribute_list);
-    }
     for (auto& handle : inherited_standard_handles) {
       CloseMuonNodeWindowsHandle(&handle);
     }
-    if (process.hProcess != nullptr) {
-      (void)TerminateProcess(process.hProcess, 137u);
-    }
-    CloseMuonNodeWindowsHandle(&job);
-    CloseMuonNodeWindowsHandle(&process.hThread);
-    CloseMuonNodeWindowsHandle(&process.hProcess);
     throw;
   }
   // Observe pre-connect exits so ConnectNamedPipe cannot strand startup.
@@ -1650,8 +1534,8 @@ static cardio::promise<void> StartMuonNodeProcess(
         static_cast<int>(GetLastError()), std::system_category(),
         "GetNamedPipeClientProcessId failed for Node sidecar");
   }
-  if (runtime->process_id == 0 ||
-      pipe_client_process_id != runtime->process_id) {
+  if (runtime->process.process_id == 0 ||
+      pipe_client_process_id != runtime->process.process_id) {
     throw std::runtime_error(
         "Node IPC pipe was connected by an unexpected process");
   }
@@ -1746,22 +1630,9 @@ static cardio::promise<void> StartMuonNodeProcess(
         "Failed to configure the Node IPC socket");
   }
 
-  const auto* configured_executable =
-      std::getenv("MUON_NODE_EXECUTABLE");
-  auto executable = std::string("node");
-  auto use_path_search = true;
-  if (configured_executable != nullptr) {
-    const auto path = std::filesystem::path(configured_executable);
-    if (!path.is_absolute()) {
-      close_sockets();
-      throw std::runtime_error(
-          "MUON_NODE_EXECUTABLE must be an absolute path");
-    }
-    executable = path.string();
-    use_path_search = false;
-  }
   auto arguments_storage =
-      std::vector<std::string>{executable, runtime->bridge_path};
+      std::vector<std::string>{runtime->executable_path,
+                               runtime->bridge_path};
   std::vector<char*> arguments;
   for (auto& argument : arguments_storage) {
     arguments.push_back(argument.data());
@@ -1776,21 +1647,16 @@ static cardio::promise<void> StartMuonNodeProcess(
   environment.push_back(nullptr);
 
   pid_t process_id = -1;
-  const auto spawn_error =
-      use_path_search
-          ? posix_spawnp(
-                &process_id, executable.c_str(), &actions, nullptr,
-                arguments.data(), environment.data())
-          : posix_spawn(
-                &process_id, executable.c_str(), &actions, nullptr,
-                arguments.data(), environment.data());
+  const auto spawn_error = posix_spawn(
+      &process_id, runtime->executable_path.c_str(), &actions, nullptr,
+      arguments.data(), environment.data());
   (void)::close(child_socket);
   if (spawn_error != 0) {
     (void)::close(runtime->socket_fd);
     runtime->socket_fd = -1;
     throw std::system_error(
         spawn_error, std::generic_category(),
-        "Failed to start Node executable " + executable);
+        "Failed to start Node executable " + runtime->executable_path);
   }
 #if defined(SYS_pidfd_open)
   const auto process_fd =
@@ -1851,12 +1717,14 @@ static cardio::promise<void> MonitorMuonNodeProcess(
   auto exit_status_available = false;
   try {
 #if defined(_WIN32)
-    if (runtime->process == nullptr) {
+    if (runtime->process.process == nullptr) {
       throw std::runtime_error("Node process handle is unavailable");
     }
-    (void)co_await cardio::from_win32_handle(runtime->process);
+    (void)co_await cardio::from_win32_handle(
+        runtime->process.process);
     DWORD native_exit_code = 0;
-    if (GetExitCodeProcess(runtime->process, &native_exit_code) == FALSE) {
+    if (GetExitCodeProcess(
+            runtime->process.process, &native_exit_code) == FALSE) {
       throw std::system_error(
           static_cast<int>(GetLastError()), std::system_category(),
           "GetExitCodeProcess failed for Node sidecar");
@@ -2005,8 +1873,20 @@ static void BeginMuonNodeShutdown(MuonNodeRuntime* runtime) {
   }
   if (runtime->state != MuonNodeRuntimeState::Stopping) {
     runtime->state = MuonNodeRuntimeState::Stopping;
+    if (runtime->create_invocation) {
+      const auto invocation =
+          std::exchange(runtime->create_invocation, nullptr);
+      CompleteMuonNodeHostInvocation(
+          runtime, invocation, false, "",
+          "Node instance was released before the request completed");
+    }
     CompleteAllMuonNodeHostInvocations(
-        runtime, "Node runtime is shutting down");
+        runtime,
+        "Node instance was released before the request completed");
+    CompleteMuonNodePendingRequests(
+        runtime,
+        "Node instance was released before the request completed");
+    runtime->pending_callback_requests.clear();
   }
   if (!runtime->process_started || runtime->process_exited) {
     (void)runtime->io_cancellation.cancel();
@@ -2018,8 +1898,13 @@ static void BeginMuonNodeShutdown(MuonNodeRuntime* runtime) {
 
 static cardio::promise<void> StartMuonNodeRuntime(
     MuonNodeRuntime* runtime) {
-  runtime->startup_active = true;
   try {
+    if (runtime->state == MuonNodeRuntimeState::Stopping ||
+        runtime->state == MuonNodeRuntimeState::Stopped) {
+      runtime->startup_active = false;
+      MaybeCompleteMuonNodeStop(runtime);
+      co_return;
+    }
     runtime->session_token = CreateMuonNodeSessionToken();
     co_await StartMuonNodeProcess(runtime);
     if (runtime->process_exited) {
@@ -2059,6 +1944,7 @@ static void EnsureMuonNodeRuntimeStarted(MuonNodeRuntime* runtime) {
     return;
   }
   runtime->state = MuonNodeRuntimeState::Starting;
+  runtime->startup_active = true;
   cardio::fire_and_forget(StartMuonNodeRuntime(runtime));
 }
 
@@ -2068,12 +1954,6 @@ static void SubmitMuonNodeCommand(MuonNodeRuntime* runtime,
     CompleteMuonNodeHostInvocation(
         nullptr, command.invocation, false, "",
         "Node runtime is unavailable");
-    return;
-  }
-  if (runtime->metadata_only) {
-    CompleteMuonNodeHostInvocation(
-        runtime, command.invocation, false, "",
-        "Node runtime is unavailable in validate mode");
     return;
   }
   if (runtime->state == MuonNodeRuntimeState::Failed) {
@@ -2088,7 +1968,7 @@ static void SubmitMuonNodeCommand(MuonNodeRuntime* runtime,
       runtime->state == MuonNodeRuntimeState::Stopped) {
     CompleteMuonNodeHostInvocation(
         runtime, command.invocation, false, "",
-        "Node runtime is shutting down");
+        "Node instance is being released or has been released");
     return;
   }
   if (runtime->pending_requests.size() +
@@ -2116,20 +1996,99 @@ CreateMuonNodeInvocation(muon_completion_func completion,
   return invocation;
 }
 
+static MuonNodeRuntime* FindMuonNodeRuntime(
+    const char* renderer_owner_token,
+    const char* instance_id) {
+  if (g_muon_node_manager == nullptr ||
+      renderer_owner_token == nullptr ||
+      renderer_owner_token[0] == '\0' ||
+      instance_id == nullptr || instance_id[0] == '\0') {
+    return nullptr;
+  }
+  const auto entry =
+      g_muon_node_manager->runtimes.find(instance_id);
+  if (entry == g_muon_node_manager->runtimes.end() ||
+      entry->second->renderer_owner_token != renderer_owner_token) {
+    return nullptr;
+  }
+  return entry->second.get();
+}
+
+/**
+ * Creates one hosted Node.js runtime for a renderer context.
+ *
+ * @param completion Completes with an opaque runtime instance identifier after
+ * the sidecar handshake and project initialization finish.
+ * @param renderer_owner_token Opaque renderer owner token supplied by muon.
+ */
+extern "C" void muon_node_create_node(
+    muon_completion_func completion,
+    const char* renderer_owner_token) {
+  auto invocation = CreateMuonNodeInvocation(
+      completion, MuonNodeHostResultKind::String);
+  auto* manager = g_muon_node_manager.get();
+  if (manager == nullptr || manager->stopping) {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node plugin is shutting down");
+    return;
+  }
+  if (renderer_owner_token == nullptr ||
+      renderer_owner_token[0] == '\0') {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node renderer owner token is unavailable");
+    return;
+  }
+  if (manager->next_instance_id ==
+      std::numeric_limits<uint64_t>::max()) {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node instance ids are exhausted");
+    return;
+  }
+
+  const auto instance_id =
+      std::to_string(manager->next_instance_id);
+  manager->next_instance_id += 1;
+  auto runtime = std::make_shared<MuonNodeRuntime>();
+  runtime->manager = manager;
+  runtime->instance_id = instance_id;
+  runtime->renderer_owner_token = renderer_owner_token;
+  runtime->project_root = manager->project_root;
+  runtime->bridge_path = manager->bridge_path;
+  runtime->executable_path = manager->executable_path;
+  runtime->create_invocation = invocation;
+  manager->runtimes.emplace(instance_id, runtime);
+  EnsureMuonNodeRuntimeStarted(runtime.get());
+}
+
 /**
  * Imports a module into the hosted Node.js runtime.
  *
  * @param completion Completes with a JSON module descriptor.
+ * @param renderer_owner_token Opaque renderer owner token supplied by muon.
+ * @param instance_id Opaque runtime instance identifier.
  * @param specifier Node.js module specifier.
  */
 extern "C" void muon_node_import_module(
     muon_completion_func completion,
+    const char* renderer_owner_token,
+    const char* instance_id,
     const char* specifier) {
   auto invocation = CreateMuonNodeInvocation(
       completion, MuonNodeHostResultKind::String);
+  auto* runtime =
+      FindMuonNodeRuntime(renderer_owner_token, instance_id);
+  if (runtime == nullptr) {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node instance is being released or has been released");
+    return;
+  }
   if (specifier == nullptr || specifier[0] == '\0') {
     CompleteMuonNodeHostInvocation(
-        g_muon_node_runtime.get(), invocation, false, "",
+        runtime, invocation, false, "",
         "Node module specifier must be a non-empty string");
     return;
   }
@@ -2137,13 +2096,15 @@ extern "C" void muon_node_import_module(
   command.command = "importModule";
   command.first = specifier;
   command.invocation = invocation;
-  SubmitMuonNodeCommand(g_muon_node_runtime.get(), std::move(command));
+  SubmitMuonNodeCommand(runtime, std::move(command));
 }
 
 /**
  * Calls one function export through a descriptor module handle.
  *
  * @param completion Completes with a JSON encoded bridge value.
+ * @param renderer_owner_token Opaque renderer owner token supplied by muon.
+ * @param instance_id Opaque runtime instance identifier.
  * @param module_id Sidecar module handle.
  * @param export_name Function export name.
  * @param arguments_json JSON array containing encoded bridge arguments.
@@ -2151,17 +2112,27 @@ extern "C" void muon_node_import_module(
  */
 extern "C" void muon_node_call(
     muon_completion_func completion,
+    const char* renderer_owner_token,
+    const char* instance_id,
     const char* module_id,
     const char* export_name,
     const char* arguments_json,
     muon_native_function callback_dispatcher) {
   auto invocation = CreateMuonNodeInvocation(
       completion, MuonNodeHostResultKind::String);
+  auto* runtime =
+      FindMuonNodeRuntime(renderer_owner_token, instance_id);
+  if (runtime == nullptr) {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node instance is being released or has been released");
+    return;
+  }
   if (module_id == nullptr || module_id[0] == '\0' ||
       export_name == nullptr || export_name[0] == '\0' ||
       arguments_json == nullptr) {
     CompleteMuonNodeHostInvocation(
-        g_muon_node_runtime.get(), invocation, false, "",
+        runtime, invocation, false, "",
         "Node call requires a module, export, and argument array");
     return;
   }
@@ -2171,10 +2142,9 @@ extern "C" void muon_node_call(
   if (!CollectMuonNodeCallbackHandles(
           arguments_json, &handles, &error_message)) {
     CompleteMuonNodeHostInvocation(
-        g_muon_node_runtime.get(), invocation, false, "", error_message);
+        runtime, invocation, false, "", error_message);
     return;
   }
-  auto* runtime = g_muon_node_runtime.get();
   if (!handles.empty()) {
     if (runtime == nullptr || callback_dispatcher == nullptr ||
         g_muon_node_helpers == nullptr ||
@@ -2225,16 +2195,28 @@ extern "C" void muon_node_call(
  * Releases a descriptor module handle in the sidecar.
  *
  * @param completion Completes after the handle is released.
+ * @param renderer_owner_token Opaque renderer owner token supplied by muon.
+ * @param instance_id Opaque runtime instance identifier.
  * @param module_id Sidecar module handle.
  */
-extern "C" void muon_node_release(
+extern "C" void muon_node_release_module(
     muon_completion_func completion,
+    const char* renderer_owner_token,
+    const char* instance_id,
     const char* module_id) {
   auto invocation = CreateMuonNodeInvocation(
       completion, MuonNodeHostResultKind::Void);
+  auto* runtime =
+      FindMuonNodeRuntime(renderer_owner_token, instance_id);
+  if (runtime == nullptr) {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node instance is being released or has been released");
+    return;
+  }
   if (module_id == nullptr || module_id[0] == '\0') {
     CompleteMuonNodeHostInvocation(
-        g_muon_node_runtime.get(), invocation, false, "",
+        runtime, invocation, false, "",
         "Node module handle must be a non-empty string");
     return;
   }
@@ -2242,7 +2224,54 @@ extern "C" void muon_node_release(
   command.command = "release";
   command.first = module_id;
   command.invocation = invocation;
-  SubmitMuonNodeCommand(g_muon_node_runtime.get(), std::move(command));
+  SubmitMuonNodeCommand(runtime, std::move(command));
+}
+
+/**
+ * Releases one hosted Node.js runtime and its sidecar process.
+ *
+ * @param completion Completes after the process and native handles have been
+ * recovered.
+ * @param renderer_owner_token Opaque renderer owner token supplied by muon.
+ * @param instance_id Opaque runtime instance identifier.
+ */
+extern "C" void muon_node_release_node(
+    muon_completion_func completion,
+    const char* renderer_owner_token,
+    const char* instance_id) {
+  auto invocation = CreateMuonNodeInvocation(
+      completion, MuonNodeHostResultKind::Void);
+  auto* runtime =
+      FindMuonNodeRuntime(renderer_owner_token, instance_id);
+  if (runtime == nullptr) {
+    CompleteMuonNodeHostInvocation(
+        nullptr, invocation, false, "",
+        "Node instance is being released or has been released");
+    return;
+  }
+  if (runtime->state == MuonNodeRuntimeState::Stopped) {
+    CompleteMuonNodeHostInvocation(
+        runtime, invocation, true, "", "");
+    return;
+  }
+  runtime->release_invocations.push_back(invocation);
+  BeginMuonNodeShutdown(runtime);
+}
+
+static void ReleaseMuonNodeRendererContext(
+    const char* renderer_owner_token) {
+  auto* manager = g_muon_node_manager.get();
+  if (manager == nullptr || renderer_owner_token == nullptr ||
+      renderer_owner_token[0] == '\0') {
+    return;
+  }
+  for (const auto& entry : manager->runtimes) {
+    auto* runtime = entry.second.get();
+    if (runtime != nullptr &&
+        runtime->renderer_owner_token == renderer_owner_token) {
+      BeginMuonNodeShutdown(runtime);
+    }
+  }
 }
 
 static void StopMuonNodePlugin(muon_plugin_stop_completion completion,
@@ -2250,14 +2279,18 @@ static void StopMuonNodePlugin(muon_plugin_stop_completion completion,
   if (completion == nullptr) {
     return;
   }
-  if (!g_muon_node_runtime) {
+  auto* manager = g_muon_node_manager.get();
+  if (manager == nullptr) {
     completion(user_data);
     return;
   }
-  auto* runtime = g_muon_node_runtime.get();
-  runtime->stop_completion = completion;
-  runtime->stop_user_data = user_data;
-  BeginMuonNodeShutdown(runtime);
+  manager->stopping = true;
+  manager->stop_completion = completion;
+  manager->stop_user_data = user_data;
+  for (const auto& entry : manager->runtimes) {
+    BeginMuonNodeShutdown(entry.second.get());
+  }
+  MaybeCompleteMuonNodeManagerStop(manager);
 }
 
 static const muon_type_descriptor kMuonNodeVoidType = {
@@ -2276,50 +2309,85 @@ static const muon_type_descriptor kMuonNodeCallbackType = {
     MUON_TYPE_FUNCTION,
     &kMuonNodeCallbackSignature,
 };
+static const muon_type_descriptor kMuonNodeCreateArguments[] = {
+    kMuonNodeStringType,
+};
 static const muon_type_descriptor kMuonNodeImportArguments[] = {
+    kMuonNodeStringType,
+    kMuonNodeStringType,
     kMuonNodeStringType,
 };
 static const muon_type_descriptor kMuonNodeCallArguments[] = {
     kMuonNodeStringType,
     kMuonNodeStringType,
     kMuonNodeStringType,
+    kMuonNodeStringType,
+    kMuonNodeStringType,
     kMuonNodeCallbackType,
 };
-static const muon_type_descriptor kMuonNodeReleaseArguments[] = {
+static const muon_type_descriptor kMuonNodeReleaseModuleArguments[] = {
     kMuonNodeStringType,
+    kMuonNodeStringType,
+    kMuonNodeStringType,
+};
+static const muon_type_descriptor kMuonNodeReleaseNodeArguments[] = {
+    kMuonNodeStringType,
+    kMuonNodeStringType,
+};
+static const muon_plugin_function_metadata kMuonNodeCreateFunction = {
+    "__createNode",
+    reinterpret_cast<muon_native_function>(&muon_node_create_node),
+    {1, kMuonNodeCreateArguments, &kMuonNodeStringType},
+    "createNode",
 };
 static const muon_plugin_function_metadata kMuonNodeImportFunction = {
     "__importModule",
     reinterpret_cast<muon_native_function>(&muon_node_import_module),
-    {1, kMuonNodeImportArguments, &kMuonNodeStringType},
+    {3, kMuonNodeImportArguments, &kMuonNodeStringType},
     "importModule",
 };
 static const muon_plugin_function_metadata kMuonNodeCallFunction = {
     "__call",
     reinterpret_cast<muon_native_function>(&muon_node_call),
-    {4, kMuonNodeCallArguments, &kMuonNodeStringType},
+    {6, kMuonNodeCallArguments, &kMuonNodeStringType},
     "call",
 };
-static const muon_plugin_function_metadata kMuonNodeReleaseFunction = {
-    "__release",
-    reinterpret_cast<muon_native_function>(&muon_node_release),
-    {1, kMuonNodeReleaseArguments, &kMuonNodeVoidType},
-    "release",
+static const muon_plugin_function_metadata
+    kMuonNodeReleaseModuleFunction = {
+        "__releaseModule",
+        reinterpret_cast<muon_native_function>(
+            &muon_node_release_module),
+        {3, kMuonNodeReleaseModuleArguments, &kMuonNodeVoidType},
+        "releaseModule",
+};
+static const muon_plugin_function_metadata
+    kMuonNodeReleaseNodeFunction = {
+        "__releaseNode",
+        reinterpret_cast<muon_native_function>(
+            &muon_node_release_node),
+        {2, kMuonNodeReleaseNodeArguments, &kMuonNodeVoidType},
+        "releaseNode",
 };
 static const muon_plugin_function_metadata* const kMuonNodeFunctions[] = {
+    &kMuonNodeCreateFunction,
     &kMuonNodeImportFunction,
     &kMuonNodeCallFunction,
-    &kMuonNodeReleaseFunction,
+    &kMuonNodeReleaseModuleFunction,
+    &kMuonNodeReleaseNodeFunction,
     nullptr,
 };
 
 static constexpr char kMuonNodeSetupScript[] = R"JS(
+const createNodeBridge = namespace.__createNode;
 const importModuleBridge = namespace.__importModule;
 const callBridge = namespace.__call;
-const releaseBridge = namespace.__release;
+const releaseModuleBridge = namespace.__releaseModule;
+const releaseNodeBridge = namespace.__releaseNode;
+delete namespace.__createNode;
 delete namespace.__importModule;
 delete namespace.__call;
-delete namespace.__release;
+delete namespace.__releaseModule;
+delete namespace.__releaseNode;
 
 const signed64Minimum = -(2n ** 63n);
 const signed64Maximum = 2n ** 63n - 1n;
@@ -2327,16 +2395,38 @@ const unsigned64Maximum = 2n ** 64n - 1n;
 let nextCallbackHandle = 1;
 const callbacks = new Map();
 
-const encodeBase64 = (value) => {
-  const bytes = value instanceof ArrayBuffer
-    ? new Uint8Array(value)
-    : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength"
+).get;
+
+// ArrayBuffer.prototype can be imitated, so verify the internal slot with the
+// intrinsic getter instead of relying on instanceof.
+const hasArrayBufferInternalSlot = (value) => {
+  try {
+    Reflect.apply(arrayBufferByteLengthGetter, value, []);
+    return true;
+  } catch {
+    return false;
   }
-  return btoa(binary);
+};
+
+const encodeBase64 = (value, isArrayBufferValue) => {
+  try {
+    const bytes = isArrayBufferValue
+      ? new Uint8Array(value)
+      : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(
+        ...bytes.subarray(offset, offset + chunkSize)
+      );
+    }
+    return btoa(binary);
+  } catch {
+    throw new TypeError("The Node bridge value could not be inspected safely");
+  }
 };
 
 const decodeBase64 = (source) => {
@@ -2348,13 +2438,132 @@ const decodeBase64 = (source) => {
   return bytes;
 };
 
+const cloneJsonValue = (value, activeValues) => {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new TypeError("Unsupported strict JSON number");
+    }
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("Unsupported strict JSON value");
+  }
+  if (activeValues.has(value)) {
+    throw new TypeError("Circular strict JSON value");
+  }
+
+  const isArray = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    (isArray && prototype !== Array.prototype) ||
+    (!isArray && prototype !== Object.prototype && prototype !== null)
+  ) {
+    throw new TypeError("Unsupported strict JSON object");
+  }
+
+  activeValues.add(value);
+  try {
+    const ownKeys = Reflect.ownKeys(value);
+    if (isArray) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (
+        lengthDescriptor === undefined ||
+        !Object.hasOwn(lengthDescriptor, "value") ||
+        lengthDescriptor.enumerable ||
+        typeof lengthDescriptor.value !== "number" ||
+        !Number.isInteger(lengthDescriptor.value) ||
+        lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > 0xffffffff ||
+        ownKeys.length !== lengthDescriptor.value + 1 ||
+        ownKeys.some((key) => typeof key !== "string")
+      ) {
+        throw new TypeError("Unsupported strict JSON array");
+      }
+
+      const stringKeys = new Set(ownKeys);
+      if (!stringKeys.has("length")) {
+        throw new TypeError("Unsupported strict JSON array");
+      }
+      const result = [];
+      for (let index = 0; index < lengthDescriptor.value; index += 1) {
+        const key = String(index);
+        if (!stringKeys.has(key)) {
+          throw new TypeError("Unsupported strict JSON array");
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (
+          descriptor === undefined ||
+          !descriptor.enumerable ||
+          !Object.hasOwn(descriptor, "value")
+        ) {
+          throw new TypeError("Unsupported strict JSON array");
+        }
+        Object.defineProperty(result, key, {
+          configurable: true,
+          enumerable: true,
+          value: cloneJsonValue(descriptor.value, activeValues),
+          writable: true,
+        });
+      }
+      return result;
+    }
+
+    const result = {};
+    for (const key of ownKeys) {
+      if (typeof key !== "string") {
+        throw new TypeError("Unsupported strict JSON object");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !Object.hasOwn(descriptor, "value")
+      ) {
+        throw new TypeError("Unsupported strict JSON object");
+      }
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: cloneJsonValue(descriptor.value, activeValues),
+        writable: true,
+      });
+    }
+    return result;
+  } finally {
+    activeValues.delete(value);
+  }
+};
+
+const cloneJsonAggregate = (value, errorMessage) => {
+  try {
+    if (value === null || typeof value !== "object") {
+      throw new TypeError("Strict JSON aggregate expected");
+    }
+    return cloneJsonValue(value, new WeakSet());
+  } catch {
+    throw new TypeError(errorMessage);
+  }
+};
+
 const decodeValue = (value) => {
   if (
     value === null ||
     typeof value === "boolean" ||
-    typeof value === "number" ||
     typeof value === "string"
   ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      throw new TypeError("Unsupported value returned by the Node runtime");
+    }
     return value;
   }
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -2368,6 +2577,12 @@ const decodeValue = (value) => {
   }
   if (value.kind === "buffer" && typeof value.data === "string") {
     return decodeBase64(value.data);
+  }
+  if (value.kind === "json" && Object.hasOwn(value, "value")) {
+    return cloneJsonAggregate(
+      value.value,
+      "Unsupported strict JSON value returned by the Node runtime"
+    );
   }
   throw new TypeError("Unsupported value returned by the Node runtime");
 };
@@ -2405,8 +2620,18 @@ const encodeValue = (
     }
     throw new RangeError("BigInt is outside the supported i64/u64 range");
   }
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-    return { kind: "buffer", data: encodeBase64(value) };
+  const isArrayBufferValue = hasArrayBufferInternalSlot(value);
+  let isArrayBufferView = false;
+  try {
+    isArrayBufferView = ArrayBuffer.isView(value);
+  } catch {
+    throw new TypeError("The Node bridge value could not be inspected safely");
+  }
+  if (isArrayBufferValue || isArrayBufferView) {
+    return {
+      kind: "buffer",
+      data: encodeBase64(value, isArrayBufferValue),
+    };
   }
   if (typeof value === "function" && allowFunction) {
     const handle = `${callbackHandlePrefix}:renderer-${nextCallbackHandle}`;
@@ -2415,8 +2640,17 @@ const encodeValue = (
     callbackHandles.push(handle);
     return { kind: "function", handle };
   }
+  if (value !== null && typeof value === "object") {
+    return {
+      kind: "json",
+      value: cloneJsonAggregate(
+        value,
+        "Only strict JSON objects and arrays can cross the Node bridge"
+      ),
+    };
+  }
   throw new TypeError(
-    "Only primitives, BigInt, buffers, and callback functions can cross the Node bridge"
+    "Only strict JSON values, BigInt, buffers, and callback functions can cross the Node bridge"
   );
 };
 
@@ -2431,7 +2665,7 @@ const dispatchCallback = async (payloadSource) => {
   return JSON.stringify(encodeValue(result, [], false, ""));
 };
 
-const createModuleFacade = (imported) => {
+const createModuleFacade = (instanceState, imported) => {
   if (
     imported === null ||
     typeof imported !== "object" ||
@@ -2471,17 +2705,30 @@ const createModuleFacade = (imported) => {
       configurable: false,
       writable: false,
       value: async (...argumentsValue) => {
-        if (released || releaseOperation !== undefined) {
+        if (
+          instanceState.status !== "active" ||
+          released ||
+          releaseOperation !== undefined
+        ) {
           throw new Error(
-            "Node module handle is being released or has been released"
+            instanceState.status === "active"
+              ? "Node module handle is being released or has been released"
+              : "Node instance is being released or has been released"
           );
         }
         const callbackHandles = [];
         try {
           const encodedArguments = argumentsValue.map((value) =>
-            encodeValue(value, callbackHandles, true, imported.moduleId)
+            encodeValue(
+              value,
+              callbackHandles,
+              true,
+              `${instanceState.id}:${imported.moduleId}`
+            )
           );
           const resultSource = await callBridge(
+            "",
+            instanceState.id,
             imported.moduleId,
             exported.name,
             JSON.stringify(encodedArguments),
@@ -2504,15 +2751,31 @@ const createModuleFacade = (imported) => {
       if (released) {
         return;
       }
+      if (instanceState.status !== "active") {
+        await instanceState.release();
+        released = true;
+        return;
+      }
       if (releaseOperation === undefined) {
         releaseOperation = (async () => {
-          await releaseBridge(imported.moduleId);
+          await releaseModuleBridge(
+            "",
+            instanceState.id,
+            imported.moduleId
+          );
         })();
       }
       const operation = releaseOperation;
       try {
         await operation;
         released = true;
+      } catch (error) {
+        if (instanceState.status !== "active") {
+          await instanceState.release();
+          released = true;
+          return;
+        }
+        throw error;
       } finally {
         if (releaseOperation === operation) {
           releaseOperation = undefined;
@@ -2523,25 +2786,71 @@ const createModuleFacade = (imported) => {
   return Object.freeze(facade);
 };
 
-if (
-  isAllowed("importModule") &&
-  isAllowed("call") &&
-  isAllowed("release")
-) {
-  Object.defineProperty(namespace, "importModule", {
+const createNodeFacade = (instanceId) => {
+  const instanceState = {
+    id: instanceId,
+    status: "active",
+    releaseOperation: undefined,
+    release: undefined,
+  };
+  const facade = Object.create(null);
+  Object.defineProperty(facade, "importModule", {
     enumerable: true,
     configurable: false,
     writable: false,
     value: async (specifier) => {
+      if (instanceState.status !== "active") {
+        throw new Error(
+          "Node instance is being released or has been released"
+        );
+      }
       if (typeof specifier !== "string" || specifier.length === 0) {
         throw new TypeError("Node module specifier must be a non-empty string");
       }
       return createModuleFacade(
-        JSON.parse(await importModuleBridge(specifier))
+        instanceState,
+        JSON.parse(await importModuleBridge("", instanceId, specifier))
       );
     },
   });
-}
+  const release = async () => {
+    if (instanceState.status === "released") {
+      return;
+    }
+    if (instanceState.releaseOperation === undefined) {
+      instanceState.status = "releasing";
+      instanceState.releaseOperation = (async () => {
+        await releaseNodeBridge("", instanceId);
+        instanceState.status = "released";
+      })();
+    }
+    await instanceState.releaseOperation;
+  };
+  instanceState.release = release;
+  Object.defineProperty(facade, "release", {
+    enumerable: true,
+    configurable: false,
+    writable: false,
+    value: release,
+  });
+  if (typeof Symbol.asyncDispose === "symbol") {
+    Object.defineProperty(facade, Symbol.asyncDispose, {
+      enumerable: false,
+      configurable: false,
+      writable: false,
+      value: release,
+    });
+  }
+  return Object.freeze(facade);
+};
+
+Object.defineProperty(namespace, "createNode", {
+  enumerable: true,
+  configurable: false,
+  writable: false,
+  value: async () =>
+    createNodeFacade(await createNodeBridge("")),
+});
 )JS";
 
 static const muon_plugin_namespace kMuonNodeNamespace = {
@@ -2556,40 +2865,72 @@ static const muon_plugin_namespace* const kMuonNodeNamespaces[] = {
 static const muon_plugin_metadata kMuonNodeMetadata = {
     kMuonNodeNamespaces,
     &StopMuonNodePlugin,
+    &ReleaseMuonNodeRendererContext,
 };
+
+static bool IsMuonNodeExecutablePathAbsolute(
+    const char* executable) noexcept {
+  if (executable == nullptr || executable[0] == '\0') {
+    return false;
+  }
+  try {
+#if defined(_WIN32)
+    return std::filesystem::path(
+               ConvertMuonNodeUtf8ToWide(executable))
+        .is_absolute();
+#else
+    return std::filesystem::path(executable).is_absolute();
+#endif
+  } catch (...) {
+    return false;
+  }
+}
 
 /**
  * Initializes the optional out-of-process Node.js plugin.
  *
- * @param context Host helpers and resolved project/bridge configuration.
+ * @param context Host helpers and resolved project, bridge, and executable
+ * configuration.
  * @return Static Node plugin metadata, or null when configuration is invalid.
  *
- * @remarks Initialization only records metadata and paths. The Node.js process
- * starts lazily when the first module import is submitted.
+ * @remarks Initialization only records metadata and paths. Each Node.js
+ * process starts when the renderer creates its corresponding Node instance.
  */
 extern "C" const muon_plugin_metadata* muon_init_plugin(
     const muon_plugin_init_context* context) {
   if (context == nullptr || context->helpers == nullptr) {
     return nullptr;
   }
+#if defined(_WIN32)
+  // cardio may retain final promise-cleanup callbacks after the plugin reports
+  // that its logical operations have stopped. Muon loads this plugin once for
+  // the application lifetime, so keep its callback code mapped until process
+  // termination instead of allowing FreeLibrary to unmap an active return
+  // address during shutdown.
+  auto pinned_module = HMODULE{};
+  if (GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+              GET_MODULE_HANDLE_EX_FLAG_PIN,
+          reinterpret_cast<LPCWSTR>(&muon_init_plugin),
+          &pinned_module) == FALSE) {
+    return nullptr;
+  }
+#endif
   const auto* project =
       muon_plugin_get_config_value(context, "project");
   const auto* bridge =
       muon_plugin_get_config_value(context, "bridge");
-  const auto* metadata_only =
-      muon_plugin_get_config_value(context, "metadataOnly");
+  const auto* executable =
+      muon_plugin_get_config_value(context, "executable");
   if (project == nullptr || project[0] == '\0' ||
       bridge == nullptr || bridge[0] == '\0' ||
-      metadata_only == nullptr ||
-      (std::strcmp(metadata_only, "0") != 0 &&
-       std::strcmp(metadata_only, "1") != 0)) {
+      !IsMuonNodeExecutablePathAbsolute(executable)) {
     return nullptr;
   }
   g_muon_node_helpers = context->helpers;
-  g_muon_node_runtime = std::make_unique<MuonNodeRuntime>();
-  g_muon_node_runtime->metadata_only =
-      std::strcmp(metadata_only, "1") == 0;
-  g_muon_node_runtime->project_root = project;
-  g_muon_node_runtime->bridge_path = bridge;
+  g_muon_node_manager = std::make_unique<MuonNodeManager>();
+  g_muon_node_manager->project_root = project;
+  g_muon_node_manager->bridge_path = bridge;
+  g_muon_node_manager->executable_path = executable;
   return &kMuonNodeMetadata;
 }

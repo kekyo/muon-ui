@@ -46,6 +46,7 @@ static const muon_plugin_namespace* const same_name_alpha_namespaces_pointers[] 
 static const muon_plugin_metadata same_name_alpha_metadata = {
     same_name_alpha_namespaces_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

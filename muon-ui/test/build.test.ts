@@ -12,6 +12,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -67,6 +68,118 @@ const exists = async (path: string): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+interface DecodedTlvValue {
+  value: unknown;
+  nextOffset: number;
+}
+
+const decodeTlvVarUint = (
+  content: Buffer,
+  offset: number,
+): { value: bigint; nextOffset: number } => {
+  let value = 0n;
+  let shift = 0n;
+  let nextOffset = offset;
+  for (;;) {
+    const byte = content[nextOffset];
+    if (byte === undefined) {
+      throw new Error("Unexpected end of embedded TLV varuint.");
+    }
+    value |= BigInt(byte & 0x7f) << shift;
+    nextOffset += 1;
+    if ((byte & 0x80) === 0) {
+      return { value, nextOffset };
+    }
+    shift += 7n;
+  }
+};
+
+const decodeTlvBytes = (
+  content: Buffer,
+  offset: number,
+): { value: Buffer; nextOffset: number } => {
+  const length = decodeTlvVarUint(content, offset);
+  const byteLength = Number(length.value);
+  const nextOffset = length.nextOffset + byteLength;
+  if (!Number.isSafeInteger(byteLength) || nextOffset > content.length) {
+    throw new Error("Invalid embedded TLV byte length.");
+  }
+  return {
+    value: content.subarray(length.nextOffset, nextOffset),
+    nextOffset,
+  };
+};
+
+const decodeTlvValue = (content: Buffer, offset: number): DecodedTlvValue => {
+  const tag = content[offset];
+  if (tag === undefined) {
+    throw new Error("Unexpected end of embedded TLV value.");
+  }
+  if (tag === 0) {
+    return { value: null, nextOffset: offset + 1 };
+  }
+  if (tag === 1 || tag === 2) {
+    return { value: tag === 2, nextOffset: offset + 1 };
+  }
+  if (tag === 3) {
+    const decoded = decodeTlvVarUint(content, offset + 1);
+    return {
+      value: Number(decoded.value),
+      nextOffset: decoded.nextOffset,
+    };
+  }
+  if (tag === 4 || tag === 5) {
+    const decoded = decodeTlvBytes(content, offset + 1);
+    return {
+      value:
+        tag === 4 ? decoded.value.toString("utf8") : Buffer.from(decoded.value),
+      nextOffset: decoded.nextOffset,
+    };
+  }
+  if (tag === 6) {
+    const count = decodeTlvVarUint(content, offset + 1);
+    const values: unknown[] = [];
+    let nextOffset = count.nextOffset;
+    for (let index = 0; index < Number(count.value); index += 1) {
+      const decoded = decodeTlvValue(content, nextOffset);
+      values.push(decoded.value);
+      nextOffset = decoded.nextOffset;
+    }
+    return { value: values, nextOffset };
+  }
+  if (tag === 7) {
+    const count = decodeTlvVarUint(content, offset + 1);
+    const value: Record<string, unknown> = {};
+    let nextOffset = count.nextOffset;
+    for (let index = 0; index < Number(count.value); index += 1) {
+      const key = decodeTlvBytes(content, nextOffset);
+      const decoded = decodeTlvValue(content, key.nextOffset);
+      value[key.value.toString("utf8")] = decoded.value;
+      nextOffset = decoded.nextOffset;
+    }
+    return { value, nextOffset };
+  }
+  throw new Error(`Unknown embedded TLV tag: ${tag}.`);
+};
+
+const readFakeLauncherEmbeddedConfig = async (
+  launcherPath: string,
+): Promise<Record<string, unknown>> => {
+  const content = await readFile(launcherPath);
+  const decoded = decodeTlvValue(
+    content,
+    Buffer.byteLength("launcher prefix\n"),
+  );
+  if (
+    typeof decoded.value !== "object" ||
+    decoded.value === null ||
+    Array.isArray(decoded.value)
+  ) {
+    throw new Error("Embedded launcher config is not an object.");
+  }
+  return decoded.value as Record<string, unknown>;
 };
 
 const createFakeSigningCommand = async (
@@ -191,11 +304,21 @@ const createFakeMuonPackageDistForTargets = async (
     const nativeDirectory = join(packageDirectory, "native", target);
     await mkdir(runtimeDirectory, { recursive: true });
     await mkdir(nativeDirectory, { recursive: true });
+    const runtimeExecutablePath = join(
+      runtimeDirectory,
+      descriptor.runtimeExecutableName,
+    );
     await writeExecutable(
-      join(runtimeDirectory, descriptor.runtimeExecutableName),
+      runtimeExecutablePath,
       createMuonEmbeddedConfigSlot(),
       "core",
     );
+    if (target.startsWith("linux-")) {
+      await chmod(runtimeExecutablePath, 0o644);
+      const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
+      await writeFile(supervisorPath, `${target} executor supervisor\n`);
+      await chmod(supervisorPath, 0o644);
+    }
     await writeFile(join(runtimeDirectory, descriptor.uiLibraryName), "ui\n");
     await writeFile(
       join(runtimeDirectory, descriptor.cardioLibraryName),
@@ -703,6 +826,9 @@ describe("muon build", () => {
         name: "muon-node-project-fixture",
         type: "module",
         main: "./main.js",
+        engines: {
+          node: ">=20 <23 || ^24.3.0",
+        },
         imports: {
           "#message": "./message.js",
         },
@@ -781,6 +907,27 @@ describe("muon build", () => {
     expect(result.targets[0]?.embeddedConfig.node).toEqual({
       project: "./node-project",
     });
+    expect(result.targets[0]?.embeddedConfig).not.toHaveProperty(
+      "launcher.nodeRuntime",
+    );
+    expect(
+      await readFakeLauncherEmbeddedConfig(
+        result.targets[0]?.launcherPath ?? "",
+      ),
+    ).toMatchObject({
+      launcher: {
+        nodeRuntime: {
+          required: true,
+          engineRangeSpecified: true,
+          engineRange: ">=20 <23 || ^24.3.0",
+          comparatorSets: [
+            [">=20.19.0", "<21.0.0-0", ">=20.0.0", "<23.0.0-0"],
+            [">=22.12.0", ">=20.0.0", "<23.0.0-0"],
+            [">=22.12.0", ">=24.3.0", "<25.0.0-0"],
+          ],
+        },
+      },
+    });
     const assetEntries = await readZipEntries(join(outputPath, "assets.zip"));
     expect(
       [...assetEntries.keys()].some((entry) =>
@@ -792,6 +939,67 @@ describe("muon build", () => {
     await expect(exists(join(outputPath, "node-runtime.tar.xz"))).resolves.toBe(
       false,
     );
+  });
+
+  it("requires a staged Node runtime in validate plugin mode", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-node-validate-mode-",
+    );
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const backendDirectory = join(root, "backend");
+    await mkdir(backendDirectory, { recursive: true });
+    await writeFile(
+      join(backendDirectory, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "muon-node-validate-fixture",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          node: {
+            project: "./backend",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      runtimePluginConfig: {
+        mode: "validate",
+        capabilities: [],
+      },
+    });
+
+    expect(result.targets[0]?.embeddedConfig).not.toHaveProperty(
+      "launcher.nodeRuntime",
+    );
+    expect(
+      await readFakeLauncherEmbeddedConfig(
+        result.targets[0]?.launcherPath ?? "",
+      ),
+    ).toMatchObject({
+      launcher: {
+        nodeRuntime: {
+          required: true,
+          engineRangeSpecified: false,
+          engineRange: "*",
+          comparatorSets: [[">=20.19.0", "<21.0.0-0"], [">=22.12.0"]],
+        },
+      },
+    });
   });
 
   it("rejects a Node project inside a symlinked output runtime before deleting its source", async () => {
@@ -1074,6 +1282,25 @@ describe("muon build", () => {
         join(root, "dist-muon/windows-amd64", "default-targets-sample.exe"),
       ),
     ).resolves.toBe(true);
+    for (const target of [
+      "linux-amd64",
+      "linux-armhf",
+      "linux-arm64",
+    ] as const) {
+      expect(
+        (await stat(join(root, "dist-muon", target, "muon-core"))).mode & 0o777,
+      ).toBe(0o755);
+      const supervisorPath = join(
+        root,
+        "dist-muon",
+        target,
+        "muon-executor-supervisor",
+      );
+      await expect(readFile(supervisorPath, "utf8")).resolves.toBe(
+        `${target} executor supervisor\n`,
+      );
+      expect((await stat(supervisorPath)).mode & 0o777).toBe(0o755);
+    }
   });
 
   it("copies MinGW runtime DLLs into Windows target distributions", async () => {
@@ -2487,6 +2714,10 @@ describe("muon build", () => {
         mode: "simple",
       },
     });
+    expect(target?.embeddedConfig.launcher).not.toHaveProperty("nodeRuntime");
+    expect(
+      await readFakeLauncherEmbeddedConfig(target?.launcherPath ?? ""),
+    ).not.toHaveProperty("launcher.nodeRuntime");
   });
 
   it("adds a generated browser start page only when the config omits one", async () => {

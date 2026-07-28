@@ -30,27 +30,38 @@ declare global {
     /**
      * Optional out-of-process Node.js runtime.
      *
-     * @remarks Present only when `node.project` is configured and
-     * `plugin.mode` is `"simple"` in `muon.json`.
+     * @remarks Present on `window.muon` only when `node.project` is configured
+     * and `plugin.mode` is `"simple"` in `muon.json`. Validate mode exposes
+     * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
   }
 
   /**
-   * Scalar, void, or normalized copied binary value returned by the Node
-   * sidecar.
+   * JSON data copied across the Node sidecar process boundary.
    *
-   * @remarks Numbers must be finite and cannot be negative zero. Binary
-   * results are always returned as a `Uint8Array`.
+   * @remarks Numbers must be finite and cannot be negative zero. Objects must
+   * be plain records and arrays must be dense. Nested `undefined`, `bigint`,
+   * binary, and function values are unsupported. The readonly containers
+   * accept readonly inputs such as `as const`; returned values are not frozen.
+   * Object identity, prototypes, and property descriptors are not preserved.
    */
-  type MuonNodeValue =
-    | undefined
+  type MuonNodeJsonValue =
     | null
     | boolean
     | number
     | string
-    | bigint
-    | Uint8Array;
+    | readonly MuonNodeJsonValue[]
+    | { readonly [key: string]: MuonNodeJsonValue };
+
+  /**
+   * JSON data, scalar extension, void, or normalized copied binary value
+   * returned by the Node sidecar.
+   *
+   * @remarks `undefined`, `bigint`, and binary values are supported only at
+   * the top level. Binary results are always returned as a `Uint8Array`.
+   */
+  type MuonNodeValue = undefined | MuonNodeJsonValue | bigint | Uint8Array;
 
   /**
    * Copied binary input accepted by the Node sidecar bridge.
@@ -60,13 +71,22 @@ declare global {
    */
   type MuonNodeBinaryArgument = ArrayBuffer | ArrayBufferView;
 
-  /** Argument accepted by a function exported from a hosted Node module. */
+  /**
+   * Argument accepted by a function exported from a hosted Node module.
+   *
+   * @remarks JSON objects and arrays are copied by value. Callback functions,
+   * `undefined`, `bigint`, and binary values cannot be nested inside them.
+   */
   type MuonNodeArgument =
     | MuonNodeValue
     | MuonNodeBinaryArgument
     | MuonNodeCallback;
 
-  /** Value accepted when a renderer callback settles. */
+  /**
+   * Value accepted when a renderer callback settles.
+   *
+   * @remarks JSON objects and arrays are copied by value.
+   */
   type MuonNodeCallbackResult = MuonNodeValue | MuonNodeBinaryArgument;
 
   /**
@@ -84,7 +104,8 @@ declare global {
   /**
    * Function exported by a hosted Node module.
    *
-   * @param args - Primitive values, bigint values, copied buffers, or callbacks.
+   * @param args - JSON values, primitive extensions, copied buffers, or
+   * callbacks.
    * @returns A promise for a supported bridge value.
    * @remarks Every encoded IPC frame is limited to 16 MiB, including JSON and
    * base64 overhead. One runtime accepts at most 1,024 pending requests.
@@ -97,8 +118,9 @@ declare global {
    * Descriptor-backed facade for one imported Node module.
    *
    * @typeParam TExports - Expected exported members of the imported module.
-   * @remarks The facade is a renderer-local frozen object. Arbitrary Node
-   * objects never cross the process boundary.
+   * @remarks The facade is a renderer-local frozen object. JSON data returned
+   * by exported functions is copied by value; Node object identity and
+   * prototypes never cross the process boundary.
    */
   type MuonNodeModule<TExports extends object = Record<string, any>> =
     Readonly<TExports> & {
@@ -113,14 +135,30 @@ declare global {
   /** Out-of-process Node.js runtime exposed by the optional Node plugin. */
   interface MuonNodeApi {
     /**
+     * Create an isolated out-of-process Node.js runtime.
+     *
+     * @returns A promise for a releaseable Node.js runtime instance.
+     */
+    readonly createNode: () => Promise<MuonNodeInstance>;
+  }
+
+  /**
+   * One isolated out-of-process Node.js runtime instance.
+   *
+   * @remarks Release the instance when it is no longer needed. Releasing it
+   * terminates the corresponding sidecar process and cancels pending calls.
+   */
+  interface MuonNodeInstance extends AsyncReleaseable {
+    /**
      * Import a Node built-in or a module resolved from the configured project.
      *
      * @typeParam TExports - Expected exported members for static typing.
      * @param specifier - A strict `node:` built-in specifier, project-relative
      * specifier, or bare package specifier.
-     * @returns A descriptor-backed module facade.
-     * @remarks Built-ins without the `node:` prefix are rejected. Objects other
-     * than copied binary values are not supported as arguments or results.
+     * @returns A descriptor-backed module facade owned by this instance.
+     * @remarks Built-ins without the `node:` prefix are rejected. JSON objects
+     * and arrays are copied when used as function or callback arguments and
+     * results, but JSON object and array constants are omitted from the facade.
      */
     readonly importModule: <TExports extends object = Record<string, any>>(
       specifier: string,
@@ -1753,6 +1791,18 @@ declare global {
      */
     readonly args?: readonly string[];
     /**
+     * Detach the process tree from muon's lifecycle when the handle is released.
+     *
+     * @remarks When `false`, muon owns the process tree and terminates it after
+     * the root process exits or when the handle, its context, or muon itself is
+     * released. When `true`, those releases close muon's standard-I/O
+     * connections and detach the process tree without sending it a termination
+     * signal. Call `kill()` before releasing the handle to explicitly terminate
+     * a daemon process tree.
+     * @defaultValue `false`
+     */
+    readonly daemon?: boolean;
+    /**
      * Receives stdout chunks as the child process writes them.
      *
      * @remarks When specified, `wait()` omits `stdout` from its result. The
@@ -1808,21 +1858,31 @@ declare global {
      *
      * @returns A promise for the completed child process result.
      * @remarks The same promise is reused for repeated calls. It resolves even
-     * when the child exits with a non-zero exit code.
+     * when the child exits with a non-zero exit code. Completion observes the
+     * root process only. After it exits, descendants of a non-daemon process are
+     * terminated, while descendants of a daemon process may continue running.
+     * Waiting also releases the handle and therefore detaches a daemon process
+     * tree.
      */
     readonly wait: () => Promise<MuonExecutorSpawnResult>;
     /**
      * Request process termination.
      *
      * @returns A promise that resolves when the termination request is issued.
-     * @remarks POSIX uses `SIGTERM`; Windows uses `TerminateProcess(..., 1)`.
+     * @remarks Terminates the process tree for both daemon and non-daemon
+     * processes. This operation is only available while the handle remains
+     * connected.
      */
     readonly kill: () => Promise<void>;
     /**
-     * Release the native handle and terminate the process when it is still
-     * running.
+     * Release the native handle.
      *
      * @returns A promise that resolves after release is requested.
+     * @remarks For a non-daemon process, release terminates the process tree.
+     * For a daemon process, release detaches the process tree without sending a
+     * termination signal. In either mode, muon closes its standard-I/O
+     * connections and callbacks; a surviving process can therefore observe EOF
+     * or write failures.
      */
     readonly release: () => Promise<void>;
   }

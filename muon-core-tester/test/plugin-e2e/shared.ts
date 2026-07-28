@@ -7,11 +7,14 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
   access as nodeAccess,
   appendFile as nodeAppendFile,
+  chmod as nodeChmod,
   constants,
   copyFile as nodeCopyFile,
   mkdir as nodeMkdir,
   mkdtemp as nodeMkdtemp,
   readFile as nodeReadFile,
+  realpath as nodeRealpath,
+  rename as nodeRename,
   rm as nodeRm,
   stat,
   writeFile as nodeWriteFile,
@@ -325,6 +328,36 @@ export const rm = async (
   }
 };
 
+/**
+ * Resolves a local path through the host filesystem.
+ *
+ * @param path Local or remote-Windows path.
+ * @returns Canonical local path, or the unchanged absolute Windows path.
+ * @remarks Remote Windows fixtures are staged without links, and agent-rover
+ * does not expose a remote realpath operation.
+ */
+export const realpath = async (path: string): Promise<string> =>
+  isWindowsAbsolutePath(path) ? path : await nodeRealpath(path);
+
+/**
+ * Renames a local or remote-Windows filesystem entry.
+ *
+ * @param from Existing path.
+ * @param to Destination path on the same filesystem.
+ */
+export const rename = async (from: string, to: string): Promise<void> => {
+  const fromIsWindows = isWindowsAbsolutePath(from);
+  const toIsWindows = isWindowsAbsolutePath(to);
+  if (fromIsWindows !== toIsWindows) {
+    throw new Error("Cannot rename across local and remote filesystems");
+  }
+  if (!fromIsWindows) {
+    await nodeRename(from, to);
+    return;
+  }
+  await requireWindowsRemoteContext().agent.files.rename(from, to);
+};
+
 const applyRemoteCdpOptions = (
   options: ConnectOptions = {},
 ): ConnectOptions => {
@@ -521,6 +554,10 @@ export interface RunningMuon {
   process: MuonProcessHandle;
   pluginDirectory: string;
   remoteWindows?: RunningWindowsRemoteMuon;
+  /**
+   * Effective directory containing the running Muon executable.
+   */
+  runtimeDirectory: string | undefined;
   stateDirectory?: string;
   stderr: string;
   usesValgrind: boolean;
@@ -714,6 +751,73 @@ export const TEST_PLUGIN_DIRECTORY =
         windowsRemoteContextAtLoad.runtime.debugRuntimeDirectory,
         "test-plugins",
       );
+
+/**
+ * Gets the framework-managed Node executable path for a running Muon process.
+ *
+ * @param running Running Muon process.
+ * @returns Absolute path used to launch the Node sidecar.
+ * @throws Error when the effective runtime directory is unavailable.
+ */
+export const getBundledNodeExecutable = (running: RunningMuon): string => {
+  if (running.runtimeDirectory === undefined) {
+    throw new Error("Muon runtime directory is unavailable");
+  }
+  return join(
+    running.runtimeDirectory,
+    "runtimes",
+    "node",
+    "bin",
+    process.platform === "win32" || running.remoteWindows !== undefined
+      ? "node.exe"
+      : "node",
+  );
+};
+
+/**
+ * Gets the Node.js project fixture path for the active E2E platform.
+ *
+ * @returns Local fixture path or its staged remote-Windows path.
+ */
+export const getNodeProjectFixtureDirectory = (): string =>
+  getWindowsRemoteContext()?.runtime.nodeProjectDirectory ??
+  resolve("test", "fixtures", "node-project");
+
+/**
+ * Gets the Express project fixture path for the active E2E platform.
+ *
+ * @returns Local fixture source path or its dependency-installed
+ * remote-Windows path.
+ */
+export const getNodeExpressProjectFixtureDirectory = (): string =>
+  getWindowsRemoteContext()?.runtime.nodeExpressProjectDirectory ??
+  resolve("test", "fixtures", "node-express-project");
+
+/**
+ * Gets a command-line marker that identifies Node sidecars in process lists.
+ *
+ * @returns Platform-specific process marker.
+ */
+export const getNodeSidecarCommandMarker = (): string =>
+  isWindowsRemoteE2e() ? "node.exe" : "node-bridge.mjs";
+
+const prepareBundledNodeExecutable = async (
+  running: RunningMuon,
+): Promise<void> => {
+  if (process.platform !== "linux" || isWindowsRemoteE2e()) {
+    return;
+  }
+  const executable = getBundledNodeExecutable(running);
+  const temporaryExecutable = `${executable}.tmp-${String(process.pid)}`;
+  await nodeMkdir(nodeDirname(executable), { recursive: true });
+  try {
+    await nodeCopyFile(process.execPath, temporaryExecutable);
+    await nodeChmod(temporaryExecutable, 0o755);
+    await nodeRename(temporaryExecutable, executable);
+  } finally {
+    await nodeRm(temporaryExecutable, { force: true });
+  }
+};
 export const PLUGIN_SUFFIX = isWindowsRemoteE2e()
   ? ".dll"
   : process.platform === "win32"
@@ -1244,16 +1348,25 @@ export const waitForProcessExit = async (
   timeoutMs: number,
 ): Promise<void> => {
   if (running.remoteWindows !== undefined) {
-    const snapshot = await running.remoteWindows.muonProcess.waitForExit({
-      intervalMs: 100,
-      timeoutMs,
-    });
-    applyWindowsRemoteProcessSnapshot(
-      running.process as WindowsRemoteProcessHandle,
-      snapshot.root,
-    );
-    await refreshWindowsRemoteStderr(running);
-    return;
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const snapshot = await running.remoteWindows.muonProcess.rootSnapshot();
+      applyWindowsRemoteProcessSnapshot(
+        running.process as WindowsRemoteProcessHandle,
+        snapshot,
+      );
+      if (!snapshot.running) {
+        await refreshWindowsRemoteStderr(running);
+        return;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `Timed out waiting for muon to exit after ${String(timeoutMs)}ms`,
+        );
+      }
+      await delay(Math.min(100, remainingMs));
+    }
   }
 
   if (
@@ -1344,6 +1457,30 @@ export const listProcessGroupCommandLines = async (
       const commandLine = match[2];
       return commandLine === undefined ? [] : [commandLine];
     });
+};
+
+/**
+ * Lists the root and descendant process command markers for a running Muon.
+ *
+ * @param running Running Muon process.
+ * @returns Process paths and names on remote Windows, or process-group command
+ * lines on the local host.
+ */
+export const listMuonProcessCommandLines = async (
+  running: RunningMuon,
+): Promise<string[]> => {
+  if (running.remoteWindows !== undefined) {
+    const snapshot = await running.remoteWindows.muonProcess.snapshot();
+    return [snapshot.root, ...snapshot.processes]
+      .filter((processInfo) => processInfo.running)
+      .map((processInfo) => `${processInfo.path} ${processInfo.name}`);
+  }
+
+  const processGroupId = running.process.pid;
+  if (processGroupId === undefined) {
+    throw new Error("Muon process group id is unavailable");
+  }
+  return await listProcessGroupCommandLines(processGroupId);
 };
 
 export const parseXpropWindowTitle = (output: string): string | undefined => {
@@ -2417,6 +2554,7 @@ interface StartWindowsRemoteMuonOptions {
   environment: NodeJS.ProcessEnv;
   executablePath: string | undefined;
   includeStandardPlugins: boolean;
+  killTreeOnRelease: boolean;
   logConfig: Record<string, unknown> | undefined;
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
@@ -2870,6 +3008,9 @@ const startWindowsRemoteMuon = async (
           captureStderr: true,
           captureStdout: true,
           environment: createWindowsRemoteEnvironment(options.environment),
+          // Daemon lifecycle tests disable the outer job so descendants can
+          // break away and remain observable after Muon exits.
+          killTreeOnRelease: options.killTreeOnRelease,
           path: executable,
           workingDirectory: directory,
         }),
@@ -2918,6 +3059,7 @@ const startWindowsRemoteMuon = async (
       profilePath,
       target: context.runtime.target,
     },
+    runtimeDirectory: directory,
     stderr: "",
     usesValgrind: false,
   };
@@ -2986,6 +3128,7 @@ export const startMuon = async (
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
   nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
+  windowsRemoteKillTreeOnRelease = true,
 ): Promise<RunningMuon> => {
   if (getWindowsRemoteContext() !== undefined) {
     return await startWindowsRemoteMuon(
@@ -3007,6 +3150,7 @@ export const startMuon = async (
         environment,
         executablePath,
         includeStandardPlugins,
+        killTreeOnRelease: windowsRemoteKillTreeOnRelease,
         logConfig,
         networkAllowPatterns,
         networkAuthorizedOrigins,
@@ -3105,6 +3249,12 @@ export const startMuon = async (
   const running: RunningMuon = {
     process: child,
     pluginDirectory,
+    runtimeDirectory:
+      getLocalFallbackAppIdForExecutable(executable) === "muon-launcher"
+        ? stateDirectory === undefined || stateDirectory === ""
+          ? undefined
+          : join(stateDirectory, "muon-launcher", "runtime")
+        : directory,
     stderr: "",
     usesValgrind: useValgrind,
   };
@@ -3168,6 +3318,7 @@ export const startDebugMuon = async (
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
   nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
+  windowsRemoteKillTreeOnRelease = true,
 ): Promise<RunningMuon> =>
   await startMuon(
     DEBUG_MUON_DIRECTORY,
@@ -3203,6 +3354,7 @@ export const startDebugMuon = async (
     networkLocalAccess,
     nodeProject,
     pluginCapabilities,
+    windowsRemoteKillTreeOnRelease,
   );
 
 /**
@@ -3258,7 +3410,7 @@ export const startDebugMuonWithNodeProject = async (
     nodeProject,
     pluginCapabilities = [],
   } = options;
-  return await startDebugMuon(
+  const running = await startDebugMuon(
     [],
     networkAllowPatterns,
     environment,
@@ -3288,6 +3440,13 @@ export const startDebugMuonWithNodeProject = async (
     nodeProject,
     pluginCapabilities,
   );
+  try {
+    await prepareBundledNodeExecutable(running);
+    return running;
+  } catch (error) {
+    await stopMuon(running, undefined);
+    throw error;
+  }
 };
 
 export const startDebugMuonLauncher = async (
@@ -4144,11 +4303,38 @@ export const withMuonEnvironment = async (
   pluginNames: string[],
   environment: NodeJS.ProcessEnv,
   run: (driver: CdpDriver, running: RunningMuon) => Promise<void>,
+  windowsRemoteKillTreeOnRelease = true,
 ): Promise<void> => {
   const running = await startDebugMuon(
     pluginNames,
     TEST_NETWORK_ALLOW_PATTERNS,
     environment,
+    undefined,
+    TEST_PLUGIN_ALLOW_PATTERNS,
+    pluginNames,
+    TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    [],
+    null,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    {},
+    {},
+    true,
+    shouldUseValgrind,
+    {},
+    undefined,
+    undefined,
+    [],
+    windowsRemoteKillTreeOnRelease,
   );
   let driver: CdpDriver | undefined = undefined;
   try {

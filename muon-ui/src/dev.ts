@@ -37,6 +37,7 @@ import {
   assertMuonNodeProjectAssetSourceIsSafe,
   assertMuonNodeProjectStagingIsSafe,
   assertMuonNodeProjectViteBuildIsSafe,
+  createMuonNodeRuntimeRequirement,
   resolveMuonNodeProject,
   stageMuonNodeProject,
 } from "./node-project.js";
@@ -782,6 +783,7 @@ const runMuonDevOnce = async (
     stageDir: stagePath,
     target,
     cacheDir: environment.MUON_CACHE_DIR,
+    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(nodeProject, true),
     force: false,
     quiet: options.quietPrepare === true,
     prepareExecutablePath: undefined,

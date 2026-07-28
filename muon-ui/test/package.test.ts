@@ -244,6 +244,11 @@ const publicDeclarationDefaultValueTargets: PublicDeclarationDefaultValueTarget[
       memberName: "env",
     },
     {
+      filePath: "muon.d.ts",
+      parentName: "MuonExecutorSpawnOptions",
+      memberName: "daemon",
+    },
+    {
       filePath: "vite.d.ts",
       parentName: "MuonViteBuildOptions",
       memberName: "targets",
@@ -610,84 +615,103 @@ describe("muon-ui package root export", () => {
     expect(workspaceHelp.stdout).toContain("Usage: ./build_package.sh");
   });
 
-  it("stages the Node plugin payload without bundling a Node runtime", async () => {
+  it("stages Linux runtime helpers and the Node plugin without bundling a Node runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-package-node-stage-"));
     cleanupDirectories.push(root);
     const workspaceDirectory = join(root, "muon-ui");
-    const builderDirectory = join(root, "muon-builder", "dist-linux-amd64");
-    const runtimeDirectory = join(root, "muon-core", "dist-linux-amd64");
     await mkdir(join(workspaceDirectory, "scripts"), { recursive: true });
     await mkdir(join(workspaceDirectory, "dist"), { recursive: true });
     await mkdir(join(root, "images"), { recursive: true });
-    await mkdir(builderDirectory, { recursive: true });
-    await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
     await copyFile(
       resolve("scripts", "stage-muon-builder.mjs"),
       join(workspaceDirectory, "scripts", "stage-muon-builder.mjs"),
     );
     await writeFile(join(workspaceDirectory, "dist", "cli.cjs"), "");
     await writeFile(join(root, "images", "muon-256.png"), "icon\n");
-    for (const executableName of [
-      "muon-builder",
-      "muon-launcher",
-      "muon-runtime-helper",
-      "muon-plugin-inspector",
-    ]) {
-      await writeExecutableScript(
-        join(builderDirectory, executableName),
-        `${executableName}\n`,
-      );
-    }
-    await writeExecutableScript(
-      join(runtimeDirectory, "muon-core"),
-      "muon-core\n",
-    );
-    await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "muon-ui\n");
-    await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
-    await writeFile(join(runtimeDirectory, "CREDITS.md"), "credits\n");
-    await writeFile(
-      join(runtimeDirectory, "plugins", "node.so"),
-      "node plugin\n",
-    );
-    await writeFile(
-      join(runtimeDirectory, "plugins", "node-bridge.mjs"),
-      "node bridge\n",
-    );
-    await writeExecutableScript(join(runtimeDirectory, "node"), "node\n");
-    await writeFile(
-      join(runtimeDirectory, "node-v24.0.0-linux-x64.tar.xz"),
-      "node archive\n",
-    );
 
-    await execFileAsync(
-      process.execPath,
-      ["scripts/stage-muon-builder.mjs", "--target", "linux-amd64", "--dist"],
-      {
-        cwd: workspaceDirectory,
-      },
-    );
-
-    const stagedRuntimeDirectory = join(
-      workspaceDirectory,
-      "dist",
-      "runtime",
+    for (const target of [
       "linux-amd64",
-    );
-    await expect(
-      readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
-    ).resolves.toBe("node plugin\n");
-    await expect(
-      readFile(
-        join(stagedRuntimeDirectory, "plugins", "node-bridge.mjs"),
-        "utf8",
-      ),
-    ).resolves.toBe("node bridge\n");
-    await expect(exists(join(stagedRuntimeDirectory, "node"))).resolves.toBe(
-      false,
-    );
-    await expect(
-      exists(join(stagedRuntimeDirectory, "node-v24.0.0-linux-x64.tar.xz")),
-    ).resolves.toBe(false);
+      "linux-armhf",
+      "linux-arm64",
+    ] as const) {
+      const builderDirectory = join(root, "muon-builder", `dist-${target}`);
+      const runtimeDirectory = join(root, "muon-core", `dist-${target}`);
+      await mkdir(builderDirectory, { recursive: true });
+      await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
+      for (const executableName of [
+        "muon-builder",
+        "muon-launcher",
+        "muon-runtime-helper",
+        "muon-plugin-inspector",
+      ]) {
+        await writeExecutableScript(
+          join(builderDirectory, executableName),
+          `${executableName}\n`,
+        );
+      }
+      await writeExecutableScript(
+        join(runtimeDirectory, "muon-core"),
+        "muon-core\n",
+      );
+      await writeExecutableScript(
+        join(runtimeDirectory, "muon-executor-supervisor"),
+        `${target} executor supervisor\n`,
+      );
+      await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "muon-ui\n");
+      await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
+      await writeFile(join(runtimeDirectory, "CREDITS.md"), "credits\n");
+      await writeFile(
+        join(runtimeDirectory, "plugins", "node.so"),
+        "node plugin\n",
+      );
+      await writeFile(
+        join(runtimeDirectory, "plugins", "node-bridge.mjs"),
+        "node bridge\n",
+      );
+      await writeExecutableScript(join(runtimeDirectory, "node"), "node\n");
+      await writeFile(
+        join(runtimeDirectory, "node-v24.0.0-linux-x64.tar.xz"),
+        "node archive\n",
+      );
+
+      await execFileAsync(
+        process.execPath,
+        ["scripts/stage-muon-builder.mjs", "--target", target, "--dist"],
+        {
+          cwd: workspaceDirectory,
+        },
+      );
+
+      const stagedRuntimeDirectory = join(
+        workspaceDirectory,
+        "dist",
+        "runtime",
+        target,
+      );
+      const supervisorPath = join(
+        stagedRuntimeDirectory,
+        "muon-executor-supervisor",
+      );
+      await expect(readFile(supervisorPath, "utf8")).resolves.toBe(
+        `${target} executor supervisor\n`,
+      );
+      expect((await stat(supervisorPath)).mode & 0o111).not.toBe(0);
+      await expect(
+        readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
+      ).resolves.toBe("node plugin\n");
+      await expect(
+        readFile(
+          join(stagedRuntimeDirectory, "plugins", "node-bridge.mjs"),
+          "utf8",
+        ),
+      ).resolves.toBe("node bridge\n");
+      await expect(exists(join(stagedRuntimeDirectory, "node"))).resolves.toBe(
+        false,
+      );
+      await expect(
+        exists(join(stagedRuntimeDirectory, "node-v24.0.0-linux-x64.tar.xz")),
+      ).resolves.toBe(false);
+    }
   });
 
   it("uses vendored native dependency checkouts for package builds by default", async () => {
@@ -1230,41 +1254,103 @@ void releasePromise;
     ).resolves.toBeUndefined();
   });
 
-  it("provides types for the optional descriptor-backed Node API", async () => {
+  it("provides types for descriptor-backed modules from a Node instance", async () => {
     await expect(
-      runTypeScriptConsumer(`import type {} from "muon-ui";
+      runTypeScriptConsumer(`import { createNode } from "muon:node";
+import type {} from "muon-ui";
 
 interface FsPromisesExports {
   readonly readFile: (path: string, encoding: string) => Promise<string>;
 }
 
 const nodeApi: MuonNodeApi | undefined = window.muon.node;
+const validateCreateNode: MuonNodeApi["createNode"] = createNode;
 const callback: MuonNodeCallback = async (value) => String(value);
 const value: MuonNodeValue = Uint8Array.from([1, 2, 3]);
+const jsonValue: MuonNodeJsonValue = {
+  enabled: true,
+  nested: {
+    count: 3,
+    labels: ["first", "second"] as const,
+  },
+};
+const nestedJsonValue: MuonNodeValue = {
+  records: [
+    { id: 1, value: null },
+    { id: 2, value: "second" },
+  ] as const,
+};
+const readonlyJsonArray: MuonNodeValue = [
+  "first",
+  { nested: [true, null, 42] as const },
+] as const;
 const argument: MuonNodeArgument = callback;
+const jsonArgument: MuonNodeArgument = {
+  request: {
+    ids: [1, 2, 3] as const,
+  },
+};
 const arrayBufferArgument: MuonNodeArgument = new ArrayBuffer(8);
 const typedArrayArgument: MuonNodeArgument = new Int32Array([1, 2, 3]);
+const jsonCallbackResult: MuonNodeCallbackResult = {
+  response: ["accepted", { complete: true }] as const,
+};
+const jsonCallback: MuonNodeCallback = async () => [
+  "accepted",
+  { complete: true },
+] as const;
+
+class UnsupportedClass {
+  readonly value = "unsupported";
+}
 
 const run = async (): Promise<void> => {
   if (nodeApi === undefined) {
     return;
   }
+  const node: MuonNodeInstance = await nodeApi.createNode();
+  const releaseable: AsyncReleaseable = node;
   const fs: MuonNodeModule<FsPromisesExports> =
-    await nodeApi.importModule<FsPromisesExports>("node:fs/promises");
+    await node.importModule<FsPromisesExports>("node:fs/promises");
   const text: string = await fs.readFile("file.txt", "utf8");
   await fs.$release();
+  await node.release();
+  await node[Symbol.asyncDispose]();
+  void releaseable;
   void text;
 };
 
-// @ts-expect-error Arbitrary objects cannot cross the Node bridge.
-const unsupportedValue: MuonNodeValue = { unsupported: true };
+// @ts-expect-error BigInt is supported only as a top-level bridge value.
+const nestedBigInt: MuonNodeValue = { unsupported: 1n };
+// @ts-expect-error Undefined is supported only as a top-level bridge value.
+const nestedUndefined: MuonNodeValue = { unsupported: undefined };
+// @ts-expect-error Binary values are supported only as top-level bridge values.
+const nestedBuffer: MuonNodeValue = { unsupported: Uint8Array.from([1, 2, 3]) };
+// @ts-expect-error Functions cannot be nested in copied JSON values.
+const nestedFunction: MuonNodeValue = { unsupported: (value: number): number => value };
+// @ts-expect-error Date instances are not copied JSON values.
+const nestedDate: MuonNodeValue = { unsupported: new Date() };
+// @ts-expect-error Class instances are not copied JSON values.
+const nestedClass: MuonNodeValue = { unsupported: new UnsupportedClass() };
 
 void argument;
 void arrayBufferArgument;
 void callback;
+void jsonArgument;
+void jsonCallback;
+void jsonCallbackResult;
+void jsonValue;
+void nestedBigInt;
+void nestedBuffer;
+void nestedClass;
+void nestedDate;
+void nestedFunction;
+void nestedJsonValue;
+void nestedUndefined;
+void readonlyJsonArray;
 void run;
 void typedArrayArgument;
-void unsupportedValue;
+void validateCreateNode;
 void value;
 `),
     ).resolves.toBeUndefined();
@@ -1357,10 +1443,24 @@ const globalTypeDescriptors: readonly MuonAdhocType[] = [
 
 const run = async (): Promise<void> => {
   const process = await spawn({ command: "node", args: ["--version"] });
+  const daemonProcess = await spawn({
+    command: "node",
+    args: ["daemon.mjs"],
+    daemon: true,
+  });
+  const foregroundProcess = await window.muon.executor.spawn({
+    command: "node",
+    daemon: false,
+  });
   const releaseable: AsyncReleaseable = process;
   const disposable: AsyncDisposable = releaseable;
   const result: MuonExecutorSpawnResult = await process.wait();
   await releaseable.release();
+  await daemonProcess.release();
+  await foregroundProcess.release();
+
+  // @ts-expect-error daemon only accepts boolean values.
+  await spawn({ command: "node", daemon: "true" });
 
   const library: MuonAdhocLibrary = await loadLibrary("libc.so");
   const mallocSignature: MuonAdhocSignature = {

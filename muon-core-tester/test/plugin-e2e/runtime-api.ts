@@ -8,6 +8,7 @@ import {
   copyFile as nodeCopyFile,
   mkdtemp as nodeMkdtemp,
   readFile as nodeReadFile,
+  readdir as nodeReaddir,
   rm as nodeRm,
   writeFile as nodeWriteFile,
 } from "node:fs/promises";
@@ -121,6 +122,7 @@ import type {
 interface ExecutorSpawnOptions {
   args: string[];
   command: string;
+  daemon?: boolean;
 }
 
 const isLocalLinuxE2e = process.platform === "linux" && !isWindowsRemoteE2e();
@@ -382,6 +384,509 @@ const createExecutorLongRunningSpawnOptions = (
   };
 };
 
+interface ExecutorProcessTreeFixture {
+  readonly heartbeatPath: string;
+  readonly marker: string;
+  readonly processIdPath: string;
+  readonly spawnOptions: ExecutorSpawnOptions;
+}
+
+const createExecutorProcessTreeFixture = (
+  directory: string,
+  marker: string,
+  daemon: boolean | undefined,
+  rootExitDelayMs: number | undefined,
+): ExecutorProcessTreeFixture => {
+  const heartbeatPath = nodeJoin(directory, "heartbeat.txt");
+  const processIdPath = nodeJoin(directory, "grandchild.pid");
+  const grandchildScript = [
+    'const { appendFileSync } = require("node:fs");',
+    `const heartbeatPath = ${JSON.stringify(heartbeatPath)};`,
+    `const marker = ${JSON.stringify(marker)};`,
+    "const beat = () => appendFileSync(heartbeatPath, `${marker}:${Date.now()}\\n`);",
+    "beat();",
+    "setInterval(beat, 50);",
+  ].join("\n");
+  const rootScript = [
+    'const { spawn } = require("node:child_process");',
+    'const { writeFileSync } = require("node:fs");',
+    `const marker = ${JSON.stringify(marker)};`,
+    `const processIdPath = ${JSON.stringify(processIdPath)};`,
+    `const grandchildScript = ${JSON.stringify(grandchildScript)};`,
+    "const grandchild = spawn(process.execPath, ['-e', grandchildScript], {",
+    "  stdio: 'ignore',",
+    "});",
+    "writeFileSync(processIdPath, String(grandchild.pid));",
+    rootExitDelayMs === undefined
+      ? "setInterval(() => void marker, 1000);"
+      : `setTimeout(() => process.exit(0), ${String(rootExitDelayMs)});`,
+  ].join("\n");
+  return {
+    heartbeatPath,
+    marker,
+    processIdPath,
+    spawnOptions: {
+      args: ["-e", rootScript],
+      command: process.execPath,
+      ...(daemon === undefined ? {} : { daemon }),
+    },
+  };
+};
+
+const createExecutorStdioProcessTreeFixture = (
+  directory: string,
+  marker: string,
+): ExecutorProcessTreeFixture => {
+  const heartbeatPath = nodeJoin(directory, "heartbeat.txt");
+  const processIdPath = nodeJoin(directory, "grandchild.pid");
+  const stdinPath = nodeJoin(directory, "stdin.txt");
+  const streamSetupScript = [
+    "const ignoreClosedStream = (error) => {",
+    '  if (error?.code !== "EPIPE" && error?.code !== "ERR_STREAM_DESTROYED") {',
+    "    throw error;",
+    "  }",
+    "};",
+    'process.stdout.on("error", ignoreClosedStream);',
+    'process.stderr.on("error", ignoreClosedStream);',
+  ];
+  const grandchildScript = [
+    'const { appendFileSync } = require("node:fs");',
+    `const heartbeatPath = ${JSON.stringify(heartbeatPath)};`,
+    `const marker = ${JSON.stringify(marker)};`,
+    ...streamSetupScript,
+    "const beat = () => {",
+    "  appendFileSync(heartbeatPath, `${marker}:grandchild:${Date.now()}\\n`);",
+    "  if (!process.stdout.destroyed) {",
+    "    process.stdout.write(`${marker}:grandchild:stdout\\n`);",
+    "  }",
+    "  if (!process.stderr.destroyed) {",
+    "    process.stderr.write(`${marker}:grandchild:stderr\\n`);",
+    "  }",
+    "};",
+    "beat();",
+    "setInterval(beat, 50);",
+  ].join("\n");
+  const rootScript = [
+    'const { spawn } = require("node:child_process");',
+    'const { writeFileSync } = require("node:fs");',
+    `const marker = ${JSON.stringify(marker)};`,
+    `const processIdPath = ${JSON.stringify(processIdPath)};`,
+    `const stdinPath = ${JSON.stringify(stdinPath)};`,
+    `const grandchildScript = ${JSON.stringify(grandchildScript)};`,
+    ...streamSetupScript,
+    'process.stdin.on("data", (chunk) => {',
+    "  writeFileSync(stdinPath, `${marker}:stdin:${chunk.length}\\n`);",
+    "  if (!process.stdout.destroyed) {",
+    "    process.stdout.write(`${marker}:stdin:${chunk.length}\\n`);",
+    "  }",
+    "});",
+    'process.stdin.on("error", () => {});',
+    "const grandchild = spawn(process.execPath, ['-e', grandchildScript], {",
+    "  stdio: 'inherit',",
+    "});",
+    "writeFileSync(processIdPath, String(grandchild.pid));",
+    "const beat = () => {",
+    "  if (!process.stdout.destroyed) {",
+    "    process.stdout.write(`${marker}:root:stdout\\n`);",
+    "  }",
+    "  if (!process.stderr.destroyed) {",
+    "    process.stderr.write(`${marker}:root:stderr\\n`);",
+    "  }",
+    "};",
+    "beat();",
+    "setInterval(beat, 50);",
+  ].join("\n");
+  return {
+    heartbeatPath,
+    marker,
+    processIdPath,
+    spawnOptions: {
+      args: ["-e", rootScript],
+      command: process.execPath,
+      daemon: true,
+    },
+  };
+};
+
+interface ExecutorContinuousOutputFixture {
+  readonly marker: string;
+  readonly processIdPath: string;
+  readonly spawnOptions: ExecutorSpawnOptions;
+  readonly stderrReadyPath: string;
+  readonly stdoutReadyPath: string;
+  readonly writerCount: number;
+}
+
+const createExecutorContinuousOutputFixture = (
+  directory: string,
+  marker: string,
+): ExecutorContinuousOutputFixture => {
+  const processIdPath = nodeJoin(directory, "writers.json");
+  const stdoutReadyPath = nodeJoin(directory, "stdout-ready.txt");
+  const stderrReadyPath = nodeJoin(directory, "stderr-ready.txt");
+  const rootScript = [
+    'const { spawn } = require("node:child_process");',
+    'const { writeFileSync } = require("node:fs");',
+    `const marker = ${JSON.stringify(marker)};`,
+    `const processIdPath = ${JSON.stringify(processIdPath)};`,
+    `const stdoutReadyPath = ${JSON.stringify(stdoutReadyPath)};`,
+    `const stderrReadyPath = ${JSON.stringify(stderrReadyPath)};`,
+    "let started = false;",
+    'process.on("SIGTERM", () => process.exit(0));',
+    'process.stdin.on("data", () => {',
+    "  if (started) {",
+    "    return;",
+    "  }",
+    "  started = true;",
+    "  const stdoutWriters = Array.from({ length: 16 }, () =>",
+    "    spawn('yes', [marker], { stdio: ['ignore', 'inherit', 'ignore'] }),",
+    "  );",
+    "  const stderrWriters = Array.from({ length: 16 }, () =>",
+    "    spawn(",
+    "      '/bin/sh',",
+    "      ['-c', 'exec yes \"$1\" >&2', 'sh', marker],",
+    "      { stdio: ['ignore', 'ignore', 'inherit'] },",
+    "    ),",
+    "  );",
+    "  const writers = [...stdoutWriters, ...stderrWriters];",
+    "  writeFileSync(",
+    "    processIdPath,",
+    "    JSON.stringify(writers.map((writer) => writer.pid)),",
+    "  );",
+    "  setTimeout(() => {",
+    "    if (writers.every((writer) => writer.exitCode === null)) {",
+    "      writeFileSync(stdoutReadyPath, marker);",
+    "      writeFileSync(stderrReadyPath, marker);",
+    "    }",
+    "  }, 250);",
+    "});",
+    "setInterval(() => void marker, 1000);",
+  ].join("\n");
+  return {
+    marker,
+    processIdPath,
+    spawnOptions: {
+      args: ["-e", rootScript],
+      command: process.execPath,
+      daemon: true,
+    },
+    stderrReadyPath,
+    stdoutReadyPath,
+    writerCount: 32,
+  };
+};
+
+const executorBufferedOutputSize = 256 * 1024;
+
+const executorBufferedOutputSource = `#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+#define OUTPUT_SIZE (256 * 1024)
+
+static void sleep_for_trigger(void) {
+  const struct timespec delay = {0, 1000000L};
+  while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
+  }
+}
+
+int main(int argc, char** argv) {
+  static uint8_t output[OUTPUT_SIZE];
+  FILE* ready_file;
+  int pipe_error;
+  int pipe_size;
+  size_t offset;
+
+  if (argc != 4) {
+    fprintf(stderr, "Expected ready path, trigger path and marker\\n");
+    return 2;
+  }
+  pipe_size = fcntl(STDOUT_FILENO, F_SETPIPE_SZ, OUTPUT_SIZE);
+  pipe_error = pipe_size < 0 ? errno : 0;
+  ready_file = fopen(argv[1], "w");
+  if (ready_file == NULL) {
+    perror("fopen");
+    return 4;
+  }
+  if (fprintf(
+          ready_file,
+          "%ld:%d:%d:%s",
+          (long)getpid(),
+          pipe_size,
+          pipe_error,
+          argv[3]) < 0 ||
+      fflush(ready_file) != 0 ||
+      fsync(fileno(ready_file)) != 0 ||
+      fclose(ready_file) != 0) {
+    fprintf(stderr, "Unable to publish fixture readiness\\n");
+    return 5;
+  }
+  if (pipe_size < OUTPUT_SIZE) {
+    fprintf(
+        stderr,
+        "Unable to extend stdout pipe: %d (errno %d)\\n",
+        pipe_size,
+        pipe_error);
+    return 3;
+  }
+  while (access(argv[2], F_OK) != 0) {
+    if (errno != ENOENT) {
+      perror("access");
+      return 6;
+    }
+    sleep_for_trigger();
+  }
+  for (offset = 0; offset < OUTPUT_SIZE; ++offset) {
+    output[offset] = (uint8_t)((offset * 31U + 17U) & 0xffU);
+  }
+  offset = 0;
+  while (offset < OUTPUT_SIZE) {
+    const ssize_t written =
+        write(STDOUT_FILENO, output + offset, OUTPUT_SIZE - offset);
+    if (written > 0) {
+      offset += (size_t)written;
+    } else if (written < 0 && errno == EINTR) {
+      continue;
+    } else {
+      perror("write");
+      return 7;
+    }
+  }
+  return 0;
+}
+`;
+
+interface ExecutorBufferedOutputFixture {
+  readonly directory: string;
+  readonly marker: string;
+  readonly readyPath: string;
+  readonly spawnOptions: ExecutorSpawnOptions;
+  readonly triggerPath: string;
+}
+
+const buildExecutorBufferedOutputFixture = async (
+  marker: string,
+): Promise<ExecutorBufferedOutputFixture> => {
+  const directory = await nodeMkdtemp(
+    nodeJoin(nodeTmpdir(), "muon-executor-buffered-output-"),
+  );
+  const sourcePath = nodeJoin(directory, "buffered-output.c");
+  const executablePath = nodeJoin(directory, "buffered-output");
+  const readyPath = nodeJoin(directory, "ready.txt");
+  const triggerPath = nodeJoin(directory, "trigger.txt");
+  try {
+    await nodeWriteFile(sourcePath, executorBufferedOutputSource, "utf8");
+    await execFileAsync(
+      "gcc",
+      [
+        sourcePath,
+        "-std=c99",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-o",
+        executablePath,
+      ],
+      { timeout: cdpCommandTimeoutMs },
+    );
+  } catch (error) {
+    await nodeRm(directory, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    directory,
+    marker,
+    readyPath,
+    spawnOptions: {
+      args: [readyPath, triggerPath, marker],
+      command: executablePath,
+    },
+    triggerPath,
+  };
+};
+
+const isMissingLocalLinuxProcessError = (error: unknown): boolean => {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ESRCH";
+};
+
+const readLocalLinuxProcessState = async (
+  processId: number,
+): Promise<string | undefined> => {
+  try {
+    const content = await nodeReadFile(`/proc/${processId}/stat`, "utf8");
+    const commandEnd = content.lastIndexOf(")");
+    const state = /^\s+(\S)/u.exec(content.slice(commandEnd + 1))?.[1];
+    return state;
+  } catch (error) {
+    if (isMissingLocalLinuxProcessError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+};
+
+const readLocalLinuxParentProcessId = async (
+  processId: number,
+): Promise<number> => {
+  const content = await nodeReadFile(`/proc/${processId}/status`, "utf8");
+  const parentProcessIdText = /^PPid:[\t ]+(\d+)[\t ]*$/mu.exec(content)?.[1];
+  if (parentProcessIdText === undefined) {
+    throw new Error(`Could not read parent process id for pid ${processId}`);
+  }
+  const parentProcessId = Number(parentProcessIdText);
+  if (!Number.isSafeInteger(parentProcessId) || parentProcessId <= 0) {
+    throw new Error(
+      `Invalid parent process id for pid ${processId}: ${parentProcessIdText}`,
+    );
+  }
+  return parentProcessId;
+};
+
+const isLocalLinuxProcessAlive = async (
+  processId: number,
+): Promise<boolean> => {
+  const state = await readLocalLinuxProcessState(processId);
+  return state !== undefined && state !== "Z";
+};
+
+const waitForLocalLinuxProcessState = async (
+  processId: number,
+  expectedAlive: boolean,
+  description: string,
+): Promise<void> => {
+  const deadline = Date.now() + targetTimeoutMs;
+  let lastState: string | undefined = undefined;
+  while (Date.now() < deadline) {
+    lastState = await readLocalLinuxProcessState(processId);
+    const alive = lastState !== undefined && lastState !== "Z";
+    if (alive === expectedAlive) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error(
+    `Timed out waiting for ${description}; pid=${processId}, state=${lastState ?? "missing"}`,
+  );
+};
+
+const listLocalLinuxFixtureProcessIds = async (
+  marker: string,
+): Promise<number[]> => {
+  const entries = await nodeReaddir("/proc", { withFileTypes: true });
+  const processIds: number[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/u.test(entry.name)) {
+      continue;
+    }
+    const processId = Number(entry.name);
+    try {
+      const commandLine = await nodeReadFile(
+        `/proc/${entry.name}/cmdline`,
+        "utf8",
+      );
+      if (commandLine.includes(marker)) {
+        processIds.push(processId);
+      }
+    } catch (error) {
+      if (!isMissingLocalLinuxProcessError(error)) {
+        throw error;
+      }
+    }
+  }
+  return processIds;
+};
+
+const isLocalLinuxFixtureProcess = async (
+  processId: number,
+  marker: string,
+): Promise<boolean> => {
+  try {
+    const commandLine = await nodeReadFile(
+      `/proc/${String(processId)}/cmdline`,
+      "utf8",
+    );
+    return commandLine.includes(marker);
+  } catch (error) {
+    if (isMissingLocalLinuxProcessError(error)) {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const terminateLocalLinuxFixtureProcesses = async (
+  marker: string,
+  knownProcessIds: readonly number[],
+): Promise<void> => {
+  const deadline = Date.now() + targetTimeoutMs;
+  while (Date.now() < deadline) {
+    const processIds = new Set([
+      ...knownProcessIds.filter((processId) => processId > 0),
+      ...(await listLocalLinuxFixtureProcessIds(marker)),
+    ]);
+    const liveProcessIds: number[] = [];
+    for (const processId of processIds) {
+      if (
+        (await isLocalLinuxProcessAlive(processId)) &&
+        (await isLocalLinuxFixtureProcess(processId, marker))
+      ) {
+        liveProcessIds.push(processId);
+      }
+    }
+    if (liveProcessIds.length === 0) {
+      return;
+    }
+    for (const processId of liveProcessIds.reverse()) {
+      if (!(await isLocalLinuxFixtureProcess(processId, marker))) {
+        continue;
+      }
+      try {
+        process.kill(processId, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          throw error;
+        }
+      }
+    }
+    await delay(50);
+  }
+  throw new Error(`Timed out cleaning executor fixture '${marker}'`);
+};
+
+const readExecutorFixtureGrandchildProcessId = async (
+  fixture: ExecutorProcessTreeFixture,
+): Promise<number> => {
+  const processIdText = await waitForTextFileContent(
+    fixture.processIdPath,
+    (content) => /^\d+\s*$/u.test(content),
+    `${fixture.marker} grandchild process id`,
+  );
+  const processId = Number(processIdText.trim());
+  expect(Number.isSafeInteger(processId)).toBe(true);
+  expect(processId).toBeGreaterThan(0);
+  return processId;
+};
+
+const waitForExecutorFixtureHeartbeat = async (
+  fixture: ExecutorProcessTreeFixture,
+  previousContent: string | undefined,
+): Promise<string> =>
+  await waitForTextFileContent(
+    fixture.heartbeatPath,
+    (content) =>
+      content.includes(fixture.marker) &&
+      (previousContent === undefined ||
+        content.length > previousContent.length),
+    `${fixture.marker} heartbeat`,
+  );
+
 interface WindowsCommandResult {
   exitCode: number | null;
   stderr: string;
@@ -471,6 +976,353 @@ const runWindowsPowerShell = async (
     };
   } finally {
     await processInfo.releaseAsync();
+  }
+};
+
+interface WindowsExecutorProcessTreeFixture {
+  readonly directory: string;
+  readonly heartbeatPath: string;
+  readonly marker: string;
+  readonly processIdPath: string;
+  readonly spawnOptions: ExecutorSpawnOptions;
+}
+
+interface WindowsExecutorProcessTreeIds {
+  readonly grandchildProcessId: number;
+  readonly rootProcessId: number;
+}
+
+const quoteWindowsPowerShellLiteral = (value: string): string =>
+  `'${value.replaceAll("'", "''")}'`;
+
+const encodeWindowsPowerShellCommand = (script: string): string =>
+  Buffer.from(script, "utf16le").toString("base64");
+
+const createWindowsExecutorProcessTreeFixture = (
+  directory: string,
+  marker: string,
+  daemon: boolean | undefined,
+  rootExitDelayMs: number | undefined,
+): WindowsExecutorProcessTreeFixture => {
+  const heartbeatPath = join(directory, "heartbeat.txt");
+  const processIdPath = join(directory, "processes.pid");
+  const grandchildScript = `
+$ErrorActionPreference = 'Stop'
+$heartbeatPath = ${quoteWindowsPowerShellLiteral(heartbeatPath)}
+$marker = ${quoteWindowsPowerShellLiteral(marker)}
+while ($true) {
+  [IO.File]::AppendAllText(
+    $heartbeatPath,
+    ($marker + ':' + [string]$PID + [Environment]::NewLine)
+  )
+  Start-Sleep -Milliseconds 100
+}
+`;
+  const encodedGrandchildCommand =
+    encodeWindowsPowerShellCommand(grandchildScript);
+  const rootScript = `
+$ErrorActionPreference = 'Stop'
+$powershellPath = ${quoteWindowsPowerShellLiteral(windowsPowerShellPath)}
+$processIdPath = ${quoteWindowsPowerShellLiteral(processIdPath)}
+$marker = ${quoteWindowsPowerShellLiteral(marker)}
+$grandchildStartInfo = [Diagnostics.ProcessStartInfo]::new()
+$grandchildStartInfo.FileName = $powershellPath
+$grandchildStartInfo.Arguments = (
+  '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' +
+  ${quoteWindowsPowerShellLiteral(encodedGrandchildCommand)}
+)
+$grandchildStartInfo.UseShellExecute = $false
+$grandchildStartInfo.CreateNoWindow = $true
+$grandchild = [Diagnostics.Process]::Start($grandchildStartInfo)
+[IO.File]::WriteAllText(
+  $processIdPath,
+  (
+    [string]$PID +
+    [Environment]::NewLine +
+    [string]$grandchild.Id +
+    [Environment]::NewLine +
+    $marker +
+    [Environment]::NewLine
+  )
+)
+${
+  rootExitDelayMs === undefined
+    ? `while ($true) {
+  Start-Sleep -Milliseconds 250
+}`
+    : `Start-Sleep -Milliseconds ${String(rootExitDelayMs)}
+exit 0`
+}
+`;
+  return {
+    directory,
+    heartbeatPath,
+    marker,
+    processIdPath,
+    spawnOptions: {
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encodeWindowsPowerShellCommand(rootScript),
+      ],
+      command: windowsPowerShellPath,
+      ...(daemon === undefined ? {} : { daemon }),
+    },
+  };
+};
+
+const createWindowsExecutorStdioProcessTreeFixture = (
+  directory: string,
+  marker: string,
+): WindowsExecutorProcessTreeFixture => {
+  const heartbeatPath = join(directory, "heartbeat.txt");
+  const processIdPath = join(directory, "processes.pid");
+  const stdinPath = join(directory, "stdin.txt");
+  const streamSetupScript = `
+$stdout = [Console]::OpenStandardOutput()
+$stderr = [Console]::OpenStandardError()
+function Write-ExecutorStream {
+  param([IO.Stream]$Stream, [string]$Text)
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    $Stream.Write($bytes, 0, $bytes.Length)
+    $Stream.Flush()
+  } catch {
+    # Closing the Muon-side stream connection must not end a daemon process.
+  }
+}
+`;
+  const grandchildScript = `
+$ErrorActionPreference = 'Stop'
+$heartbeatPath = ${quoteWindowsPowerShellLiteral(heartbeatPath)}
+$marker = ${quoteWindowsPowerShellLiteral(marker)}
+${streamSetupScript}
+while ($true) {
+  [IO.File]::AppendAllText(
+    $heartbeatPath,
+    ($marker + ':' + [string]$PID + ':grandchild:' + [string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) + [Environment]::NewLine)
+  )
+  Write-ExecutorStream $stdout ($marker + ':grandchild:stdout' + [Environment]::NewLine)
+  Write-ExecutorStream $stderr ($marker + ':grandchild:stderr' + [Environment]::NewLine)
+  Start-Sleep -Milliseconds 50
+}
+`;
+  const encodedGrandchildCommand =
+    encodeWindowsPowerShellCommand(grandchildScript);
+  const rootScript = `
+$ErrorActionPreference = 'Stop'
+$powershellPath = ${quoteWindowsPowerShellLiteral(windowsPowerShellPath)}
+$processIdPath = ${quoteWindowsPowerShellLiteral(processIdPath)}
+$stdinPath = ${quoteWindowsPowerShellLiteral(stdinPath)}
+$marker = ${quoteWindowsPowerShellLiteral(marker)}
+${streamSetupScript}
+Write-ExecutorStream $stdout ($marker + ':root:stdout' + [Environment]::NewLine)
+Write-ExecutorStream $stderr ($marker + ':root:stderr' + [Environment]::NewLine)
+$grandchildStartInfo = [Diagnostics.ProcessStartInfo]::new()
+$grandchildStartInfo.FileName = $powershellPath
+$grandchildStartInfo.Arguments = (
+  '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' +
+  ${quoteWindowsPowerShellLiteral(encodedGrandchildCommand)}
+)
+$grandchildStartInfo.UseShellExecute = $false
+$grandchildStartInfo.CreateNoWindow = $true
+$grandchild = [Diagnostics.Process]::Start($grandchildStartInfo)
+[IO.File]::WriteAllText(
+  $processIdPath,
+  (
+    [string]$PID +
+    [Environment]::NewLine +
+    [string]$grandchild.Id +
+    [Environment]::NewLine +
+    $marker +
+    [Environment]::NewLine
+  )
+)
+$stdin = [Console]::OpenStandardInput()
+$stdinBuffer = [byte[]]::new(256)
+$stdinReadTask = $stdin.ReadAsync($stdinBuffer, 0, $stdinBuffer.Length)
+while ($true) {
+  if ($null -ne $stdinReadTask -and $stdinReadTask.IsCompleted) {
+    try {
+      $read = $stdinReadTask.Result
+    } catch {
+      $read = 0
+    }
+    if ($read -gt 0) {
+      [IO.File]::WriteAllText(
+        $stdinPath,
+        ($marker + ':stdin:' + [string]$read + [Environment]::NewLine)
+      )
+      Write-ExecutorStream $stdout ($marker + ':stdin:' + [string]$read + [Environment]::NewLine)
+      $stdinReadTask = $stdin.ReadAsync($stdinBuffer, 0, $stdinBuffer.Length)
+    } else {
+      $stdinReadTask = $null
+    }
+  }
+  Write-ExecutorStream $stdout ($marker + ':root:stdout' + [Environment]::NewLine)
+  Write-ExecutorStream $stderr ($marker + ':root:stderr' + [Environment]::NewLine)
+  Start-Sleep -Milliseconds 50
+}
+`;
+  return {
+    directory,
+    heartbeatPath,
+    marker,
+    processIdPath,
+    spawnOptions: {
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encodeWindowsPowerShellCommand(rootScript),
+      ],
+      command: windowsPowerShellPath,
+      daemon: true,
+    },
+  };
+};
+
+const readWindowsExecutorProcessTreeIds = async (
+  fixture: WindowsExecutorProcessTreeFixture,
+): Promise<WindowsExecutorProcessTreeIds> => {
+  const processIdText = await waitForTextFileContent(
+    fixture.processIdPath,
+    (content) =>
+      /^\d+\r?\n\d+\r?\n/u.test(content) && content.includes(fixture.marker),
+    `${fixture.marker} Windows process ids`,
+  );
+  const lines = processIdText.split(/\r?\n/u);
+  const rootProcessId = Number(lines[0]);
+  const grandchildProcessId = Number(lines[1]);
+  expect(Number.isSafeInteger(rootProcessId)).toBe(true);
+  expect(rootProcessId).toBeGreaterThan(0);
+  expect(Number.isSafeInteger(grandchildProcessId)).toBe(true);
+  expect(grandchildProcessId).toBeGreaterThan(0);
+  expect(grandchildProcessId).not.toBe(rootProcessId);
+  await waitForTextFileContent(
+    fixture.heartbeatPath,
+    (content) =>
+      content.includes(`${fixture.marker}:${String(grandchildProcessId)}`),
+    `${fixture.marker} Windows grandchild heartbeat`,
+  );
+  return { grandchildProcessId, rootProcessId };
+};
+
+const waitForWindowsRemoteProcessState = async (
+  processId: number,
+  expectedAlive: boolean,
+  description: string,
+): Promise<void> => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    throw new Error("Windows remote e2e context is not configured");
+  }
+  const deadline = Date.now() + targetTimeoutMs;
+  let lastRunning: boolean | undefined = undefined;
+  let lastError: unknown = undefined;
+  while (Date.now() < deadline) {
+    try {
+      const snapshot = await context.agent.processes.snapshot(processId);
+      lastRunning = snapshot.running;
+      if (lastRunning === expectedAlive) {
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(100);
+  }
+  throw new Error(
+    `Timed out waiting for ${description}; pid=${String(
+      processId,
+    )}, running=${String(lastRunning)}, error=${String(lastError)}`,
+  );
+};
+
+const terminateWindowsExecutorFixtureProcesses = async (
+  fixture: WindowsExecutorProcessTreeFixture,
+  processIds: readonly number[],
+): Promise<void> => {
+  const context = getWindowsRemoteContext();
+  if (context === undefined) {
+    throw new Error("Windows remote e2e context is not configured");
+  }
+  const cleanupProcessIds = [...processIds];
+  try {
+    const processIdText = await readFile(fixture.processIdPath, "utf8");
+    if (processIdText.includes(fixture.marker)) {
+      for (const line of processIdText.split(/\r?\n/u).slice(0, 2)) {
+        const processId = Number(line);
+        if (
+          Number.isSafeInteger(processId) &&
+          processId > 0 &&
+          !cleanupProcessIds.includes(processId)
+        ) {
+          cleanupProcessIds.push(processId);
+        }
+      }
+    }
+  } catch {
+    // The fixture may have failed before it wrote the process id file.
+  }
+
+  const rootProcessId = cleanupProcessIds[0];
+  if (rootProcessId !== undefined && rootProcessId > 0) {
+    const cleanupScript = `
+$ErrorActionPreference = 'SilentlyContinue'
+$rootProcessId = [UInt32]${String(rootProcessId)}
+$processes = @(Get-CimInstance Win32_Process)
+$pending = [Collections.Generic.Queue[UInt32]]::new()
+$pending.Enqueue($rootProcessId)
+$descendants = [Collections.Generic.List[UInt32]]::new()
+while ($pending.Count -gt 0) {
+  $parentProcessId = $pending.Dequeue()
+  foreach ($process in $processes) {
+    if ([UInt32]$process.ParentProcessId -eq $parentProcessId) {
+      $processId = [UInt32]$process.ProcessId
+      $descendants.Add($processId)
+      $pending.Enqueue($processId)
+    }
+  }
+}
+for ($index = $descendants.Count - 1; $index -ge 0; $index -= 1) {
+  Stop-Process -Id $descendants[$index] -Force
+}
+Stop-Process -Id $rootProcessId -Force
+`;
+    try {
+      await runWindowsPowerShell(
+        fixture.directory,
+        `cleanup-${fixture.marker}`,
+        cleanupScript,
+        targetTimeoutMs,
+      );
+    } catch {
+      // Known process ids below provide a fallback when CIM is unavailable.
+    }
+  }
+
+  for (const processId of cleanupProcessIds.reverse()) {
+    if (!Number.isSafeInteger(processId) || processId <= 0) {
+      continue;
+    }
+    try {
+      const snapshot = await context.agent.processes.snapshot(processId);
+      if (snapshot.running) {
+        await context.agent.processes.kill(processId);
+      }
+      await context.agent.processes.waitForExit(processId, {
+        intervalMs: 100,
+        timeoutMs: targetTimeoutMs,
+      });
+    } catch {
+      // The process may have exited between snapshot and cleanup.
+    }
   }
 };
 
@@ -2216,6 +3068,137 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     },
   );
 
+  it("rejects a non-boolean executor daemon option", async () => {
+    await withMuonEnvironment([], {}, async (driver) => {
+      await expect(
+        evaluateRejection(
+          driver,
+          `window.muon.executor.spawn({
+            command: "unused",
+            daemon: "true",
+          })`,
+        ),
+      ).resolves.toContain("daemon must be a boolean");
+    });
+  });
+
+  windowsIt(
+    "rejects an unstartable Windows executor process without terminating Muon",
+    async () => {
+      const missingCommand = `Z:\\muon-e2e\\missing-${randomUUID()}.exe`;
+      await withMuonEnvironment(
+        [],
+        {},
+        async (driver) => {
+          await expect(
+            evaluateRejection(
+              driver,
+              `window.muon.executor.spawn({
+                command: ${JSON.stringify(missingCommand)},
+                daemon: true,
+              })`,
+            ),
+          ).resolves.toContain("CreateProcessW failed");
+
+          const waitResult = await driver.evaluate<{
+            exitCode: number;
+            processId: number;
+          }>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              createExecutorOkSpawnOptions(),
+            )});
+            return await child.wait();
+          })()`);
+          expect(waitResult.processId).toBeGreaterThan(0);
+          expect(waitResult.exitCode).toBe(0);
+        },
+        false,
+      );
+    },
+  );
+
+  windowsIt(
+    "recovers after an injected one-shot Windows executor operation event failure",
+    async () => {
+      const spawnOptions = createExecutorOkSpawnOptions();
+      await withMuonEnvironment(
+        [],
+        { MUON_TEST_EXECUTOR_FAIL_OPERATION_EVENT_ONCE: "1" },
+        async (driver) => {
+          const values = await driver.evaluate<{
+            firstError: string;
+            secondExitCode: number;
+            secondProcessId: number;
+          }>(`(async () => {
+            let firstError = "";
+            let first;
+            try {
+              first = await window.muon.executor.spawn(${JSON.stringify(
+                spawnOptions,
+              )});
+            } catch (error) {
+              firstError = String(error?.message ?? error);
+            }
+            if (first !== undefined) {
+              await first.release();
+            }
+            const second = await window.muon.executor.spawn(${JSON.stringify(
+              spawnOptions,
+            )});
+            const secondResult = await second.wait();
+            return {
+              firstError,
+              secondExitCode: secondResult.exitCode,
+              secondProcessId: secondResult.processId,
+            };
+          })()`);
+
+          expect(values.firstError).toContain(
+            "Failed to create process I/O worker event",
+          );
+          expect(values.secondProcessId).toBeGreaterThan(0);
+          expect(values.secondExitCode).toBe(0);
+        },
+      );
+    },
+  );
+
+  windowsIt(
+    "rejects a Windows daemon when its parent job forbids breakaway without terminating Muon",
+    async () => {
+      await withMuonEnvironment(
+        [],
+        {},
+        async (driver) => {
+          await expect(
+            evaluateRejection(
+              driver,
+              `window.muon.executor.spawn({
+                ...${JSON.stringify(createExecutorOkSpawnOptions())},
+                daemon: true,
+              })`,
+            ),
+          ).resolves.toContain(
+            "CreateProcessW failed while breaking away from the parent job",
+          );
+
+          const waitResult = await driver.evaluate<{
+            exitCode: number;
+            processId: number;
+          }>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              createExecutorOkSpawnOptions(),
+            )});
+            return await child.wait();
+          })()`);
+          expect(waitResult.processId).toBeGreaterThan(0);
+          expect(waitResult.exitCode).toBe(0);
+        },
+        true,
+      );
+    },
+  );
+
   it("streams child process output and writes stdin incrementally", async () => {
     const spawnOptions = createExecutorStreamingSpawnOptions();
     await withMuonEnvironment([], {}, async (driver) => {
@@ -2331,6 +3314,1345 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
   });
 
   linuxIt(
+    "keeps a daemon executor process tree alive after release",
+    async () => {
+      const directory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-daemon-release-"),
+      );
+      const marker = `muon-executor-daemon-release-${randomUUID()}`;
+      const fixture = createExecutorProcessTreeFixture(
+        directory,
+        marker,
+        true,
+        undefined,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const rootProcessId = await driver.evaluate<number>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              fixture.spawnOptions,
+            )});
+            globalThis.executorDaemonReleaseChild = child;
+            return child.processId;
+          })()`);
+          processIds.push(rootProcessId);
+          const grandchildProcessId =
+            await readExecutorFixtureGrandchildProcessId(fixture);
+          processIds.push(grandchildProcessId);
+          const heartbeat = await waitForExecutorFixtureHeartbeat(
+            fixture,
+            undefined,
+          );
+
+          await driver.evaluate(
+            "globalThis.executorDaemonReleaseChild.release()",
+          );
+          await waitForExecutorFixtureHeartbeat(fixture, heartbeat);
+          await waitForLocalLinuxProcessState(
+            rootProcessId,
+            true,
+            "released daemon executor root to remain alive",
+          );
+          await waitForLocalLinuxProcessState(
+            grandchildProcessId,
+            true,
+            "released daemon executor grandchild to remain alive",
+          );
+        });
+
+        for (const processId of processIds) {
+          await waitForLocalLinuxProcessState(
+            processId,
+            true,
+            "released daemon executor tree to survive Muon shutdown",
+          );
+        }
+      } finally {
+        await terminateLocalLinuxFixtureProcesses(marker, processIds);
+        await nodeRm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  linuxIt(
+    "applies daemon lifecycle policy to unreleased process trees when the context and Muon close",
+    async () => {
+      const foregroundDirectory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-context-foreground-"),
+      );
+      const daemonDirectory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-context-daemon-"),
+      );
+      const foregroundMarker = `muon-executor-context-foreground-${randomUUID()}`;
+      const daemonMarker = `muon-executor-context-daemon-${randomUUID()}`;
+      const foregroundFixture = createExecutorProcessTreeFixture(
+        foregroundDirectory,
+        foregroundMarker,
+        false,
+        undefined,
+      );
+      const daemonFixture = createExecutorProcessTreeFixture(
+        daemonDirectory,
+        daemonMarker,
+        true,
+        undefined,
+      );
+      const foregroundProcessIds: number[] = [];
+      const daemonProcessIds: number[] = [];
+      let daemonHeartbeat: string | undefined = undefined;
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const rootProcessIds = await driver.evaluate<{
+            daemon: number;
+            foreground: number;
+          }>(`(async () => {
+            globalThis.executorUnreleasedForeground =
+              await window.muon.executor.spawn(${JSON.stringify(
+                foregroundFixture.spawnOptions,
+              )});
+            globalThis.executorUnreleasedDaemon =
+              await window.muon.executor.spawn(${JSON.stringify(
+                daemonFixture.spawnOptions,
+              )});
+            return {
+              daemon: globalThis.executorUnreleasedDaemon.processId,
+              foreground: globalThis.executorUnreleasedForeground.processId,
+            };
+          })()`);
+          foregroundProcessIds.push(rootProcessIds.foreground);
+          daemonProcessIds.push(rootProcessIds.daemon);
+          foregroundProcessIds.push(
+            await readExecutorFixtureGrandchildProcessId(foregroundFixture),
+          );
+          daemonProcessIds.push(
+            await readExecutorFixtureGrandchildProcessId(daemonFixture),
+          );
+          await waitForExecutorFixtureHeartbeat(foregroundFixture, undefined);
+          daemonHeartbeat = await waitForExecutorFixtureHeartbeat(
+            daemonFixture,
+            undefined,
+          );
+
+          await driver.navigate(
+            "data:text/html,<title>muon executor context closed</title>",
+            cdpCommandTimeoutMs,
+          );
+          for (const processId of foregroundProcessIds) {
+            await waitForLocalLinuxProcessState(
+              processId,
+              false,
+              "unreleased foreground executor process after context close",
+            );
+          }
+          for (const processId of daemonProcessIds) {
+            await waitForLocalLinuxProcessState(
+              processId,
+              true,
+              "unreleased daemon executor process after context close",
+            );
+          }
+          daemonHeartbeat = await waitForExecutorFixtureHeartbeat(
+            daemonFixture,
+            daemonHeartbeat,
+          );
+        });
+
+        for (const processId of daemonProcessIds) {
+          await waitForLocalLinuxProcessState(
+            processId,
+            true,
+            "unreleased daemon executor process after Muon shutdown",
+          );
+        }
+        await waitForExecutorFixtureHeartbeat(daemonFixture, daemonHeartbeat);
+      } finally {
+        try {
+          await terminateLocalLinuxFixtureProcesses(
+            foregroundMarker,
+            foregroundProcessIds,
+          );
+          await terminateLocalLinuxFixtureProcesses(
+            daemonMarker,
+            daemonProcessIds,
+          );
+        } finally {
+          await nodeRm(foregroundDirectory, {
+            recursive: true,
+            force: true,
+          });
+          await nodeRm(daemonDirectory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  linuxIt(
+    "releases daemon executor streams while its active process tree remains alive",
+    async () => {
+      const directory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-daemon-stdio-release-"),
+      );
+      const marker = `muon-executor-daemon-stdio-release-${randomUUID()}`;
+      const fixture = createExecutorStdioProcessTreeFixture(directory, marker);
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const rootProcessId = await driver.evaluate<number>(`(async () => {
+            const delay = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+            const callbacks = { stderr: 0, stdout: 0 };
+            const child = await window.muon.executor.spawn({
+              ...${JSON.stringify(fixture.spawnOptions)},
+              onStdout: () => {
+                callbacks.stdout += 1;
+              },
+              onStderr: () => {
+                callbacks.stderr += 1;
+              },
+            });
+            globalThis.executorDaemonStdioChild = child;
+            globalThis.executorDaemonStdioCallbacks = callbacks;
+            await child.writeStdin("stdio-active");
+            const deadline = Date.now() + 5000;
+            while (
+              Date.now() < deadline &&
+              (callbacks.stdout === 0 || callbacks.stderr === 0)
+            ) {
+              await delay(20);
+            }
+            if (callbacks.stdout === 0 || callbacks.stderr === 0) {
+              throw new Error("Timed out waiting for active executor streams");
+            }
+            return child.processId;
+          })()`);
+          processIds.push(rootProcessId);
+          const grandchildProcessId =
+            await readExecutorFixtureGrandchildProcessId(fixture);
+          processIds.push(grandchildProcessId);
+          await waitForTextFileContent(
+            nodeJoin(directory, "stdin.txt"),
+            (content) => content.includes(`${fixture.marker}:stdin:`),
+            `${fixture.marker} active stdin`,
+          );
+          let heartbeat = await waitForTextFileContent(
+            fixture.heartbeatPath,
+            (content) => content.includes(`${fixture.marker}:grandchild:`),
+            `${fixture.marker} active heartbeat`,
+          );
+
+          const releaseResult = await driver.evaluate<{
+            durationMs: number;
+            stderrCallbacks: number;
+            stdoutCallbacks: number;
+          }>(`(async () => {
+            const delay = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+            const startedAt = performance.now();
+            const releaseWatcher = (async () => {
+              await globalThis.executorDaemonStdioChild.release();
+              return true;
+            })();
+            const timeoutWatcher = (async () => {
+              await delay(5000);
+              return false;
+            })();
+            const released = await Promise.race([
+              releaseWatcher,
+              timeoutWatcher,
+            ]);
+            if (!released) {
+              throw new Error("Timed out releasing active executor streams");
+            }
+            return {
+              durationMs: performance.now() - startedAt,
+              stderrCallbacks:
+                globalThis.executorDaemonStdioCallbacks.stderr,
+              stdoutCallbacks:
+                globalThis.executorDaemonStdioCallbacks.stdout,
+            };
+          })()`);
+          expect(releaseResult.durationMs).toBeLessThan(5000);
+
+          heartbeat = await waitForExecutorFixtureHeartbeat(fixture, heartbeat);
+          await waitForExecutorFixtureHeartbeat(fixture, heartbeat);
+          const callbacksAfterHeartbeat = await driver.evaluate<{
+            stderr: number;
+            stdout: number;
+          }>("globalThis.executorDaemonStdioCallbacks");
+          expect(callbacksAfterHeartbeat).toEqual({
+            stderr: releaseResult.stderrCallbacks,
+            stdout: releaseResult.stdoutCallbacks,
+          });
+          await waitForLocalLinuxProcessState(
+            rootProcessId,
+            true,
+            "released daemon executor root with closed stdio",
+          );
+          await waitForLocalLinuxProcessState(
+            grandchildProcessId,
+            true,
+            "released daemon executor grandchild with closed stdio",
+          );
+        });
+
+        for (const processId of processIds) {
+          await waitForLocalLinuxProcessState(
+            processId,
+            true,
+            "released active daemon executor process after Muon shutdown",
+          );
+        }
+      } finally {
+        await terminateLocalLinuxFixtureProcesses(marker, processIds);
+        await nodeRm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  linuxIt(
+    "captures every byte buffered in an extended pipe when the executor root exits",
+    async () => {
+      const marker = `muon-executor-buffered-output-${randomUUID()}`;
+      const fixture = await buildExecutorBufferedOutputFixture(marker);
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const startResult = await driver.evaluate<{
+            muonProcessId: number;
+            rootProcessId: number;
+          }>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              fixture.spawnOptions,
+            )});
+            globalThis.executorBufferedOutputChild = child;
+            return {
+              muonProcessId:
+                await window.muon.environments.getProcessId(),
+              rootProcessId: child.processId,
+            };
+          })()`);
+          const { muonProcessId, rootProcessId } = startResult;
+          processIds.push(rootProcessId);
+
+          const readyContent = await waitForTextFileContent(
+            fixture.readyPath,
+            (content) => {
+              const values = content.split(":");
+              return (
+                values.length === 4 &&
+                Number(values[0]) === rootProcessId &&
+                Number.isInteger(Number(values[1])) &&
+                Number.isInteger(Number(values[2])) &&
+                values[3] === fixture.marker
+              );
+            },
+            `${fixture.marker} extended output pipe`,
+          );
+          const readyValues = readyContent.split(":");
+          expect(Number(readyValues[0])).toBe(rootProcessId);
+          expect(
+            Number(readyValues[1]),
+            `F_SETPIPE_SZ failed with errno ${readyValues[2]}`,
+          ).toBeGreaterThanOrEqual(executorBufferedOutputSize);
+          expect(Number(readyValues[2])).toBe(0);
+          expect(readyValues[3]).toBe(fixture.marker);
+
+          const supervisorProcessId =
+            await readLocalLinuxParentProcessId(rootProcessId);
+          processIds.push(supervisorProcessId);
+          const supervisorCommandLine = await nodeReadFile(
+            `/proc/${String(supervisorProcessId)}/cmdline`,
+            "utf8",
+          );
+          expect(supervisorCommandLine).toContain("muon-executor-supervisor");
+
+          expect(muonProcessId).toBeGreaterThan(0);
+          let muonStopped = false;
+          try {
+            process.kill(muonProcessId, "SIGSTOP");
+            muonStopped = true;
+            await nodeWriteFile(fixture.triggerPath, fixture.marker, "utf8");
+            await waitForLocalLinuxProcessState(
+              rootProcessId,
+              false,
+              "buffered-output executor root while Muon is stopped",
+            );
+            await waitForLocalLinuxProcessState(
+              supervisorProcessId,
+              false,
+              "buffered-output executor supervisor while Muon is stopped",
+            );
+          } finally {
+            if (muonStopped) {
+              process.kill(muonProcessId, "SIGCONT");
+            }
+          }
+
+          const values = await driver.evaluate<{
+            capturedBytes: number;
+            exitCode: number;
+            mismatchIndex: number;
+            processId: number;
+          }>(`(async () => {
+            const result =
+              await globalThis.executorBufferedOutputChild.wait();
+            let mismatchIndex = -1;
+            for (let index = 0; index < result.stdout.length; index += 1) {
+              const expected = (index * 31 + 17) & 0xff;
+              if (result.stdout[index] !== expected) {
+                mismatchIndex = index;
+                break;
+              }
+            }
+            return {
+              capturedBytes: result.stdout.length,
+              exitCode: result.exitCode,
+              mismatchIndex,
+              processId: result.processId,
+            };
+          })()`);
+          expect(values).toEqual({
+            capturedBytes: executorBufferedOutputSize,
+            exitCode: 0,
+            mismatchIndex: -1,
+            processId: rootProcessId,
+          });
+        });
+      } finally {
+        await terminateLocalLinuxFixtureProcesses(marker, processIds);
+        await nodeRm(fixture.directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  linuxIt(
+    "disposes a daemon executor connection without starving behind continuous stdout and stderr",
+    async () => {
+      const directory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-daemon-continuous-output-"),
+      );
+      const marker = `muon-executor-daemon-continuous-output-${randomUUID()}`;
+      const fixture = createExecutorContinuousOutputFixture(directory, marker);
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const startResult = await driver.evaluate<{
+            handleId: number;
+            processId: number;
+          }>(`(async () => {
+            const emptyBytes = new Uint8Array(0);
+            const ownerCallback = () => {};
+            const rpc = async (request, data = emptyBytes) =>
+              JSON.parse(
+                await window.muon.executor.__spawnRpc(
+                  JSON.stringify(request),
+                  data,
+                  0,
+                  ownerCallback,
+                  null,
+                  null,
+                ),
+              );
+            const start = await rpc({
+              op: "start",
+              options: ${JSON.stringify(fixture.spawnOptions)},
+              captureStdout: false,
+              captureStderr: false,
+            });
+            globalThis.executorContinuousOutputRpc = rpc;
+            globalThis.executorContinuousOutputHandleId = start.handleId;
+            await rpc(
+              { op: "writeStdin", handleId: start.handleId },
+              new TextEncoder().encode("start"),
+            );
+            return start;
+          })()`);
+          processIds.push(startResult.processId);
+
+          const writerProcessIdsText = await waitForTextFileContent(
+            fixture.processIdPath,
+            (content) => {
+              try {
+                const values: unknown = JSON.parse(content);
+                return (
+                  Array.isArray(values) &&
+                  values.length === fixture.writerCount &&
+                  values.every(
+                    (value) =>
+                      typeof value === "number" &&
+                      Number.isSafeInteger(value) &&
+                      value > 0,
+                  )
+                );
+              } catch {
+                return false;
+              }
+            },
+            `${fixture.marker} writer process ids`,
+          );
+          const writerProcessIds = JSON.parse(writerProcessIdsText) as number[];
+          processIds.push(...writerProcessIds);
+
+          await waitForTextFileContent(
+            fixture.stdoutReadyPath,
+            (content) => content === fixture.marker,
+            `${fixture.marker} continuous stdout`,
+          );
+          await waitForTextFileContent(
+            fixture.stderrReadyPath,
+            (content) => content === fixture.marker,
+            `${fixture.marker} continuous stderr`,
+          );
+
+          const waitWatcher = (async () => ({
+            completed: true as const,
+            result: await driver.evaluate<{
+              exitCode: number;
+              processId: number;
+            }>(`globalThis.executorContinuousOutputRpc({
+              op: "wait",
+              handleId: globalThis.executorContinuousOutputHandleId,
+            })`),
+          }))();
+          process.kill(startResult.processId, "SIGTERM");
+
+          let waitTimeoutId: ReturnType<typeof setTimeout> | undefined =
+            undefined;
+          const timeoutWatcher = new Promise<{
+            readonly completed: false;
+          }>((resolve) => {
+            waitTimeoutId = setTimeout(
+              () => resolve({ completed: false }),
+              targetTimeoutMs,
+            );
+          });
+          let waitOutcome:
+            | {
+                readonly completed: true;
+                readonly result: {
+                  readonly exitCode: number;
+                  readonly processId: number;
+                };
+              }
+            | {
+                readonly completed: false;
+              };
+          try {
+            waitOutcome = await Promise.race([waitWatcher, timeoutWatcher]);
+          } finally {
+            if (waitTimeoutId !== undefined) {
+              clearTimeout(waitTimeoutId);
+            }
+          }
+          if (!waitOutcome.completed) {
+            for (const processId of [...writerProcessIds].reverse()) {
+              if (
+                !(await isLocalLinuxFixtureProcess(processId, fixture.marker))
+              ) {
+                continue;
+              }
+              try {
+                process.kill(processId, "SIGKILL");
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                  throw error;
+                }
+              }
+            }
+            await waitWatcher;
+          }
+          expect(waitOutcome).toEqual({
+            completed: true,
+            result: {
+              exitCode: 0,
+              processId: startResult.processId,
+            },
+          });
+
+          await driver.evaluate(`globalThis.executorContinuousOutputRpc({
+            op: "dispose",
+            handleId: globalThis.executorContinuousOutputHandleId,
+          })`);
+
+          for (const processId of writerProcessIds) {
+            await waitForLocalLinuxProcessState(
+              processId,
+              false,
+              "continuous executor writer after connection disposal",
+            );
+          }
+          await waitForLocalLinuxProcessState(
+            startResult.processId,
+            false,
+            "continuous-output daemon root after wait",
+          );
+        });
+      } finally {
+        await terminateLocalLinuxFixtureProcesses(marker, processIds);
+        await nodeRm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  linuxIt("kills an attached daemon executor process tree", async () => {
+    const directory = await nodeMkdtemp(
+      nodeJoin(nodeTmpdir(), "muon-executor-daemon-kill-"),
+    );
+    const marker = `muon-executor-daemon-kill-${randomUUID()}`;
+    const fixture = createExecutorProcessTreeFixture(
+      directory,
+      marker,
+      true,
+      undefined,
+    );
+    const processIds: number[] = [];
+    try {
+      await withMuonEnvironment([], {}, async (driver) => {
+        const rootProcessId = await driver.evaluate<number>(`(async () => {
+          const child = await window.muon.executor.spawn(${JSON.stringify(
+            fixture.spawnOptions,
+          )});
+          globalThis.executorDaemonKillChild = child;
+          return child.processId;
+        })()`);
+        processIds.push(rootProcessId);
+        const grandchildProcessId =
+          await readExecutorFixtureGrandchildProcessId(fixture);
+        processIds.push(grandchildProcessId);
+        await waitForExecutorFixtureHeartbeat(fixture, undefined);
+
+        const exitCode = await driver.evaluate<number>(`(async () => {
+          await globalThis.executorDaemonKillChild.kill();
+          return (await globalThis.executorDaemonKillChild.wait()).exitCode;
+        })()`);
+        expect(exitCode).not.toBe(0);
+        await waitForLocalLinuxProcessState(
+          rootProcessId,
+          false,
+          "killed daemon executor root to exit",
+        );
+        await waitForLocalLinuxProcessState(
+          grandchildProcessId,
+          false,
+          "killed daemon executor grandchild to exit",
+        );
+      });
+    } finally {
+      await terminateLocalLinuxFixtureProcesses(marker, processIds);
+      await nodeRm(directory, { recursive: true, force: true });
+    }
+  });
+
+  linuxIt(
+    "cleans up the complete executor process tree when daemon is omitted",
+    async () => {
+      const directory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-foreground-release-"),
+      );
+      const marker = `muon-executor-foreground-release-${randomUUID()}`;
+      const fixture = createExecutorProcessTreeFixture(
+        directory,
+        marker,
+        undefined,
+        undefined,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const rootProcessId = await driver.evaluate<number>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              fixture.spawnOptions,
+            )});
+            globalThis.executorForegroundReleaseChild = child;
+            return child.processId;
+          })()`);
+          processIds.push(rootProcessId);
+          const grandchildProcessId =
+            await readExecutorFixtureGrandchildProcessId(fixture);
+          processIds.push(grandchildProcessId);
+          await waitForExecutorFixtureHeartbeat(fixture, undefined);
+
+          await driver.evaluate(
+            "globalThis.executorForegroundReleaseChild.release()",
+          );
+          await waitForLocalLinuxProcessState(
+            rootProcessId,
+            false,
+            "released foreground executor root to exit",
+          );
+          await waitForLocalLinuxProcessState(
+            grandchildProcessId,
+            false,
+            "released foreground executor grandchild to exit",
+          );
+        });
+      } finally {
+        await terminateLocalLinuxFixtureProcesses(marker, processIds);
+        await nodeRm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  linuxIt(
+    "cleans up a foreground process tree when its supervisor exits unexpectedly",
+    async () => {
+      const directory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-supervisor-exit-"),
+      );
+      const marker = `muon-executor-supervisor-exit-${randomUUID()}`;
+      const fixture = createExecutorProcessTreeFixture(
+        directory,
+        marker,
+        false,
+        undefined,
+      );
+      const processIds: number[] = [];
+      let supervisorProcessId = -1;
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const rootProcessId = await driver.evaluate<number>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              fixture.spawnOptions,
+            )});
+            globalThis.executorSupervisorExitChild = child;
+            return child.processId;
+          })()`);
+          processIds.push(rootProcessId);
+          const grandchildProcessId =
+            await readExecutorFixtureGrandchildProcessId(fixture);
+          processIds.push(grandchildProcessId);
+          await waitForExecutorFixtureHeartbeat(fixture, undefined);
+
+          supervisorProcessId =
+            await readLocalLinuxParentProcessId(rootProcessId);
+          expect(supervisorProcessId).not.toBe(rootProcessId);
+          expect(supervisorProcessId).not.toBe(grandchildProcessId);
+          const supervisorCommandLine = await nodeReadFile(
+            `/proc/${supervisorProcessId}/cmdline`,
+            "utf8",
+          );
+          expect(supervisorCommandLine).toContain("muon-executor-supervisor");
+
+          process.kill(supervisorProcessId, "SIGKILL");
+          const releaseResult = await driver.evaluate<{
+            killError: string;
+            releaseCompleted: boolean;
+            waitError: string;
+            writeError: string;
+          }>(`(async () => {
+            const child = globalThis.executorSupervisorExitChild;
+            const getError = async (operation) => {
+              try {
+                await operation();
+                return "";
+              } catch (error) {
+                return String(error?.message ?? error);
+              }
+            };
+            const waitError = await getError(() => child.wait());
+            const writeError = await getError(() =>
+              child.writeStdin(new Uint8Array([1])),
+            );
+            const killError = await getError(() => child.kill());
+            await child.release();
+            await child.release();
+            return {
+              killError,
+              releaseCompleted: true,
+              waitError,
+              writeError,
+            };
+          })()`);
+          expect(releaseResult.waitError).toContain("Executor supervisor");
+          expect(releaseResult.writeError).toBe("executor process is released");
+          expect(releaseResult.killError).toBe("executor process is released");
+          expect(releaseResult.releaseCompleted).toBe(true);
+          await waitForLocalLinuxProcessState(
+            rootProcessId,
+            false,
+            "foreground executor root after supervisor failure",
+          );
+          await waitForLocalLinuxProcessState(
+            grandchildProcessId,
+            false,
+            "foreground executor grandchild after supervisor failure",
+          );
+        });
+      } finally {
+        try {
+          if (supervisorProcessId > 0) {
+            try {
+              process.kill(supervisorProcessId, "SIGKILL");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                throw error;
+              }
+            }
+          }
+        } finally {
+          try {
+            await terminateLocalLinuxFixtureProcesses(marker, processIds);
+          } finally {
+            await nodeRm(directory, { recursive: true, force: true });
+          }
+        }
+      }
+    },
+  );
+
+  linuxIt(
+    "cleans up executor descendants after the root process exits",
+    async () => {
+      const directory = await nodeMkdtemp(
+        nodeJoin(nodeTmpdir(), "muon-executor-root-exit-"),
+      );
+      const marker = `muon-executor-root-exit-${randomUUID()}`;
+      const fixture = createExecutorProcessTreeFixture(
+        directory,
+        marker,
+        undefined,
+        1000,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const rootProcessId = await driver.evaluate<number>(`(async () => {
+            const child = await window.muon.executor.spawn(${JSON.stringify(
+              fixture.spawnOptions,
+            )});
+            globalThis.executorRootExitChild = child;
+            return child.processId;
+          })()`);
+          processIds.push(rootProcessId);
+          const grandchildProcessId =
+            await readExecutorFixtureGrandchildProcessId(fixture);
+          processIds.push(grandchildProcessId);
+          await waitForExecutorFixtureHeartbeat(fixture, undefined);
+
+          await expect(
+            driver.evaluate<number>(
+              "(async () => (await globalThis.executorRootExitChild.wait()).exitCode)()",
+            ),
+          ).resolves.toBe(0);
+          await waitForLocalLinuxProcessState(
+            grandchildProcessId,
+            false,
+            "executor grandchild after its root exits",
+          );
+        });
+      } finally {
+        await terminateLocalLinuxFixtureProcesses(marker, processIds);
+        await nodeRm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  windowsIt(
+    "cleans up the complete Windows executor process tree when daemon is omitted",
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-foreground-release-"),
+      );
+      const marker = `muon-executor-windows-foreground-release-${randomUUID()}`;
+      const fixture = createWindowsExecutorProcessTreeFixture(
+        directory,
+        marker,
+        undefined,
+        undefined,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const handleProcessId = await driver.evaluate<number>(
+            `(async () => {
+              const child = await window.muon.executor.spawn(${JSON.stringify(
+                fixture.spawnOptions,
+              )});
+              globalThis.executorWindowsForegroundReleaseChild = child;
+              return child.processId;
+            })()`,
+          );
+          processIds.push(handleProcessId);
+          const treeIds = await readWindowsExecutorProcessTreeIds(fixture);
+          processIds.push(treeIds.grandchildProcessId);
+          expect(treeIds.rootProcessId).toBe(handleProcessId);
+
+          await driver.evaluate(
+            "globalThis.executorWindowsForegroundReleaseChild.release()",
+          );
+          await waitForWindowsRemoteProcessState(
+            treeIds.rootProcessId,
+            false,
+            "released Windows foreground executor root to exit",
+          );
+          await waitForWindowsRemoteProcessState(
+            treeIds.grandchildProcessId,
+            false,
+            "released Windows foreground executor grandchild to exit",
+          );
+        });
+      } finally {
+        try {
+          await terminateWindowsExecutorFixtureProcesses(fixture, processIds);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  windowsIt(
+    "cleans up Windows executor descendants after the root process exits",
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-root-exit-"),
+      );
+      const marker = `muon-executor-windows-root-exit-${randomUUID()}`;
+      const fixture = createWindowsExecutorProcessTreeFixture(
+        directory,
+        marker,
+        undefined,
+        3000,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment([], {}, async (driver) => {
+          const handleProcessId = await driver.evaluate<number>(
+            `(async () => {
+              const child = await window.muon.executor.spawn(${JSON.stringify(
+                fixture.spawnOptions,
+              )});
+              globalThis.executorWindowsRootExitChild = child;
+              return child.processId;
+            })()`,
+          );
+          processIds.push(handleProcessId);
+          const treeIds = await readWindowsExecutorProcessTreeIds(fixture);
+          processIds.push(treeIds.grandchildProcessId);
+          expect(treeIds.rootProcessId).toBe(handleProcessId);
+
+          await expect(
+            driver.evaluate<number>(
+              "(async () => (await globalThis.executorWindowsRootExitChild.wait()).exitCode)()",
+            ),
+          ).resolves.toBe(0);
+          await waitForWindowsRemoteProcessState(
+            treeIds.grandchildProcessId,
+            false,
+            "Windows executor grandchild after its root exits",
+          );
+        });
+      } finally {
+        try {
+          await terminateWindowsExecutorFixtureProcesses(fixture, processIds);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  windowsIt(
+    "keeps a Windows daemon executor process tree alive after release and Muon shutdown",
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-daemon-release-"),
+      );
+      const marker = `muon-executor-windows-daemon-release-${randomUUID()}`;
+      const fixture = createWindowsExecutorProcessTreeFixture(
+        directory,
+        marker,
+        true,
+        undefined,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment(
+          [],
+          {},
+          async (driver) => {
+            const handleProcessId = await driver.evaluate<number>(
+              `(async () => {
+              const child = await window.muon.executor.spawn(${JSON.stringify(
+                fixture.spawnOptions,
+              )});
+              globalThis.executorWindowsDaemonReleaseChild = child;
+              return child.processId;
+            })()`,
+            );
+            processIds.push(handleProcessId);
+            const treeIds = await readWindowsExecutorProcessTreeIds(fixture);
+            processIds.push(treeIds.grandchildProcessId);
+            expect(treeIds.rootProcessId).toBe(handleProcessId);
+
+            await driver.evaluate(
+              "globalThis.executorWindowsDaemonReleaseChild.release()",
+            );
+            await waitForWindowsRemoteProcessState(
+              treeIds.rootProcessId,
+              true,
+              "released Windows daemon executor root to remain alive",
+            );
+            await waitForWindowsRemoteProcessState(
+              treeIds.grandchildProcessId,
+              true,
+              "released Windows daemon executor grandchild to remain alive",
+            );
+          },
+          false,
+        );
+
+        const rootProcessId = processIds[0];
+        const grandchildProcessId = processIds[1];
+        if (rootProcessId === undefined || grandchildProcessId === undefined) {
+          throw new Error("Windows daemon executor process ids are missing");
+        }
+        await waitForWindowsRemoteProcessState(
+          rootProcessId,
+          true,
+          "released Windows daemon executor root to survive Muon shutdown",
+        );
+        await waitForWindowsRemoteProcessState(
+          grandchildProcessId,
+          true,
+          "released Windows daemon executor grandchild to survive Muon shutdown",
+        );
+      } finally {
+        try {
+          await terminateWindowsExecutorFixtureProcesses(fixture, processIds);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  windowsIt(
+    "applies the Windows daemon lifecycle policy to unreleased process trees when the context and Muon close",
+    async () => {
+      const foregroundDirectory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-context-foreground-"),
+      );
+      const daemonDirectory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-context-daemon-"),
+      );
+      const foregroundMarker = `muon-executor-windows-context-foreground-${randomUUID()}`;
+      const daemonMarker = `muon-executor-windows-context-daemon-${randomUUID()}`;
+      const foregroundFixture = createWindowsExecutorProcessTreeFixture(
+        foregroundDirectory,
+        foregroundMarker,
+        false,
+        undefined,
+      );
+      const daemonFixture = createWindowsExecutorProcessTreeFixture(
+        daemonDirectory,
+        daemonMarker,
+        true,
+        undefined,
+      );
+      const foregroundProcessIds: number[] = [];
+      const daemonProcessIds: number[] = [];
+      let daemonHeartbeat: string | undefined = undefined;
+      try {
+        await withMuonEnvironment(
+          [],
+          {},
+          async (driver) => {
+            const handleProcessIds = await driver.evaluate<{
+              daemon: number;
+              foreground: number;
+            }>(`(async () => {
+            globalThis.executorWindowsUnreleasedForeground =
+              await window.muon.executor.spawn(${JSON.stringify(
+                foregroundFixture.spawnOptions,
+              )});
+            globalThis.executorWindowsUnreleasedDaemon =
+              await window.muon.executor.spawn(${JSON.stringify(
+                daemonFixture.spawnOptions,
+              )});
+            return {
+              daemon:
+                globalThis.executorWindowsUnreleasedDaemon.processId,
+              foreground:
+                globalThis.executorWindowsUnreleasedForeground.processId,
+            };
+          })()`);
+            const foregroundTreeIds =
+              await readWindowsExecutorProcessTreeIds(foregroundFixture);
+            const daemonTreeIds =
+              await readWindowsExecutorProcessTreeIds(daemonFixture);
+            expect(foregroundTreeIds.rootProcessId).toBe(
+              handleProcessIds.foreground,
+            );
+            expect(daemonTreeIds.rootProcessId).toBe(handleProcessIds.daemon);
+            foregroundProcessIds.push(
+              foregroundTreeIds.rootProcessId,
+              foregroundTreeIds.grandchildProcessId,
+            );
+            daemonProcessIds.push(
+              daemonTreeIds.rootProcessId,
+              daemonTreeIds.grandchildProcessId,
+            );
+            daemonHeartbeat = await waitForExecutorFixtureHeartbeat(
+              daemonFixture,
+              undefined,
+            );
+
+            await driver.navigate(
+              "data:text/html,<title>muon Windows executor context closed</title>",
+              cdpCommandTimeoutMs,
+            );
+            for (const processId of foregroundProcessIds) {
+              await waitForWindowsRemoteProcessState(
+                processId,
+                false,
+                "unreleased Windows foreground executor process after context close",
+              );
+            }
+            for (const processId of daemonProcessIds) {
+              await waitForWindowsRemoteProcessState(
+                processId,
+                true,
+                "unreleased Windows daemon executor process after context close",
+              );
+            }
+            daemonHeartbeat = await waitForExecutorFixtureHeartbeat(
+              daemonFixture,
+              daemonHeartbeat,
+            );
+          },
+          false,
+        );
+
+        for (const processId of daemonProcessIds) {
+          await waitForWindowsRemoteProcessState(
+            processId,
+            true,
+            "unreleased Windows daemon executor process after Muon shutdown",
+          );
+        }
+        await waitForExecutorFixtureHeartbeat(daemonFixture, daemonHeartbeat);
+      } finally {
+        try {
+          await terminateWindowsExecutorFixtureProcesses(
+            foregroundFixture,
+            foregroundProcessIds,
+          );
+          await terminateWindowsExecutorFixtureProcesses(
+            daemonFixture,
+            daemonProcessIds,
+          );
+        } finally {
+          await rm(foregroundDirectory, { recursive: true, force: true });
+          await rm(daemonDirectory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  windowsIt(
+    "releases Windows daemon executor streams while its active process tree remains alive",
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-daemon-stdio-release-"),
+      );
+      const marker = `muon-executor-windows-daemon-stdio-release-${randomUUID()}`;
+      const fixture = createWindowsExecutorStdioProcessTreeFixture(
+        directory,
+        marker,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment(
+          [],
+          {},
+          async (driver) => {
+            const handleProcessId =
+              await driver.evaluate<number>(`(async () => {
+            const delay = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+            const callbacks = { stderr: 0, stdout: 0 };
+            const child = await window.muon.executor.spawn({
+              ...${JSON.stringify(fixture.spawnOptions)},
+              onStdout: () => {
+                callbacks.stdout += 1;
+              },
+              onStderr: () => {
+                callbacks.stderr += 1;
+              },
+            });
+            globalThis.executorWindowsDaemonStdioChild = child;
+            globalThis.executorWindowsDaemonStdioCallbacks = callbacks;
+            await child.writeStdin("stdio-active");
+            const deadline = Date.now() + ${String(targetTimeoutMs)};
+            while (
+              Date.now() < deadline &&
+              (callbacks.stdout === 0 || callbacks.stderr === 0)
+            ) {
+              await delay(20);
+            }
+            if (callbacks.stdout === 0 || callbacks.stderr === 0) {
+              throw new Error("Timed out waiting for active executor streams");
+            }
+            return child.processId;
+          })()`);
+            const treeIds = await readWindowsExecutorProcessTreeIds(fixture);
+            expect(treeIds.rootProcessId).toBe(handleProcessId);
+            processIds.push(treeIds.rootProcessId, treeIds.grandchildProcessId);
+            await waitForTextFileContent(
+              join(directory, "stdin.txt"),
+              (content) => content.includes(`${fixture.marker}:stdin:`),
+              `${fixture.marker} Windows active stdin`,
+            );
+            let heartbeat = await waitForTextFileContent(
+              fixture.heartbeatPath,
+              (content) =>
+                content.includes(
+                  `${fixture.marker}:${String(treeIds.grandchildProcessId)}:grandchild:`,
+                ),
+              `${fixture.marker} Windows active heartbeat`,
+            );
+
+            const releaseResult = await driver.evaluate<{
+              durationMs: number;
+              stderrCallbacks: number;
+              stdoutCallbacks: number;
+            }>(`(async () => {
+            const delay = (ms) =>
+              new Promise((resolve) => setTimeout(resolve, ms));
+            const startedAt = performance.now();
+            const releaseWatcher = (async () => {
+              await globalThis.executorWindowsDaemonStdioChild.release();
+              return true;
+            })();
+            const timeoutWatcher = (async () => {
+              await delay(5000);
+              return false;
+            })();
+            const released = await Promise.race([
+              releaseWatcher,
+              timeoutWatcher,
+            ]);
+            if (!released) {
+              throw new Error("Timed out releasing active executor streams");
+            }
+            return {
+              durationMs: performance.now() - startedAt,
+              stderrCallbacks:
+                globalThis.executorWindowsDaemonStdioCallbacks.stderr,
+              stdoutCallbacks:
+                globalThis.executorWindowsDaemonStdioCallbacks.stdout,
+            };
+          })()`);
+            expect(releaseResult.durationMs).toBeLessThan(5000);
+
+            heartbeat = await waitForExecutorFixtureHeartbeat(
+              fixture,
+              heartbeat,
+            );
+            await waitForExecutorFixtureHeartbeat(fixture, heartbeat);
+            const callbacksAfterHeartbeat = await driver.evaluate<{
+              stderr: number;
+              stdout: number;
+            }>("globalThis.executorWindowsDaemonStdioCallbacks");
+            expect(callbacksAfterHeartbeat).toEqual({
+              stderr: releaseResult.stderrCallbacks,
+              stdout: releaseResult.stdoutCallbacks,
+            });
+            await waitForWindowsRemoteProcessState(
+              treeIds.rootProcessId,
+              true,
+              "released Windows daemon executor root with closed stdio",
+            );
+            await waitForWindowsRemoteProcessState(
+              treeIds.grandchildProcessId,
+              true,
+              "released Windows daemon executor grandchild with closed stdio",
+            );
+          },
+          false,
+        );
+
+        for (const processId of processIds) {
+          await waitForWindowsRemoteProcessState(
+            processId,
+            true,
+            "released active Windows daemon executor process after Muon shutdown",
+          );
+        }
+      } finally {
+        try {
+          await terminateWindowsExecutorFixtureProcesses(fixture, processIds);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  windowsIt(
+    "kills a connected Windows daemon executor process tree",
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "muon-executor-windows-daemon-kill-"),
+      );
+      const marker = `muon-executor-windows-daemon-kill-${randomUUID()}`;
+      const fixture = createWindowsExecutorProcessTreeFixture(
+        directory,
+        marker,
+        true,
+        undefined,
+      );
+      const processIds: number[] = [];
+      try {
+        await withMuonEnvironment(
+          [],
+          {},
+          async (driver) => {
+            const handleProcessId = await driver.evaluate<number>(
+              `(async () => {
+              const child = await window.muon.executor.spawn(${JSON.stringify(
+                fixture.spawnOptions,
+              )});
+              globalThis.executorWindowsDaemonKillChild = child;
+              return child.processId;
+            })()`,
+            );
+            processIds.push(handleProcessId);
+            const treeIds = await readWindowsExecutorProcessTreeIds(fixture);
+            processIds.push(treeIds.grandchildProcessId);
+            expect(treeIds.rootProcessId).toBe(handleProcessId);
+
+            const exitCode = await driver.evaluate<number>(`(async () => {
+            await globalThis.executorWindowsDaemonKillChild.kill();
+            return (await globalThis.executorWindowsDaemonKillChild.wait()).exitCode;
+          })()`);
+            expect(exitCode).not.toBe(0);
+            await waitForWindowsRemoteProcessState(
+              treeIds.rootProcessId,
+              false,
+              "killed Windows daemon executor root to exit",
+            );
+            await waitForWindowsRemoteProcessState(
+              treeIds.grandchildProcessId,
+              false,
+              "killed Windows daemon executor grandchild to exit",
+            );
+          },
+          false,
+        );
+      } finally {
+        try {
+          await terminateWindowsExecutorFixtureProcesses(fixture, processIds);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  linuxIt(
     "terminates executor children when the V8 context is released",
     async () => {
       const marker = `muon-spawn-context-release-${Date.now().toString(36)}`;
@@ -2356,44 +4678,29 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
           createExecutorLongRunningSpawnOptions(marker),
         )});
       })()`);
-        for (let index = 0; index < 50; index += 1) {
-          const commandLines = await listProcessGroupCommandLines(
-            running.process.pid ?? 0,
-          );
-          if (
-            commandLines.some((commandLine) => commandLine.includes(marker))
-          ) {
+        let processIds: number[] = [];
+        const processStartDeadline = Date.now() + targetTimeoutMs;
+        while (Date.now() < processStartDeadline) {
+          processIds = await listLocalLinuxFixtureProcessIds(marker);
+          if (processIds.length > 0) {
             break;
           }
           await delay(100);
         }
-        expect(
-          (await listProcessGroupCommandLines(running.process.pid ?? 0)).some(
-            (commandLine) => commandLine.includes(marker),
-          ),
-        ).toBe(true);
+        expect(processIds.length).toBeGreaterThan(0);
 
         await driver.navigate(
           "data:text/html,<title>muon executor context released</title>",
           cdpCommandTimeoutMs,
         );
-        for (let index = 0; index < 100; index += 1) {
-          const commandLines = await listProcessGroupCommandLines(
-            running.process.pid ?? 0,
+        for (const processId of processIds) {
+          await waitForLocalLinuxProcessState(
+            processId,
+            false,
+            "executor target after its V8 context is released",
           );
-          if (
-            !commandLines.some((commandLine) => commandLine.includes(marker))
-          ) {
-            return;
-          }
-          await delay(100);
         }
-        const commandLines = await listProcessGroupCommandLines(
-          running.process.pid ?? 0,
-        );
-        expect(
-          commandLines.some((commandLine) => commandLine.includes(marker)),
-        ).toBe(false);
+        expect(await listLocalLinuxFixtureProcessIds(marker)).toEqual([]);
       } catch (error) {
         throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
       } finally {

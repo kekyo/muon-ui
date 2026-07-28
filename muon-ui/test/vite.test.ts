@@ -516,6 +516,9 @@ const createFakePackageDirectory = async (root: string): Promise<string> => {
   );
   await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "ui\n");
   await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
+  const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
+  await writeFile(supervisorPath, "executor supervisor\n");
+  await chmod(supervisorPath, 0o755);
   await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
   await writeFakePackagedExecutable(
     join(nativeDirectory, "muon-launcher"),
@@ -1133,6 +1136,63 @@ describe("muon Vite plugin", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("resolves the validate-mode Node virtual module when a Node project is configured", async () => {
+    const root = await createTemporaryDirectory("muon-vite-node-capability-");
+    const backendDirectory = join(root, "backend");
+    await mkdir(join(root, "src"), { recursive: true });
+    await mkdir(backendDirectory, { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<script type="module" src="/src/main.ts"></script>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      [
+        'import { createNode } from "muon:node";',
+        "const run = async () => {",
+        "  const node = await createNode();",
+        "  await node.release();",
+        "};",
+        "void run();",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(backendDirectory, "package.json"),
+      `${JSON.stringify({ name: "muon-node-capability-fixture" }, null, 2)}\n`,
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      `${JSON.stringify(
+        {
+          node: {
+            project: "./backend",
+          },
+          plugin: {
+            mode: "validate",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await viteBuild({
+      root,
+      logLevel: "silent",
+      plugins: [
+        muon({
+          open: false,
+          build: false,
+        }),
+      ],
+    });
+
+    await expect(
+      access(join(root, "dist", "index.html")),
+    ).resolves.toBeUndefined();
+  });
+
   it("packages Vite base-path output under the matching asset URL root", async () => {
     const root = await createTemporaryDirectory("muon-vite-base-pack-");
     const packageDirectory = await createFakePackageDirectory(root);
@@ -1466,6 +1526,162 @@ describe("muon Vite plugin", () => {
     expect(moduleSource).toContain("wait");
     expect(moduleSource).toContain("kill");
     expect(moduleSource).toContain("dispose");
+  });
+
+  it("passes executor daemon mode through the validate runtime facade", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-vite-executor-daemon-capability-",
+    );
+    await mkdir(join(root, "src"), { recursive: true });
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/**"],
+          allow: ["muon.executor.spawn"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "executor.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toBeDefined();
+    if (moduleSource === undefined) {
+      return;
+    }
+
+    const requests: unknown[] = [];
+    const call = async (
+      _capabilityId: string,
+      _functionPath: string,
+      args: readonly unknown[],
+    ): Promise<string> => {
+      const request = JSON.parse(String(args[0])) as {
+        readonly op: string;
+      };
+      requests.push(request);
+      return request.op === "start"
+        ? JSON.stringify({ handleId: "daemon-test", processId: 123 })
+        : "{}";
+    };
+    Reflect.set(globalThis, "__muon_plugin_call", call);
+    try {
+      const moduleUrl = `data:text/javascript;base64,${Buffer.from(
+        moduleSource,
+      ).toString("base64")}`;
+      const executor = (await import(moduleUrl)) as {
+        readonly spawn: (options: {
+          readonly args: readonly string[];
+          readonly command: string;
+          readonly daemon: boolean;
+        }) => Promise<{ readonly release: () => Promise<void> }>;
+      };
+      const child = await executor.spawn({
+        args: ["fixture.mjs"],
+        command: "node",
+        daemon: true,
+      });
+      await child.release();
+    } finally {
+      Reflect.deleteProperty(globalThis, "__muon_plugin_call");
+    }
+
+    expect(requests[0]).toEqual({
+      captureStderr: true,
+      captureStdout: true,
+      op: "start",
+      options: {
+        args: ["fixture.mjs"],
+        command: "node",
+        daemon: true,
+      },
+    });
+  });
+
+  it("releases a validate executor handle when wait rejects", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-vite-executor-rejected-wait-",
+    );
+    await mkdir(join(root, "src"), { recursive: true });
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      imports: [
+        {
+          sources: ["src/**"],
+          allow: ["muon.executor.spawn"],
+          pluginName: "internal",
+        },
+      ],
+    });
+
+    const resolved = resolver.resolveId(
+      "muon:executor",
+      join(root, "src", "executor.ts"),
+    );
+    expect(resolved).toBeDefined();
+    const moduleSource =
+      resolved === undefined ? undefined : resolver.load(resolved.id);
+    expect(moduleSource).toBeDefined();
+    if (moduleSource === undefined) {
+      return;
+    }
+
+    const requests: { readonly op: string }[] = [];
+    const call = async (
+      _capabilityId: string,
+      _functionPath: string,
+      args: readonly unknown[],
+    ): Promise<string> => {
+      const request = JSON.parse(String(args[0])) as {
+        readonly op: string;
+      };
+      requests.push(request);
+      if (request.op === "start") {
+        return JSON.stringify({ handleId: "rejected-wait", processId: 123 });
+      }
+      if (request.op === "wait") {
+        throw new Error("executor supervisor failed");
+      }
+      return "{}";
+    };
+    Reflect.set(globalThis, "__muon_plugin_call", call);
+    try {
+      const moduleUrl = `data:text/javascript;base64,${Buffer.from(
+        moduleSource,
+      ).toString("base64")}`;
+      const executor = (await import(moduleUrl)) as {
+        readonly spawn: (options: {
+          readonly args: readonly string[];
+          readonly command: string;
+        }) => Promise<{
+          readonly release: () => Promise<void>;
+          readonly wait: () => Promise<unknown>;
+          readonly writeStdin: (data: Uint8Array) => Promise<void>;
+        }>;
+      };
+      const child = await executor.spawn({
+        args: ["fixture.mjs"],
+        command: "node",
+      });
+      await expect(child.wait()).rejects.toThrow("executor supervisor failed");
+      await expect(child.writeStdin(new Uint8Array([1]))).rejects.toThrow(
+        "executor process is released",
+      );
+      await child.release();
+      await child.release();
+    } finally {
+      Reflect.deleteProperty(globalThis, "__muon_plugin_call");
+    }
+
+    expect(requests.map((request) => request.op)).toEqual([
+      "start",
+      "wait",
+      "dispose",
+    ]);
   });
 
   it("generates a parsed application config export for validate mode", async () => {

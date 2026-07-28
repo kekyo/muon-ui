@@ -20,6 +20,7 @@ import type { MuonVitePluginOptions } from "./vite.js";
 import {
   assertMuonNodeHostArtifacts,
   assertMuonNodeProjectStagingIsSafe,
+  createMuonNodeRuntimeRequirement,
   resolveMuonNodeProject,
   stageMuonNodeProject,
 } from "./node-project.js";
@@ -499,12 +500,17 @@ export const startMuonViteBrowserBridge = async ({
             : dirname(projectConfig.path),
         );
         await assertMuonNodeProjectStagingIsSafe(nodeProject, stagePath);
+        const runtimePluginConfig = await refreshRuntimePluginConfig();
         const preparedRuntime = await runMuonPrepare({
           muonPath,
           cefPath,
           stageDir: stagePath,
           target,
           cacheDir: environment.MUON_CACHE_DIR,
+          nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(
+            nodeProject,
+            true,
+          ),
           force: false,
           quiet: false,
           prepareExecutablePath: undefined,
@@ -514,7 +520,6 @@ export const startMuonViteBrowserBridge = async ({
         if (preparedRuntime.stagePath === undefined) {
           throw new Error("muon-builder did not return a staged runtime path.");
         }
-        const runtimePluginConfig = await refreshRuntimePluginConfig();
         const nodeProjectPath = await stageMuonNodeProject(
           nodeProject,
           preparedRuntime.stagePath,

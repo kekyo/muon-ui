@@ -22,8 +22,10 @@ import { resolve as resolveImport } from 'import-meta-resolve';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValidRange from 'semver/ranges/valid.js';
 
+declare const __MUON_NODE_SUPPORTED_ENGINE_RANGE__: string;
+
 const protocolName = 'muon-node/1';
-const supportedNodeRange = '^20.19.0 || >=22.12.0';
+const supportedNodeRange = __MUON_NODE_SUPPORTED_ENGINE_RANGE__;
 const maximumFramePayloadLength = 16 * 1024 * 1024;
 const signed64Minimum = -(2n ** 63n);
 const signed64Maximum = 2n ** 63n - 1n;
@@ -321,11 +323,30 @@ const decodeBufferTag = (value: Readonly<Record<string, unknown>>): Buffer => {
   return decoded;
 };
 
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength'
+)?.get;
+
+// ArrayBuffer.prototype can be imitated and instanceof excludes other realms,
+// so verify the internal slot with the intrinsic getter.
+const hasArrayBufferInternalSlot = (value: unknown): value is ArrayBuffer => {
+  if (arrayBufferByteLengthGetter === undefined) {
+    return false;
+  }
+  try {
+    Reflect.apply(arrayBufferByteLengthGetter, value, []);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const getBinaryView = (value: unknown): Buffer | undefined => {
   if (Buffer.isBuffer(value)) {
     return value;
   }
-  if (value instanceof ArrayBuffer) {
+  if (hasArrayBufferInternalSlot(value)) {
     return Buffer.from(value);
   }
   if (ArrayBuffer.isView(value)) {
@@ -334,7 +355,205 @@ const getBinaryView = (value: unknown): Buffer | undefined => {
   return undefined;
 };
 
-const encodeWireValue = (value: unknown): unknown => {
+const getBinaryViewSafely = (value: unknown): Buffer | undefined => {
+  try {
+    return getBinaryView(value);
+  } catch {
+    throw createBridgeError(
+      'ERR_MUON_NODE_UNSUPPORTED_VALUE',
+      'The bridge value could not be inspected safely.'
+    );
+  }
+};
+
+interface StrictJsonObject {
+  readonly [key: string]: StrictJsonValue;
+}
+
+type StrictJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly StrictJsonValue[]
+  | StrictJsonObject;
+
+const unsupportedJsonErrors = new WeakSet<object>();
+
+const throwUnsupportedJsonValue = (message: string): never => {
+  const error = createBridgeError('ERR_MUON_NODE_UNSUPPORTED_VALUE', message);
+  unsupportedJsonErrors.add(error);
+  throw error;
+};
+
+const requireJsonDataProperty = (
+  descriptor: PropertyDescriptor | undefined,
+  description: string
+): unknown => {
+  if (
+    descriptor === undefined ||
+    !descriptor.enumerable ||
+    !Object.prototype.hasOwnProperty.call(descriptor, 'value')
+  ) {
+    return throwUnsupportedJsonValue(
+      `${description} must be an enumerable data property.`
+    );
+  }
+  return descriptor.value as unknown;
+};
+
+const normalizeStrictJsonValue = (
+  value: unknown,
+  ancestors: Set<object>
+): StrictJsonValue => {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'string'
+  ) {
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      return throwUnsupportedJsonValue(
+        'JSON containers support only finite number values other than negative zero.'
+      );
+    }
+    return value;
+  }
+  if (typeof value !== 'object') {
+    return throwUnsupportedJsonValue(
+      'JSON containers can contain only JSON-compatible values.'
+    );
+  }
+  if (ancestors.has(value)) {
+    return throwUnsupportedJsonValue(
+      'JSON containers cannot contain circular references.'
+    );
+  }
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        return throwUnsupportedJsonValue(
+          'JSON arrays must use Array.prototype.'
+        );
+      }
+
+      const keys = Reflect.ownKeys(value);
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+      if (
+        lengthDescriptor === undefined ||
+        lengthDescriptor.enumerable ||
+        !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value') ||
+        typeof lengthDescriptor.value !== 'number' ||
+        !Number.isInteger(lengthDescriptor.value) ||
+        lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > 0xffffffff
+      ) {
+        return throwUnsupportedJsonValue(
+          'JSON arrays must have a valid length data property.'
+        );
+      }
+      const length = lengthDescriptor.value;
+      if (keys.length !== length + 1) {
+        return throwUnsupportedJsonValue(
+          'JSON arrays must be dense and cannot contain additional properties.'
+        );
+      }
+      const stringKeys = new Set<string>();
+      for (const key of keys) {
+        if (typeof key !== 'string') {
+          return throwUnsupportedJsonValue(
+            'JSON arrays must be dense and cannot contain additional properties.'
+          );
+        }
+        stringKeys.add(key);
+      }
+      if (!stringKeys.has('length')) {
+        return throwUnsupportedJsonValue(
+          'JSON arrays must have a length property.'
+        );
+      }
+
+      const normalized: StrictJsonValue[] = new Array(length);
+      for (let index = 0; index < length; index += 1) {
+        const key = String(index);
+        if (!stringKeys.has(key)) {
+          return throwUnsupportedJsonValue(
+            'JSON arrays must be dense and cannot contain additional properties.'
+          );
+        }
+        const element = requireJsonDataProperty(
+          Object.getOwnPropertyDescriptor(value, key),
+          `JSON array element ${key}`
+        );
+        Object.defineProperty(normalized, key, {
+          value: normalizeStrictJsonValue(element, ancestors),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      }
+      return normalized;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return throwUnsupportedJsonValue(
+        'JSON objects must use Object.prototype or a null prototype.'
+      );
+    }
+
+    const normalized: Record<string, StrictJsonValue> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') {
+        return throwUnsupportedJsonValue(
+          'JSON objects cannot contain symbol properties.'
+        );
+      }
+      const property = requireJsonDataProperty(
+        Object.getOwnPropertyDescriptor(value, key),
+        `JSON object property ${JSON.stringify(key)}`
+      );
+      Object.defineProperty(normalized, key, {
+        value: normalizeStrictJsonValue(property, ancestors),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return normalized;
+  } finally {
+    ancestors.delete(value);
+  }
+};
+
+const normalizeStrictJsonContainer = (value: unknown): StrictJsonValue => {
+  try {
+    if (typeof value !== 'object' || value === null) {
+      return throwUnsupportedJsonValue(
+        'A JSON bridge value must be an object or array.'
+      );
+    }
+    return normalizeStrictJsonValue(value, new Set<object>());
+  } catch (error) {
+    if (
+      error !== null &&
+      (typeof error === 'object' || typeof error === 'function') &&
+      unsupportedJsonErrors.has(error)
+    ) {
+      throw error;
+    }
+    throw createBridgeError(
+      'ERR_MUON_NODE_UNSUPPORTED_VALUE',
+      'The JSON bridge value could not be inspected safely.'
+    );
+  }
+};
+
+const encodeScalarWireValue = (value: unknown): unknown => {
   if (value === undefined) {
     return {
       kind: 'undefined',
@@ -374,7 +593,7 @@ const encodeWireValue = (value: unknown): unknown => {
       'The bigint value is outside the i64/u64 range.'
     );
   }
-  const binary = getBinaryView(value);
+  const binary = getBinaryViewSafely(value);
   if (binary !== undefined) {
     return {
       kind: 'buffer',
@@ -385,6 +604,19 @@ const encodeWireValue = (value: unknown): unknown => {
     'ERR_MUON_NODE_UNSUPPORTED_VALUE',
     'Only primitive, i64, u64, and buffer values can cross the bridge.'
   );
+};
+
+const encodeWireValue = (value: unknown): unknown => {
+  if (value !== null && typeof value === 'object') {
+    const binary = getBinaryViewSafely(value);
+    if (binary === undefined) {
+      return {
+        kind: 'json',
+        value: normalizeStrictJsonContainer(value),
+      };
+    }
+  }
+  return encodeScalarWireValue(value);
 };
 
 const tokensMatch = (actual: string, expected: string): boolean => {
@@ -737,7 +969,7 @@ const describeModuleExports = (
       descriptor.push({
         name,
         kind: 'primitive',
-        value: encodeWireValue(value),
+        value: encodeScalarWireValue(value),
       });
     } catch (error) {
       if (getErrorCode(error, '') !== 'ERR_MUON_NODE_UNSUPPORTED_VALUE') {
@@ -965,6 +1197,9 @@ export const createMuonNodeBridge = (
     }
     if (tagged.kind === 'buffer') {
       return decodeBufferTag(tagged);
+    }
+    if (tagged.kind === 'json') {
+      return normalizeStrictJsonContainer(tagged.value);
     }
     if (tagged.kind === 'function') {
       const handle = requireString(

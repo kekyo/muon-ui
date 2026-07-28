@@ -305,6 +305,7 @@ static const muon_plugin_namespace* const lifetime_namespaces_pointers[] = {
 static const muon_plugin_metadata lifetime_metadata = {
     lifetime_namespaces_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

@@ -663,12 +663,6 @@ target_link_libraries(cardio_shared PRIVATE
   Threads::Threads
   ${MUON_CARDIO_GLIB_TARGETS}
   )
-if(MINGW)
-  target_link_options(cardio_shared PRIVATE
-    -static-libgcc
-    -static-libstdc++
-    )
-endif()
 MUON_APPLY_SANITIZERS(cardio_shared)
 
 add_library(muon_cardio INTERFACE)
@@ -684,6 +678,66 @@ target_link_libraries(muon_cardio INTERFACE
   Threads::Threads
   ${MUON_CARDIO_GLIB_TARGETS}
   )
+
+if(WIN32)
+  add_library(muon_windows_job_process STATIC
+    src/platform/muon_windows_job_process.cpp
+    src/platform/muon_windows_job_process.h
+    )
+  set_target_properties(muon_windows_job_process PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    )
+  target_compile_features(muon_windows_job_process PRIVATE cxx_std_20)
+  target_compile_definitions(muon_windows_job_process PRIVATE
+    NOMINMAX
+    NTDDI_VERSION=0x0A00000A
+    WIN32_LEAN_AND_MEAN
+    WINVER=0x0A00
+    _WIN32_WINNT=0x0A00
+    )
+  target_include_directories(muon_windows_job_process PUBLIC
+    src/platform
+    )
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(muon_windows_job_process PRIVATE
+      -fexceptions
+      )
+  elseif(MSVC)
+    target_compile_options(muon_windows_job_process PRIVATE
+      /EHsc
+      )
+  endif()
+  MUON_APPLY_SANITIZERS(muon_windows_job_process)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(muon_executor_supervisor_protocol STATIC
+    src/process/muon_executor_supervisor_protocol.cpp
+    src/process/muon_executor_supervisor_protocol.h
+    )
+  target_compile_features(muon_executor_supervisor_protocol
+    PRIVATE cxx_std_20)
+  target_include_directories(muon_executor_supervisor_protocol PUBLIC
+    src
+    )
+  MUON_APPLY_SANITIZERS(muon_executor_supervisor_protocol)
+
+  add_executable(muon_executor_supervisor
+    src/process/muon_executor_supervisor_main.cpp
+    )
+  set_target_properties(muon_executor_supervisor PROPERTIES
+    OUTPUT_NAME "muon-executor-supervisor"
+    RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}"
+    )
+  target_compile_features(muon_executor_supervisor PRIVATE cxx_std_20)
+  target_include_directories(muon_executor_supervisor PRIVATE
+    src
+    )
+  target_link_libraries(muon_executor_supervisor PRIVATE
+    muon_executor_supervisor_protocol
+    )
+  MUON_APPLY_SANITIZERS(muon_executor_supervisor)
+endif()
 
 set(APP_SOURCES
   src/main.cpp
@@ -799,6 +853,15 @@ set(APP_HEADERS
   src/ui/muon_ui_title_bar.h
   include/muon_plugin_api.h
   )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND APP_SOURCES
+    src/process/muon_linux_executor_supervisor.cpp
+    )
+  list(APPEND APP_HEADERS
+    src/process/muon_executor_supervisor_protocol.h
+    src/process/muon_linux_executor_supervisor.h
+    )
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   set_source_files_properties(
@@ -935,12 +998,7 @@ if(WIN32)
     )
   target_link_libraries(muon_node_plugin PRIVATE
     bcrypt
-    )
-endif()
-if(MINGW)
-  target_link_options(muon_node_plugin PRIVATE
-    -static-libgcc
-    -static-libstdc++
+    muon_windows_job_process
     )
 endif()
 MUON_APPLY_SANITIZERS(muon_node_plugin)
@@ -954,6 +1012,11 @@ set(MUON_CORE_PAYLOAD_ITEMS
   "${MUON_CARDIO_RUNTIME_LIBRARY_NAME}"
   "plugins"
   )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND MUON_CORE_PAYLOAD_ITEMS
+    "muon-executor-supervisor${CMAKE_EXECUTABLE_SUFFIX}"
+    )
+endif()
 if(MUON_RUNTIME_INCLUDE_APP_FILES)
   list(APPEND MUON_CORE_PAYLOAD_ITEMS
     "muon.json"
@@ -1122,9 +1185,14 @@ if(WIN32)
   target_link_libraries(${APP_NAME} PRIVATE
     advapi32
     comctl32
+    muon_windows_job_process
     ole32
     shell32
     uuid
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(${APP_NAME} PRIVATE
+    muon_executor_supervisor_protocol
     )
 endif()
 target_include_directories(${APP_NAME} PRIVATE
@@ -1329,14 +1397,19 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES)
     )
 endif()
 if(MINGW)
-  list(APPEND MUON_RUNTIME_COPY_COMMANDS
-    COMMAND ${CMAKE_COMMAND}
-      "-DINPUT=$<TARGET_FILE:muon_ui>"
-      "-DOUTPUT_DIR=${MUON_RUNTIME_DIR}"
-      "-DOBJDUMP=${CMAKE_OBJDUMP}"
-      "-DCANDIDATES=${MUON_MINGW_RUNTIME_DLLS_ARG}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_mingw_runtime_imports.cmake"
-    )
+  foreach(MUON_MINGW_RUNTIME_TARGET
+      muon_ui
+      cardio_shared
+      muon_node_plugin)
+    list(APPEND MUON_RUNTIME_COPY_COMMANDS
+      COMMAND ${CMAKE_COMMAND}
+        "-DINPUT=$<TARGET_FILE:${MUON_MINGW_RUNTIME_TARGET}>"
+        "-DOUTPUT_DIR=${MUON_RUNTIME_DIR}"
+        "-DOBJDUMP=${CMAKE_OBJDUMP}"
+        "-DCANDIDATES=${MUON_MINGW_RUNTIME_DLLS_ARG}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_mingw_runtime_imports.cmake"
+      )
+  endforeach()
 endif()
 list(APPEND MUON_RUNTIME_COPY_COMMANDS
   COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -1361,6 +1434,9 @@ add_dependencies(muon_runtime_files ${APP_NAME})
 add_dependencies(muon_runtime_files muon_ui)
 add_dependencies(muon_runtime_files cardio_shared)
 add_dependencies(muon_runtime_files muon_node_plugin)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_dependencies(muon_runtime_files muon_executor_supervisor)
+endif()
 if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
   add_custom_target(muon_runtime_config_template
     DEPENDS "${MUON_CONFIG_TEMPLATE}"
@@ -1407,14 +1483,14 @@ if(WIN32)
       "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${APP_EXECUTABLE_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt' && grep -Fq 'DLL Name: ${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' '${CMAKE_CURRENT_BINARY_DIR}/muon-runtime-imports.txt'"
     )
   add_test(
-    NAME runtime_cardio_uses_static_mingw_runtime
+    NAME runtime_cardio_uses_packaged_mingw_runtime
     COMMAND bash -c
-      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt'"
+      "'${CMAKE_OBJDUMP}' -p '${MUON_RUNTIME_DIR}/${MUON_CARDIO_RUNTIME_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && grep -Eq 'DLL Name: libgcc_s_.*-1\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && grep -Fq 'DLL Name: libstdc++-6.dll' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt' && while IFS= read -r dll; do test -f '${MUON_RUNTIME_DIR}/'\"$dll\"; done < <(sed -n 's/.*DLL Name: \\(libgcc_s_.*-1\\.dll\\|libstdc++-6\\.dll\\|libwinpthread-1\\.dll\\).*/\\1/p' '${CMAKE_CURRENT_BINARY_DIR}/cardio-runtime-imports.txt')"
     )
   add_test(
-    NAME runtime_node_plugin_uses_static_mingw_runtime
+    NAME runtime_node_plugin_uses_packaged_mingw_runtime
     COMMAND bash -c
-      "'${CMAKE_OBJDUMP}' -p '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && ! grep -Eq 'DLL Name: (libgcc_s_.*-1|libstdc\\+\\+-6)\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt'"
+      "'${CMAKE_OBJDUMP}' -p '${MUON_NODE_PLUGIN_OUTPUT_DIR}/${MUON_NODE_PLUGIN_LIBRARY_NAME}' > '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && grep -Eq 'DLL Name: libgcc_s_.*-1\\.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && grep -Fq 'DLL Name: libstdc++-6.dll' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt' && while IFS= read -r dll; do test -f '${MUON_RUNTIME_DIR}/'\"$dll\"; done < <(sed -n 's/.*DLL Name: \\(libgcc_s_.*-1\\.dll\\|libstdc++-6\\.dll\\|libwinpthread-1\\.dll\\).*/\\1/p' '${CMAKE_CURRENT_BINARY_DIR}/node-plugin-runtime-imports.txt')"
     )
   add_test(
     NAME runtime_node_plugin_exports_entry_point
@@ -1615,6 +1691,22 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     )
   MUON_APPLY_SANITIZERS(muon_builtin_browser_test)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(muon_executor_supervisor_sigchld_test
+      tests/muon_executor_supervisor_sigchld_test.cpp
+      src/process/muon_linux_executor_supervisor.cpp
+      )
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_executor_supervisor_sigchld_test)
+    target_compile_features(muon_executor_supervisor_sigchld_test PRIVATE
+      cxx_std_20)
+    target_include_directories(muon_executor_supervisor_sigchld_test PRIVATE
+      src
+      )
+    target_link_libraries(muon_executor_supervisor_sigchld_test PRIVATE
+      muon_executor_supervisor_protocol
+      )
+    add_dependencies(muon_executor_supervisor_sigchld_test
+      muon_executor_supervisor)
+    MUON_APPLY_SANITIZERS(muon_executor_supervisor_sigchld_test)
     add_executable(muon_tray_linux_dbus_test
       tests/muon_tray_linux_dbus_test.cpp
       src/muon_json_helpers.cpp
@@ -1900,6 +1992,15 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     COMMAND muon_builtin_browser_test
     )
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(
+      NAME executor_supervisor_inherited_sigchld
+      COMMAND muon_executor_supervisor_sigchld_test
+        "$<TARGET_FILE:muon_executor_supervisor>"
+        "$<TARGET_FILE:muon_executor_supervisor_sigchld_test>"
+      )
+    set_tests_properties(executor_supervisor_inherited_sigchld PROPERTIES
+      TIMEOUT 15
+      )
     add_test(
       NAME tray_linux_dbus
       COMMAND muon_tray_linux_dbus_test

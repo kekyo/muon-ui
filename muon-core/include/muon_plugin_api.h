@@ -716,6 +716,22 @@ typedef void (*muon_plugin_stop_func)(
     void* user_data);
 
 /**
+ * @brief Notifies a plugin that one renderer-owned function scope was
+ * released.
+ *
+ * @param owner_token Non-null opaque owner token previously supplied to a
+ * plugin function owned by that renderer context.
+ *
+ * @remarks muon invokes this function synchronously on the browser UI thread,
+ * at most once for each owner token and loaded plugin, before invalidating
+ * renderer-owned function sources. The token pointer remains valid only for
+ * the duration of this call. A plugin may begin asynchronous cleanup from this
+ * notification, but must not block the renderer release path.
+ */
+typedef void (*muon_plugin_renderer_context_released_func)(
+    const char* owner_token);
+
+/**
  * @brief Metadata returned by a plugin entry point.
  */
 typedef struct muon_plugin_metadata {
@@ -733,6 +749,13 @@ typedef struct muon_plugin_metadata {
    * May be null when the plugin owns no resources that require shutdown.
    */
   muon_plugin_stop_func stop;
+  /**
+   * Optional renderer-context release notification.
+   *
+   * May be null when the plugin owns no resources scoped to renderer
+   * contexts.
+   */
+  muon_plugin_renderer_context_released_func renderer_context_released;
 } muon_plugin_metadata;
 
 /**

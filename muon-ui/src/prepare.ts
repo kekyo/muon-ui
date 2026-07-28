@@ -17,6 +17,7 @@ import {
   createMuonProgressRenderer,
   type MuonProgressEvent,
 } from "./progress.js";
+import type { MuonNodeRuntimeRequirement } from "./node-project.js";
 
 /**
  * Options used to invoke the native muon builder helper.
@@ -46,6 +47,13 @@ export interface MuonPrepareOptions {
    * Cache directory passed to muon-builder.
    */
   cacheDir: string | undefined;
+
+  /**
+   * Node runtime requirement used to select or validate a sidecar runtime.
+   *
+   * @remarks This is `undefined` when the application has no Node project.
+   */
+  nodeRuntimeRequirement: MuonNodeRuntimeRequirement | undefined;
 
   /**
    * Rebuild an existing prepared runtime.
@@ -218,6 +226,12 @@ const createMuonPrepareArguments = (options: MuonPrepareOptions): string[] => {
   }
   if (options.cacheDir !== undefined) {
     args.push("--cache-dir", options.cacheDir);
+  }
+  if (options.nodeRuntimeRequirement !== undefined) {
+    args.push(
+      "--node-runtime-requirement",
+      JSON.stringify(options.nodeRuntimeRequirement),
+    );
   }
   if (options.force) {
     args.push("--force");

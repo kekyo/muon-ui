@@ -96,6 +96,22 @@ describe('muon Node module loading', () => {
             value: 42,
           },
           {
+            name: 'bigintExport',
+            kind: 'primitive',
+            value: {
+              kind: 'i64',
+              value: '123',
+            },
+          },
+          {
+            name: 'bufferExport',
+            kind: 'primitive',
+            value: {
+              kind: 'buffer',
+              data: Buffer.from([1, 2, 3]).toString('base64'),
+            },
+          },
+          {
             name: 'echo',
             kind: 'function',
           },
@@ -112,6 +128,13 @@ describe('muon Node module loading', () => {
         expect.arrayContaining([
           expect.objectContaining({
             name: 'objectExport',
+          }),
+        ])
+      );
+      expect(esm.descriptor.exports).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'arrayExport',
           }),
         ])
       );

@@ -112,6 +112,13 @@ export const stopServer = async () => {
 export const isListening = () => server?.listening === true;
 
 /**
+ * Gets the executable path used to launch this Node sidecar.
+ *
+ * @returns {string} Absolute Node executable path.
+ */
+export const executablePath = () => process.execPath;
+
+/**
  * Gets the process identifier of the Node sidecar.
  *
  * @returns {number} The Node sidecar process identifier.

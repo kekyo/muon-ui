@@ -46,7 +46,8 @@ muonパッケージには、以下の要素を含みます:
 - muon内蔵プラグインのTypeScript型定義
 - プラットフォーム別のmuonバイナリアセット
 
-CEF本体バイナリは、NPMパッケージに含まれません。CEFは必要になった時点で、公式CDNからダウンロードされます。
+CEF本体バイナリと、オプションのNode.js連携で使用するNode.jsランタイムは、NPMパッケージに含まれません。
+CEFは必要になった時点で公式CDNから、Node.jsランタイムは`node.project`でNode.jsプロジェクトを構成した場合だけ、プラグインモードにかかわらず公式配布サイトからダウンロードされます。
 
 ## muon Viteプラグインを構成
 
@@ -146,6 +147,8 @@ npm run build
 > 注釈: これは `package.json` の `scripts` に定義された `vite build` の別名です。
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
+Node.jsプロジェクトを構成した場合は、そのプロジェクト、muonとのbridge、必要なNode.jsバージョンの条件も配布ディレクトリへ含まれます。
+Node.jsランタイム本体はビルド時には含まれず、ランタイム要件が実行必須となる場合だけ、配布先でmuon launcherが初回起動時に準備します。
 既定では、muonがサポートする全ターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力されます:
 
 ```text
@@ -247,7 +250,7 @@ npx muon pack --target windows-amd64 --type nsis
 - `zip` はWindowsターゲットだけで使用でき、各 `<packageName>/<target>` ディレクトリを含むポータブルZIPです。
 - `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `<packageName>/<target>` ディレクトリを含むポータブルgzip圧縮tarです。
   `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
-  ポータブル配布物にはCEFバイナリを含めず、初回起動時に展開先の `<packageName>/<target>` 直下へCEFを準備します。
+  ポータブル配布物にはCEFバイナリとNode.jsランタイム本体を含めず、初回起動時に展開先の `<packageName>/<target>` 直下へCEFと、必要な場合だけ `runtimes/node/` 配下へNode.jsランタイムを準備します。
   プロファイルも同じディレクトリ直下の `profile/` が使われます。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   Debian/Ubuntuでは、 `sudo apt install dpkg-deb` でインストール出来ます。
@@ -276,8 +279,8 @@ npx muon pack --target windows-amd64 --type nsis
 - muonでは、muon-coreプロセスがCEFを初期化します。
   CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
   muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
-- muonは、Node.jsプラグインを構成した場合だけ、Node.jsプロセスが有効になります。
-  最初の`importModule()`で別プロセスのNode.js sidecarを遅延起動し、以降の呼び出しを中継します。
+- muonは、`node.project`でNode.jsプロジェクトを構成した場合だけ、Node.js連携が有効になります。
+  `createNode()`を呼ぶたびに別プロセスのNode.js sidecarを一つ起動し、そのinstanceの`importModule()`以降の呼び出しを中継します。複数のinstanceは互いに分離されています。
   sidecarはUIを生成または所有せず、処理のオフロードやNode.jsエコシステムの機能を利用するためのオプションです。
 
 Electron:
@@ -311,7 +314,10 @@ flowchart LR
 このページ中心のモデルにより、ウェブアプリ開発を知っていればmuonアプリ開発を始められます。
 
 これは、すべての処理をページ内のJavaScriptへ実装しなければならない、という意味ではありません。
-例えば、ドメインロジックやデータリポジトリ実装もページのbundleに含まれますが、必要に応じてmuonプラグイン、[Node.js sidecar](./nodejs-sidecar.md)、リモートWeb APIへ責務を分離出来ます。
-Node.js sidecarを使用すれば、UIと関係のないNode.jsコードを別プロセスの通常のNode.jsプロジェクトとして構成出来ます。
+例えば、ドメインロジックやデータリポジトリ実装もページのbundleに含まれますが、必要に応じて、リモートWeb API、[Node.js sidecar](./nodejs-sidecar.md)、外部プログラム、[muonプラグイン実装](./muon-plugin-develop.md)、へ責務を分離出来ます。
 
-大きなバックエンド実装をmuonアプリへ同梱する前に、クラウドサービスやホストされた仮想マシン上のWeb APIとして実装すべきかも検討してください。
+- クラウドサービスやホストされた仮想マシン上のWeb APIとして実装すべきかを検討してください。
+- Node.js sidecarを使用すれば、UIと関係のないNode.jsコードを別プロセスの通常のNode.jsプロジェクトとして構成出来ます。
+  また、Node.jsでサポートされる、より高機能なNPMライブラリを使用できます。
+- [`muon.executor` プラグイン](./muon-built-in-plugin-reference.md) を使用すれば、外部プログラムを呼び出して処理させることが出来ます。
+- 更にOSネイティブな機能をタイトに結合したい場合は、muonプラグインを実装することも出来ます。

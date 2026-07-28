@@ -10,6 +10,9 @@
 
 #include "prepare_progress.h"
 
+/** File name used for the cached CEF catalog. */
+#define MUON_PREPARE_CEF_CATALOG_FILE_NAME "cef-catalog.json"
+
 /**
  * CEF artifact metadata resolved from the cached catalog.
  */
@@ -77,11 +80,11 @@ void muon_prepare_free_cef_artifact(MuonCefArtifact *artifact);
  *
  * Existing catalog data is used as a fallback when refresh fails.
  */
-int muon_prepare_ensure_catalog_cache(const char *cache_dir, int force);
-int muon_prepare_ensure_catalog_cache_with_status(const char *cache_dir,
-                                                  int force,
-                                                  int *updated);
-int muon_prepare_ensure_catalog_cache_with_status_progress(
+int muon_prepare_ensure_cef_catalog_cache(const char *cache_dir, int force);
+int muon_prepare_ensure_cef_catalog_cache_with_status(const char *cache_dir,
+                                                      int force,
+                                                      int *updated);
+int muon_prepare_ensure_cef_catalog_cache_with_status_progress(
     const char *cache_dir, int force, int *updated,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data);
 

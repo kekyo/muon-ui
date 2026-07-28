@@ -126,14 +126,17 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 {
   "node": {
     "project": "./backend"
-  },
-  "plugin": {
-    "mode": "simple"
   }
 }
 ```
 
-`node`を指定する場合、`project`は空ではないstringでなければなりません。MVPの`window.muon.node` APIには`plugin.mode: "simple"`が必要です。validate modeはmetadataだけをloadし、APIを公開せずNode.jsも起動しません。`plugin.plugins[]`で`node`という名前を直接指定することはできません。開発、ビルド、配布、system Node.jsの選択、APIと値の制約については[Node.js sidecarを使用する](./nodejs-sidecar.md)を参照してください。
+`node`を指定する場合、`project`は空ではないstringでなければなりません。参照先は通常のNode.jsプロジェクトであり、`package.json`の`type`、`main`、`exports`、`imports`、`dependencies`、`engines.node`は通常のNode.jsと同じ形式で管理します。muon固有の追加設定をNodeプロジェクトの`package.json`へ記述する必要はありません。Node.js機能の有効化は`node.project`だけで決まり、`plugin.mode`や`plugin.plugins[]`の設定には依存しません。
+
+`engines.node`を指定した場合、muonはそのrangeとNode bridgeの互換rangeの積集合を正規化し、内部`launcher.nodeRuntime`として成果物へ埋め込みます。省略した場合はNode bridgeの互換rangeが使用され、その範囲に一致する最新のLTS releaseが選択されます。一致するLTSがなければ失敗し、非LTS releaseへはfallbackしません。指定した場合は、一致するLTS releaseの最大version、該当するLTSがなければ一致する全releaseの最大versionが選択されます。launcherはNode.js公式の`https://nodejs.org/dist/index.json`とversion別の`SHASUMS256.txt`を使用し、archiveをSHA-256で検証してから`runtimes/node/`へ準備します。
+
+`muon build`と`muon pack`は、Nodeプロジェクト、`node.so`または`node.dll`、`node-bridge.mjs`、正規化済みランタイム要件を収録しますが、Node.js実行ファイル、配布archive、download cacheは収録しません。ランタイム要件が実行必須となる場合、実行ファイルは開発時の起動準備、`muon run`、または配布物のlauncherによって準備されます。配置内容は`runtimes/node/LICENSE`と`runtimes/node/bin/node`（Windowsでは`node.exe`）だけであり、npmとCorepackは含まれません。Nodeプラグインはこの実行ファイルの絶対パスだけを使用し、環境変数や`PATH`へfallbackしません。
+
+既定のvalidate modeではViteの`muon:node` virtual moduleから`createNode()`をimportし、simple modeでは`window.muon.node.createNode()`を使用します。どちらも`createNode()`ごとに独立したNode sidecar processを起動します。Node相互運用APIに`plugin.plugins[].imports`やallow設定は不要であり、`plugin.plugins[]`で予約名`node`を直接指定することもできません。Node.js runtimeは両方のmodeで準備されます。開発、ビルド、配布、ランタイム選択、APIと値の制約については[Node.js sidecarを使用する](./nodejs-sidecar.md)を参照してください。
 
 ## browserキー
 
@@ -431,5 +434,5 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 | :--------------------- | :------- | :--------- | :---------------------------------------------------------------------------------------------------- |
 | `defaultVersionPolicy` | `string` | `"tested"` | `muon-launcher.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
-> 注釈: ここに挙げられていない `appId` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
-> 解説は省略します。
+> 注釈: ここに挙げられていない `appId` は、 `muon build` または `muon pack` 時に自動的に計算・挿入されます。
+> `node.project`を指定した場合は、NodeプロジェクトとNode bridgeから生成された正規化済み要件も内部`nodeRuntime`として挿入されます。ユーザーが `launcher.nodeRuntime` を指定するとbuild errorになります。

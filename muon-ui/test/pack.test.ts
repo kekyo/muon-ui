@@ -193,6 +193,12 @@ const createFakeMuonPackageDist = async (
       join(runtimeDirectory, descriptor.cardioLibraryName),
       "cardio\n",
     );
+    if (target.startsWith("linux-")) {
+      await writeExecutable(
+        join(runtimeDirectory, "muon-executor-supervisor"),
+        `${target} executor supervisor\n`,
+      );
+    }
     const nodePluginFileName = target.startsWith("windows-")
       ? "node.dll"
       : "node.so";

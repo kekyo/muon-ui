@@ -25,6 +25,7 @@
 
 #ifndef _WIN32
 #include <signal.h>
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #else
@@ -50,6 +51,8 @@ typedef int MuonSSize;
 #define MUON_OPEN_READ_FLAGS O_RDONLY
 #define MUON_OPEN_WRITE_FLAGS (O_WRONLY | O_CREAT | O_TRUNC)
 typedef ssize_t MuonSSize;
+
+extern char **environ;
 #endif
 
 static int g_quiet = 0;
@@ -77,15 +80,56 @@ void muon_print_errno(const char *message) {
   fflush(stderr);
 }
 
+#ifdef _WIN32
+static void muon_print_windows_path_error(const char *path, DWORD error) {
+  if (g_quiet) {
+    return;
+  }
+  char message[512] = {0};
+  DWORD length = FormatMessageA(
+      FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS |
+          FORMAT_MESSAGE_MAX_WIDTH_MASK,
+      NULL, error, 0, message, (DWORD)sizeof(message), NULL);
+  while (length > 0 &&
+         (message[length - 1] == '\r' || message[length - 1] == '\n')) {
+    message[--length] = '\0';
+  }
+  if (length == 0) {
+    muon_print_error("%s: Windows error %lu\n", path, (unsigned long)error);
+    return;
+  }
+  muon_print_error("%s: %s (Windows error %lu)\n", path, message,
+                   (unsigned long)error);
+}
+#endif
+
 void muon_log_message(const char *format, ...) {
   if (g_quiet) {
     return;
   }
   va_list arguments;
   va_start(arguments, format);
-  vfprintf(stderr, format, arguments);
+  const int message_length = vsnprintf(NULL, 0, format, arguments);
   va_end(arguments);
-  fputc('\n', stderr);
+  if (message_length < 0) {
+    return;
+  }
+  char *line = (char *)malloc((size_t)message_length + 2);
+  if (line == NULL) {
+    return;
+  }
+  va_start(arguments, format);
+  const int written =
+      vsnprintf(line, (size_t)message_length + 1, format, arguments);
+  va_end(arguments);
+  if (written != message_length) {
+    free(line);
+    return;
+  }
+  line[message_length] = '\n';
+  line[message_length + 1] = '\0';
+  fwrite(line, 1, (size_t)message_length + 1, stderr);
+  free(line);
   fflush(stderr);
 }
 
@@ -540,7 +584,47 @@ int muon_copy_directory_contents(const char *source, const char *destination,
       MUON_PREPARE_PROGRESS_PHASE_INSTALLING, "");
 }
 
+#ifdef _WIN32
+static int muon_remove_windows_reparse_point_if_present(const char *path,
+                                                        int *handled) {
+  *handled = 1;
+  const DWORD attributes = GetFileAttributesA(path);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    const DWORD error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+      return 0;
+    }
+    muon_print_windows_path_error(path, error);
+    return -1;
+  }
+  if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+    *handled = 0;
+    return 0;
+  }
+  const BOOL removed = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+                           ? RemoveDirectoryA(path)
+                           : DeleteFileA(path);
+  if (!removed) {
+    const DWORD error = GetLastError();
+    muon_print_windows_path_error(path, error);
+    return -1;
+  }
+  return 0;
+}
+#endif
+
 int muon_remove_recursive(const char *path) {
+  if (path == NULL) {
+    return 0;
+  }
+#ifdef _WIN32
+  int handled = 0;
+  const int reparse_result =
+      muon_remove_windows_reparse_point_if_present(path, &handled);
+  if (handled) {
+    return reparse_result;
+  }
+#endif
   struct stat entry;
   if (muon_lstat(path, &entry) != 0) {
     return errno == ENOENT ? 0 : -1;
@@ -1437,6 +1521,73 @@ static void wait_for_progress_poll(void) {
   delay.tv_nsec = 100 * 1000 * 1000;
   nanosleep(&delay, NULL);
 }
+
+static void report_posix_error(const char *message, int error_number) {
+  errno = error_number;
+  muon_print_errno(message);
+}
+
+static int initialize_null_output_actions(
+    posix_spawn_file_actions_t *file_actions) {
+  int result = posix_spawn_file_actions_init(file_actions);
+  if (result != 0) {
+    return result;
+  }
+  result = posix_spawn_file_actions_addopen(
+      file_actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+  if (result == 0) {
+    result = posix_spawn_file_actions_adddup2(
+        file_actions, STDOUT_FILENO, STDERR_FILENO);
+  }
+  if (result != 0) {
+    const int destroy_result =
+        posix_spawn_file_actions_destroy(file_actions);
+    if (destroy_result != 0) {
+      report_posix_error("posix_spawn_file_actions_destroy", destroy_result);
+    }
+  }
+  return result;
+}
+
+static int spawn_process(pid_t *pid, char *const argv[],
+                         int discard_output) {
+  posix_spawn_file_actions_t file_actions;
+  const posix_spawn_file_actions_t *file_actions_pointer = NULL;
+  if (discard_output) {
+    const int actions_result =
+        initialize_null_output_actions(&file_actions);
+    if (actions_result != 0) {
+      report_posix_error("posix_spawn_file_actions", actions_result);
+      return -1;
+    }
+    file_actions_pointer = &file_actions;
+  }
+
+  const int spawn_result =
+      posix_spawnp(pid, argv[0], file_actions_pointer, NULL, argv, environ);
+  if (file_actions_pointer != NULL) {
+    const int destroy_result =
+        posix_spawn_file_actions_destroy(&file_actions);
+    if (destroy_result != 0) {
+      report_posix_error("posix_spawn_file_actions_destroy", destroy_result);
+    }
+  }
+  if (spawn_result != 0) {
+    report_posix_error(argv[0], spawn_result);
+    return -1;
+  }
+  return 0;
+}
+
+static pid_t wait_for_child_process(pid_t pid, int *status, int options) {
+  for (;;) {
+    const pid_t result = waitpid(pid, status, options);
+    if (result < 0 && errno == EINTR) {
+      continue;
+    }
+    return result;
+  }
+}
 #endif
 
 static int run_process(char *const argv[], int report_command_failure) {
@@ -1455,28 +1606,12 @@ static int run_process(char *const argv[], int report_command_failure) {
   }
   return 0;
 #else
-  pid_t pid = fork();
-  if (pid < 0) {
-    muon_print_errno("fork");
+  pid_t pid = 0;
+  if (spawn_process(&pid, argv, g_quiet) != 0) {
     return -1;
   }
-  if (pid == 0) {
-    if (g_quiet) {
-      const int null_output = open("/dev/null", O_WRONLY);
-      if (null_output >= 0) {
-        dup2(null_output, STDOUT_FILENO);
-        dup2(null_output, STDERR_FILENO);
-        if (null_output > STDERR_FILENO) {
-          close(null_output);
-        }
-      }
-    }
-    execvp(argv[0], argv);
-    muon_print_errno(argv[0]);
-    _exit(127);
-  }
   int status = 0;
-  if (waitpid(pid, &status, 0) < 0) {
+  if (wait_for_child_process(pid, &status, 0) < 0) {
     muon_print_errno("waitpid");
     return -1;
   }
@@ -1542,27 +1677,14 @@ static int run_process_with_file_progress(
   }
   return 0;
 #else
-  pid_t pid = fork();
-  if (pid < 0) {
-    muon_print_errno("fork");
+  pid_t pid = 0;
+  if (spawn_process(&pid, argv, 1) != 0) {
     return -1;
-  }
-  if (pid == 0) {
-    const int null_output = open("/dev/null", O_WRONLY);
-    if (null_output >= 0) {
-      dup2(null_output, STDOUT_FILENO);
-      dup2(null_output, STDERR_FILENO);
-      if (null_output > STDERR_FILENO) {
-        close(null_output);
-      }
-    }
-    execvp(argv[0], argv);
-    muon_print_errno(argv[0]);
-    _exit(127);
   }
   int wait_status = 0;
   for (;;) {
-    const pid_t wait_result = waitpid(pid, &wait_status, WNOHANG);
+    const pid_t wait_result =
+        wait_for_child_process(pid, &wait_status, WNOHANG);
     if (wait_result < 0) {
       muon_print_errno("waitpid");
       return -1;

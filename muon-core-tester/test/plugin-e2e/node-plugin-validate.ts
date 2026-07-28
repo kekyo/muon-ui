@@ -3,8 +3,6 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { resolve } from "node:path";
-
 import { expect, it } from "vitest";
 
 import {
@@ -14,30 +12,25 @@ import {
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   constants,
+  getNodeProjectFixtureDirectory,
+  getNodeSidecarCommandMarker,
   join,
-  listProcessGroupCommandLines,
+  listMuonProcessCommandLines,
   mkdtemp,
+  readFile,
   rm,
   startDebugMuonWithNodeProject,
   stopMuon,
   tmpdir,
 } from "./shared.js";
-import type { CdpDriver, RunningMuon } from "./shared.js";
-import { isWindowsRemoteE2e } from "./windows-context.js";
+import type { CdpDriver } from "./shared.js";
 
-const localIt = isWindowsRemoteE2e() ? it.skip : it;
-const nodeProjectDirectory = resolve("test/fixtures/node-project");
-const nodeBridgeCommandMarker = "node-bridge.mjs";
-const nodeImportCapabilityId = "node-import-validate-e2e";
-const nodeImportFunctionPath = "muon.node.importModule";
+const nodeProjectDirectory = getNodeProjectFixtureDirectory();
+const nodeSidecarCommandMarker = getNodeSidecarCommandMarker();
+const nodeIt = it;
 
-const requireProcessGroupId = (running: RunningMuon): number => {
-  const processGroupId = running.process.pid;
-  if (processGroupId === undefined) {
-    throw new Error("Muon process group id is unavailable");
-  }
-  return processGroupId;
-};
+const readMarkerLines = async (path: string): Promise<string[]> =>
+  (await readFile(path, "utf8")).split("\n").filter((line) => line !== "");
 
 const connectToValidateTestPage = async (): Promise<CdpDriver> => {
   const driver = await connectToMuonCdp({
@@ -48,8 +41,8 @@ const connectToValidateTestPage = async (): Promise<CdpDriver> => {
   return driver;
 };
 
-localIt(
-  "does not allow a validate-mode capability call to start the Node sidecar",
+nodeIt(
+  "runs a Node instance through the validate-mode virtual module facade",
   async () => {
     const markerDirectory = await mkdtemp(
       join(tmpdir(), "muon-node-validate-"),
@@ -59,16 +52,9 @@ localIt(
       const running = await startDebugMuonWithNodeProject({
         nodeProject: nodeProjectDirectory,
         environment: {
-          MUON_NODE_EXECUTABLE: process.execPath,
           MUON_NODE_TEST_START_MARKER: markerPath,
         },
         browserPluginAllowPatterns: null,
-        pluginCapabilities: [
-          {
-            id: nodeImportCapabilityId,
-            allow: [nodeImportFunctionPath],
-          },
-        ],
       });
       let driver: CdpDriver | undefined = undefined;
       try {
@@ -79,48 +65,202 @@ localIt(
         await expect(
           driver.evaluate("typeof globalThis.__muon_plugin_call"),
         ).resolves.toBe("function");
+        const nodeApiDescriptor = await driver.evaluate<{
+          readonly configurable: boolean;
+          readonly enumerable: boolean;
+          readonly frozen: boolean;
+          readonly writable: boolean;
+        }>(`(() => {
+          const descriptor = Object.getOwnPropertyDescriptor(
+            globalThis,
+            "__muon_node_api"
+          );
+          return {
+            configurable: descriptor.configurable,
+            enumerable: descriptor.enumerable,
+            frozen: Object.isFrozen(descriptor.value),
+            writable: descriptor.writable,
+          };
+        })()`);
+        expect(nodeApiDescriptor).toEqual({
+          configurable: false,
+          enumerable: false,
+          frozen: true,
+          writable: false,
+        });
+        const internalCapabilityError = await driver.evaluate<string>(
+          `(async () => {
+            try {
+              await globalThis.__muon_plugin_call(
+                "__muon_node_internal",
+                "muon.node.createNode",
+                [""]
+              );
+              return "";
+            } catch (error) {
+              return String(
+                error instanceof Error ? error.message : error
+              );
+            }
+          })()`,
+        );
+        expect(internalCapabilityError).toContain("cannot be called directly");
         await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
 
-        const processGroupId = requireProcessGroupId(running);
         const commandLinesBeforeCall =
-          await listProcessGroupCommandLines(processGroupId);
+          await listMuonProcessCommandLines(running);
         expect(
           commandLinesBeforeCall.some((line) =>
-            line.includes(nodeBridgeCommandMarker),
+            line.includes(nodeSidecarCommandMarker),
           ),
         ).toBe(false);
 
         const outcome = await driver.evaluate<{
-          readonly error: string;
-          readonly ok: boolean;
+          readonly callbackJson: {
+            readonly copied: boolean;
+            readonly original: unknown;
+            readonly returned: unknown;
+          };
+          readonly hasUnsupportedExport: boolean;
+          readonly invalidJsonError: string;
+          readonly jsonValue: {
+            readonly copied: boolean;
+            readonly original: unknown;
+            readonly returned: unknown;
+          };
+          readonly processId: number;
+          readonly reservedTags: readonly unknown[];
+          readonly state: readonly number[];
         }>(`(async () => {
+          const node = await globalThis.__muon_node_api.createNode();
           try {
-            await globalThis.__muon_plugin_call(
-              ${JSON.stringify(nodeImportCapabilityId)},
-              ${JSON.stringify(nodeImportFunctionPath)},
-              ["./backend.mjs"]
-            );
-            return { ok: true, error: "" };
-          } catch (error) {
-            return {
-              ok: false,
-              error: String(error && error.message ? error.message : error),
+            const backend = await node.importModule("./backend.mjs");
+
+            const jsonArgument = {
+              nested: {
+                items: ["validate", { source: "renderer" }],
+              },
             };
+            const jsonResult = await backend.mutateJsonValue(jsonArgument);
+
+            const callbackArgument = {
+              nested: {
+                items: [
+                  { source: "node" },
+                  ["validate", 42, false, null],
+                ],
+              },
+            };
+            const callbackResult = await backend.invokeCallback(
+              async (value) => {
+                value.nested.items[0].source = "validate callback";
+                return {
+                  received: value,
+                  response: ["callback", { accepted: true }],
+                };
+              },
+              callbackArgument
+            );
+
+            const reservedTags = await Promise.all([
+              { kind: "i64", value: "123" },
+              { kind: "buffer", data: "not-a-buffer" },
+              { kind: "function", handle: 123 },
+              { kind: "json", value: { nested: true } },
+            ].map(async (value) => await backend.echo(value)));
+
+            let invalidJsonError = "";
+            try {
+              await backend.echo({ nested: 1n });
+            } catch (error) {
+              invalidJsonError = String(
+                error instanceof Error ? error.message : error
+              );
+            }
+
+            return {
+              callbackJson: {
+                copied:
+                  callbackArgument !== callbackResult.received &&
+                  callbackArgument.nested !== callbackResult.received.nested,
+                original: callbackArgument,
+                returned: callbackResult,
+              },
+              hasUnsupportedExport:
+                Object.hasOwn(backend, "unsupportedExport"),
+              invalidJsonError,
+              jsonValue: {
+                copied:
+                  jsonArgument !== jsonResult &&
+                  jsonArgument.nested !== jsonResult.nested,
+                original: jsonArgument,
+                returned: jsonResult,
+              },
+              processId: await backend.processId(),
+              reservedTags,
+              state: [
+                await backend.incrementState(),
+                await backend.incrementState(),
+              ],
+            };
+          } finally {
+            await node.release();
           }
         })()`);
 
         const commandLinesAfterCall =
-          await listProcessGroupCommandLines(processGroupId);
+          await listMuonProcessCommandLines(running);
         expect(
-          commandLinesAfterCall.some((line) =>
-            line.includes(nodeBridgeCommandMarker),
+          commandLinesAfterCall.filter((line) =>
+            line.includes(nodeSidecarCommandMarker),
           ),
-        ).toBe(false);
-        await expect(access(markerPath, constants.F_OK)).rejects.toThrow();
-        expect(outcome.ok).toBe(false);
-        expect(outcome.error).toBe(
-          "Node runtime is unavailable in validate mode",
-        );
+        ).toHaveLength(0);
+        expect(await readMarkerLines(markerPath)).toEqual([
+          String(outcome.processId),
+        ]);
+        expect(outcome.callbackJson).toEqual({
+          copied: true,
+          original: {
+            nested: {
+              items: [{ source: "node" }, ["validate", 42, false, null]],
+            },
+          },
+          returned: {
+            received: {
+              nested: {
+                items: [
+                  { source: "validate callback" },
+                  ["validate", 42, false, null],
+                ],
+              },
+            },
+            response: ["callback", { accepted: true }],
+          },
+        });
+        expect(outcome.hasUnsupportedExport).toBe(false);
+        expect(outcome.invalidJsonError).toMatch(/bigint|JSON|unsupported/iu);
+        expect(outcome.jsonValue).toEqual({
+          copied: true,
+          original: {
+            nested: {
+              items: ["validate", { source: "renderer" }],
+            },
+          },
+          returned: {
+            nested: {
+              items: ["validate", { source: "node" }],
+            },
+            nodeOnly: ["added", { accepted: true }],
+          },
+        });
+        expect(outcome.processId).toBeGreaterThan(0);
+        expect(outcome.reservedTags).toEqual([
+          { kind: "i64", value: "123" },
+          { kind: "buffer", data: "not-a-buffer" },
+          { kind: "function", handle: 123 },
+          { kind: "json", value: { nested: true } },
+        ]);
+        expect(outcome.state).toEqual([1, 2]);
       } catch (error) {
         if (error instanceof Error) {
           error.message = `${error.message}\nMuon stderr:\n${running.stderr}`;

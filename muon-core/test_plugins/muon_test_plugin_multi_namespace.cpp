@@ -71,6 +71,7 @@ static const muon_plugin_namespace* const multi_namespace_namespaces_pointers[] 
 static const muon_plugin_metadata multi_namespace_metadata = {
     multi_namespace_namespaces_pointers,
     nullptr,
+    nullptr,
 };
 
 extern "C" const muon_plugin_metadata* muon_init_plugin(

@@ -147,7 +147,7 @@ static int copy_url_to_file_progress(
     const char *status,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
-    return run_curl_download(url, destination, "-fsSL", size, status,
+    return run_curl_download(url, destination, "-fsL", size, status,
                              progress_callback, progress_user_data);
   }
   const char *source = url;
@@ -233,18 +233,19 @@ void muon_prepare_free_cef_artifact(MuonCefArtifact *artifact) {
   memset(artifact, 0, sizeof(*artifact));
 }
 
-int muon_prepare_ensure_catalog_cache(const char *cache_dir, int force) {
-  return muon_prepare_ensure_catalog_cache_with_status(cache_dir, force, NULL);
+int muon_prepare_ensure_cef_catalog_cache(const char *cache_dir, int force) {
+  return muon_prepare_ensure_cef_catalog_cache_with_status(cache_dir, force,
+                                                           NULL);
 }
 
-int muon_prepare_ensure_catalog_cache_with_status(const char *cache_dir,
-                                                  int force,
-                                                  int *updated) {
-  return muon_prepare_ensure_catalog_cache_with_status_progress(
+int muon_prepare_ensure_cef_catalog_cache_with_status(const char *cache_dir,
+                                                      int force,
+                                                      int *updated) {
+  return muon_prepare_ensure_cef_catalog_cache_with_status_progress(
       cache_dir, force, updated, NULL, NULL);
 }
 
-int muon_prepare_ensure_catalog_cache_with_status_progress(
+int muon_prepare_ensure_cef_catalog_cache_with_status_progress(
     const char *cache_dir, int force, int *updated,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   if (updated != NULL) {
@@ -253,8 +254,10 @@ int muon_prepare_ensure_catalog_cache_with_status_progress(
   if (muon_ensure_directory(cache_dir) != 0) {
     return -1;
   }
-  char *catalog_path = muon_path_join(cache_dir, "catalog.json");
-  char *temporary_path = muon_create_temporary_path(cache_dir, "catalog.json");
+  char *catalog_path =
+      muon_path_join(cache_dir, MUON_PREPARE_CEF_CATALOG_FILE_NAME);
+  char *temporary_path = muon_create_temporary_path(
+      cache_dir, MUON_PREPARE_CEF_CATALOG_FILE_NAME);
   if (catalog_path == NULL || temporary_path == NULL) {
     free(catalog_path);
     free(temporary_path);
@@ -347,7 +350,8 @@ int muon_prepare_resolve_cef_artifact(const char *cache_dir,
                                       const char *distribution,
                                       MuonCefArtifact *artifact) {
   memset(artifact, 0, sizeof(*artifact));
-  char *catalog_path = muon_path_join(cache_dir, "catalog.json");
+  char *catalog_path =
+      muon_path_join(cache_dir, MUON_PREPARE_CEF_CATALOG_FILE_NAME);
   yyjson_doc *catalog =
       catalog_path == NULL ? NULL : muon_json_read_file(catalog_path);
   yyjson_val *root = catalog == NULL ? NULL : yyjson_doc_get_root(catalog);
@@ -547,7 +551,8 @@ static int collect_policy_candidates(const char *cache_dir,
                                      int require_same_major,
                                      MuonCefCandidateList *list) {
   memset(list, 0, sizeof(*list));
-  char *catalog_path = muon_path_join(cache_dir, "catalog.json");
+  char *catalog_path =
+      muon_path_join(cache_dir, MUON_PREPARE_CEF_CATALOG_FILE_NAME);
   yyjson_doc *catalog =
       catalog_path == NULL ? NULL : muon_json_read_file(catalog_path);
   yyjson_val *root = catalog == NULL ? NULL : yyjson_doc_get_root(catalog);
@@ -815,9 +820,10 @@ int muon_prepare_ensure_cef_artifact_cache_progress(
     char **archive_path, MuonPrepareProgressCallback progress_callback,
     void *progress_user_data) {
   *archive_path = NULL;
-  char *artifacts_dir = muon_path_join(cache_dir, "artifacts");
-  char *final_path =
-      artifacts_dir == NULL ? NULL : muon_path_join(artifacts_dir, artifact->file_name);
+  char *artifacts_dir = muon_path_join3(cache_dir, "artifacts", "cef");
+  char *final_path = artifacts_dir == NULL
+                         ? NULL
+                         : muon_path_join(artifacts_dir, artifact->file_name);
   char *temporary_path =
       artifacts_dir == NULL
           ? NULL

@@ -1039,6 +1039,7 @@ static const muon_plugin_namespace* const fs_dialog_namespaces[] = {
 static const muon_plugin_metadata fs_dialog_metadata = {
     fs_dialog_namespaces,
     nullptr,
+    nullptr,
 };
 
 const muon_plugin_metadata* GetMuonBuiltinFsDialogsPluginMetadata() {

@@ -13,6 +13,7 @@
 #include <string.h>
 
 #define MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE (64 * 1024)
+#define MUON_LAUNCHER_TLV_MAX_NESTING_DEPTH 64U
 
 #if defined(__GNUC__) || defined(__clang__)
 #define MUON_LAUNCHER_EMBEDDED_CONFIG_USED __attribute__((used))
@@ -118,9 +119,14 @@ static int tlv_read_var_uint(MuonLauncherTlvReader *reader,
                              unsigned long long *value) {
   unsigned long long result = 0;
   unsigned int shift = 0;
-  while (reader->offset < reader->size && shift < 64) {
+  while (reader->offset < reader->size && shift <= 63) {
     const unsigned char byte = reader->bytes[reader->offset++];
-    result |= ((unsigned long long)(byte & 0x7f)) << shift;
+    const unsigned char payload = byte & 0x7f;
+    if ((shift == 63 && payload > 1) ||
+        (shift != 0 && payload == 0 && (byte & 0x80) == 0)) {
+      return -1;
+    }
+    result |= ((unsigned long long)payload) << shift;
     if ((byte & 0x80) == 0) {
       *value = result;
       return 0;
@@ -130,46 +136,79 @@ static int tlv_read_var_uint(MuonLauncherTlvReader *reader,
   return -1;
 }
 
-static int tlv_skip_value(MuonLauncherTlvReader *reader);
+static int tlv_skip_value_with_depth(MuonLauncherTlvReader *reader,
+                                     unsigned int depth);
+
+static int tlv_read_sized_count(MuonLauncherTlvReader *reader,
+                                size_t minimum_encoded_size,
+                                size_t *count) {
+  unsigned long long raw_count = 0;
+  if (tlv_read_var_uint(reader, &raw_count) != 0 ||
+      raw_count > (unsigned long long)SIZE_MAX) {
+    return -1;
+  }
+  const size_t result = (size_t)raw_count;
+  const size_t remaining = reader->size - reader->offset;
+  if (minimum_encoded_size != 0 &&
+      result > remaining / minimum_encoded_size) {
+    return -1;
+  }
+  *count = result;
+  return 0;
+}
+
+static int tlv_read_counted_bytes(MuonLauncherTlvReader *reader,
+                                  const unsigned char **bytes,
+                                  size_t *length) {
+  unsigned long long raw_length = 0;
+  if (tlv_read_var_uint(reader, &raw_length) != 0 ||
+      raw_length > (unsigned long long)SIZE_MAX ||
+      (size_t)raw_length > reader->size - reader->offset) {
+    return -1;
+  }
+  *bytes = reader->bytes + reader->offset;
+  *length = (size_t)raw_length;
+  reader->offset += *length;
+  return 0;
+}
 
 static int tlv_skip_counted_bytes(MuonLauncherTlvReader *reader) {
-  unsigned long long length = 0;
-  if (tlv_read_var_uint(reader, &length) != 0 ||
-      length > (unsigned long long)(reader->size - reader->offset)) {
-    return -1;
-  }
-  reader->offset += (size_t)length;
-  return 0;
+  const unsigned char *bytes = NULL;
+  size_t length = 0;
+  return tlv_read_counted_bytes(reader, &bytes, &length);
 }
 
-static int tlv_skip_array(MuonLauncherTlvReader *reader) {
-  unsigned long long count = 0;
-  if (tlv_read_var_uint(reader, &count) != 0) {
+static int tlv_skip_array(MuonLauncherTlvReader *reader,
+                          unsigned int child_depth) {
+  size_t count = 0;
+  if (tlv_read_sized_count(reader, 1, &count) != 0) {
     return -1;
   }
-  for (unsigned long long index = 0; index < count; index += 1) {
-    if (tlv_skip_value(reader) != 0) {
+  for (size_t index = 0; index < count; index += 1) {
+    if (tlv_skip_value_with_depth(reader, child_depth) != 0) {
       return -1;
     }
   }
   return 0;
 }
 
-static int tlv_skip_object(MuonLauncherTlvReader *reader) {
-  unsigned long long count = 0;
-  if (tlv_read_var_uint(reader, &count) != 0) {
+static int tlv_skip_object(MuonLauncherTlvReader *reader,
+                           unsigned int child_depth) {
+  size_t count = 0;
+  if (tlv_read_sized_count(reader, 2, &count) != 0) {
     return -1;
   }
-  for (unsigned long long index = 0; index < count; index += 1) {
+  for (size_t index = 0; index < count; index += 1) {
     if (tlv_skip_counted_bytes(reader) != 0 ||
-        tlv_skip_value(reader) != 0) {
+        tlv_skip_value_with_depth(reader, child_depth) != 0) {
       return -1;
     }
   }
   return 0;
 }
 
-static int tlv_skip_value(MuonLauncherTlvReader *reader) {
+static int tlv_skip_value_with_depth(MuonLauncherTlvReader *reader,
+                                     unsigned int depth) {
   if (reader->offset >= reader->size) {
     return -1;
   }
@@ -187,25 +226,35 @@ static int tlv_skip_value(MuonLauncherTlvReader *reader) {
     case 5:
       return tlv_skip_counted_bytes(reader);
     case 6:
-      return tlv_skip_array(reader);
+      if (depth >= MUON_LAUNCHER_TLV_MAX_NESTING_DEPTH) {
+        return -1;
+      }
+      return tlv_skip_array(reader, depth + 1);
     case 7:
-      return tlv_skip_object(reader);
+      if (depth >= MUON_LAUNCHER_TLV_MAX_NESTING_DEPTH) {
+        return -1;
+      }
+      return tlv_skip_object(reader, depth + 1);
     default:
       return -1;
   }
 }
 
+static int tlv_skip_value(MuonLauncherTlvReader *reader) {
+  return tlv_skip_value_with_depth(reader, 0);
+}
+
 static int tlv_read_raw_key(MuonLauncherTlvReader *reader,
                             const char **key,
                             size_t *key_length) {
-  unsigned long long length = 0;
-  if (tlv_read_var_uint(reader, &length) != 0 ||
-      length > (unsigned long long)(reader->size - reader->offset)) {
+  const unsigned char *bytes = NULL;
+  size_t length = 0;
+  if (tlv_read_counted_bytes(reader, &bytes, &length) != 0 ||
+      memchr(bytes, '\0', length) != NULL) {
     return -1;
   }
-  *key = (const char *)(reader->bytes + reader->offset);
-  *key_length = (size_t)length;
-  reader->offset += (size_t)length;
+  *key = (const char *)bytes;
+  *key_length = length;
   return 0;
 }
 
@@ -218,11 +267,19 @@ static int tlv_key_equals(const char *key,
 }
 
 static int tlv_read_object_value_count(MuonLauncherTlvReader *reader,
-                                       unsigned long long *count) {
+                                       size_t *count) {
   if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 7) {
     return -1;
   }
-  return tlv_read_var_uint(reader, count);
+  return tlv_read_sized_count(reader, 2, count);
+}
+
+static int tlv_read_array_value_count(MuonLauncherTlvReader *reader,
+                                      size_t *count) {
+  if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 6) {
+    return -1;
+  }
+  return tlv_read_sized_count(reader, 1, count);
 }
 
 static int tlv_read_string_value(MuonLauncherTlvReader *reader,
@@ -230,27 +287,25 @@ static int tlv_read_string_value(MuonLauncherTlvReader *reader,
   if (reader->offset >= reader->size || reader->bytes[reader->offset++] != 4) {
     return -1;
   }
-  unsigned long long length = 0;
-  if (tlv_read_var_uint(reader, &length) != 0 ||
-      length > (unsigned long long)(reader->size - reader->offset)) {
+  const unsigned char *bytes = NULL;
+  size_t length = 0;
+  if (tlv_read_counted_bytes(reader, &bytes, &length) != 0 ||
+      memchr(bytes, '\0', length) != NULL) {
     return -1;
   }
-  char *result =
-      muon_substring((const char *)(reader->bytes + reader->offset),
-                     (size_t)length);
+  char *result = muon_substring((const char *)bytes, length);
   if (result == NULL) {
     return -1;
   }
-  reader->offset += (size_t)length;
   *value = result;
   return 0;
 }
 
 static int tlv_read_launcher_default_version_policy(
     MuonLauncherTlvReader *reader,
-    unsigned long long count,
+    size_t count,
     char **policy) {
-  for (unsigned long long index = 0; index < count; index += 1) {
+  for (size_t index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
@@ -283,9 +338,9 @@ static int tlv_read_launcher_default_version_policy(
 }
 
 static int tlv_read_launcher_app_id(MuonLauncherTlvReader *reader,
-                                     unsigned long long count,
+                                     size_t count,
                                      char **app_id) {
-  for (unsigned long long index = 0; index < count; index += 1) {
+  for (size_t index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
@@ -309,6 +364,156 @@ static int tlv_read_launcher_app_id(MuonLauncherTlvReader *reader,
   return 0;
 }
 
+static int tlv_read_boolean_value(MuonLauncherTlvReader *reader,
+                                  int *value) {
+  if (reader->offset >= reader->size) {
+    return -1;
+  }
+  const unsigned char tag = reader->bytes[reader->offset++];
+  if (tag == 1) {
+    *value = 0;
+    return 0;
+  }
+  if (tag == 2) {
+    *value = 1;
+    return 0;
+  }
+  return -1;
+}
+
+static int tlv_read_node_comparator_sets(
+    MuonLauncherTlvReader *reader,
+    MuonNodeRuntimeRequirement *requirement) {
+  size_t set_count = 0;
+  if (tlv_read_array_value_count(reader, &set_count) != 0 ||
+      set_count == 0 ||
+      set_count > SIZE_MAX / sizeof(MuonNodeComparatorSet)) {
+    return -1;
+  }
+  requirement->sets = (MuonNodeComparatorSet *)calloc(
+      set_count, sizeof(MuonNodeComparatorSet));
+  if (requirement->sets == NULL) {
+    return -1;
+  }
+  requirement->set_count = set_count;
+  for (size_t set_index = 0; set_index < set_count; set_index += 1) {
+    MuonNodeComparatorSet *set = &requirement->sets[set_index];
+    if (tlv_read_array_value_count(reader, &set->count) != 0) {
+      return -1;
+    }
+    if (set->count == 0) {
+      continue;
+    }
+    if (set->count > SIZE_MAX / sizeof(char *)) {
+      return -1;
+    }
+    set->comparators = (char **)calloc(set->count, sizeof(char *));
+    if (set->comparators == NULL) {
+      return -1;
+    }
+    for (size_t comparator_index = 0; comparator_index < set->count;
+         comparator_index += 1) {
+      if (tlv_read_string_value(
+              reader, &set->comparators[comparator_index]) != 0 ||
+          set->comparators[comparator_index][0] == '\0') {
+        return -1;
+      }
+    }
+  }
+  return 0;
+}
+
+static int tlv_read_node_runtime_requirement(
+    MuonLauncherTlvReader *reader,
+    size_t count,
+    MuonNodeRuntimeRequirement *requirement) {
+  if (count != 4) {
+    return -1;
+  }
+  int has_required = 0;
+  int has_engine_range_specified = 0;
+  int has_engine_range = 0;
+  int has_comparator_sets = 0;
+  for (size_t index = 0; index < count; index += 1) {
+    const char *key = NULL;
+    size_t key_length = 0;
+    if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
+      return -1;
+    }
+    if (tlv_key_equals(key, key_length, "required")) {
+      if (has_required ||
+          tlv_read_boolean_value(reader, &requirement->required) != 0) {
+        return -1;
+      }
+      has_required = 1;
+      continue;
+    }
+    if (tlv_key_equals(key, key_length, "engineRangeSpecified")) {
+      if (has_engine_range_specified ||
+          tlv_read_boolean_value(
+              reader, &requirement->engine_range_specified) != 0) {
+        return -1;
+      }
+      has_engine_range_specified = 1;
+      continue;
+    }
+    if (tlv_key_equals(key, key_length, "engineRange")) {
+      if (has_engine_range ||
+          tlv_read_string_value(reader, &requirement->engine_range) != 0 ||
+          requirement->engine_range[0] == '\0') {
+        return -1;
+      }
+      has_engine_range = 1;
+      continue;
+    }
+    if (tlv_key_equals(key, key_length, "comparatorSets")) {
+      if (has_comparator_sets ||
+          tlv_read_node_comparator_sets(reader, requirement) != 0) {
+        return -1;
+      }
+      has_comparator_sets = 1;
+      continue;
+    }
+    return -1;
+  }
+  if (!has_required || !has_engine_range_specified ||
+      !has_engine_range || !has_comparator_sets) {
+    return -1;
+  }
+  return 0;
+}
+
+static int tlv_read_launcher_node_runtime(
+    MuonLauncherTlvReader *reader,
+    size_t count,
+    MuonNodeRuntimeRequirement *requirement,
+    int *present) {
+  int node_runtime_seen = 0;
+  for (size_t index = 0; index < count; index += 1) {
+    const char *key = NULL;
+    size_t key_length = 0;
+    if (tlv_read_raw_key(reader, &key, &key_length) != 0) {
+      return -1;
+    }
+    if (tlv_key_equals(key, key_length, "nodeRuntime")) {
+      size_t requirement_count = 0;
+      if (node_runtime_seen ||
+          tlv_read_object_value_count(reader, &requirement_count) != 0 ||
+          tlv_read_node_runtime_requirement(
+              reader, requirement_count, requirement) != 0) {
+        return -1;
+      }
+      node_runtime_seen = 1;
+      *present = 1;
+      continue;
+    }
+    if (tlv_skip_value(reader) != 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
 int muon_launcher_get_embedded_default_version_policy(char **policy) {
   if (policy == NULL) {
     return -1;
@@ -323,12 +528,12 @@ int muon_launcher_get_embedded_default_version_policy(char **policy) {
       kMuonLauncherEmbeddedConfigSlot,
       MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE,
       0};
-  unsigned long long count = 0;
+  size_t count = 0;
   if (tlv_read_object_value_count(&reader, &count) != 0) {
     muon_print_error("Invalid embedded muon launcher config.\n");
     return -1;
   }
-  for (unsigned long long index = 0; index < count; index += 1) {
+  for (size_t index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(&reader, &key, &key_length) != 0) {
@@ -336,7 +541,7 @@ int muon_launcher_get_embedded_default_version_policy(char **policy) {
       return -1;
     }
     if (tlv_key_equals(key, key_length, "launcher")) {
-      unsigned long long launcher_count = 0;
+      size_t launcher_count = 0;
       if (tlv_read_object_value_count(&reader, &launcher_count) != 0) {
         muon_print_error("muon.json launcher must be an object.\n");
         return -1;
@@ -370,12 +575,12 @@ int muon_launcher_get_embedded_app_id(char **app_id) {
       kMuonLauncherEmbeddedConfigSlot,
       MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE,
       0};
-  unsigned long long count = 0;
+  size_t count = 0;
   if (tlv_read_object_value_count(&reader, &count) != 0) {
     muon_print_error("Invalid embedded muon launcher config.\n");
     return -1;
   }
-  for (unsigned long long index = 0; index < count; index += 1) {
+  for (size_t index = 0; index < count; index += 1) {
     const char *key = NULL;
     size_t key_length = 0;
     if (tlv_read_raw_key(&reader, &key, &key_length) != 0) {
@@ -383,7 +588,7 @@ int muon_launcher_get_embedded_app_id(char **app_id) {
       return -1;
     }
     if (tlv_key_equals(key, key_length, "launcher")) {
-      unsigned long long launcher_count = 0;
+      size_t launcher_count = 0;
       if (tlv_read_object_value_count(&reader, &launcher_count) != 0) {
         muon_print_error("muon.json launcher must be an object.\n");
         return -1;
@@ -401,6 +606,70 @@ int muon_launcher_get_embedded_app_id(char **app_id) {
     }
   }
   return 0;
+}
+
+int muon_launcher_get_embedded_node_runtime_requirement(
+    MuonNodeRuntimeRequirement *requirement, int *present) {
+  if (requirement == NULL) {
+    return -1;
+  }
+  memset(requirement, 0, sizeof(*requirement));
+  if (present == NULL) {
+    return -1;
+  }
+  *present = 0;
+  if (embedded_slot_is_empty()) {
+    return 0;
+  }
+
+  MuonLauncherTlvReader reader = {
+      kMuonLauncherEmbeddedConfigSlot,
+      MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE,
+      0};
+  size_t count = 0;
+  int launcher_seen = 0;
+  if (tlv_read_object_value_count(&reader, &count) != 0) {
+    goto invalid;
+  }
+  for (size_t index = 0; index < count; index += 1) {
+    const char *key = NULL;
+    size_t key_length = 0;
+    if (tlv_read_raw_key(&reader, &key, &key_length) != 0) {
+      goto invalid;
+    }
+    if (tlv_key_equals(key, key_length, "launcher")) {
+      size_t launcher_count = 0;
+      if (launcher_seen ||
+          tlv_read_object_value_count(&reader, &launcher_count) != 0 ||
+          tlv_read_launcher_node_runtime(
+              &reader, launcher_count, requirement, present) != 0) {
+        goto invalid;
+      }
+      launcher_seen = 1;
+      continue;
+    }
+    if (tlv_skip_value(&reader) != 0) {
+      goto invalid;
+    }
+  }
+  if (*present &&
+      muon_prepare_validate_node_runtime_requirement(requirement) != 0) {
+    muon_prepare_free_node_runtime_requirement(requirement);
+    *present = 0;
+    return -1;
+  }
+  /*
+   * A populated fixed slot has random padding after the counted root value.
+   * Completing the root object is therefore the only valid end condition.
+   */
+  return 0;
+
+invalid:
+  muon_print_error(
+      "Invalid embedded muon launcher.nodeRuntime configuration.\n");
+  muon_prepare_free_node_runtime_requirement(requirement);
+  *present = 0;
+  return -1;
 }
 
 void muon_launcher_config_init_defaults(MuonLauncherConfig *config) {
@@ -458,17 +727,20 @@ static int apply_entry(MuonLauncherConfig *config, const char *section,
     config->has_cef_exact_version = 1;
     return 0;
   }
-  if (strcmp(section, "cef") == 0 &&
+  if (strcmp(section, "runtime") == 0 &&
       strcmp(key, "catalogRefreshIntervalSeconds") == 0) {
     if (parse_uint64(value, &config->catalog_refresh_interval_seconds) != 0) {
       return -1;
     }
-    config->has_catalog_refresh_interval_seconds = 1;
     return 0;
   }
   if (strcmp(section, "cef") == 0 &&
       strcmp(key, "lastCatalogUpdateUnix") == 0) {
-    return parse_uint64(value, &config->last_catalog_update_unix);
+    return parse_uint64(value, &config->cef_last_catalog_update_unix);
+  }
+  if (strcmp(section, "node") == 0 &&
+      strcmp(key, "lastCatalogUpdateUnix") == 0) {
+    return parse_uint64(value, &config->node_last_catalog_update_unix);
   }
   if (strcmp(section, "update") == 0 && strcmp(key, "requested") == 0) {
     return parse_bool(value, &config->update_requested);
@@ -582,7 +854,13 @@ int muon_launcher_config_write(const char *runtime_dir,
     free(temporary_path);
     return -1;
   }
-  int size = snprintf(NULL, 0, "[cef]\n");
+  int size =
+      snprintf(NULL, 0,
+               "[runtime]\n"
+               "catalogRefreshIntervalSeconds=%llu\n"
+               "\n"
+               "[cef]\n",
+               config->catalog_refresh_interval_seconds);
   if (config->has_cef_version_policy) {
     size += snprintf(NULL, 0, "versionPolicy=%s\n",
                      config->cef_version_policy);
@@ -591,17 +869,17 @@ int muon_launcher_config_write(const char *runtime_dir,
     size +=
         snprintf(NULL, 0, "exactVersion=%s\n", config->cef_exact_version);
   }
-  if (config->has_catalog_refresh_interval_seconds) {
-    size += snprintf(NULL, 0, "catalogRefreshIntervalSeconds=%llu\n",
-                     config->catalog_refresh_interval_seconds);
-  }
   size += snprintf(NULL, 0,
+                   "lastCatalogUpdateUnix=%llu\n"
+                   "\n"
+                   "[node]\n"
                    "lastCatalogUpdateUnix=%llu\n"
                    "\n"
                    "[update]\n"
                    "requested=%s\n"
                    "requestedAtUnix=%llu\n",
-                   config->last_catalog_update_unix,
+                   config->cef_last_catalog_update_unix,
+                   config->node_last_catalog_update_unix,
                    config->update_requested ? "true" : "false",
                    config->update_requested_at_unix);
   if (size < 0) {
@@ -629,7 +907,12 @@ int muon_launcher_config_write(const char *runtime_dir,
     output += written;                                                        \
     remaining -= (size_t)written;                                             \
   } while (0)
-  MUON_WRITE_LAUNCHER_CONFIG("[cef]\n");
+  MUON_WRITE_LAUNCHER_CONFIG(
+      "[runtime]\n"
+      "catalogRefreshIntervalSeconds=%llu\n"
+      "\n"
+      "[cef]\n",
+      config->catalog_refresh_interval_seconds);
   if (config->has_cef_version_policy) {
     MUON_WRITE_LAUNCHER_CONFIG("versionPolicy=%s\n",
                                 config->cef_version_policy);
@@ -638,17 +921,17 @@ int muon_launcher_config_write(const char *runtime_dir,
     MUON_WRITE_LAUNCHER_CONFIG("exactVersion=%s\n",
                                 config->cef_exact_version);
   }
-  if (config->has_catalog_refresh_interval_seconds) {
-    MUON_WRITE_LAUNCHER_CONFIG("catalogRefreshIntervalSeconds=%llu\n",
-                                config->catalog_refresh_interval_seconds);
-  }
   MUON_WRITE_LAUNCHER_CONFIG(
+      "lastCatalogUpdateUnix=%llu\n"
+      "\n"
+      "[node]\n"
       "lastCatalogUpdateUnix=%llu\n"
       "\n"
       "[update]\n"
       "requested=%s\n"
       "requestedAtUnix=%llu\n",
-      config->last_catalog_update_unix,
+      config->cef_last_catalog_update_unix,
+      config->node_last_catalog_update_unix,
       config->update_requested ? "true" : "false",
       config->update_requested_at_unix);
 #undef MUON_WRITE_LAUNCHER_CONFIG

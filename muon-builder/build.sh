@@ -122,13 +122,17 @@ command -v "${RANLIB}" >/dev/null || { echo "${RANLIB} is required" >&2; exit 1;
 if [[ "${TARGET_NAME}" == windows-* ]]; then
   command -v "${WINDRES}" >/dev/null || { echo "${WINDRES} is required" >&2; exit 1; }
 fi
+THREAD_CPPFLAGS_EXTRA=""
+THREAD_LDLIBS_EXTRA=""
 LAUNCHER_CPPFLAGS_EXTRA=""
 LAUNCHER_LDLIBS_EXTRA=""
 case "${TARGET_NAME}" in
   linux-*)
     command -v pkg-config >/dev/null || { echo "pkg-config is required" >&2; exit 1; }
-    LAUNCHER_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb) -pthread"
-    LAUNCHER_LDLIBS_EXTRA="$(pkg-config --libs xcb) -pthread"
+    THREAD_CPPFLAGS_EXTRA="-pthread"
+    THREAD_LDLIBS_EXTRA="-pthread"
+    LAUNCHER_CPPFLAGS_EXTRA="$(pkg-config --cflags xcb)"
+    LAUNCHER_LDLIBS_EXTRA="$(pkg-config --libs xcb)"
     ;;
   windows-*)
     LAUNCHER_LDLIBS_EXTRA="-lcomctl32 -lgdi32"
@@ -238,6 +242,7 @@ EOF
 
 YYJSON_VERSION="0.12.0"
 BZIP2_VERSION="1.0.8"
+ZLIB_VERSION="1.3.2"
 LIBARCHIVE_VERSION="3.8.7"
 bash "${SCRIPT_DIR}/build_yyjson.sh"
 YYJSON_SOURCE_DIR="${SCRIPT_DIR}/.deps/src/yyjson-${YYJSON_VERSION}/src"
@@ -245,11 +250,30 @@ BZIP2_SOURCE_DIR="${SCRIPT_DIR}/.deps/src/bzip2-${BZIP2_VERSION}"
 BZIP2_BUILD_DIR="${SCRIPT_DIR}/.deps/build/bzip2-${CEF_TARGET_NAME}"
 BZIP2_LIB="${BZIP2_BUILD_DIR}/libbz2.a"
 bash "${SCRIPT_DIR}/build_bzip2.sh" "${CEF_TARGET_NAME}" "${CC}" "${AR}" "${RANLIB}"
+ZLIB_BUILD_DIR="${SCRIPT_DIR}/.deps/build/zlib-${CEF_TARGET_NAME}"
+ZLIB_INSTALL_DIR="${ZLIB_BUILD_DIR}/install"
+ZLIB_INCLUDE_DIR="${ZLIB_INSTALL_DIR}/include"
+case "${CEF_TARGET_NAME}" in
+  windows32|windows64)
+    ZLIB_LIB="${ZLIB_INSTALL_DIR}/lib/libzs.a"
+    ;;
+  *)
+    ZLIB_LIB="${ZLIB_INSTALL_DIR}/lib/libz.a"
+    ;;
+esac
+bash "${SCRIPT_DIR}/build_zlib.sh" "${CEF_TARGET_NAME}" "${CC}" "${AR}" "${RANLIB}"
 LIBARCHIVE_SOURCE_DIR="${SCRIPT_DIR}/.deps/src/libarchive-${LIBARCHIVE_VERSION}"
 LIBARCHIVE_BUILD_DIR="${SCRIPT_DIR}/.deps/build/libarchive-${CEF_TARGET_NAME}"
 LIBARCHIVE_INCLUDE_DIR="${LIBARCHIVE_SOURCE_DIR}/libarchive"
 LIBARCHIVE_LIB="${LIBARCHIVE_BUILD_DIR}/libarchive/libarchive.a"
-bash "${SCRIPT_DIR}/build_libarchive.sh" "${CEF_TARGET_NAME}" "${CC}" "${AR}" "${RANLIB}" "${BZIP2_LIB}"
+bash "${SCRIPT_DIR}/build_libarchive.sh" \
+  "${CEF_TARGET_NAME}" \
+  "${CC}" \
+  "${AR}" \
+  "${RANLIB}" \
+  "${BZIP2_LIB}" \
+  "${ZLIB_INCLUDE_DIR}" \
+  "${ZLIB_LIB}"
 
 BUILD_TYPE_LOWER="${BUILD_TYPE,,}"
 case "${BUILD_USAGE}" in
@@ -383,7 +407,10 @@ if [[ "${TARGET_NAME}" == windows-* ]]; then
     "${LAUNCHER_RESOURCE_OBJECTS_VALUE}"
 fi
 
-CPPFLAGS_VALUE="-I${VERSION_DIR} -I${YYJSON_SOURCE_DIR} -I${LIBARCHIVE_INCLUDE_DIR} -I${BZIP2_SOURCE_DIR} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\\"${TARGET_NAME}\\\""
+CPPFLAGS_VALUE="-I${VERSION_DIR} -I${YYJSON_SOURCE_DIR} -I${LIBARCHIVE_INCLUDE_DIR} -I${BZIP2_SOURCE_DIR} -I${ZLIB_INCLUDE_DIR} -DLIBARCHIVE_STATIC -DMUON_PREPARE_TARGET_NAME=\\\"${TARGET_NAME}\\\""
+if [[ -n "${THREAD_CPPFLAGS_EXTRA}" ]]; then
+  CPPFLAGS_VALUE="${CPPFLAGS_VALUE} ${THREAD_CPPFLAGS_EXTRA}"
+fi
 if [[ -n "${CPPFLAGS:-}" ]]; then
   CPPFLAGS_VALUE="${CPPFLAGS_VALUE} ${CPPFLAGS}"
 fi
@@ -392,7 +419,10 @@ if [[ -n "${LAUNCHER_CPPFLAGS:-}" ]]; then
   LAUNCHER_CPPFLAGS_VALUE="${LAUNCHER_CPPFLAGS_VALUE} ${LAUNCHER_CPPFLAGS}"
 fi
 
-LDLIBS_VALUE="${LIBARCHIVE_LIB} ${BZIP2_LIB}"
+LDLIBS_VALUE="${LIBARCHIVE_LIB} ${BZIP2_LIB} ${ZLIB_LIB}"
+if [[ -n "${THREAD_LDLIBS_EXTRA}" ]]; then
+  LDLIBS_VALUE="${LDLIBS_VALUE} ${THREAD_LDLIBS_EXTRA}"
+fi
 if [[ -n "${LDLIBS:-}" ]]; then
   LDLIBS_VALUE="${LDLIBS_VALUE} ${LDLIBS}"
 fi

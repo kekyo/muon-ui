@@ -596,6 +596,7 @@ export const spawn = async (options = {}) => {
         args: options.args,
         cwd: options.cwd,
         env: options.env,
+        daemon: options.daemon,
       },
       captureStdout: stdoutCallback === null,
       captureStderr: stderrCallback === null,
@@ -642,17 +643,19 @@ export const spawn = async (options = {}) => {
         return waitPromise;
       }
       waitPromise = (async () => {
-        const result = __muonExecutorDecodeWaitResult(
-          await __muonExecutorRpc({ op: "wait", handleId }),
-        );
-        if (!released) {
-          released = true;
-          __muonExecutorActiveProcesses.delete(handle);
-          try {
-            await __muonExecutorRpc({ op: "dispose", handleId });
-          } catch {}
+        try {
+          return __muonExecutorDecodeWaitResult(
+            await __muonExecutorRpc({ op: "wait", handleId }),
+          );
+        } finally {
+          if (!released) {
+            released = true;
+            __muonExecutorActiveProcesses.delete(handle);
+            try {
+              await __muonExecutorRpc({ op: "dispose", handleId });
+            } catch {}
+          }
         }
-        return result;
       })();
       return waitPromise;
     },

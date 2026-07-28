@@ -5269,6 +5269,7 @@ static const muon_plugin_namespace* const fs_namespaces[] = {
 static const muon_plugin_metadata fs_metadata = {
     fs_namespaces,
     nullptr,
+    nullptr,
 };
 
 bool InitializeMuonBuiltinFs(const muon_plugin_init_context* context,

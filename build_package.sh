@@ -354,6 +354,10 @@ validate_linux_artifacts() {
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
+      "muon-ui/dist/runtime/${target_name}/muon-executor-supervisor" \
+      "${expected_class}" \
+      "${expected_machine}"
+    validate_readelf_header \
       "muon-ui/dist/runtime/${target_name}/libmuon-ui.so" \
       "${expected_class}" \
       "${expected_machine}"
@@ -478,6 +482,9 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linux-amd64/libcardio.so"
   require_pack_file "dist/runtime/linux-armhf/libcardio.so"
   require_pack_file "dist/runtime/linux-arm64/libcardio.so"
+  require_pack_file "dist/runtime/linux-amd64/muon-executor-supervisor"
+  require_pack_file "dist/runtime/linux-armhf/muon-executor-supervisor"
+  require_pack_file "dist/runtime/linux-arm64/muon-executor-supervisor"
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"
   require_pack_file "dist/runtime/windows-amd64/libcardio.dll"
   require_pack_file "dist/runtime/linux-amd64/plugins/node.so"

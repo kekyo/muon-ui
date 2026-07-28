@@ -9,10 +9,17 @@ import prettierMax from "prettier-max";
 import screwUp from "screw-up";
 import { defineConfig } from "vitest/config";
 
+import muonNodePackageJson from "../muon-node/package.json" with { type: "json" };
+
 export default defineConfig(({ mode }) => {
   const isCjs = mode === "cjs";
 
   return {
+    define: {
+      __MUON_NODE_SUPPORTED_ENGINE_RANGE__: JSON.stringify(
+        muonNodePackageJson.engines.node,
+      ),
+    },
     plugins: [
       prettierMax(),
       screwUp({

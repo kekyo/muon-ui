@@ -11,8 +11,16 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#include <process.h>
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 #include "prepare.h"
 #include "prepare_cef.h"
+#include "prepare_node.h"
 #include "launcher_config.h"
 #include "common.h"
 #include "muon_runtime_info_generated.h"
@@ -32,6 +40,15 @@
 #endif
 
 typedef struct {
+  int initialized;
+#ifdef _WIN32
+  CRITICAL_SECTION mutex;
+#else
+  pthread_mutex_t mutex;
+#endif
+} PrepareProgressGate;
+
+typedef struct {
   char *muon_path;
   char *cef_path;
   char *stage_dir;
@@ -44,13 +61,15 @@ typedef struct {
   int has_cef_exact_version;
   char *launcher_config_dir;
   char *cache_dir;
+  int owns_cache_dir;
+  MuonNodeRuntimeRequirement node_runtime_requirement;
+  int has_node_runtime_requirement;
   unsigned long long catalog_refresh_interval_seconds;
-  int has_catalog_refresh_interval_seconds;
-  unsigned long long last_catalog_update_unix;
+  unsigned long long cef_last_catalog_update_unix;
+  unsigned long long node_last_catalog_update_unix;
   int update_requested;
   unsigned long long update_requested_at_unix;
   int write_launcher_config;
-  int catalog_updated;
   int force;
   int quiet;
   int json;
@@ -58,6 +77,7 @@ typedef struct {
   MuonPrepareProgressCallback progress_callback;
   void *progress_user_data;
   int progress_emitted;
+  PrepareProgressGate progress_gate;
 } PrepareOptions;
 
 typedef struct {
@@ -72,6 +92,27 @@ typedef struct {
   size_t count;
   size_t capacity;
 } PrepareNameList;
+
+typedef struct {
+  int applicable;
+  int due;
+  int updated;
+} CatalogRefreshOutcome;
+
+typedef struct {
+  PrepareOptions *options;
+  MuonNodeArtifact artifact;
+  char *archive_path;
+  CatalogRefreshOutcome catalog;
+  int result;
+} NodePrepareTask;
+
+typedef struct {
+  char *parent;
+  char *raw_key;
+  char *lock_path;
+  int acquired;
+} PrepareRuntimeTransaction;
 
 static const char *kEmptyFingerprint =
     "0000000000000000000000000000000000000000000000000000000000000000";
@@ -107,6 +148,64 @@ static int validate_public_target(const char *target) {
   return -1;
 }
 
+static int prepare_progress_gate_initialize(PrepareOptions *options) {
+  if (options->progress_callback == NULL) {
+    return 1;
+  }
+#ifdef _WIN32
+  InitializeCriticalSection(&options->progress_gate.mutex);
+  options->progress_gate.initialized = 1;
+  return 1;
+#else
+  const int result = pthread_mutex_init(&options->progress_gate.mutex, NULL);
+  if (result != 0) {
+    muon_log_message(
+        "Progress serialization is unavailable; runtime downloads will run "
+        "serially.");
+    return 0;
+  }
+  options->progress_gate.initialized = 1;
+  return 1;
+#endif
+}
+
+static void prepare_progress_gate_lock(PrepareOptions *options) {
+  if (!options->progress_gate.initialized) {
+    return;
+  }
+#ifdef _WIN32
+  EnterCriticalSection(&options->progress_gate.mutex);
+#else
+  pthread_mutex_lock(&options->progress_gate.mutex);
+#endif
+}
+
+static void prepare_progress_gate_unlock(PrepareOptions *options) {
+  if (!options->progress_gate.initialized) {
+    return;
+  }
+#ifdef _WIN32
+  LeaveCriticalSection(&options->progress_gate.mutex);
+#else
+  pthread_mutex_unlock(&options->progress_gate.mutex);
+#endif
+}
+
+static void prepare_progress_gate_dispose(PrepareOptions *options) {
+  if (!options->progress_gate.initialized) {
+    return;
+  }
+#ifdef _WIN32
+  DeleteCriticalSection(&options->progress_gate.mutex);
+#else
+  pthread_mutex_destroy(&options->progress_gate.mutex);
+#endif
+  options->progress_gate.initialized = 0;
+}
+
+static void forward_prepare_progress(const MuonPrepareProgress *progress,
+                                     void *user_data);
+
 static void prepare_report_progress(const PrepareOptions *options,
                                     MuonPrepareProgressPhase phase,
                                     const char *status,
@@ -114,19 +213,25 @@ static void prepare_report_progress(const PrepareOptions *options,
                                     unsigned long long total,
                                     int determinate) {
   if (options->progress_callback != NULL) {
-    ((PrepareOptions *)options)->progress_emitted = 1;
+    MuonPrepareProgress progress;
+    progress.phase = phase;
+    progress.status = status;
+    progress.current = current;
+    progress.total = total;
+    progress.determinate = determinate;
+    forward_prepare_progress(&progress, (void *)options);
   } else if (status != NULL && status[0] != '\0') {
     muon_log_message("%s", status);
   }
-  muon_report_progress(options->progress_callback, options->progress_user_data,
-                       phase, status, current, total, determinate);
 }
 
 static void forward_prepare_progress(const MuonPrepareProgress *progress,
                                      void *user_data) {
   PrepareOptions *options = (PrepareOptions *)user_data;
+  prepare_progress_gate_lock(options);
   options->progress_emitted = 1;
   options->progress_callback(progress, options->progress_user_data);
+  prepare_progress_gate_unlock(options);
 }
 
 static MuonPrepareProgressCallback get_prepare_progress_callback(
@@ -480,9 +585,10 @@ static int apply_launcher_config(PrepareOptions *options,
   options->has_cef_exact_version = config->has_cef_exact_version;
   options->catalog_refresh_interval_seconds =
       config->catalog_refresh_interval_seconds;
-  options->has_catalog_refresh_interval_seconds =
-      config->has_catalog_refresh_interval_seconds;
-  options->last_catalog_update_unix = config->last_catalog_update_unix;
+  options->cef_last_catalog_update_unix =
+      config->cef_last_catalog_update_unix;
+  options->node_last_catalog_update_unix =
+      config->node_last_catalog_update_unix;
   options->update_requested = config->update_requested;
   options->update_requested_at_unix = config->update_requested_at_unix;
   return 0;
@@ -548,13 +654,11 @@ static int load_launcher_config_if_present(PrepareOptions *options) {
   return result;
 }
 
-static int save_launcher_config_if_needed(const PrepareOptions *options) {
+static int save_launcher_config_to_directory(const PrepareOptions *options,
+                                             const char *config_dir) {
   if (!options->write_launcher_config) {
     return 0;
   }
-  const char *config_dir =
-      options->launcher_config_dir == NULL ? options->muon_path
-                                            : options->launcher_config_dir;
   MuonLauncherConfig config;
   muon_launcher_config_init_defaults(&config);
   if (config.cef_version_policy == NULL || config.cef_exact_version == NULL) {
@@ -570,9 +674,10 @@ static int save_launcher_config_if_needed(const PrepareOptions *options) {
   config.has_cef_exact_version = options->has_cef_exact_version;
   config.catalog_refresh_interval_seconds =
       options->catalog_refresh_interval_seconds;
-  config.has_catalog_refresh_interval_seconds =
-      options->has_catalog_refresh_interval_seconds;
-  config.last_catalog_update_unix = options->last_catalog_update_unix;
+  config.cef_last_catalog_update_unix =
+      options->cef_last_catalog_update_unix;
+  config.node_last_catalog_update_unix =
+      options->node_last_catalog_update_unix;
   config.update_requested = options->update_requested;
   config.update_requested_at_unix = options->update_requested_at_unix;
   if (config.cef_version_policy == NULL || config.cef_exact_version == NULL) {
@@ -584,8 +689,27 @@ static int save_launcher_config_if_needed(const PrepareOptions *options) {
   return result;
 }
 
-static int catalog_exists(const char *cache_dir) {
-  char *catalog_path = muon_path_join(cache_dir, "catalog.json");
+static int save_launcher_config_if_needed(const PrepareOptions *options) {
+  const char *config_dir =
+      options->launcher_config_dir == NULL ? options->muon_path
+                                            : options->launcher_config_dir;
+  return save_launcher_config_to_directory(options, config_dir);
+}
+
+static int cef_catalog_exists(const char *cache_dir) {
+  char *catalog_path =
+      muon_path_join(cache_dir, MUON_PREPARE_CEF_CATALOG_FILE_NAME);
+  if (catalog_path == NULL) {
+    return 0;
+  }
+  const int exists = muon_path_exists(catalog_path);
+  free(catalog_path);
+  return exists;
+}
+
+static int node_catalog_exists(const char *cache_dir) {
+  char *catalog_path =
+      muon_path_join(cache_dir, MUON_PREPARE_NODE_CATALOG_FILE_NAME);
   if (catalog_path == NULL) {
     return 0;
   }
@@ -598,8 +722,9 @@ static int policy_uses_catalog(const PrepareOptions *options) {
   return strcmp(options->cef_version_policy, "tested") != 0;
 }
 
-static int catalog_refresh_due(const PrepareOptions *options) {
-  if (!catalog_exists(options->cache_dir)) {
+static int catalog_refresh_due(const PrepareOptions *options, int exists,
+                               unsigned long long last_update_unix) {
+  if (!exists) {
     return 1;
   }
   if (options->force || options->update_requested) {
@@ -609,34 +734,36 @@ static int catalog_refresh_due(const PrepareOptions *options) {
     return 0;
   }
   const unsigned long long now = muon_current_unix_time();
-  return options->last_catalog_update_unix == 0 ||
-         now >= options->last_catalog_update_unix +
-                    options->catalog_refresh_interval_seconds;
+  return last_update_unix == 0 || now < last_update_unix ||
+         now - last_update_unix >=
+             options->catalog_refresh_interval_seconds;
 }
 
-static int ensure_catalog_cache(const PrepareOptions *options,
-                                int catalog_required) {
+static int ensure_cef_catalog_cache(const PrepareOptions *options,
+                                    int catalog_required,
+                                    CatalogRefreshOutcome *outcome) {
   PrepareOptions *mutable_options = (PrepareOptions *)options;
-  mutable_options->catalog_updated = 0;
-  if (!catalog_refresh_due(options)) {
+  outcome->due =
+      catalog_refresh_due(options, cef_catalog_exists(options->cache_dir),
+                          options->cef_last_catalog_update_unix);
+  if (!outcome->due) {
     return 0;
   }
   int updated = 0;
-  if (options->progress_callback != NULL) {
-    mutable_options->progress_emitted = 1;
-  }
-  const int result = muon_prepare_ensure_catalog_cache_with_status_progress(
-      options->cache_dir, 1, &updated, get_prepare_progress_callback(options),
-      get_prepare_progress_user_data(options));
-  mutable_options->catalog_updated = updated;
+  const int result =
+      muon_prepare_ensure_cef_catalog_cache_with_status_progress(
+          options->cache_dir, 1, &updated,
+          get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options));
   if (updated) {
-    mutable_options->last_catalog_update_unix = muon_current_unix_time();
-    mutable_options->update_requested = 0;
-    mutable_options->update_requested_at_unix = 0;
+    outcome->updated = 1;
+    mutable_options->cef_last_catalog_update_unix = muon_current_unix_time();
   }
-  return result == 0 || (!catalog_required && catalog_exists(options->cache_dir))
-             ? 0
-             : -1;
+  if (result == 0 ||
+      (!catalog_required && cef_catalog_exists(options->cache_dir))) {
+    return 0;
+  }
+  return -1;
 }
 
 static MuonCefReference create_cef_reference(
@@ -669,6 +796,165 @@ static int ensure_cef_archive_cache(const PrepareOptions *options,
     return -1;
   }
   muon_prepare_free_cef_artifact(&artifact);
+  return 0;
+}
+
+static int ensure_node_archive_cache(const PrepareOptions *options,
+                                     MuonNodeArtifact *artifact,
+                                     char **node_archive_path,
+                                     CatalogRefreshOutcome *catalog) {
+  memset(artifact, 0, sizeof(*artifact));
+  *node_archive_path = NULL;
+  if (!options->has_node_runtime_requirement ||
+      !options->node_runtime_requirement.required) {
+    return 0;
+  }
+
+  catalog->applicable = 1;
+  catalog->due =
+      catalog_refresh_due(options, node_catalog_exists(options->cache_dir),
+                          options->node_last_catalog_update_unix);
+  int updated = 0;
+  int result = 0;
+  if (catalog->due) {
+    result = muon_prepare_ensure_node_catalog_cache_with_status_progress(
+        options->cache_dir, 1, &updated,
+        get_prepare_progress_callback(options),
+        get_prepare_progress_user_data(options));
+    if (updated) {
+      catalog->updated = 1;
+      ((PrepareOptions *)options)->node_last_catalog_update_unix =
+          muon_current_unix_time();
+    }
+  }
+  if (result == 0) {
+    result = muon_prepare_resolve_node_artifact(
+        options->cache_dir, options->target,
+        &options->node_runtime_requirement, artifact);
+  }
+  if (result == 0) {
+    result = muon_prepare_ensure_node_archive_cache_progress(
+        options->cache_dir, artifact, options->force, node_archive_path,
+        get_prepare_progress_callback(options),
+        get_prepare_progress_user_data(options));
+  }
+  return result;
+}
+
+static void run_node_prepare_task(NodePrepareTask *task) {
+  task->result = ensure_node_archive_cache(
+      task->options, &task->artifact, &task->archive_path, &task->catalog);
+}
+
+#ifdef _WIN32
+static unsigned __stdcall run_node_prepare_thread(void *argument) {
+  run_node_prepare_task((NodePrepareTask *)argument);
+  return 0;
+}
+#else
+static void *run_node_prepare_thread(void *argument) {
+  run_node_prepare_task((NodePrepareTask *)argument);
+  return NULL;
+}
+#endif
+
+static int prepare_cef_archive_input(
+    PrepareOptions *options, const MuonRuntimeInfo *runtime_info,
+    int cef_is_archive, char **cef_path, CatalogRefreshOutcome *catalog) {
+  const int catalog_required =
+      strcmp(options->cef_version_policy, "exact") == 0;
+  catalog->applicable =
+      cef_is_archive &&
+      (policy_uses_catalog(options) || options->force ||
+       options->update_requested);
+  if (catalog->applicable &&
+      ensure_cef_catalog_cache(options, catalog_required, catalog) != 0) {
+    if (catalog_required) {
+      return -1;
+    }
+    muon_log_message("CEF catalog cache skipped.");
+  }
+  if (*cef_path == NULL &&
+      ensure_cef_archive_cache(options, runtime_info, cef_path) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+static void clear_catalog_update_request_if_satisfied(
+    PrepareOptions *options, const CatalogRefreshOutcome *cef_catalog,
+    const CatalogRefreshOutcome *node_catalog) {
+  if (!options->update_requested) {
+    return;
+  }
+  const int any_applicable =
+      cef_catalog->applicable || node_catalog->applicable;
+  const int every_applicable_updated =
+      (!cef_catalog->applicable || cef_catalog->updated) &&
+      (!node_catalog->applicable || node_catalog->updated);
+  if (any_applicable && every_applicable_updated) {
+    options->update_requested = 0;
+    options->update_requested_at_unix = 0;
+  }
+}
+
+static int prepare_runtime_archive_inputs(
+    PrepareOptions *options, const MuonRuntimeInfo *runtime_info,
+    int cef_is_archive, char **cef_path, int allow_parallel,
+    NodePrepareTask *node_task) {
+  memset(node_task, 0, sizeof(*node_task));
+  node_task->options = options;
+  CatalogRefreshOutcome cef_catalog = {0};
+  const int node_required =
+      options->has_node_runtime_requirement &&
+      options->node_runtime_requirement.required;
+  int thread_started = 0;
+  int thread_join_result = 0;
+#ifdef _WIN32
+  HANDLE thread = NULL;
+  if (allow_parallel && node_required) {
+    const uintptr_t thread_value =
+        _beginthreadex(NULL, 0, run_node_prepare_thread, node_task, 0, NULL);
+    thread = thread_value == 0 ? NULL : (HANDLE)thread_value;
+    thread_started = thread != NULL;
+  }
+#else
+  pthread_t thread;
+  if (allow_parallel && node_required) {
+    thread_started =
+        pthread_create(&thread, NULL, run_node_prepare_thread, node_task) == 0;
+  }
+#endif
+
+  const int cef_result = prepare_cef_archive_input(
+      options, runtime_info, cef_is_archive, cef_path, &cef_catalog);
+  if (thread_started) {
+#ifdef _WIN32
+    const DWORD wait_result = WaitForSingleObject(thread, INFINITE);
+    if (wait_result != WAIT_OBJECT_0) {
+      muon_print_error("Failed to wait for Node.js preparation thread: %lu\n",
+                       (unsigned long)GetLastError());
+      abort();
+    }
+    CloseHandle(thread);
+#else
+    const int join_result = pthread_join(thread, NULL);
+    if (join_result != 0) {
+      muon_print_error("Failed to join Node.js preparation thread: %s\n",
+                       strerror(join_result));
+      abort();
+    }
+#endif
+  } else if (node_required) {
+    run_node_prepare_task(node_task);
+  }
+
+  if (cef_result != 0 || thread_join_result != 0 ||
+      node_task->result != 0) {
+    return -1;
+  }
+  clear_catalog_update_request_if_satisfied(
+      options, &cef_catalog, &node_task->catalog);
   return 0;
 }
 
@@ -818,13 +1104,26 @@ static int staging_root_entry_is_cef_payload(const char *name) {
 }
 
 static int staging_root_entry_is_generated_runtime_state(const char *name) {
+  static const char *const runtime_lock_prefix = ".muon-runtime-";
+  static const char *const lock_suffix = ".lock";
+  const size_t name_length = strlen(name);
+  const size_t prefix_length = strlen(runtime_lock_prefix);
+  const size_t suffix_length = strlen(lock_suffix);
+  if (name_length >= prefix_length + suffix_length &&
+      strncmp(name, runtime_lock_prefix, prefix_length) == 0 &&
+      strcmp(name + name_length - suffix_length, lock_suffix) == 0) {
+    return 1;
+  }
   static const char *const generated_entries[] = {
       ".muon-ready.json",
+      ".muon-runtime-ready.json",
+      ".muon-cef-ready.json",
       ".muon-test-config",
       "muon-launcher.ini",
       "muon-cef.log",
       "muon-close-debug.log",
       "muon-runtime-helper",
+      "runtimes",
   };
   for (size_t index = 0;
        index < sizeof(generated_entries) / sizeof(generated_entries[0]);
@@ -1081,13 +1380,88 @@ static char *create_hidden_lock_path(const char *parent, const char *prefix,
   return result;
 }
 
-static int prepare_staging(const PrepareOptions *options,
-                           const MuonRuntimeInfo *runtime_info,
-                           const char *cef_path, int cef_is_archive,
-                           PrepareResult *result) {
-  if (options->stage_dir == NULL) {
-    return set_prepare_result(result, NULL, options->muon_path, cef_path, 0);
+static void dispose_prepare_runtime_transaction(
+    PrepareRuntimeTransaction *transaction) {
+  if (transaction->acquired) {
+    muon_release_lock(transaction->lock_path);
   }
+  free(transaction->parent);
+  free(transaction->raw_key);
+  free(transaction->lock_path);
+  memset(transaction, 0, sizeof(*transaction));
+}
+
+static int begin_prepare_runtime_transaction(
+    const PrepareOptions *options, const char *parent, const char *prefix,
+    const char *key_source, PrepareRuntimeTransaction *transaction) {
+  memset(transaction, 0, sizeof(*transaction));
+  transaction->parent = muon_duplicate_string(parent);
+  transaction->raw_key = sanitize_key(key_source);
+  transaction->lock_path =
+      transaction->parent == NULL || transaction->raw_key == NULL
+          ? NULL
+          : create_hidden_lock_path(transaction->parent, prefix,
+                                    transaction->raw_key);
+  if (transaction->parent == NULL || transaction->raw_key == NULL ||
+      transaction->lock_path == NULL ||
+      muon_acquire_lock_with_progress(
+          transaction->lock_path, get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options),
+          MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
+          "Installing CEF runtime...") != 0) {
+    dispose_prepare_runtime_transaction(transaction);
+    return -1;
+  }
+  transaction->acquired = 1;
+  return 0;
+}
+
+static int begin_staged_prepare_runtime_transaction(
+    const PrepareOptions *options, PrepareRuntimeTransaction *transaction) {
+  char *parent = muon_parent_directory(options->stage_dir);
+  if (parent == NULL) {
+    return -1;
+  }
+  const int result = begin_prepare_runtime_transaction(
+      options, parent, "muon-stage", options->stage_dir, transaction);
+  free(parent);
+  return result;
+}
+
+static int begin_in_place_prepare_runtime_transaction(
+    const PrepareOptions *options, PrepareRuntimeTransaction *transaction) {
+  return begin_prepare_runtime_transaction(
+      options, options->muon_path, "muon-runtime", options->muon_path,
+      transaction);
+}
+
+static char *create_runtime_ready_content(const char *muon_fingerprint,
+                                          const char *cef_fingerprint,
+                                          const char *node_fingerprint) {
+  const int size = snprintf(
+      NULL, 0,
+      "{\"ready\":true,\"muonFingerprint\":\"%s\","
+      "\"cefFingerprint\":\"%s\",\"nodeFingerprint\":\"%s\"}\n",
+      muon_fingerprint, cef_fingerprint, node_fingerprint);
+  if (size < 0) {
+    return NULL;
+  }
+  char *result = (char *)malloc((size_t)size + 1);
+  if (result == NULL) {
+    return NULL;
+  }
+  snprintf(result, (size_t)size + 1,
+           "{\"ready\":true,\"muonFingerprint\":\"%s\","
+           "\"cefFingerprint\":\"%s\",\"nodeFingerprint\":\"%s\"}\n",
+           muon_fingerprint, cef_fingerprint, node_fingerprint);
+  return result;
+}
+
+static int prepare_staging_locked(
+    const PrepareOptions *options, const MuonRuntimeInfo *runtime_info,
+    const char *cef_path, int cef_is_archive, const char *node_archive_path,
+    const MuonNodeArtifact *node_artifact,
+    const PrepareRuntimeTransaction *transaction, PrepareResult *result) {
   char muon_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if (fingerprint_staging_muon_source(options->muon_path, muon_fingerprint) !=
@@ -1096,236 +1470,150 @@ static int prepare_staging(const PrepareOptions *options,
                                      cef_fingerprint) != 0) {
     return -1;
   }
-  char *ready_content =
-      muon_create_ready_content(muon_fingerprint, cef_fingerprint);
-  char *ready_path = muon_path_join(options->stage_dir, ".muon-ready.json");
-  char *parent = muon_parent_directory(options->stage_dir);
-  char *raw_key = sanitize_key(options->stage_dir);
-  char *lock_name =
-      parent == NULL || raw_key == NULL
-          ? NULL
-          : create_hidden_lock_path(parent, "muon-stage", raw_key);
-  if (ready_content == NULL || ready_path == NULL || parent == NULL ||
-      raw_key == NULL || lock_name == NULL) {
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
+  const char *node_fingerprint =
+      node_archive_path == NULL ? kEmptyFingerprint : node_artifact->sha256;
+  if (node_fingerprint == NULL) {
     return -1;
   }
-  if (!options->force && muon_path_exists(ready_path) &&
-      muon_ready_file_matches(ready_path, ready_content)) {
-    const int set_result = set_prepare_result(result, options->stage_dir,
-                                              options->muon_path, cef_path, 1);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    return set_result;
-  }
-  if (muon_ensure_directory(parent) != 0 ||
-      muon_acquire_lock_with_progress(
-          lock_name, get_prepare_progress_callback(options),
-          get_prepare_progress_user_data(options),
-          MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
-          "Installing CEF runtime...") != 0) {
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    return -1;
+  char *ready_content = create_runtime_ready_content(
+      muon_fingerprint, cef_fingerprint, node_fingerprint);
+  char *ready_path =
+      muon_path_join(options->stage_dir, ".muon-runtime-ready.json");
+  char *temporary_directory = NULL;
+  char *temporary_ready = NULL;
+  int temporary_published = 0;
+  int prepare_result = -1;
+  if (ready_content == NULL || ready_path == NULL ||
+      transaction == NULL || !transaction->acquired) {
+    goto cleanup;
   }
   if (ensure_muon_gitignore_entry(options->stage_dir) != 0) {
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    return -1;
+    goto cleanup;
   }
   if (!options->force && muon_path_exists(ready_path) &&
       muon_ready_file_matches(ready_path, ready_content)) {
-    muon_release_lock(lock_name);
-    const int set_result = set_prepare_result(result, options->stage_dir,
-                                              options->muon_path, cef_path, 1);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    return set_result;
+    if (save_launcher_config_to_directory(options, options->stage_dir) != 0) {
+      goto cleanup;
+    }
+    prepare_result = set_prepare_result(
+        result, options->stage_dir, options->muon_path, cef_path, 1);
+    goto cleanup;
   }
-  char *temporary_directory = muon_create_temporary_path(parent, raw_key);
-  char *temporary_ready =
-      temporary_directory == NULL ? NULL : muon_path_join(temporary_directory, ".muon-ready.json");
+  temporary_directory = muon_create_temporary_path(
+      transaction->parent, transaction->raw_key);
+  temporary_ready =
+      temporary_directory == NULL
+          ? NULL
+          : muon_path_join(temporary_directory,
+                           ".muon-runtime-ready.json");
   if (temporary_directory == NULL || temporary_ready == NULL ||
       muon_ensure_directory(temporary_directory) != 0) {
-    muon_remove_recursive(temporary_directory);
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    free(temporary_directory);
-    free(temporary_ready);
-    return -1;
+    goto cleanup;
   }
   size_t cef_file_count = 0;
   size_t muon_file_count = 0;
+  size_t node_file_count = 0;
   prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
                           "Installing CEF runtime...", 0, 0, 0);
   if (copy_staging_muon_source(options->muon_path, temporary_directory,
                                &muon_file_count) != 0) {
-    muon_remove_recursive(temporary_directory);
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    free(temporary_directory);
-    free(temporary_ready);
-    return -1;
+    goto cleanup;
   }
   muon_log_message("muon files copied to staging: files=%llu",
-              (unsigned long long)muon_file_count);
+                   (unsigned long long)muon_file_count);
   if ((cef_is_archive
            ? extract_archive(cef_path, temporary_directory, &cef_file_count,
                              get_prepare_progress_callback(options),
                              get_prepare_progress_user_data(options))
-           : copy_cef_source(cef_path, temporary_directory,
-                             &cef_file_count,
+           : copy_cef_source(cef_path, temporary_directory, &cef_file_count,
                              get_prepare_progress_callback(options),
                              get_prepare_progress_user_data(options))) != 0) {
-    muon_remove_recursive(temporary_directory);
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    free(temporary_directory);
-    free(temporary_ready);
-    return -1;
+    goto cleanup;
   }
   muon_log_message("CEF files copied to staging: version=%s files=%llu",
-              runtime_info->cef_reference_version,
-              (unsigned long long)cef_file_count);
-  if (muon_write_text_file(temporary_ready, ready_content) != 0) {
-    muon_remove_recursive(temporary_directory);
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    free(temporary_directory);
-    free(temporary_ready);
-    return -1;
+                   runtime_info->cef_reference_version,
+                   (unsigned long long)cef_file_count);
+  if (node_archive_path != NULL &&
+      muon_prepare_install_node_runtime_progress(
+          node_archive_path, options->target, node_artifact,
+          temporary_directory, &node_file_count,
+          get_prepare_progress_callback(options),
+          get_prepare_progress_user_data(options)) != 0) {
+    goto cleanup;
+  }
+  if (node_archive_path != NULL) {
+    muon_log_message("Node.js files copied to staging: version=%s files=%llu",
+                     node_artifact->version,
+                     (unsigned long long)node_file_count);
+  }
+  if (save_launcher_config_to_directory(options, temporary_directory) != 0 ||
+      muon_write_text_file(temporary_ready, ready_content) != 0) {
+    goto cleanup;
   }
   prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
                           "Starting muon...", 0, 0, 0);
   if (muon_path_exists(options->stage_dir) &&
       muon_remove_recursive(options->stage_dir) != 0) {
-    muon_remove_recursive(temporary_directory);
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    free(temporary_directory);
-    free(temporary_ready);
-    return -1;
+    goto cleanup;
   }
   if (rename(temporary_directory, options->stage_dir) != 0) {
     muon_print_errno(options->stage_dir);
-    muon_remove_recursive(temporary_directory);
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(parent);
-    free(raw_key);
-    free(lock_name);
-    free(temporary_directory);
-    free(temporary_ready);
-    return -1;
+    goto cleanup;
   }
-  muon_release_lock(lock_name);
-  const int set_result =
+  temporary_published = 1;
+  prepare_result =
       set_prepare_result(result, options->stage_dir, options->muon_path,
                          cef_path, 0);
+
+cleanup:
+  if (!temporary_published) {
+    muon_remove_recursive(temporary_directory);
+  }
   free(ready_content);
   free(ready_path);
-  free(parent);
-  free(raw_key);
-  free(lock_name);
   free(temporary_directory);
   free(temporary_ready);
-  return set_result;
+  return prepare_result;
 }
 
-static int prepare_cef_in_place(const PrepareOptions *options,
-                                const MuonRuntimeInfo *runtime_info,
-                                const char *cef_path, int cef_is_archive,
-                                PrepareResult *result) {
+static int prepare_runtime_in_place_locked(
+    const PrepareOptions *options, const MuonRuntimeInfo *runtime_info,
+    const char *cef_path, int cef_is_archive, const char *node_archive_path,
+    const MuonNodeArtifact *node_artifact, PrepareResult *result) {
   char cef_fingerprint[SHA256_DIGEST_STRING_LENGTH];
   if ((cef_is_archive
            ? muon_fingerprint_path_recursive(cef_path, "", cef_fingerprint)
            : fingerprint_cef_source(cef_path, cef_fingerprint)) != 0) {
     return -1;
   }
-  char *ready_content = muon_create_ready_content(kEmptyFingerprint, cef_fingerprint);
-  char *ready_path = muon_path_join(options->muon_path, ".muon-cef-ready.json");
-  char *raw_key = sanitize_key(options->muon_path);
-  char *lock_name =
-      raw_key == NULL
-          ? NULL
-          : create_hidden_lock_path(options->muon_path, "muon-cef", raw_key);
-  if (ready_content == NULL || ready_path == NULL || raw_key == NULL ||
-      lock_name == NULL) {
+  const char *node_fingerprint =
+      node_archive_path == NULL ? kEmptyFingerprint : node_artifact->sha256;
+  if (node_fingerprint == NULL) {
+    return -1;
+  }
+  char *ready_content = create_runtime_ready_content(
+      kEmptyFingerprint, cef_fingerprint, node_fingerprint);
+  char *ready_path =
+      muon_path_join(options->muon_path, ".muon-runtime-ready.json");
+  if (ready_content == NULL || ready_path == NULL) {
     free(ready_content);
     free(ready_path);
-    free(raw_key);
-    free(lock_name);
     return -1;
   }
   if (!options->force && muon_path_exists(ready_path) &&
       muon_ready_file_matches(ready_path, ready_content)) {
-    const int set_result = set_prepare_result(result, options->muon_path,
-                                              options->muon_path, cef_path, 1);
+    const int set_result =
+        save_launcher_config_to_directory(options, options->muon_path) == 0
+            ? set_prepare_result(result, options->muon_path,
+                                 options->muon_path, cef_path, 1)
+            : -1;
     free(ready_content);
     free(ready_path);
-    free(raw_key);
-    free(lock_name);
     return set_result;
   }
-  if (muon_acquire_lock_with_progress(
-          lock_name, get_prepare_progress_callback(options),
-          get_prepare_progress_user_data(options),
-          MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
-          "Installing CEF runtime...") != 0) {
-    free(ready_content);
-    free(ready_path);
-    free(raw_key);
-    free(lock_name);
-    return -1;
-  }
-  if (!options->force && muon_path_exists(ready_path) &&
-      muon_ready_file_matches(ready_path, ready_content)) {
-    muon_release_lock(lock_name);
-    const int set_result = set_prepare_result(result, options->muon_path,
-                                              options->muon_path, cef_path, 1);
-    free(ready_content);
-    free(ready_path);
-    free(raw_key);
-    free(lock_name);
-    return set_result;
+  int prepare_result = -1;
+  if (muon_remove_recursive(ready_path) != 0) {
+    goto cleanup;
   }
   size_t cef_file_count = 0;
   prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_INSTALLING,
@@ -1338,34 +1626,92 @@ static int prepare_cef_in_place(const PrepareOptions *options,
                              &cef_file_count,
                              get_prepare_progress_callback(options),
                              get_prepare_progress_user_data(options))) != 0) {
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(raw_key);
-    free(lock_name);
-    return -1;
+    goto cleanup;
   }
   muon_log_message("CEF files copied to runtime: version=%s files=%llu",
-              runtime_info->cef_reference_version,
-              (unsigned long long)cef_file_count);
-  if (muon_write_text_file(ready_path, ready_content) != 0) {
-    muon_release_lock(lock_name);
-    free(ready_content);
-    free(ready_path);
-    free(raw_key);
-    free(lock_name);
-    return -1;
+                   runtime_info->cef_reference_version,
+                   (unsigned long long)cef_file_count);
+  size_t node_file_count = 0;
+  int node_result = 0;
+  if (node_archive_path != NULL) {
+    node_result = muon_prepare_install_node_runtime_progress(
+        node_archive_path, options->target, node_artifact,
+        options->muon_path, &node_file_count,
+        get_prepare_progress_callback(options),
+        get_prepare_progress_user_data(options));
+  } else {
+    char *runtimes_path = muon_path_join(options->muon_path, "runtimes");
+    char *node_path =
+        runtimes_path == NULL ? NULL : muon_path_join(runtimes_path, "node");
+    node_result =
+        node_path == NULL ? -1 : muon_remove_recursive(node_path);
+    free(runtimes_path);
+    free(node_path);
+  }
+  if (node_result != 0) {
+    goto cleanup;
+  }
+  if (node_archive_path != NULL) {
+    muon_log_message("Node.js files copied to runtime: version=%s files=%llu",
+                     node_artifact->version,
+                     (unsigned long long)node_file_count);
+  }
+  if (save_launcher_config_to_directory(options, options->muon_path) != 0 ||
+      muon_write_text_file(ready_path, ready_content) != 0) {
+    goto cleanup;
   }
   prepare_report_progress(options, MUON_PREPARE_PROGRESS_PHASE_FINALIZING,
                           "Starting muon...", 0, 0, 0);
-  muon_release_lock(lock_name);
-  const int set_result = set_prepare_result(result, options->muon_path,
-                                            options->muon_path, cef_path, 0);
+  prepare_result = set_prepare_result(result, options->muon_path,
+                                      options->muon_path, cef_path, 0);
+
+cleanup:
   free(ready_content);
   free(ready_path);
-  free(raw_key);
-  free(lock_name);
-  return set_result;
+  return prepare_result;
+}
+
+static int configure_staged_launcher_state(PrepareOptions *options) {
+  if (load_launcher_config_if_present(options) != 0) {
+    return -1;
+  }
+  char *launcher_config_dir =
+      muon_duplicate_path_string(options->stage_dir);
+  if (launcher_config_dir == NULL) {
+    return -1;
+  }
+  free(options->launcher_config_dir);
+  options->launcher_config_dir = launcher_config_dir;
+  options->write_launcher_config = 1;
+  return 0;
+}
+
+static int prepare_staged_runtime_transaction(
+    PrepareOptions *options, const MuonRuntimeInfo *runtime_info,
+    int cef_is_archive, char **cef_path, int allow_parallel,
+    NodePrepareTask *node_task, PrepareResult *result) {
+  PrepareRuntimeTransaction transaction = {0};
+  int prepare_result = -1;
+  if (begin_staged_prepare_runtime_transaction(options, &transaction) != 0) {
+    return -1;
+  }
+  if (configure_staged_launcher_state(options) != 0) {
+    goto cleanup;
+  }
+  muon_set_quiet(options->quiet);
+  if (prepare_runtime_archive_inputs(options, runtime_info, cef_is_archive,
+                                     cef_path, allow_parallel, node_task) != 0 ||
+      prepare_staging_locked(
+          options, runtime_info, *cef_path, cef_is_archive,
+          node_task->archive_path, &node_task->artifact, &transaction,
+          result) != 0) {
+    goto cleanup;
+  }
+  prepare_result = 0;
+
+cleanup:
+  dispose_prepare_runtime_transaction(&transaction);
+  return prepare_result;
 }
 
 static int print_json_document(yyjson_mut_doc *document) {
@@ -1462,55 +1808,33 @@ static const char *progress_phase_name(MuonPrepareProgressPhase phase) {
   return "unknown";
 }
 
-static void print_json_string_literal(FILE *stream, const char *value) {
-  fputc('"', stream);
-  for (const unsigned char *cursor = (const unsigned char *)value;
-       *cursor != '\0'; cursor += 1) {
-    switch (*cursor) {
-    case '"':
-      fputs("\\\"", stream);
-      break;
-    case '\\':
-      fputs("\\\\", stream);
-      break;
-    case '\b':
-      fputs("\\b", stream);
-      break;
-    case '\f':
-      fputs("\\f", stream);
-      break;
-    case '\n':
-      fputs("\\n", stream);
-      break;
-    case '\r':
-      fputs("\\r", stream);
-      break;
-    case '\t':
-      fputs("\\t", stream);
-      break;
-    default:
-      if (*cursor < 0x20) {
-        fprintf(stream, "\\u%04x", (unsigned int)*cursor);
-      } else {
-        fputc((int)*cursor, stream);
-      }
-      break;
-    }
-  }
-  fputc('"', stream);
-}
-
 static void print_progress_json(const MuonPrepareProgress *progress,
                                 void *user_data) {
   (void)user_data;
-  fputs("{\"phase\":", stderr);
-  print_json_string_literal(stderr, progress_phase_name(progress->phase));
-  fputs(",\"status\":", stderr);
-  print_json_string_literal(stderr,
-                            progress->status == NULL ? "" : progress->status);
-  fprintf(stderr, ",\"current\":%llu,\"total\":%llu,\"determinate\":%s}\n",
-          progress->current, progress->total,
-          progress->determinate ? "true" : "false");
+  yyjson_mut_doc *document = yyjson_mut_doc_new(NULL);
+  yyjson_mut_val *root = document == NULL ? NULL : yyjson_mut_obj(document);
+  if (document == NULL || root == NULL) {
+    yyjson_mut_doc_free(document);
+    return;
+  }
+  yyjson_mut_doc_set_root(document, root);
+  const int ok =
+      yyjson_mut_obj_add_strcpy(document, root, "phase",
+                                progress_phase_name(progress->phase)) &&
+      yyjson_mut_obj_add_strcpy(
+          document, root, "status",
+          progress->status == NULL ? "" : progress->status) &&
+      yyjson_mut_obj_add_uint(document, root, "current", progress->current) &&
+      yyjson_mut_obj_add_uint(document, root, "total", progress->total) &&
+      yyjson_mut_obj_add_bool(document, root, "determinate",
+                              progress->determinate);
+  char *json =
+      ok ? yyjson_mut_write(document, YYJSON_WRITE_NEWLINE_AT_END, NULL) : NULL;
+  if (json != NULL) {
+    fwrite(json, 1, strlen(json), stderr);
+    free(json);
+  }
+  yyjson_mut_doc_free(document);
   fflush(stderr);
 }
 
@@ -1519,6 +1843,7 @@ static void print_usage(void) {
       "Usage: muon-builder <command> [options]\n"
       "       muon-builder runtime --muon-path <path> [--cef-path <path>] "
       "[--stage-dir <path>] [--target <target>] [--cache-dir <path>] "
+      "[--node-runtime-requirement <json>] "
       "[--force] [--quiet|-q] [--json]\n"
       "       muon-builder buildtime --version <cefVersion> --target <target> "
       "--output-dir <path> [--cache-dir <path>] [--force] [--quiet|-q] "
@@ -1542,6 +1867,18 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
       options->target = argv[++index];
     } else if (strcmp(argv[index], "--cache-dir") == 0 && index + 1 < argc) {
       options->cache_dir = argv[++index];
+    } else if (strcmp(argv[index], "--node-runtime-requirement") == 0 &&
+               index + 1 < argc) {
+      if (options->has_node_runtime_requirement) {
+        muon_print_error("--node-runtime-requirement may only be specified "
+                         "once.\n");
+        return -1;
+      }
+      if (muon_prepare_parse_node_runtime_requirement(
+              argv[++index], &options->node_runtime_requirement) != 0) {
+        return -1;
+      }
+      options->has_node_runtime_requirement = 1;
     } else if (strcmp(argv[index], "--force") == 0) {
       options->force = 1;
     } else if (strcmp(argv[index], "--quiet") == 0 ||
@@ -1565,6 +1902,7 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
   }
   if (options->cache_dir == NULL) {
     options->cache_dir = default_cache_dir();
+    options->owns_cache_dir = 1;
   }
   if (options->target == NULL) {
     options->target = MUON_PREPARE_TARGET_NAME;
@@ -1579,6 +1917,9 @@ static int parse_runtime_arguments(int argc, char **argv, int start_index,
   if (options->cache_dir == NULL || options->cef_version_policy == NULL ||
       options->cef_exact_version == NULL) {
     return -1;
+  }
+  if (options->stage_dir != NULL) {
+    return 0;
   }
   return load_launcher_config_if_present(options);
 }
@@ -1621,6 +1962,7 @@ static int parse_buildtime_arguments(int argc, char **argv, int start_index,
   }
   if (options->cache_dir == NULL) {
     options->cache_dir = default_cache_dir();
+    options->owns_cache_dir = 1;
   }
   if (options->target == NULL) {
     options->target = MUON_PREPARE_TARGET_NAME;
@@ -1642,8 +1984,12 @@ int muon_prepare_in_place_with_progress(
     void *progress_user_data) {
   setvbuf(stderr, NULL, _IONBF, 0);
   muon_set_quiet(0);
-  PrepareOptions options;
-  memset(&options, 0, sizeof(options));
+  PrepareOptions options = {0};
+  PrepareResult result = {0};
+  NodePrepareTask node_task = {0};
+  PrepareRuntimeTransaction transaction = {0};
+  char *cef_path = NULL;
+  int exit_code = 1;
   options.muon_path = muon_duplicate_path_string(muon_path);
   options.target =
       target == NULL || target[0] == '\0'
@@ -1662,38 +2008,14 @@ int muon_prepare_in_place_with_progress(
       options.cache_dir == NULL || options.cef_version_policy == NULL ||
       options.cef_exact_version == NULL ||
       validate_public_target(options.target) != 0) {
-    free(options.muon_path);
-    free(options.target);
-    free(options.cache_dir);
-    free(options.cef_version_policy);
-    free(options.cef_exact_version);
-    return 1;
+    goto cleanup_paths;
   }
-  MuonLauncherConfig launcher_config;
-  if (read_launcher_config_with_embedded_default(options.muon_path,
-                                                 &launcher_config) != 0) {
-    free(options.muon_path);
-    free(options.target);
-    free(options.cache_dir);
-    free(options.cef_version_policy);
-    free(options.cef_exact_version);
-    return 1;
+  if (muon_launcher_get_embedded_node_runtime_requirement(
+          &options.node_runtime_requirement,
+          &options.has_node_runtime_requirement) != 0) {
+    goto cleanup_paths;
   }
-  if (apply_launcher_config(&options, &launcher_config) != 0) {
-    muon_launcher_config_free(&launcher_config);
-    free(options.muon_path);
-    free(options.target);
-    free(options.cache_dir);
-    free(options.cef_version_policy);
-    free(options.cef_exact_version);
-    return 1;
-  }
-  muon_launcher_config_free(&launcher_config);
-  options.write_launcher_config = 1;
   const MuonRuntimeInfo *runtime_info = get_embedded_runtime_info();
-  PrepareResult result = {0};
-  char *cef_path = NULL;
-  int exit_code = 1;
   if (runtime_info == NULL) {
     goto cleanup_paths;
   }
@@ -1705,35 +2027,46 @@ int muon_prepare_in_place_with_progress(
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_paths;
   }
+  const int allow_parallel = prepare_progress_gate_initialize(&options);
+  if (begin_in_place_prepare_runtime_transaction(&options, &transaction) !=
+      0) {
+    goto cleanup_paths;
+  }
+  MuonLauncherConfig launcher_config;
+  if (read_launcher_config_with_embedded_default(options.muon_path,
+                                                 &launcher_config) != 0) {
+    goto cleanup_paths;
+  }
+  if (apply_launcher_config(&options, &launcher_config) != 0) {
+    muon_launcher_config_free(&launcher_config);
+    goto cleanup_paths;
+  }
+  muon_launcher_config_free(&launcher_config);
+  options.write_launcher_config = 1;
   muon_set_quiet(quiet);
-  const int catalog_required = strcmp(options.cef_version_policy, "exact") == 0;
-  if ((policy_uses_catalog(&options) || options.force ||
-       options.update_requested) &&
-      ensure_catalog_cache(&options, catalog_required) != 0) {
-    if (catalog_required) {
-      goto cleanup_paths;
-    }
-    muon_log_message("CEF catalog cache skipped.");
-  }
-  if (ensure_cef_archive_cache(&options, runtime_info, &cef_path) != 0) {
+  if (prepare_runtime_archive_inputs(&options, runtime_info, 1, &cef_path,
+                                     allow_parallel, &node_task) != 0) {
     goto cleanup_paths;
   }
-  if (prepare_cef_in_place(&options, runtime_info, cef_path, 1, &result) != 0) {
-    goto cleanup_paths;
-  }
-  if (save_launcher_config_if_needed(&options) != 0) {
+  if (prepare_runtime_in_place_locked(
+          &options, runtime_info, cef_path, 1, node_task.archive_path,
+          &node_task.artifact, &result) != 0) {
     goto cleanup_paths;
   }
   exit_code = 0;
 cleanup_paths:
+  dispose_prepare_runtime_transaction(&transaction);
   if (options.progress_emitted) {
     prepare_report_progress(
         &options,
         exit_code == 0 ? MUON_PREPARE_PROGRESS_PHASE_DONE
                        : MUON_PREPARE_PROGRESS_PHASE_FAILED,
-        exit_code == 0 ? "Starting muon..." : "Failed to prepare CEF.", 0, 0,
-        0);
+        exit_code == 0 ? "Starting muon..." : "Failed to prepare runtime.", 0,
+        0, 0);
   }
+  prepare_progress_gate_dispose(&options);
+  muon_prepare_free_node_artifact(&node_task.artifact);
+  free(node_task.archive_path);
   free(cef_path);
   free(result.stage_path);
   free(result.muon_path);
@@ -1744,6 +2077,8 @@ cleanup_paths:
   free(options.cef_version_policy);
   free(options.cef_exact_version);
   free(options.launcher_config_dir);
+  muon_prepare_free_node_runtime_requirement(
+      &options.node_runtime_requirement);
   return exit_code;
 }
 
@@ -1759,8 +2094,11 @@ int muon_prepare_staged_with_progress(
     MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
   setvbuf(stderr, NULL, _IONBF, 0);
   muon_set_quiet(0);
-  PrepareOptions options;
-  memset(&options, 0, sizeof(options));
+  PrepareOptions options = {0};
+  PrepareResult result = {0};
+  NodePrepareTask node_task = {0};
+  char *cef_path = NULL;
+  int exit_code = 1;
   options.muon_path = muon_duplicate_path_string(muon_path);
   options.stage_dir = muon_duplicate_path_string(stage_dir);
   options.target =
@@ -1779,33 +2117,15 @@ int muon_prepare_staged_with_progress(
   if (options.muon_path == NULL || options.stage_dir == NULL ||
       options.target == NULL || options.cache_dir == NULL ||
       options.cef_version_policy == NULL || options.cef_exact_version == NULL ||
-      validate_public_target(options.target) != 0 ||
-      load_launcher_config_if_present(&options) != 0) {
-    free(options.muon_path);
-    free(options.stage_dir);
-    free(options.target);
-    free(options.cache_dir);
-    free(options.cef_version_policy);
-    free(options.cef_exact_version);
-    free(options.launcher_config_dir);
-    return 1;
+      validate_public_target(options.target) != 0) {
+    goto cleanup_paths;
   }
-  free(options.launcher_config_dir);
-  options.launcher_config_dir = muon_duplicate_string(options.stage_dir);
-  options.write_launcher_config = 1;
-  if (options.launcher_config_dir == NULL) {
-    free(options.muon_path);
-    free(options.stage_dir);
-    free(options.target);
-    free(options.cache_dir);
-    free(options.cef_version_policy);
-    free(options.cef_exact_version);
-    return 1;
+  if (muon_launcher_get_embedded_node_runtime_requirement(
+          &options.node_runtime_requirement,
+          &options.has_node_runtime_requirement) != 0) {
+    goto cleanup_paths;
   }
   const MuonRuntimeInfo *runtime_info = get_embedded_runtime_info();
-  PrepareResult result = {0};
-  char *cef_path = NULL;
-  int exit_code = 1;
   if (runtime_info == NULL) {
     goto cleanup_paths;
   }
@@ -1817,23 +2137,10 @@ int muon_prepare_staged_with_progress(
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_paths;
   }
-  muon_set_quiet(quiet);
-  const int catalog_required = strcmp(options.cef_version_policy, "exact") == 0;
-  if ((policy_uses_catalog(&options) || options.force ||
-       options.update_requested) &&
-      ensure_catalog_cache(&options, catalog_required) != 0) {
-    if (catalog_required) {
-      goto cleanup_paths;
-    }
-    muon_log_message("CEF catalog cache skipped.");
-  }
-  if (ensure_cef_archive_cache(&options, runtime_info, &cef_path) != 0) {
-    goto cleanup_paths;
-  }
-  if (prepare_staging(&options, runtime_info, cef_path, 1, &result) != 0) {
-    goto cleanup_paths;
-  }
-  if (save_launcher_config_if_needed(&options) != 0) {
+  const int allow_parallel = prepare_progress_gate_initialize(&options);
+  if (prepare_staged_runtime_transaction(
+          &options, runtime_info, 1, &cef_path, allow_parallel, &node_task,
+          &result) != 0) {
     goto cleanup_paths;
   }
   exit_code = 0;
@@ -1843,9 +2150,12 @@ cleanup_paths:
         &options,
         exit_code == 0 ? MUON_PREPARE_PROGRESS_PHASE_DONE
                        : MUON_PREPARE_PROGRESS_PHASE_FAILED,
-        exit_code == 0 ? "Starting muon..." : "Failed to prepare CEF.", 0, 0,
-        0);
+        exit_code == 0 ? "Starting muon..." : "Failed to prepare runtime.", 0,
+        0, 0);
   }
+  prepare_progress_gate_dispose(&options);
+  muon_prepare_free_node_artifact(&node_task.artifact);
+  free(node_task.archive_path);
   free(cef_path);
   free(result.stage_path);
   free(result.muon_path);
@@ -1857,12 +2167,22 @@ cleanup_paths:
   free(options.cef_version_policy);
   free(options.cef_exact_version);
   free(options.launcher_config_dir);
+  muon_prepare_free_node_runtime_requirement(
+      &options.node_runtime_requirement);
   return exit_code;
 }
 
 static int run_runtime_command(int argc, char **argv, int start_index) {
-  PrepareOptions options;
+  PrepareOptions options = {0};
   if (parse_runtime_arguments(argc, argv, start_index, &options) != 0) {
+    if (options.owns_cache_dir) {
+      free(options.cache_dir);
+    }
+    free(options.cef_version_policy);
+    free(options.cef_exact_version);
+    free(options.launcher_config_dir);
+    muon_prepare_free_node_runtime_requirement(
+        &options.node_runtime_requirement);
     print_usage();
     return 1;
   }
@@ -1873,6 +2193,7 @@ static int run_runtime_command(int argc, char **argv, int start_index) {
   const MuonRuntimeInfo *runtime_info = get_embedded_runtime_info();
   PrepareResult result = {0};
   char *cef_path = NULL;
+  NodePrepareTask node_task = {0};
   int exit_code = 1;
   int cef_is_archive = 0;
   if (runtime_info == NULL) {
@@ -1894,26 +2215,21 @@ static int run_runtime_command(int argc, char **argv, int start_index) {
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_paths;
   }
-  const int catalog_required = strcmp(options.cef_version_policy, "exact") == 0;
-  if (cef_is_archive &&
-      (policy_uses_catalog(&options) || options.force ||
-       options.update_requested) &&
-      ensure_catalog_cache(&options, catalog_required) != 0) {
-    if (catalog_required) {
+  const int allow_parallel = prepare_progress_gate_initialize(&options);
+  if (options.stage_dir != NULL) {
+    if (prepare_staged_runtime_transaction(
+            &options, runtime_info, cef_is_archive, &cef_path, allow_parallel,
+            &node_task, &result) != 0) {
       goto cleanup_paths;
     }
-    muon_log_message("CEF catalog cache skipped.");
-  }
-  if (cef_path == NULL &&
-      ensure_cef_archive_cache(&options, runtime_info, &cef_path) != 0) {
-    goto cleanup_paths;
-  }
-  if (prepare_staging(&options, runtime_info, cef_path, cef_is_archive,
-                      &result) != 0) {
-    goto cleanup_paths;
-  }
-  if (save_launcher_config_if_needed(&options) != 0) {
-    goto cleanup_paths;
+  } else {
+    if (prepare_runtime_archive_inputs(
+            &options, runtime_info, cef_is_archive, &cef_path, allow_parallel,
+            &node_task) != 0 ||
+        set_prepare_result(&result, NULL, options.muon_path, cef_path, 0) != 0 ||
+        save_launcher_config_if_needed(&options) != 0) {
+      goto cleanup_paths;
+    }
   }
   if (options.json) {
     print_result_json(&result);
@@ -1924,19 +2240,32 @@ static int run_runtime_command(int argc, char **argv, int start_index) {
   }
   exit_code = 0;
 cleanup_paths:
+  prepare_progress_gate_dispose(&options);
+  muon_prepare_free_node_artifact(&node_task.artifact);
+  free(node_task.archive_path);
   free(cef_path);
   free(result.stage_path);
   free(result.muon_path);
   free(result.cef_path);
+  if (options.owns_cache_dir) {
+    free(options.cache_dir);
+  }
   free(options.cef_version_policy);
   free(options.cef_exact_version);
   free(options.launcher_config_dir);
+  muon_prepare_free_node_runtime_requirement(
+      &options.node_runtime_requirement);
   return exit_code;
 }
 
 static int run_buildtime_command(int argc, char **argv, int start_index) {
-  PrepareOptions options;
+  PrepareOptions options = {0};
   if (parse_buildtime_arguments(argc, argv, start_index, &options) != 0) {
+    if (options.owns_cache_dir) {
+      free(options.cache_dir);
+    }
+    free(options.cef_version_policy);
+    free(options.cef_exact_version);
     print_usage();
     return 1;
   }
@@ -1951,7 +2280,8 @@ static int run_buildtime_command(int argc, char **argv, int start_index) {
   if (muon_ensure_directory(options.cache_dir) != 0) {
     goto cleanup_artifact;
   }
-  if (muon_prepare_ensure_catalog_cache(options.cache_dir, options.force) != 0) {
+  if (muon_prepare_ensure_cef_catalog_cache(options.cache_dir,
+                                            options.force) != 0) {
     goto cleanup_artifact;
   }
   if (muon_prepare_resolve_cef_artifact(options.cache_dir,
@@ -1983,6 +2313,9 @@ static int run_buildtime_command(int argc, char **argv, int start_index) {
 cleanup_artifact:
   muon_prepare_free_cef_artifact(&artifact);
   free(archive_path);
+  if (options.owns_cache_dir) {
+    free(options.cache_dir);
+  }
   free(options.cef_version_policy);
   free(options.cef_exact_version);
   return exit_code;

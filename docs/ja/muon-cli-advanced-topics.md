@@ -22,9 +22,12 @@ npx muon run
 - `vite.config.*` にmuon Viteプラグインが1つだけ含まれている場合、`muon run` は `muonPath`, `cefPath`, `stagePath`, `enableDebugger`, `allowInsecureLocalhost` と `build.configPath` を読み取ります。
 - CLIオプションで同じ項目を指定した場合はCLI側が優先され、`open` は `muon run` では無視されます。
   `build: false` は `--assets` を省略したVite-backed起動ではエラーになりますが、`--assets` を明示した場合は従来どおり指定アセットを起動します。
+- `allowInsecureLocalhost` の優先順位は、`--allow-insecure-localhost`、明示したViteプラグインオプション、`muon.json` の `network.localAccess.allowInsecureLocalhost`、`false` の順です。
+  CLIフラグは設定を有効にするだけで、負方向のCLI形式はありません。
 - muon DevTools、リサイクルキーバインド、CDPの開発用既定値を無効化するには `--no-debugger` を指定します。
 - localhostの開発用HTTPS証明書エラーを無視するには `--allow-insecure-localhost` を指定します。
-  このオプションは `muon run` とViteプラグインだけで使用でき、配布用のmuon-launcherへ直接渡すと起動前に拒否されます。
+  このrawフラグを配布用のmuon-launcherへ直接渡した場合は、引き続き起動前に拒否されます。
+  配布用ビルドでこの動作が必要な場合は、`muon.json` の `network.localAccess.allowInsecureLocalhost` を設定してください。
 - `muon run` は起動前にmuon-builderを実行し、CEFと、`node.project` を指定した場合に必要な公式Node.js runtimeを準備します。Node.js runtimeの準備は `simple` と `validate` のどちらのモードでも行われます。
   両方のdownloadが必要な場合は並行して実行され、Node.jsはstage directoryの `runtimes/node/bin/node`（Windowsでは `runtimes/node/bin/node.exe`）へ配置されます。
   Node.js実行ファイルを指定するCLIオプションはなく、Node pluginはこの絶対pathだけを使用します。環境変数や `PATH` へのfallbackはありません。

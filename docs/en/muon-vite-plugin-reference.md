@@ -28,7 +28,7 @@ export default defineConfig({
 | `cefPath` | `string` | automatic acquisition by muon-builder | CEF directory or CEF archive root used for development launch. |
 | `stagePath` | `string` | `".muon/<public-target>"` | Directory where the muon runtime is staged for development launch. |
 | `enableDebugger` | `boolean` | `true` | Enables CDP, the `F12` muon DevTools keybind, and the `Ctrl+F12` recycle keybind during development launch. |
-| `allowInsecureLocalhost` | `boolean` | `false` | Ignores invalid localhost HTTPS certificate errors during development launch. |
+| `allowInsecureLocalhost` | `boolean` | `muon.json`, then `false` | Overrides whether invalid localhost HTTPS certificate errors are ignored during development launch. |
 | `exitWithServer` | `boolean` | `true` | Whether to stop the Vite dev server when muon-core exits normally. |
 | `dev` | `object` | `{}` | Overrides applied only to the muon process launched by Vite development. |
 | `pluginAccess` | `false \| object` | `plugin` setting from `muon.json` | Override settings for plugin API exposure and virtual module imports. |
@@ -48,8 +48,10 @@ export default defineConfig({
 - When `stagePath` is omitted, `.muon/<public-target>` under the Vite project root is used.
 - When `enableDebugger` is enabled, CDP is enabled through development-launch override settings, muon DevTools can be opened with `F12`, and muon can be recycle-restarted with `Ctrl+F12`.
   To enable muon DevTools in distribution builds, configure `cdp` and `browser.keybind` in `muon.json` instead of the Vite plugin argument.
-- When `allowInsecureLocalhost` is enabled, Chromium's `--allow-insecure-localhost` switch is passed to the launched muon-core process.
-  This is a localhost-only development workaround and cannot be enabled through a distribution launcher or `muon.json`.
+- When `allowInsecureLocalhost` is specified, its value is written to `network.localAccess.allowInsecureLocalhost` in the generated development config loaded after the project `muon.json`.
+  For `vite dev`, the precedence is an explicitly specified Vite plugin option, `muon.json`, then `false`.
+  For `muon run`, `--allow-insecure-localhost` has higher precedence than the Vite plugin option.
+  `vite build` ignores the Vite plugin option; distribution builds use the value embedded from `muon.json`.
 - When `exitWithServer` is omitted or `true`, the Vite dev server also exits when muon-core exits normally.
   muon recycle restart does not stop the Vite dev server.
 

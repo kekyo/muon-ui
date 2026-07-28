@@ -81,3 +81,14 @@ CefSettings CreateMuonCefSettings(
   settings.log_severity = GetCefLogSeverity(config.log.cef);
   return settings;
 }
+
+void ConfigureMuonCefNetworkCommandLine(
+    const MuonConfig& config,
+    const CefString& process_type,
+    CefRefPtr<CefCommandLine> command_line) {
+  if (!command_line || !process_type.empty() ||
+      !config.network.local_access.allow_insecure_localhost) {
+    return;
+  }
+  command_line->AppendSwitch("allow-insecure-localhost");
+}

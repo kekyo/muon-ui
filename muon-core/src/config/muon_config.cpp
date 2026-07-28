@@ -77,6 +77,8 @@ static constexpr char kMuonConfigNetworkAuthorizedOriginSchemeKey[] = "scheme";
 static constexpr char kMuonConfigNetworkAuthorizedOriginDomainKey[] = "domain";
 static constexpr char kMuonConfigNetworkAuthorizedOriginPortKey[] = "port";
 static constexpr char kMuonConfigNetworkLocalAccessKey[] = "localAccess";
+static constexpr char kMuonConfigNetworkAllowInsecureLocalhostKey[] =
+    "allowInsecureLocalhost";
 static constexpr char kMuonConfigNetworkLoopbackOriginsKey[] =
     "loopbackOrigins";
 static constexpr char kMuonConfigNetworkLocalNetworkOriginsKey[] =
@@ -2320,6 +2322,20 @@ static bool ReadNetworkConfig(yyjson_val* root,
     *error_message = "muon.json network.localAccess must be an object";
     return false;
   }
+
+  const auto allow_insecure_localhost = yyjson_obj_get(
+      local_access, kMuonConfigNetworkAllowInsecureLocalhostKey);
+  if (allow_insecure_localhost != nullptr) {
+    if (!yyjson_is_bool(allow_insecure_localhost)) {
+      *error_message =
+          "muon.json network.localAccess.allowInsecureLocalhost must be a "
+          "boolean";
+      return false;
+    }
+    config->network.local_access.allow_insecure_localhost =
+        yyjson_get_bool(allow_insecure_localhost);
+  }
+
   return ReadAuthorizedOriginArray(
              local_access, kMuonConfigNetworkLoopbackOriginsKey,
              "network.localAccess.loopbackOrigins",

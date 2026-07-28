@@ -310,6 +310,7 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 | :-- | :--- | :------ | :------ |
 | `allow` | `readonly string[]` | `["asset://**", "data:image/**"]` | List of URL patterns allowed to load. |
 | `authorizedOrigin` | `readonly object[]` | `[]` | Allows additional network access for requests originating from specified origins. |
+| `localAccess.allowInsecureLocalhost` | `boolean` | `false` | Ignores invalid HTTPS certificate errors for localhost. |
 | `localAccess.loopbackOrigins` | `readonly object[]` | `[]` | Origins granted permission to access the loopback network. |
 | `localAccess.localNetworkOrigins` | `readonly object[]` | `[]` | Origins granted permission to access the local network. |
 
@@ -328,6 +329,11 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 - Elements of `localAccess.loopbackOrigins` and `localAccess.localNetworkOrigins` use the same exact `scheme`, `domain`, and `port` matching.
   These lists control only the Local Network Access permission requested by CEF, so destination URLs must also be allowed by `allow`.
   The combined legacy Local Network Access permission is accepted only when the same origin is present in both lists.
+- `localAccess.allowInsecureLocalhost` enables Chromium's localhost-only certificate error bypass in the browser process.
+  It neither permits a destination through `allow` nor grants Local Network Access permission.
+  Keep it disabled unless the application must connect to a localhost HTTPS endpoint with an invalid development certificate.
+  Like other scalar settings, a value in a later-loaded config overrides an earlier value; when every config omits it, the effective value is `false`.
+  `muon build` embeds the value from `muon.json`, so it also applies to distribution builds.
 
 ## plugin key
 

@@ -27,7 +27,7 @@ export default defineConfig({
 | `cefPath`        | `string`              | muon-builderの自動取得      | 開発起動で使用するCEFディレクトリ、またはCEF archive rootです。      |
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にmuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のmuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
-| `allowInsecureLocalhost` | `boolean` | `false` | 開発起動時にlocalhostの無効なHTTPS証明書エラーを無視します。 |
+| `allowInsecureLocalhost` | `boolean` | `muon.json`、次に `false` | 開発起動時にlocalhostの無効なHTTPS証明書エラーを無視するかを上書きします。 |
 | `exitWithServer` | `boolean`             | `true`                      | muon-coreが通常終了した時にVite dev serverも終了するかどうかです。   |
 | `dev`            | `object`              | `{}`                        | Vite開発起動のmuonプロセスだけに適用する上書き設定です。             |
 | `pluginAccess`   | `false \| object`     | `muon.json` の `plugin` 設定 | プラグインAPIの露出方式とvirtual module importの上書き設定です。     |
@@ -47,8 +47,10 @@ export default defineConfig({
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでmuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
-- `allowInsecureLocalhost` を有効にした場合、起動するmuon-coreへChromiumの `--allow-insecure-localhost` スイッチを渡します。
-  localhostに限定された開発用回避策であり、配布用launcherや `muon.json` からは有効化できません。
+- `allowInsecureLocalhost` を指定した場合、その値をプロジェクトの `muon.json` より後に読み込む開発用生成configの `network.localAccess.allowInsecureLocalhost` へ書き込みます。
+  `vite dev` での優先順位は、明示したViteプラグインオプション、`muon.json`、`false` の順です。
+  `muon run` では、`--allow-insecure-localhost` がViteプラグインオプションより優先されます。
+  `vite build` はViteプラグインオプションを無視し、配布用ビルドでは `muon.json` から埋め込まれた値を使用します。
 - `exitWithServer` を省略または `true` にした場合、muon-coreが通常終了するとVite dev serverも終了します。
   muonのリサイクル再起動ではVite dev serverは終了しません。
 

@@ -97,6 +97,11 @@ interface MuonDevOverrideConfig {
       recycle: "ctrl+f12";
     };
   };
+  network?: {
+    localAccess: {
+      allowInsecureLocalhost: boolean;
+    };
+  };
   plugin?: MuonRuntimePluginConfig;
 }
 
@@ -611,6 +616,7 @@ const resolveAssetSource = async (
 const createMuonDevOverrideConfig = (
   assetSourcePath: string | undefined,
   enableDebugger: boolean,
+  allowInsecureLocalhost: boolean | undefined,
   browserStartPage: string | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig | undefined,
   nodeProjectPath: string | undefined,
@@ -655,6 +661,15 @@ const createMuonDevOverrideConfig = (
         }
       : {}),
     ...(browser === undefined ? {} : { browser }),
+    ...(allowInsecureLocalhost === undefined
+      ? {}
+      : {
+          network: {
+            localAccess: {
+              allowInsecureLocalhost,
+            },
+          },
+        }),
     ...(runtimePluginConfig === undefined
       ? {}
       : { plugin: runtimePluginConfig }),
@@ -675,13 +690,9 @@ const writeMuonDevOverrideConfig = async (
 const runMuonExecutable = async (
   muonExecutablePath: string,
   configPaths: readonly string[],
-  allowInsecureLocalhost: boolean,
   environment: NodeJS.ProcessEnv,
 ): Promise<number> => {
-  const args = [
-    ...configPaths.flatMap((configPath) => ["-c", configPath]),
-    ...(allowInsecureLocalhost ? ["--allow-insecure-localhost"] : []),
-  ];
+  const args = configPaths.flatMap((configPath) => ["-c", configPath]);
   const child = spawn(muonExecutablePath, args, {
     cwd: dirname(muonExecutablePath),
     env: environment,
@@ -744,8 +755,7 @@ const runMuonDevOnce = async (
     options.enableDebugger ?? pluginOptions?.enableDebugger ?? true;
   const allowInsecureLocalhost =
     (options as InternalMuonDevOptions).allowInsecureLocalhost ??
-    pluginOptions?.allowInsecureLocalhost ??
-    false;
+    pluginOptions?.allowInsecureLocalhost;
   const projectConfig = await resolveProjectConfig(
     root,
     options.configPath ?? preparedViteAssets?.configPath,
@@ -806,6 +816,7 @@ const runMuonDevOnce = async (
     createMuonDevOverrideConfig(
       asset.overrideAssetSourcePath,
       enableDebugger,
+      allowInsecureLocalhost,
       browserStartPage,
       preparedViteAssets?.runtimePluginConfig,
       nodeProjectPath,
@@ -824,7 +835,6 @@ const runMuonDevOnce = async (
   const exitCode = await runMuonExecutable(
     muonExecutablePath,
     configPaths,
-    allowInsecureLocalhost,
     environment,
   );
 

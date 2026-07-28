@@ -73,6 +73,9 @@ interface MuonOverrideConfig {
   };
   network: {
     allow: string[];
+    localAccess?: {
+      allowInsecureLocalhost: boolean;
+    };
   };
 }
 
@@ -259,6 +262,7 @@ const getWebSocketOrigin = (startUrl: string): string => {
 const createMuonOverrideConfig = (
   startUrl: string,
   enableDebugger: boolean,
+  allowInsecureLocalhost: boolean | undefined,
   config: Readonly<Record<string, string>> | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig,
   nodeProjectPath: string | undefined,
@@ -297,6 +301,13 @@ const createMuonOverrideConfig = (
     },
     network: {
       allow: [`${origin}/**`, `${getWebSocketOrigin(startUrl)}/**`],
+      ...(allowInsecureLocalhost === undefined
+        ? {}
+        : {
+            localAccess: {
+              allowInsecureLocalhost,
+            },
+          }),
     },
   };
 };
@@ -319,6 +330,7 @@ const writeMuonOverrideConfig = (
       createMuonOverrideConfig(
         startUrl,
         pluginOptions.enableDebugger !== false,
+        pluginOptions.allowInsecureLocalhost,
         pluginOptions.dev?.config,
         runtimePluginConfig,
         nodeProjectPath,
@@ -403,23 +415,15 @@ const createMuonConfigArguments = (
 const waitForMuonProcess = async (
   muonExecutablePath: string,
   configArguments: readonly string[],
-  allowInsecureLocalhost: boolean,
   environment: NodeJS.ProcessEnv,
   setCurrentChild: (child: ChildProcess | undefined) => void,
 ): Promise<number> => {
-  const child = spawn(
-    muonExecutablePath,
-    [
-      ...configArguments,
-      ...(allowInsecureLocalhost ? ["--allow-insecure-localhost"] : []),
-    ],
-    {
-      cwd: dirname(muonExecutablePath),
-      env: environment,
-      stdio: "ignore",
-      windowsHide: false,
-    },
-  );
+  const child = spawn(muonExecutablePath, [...configArguments], {
+    cwd: dirname(muonExecutablePath),
+    env: environment,
+    stdio: "ignore",
+    windowsHide: false,
+  });
   setCurrentChild(child);
   try {
     return await new Promise<number>((resolvePromise, reject) => {
@@ -546,7 +550,6 @@ export const startMuonViteBrowserBridge = async ({
             projectConfig.path,
             paths.overrideConfigPath,
           ),
-          pluginOptions.allowInsecureLocalhost === true,
           environment,
           setCurrentChild,
         );

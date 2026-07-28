@@ -376,6 +376,10 @@ struct MuonAuthorizedOriginConfig {
  */
 struct MuonLocalAccessConfig {
   /**
+   * Whether localhost HTTPS certificate errors are ignored.
+   */
+  bool allow_insecure_localhost = false;
+  /**
    * Origins permitted to access loopback network endpoints.
    */
   std::vector<MuonAuthorizedOriginConfig> loopback_origins;

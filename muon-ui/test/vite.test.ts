@@ -140,7 +140,18 @@ const writeBasicViteProject = async (root: string): Promise<void> => {
 const writeProjectMuonConfig = async (root: string): Promise<void> => {
   await writeFile(
     join(root, "muon.json"),
-    `${JSON.stringify({ network: { allow: ["asset://main/**"] } }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        network: {
+          allow: ["asset://main/**"],
+          localAccess: {
+            allowInsecureLocalhost: true,
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
   );
 };
 
@@ -2728,7 +2739,12 @@ describe("muon Vite plugin", () => {
         capabilities: unknown[];
         mode: string;
       };
-      network: { allow: string[] };
+      network: {
+        allow: string[];
+        localAccess?: {
+          allowInsecureLocalhost: boolean;
+        };
+      };
     };
     const baseUrl = server.resolvedUrls?.local[0];
     expect(baseUrl).toBeDefined();
@@ -2772,12 +2788,65 @@ describe("muon Vite plugin", () => {
         ],
       },
     });
+    expect(overrideConfig.network.localAccess).toBeUndefined();
     expect(process.env.BROWSER).toBe("existing-browser");
 
     await server.close();
     expect(process.env.BROWSER).toBe("existing-browser");
     await expect(access(dirname(overrideConfigPath ?? ""))).rejects.toThrow();
   });
+
+  it.each([true, false])(
+    "writes an explicit allowInsecureLocalhost=%s to the Vite override",
+    async (allowInsecureLocalhost) => {
+      const root = await createTemporaryDirectory(
+        "muon-vite-insecure-localhost-",
+      );
+      const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+      const outputDirectory =
+        await createTemporaryDirectory("muon-vite-output-");
+      const cefDirectory = await writeFakeCefDirectory();
+      await writeBasicViteProject(root);
+      await writeProjectMuonConfig(root);
+      await writeFakeMuonSource(muonDirectory, outputDirectory);
+      process.env.MUON_CACHE_DIR =
+        await createTemporaryDirectory("muon-vite-cache-");
+
+      const server = await startServer(
+        root,
+        {
+          muonPath: muonDirectory,
+          cefPath: cefDirectory,
+          stagePath: undefined,
+          enableDebugger: undefined,
+          allowInsecureLocalhost,
+          open: undefined,
+        },
+        undefined,
+      );
+      try {
+        await wait(() => existsSync(join(outputDirectory, "override.json")));
+        const overrideConfig = JSON.parse(
+          await readFile(join(outputDirectory, "override.json"), "utf8"),
+        ) as {
+          network: {
+            localAccess?: {
+              allowInsecureLocalhost: boolean;
+            };
+          };
+        };
+
+        expect(overrideConfig.network.localAccess).toEqual({
+          allowInsecureLocalhost,
+        });
+        expect(await readCapturedArguments(outputDirectory)).not.toContain(
+          "--allow-insecure-localhost",
+        );
+      } finally {
+        await server.close();
+      }
+    },
+  );
 
   it("adds application config overrides to Vite development startup", async () => {
     const root = await createTemporaryDirectory("muon-vite-dev-config-");
@@ -2926,6 +2995,11 @@ describe("muon Vite plugin", () => {
       await readFile(join(outputDirectory, "override-1.json"), "utf8"),
     ) as {
       plugin: { plugins: { name: string; allow: string[] }[] };
+      network: {
+        localAccess?: {
+          allowInsecureLocalhost: boolean;
+        };
+      };
     };
     expect(firstOverride.plugin.plugins).toEqual([
       {
@@ -2933,6 +3007,9 @@ describe("muon Vite plugin", () => {
         allow: ["muon.browser.reload"],
       },
     ]);
+    expect(firstOverride.network.localAccess).toEqual({
+      allowInsecureLocalhost: true,
+    });
 
     await writeValidatePluginMuonConfig(root, "muon.browser.recycle");
     await writeFile(join(outputDirectory, "continue-1"), "");
@@ -2942,6 +3019,11 @@ describe("muon Vite plugin", () => {
       await readFile(join(outputDirectory, "override-2.json"), "utf8"),
     ) as {
       plugin: { plugins: { name: string; allow: string[] }[] };
+      network: {
+        localAccess?: {
+          allowInsecureLocalhost: boolean;
+        };
+      };
     };
     expect(secondOverride.plugin.plugins).toEqual([
       {
@@ -2949,6 +3031,9 @@ describe("muon Vite plugin", () => {
         allow: ["muon.browser.recycle"],
       },
     ]);
+    expect(secondOverride.network.localAccess).toEqual({
+      allowInsecureLocalhost: true,
+    });
 
     for (const launchIndex of [1, 2]) {
       const argumentsForLaunch = (
@@ -2956,11 +3041,7 @@ describe("muon Vite plugin", () => {
       )
         .trim()
         .split("\n");
-      expect(
-        argumentsForLaunch.filter(
-          (argument) => argument === "--allow-insecure-localhost",
-        ),
-      ).toHaveLength(1);
+      expect(argumentsForLaunch).not.toContain("--allow-insecure-localhost");
     }
 
     await server.close();
@@ -3568,7 +3649,18 @@ describe("muon run CLI", () => {
     const cefDirectory = await writeFakeCefDirectory();
     await writeFile(
       join(root, "muon.json"),
-      `${JSON.stringify({ browser: { startPage: "asset://main/custom.html" } }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          browser: { startPage: "asset://main/custom.html" },
+          network: {
+            localAccess: {
+              allowInsecureLocalhost: true,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
     );
     await writeRunViteApplication(root);
     await writeFakeMuonSource(muonDirectory, outputDirectory);
@@ -3599,9 +3691,15 @@ describe("muon run CLI", () => {
       await readFile(join(outputDirectory, "override.json"), "utf8"),
     ) as {
       browser: { startPage?: string };
+      network?: {
+        localAccess?: {
+          allowInsecureLocalhost: boolean;
+        };
+      };
     };
 
     expect(overrideConfig.browser.startPage).toBeUndefined();
+    expect(overrideConfig.network?.localAccess).toBeUndefined();
     expect(await readCapturedArguments(outputDirectory)).toEqual([
       "-c",
       join(root, "muon.json"),
@@ -4127,8 +4225,22 @@ describe("muon run CLI", () => {
         join(root, "muon.json"),
         "-c",
         devResult.overrideConfigPath,
-        "--allow-insecure-localhost",
       ]);
+      const overrideConfig = JSON.parse(
+        await readFile(
+          join(outputDirectory, `override-${launchIndex}.json`),
+          "utf8",
+        ),
+      ) as {
+        network?: {
+          localAccess?: {
+            allowInsecureLocalhost: boolean;
+          };
+        };
+      };
+      expect(overrideConfig.network?.localAccess).toEqual({
+        allowInsecureLocalhost: true,
+      });
     }
   });
 
@@ -4171,6 +4283,7 @@ describe("muon run CLI", () => {
     const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
     const cefDirectory = await writeFakeCefDirectory();
     const assetsPath = await writeDevAssets(root);
+    await writeProjectMuonConfig(root);
     await writeFakeMuonSource(muonDirectory, outputDirectory);
     await writeMuonViteConfig(
       root,
@@ -4178,7 +4291,7 @@ describe("muon run CLI", () => {
         'import muon from "__MUON_VITE_URL__";',
         "export default {",
         "  plugins: [",
-        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, allowInsecureLocalhost: true, open: false, exitWithServer: false, dev: { config: { apiBaseUrl: "/api" } }, build: false }),`,
+        `    muon({ muonPath: ${JSON.stringify(muonDirectory)}, cefPath: ${JSON.stringify(cefDirectory)}, stagePath: "custom-stage", enableDebugger: false, allowInsecureLocalhost: false, open: false, exitWithServer: false, dev: { config: { apiBaseUrl: "/api" } }, build: false }),`,
         "  ],",
         "};",
       ].join("\n"),
@@ -4206,18 +4319,27 @@ describe("muon run CLI", () => {
       config?: unknown;
       cdp?: unknown;
       browser?: { keybind?: unknown };
+      network?: {
+        localAccess?: {
+          allowInsecureLocalhost: boolean;
+        };
+      };
     };
 
     expect(devResult.stagePath).toBe(join(root, "custom-stage"));
     expect(await readCapturedArguments(outputDirectory)).toEqual([
       "-c",
+      join(root, "muon.json"),
+      "-c",
       devResult.overrideConfigPath,
-      "--allow-insecure-localhost",
     ]);
     expect(overrideConfig.asset.sourcePath).toBe(assetsPath);
     expect(overrideConfig.config).toBeUndefined();
     expect(overrideConfig.cdp).toBeUndefined();
     expect(overrideConfig.browser?.keybind).toBeUndefined();
+    expect(overrideConfig.network?.localAccess).toEqual({
+      allowInsecureLocalhost: false,
+    });
   });
 
   it("lets CLI options override muon Vite plugin options", async () => {
@@ -4278,15 +4400,22 @@ describe("muon run CLI", () => {
     ) as {
       cdp?: unknown;
       browser?: { keybind?: unknown };
+      network?: {
+        localAccess?: {
+          allowInsecureLocalhost: boolean;
+        };
+      };
     };
 
     expect(devResult.stagePath).toBe(cliStagePath);
     expect(overrideConfig.cdp).toBeUndefined();
     expect(overrideConfig.browser?.keybind).toBeUndefined();
+    expect(overrideConfig.network?.localAccess).toEqual({
+      allowInsecureLocalhost: true,
+    });
     expect(await readCapturedArguments(cliOutputDirectory)).toEqual([
       "-c",
       join(root, ".muon", "run", "muon.run.json"),
-      "--allow-insecure-localhost",
     ]);
     await expect(
       access(join(pluginOutputDirectory, "override.json")),

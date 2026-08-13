@@ -58,6 +58,12 @@ describe("GitHub Actions CI", () => {
       "push",
       "workflow_dispatch",
     ]);
+    expect(
+      requireSequence(
+        requireMapping(triggers.push, "Push trigger").branches,
+        "Push branches",
+      ).sort(),
+    ).toEqual(["develop", "main"]);
     expect(workflow.permissions).toEqual({ contents: "read" });
 
     const jobs = requireMapping(workflow.jobs, "Workflow jobs");
@@ -65,13 +71,11 @@ describe("GitHub Actions CI", () => {
     for (const [jobName, value] of Object.entries(jobs)) {
       const job = requireMapping(value, `Job ${jobName}`);
       expect(job["runs-on"]).toBe("ubuntu-latest");
-      expect(job.permissions).toEqual({
-        contents: "read",
-        "security-events": "write",
-      });
     }
 
     const buildTestJob = requireMapping(jobs["build-test"], "Build/test job");
+    expect(buildTestJob["timeout-minutes"]).toBe(45);
+    expect(buildTestJob.permissions).toEqual({ contents: "read" });
     const buildTestSteps = requireSequence(
       buildTestJob.steps,
       "Build/test steps",
@@ -103,38 +107,119 @@ describe("GitHub Actions CI", () => {
     expect(findStep(buildTestSteps, "Install npm dependencies").run).toBe(
       "npm ci",
     );
-    expect(findStep(buildTestSteps, "Build").run).toBe("npm run build");
-    expect(findStep(buildTestSteps, "Test").run).toBe("npm run test");
+    expect(findStep(buildTestSteps, "Build and test").run).toBe("npm run test");
 
-    const cppInitialization = findStep(
-      buildTestSteps,
-      "Initialize CodeQL for C and C++",
+    const cefCache = findStep(buildTestSteps, "Cache CEF");
+    expect(cefCache.uses).toBe(
+      "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
     );
-    expect(cppInitialization.with).toEqual({
-      "build-mode": "manual",
-      languages: "c-cpp",
-    });
-    const buildStepIndex = buildTestSteps.indexOf(
-      findStep(buildTestSteps, "Build"),
+    const cefCacheConfiguration = requireMapping(
+      cefCache.with,
+      "CEF cache configuration",
     );
-    expect(buildTestSteps.indexOf(cppInitialization)).toBeLessThan(
-      buildStepIndex,
+    expect(requireString(cefCacheConfiguration.path, "CEF cache paths")).toBe(
+      [
+        "~/.cache/muon/cef-catalog.json",
+        "~/.cache/muon/artifacts/cef",
+        "muon-core/.cef",
+      ].join("\n"),
     );
-    expect(buildStepIndex).toBeLessThan(
-      buildTestSteps.indexOf(findStep(buildTestSteps, "Analyze C and C++")),
+    const cefCacheKey = requireString(
+      cefCacheConfiguration.key,
+      "CEF cache key",
     );
+    expect(cefCacheKey).toContain("hashFiles(");
+    expect(cefCacheKey).not.toContain("github.sha");
+
+    const nativeCache = findStep(buildTestSteps, "Cache native dependencies");
+    expect(nativeCache.uses).toBe(
+      "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+    );
+    const nativeCacheConfiguration = requireMapping(
+      nativeCache.with,
+      "Native cache configuration",
+    );
+    expect(
+      requireString(nativeCacheConfiguration.path, "Native cache paths"),
+    ).toBe(
+      [
+        "muon-builder/.deps",
+        "muon-core/.deps/*.tar.gz",
+        "muon-core/.deps/src",
+      ].join("\n"),
+    );
+    const nativeCacheKey = requireString(
+      nativeCacheConfiguration.key,
+      "Native cache key",
+    );
+    expect(nativeCacheKey).toContain("steps.native-toolchain.outputs");
+    expect(nativeCacheKey).toContain("hashFiles(");
+    expect(nativeCacheKey).toContain("muon-builder/build.sh");
+    expect(nativeCacheKey).not.toContain("github.sha");
+
+    const nativeToolchainCommand = requireString(
+      findStep(buildTestSteps, "Identify native toolchain").run,
+      "Native toolchain identification command",
+    );
+    for (const tool of [
+      "gcc",
+      "ar",
+      "ranlib",
+      "i686-w64-mingw32-gcc",
+      "i686-w64-mingw32-ar",
+      "i686-w64-mingw32-ranlib",
+      "x86_64-w64-mingw32-gcc",
+      "x86_64-w64-mingw32-ar",
+      "x86_64-w64-mingw32-ranlib",
+    ]) {
+      expect(nativeToolchainCommand).toContain(tool);
+    }
+    expect(nativeToolchainCommand).toContain("command -v");
+    expect(nativeToolchainCommand).toContain("--version");
+
+    expect(
+      buildTestSteps.some(
+        (value, index) =>
+          requireMapping(value, `Build/test step ${index + 1}`).uses !==
+            undefined &&
+          requireString(
+            requireMapping(value, `Build/test step ${index + 1}`).uses,
+            `Build/test action ${index + 1}`,
+          ).startsWith("github/codeql-action/"),
+      ),
+    ).toBe(false);
 
     const codeqlJob = requireMapping(jobs.codeql, "CodeQL job");
+    expect(codeqlJob["timeout-minutes"]).toBe(30);
+    expect(codeqlJob.permissions).toEqual({
+      contents: "read",
+      "security-events": "write",
+    });
     const strategy = requireMapping(codeqlJob.strategy, "CodeQL strategy");
     const matrix = requireMapping(strategy.matrix, "CodeQL matrix");
     expect(requireSequence(matrix.language, "CodeQL languages").sort()).toEqual(
-      ["actions", "javascript-typescript"],
+      ["actions", "c-cpp", "javascript-typescript"],
     );
     const codeqlSteps = requireSequence(codeqlJob.steps, "CodeQL steps");
-    expect(findStep(codeqlSteps, "Initialize CodeQL").with).toEqual({
+    expect(findStep(codeqlSteps, "Checkout repository").with).toEqual({
+      "persist-credentials": false,
+      submodules: "recursive",
+    });
+    const initializeCodeql = findStep(codeqlSteps, "Initialize CodeQL");
+    expect(initializeCodeql.with).toEqual({
       "build-mode": "none",
       languages: "${{ matrix.language }}",
     });
+    const analyzeCodeql = findStep(codeqlSteps, "Analyze");
+    expect(analyzeCodeql.uses).toBe(
+      "github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3",
+    );
+    expect(analyzeCodeql.with).toEqual({
+      category: "/language:${{ matrix.language }}",
+    });
+    expect(codeqlSteps.indexOf(initializeCodeql)).toBeLessThan(
+      codeqlSteps.indexOf(analyzeCodeql),
+    );
 
     const allSteps = [...buildTestSteps, ...codeqlSteps].map((value, index) =>
       requireMapping(value, `Combined step ${index + 1}`),
@@ -144,8 +229,22 @@ describe("GitHub Actions CI", () => {
       .filter((value): value is string => typeof value === "string")
       .filter((value) => !value.startsWith("./"));
     expect(externalActions.length).toBeGreaterThan(0);
+    const allowedActions = [
+      "actions/cache",
+      "actions/checkout",
+      "actions/setup-node",
+      "github/codeql-action/analyze",
+      "github/codeql-action/init",
+    ];
     for (const action of externalActions) {
       expect(action).toMatch(/^[^@\s]+@[0-9a-f]{40}$/);
+      expect(allowedActions).toContain(action.split("@", 1)[0]);
+    }
+
+    for (const [index, value] of codeqlSteps.entries()) {
+      expect(
+        requireMapping(value, `CodeQL step ${index + 1}`).run,
+      ).toBeUndefined();
     }
 
     const runCommands = allSteps

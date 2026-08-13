@@ -2,6 +2,9 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
+      - develop
   pull_request:
   workflow_dispatch:
 
@@ -14,12 +17,11 @@ permissions:
 
 jobs:
   build-test:
-    name: Build, test, and analyze C and C++
+    name: Build and test
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     permissions:
       contents: read
-      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,24 +63,56 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Initialize CodeQL for C and C++
-        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
-        with:
-          build-mode: manual
-          languages: c-cpp
+      - name: Identify native toolchain
+        id: native-toolchain
+        shell: bash
+        run: |
+          tools=(
+            gcc
+            ar
+            ranlib
+            i686-w64-mingw32-gcc
+            i686-w64-mingw32-ar
+            i686-w64-mingw32-ranlib
+            x86_64-w64-mingw32-gcc
+            x86_64-w64-mingw32-ar
+            x86_64-w64-mingw32-ranlib
+          )
+          fingerprint="$(
+            {
+              for tool in "${tools[@]}"; do
+                command -v "${tool}"
+                "${tool}" --version
+              done
+            } | sha256sum | cut -d ' ' -f 1
+          )"
+          echo "fingerprint=${fingerprint}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build and Test
+      - name: Cache CEF
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |-
+            ~/.cache/muon/cef-catalog.json
+            ~/.cache/muon/artifacts/cef
+            muon-core/.cef
+          key: ${{ runner.os }}-${{ runner.arch }}-cef-linux64-v1-${{ hashFiles('muon-core/build.sh', 'muon-builder/src/prepare_cef.c', 'muon-builder/src/prepare_cef.h') }}
+
+      - name: Cache native dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |-
+            muon-builder/.deps
+            muon-core/.deps/*.tar.gz
+            muon-core/.deps/src
+          key: ${{ runner.os }}-${{ runner.arch }}-native-deps-v1-${{ steps.native-toolchain.outputs.fingerprint }}-${{ hashFiles('muon-builder/build.sh', 'muon-builder/build_*.sh', 'muon-core/build_*.sh') }}
+
+      - name: Build and test
         run: npm run test
-
-      - name: Analyze C and C++
-        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
-        with:
-          category: /language:c-cpp
 
   codeql:
     name: Analyze ${{ matrix.language }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
@@ -87,12 +121,14 @@ jobs:
       matrix:
         language:
           - actions
+          - c-cpp
           - javascript-typescript
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: recursive
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6

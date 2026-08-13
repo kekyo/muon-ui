@@ -26,7 +26,10 @@ RANLIB_PATH="$(command -v "${RANLIB_VALUE}")"
 
 ZLIB_VERSION="1.3.2"
 ZLIB_PACKAGE="zlib-${ZLIB_VERSION}.tar.gz"
-ZLIB_URL="https://zlib.net/fossils/${ZLIB_PACKAGE}"
+ZLIB_URLS=(
+  "https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/${ZLIB_PACKAGE}"
+  "https://zlib.net/fossils/${ZLIB_PACKAGE}"
+)
 ZLIB_SHA256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
 DEPS_DIR="${SCRIPT_DIR}/.deps"
 ARCHIVE="${DEPS_DIR}/${ZLIB_PACKAGE}"
@@ -73,14 +76,40 @@ release_lock() {
   fi
 }
 
-archive_sha256() {
-  sha256sum "${ARCHIVE}" | awk '{print $1}'
+file_sha256() {
+  sha256sum "$1" | awk '{print $1}'
 }
 
 download_archive() {
-  rm -f "${TMP_ARCHIVE}"
-  curl -fL -o "${TMP_ARCHIVE}" "${ZLIB_URL}"
-  mv "${TMP_ARCHIVE}" "${ARCHIVE}"
+  local actual
+  local url
+
+  for url in "${ZLIB_URLS[@]}"; do
+    rm -f "${TMP_ARCHIVE}"
+    echo "Downloading ${ZLIB_PACKAGE} from ${url}" >&2
+    if ! curl \
+      -fL \
+      --retry 2 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --retry-max-time 120 \
+      --connect-timeout 15 \
+      --max-time 60 \
+      -o "${TMP_ARCHIVE}" \
+      "${url}"; then
+      echo "Failed to download ${ZLIB_PACKAGE} from ${url}" >&2
+      continue
+    fi
+    if actual="$(file_sha256 "${TMP_ARCHIVE}")" &&
+       [[ "${actual}" == "${ZLIB_SHA256}" ]]; then
+      mv "${TMP_ARCHIVE}" "${ARCHIVE}"
+      return 0
+    fi
+    echo "zlib archive sha256 mismatch from ${url}: expected ${ZLIB_SHA256}, got ${actual:-unavailable}" >&2
+  done
+
+  echo "Failed to download a verified ${ZLIB_PACKAGE} archive" >&2
+  return 1
 }
 
 mkdir -p "${DEPS_DIR}" "${DEPS_DIR}/src" "${DEPS_DIR}/build"
@@ -89,13 +118,13 @@ acquire_lock
 
 if [[ ! -f "${ARCHIVE}" ]]; then
   download_archive
-elif [[ "$(archive_sha256)" != "${ZLIB_SHA256}" ]]; then
+elif [[ "$(file_sha256 "${ARCHIVE}")" != "${ZLIB_SHA256}" ]]; then
   echo "zlib archive sha256 mismatch; redownloading ${ZLIB_PACKAGE}" >&2
   rm -f "${ARCHIVE}"
   download_archive
 fi
 
-actual="$(archive_sha256)"
+actual="$(file_sha256 "${ARCHIVE}")"
 if [[ "${ZLIB_SHA256}" != "${actual}" ]]; then
   echo "zlib archive sha256 mismatch: expected ${ZLIB_SHA256}, got ${actual}" >&2
   exit 1

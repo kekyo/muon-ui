@@ -1954,6 +1954,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_rpc_test
     tests/muon_rpc_test.cpp
     src/rpc/muon_rpc.cpp
+    src/rpc/muon_rpc_host.cpp
+    src/config/muon_glob.cpp
+    src/plugins/muon_plugin_policy.cpp
     src/plugins/muon_type_metadata.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_rpc_test)

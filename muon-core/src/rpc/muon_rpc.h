@@ -281,6 +281,12 @@ struct MuonRpcRendererFunctionCall {
   /** Renderer-local source function identifier. */
   int function_id = 0;
 
+  /** Whether the native caller supplied a result completion. */
+  bool expects_result = false;
+
+  /** Recursive signature of the renderer-owned function. */
+  MuonTypeMetadata function_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
+
   /** Fully decoded callback arguments. */
   std::vector<MuonRpcValue> arguments;
 };

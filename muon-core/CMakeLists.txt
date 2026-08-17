@@ -786,6 +786,7 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs_read_limits.cpp
   src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
   src/plugins/muon_cef_plugin_metadata.cpp
+  src/plugins/muon_cef_rpc.cpp
   src/plugins/muon_function_wrapper_lifecycle.cpp
   src/plugins/muon_plugin_metadata.cpp
   src/plugins/muon_plugin_policy.cpp
@@ -794,6 +795,8 @@ set(APP_SOURCES
   src/plugins/muon_traffic_cardio_operation.cpp
   src/plugins/muon_type_metadata.cpp
   src/plugins/muon_v8_handler.cpp
+  src/rpc/muon_rpc.cpp
+  src/rpc/muon_rpc_host.cpp
   )
 set(APP_HEADERS
   src/muon_json_helpers.h
@@ -840,17 +843,19 @@ set(APP_HEADERS
   src/plugins/builtin/muon_builtin_fs_helpers.h
   src/plugins/builtin/muon_builtin_fs_watch_registry.h
   src/plugins/muon_cef_plugin_metadata.h
+  src/plugins/muon_cef_rpc.h
   src/plugins/muon_js_bridge.h
   src/plugins/muon_function_wrapper_lifecycle.h
   src/plugins/muon_plugin_metadata.h
   src/plugins/muon_plugin_policy.h
   src/plugins/muon_plugin_runtime.h
-  src/plugins/muon_plugin_value.h
   src/plugins/muon_shared_buffer.h
   src/plugins/muon_traffic_adapter.h
   src/plugins/muon_traffic_cardio_operation.h
   src/plugins/muon_type_metadata.h
   src/plugins/muon_v8_handler.h
+  src/rpc/muon_rpc.h
+  src/rpc/muon_rpc_host.h
   src/ui/muon_ui_fs_dialogs.h
   src/ui/muon_ui_title_bar.h
   include/muon_plugin_api.h
@@ -1953,6 +1958,24 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     Threads::Threads
     )
   MUON_APPLY_SANITIZERS(muon_function_wrapper_lifecycle_test)
+  add_library(muon_plugin_runtime_cef_independent_compile OBJECT
+    src/plugins/muon_plugin_runtime.cpp
+    )
+  target_compile_features(muon_plugin_runtime_cef_independent_compile PRIVATE
+    cxx_std_20)
+  target_include_directories(muon_plugin_runtime_cef_independent_compile PRIVATE
+    include
+    src
+    "${TRA_FFIC_ROOT_RESOLVED}/include"
+    "${CARDIO_ROOT_RESOLVED}/include"
+    )
+  if(MUON_TRACK_FFI_CLOSURES)
+    target_compile_definitions(
+      muon_plugin_runtime_cef_independent_compile PRIVATE
+      MUON_TRACK_FFI_CLOSURES
+      TRA_FFIC_TRACK_CLOSURES
+      )
+  endif()
   add_executable(muon_rpc_test
     tests/muon_rpc_test.cpp
     src/rpc/muon_rpc.cpp
@@ -1976,8 +1999,11 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_plugin_metadata_test
     tests/muon_plugin_metadata_test.cpp
     src/plugins/muon_cef_plugin_metadata.cpp
+    src/plugins/muon_cef_rpc.cpp
     src/plugins/muon_plugin_metadata.cpp
+    src/plugins/muon_shared_buffer.cpp
     src/plugins/muon_type_metadata.cpp
+    src/rpc/muon_rpc.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_plugin_metadata_test)
   target_compile_features(muon_plugin_metadata_test PRIVATE cxx_std_20)

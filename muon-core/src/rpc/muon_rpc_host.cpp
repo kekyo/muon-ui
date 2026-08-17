@@ -137,14 +137,14 @@ bool MuonRpcHost::DispatchCall(const MuonRpcCallRequest& request) {
   if (!impl_ || !IsValidMuonRpcOwner(request.owner)) {
     return false;
   }
-  if (request.call_id == 0 || request.function_id == 0) {
+  if (request.call_id == 0) {
     SendRejectedCall(impl_, request, "Invalid muon plugin call");
     return true;
   }
 
   auto route_kind = MuonRpcRouteKind::Plugin;
   if (request.kind == MuonRpcCallKind::PluginProxy) {
-    if (request.proxy_lease_token.empty()) {
+    if (request.function_id == 0 || request.proxy_lease_token.empty()) {
       SendRejectedCall(impl_, request, "Invalid muon function proxy call");
       return true;
     }
@@ -263,7 +263,7 @@ bool CreateMuonRpcHost(
   impl->capability_policies = capability_policies;
   impl->services = std::move(services);
   for (const auto& route : routes) {
-    if (route.function_id == 0 || route.public_path.empty()) {
+    if (route.public_path.empty()) {
       *error_message = "Invalid muon RPC function route";
       return false;
     }

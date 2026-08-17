@@ -41,7 +41,7 @@ enum class MuonRpcRouteKind {
  * Immutable routing metadata for one direct RPC function.
  */
 struct MuonRpcFunctionRoute {
-  /** Runtime-wide positive function identifier. */
+  /** Runtime-wide zero-based function identifier. */
   uint32_t function_id = 0;
 
   /** Public JavaScript function path used by capability validation. */

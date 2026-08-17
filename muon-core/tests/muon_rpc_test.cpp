@@ -9,6 +9,7 @@
 
 #include "plugins/muon_plugin_metadata.h"
 #include "plugins/muon_plugin_policy.h"
+#include "plugins/muon_plugin_runtime.h"
 
 #include <cstdint>
 #include <functional>
@@ -146,6 +147,31 @@ static bool RunMetadataModelTest() {
          Expect(CreateMuonFunctionPublicPath(function) ==
                     "muon.files.readText",
                 "CEF-independent function public path changed");
+}
+
+static bool RunPluginRuntimeBoundaryTest() {
+  MuonPluginRuntimeServices services;
+  services.is_owner_thread = []() { return true; };
+  services.post_owner_task = [](std::function<void()> task) {
+    task();
+    return true;
+  };
+  services.allocate_buffer = [](size_t size, std::string*) {
+    return CreateMuonRpcOwnedBuffer(size);
+  };
+  services.is_owner_available = [](const MuonRpcOwner& owner) {
+    return IsValidMuonRpcOwner(owner);
+  };
+  services.send_message = [](const MuonRpcMessage&, std::string*) {
+    return true;
+  };
+
+  auto task_ran = false;
+  return Expect(services.post_owner_task([&task_ran]() { task_ran = true; }),
+                "CEF-independent runtime task was rejected") &&
+         Expect(task_ran, "CEF-independent runtime task did not run") &&
+         Expect(services.allocate_buffer(4, nullptr)->GetSize() == 4,
+                "CEF-independent runtime allocation changed");
 }
 
 static bool RunClientStateTest() {
@@ -328,6 +354,31 @@ static bool RunRpcHostRoutingTest() {
                 "RPC host did not retire the completed call");
 }
 
+static bool RunRpcHostZeroFunctionIdTest() {
+  const auto owner = CreateOwner(4, "frame-zero", 32);
+  FakeRpcHostTransport transport;
+  auto host = std::shared_ptr<MuonRpcHost>{};
+  auto error_message = std::string{};
+  const auto routes = std::vector<MuonRpcFunctionRoute>{
+      {0, "muon.zero", MuonRpcRouteKind::Plugin},
+  };
+  if (!Expect(CreateMuonRpcHost(
+                  MuonRpcHostMode::Simple, routes, {},
+                  CreateFakeRpcHostServices(&transport), &host,
+                  &error_message),
+              "RPC host rejected the first runtime function id: " +
+                  error_message)) {
+    return false;
+  }
+
+  const auto call = CreateHostCall(owner, 1, 0);
+  return Expect(host->DispatchCall(call),
+                "RPC host rejected a zero-based runtime function id") &&
+         Expect(transport.plugin_calls.size() == 1 &&
+                    transport.plugin_calls[0].function_id == 0,
+                "RPC host did not route the first runtime function");
+}
+
 static bool RunRpcHostCapabilityTest() {
   const auto owner = CreateOwner(5, "frame-e", 41);
   FakeRpcHostTransport transport;
@@ -434,8 +485,11 @@ static bool RunRpcHostLifecycleTest() {
 int main() {
   return RunOwnerIdentityTest() && RunBinaryStorageTest() &&
                  RunTypedMessageTest() && RunMetadataModelTest() &&
+                 RunPluginRuntimeBoundaryTest() &&
                  RunClientStateTest() &&
-                 RunRpcHostRoutingTest() && RunRpcHostCapabilityTest() &&
+                 RunRpcHostRoutingTest() &&
+                 RunRpcHostZeroFunctionIdTest() &&
+                 RunRpcHostCapabilityTest() &&
                  RunRpcHostLifecycleTest()
              ? 0
              : 1;

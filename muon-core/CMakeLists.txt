@@ -610,9 +610,8 @@ if(NOT EXISTS "${MUON_CARDIO_SHARED_SOURCE}")
   message(FATAL_ERROR
     "cardio shared runtime source is required. Update CARDIO_ROOT to a checkout containing samples/libcardio/libcardio.cpp.")
 endif()
-string(TOLOWER "${CMAKE_BUILD_TYPE}" MUON_BUILD_TYPE_LOWER)
 set(MUON_CARDIO_OUTPUT_DIR
-  "${CMAKE_CURRENT_SOURCE_DIR}/.deps/libcardio/${MUON_TARGET_NAME}/${MUON_BUILD_TYPE_LOWER}")
+  "${CMAKE_CURRENT_BINARY_DIR}/cardio")
 set(MUON_CARDIO_RUNTIME_LIBRARY_NAME
   "libcardio${CMAKE_SHARED_LIBRARY_SUFFIX}")
 set(MUON_CARDIO_CONFIG_DEFINES
@@ -1444,6 +1443,13 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
 endif()
 
 enable_testing()
+add_test(
+  NAME cardio_build_variant_isolated
+  COMMAND ${CMAKE_COMMAND}
+    "-DMUON_ARTIFACT=$<TARGET_FILE:cardio_shared>"
+    "-DMUON_BUILD_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_artifact_build_scoped.cmake"
+  )
 add_test(
   NAME runtime_contains_node_plugin
   COMMAND bash -c

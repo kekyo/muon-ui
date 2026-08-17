@@ -264,7 +264,6 @@ endif()
 
 function(MUON_APPLY_SANITIZERS TARGET_NAME)
   if(MUON_ENABLE_SANITIZERS)
-    get_target_property(MUON_SANITIZER_TARGET_TYPE ${TARGET_NAME} TYPE)
     target_compile_options(${TARGET_NAME} PRIVATE
       -fsanitize=address,leak,undefined
       -fno-omit-frame-pointer
@@ -273,13 +272,6 @@ function(MUON_APPLY_SANITIZERS TARGET_NAME)
       -fsanitize=address,leak,undefined
       -fno-omit-frame-pointer
       )
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
-        MUON_SANITIZER_TARGET_TYPE STREQUAL "EXECUTABLE")
-      target_link_options(${TARGET_NAME} PRIVATE
-        -static-libasan
-        -static-libubsan
-        )
-    endif()
   endif()
 endfunction()
 

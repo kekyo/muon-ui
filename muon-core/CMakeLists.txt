@@ -1951,6 +1951,22 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     Threads::Threads
     )
   MUON_APPLY_SANITIZERS(muon_function_wrapper_lifecycle_test)
+  add_executable(muon_rpc_test
+    tests/muon_rpc_test.cpp
+    src/rpc/muon_rpc.cpp
+    src/plugins/muon_type_metadata.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_rpc_test)
+  target_compile_features(muon_rpc_test PRIVATE cxx_std_20)
+  target_include_directories(muon_rpc_test PRIVATE
+    include
+    src
+    "${TRA_FFIC_ROOT_RESOLVED}/include"
+    )
+  target_link_libraries(muon_rpc_test PRIVATE
+    ${LIBFFI_TARGET}
+    )
+  MUON_APPLY_SANITIZERS(muon_rpc_test)
   add_executable(muon_plugin_metadata_test
     tests/muon_plugin_metadata_test.cpp
     src/plugins/muon_plugin_metadata.cpp
@@ -2045,6 +2061,10 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME function_wrapper_lifecycle
     COMMAND muon_function_wrapper_lifecycle_test
+    )
+  add_test(
+    NAME rpc
+    COMMAND muon_rpc_test
     )
   add_test(
     NAME plugin_metadata

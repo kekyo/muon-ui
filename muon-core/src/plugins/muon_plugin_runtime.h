@@ -9,6 +9,7 @@
 #include "browser/muon_builtin_browser.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "plugins/muon_plugin_policy.h"
+#include "plugins/muon_plugin_value.h"
 #include "plugins/muon_shared_buffer.h"
 
 #include "include/cef_frame.h"

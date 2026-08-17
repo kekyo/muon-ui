@@ -5,6 +5,7 @@
  */
 
 #include "plugins/muon_plugin_metadata.h"
+#include "plugins/muon_cef_plugin_metadata.h"
 
 #include "include/cef_app.h"
 

@@ -7,6 +7,7 @@
 #include "rpc/muon_rpc.h"
 #include "rpc/muon_rpc_host.h"
 
+#include "plugins/muon_plugin_metadata.h"
 #include "plugins/muon_plugin_policy.h"
 
 #include <cstdint>
@@ -128,6 +129,23 @@ static bool RunTypedMessageTest() {
                 "typed RPC string argument changed") &&
          Expect(decoded->arguments[1].function.function_id == 19,
                 "typed RPC function reference changed");
+}
+
+static bool RunMetadataModelTest() {
+  MuonFunctionMetadata function;
+  function.id = 23;
+  function.plugin_namespace = "muon.files";
+  function.js_name = "readInternal";
+  function.public_name = "readText";
+  function.arg_types.push_back(
+      CreateMuonPrimitiveType(MUON_TYPE_STRING));
+  function.return_type = CreateMuonPrimitiveType(MUON_TYPE_STRING);
+
+  return Expect(IsValidMuonPluginNamespace(function.plugin_namespace),
+                "CEF-independent plugin namespace was rejected") &&
+         Expect(CreateMuonFunctionPublicPath(function) ==
+                    "muon.files.readText",
+                "CEF-independent function public path changed");
 }
 
 static bool RunClientStateTest() {
@@ -415,7 +433,8 @@ static bool RunRpcHostLifecycleTest() {
 
 int main() {
   return RunOwnerIdentityTest() && RunBinaryStorageTest() &&
-                 RunTypedMessageTest() && RunClientStateTest() &&
+                 RunTypedMessageTest() && RunMetadataModelTest() &&
+                 RunClientStateTest() &&
                  RunRpcHostRoutingTest() && RunRpcHostCapabilityTest() &&
                  RunRpcHostLifecycleTest()
              ? 0

@@ -13,6 +13,7 @@
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
+#include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "network/muon_network_request_handler.h"
 #include "browser/muon_window_state.h"

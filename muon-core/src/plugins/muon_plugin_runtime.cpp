@@ -14,6 +14,7 @@
 #include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
+#include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_function_wrapper_lifecycle.h"
 #include "plugins/muon_js_bridge.h"
 #include "config/muon_paths.h"

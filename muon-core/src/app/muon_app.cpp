@@ -27,6 +27,7 @@
 #include "plugins/builtin/muon_builtin_environments.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_plugin_runtime.h"
+#include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_shared_buffer.h"
 #include "plugins/muon_v8_handler.h"
 

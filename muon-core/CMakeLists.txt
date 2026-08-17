@@ -785,6 +785,7 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
   src/plugins/builtin/muon_builtin_fs_read_limits.cpp
   src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
+  src/plugins/muon_cef_plugin_metadata.cpp
   src/plugins/muon_function_wrapper_lifecycle.cpp
   src/plugins/muon_plugin_metadata.cpp
   src/plugins/muon_plugin_policy.cpp
@@ -838,6 +839,7 @@ set(APP_HEADERS
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.h
   src/plugins/builtin/muon_builtin_fs_helpers.h
   src/plugins/builtin/muon_builtin_fs_watch_registry.h
+  src/plugins/muon_cef_plugin_metadata.h
   src/plugins/muon_js_bridge.h
   src/plugins/muon_function_wrapper_lifecycle.h
   src/plugins/muon_plugin_metadata.h
@@ -1956,6 +1958,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/rpc/muon_rpc.cpp
     src/rpc/muon_rpc_host.cpp
     src/config/muon_glob.cpp
+    src/plugins/muon_plugin_metadata.cpp
     src/plugins/muon_plugin_policy.cpp
     src/plugins/muon_type_metadata.cpp
     )
@@ -1972,6 +1975,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_rpc_test)
   add_executable(muon_plugin_metadata_test
     tests/muon_plugin_metadata_test.cpp
+    src/plugins/muon_cef_plugin_metadata.cpp
     src/plugins/muon_plugin_metadata.cpp
     src/plugins/muon_type_metadata.cpp
     )

@@ -6,6 +6,8 @@
 
 #include "plugins/muon_plugin_runtime.h"
 
+#include "plugins/muon_traffic_type_metadata.h"
+
 #include "muon_cardio_post.h"
 #include "muon_sha256.h"
 

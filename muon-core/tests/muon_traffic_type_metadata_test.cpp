@@ -4,7 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 
-#include "plugins/muon_type_metadata.h"
+#include "plugins/muon_traffic_type_metadata.h"
 
 #include <iostream>
 #include <string>

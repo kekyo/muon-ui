@@ -71,6 +71,9 @@ struct MuonRpcHostServices {
                      MuonRpcHostCompletion completion)>
       invoke_platform;
 
+  /** Cancels one invocation that is no longer retained by the RPC host. */
+  std::function<void(const MuonRpcCallCancel& cancel)> cancel_call;
+
   /** Releases one plugin-proxy wrapper lease. */
   std::function<void(const MuonRpcPluginProxyRelease& release)>
       release_plugin_proxy;
@@ -109,7 +112,7 @@ class MuonRpcHost final {
    * Handles one decoded host-bound RPC control message.
    *
    * @param message Message to route.
-   * @return true for calls and supported release messages.
+   * @return true for calls and supported control messages.
    */
   bool HandleMessage(const MuonRpcMessage& message);
 

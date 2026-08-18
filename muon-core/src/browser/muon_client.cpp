@@ -1119,6 +1119,7 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
              MuonRpcHostCompletion completion) {
         InvokeRpcPlatform(request, std::move(completion));
       };
+  rpc_services.cancel_call = [](const MuonRpcCallCancel&) {};
   rpc_services.release_plugin_proxy =
       [this](const MuonRpcPluginProxyRelease& release) {
         if (plugin_runtime_) {

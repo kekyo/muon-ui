@@ -203,6 +203,19 @@ bool MuonRpcHost::HandleMessage(const MuonRpcMessage& message) {
   if (!impl_) {
     return false;
   }
+  if (const auto* cancel = std::get_if<MuonRpcCallCancel>(&message)) {
+    if (!IsValidMuonRpcOwner(cancel->owner) || cancel->call_id == 0) {
+      return false;
+    }
+    const auto pending_iterator = impl_->pending_calls.find(
+        CreatePendingKey(cancel->owner, cancel->call_id));
+    if (pending_iterator == impl_->pending_calls.end()) {
+      return true;
+    }
+    impl_->pending_calls.erase(pending_iterator);
+    impl_->services.cancel_call(*cancel);
+    return true;
+  }
   if (const auto* release =
           std::get_if<MuonRpcPluginProxyRelease>(&message)) {
     if (!IsValidMuonRpcOwner(release->owner) || release->proxy_id == 0 ||
@@ -216,13 +229,21 @@ bool MuonRpcHost::HandleMessage(const MuonRpcMessage& message) {
     if (!IsValidMuonRpcOwner(release->owner)) {
       return false;
     }
+    auto cancelled_calls = std::vector<MuonRpcCallCancel>{};
     auto iterator = impl_->pending_calls.begin();
     while (iterator != impl_->pending_calls.end()) {
       if (IsSameOwner(iterator->first, release->owner)) {
+        MuonRpcCallCancel cancel;
+        cancel.owner = iterator->second.owner;
+        cancel.call_id = iterator->second.call_id;
+        cancelled_calls.push_back(std::move(cancel));
         iterator = impl_->pending_calls.erase(iterator);
       } else {
         ++iterator;
       }
+    }
+    for (const auto& cancel : cancelled_calls) {
+      impl_->services.cancel_call(cancel);
     }
     impl_->services.release_context(*release);
     return true;
@@ -252,8 +273,8 @@ bool CreateMuonRpcHost(
     return false;
   }
   if (!services.invoke_plugin || !services.invoke_platform ||
-      !services.release_plugin_proxy || !services.release_context ||
-      !services.send_result) {
+      !services.cancel_call || !services.release_plugin_proxy ||
+      !services.release_context || !services.send_result) {
     *error_message = "Muon RPC host services are incomplete";
     return false;
   }

@@ -30,6 +30,7 @@ int main() {
                             MuonRpcHostCompletion completion) {
         pending_completion = std::move(completion);
       };
+  services.cancel_call = [](const MuonRpcCallCancel&) {};
   services.release_plugin_proxy = [](const MuonRpcPluginProxyRelease&) {};
   services.release_context = [](const MuonRpcContextReleased&) {};
   services.send_result = [&received_results](const MuonRpcCallResult& result) {

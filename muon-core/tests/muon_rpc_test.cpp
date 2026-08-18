@@ -234,6 +234,7 @@ struct FakeRpcHostTransport {
   std::vector<MuonRpcCallRequest> plugin_calls;
   std::vector<MuonRpcCallRequest> platform_calls;
   std::vector<MuonRpcCallResult> results;
+  std::vector<MuonRpcCallCancel> call_cancels;
   std::vector<MuonRpcPluginProxyRelease> proxy_releases;
   std::vector<MuonRpcContextReleased> context_releases;
   std::vector<MuonRpcHostCompletion> pending_completions;
@@ -254,6 +255,9 @@ static MuonRpcHostServices CreateFakeRpcHostServices(
         transport->platform_calls.push_back(request);
         transport->pending_completions.push_back(std::move(completion));
       };
+  services.cancel_call = [transport](const MuonRpcCallCancel& cancel) {
+    transport->call_cancels.push_back(cancel);
+  };
   services.release_plugin_proxy =
       [transport](const MuonRpcPluginProxyRelease& release) {
         transport->proxy_releases.push_back(release);
@@ -482,6 +486,78 @@ static bool RunRpcHostLifecycleTest() {
                 "released RPC context produced a late result");
 }
 
+static bool RunRpcHostCancellationTest() {
+  const auto owner = CreateOwner(7, "frame-g", 61);
+  const auto other_owner = CreateOwner(7, "frame-g", 62);
+  FakeRpcHostTransport transport;
+  const auto host = CreateTestRpcHost(MuonRpcHostMode::Simple, &transport, {});
+  if (!Expect(host != nullptr, "cancellation RPC host was not created")) {
+    return false;
+  }
+
+  host->DispatchCall(CreateHostCall(owner, 1, 7));
+  MuonRpcCallCancel wrong_owner_cancel;
+  wrong_owner_cancel.owner = other_owner;
+  wrong_owner_cancel.call_id = 1;
+  if (!Expect(host->HandleMessage(wrong_owner_cancel),
+              "well-formed cross-owner RPC cancel was not consumed") ||
+      !Expect(transport.call_cancels.empty(),
+              "cross-owner RPC cancel reached the invocation service") ||
+      !Expect(host->GetPendingCallCount() == 1,
+              "cross-owner RPC cancel retired the pending call")) {
+    return false;
+  }
+
+  MuonRpcCallCancel cancel;
+  cancel.owner = owner;
+  cancel.call_id = 1;
+  if (!Expect(host->HandleMessage(cancel),
+              "matching RPC cancel was not consumed") ||
+      !Expect(transport.call_cancels.size() == 1 &&
+                  AreEqualMuonRpcOwners(transport.call_cancels[0].owner,
+                                        owner) &&
+                  transport.call_cancels[0].call_id == 1,
+              "matching RPC cancel was not routed once") ||
+      !Expect(host->GetPendingCallCount() == 0,
+              "matching RPC cancel left a pending call") ||
+      !Expect(host->HandleMessage(cancel),
+              "duplicate RPC cancel was not consumed") ||
+      !Expect(transport.call_cancels.size() == 1,
+              "duplicate RPC cancel was routed twice")) {
+    return false;
+  }
+
+  MuonRpcCallResult late_result;
+  late_result.success = true;
+  transport.pending_completions[0](late_result);
+  if (!Expect(transport.results.empty(),
+              "cancelled RPC call produced a late result")) {
+    return false;
+  }
+
+  host->DispatchCall(CreateHostCall(owner, 2, 7));
+  host->DispatchCall(CreateHostCall(owner, 3, 8));
+  host->DispatchCall(CreateHostCall(other_owner, 4, 7));
+  MuonRpcContextReleased release;
+  release.owner = owner;
+  if (!Expect(host->HandleMessage(release),
+              "RPC context release was not consumed") ||
+      !Expect(transport.call_cancels.size() == 3,
+              "RPC context release did not cancel every owned call") ||
+      !Expect(transport.call_cancels[1].call_id == 2 &&
+                  transport.call_cancels[2].call_id == 3,
+              "RPC context release cancelled the wrong calls") ||
+      !Expect(host->GetPendingCallCount() == 1,
+              "RPC context release changed another owner's pending call")) {
+    return false;
+  }
+
+  MuonRpcCallCancel invalid_cancel;
+  invalid_cancel.owner = owner;
+  return Expect(!host->HandleMessage(invalid_cancel),
+                "zero-id RPC cancel was accepted");
+}
+
 int main() {
   return RunOwnerIdentityTest() && RunBinaryStorageTest() &&
                  RunTypedMessageTest() && RunMetadataModelTest() &&
@@ -490,7 +566,8 @@ int main() {
                  RunRpcHostRoutingTest() &&
                  RunRpcHostZeroFunctionIdTest() &&
                  RunRpcHostCapabilityTest() &&
-                 RunRpcHostLifecycleTest()
+                 RunRpcHostLifecycleTest() &&
+                 RunRpcHostCancellationTest()
              ? 0
              : 1;
 }

@@ -269,6 +269,17 @@ struct MuonRpcCallResult {
 };
 
 /**
+ * Renderer-to-host request to cancel one pending invocation.
+ */
+struct MuonRpcCallCancel {
+  /** JavaScript context that initiated the call. */
+  MuonRpcOwner owner;
+
+  /** Owner-local positive call identifier being cancelled. */
+  uint32_t call_id = 0;
+};
+
+/**
  * Host-to-renderer invocation of a renderer-owned function source.
  */
 struct MuonRpcRendererFunctionCall {
@@ -367,6 +378,7 @@ struct MuonRpcContextReleased {
 using MuonRpcMessage = std::variant<
     MuonRpcCallRequest,
     MuonRpcCallResult,
+    MuonRpcCallCancel,
     MuonRpcRendererFunctionCall,
     MuonRpcRendererFunctionResult,
     MuonRpcRendererFunctionLease,

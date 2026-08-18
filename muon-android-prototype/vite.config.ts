@@ -9,6 +9,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [prettierMax(), screwUp()],
+  base: './',
   build: {
     emptyOutDir: true,
     minify: false,

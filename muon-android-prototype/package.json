@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "vitest run && vite build"
+    "test": "vitest run && vite build && cd android && ./gradlew assembleDebug assembleDebugAndroidTest",
+    "test:android": "vite build && cd android && ./gradlew connectedDebugAndroidTest"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

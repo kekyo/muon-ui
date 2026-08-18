@@ -6,17 +6,20 @@
 
 package dev.muon.prototype;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.UiAutomation;
 import android.content.Context;
+import android.content.Intent;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -25,12 +28,15 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -63,6 +69,270 @@ public final class MuonNetworkFilterTest {
         }
     }
 
+    @Test
+    public void blocksEveryWebContentNetworkPathAndAllowsOnlyDataImages()
+            throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        automation.grantRuntimePermission(
+                context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
+
+        try (NetworkTestServer server = new NetworkTestServer();
+             ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+
+            String loopbackOrigin = server.loopbackOrigin();
+            String localNetworkOrigin = server.localNetworkOrigin();
+            String script = """
+                    void (async () => {
+                      const settleFrame = (url) => new Promise((resolve) => {
+                        const frame = document.createElement('iframe');
+                        const onViolation = (event) => {
+                          if (event.blockedURI === url ||
+                              (url.startsWith('blob:') && event.blockedURI.startsWith('blob'))) {
+                            document.removeEventListener('securitypolicyviolation', onViolation);
+                            frame.remove();
+                            resolve('completed');
+                          }
+                        };
+                        document.addEventListener('securitypolicyviolation', onViolation);
+                        frame.addEventListener('load', () => resolve('completed'), { once: true });
+                        frame.addEventListener('error', () => resolve('completed'), { once: true });
+                        frame.src = url;
+                        document.body.append(frame);
+                      });
+                      const settleXhr = (url) => new Promise((resolve) => {
+                        const request = new XMLHttpRequest();
+                        request.addEventListener('load', () => resolve('reached'), { once: true });
+                        request.addEventListener('error', () => resolve('blocked'), { once: true });
+                        request.addEventListener('abort', () => resolve('blocked'), { once: true });
+                        request.open('GET', url);
+                        request.send();
+                      });
+                      const settleFetch = async (url) => {
+                        try {
+                          await fetch(url);
+                          return 'reached';
+                        } catch {
+                          return 'blocked';
+                        }
+                      };
+                      const settleWebSocket = (url) => new Promise((resolve) => {
+                        try {
+                          const socket = new WebSocket(url);
+                          socket.addEventListener('open', () => {
+                            socket.close();
+                            resolve('reached');
+                          }, { once: true });
+                          socket.addEventListener('error', () => resolve('blocked'), { once: true });
+                        } catch {
+                          resolve('blocked');
+                        }
+                      });
+                      const settleImage = (url) => new Promise((resolve) => {
+                        const image = new Image();
+                        image.addEventListener('load', () => resolve('loaded'), { once: true });
+                        image.addEventListener('error', () => resolve('blocked'), { once: true });
+                        image.src = url;
+                      });
+                      const blobUrl = URL.createObjectURL(new Blob([
+                        '<body data-muon-network-probe="reached"><img src="',
+                        %1$s + '/blob-resource',
+                        '">'
+                      ], { type: 'text/html' }));
+                      const blobFrame = document.createElement('iframe');
+                      blobFrame.src = blobUrl;
+                      document.body.append(blobFrame);
+                      let serviceWorker = 'registered';
+                      try {
+                        await navigator.serviceWorker.register(
+                          location.origin + '/assets/network-filter-probe-worker.js'
+                        );
+                      } catch {
+                        serviceWorker = 'blocked';
+                      }
+                      const result = {
+                        iframe: await settleFrame(%1$s + '/iframe'),
+                        fetch: await settleFetch(%1$s + '/fetch'),
+                        xhr: await settleXhr(%1$s + '/xhr'),
+                        websocket: await settleWebSocket(%2$s + '/websocket'),
+                        redirect: await settleFetch(%1$s + '/redirect'),
+                        serviceWorker,
+                        localNetwork: await settleFetch(%3$s + '/local-network'),
+                        dataImage: await settleImage(
+                          'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
+                        )
+                      };
+                      await new Promise((resolve) => requestAnimationFrame(
+                        () => requestAnimationFrame(resolve)
+                      ));
+                      try {
+                        result.blob = blobFrame.contentDocument?.body?.dataset
+                          .muonNetworkProbe === 'reached' ? 'reached' : 'blocked';
+                      } catch {
+                        result.blob = 'blocked';
+                      }
+                      blobFrame.remove();
+                      URL.revokeObjectURL(blobUrl);
+                      muonAndroidTest.postMessage(JSON.stringify(result));
+                    })();
+                    """.formatted(
+                    JSONObject.quote(loopbackOrigin),
+                    JSONObject.quote(server.loopbackWebSocketOrigin()),
+                    JSONObject.quote(localNetworkOrigin));
+            scenario.onActivity(current -> current.getWebViewForTest()
+                    .evaluateJavascript(script, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "completed", result.getString("iframe"));
+            assertEquals(message, "blocked", result.getString("fetch"));
+            assertEquals(message, "blocked", result.getString("xhr"));
+            assertEquals(message, "blocked", result.getString("websocket"));
+            assertEquals(message, "blocked", result.getString("redirect"));
+            assertEquals(message, "blocked", result.getString("serviceWorker"));
+            assertEquals(message, "blocked", result.getString("blob"));
+            assertEquals(message, "blocked", result.getString("localNetwork"));
+            assertEquals(message, "loaded", result.getString("dataImage"));
+
+            assertFalse(server.wasRequested("/iframe"));
+            assertFalse(server.wasRequested("/fetch"));
+            assertFalse(server.wasRequested("/xhr"));
+            assertFalse(server.wasRequested("/websocket"));
+            assertFalse(server.wasRequested("/redirect"));
+            assertFalse(server.wasRequested("/redirect-target"));
+            assertFalse(server.wasRequested("/blob-resource"));
+            assertFalse(server.wasRequested("/local-network"));
+        }
+    }
+
+    @Test
+    public void confirmsWebViewRequestCallbackCoverageIsNotCefCompatible()
+            throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        automation.grantRuntimePermission(
+                context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
+
+        try (NetworkTestServer server = new NetworkTestServer()) {
+            String pageUrl = server.url("/probe");
+            Intent intent = new Intent(
+                    context, MuonNetworkCapabilityProbeActivity.class);
+            intent.putExtra(MuonNetworkCapabilityProbeActivity.EXTRA_PAGE_URL, pageUrl);
+            try (ActivityScenario<MuonNetworkCapabilityProbeActivity> scenario =
+                         ActivityScenario.launch(intent)) {
+                AtomicReference<MuonNetworkCapabilityProbeActivity> activityReference =
+                        new AtomicReference<>();
+                scenario.onActivity(activityReference::set);
+                MuonNetworkCapabilityProbeActivity activity = activityReference.get();
+                assertNotNull(activity);
+                assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                activity.clearRequestObservationsForTest();
+
+                String origin = server.loopbackOrigin();
+                String script = """
+                        void (async () => {
+                          const loadFrame = (url) => new Promise((resolve) => {
+                            const frame = document.createElement('iframe');
+                            frame.addEventListener('load', () => resolve(frame), { once: true });
+                            frame.addEventListener('error', () => resolve(frame), { once: true });
+                            frame.src = url;
+                            document.body.append(frame);
+                          });
+                          const loadXhr = (url) => new Promise((resolve, reject) => {
+                            const request = new XMLHttpRequest();
+                            request.addEventListener('load', resolve, { once: true });
+                            request.addEventListener('error', reject, { once: true });
+                            request.open('GET', url);
+                            request.send();
+                          });
+                          await loadFrame(%1$s + '/iframe');
+                          await fetch(%1$s + '/fetch');
+                          await loadXhr(%1$s + '/xhr');
+                          await fetch(%1$s + '/redirect');
+                          await new Promise((resolve) => {
+                            const socket = new WebSocket(%2$s + '/websocket');
+                            socket.addEventListener('open', () => {
+                              socket.close();
+                              resolve();
+                            }, { once: true });
+                            socket.addEventListener('error', resolve, { once: true });
+                          });
+                          const blobUrl = URL.createObjectURL(new Blob([
+                            '<body data-muon-network-probe="loaded">'
+                          ], { type: 'text/html' }));
+                          const blobFrame = await loadFrame(blobUrl);
+                          const blob = blobFrame.contentDocument?.body?.dataset
+                            .muonNetworkProbe === 'loaded' ? 'loaded' : 'failed';
+                          blobFrame.remove();
+                          URL.revokeObjectURL(blobUrl);
+
+                          const registration = await navigator.serviceWorker.register(
+                            %1$s + '/service-worker.js'
+                          );
+                          await navigator.serviceWorker.ready;
+                          await new Promise((resolve) => {
+                            const channel = new MessageChannel();
+                            channel.port1.addEventListener('message', resolve, { once: true });
+                            channel.port1.start();
+                            registration.active.postMessage('fetch', [channel.port2]);
+                          });
+                          muonNetworkProbe.postMessage(JSON.stringify({ blob }));
+                        })();
+                        """.formatted(
+                        JSONObject.quote(origin),
+                        JSONObject.quote(server.loopbackWebSocketOrigin()));
+                scenario.onActivity(current -> current.getWebViewForTest()
+                        .evaluateJavascript(script, null));
+
+                String message = activity.awaitMessageForTest(30, TimeUnit.SECONDS);
+                assertNotNull(message);
+                assertEquals("loaded", new JSONObject(message).getString("blob"));
+
+                assertTrue(server.wasRequested("/iframe"));
+                assertTrue(server.wasRequested("/fetch"));
+                assertTrue(server.wasRequested("/xhr"));
+                assertTrue(server.wasRequested("/websocket"));
+                assertTrue(server.wasRequested("/redirect"));
+                assertTrue(server.wasRequested("/redirect-target"));
+                assertTrue(server.wasRequested("/service-worker.js"));
+                assertTrue(server.wasRequested("/service-worker-fetch"));
+
+                List<MuonNetworkCapabilityProbeActivity.RequestObservation> webViewRequests =
+                        activity.getWebViewRequestsForTest();
+                assertTrue(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/iframe"))
+                                && !request.isMainFrame()));
+                assertTrue(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/fetch"))));
+                assertTrue(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/xhr"))));
+                assertTrue(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/redirect"))
+                                && !request.isRedirect()));
+                assertFalse(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/redirect-target"))));
+                assertFalse(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/websocket"))));
+                assertFalse(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().startsWith("blob:")));
+                assertFalse(webViewRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/service-worker-fetch"))));
+
+                List<MuonNetworkCapabilityProbeActivity.RequestObservation>
+                        serviceWorkerRequests = activity.getServiceWorkerRequestsForTest();
+                assertTrue(serviceWorkerRequests.stream().anyMatch(request ->
+                        request.getUrl().equals(server.url("/service-worker-fetch"))));
+            }
+        }
+    }
+
     private static final class NetworkTestServer implements AutoCloseable {
         private final ServerSocket serverSocket;
         private final List<String> requestedPaths =
@@ -70,20 +340,52 @@ public final class MuonNetworkFilterTest {
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final CountDownLatch started = new CountDownLatch(1);
         private final Thread acceptThread;
+        private final String localNetworkHost;
 
         private NetworkTestServer() throws Exception {
-            serverSocket = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
+            localNetworkHost = findLocalNetworkHost();
+            serverSocket = new ServerSocket(0, 16);
             acceptThread = new Thread(this::acceptRequests, "muon-network-test-server");
             acceptThread.start();
             assertTrue(started.await(30, TimeUnit.SECONDS));
         }
 
         private String url(String path) {
-            return "http://localhost:" + serverSocket.getLocalPort() + path;
+            return loopbackOrigin() + path;
+        }
+
+        private String loopbackOrigin() {
+            return "http://localhost:" + serverSocket.getLocalPort();
+        }
+
+        private String loopbackWebSocketOrigin() {
+            return "ws://localhost:" + serverSocket.getLocalPort();
+        }
+
+        private String localNetworkOrigin() {
+            return "http://" + localNetworkHost + ":" + serverSocket.getLocalPort();
         }
 
         private boolean wasRequested(String path) {
             return requestedPaths.contains(path);
+        }
+
+        private static String findLocalNetworkHost() throws Exception {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                if (!networkInterface.isUp() || networkInterface.isLoopback()) {
+                    continue;
+                }
+                Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (address instanceof Inet4Address && address.isSiteLocalAddress()) {
+                        return address.getHostAddress();
+                    }
+                }
+            }
+            throw new IllegalStateException("No local IPv4 address is available");
         }
 
         private void acceptRequests() {
@@ -119,9 +421,39 @@ public final class MuonNetworkFilterTest {
                     line = reader.readLine();
                 } while (line != null && !line.isEmpty());
 
+                String path = parts.length >= 2 ? parts[1] : "/";
+                if (path.equals("/redirect")) {
+                    writer.write("HTTP/1.1 302 Found\r\n");
+                    writer.write("Location: /redirect-target\r\n");
+                    writer.write("Content-Length: 0\r\n");
+                    writer.write("Connection: close\r\n\r\n");
+                    writer.flush();
+                    return;
+                }
+
+                String contentType = "text/html; charset=utf-8";
                 String body = "<!doctype html><title>network reached</title>";
+                if (path.equals("/service-worker.js")) {
+                    contentType = "application/javascript; charset=utf-8";
+                    body = """
+                            self.addEventListener('install', (event) => {
+                              event.waitUntil(self.skipWaiting());
+                            });
+                            self.addEventListener('activate', (event) => {
+                              event.waitUntil(self.clients.claim());
+                            });
+                            self.addEventListener('message', (event) => {
+                              event.waitUntil((async () => {
+                                await fetch('/service-worker-fetch');
+                                event.ports[0].postMessage('completed');
+                              })());
+                            });
+                            """;
+                }
                 writer.write("HTTP/1.1 200 OK\r\n");
-                writer.write("Content-Type: text/html; charset=utf-8\r\n");
+                writer.write("Content-Type: " + contentType + "\r\n");
+                writer.write("Cache-Control: no-store\r\n");
+                writer.write("Service-Worker-Allowed: /\r\n");
                 writer.write("Content-Length: "
                         + body.getBytes(StandardCharsets.UTF_8).length + "\r\n");
                 writer.write("Connection: close\r\n\r\n");

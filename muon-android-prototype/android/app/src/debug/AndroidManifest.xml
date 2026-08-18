@@ -6,5 +6,9 @@
 
     <application
         android:usesCleartextTraffic="true"
-        tools:replace="android:usesCleartextTraffic" />
+        tools:replace="android:usesCleartextTraffic">
+        <activity
+            android:name=".MuonNetworkCapabilityProbeActivity"
+            android:exported="false" />
+    </application>
 </manifest>

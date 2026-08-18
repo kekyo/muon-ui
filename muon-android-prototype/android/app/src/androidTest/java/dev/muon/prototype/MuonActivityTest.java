@@ -48,7 +48,7 @@ public final class MuonActivityTest {
             });
             assertTrue(evaluated.await(30, TimeUnit.SECONDS));
             assertEquals(
-                    "\"muon Android prototype|https://appassets.androidplatform.net\"",
+                    "\"muon Android prototype|https://main.asset.muon.invalid\"",
                     result.get());
         }
     }

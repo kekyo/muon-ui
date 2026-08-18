@@ -6,7 +6,9 @@
 
 package dev.muon.prototype;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -26,40 +28,35 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
-/** Enforces the fail-closed network boundary used by the Android WebView backend. */
-final class MuonWebViewNetworkFilter {
+/** Serves the trusted asset origin without filtering ordinary WebView network traffic. */
+final class MuonAssetRequestHandler implements AutoCloseable {
     private static final String TRUSTED_SCHEME = "https";
-    private static final String TRUSTED_HOST = "appassets.androidplatform.net";
-    private static final String TRUSTED_PATH_PREFIX = "/assets/";
-    private static final String DATA_IMAGE_PREFIX = "data:image/";
-    private static final String CONTENT_SECURITY_POLICY = String.join("; ",
-            "default-src 'none'",
-            "script-src 'self'",
-            "style-src 'self'",
-            "img-src 'self' data:",
-            "connect-src 'none'",
-            "frame-src 'none'",
-            "worker-src 'none'",
-            "object-src 'none'",
-            "base-uri 'none'",
-            "form-action 'none'");
-    private static final byte[] FORBIDDEN_BODY =
-            "Forbidden".getBytes(StandardCharsets.UTF_8);
+    private static final String TRUSTED_HOST = "main.asset.muon.invalid";
+    private static final String TRUSTED_PATH_PREFIX = "/";
+    private static final byte[] NOT_FOUND_BODY =
+            "Not Found".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] METHOD_NOT_ALLOWED_BODY =
+            "Method Not Allowed".getBytes(StandardCharsets.UTF_8);
 
     private final WebViewAssetLoader assetLoader;
+    private final boolean networkLoadsAllowed;
+    private ServiceWorkerControllerCompat serviceWorkerController;
 
-    MuonWebViewNetworkFilter(@NonNull Context context) {
+    MuonAssetRequestHandler(@NonNull Context context) {
         assetLoader = new WebViewAssetLoader.Builder()
+                .setDomain(TRUSTED_HOST)
                 .addPathHandler(TRUSTED_PATH_PREFIX,
                         new WebViewAssetLoader.AssetsPathHandler(context))
                 .build();
+        networkLoadsAllowed = context.checkSelfPermission(Manifest.permission.INTERNET)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     void configureWebViewSettings(@NonNull WebSettings settings) {
         settings.setJavaScriptEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
-        settings.setBlockNetworkLoads(true);
+        settings.setBlockNetworkLoads(!networkLoadsAllowed);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
     }
 
@@ -70,44 +67,52 @@ final class MuonWebViewNetworkFilter {
         requireFeature(WebViewFeature.SERVICE_WORKER_FILE_ACCESS);
         requireFeature(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST);
 
-        ServiceWorkerControllerCompat controller =
-                ServiceWorkerControllerCompat.getInstance();
+        serviceWorkerController = ServiceWorkerControllerCompat.getInstance();
         ServiceWorkerWebSettingsCompat settings =
-                controller.getServiceWorkerWebSettings();
+                serviceWorkerController.getServiceWorkerWebSettings();
         settings.setAllowContentAccess(false);
         settings.setAllowFileAccess(false);
-        settings.setBlockNetworkLoads(true);
-        controller.setServiceWorkerClient(new ServiceWorkerClientCompat() {
+        settings.setBlockNetworkLoads(!networkLoadsAllowed);
+        serviceWorkerController.setServiceWorkerClient(new ServiceWorkerClientCompat() {
             @Nullable
             @Override
             public WebResourceResponse shouldInterceptRequest(
                     @NonNull WebResourceRequest request) {
-                return createForbiddenResponse(false);
+                return MuonAssetRequestHandler.this.shouldInterceptRequest(request);
             }
         });
-    }
-
-    boolean shouldBlockNavigation(@NonNull WebResourceRequest request) {
-        return !isAllowedUrl(request.getUrl());
     }
 
     @Nullable WebResourceResponse shouldInterceptRequest(
             @NonNull WebResourceRequest request) {
         Uri url = request.getUrl();
-        if (isTrustedAssetUrl(url)) {
-            WebResourceResponse response = assetLoader.shouldInterceptRequest(url);
-            if (response != null) {
-                applySecurityHeaders(response);
-                return response;
-            }
-        } else if (isDataImageUrl(url)) {
+        if (!isTrustedAssetUrl(url)) {
             return null;
         }
-        return createForbiddenResponse(request.isForMainFrame());
+
+        String method = request.getMethod();
+        if (!"GET".equals(method) && !"HEAD".equals(method)) {
+            return createErrorResponse(
+                    405,
+                    "Method Not Allowed",
+                    METHOD_NOT_ALLOWED_BODY,
+                    true);
+        }
+
+        WebResourceResponse response = assetLoader.shouldInterceptRequest(url);
+        if (response == null || response.getData() == null) {
+            return createErrorResponse(404, "Not Found", NOT_FOUND_BODY, false);
+        }
+        applySecurityHeaders(response);
+        return response;
     }
 
-    private static boolean isAllowedUrl(@NonNull Uri url) {
-        return isTrustedAssetUrl(url) || isDataImageUrl(url);
+    @Override
+    public void close() {
+        if (serviceWorkerController != null) {
+            serviceWorkerController.setServiceWorkerClient(null);
+            serviceWorkerController = null;
+        }
     }
 
     private static boolean isTrustedAssetUrl(@NonNull Uri url) {
@@ -124,33 +129,34 @@ final class MuonWebViewNetworkFilter {
                 && path.startsWith(TRUSTED_PATH_PREFIX);
     }
 
-    private static boolean isDataImageUrl(@NonNull Uri url) {
-        return url.toString().startsWith(DATA_IMAGE_PREFIX);
-    }
-
     private static void applySecurityHeaders(@NonNull WebResourceResponse response) {
         Map<String, String> existingHeaders = response.getResponseHeaders();
         Map<String, String> headers = existingHeaders == null
                 ? new HashMap<>()
                 : new HashMap<>(existingHeaders);
-        headers.put("Content-Security-Policy", CONTENT_SECURITY_POLICY);
         headers.put("X-Content-Type-Options", "nosniff");
         response.setResponseHeaders(headers);
     }
 
-    @NonNull private static WebResourceResponse createForbiddenResponse(
-            boolean isMainFrame) {
+    @NonNull private static WebResourceResponse createErrorResponse(
+            int statusCode,
+            @NonNull String reasonPhrase,
+            @NonNull byte[] body,
+            boolean includeAllowHeader) {
         Map<String, String> headers = new HashMap<>();
         headers.put("Cache-Control", "no-store");
         headers.put("Content-Security-Policy", "default-src 'none'");
         headers.put("X-Content-Type-Options", "nosniff");
+        if (includeAllowHeader) {
+            headers.put("Allow", "GET, HEAD");
+        }
         return new WebResourceResponse(
-                isMainFrame ? "text/html" : "text/plain",
+                "text/plain",
                 StandardCharsets.UTF_8.name(),
-                403,
-                "Forbidden",
+                statusCode,
+                reasonPhrase,
                 headers,
-                new ByteArrayInputStream(FORBIDDEN_BODY));
+                new ByteArrayInputStream(body));
     }
 
     private static void requireFeature(@NonNull String feature) {

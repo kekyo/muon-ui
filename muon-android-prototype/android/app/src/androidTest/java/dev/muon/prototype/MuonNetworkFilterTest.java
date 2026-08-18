@@ -46,7 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(AndroidJUnit4.class)
 public final class MuonNetworkFilterTest {
     @Test
-    public void blocksUnconfiguredMainFrameBeforeItReachesTheNetwork() throws Exception {
+    public void allowsExternalMainFrameThroughTheNormalWebViewNetwork() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
         automation.grantRuntimePermission(
@@ -61,154 +61,32 @@ public final class MuonNetworkFilterTest {
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
             activity.clearFinishedPageUrlsForTest();
 
-            String url = server.url("/blocked-main-frame");
+            String url = server.url("/external-main-frame");
             scenario.onActivity(current -> current.getWebViewForTest().loadUrl(url));
 
-            assertNotNull(activity.awaitFinishedPageUrlForTest(30, TimeUnit.SECONDS));
-            assertFalse(server.wasRequested("/blocked-main-frame"));
+            assertEquals(
+                    url,
+                    activity.awaitFinishedPageUrlForTest(30, TimeUnit.SECONDS));
+            assertTrue(server.wasRequested("/external-main-frame"));
         }
     }
 
     @Test
-    public void blocksEveryWebContentNetworkPathAndAllowsOnlyDataImages()
-            throws Exception {
-        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
-        automation.grantRuntimePermission(
-                context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
-
-        try (NetworkTestServer server = new NetworkTestServer();
-             ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+    public void returnsLocalNotFoundForMissingTrustedAssets() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
             AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
             scenario.onActivity(activityReference::set);
             MuonActivity activity = activityReference.get();
             assertNotNull(activity);
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
-            activity.clearTestMessages();
+            activity.clearMainFrameHttpStatusesForTest();
 
-            String loopbackOrigin = server.loopbackOrigin();
-            String localNetworkOrigin = server.localNetworkOrigin();
-            String script = """
-                    void (async () => {
-                      const settleFrame = (url) => new Promise((resolve) => {
-                        const frame = document.createElement('iframe');
-                        const onViolation = (event) => {
-                          if (event.blockedURI === url ||
-                              (url.startsWith('blob:') && event.blockedURI.startsWith('blob'))) {
-                            document.removeEventListener('securitypolicyviolation', onViolation);
-                            frame.remove();
-                            resolve('completed');
-                          }
-                        };
-                        document.addEventListener('securitypolicyviolation', onViolation);
-                        frame.addEventListener('load', () => resolve('completed'), { once: true });
-                        frame.addEventListener('error', () => resolve('completed'), { once: true });
-                        frame.src = url;
-                        document.body.append(frame);
-                      });
-                      const settleXhr = (url) => new Promise((resolve) => {
-                        const request = new XMLHttpRequest();
-                        request.addEventListener('load', () => resolve('reached'), { once: true });
-                        request.addEventListener('error', () => resolve('blocked'), { once: true });
-                        request.addEventListener('abort', () => resolve('blocked'), { once: true });
-                        request.open('GET', url);
-                        request.send();
-                      });
-                      const settleFetch = async (url) => {
-                        try {
-                          await fetch(url);
-                          return 'reached';
-                        } catch {
-                          return 'blocked';
-                        }
-                      };
-                      const settleWebSocket = (url) => new Promise((resolve) => {
-                        try {
-                          const socket = new WebSocket(url);
-                          socket.addEventListener('open', () => {
-                            socket.close();
-                            resolve('reached');
-                          }, { once: true });
-                          socket.addEventListener('error', () => resolve('blocked'), { once: true });
-                        } catch {
-                          resolve('blocked');
-                        }
-                      });
-                      const settleImage = (url) => new Promise((resolve) => {
-                        const image = new Image();
-                        image.addEventListener('load', () => resolve('loaded'), { once: true });
-                        image.addEventListener('error', () => resolve('blocked'), { once: true });
-                        image.src = url;
-                      });
-                      const blobUrl = URL.createObjectURL(new Blob([
-                        '<body data-muon-network-probe="reached"><img src="',
-                        %1$s + '/blob-resource',
-                        '">'
-                      ], { type: 'text/html' }));
-                      const blobFrame = document.createElement('iframe');
-                      blobFrame.src = blobUrl;
-                      document.body.append(blobFrame);
-                      let serviceWorker = 'registered';
-                      try {
-                        await navigator.serviceWorker.register(
-                          location.origin + '/assets/network-filter-probe-worker.js'
-                        );
-                      } catch {
-                        serviceWorker = 'blocked';
-                      }
-                      const result = {
-                        iframe: await settleFrame(%1$s + '/iframe'),
-                        fetch: await settleFetch(%1$s + '/fetch'),
-                        xhr: await settleXhr(%1$s + '/xhr'),
-                        websocket: await settleWebSocket(%2$s + '/websocket'),
-                        redirect: await settleFetch(%1$s + '/redirect'),
-                        serviceWorker,
-                        localNetwork: await settleFetch(%3$s + '/local-network'),
-                        dataImage: await settleImage(
-                          'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
-                        )
-                      };
-                      await new Promise((resolve) => requestAnimationFrame(
-                        () => requestAnimationFrame(resolve)
-                      ));
-                      try {
-                        result.blob = blobFrame.contentDocument?.body?.dataset
-                          .muonNetworkProbe === 'reached' ? 'reached' : 'blocked';
-                      } catch {
-                        result.blob = 'blocked';
-                      }
-                      blobFrame.remove();
-                      URL.revokeObjectURL(blobUrl);
-                      muonAndroidTest.postMessage(JSON.stringify(result));
-                    })();
-                    """.formatted(
-                    JSONObject.quote(loopbackOrigin),
-                    JSONObject.quote(server.loopbackWebSocketOrigin()),
-                    JSONObject.quote(localNetworkOrigin));
-            scenario.onActivity(current -> current.getWebViewForTest()
-                    .evaluateJavascript(script, null));
+            scenario.onActivity(current -> current.getWebViewForTest().loadUrl(
+                    MuonActivity.TRUSTED_ORIGIN + "/missing-asset.html"));
 
-            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
-            assertNotNull(message);
-            JSONObject result = new JSONObject(message);
-            assertEquals(message, "completed", result.getString("iframe"));
-            assertEquals(message, "blocked", result.getString("fetch"));
-            assertEquals(message, "blocked", result.getString("xhr"));
-            assertEquals(message, "blocked", result.getString("websocket"));
-            assertEquals(message, "blocked", result.getString("redirect"));
-            assertEquals(message, "blocked", result.getString("serviceWorker"));
-            assertEquals(message, "blocked", result.getString("blob"));
-            assertEquals(message, "blocked", result.getString("localNetwork"));
-            assertEquals(message, "loaded", result.getString("dataImage"));
-
-            assertFalse(server.wasRequested("/iframe"));
-            assertFalse(server.wasRequested("/fetch"));
-            assertFalse(server.wasRequested("/xhr"));
-            assertFalse(server.wasRequested("/websocket"));
-            assertFalse(server.wasRequested("/redirect"));
-            assertFalse(server.wasRequested("/redirect-target"));
-            assertFalse(server.wasRequested("/blob-resource"));
-            assertFalse(server.wasRequested("/local-network"));
+            assertEquals(
+                    Integer.valueOf(404),
+                    activity.awaitMainFrameHttpStatusForTest(30, TimeUnit.SECONDS));
         }
     }
 

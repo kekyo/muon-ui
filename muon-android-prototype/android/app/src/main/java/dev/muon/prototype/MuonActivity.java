@@ -30,8 +30,8 @@ import java.util.concurrent.TimeUnit;
 
 /** Hosts the Android WebView backend prototype. */
 public final class MuonActivity extends Activity {
-    static final String TRUSTED_ORIGIN = "https://appassets.androidplatform.net";
-    private static final String APP_URL = TRUSTED_ORIGIN + "/assets/index.html";
+    static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
+    private static final String APP_URL = TRUSTED_ORIGIN + "/index.html";
     private static final String RPC_OBJECT_NAME = "muonAndroidRpc";
     private static final String TEST_OBJECT_NAME = "muonAndroidTest";
 
@@ -42,8 +42,11 @@ public final class MuonActivity extends Activity {
     private final CountDownLatch pageReady = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<Integer> mainFrameHttpStatuses =
+            new LinkedBlockingQueue<>();
     private WebView webView;
     private MuonRpcBridge rpcBridge;
+    private MuonAssetRequestHandler assetRequestHandler;
     private boolean testBridgeInstalled;
 
     @Override
@@ -57,24 +60,27 @@ public final class MuonActivity extends Activity {
             throw new IllegalStateException("WebView ArrayBuffer messages are unavailable");
         }
 
-        MuonWebViewNetworkFilter networkFilter = new MuonWebViewNetworkFilter(this);
-        networkFilter.configureServiceWorkers();
+        assetRequestHandler = new MuonAssetRequestHandler(this);
+        assetRequestHandler.configureServiceWorkers();
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
-        networkFilter.configureWebViewSettings(settings);
+        assetRequestHandler.configureWebViewSettings(settings);
         webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(
-                    WebView view,
-                    WebResourceRequest request) {
-                return networkFilter.shouldBlockNavigation(request);
-            }
-
             @Override
             public WebResourceResponse shouldInterceptRequest(
                     WebView view,
                     WebResourceRequest request) {
-                return networkFilter.shouldInterceptRequest(request);
+                return assetRequestHandler.shouldInterceptRequest(request);
+            }
+
+            @Override
+            public void onReceivedHttpError(
+                    WebView view,
+                    WebResourceRequest request,
+                    WebResourceResponse errorResponse) {
+                if (request.isForMainFrame()) {
+                    mainFrameHttpStatuses.add(errorResponse.getStatusCode());
+                }
             }
 
             @Override
@@ -149,6 +155,16 @@ public final class MuonActivity extends Activity {
         finishedPageUrls.clear();
     }
 
+    @Nullable Integer awaitMainFrameHttpStatusForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        return mainFrameHttpStatuses.poll(timeout, unit);
+    }
+
+    void clearMainFrameHttpStatusesForTest() {
+        mainFrameHttpStatuses.clear();
+    }
+
     int getNativePendingCallCountForTest() {
         return rpcBridge == null ? 0 : rpcBridge.getNativePendingCallCount();
     }
@@ -165,6 +181,10 @@ public final class MuonActivity extends Activity {
         if (rpcBridge != null) {
             rpcBridge.close();
             rpcBridge = null;
+        }
+        if (assetRequestHandler != null) {
+            assetRequestHandler.close();
+            assetRequestHandler = null;
         }
         if (webView != null) {
             webView.destroy();

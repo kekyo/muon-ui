@@ -18,6 +18,18 @@ This ID is difficult to guess, but if it is identified through dynamic analysis 
 On the other hand, page URL filters, which are automatically configured in `validate` mode and manually configured in `simple` mode, are stronger because they prevent JavaScript from referencing the muon object itself.
 Therefore, always take care not to expose unnecessary plugin functions.
 
+## Android WebView backend
+
+The Android WebView backend does not comprehensively intercept normal WebView network traffic through muon. CEF settings such as `network.allow`, `network.authorizedOrigin`, and `network.localAccess` may remain in a shared `muon.json`, but Android does not enforce them as allow or deny rules for WebView traffic and emits a warning when they are explicitly configured.
+
+On Android, the Manifest `INTERNET` permission, local-network permissions required by the device and API level, and Network Security Config act as application-wide boundaries outside muon. Web-platform restrictions such as CORS and CSP also apply normally. In an environment with `INTERNET` permission, assume that WebView can communicate externally without a muon destination allowlist.
+
+Muon plugin RPC is accepted only from the main frame of the configured HTTPS asset origin. It is not exposed to an external-origin main frame, an iframe, or a same-origin subframe. However, JavaScript running in the trusted main frame cannot be distinguished by the source file from which it was loaded. An external script loaded into that page receives the same privileges as the page, so use CSP and dependency controls as additional boundaries.
+
+The default asset URL is `https://main.asset.muon.invalid/`, and the production configuration model uses `https://{asset_name}.asset.muon.invalid/` as its default template. Muon handles a configured asset host locally and does not fall back to the external network for a missing asset. External access can still occur when a host is misconfigured, a real host not dedicated to assets is used, or the platform handles a request unexpectedly. When changing the template, use a dedicated host owned by the application developer and keep `browser.startPage`, the CEF `network.allow`, `plugin.pages`, other origin-dependent settings, CSP, source code, and tests consistent. The [network-filter validation record](../../filter-limitation.md) lists every related item.
+
+The current Android `muon.fs` implementation handles only real filesystem paths allowed by Android. Direct `content://` URI support and `muon.fs.dialogs` are deferred. `muon.launcher`, `muon.executor`, the desktop Node.js sidecar, and runtime external plugin loading are also not currently exposed. A Node.js sidecar may be designed separately using nodejs-mobile. See the [Android API compatibility policy](../../android-api-compatibility.md) for the exact function set.
+
 ## Limitations on enabling the CEF sandbox on Linux
 
 On Linux, when a muon app is not started with administrator privileges, the `cef-sandbox` required by CEF cannot be started correctly.

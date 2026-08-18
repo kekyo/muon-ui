@@ -4,6 +4,8 @@
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
 既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
 
+Android WebViewバックエンドは、この章にあるデスクトップAPIの一部だけを公開します。Androidで利用できる関数とプラットフォーム固有の挙動は、[Android WebViewバックエンドの制約](limitation.md#android-webviewバックエンド)と[Android API対応方針](../../android-api-compatibility.md)を参照してください。公開されない関数をno-opへ置き換えることはありません。
+
 例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、
 `muon:executor` から `spawn` をインポートします:
 
@@ -159,25 +161,34 @@ await window.muon.launcher.triggerUpdate();
 | `getConfigValues()`     | なし               | `Promise<Record<string, string>>` | トップレベルのアプリケーション `config` の実効値を返します。                                                    |
 | `getCommandLine()`      | なし               | `Promise<string[]>`               | muon起動時に記録されたコマンドラインを返します。利用可能な場合は `argv[0]` も含みます。                         |
 | `getProcessId()`        | なし               | `Promise<number>`                 | ネイティブmuonプロセスIDを返します。                                                                            |
-| `getRuntimeInfo()`      | なし               | `Promise<MuonRuntimeInfo>`        | muon-coreのビルド情報、参照CEF情報、実行中CEF情報を返します。                                                    |
+| `getRuntimeInfo()`      | なし               | `Promise<MuonRuntimeInfo>`        | 現在のバックエンドに応じたruntime情報を返します。                                                               |
 | `getAutostart()`        | なし               | `Promise<boolean \| undefined>`   | ユーザーセッション開始時に現在のアプリを自動起動する設定かどうかを返します。判別不能な場合は `undefined` です。 |
 | `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>`                   | 自動起動設定を有効または無効にします。                                                                          |
 
-- `getRuntimeInfo()` の `muonCore` には、`version`, `gitCommitHash`, `buildDate`, `gitCommitDate` が含まれます。
-  `buildDate` と `gitCommitDate` はISO 8601形式の文字列です。
+- `getRuntimeInfo()` は `backend` で分岐する型を返します。
+  `backend === "cef"` の場合は、従来のmuon-coreビルド情報、参照CEF情報、実行中CEF情報を返します。`muonCore` には `version`, `gitCommitHash`, `buildDate`, `gitCommitDate` が含まれ、日付はISO 8601形式です。
+  `backend === "android-webview"` の場合は、Android OS version/API level、ABI、application ID/version、WebView provider package/versionを返します。CEF固有fieldは存在しません。
+- Android WebViewバックエンドで公開されるenvironment関数は、`getVariables()`, `getConfigValues()`, `getProcessId()`, `getRuntimeInfo()`です。`getCommandLine()`, `getAutostart()`, `setAutostart()`は公開されません。
+- Androidはapp processを再生成できるため、process IDやruntime情報をinstallation IDまたは永続的なsession IDとして使用しないでください。
 - `getAutostart()` と `setAutostart()` は、起動時のlaunch sourceに応じたプラットフォームバックエンドを使用します。
   POSIX desktopではXDG Autostart、Windowsでは現在のユーザーのRun registry entryを使用します。
 
 ```js
 const variables = await window.muon.environments.getVariables();
 const config = await window.muon.environments.getConfigValues();
-const commandLine = await window.muon.environments.getCommandLine();
 const processId = await window.muon.environments.getProcessId();
 const runtimeInfo = await window.muon.environments.getRuntimeInfo();
-const autostart = await window.muon.environments.getAutostart();
 
-if (autostart !== true) {
-  await window.muon.environments.setAutostart(true);
+if (runtimeInfo.backend === "android-webview") {
+  console.log(runtimeInfo.apiLevel, runtimeInfo.webViewVersion);
+} else {
+  const commandLine = await window.muon.environments.getCommandLine();
+  const autostart = await window.muon.environments.getAutostart();
+  console.log(runtimeInfo.muonCore.version, runtimeInfo.cefRuntime.version);
+  console.log(commandLine);
+  if (autostart !== true) {
+    await window.muon.environments.setAutostart(true);
+  }
 }
 ```
 
@@ -358,6 +369,7 @@ try {
 Linux環境ではGIO/GVfsを利用するため、通常の `muon.fs` 関数に渡すファイル位置引数にはローカルパスまたはURIを指定出来ます。
 GTKファイルダイアログで `gtk.localOnly: false` の場合にGVfs上のURIが選択結果として返ったときも、そのURIを通常の `muon.fs` 関数へ渡せます。
 Linux以外の環境では、通常の `muon.fs` 関数はローカルファイルシステム上のパスを扱います。
+Android WebViewバックエンドの現在の実装は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIは現在rejectされ、直接指定する対応は後続作業です。`muon.fs.dialogs`も、そのURIを扱う契約が実装されるまではAndroidへ公開されません。
 
 | 関数                                             | 引数                                                                                                                 | 戻り値                    | 説明                                                                                                                                                       |
 | :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |

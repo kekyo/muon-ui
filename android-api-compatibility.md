@@ -27,7 +27,7 @@
 | 非対応 | Android版では公開しない |
 | ステップ5 | Android NDKプラグイン対応で別途決定、実装する |
 
-この表はAndroid製品版の目標仕様であり、現在の試作に実装済みであることを表さない。
+この表はAndroid製品版の目標仕様を示す。初期実装へ反映済みの範囲と、後続作業へ延期した範囲は次節で区別する。
 
 ## 公開時の共通規則
 
@@ -38,11 +38,20 @@
 - Android向け別設計は、デスクトップAPIへAndroid固有の意味を追加するのではなく、Androidのライフサイクルや権限を型と関数名に表現する。
 - 共通APIにAndroid固有の制約がある場合、未対応オプションを無言で無視しない。target build時または呼び出し時に診断する。
 
-## 現在のAndroid試作との差
+## 現在のAndroid実装状況
 
-現在の[Android試作](muon-android-prototype/android/app/src/main/cpp/muon_android_rpc_jni.cpp)は、共通RPCの文字列、エラー、キャンセル、バイナリ転送を検証するための実装である。公開APIとして接続済みなのは`muon.environments.getConfigValues()`相当だけで、その他のrouteはRPC試験専用である。組み込みプラグインの汎用呼び出しは未実装である。
+現在の[Android試作](muon-android-prototype/android/app/src/main/cpp/muon_android_rpc_jni.cpp)には、共通RPCを経由する次の組み込みAPIを実装した。simple modeで公開する関数一覧は[Android APIメタデータ](muon-android-prototype/src/android-api.ts)を唯一の公開リストとし、一覧にない関数を動的に作成しない。
 
-また、現在のGradle設定は`x86_64`だけを対象としている。この文書で「互換」または「制約付き互換」としたAPIも、以後の実装とテストが完了するまでは利用可能とは扱わない。
+- `muon.browser`: `reload()`, fullscreen 3関数、zoom 3関数、`close()`
+- `muon.environments`: `getVariables()`, `getConfigValues()`, `getProcessId()`, `getRuntimeInfo()`
+- `muon.fs`: 実pathを扱う22関数。対応表で対象としたread/write、metadata、directory操作、link操作、`watch()`を含む
+
+`muon.launcher`、`muon.executor`、`muon.fs.dialogs`、Node.js sidecar、対応表で非対応またはAndroid向け別設計としたbrowser/environment関数は公開リストへ含めていない。`muon.fs.dialogs`は、先に`content://`を`muon.fs`で扱う契約を確定するまで公開しない。
+
+[Android設定検証器](muon-android-prototype/src/android-config.ts)は、Androidで意味を持たない値を拒否し、受理しても適用しないnetwork設定と`plugin.pages`を警告する。これは製品用Android build pipelineへ組み込むための検証プリミティブであり、現在の試作には合成済み`muon.json`を読み込むbuild pipeline自体はまだない。
+このため、`getConfigValues()`のrouteと型は実装済みだが、現在返す値は試作用に組み込んだ設定値である。製品buildで合成済み`muon.json`の`config`を渡す接続はbuild pipelineと同時に行う。
+
+現在のGradle設定は`x86_64`だけを対象としている。実機用`arm64-v8a`とbuild-time同梱NDKプラグインはplanのステップ5で扱う。
 
 ## `muon.browser`
 
@@ -84,10 +93,10 @@ Androidアプリ自身の更新機能が必要な場合は、配布元の更新�
 | `getConfigValues()` | 互換 | 合成済み`muon.json`のtop-level `config`を同じ`Record<string, string>`として返す。試作でPromise往復を確認済み |
 | `getCommandLine()` | 非対応 | ActivityはIntentとsaved stateから起動され、利用者が指定したdesktop形式の`argv`を持たない。起動情報が必要ならAndroid Intent用の別APIを設計する |
 | `getProcessId()` | 互換 | 現在のMuon app process IDをnumberで返す。Androidのprocess IDはprocess再生成で変わり得る |
-| `getRuntimeInfo()` | 制約付き互換 | runtime情報を返す目的と関数名は維持するが、現行型の`cefReference`と`cefRuntime`を偽装しない。共通のMuon build情報に、`backend: "cef" | "android-webview"`で分岐するruntime情報を持たせ、AndroidではOS、ABI、WebView package/versionを返す型へ変更する |
+| `getRuntimeInfo()` | 制約付き互換 | runtime情報を返す目的と関数名は維持するが、現行型の`cefReference`と`cefRuntime`を偽装しない。`MuonRuntimeInfo`を`backend: "cef" | "android-webview"`で分岐する型とし、AndroidではOS/API level、ABI、application ID/version、WebView package/versionを返す |
 | `getAutostart()`, `setAutostart()` | 非対応 | XDG AutostartやWindows Run registryと同じ契約はない。boot broadcast、background execution制限、利用者権限を扱う必要がある場合は別APIとして設計する |
 
-Androidは、必要に応じてapp processを終了し再生成できる。[Processes and app lifecycle](https://developer.android.com/guide/components/activities/process-lifecycle) `getProcessId()`と将来のruntime情報は、値がinstallationやapp sessionを一意に識別するものではないことを文書化する。
+Androidは、必要に応じてapp processを終了し再生成できる。[Processes and app lifecycle](https://developer.android.com/guide/components/activities/process-lifecycle) `getProcessId()`と`getRuntimeInfo()`の値は、installationやapp sessionを一意に識別するものではない。
 
 ## `muon.executor`
 
@@ -110,7 +119,7 @@ Androidのsecurity guidanceは、多くの形態のdynamic code loadingを避け
 | `realpath()`, `readlink()`, `symlink()` | 制約付き互換 | symlinkを提供するfilesystem上だけで動作する。Androidで意味を持たないWindowsの`junction`指定はrejectする |
 | `watch()` | 制約付き互換 | app processが生存している間のpath監視として提供し、context解放時に停止する。process終了後の永続監視は保証しない |
 
-AndroidのStorage Access Frameworkが返す`content://` URIはfilesystem pathではない。この表の`muon.fs`関数へURIを渡しても処理せず、明示的にrejectする。document providerのURIを読み書きする場合は、permission grant、URI寿命、provider固有機能を扱う別のdocument APIを設計する。
+AndroidのStorage Access Frameworkが返す`content://` URIはfilesystem pathではない。現在の初期実装は、この表の`muon.fs`関数へURIを渡すと明示的にrejectする。将来は`content://`を`muon.fs`へ直接指定できるようにするが、permission grant、URI寿命、provider固有機能と、pathでは成立しない操作の扱いを先に定義する必要があるため、今回の実装範囲には含めない。
 
 すべての関数で、既存のsize limit、UTF-8検査、`AbortSignal`、capability判定を維持する。Androidのcancelはbest effortであり、OS呼び出しが完了済みの場合まで結果を巻き戻すものではない。
 
@@ -127,7 +136,7 @@ AndroidではStorage Access Frameworkを使用する。選択結果はlocal path
 
 Android pickerはproviderがUIを所有する。そのため`title`、`defaultPath`、`buttonLabel`、`showHidden`、extension filter、`confirmOverwrite`がdesktopと同じ表示や動作になるとは保証しない。GTKまたはWin32固有optionはAndroidでは使用できず、指定時に診断する。
 
-このdialog APIはURIを返すが、前節のpath版`muon.fs`は`content://`を処理しない。Android実装でdialogを公開する前に、少なくとも選択URIのread、write、permission releaseを行うdocument APIを別途定義する。URIをpathへ変換するfallbackは設けない。
+このdialog APIはURIを返すが、現在のpath版`muon.fs`は`content://`を処理しない。Android実装でdialogを公開する前に、少なくとも選択URIのread、write、permission releaseを`muon.fs`で扱う契約を定義する。URIをpathへ変換するfallbackは設けない。
 
 ## Node.js sidecar
 
@@ -136,7 +145,7 @@ Android pickerはproviderがUIを所有する。そのため`title`、`defaultPa
 | `window.muon.node.createNode()`, `muon:node` | 非対応 | Android初期版では、desktop用Node executableを別processとして準備・起動するsidecar modelを提供しない |
 | `node.project` | 非対応 | Android targetではbuild errorにする。設定を受理してNode連携が存在するように見せない |
 
-将来JavaScript runtimeやbackground serviceが必要になっても、Node.js sidecarとの互換を前提にせず、Androidのprocess、service、package制約に合わせて別途採否を判断する。
+Node.js sidecarは将来nodejs-mobileを利用して実装する構想がある。ただし、Androidのprocess、service、package、lifecycleに合わせた設計と検証が必要であり、今回の初期API実装には含めない。現在のAndroid targetでdesktop sidecarが利用できるように見せるfallbackは設けない。
 
 ## ネイティブMuonプラグイン
 
@@ -159,7 +168,7 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 | top-level `config` | 互換 | `getConfigValues()`へ同じ合成済みstring mapを渡す |
 | `asset` storageとHTTPS URL template | 制約付き互換 | `https://{asset_name}.asset.muon.invalid/`を既定templateとして、構成済みhostをfail-closedでlocal assetへ割り当てる |
 | `browser.startPage` | 互換 | HTTPS asset URLまたはWebViewが通常読み込みできるURLを使用する。既定値は`https://main.asset.muon.invalid/index.html`へ移行する |
-| `browser.profile` | Android向け別設計 | 省略時はAndroid管理のWebView dataを使用し、現行fieldの明示指定はbuild errorにする。data isolationが必要な場合はAndroidのprofile/data directory modelに合わせて別設定にする |
+| `browser.profilePath` | Android向け別設計 | 省略時はAndroid管理のWebView dataを使用し、現行fieldの明示指定はbuild errorにする。data isolationが必要な場合はAndroidのprofile/data directory modelに合わせて別設定にする。現行schemaにない`browser.profile`も受理しない |
 | `browser.initialWindowState` | 制約付き互換 | `normal`と`fullscreen`だけを許可し、`hidden`、`minimized`、`maximized`はAndroid targetのbuild errorにする |
 | `browser.backgroundColor` | 互換 | Activity windowとWebViewの初期背景色へ反映する。`system`はAndroid themeのlight/darkを使う |
 | `browser.titleBarType`, `browser.initialTitleBarVisibility`, title bar icon | 非対応 | 現行fieldを明示したAndroid targetはbuild errorにする。app barとlauncher iconはAndroid resource/UIとして扱う |
@@ -188,17 +197,18 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 | Notificationとforeground service | notification permission、channel、service type、ユーザーによる停止、background execution制限 |
 | Document URI | URI permissionの取得・永続化・解放、read/write mode、provider error、Activity再生成 |
 | App update | 配布store、利用可能性、利用者同意、immediate/flexible update、store外配布時の非対応 |
-| Runtime情報 | backendのdiscriminated union、Android OS/API level、ABI、WebView package/version、Muon build情報 |
+| Runtime情報 | backendのdiscriminated union、Android OS/API level、ABI、application ID/version、WebView package/version |
 
-## 実装優先順位
+## 実装状況と残作業
 
-ステップ4の後にAPI実装を行う場合は、次の順序を基本とする。
+初期API実装は、次の順序で実施した。完了済みとした項目は、TypeScriptの公開契約、Java/JNIのnative route、WebViewからの計装テストまでを含む。
 
-1. `getConfigValues()`, `getVariables()`, `getProcessId()`, `reload()`, fullscreen、zoom、`close()`の共通APIを実装する。
-2. app-specific pathを対象とする`muon.fs`を実装する。
-3. Document URI APIを先に確定し、その後に対応する`muon.fs.dialogs`を実装する。
-4. 必要性が確認されたAndroid向け別設計だけを個別に行う。
-5. planのステップ5として、build-time同梱NDKプラグインを`arm64-v8a`と`x86_64`へ実装する。
+1. 完了: `getConfigValues()`, `getVariables()`, `getProcessId()`, `getRuntimeInfo()`, `reload()`, fullscreen、zoom、`close()`。
+2. 完了: app-specific pathを対象とする`muon.fs` 22関数。
+3. 完了: Android設定の受理、拒否、警告規則を表す検証プリミティブと、CEF/Androidを分岐できる`MuonRuntimeInfo`型。
+4. 延期: `content://`を直接扱う`muon.fs`契約と、その後の`muon.fs.dialogs`。
+5. 延期: nodejs-mobileを用いるsidecarと、必要性が確認されたAndroid向け別設計。
+6. planのステップ5: build-time同梱NDKプラグインと`arm64-v8a`対応。
 
 各実装では、関数単位のcapability、asset originとmain frameのRPC境界、cancel、Activity再生成を既存の共通RPCテスト条件へ追加する。
 
@@ -215,4 +225,4 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 - `muon.json`でAndroid targetが受理する値、制約付きで受理する値、拒否する値の方針を示している。
 - Android公式資料と現在のMuon実装を判断根拠として参照している。
 
-この文書では上記条件をすべて満たしている。したがって、ステップ4の成果物であるAPI対応方針の定義は完了とする。実際のAndroid API実装はこの完了判定に含めない。
+この文書では上記条件をすべて満たしている。したがって、ステップ4の成果物であるAPI対応方針の定義は完了している。加えて、「現在のAndroid実装状況」に列挙した初期API、非対応APIの非公開化、設定検証、runtime型の実装とテストも完了した。`content://`、`muon.fs.dialogs`、nodejs-mobile sidecar、`arm64-v8a`、NDKプラグインは明示した後続作業であり、今回の完了判定には含めない。

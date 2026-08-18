@@ -171,6 +171,7 @@ static bool CreateRuntimeInfoJson(std::string* result,
                         kMuonRuntimeInfo.cef_reference_api_hash) ||
       !yyjson_mut_obj_add_val(document, cef_reference, "artifact",
                               cef_artifact) ||
+      !AddRuntimeString(document, root, "backend", "cef") ||
       !AddRuntimeString(document, root, "name", kMuonRuntimeInfo.name) ||
       !AddRuntimeString(document, root, "executableName",
                         kMuonRuntimeInfo.executable_name) ||

@@ -27,6 +27,10 @@ android {
         }
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -58,6 +62,7 @@ tasks.named("preBuild") {
 }
 
 dependencies {
+    implementation("androidx.core:core:1.19.0")
     implementation("androidx.webkit:webkit:1.17.0")
 
     androidTestImplementation("androidx.test:core:1.7.0")

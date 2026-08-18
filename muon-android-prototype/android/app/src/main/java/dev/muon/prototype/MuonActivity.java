@@ -40,6 +40,7 @@ public final class MuonActivity extends Activity {
     }
 
     private final CountDownLatch pageReady = new CountDownLatch(1);
+    private final CountDownLatch destroyed = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<Integer> mainFrameHttpStatuses =
@@ -92,7 +93,7 @@ public final class MuonActivity extends Activity {
             }
         });
 
-        rpcBridge = new MuonRpcBridge();
+        rpcBridge = new MuonRpcBridge(this, webView);
         WebViewCompat.addWebMessageListener(
                 webView,
                 RPC_OBJECT_NAME,
@@ -169,6 +170,19 @@ public final class MuonActivity extends Activity {
         return rpcBridge == null ? 0 : rpcBridge.getNativePendingCallCount();
     }
 
+    boolean isFullscreenForTest() {
+        return rpcBridge != null && rpcBridge.isFullscreenForTest();
+    }
+
+    float getManagedZoomFactorForTest() {
+        return rpcBridge == null ? 1.0f : rpcBridge.getManagedZoomFactorForTest();
+    }
+
+    boolean awaitDestroyedForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return destroyed.await(timeout, unit);
+    }
+
     @Override
     protected void onDestroy() {
         if (webView != null) {
@@ -191,5 +205,6 @@ public final class MuonActivity extends Activity {
             webView = null;
         }
         super.onDestroy();
+        destroyed.countDown();
     }
 }

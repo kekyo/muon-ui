@@ -9,6 +9,7 @@ import {
   installMuonWebViewCapabilityBridge,
   type MuonWebViewJavaScriptBridge,
 } from './webview-rpc.js';
+import { createMuonAndroidSimpleApi } from './android-api.js';
 
 /** Testable prototype operations that require direct RPC client controls. */
 export interface MuonAndroidPrototypeOperations {
@@ -32,6 +33,16 @@ if (bridge === undefined) {
     createMuonWebViewRpcTransport(bridge)
   );
   const uninstallCapabilityBridge = installMuonWebViewCapabilityBridge(client);
+  const previousMuon = Object.getOwnPropertyDescriptor(globalThis, 'muon');
+  Object.defineProperty(globalThis, 'muon', {
+    configurable: true,
+    enumerable: true,
+    writable: false,
+    value: createMuonAndroidSimpleApi(client, {
+      'muon.browser': 'browser-capability',
+      'muon.environments': 'environment-capability',
+    }),
+  });
   const operations: MuonAndroidPrototypeOperations = {
     cancelDelayed: () => {
       const controller = new AbortController();
@@ -75,6 +86,11 @@ if (bridge === undefined) {
     'pagehide',
     () => {
       Reflect.deleteProperty(globalThis, '__muon_android_prototype');
+      if (previousMuon === undefined) {
+        Reflect.deleteProperty(globalThis, 'muon');
+      } else {
+        Object.defineProperty(globalThis, 'muon', previousMuon);
+      }
       uninstallCapabilityBridge();
       client.dispose();
     },

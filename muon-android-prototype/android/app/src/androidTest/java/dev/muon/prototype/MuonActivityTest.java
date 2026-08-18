@@ -7,6 +7,7 @@
 package dev.muon.prototype;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertTrue;
@@ -16,6 +17,7 @@ import android.webkit.WebView;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -50,6 +52,39 @@ public final class MuonActivityTest {
             assertEquals(
                     "\"muon Android prototype|https://main.asset.muon.invalid\"",
                     result.get());
+        }
+    }
+
+    @Test
+    public void simpleModePublishesOnlyImplementedAndroidNamespaces() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+
+            AtomicReference<String> result = new AtomicReference<>();
+            CountDownLatch evaluated = new CountDownLatch(1);
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
+                    "JSON.stringify({" +
+                            "namespaces: Object.keys(globalThis.muon)," +
+                            "browser: Object.keys(globalThis.muon.browser)," +
+                            "hasHardReload: 'hardReload' in globalThis.muon.browser" +
+                            "})",
+                    value -> {
+                        result.set(value);
+                        evaluated.countDown();
+                    }));
+
+            assertTrue(evaluated.await(30, TimeUnit.SECONDS));
+            assertNotNull(result.get());
+            String decoded = new JSONArray("[" + result.get() + "]").getString(0);
+            JSONObject api = new JSONObject(decoded);
+            assertEquals("[\"browser\",\"environments\"]",
+                    api.getJSONArray("namespaces").toString());
+            assertEquals(8, api.getJSONArray("browser").length());
+            assertFalse(api.getBoolean("hasHardReload"));
         }
     }
 
@@ -92,6 +127,163 @@ public final class MuonActivityTest {
     }
 
     @Test
+    public void returnsAndroidEnvironmentInformation() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      try {
+                        const call = (path) => globalThis.__muon_plugin_call(
+                          'environment-capability', path, []
+                        );
+                        const variables = JSON.parse(await call(
+                          'muon.environments.getVariables'
+                        ));
+                        const config = JSON.parse(await call(
+                          'muon.environments.getConfigValues'
+                        ));
+                        const processId = await call(
+                          'muon.environments.getProcessId'
+                        );
+                        const runtime = JSON.parse(await call(
+                          'muon.environments.getRuntimeInfo'
+                        ));
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'resolved',
+                          variables,
+                          config,
+                          processId,
+                          runtime
+                        }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'rejected',
+                          error: error instanceof Error ? error.message : String(error)
+                        }));
+                      }
+                    })();
+                    """, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "resolved", result.getString("status"));
+            assertTrue(result.getJSONObject("variables").length() >= 0);
+            assertEquals("android", result.getJSONObject("config").getString("channel"));
+            assertTrue(result.getInt("processId") > 0);
+            JSONObject runtime = result.getJSONObject("runtime");
+            assertEquals("android-webview", runtime.getString("backend"));
+            assertEquals("android", runtime.getString("os"));
+            assertTrue(runtime.getInt("apiLevel") >= 24);
+            assertFalse(runtime.getString("abi").isEmpty());
+            assertFalse(runtime.getString("webViewPackage").isEmpty());
+            assertFalse(runtime.getString("webViewVersion").isEmpty());
+        }
+    }
+
+    @Test
+    public void controlsFullscreenAndManagedZoom() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      try {
+                        const call = (path) => globalThis.__muon_plugin_call(
+                          'browser-capability', path, []
+                        );
+                        await call('muon.browser.enterFullscreen');
+                        await call('muon.browser.zoomIn');
+                        muonAndroidTest.postMessage('entered');
+                      } catch (error) {
+                        muonAndroidTest.postMessage(
+                          error instanceof Error ? error.message : String(error)
+                        );
+                      }
+                    })();
+                    """, null));
+
+            assertEquals("entered", activity.awaitTestMessage(30, TimeUnit.SECONDS));
+            assertTrue(activity.isFullscreenForTest());
+            assertTrue(activity.getManagedZoomFactorForTest() > 1.0f);
+
+            activity.clearTestMessages();
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      const call = (path) => globalThis.__muon_plugin_call(
+                        'browser-capability', path, []
+                      );
+                      await call('muon.browser.toggleFullscreen');
+                      await call('muon.browser.zoomOut');
+                      await call('muon.browser.zoomIn');
+                      await call('muon.browser.resetZoom');
+                      muonAndroidTest.postMessage('reset');
+                    })();
+                    """, null));
+
+            assertEquals("reset", activity.awaitTestMessage(30, TimeUnit.SECONDS));
+            assertFalse(activity.isFullscreenForTest());
+            assertEquals(1.0f, activity.getManagedZoomFactorForTest(), 0.001f);
+        }
+    }
+
+    @Test
+    public void reloadsTheCurrentWebView() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearFinishedPageUrlsForTest();
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void globalThis.__muon_plugin_call(
+                      'browser-capability',
+                      'muon.browser.reload',
+                      []
+                    );
+                    """, null));
+
+            assertEquals(
+                    MuonActivity.TRUSTED_ORIGIN + "/index.html",
+                    activity.awaitFinishedPageUrlForTest(30, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void closesOnlyTheOwnedActivity() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void globalThis.__muon_plugin_call(
+                      'browser-capability',
+                      'muon.browser.close',
+                      []
+                    );
+                    """, null));
+
+            assertTrue(activity.awaitDestroyedForTest(30, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     public void rejectsNativeFailuresWithTheirDiagnostic() throws Exception {
         try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
             AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
@@ -124,6 +316,39 @@ public final class MuonActivityTest {
             JSONObject result = new JSONObject(message);
             assertEquals("rejected", result.getString("status"));
             assertEquals("prototype failure", result.getString("error"));
+        }
+    }
+
+    @Test
+    public void rejectsFunctionsNotRegisteredForAndroid() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      try {
+                        await globalThis.__muon_plugin_call(
+                          'environment-capability',
+                          'muon.environments.getCommandLine',
+                          []
+                        );
+                        muonAndroidTest.postMessage('resolved');
+                      } catch (error) {
+                        muonAndroidTest.postMessage(
+                          error instanceof Error ? error.message : String(error)
+                        );
+                      }
+                    })();
+                    """, null));
+
+            String diagnostic = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(diagnostic);
+            assertEquals("Unknown muon plugin function", diagnostic);
         }
     }
 

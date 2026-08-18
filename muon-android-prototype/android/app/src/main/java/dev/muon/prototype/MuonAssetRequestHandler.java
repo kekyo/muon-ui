@@ -58,6 +58,9 @@ final class MuonAssetRequestHandler implements AutoCloseable {
         settings.setAllowContentAccess(false);
         settings.setBlockNetworkLoads(!networkLoadsAllowed);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setSupportZoom(true);
+        settings.setBuiltInZoomControls(false);
+        settings.setDisplayZoomControls(false);
     }
 
     void configureServiceWorkers() {

@@ -6,12 +6,14 @@
 
 package dev.muon.prototype;
 
+import android.app.Activity;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.WebView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebMessageCompat;
 import androidx.webkit.WebViewCompat;
@@ -23,41 +25,60 @@ import org.json.JSONObject;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 /** Adapts trusted WebView messages to the CEF-independent native RPC host. */
 final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoCloseable {
     private static final int PROTOCOL_VERSION = 1;
     private static final int BINARY_HEADER_LENGTH = 16;
+    private static final int MAXIMUM_ATTACHMENT_COUNT = 1024;
+    private static final int MAXIMUM_ATTACHMENT_BYTES = 64 * 1024 * 1024;
     private static final long DELAY_MILLISECONDS = 5000;
+    private static final int RESULT_VOID = 0;
+    private static final int RESULT_STRING = 1;
+    private static final int RESULT_UNSIGNED_INTEGER = 2;
+    private static final int RESULT_BOOLEAN = 3;
+    private static final int RESULT_BINARY = 4;
 
     private static final class PendingBinaryCall {
         final int callId;
         final String capabilityId;
         final String functionPath;
-        final int byteLength;
+        final String argumentsJson;
+        final int[] byteLengths;
+        final byte[][] attachments;
+        int receivedAttachmentCount;
 
         PendingBinaryCall(
                 int callId,
                 @NonNull String capabilityId,
                 @NonNull String functionPath,
-                int byteLength) {
+                @NonNull String argumentsJson,
+                @NonNull int[] byteLengths) {
             this.callId = callId;
             this.capabilityId = capabilityId;
             this.functionPath = functionPath;
-            this.byteLength = byteLength;
+            this.argumentsJson = argumentsJson;
+            this.byteLengths = byteLengths;
+            attachments = new byte[byteLengths.length][];
         }
     }
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<Integer, PendingBinaryCall> pendingBinaryCalls = new HashMap<>();
     private final Map<Integer, Runnable> delayedCompletions = new HashMap<>();
+    private final MuonAndroidPlatformService platformService;
     private long nativeHandle;
     private JavaScriptReplyProxy replyProxy;
 
-    MuonRpcBridge() {
+    MuonRpcBridge(
+            @NonNull Activity activity,
+            @NonNull WebView webView) {
+        platformService = new MuonAndroidPlatformService(activity, webView);
         nativeHandle = nativeCreateHost(this);
         if (nativeHandle == 0) {
+            platformService.close();
             throw new IllegalStateException("Could not create the native muon RPC host");
         }
     }
@@ -115,27 +136,55 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         if (callId <= 0 || functionPath.isEmpty() || arguments == null) {
             return;
         }
-        if (arguments.length() == 0) {
-            nativeDispatchCall(nativeHandle, callId, capabilityId, functionPath, null);
+        Map<Integer, Integer> binaryDescriptors = new HashMap<>();
+        try {
+            collectBinaryDescriptors(arguments, binaryDescriptors);
+        } catch (JSONException error) {
+            sendProtocolError(callId, error.getMessage() == null
+                    ? "Invalid Android RPC binary descriptor"
+                    : error.getMessage());
             return;
         }
-        if (arguments.length() == 1) {
-            JSONObject descriptor = arguments.optJSONObject(0);
-            if (descriptor != null
-                    && "binary".equals(descriptor.optString("type", ""))
-                    && descriptor.optInt("attachment", -1) == 0
-                    && descriptor.optInt("byteLength", -1) >= 0) {
-                PendingBinaryCall pending = new PendingBinaryCall(
-                        callId,
-                        capabilityId,
-                        functionPath,
-                        descriptor.getInt("byteLength"));
-                if (pendingBinaryCalls.putIfAbsent(callId, pending) == null) {
-                    return;
-                }
-            }
+        if (binaryDescriptors.size() > MAXIMUM_ATTACHMENT_COUNT) {
+            sendProtocolError(callId, "Too many Android RPC binary attachments");
+            return;
         }
-        sendProtocolError(callId, "Unsupported Android prototype RPC arguments");
+        int[] byteLengths = new int[binaryDescriptors.size()];
+        long totalBytes = 0;
+        for (int attachment = 0; attachment < byteLengths.length; attachment += 1) {
+            Integer byteLength = binaryDescriptors.get(attachment);
+            if (byteLength == null) {
+                sendProtocolError(callId, "Android RPC binary attachments are not contiguous");
+                return;
+            }
+            byteLengths[attachment] = byteLength;
+            totalBytes += byteLength;
+        }
+        if (totalBytes > MAXIMUM_ATTACHMENT_BYTES) {
+            sendProtocolError(callId, "Android RPC binary attachments exceed the size limit");
+            return;
+        }
+
+        String argumentsJson = arguments.toString();
+        if (byteLengths.length == 0) {
+            nativeDispatchCall(
+                    nativeHandle,
+                    callId,
+                    capabilityId,
+                    functionPath,
+                    argumentsJson,
+                    new byte[0][]);
+            return;
+        }
+        PendingBinaryCall pending = new PendingBinaryCall(
+                callId,
+                capabilityId,
+                functionPath,
+                argumentsJson,
+                byteLengths);
+        if (pendingBinaryCalls.putIfAbsent(callId, pending) != null) {
+            sendProtocolError(callId, "Duplicate Android RPC call id");
+        }
     }
 
     private void handleBinaryMessage(@NonNull byte[] frame) {
@@ -156,19 +205,70 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         PendingBinaryCall pending = pendingBinaryCalls.get(callId);
         int payloadLength = frame.length - BINARY_HEADER_LENGTH;
         if (callId <= 0
-                || attachment != 0
                 || pending == null
-                || pending.byteLength != payloadLength) {
+                || attachment < 0
+                || attachment >= pending.byteLengths.length
+                || pending.byteLengths[attachment] != payloadLength
+                || pending.attachments[attachment] != null) {
+            return;
+        }
+        byte[] payload = Arrays.copyOfRange(frame, BINARY_HEADER_LENGTH, frame.length);
+        pending.attachments[attachment] = payload;
+        pending.receivedAttachmentCount += 1;
+        if (pending.receivedAttachmentCount != pending.attachments.length) {
             return;
         }
         pendingBinaryCalls.remove(callId);
-        byte[] payload = Arrays.copyOfRange(frame, BINARY_HEADER_LENGTH, frame.length);
         nativeDispatchCall(
                 nativeHandle,
                 pending.callId,
                 pending.capabilityId,
                 pending.functionPath,
-                payload);
+                pending.argumentsJson,
+                pending.attachments);
+    }
+
+    private static void collectBinaryDescriptors(
+            @NonNull Object value,
+            @NonNull Map<Integer, Integer> descriptors) throws JSONException {
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            for (int index = 0; index < array.length(); index += 1) {
+                collectBinaryDescriptors(array.get(index), descriptors);
+            }
+            return;
+        }
+        if (!(value instanceof JSONObject)) {
+            return;
+        }
+
+        JSONObject object = (JSONObject) value;
+        if ("binary".equals(object.optString("type", ""))) {
+            Object attachmentValue = object.opt("attachment");
+            Object byteLengthValue = object.opt("byteLength");
+            if (object.length() != 3
+                    || !(attachmentValue instanceof Number)
+                    || !(byteLengthValue instanceof Number)) {
+                throw new JSONException("Invalid Android RPC binary descriptor");
+            }
+            long attachment = ((Number) attachmentValue).longValue();
+            long byteLength = ((Number) byteLengthValue).longValue();
+            if (((Number) attachmentValue).doubleValue() != attachment
+                    || ((Number) byteLengthValue).doubleValue() != byteLength
+                    || attachment < 0
+                    || attachment > Integer.MAX_VALUE
+                    || byteLength < 0
+                    || byteLength > MAXIMUM_ATTACHMENT_BYTES
+                    || descriptors.putIfAbsent((int) attachment, (int) byteLength) != null) {
+                throw new JSONException("Invalid Android RPC binary descriptor");
+            }
+            return;
+        }
+
+        Iterator<String> keys = object.keys();
+        while (keys.hasNext()) {
+            collectBinaryDescriptors(object.get(keys.next()), descriptors);
+        }
     }
 
     private void sendProtocolError(int callId, @NonNull String diagnostic) {
@@ -199,6 +299,110 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private void onNativeBinaryResult(@NonNull byte[] frame) {
         if (nativeHandle != 0 && replyProxy != null) {
             replyProxy.postMessage(frame);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private void invokePlatformFunction(
+            int callId,
+            @NonNull String functionPath,
+            @NonNull String argumentsJson,
+            @NonNull byte[][] attachments) {
+        try {
+            JSONArray arguments = new JSONArray(argumentsJson);
+            platformService.invoke(
+                    functionPath,
+                    arguments,
+                    attachments,
+                    new MuonAndroidPlatformService.Completion() {
+                        @Override
+                        public void completeVoid() {
+                            completePlatformCall(
+                                    callId, RESULT_VOID, null, 0, false, null, null);
+                        }
+
+                        @Override
+                        public void completeString(@NonNull String value) {
+                            completePlatformCall(
+                                    callId, RESULT_STRING, value, 0, false, null, null);
+                        }
+
+                        @Override
+                        public void completeUnsignedInteger(long value) {
+                            completePlatformCall(
+                                    callId,
+                                    RESULT_UNSIGNED_INTEGER,
+                                    null,
+                                    value,
+                                    false,
+                                    null,
+                                    null);
+                        }
+
+                        @Override
+                        public void completeBoolean(boolean value) {
+                            completePlatformCall(
+                                    callId, RESULT_BOOLEAN, null, 0, value, null, null);
+                        }
+
+                        @Override
+                        public void completeBinary(@NonNull byte[] value) {
+                            completePlatformCall(
+                                    callId, RESULT_BINARY, null, 0, false, value, null);
+                        }
+
+                        @Override
+                        public void fail(@NonNull String diagnostic) {
+                            completePlatformCall(
+                                    callId,
+                                    RESULT_VOID,
+                                    null,
+                                    0,
+                                    false,
+                                    null,
+                                    diagnostic);
+                        }
+                    });
+        } catch (JSONException error) {
+            completePlatformCall(
+                    callId,
+                    RESULT_VOID,
+                    null,
+                    0,
+                    false,
+                    null,
+                    "Invalid Android RPC arguments");
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private void cancelPlatformCall(int callId) {
+        platformService.cancel(callId);
+    }
+
+    @SuppressWarnings("unused")
+    private void cancelAllPlatformCalls() {
+        platformService.cancelAll();
+    }
+
+    private void completePlatformCall(
+            int callId,
+            int resultKind,
+            @Nullable String stringValue,
+            long unsignedIntegerValue,
+            boolean booleanValue,
+            @Nullable byte[] binaryValue,
+            @Nullable String error) {
+        if (nativeHandle != 0) {
+            nativeCompletePlatformCall(
+                    nativeHandle,
+                    callId,
+                    resultKind,
+                    stringValue,
+                    unsignedIntegerValue,
+                    booleanValue,
+                    binaryValue,
+                    error);
         }
     }
 
@@ -237,6 +441,14 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         return nativeHandle == 0 ? 0 : nativeGetPendingCallCount(nativeHandle);
     }
 
+    boolean isFullscreenForTest() {
+        return platformService.isFullscreen();
+    }
+
+    float getManagedZoomFactorForTest() {
+        return platformService.getManagedZoomFactor();
+    }
+
     @Override
     public void close() {
         pendingBinaryCalls.clear();
@@ -246,6 +458,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             nativeDestroyHost(nativeHandle);
             nativeHandle = 0;
         }
+        platformService.close();
         replyProxy = null;
     }
 
@@ -256,11 +469,22 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             int callId,
             @NonNull String capabilityId,
             @NonNull String functionPath,
-            byte[] binaryArgument);
+            @NonNull String argumentsJson,
+            @NonNull byte[][] binaryArguments);
 
     private static native void nativeCancelCall(long handle, int callId);
 
     private static native void nativeCompleteDelayedCall(long handle, int callId);
+
+    private static native void nativeCompletePlatformCall(
+            long handle,
+            int callId,
+            int resultKind,
+            @Nullable String stringValue,
+            long unsignedIntegerValue,
+            boolean booleanValue,
+            byte[] binaryValue,
+            @Nullable String error);
 
     private static native void nativeReleaseContext(long handle);
 

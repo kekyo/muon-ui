@@ -20,7 +20,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebMessageCompat;
-import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
@@ -42,6 +41,7 @@ public final class MuonActivity extends Activity {
 
     private final CountDownLatch pageReady = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
     private WebView webView;
     private MuonRpcBridge rpcBridge;
     private boolean testBridgeInstalled;
@@ -57,24 +57,29 @@ public final class MuonActivity extends Activity {
             throw new IllegalStateException("WebView ArrayBuffer messages are unavailable");
         }
 
-        WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
-                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
-                .build();
+        MuonWebViewNetworkFilter networkFilter = new MuonWebViewNetworkFilter(this);
+        networkFilter.configureServiceWorkers();
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
+        networkFilter.configureWebViewSettings(settings);
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view,
+                    WebResourceRequest request) {
+                return networkFilter.shouldBlockNavigation(request);
+            }
+
             @Override
             public WebResourceResponse shouldInterceptRequest(
                     WebView view,
                     WebResourceRequest request) {
-                return assetLoader.shouldInterceptRequest(request.getUrl());
+                return networkFilter.shouldInterceptRequest(request);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                finishedPageUrls.add(url);
                 if (APP_URL.equals(url)) {
                     pageReady.countDown();
                 }
@@ -133,6 +138,15 @@ public final class MuonActivity extends Activity {
 
     void clearTestMessages() {
         testMessages.clear();
+    }
+
+    @Nullable String awaitFinishedPageUrlForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return finishedPageUrls.poll(timeout, unit);
+    }
+
+    void clearFinishedPageUrlsForTest() {
+        finishedPageUrls.clear();
     }
 
     int getNativePendingCallCountForTest() {

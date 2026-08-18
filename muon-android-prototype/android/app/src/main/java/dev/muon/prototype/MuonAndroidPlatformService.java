@@ -9,6 +9,8 @@ package dev.muon.prototype;
 import android.app.Activity;
 import android.content.pm.PackageInfo;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import android.webkit.WebView;
 
@@ -47,6 +49,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
 
     private Activity activity;
     private WebView webView;
+    private final MuonAndroidFilesystemService filesystemService;
     private boolean fullscreen;
     private float managedZoomFactor = 1.0f;
 
@@ -55,15 +58,23 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             @NonNull WebView webView) {
         this.activity = activity;
         this.webView = webView;
+        filesystemService = new MuonAndroidFilesystemService(
+                new Handler(Looper.getMainLooper()));
     }
 
     void invoke(
+            int callId,
             @NonNull String functionPath,
             @NonNull JSONArray arguments,
             @NonNull byte[][] attachments,
             @NonNull Completion completion) {
         if (activity == null || webView == null) {
             completion.fail("Android platform service was released");
+            return;
+        }
+        if (functionPath.startsWith("muon.fs.")) {
+            filesystemService.invoke(
+                    callId, functionPath, arguments, attachments, completion);
             return;
         }
         if (arguments.length() != 0 || attachments.length != 0) {
@@ -86,8 +97,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                     completion.completeString(createRuntimeInfo().toString());
                     return;
                 case "muon.browser.reload":
-                    completion.completeVoid();
                     webView.reload();
+                    completion.completeVoid();
                     return;
                 case "muon.browser.toggleFullscreen":
                     setFullscreen(!fullscreen);
@@ -114,8 +125,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                     completion.completeVoid();
                     return;
                 case "muon.browser.close":
-                    completion.completeVoid();
                     activity.finish();
+                    completion.completeVoid();
                     return;
                 default:
                     completion.fail("Unknown Android platform function: " + functionPath);
@@ -127,11 +138,11 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     }
 
     void cancel(int callId) {
-        // The environment and browser operations complete synchronously.
+        filesystemService.cancel(callId);
     }
 
     void cancelAll() {
-        // The environment and browser operations complete synchronously.
+        filesystemService.cancelAll();
     }
 
     boolean isFullscreen() {
@@ -142,8 +153,13 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         return managedZoomFactor;
     }
 
+    int getActiveFilesystemWatchCount() {
+        return filesystemService.getActiveWatchCount();
+    }
+
     @Override
     public void close() {
+        filesystemService.close();
         activity = null;
         webView = null;
     }

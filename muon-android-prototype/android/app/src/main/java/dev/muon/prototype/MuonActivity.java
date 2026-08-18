@@ -178,6 +178,12 @@ public final class MuonActivity extends Activity {
         return rpcBridge == null ? 1.0f : rpcBridge.getManagedZoomFactorForTest();
     }
 
+    int getActiveFilesystemWatchCountForTest() {
+        return rpcBridge == null
+                ? 0
+                : rpcBridge.getActiveFilesystemWatchCountForTest();
+    }
+
     boolean awaitDestroyedForTest(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException {
         return destroyed.await(timeout, unit);

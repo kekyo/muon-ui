@@ -311,6 +311,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         try {
             JSONArray arguments = new JSONArray(argumentsJson);
             platformService.invoke(
+                    callId,
                     functionPath,
                     arguments,
                     attachments,
@@ -447,6 +448,10 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     float getManagedZoomFactorForTest() {
         return platformService.getManagedZoomFactor();
+    }
+
+    int getActiveFilesystemWatchCountForTest() {
+        return platformService.getActiveFilesystemWatchCount();
     }
 
     @Override

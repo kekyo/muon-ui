@@ -41,6 +41,7 @@ if (bridge === undefined) {
     value: createMuonAndroidSimpleApi(client, {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
+      'muon.fs': 'fs-capability',
     }),
   });
   const operations: MuonAndroidPrototypeOperations = {

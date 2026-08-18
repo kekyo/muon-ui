@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -51,12 +52,27 @@ static constexpr uint32_t kZoomInFunctionId = 12;
 static constexpr uint32_t kZoomOutFunctionId = 13;
 static constexpr uint32_t kResetZoomFunctionId = 14;
 static constexpr uint32_t kCloseFunctionId = 15;
+static constexpr uint32_t kFirstFilesystemFunctionId = 16;
 static constexpr size_t kBinaryHeaderLength = 16;
 static constexpr jint kPlatformResultVoid = 0;
 static constexpr jint kPlatformResultString = 1;
 static constexpr jint kPlatformResultUnsignedInteger = 2;
 static constexpr jint kPlatformResultBoolean = 3;
 static constexpr jint kPlatformResultBinary = 4;
+
+static const std::vector<std::string> kFilesystemFunctionPaths = {
+    "muon.fs.readFile",       "muon.fs.writeFile",
+    "muon.fs.readTextFile",   "muon.fs.writeTextFile",
+    "muon.fs.stat",           "muon.fs.lstat",
+    "muon.fs.exists",         "muon.fs.access",
+    "muon.fs.readdir",        "muon.fs.mkdir",
+    "muon.fs.rm",             "muon.fs.unlink",
+    "muon.fs.rmdir",          "muon.fs.rename",
+    "muon.fs.copyFile",       "muon.fs.appendFile",
+    "muon.fs.appendTextFile", "muon.fs.truncate",
+    "muon.fs.realpath",       "muon.fs.readlink",
+    "muon.fs.symlink",        "muon.fs.watch",
+};
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {
   return reinterpret_cast<MuonAndroidRpcHost*>(
@@ -479,6 +495,16 @@ static bool ResolveFunctionId(const std::string& function_path,
     *function_id = kCloseFunctionId;
     return true;
   }
+  const auto filesystem =
+      std::find(kFilesystemFunctionPaths.begin(), kFilesystemFunctionPaths.end(),
+                function_path);
+  if (filesystem != kFilesystemFunctionPaths.end()) {
+    *function_id = kFirstFilesystemFunctionId +
+                   static_cast<uint32_t>(
+                       std::distance(kFilesystemFunctionPaths.begin(),
+                                     filesystem));
+    return true;
+  }
   return false;
 }
 
@@ -491,6 +517,11 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
            "muon.environments.getProcessId",
            "muon.environments.getRuntimeInfo"},
           &environment_policy, error_message)) {
+    return false;
+  }
+  auto filesystem_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateMuonPluginPolicy(kFilesystemFunctionPaths, &filesystem_policy,
+                              error_message)) {
     return false;
   }
   auto browser_policy = std::shared_ptr<MuonPluginPolicy>{};
@@ -508,7 +539,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
     return false;
   }
 
-  const auto routes = std::vector<MuonRpcFunctionRoute>{
+  auto routes = std::vector<MuonRpcFunctionRoute>{
       {kGetConfigFunctionId, "muon.environments.getConfigValues",
        MuonRpcRouteKind::Platform},
       {kGetVariablesFunctionId, "muon.environments.getVariables",
@@ -536,10 +567,17 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
       {kEchoBinaryFunctionId, "prototype.echoBinary",
        MuonRpcRouteKind::Platform},
   };
+  for (auto index = size_t{0}; index < kFilesystemFunctionPaths.size();
+       ++index) {
+    routes.push_back(
+        {kFirstFilesystemFunctionId + static_cast<uint32_t>(index),
+         kFilesystemFunctionPaths[index], MuonRpcRouteKind::Platform});
+  }
   const auto policies =
       std::map<std::string, std::shared_ptr<MuonPluginPolicy>>{
           {"environment-capability", environment_policy},
           {"browser-capability", browser_policy},
+          {"fs-capability", filesystem_policy},
           {"prototype-capability", prototype_policy},
       };
   MuonRpcHostServices services;

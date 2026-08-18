@@ -70,6 +70,7 @@ public final class MuonActivityTest {
                     "JSON.stringify({" +
                             "namespaces: Object.keys(globalThis.muon)," +
                             "browser: Object.keys(globalThis.muon.browser)," +
+                            "fs: Object.keys(globalThis.muon.fs)," +
                             "hasHardReload: 'hardReload' in globalThis.muon.browser" +
                             "})",
                     value -> {
@@ -81,9 +82,10 @@ public final class MuonActivityTest {
             assertNotNull(result.get());
             String decoded = new JSONArray("[" + result.get() + "]").getString(0);
             JSONObject api = new JSONObject(decoded);
-            assertEquals("[\"browser\",\"environments\"]",
+            assertEquals("[\"browser\",\"environments\",\"fs\"]",
                     api.getJSONArray("namespaces").toString());
             assertEquals(8, api.getJSONArray("browser").length());
+            assertEquals(22, api.getJSONArray("fs").length());
             assertFalse(api.getBoolean("hasHardReload"));
         }
     }
@@ -478,6 +480,279 @@ public final class MuonActivityTest {
             assertEquals("muon Android prototype", result.getString("heading"));
             JSONObject config = new JSONObject(result.getString("value"));
             assertEquals("android", config.getString("channel"));
+        }
+    }
+
+    @Test
+    public void performsFilesystemOperationsThroughThePublicApi() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+            String basePath = activity.getFilesDir().getAbsolutePath()
+                    + "/fs-api-" + System.nanoTime();
+            String script = """
+                    void (async () => {
+                      const base = %s;
+                      const nested = `${base}/nested`;
+                      const textPath = `${nested}/value.txt`;
+                      const binaryPath = `${nested}/binary.bin`;
+                      const copiedPath = `${nested}/copied.bin`;
+                      const renamedPath = `${nested}/renamed.bin`;
+                      const linkPath = `${nested}/link`;
+                      try {
+                        await muon.fs.mkdir(nested, { recursive: true });
+                        await muon.fs.writeTextFile(textPath, 'hello', 'utf8');
+                        await muon.fs.appendTextFile(textPath, '世界', 'utf-8');
+                        const text = await muon.fs.readTextFile(textPath, 'utf8');
+
+                        const source = Uint8Array.from([0, 1, 2, 3, 4]);
+                        await muon.fs.writeFile(binaryPath, source.subarray(1, 4));
+                        await muon.fs.writeFile(binaryPath, Uint8Array.from([9, 8]), {
+                          position: 1
+                        });
+                        await muon.fs.appendFile(binaryPath, Uint8Array.from([7]));
+                        const binary = Array.from(new Uint8Array(
+                          await muon.fs.readFile(binaryPath)
+                        ));
+
+                        await muon.fs.copyFile(binaryPath, copiedPath, {
+                          overwrite: false
+                        });
+                        await muon.fs.rename(copiedPath, renamedPath);
+                        await muon.fs.truncate(renamedPath, 2);
+                        const truncated = Array.from(new Uint8Array(
+                          await muon.fs.readFile(renamedPath)
+                        ));
+
+                        await muon.fs.symlink('value.txt', linkPath, 'file');
+                        const followed = await muon.fs.stat(linkPath);
+                        const link = await muon.fs.lstat(linkPath);
+                        const target = await muon.fs.readlink(linkPath);
+                        const textStats = await muon.fs.stat(textPath);
+                        const names = await muon.fs.readdir(nested);
+                        const dirents = await muon.fs.readdir(nested, {
+                          withFileTypes: true
+                        });
+                        const linkDirent = dirents.find(({ name }) => name === 'link');
+                        const accessible = await muon.fs.access(textPath, {
+                          mode: ['read', 'write']
+                        });
+                        const canonical = await muon.fs.realpath(textPath);
+                        const missing = await muon.fs.exists(`${nested}/missing`);
+
+                        await muon.fs.mkdir(`${nested}/empty`);
+                        await muon.fs.rmdir(`${nested}/empty`);
+                        await muon.fs.unlink(linkPath);
+                        await muon.fs.rm(base, { recursive: true });
+                        const existsAfterRemove = await muon.fs.exists(base);
+
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'resolved',
+                          text,
+                          binary,
+                          truncated,
+                          target,
+                          followedIsFile: followed.isFile(),
+                          linkIsSymbolicLink: link.isSymbolicLink(),
+                          direntIsSymbolicLink: linkDirent?.isSymbolicLink() === true,
+                          textSize: textStats.size,
+                          mtimeIsValid: textStats.mtimeMs >= 0,
+                          names,
+                          accessible,
+                          canonical,
+                          missing,
+                          existsAfterRemove
+                        }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'rejected',
+                          error: error instanceof Error ? error.message : String(error)
+                        }));
+                      }
+                    })();
+                    """.formatted(JSONObject.quote(basePath));
+
+            scenario.onActivity(current -> current.getWebViewForTest()
+                    .evaluateJavascript(script, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "resolved", result.getString("status"));
+            assertEquals("hello世界", result.getString("text"));
+            assertEquals("[1,9,8,7]", result.getJSONArray("binary").toString());
+            assertEquals("[1,9]", result.getJSONArray("truncated").toString());
+            assertEquals("value.txt", result.getString("target"));
+            assertTrue(result.getBoolean("followedIsFile"));
+            assertTrue(result.getBoolean("linkIsSymbolicLink"));
+            assertTrue(result.getBoolean("direntIsSymbolicLink"));
+            assertEquals(11, result.getLong("textSize"));
+            assertTrue(result.getBoolean("mtimeIsValid"));
+            assertEquals(
+                    "[\"binary.bin\",\"link\",\"renamed.bin\",\"value.txt\"]",
+                    result.getJSONArray("names").toString());
+            assertTrue(result.getBoolean("accessible"));
+            assertTrue(result.getString("canonical").endsWith("/nested/value.txt"));
+            assertFalse(result.getBoolean("missing"));
+            assertFalse(result.getBoolean("existsAfterRemove"));
+        }
+    }
+
+    @Test
+    public void enforcesFilesystemInputAndTextBoundaries() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+            String basePath = activity.getFilesDir().getAbsolutePath()
+                    + "/fs-boundary-" + System.nanoTime();
+            String script = """
+                    void (async () => {
+                      const base = %s;
+                      const capture = async (operation) => {
+                        try {
+                          await operation();
+                          return { resolved: true };
+                        } catch (error) {
+                          return {
+                            resolved: false,
+                            name: error !== null && typeof error === 'object' && 'name' in error
+                              ? String(error.name)
+                              : '',
+                            message: error instanceof Error ? error.message : String(error)
+                          };
+                        }
+                      };
+                      try {
+                        await muon.fs.mkdir(base);
+                        const invalidPath = `${base}/invalid.txt`;
+                        await muon.fs.writeFile(
+                          invalidPath,
+                          Uint8Array.from([0xc3, 0x28])
+                        );
+                        const invalidUtf8 = await capture(() =>
+                          muon.fs.readTextFile(invalidPath, 'utf8')
+                        );
+                        const nulText = await capture(() =>
+                          muon.fs.writeTextFile(`${base}/nul.txt`, 'a\\0b', 'utf8')
+                        );
+                        const contentUri = await capture(() =>
+                          muon.fs.exists('content://dev.muon/document/1')
+                        );
+                        const junction = await capture(() =>
+                          muon.fs.symlink('target', `${base}/junction`, 'junction')
+                        );
+                        const oversized = await capture(() =>
+                          muon.fs.readFile(`${base}/missing`, { length: 67108865 })
+                        );
+                        const controller = new AbortController();
+                        controller.abort();
+                        const aborted = await capture(() =>
+                          muon.fs.readFile(invalidPath, { signal: controller.signal })
+                        );
+                        await muon.fs.rm(base, { recursive: true });
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'resolved',
+                          invalidUtf8,
+                          nulText,
+                          contentUri,
+                          junction,
+                          oversized,
+                          aborted
+                        }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'rejected',
+                          error: error instanceof Error ? error.message : String(error)
+                        }));
+                      }
+                    })();
+                    """.formatted(JSONObject.quote(basePath));
+
+            scenario.onActivity(current -> current.getWebViewForTest()
+                    .evaluateJavascript(script, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "resolved", result.getString("status"));
+            assertTrue(result.getJSONObject("invalidUtf8").getString("message")
+                    .contains("valid UTF-8"));
+            assertTrue(result.getJSONObject("nulText").getString("message")
+                    .contains("NUL"));
+            assertTrue(result.getJSONObject("contentUri").getString("message")
+                    .contains("content://"));
+            assertTrue(result.getJSONObject("junction").getString("message")
+                    .contains("junction symbolic links are unavailable on Android"));
+            assertTrue(result.getJSONObject("oversized").getString("message")
+                    .contains("67108864"));
+            assertEquals("AbortError",
+                    result.getJSONObject("aborted").getString("name"));
+        }
+    }
+
+    @Test
+    public void watchesFilesystemChangesAndReleasesTheLease() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+            String basePath = activity.getFilesDir().getAbsolutePath()
+                    + "/fs-watch-" + System.nanoTime();
+            String script = """
+                    void (async () => {
+                      const base = %s;
+                      try {
+                        await muon.fs.mkdir(base);
+                        let reported = false;
+                        const watcher = await muon.fs.watch(base, async (event) => {
+                          if (reported || event.filename !== 'watched.txt') {
+                            return;
+                          }
+                          reported = true;
+                          await watcher.close();
+                          await muon.fs.rm(base, { recursive: true });
+                          muonAndroidTest.postMessage(JSON.stringify({
+                            status: 'resolved',
+                            event
+                          }));
+                        });
+                        await muon.fs.writeTextFile(
+                          `${base}/watched.txt`,
+                          'changed',
+                          'utf8'
+                        );
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'rejected',
+                          error: error instanceof Error ? error.message : String(error)
+                        }));
+                      }
+                    })();
+                    """.formatted(JSONObject.quote(basePath));
+
+            scenario.onActivity(current -> current.getWebViewForTest()
+                    .evaluateJavascript(script, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "resolved", result.getString("status"));
+            JSONObject event = result.getJSONObject("event");
+            assertEquals("watched.txt", event.getString("filename"));
+            assertTrue("rename".equals(event.getString("eventType"))
+                    || "change".equals(event.getString("eventType")));
+            assertEquals(0, activity.getActiveFilesystemWatchCountForTest());
         }
     }
 }

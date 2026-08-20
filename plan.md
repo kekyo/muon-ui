@@ -383,14 +383,18 @@ artifact試験はdebug/release APKとrelease AABについて、`arm64-v8a`、`x8
 
 | 対象 | ABI・ページ | 実行内容 |
 |---|---|---|
-| Android WebView結合 | `x86_64`・16 KiB VM | debug instrumentation全件、release APK、AAB由来split APK |
-| Android WebView結合 | `arm64-v8a`・4 KiB Pixel 6 | debug instrumentation全件、release APK、AAB由来split APK |
-| Android WebView最終gate | `arm64-v8a`・16 KiB実機またはVM | plugin全回帰、closure/W^X、lifecycle全件 |
+| Android WebViewローカル完了gate | `x86_64`・16 KiB VM | debug instrumentation全件、release APK、AAB由来split APK |
+| Android WebView実機確認 | `arm64-v8a`・4 KiB Pixel 6 | ローカル完了後に実機を手動接続し、debug instrumentation全件、release APK、AAB由来split APKを実行する |
+| Android WebView追加互換性gate | `arm64-v8a`・16 KiB実機またはVM | 実行環境を利用できる場合にplugin全回帰、closure/W^X、lifecycle全件を実行する |
 | cardio upstream | 実行可能な各Android環境 | `test-android-runtime`全体 |
 | tra-ffic upstream | 実行可能な各Android環境 | `test-android-runtime`全体 |
 | desktop回帰 | Linux、Windows i686/amd64 | rootの全workspace test。Android分岐による挙動差がないこと |
 
-時間待ちで成否を推測せず、Java/native双方のcompletion、latch、resource countで終了を判定します。端末またはVMのABI、API、実ページサイズをtest開始時にassertし、想定と違う環境でPASSにしません。最終GREEN後に利用者向けplugin build/package手順、対応ABI、build-time同梱制約、Android process kill時のstop制約を文書化し、`doc:`コミットを作ります。
+時間待ちで成否を推測せず、Java/native双方のcompletion、latch、resource countで終了を判定します。端末またはVMのABI、API、実ページサイズをtest開始時にassertし、想定と違う環境でPASSにしません。
+
+今回の実装作業は、両ABIのbuild・artifact試験、rootの全workspace test、およびローカル`x86_64`・16 KiB VMの全instrumentation testがGREENになった時点をローカル完了とします。接続済みの実機があってもこの段階では使用しません。Pixel 6の`arm64-v8a`・4 KiB実行は、ローカル完了後に利用者が実機を手動接続したことを確認してから独立して行います。利用可能な`arm64-v8a`・16 KiB実行環境がない場合は、16 KiB整列済みarm64成果物の検査までを記録し、runtime確認を未実施と明記します。
+
+最終GREEN後に利用者向けplugin build/package手順、対応ABI、build-time同梱制約、Android process kill時のstop制約を文書化し、`doc:`コミットを作ります。
 
 #### ステップ5の完了条件
 
@@ -399,7 +403,7 @@ artifact試験はdebug/release APKとrelease AABについて、`arm64-v8a`、`x8
 3. Androidではbuild-time registryにあるpackage sonameだけをloadし、`plugin.path`探索、runtime download、外部plugin signature検査を行わない。`allow`、`config`、simple/validate capabilityは既存契約を維持する。
 4. Java main message、cardioの即時、timer、fd、別thread post、plugin completionが共存し、Activity再生成、終了・再起動、cancel後にもcallback、pending call、function lease、closure、plugin task、Looper fdが残らない。
 5. primitive、64 bit、binary、renderer function、plugin proxy、async completionを含むMuon plugin結合試験が`x86_64`と`arm64-v8a`でPASSし、desktop CEF版と意味上の結果が一致する。
-6. tra-fficの全回帰と最終muon library内の直接closure呼び出しが、16 KiBページの`x86_64` VMと16 KiBページ対応の`arm64-v8a`実機またはVMの両方でPASSする。
+6. tra-fficの全回帰と最終muon library内の直接closure呼び出しが16 KiBページの`x86_64` VMでPASSする。`arm64-v8a`は4 KiB Pixel 6で実機確認し、16 KiB環境を利用できる場合は同じ試験を追加実行する。利用できない場合もarm64 ELF/APK/AABの16 KiB整列検査を必須とする。
 7. libffi 3.8.0のcommit、公式取得元、NDK、API level、configure引数、コンパイルフラグ、patch hashを固定し、ABI別に再現可能な`libffi.a`をbuildする。静的トランポリンとW^Xを実行時に検証し、libffi submoduleを変更しない。
 8. debug/release APKとrelease AABが`arm64-v8a`、`x86_64`、共有cardio、共有libc++、registry内pluginを含み、全ELFとpackageが16 KiBページ対応である。非対応ABI、plugin欠落、entry point欠落、init失敗をbuild時またはpage load前に決定的なerrorとして返す。
 9. Android実機・VM接続試験を含む全project testとupstream Android全体試験がPASSし、Android分岐によってdesktop CEF版の挙動が変わらない。

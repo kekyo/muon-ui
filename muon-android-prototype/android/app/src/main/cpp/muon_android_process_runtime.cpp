@@ -68,6 +68,7 @@ struct MuonAndroidProcessRuntimeControllerImpl {
   bool stop_requested = false;
   bool stop_completion_posted = false;
   std::set<int> dispatcher_file_descriptors;
+  std::vector<void*> deferred_library_handles;
   std::map<int, MuonAndroidProcessSession> sessions;
   std::vector<MuonRpcOwner> pending_probes;
   MuonAndroidPluginCatalog plugin_catalog;
@@ -243,9 +244,11 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
                ? nullptr
                : ::dlsym(handle, symbol);
   };
-  services.close_library = [](void* handle) {
+  // A plugin Stop coroutine may leave its cardio fire_and_forget cleanup in
+  // the dispatcher queue. Keep its DSO mapped until that queue is destroyed.
+  services.close_library = [this](void* handle) {
     if (handle != nullptr) {
-      (void)::dlclose(handle);
+      deferred_library_handles.push_back(handle);
     }
   };
 
@@ -382,6 +385,14 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
   stop_completion_posted = false;
   plugin_runtime.reset();
   dispatcher_host.reset();
+  // Dispatcher work-item destructors can execute std::function managers that
+  // were instantiated in a plugin DSO, so dlclose must be the final step.
+  for (auto* handle : deferred_library_handles) {
+    if (handle != nullptr) {
+      (void)::dlclose(handle);
+    }
+  }
+  deferred_library_handles.clear();
   for (const auto descriptor : dispatcher_file_descriptors) {
     errno = 0;
     if (::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {
@@ -520,6 +531,29 @@ void MuonAndroidProcessRuntimeController::Invoke(
     return;
   }
   impl_->plugin_runtime->Invoke(request, std::move(completion));
+}
+
+bool MuonAndroidProcessRuntimeController::GetRendererFunctionReturnType(
+    const MuonRpcOwner& owner,
+    uint32_t call_id,
+    MuonTypeMetadata* return_type) const {
+  if (return_type == nullptr ||
+      std::this_thread::get_id() != impl_->owner_thread ||
+      impl_->state != MuonAndroidProcessRuntimeState::Running ||
+      !impl_->plugin_runtime) {
+    return false;
+  }
+  return impl_->plugin_runtime->GetRendererFunctionReturnType(
+      owner, call_id, return_type);
+}
+
+void MuonAndroidProcessRuntimeController::CompleteRendererFunctionCall(
+    const MuonRpcRendererFunctionResult& result) {
+  if (std::this_thread::get_id() == impl_->owner_thread &&
+      impl_->state == MuonAndroidProcessRuntimeState::Running &&
+      impl_->plugin_runtime) {
+    impl_->plugin_runtime->CompleteRendererFunctionCall(result);
+  }
 }
 
 void MuonAndroidProcessRuntimeController::ReleasePluginFunctionProxy(

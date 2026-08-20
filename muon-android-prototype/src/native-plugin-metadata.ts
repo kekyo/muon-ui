@@ -75,6 +75,9 @@ export interface MuonAndroidRendererMetadata {
   /** Transport schema version. */
   readonly version: 1;
 
+  /** Native RPC context that owns renderer function sources. */
+  readonly contextId: number;
+
   /** Page exposure mode selected by the Android host. */
   readonly mode: 'simple' | 'validate';
 
@@ -162,6 +165,10 @@ export const readMuonAndroidRendererMetadata = (
   if (
     !isRecord(value) ||
     value.version !== 1 ||
+    !Number.isInteger(value.contextId) ||
+    typeof value.contextId !== 'number' ||
+    value.contextId <= 0 ||
+    value.contextId > 0x7fffffff ||
     (value.mode !== 'simple' && value.mode !== 'validate') ||
     !Array.isArray(value.namespaces) ||
     !Array.isArray(value.functions)
@@ -217,6 +224,7 @@ export const readMuonAndroidRendererMetadata = (
 
   return Object.freeze({
     version: 1,
+    contextId: value.contextId,
     mode: value.mode,
     namespaces: Object.freeze(namespaces),
     functions: Object.freeze(functions),

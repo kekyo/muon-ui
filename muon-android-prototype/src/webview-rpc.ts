@@ -35,7 +35,11 @@ export interface MuonWebViewRpcCallOptions {
 }
 
 /** The kind of payload represented by a WebView RPC binary frame. */
-export type MuonWebViewRpcBinaryFrameKind = 'argument' | 'result';
+export type MuonWebViewRpcBinaryFrameKind =
+  | 'argument'
+  | 'result'
+  | 'renderer-argument'
+  | 'renderer-result';
 
 /** Values required to encode a WebView RPC binary frame. */
 export interface MuonWebViewRpcBinaryFrame {
@@ -97,13 +101,50 @@ interface PendingCall {
   readonly reject: (reason: unknown) => void;
   readonly signal: AbortSignal | undefined;
   readonly returnType: MuonNativeTypeMetadata | undefined;
+  readonly rendererFunctionTransfers: readonly number[];
   abortListener: (() => void) | undefined;
 }
 
 interface EncodedArguments {
   readonly value: readonly unknown[];
   readonly attachments: readonly ArrayBuffer[];
+  readonly rendererFunctionTransfers: readonly number[];
 }
+
+interface RendererFunctionSource {
+  readonly value: (...arguments_: readonly unknown[]) => unknown;
+  readonly leases: Set<string>;
+  pendingTransfers: number;
+}
+
+interface PluginFunctionProxyState {
+  readonly proxyId: number;
+  readonly leaseToken: string;
+  readonly type: MuonNativeTypeMetadata;
+  released: boolean;
+}
+
+interface PendingRendererFunctionCall {
+  readonly callId: number;
+  readonly functionId: number;
+  readonly expectsResult: boolean;
+  readonly functionType: MuonNativeTypeMetadata;
+  readonly encodedArguments: readonly unknown[];
+  readonly expectedAttachmentLengths: readonly number[];
+  readonly attachments: Array<ArrayBuffer | undefined>;
+  receivedAttachmentCount: number;
+}
+
+type EncodeFunctionValue = (
+  value: unknown,
+  type: MuonNativeTypeMetadata,
+  rendererFunctionTransfers: number[]
+) => unknown;
+
+type DecodeFunctionValue = (
+  value: unknown,
+  type: MuonNativeTypeMetadata
+) => unknown;
 
 const binaryHeaderLength = 16;
 const binaryMagic = [0x4d, 0x52, 0x50, 0x43] as const;
@@ -118,6 +159,121 @@ const isUnsignedInteger = (value: unknown): value is number =>
   Number.isInteger(value) &&
   value >= 0 &&
   value <= 0xffffffff;
+
+const nativeValueTypes = new Set<MuonNativeTypeMetadata['type']>([
+  'void',
+  'bool',
+  'i8',
+  'u8',
+  'i16',
+  'u16',
+  'i32',
+  'u32',
+  'i64',
+  'u64',
+  'f32',
+  'f64',
+  'string',
+  'pointer',
+  'function',
+  'buffer_view',
+]);
+
+const isNativeTypeMetadata = (
+  value: unknown,
+  allowVoid: boolean,
+  depth = 0
+): value is MuonNativeTypeMetadata => {
+  if (
+    !isRecord(value) ||
+    depth > 16 ||
+    !nativeValueTypes.has(value.type as MuonNativeTypeMetadata['type']) ||
+    (!allowVoid && value.type === 'void')
+  ) {
+    return false;
+  }
+  if (value.type !== 'function') {
+    return true;
+  }
+  return (
+    Array.isArray(value.args) &&
+    value.args.every((argument) =>
+      isNativeTypeMetadata(argument, false, depth + 1)
+    ) &&
+    isNativeTypeMetadata(value.returnType, true, depth + 1)
+  );
+};
+
+const areNativeTypesEqual = (
+  first: MuonNativeTypeMetadata,
+  second: MuonNativeTypeMetadata
+): boolean => {
+  if (first.type !== second.type) {
+    return false;
+  }
+  if (first.type !== 'function' || second.type !== 'function') {
+    return true;
+  }
+  const firstArguments = first.args ?? [];
+  const secondArguments = second.args ?? [];
+  if (
+    firstArguments.length !== secondArguments.length ||
+    first.returnType === undefined ||
+    second.returnType === undefined ||
+    !areNativeTypesEqual(first.returnType, second.returnType)
+  ) {
+    return false;
+  }
+  return firstArguments.every((argument, index) =>
+    areNativeTypesEqual(argument, secondArguments[index]!)
+  );
+};
+
+const collectBinaryAttachmentLengths = (
+  value: unknown,
+  lengths: Map<number, number>
+): boolean => {
+  if (Array.isArray(value)) {
+    return value.every((element) =>
+      collectBinaryAttachmentLengths(element, lengths)
+    );
+  }
+  if (!isRecord(value)) {
+    return true;
+  }
+  if (value.type === 'binary') {
+    if (
+      !isUnsignedInteger(value.attachment) ||
+      !isUnsignedInteger(value.byteLength) ||
+      lengths.has(value.attachment)
+    ) {
+      return false;
+    }
+    lengths.set(value.attachment, value.byteLength);
+    return true;
+  }
+  return Object.values(value).every((element) =>
+    collectBinaryAttachmentLengths(element, lengths)
+  );
+};
+
+const getContiguousBinaryAttachmentLengths = (
+  value: unknown
+): readonly number[] | undefined => {
+  const descriptors = new Map<number, number>();
+  if (!collectBinaryAttachmentLengths(value, descriptors)) {
+    return undefined;
+  }
+  const lengths: number[] = [];
+  for (let attachment = 0; attachment < descriptors.size; attachment += 1) {
+    const byteLength = descriptors.get(attachment);
+    if (byteLength === undefined) {
+      return undefined;
+    }
+    lengths.push(byteLength);
+  }
+  return lengths;
+};
 
 const copyArrayBufferView = (value: ArrayBufferView): ArrayBuffer => {
   const copy = new Uint8Array(value.byteLength);
@@ -181,7 +337,7 @@ const encodeArguments = (arguments_: readonly unknown[]): EncodedArguments => {
   const value = arguments_.map((argument) =>
     encodeArgumentValue(argument, attachments, ancestors)
   );
-  return { value, attachments };
+  return { value, attachments, rendererFunctionTransfers: [] };
 };
 
 const encodeInt64Argument = (value: unknown, unsigned: boolean): string => {
@@ -229,7 +385,9 @@ const encodeNumberArgument = (
 const encodeNativeArgumentValue = (
   value: unknown,
   type: MuonNativeTypeMetadata,
-  attachments: ArrayBuffer[]
+  attachments: ArrayBuffer[],
+  rendererFunctionTransfers: number[],
+  encodeFunctionValue: EncodeFunctionValue
 ): unknown => {
   switch (type.type) {
     case 'bool':
@@ -289,7 +447,7 @@ const encodeNativeArgumentValue = (
       if (value === null || value === undefined) {
         return null;
       }
-      throw new TypeError('expected function');
+      return encodeFunctionValue(value, type, rendererFunctionTransfers);
     case 'void':
       throw new TypeError('void arguments are unavailable');
   }
@@ -297,7 +455,9 @@ const encodeNativeArgumentValue = (
 
 const encodeNativeArguments = (
   function_: MuonNativeFunctionMetadata,
-  arguments_: readonly unknown[]
+  arguments_: readonly unknown[],
+  encodeFunctionValue: EncodeFunctionValue,
+  releaseRendererFunctionTransfers: (functionIds: readonly number[]) => void
 ): EncodedArguments => {
   if (arguments_.length !== function_.args.length) {
     throw new TypeError(
@@ -305,25 +465,31 @@ const encodeNativeArguments = (
     );
   }
   const attachments: ArrayBuffer[] = [];
-  const value = arguments_.map((argument, index) => {
-    try {
+  const rendererFunctionTransfers: number[] = [];
+  let currentIndex = 0;
+  try {
+    const value = arguments_.map((argument, index) => {
+      currentIndex = index;
       return encodeNativeArgumentValue(
         argument,
         function_.args[index]!,
-        attachments
+        attachments,
+        rendererFunctionTransfers,
+        encodeFunctionValue
       );
-    } catch (error) {
-      const diagnostic =
-        error instanceof Error ? error.message : 'invalid value';
-      throw new TypeError(`Invalid argument ${index}: ${diagnostic}`);
-    }
-  });
-  return { value, attachments };
+    });
+    return { value, attachments, rendererFunctionTransfers };
+  } catch (error) {
+    releaseRendererFunctionTransfers(rendererFunctionTransfers);
+    const diagnostic = error instanceof Error ? error.message : 'invalid value';
+    throw new TypeError(`Invalid argument ${currentIndex}: ${diagnostic}`);
+  }
 };
 
 const decodeNativeResult = (
   value: unknown,
-  type: MuonNativeTypeMetadata
+  type: MuonNativeTypeMetadata,
+  decodeFunctionValue: DecodeFunctionValue
 ): unknown => {
   if (type.type === 'void') {
     return undefined;
@@ -351,13 +517,43 @@ const decodeNativeResult = (
     }
     return value;
   }
-  if (type.type === 'function' || type.type === 'buffer_view') {
+  if (type.type === 'function') {
+    if (value === null) {
+      return null;
+    }
+    return decodeFunctionValue(value, type);
+  }
+  if (type.type === 'buffer_view') {
     throw new TypeError('Android native result transport is invalid');
   }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new TypeError('Android native numeric result is invalid');
   }
   return value;
+};
+
+const decodeHostNativeValue = (
+  value: unknown,
+  type: MuonNativeTypeMetadata,
+  attachments: readonly (ArrayBuffer | undefined)[],
+  decodeFunctionValue: DecodeFunctionValue
+): unknown => {
+  if (type.type !== 'buffer_view') {
+    return decodeNativeResult(value, type, decodeFunctionValue);
+  }
+  if (
+    !isRecord(value) ||
+    value.type !== 'binary' ||
+    !isUnsignedInteger(value.attachment) ||
+    !isUnsignedInteger(value.byteLength)
+  ) {
+    throw new TypeError('Android native binary value is invalid');
+  }
+  const payload = attachments[value.attachment];
+  if (payload === undefined || payload.byteLength !== value.byteLength) {
+    throw new TypeError('Android native binary attachment is missing');
+  }
+  return payload;
 };
 
 const createAbortError = (): DOMException =>
@@ -389,7 +585,14 @@ export const encodeMuonWebViewRpcBinaryFrame = (
   const bytes = new Uint8Array(encoded);
   bytes.set(binaryMagic, 0);
   bytes[4] = protocolVersion;
-  bytes[5] = frame.kind === 'argument' ? 1 : 2;
+  bytes[5] =
+    frame.kind === 'argument'
+      ? 1
+      : frame.kind === 'result'
+        ? 2
+        : frame.kind === 'renderer-argument'
+          ? 3
+          : 4;
   const view = new DataView(encoded);
   view.setUint32(8, frame.callId);
   view.setUint32(12, frame.attachment);
@@ -417,7 +620,7 @@ export const decodeMuonWebViewRpcBinaryFrame = (
     bytes[2] !== binaryMagic[2] ||
     bytes[3] !== binaryMagic[3] ||
     bytes[4] !== protocolVersion ||
-    (bytes[5] !== 1 && bytes[5] !== 2) ||
+    (bytes[5] !== 1 && bytes[5] !== 2 && bytes[5] !== 3 && bytes[5] !== 4) ||
     bytes[6] !== 0 ||
     bytes[7] !== 0
   ) {
@@ -431,7 +634,14 @@ export const decodeMuonWebViewRpcBinaryFrame = (
   }
 
   return {
-    kind: bytes[5] === 1 ? 'argument' : 'result',
+    kind:
+      bytes[5] === 1
+        ? 'argument'
+        : bytes[5] === 2
+          ? 'result'
+          : bytes[5] === 3
+            ? 'renderer-argument'
+            : 'renderer-result',
     callId,
     attachment: view.getUint32(12),
     payload: message.slice(binaryHeaderLength),
@@ -473,6 +683,15 @@ export const createMuonWebViewRpcClient = (
   rendererMetadata?: MuonAndroidRendererMetadata
 ): MuonWebViewRpcClient => {
   const pendingCalls = new Map<number, PendingCall>();
+  const rendererFunctionIds = new WeakMap<Function, number>();
+  const rendererFunctions = new Map<number, RendererFunctionSource>();
+  const pendingRendererFunctionCalls = new Map<
+    number,
+    PendingRendererFunctionCall
+  >();
+  const rendererResultTransfers = new Map<number, readonly number[]>();
+  const pluginProxyStates = new WeakMap<Function, PluginFunctionProxyState>();
+  const livePluginProxyStates = new Set<PluginFunctionProxyState>();
   const functionsByPath = new Map<string, MuonNativeFunctionMetadata>(
     (rendererMetadata?.functions ?? []).map(
       (function_) =>
@@ -480,7 +699,303 @@ export const createMuonWebViewRpcClient = (
     )
   );
   let nextCallId = 1;
+  let nextRendererFunctionId = 1;
   let disposed = false;
+
+  const sendTextMessage = (value: Record<string, unknown>): void => {
+    transport.send(JSON.stringify({ version: protocolVersion, ...value }));
+  };
+
+  const releaseRendererFunctionIfIdle = (functionId: number): void => {
+    const source = rendererFunctions.get(functionId);
+    if (
+      source !== undefined &&
+      source.pendingTransfers === 0 &&
+      source.leases.size === 0
+    ) {
+      rendererFunctions.delete(functionId);
+    }
+  };
+
+  const releaseRendererFunctionTransfers = (
+    functionIds: readonly number[]
+  ): void => {
+    for (const functionId of functionIds) {
+      const source = rendererFunctions.get(functionId);
+      if (source !== undefined && source.pendingTransfers > 0) {
+        source.pendingTransfers -= 1;
+        releaseRendererFunctionIfIdle(functionId);
+      }
+    }
+  };
+
+  let pluginProxyFinalizer:
+    | FinalizationRegistry<PluginFunctionProxyState>
+    | undefined;
+
+  const releasePluginProxy = (state: PluginFunctionProxyState): void => {
+    if (state.released) {
+      return;
+    }
+    state.released = true;
+    livePluginProxyStates.delete(state);
+    pluginProxyFinalizer?.unregister(state);
+    if (!disposed) {
+      sendTextMessage({
+        type: 'plugin-proxy-release',
+        proxyId: state.proxyId,
+        leaseToken: state.leaseToken,
+      });
+    }
+  };
+
+  if (typeof FinalizationRegistry === 'function') {
+    pluginProxyFinalizer = new FinalizationRegistry((state) => {
+      try {
+        releasePluginProxy(state);
+      } catch {
+        // A collected proxy has no caller to observe a closed transport.
+      }
+    });
+  }
+
+  const encodeFunctionValue: EncodeFunctionValue = (
+    value,
+    type,
+    rendererFunctionTransfers
+  ) => {
+    if (typeof value !== 'function') {
+      throw new TypeError('expected function');
+    }
+    const proxy = pluginProxyStates.get(value);
+    if (proxy !== undefined) {
+      if (proxy.released) {
+        throw new TypeError('muon function proxy is released');
+      }
+      if (!areNativeTypesEqual(proxy.type, type)) {
+        throw new TypeError('function signature mismatch');
+      }
+      return {
+        type: 'function',
+        kind: 'plugin-proxy',
+        proxyId: proxy.proxyId,
+        leaseToken: proxy.leaseToken,
+      };
+    }
+    if (rendererMetadata === undefined) {
+      throw new TypeError('renderer function context is unavailable');
+    }
+
+    let functionId = rendererFunctionIds.get(value);
+    let source =
+      functionId === undefined ? undefined : rendererFunctions.get(functionId);
+    if (source === undefined) {
+      if (nextRendererFunctionId > maximumCallId) {
+        throw new RangeError('Renderer function ids were exhausted');
+      }
+      functionId = nextRendererFunctionId;
+      nextRendererFunctionId += 1;
+      source = {
+        value: value as (...arguments_: readonly unknown[]) => unknown,
+        leases: new Set<string>(),
+        pendingTransfers: 0,
+      };
+      rendererFunctionIds.set(value, functionId);
+      rendererFunctions.set(functionId, source);
+    }
+    source.pendingTransfers += 1;
+    const transferredFunctionId = functionId;
+    if (transferredFunctionId === undefined) {
+      throw new TypeError('Renderer function identity is unavailable');
+    }
+    rendererFunctionTransfers.push(transferredFunctionId);
+    return {
+      type: 'function',
+      kind: 'renderer-source',
+      rendererContextId: rendererMetadata.contextId,
+      functionId: transferredFunctionId,
+    };
+  };
+
+  const invokeCall = (
+    target:
+      | {
+          readonly kind: 'plugin';
+          readonly capabilityId: string;
+          readonly functionPath: string;
+          readonly functionMetadata: MuonNativeFunctionMetadata | undefined;
+        }
+      | {
+          readonly kind: 'plugin-proxy';
+          readonly state: PluginFunctionProxyState;
+        },
+    arguments_: readonly unknown[],
+    options: MuonWebViewRpcCallOptions | undefined
+  ): Promise<unknown> => {
+    if (disposed) {
+      return Promise.reject(new Error('muon WebView RPC client was disposed'));
+    }
+    if (target.kind === 'plugin-proxy' && target.state.released) {
+      return Promise.reject(new Error('muon function proxy is released'));
+    }
+    if (options?.signal?.aborted === true) {
+      return Promise.reject(createAbortError());
+    }
+    if (nextCallId > maximumCallId) {
+      return Promise.reject(new RangeError('WebView RPC callId was exhausted'));
+    }
+
+    const callId = nextCallId;
+    nextCallId += 1;
+    let encodedArguments: EncodedArguments;
+    let callMessage: string;
+    let returnType: MuonNativeTypeMetadata | undefined;
+    try {
+      if (target.kind === 'plugin') {
+        encodedArguments =
+          target.functionMetadata === undefined
+            ? encodeArguments(arguments_)
+            : encodeNativeArguments(
+                target.functionMetadata,
+                arguments_,
+                encodeFunctionValue,
+                releaseRendererFunctionTransfers
+              );
+        returnType = target.functionMetadata?.returnType;
+        callMessage = JSON.stringify({
+          version: protocolVersion,
+          type: 'call',
+          callId,
+          capabilityId: target.capabilityId,
+          functionPath: target.functionPath,
+          arguments: encodedArguments.value,
+        });
+      } else {
+        const functionArguments = target.state.type.args;
+        const functionReturnType = target.state.type.returnType;
+        if (
+          functionArguments === undefined ||
+          functionReturnType === undefined
+        ) {
+          throw new TypeError('muon function proxy signature is invalid');
+        }
+        encodedArguments = encodeNativeArguments(
+          {
+            id: target.state.proxyId,
+            namespace: 'muon',
+            name: 'proxy',
+            publicName: 'proxy',
+            capabilityId: 'proxy',
+            args: functionArguments,
+            returnType: functionReturnType,
+          },
+          arguments_,
+          encodeFunctionValue,
+          releaseRendererFunctionTransfers
+        );
+        returnType = functionReturnType;
+        callMessage = JSON.stringify({
+          version: protocolVersion,
+          type: 'call',
+          callKind: 'plugin-proxy',
+          callId,
+          proxyId: target.state.proxyId,
+          leaseToken: target.state.leaseToken,
+          arguments: encodedArguments.value,
+        });
+      }
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    return new Promise<unknown>((resolve, reject) => {
+      const pending: PendingCall = {
+        resolve,
+        reject,
+        signal: options?.signal,
+        returnType,
+        rendererFunctionTransfers: encodedArguments.rendererFunctionTransfers,
+        abortListener: undefined,
+      };
+      if (pending.signal !== undefined) {
+        pending.abortListener = () => {
+          if (takePending(callId) === undefined) {
+            return;
+          }
+          try {
+            sendTextMessage({ type: 'cancel', callId });
+          } finally {
+            reject(createAbortError());
+          }
+        };
+        pending.signal.addEventListener('abort', pending.abortListener, {
+          once: true,
+        });
+      }
+      pendingCalls.set(callId, pending);
+
+      try {
+        transport.send(callMessage);
+        encodedArguments.attachments.forEach((payload, attachment) => {
+          transport.send(
+            encodeMuonWebViewRpcBinaryFrame({
+              kind: 'argument',
+              callId,
+              attachment,
+              payload,
+            })
+          );
+        });
+      } catch (error) {
+        const failed = takePending(callId);
+        failed?.reject(error);
+      }
+    });
+  };
+
+  const decodeFunctionValue: DecodeFunctionValue = (value, type) => {
+    if (
+      !isRecord(value) ||
+      value.type !== 'function' ||
+      value.kind !== 'plugin-proxy' ||
+      !Number.isInteger(value.proxyId) ||
+      typeof value.proxyId !== 'number' ||
+      value.proxyId <= 0 ||
+      value.proxyId > maximumCallId ||
+      typeof value.leaseToken !== 'string' ||
+      value.leaseToken.length === 0
+    ) {
+      throw new TypeError('Android native function proxy is invalid');
+    }
+    const state: PluginFunctionProxyState = {
+      proxyId: value.proxyId,
+      leaseToken: value.leaseToken,
+      type,
+      released: false,
+    };
+    const callable = (...arguments_: readonly unknown[]): Promise<unknown> =>
+      invokeCall({ kind: 'plugin-proxy', state }, arguments_, undefined);
+    const release = (): void => releasePluginProxy(state);
+    Object.defineProperty(callable, 'release', {
+      configurable: false,
+      enumerable: false,
+      writable: false,
+      value: release,
+    });
+    const dispose = Reflect.get(Symbol, 'dispose');
+    if (typeof dispose === 'symbol') {
+      Object.defineProperty(callable, dispose, {
+        configurable: false,
+        enumerable: false,
+        writable: false,
+        value: release,
+      });
+    }
+    pluginProxyStates.set(callable, state);
+    livePluginProxyStates.add(state);
+    pluginProxyFinalizer?.register(callable, state, state);
+    return callable;
+  };
 
   const detachAbortListener = (pending: PendingCall): void => {
     if (pending.signal !== undefined && pending.abortListener !== undefined) {
@@ -496,7 +1011,163 @@ export const createMuonWebViewRpcClient = (
     }
     pendingCalls.delete(callId);
     detachAbortListener(pending);
+    releaseRendererFunctionTransfers(pending.rendererFunctionTransfers);
     return pending;
+  };
+
+  const sendRendererFunctionFailure = (
+    callId: number,
+    error: unknown
+  ): void => {
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    sendTextMessage({
+      type: 'renderer-function-result',
+      callId,
+      success: false,
+      error: diagnostic,
+    });
+  };
+
+  const executeRendererFunctionCall = async (
+    pending: PendingRendererFunctionCall
+  ): Promise<void> => {
+    const source = rendererFunctions.get(pending.functionId);
+    if (source === undefined) {
+      if (pending.expectsResult && !disposed) {
+        sendRendererFunctionFailure(
+          pending.callId,
+          new Error('Renderer function source is unavailable')
+        );
+      }
+      return;
+    }
+    try {
+      const argumentTypes = pending.functionType.args;
+      const returnType = pending.functionType.returnType;
+      if (
+        argumentTypes === undefined ||
+        returnType === undefined ||
+        argumentTypes.length !== pending.encodedArguments.length
+      ) {
+        throw new TypeError('Renderer function signature is invalid');
+      }
+      const arguments_ = pending.encodedArguments.map((argument, index) =>
+        decodeHostNativeValue(
+          argument,
+          argumentTypes[index]!,
+          pending.attachments,
+          decodeFunctionValue
+        )
+      );
+      const result = await source.value(...arguments_);
+      if (!pending.expectsResult || disposed) {
+        return;
+      }
+
+      const attachments: ArrayBuffer[] = [];
+      const rendererFunctionTransfers: number[] = [];
+      let encodedResult: unknown = null;
+      try {
+        if (returnType.type !== 'void') {
+          encodedResult = encodeNativeArgumentValue(
+            result,
+            returnType,
+            attachments,
+            rendererFunctionTransfers,
+            encodeFunctionValue
+          );
+        }
+      } catch (error) {
+        releaseRendererFunctionTransfers(rendererFunctionTransfers);
+        throw error;
+      }
+      if (rendererFunctionTransfers.length !== 0) {
+        rendererResultTransfers.set(pending.callId, rendererFunctionTransfers);
+      }
+      try {
+        sendTextMessage({
+          type: 'renderer-function-result',
+          callId: pending.callId,
+          success: true,
+          value: encodedResult,
+        });
+        attachments.forEach((payload, attachment) => {
+          transport.send(
+            encodeMuonWebViewRpcBinaryFrame({
+              kind: 'renderer-result',
+              callId: pending.callId,
+              attachment,
+              payload,
+            })
+          );
+        });
+      } catch (error) {
+        rendererResultTransfers.delete(pending.callId);
+        releaseRendererFunctionTransfers(rendererFunctionTransfers);
+        throw error;
+      }
+    } catch (error) {
+      if (pending.expectsResult && !disposed) {
+        sendRendererFunctionFailure(pending.callId, error);
+      }
+    }
+  };
+
+  const beginRendererFunctionCall = (
+    pending: PendingRendererFunctionCall
+  ): void => {
+    pendingRendererFunctionCalls.delete(pending.callId);
+    void executeRendererFunctionCall(pending);
+  };
+
+  const handleRendererFunctionCall = (
+    parsed: Record<string, unknown>
+  ): void => {
+    if (
+      !Number.isInteger(parsed.callId) ||
+      typeof parsed.callId !== 'number' ||
+      parsed.callId <= 0 ||
+      parsed.callId > maximumCallId ||
+      !Number.isInteger(parsed.functionId) ||
+      typeof parsed.functionId !== 'number' ||
+      parsed.functionId <= 0 ||
+      parsed.functionId > maximumCallId ||
+      typeof parsed.expectsResult !== 'boolean' ||
+      !isNativeTypeMetadata(parsed.functionType, false) ||
+      parsed.functionType.type !== 'function' ||
+      !Array.isArray(parsed.arguments) ||
+      pendingRendererFunctionCalls.has(parsed.callId)
+    ) {
+      return;
+    }
+    const expectedAttachmentLengths = getContiguousBinaryAttachmentLengths(
+      parsed.arguments
+    );
+    if (expectedAttachmentLengths === undefined) {
+      if (parsed.expectsResult) {
+        sendRendererFunctionFailure(
+          parsed.callId,
+          new TypeError('Renderer function binary descriptors are invalid')
+        );
+      }
+      return;
+    }
+    const pending: PendingRendererFunctionCall = {
+      callId: parsed.callId,
+      functionId: parsed.functionId,
+      expectsResult: parsed.expectsResult,
+      functionType: parsed.functionType,
+      encodedArguments: parsed.arguments,
+      expectedAttachmentLengths,
+      attachments: new Array<ArrayBuffer | undefined>(
+        expectedAttachmentLengths.length
+      ),
+      receivedAttachmentCount: 0,
+    };
+    pendingRendererFunctionCalls.set(pending.callId, pending);
+    if (expectedAttachmentLengths.length === 0) {
+      beginRendererFunctionCall(pending);
+    }
   };
 
   const handleTextMessage = (message: string): void => {
@@ -506,9 +1177,53 @@ export const createMuonWebViewRpcClient = (
     } catch {
       return;
     }
+    if (!isRecord(parsed) || parsed.version !== protocolVersion) {
+      return;
+    }
+
+    if (parsed.type === 'renderer-function-call') {
+      handleRendererFunctionCall(parsed);
+      return;
+    }
+    if (parsed.type === 'renderer-function-lease') {
+      if (
+        !Number.isInteger(parsed.functionId) ||
+        typeof parsed.functionId !== 'number' ||
+        parsed.functionId <= 0 ||
+        typeof parsed.leaseToken !== 'string' ||
+        parsed.leaseToken.length === 0 ||
+        typeof parsed.acquire !== 'boolean'
+      ) {
+        return;
+      }
+      const source = rendererFunctions.get(parsed.functionId);
+      if (source === undefined) {
+        return;
+      }
+      if (parsed.acquire) {
+        source.leases.add(parsed.leaseToken);
+      } else {
+        source.leases.delete(parsed.leaseToken);
+        releaseRendererFunctionIfIdle(parsed.functionId);
+      }
+      return;
+    }
+    if (parsed.type === 'renderer-function-result-consumed') {
+      if (
+        !Number.isInteger(parsed.callId) ||
+        typeof parsed.callId !== 'number' ||
+        parsed.callId <= 0
+      ) {
+        return;
+      }
+      const transfers = rendererResultTransfers.get(parsed.callId);
+      if (transfers !== undefined) {
+        rendererResultTransfers.delete(parsed.callId);
+        releaseRendererFunctionTransfers(transfers);
+      }
+      return;
+    }
     if (
-      !isRecord(parsed) ||
-      parsed.version !== protocolVersion ||
       parsed.type !== 'result' ||
       !Number.isInteger(parsed.callId) ||
       typeof parsed.callId !== 'number' ||
@@ -531,7 +1246,13 @@ export const createMuonWebViewRpcClient = (
           if (parsed.valueType !== pending.returnType.type) {
             throw new TypeError('Android native result type is invalid');
           }
-          pending.resolve(decodeNativeResult(parsed.value, pending.returnType));
+          pending.resolve(
+            decodeNativeResult(
+              parsed.value,
+              pending.returnType,
+              decodeFunctionValue
+            )
+          );
         }
       } catch (error) {
         pending.reject(error);
@@ -549,7 +1270,31 @@ export const createMuonWebViewRpcClient = (
 
   const handleBinaryMessage = (message: ArrayBuffer): void => {
     const frame = decodeMuonWebViewRpcBinaryFrame(message);
-    if (frame === undefined || frame.kind !== 'result') {
+    if (frame === undefined) {
+      return;
+    }
+    if (frame.kind === 'renderer-argument') {
+      const pending = pendingRendererFunctionCalls.get(frame.callId);
+      if (
+        pending === undefined ||
+        frame.attachment >= pending.expectedAttachmentLengths.length ||
+        pending.expectedAttachmentLengths[frame.attachment] !==
+          frame.payload.byteLength ||
+        pending.attachments[frame.attachment] !== undefined
+      ) {
+        return;
+      }
+      pending.attachments[frame.attachment] = frame.payload;
+      pending.receivedAttachmentCount += 1;
+      if (
+        pending.receivedAttachmentCount ===
+        pending.expectedAttachmentLengths.length
+      ) {
+        beginRendererFunctionCall(pending);
+      }
+      return;
+    }
+    if (frame.kind !== 'result') {
       return;
     }
     const pending = takePending(frame.callId);
@@ -583,86 +1328,16 @@ export const createMuonWebViewRpcClient = (
     arguments_: readonly unknown[],
     options?: MuonWebViewRpcCallOptions
   ): Promise<unknown> => {
-    if (disposed) {
-      return Promise.reject(new Error('muon WebView RPC client was disposed'));
-    }
-    if (options?.signal?.aborted === true) {
-      return Promise.reject(createAbortError());
-    }
-    if (nextCallId > maximumCallId) {
-      return Promise.reject(new RangeError('WebView RPC callId was exhausted'));
-    }
-
-    const callId = nextCallId;
-    nextCallId += 1;
-    let encodedArguments: EncodedArguments;
-    let callMessage: string;
-    try {
-      const functionMetadata = functionsByPath.get(functionPath);
-      encodedArguments =
-        functionMetadata === undefined
-          ? encodeArguments(arguments_)
-          : encodeNativeArguments(functionMetadata, arguments_);
-      callMessage = JSON.stringify({
-        version: protocolVersion,
-        type: 'call',
-        callId,
+    return invokeCall(
+      {
+        kind: 'plugin',
         capabilityId,
         functionPath,
-        arguments: encodedArguments.value,
-      });
-    } catch (error) {
-      return Promise.reject(error);
-    }
-
-    return new Promise<unknown>((resolve, reject) => {
-      const pending: PendingCall = {
-        resolve,
-        reject,
-        signal: options?.signal,
-        returnType: functionsByPath.get(functionPath)?.returnType,
-        abortListener: undefined,
-      };
-      if (pending.signal !== undefined) {
-        pending.abortListener = () => {
-          if (takePending(callId) === undefined) {
-            return;
-          }
-          try {
-            transport.send(
-              JSON.stringify({
-                version: protocolVersion,
-                type: 'cancel',
-                callId,
-              })
-            );
-          } finally {
-            reject(createAbortError());
-          }
-        };
-        pending.signal.addEventListener('abort', pending.abortListener, {
-          once: true,
-        });
-      }
-      pendingCalls.set(callId, pending);
-
-      try {
-        transport.send(callMessage);
-        encodedArguments.attachments.forEach((payload, attachment) => {
-          transport.send(
-            encodeMuonWebViewRpcBinaryFrame({
-              kind: 'argument',
-              callId,
-              attachment,
-              payload,
-            })
-          );
-        });
-      } catch (error) {
-        const failed = takePending(callId);
-        failed?.reject(error);
-      }
-    });
+        functionMetadata: functionsByPath.get(functionPath),
+      },
+      arguments_,
+      options
+    );
   };
 
   const dispose = (): void => {
@@ -680,9 +1355,21 @@ export const createMuonWebViewRpcClient = (
     }
     for (const pending of pendingCalls.values()) {
       detachAbortListener(pending);
+      releaseRendererFunctionTransfers(pending.rendererFunctionTransfers);
       pending.reject(new Error('muon WebView RPC client was disposed'));
     }
     pendingCalls.clear();
+    pendingRendererFunctionCalls.clear();
+    for (const transfers of rendererResultTransfers.values()) {
+      releaseRendererFunctionTransfers(transfers);
+    }
+    rendererResultTransfers.clear();
+    rendererFunctions.clear();
+    for (const state of livePluginProxyStates) {
+      state.released = true;
+      pluginProxyFinalizer?.unregister(state);
+    }
+    livePluginProxyStates.clear();
   };
 
   return {

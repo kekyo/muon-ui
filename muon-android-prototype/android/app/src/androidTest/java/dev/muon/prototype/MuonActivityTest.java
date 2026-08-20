@@ -528,7 +528,8 @@ public final class MuonActivityTest {
             JSONObject result = new JSONObject(message);
             assertEquals(message, "resolved", result.getString("status"));
             JSONObject values = result.getJSONObject("values");
-            assertEquals("[\"alpha\",\"cardio\",\"types\"]",
+            assertEquals("[\"alpha\",\"cardio\",\"functionLifetime\","
+                            + "\"recursiveFunctions\",\"types\"]",
                     values.getJSONArray("pluginKeys").toString());
             assertTrue(values.getJSONArray("typeKeys").length() >= 31);
             assertEquals("alpha", values.getString("alphaName"));
@@ -573,6 +574,209 @@ public final class MuonActivityTest {
             assertEquals("first", values.getString("resolvedTwice"));
             assertEquals("undefined", values.getString("voidType"));
             assertTrue(values.getString("deniedCapability").contains("not allowed"));
+        }
+    }
+
+    @Test
+    public void bridgesRendererFunctionsAndPluginProxyLifetimes() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      try {
+                        const lifetime = globalThis.muon.test.functionLifetime;
+                        const recursive = globalThis.muon.test.recursiveFunctions;
+                        const callback = () => undefined;
+                        const otherCallback = () => undefined;
+                        const overlap = await Promise.all([
+                          lifetime.lifetimeOverlapSamePointer(callback, callback),
+                          lifetime.lifetimeOverlapSamePointer(callback, callback),
+                        ]);
+                        let invalidArgument = '';
+                        try {
+                          await lifetime.lifetimeSamePointer(callback, 1);
+                        } catch (error) {
+                          invalidArgument = error instanceof Error
+                            ? error.message
+                            : String(error);
+                        }
+
+                        let retainedInvocations = 0;
+                        const retainedCallback = () => {
+                          retainedInvocations += 1;
+                        };
+                        const retained = await lifetime.lifetimeRetain(retainedCallback);
+                        const retainedMatches = await lifetime
+                          .lifetimeRetainedMatches(retainedCallback);
+                        await lifetime.lifetimeInvokeRetained();
+                        await lifetime.lifetimeFinalizeRetained();
+
+                        let proxy;
+                        const recursiveProxy = await recursive
+                          .recursiveFunctionArgRoundtrip((value) => {
+                            proxy = value;
+                            return value;
+                          });
+                        const proxyReleaseDescriptor = Object
+                          .getOwnPropertyDescriptor(proxy, 'release');
+                        const proxyDisposeDescriptor = Object
+                          .getOwnPropertyDescriptor(proxy, Symbol.dispose);
+                        const proxyCall = await proxy(41);
+                        proxy.release();
+                        proxy[Symbol.dispose]();
+                        const releasedCall = proxy(41);
+                        let releasedCallError = '';
+                        try {
+                          await releasedCall;
+                        } catch (error) {
+                          releasedCallError = error instanceof Error
+                            ? error.message
+                            : String(error);
+                        }
+                        let releasedArgumentError = '';
+                        try {
+                          await recursive.recursiveInvoke(proxy);
+                        } catch (error) {
+                          releasedArgumentError = error instanceof Error
+                            ? error.message
+                            : String(error);
+                        }
+
+                        const recursiveBuffer = Array.from(new Uint8Array(
+                          await recursive.recursiveBufferReturnFunction((buffer) => {
+                            if (Array.from(new Uint8Array(buffer)).join(',')
+                                !== '12,13,14,15') {
+                              throw new Error('unexpected outer buffer');
+                            }
+                            return (innerBuffer) => {
+                              if (Array.from(new Uint8Array(innerBuffer)).join(',')
+                                  !== '21,22,23,24') {
+                                throw new Error('unexpected inner buffer');
+                              }
+                              return Uint8Array.from([201, 202, 203, 204]).buffer;
+                            };
+                          })
+                        ));
+
+                        const values = {
+                          samePointer: await lifetime
+                            .lifetimeSamePointer(callback, callback),
+                          differentPointer: await lifetime
+                            .lifetimeDifferentPointer(callback, otherCallback),
+                          asyncSamePointer: await lifetime
+                            .lifetimeAsyncSamePointer(callback, callback),
+                          overlap,
+                          invalidArgument,
+                          nullInput: await lifetime.lifetimeNullPointer(null),
+                          undefinedInput: await lifetime
+                            .lifetimeNullPointer(undefined),
+                          nullResult: await lifetime.lifetimeReturnNullFunction(),
+                          nullCallback: await lifetime
+                            .lifetimeNullCallbackRoundtrip((value) => {
+                              if (value !== null) {
+                                throw new Error('expected null function argument');
+                              }
+                              return null;
+                            }),
+                          undefinedCallback: await lifetime
+                            .lifetimeNullCallbackRoundtrip((value) => {
+                              if (value !== null) {
+                                throw new Error('expected null function argument');
+                              }
+                              return undefined;
+                            }),
+                          retained,
+                          retainedMatches,
+                          retainedInvocations,
+                          asyncRetainFinalize: await lifetime
+                            .lifetimeAsyncRetainFinalize(callback),
+                          recursiveInvoke: await recursive
+                            .recursiveInvoke((value) => value + 1),
+                          recursiveReturn: await recursive
+                            .recursiveReturnFunction((base) =>
+                              (value) => base + value),
+                          recursiveProxy,
+                          proxyType: typeof proxy,
+                          proxyCall,
+                          releaseType: typeof proxy.release,
+                          releaseEnumerable: Object.keys(proxy).includes('release'),
+                          releaseFunctionsMatch:
+                            proxy.release === proxy[Symbol.dispose],
+                          releaseDescriptor: {
+                            configurable: proxyReleaseDescriptor?.configurable,
+                            enumerable: proxyReleaseDescriptor?.enumerable,
+                            writable: proxyReleaseDescriptor?.writable,
+                          },
+                          disposeDescriptor: {
+                            configurable: proxyDisposeDescriptor?.configurable,
+                            enumerable: proxyDisposeDescriptor?.enumerable,
+                            writable: proxyDisposeDescriptor?.writable,
+                          },
+                          releasedCallIsPromise: releasedCall instanceof Promise,
+                          releasedCallError,
+                          releasedArgumentError,
+                          recursiveBuffer,
+                        };
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'resolved',
+                          values,
+                        }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'rejected',
+                          error: error instanceof Error ? error.message : String(error),
+                        }));
+                      }
+                    })();
+                    """, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "resolved", result.getString("status"));
+            JSONObject values = result.getJSONObject("values");
+            assertTrue(values.getBoolean("samePointer"));
+            assertTrue(values.getBoolean("differentPointer"));
+            assertTrue(values.getBoolean("asyncSamePointer"));
+            assertEquals("[true,true]", values.getJSONArray("overlap").toString());
+            assertEquals("Invalid argument 1: expected function",
+                    values.getString("invalidArgument"));
+            assertTrue(values.getBoolean("nullInput"));
+            assertTrue(values.getBoolean("undefinedInput"));
+            assertTrue(values.isNull("nullResult"));
+            assertTrue(values.isNull("nullCallback"));
+            assertTrue(values.isNull("undefinedCallback"));
+            assertTrue(values.getBoolean("retained"));
+            assertTrue(values.getBoolean("retainedMatches"));
+            assertEquals(1, values.getInt("retainedInvocations"));
+            assertTrue(values.getBoolean("asyncRetainFinalize"));
+            assertEquals(42, values.getInt("recursiveInvoke"));
+            assertEquals(42, values.getInt("recursiveReturn"));
+            assertEquals(42, values.getInt("recursiveProxy"));
+            assertEquals("function", values.getString("proxyType"));
+            assertEquals(42, values.getInt("proxyCall"));
+            assertEquals("function", values.getString("releaseType"));
+            assertFalse(values.getBoolean("releaseEnumerable"));
+            assertTrue(values.getBoolean("releaseFunctionsMatch"));
+            assertEquals("{\"configurable\":false,\"enumerable\":false,"
+                            + "\"writable\":false}",
+                    values.getJSONObject("releaseDescriptor").toString());
+            assertEquals("{\"configurable\":false,\"enumerable\":false,"
+                            + "\"writable\":false}",
+                    values.getJSONObject("disposeDescriptor").toString());
+            assertTrue(values.getBoolean("releasedCallIsPromise"));
+            assertTrue(values.getString("releasedCallError").toLowerCase()
+                    .contains("released"));
+            assertTrue(values.getString("releasedArgumentError").toLowerCase()
+                    .contains("released"));
+            assertEquals("[31,32,33,34]",
+                    values.getJSONArray("recursiveBuffer").toString());
         }
     }
 

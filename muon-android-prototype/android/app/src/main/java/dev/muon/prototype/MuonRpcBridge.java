@@ -47,7 +47,12 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private static final int NATIVE_ARGUMENT_NUMBER = 2;
     private static final int NATIVE_ARGUMENT_STRING = 3;
     private static final int NATIVE_ARGUMENT_BINARY = 4;
-    private static final int NATIVE_ARGUMENT_JSON = 5;
+    private static final int NATIVE_ARGUMENT_FUNCTION = 5;
+    private static final int NATIVE_ARGUMENT_JSON = 6;
+    private static final int NATIVE_FUNCTION_RENDERER_SOURCE = 1;
+    private static final int NATIVE_FUNCTION_PLUGIN_PROXY = 2;
+    private static final int NATIVE_CALL_PLUGIN = 0;
+    private static final int NATIVE_CALL_PLUGIN_PROXY = 1;
     private static final Handler PROCESS_MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     /** Flat root argument representation decoded again against native metadata. */
@@ -57,6 +62,11 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         final double numberValue;
         @Nullable final String stringValue;
         final int attachment;
+        final int functionKind;
+        final int rendererContextId;
+        final int functionId;
+        final int proxyId;
+        @Nullable final String leaseToken;
 
         NativeArgument(
                 int kind,
@@ -64,18 +74,41 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
                 double numberValue,
                 @Nullable String stringValue,
                 int attachment) {
+            this(kind, booleanValue, numberValue, stringValue, attachment,
+                    0, 0, 0, 0, null);
+        }
+
+        NativeArgument(
+                int kind,
+                boolean booleanValue,
+                double numberValue,
+                @Nullable String stringValue,
+                int attachment,
+                int functionKind,
+                int rendererContextId,
+                int functionId,
+                int proxyId,
+                @Nullable String leaseToken) {
             this.kind = kind;
             this.booleanValue = booleanValue;
             this.numberValue = numberValue;
             this.stringValue = stringValue;
             this.attachment = attachment;
+            this.functionKind = functionKind;
+            this.rendererContextId = rendererContextId;
+            this.functionId = functionId;
+            this.proxyId = proxyId;
+            this.leaseToken = leaseToken;
         }
     }
 
     private static final class PendingBinaryCall {
         final int callId;
+        final int callKind;
         final String capabilityId;
         final String functionPath;
+        final int proxyId;
+        final String proxyLeaseToken;
         final String argumentsJson;
         final NativeArgument[] nativeArguments;
         final int[] byteLengths;
@@ -84,14 +117,20 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
         PendingBinaryCall(
                 int callId,
+                int callKind,
                 @NonNull String capabilityId,
                 @NonNull String functionPath,
+                int proxyId,
+                @NonNull String proxyLeaseToken,
                 @NonNull String argumentsJson,
                 @NonNull NativeArgument[] nativeArguments,
                 @NonNull int[] byteLengths) {
             this.callId = callId;
+            this.callKind = callKind;
             this.capabilityId = capabilityId;
             this.functionPath = functionPath;
+            this.proxyId = proxyId;
+            this.proxyLeaseToken = proxyLeaseToken;
             this.argumentsJson = argumentsJson;
             this.nativeArguments = nativeArguments;
             this.byteLengths = byteLengths;
@@ -99,8 +138,28 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         }
     }
 
+    private static final class PendingBinaryRendererResult {
+        final int callId;
+        final NativeArgument[] nativeResult;
+        final int[] byteLengths;
+        final byte[][] attachments;
+        int receivedAttachmentCount;
+
+        PendingBinaryRendererResult(
+                int callId,
+                @NonNull NativeArgument[] nativeResult,
+                @NonNull int[] byteLengths) {
+            this.callId = callId;
+            this.nativeResult = nativeResult;
+            this.byteLengths = byteLengths;
+            attachments = new byte[byteLengths.length][];
+        }
+    }
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<Integer, PendingBinaryCall> pendingBinaryCalls = new HashMap<>();
+    private final Map<Integer, PendingBinaryRendererResult> pendingBinaryRendererResults =
+            new HashMap<>();
     private final Map<Integer, Runnable> delayedCompletions = new HashMap<>();
     private final LinkedBlockingQueue<String> nativeRuntimeProbeResults =
             new LinkedBlockingQueue<>();
@@ -153,6 +212,14 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             String type = message.optString("type", "");
             if ("call".equals(type)) {
                 handleCallMessage(message);
+            } else if ("renderer-function-result".equals(type)) {
+                handleRendererFunctionResult(message);
+            } else if ("plugin-proxy-release".equals(type)) {
+                int proxyId = message.optInt("proxyId", 0);
+                String leaseToken = message.optString("leaseToken", "");
+                if (proxyId > 0 && !leaseToken.isEmpty() && nativeHandle != 0) {
+                    nativeReleasePluginProxy(nativeHandle, proxyId, leaseToken);
+                }
             } else if ("cancel".equals(type)) {
                 int callId = message.optInt("callId", 0);
                 if (callId > 0 && nativeHandle != 0) {
@@ -161,6 +228,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
                 }
             } else if ("release".equals(type) && nativeHandle != 0) {
                 pendingBinaryCalls.clear();
+                pendingBinaryRendererResults.clear();
                 nativeReleaseContext(nativeHandle);
             }
         } catch (JSONException ignored) {
@@ -170,10 +238,18 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     private void handleCallMessage(@NonNull JSONObject message) throws JSONException {
         int callId = message.optInt("callId", 0);
+        boolean pluginProxy = "plugin-proxy".equals(message.optString("callKind", ""));
+        int callKind = pluginProxy ? NATIVE_CALL_PLUGIN_PROXY : NATIVE_CALL_PLUGIN;
         String capabilityId = message.optString("capabilityId", "");
         String functionPath = message.optString("functionPath", "");
+        int proxyId = message.optInt("proxyId", 0);
+        String proxyLeaseToken = message.optString("leaseToken", "");
         JSONArray arguments = message.optJSONArray("arguments");
-        if (callId <= 0 || functionPath.isEmpty() || arguments == null) {
+        if (callId <= 0
+                || arguments == null
+                || (pluginProxy
+                    ? proxyId <= 0 || proxyLeaseToken.isEmpty()
+                    : functionPath.isEmpty())) {
             return;
         }
         Map<Integer, Integer> binaryDescriptors = new HashMap<>();
@@ -210,8 +286,11 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             nativeDispatchCall(
                     nativeHandle,
                     callId,
+                    callKind,
                     capabilityId,
                     functionPath,
+                    proxyId,
+                    proxyLeaseToken,
                     argumentsJson,
                     createNativeArguments(arguments),
                     new byte[0][]);
@@ -219,13 +298,74 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         }
         PendingBinaryCall pending = new PendingBinaryCall(
                 callId,
+                callKind,
                 capabilityId,
                 functionPath,
+                proxyId,
+                proxyLeaseToken,
                 argumentsJson,
                 createNativeArguments(arguments),
                 byteLengths);
         if (pendingBinaryCalls.putIfAbsent(callId, pending) != null) {
             sendProtocolError(callId, "Duplicate Android RPC call id");
+        }
+    }
+
+    private void handleRendererFunctionResult(@NonNull JSONObject message)
+            throws JSONException {
+        int callId = message.optInt("callId", 0);
+        if (callId <= 0 || nativeHandle == 0 || !message.has("success")) {
+            return;
+        }
+        boolean success = message.getBoolean("success");
+        if (!success) {
+            nativeCompleteRendererFunctionCall(
+                    nativeHandle,
+                    callId,
+                    false,
+                    message.optString("error", "Renderer function failed"),
+                    new NativeArgument[0],
+                    new byte[0][]);
+            return;
+        }
+
+        Object value = message.has("value") ? message.get("value") : JSONObject.NULL;
+        JSONArray encodedResult = new JSONArray();
+        encodedResult.put(value);
+        Map<Integer, Integer> binaryDescriptors = new HashMap<>();
+        collectBinaryDescriptors(encodedResult, binaryDescriptors);
+        int[] byteLengths = createBinaryAttachmentLengths(binaryDescriptors);
+        if (byteLengths == null) {
+            nativeCompleteRendererFunctionCall(
+                    nativeHandle,
+                    callId,
+                    false,
+                    "Invalid renderer function binary descriptors",
+                    new NativeArgument[0],
+                    new byte[0][]);
+            return;
+        }
+        NativeArgument[] nativeResult = createNativeArguments(encodedResult);
+        if (byteLengths.length == 0) {
+            nativeCompleteRendererFunctionCall(
+                    nativeHandle,
+                    callId,
+                    true,
+                    null,
+                    nativeResult,
+                    new byte[0][]);
+            return;
+        }
+        PendingBinaryRendererResult pending = new PendingBinaryRendererResult(
+                callId, nativeResult, byteLengths);
+        if (pendingBinaryRendererResults.putIfAbsent(callId, pending) != null) {
+            nativeCompleteRendererFunctionCall(
+                    nativeHandle,
+                    callId,
+                    false,
+                    "Duplicate renderer function result",
+                    new NativeArgument[0],
+                    new byte[0][]);
         }
     }
 
@@ -236,7 +376,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
                 || frame[2] != 'P'
                 || frame[3] != 'C'
                 || frame[4] != PROTOCOL_VERSION
-                || frame[5] != 1
+                || (frame[5] != 1 && frame[5] != 4)
                 || frame[6] != 0
                 || frame[7] != 0) {
             return;
@@ -244,6 +384,10 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         ByteBuffer header = ByteBuffer.wrap(frame, 0, BINARY_HEADER_LENGTH);
         int callId = header.getInt(8);
         int attachment = header.getInt(12);
+        if (frame[5] == 4) {
+            handleRendererResultBinaryFrame(frame, callId, attachment);
+            return;
+        }
         PendingBinaryCall pending = pendingBinaryCalls.get(callId);
         int payloadLength = frame.length - BINARY_HEADER_LENGTH;
         if (callId <= 0
@@ -264,10 +408,43 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         nativeDispatchCall(
                 nativeHandle,
                 pending.callId,
+                pending.callKind,
                 pending.capabilityId,
                 pending.functionPath,
+                pending.proxyId,
+                pending.proxyLeaseToken,
                 pending.argumentsJson,
                 pending.nativeArguments,
+                pending.attachments);
+    }
+
+    private void handleRendererResultBinaryFrame(
+            @NonNull byte[] frame,
+            int callId,
+            int attachment) {
+        PendingBinaryRendererResult pending = pendingBinaryRendererResults.get(callId);
+        int payloadLength = frame.length - BINARY_HEADER_LENGTH;
+        if (callId <= 0
+                || pending == null
+                || attachment < 0
+                || attachment >= pending.byteLengths.length
+                || pending.byteLengths[attachment] != payloadLength
+                || pending.attachments[attachment] != null) {
+            return;
+        }
+        pending.attachments[attachment] =
+                Arrays.copyOfRange(frame, BINARY_HEADER_LENGTH, frame.length);
+        pending.receivedAttachmentCount += 1;
+        if (pending.receivedAttachmentCount != pending.attachments.length) {
+            return;
+        }
+        pendingBinaryRendererResults.remove(callId);
+        nativeCompleteRendererFunctionCall(
+                nativeHandle,
+                pending.callId,
+                true,
+                null,
+                pending.nativeResult,
                 pending.attachments);
     }
 
@@ -300,12 +477,61 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
                         0,
                         null,
                         ((JSONObject) value).getInt("attachment"));
+            } else if (value instanceof JSONObject
+                    && "function".equals(((JSONObject) value).optString("type", ""))) {
+                JSONObject function = (JSONObject) value;
+                String functionKind = function.optString("kind", "");
+                if ("renderer-source".equals(functionKind)) {
+                    result[index] = new NativeArgument(
+                            NATIVE_ARGUMENT_FUNCTION,
+                            false,
+                            0,
+                            null,
+                            -1,
+                            NATIVE_FUNCTION_RENDERER_SOURCE,
+                            function.getInt("rendererContextId"),
+                            function.getInt("functionId"),
+                            0,
+                            null);
+                } else if ("plugin-proxy".equals(functionKind)) {
+                    result[index] = new NativeArgument(
+                            NATIVE_ARGUMENT_FUNCTION,
+                            false,
+                            0,
+                            null,
+                            -1,
+                            NATIVE_FUNCTION_PLUGIN_PROXY,
+                            0,
+                            0,
+                            function.getInt("proxyId"),
+                            function.getString("leaseToken"));
+                } else {
+                    throw new JSONException("Invalid Android RPC function descriptor");
+                }
             } else {
                 result[index] = new NativeArgument(
                         NATIVE_ARGUMENT_JSON, false, 0, value.toString(), -1);
             }
         }
         return result;
+    }
+
+    @Nullable private static int[] createBinaryAttachmentLengths(
+            @NonNull Map<Integer, Integer> binaryDescriptors) {
+        if (binaryDescriptors.size() > MAXIMUM_ATTACHMENT_COUNT) {
+            return null;
+        }
+        int[] byteLengths = new int[binaryDescriptors.size()];
+        long totalBytes = 0;
+        for (int attachment = 0; attachment < byteLengths.length; attachment += 1) {
+            Integer byteLength = binaryDescriptors.get(attachment);
+            if (byteLength == null) {
+                return null;
+            }
+            byteLengths[attachment] = byteLength;
+            totalBytes += byteLength;
+        }
+        return totalBytes > MAXIMUM_ATTACHMENT_BYTES ? null : byteLengths;
     }
 
     private static void collectBinaryDescriptors(
@@ -609,6 +835,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     void close(boolean preserveRuntime) {
         pendingBinaryCalls.clear();
+        pendingBinaryRendererResults.clear();
         cancelAllNativeDelays();
         if (nativeHandle != 0) {
             nativeReleaseContext(nativeHandle);
@@ -627,11 +854,27 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private static native void nativeDispatchCall(
             long handle,
             int callId,
+            int callKind,
             @NonNull String capabilityId,
             @NonNull String functionPath,
+            int proxyId,
+            @NonNull String proxyLeaseToken,
             @NonNull String argumentsJson,
             @NonNull NativeArgument[] nativeArguments,
             @NonNull byte[][] binaryArguments);
+
+    private static native void nativeCompleteRendererFunctionCall(
+            long handle,
+            int callId,
+            boolean success,
+            @Nullable String error,
+            @NonNull NativeArgument[] nativeResult,
+            @NonNull byte[][] binaryArguments);
+
+    private static native void nativeReleasePluginProxy(
+            long handle,
+            int proxyId,
+            @NonNull String leaseToken);
 
     private static native void nativeCancelCall(long handle, int callId);
 

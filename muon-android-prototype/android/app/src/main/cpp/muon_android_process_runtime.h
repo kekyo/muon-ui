@@ -131,6 +131,15 @@ class MuonAndroidProcessRuntimeController final {
   void Invoke(const MuonRpcCallRequest& request,
               MuonPluginRuntime::Completion completion);
 
+  /** Resolves the result type for one pending renderer callback. */
+  bool GetRendererFunctionReturnType(const MuonRpcOwner& owner,
+                                     uint32_t call_id,
+                                     MuonTypeMetadata* return_type) const;
+
+  /** Completes one plugin-initiated renderer callback. */
+  void CompleteRendererFunctionCall(
+      const MuonRpcRendererFunctionResult& result);
+
   /** Releases one native plugin proxy wrapper lease. */
   void ReleasePluginFunctionProxy(
       const MuonRpcPluginProxyRelease& release);

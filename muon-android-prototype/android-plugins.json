@@ -27,6 +27,28 @@
       "config": {}
     },
     {
+      "name": "muon_test_plugin_function_lifetime",
+      "soname": "libmuon_test_plugin_function_lifetime.so",
+      "source": "../muon-core/test_plugins/muon_test_plugin_function_lifetime.cpp",
+      "artifacts": {
+        "x86_64": "lib/x86_64/libmuon_test_plugin_function_lifetime.so",
+        "arm64-v8a": "lib/arm64-v8a/libmuon_test_plugin_function_lifetime.so"
+      },
+      "allow": ["muon.test.functionLifetime.*"],
+      "config": {}
+    },
+    {
+      "name": "muon_test_plugin_recursive_functions",
+      "soname": "libmuon_test_plugin_recursive_functions.so",
+      "source": "../muon-core/test_plugins/muon_test_plugin_recursive_functions.cpp",
+      "artifacts": {
+        "x86_64": "lib/x86_64/libmuon_test_plugin_recursive_functions.so",
+        "arm64-v8a": "lib/arm64-v8a/libmuon_test_plugin_recursive_functions.so"
+      },
+      "allow": ["muon.test.recursiveFunctions.*"],
+      "config": {}
+    },
+    {
       "name": "muon_test_plugin_types",
       "soname": "libmuon_test_plugin_types.so",
       "source": "../muon-core/test_plugins/muon_test_plugin_types.cpp",

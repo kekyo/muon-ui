@@ -250,9 +250,13 @@ AndroidはアプリdomainのJIT用途に`execmem`を許可しており、NDKの�
 
 一方、Android 10以降は書き込み可能なアプリhome内のファイルを実行することをW^X違反として制限します。[Android 10 behavior changes](https://developer.android.com/about/versions/10/behavior-changes-10) 今回は匿名マッピングが成功したためこの制限に触れませんでしたが、端末ポリシーが匿名RWXを拒否した場合、libffi 3.4.6の一時実行ファイルfallbackがアプリsandbox内で成功するとは限りません。また、`minSdk 24`向けconfigureでは`memfd_create`を利用できませんでした。従って、1台のAVDでの成功を全OEM・全セキュリティ構成の保証とはしません。
 
-tra-ffic自身にはAndroid固有の機能不良を再現できませんでした。`TRA_FFIC_IN_POSIX`、pthread、libffi ABIはいずれもx86_64で正常でした。当時残っていたAndroid公式テストとarm64確認の不足は、tra-ffic 1.0.0のAndroid artifact/runtime CIとlibffi 3.8.0への更新でupstream対応済みです。muon側ではupstreamと同じ版・ABI・16 KiB整列条件を再現し、最終APK内でのclosure実行を接続テストします。
+tra-ffic自身にはAndroid固有の機能不良を再現できませんでした。`TRA_FFIC_IN_POSIX`、pthread、libffi ABIはいずれも正常で、tra-ffic 1.0.0の全回帰とmuon最終library経由のfunction marshallingが16 KiBページのx86_64 VMでPASSしました。当時残っていたAndroid公式テストとarm64確認の不足は、tra-ffic 1.0.0のAndroid artifact/runtime CIとlibffi 3.8.0への更新でupstream対応済みです。tra-ffic本体に追加修正はありません。
 
-libffi 3.8.0は対応するLinux x86_64/AArch64で静的実行トランポリンを既定有効にでき、トランポリンコードと書き込み可能なパラメーターを別マッピングにします。従って、最初の実装ではlibffiのソースを変更せず、tra-fficが固定するリビジョンをmuonのビルドディレクトリへ無改変でビルドします。生成された設定で静的トランポリンが有効なことと、実行時マッピングがW^Xを満たすことは両ABIの接続テストで検証します。
+一方、muonへの最終結合ではlibffi 3.8.0のx86_64静的トランポリンにAndroid 16 KiBページ固有の課題を摘出しました。`FFI_EXEC_STATIC_TRAMP=1`でも、x86_64の`UNIX64_TRAMP_MAP_SHIFT`は4 KiBを表す12に固定されています。[libffi 3.8.0 x86_64 trampoline table](https://github.com/libffi/libffi/blob/v3.8.0/src/x86/internal64.h) `tramp.c`は実ページサイズがこの固定tableより大きい場合に静的トランポリンを無効化するため、16 KiBページVMでは動的トランポリンへfallbackし、closureの実行addressが匿名`rwxp` mappingになりました。[libffi 3.8.0 static trampoline initialization](https://github.com/libffi/libffi/blob/v3.8.0/src/tramp.c) 2026年8月21日時点のlibffi masterにも同じ4 KiB固定値が残っています。[libffi master x86_64 trampoline table](https://github.com/libffi/libffi/blob/master/src/x86/internal64.h)
+
+これはtra-fficのAPIやAndroid対応ではなくlibffi実装側のupstream候補です。muonではlibffi submoduleを変更せず、前節の候補2を採用しました。`muon-android-prototype/patches/libffi/0001-android-x86_64-16k-static-trampoline.patch`をmuon所有のpatch queueに置き、公式source archiveを展開したbuild用copyへ`git apply --check`後に適用します。patchはAndroid x86_64だけtableを16 KiBへ広げ、assemblyのPC-relative offsetをtable sizeから導出します。patch SHA-256は`fe17ff7f99192957575908078593b5182bf660b3a0415ceb6b173080bad07959`で、base libffi commit、recipe、configure引数、両ABIの生成物hashとともにdependency manifestへ固定しました。
+
+修正後の16 KiB x86_64 VMでは、renderer function closureの実行addressが実行可能かつ非書き込みのmappingに入り、allocation/free数が釣り合い、tra-fficのdeferred taskも0へ戻ることを最終`libmuon_android_rpc.so`内で確認しました。arm64-v8aはこのx86_64限定patchの影響を受けず、従来どおり静的トランポリンを使用します。arm64の実行確認は後続のPixel 6 gateに残します。
 
 将来libffiへAndroid固有の変更が必要になった場合も、libffi submoduleの作業ツリーは変更しません。候補は優先順に次のとおりです。
 
@@ -271,28 +275,35 @@ libffi 3.8.0は対応するLinux x86_64/AArch64で静的実行トランポリン
 | Looper eventからcardio内部snapshotへの`revents`転記 | 試作で再現した必須処理をcardio 1.1.0が内部実装する | cardio upstream実装を利用し、muon側へ複製しない |
 | tra-fficのPOSIX/libffi動作 | tra-ffic 1.0.0がAndroid両ABIと4 KiB/16 KiBページを正式対応する | tra-ffic本体のmuon独自修正は不要 |
 | Android NDKの継続試験とarm64 hardening | tra-ffic upstreamにartifact/runtime CIが追加済み | muonでも最終APKを対象とした両ABI接続テストを行う |
-| libffiの版、取得、ハッシュ、ABI別静的ビルド | tra-ffic 1.0.0がlibffi 3.8.0を固定し、muonの配布物と再現可能ビルドに属する | muonの外部ビルドレシピで管理し、必要な変更は一時コピーへのpatch queueなどsubmodule外で適用する |
+| libffi x86_64の16 KiB静的トランポリン | 3.8.0と2026年8月21日時点のmasterでtableが4 KiB固定のため、16 KiBページでは動的な匿名`rwxp`へfallbackする | libffi upstreamへの修正候補。muonではbase commitに紐付けたpatch queueを展開後copyへ適用し、submoduleは変更しない |
+| libffiの版、取得、ハッシュ、ABI別静的ビルド | tra-ffic 1.0.0がlibffi 3.8.0を固定し、muonの配布物と再現可能ビルドに属する | muonの外部ビルドレシピで設定、patch SHA-256、両ABI成果物を管理する |
+| plugin Stop中に新Activityが生成される競合 | cardio hostは正常で、process runtimeとActivity sessionの所有関係に起因するmuon固有課題 | pollingやblockを使わず、Stop完了後に待機sessionへready/failure callbackを配送するmuon lifecycleで解決済み |
 | APK/AABへのプラグイン同梱、JNI境界、Activityライフサイクル | muon固有 | muon側で実装する |
 
-#### 実装開始条件の判定
+#### 実装開始時の判定
 
 ステップ5の実装開始条件は満たしています。
 
 - cardio 1.1.0、tra-ffic 1.0.0、libffi 3.8.0の採用commitが固定され、すべてのsubmodule作業ツリーがcleanです。
 - upstreamの正式なAndroid全体試験は、16 KiBページの`x86_64` VMと4 KiBページの`arm64-v8a` Pixel 6実機でPASSしています。
 - cardioはJava UI Looperへ自動接続する公開hostを持ち、muon側でprivate実装を複製する必要がありません。
-- tra-fficとlibffiは両ABIでclosureを実行でき、現時点ではlibffi sourceへのdownstream変更を必要としません。
+- 事前検証ではtra-fficとlibffiが両ABIでclosureを実行でき、libffi sourceへのdownstream変更は不要と判定しました。最終muon結合で摘出したx86_64・16 KiB静的トランポリン課題とpatch queue採用は前節の実装結果で更新しています。
 
 `arm64-v8a`の16 KiBページ実行は最終完了条件として残しますが、両ABIの16 KiB整列成果物と`x86_64`の16 KiB実行を確認済みなので、実装開始を妨げる条件とはしません。
 
-#### 現在の実装との差分
+#### 2026年8月21日時点の実装結果
 
-現在のAndroid試作は、CEF非依存の`muon_rpc_core`だけをJNI libraryへリンクしています。[Android CMake](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/cpp/CMakeLists.txt:5)
-JNIの`invoke_plugin`は常に「plugin routes are unavailable」を返し、plugin metadata、tra-ffic、libffi、cardio hostをまだ接続していません。[Android JNI host](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/cpp/muon_android_rpc_jni.cpp:584)
-GradleのABIも現在は`x86_64`だけです。[Android Gradle設定](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/build.gradle.kts:20)
+計画したruntime分離、dependency build、package registry、cardio main Looper host、full-duplex plugin RPC、failure/W^X/lifecycle hardeningを実装しました。Android側はCEF非依存の`muon_rpc_core`と共通`muon_plugin_runtime_core`をJNI libraryへリンクし、desktop builtin、GTK、GIO、CEF、executorには依存しません。Gradle/CMakeは`x86_64`と`arm64-v8a`を同じgraphでbuildし、`libcardio.so`と`libc++_shared.so`をprocess内で共有します。
 
-一方、`MuonPluginRuntime`の公開境界はCEF型を含みませんが、実装sourceはdesktopのbuiltin filesystem、executor、browser、ログ、実行ファイル相対path解決を直接参照しています。[plugin runtime](/home/kouji/Projects/muon-ui/muon-core/src/plugins/muon_plugin_runtime.cpp:14)
-従って、Android用に別のplugin runtimeを複製するのではなく、共通runtime coreとdesktop builtin adapterを分離してからAndroidへリンクします。
+build-time registryはlogical plugin名、package soname、C++ source、両ABI artifact、`allow`、string `config`を一つの入力からC++ tableとpackage stagingへ生成します。runtimeはこのtableのsonameだけを列挙順に`dlopen()`し、desktopの`plugin.path`、download、external storage探索、`signature`、`salt`をAndroidへ持ち込みません。simple/validate modeとも、実際にloadしてpolicyを適用したmetadataからpage load前に公開APIを構築します。
+
+processごとにcardio 1.1.0の`dispatcher_host_android_auto`と`MuonPluginRuntime`を一組だけ作り、Activity/WebViewごとにowner sessionを登録します。Java main message、cardioの即時、timer、fd readiness、別thread post、plugin completionは同じmain Looper上で共存します。最後のsession終了時はpluginを非同期停止し、逆順unload後にcardio hostを破棄します。停止中に新Activityが生成された場合は待機sessionとして保持し、Stop完了後にevent callbackで新runtimeへattachするため、worker thread、nested loop、polling、main thread blockはありません。
+
+WebView RPCはprimitive、全整数幅、64 bit、null、string、binary/buffer view、async completion、renderer-owned function、plugin-owned proxy、再帰function signature、release/cancelを共通plugin runtimeへ接続しました。startup failureはWebViewをloadする前に画面とlogcatへ決定的なdiagnosticを返し、既に開いたlibrary、JNI reference、dispatcher fdを回収します。
+
+配布形式試験はdebug/release APK、release AAB、AABからbundletoolで生成した端末別split APKを対象とします。bundletoolは公式standalone `bundletool-all-1.18.3.jar`を使用し、SHA-256 `a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29`をdownload時とcache利用時に検証します。公式buildもstandalone artifactへruntime classpathを含める構成であり、Maven artifact単体では不足したKotlin runtimeをこの方法で解消しました。[bundletool standalone build](https://github.com/google/bundletool/blob/master/build.gradle) local release gateは標準debug keyで署名しますが、Play Storeを含む配布署名はこの試作の範囲外です。
+
+実装は計画したコミット境界どおり、`58ff5a51`、`4c1d32a5`、`c469aace`、`9dcfad1b`、`b90d3195`、`3a5795a7`、`da4c259f`へ分割しました。外部submoduleの作業ツリーはすべてcleanです。
 
 #### 実装方針
 
@@ -301,7 +312,7 @@ GradleのABIも現在は`x86_64`だけです。[Android Gradle設定](/home/kouj
 - Androidの組み込みbrowser、environment、filesystem関数は、現在どおり`MuonRpcRouteKind::Platform`としてJava serviceへ送ります。desktop専用builtin pluginをAndroid native runtimeへリンクしません。
 - Android processにつき`dispatcher_host_android_auto`と`MuonPluginRuntime`を一組だけ作り、Activity/WebViewごとに独立したRPC owner/sessionを登録します。Activity再生成時にcardio dispatcherを重複生成しません。
 - `libcardio.so`はhostとcardio利用pluginが共有します。JNI library、`libcardio.so`、C++ pluginのすべてでNDK 29.0.14206865の`libc++_shared.so`を一つだけ使用します。複数のshared libraryへ`libc++_static`を重複リンクすると、allocation、exception、C++ global stateが未定義動作になるためです。[Android NDK C++ runtime](https://developer.android.com/ndk/guides/cpp-support)
-- tra-fficはheader実装を共通runtime coreへ組み込み、libffi 3.8.0はABI別の`libffi.a`として静的リンクします。libffi submodule sourceは変更しません。
+- tra-fficはheader実装を共通runtime coreへ組み込み、libffi 3.8.0はABI別の`libffi.a`として静的リンクします。libffi submodule sourceは変更せず、必要なx86_64・16 KiB修正はmuon所有patchを展開後のbuild用copyだけへ適用します。
 - すべてのAndroid ELFとAPK/AABを16 KiBページ対応として生成します。NDK r28以降は16 KiB整列が既定ですが、最終成果物の全`LOAD` segmentとpackage alignmentを試験で直接確認します。[Android 16 KiBページ対応](https://developer.android.com/guide/practices/page-sizes)
 - 現在の`muon-android-prototype`をステップ5の結合・配布形式試験hostとして使用します。公開`muon-ui` target、Play Store署名、installerはこのステップへ含めませんが、再利用できるmuon-core target、registry generator、Gradle/CMake recipeとして実装し、debug/release APKとrelease AABの両方を成果物にします。
 - 各実装項目は、期待する機能を検証する試験を先に追加して全体実行でREDを確認し、実装後に同じ全体試験をGREENにします。各GREENごとに以下の粒度でコミットし、submodule内には変更を作りません。
@@ -321,7 +332,7 @@ runtime serviceにはowner-thread判定、owner-threadへのpost、buffer確保�
 
 ##### 2. Android native dependencyを再現可能にbuildする
 
-muon所有のAndroid build recipeを追加し、tra-fficが固定するlibffi sourceをbuild directoryへ無改変でcopyしてから、`x86_64-linux-android`と`aarch64-linux-android`の各hostで`--disable-shared --enable-static --disable-docs --with-pic`を指定してconfigureします。入力commit、NDK、API 24、configure引数、CFLAGS、LDFLAGS、patch一覧とSHA-256をmanifestへ記録します。初期状態のpatch一覧は空です。
+muon所有のAndroid build recipeを追加し、tra-fficが固定するlibffi sourceをbuild directoryへcopyしてから、`git apply --check`を通したmuon所有patch queueをそのcopyだけへ適用し、`x86_64-linux-android`と`aarch64-linux-android`の各hostで`--disable-shared --enable-static --disable-docs --with-pic`を指定してconfigureします。入力commit、NDK、API 24、configure引数、CFLAGS、LDFLAGS、patch一覧とSHA-256をmanifestへ記録します。計画時はpatchなしで開始しましたが、hardening時にx86_64・16 KiB静的トランポリンpatchを追加しました。
 
 同じCMake graphでupstreamの`libcardio.cpp`からABI別`libcardio.so`をbuildし、`CARDIO_SHARED_LIB=1`、`CARDIO_BUILD_SHARED_LIB=1`、`CARDIO_HAS_POSIX_FD=1`、`CARDIO_WITH_LINUX_IO_URING=0`を固定します。JNI libraryとcardioを利用するpluginは`CARDIO_SHARED_LIB=1`でこの一つのlibraryへlinkします。Android CMakeには`ANDROID_STL=c++_shared`を指定し、Gradleに`libc++_shared.so`を一つだけpackageさせます。
 
@@ -394,7 +405,7 @@ artifact試験はdebug/release APKとrelease AABについて、`arm64-v8a`、`x8
 
 今回の実装作業は、両ABIのbuild・artifact試験、rootの全workspace test、およびローカル`x86_64`・16 KiB VMの全instrumentation testがGREENになった時点をローカル完了とします。接続済みの実機があってもこの段階では使用しません。Pixel 6の`arm64-v8a`・4 KiB実行は、ローカル完了後に利用者が実機を手動接続したことを確認してから独立して行います。利用可能な`arm64-v8a`・16 KiB実行環境がない場合は、16 KiB整列済みarm64成果物の検査までを記録し、runtime確認を未実施と明記します。
 
-最終GREEN後に利用者向けplugin build/package手順、対応ABI、build-time同梱制約、Android process kill時のstop制約を文書化し、`doc:`コミットを作ります。
+ローカルAndroid gateのGREEN後に利用者向けplugin build/package手順、対応ABI、build-time同梱制約、Android process kill時のstop制約を文書化し、`doc:`コミットを作ります。
 
 #### ステップ5の完了条件
 
@@ -407,3 +418,41 @@ artifact試験はdebug/release APKとrelease AABについて、`arm64-v8a`、`x8
 7. libffi 3.8.0のcommit、公式取得元、NDK、API level、configure引数、コンパイルフラグ、patch hashを固定し、ABI別に再現可能な`libffi.a`をbuildする。静的トランポリンとW^Xを実行時に検証し、libffi submoduleを変更しない。
 8. debug/release APKとrelease AABが`arm64-v8a`、`x86_64`、共有cardio、共有libc++、registry内pluginを含み、全ELFとpackageが16 KiBページ対応である。非対応ABI、plugin欠落、entry point欠落、init失敗をbuild時またはpage load前に決定的なerrorとして返す。
 9. Android実機・VM接続試験を含む全project testとupstream Android全体試験がPASSし、Android分岐によってdesktop CEF版の挙動が変わらない。
+
+#### ローカル完了判定（2026年8月21日）
+
+ローカルAndroid gateは完了しました。対象はserialを`emulator-5556`へ固定したPixel 6 AVD、Android 17/API 37、`x86_64`、実ページサイズ16 KiBです。Pixel 6実機にはこの工程で接続せず、arm64実機gateは利用者が手動接続した後の独立工程として残しています。
+
+実行結果は次のとおりです。
+
+| 実行 | 結果 | 確認内容 |
+|---|---|---|
+| `npm test` | Android関連とdesktop coreはPASS、root終了コードは1 | Android Vitest 49件、両ABI dependency再生成、debug/release APK、release AAB/APKS、registry/native/package検査、muon-core CTest、muon-core-tester 206件がPASS。muon-uiの既存Windows Settings uninstall E2Eだけがメニュー待機timeoutとなり306/307件だった。この非Android失敗は最終差分で2回再現した |
+| `ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype` | PASS | debug instrumentation 25/25、署名済みrelease APKのinstall/start/page-ready、AAB由来の端末別split APK install/start/page-ready |
+| dependency/artifact verifier | PASS | libffi patch/base/recipe hash、両ABI ELF machine、全`LOAD`の`0x4000`、`DT_NEEDED` allowlist、plugin entry point、APK 16 KiB zip alignment |
+| release APKS verifier | PASS | bundletoolが生成した全3 variantについて、x86_64/arm64-v8a native splitを一対一で確認し、合計48 ELFを検査 |
+| lifecycle/W^X instrumentation | PASS | startup fault 6種、逆順unload、Activity再生成とStop中再起動、session/call/function/closure/task/fd回収、closure executableかつnon-writable mapping、allocation/free balance |
+
+完了条件との比較は次のとおりです。
+
+| 条件 | ローカル判定 | 残作業 |
+|---|---|---|
+| 1 | 達成 | なし。cardio 1.1.0の公開auto hostだけを使用 |
+| 2 | 達成 | なし。Android native targetのdesktop依存なしをartifactでも確認 |
+| 3 | 達成 | なし。build-time registry外の探索を行わない |
+| 4 | x86_64 VMで達成 | arm64実機で同じlifecycle全件を再確認する |
+| 5 | x86_64 VMで達成、arm64成果物buildまで達成 | Pixel 6上のarm64 plugin結合試験 |
+| 6 | 16 KiB x86_64で達成、arm64 16 KiB整列まで達成 | 4 KiB Pixel 6実行。arm64 16 KiB runtimeは環境入手時に追加 |
+| 7 | 達成 | libffi upstreamへ切り出せるx86_64・16 KiB修正候補を維持する |
+| 8 | 達成 | production配布時はdebug keyを正式な配布署名へ置換する |
+| 9 | VMとupstream事前試験まで達成 | Pixel 6のmuon結合試験が未実施。root全体にはAndroidと無関係な既存Windows Settings E2E timeoutが1件残る |
+
+従って、今回指定された「ローカルAndroid VMでのテスト実行まで」は完了です。ステップ5全体の最終完了は、利用者がPixel 6を手動接続した後にarm64-v8a・4 KiBのdebug instrumentation、release APK、AAB由来split APKを通し、条件5、6、9の実機欄を更新した時点とします。
+
+#### 最終upstream候補
+
+| 対象 | 新たに摘出した課題 | 最終判定 |
+|---|---|---|
+| cardio 1.1.0 | なし | `dispatcher_host_android_auto`はJava main Looper上で正常に動作した。Stop中のActivity再生成競合はmuonのsession lifecycle課題であり、cardio upstream修正対象ではない |
+| tra-ffic 1.0.0 | なし | function marshalling、closure lifetime、deferred task回収を含め正常。tra-ffic upstream修正対象はない |
+| libffi 3.8.0 | x86_64静的トランポリンtableが4 KiB固定で、16 KiBページでは匿名`rwxp`の動的トランポリンへfallbackする | libffi upstream修正候補。muonではsubmodule外のpatch queueでAndroid x86_64 tableを16 KiB化し、W^Xを実測確認済み |

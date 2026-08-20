@@ -188,7 +188,7 @@ Android版ではネイティブプラグイン互換を求めず、
 
 ### ステップ5: ネイティブプラグインの事前検証
 
-2026年8月19日に、現在の`cardio 0.2.0`、`tra-ffic 0.3.0`、およびtra-fficが使用する`libffi 3.4.6`を対象としてAndroid試験を行いました。submodule自体は変更せず、Android用ホストを追加したcardioの一時作業コピーと、Android instrumentation testへ一時的に組み込んだtra-fficの既存全回帰テストを使用しました。試験用変更と一時ビルド成果物は製品コードへ残していません。
+2026年8月19日に、当時の`cardio 0.2.0`、`tra-ffic 0.3.0`、およびtra-fficが使用する`libffi 3.4.6`を対象としてAndroid試験を行いました。submodule自体は変更せず、Android用ホストを追加したcardioの一時作業コピーと、Android instrumentation testへ一時的に組み込んだtra-fficの既存全回帰テストを使用しました。試験用変更と一時ビルド成果物は製品コードへ残していません。
 
 #### 検証環境と範囲
 
@@ -196,6 +196,15 @@ Android版ではネイティブプラグイン互換を求めず、
 - `x86_64`ではinstrumentation test全20件を実行し、既存18件と今回の互換性試験2件がすべてPASSしました。
 - `arm64-v8a`では同じNDK/API 24設定でlibffi 3.4.6をビルドし、cardio試作、tra-ffic全回帰テスト、libffiを含む`libmuon_android_rpc.so`をAPKへ同梱できるところまで確認しました。生成ELFのLOADセグメントの`p_align`は`0x4000`でした。ただしarm64 VMまたは実機がないため、arm64でのclosure実行は未確認です。
 - libffi 3.4.6の公式リリースアーカイブを使用し、確認したSHA-256は`b0dea9df23c863a7a50e825440f3ebffabd65df1497108e5d437747843895a4e`です。
+
+2026年8月20日にupstreamの正式Android対応版へ更新しました。cardio 1.1.0はAndroid API 24以降を対象として`dispatcher_host_android`と`dispatcher_host_android_auto`を提供し、tra-ffic 1.0.0はAndroid API 24以降の`x86_64`、`arm64-v8a`、4 KiB/16 KiBページをlibffi 3.8.0で正式に試験します。muonのsubmodule参照もこの2版へ更新し、tra-fficが固定するlibffi 3.8.0を再帰submoduleとして使用します。以下の3.4.6による結果は採用版決定前の履歴として残し、実装では正式対応版を基準にします。
+
+同日に正式版のupstream Android全体試験も、NDK 29.0.14206865、SDK Platform 37.0、Build Tools 36.0.0、Android 37.1 `google_apis_ps16k`の`x86_64` VM、16 KiBページで再実行しました。
+
+- cardio 1.1.0は、manual host、Java UI Looperへ接続するauto host、Android設定制約、両ABIのAPK/ELF 16 KiB整列を含む`test-android-runtime`がPASSしました。
+- tra-ffic 1.0.0は、libffi 3.8.0を無改変の一時ビルドコピーから両ABI向けに静的ビルドし、全回帰、closure生成・呼び出し、両ABIのAPK/ELF 16 KiB整列を含む`test-android-runtime`がPASSしました。
+- 生成されたx86_64とarm64-v8aの`fficonfig.h`はいずれも`FFI_EXEC_STATIC_TRAMP=1`と`FFI_MMAP_EXEC_WRIT=1`で、`FFI_EXEC_TRAMPOLINE_TABLE`は無効でした。従って採用版は、対応ABIでは静的実行トランポリンを優先し、必要時の実行可能マッピングfallbackもコンパイルする構成です。
+- `arm64-v8a`はビルド、静的リンク、ELF/APK整列までPASSしましたが、今回利用可能なVMはx86_64だけのため、arm64での実行は完了条件として残します。
 
 #### cardioのAndroidメインLooper統合
 
@@ -214,7 +223,7 @@ AOSPではJava `MessageQueue`もスレッドローカルなネイティブ`Loope
 
 VMでは、Javaの`Handler`メッセージがcardio処理中にも配送され、即時continuation、50 msタイマー、pipe fd readiness、別スレッドからのpostがすべてAndroidメインスレッドと同じスレッドで実行されました。したがって、muon-coreがメインスレッドdispatcherを前提とする構成を維持できます。
 
-現在のcardio公開APIだけで同等ホストをmuon側に実装することはできません。wait snapshotの作成・回収、キュー取得、timer deadlineなどがprivateで、既存のauto hostだけがfriendになっているためです。upstreamのcardioに`dispatcher_host_android_auto`を追加するか、同等機能を安全に実装できる公開host adapter境界を追加する必要があります。muon側でprivate実装を複製する案は採用しません。
+cardio 0.2.0の公開APIだけで同等ホストをmuon側に実装することはできませんでした。wait snapshotの作成・回収、キュー取得、timer deadlineなどがprivateで、当時は既存のauto hostだけがfriendだったためです。この課題はcardio 1.1.0の正式な`dispatcher_host_android_auto`でupstream解決済みです。muonはこの公開hostを使用し、private実装の複製や独自ポーリングを持ちません。
 
 #### tra-fficとlibffi closure
 
@@ -232,17 +241,28 @@ AndroidはアプリdomainのJIT用途に`execmem`を許可しており、NDKの�
 
 一方、Android 10以降は書き込み可能なアプリhome内のファイルを実行することをW^X違反として制限します。[Android 10 behavior changes](https://developer.android.com/about/versions/10/behavior-changes-10) 今回は匿名マッピングが成功したためこの制限に触れませんでしたが、端末ポリシーが匿名RWXを拒否した場合、libffi 3.4.6の一時実行ファイルfallbackがアプリsandbox内で成功するとは限りません。また、`minSdk 24`向けconfigureでは`memfd_create`を利用できませんでした。従って、1台のAVDでの成功を全OEM・全セキュリティ構成の保証とはしません。
 
-tra-ffic自身にはAndroid固有の機能不良を再現できませんでした。`TRA_FFIC_IN_POSIX`、pthread、libffi ABIはいずれもx86_64で正常でした。ただし、Android用の公式ビルド・実行テストがupstreamにないことと、arm64実行を未確認であることは課題です。またlibffi 3.4.7にはARM64のBTI修正とpointer authentication対応が含まれるため、3.4.6を製品版の固定値とする前に新しいlibffiでもtra-ffic全テストを実行して採用版を決めます。[libffi 3.4.7 release notes](https://github.com/libffi/libffi/releases/tag/v3.4.7)
+tra-ffic自身にはAndroid固有の機能不良を再現できませんでした。`TRA_FFIC_IN_POSIX`、pthread、libffi ABIはいずれもx86_64で正常でした。当時残っていたAndroid公式テストとarm64確認の不足は、tra-ffic 1.0.0のAndroid artifact/runtime CIとlibffi 3.8.0への更新でupstream対応済みです。muon側ではupstreamと同じ版・ABI・16 KiB整列条件を再現し、最終APK内でのclosure実行を接続テストします。
+
+libffi 3.8.0は対応するLinux x86_64/AArch64で静的実行トランポリンを既定有効にでき、トランポリンコードと書き込み可能なパラメーターを別マッピングにします。従って、最初の実装ではlibffiのソースを変更せず、tra-fficが固定するリビジョンをmuonのビルドディレクトリへ無改変でビルドします。生成された設定で静的トランポリンが有効なことと、実行時マッピングがW^Xを満たすことは両ABIの接続テストで検証します。
+
+将来libffiへAndroid固有の変更が必要になった場合も、libffi submoduleの作業ツリーは変更しません。候補は優先順に次のとおりです。
+
+1. コンパイル定義、configure cache、CFLAGS/LDFLAGSだけで解決できる場合は、muon-builderの外部ビルドレシピで指定する。upstreamソースを変更せず、更新追従が最も容易なため第一候補とする。
+2. ソース修正が必要な場合は、muon内にbase libffi commitへ紐付くpatch queueを置き、submoduleからビルド用一時ディレクトリへエクスポートしたコピーに`git apply --check`後に適用する。元submoduleをcleanに保ち、パッチ不一致を更新時の明示的エラーにできるため、一般的なソース修正の推奨案とする。
+3. `ffi_closure_alloc()`/`ffi_closure_free()`だけを差し替えればよい場合は、muon所有のallocator shimを最終リンク時の`--wrap`で注入する。差分を小さくできる一方、NDK linker依存となり、libffi内部からの参照や全ABIでの動作を別途検証する必要がある。
+4. allocator実装全体を置換する必要がある場合は、muon所有のビルドmanifestでlibffiの対象source listを管理し、upstreamの該当translation unitをmuon側実装へ置換する。内部実装への結合が強く更新コストも高いため、patch queueでも対処できない場合だけ採用する。
+
+どの方式でも、対象libffi commit、適用した設定またはpatchのSHA-256、生成物のABI・ELF整列、closure回帰テストをビルド記録へ含めます。libffiのsubmodule参照そのものをmuon独自commitへ差し替える方法は採用しません。
 
 #### upstreamとmuonの分担
 
 | 対象 | 判定 | 対応先 |
 |---|---|---|
-| Androidの既存Looperへ接続するauto host | 現在のcardioに存在せず、private状態へアクセスする必要がある | cardio upstreamへ`dispatcher_host_android_auto`とAndroid回帰テストを追加する |
-| Looper eventからcardio内部snapshotへの`revents`転記 | 試作で実際に欠落を再現したAndroid host固有の必須処理 | cardio upstreamのAndroid host実装とテストで保証する |
-| tra-fficのPOSIX/libffi動作 | x86_64 Android VMの既存全回帰テストで問題なし | tra-ffic本体の修正は現時点で不要 |
-| Android NDKの継続試験とarm64 hardening | upstreamにAndroid test targetがなく、arm64実行は未確認 | tra-ffic upstreamでAndroid build/test targetとlibffi対応版の範囲を追加する候補 |
-| libffiの版、取得、ハッシュ、ABI別静的ビルド | muonの配布物と再現可能ビルドに属する | muonのAndroidビルドで管理する。ただしlibffi自体のallocator修正が必要ならlibffi upstreamで扱う |
+| Androidの既存Looperへ接続するauto host | cardio 1.1.0の`dispatcher_host_android_auto`で正式対応済み | muonは公開hostを使用し、upstreamのAndroid回帰テストに加えてmuon接続テストを行う |
+| Looper eventからcardio内部snapshotへの`revents`転記 | 試作で再現した必須処理をcardio 1.1.0が内部実装する | cardio upstream実装を利用し、muon側へ複製しない |
+| tra-fficのPOSIX/libffi動作 | tra-ffic 1.0.0がAndroid両ABIと4 KiB/16 KiBページを正式対応する | tra-ffic本体のmuon独自修正は不要 |
+| Android NDKの継続試験とarm64 hardening | tra-ffic upstreamにartifact/runtime CIが追加済み | muonでも最終APKを対象とした両ABI接続テストを行う |
+| libffiの版、取得、ハッシュ、ABI別静的ビルド | tra-ffic 1.0.0がlibffi 3.8.0を固定し、muonの配布物と再現可能ビルドに属する | muonの外部ビルドレシピで管理し、必要な変更は一時コピーへのpatch queueなどsubmodule外で適用する |
 | APK/AABへのプラグイン同梱、JNI境界、Activityライフサイクル | muon固有 | muon側で実装する |
 
 #### ステップ5の完了条件
@@ -250,6 +270,6 @@ tra-ffic自身にはAndroid固有の機能不良を再現できませんでし�
 1. cardio upstream版のAndroid auto hostを使用し、muon側にcardio private実装のコピーや独自ポーリングがない。
 2. Androidメインスレッド上で、Javaメッセージとcardioの即時、timer、fd、別スレッドpostが共存し、Activityの生成・破棄を繰り返してもcallbackやfdが残らない。
 3. tra-fficの全回帰テストと直接closure呼び出しが、`x86_64` AVDと16 KiBページ対応の`arm64-v8a`実機またはVMの両方でPASSする。
-4. 採用するlibffi版、公式取得元、SHA-256、NDK API level、コンパイルフラグを固定し、ABI別に再現可能な静的ビルドを行う。匿名RWXを許容するか、W^Xを保つallocatorを要求するかもセキュリティ方針として決定する。
+4. tra-fficが固定するlibffi 3.8.0のcommit、公式取得元、NDK API level、コンパイルフラグを固定し、ABI別に再現可能な静的ビルドを行う。静的トランポリンとW^Xを実行時に検証し、downstream変更が必要な場合もlibffi submoduleを変更せず、muon側の設定または一時コピーへのpatchとして管理する。
 5. `arm64-v8a`と`x86_64`のプラグインをAPK/AABへビルド時同梱し、非対応ABI、欠落プラグイン、初期化失敗をJavaScript側へ決定的なエラーとして返す。
 6. Android接続テストを含む全プロジェクトテストがPASSし、Android用処理によってデスクトップCEF版の挙動が変わらない。

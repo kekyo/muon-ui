@@ -70,6 +70,7 @@ struct MuonAndroidProcessRuntimeControllerImpl {
   std::set<int> dispatcher_file_descriptors;
   std::map<int, MuonAndroidProcessSession> sessions;
   std::vector<MuonRpcOwner> pending_probes;
+  MuonAndroidPluginCatalog plugin_catalog;
   std::unique_ptr<cardio::dispatcher_host_android_auto> dispatcher_host;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime;
 };
@@ -168,6 +169,21 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   if (!CreateMuonAndroidPluginLoadEntries(&plugins, error_message)) {
     return false;
   }
+  plugin_catalog = MuonAndroidPluginCatalog{};
+  auto ordered_capability_policies =
+      std::vector<std::pair<std::string, std::shared_ptr<MuonPluginPolicy>>>{};
+  ordered_capability_policies.reserve(plugins.size());
+  for (const auto& plugin : plugins) {
+    if (plugin.plugin.empty() || !plugin.plugin_policy ||
+        !plugin_catalog.capability_policies
+             .emplace(plugin.plugin, plugin.plugin_policy)
+             .second) {
+      *error_message = "Invalid Android plugin capability catalog";
+      return false;
+    }
+    ordered_capability_policies.push_back(
+        {plugin.plugin, plugin.plugin_policy});
+  }
 
   MuonPluginRuntimeServices services;
   services.dispatcher = dispatcher_host.get();
@@ -238,6 +254,23 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   if (!plugin_runtime->IsReady()) {
     *error_message = plugin_runtime->GetStartupError();
     return false;
+  }
+  plugin_catalog.namespaces = plugin_runtime->GetNamespaces();
+  plugin_catalog.functions = plugin_runtime->GetFunctions();
+  for (const auto& function : plugin_catalog.functions) {
+    const auto path = CreateMuonFunctionPublicPath(function);
+    for (const auto& policy : ordered_capability_policies) {
+      if (policy.second->IsAllowedFunctionPath(path)) {
+        plugin_catalog.capability_ids_by_function_path.emplace(
+            path, policy.first);
+        break;
+      }
+    }
+    if (plugin_catalog.capability_ids_by_function_path.find(path) ==
+        plugin_catalog.capability_ids_by_function_path.end()) {
+      *error_message = "Android plugin function has no capability: " + path;
+      return false;
+    }
   }
   probe_function_id = 0;
   for (const auto& function : plugin_runtime->GetFunctions()) {
@@ -358,6 +391,7 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
   dispatcher_file_descriptors.clear();
   destroyed_dispatcher_hosts += 1;
   probe_function_id = 0;
+  plugin_catalog = MuonAndroidPluginCatalog{};
   state = MuonAndroidProcessRuntimeState::Idle;
   if (sessions.empty()) {
     pending_probes.clear();
@@ -431,10 +465,76 @@ void MuonAndroidProcessRuntimeController::ActivateSession(
   }
 }
 
+bool MuonAndroidProcessRuntimeController::GetPluginCatalog(
+    MuonAndroidPluginCatalog* catalog,
+    std::string* error_message) const {
+  if (catalog == nullptr || error_message == nullptr) {
+    return false;
+  }
+  *catalog = MuonAndroidPluginCatalog{};
+  error_message->clear();
+  if (std::this_thread::get_id() != impl_->owner_thread ||
+      impl_->state != MuonAndroidProcessRuntimeState::Running ||
+      !impl_->plugin_runtime) {
+    *error_message = "Android native plugin runtime is unavailable";
+    return false;
+  }
+  *catalog = impl_->plugin_catalog;
+  return true;
+}
+
+bool MuonAndroidProcessRuntimeController::GetCallArgumentTypes(
+    const MuonRpcCallRequest& request,
+    std::vector<MuonTypeMetadata>* argument_types,
+    std::string* error_message) const {
+  if (argument_types == nullptr || error_message == nullptr) {
+    return false;
+  }
+  argument_types->clear();
+  error_message->clear();
+  if (std::this_thread::get_id() != impl_->owner_thread ||
+      impl_->state != MuonAndroidProcessRuntimeState::Running ||
+      !impl_->plugin_runtime) {
+    *error_message = "Android native plugin runtime is unavailable";
+    return false;
+  }
+  return impl_->plugin_runtime->GetCallArgumentTypes(
+      request, argument_types, error_message);
+}
+
+void MuonAndroidProcessRuntimeController::Invoke(
+    const MuonRpcCallRequest& request,
+    MuonPluginRuntime::Completion completion) {
+  if (!completion) {
+    return;
+  }
+  if (std::this_thread::get_id() != impl_->owner_thread ||
+      impl_->state != MuonAndroidProcessRuntimeState::Running ||
+      !impl_->plugin_runtime) {
+    MuonRpcCallResult result;
+    result.owner = request.owner;
+    result.call_id = request.call_id;
+    result.success = false;
+    result.error_message = "Android native plugin runtime is unavailable";
+    completion(result);
+    return;
+  }
+  impl_->plugin_runtime->Invoke(request, std::move(completion));
+}
+
+void MuonAndroidProcessRuntimeController::ReleasePluginFunctionProxy(
+    const MuonRpcPluginProxyRelease& release) {
+  if (std::this_thread::get_id() == impl_->owner_thread &&
+      impl_->state == MuonAndroidProcessRuntimeState::Running &&
+      impl_->plugin_runtime) {
+    impl_->plugin_runtime->ReleasePluginFunctionProxy(release);
+  }
+}
+
 void MuonAndroidProcessRuntimeController::ReleaseSessionContext(
     const MuonRpcOwner& owner) {
   auto* session = FindSession(impl_.get(), owner);
-  if (session == nullptr) {
+  if (session == nullptr || !session->available) {
     return;
   }
   session->available = false;

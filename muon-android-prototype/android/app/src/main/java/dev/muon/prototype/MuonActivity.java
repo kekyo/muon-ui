@@ -19,6 +19,7 @@ import android.webkit.WebViewClient;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.webkit.JavaScriptReplyProxy;
+import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebMessageCompat;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
@@ -47,6 +48,7 @@ public final class MuonActivity extends Activity {
             new LinkedBlockingQueue<>();
     private WebView webView;
     private MuonRpcBridge rpcBridge;
+    private ScriptHandler pluginMetadataScriptHandler;
     private MuonAssetRequestHandler assetRequestHandler;
     private boolean testBridgeInstalled;
 
@@ -59,6 +61,9 @@ public final class MuonActivity extends Activity {
         }
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)) {
             throw new IllegalStateException("WebView ArrayBuffer messages are unavailable");
+        }
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            throw new IllegalStateException("WebView document-start scripts are unavailable");
         }
 
         assetRequestHandler = new MuonAssetRequestHandler(this);
@@ -99,6 +104,10 @@ public final class MuonActivity extends Activity {
                 RPC_OBJECT_NAME,
                 Collections.singleton(TRUSTED_ORIGIN),
                 rpcBridge);
+        pluginMetadataScriptHandler = WebViewCompat.addDocumentStartJavaScript(
+                webView,
+                rpcBridge.getDocumentStartScript(),
+                Collections.singleton(TRUSTED_ORIGIN));
         if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             WebViewCompat.addWebMessageListener(
                     webView,
@@ -237,6 +246,10 @@ public final class MuonActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (pluginMetadataScriptHandler != null) {
+            pluginMetadataScriptHandler.remove();
+            pluginMetadataScriptHandler = null;
+        }
         if (webView != null) {
             WebViewCompat.removeWebMessageListener(webView, RPC_OBJECT_NAME);
             if (testBridgeInstalled) {

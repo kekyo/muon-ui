@@ -11,15 +11,24 @@
 #include "rpc/muon_rpc_host.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
+
+struct MuonAndroidResolvedRoute {
+  uint32_t function_id = 0;
+  MuonRpcRouteKind kind = MuonRpcRouteKind::Plugin;
+};
 
 struct MuonAndroidRpcHost {
   JavaVM* virtual_machine = nullptr;
@@ -34,8 +43,16 @@ struct MuonAndroidRpcHost {
   jmethodID cancel_all_platform_calls = nullptr;
   jmethodID deliver_runtime_probe = nullptr;
   jmethodID settle_runtime_probe = nullptr;
+  jclass native_argument_class = nullptr;
+  jfieldID native_argument_kind = nullptr;
+  jfieldID native_argument_boolean_value = nullptr;
+  jfieldID native_argument_number_value = nullptr;
+  jfieldID native_argument_string_value = nullptr;
+  jfieldID native_argument_attachment = nullptr;
   MuonRpcOwner owner;
   std::shared_ptr<MuonRpcHost> host;
+  std::map<std::string, MuonAndroidResolvedRoute> routes_by_path;
+  std::string renderer_metadata_json;
   std::map<uint32_t, MuonRpcHostCompletion> delayed_completions;
   std::map<uint32_t, MuonRpcHostCompletion> platform_completions;
 };
@@ -48,28 +65,17 @@ static JavaVM* process_virtual_machine = nullptr;
 static jclass process_bridge_class = nullptr;
 static jmethodID schedule_runtime_stop_completion = nullptr;
 
-static constexpr uint32_t kGetConfigFunctionId = 1;
-static constexpr uint32_t kFailFunctionId = 2;
-static constexpr uint32_t kDelayFunctionId = 3;
-static constexpr uint32_t kEchoBinaryFunctionId = 4;
-static constexpr uint32_t kGetVariablesFunctionId = 5;
-static constexpr uint32_t kGetProcessIdFunctionId = 6;
-static constexpr uint32_t kGetRuntimeInfoFunctionId = 7;
-static constexpr uint32_t kReloadFunctionId = 8;
-static constexpr uint32_t kToggleFullscreenFunctionId = 9;
-static constexpr uint32_t kEnterFullscreenFunctionId = 10;
-static constexpr uint32_t kExitFullscreenFunctionId = 11;
-static constexpr uint32_t kZoomInFunctionId = 12;
-static constexpr uint32_t kZoomOutFunctionId = 13;
-static constexpr uint32_t kResetZoomFunctionId = 14;
-static constexpr uint32_t kCloseFunctionId = 15;
-static constexpr uint32_t kFirstFilesystemFunctionId = 16;
 static constexpr size_t kBinaryHeaderLength = 16;
 static constexpr jint kPlatformResultVoid = 0;
 static constexpr jint kPlatformResultString = 1;
 static constexpr jint kPlatformResultUnsignedInteger = 2;
 static constexpr jint kPlatformResultBoolean = 3;
 static constexpr jint kPlatformResultBinary = 4;
+static constexpr jint kNativeArgumentNull = 0;
+static constexpr jint kNativeArgumentBoolean = 1;
+static constexpr jint kNativeArgumentNumber = 2;
+static constexpr jint kNativeArgumentString = 3;
+static constexpr jint kNativeArgumentBinary = 4;
 
 static const std::vector<std::string> kFilesystemFunctionPaths = {
     "muon.fs.readFile",       "muon.fs.writeFile",
@@ -83,6 +89,24 @@ static const std::vector<std::string> kFilesystemFunctionPaths = {
     "muon.fs.appendTextFile", "muon.fs.truncate",
     "muon.fs.realpath",       "muon.fs.readlink",
     "muon.fs.symlink",        "muon.fs.watch",
+};
+
+static const std::vector<std::string> kPlatformFunctionPaths = {
+    "muon.environments.getConfigValues",
+    "prototype.fail",
+    "prototype.delay",
+    "prototype.echoBinary",
+    "muon.environments.getVariables",
+    "muon.environments.getProcessId",
+    "muon.environments.getRuntimeInfo",
+    "muon.browser.reload",
+    "muon.browser.toggleFullscreen",
+    "muon.browser.enterFullscreen",
+    "muon.browser.exitFullscreen",
+    "muon.browser.zoomIn",
+    "muon.browser.zoomOut",
+    "muon.browser.resetZoom",
+    "muon.browser.close",
 };
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {
@@ -189,6 +213,110 @@ static void AppendJsonString(const std::string& value, std::string* output) {
   output->push_back('"');
 }
 
+template <typename Number>
+static void AppendJsonFloatingPoint(Number value, std::string* output) {
+  auto buffer = std::array<char, 64>{};
+  const auto encoded = std::to_chars(
+      buffer.data(), buffer.data() + buffer.size(), value,
+      std::chars_format::general, std::numeric_limits<Number>::max_digits10);
+  if (encoded.ec == std::errc()) {
+    output->append(buffer.data(), encoded.ptr);
+  } else {
+    output->append("0");
+  }
+}
+
+static void AppendTypeMetadataJson(const MuonTypeMetadata& type,
+                                   std::string* output) {
+  output->append("{\"type\":");
+  AppendJsonString(GetMuonValueTypeName(type.type), output);
+  if (type.type == MUON_TYPE_FUNCTION) {
+    output->append(",\"args\":[");
+    for (auto index = size_t{0}; index < type.function_arg_types.size();
+         ++index) {
+      if (index != 0) {
+        output->push_back(',');
+      }
+      AppendTypeMetadataJson(type.function_arg_types[index], output);
+    }
+    output->append("],\"returnType\":");
+    if (type.function_return_type.size() == 1) {
+      AppendTypeMetadataJson(type.function_return_type[0], output);
+    } else {
+      output->append("null");
+    }
+  }
+  output->push_back('}');
+}
+
+static std::string CreateRendererMetadataJson(
+    const MuonAndroidPluginCatalog& catalog) {
+  auto output = std::string{
+      "{\"version\":1,\"mode\":\"simple\",\"namespaces\":["};
+  for (auto namespace_index = size_t{0};
+       namespace_index < catalog.namespaces.size(); ++namespace_index) {
+    if (namespace_index != 0) {
+      output.push_back(',');
+    }
+    const auto& plugin_namespace = catalog.namespaces[namespace_index];
+    output.append("{\"namespace\":");
+    AppendJsonString(plugin_namespace.plugin_namespace, &output);
+    output.append(",\"setupScript\":");
+    AppendJsonString(plugin_namespace.setup_script, &output);
+    output.append(",\"allowedFunctions\":[");
+    for (auto function_index = size_t{0};
+         function_index < plugin_namespace.allowed_function_names.size();
+         ++function_index) {
+      if (function_index != 0) {
+        output.push_back(',');
+      }
+      AppendJsonString(
+          plugin_namespace.allowed_function_names[function_index], &output);
+    }
+    output.append("]}");
+  }
+  output.append("],\"functions\":[");
+  for (auto function_index = size_t{0};
+       function_index < catalog.functions.size(); ++function_index) {
+    if (function_index != 0) {
+      output.push_back(',');
+    }
+    const auto& function = catalog.functions[function_index];
+    const auto path = CreateMuonFunctionPublicPath(function);
+    output.append("{\"id\":");
+    output.append(std::to_string(function.id));
+    output.append(",\"namespace\":");
+    AppendJsonString(function.plugin_namespace, &output);
+    output.append(",\"name\":");
+    AppendJsonString(function.js_name, &output);
+    output.append(",\"publicName\":");
+    AppendJsonString(function.public_name.empty() ? function.js_name
+                                                   : function.public_name,
+                     &output);
+    output.append(",\"capabilityId\":");
+    const auto capability =
+        catalog.capability_ids_by_function_path.find(path);
+    AppendJsonString(
+        capability == catalog.capability_ids_by_function_path.end()
+            ? std::string{}
+            : capability->second,
+        &output);
+    output.append(",\"args\":[");
+    for (auto argument_index = size_t{0};
+         argument_index < function.arg_types.size(); ++argument_index) {
+      if (argument_index != 0) {
+        output.push_back(',');
+      }
+      AppendTypeMetadataJson(function.arg_types[argument_index], &output);
+    }
+    output.append("],\"returnType\":");
+    AppendTypeMetadataJson(function.return_type, &output);
+    output.push_back('}');
+  }
+  output.append("]}");
+  return output;
+}
+
 static void SendTextResult(MuonAndroidRpcHost* state,
                            const MuonRpcCallResult& result) {
   auto* environment = GetAndroidEnvironment(state);
@@ -197,25 +325,76 @@ static void SendTextResult(MuonAndroidRpcHost* state,
   }
   auto message = std::string{"{\"version\":1,\"type\":\"result\",\"callId\":"};
   message.append(std::to_string(result.call_id));
-  if (!result.success) {
+  auto success = result.success;
+  auto error_message = result.error_message;
+  if (success &&
+      ((result.value.type.type == MUON_TYPE_F32 &&
+        !std::isfinite(result.value.f32_value)) ||
+       (result.value.type.type == MUON_TYPE_F64 &&
+        !std::isfinite(result.value.f64_value)))) {
+    success = false;
+    error_message = "Cannot encode a non-finite plugin result";
+  }
+  if (success &&
+      (result.value.type.type == MUON_TYPE_FUNCTION ||
+       result.value.type.type == MUON_TYPE_BUFFER_VIEW)) {
+    success = false;
+    error_message = "Unsupported Android plugin result type";
+  }
+  if (!success) {
     message.append(",\"success\":false,\"error\":");
-    AppendJsonString(result.error_message, &message);
+    AppendJsonString(error_message, &message);
     message.push_back('}');
   } else {
-    message.append(",\"success\":true,\"value\":");
+    message.append(",\"success\":true,\"valueType\":");
+    AppendJsonString(GetMuonValueTypeName(result.value.type.type), &message);
+    message.append(",\"value\":");
     switch (result.value.type.type) {
+      case MUON_TYPE_VOID:
+        message.append("null");
+        break;
+      case MUON_TYPE_BOOL:
+        message.append(result.value.bool_value ? "true" : "false");
+        break;
+      case MUON_TYPE_I8:
+        message.append(std::to_string(result.value.i8_value));
+        break;
+      case MUON_TYPE_U8:
+        message.append(std::to_string(result.value.u8_value));
+        break;
+      case MUON_TYPE_I16:
+        message.append(std::to_string(result.value.i16_value));
+        break;
+      case MUON_TYPE_U16:
+        message.append(std::to_string(result.value.u16_value));
+        break;
+      case MUON_TYPE_I32:
+        message.append(std::to_string(result.value.i32_value));
+        break;
+      case MUON_TYPE_U32:
+        message.append(std::to_string(result.value.u32_value));
+        break;
+      case MUON_TYPE_I64:
+        AppendJsonString(std::to_string(result.value.i64_value), &message);
+        break;
+      case MUON_TYPE_U64:
+        AppendJsonString(std::to_string(result.value.u64_value), &message);
+        break;
+      case MUON_TYPE_F32:
+        AppendJsonFloatingPoint(result.value.f32_value, &message);
+        break;
+      case MUON_TYPE_F64:
+        AppendJsonFloatingPoint(result.value.f64_value, &message);
+        break;
+      case MUON_TYPE_POINTER:
+        message.append(std::to_string(result.value.pointer_value));
+        break;
       case MUON_TYPE_STRING:
         if (result.value.is_null) {
           message.append("null");
         } else {
           AppendJsonString(result.value.string_value, &message);
         }
-        break;
-      case MUON_TYPE_BOOL:
-        message.append(result.value.bool_value ? "true" : "false");
-        break;
-      case MUON_TYPE_U32:
-        message.append(std::to_string(result.value.u32_value));
         break;
       default:
         message.append("null");
@@ -404,11 +583,11 @@ static void InvokePlatformFunction(MuonAndroidRpcHost* state,
                                    const MuonRpcCallRequest& request,
                                    MuonRpcHostCompletion completion) {
   auto* environment = GetAndroidEnvironment(state);
-  if (request.function_id == kFailFunctionId) {
+  if (request.capability.function_path == "prototype.fail") {
     CompleteWithFailure(request, "prototype failure", std::move(completion));
     return;
   }
-  if (request.function_id == kDelayFunctionId) {
+  if (request.capability.function_path == "prototype.delay") {
     state->delayed_completions.emplace(request.call_id,
                                        std::move(completion));
     if (environment != nullptr) {
@@ -418,7 +597,7 @@ static void InvokePlatformFunction(MuonAndroidRpcHost* state,
     }
     return;
   }
-  if (request.function_id == kEchoBinaryFunctionId) {
+  if (request.capability.function_path == "prototype.echoBinary") {
     if (request.arguments.size() != 2 ||
         request.arguments[1].type.type != MUON_TYPE_BUFFER_VIEW ||
         !IsValidMuonRpcBinary(request.arguments[1].binary)) {
@@ -517,83 +696,286 @@ static void ReleasePlatformContext(MuonAndroidRpcHost* state) {
   }
 }
 
-static bool ResolveFunctionId(const std::string& function_path,
-                              uint32_t* function_id) {
-  if (function_path == "muon.environments.getConfigValues") {
-    *function_id = kGetConfigFunctionId;
-    return true;
+static bool ResolveFunctionRoute(const MuonAndroidRpcHost* state,
+                                 const std::string& function_path,
+                                 MuonAndroidResolvedRoute* route) {
+  if (state == nullptr || route == nullptr) {
+    return false;
   }
-  if (function_path == "prototype.fail") {
-    *function_id = kFailFunctionId;
-    return true;
+  const auto iterator = state->routes_by_path.find(function_path);
+  if (iterator == state->routes_by_path.end()) {
+    return false;
   }
-  if (function_path == "prototype.delay") {
-    *function_id = kDelayFunctionId;
-    return true;
+  *route = iterator->second;
+  return true;
+}
+
+static bool ParseInt64(const std::string& source, int64_t* value) {
+  if (value == nullptr || source.empty()) {
+    return false;
   }
-  if (function_path == "prototype.echoBinary") {
-    *function_id = kEchoBinaryFunctionId;
-    return true;
+  const auto parsed = std::from_chars(
+      source.data(), source.data() + source.size(), *value);
+  return parsed.ec == std::errc() &&
+         parsed.ptr == source.data() + source.size();
+}
+
+static bool ParseUInt64(const std::string& source, uint64_t* value) {
+  if (value == nullptr || source.empty()) {
+    return false;
   }
-  if (function_path == "muon.environments.getVariables") {
-    *function_id = kGetVariablesFunctionId;
-    return true;
+  const auto parsed = std::from_chars(
+      source.data(), source.data() + source.size(), *value);
+  return parsed.ec == std::errc() &&
+         parsed.ptr == source.data() + source.size();
+}
+
+static bool DecodeBinaryArgument(JNIEnv* environment,
+                                 jobjectArray binary_arguments,
+                                 jint attachment,
+                                 MuonRpcValue* value) {
+  if (environment == nullptr || binary_arguments == nullptr ||
+      value == nullptr || attachment < 0 ||
+      attachment >= environment->GetArrayLength(binary_arguments)) {
+    return false;
   }
-  if (function_path == "muon.environments.getProcessId") {
-    *function_id = kGetProcessIdFunctionId;
-    return true;
+  const auto binary_argument = static_cast<jbyteArray>(
+      environment->GetObjectArrayElement(binary_arguments, attachment));
+  if (binary_argument == nullptr) {
+    return false;
   }
-  if (function_path == "muon.environments.getRuntimeInfo") {
-    *function_id = kGetRuntimeInfoFunctionId;
-    return true;
+  const auto size = environment->GetArrayLength(binary_argument);
+  auto storage = CreateMuonRpcOwnedBuffer(static_cast<size_t>(size));
+  if (!storage || (size != 0 && storage->GetData() == nullptr)) {
+    environment->DeleteLocalRef(binary_argument);
+    return false;
   }
-  if (function_path == "muon.browser.reload") {
-    *function_id = kReloadFunctionId;
-    return true;
+  if (size != 0) {
+    environment->GetByteArrayRegion(
+        binary_argument, 0, size, static_cast<jbyte*>(storage->GetData()));
   }
-  if (function_path == "muon.browser.toggleFullscreen") {
-    *function_id = kToggleFullscreenFunctionId;
-    return true;
+  environment->DeleteLocalRef(binary_argument);
+  if (environment->ExceptionCheck()) {
+    environment->ExceptionClear();
+    return false;
   }
-  if (function_path == "muon.browser.enterFullscreen") {
-    *function_id = kEnterFullscreenFunctionId;
-    return true;
+  value->binary.storage = std::move(storage);
+  value->binary.size = static_cast<size_t>(size);
+  return true;
+}
+
+static bool DecodePluginArguments(
+    MuonAndroidRpcHost* state,
+    JNIEnv* environment,
+    MuonRpcCallRequest* request,
+    jobjectArray native_arguments,
+    jobjectArray binary_arguments,
+    std::string* error_message) {
+  if (state == nullptr || environment == nullptr || request == nullptr ||
+      native_arguments == nullptr || error_message == nullptr ||
+      process_runtime == nullptr) {
+    return false;
   }
-  if (function_path == "muon.browser.exitFullscreen") {
-    *function_id = kExitFullscreenFunctionId;
-    return true;
+  request->arguments.clear();
+  error_message->clear();
+  auto expected_types = std::vector<MuonTypeMetadata>{};
+  if (!process_runtime->GetCallArgumentTypes(
+          *request, &expected_types, error_message)) {
+    return false;
   }
-  if (function_path == "muon.browser.zoomIn") {
-    *function_id = kZoomInFunctionId;
-    return true;
+  if (environment->GetArrayLength(native_arguments) !=
+      static_cast<jsize>(expected_types.size())) {
+    *error_message = "Invalid argument count";
+    return false;
   }
-  if (function_path == "muon.browser.zoomOut") {
-    *function_id = kZoomOutFunctionId;
-    return true;
+
+  request->arguments.resize(expected_types.size());
+  for (auto index = size_t{0}; index < expected_types.size(); ++index) {
+    const auto encoded = environment->GetObjectArrayElement(
+        native_arguments, static_cast<jsize>(index));
+    if (encoded == nullptr ||
+        !environment->IsInstanceOf(encoded, state->native_argument_class)) {
+      if (encoded != nullptr) {
+        environment->DeleteLocalRef(encoded);
+      }
+      *error_message = "Invalid encoded plugin argument";
+      request->arguments.clear();
+      return false;
+    }
+    const auto kind = environment->GetIntField(
+        encoded, state->native_argument_kind);
+    const auto number = environment->GetDoubleField(
+        encoded, state->native_argument_number_value);
+    auto& value = request->arguments[index];
+    value.type = expected_types[index];
+    auto valid = true;
+    switch (expected_types[index].type) {
+      case MUON_TYPE_BOOL:
+        valid = kind == kNativeArgumentBoolean;
+        if (valid) {
+          value.bool_value = environment->GetBooleanField(
+                                 encoded,
+                                 state->native_argument_boolean_value) ==
+                             JNI_TRUE;
+        }
+        break;
+      case MUON_TYPE_I8:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                std::trunc(number) == number &&
+                number >= std::numeric_limits<int8_t>::min() &&
+                number <= std::numeric_limits<int8_t>::max();
+        if (valid) {
+          value.i8_value = static_cast<int8_t>(number);
+        }
+        break;
+      case MUON_TYPE_U8:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                std::trunc(number) == number && number >= 0.0 &&
+                number <= std::numeric_limits<uint8_t>::max();
+        if (valid) {
+          value.u8_value = static_cast<uint8_t>(number);
+        }
+        break;
+      case MUON_TYPE_I16:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                std::trunc(number) == number &&
+                number >= std::numeric_limits<int16_t>::min() &&
+                number <= std::numeric_limits<int16_t>::max();
+        if (valid) {
+          value.i16_value = static_cast<int16_t>(number);
+        }
+        break;
+      case MUON_TYPE_U16:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                std::trunc(number) == number && number >= 0.0 &&
+                number <= std::numeric_limits<uint16_t>::max();
+        if (valid) {
+          value.u16_value = static_cast<uint16_t>(number);
+        }
+        break;
+      case MUON_TYPE_I32:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                std::trunc(number) == number &&
+                number >= std::numeric_limits<int32_t>::min() &&
+                number <= std::numeric_limits<int32_t>::max();
+        if (valid) {
+          value.i32_value = static_cast<int32_t>(number);
+        }
+        break;
+      case MUON_TYPE_U32:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                std::trunc(number) == number && number >= 0.0 &&
+                number <= std::numeric_limits<uint32_t>::max();
+        if (valid) {
+          value.u32_value = static_cast<uint32_t>(number);
+        }
+        break;
+      case MUON_TYPE_I64: {
+        const auto encoded_string = static_cast<jstring>(
+            environment->GetObjectField(encoded,
+                                        state->native_argument_string_value));
+        const auto source = GetJavaString(environment, encoded_string);
+        if (encoded_string != nullptr) {
+          environment->DeleteLocalRef(encoded_string);
+        }
+        valid = kind == kNativeArgumentString &&
+                ParseInt64(source, &value.i64_value);
+        break;
+      }
+      case MUON_TYPE_U64: {
+        const auto encoded_string = static_cast<jstring>(
+            environment->GetObjectField(encoded,
+                                        state->native_argument_string_value));
+        const auto source = GetJavaString(environment, encoded_string);
+        if (encoded_string != nullptr) {
+          environment->DeleteLocalRef(encoded_string);
+        }
+        valid = kind == kNativeArgumentString &&
+                ParseUInt64(source, &value.u64_value);
+        break;
+      }
+      case MUON_TYPE_F32:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number) &&
+                number >= -std::numeric_limits<float>::max() &&
+                number <= std::numeric_limits<float>::max();
+        if (valid) {
+          value.f32_value = static_cast<float>(number);
+        }
+        break;
+      case MUON_TYPE_F64:
+        valid = kind == kNativeArgumentNumber && std::isfinite(number);
+        if (valid) {
+          value.f64_value = number;
+        }
+        break;
+      case MUON_TYPE_POINTER:
+        valid = kind == kNativeArgumentNull ||
+                (kind == kNativeArgumentNumber && std::isfinite(number) &&
+                 std::trunc(number) == number && number >= 0.0 &&
+                 number < std::ldexp(
+                              1.0, std::numeric_limits<uintptr_t>::digits));
+        if (valid && kind == kNativeArgumentNumber) {
+          value.pointer_value = static_cast<uintptr_t>(number);
+        }
+        break;
+      case MUON_TYPE_STRING:
+        if (kind == kNativeArgumentNull) {
+          value.is_null = true;
+          break;
+        }
+        if (kind == kNativeArgumentString) {
+          const auto encoded_string = static_cast<jstring>(
+              environment->GetObjectField(
+                  encoded, state->native_argument_string_value));
+          valid = encoded_string != nullptr;
+          if (valid) {
+            value.string_value = GetJavaString(environment, encoded_string);
+            valid = value.string_value.find('\0') == std::string::npos;
+          }
+          if (encoded_string != nullptr) {
+            environment->DeleteLocalRef(encoded_string);
+          }
+        } else {
+          valid = false;
+        }
+        break;
+      case MUON_TYPE_BUFFER_VIEW:
+        valid = kind == kNativeArgumentBinary &&
+                DecodeBinaryArgument(
+                    environment, binary_arguments,
+                    environment->GetIntField(
+                        encoded, state->native_argument_attachment),
+                    &value);
+        break;
+      case MUON_TYPE_FUNCTION:
+      case MUON_TYPE_VOID:
+      default:
+        valid = false;
+        break;
+    }
+    environment->DeleteLocalRef(encoded);
+    if (!valid) {
+      *error_message = "Invalid " +
+                       std::string(GetMuonValueTypeName(
+                           expected_types[index].type)) +
+                       " argument";
+      request->arguments.clear();
+      return false;
+    }
   }
-  if (function_path == "muon.browser.resetZoom") {
-    *function_id = kResetZoomFunctionId;
-    return true;
-  }
-  if (function_path == "muon.browser.close") {
-    *function_id = kCloseFunctionId;
-    return true;
-  }
-  const auto filesystem =
-      std::find(kFilesystemFunctionPaths.begin(), kFilesystemFunctionPaths.end(),
-                function_path);
-  if (filesystem != kFilesystemFunctionPaths.end()) {
-    *function_id = kFirstFilesystemFunctionId +
-                   static_cast<uint32_t>(
-                       std::distance(kFilesystemFunctionPaths.begin(),
-                                     filesystem));
-    return true;
-  }
-  return false;
+  return true;
 }
 
 static bool InitializeHost(MuonAndroidRpcHost* state,
                            std::string* error_message) {
+  if (state == nullptr || error_message == nullptr ||
+      process_runtime == nullptr) {
+    return false;
+  }
+  auto plugin_catalog = MuonAndroidPluginCatalog{};
+  if (!process_runtime->GetPluginCatalog(&plugin_catalog, error_message)) {
+    return false;
+  }
   auto environment_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateMuonPluginPolicy(
           {"muon.environments.getVariables",
@@ -623,54 +1005,81 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
     return false;
   }
 
-  auto routes = std::vector<MuonRpcFunctionRoute>{
-      {kGetConfigFunctionId, "muon.environments.getConfigValues",
-       MuonRpcRouteKind::Platform},
-      {kGetVariablesFunctionId, "muon.environments.getVariables",
-       MuonRpcRouteKind::Platform},
-      {kGetProcessIdFunctionId, "muon.environments.getProcessId",
-       MuonRpcRouteKind::Platform},
-      {kGetRuntimeInfoFunctionId, "muon.environments.getRuntimeInfo",
-       MuonRpcRouteKind::Platform},
-      {kReloadFunctionId, "muon.browser.reload", MuonRpcRouteKind::Platform},
-      {kToggleFullscreenFunctionId, "muon.browser.toggleFullscreen",
-       MuonRpcRouteKind::Platform},
-      {kEnterFullscreenFunctionId, "muon.browser.enterFullscreen",
-       MuonRpcRouteKind::Platform},
-      {kExitFullscreenFunctionId, "muon.browser.exitFullscreen",
-       MuonRpcRouteKind::Platform},
-      {kZoomInFunctionId, "muon.browser.zoomIn",
-       MuonRpcRouteKind::Platform},
-      {kZoomOutFunctionId, "muon.browser.zoomOut",
-       MuonRpcRouteKind::Platform},
-      {kResetZoomFunctionId, "muon.browser.resetZoom",
-       MuonRpcRouteKind::Platform},
-      {kCloseFunctionId, "muon.browser.close", MuonRpcRouteKind::Platform},
-      {kFailFunctionId, "prototype.fail", MuonRpcRouteKind::Platform},
-      {kDelayFunctionId, "prototype.delay", MuonRpcRouteKind::Platform},
-      {kEchoBinaryFunctionId, "prototype.echoBinary",
-       MuonRpcRouteKind::Platform},
-  };
-  for (auto index = size_t{0}; index < kFilesystemFunctionPaths.size();
-       ++index) {
+  state->routes_by_path.clear();
+  auto routes = std::vector<MuonRpcFunctionRoute>{};
+  routes.reserve(plugin_catalog.functions.size() +
+                 kPlatformFunctionPaths.size() +
+                 kFilesystemFunctionPaths.size());
+  auto used_function_ids = std::set<uint32_t>{};
+  auto maximum_plugin_function_id = uint32_t{0};
+  for (const auto& function : plugin_catalog.functions) {
+    const auto path = CreateMuonFunctionPublicPath(function);
+    if (path.empty() || !used_function_ids.insert(function.id).second ||
+        !state->routes_by_path
+             .emplace(path, MuonAndroidResolvedRoute{
+                                function.id, MuonRpcRouteKind::Plugin})
+             .second) {
+      *error_message = "Invalid Android plugin route: " + path;
+      return false;
+    }
     routes.push_back(
-        {kFirstFilesystemFunctionId + static_cast<uint32_t>(index),
-         kFilesystemFunctionPaths[index], MuonRpcRouteKind::Platform});
+        {function.id, path, MuonRpcRouteKind::Plugin});
+    maximum_plugin_function_id =
+        std::max(maximum_plugin_function_id, function.id);
   }
-  const auto policies =
-      std::map<std::string, std::shared_ptr<MuonPluginPolicy>>{
-          {"environment-capability", environment_policy},
-          {"browser-capability", browser_policy},
-          {"fs-capability", filesystem_policy},
-          {"prototype-capability", prototype_policy},
-      };
+
+  auto platform_paths = kPlatformFunctionPaths;
+  platform_paths.insert(platform_paths.end(), kFilesystemFunctionPaths.begin(),
+                        kFilesystemFunctionPaths.end());
+  auto next_platform_function_id =
+      static_cast<uint64_t>(maximum_plugin_function_id) + 1;
+  for (const auto& path : platform_paths) {
+    if (next_platform_function_id >
+        std::numeric_limits<uint32_t>::max()) {
+      *error_message = "Android RPC function id space is exhausted";
+      return false;
+    }
+    const auto function_id =
+        static_cast<uint32_t>(next_platform_function_id);
+    next_platform_function_id += 1;
+    if (!used_function_ids.insert(function_id).second ||
+        !state->routes_by_path
+             .emplace(path, MuonAndroidResolvedRoute{
+                                function_id, MuonRpcRouteKind::Platform})
+             .second) {
+      *error_message = "Duplicate Android RPC function route: " + path;
+      return false;
+    }
+    routes.push_back(
+        {function_id, path, MuonRpcRouteKind::Platform});
+  }
+
+  auto policies = plugin_catalog.capability_policies;
+  const auto add_policy = [&policies, error_message](
+                              const std::string& id,
+                              std::shared_ptr<MuonPluginPolicy> policy) {
+    if (!policies.emplace(id, std::move(policy)).second) {
+      *error_message = "Duplicate Android RPC capability id: " + id;
+      return false;
+    }
+    return true;
+  };
+  if (!add_policy("environment-capability", environment_policy) ||
+      !add_policy("browser-capability", browser_policy) ||
+      !add_policy("fs-capability", filesystem_policy) ||
+      !add_policy("prototype-capability", prototype_policy)) {
+    return false;
+  }
   MuonRpcHostServices services;
   services.invoke_plugin =
-      [](const MuonRpcCallRequest& request,
-         MuonRpcHostCompletion completion) {
-        CompleteWithFailure(request,
-                            "Android prototype plugin routes are unavailable",
-                            std::move(completion));
+      [](const MuonRpcCallRequest& request, MuonRpcHostCompletion completion) {
+        if (process_runtime == nullptr) {
+          CompleteWithFailure(request,
+                              "Android native plugin runtime is unavailable",
+                              std::move(completion));
+          return;
+        }
+        process_runtime->Invoke(request, std::move(completion));
       };
   services.invoke_platform =
       [state](const MuonRpcCallRequest& request,
@@ -680,15 +1089,27 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   services.cancel_call = [state](const MuonRpcCallCancel& cancel) {
     CancelPlatformCall(state, cancel);
   };
-  services.release_plugin_proxy = [](const MuonRpcPluginProxyRelease&) {};
-  services.release_context = [state](const MuonRpcContextReleased&) {
+  services.release_plugin_proxy = [](const MuonRpcPluginProxyRelease& release) {
+    if (process_runtime != nullptr) {
+      process_runtime->ReleasePluginFunctionProxy(release);
+    }
+  };
+  services.release_context = [state](const MuonRpcContextReleased& release) {
     ReleasePlatformContext(state);
+    if (process_runtime != nullptr) {
+      process_runtime->ReleaseSessionContext(release.owner);
+    }
   };
   services.send_result = [state](const MuonRpcCallResult& result) {
     SendResult(state, result);
   };
-  return CreateMuonRpcHost(MuonRpcHostMode::Validate, routes, policies,
-                           std::move(services), &state->host, error_message);
+  if (!CreateMuonRpcHost(MuonRpcHostMode::Validate, routes, policies,
+                         std::move(services), &state->host, error_message)) {
+    return false;
+  }
+  state->renderer_metadata_json =
+      CreateRendererMetadataJson(plugin_catalog);
+  return true;
 }
 
 /** Creates the CEF-independent host used by one WebView context. */
@@ -736,6 +1157,23 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
       bridge_class, "onNativeRuntimeProbeResult", "(I)V");
   state->settle_runtime_probe = environment->GetMethodID(
       bridge_class, "onNativeRuntimeProbeSettled", "(Z)V");
+  const auto local_native_argument_class = environment->FindClass(
+      "dev/muon/prototype/MuonRpcBridge$NativeArgument");
+  if (local_native_argument_class != nullptr) {
+    state->native_argument_class = static_cast<jclass>(
+        environment->NewGlobalRef(local_native_argument_class));
+    state->native_argument_kind = environment->GetFieldID(
+        local_native_argument_class, "kind", "I");
+    state->native_argument_boolean_value = environment->GetFieldID(
+        local_native_argument_class, "booleanValue", "Z");
+    state->native_argument_number_value = environment->GetFieldID(
+        local_native_argument_class, "numberValue", "D");
+    state->native_argument_string_value = environment->GetFieldID(
+        local_native_argument_class, "stringValue", "Ljava/lang/String;");
+    state->native_argument_attachment = environment->GetFieldID(
+        local_native_argument_class, "attachment", "I");
+    environment->DeleteLocalRef(local_native_argument_class);
+  }
   environment->DeleteLocalRef(bridge_class);
   if (state->send_text_result == nullptr ||
       state->send_binary_result == nullptr || state->schedule_delay == nullptr ||
@@ -744,7 +1182,19 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
       state->cancel_platform_call == nullptr ||
       state->cancel_all_platform_calls == nullptr ||
       state->deliver_runtime_probe == nullptr ||
-      state->settle_runtime_probe == nullptr) {
+      state->settle_runtime_probe == nullptr ||
+      state->native_argument_class == nullptr ||
+      state->native_argument_kind == nullptr ||
+      state->native_argument_boolean_value == nullptr ||
+      state->native_argument_number_value == nullptr ||
+      state->native_argument_string_value == nullptr ||
+      state->native_argument_attachment == nullptr) {
+    if (environment->ExceptionCheck()) {
+      environment->ExceptionClear();
+    }
+    if (state->native_argument_class != nullptr) {
+      environment->DeleteGlobalRef(state->native_argument_class);
+    }
     environment->DeleteGlobalRef(state->bridge);
     return 0;
   }
@@ -766,6 +1216,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
       process_virtual_machine = nullptr;
       process_bridge_class = nullptr;
       schedule_runtime_stop_completion = nullptr;
+      environment->DeleteGlobalRef(state->native_argument_class);
       environment->DeleteGlobalRef(state->bridge);
       ThrowIllegalState(environment,
                         "Could not initialize the Android process runtime");
@@ -788,6 +1239,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
   };
   if (!process_runtime->RegisterSession(
           std::move(callbacks), &state->owner, &error_message)) {
+    environment->DeleteGlobalRef(state->native_argument_class);
     environment->DeleteGlobalRef(state->bridge);
     ThrowIllegalState(
         environment,
@@ -797,11 +1249,25 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
   }
   if (!InitializeHost(state.get(), &error_message)) {
     process_runtime->UnregisterSession(state->owner, false);
+    environment->DeleteGlobalRef(state->native_argument_class);
     environment->DeleteGlobalRef(state->bridge);
     ThrowIllegalState(environment, error_message);
     return 0;
   }
   return GetAndroidRpcHandle(state.release());
+}
+
+/** Returns plugin metadata captured before the WebView document starts. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_muon_prototype_MuonRpcBridge_nativeGetRendererMetadata(
+    JNIEnv* environment,
+    jclass,
+    jlong handle) {
+  const auto* state = GetAndroidRpcHost(handle);
+  if (state == nullptr || state->renderer_metadata_json.empty()) {
+    return environment->NewStringUTF("{}");
+  }
+  return environment->NewStringUTF(state->renderer_metadata_json.c_str());
 }
 
 /** Dispatches one decoded JavaScript call to the native RPC host. */
@@ -814,6 +1280,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeDispatchCall(
     jstring capability_id,
     jstring function_path,
     jstring arguments_json,
+    jobjectArray native_arguments,
     jobjectArray binary_arguments) {
   auto* state = GetAndroidRpcHost(handle);
   if (state == nullptr || !state->host || call_id <= 0) {
@@ -828,8 +1295,31 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeDispatchCall(
   request.call_id = static_cast<uint32_t>(call_id);
   request.capability.id = GetJavaString(environment, capability_id);
   request.capability.function_path = path;
-  if (!ResolveFunctionId(path, &request.function_id)) {
+  auto route = MuonAndroidResolvedRoute{};
+  const auto has_route = ResolveFunctionRoute(state, path, &route);
+  if (has_route) {
+    request.function_id = route.function_id;
+  } else {
     request.function_id = std::numeric_limits<uint32_t>::max();
+  }
+
+  if (has_route && route.kind == MuonRpcRouteKind::Plugin) {
+    auto error_message = std::string{};
+    if (!DecodePluginArguments(
+            state, environment, &request, native_arguments,
+            binary_arguments, &error_message)) {
+      MuonRpcCallResult result;
+      result.owner = request.owner;
+      result.call_id = request.call_id;
+      result.success = false;
+      result.error_message = error_message.empty()
+                                 ? "Invalid Android plugin arguments"
+                                 : error_message;
+      SendResult(state, result);
+      return;
+    }
+    state->host->HandleMessage(MuonRpcMessage{std::move(request)});
+    return;
   }
 
   MuonRpcValue json_value;
@@ -1009,9 +1499,6 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeReleaseContext(
   }
   MuonRpcContextReleased release;
   release.owner = state->owner;
-  if (process_runtime != nullptr) {
-    process_runtime->ReleaseSessionContext(state->owner);
-  }
   state->host->HandleMessage(MuonRpcMessage{release});
 }
 
@@ -1111,6 +1598,10 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeDestroyHost(
   if (state->bridge != nullptr) {
     environment->DeleteGlobalRef(state->bridge);
     state->bridge = nullptr;
+  }
+  if (state->native_argument_class != nullptr) {
+    environment->DeleteGlobalRef(state->native_argument_class);
+    state->native_argument_class = nullptr;
   }
   delete state;
 }

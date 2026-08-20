@@ -82,7 +82,7 @@ public final class MuonActivityTest {
             assertNotNull(result.get());
             String decoded = new JSONArray("[" + result.get() + "]").getString(0);
             JSONObject api = new JSONObject(decoded);
-            assertEquals("[\"browser\",\"environments\",\"fs\"]",
+            assertEquals("[\"browser\",\"environments\",\"fs\",\"test\"]",
                     api.getJSONArray("namespaces").toString());
             assertEquals(8, api.getJSONArray("browser").length());
             assertEquals(22, api.getJSONArray("fs").length());
@@ -429,6 +429,150 @@ public final class MuonActivityTest {
             assertEquals("resolved", result.getString("status"));
             assertTrue(result.getBoolean("isArrayBuffer"));
             assertEquals("[3,1,4]", result.getJSONArray("bytes").toString());
+        }
+    }
+
+    @Test
+    public void invokesPackagedPluginsThroughThePublicJavaScriptApi() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activityReference = new AtomicReference<>();
+            scenario.onActivity(activityReference::set);
+            MuonActivity activity = activityReference.get();
+            assertNotNull(activity);
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      try {
+                        const types = globalThis.muon.test.types;
+                        const source = Uint8Array.from([3, 1, 4, 1, 5, 9, 2, 6]);
+                        const originalBeforeMutation = Array.from(source);
+                        const mutated = Array.from(new Uint8Array(
+                          await types.mutateBufferCopy(source.subarray(0))
+                        ));
+                        const values = {
+                          pluginKeys: Object.keys(globalThis.muon.test).sort(),
+                          typeKeys: Object.keys(types).sort(),
+                          alphaName: await globalThis.muon.test.alpha.alphaName(),
+                          alphaAdd: await globalThis.muon.test.alpha.alphaAdd(12, 30),
+                          alphaConfig: await globalThis.muon.test.alpha.alphaConfig(),
+                          cardioInit: await globalThis.muon.test.cardio
+                            .dispatcherAvailableAtInit(),
+                          cardioCall: await globalThis.muon.test.cardio
+                            .dispatcherAvailable(),
+                          bool: await types.echoBool(false),
+                          i8: await types.echoI8(-128),
+                          u8: await types.echoU8(255),
+                          i16: await types.echoI16(-32768),
+                          u16: await types.echoU16(65535),
+                          i32: await types.echoI32(-2147483648),
+                          u32: await types.echoU32(4294967295),
+                          i64Safe: await types.echoI64(9007199254740991),
+                          i64Truncated: await types.echoI64(1.9),
+                          i64NonFinite: await types.echoI64(Infinity),
+                          u64SignedMax: await types.echoU64(-1),
+                          f32: await types.echoF32(1.25),
+                          f64: await types.echoF64(1.25),
+                          pointerBits: await types.pointerBitSize(),
+                          pointer: await types.echoPointer(4294967296),
+                          nullPointer: await types.echoPointer(null),
+                          returnedNullPointer: await types.returnNullPointer(),
+                          string: await types.echoString('hello'),
+                          nullString: await types.echoString(null),
+                          returnedNullString: await types.returnNullString(),
+                          checksum: await types.bufferChecksum(source.subarray(1, 5)),
+                          transformed: Array.from(new Uint8Array(
+                            await types.transformBuffer(source.buffer)
+                          )),
+                          normal: Array.from(new Uint8Array(
+                            await types.returnNormalBuffer()
+                          )),
+                          shared: Array.from(new Uint8Array(
+                            await types.returnSharedBuffer()
+                          )),
+                          originalBeforeMutation,
+                          mutated,
+                          originalAfterMutation: Array.from(source),
+                          asyncValue: await types.resolveAsync(41),
+                          resolvedTwice: await types.resolveTwice(),
+                          voidType: typeof (await types.returnVoid()),
+                        };
+                        try {
+                          await globalThis.__muon_plugin_call(
+                            'muon_test_plugin_alpha',
+                            'muon.test.cardio.dispatcherAvailable',
+                            []
+                          );
+                          values.deniedCapability = 'resolved';
+                        } catch (error) {
+                          values.deniedCapability = error instanceof Error
+                            ? error.message
+                            : String(error);
+                        }
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'resolved',
+                          values,
+                        }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          status: 'rejected',
+                          error: error instanceof Error ? error.message : String(error),
+                        }));
+                      }
+                    })();
+                    """, null));
+
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertEquals(message, "resolved", result.getString("status"));
+            JSONObject values = result.getJSONObject("values");
+            assertEquals("[\"alpha\",\"cardio\",\"types\"]",
+                    values.getJSONArray("pluginKeys").toString());
+            assertTrue(values.getJSONArray("typeKeys").length() >= 31);
+            assertEquals("alpha", values.getString("alphaName"));
+            assertEquals(42, values.getInt("alphaAdd"));
+            assertEquals("android-registry", values.getString("alphaConfig"));
+            assertTrue(values.getBoolean("cardioInit"));
+            assertTrue(values.getBoolean("cardioCall"));
+            assertFalse(values.getBoolean("bool"));
+            assertEquals(-128, values.getInt("i8"));
+            assertEquals(255, values.getInt("u8"));
+            assertEquals(-32768, values.getInt("i16"));
+            assertEquals(65535, values.getInt("u16"));
+            assertEquals(-2147483648, values.getInt("i32"));
+            assertEquals(4294967295L, values.getLong("u32"));
+            assertEquals(9007199254740991L, values.getLong("i64Safe"));
+            assertEquals(1, values.getInt("i64Truncated"));
+            assertEquals(0, values.getInt("i64NonFinite"));
+            assertEquals(-1, values.getInt("u64SignedMax"));
+            assertEquals(1.25, values.getDouble("f32"), 0.0);
+            assertEquals(1.25, values.getDouble("f64"), 0.0);
+            assertEquals(64, values.getInt("pointerBits"));
+            assertEquals(4294967296L, values.getLong("pointer"));
+            assertEquals(0, values.getInt("nullPointer"));
+            assertEquals(0, values.getInt("returnedNullPointer"));
+            assertEquals("hello", values.getString("string"));
+            assertTrue(values.isNull("nullString"));
+            assertTrue(values.isNull("returnedNullString"));
+            assertEquals(11, values.getInt("checksum"));
+            assertEquals("[163,167,172,160,164,161,164,166]",
+                    values.getJSONArray("transformed").toString());
+            assertEquals("[31,34,37,40,43,46,49,52]",
+                    values.getJSONArray("normal").toString());
+            assertEquals("[91,92,93,94,95,96,97,98]",
+                    values.getJSONArray("shared").toString());
+            assertEquals("[3,1,4,1,5,9,2,6]",
+                    values.getJSONArray("originalBeforeMutation").toString());
+            assertEquals("[94,88,95,88,92,80,89,93]",
+                    values.getJSONArray("mutated").toString());
+            assertEquals("[3,1,4,1,5,9,2,6]",
+                    values.getJSONArray("originalAfterMutation").toString());
+            assertEquals(42, values.getInt("asyncValue"));
+            assertEquals("first", values.getString("resolvedTwice"));
+            assertEquals("undefined", values.getString("voidType"));
+            assertTrue(values.getString("deniedCapability").contains("not allowed"));
         }
     }
 

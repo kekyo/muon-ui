@@ -12,8 +12,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 /** Platform callbacks retained for one Android Activity/WebView session. */
 struct MuonAndroidProcessSessionCallbacks {
@@ -62,6 +64,22 @@ struct MuonAndroidProcessRuntimeDiagnostics {
   bool owner_thread = false;
 };
 
+/** Immutable plugin metadata and policies exposed to one WebView session. */
+struct MuonAndroidPluginCatalog {
+  /** Namespaces produced by the plugins that successfully loaded. */
+  std::vector<MuonNamespaceMetadata> namespaces;
+
+  /** Functions produced by the plugins that successfully loaded. */
+  std::vector<MuonFunctionMetadata> functions;
+
+  /** Registry policies keyed by the capability id used by Android pages. */
+  std::map<std::string, std::shared_ptr<MuonPluginPolicy>>
+      capability_policies;
+
+  /** Default simple-mode capability id for each public function path. */
+  std::map<std::string, std::string> capability_ids_by_function_path;
+};
+
 struct MuonAndroidProcessRuntimeControllerImpl;
 
 /** Owns one cardio host and native plugin runtime per Android process. */
@@ -93,6 +111,29 @@ class MuonAndroidProcessRuntimeController final {
 
   /** Marks a session available when its WebView creates a new context. */
   void ActivateSession(const MuonRpcOwner& owner);
+
+  /**
+   * Copies the loaded plugin catalog used to construct one WebView context.
+   *
+   * @param catalog Receives the immutable runtime metadata and policies.
+   * @param error_message Receives a deterministic availability diagnostic.
+   * @return true while the process runtime is ready for calls.
+   */
+  bool GetPluginCatalog(MuonAndroidPluginCatalog* catalog,
+                        std::string* error_message) const;
+
+  /** Resolves recursive argument metadata for a plugin or proxy call. */
+  bool GetCallArgumentTypes(const MuonRpcCallRequest& request,
+                            std::vector<MuonTypeMetadata>* argument_types,
+                            std::string* error_message) const;
+
+  /** Invokes one fully decoded native plugin call. */
+  void Invoke(const MuonRpcCallRequest& request,
+              MuonPluginRuntime::Completion completion);
+
+  /** Releases one native plugin proxy wrapper lease. */
+  void ReleasePluginFunctionProxy(
+      const MuonRpcPluginProxyRelease& release);
 
   /** Releases runtime resources associated with one WebView context. */
   void ReleaseSessionContext(const MuonRpcOwner& owner);

@@ -3,6 +3,12 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import type {
+  MuonAndroidRendererMetadata,
+  MuonNativeFunctionMetadata,
+  MuonNativeTypeMetadata,
+} from './native-plugin-metadata.js';
+
 /** A message exchanged between JavaScript and the Android WebView host. */
 export type MuonWebViewRpcMessage = string | ArrayBuffer;
 
@@ -90,6 +96,7 @@ interface PendingCall {
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
   readonly signal: AbortSignal | undefined;
+  readonly returnType: MuonNativeTypeMetadata | undefined;
   abortListener: (() => void) | undefined;
 }
 
@@ -175,6 +182,182 @@ const encodeArguments = (arguments_: readonly unknown[]): EncodedArguments => {
     encodeArgumentValue(argument, attachments, ancestors)
   );
   return { value, attachments };
+};
+
+const encodeInt64Argument = (value: unknown, unsigned: boolean): string => {
+  if (typeof value !== 'number') {
+    throw new TypeError(`expected ${unsigned ? 'u64' : 'i64'}`);
+  }
+  const truncated = Number.isFinite(value) ? Math.trunc(value) : 0;
+  const bits = BigInt.asUintN(64, BigInt(truncated));
+  return unsigned ? bits.toString() : BigInt.asIntN(64, bits).toString();
+};
+
+const encodeNumberArgument = (
+  value: unknown,
+  type: MuonNativeTypeMetadata['type']
+): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`expected ${type}`);
+  }
+  const integerRanges: Readonly<
+    Partial<Record<MuonNativeTypeMetadata['type'], readonly [number, number]>>
+  > = {
+    i8: [-128, 127],
+    u8: [0, 255],
+    i16: [-32768, 32767],
+    u16: [0, 65535],
+    i32: [-2147483648, 2147483647],
+    u32: [0, 4294967295],
+  };
+  const range = integerRanges[type];
+  if (
+    range !== undefined &&
+    (!Number.isInteger(value) || value < range[0] || value > range[1])
+  ) {
+    throw new TypeError(`expected ${type}`);
+  }
+  if (
+    type === 'f32' &&
+    (value < -3.4028234663852886e38 || value > 3.4028234663852886e38)
+  ) {
+    throw new TypeError('expected f32');
+  }
+  return value;
+};
+
+const encodeNativeArgumentValue = (
+  value: unknown,
+  type: MuonNativeTypeMetadata,
+  attachments: ArrayBuffer[]
+): unknown => {
+  switch (type.type) {
+    case 'bool':
+      if (typeof value !== 'boolean') {
+        throw new TypeError('expected bool');
+      }
+      return value;
+    case 'i8':
+    case 'u8':
+    case 'i16':
+    case 'u16':
+    case 'i32':
+    case 'u32':
+    case 'f32':
+    case 'f64':
+      return encodeNumberArgument(value, type.type);
+    case 'i64':
+      return encodeInt64Argument(value, false);
+    case 'u64':
+      return encodeInt64Argument(value, true);
+    case 'pointer':
+      if (value === null || value === undefined) {
+        return null;
+      }
+      if (
+        typeof value !== 'number' ||
+        !Number.isFinite(value) ||
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value >= 2 ** 64
+      ) {
+        throw new TypeError('expected pointer');
+      }
+      return value;
+    case 'string':
+      if (value === null || value === undefined) {
+        return null;
+      }
+      if (typeof value !== 'string' || value.includes('\0')) {
+        throw new TypeError('expected string');
+      }
+      return value;
+    case 'buffer_view': {
+      let payload: ArrayBuffer;
+      if (value instanceof ArrayBuffer) {
+        payload = value.slice(0);
+      } else if (ArrayBuffer.isView(value)) {
+        payload = copyArrayBufferView(value);
+      } else {
+        throw new TypeError('expected buffer_view');
+      }
+      const attachment = attachments.length;
+      attachments.push(payload);
+      return { type: 'binary', attachment, byteLength: payload.byteLength };
+    }
+    case 'function':
+      if (value === null || value === undefined) {
+        return null;
+      }
+      throw new TypeError('expected function');
+    case 'void':
+      throw new TypeError('void arguments are unavailable');
+  }
+};
+
+const encodeNativeArguments = (
+  function_: MuonNativeFunctionMetadata,
+  arguments_: readonly unknown[]
+): EncodedArguments => {
+  if (arguments_.length !== function_.args.length) {
+    throw new TypeError(
+      `Invalid argument count for ${function_.namespace}.${function_.publicName}`
+    );
+  }
+  const attachments: ArrayBuffer[] = [];
+  const value = arguments_.map((argument, index) => {
+    try {
+      return encodeNativeArgumentValue(
+        argument,
+        function_.args[index]!,
+        attachments
+      );
+    } catch (error) {
+      const diagnostic =
+        error instanceof Error ? error.message : 'invalid value';
+      throw new TypeError(`Invalid argument ${index}: ${diagnostic}`);
+    }
+  });
+  return { value, attachments };
+};
+
+const decodeNativeResult = (
+  value: unknown,
+  type: MuonNativeTypeMetadata
+): unknown => {
+  if (type.type === 'void') {
+    return undefined;
+  }
+  if (type.type === 'i64' || type.type === 'u64') {
+    if (typeof value !== 'string') {
+      throw new TypeError('Android native 64-bit result is invalid');
+    }
+    const parsed = BigInt(value);
+    return Number(
+      type.type === 'i64'
+        ? BigInt.asIntN(64, parsed)
+        : BigInt.asIntN(64, BigInt.asUintN(64, parsed))
+    );
+  }
+  if (type.type === 'string') {
+    if (value !== null && typeof value !== 'string') {
+      throw new TypeError('Android native string result is invalid');
+    }
+    return value;
+  }
+  if (type.type === 'bool') {
+    if (typeof value !== 'boolean') {
+      throw new TypeError('Android native bool result is invalid');
+    }
+    return value;
+  }
+  if (type.type === 'function' || type.type === 'buffer_view') {
+    throw new TypeError('Android native result transport is invalid');
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError('Android native numeric result is invalid');
+  }
+  return value;
 };
 
 const createAbortError = (): DOMException =>
@@ -286,9 +469,16 @@ export const createMuonWebViewRpcTransport = (
  * @returns The RPC client bound to the transport.
  */
 export const createMuonWebViewRpcClient = (
-  transport: MuonWebViewRpcTransport
+  transport: MuonWebViewRpcTransport,
+  rendererMetadata?: MuonAndroidRendererMetadata
 ): MuonWebViewRpcClient => {
   const pendingCalls = new Map<number, PendingCall>();
+  const functionsByPath = new Map<string, MuonNativeFunctionMetadata>(
+    (rendererMetadata?.functions ?? []).map(
+      (function_) =>
+        [`${function_.namespace}.${function_.publicName}`, function_] as const
+    )
+  );
   let nextCallId = 1;
   let disposed = false;
 
@@ -334,7 +524,18 @@ export const createMuonWebViewRpcClient = (
       return;
     }
     if (parsed.success) {
-      pending.resolve(parsed.value);
+      try {
+        if (pending.returnType === undefined) {
+          pending.resolve(parsed.value);
+        } else {
+          if (parsed.valueType !== pending.returnType.type) {
+            throw new TypeError('Android native result type is invalid');
+          }
+          pending.resolve(decodeNativeResult(parsed.value, pending.returnType));
+        }
+      } catch (error) {
+        pending.reject(error);
+      }
     } else {
       pending.reject(
         new Error(
@@ -352,7 +553,17 @@ export const createMuonWebViewRpcClient = (
       return;
     }
     const pending = takePending(frame.callId);
-    pending?.resolve(frame.payload);
+    if (pending === undefined) {
+      return;
+    }
+    if (
+      pending.returnType !== undefined &&
+      pending.returnType.type !== 'buffer_view'
+    ) {
+      pending.reject(new TypeError('Unexpected Android native binary result'));
+      return;
+    }
+    pending.resolve(frame.payload);
   };
 
   transport.setMessageHandler((message) => {
@@ -387,7 +598,11 @@ export const createMuonWebViewRpcClient = (
     let encodedArguments: EncodedArguments;
     let callMessage: string;
     try {
-      encodedArguments = encodeArguments(arguments_);
+      const functionMetadata = functionsByPath.get(functionPath);
+      encodedArguments =
+        functionMetadata === undefined
+          ? encodeArguments(arguments_)
+          : encodeNativeArguments(functionMetadata, arguments_);
       callMessage = JSON.stringify({
         version: protocolVersion,
         type: 'call',
@@ -405,6 +620,7 @@ export const createMuonWebViewRpcClient = (
         resolve,
         reject,
         signal: options?.signal,
+        returnType: functionsByPath.get(functionPath)?.returnType,
         abortListener: undefined,
       };
       if (pending.signal !== undefined) {

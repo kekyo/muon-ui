@@ -10,6 +10,8 @@ import {
   type MuonWebViewJavaScriptBridge,
 } from './webview-rpc.js';
 import { createMuonAndroidSimpleApi } from './android-api.js';
+import { installMuonAndroidNativePluginApi } from './native-plugin-api.js';
+import { readMuonAndroidRendererMetadata } from './native-plugin-metadata.js';
 
 /** Testable prototype operations that require direct RPC client controls. */
 export interface MuonAndroidPrototypeOperations {
@@ -29,21 +31,24 @@ const bridge = Reflect.get(globalThis, 'muonAndroidRpc') as
 if (bridge === undefined) {
   app.textContent = 'muon Android RPC bridge is unavailable';
 } else {
+  const rendererMetadata = readMuonAndroidRendererMetadata(
+    Reflect.get(globalThis, '__muon_android_plugin_metadata')
+  );
   const client = createMuonWebViewRpcClient(
-    createMuonWebViewRpcTransport(bridge)
+    createMuonWebViewRpcTransport(bridge),
+    rendererMetadata
   );
   const uninstallCapabilityBridge = installMuonWebViewCapabilityBridge(client);
-  const previousMuon = Object.getOwnPropertyDescriptor(globalThis, 'muon');
-  Object.defineProperty(globalThis, 'muon', {
-    configurable: true,
-    enumerable: true,
-    writable: false,
-    value: createMuonAndroidSimpleApi(client, {
-      'muon.browser': 'browser-capability',
-      'muon.environments': 'environment-capability',
-      'muon.fs': 'fs-capability',
-    }),
+  const androidApi = createMuonAndroidSimpleApi(client, {
+    'muon.browser': 'browser-capability',
+    'muon.environments': 'environment-capability',
+    'muon.fs': 'fs-capability',
   });
+  const uninstallNativePluginApi = installMuonAndroidNativePluginApi(
+    client,
+    rendererMetadata,
+    { muon: androidApi }
+  );
   const operations: MuonAndroidPrototypeOperations = {
     cancelDelayed: () => {
       const controller = new AbortController();
@@ -87,11 +92,7 @@ if (bridge === undefined) {
     'pagehide',
     () => {
       Reflect.deleteProperty(globalThis, '__muon_android_prototype');
-      if (previousMuon === undefined) {
-        Reflect.deleteProperty(globalThis, 'muon');
-      } else {
-        Object.defineProperty(globalThis, 'muon', previousMuon);
-      }
+      uninstallNativePluginApi();
       uninstallCapabilityBridge();
       client.dispose();
     },

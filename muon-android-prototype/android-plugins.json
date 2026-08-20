@@ -25,6 +25,17 @@
       },
       "allow": ["muon.test.cardio.*"],
       "config": {}
+    },
+    {
+      "name": "muon_test_plugin_types",
+      "soname": "libmuon_test_plugin_types.so",
+      "source": "../muon-core/test_plugins/muon_test_plugin_types.cpp",
+      "artifacts": {
+        "x86_64": "lib/x86_64/libmuon_test_plugin_types.so",
+        "arm64-v8a": "lib/arm64-v8a/libmuon_test_plugin_types.so"
+      },
+      "allow": ["muon.test.types.*"],
+      "config": {}
     }
   ]
 }

@@ -11,22 +11,9 @@
 #include "muon_cardio_post.h"
 #include "muon_sha256.h"
 
-#include "plugins/builtin/muon_builtin.h"
-#include "browser/muon_builtin_browser.h"
-#include "plugins/builtin/muon_builtin_executor.h"
-#include "plugins/builtin/muon_builtin_fs.h"
-#include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 #include "plugins/muon_function_wrapper_lifecycle.h"
-#include "config/muon_paths.h"
-#include "log/muon_log.h"
 
 #include <cardio.h>
-
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 #include <algorithm>
 #include <cmath>
@@ -48,7 +35,7 @@ static constexpr uint32_t kMaxMuonPluginFunctionArgs = 32;
 static std::string GetMuonTrafficError(const tra_ffic_error& error);
 
 struct MuonDynamicLibrary {
-  std::filesystem::path path;
+  std::string locator;
   void* handle = nullptr;
   muon_plugin_stop_func stop = nullptr;
   muon_plugin_renderer_context_released_func renderer_context_released =
@@ -358,19 +345,18 @@ struct MuonPluginRuntimeImpl {
       MuonPluginRuntimeStopState::Running;
   size_t next_stop_library_index = 0;
   std::vector<MuonPluginRuntime::StopCompletion> stop_completions;
-  std::vector<MuonFsDialogsCancelOwnerBrowserFunction>
-      fs_dialogs_cancel_owner_functions;
+  std::vector<std::function<void(int)>> cancel_owner_operations;
   std::vector<std::unique_ptr<MuonRegisteredFunction>> registered_functions;
   std::vector<MuonNamespaceMetadata> renderer_namespaces;
   std::vector<MuonFunctionMetadata> renderer_functions;
   uint32_t next_function_id = 0;
   std::map<uint32_t, MuonRegisteredFunction*> functions_by_id;
-  std::map<uint32_t, MuonBuiltinBrowserFunctionKind>
-      builtin_browser_functions_by_id;
+  std::map<uint32_t, uint32_t> platform_route_ids_by_function_id;
   std::set<std::string> plugin_namespaces;
   std::set<std::string> namespace_paths;
   std::map<std::string, uint32_t> function_paths;
   std::string startup_error;
+  bool platform_initialized = false;
 
   cardio::dispatcher* main_dispatcher = nullptr;
   std::shared_ptr<MuonTrafficDrainState> traffic_drain_state;
@@ -411,6 +397,16 @@ struct MuonPluginRuntimeImpl {
 };
 
 static MuonPluginRuntimeImpl* g_muon_runtime_helpers = nullptr;
+
+static void LogMuonPluginRuntimeMessage(
+    MuonPluginRuntimeImpl* impl,
+    MuonPluginRuntimeLogSource source,
+    muon_log_level level,
+    const std::string& message) {
+  if (impl != nullptr && impl->services.emit_log) {
+    impl->services.emit_log(source, level, message);
+  }
+}
 
 static std::shared_ptr<MuonFunctionSignatureStorage> CreateSharedSignature(
     const std::vector<MuonTypeMetadata>& arg_types,
@@ -490,19 +486,29 @@ MuonPluginRuntimeImpl::MuonPluginRuntimeImpl(
       !this->services.post_owner_task ||
       !this->services.allocate_buffer ||
       !this->services.is_owner_available ||
-      !this->services.send_message) {
+      !this->services.send_message ||
+      !this->services.emit_log ||
+      !this->services.open_library ||
+      !this->services.find_symbol ||
+      !this->services.close_library) {
     startup_error = "muon plugin runtime services are incomplete";
-    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError, startup_error);
+    LogMuonPluginRuntimeMessage(
+        this, MuonPluginRuntimeLogSource::Runtime,
+        MUON_LOG_LEVEL_ERROR, startup_error);
     return;
   }
   if (!this->services.is_owner_thread()) {
     startup_error = "muon plugin runtime must be created on its owner thread";
-    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError, startup_error);
+    LogMuonPluginRuntimeMessage(
+        this, MuonPluginRuntimeLogSource::Runtime,
+        MUON_LOG_LEVEL_ERROR, startup_error);
     return;
   }
   if (main_dispatcher == nullptr) {
     startup_error = "muon main dispatcher is unavailable";
-    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError, startup_error);
+    LogMuonPluginRuntimeMessage(
+        this, MuonPluginRuntimeLogSource::Runtime,
+        MUON_LOG_LEVEL_ERROR, startup_error);
     return;
   }
   tra_ffic_error error;
@@ -510,17 +516,19 @@ MuonPluginRuntimeImpl::MuonPluginRuntimeImpl(
           &traffic_queue,
           NotifyMuonTrafficFinalization,
           traffic_drain_state_handle.get())) {
-    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Failed to initialize tra-ffic task queue");
+    LogMuonPluginRuntimeMessage(
+        this, MuonPluginRuntimeLogSource::Runtime,
+        MUON_LOG_LEVEL_ERROR, "Failed to initialize tra-ffic task queue");
     return;
   }
   if (!tra_ffic_side_init_pair(&renderer_side, &plugin_side,
                                tra_ffic_task_queue_schedule_callback,
                                &traffic_queue,
                                &error)) {
-    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Failed to initialize tra-ffic sides: " +
-                       GetMuonTrafficError(error));
+    LogMuonPluginRuntimeMessage(
+        this, MuonPluginRuntimeLogSource::Runtime,
+        MUON_LOG_LEVEL_ERROR,
+        "Failed to initialize tra-ffic sides: " + GetMuonTrafficError(error));
     tra_ffic_task_queue_destroy(&traffic_queue);
     return;
   }
@@ -614,36 +622,31 @@ bool MuonPluginRuntimeImpl::HasTrafficTasks() {
   return has_tasks;
 }
 
-static void CloseMuonDynamicLibrary(void* handle) {
-  if (handle == nullptr) {
-    return;
+static void CloseMuonDynamicLibrary(MuonPluginRuntimeImpl* impl,
+                                    void* handle) {
+  if (impl != nullptr && handle != nullptr &&
+      impl->services.close_library) {
+    impl->services.close_library(handle);
   }
-#if defined(_WIN32)
-  FreeLibrary(static_cast<HMODULE>(handle));
-#else
-  dlclose(handle);
-#endif
 }
 
-static void* OpenMuonDynamicLibrary(const std::filesystem::path& path) {
-#if defined(_WIN32)
-  return LoadLibraryW(path.wstring().c_str());
-#else
-  const auto native_path = path.string();
-  return dlopen(native_path.c_str(), RTLD_NOW | RTLD_LOCAL);
-#endif
-}
-
-static void* GetMuonDynamicLibrarySymbol(void* handle, const char* name) {
-  if (handle == nullptr || name == nullptr) {
+static void* OpenMuonDynamicLibrary(MuonPluginRuntimeImpl* impl,
+                                    const std::string& locator,
+                                    std::string* error_message) {
+  if (impl == nullptr || !impl->services.open_library) {
     return nullptr;
   }
-#if defined(_WIN32)
-  return reinterpret_cast<void*>(
-      GetProcAddress(static_cast<HMODULE>(handle), name));
-#else
-  return dlsym(handle, name);
-#endif
+  return impl->services.open_library(locator, error_message);
+}
+
+static void* GetMuonDynamicLibrarySymbol(MuonPluginRuntimeImpl* impl,
+                                         void* handle,
+                                         const char* name) {
+  if (impl == nullptr || handle == nullptr || name == nullptr ||
+      !impl->services.find_symbol) {
+    return nullptr;
+  }
+  return impl->services.find_symbol(handle, name);
 }
 
 static const char* GetMuonPluginLibraryExtension() {
@@ -654,8 +657,11 @@ static const char* GetMuonPluginLibraryExtension() {
 #endif
 }
 
-static muon_init_plugin_func GetMuonPluginInitFunction(void* handle) {
-  const auto address = GetMuonDynamicLibrarySymbol(handle, kMuonPluginEntryPoint);
+static muon_init_plugin_func GetMuonPluginInitFunction(
+    MuonPluginRuntimeImpl* impl,
+    void* handle) {
+  const auto address = GetMuonDynamicLibrarySymbol(
+      impl, handle, kMuonPluginEntryPoint);
   return reinterpret_cast<muon_init_plugin_func>(address);
 }
 
@@ -674,13 +680,6 @@ static muon_plugin_init_context CreateMuonPluginInitContext(
       static_cast<uint32_t>(config_entries->size()),
       config_entries->empty() ? nullptr : config_entries->data(),
   };
-}
-
-static MuonFsDialogsCancelOwnerBrowserFunction
-GetMuonFsDialogsCancelOwnerBrowserFunction(void* handle) {
-  const auto address = GetMuonDynamicLibrarySymbol(
-      handle, kMuonFsDialogsCancelOwnerBrowserSymbol);
-  return reinterpret_cast<MuonFsDialogsCancelOwnerBrowserFunction>(address);
 }
 
 static std::filesystem::path ResolveMuonPluginLibraryPath(
@@ -1093,25 +1092,10 @@ static void ReleaseMuonSharedBuffer(muon_shared_buffer_handle handle) {
   impl->shared_buffer_allocations.erase(iterator);
 }
 
-static MuonLogLevel ConvertMuonPluginLogLevel(muon_log_level level) {
-  switch (level) {
-    case MUON_LOG_LEVEL_DEBUG:
-      return kMuonLogLevelDebug;
-    case MUON_LOG_LEVEL_INFO:
-      return kMuonLogLevelInfo;
-    case MUON_LOG_LEVEL_WARNING:
-      return kMuonLogLevelWarning;
-    case MUON_LOG_LEVEL_ERROR:
-      return kMuonLogLevelError;
-    case MUON_LOG_LEVEL_FATAL:
-      return kMuonLogLevelFatal;
-  }
-  return kMuonLogLevelInfo;
-}
-
 static void LogMuonPluginMessage(muon_log_level level, const char* message) {
-  LogMuonMessage(kMuonLogSourcePlugin, ConvertMuonPluginLogLevel(level),
-                 message == nullptr ? std::string() : std::string(message));
+  LogMuonPluginRuntimeMessage(
+      GetMuonRuntimeForHelpers(), MuonPluginRuntimeLogSource::Plugin,
+      level, message == nullptr ? std::string() : std::string(message));
 }
 
 static const muon_plugin_helpers kMuonPluginHelpers = {
@@ -1171,7 +1155,9 @@ static bool FailMuonPluginStartup(MuonPluginRuntimeImpl* impl,
   if (impl != nullptr && impl->startup_error.empty()) {
     impl->startup_error = error_message;
   }
-  LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError, error_message);
+  LogMuonPluginRuntimeMessage(
+      impl, MuonPluginRuntimeLogSource::Runtime,
+      MUON_LOG_LEVEL_ERROR, error_message);
   return false;
 }
 
@@ -1195,34 +1181,14 @@ static std::vector<std::string> CreateMuonNamespacePaths(
   return paths;
 }
 
-static void AddMuonPluginMetadataNamespaces(
-    const muon_plugin_metadata* metadata,
-    std::vector<std::string>* namespaces) {
-  if (metadata == nullptr || namespaces == nullptr ||
-      metadata->namespaces == nullptr) {
-    return;
-  }
-  for (auto namespace_entry = metadata->namespaces;
-       *namespace_entry != nullptr; ++namespace_entry) {
-    const auto* plugin_namespace = (*namespace_entry)->plugin_namespace;
-    if (plugin_namespace != nullptr) {
-      namespaces->push_back(plugin_namespace);
-    }
-  }
-}
-
-static std::vector<std::string> GetMuonReservedPluginNamespaces() {
-  std::vector<std::string> namespaces;
-  AddMuonPluginMetadataNamespaces(GetMuonBuiltinPluginMetadata(), &namespaces);
-  AddMuonPluginMetadataNamespaces(
-      GetMuonBuiltinFsDialogsPluginMetadata(), &namespaces);
-  namespaces.push_back(GetMuonBuiltinBrowserPluginNamespace());
-  return namespaces;
-}
-
 static bool IsMuonReservedPluginNamespacePath(
+    MuonPluginRuntimeImpl* impl,
     const std::string& namespace_path) {
-  for (const auto& reserved_namespace : GetMuonReservedPluginNamespaces()) {
+  if (impl == nullptr || !impl->services.platform_adapter) {
+    return false;
+  }
+  for (const auto& reserved_namespace :
+       impl->services.platform_adapter->reserved_namespaces) {
     if (namespace_path == reserved_namespace) {
       return true;
     }
@@ -1239,7 +1205,7 @@ static bool ValidateMuonPluginNamespaceRegistration(
     return false;
   }
   if (!allow_reserved_namespaces) {
-    if (IsMuonReservedPluginNamespacePath(plugin_namespace)) {
+    if (IsMuonReservedPluginNamespacePath(impl, plugin_namespace)) {
       return FailMuonPluginStartup(
           impl, "Reserved plugin namespace: " + plugin_namespace);
     }
@@ -1268,7 +1234,7 @@ static bool ValidateMuonPluginFunctionPath(
     return false;
   }
   if (!allow_reserved_namespaces &&
-      IsMuonReservedPluginNamespacePath(public_path)) {
+      IsMuonReservedPluginNamespacePath(impl, public_path)) {
     return FailMuonPluginStartup(
         impl, "Plugin function path conflicts with a reserved namespace: " +
                   public_path);
@@ -1334,9 +1300,11 @@ static bool PrepareMuonPluginNamespaces(
         std::string error_message;
         if (!ValidateMuonPluginFunctionMetadata(*source_function,
                                                 &error_message)) {
-          LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
-                         "Skipping plugin function from " + path.string() +
-                             ": " + error_message);
+          LogMuonPluginRuntimeMessage(
+              impl, MuonPluginRuntimeLogSource::Runtime,
+              MUON_LOG_LEVEL_WARNING,
+              "Skipping plugin function from " + path.string() + ": " +
+                  error_message);
           continue;
         }
 
@@ -2477,7 +2445,7 @@ static void InvokeMuonTrafficFunction(
 }
 
 static void KeepOrCloseMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
-                                          const std::filesystem::path& path,
+                                          const std::string& locator,
                                           void* handle,
                                           size_t initial_function_count,
                                           muon_plugin_stop_func stop,
@@ -2486,19 +2454,19 @@ static void KeepOrCloseMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
   if (impl != nullptr &&
       impl->registered_functions.size() > initial_function_count) {
     MuonDynamicLibrary library;
-    library.path = path;
+    library.locator = locator;
     library.handle = handle;
     library.stop = stop;
     library.renderer_context_released = renderer_context_released;
     impl->libraries.push_back(library);
-    const auto cancel_owner =
-        GetMuonFsDialogsCancelOwnerBrowserFunction(handle);
-    if (cancel_owner != nullptr) {
-      impl->fs_dialogs_cancel_owner_functions.push_back(cancel_owner);
+    if (impl->services.platform_adapter &&
+        impl->services.platform_adapter->library_loaded) {
+      impl->services.platform_adapter->library_loaded(
+          handle, &impl->cancel_owner_operations);
     }
     return;
   }
-  CloseMuonDynamicLibrary(handle);
+  CloseMuonDynamicLibrary(impl, handle);
 }
 
 struct MuonPluginStopCallbackState {
@@ -2520,9 +2488,11 @@ static void CompleteMuonPluginStop(void* user_data) {
   }
   if (!impl->services.post_owner_task(
           [impl]() { ContinueMuonPluginStop(impl); })) {
-    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
-                   "Cannot dispatch plugin shutdown completion to the runtime "
-                   "owner thread");
+    LogMuonPluginRuntimeMessage(
+        impl, MuonPluginRuntimeLogSource::Runtime,
+        MUON_LOG_LEVEL_ERROR,
+        "Cannot dispatch plugin shutdown completion to the runtime owner "
+        "thread");
   }
 }
 
@@ -2600,9 +2570,10 @@ static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
       if (!ConvertMuonFunctionSignature(
               source->signature, &registered_function->metadata.arg_types,
               &registered_function->metadata.return_type, &error_message)) {
-        LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
-                       "Skipping plugin function " + js_name + ": " +
-                           error_message);
+        LogMuonPluginRuntimeMessage(
+            impl, MuonPluginRuntimeLogSource::Runtime,
+            MUON_LOG_LEVEL_WARNING,
+            "Skipping plugin function " + js_name + ": " + error_message);
         continue;
       }
       registered_function->signature_storage = CreateSharedSignature(
@@ -2617,18 +2588,21 @@ static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
               ConvertMuonUserFunctionToTraffic(
                   reinterpret_cast<muon_user_function>(source->native_func)),
               &registered_function->function, &error)) {
-        LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
-                       "Skipping plugin function " + js_name + ": " +
-                           GetMuonTrafficError(error));
+        LogMuonPluginRuntimeMessage(
+            impl, MuonPluginRuntimeLogSource::Runtime,
+            MUON_LOG_LEVEL_WARNING,
+            "Skipping plugin function " + js_name + ": " +
+                GetMuonTrafficError(error));
         continue;
       }
       if (!CreateMuonTrafficFunctionRef(
               registered_function->function,
               registered_function->signature_storage,
               &registered_function->function_ref, &error_message)) {
-        LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
-                       "Skipping plugin function " + js_name + ": " +
-                           error_message);
+        LogMuonPluginRuntimeMessage(
+            impl, MuonPluginRuntimeLogSource::Runtime,
+            MUON_LOG_LEVEL_WARNING,
+            "Skipping plugin function " + js_name + ": " + error_message);
         (void)tra_ffic_function_release(registered_function->function, &error);
         continue;
       }
@@ -2649,158 +2623,158 @@ static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
   return true;
 }
 
-static bool RegisterMuonBuiltinBrowserFunctions(
+static bool RegisterMuonPlatformFunctions(
     MuonPluginRuntimeImpl* impl,
-    const MuonPluginPolicy& plugin_policy) {
+    const MuonPluginPolicy& plugin_policy,
+    const std::vector<MuonPluginRuntimePlatformNamespace>& namespaces) {
   if (impl == nullptr) {
     return false;
   }
-
-  const std::string plugin_namespace(GetMuonBuiltinBrowserPluginNamespace());
-  std::vector<std::string> namespace_segments;
-  if (!SplitMuonPluginNamespace(plugin_namespace, &namespace_segments)) {
-    return FailMuonPluginStartup(
-        impl, "Built-in browser namespace is invalid: " + plugin_namespace);
-  }
-  const auto namespace_paths = CreateMuonNamespacePaths(namespace_segments);
-
-  std::set<std::string> local_function_paths;
-  std::vector<const MuonBuiltinBrowserFunctionDefinition*> allowed_functions;
-  std::vector<std::string> allowed_function_names;
-  for (const auto& definition : GetMuonBuiltinBrowserFunctionDefinitions()) {
-    if (definition.js_name == nullptr ||
-        !IsValidMuonJsIdentifier(definition.js_name) ||
-        (definition.filter_name != nullptr &&
-         !IsValidMuonJsIdentifier(definition.filter_name)) ||
-        (definition.arg_count > 0 && definition.arg_types == nullptr) ||
-        definition.kind == MuonBuiltinBrowserFunctionKind::None) {
+  for (const auto& source_namespace : namespaces) {
+    std::vector<std::string> namespace_segments;
+    if (!SplitMuonPluginNamespace(
+            source_namespace.plugin_namespace, &namespace_segments)) {
       return FailMuonPluginStartup(
-          impl, "Built-in browser function metadata is invalid");
+          impl, "Platform namespace is invalid: " +
+                    source_namespace.plugin_namespace);
     }
-
-    const std::string js_name(definition.js_name);
-    const auto filter_name = definition.filter_name == nullptr
-                                 ? js_name
-                                 : std::string(definition.filter_name);
-    const auto public_path =
-        CreateMuonFunctionPublicPath(plugin_namespace, filter_name);
-    if (!IsMuonPluginFunctionAllowed(plugin_policy, public_path)) {
+    const auto namespace_paths =
+        CreateMuonNamespacePaths(namespace_segments);
+    auto local_function_paths = std::set<std::string>{};
+    auto allowed_functions =
+        std::vector<const MuonPluginRuntimePlatformFunction*>{};
+    auto allowed_function_names = std::vector<std::string>{};
+    for (const auto& definition : source_namespace.functions) {
+      if (!IsValidMuonJsIdentifier(definition.js_name) ||
+          !IsValidMuonJsIdentifier(definition.public_name) ||
+          definition.route_id == 0) {
+        return FailMuonPluginStartup(
+            impl, "Platform function metadata is invalid");
+      }
+      const auto public_path = CreateMuonFunctionPublicPath(
+          source_namespace.plugin_namespace, definition.public_name);
+      if (!IsMuonPluginFunctionAllowed(plugin_policy, public_path)) {
+        continue;
+      }
+      const auto native_path = CreateMuonFunctionPublicPath(
+          source_namespace.plugin_namespace, definition.js_name);
+      if (local_function_paths.contains(public_path) ||
+          (native_path != public_path &&
+           local_function_paths.contains(native_path))) {
+        return FailMuonPluginStartup(
+            impl, "Duplicate plugin function path: " +
+                      (local_function_paths.contains(public_path)
+                           ? public_path
+                           : native_path));
+      }
+      if (!ValidateMuonPluginFunctionPath(impl, public_path, true) ||
+          (native_path != public_path &&
+           !ValidateMuonPluginFunctionPath(impl, native_path, true))) {
+        return false;
+      }
+      local_function_paths.insert(public_path);
+      if (native_path != public_path) {
+        local_function_paths.insert(native_path);
+      }
+      allowed_functions.push_back(&definition);
+      allowed_function_names.push_back(definition.public_name);
+    }
+    if (allowed_functions.empty()) {
       continue;
     }
-    const auto native_path =
-        CreateMuonFunctionPublicPath(plugin_namespace, js_name);
-    if (local_function_paths.find(public_path) !=
-        local_function_paths.end()) {
-      return FailMuonPluginStartup(
-          impl, "Duplicate plugin function path: " + public_path);
-    }
-    if (native_path != public_path &&
-        local_function_paths.find(native_path) != local_function_paths.end()) {
-      return FailMuonPluginStartup(
-          impl, "Duplicate plugin function path: " + native_path);
-    }
-    if (!ValidateMuonPluginFunctionPath(impl, public_path, true)) {
+    if (!ValidateMuonPluginNamespaceRegistration(
+            impl, source_namespace.plugin_namespace, namespace_paths,
+            true)) {
       return false;
     }
-    if (native_path != public_path &&
-        !ValidateMuonPluginFunctionPath(impl, native_path, true)) {
-      return false;
-    }
-    local_function_paths.insert(public_path);
-    if (native_path != public_path) {
-      local_function_paths.insert(native_path);
-    }
-    allowed_functions.push_back(&definition);
-    allowed_function_names.push_back(filter_name);
-  }
+    impl->plugin_namespaces.insert(source_namespace.plugin_namespace);
+    impl->namespace_paths.insert(
+        namespace_paths.begin(), namespace_paths.end());
+    impl->renderer_namespaces.push_back(
+        {source_namespace.plugin_namespace, source_namespace.setup_script,
+         allowed_function_names});
 
-  if (allowed_functions.empty()) {
-    return true;
-  }
-  if (!ValidateMuonPluginNamespaceRegistration(
-          impl, plugin_namespace, namespace_paths, true)) {
-    return false;
-  }
-
-  impl->plugin_namespaces.insert(plugin_namespace);
-  impl->namespace_paths.insert(namespace_paths.begin(), namespace_paths.end());
-  impl->renderer_namespaces.push_back(
-      {plugin_namespace, GetMuonBuiltinBrowserSetupScript(),
-       allowed_function_names});
-
-  for (const auto* definition : allowed_functions) {
-    const std::string js_name(definition->js_name);
-    const auto filter_name = definition->filter_name == nullptr
-                                 ? js_name
-                                 : std::string(definition->filter_name);
-    const auto id = AllocateMuonFunctionId(impl);
-    MuonFunctionMetadata function;
-    function.id = id;
-    function.plugin_namespace = plugin_namespace;
-    function.js_name = js_name;
-    function.public_name = filter_name;
-    if (definition->arg_types != nullptr && definition->arg_count > 0) {
-      function.arg_types.assign(definition->arg_types,
-                                definition->arg_types + definition->arg_count);
+    for (const auto* definition : allowed_functions) {
+      const auto id = AllocateMuonFunctionId(impl);
+      MuonFunctionMetadata function;
+      function.id = id;
+      function.plugin_namespace = source_namespace.plugin_namespace;
+      function.js_name = definition->js_name;
+      function.public_name = definition->public_name;
+      function.arg_types = definition->arg_types;
+      function.return_type = definition->return_type;
+      impl->renderer_functions.push_back(std::move(function));
+      impl->function_paths[CreateMuonFunctionPublicPath(
+          source_namespace.plugin_namespace, definition->public_name)] = id;
+      const auto native_path = CreateMuonFunctionPublicPath(
+          source_namespace.plugin_namespace, definition->js_name);
+      if (native_path != CreateMuonFunctionPublicPath(
+                             source_namespace.plugin_namespace,
+                             definition->public_name)) {
+        impl->function_paths[native_path] = id;
+      }
+      impl->platform_route_ids_by_function_id[id] = definition->route_id;
     }
-    function.return_type = definition->return_type;
-    impl->renderer_functions.push_back(std::move(function));
-    impl->function_paths[CreateMuonFunctionPublicPath(plugin_namespace,
-                                                       filter_name)] = id;
-    const auto native_path =
-        CreateMuonFunctionPublicPath(plugin_namespace, js_name);
-    if (native_path !=
-        CreateMuonFunctionPublicPath(plugin_namespace, filter_name)) {
-      impl->function_paths[native_path] = id;
-    }
-    impl->builtin_browser_functions_by_id[id] = definition->kind;
   }
   return true;
 }
 
-static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
-                                   const std::filesystem::path& path,
-                                   const MuonPluginRuntimeLoadEntry& plugin,
-                                   const MuonPluginPolicy& plugin_policy) {
-  std::error_code filesystem_error;
-  if (!std::filesystem::exists(path, filesystem_error) || filesystem_error ||
-      !std::filesystem::is_regular_file(path, filesystem_error) ||
-      filesystem_error) {
+static bool LoadMuonPluginLibrary(
+    MuonPluginRuntimeImpl* impl,
+    const std::string& locator,
+    const std::filesystem::path* file_path,
+    const MuonPluginRuntimeLoadEntry& plugin,
+    const MuonPluginPolicy& plugin_policy) {
+  if (file_path != nullptr) {
+    std::error_code filesystem_error;
+    if (!std::filesystem::exists(*file_path, filesystem_error) ||
+        filesystem_error ||
+        !std::filesystem::is_regular_file(*file_path, filesystem_error) ||
+        filesystem_error) {
+      return FailMuonPluginStartup(
+          impl, "Plugin file not found: " + file_path->string());
+    }
+    if (plugin.has_expected_signature) {
+      if (!plugin.has_signature_salt) {
+        return FailMuonPluginStartup(
+            impl, "Plugin signature requires plugin salt: " + plugin.plugin);
+      }
+      std::string actual_signature;
+      if (!muon_internal::CalculateFileSha256Hex(
+              *file_path, plugin.signature_salt, &actual_signature)) {
+        return FailMuonPluginStartup(
+            impl, "Failed to calculate plugin signature: " +
+                      file_path->string());
+      }
+      if (actual_signature != plugin.expected_signature) {
+        return FailMuonPluginStartup(
+            impl, "Plugin signature mismatch: " + file_path->string() +
+                      " expected " + plugin.expected_signature + " actual " +
+                      actual_signature);
+      }
+    }
+  } else if (plugin.has_expected_signature || plugin.has_signature_salt) {
     return FailMuonPluginStartup(
-        impl, "Plugin file not found: " + path.string());
+        impl, "Packaged plugin signatures are not supported: " +
+                  plugin.plugin);
   }
 
-  if (plugin.has_expected_signature) {
-    if (!plugin.has_signature_salt) {
-      return FailMuonPluginStartup(
-          impl, "Plugin signature requires plugin salt: " + plugin.plugin);
-    }
-    std::string actual_signature;
-    if (!muon_internal::CalculateFileSha256Hex(
-            path, plugin.signature_salt, &actual_signature)) {
-      return FailMuonPluginStartup(
-          impl, "Failed to calculate plugin signature: " + path.string());
-    }
-    if (actual_signature != plugin.expected_signature) {
-      return FailMuonPluginStartup(
-          impl, "Plugin signature mismatch: " + path.string() + " expected " +
-                    plugin.expected_signature + " actual " +
-                    actual_signature);
-    }
-  }
-
-  auto* handle = OpenMuonDynamicLibrary(path);
+  auto loader_error = std::string{};
+  auto* handle = OpenMuonDynamicLibrary(impl, locator, &loader_error);
   if (handle == nullptr) {
-    return FailMuonPluginStartup(impl, "Failed to load plugin: " + path.string());
+    auto message = "Failed to load plugin: " + locator;
+    if (!loader_error.empty()) {
+      message += ": " + loader_error;
+    }
+    return FailMuonPluginStartup(impl, message);
   }
   const auto initial_function_count = impl->registered_functions.size();
-
-  const auto init_plugin = GetMuonPluginInitFunction(handle);
+  const auto init_plugin = GetMuonPluginInitFunction(impl, handle);
   if (init_plugin == nullptr) {
     const auto error_message =
-        "Plugin is missing " + std::string(kMuonPluginEntryPoint) +
-        ": " + path.string();
-    CloseMuonDynamicLibrary(handle);
+        "Plugin is missing " + std::string(kMuonPluginEntryPoint) + ": " +
+        locator;
+    CloseMuonDynamicLibrary(impl, handle);
     return FailMuonPluginStartup(impl, error_message);
   }
 
@@ -2809,32 +2783,37 @@ static bool LoadMuonPluginLibrary(MuonPluginRuntimeImpl* impl,
       CreateMuonPluginInitContext(plugin, &kMuonPluginHelpers, &config_entries);
   const auto* metadata = init_plugin(&init_context);
   if (metadata == nullptr) {
-    const auto error_message = "Plugin declined loading: " + path.string();
-    CloseMuonDynamicLibrary(handle);
+    const auto error_message = "Plugin declined loading: " + locator;
+    CloseMuonDynamicLibrary(impl, handle);
     return FailMuonPluginStartup(impl, error_message);
   }
-  if (!RegisterMuonPluginMetadata(impl, *metadata, path.string(),
-                                  plugin_policy, false)) {
-    CloseMuonDynamicLibrary(handle);
+  if (!RegisterMuonPluginMetadata(
+          impl, *metadata, locator, plugin_policy, false)) {
+    CloseMuonDynamicLibrary(impl, handle);
     return false;
   }
   if (impl->registered_functions.size() == initial_function_count) {
     const auto error_message =
-        "Plugin registered no allowed functions: " + path.string();
-    CloseMuonDynamicLibrary(handle);
+        "Plugin registered no allowed functions: " + locator;
+    CloseMuonDynamicLibrary(impl, handle);
     return FailMuonPluginStartup(impl, error_message);
   }
 
   KeepOrCloseMuonPluginLibrary(
-      impl, path, handle, initial_function_count, metadata->stop,
+      impl, locator, handle, initial_function_count, metadata->stop,
       metadata->renderer_context_released);
   return true;
 }
 
-static void ShutdownMuonBuiltinPlugins() {
-  ShutdownMuonBuiltinExecutor();
-  ShutdownMuonBuiltinFsDialogs();
-  ShutdownMuonBuiltinFs();
+static void ShutdownMuonPlatformAdapter(MuonPluginRuntimeImpl* impl) {
+  if (impl == nullptr || !impl->platform_initialized) {
+    return;
+  }
+  impl->platform_initialized = false;
+  if (impl->services.platform_adapter &&
+      impl->services.platform_adapter->shutdown) {
+    impl->services.platform_adapter->shutdown();
+  }
 }
 
 static const MuonPluginRuntimeLoadEntry* FindMuonInternalPluginEntry(
@@ -2855,46 +2834,40 @@ static bool RegisterMuonInternalPlugins(
     return true;
   }
 
+  const auto& adapter = impl->services.platform_adapter;
+  if (!adapter || !adapter->initialize || !adapter->shutdown) {
+    return FailMuonPluginStartup(
+        impl, "Platform plugin adapter is unavailable");
+  }
+
   std::vector<muon_plugin_config_entry> config_entries;
   const auto init_context =
       CreateMuonPluginInitContext(plugin, &kMuonPluginHelpers, &config_entries);
-  std::string error_message;
-  if (!InitializeMuonBuiltinFs(&init_context, &error_message)) {
+  MuonPluginRuntimePlatformInitialization initialization;
+  auto error_message = std::string{};
+  if (!adapter->initialize(
+          &init_context, &initialization, &error_message)) {
     return FailMuonPluginStartup(
-        impl, "Built-in filesystem plugin failed: " + error_message);
+        impl, error_message.empty()
+                  ? "Platform plugin initialization failed"
+                  : error_message);
   }
-  if (!InitializeMuonBuiltinFsDialogs(&init_context, &error_message)) {
-    ShutdownMuonBuiltinPlugins();
-    return FailMuonPluginStartup(
-        impl,
-        "Built-in filesystem dialogs plugin failed: " + error_message);
+  impl->platform_initialized = true;
+  for (auto& cancel_owner : initialization.cancel_owner_operations) {
+    impl->cancel_owner_operations.push_back(std::move(cancel_owner));
   }
-  if (!InitializeMuonBuiltinExecutor(&init_context,
-                                     impl->main_dispatcher,
-                                     &error_message)) {
-    ShutdownMuonBuiltinPlugins();
-    return FailMuonPluginStartup(
-        impl, "Built-in executor plugin failed: " + error_message);
+  for (const auto& platform_plugin : initialization.plugins) {
+    if (platform_plugin.metadata == nullptr ||
+        !RegisterMuonPluginMetadata(
+            impl, *platform_plugin.metadata, platform_plugin.source,
+            plugin_policy, true)) {
+      ShutdownMuonPlatformAdapter(impl);
+      return false;
+    }
   }
-  impl->fs_dialogs_cancel_owner_functions.push_back(
-      &muon_builtin_fs_dialogs_cancel_owner_browser);
-  if (!RegisterMuonPluginMetadata(
-          impl, *GetMuonBuiltinPluginMetadata(), "<builtin muon>",
-          plugin_policy, true)) {
-    ShutdownMuonBuiltinPlugins();
-    return false;
-  }
-  if (!RegisterMuonPluginMetadata(
-          impl,
-          *GetMuonBuiltinFsDialogsPluginMetadata(),
-          "<builtin muon fs dialogs>",
-          plugin_policy,
-          true)) {
-    ShutdownMuonBuiltinPlugins();
-    return false;
-  }
-  if (!RegisterMuonBuiltinBrowserFunctions(impl, plugin_policy)) {
-    ShutdownMuonBuiltinPlugins();
+  if (!RegisterMuonPlatformFunctions(
+          impl, plugin_policy, adapter->namespaces)) {
+    ShutdownMuonPlatformAdapter(impl);
     return false;
   }
   return true;
@@ -2915,33 +2888,33 @@ static bool LoadConfiguredMuonPluginLibraries(MuonPluginRuntimeImpl* impl) {
     if (!plugin.plugin_policy->HasAllowPatterns()) {
       continue;
     }
+    if (plugin.has_library_locator) {
+      if (plugin.library_locator.empty()) {
+        return FailMuonPluginStartup(
+            impl, "Plugin library locator is empty: " + plugin.plugin);
+      }
+      if (plugin.has_library_directory) {
+        return FailMuonPluginStartup(
+            impl, "Packaged plugin cannot set a library directory: " +
+                      plugin.plugin);
+      }
+      if (!LoadMuonPluginLibrary(
+              impl, plugin.library_locator, nullptr, plugin,
+              *plugin.plugin_policy)) {
+        return false;
+      }
+      continue;
+    }
     const auto path = ResolveMuonPluginLibraryPath(
         plugin.has_library_directory ? plugin.library_directory
                                      : impl->plugin_directory,
         plugin.plugin);
-    if (!LoadMuonPluginLibrary(impl, path, plugin, *plugin.plugin_policy)) {
+    if (!LoadMuonPluginLibrary(
+            impl, path.string(), &path, plugin, *plugin.plugin_policy)) {
       return false;
     }
   }
   return true;
-}
-
-std::filesystem::path ResolveMuonPluginDirectory(
-    const std::filesystem::path& plugin_path) {
-  if (plugin_path.is_absolute()) {
-    return plugin_path.lexically_normal();
-  }
-  return (GetMuonExecutableDirectory() / plugin_path).lexically_normal();
-}
-
-std::shared_ptr<MuonPluginRuntime> CreateMuonPluginRuntime(
-    std::filesystem::path plugin_path,
-    std::vector<MuonPluginRuntimeLoadEntry> plugins,
-    MuonPluginRuntimeServices services) {
-  return std::make_shared<MuonPluginRuntime>(ResolveMuonPluginDirectory(
-                                                 plugin_path),
-                                             std::move(plugins),
-                                             std::move(services));
 }
 
 MuonPluginRuntime::MuonPluginRuntime(
@@ -2964,17 +2937,17 @@ MuonPluginRuntime::MuonPluginRuntime(
   }
   if (impl_->startup_error.empty() &&
       !LoadConfiguredMuonPluginLibraries(impl_.get())) {
-    ShutdownMuonBuiltinPlugins();
+    ShutdownMuonPlatformAdapter(impl_.get());
   }
-  LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelInfo,
-                 "Loaded " +
-                     std::to_string(impl_->registered_functions.size()) +
-                     " plugin functions from " +
-                     impl_->plugin_directory.string());
+  LogMuonPluginRuntimeMessage(
+      impl_.get(), MuonPluginRuntimeLogSource::Runtime,
+      MUON_LOG_LEVEL_INFO,
+      "Loaded " + std::to_string(impl_->registered_functions.size()) +
+          " plugin functions from " + impl_->plugin_directory.string());
 }
 
 MuonPluginRuntime::~MuonPluginRuntime() {
-  ShutdownMuonBuiltinPlugins();
+  ShutdownMuonPlatformAdapter(impl_.get());
   impl_->DrainTrafficTasks();
   if (g_muon_runtime_helpers == impl_.get()) {
     g_muon_runtime_helpers = nullptr;
@@ -3016,10 +2989,13 @@ MuonPluginRuntime::~MuonPluginRuntime() {
     }
   }
   impl_->DrainTrafficTasks();
+  const auto close_library = impl_->services.close_library;
   auto libraries = std::move(impl_->libraries);
   impl_.reset();
   for (auto& library : libraries) {
-    CloseMuonDynamicLibrary(library.handle);
+    if (library.handle != nullptr && close_library) {
+      close_library(library.handle);
+    }
     library.handle = nullptr;
   }
 #if defined(MUON_TRACK_FFI_CLOSURES)
@@ -3075,23 +3051,23 @@ void MuonPluginRuntime::Stop(StopCompletion completion) {
   ContinueMuonPluginStop(impl_.get());
 }
 
-MuonBuiltinBrowserFunctionKind MuonPluginRuntime::GetBuiltinBrowserFunctionKind(
+uint32_t MuonPluginRuntime::GetPlatformFunctionRouteId(
     uint32_t function_id) const {
   const auto iterator =
-      impl_->builtin_browser_functions_by_id.find(function_id);
-  if (iterator == impl_->builtin_browser_functions_by_id.end()) {
-    return MuonBuiltinBrowserFunctionKind::None;
+      impl_->platform_route_ids_by_function_id.find(function_id);
+  if (iterator == impl_->platform_route_ids_by_function_id.end()) {
+    return 0;
   }
   return iterator->second;
 }
 
-void MuonPluginRuntime::CancelFsDialogsForOwner(int owner_browser_id) {
-  if (!impl_ || owner_browser_id <= 0) {
+void MuonPluginRuntime::CancelPlatformOperationsForOwner(int owner_id) {
+  if (!impl_ || owner_id <= 0) {
     return;
   }
-  for (const auto cancel_owner : impl_->fs_dialogs_cancel_owner_functions) {
-    if (cancel_owner != nullptr) {
-      cancel_owner(owner_browser_id);
+  for (const auto& cancel_owner : impl_->cancel_owner_operations) {
+    if (cancel_owner) {
+      cancel_owner(owner_id);
     }
   }
 }
@@ -3489,8 +3465,10 @@ static void ReleaseMuonFunctionOwner(MuonPluginRuntimeImpl* impl,
       }
     }
   }
-  ReleaseMuonBuiltinExecutorContext(renderer_context_id);
-  ReleaseMuonBuiltinFsContext(renderer_context_id);
+  if (impl->services.platform_adapter &&
+      impl->services.platform_adapter->release_context) {
+    impl->services.platform_adapter->release_context(renderer_context_id);
+  }
   impl->active_function_owners.erase(owner_id);
   std::vector<MuonRendererFunctionSource*> sources;
   const auto owner_iterator =

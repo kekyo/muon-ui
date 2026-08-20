@@ -1101,8 +1101,9 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       MuonRpcFunctionRoute route;
       route.function_id = function.id;
       route.public_path = CreateMuonFunctionPublicPath(function);
-      route.kind = plugin_runtime_->GetBuiltinBrowserFunctionKind(function.id) ==
-                           MuonBuiltinBrowserFunctionKind::None
+      const auto platform_route_id =
+          plugin_runtime_->GetPlatformFunctionRouteId(function.id);
+      route.kind = platform_route_id == 0
                        ? MuonRpcRouteKind::Plugin
                        : MuonRpcRouteKind::Platform;
       routes.push_back(std::move(route));
@@ -1591,7 +1592,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     AppendMuonCloseDebugLog(log.str());
   }
   if (plugin_runtime_) {
-    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+    plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   ReleaseFunctionBrowserState(browser_id);
   const auto pending_favicon_request =
@@ -1637,7 +1638,7 @@ void MuonClient::OnRenderProcessTerminated(
   }
   const auto browser_id = browser->GetIdentifier();
   if (plugin_runtime_) {
-    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+    plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   ReleaseFunctionBrowserState(browser_id);
 }
@@ -1785,7 +1786,7 @@ bool MuonClient::RequestCloseAfterPendingFsDialog(
   }
   close_windows_after_pending_fs_dialogs_[browser_id] = window;
   if (plugin_runtime_) {
-    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+    plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   muon_ui_fs_dialogs_cancel_owner_browser(browser_id);
   ClearModalBrowserViewDisable(browser_id);
@@ -3800,7 +3801,8 @@ void MuonClient::InvokeRpcPlatform(const MuonRpcCallRequest& request,
   const auto call = call_iterator->second;
   platform_rpc_completions_[call_key] = std::move(completion);
   DispatchBuiltinBrowserCall(
-      plugin_runtime_->GetBuiltinBrowserFunctionKind(request.function_id),
+      static_cast<MuonBuiltinBrowserFunctionKind>(
+          plugin_runtime_->GetPlatformFunctionRouteId(request.function_id)),
       call);
 }
 

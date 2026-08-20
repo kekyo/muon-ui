@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "browser/muon_builtin_browser.h"
+#include "muon_plugin_api.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "plugins/muon_plugin_policy.h"
 #include "rpc/muon_rpc.h"
@@ -20,6 +20,103 @@
 #include <vector>
 
 struct MuonPluginRuntimeImpl;
+
+/** Identifies the producer of one portable runtime log message. */
+enum class MuonPluginRuntimeLogSource {
+  /** Message produced by the runtime itself. */
+  Runtime,
+
+  /** Message produced through the native plugin logging helper. */
+  Plugin,
+};
+
+/** One platform-provided native plugin metadata block. */
+struct MuonPluginRuntimePlatformPlugin {
+  /** C ABI metadata registered as an internal plugin. */
+  const muon_plugin_metadata* metadata = nullptr;
+
+  /** Diagnostic source name used in startup errors and warnings. */
+  std::string source;
+};
+
+/** One platform function exposed without a native plugin function pointer. */
+struct MuonPluginRuntimePlatformFunction {
+  /** Internal JavaScript function name. */
+  std::string js_name;
+
+  /** Public function name used by allow filtering. */
+  std::string public_name;
+
+  /** Function argument metadata. */
+  std::vector<MuonTypeMetadata> arg_types;
+
+  /** Promise resolution type. */
+  MuonTypeMetadata return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
+
+  /** Nonzero adapter-defined route identifier for this function. */
+  uint32_t route_id = 0;
+};
+
+/** One platform namespace and its JavaScript-visible functions. */
+struct MuonPluginRuntimePlatformNamespace {
+  /** Dot-notation namespace exposed to JavaScript. */
+  std::string plugin_namespace;
+
+  /** Optional JavaScript wrapper setup script. */
+  std::string setup_script;
+
+  /** Platform functions in renderer exposure order. */
+  std::vector<MuonPluginRuntimePlatformFunction> functions;
+};
+
+/** Platform resources produced while internal plugins are initialized. */
+struct MuonPluginRuntimePlatformInitialization {
+  /** Native metadata blocks to register with the internal policy. */
+  std::vector<MuonPluginRuntimePlatformPlugin> plugins;
+
+  /** Platform operation cancellation callbacks owned by the adapter. */
+  std::vector<std::function<void(int owner_id)>>
+      cancel_owner_operations;
+};
+
+/** Optional platform adapter used by desktop built-in plugins and routes. */
+struct MuonPluginRuntimePlatformAdapter {
+  /** Namespace paths external plugins may not claim. */
+  std::vector<std::string> reserved_namespaces;
+
+  /** Platform routes exposed through the internal plugin policy. */
+  std::vector<MuonPluginRuntimePlatformNamespace> namespaces;
+
+  /**
+   * Initializes platform native plugins for one internal load entry.
+   *
+   * @param context Plugin context backed by the portable runtime helpers.
+   * @param initialization Receives metadata and cancellation callbacks.
+   * @param error_message Receives a deterministic initialization error.
+   * @return true when platform resources are initialized.
+   */
+  std::function<bool(
+      const muon_plugin_init_context* context,
+      MuonPluginRuntimePlatformInitialization* initialization,
+      std::string* error_message)> initialize;
+
+  /** Shuts down all resources created by initialize. */
+  std::function<void()> shutdown;
+
+  /** Releases platform state associated with a renderer context. */
+  std::function<void(int renderer_context_id)> release_context;
+
+  /**
+   * Inspects a loaded library for optional platform-owned integration hooks.
+   *
+   * @param handle Opaque library handle returned by the platform loader.
+   * @param cancel_owner_operations Receives owner cleanup callbacks.
+   */
+  std::function<void(
+      void* handle,
+      std::vector<std::function<void(int owner_id)>>*
+          cancel_owner_operations)> library_loaded;
+};
 
 #if defined(MUON_TEST_BUILD)
 /** Test-build counts for one function wrapper lifecycle scope. */
@@ -85,6 +182,15 @@ struct MuonPluginRuntimeLoadEntry {
    */
   std::string plugin;
   /**
+   * Whether library_locator names a packaged library instead of a desktop
+   * filesystem entry.
+   */
+  bool has_library_locator = false;
+  /**
+   * Platform loader key, such as an Android package soname.
+   */
+  std::string library_locator;
+  /**
    * Whether library_directory overrides the runtime-wide plugin directory.
    */
   bool has_library_directory = false;
@@ -139,6 +245,24 @@ struct MuonPluginRuntimeServices {
   /** Sends one typed host-to-renderer RPC message. */
   std::function<bool(const MuonRpcMessage& message,
                      std::string* error_message)> send_message;
+
+  /** Sends a runtime or plugin message to the platform log sink. */
+  std::function<void(MuonPluginRuntimeLogSource source,
+                     muon_log_level level,
+                     const std::string& message)> emit_log;
+
+  /** Opens a platform library locator and returns its opaque handle. */
+  std::function<void*(const std::string& locator,
+                      std::string* error_message)> open_library;
+
+  /** Resolves one symbol from an opened platform library. */
+  std::function<void*(void* handle, const char* symbol)> find_symbol;
+
+  /** Closes one opened platform library handle. */
+  std::function<void(void* handle)> close_library;
+
+  /** Optional desktop or mobile platform built-in adapter. */
+  std::shared_ptr<MuonPluginRuntimePlatformAdapter> platform_adapter;
 };
 
 /**
@@ -203,20 +327,19 @@ class MuonPluginRuntime final {
   void Stop(StopCompletion completion);
 
   /**
-   * Returns the built-in browser operation for a function id.
+   * Returns the adapter-defined platform route for a function id.
    *
    * @param function_id Renderer-visible function id.
-   * @return Browser operation kind, or None for non-browser functions.
+   * @return Nonzero platform route identifier, or zero for plugin functions.
    */
-  MuonBuiltinBrowserFunctionKind GetBuiltinBrowserFunctionKind(
-      uint32_t function_id) const;
+  uint32_t GetPlatformFunctionRouteId(uint32_t function_id) const;
 
   /**
-   * Cancels modal filesystem dialogs owned by the given browser.
+   * Cancels adapter-owned operations associated with the given owner.
    *
-   * @param owner_browser_id Platform browser identifier for the opener window.
+   * @param owner_id Platform owner identifier to release.
    */
-  void CancelFsDialogsForOwner(int owner_browser_id);
+  void CancelPlatformOperationsForOwner(int owner_id);
 
   /**
    * Resolves the argument types required to decode one invocation.

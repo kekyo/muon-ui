@@ -30,7 +30,7 @@ muonをandroidに対応させることを検討します。
 
 - 起動、サブプロセス、イベントループがCEF依存です。[main.cpp](/home/kouji/Projects/muon-ui/muon-core/src/main.cpp:77)
 - アセット配信、プラグイン起動、ブラウザー生成が同じCEF初期化処理内にあります。[muon_app.cpp](/home/kouji/Projects/muon-ui/muon-core/src/app/muon_app.cpp:871)
-- プラグインランタイム自体が`CefFrame`や`CefProcessMessage`を公開型に含んでいます。[muon_plugin_runtime.h](/home/kouji/Projects/muon-ui/muon-core/src/plugins/muon_plugin_runtime.h:14)
+- プラグインランタイムの公開APIからCEF型は分離されていますが、browser builtin種別、filesystem path、dialog cancelなどdesktop固有の境界が残っています。[muon_plugin_runtime.h](/home/kouji/Projects/muon-ui/muon-core/src/plugins/muon_plugin_runtime.h:9)
 - ビルドも常にCEFを要求します。[CMakeLists.txt](/home/kouji/Projects/muon-ui/muon-core/CMakeLists.txt:59)
 - 配布ターゲットはLinux/WindowsとCEFターゲットが1対1に結び付いています。[targets.ts](/home/kouji/Projects/muon-ui/muon-ui/src/targets.ts:7)
 
@@ -186,7 +186,9 @@ Android版ではネイティブプラグイン互換を求めず、
 
 総合すると、「WebViewを採用し、RPCとプラグインランタイムをCEFから分離する」が推奨案です。ただし現行ネットワークポリシーの完全互換を必須とするなら、先にセキュリティ試作を行い、不成立ならGeckoViewを選ぶのが妥当です。CEFのAndroid移植は初手には勧められません。
 
-### ステップ5: ネイティブプラグインの事前検証
+### ステップ5: ネイティブプラグインのNDK対応
+
+#### 事前検証
 
 2026年8月19日に、当時の`cardio 0.2.0`、`tra-ffic 0.3.0`、およびtra-fficが使用する`libffi 3.4.6`を対象としてAndroid試験を行いました。submodule自体は変更せず、Android用ホストを追加したcardioの一時作業コピーと、Android instrumentation testへ一時的に組み込んだtra-fficの既存全回帰テストを使用しました。試験用変更と一時ビルド成果物は製品コードへ残していません。
 
@@ -272,11 +274,132 @@ libffi 3.8.0は対応するLinux x86_64/AArch64で静的実行トランポリン
 | libffiの版、取得、ハッシュ、ABI別静的ビルド | tra-ffic 1.0.0がlibffi 3.8.0を固定し、muonの配布物と再現可能ビルドに属する | muonの外部ビルドレシピで管理し、必要な変更は一時コピーへのpatch queueなどsubmodule外で適用する |
 | APK/AABへのプラグイン同梱、JNI境界、Activityライフサイクル | muon固有 | muon側で実装する |
 
+#### 実装開始条件の判定
+
+ステップ5の実装開始条件は満たしています。
+
+- cardio 1.1.0、tra-ffic 1.0.0、libffi 3.8.0の採用commitが固定され、すべてのsubmodule作業ツリーがcleanです。
+- upstreamの正式なAndroid全体試験は、16 KiBページの`x86_64` VMと4 KiBページの`arm64-v8a` Pixel 6実機でPASSしています。
+- cardioはJava UI Looperへ自動接続する公開hostを持ち、muon側でprivate実装を複製する必要がありません。
+- tra-fficとlibffiは両ABIでclosureを実行でき、現時点ではlibffi sourceへのdownstream変更を必要としません。
+
+`arm64-v8a`の16 KiBページ実行は最終完了条件として残しますが、両ABIの16 KiB整列成果物と`x86_64`の16 KiB実行を確認済みなので、実装開始を妨げる条件とはしません。
+
+#### 現在の実装との差分
+
+現在のAndroid試作は、CEF非依存の`muon_rpc_core`だけをJNI libraryへリンクしています。[Android CMake](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/cpp/CMakeLists.txt:5)
+JNIの`invoke_plugin`は常に「plugin routes are unavailable」を返し、plugin metadata、tra-ffic、libffi、cardio hostをまだ接続していません。[Android JNI host](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/cpp/muon_android_rpc_jni.cpp:584)
+GradleのABIも現在は`x86_64`だけです。[Android Gradle設定](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/build.gradle.kts:20)
+
+一方、`MuonPluginRuntime`の公開境界はCEF型を含みませんが、実装sourceはdesktopのbuiltin filesystem、executor、browser、ログ、実行ファイル相対path解決を直接参照しています。[plugin runtime](/home/kouji/Projects/muon-ui/muon-core/src/plugins/muon_plugin_runtime.cpp:14)
+従って、Android用に別のplugin runtimeを複製するのではなく、共通runtime coreとdesktop builtin adapterを分離してからAndroidへリンクします。
+
+#### 実装方針
+
+- 対象はAPK/AABへbuild時に同梱した正式なMuon pluginだけとします。downloadしたcode、外部storage、`plugin.path`のruntime探索、`muon.executor.loadLibrary()`は実装しません。AndroidもAPK外codeの動的loadを避けるよう推奨しています。[Android Dynamic Code Loading](https://developer.android.com/privacy-and-security/risks/dynamic-code-loading)
+- pluginの論理名とpackage内のELF sonameをbuild-time registryで明示的に対応付けます。runtimeはdirectory scanやファイル名推測を行わず、registryにあるsonameだけを`dlopen()`します。Android packageのnative library配置は`lib/<abi>/lib<name>.so`に固定します。[Android ABI管理](https://developer.android.com/ndk/guides/abis)
+- Androidの組み込みbrowser、environment、filesystem関数は、現在どおり`MuonRpcRouteKind::Platform`としてJava serviceへ送ります。desktop専用builtin pluginをAndroid native runtimeへリンクしません。
+- Android processにつき`dispatcher_host_android_auto`と`MuonPluginRuntime`を一組だけ作り、Activity/WebViewごとに独立したRPC owner/sessionを登録します。Activity再生成時にcardio dispatcherを重複生成しません。
+- `libcardio.so`はhostとcardio利用pluginが共有します。JNI library、`libcardio.so`、C++ pluginのすべてでNDK 29.0.14206865の`libc++_shared.so`を一つだけ使用します。複数のshared libraryへ`libc++_static`を重複リンクすると、allocation、exception、C++ global stateが未定義動作になるためです。[Android NDK C++ runtime](https://developer.android.com/ndk/guides/cpp-support)
+- tra-fficはheader実装を共通runtime coreへ組み込み、libffi 3.8.0はABI別の`libffi.a`として静的リンクします。libffi submodule sourceは変更しません。
+- すべてのAndroid ELFとAPK/AABを16 KiBページ対応として生成します。NDK r28以降は16 KiB整列が既定ですが、最終成果物の全`LOAD` segmentとpackage alignmentを試験で直接確認します。[Android 16 KiBページ対応](https://developer.android.com/guide/practices/page-sizes)
+- 現在の`muon-android-prototype`をステップ5の結合・配布形式試験hostとして使用します。公開`muon-ui` target、Play Store署名、installerはこのステップへ含めませんが、再利用できるmuon-core target、registry generator、Gradle/CMake recipeとして実装し、debug/release APKとrelease AABの両方を成果物にします。
+- 各実装項目は、期待する機能を検証する試験を先に追加して全体実行でREDを確認し、実装後に同じ全体試験をGREENにします。各GREENごとに以下の粒度でコミットし、submodule内には変更を作りません。
+- 実装中にcardioまたはtra-fficの公開APIだけで再現するAndroid固有課題を新たに検出した場合は、muonへprivate実装のcopyや恒久的workaroundを入れません。最小再現試験、ABI、ページサイズ、lifecycle条件、実行logをupstream課題として切り出し、upstreamで修正された正式commitへsubmodule参照を更新してからmuon接続試験をGREENにします。libffi課題だけは前節どおりmuonのbuild設定または一時copyへのpatch queueで管理します。ステップ5の最終まとめには、新たに摘出した課題、再現条件、対応先、解決状況を一覧で残します。
+
+#### 実施計画
+
+##### 1. plugin runtime coreをplatform非依存にする
+
+`MuonPluginRuntime`のFFI marshalling、plugin metadata検証、function wrapper lifetime、tra-ffic queue、外部plugin登録を`muon_plugin_runtime_core`として独立したCMake targetにします。desktopのbuiltin plugin初期化、browser function種別、filesystem dialog cancel、実行ファイル相対path、CEF用log sinkはdesktop adapterへ移します。Androidはcoreだけをリンクし、platform functionは既存Java serviceへ残します。
+
+runtime serviceにはowner-thread判定、owner-threadへのpost、buffer確保、owner生存判定、transport送信に加え、platform logとpackage library loaderに必要な境界を明示します。desktop adapterは現行のpath、signature、salt、builtin挙動を維持し、Android adapterはbuild-time registryのsonameだけを受理します。logical plugin nameとlibrary locatorを分離し、Androidでdesktopの`name + ".so"`規則を流用しません。
+
+先に、desktop builtinをリンクしないcoreだけでpluginをload、invoke、stopできるhost試験と、NDK CMakeでcoreをlinkする試験を追加します。完了条件は、Android targetがCEF、GTK、GIO、desktop executorへ依存せずlinkでき、既存desktop全体試験の結果が変わらないことです。
+
+コミット境界は`refactor: extract portable native plugin runtime`とします。
+
+##### 2. Android native dependencyを再現可能にbuildする
+
+muon所有のAndroid build recipeを追加し、tra-fficが固定するlibffi sourceをbuild directoryへ無改変でcopyしてから、`x86_64-linux-android`と`aarch64-linux-android`の各hostで`--disable-shared --enable-static --disable-docs --with-pic`を指定してconfigureします。入力commit、NDK、API 24、configure引数、CFLAGS、LDFLAGS、patch一覧とSHA-256をmanifestへ記録します。初期状態のpatch一覧は空です。
+
+同じCMake graphでupstreamの`libcardio.cpp`からABI別`libcardio.so`をbuildし、`CARDIO_SHARED_LIB=1`、`CARDIO_BUILD_SHARED_LIB=1`、`CARDIO_HAS_POSIX_FD=1`、`CARDIO_WITH_LINUX_IO_URING=0`を固定します。JNI libraryとcardioを利用するpluginは`CARDIO_SHARED_LIB=1`でこの一つのlibraryへlinkします。Android CMakeには`ANDROID_STL=c++_shared`を指定し、Gradleに`libc++_shared.so`を一つだけpackageさせます。
+
+先に、両ABIのdependency manifest、`fficonfig.h`、static trampoline設定、library依存関係、16 KiB ELF整列を実成果物から検証するartifact試験を追加します。完了条件は、clean buildから同じ入力で両ABIを再生成でき、libffi submoduleがcleanなままであることです。
+
+コミット境界は`chore: build Android native plugin dependencies`とします。
+
+##### 3. build-time plugin registryとpackage処理を作る
+
+Android build入力から、logical plugin name、package soname、ABI別artifact、`allow`、string `config`を持つmuon所有manifestを生成します。`plugin.path`、runtime `signature`、`salt`はAndroid入力として拒否します。重複logical name、重複soname、`lib<name>.so`形式でないlibrary、片方のABI欠落、ELF machine不一致、plugin API entry point欠落はpackage前にbuild errorにします。
+
+registry generatorはC++用の固定tableとGradle/CMake用staging一覧を同じ正規化済み入力から生成します。runtimeはtableを列挙順にloadし、filesystem存在確認を前提にせずpackage sonameで開きます。`dlopen()`または`dlsym("muon_init_plugin")`の失敗、pluginがloadを辞退した場合、metadata不正、allow対象関数が0件の場合は、logical plugin nameを含む決定的なstartup errorにします。
+
+simple modeの公開metadataは実際にloadしたAndroid pluginからpage load前に取得します。validate modeのexact importは既存のfunction pathを使用し、wildcard importがある場合だけ現行と同様にhost用plugin artifactをinspectorへ渡してcatalogを生成します。手書きのAndroid function catalogを真実源にはしません。
+
+先にmanifest validationの全ケースと、意図的にmissing/invalid pluginを持つAndroid build variantの失敗試験を追加します。完了条件は、registry外libraryをruntimeが探索せず、両ABIのAPK/AABへregistryどおりのpluginだけが入ることです。
+
+コミット境界は`feat: package Android native plugins`とします。
+
+##### 4. process単位のcardio hostとplugin runtimeを接続する
+
+Java main Looper上でnative process runtimeを作り、最初に`dispatcher_host_android_auto`、次に`MuonPluginRuntime`を構築します。runtime servicesはmain-thread判定、cardioによるowner-thread post、process内buffer、Activity session registryによるowner生存判定、WebView transport送信、logcat sinkを提供します。
+
+現在のJNI stateはJNI呼び出し中だけ有効な`JNIEnv*`を一時保持するため、cardio callbackから完了するpluginには使用できません。process runtimeは`JavaVM*`と必要最小限のglobal referenceを保持し、callback時に現在のmain threadの`JNIEnv*`を取得します。released sessionへは送信せず、global/local referenceを所有規則どおり解放します。
+
+各Activity/WebViewは単調増加するowner idを持つRPC sessionだけを作ります。`pagehide`と`onDestroy`でcall、renderer function、plugin proxy、binary attachmentをreleaseします。configuration changeではprocess runtimeを維持し、最後の通常session終了ではpluginの非同期`Stop()`を開始します。停止中に新しいActivityが来た場合はpollingやblockを行わず、Stop完了、plugin unload、cardio host破棄を同じLooper上で終えてから新runtimeを作り、待機sessionをattachします。OSによるprocess強制終了ではstop callbackが保証されないことはAndroid lifecycleの制約として扱います。
+
+先に、Muon test pluginからcardio dispatcherがinit時にもcall時にも存在すること、即時、timer、fd、別thread postがJava `Handler`と同じmain threadで完了すること、session release後のcallbackを配送しないことをinstrumentation testへ追加します。完了条件は、独自loop、worker thread、pollingを追加せず、Activity再生成と終了・再起動でdispatcher、callback、fd数が増え続けないことです。
+
+コミット境界は`feat: host Android plugins on the main looper`とします。
+
+##### 5. plugin metadataとfull-duplex RPCをWebViewへ接続する
+
+JNIの固定`ResolveFunctionId()`を、platform routeと`MuonPluginRuntime::GetFunctions()`から作るtableへ置き換えます。ID空間の重複を検証し、plugin routeは`MuonRpcRouteKind::Plugin`として`GetCallArgumentTypes()`、`Invoke()`、`ReleasePluginFunctionProxy()`、`ReleaseFunctionContext()`へ接続します。platform routeは現在のJava serviceへ残します。
+
+WebView codecは、現在のstring、boolean、`u32`、binaryだけでなく、Muon plugin ABIの全scalar、null string/pointer、64 bit integer表現、nested function signature、renderer-owned function、plugin proxy、buffer viewをCEF側と同じ意味で扱います。hostからJavaScript functionを呼ぶmessage、JavaScriptから結果を返すmessage、proxy releaseをprotocolへ追加します。cancel後のnative完了は破棄し、context releaseを最終的なlifetime cleanupにします。binaryはWebView境界でcopyし、pluginが保持できる期間を既存`muon_plugin_api.h`契約から変更しません。
+
+simple modeでは、load済みmetadataから許可されたnamespace/functionだけをdocument開始時に構築し、pluginのsetup scriptも許可済み関数だけを対象に実行します。validate modeでは既存のVite virtual moduleと`globalThis.__muon_plugin_call`を使い、capability idとfunction pathをnative側でも検証します。どちらも構成済みasset originのmain frame以外へplugin bridgeを公開しません。
+
+先に、既存のtypes、recursive functions、function lifetime、cardio test pluginをAndroid用にbuildし、primitive、64 bit、binary、async completion、JavaScript callback、function return/proxy identity、release、allow、configをpublic JavaScript APIから検証する試験を追加します。完了条件は、同じtest pluginの意味上の結果がdesktop CEFとAndroid WebViewで一致することです。
+
+コミット境界はscalar/binary経路を`feat: invoke Android native plugins`、function/lifetime経路を`feat: bridge Android plugin functions`に分けます。
+
+##### 6. failure、W^X、package、lifecycleをhardeningする
+
+非対応ABI、plugin欠落、entry point欠落、init失敗、metadata不正、duplicate path、allow不一致をそれぞれ再現し、build時に判定できるものはbuild error、install後にしか判定できないものはWebViewをloadする前のstartup errorとして返します。失敗時も既にloadしたpluginを逆順にStop/unloadし、cardio hostとJNI referenceを解放します。
+
+libffi closureについては、最終`libmuon_android_rpc.so`内でfunction marshallingを実行し、closure allocation/freeが釣り合うこと、実行addressが実行可能であること、対応する書き込みdataと実行codeが同じ`rwx` mappingになっていないことを`/proc/self/maps`の実測で確認します。libffi変更が必要になった場合だけ、前節の優先順位に従ってmuon build設定、次に一時copyへのpatch queueを使用します。
+
+artifact試験はdebug/release APKとrelease AABについて、`arm64-v8a`、`x86_64`、`libmuon_android_rpc.so`、`libcardio.so`、`libc++_shared.so`、全pluginの存在、ELF machine、`DT_NEEDED`、`LOAD` segmentの`0x4000`整列、APK zip alignmentを確認します。AABから生成したinstallable split APKも検査し、実際に端末へinstallして試験します。
+
+先に各failureとlifecycle leakの試験を追加します。完了条件は、成功・失敗・cancel・Activity再生成・runtime停止のすべてでpending call、function lease、closure、plugin task、Looper fdが回収されることです。
+
+コミット境界は`fix: harden Android native plugin lifecycle`とします。
+
+##### 7. 全体試験と完了判定を行う
+
+各GREEN commit前に個別testだけを実行せず、`npm test`で全workspace、`npm run test:android --workspace muon-android-prototype`で全instrumentation testを実行します。最終判定では次のmatrixをすべて実行します。
+
+| 対象 | ABI・ページ | 実行内容 |
+|---|---|---|
+| Android WebView結合 | `x86_64`・16 KiB VM | debug instrumentation全件、release APK、AAB由来split APK |
+| Android WebView結合 | `arm64-v8a`・4 KiB Pixel 6 | debug instrumentation全件、release APK、AAB由来split APK |
+| Android WebView最終gate | `arm64-v8a`・16 KiB実機またはVM | plugin全回帰、closure/W^X、lifecycle全件 |
+| cardio upstream | 実行可能な各Android環境 | `test-android-runtime`全体 |
+| tra-ffic upstream | 実行可能な各Android環境 | `test-android-runtime`全体 |
+| desktop回帰 | Linux、Windows i686/amd64 | rootの全workspace test。Android分岐による挙動差がないこと |
+
+時間待ちで成否を推測せず、Java/native双方のcompletion、latch、resource countで終了を判定します。端末またはVMのABI、API、実ページサイズをtest開始時にassertし、想定と違う環境でPASSにしません。最終GREEN後に利用者向けplugin build/package手順、対応ABI、build-time同梱制約、Android process kill時のstop制約を文書化し、`doc:`コミットを作ります。
+
 #### ステップ5の完了条件
 
-1. cardio upstream版のAndroid auto hostを使用し、muon側にcardio private実装のコピーや独自ポーリングがない。
-2. Androidメインスレッド上で、Javaメッセージとcardioの即時、timer、fd、別スレッドpostが共存し、Activityの生成・破棄を繰り返してもcallbackやfdが残らない。
-3. tra-fficの全回帰テストと直接closure呼び出しが、`x86_64` AVDと16 KiBページ対応の`arm64-v8a`実機またはVMの両方でPASSする。
-4. tra-fficが固定するlibffi 3.8.0のcommit、公式取得元、NDK API level、コンパイルフラグを固定し、ABI別に再現可能な静的ビルドを行う。静的トランポリンとW^Xを実行時に検証し、downstream変更が必要な場合もlibffi submoduleを変更せず、muon側の設定または一時コピーへのpatchとして管理する。
-5. `arm64-v8a`と`x86_64`のプラグインをAPK/AABへビルド時同梱し、非対応ABI、欠落プラグイン、初期化失敗をJavaScript側へ決定的なエラーとして返す。
-6. Android接続テストを含む全プロジェクトテストがPASSし、Android用処理によってデスクトップCEF版の挙動が変わらない。
+1. cardio 1.1.0の`dispatcher_host_android_auto`をprocessのmain Looper上で使用し、muon側にcardio private実装のcopy、独自loop、polling、安易なworker threadがない。
+2. 共通`MuonPluginRuntime` coreをdesktopとAndroidで使用し、Android native targetがCEF、GTK、GIO、desktop builtin executorへ依存しない。
+3. Androidではbuild-time registryにあるpackage sonameだけをloadし、`plugin.path`探索、runtime download、外部plugin signature検査を行わない。`allow`、`config`、simple/validate capabilityは既存契約を維持する。
+4. Java main message、cardioの即時、timer、fd、別thread post、plugin completionが共存し、Activity再生成、終了・再起動、cancel後にもcallback、pending call、function lease、closure、plugin task、Looper fdが残らない。
+5. primitive、64 bit、binary、renderer function、plugin proxy、async completionを含むMuon plugin結合試験が`x86_64`と`arm64-v8a`でPASSし、desktop CEF版と意味上の結果が一致する。
+6. tra-fficの全回帰と最終muon library内の直接closure呼び出しが、16 KiBページの`x86_64` VMと16 KiBページ対応の`arm64-v8a`実機またはVMの両方でPASSする。
+7. libffi 3.8.0のcommit、公式取得元、NDK、API level、configure引数、コンパイルフラグ、patch hashを固定し、ABI別に再現可能な`libffi.a`をbuildする。静的トランポリンとW^Xを実行時に検証し、libffi submoduleを変更しない。
+8. debug/release APKとrelease AABが`arm64-v8a`、`x86_64`、共有cardio、共有libc++、registry内pluginを含み、全ELFとpackageが16 KiBページ対応である。非対応ABI、plugin欠落、entry point欠落、init失敗をbuild時またはpage load前に決定的なerrorとして返す。
+9. Android実機・VM接続試験を含む全project testとupstream Android全体試験がPASSし、Android分岐によってdesktop CEF版の挙動が変わらない。

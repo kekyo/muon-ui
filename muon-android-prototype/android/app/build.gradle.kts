@@ -69,8 +69,13 @@ val buildNativeDependencies by tasks.registering(Exec::class) {
     commandLine("node", "scripts/build-native-dependencies.mjs")
 }
 
+val generateAndroidPluginRegistry by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("node", "scripts/generate-android-plugin-registry.mjs")
+}
+
 tasks.named("preBuild") {
-    dependsOn(buildWebAssets, buildNativeDependencies)
+    dependsOn(buildWebAssets, buildNativeDependencies, generateAndroidPluginRegistry)
 }
 
 dependencies {

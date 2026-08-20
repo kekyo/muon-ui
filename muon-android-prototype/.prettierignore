@@ -8,6 +8,7 @@ pnpm-lock.yaml
 dist/
 build/
 android/.native-dependencies/
+android/.generated/
 android/.cxx/
 android/.gradle/
 android/app/.cxx/

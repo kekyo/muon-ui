@@ -46,6 +46,78 @@ static std::shared_ptr<MuonPluginPolicy> CreateAlphaPolicy() {
   return policy;
 }
 
+static const muon_plugin_metadata* DeclinePackagedPlugin(
+    const muon_plugin_init_context*) {
+  return nullptr;
+}
+
+static const muon_plugin_namespace invalid_packaged_namespace = {
+    "invalid namespace",
+    nullptr,
+    nullptr,
+};
+
+static const muon_plugin_namespace* const
+    invalid_packaged_namespace_pointers[] = {
+        &invalid_packaged_namespace,
+        nullptr,
+};
+
+static const muon_plugin_metadata invalid_packaged_metadata = {
+    invalid_packaged_namespace_pointers,
+    nullptr,
+    nullptr,
+};
+
+static const muon_plugin_metadata* LoadInvalidPackagedPlugin(
+    const muon_plugin_init_context*) {
+  return &invalid_packaged_metadata;
+}
+
+static void BetaPackagedFunction(muon_completion_func completion) {
+  completion(nullptr, nullptr);
+}
+
+static const muon_type_descriptor packaged_type_void = {
+    MUON_TYPE_VOID,
+    nullptr,
+};
+
+static const muon_plugin_function_metadata beta_packaged_function = {
+    "betaValue",
+    reinterpret_cast<muon_native_function>(&BetaPackagedFunction),
+    {0, nullptr, &packaged_type_void},
+    nullptr,
+};
+
+static const muon_plugin_function_metadata* const
+    beta_packaged_function_pointers[] = {
+        &beta_packaged_function,
+        nullptr,
+};
+
+static const muon_plugin_namespace beta_packaged_namespace = {
+    "muon.test.beta",
+    nullptr,
+    beta_packaged_function_pointers,
+};
+
+static const muon_plugin_namespace* const beta_packaged_namespace_pointers[] = {
+    &beta_packaged_namespace,
+    nullptr,
+};
+
+static const muon_plugin_metadata beta_packaged_metadata = {
+    beta_packaged_namespace_pointers,
+    nullptr,
+    nullptr,
+};
+
+static const muon_plugin_metadata* LoadDisallowedPackagedPlugin(
+    const muon_plugin_init_context*) {
+  return &beta_packaged_metadata;
+}
+
 static MuonPluginRuntimeServices CreateRuntimeServices(
     cardio::dispatcher* dispatcher,
     std::thread::id owner_thread) {
@@ -98,6 +170,81 @@ static MuonPluginRuntimeServices CreateRuntimeServices(
   return services;
 }
 
+static bool ExpectPackagedPluginStartupFailure(
+    cardio::dispatcher* dispatcher,
+    std::thread::id owner_thread,
+    muon_init_plugin_func init_plugin,
+    const std::string& expected_diagnostic) {
+  auto services = CreateRuntimeServices(dispatcher, owner_thread);
+  services.open_library = [](const std::string&, std::string*) -> void* {
+    return reinterpret_cast<void*>(1);
+  };
+  services.find_symbol = [init_plugin](void*, const char*) -> void* {
+    return reinterpret_cast<void*>(init_plugin);
+  };
+  services.close_library = [](void*) {};
+
+  MuonPluginRuntimeLoadEntry plugin;
+  plugin.plugin = "logical-alpha";
+  plugin.has_library_locator = true;
+  plugin.library_locator = "libunrelated-soname.so";
+  plugin.plugin_policy = CreateAlphaPolicy();
+  const auto runtime = std::make_shared<MuonPluginRuntime>(
+      std::filesystem::path{},
+      std::vector<MuonPluginRuntimeLoadEntry>{std::move(plugin)},
+      std::move(services));
+  return Expect(!runtime->IsReady(),
+                "packaged plugin failure was accepted") &&
+         Expect(runtime->GetStartupError().find("logical-alpha") !=
+                    std::string::npos,
+                "packaged plugin diagnostic omitted its logical name: " +
+                    runtime->GetStartupError()) &&
+         Expect(runtime->GetStartupError().find(expected_diagnostic) !=
+                    std::string::npos,
+                "packaged plugin diagnostic omitted its cause: " +
+                    runtime->GetStartupError());
+}
+
+static bool RunPackagedPluginStartupDiagnosticTests(
+    cardio::dispatcher* dispatcher,
+    std::thread::id owner_thread) {
+  auto open_failure_services = CreateRuntimeServices(dispatcher, owner_thread);
+  open_failure_services.open_library = [](
+      const std::string&,
+      std::string* error_message) -> void* {
+    *error_message = "not installed";
+    return nullptr;
+  };
+  MuonPluginRuntimeLoadEntry missing_plugin;
+  missing_plugin.plugin = "logical-alpha";
+  missing_plugin.has_library_locator = true;
+  missing_plugin.library_locator = "libunrelated-soname.so";
+  missing_plugin.plugin_policy = CreateAlphaPolicy();
+  const auto missing_runtime = std::make_shared<MuonPluginRuntime>(
+      std::filesystem::path{},
+      std::vector<MuonPluginRuntimeLoadEntry>{std::move(missing_plugin)},
+      std::move(open_failure_services));
+  if (!Expect(!missing_runtime->IsReady(),
+              "missing packaged plugin was accepted") ||
+      !Expect(missing_runtime->GetStartupError().find("logical-alpha") !=
+                  std::string::npos,
+              "load failure omitted its logical plugin name")) {
+    return false;
+  }
+
+  return ExpectPackagedPluginStartupFailure(
+             dispatcher, owner_thread, nullptr, "muon_init_plugin") &&
+         ExpectPackagedPluginStartupFailure(
+             dispatcher, owner_thread, &DeclinePackagedPlugin,
+             "declined loading") &&
+         ExpectPackagedPluginStartupFailure(
+             dispatcher, owner_thread, &LoadInvalidPackagedPlugin,
+             "namespace") &&
+         ExpectPackagedPluginStartupFailure(
+             dispatcher, owner_thread, &LoadDisallowedPackagedPlugin,
+             "no allowed functions");
+}
+
 static bool RunPortablePluginRuntimeTest() {
   auto group = cardio::dispatcher_group(
       cardio::exit_condition::exit_by_manual);
@@ -106,7 +253,8 @@ static bool RunPortablePluginRuntimeTest() {
   const auto owner_thread = std::this_thread::get_id();
   const auto policy = CreateAlphaPolicy();
   if (!Expect(dispatcher != nullptr, "test dispatcher is unavailable") ||
-      !Expect(policy != nullptr, "test plugin policy is unavailable")) {
+      !Expect(policy != nullptr, "test plugin policy is unavailable") ||
+      !RunPackagedPluginStartupDiagnosticTests(dispatcher, owner_thread)) {
     return false;
   }
 

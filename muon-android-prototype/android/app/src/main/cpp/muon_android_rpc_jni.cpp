@@ -6,6 +6,7 @@
 
 #include <jni.h>
 
+#include "muon_android_plugin_registry.h"
 #include "plugins/muon_plugin_policy.h"
 #include "rpc/muon_rpc_host.h"
 
@@ -33,6 +34,7 @@ struct MuonAndroidRpcHost {
   JNIEnv* environment = nullptr;
   MuonRpcOwner owner = {1, "main", 1};
   std::shared_ptr<MuonRpcHost> host;
+  std::vector<MuonPluginRuntimeLoadEntry> plugin_entries;
   std::map<uint32_t, MuonRpcHostCompletion> delayed_completions;
   std::map<uint32_t, MuonRpcHostCompletion> platform_completions;
 };
@@ -510,6 +512,10 @@ static bool ResolveFunctionId(const std::string& function_path,
 
 static bool InitializeHost(MuonAndroidRpcHost* state,
                            std::string* error_message) {
+  if (!CreateMuonAndroidPluginLoadEntries(
+          &state->plugin_entries, error_message)) {
+    return false;
+  }
   auto environment_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateMuonPluginPolicy(
           {"muon.environments.getVariables",

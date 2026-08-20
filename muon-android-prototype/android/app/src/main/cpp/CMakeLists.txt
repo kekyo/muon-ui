@@ -11,6 +11,8 @@ set(CARDIO_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/cardio")
 set(TRA_FFIC_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/tra-ffic")
 set(MUON_ANDROID_DEPENDENCY_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/../../../../.native-dependencies/${ANDROID_ABI}")
+set(MUON_ANDROID_PLUGIN_REGISTRY_ROOT
+  "${CMAKE_CURRENT_LIST_DIR}/../../../../.generated/plugin-registry")
 
 add_subdirectory(
   "${MUON_CORE_ROOT}/src/rpc"
@@ -83,7 +85,16 @@ set(MUON_BUILD_TESTS OFF)
 include("${MUON_CORE_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
 muon_add_plugin_runtime_core(muon_plugin_runtime_core)
 
+if(NOT EXISTS
+    "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugins.cmake")
+  message(FATAL_ERROR
+    "Generate the Android plugin registry before configuring CMake.")
+endif()
+include(
+  "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugins.cmake")
+
 add_library(muon_android_rpc SHARED
+  "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugin_registry.cpp"
   muon_android_rpc_jni.cpp
   )
 target_compile_features(muon_android_rpc PRIVATE cxx_std_20)
@@ -92,6 +103,9 @@ target_compile_options(muon_android_rpc PRIVATE
   -Wextra
   -Wpedantic
   -Werror
+  )
+target_include_directories(muon_android_rpc PRIVATE
+  "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}"
   )
 target_link_libraries(muon_android_rpc PRIVATE
   "$<LINK_LIBRARY:WHOLE_ARCHIVE,muon_plugin_runtime_core>"
@@ -103,3 +117,6 @@ target_link_libraries(muon_android_rpc PRIVATE
 target_link_options(muon_android_rpc PRIVATE
   -Wl,-z,max-page-size=16384
   )
+if(MUON_ANDROID_PLUGIN_TARGETS)
+  add_dependencies(muon_android_rpc ${MUON_ANDROID_PLUGIN_TARGETS})
+endif()

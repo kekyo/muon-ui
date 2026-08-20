@@ -2725,6 +2725,10 @@ static bool LoadMuonPluginLibrary(
     const std::filesystem::path* file_path,
     const MuonPluginRuntimeLoadEntry& plugin,
     const MuonPluginPolicy& plugin_policy) {
+  const auto plugin_description =
+      plugin.plugin.empty() || plugin.plugin == locator
+          ? locator
+          : plugin.plugin + " (" + locator + ")";
   if (file_path != nullptr) {
     std::error_code filesystem_error;
     if (!std::filesystem::exists(*file_path, filesystem_error) ||
@@ -2732,7 +2736,7 @@ static bool LoadMuonPluginLibrary(
         !std::filesystem::is_regular_file(*file_path, filesystem_error) ||
         filesystem_error) {
       return FailMuonPluginStartup(
-          impl, "Plugin file not found: " + file_path->string());
+          impl, "Plugin file not found: " + plugin_description);
     }
     if (plugin.has_expected_signature) {
       if (!plugin.has_signature_salt) {
@@ -2762,7 +2766,7 @@ static bool LoadMuonPluginLibrary(
   auto loader_error = std::string{};
   auto* handle = OpenMuonDynamicLibrary(impl, locator, &loader_error);
   if (handle == nullptr) {
-    auto message = "Failed to load plugin: " + locator;
+    auto message = "Failed to load plugin: " + plugin_description;
     if (!loader_error.empty()) {
       message += ": " + loader_error;
     }
@@ -2773,7 +2777,7 @@ static bool LoadMuonPluginLibrary(
   if (init_plugin == nullptr) {
     const auto error_message =
         "Plugin is missing " + std::string(kMuonPluginEntryPoint) + ": " +
-        locator;
+        plugin_description;
     CloseMuonDynamicLibrary(impl, handle);
     return FailMuonPluginStartup(impl, error_message);
   }
@@ -2783,18 +2787,24 @@ static bool LoadMuonPluginLibrary(
       CreateMuonPluginInitContext(plugin, &kMuonPluginHelpers, &config_entries);
   const auto* metadata = init_plugin(&init_context);
   if (metadata == nullptr) {
-    const auto error_message = "Plugin declined loading: " + locator;
+    const auto error_message =
+        "Plugin declined loading: " + plugin_description;
     CloseMuonDynamicLibrary(impl, handle);
     return FailMuonPluginStartup(impl, error_message);
   }
   if (!RegisterMuonPluginMetadata(
-          impl, *metadata, locator, plugin_policy, false)) {
+          impl, *metadata, plugin_description, plugin_policy, false)) {
+    if (!plugin.plugin.empty() &&
+        impl->startup_error.find(plugin.plugin) == std::string::npos) {
+      impl->startup_error = "Plugin " + plugin_description + ": " +
+                            impl->startup_error;
+    }
     CloseMuonDynamicLibrary(impl, handle);
     return false;
   }
   if (impl->registered_functions.size() == initial_function_count) {
     const auto error_message =
-        "Plugin registered no allowed functions: " + locator;
+        "Plugin registered no allowed functions: " + plugin_description;
     CloseMuonDynamicLibrary(impl, handle);
     return FailMuonPluginStartup(impl, error_message);
   }

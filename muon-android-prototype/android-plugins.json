@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "name": "muon_test_plugin_alpha",
+      "soname": "libmuon_test_plugin_alpha.so",
+      "source": "../muon-core/test_plugins/muon_test_plugin_alpha.cpp",
+      "artifacts": {
+        "x86_64": "lib/x86_64/libmuon_test_plugin_alpha.so",
+        "arm64-v8a": "lib/arm64-v8a/libmuon_test_plugin_alpha.so"
+      },
+      "allow": ["muon.test.alpha.*"],
+      "config": {
+        "alpha.config": "android-registry",
+        "channel": "test"
+      }
+    }
+  ]
+}

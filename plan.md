@@ -204,7 +204,14 @@ Android版ではネイティブプラグイン互換を求めず、
 - cardio 1.1.0は、manual host、Java UI Looperへ接続するauto host、Android設定制約、両ABIのAPK/ELF 16 KiB整列を含む`test-android-runtime`がPASSしました。
 - tra-ffic 1.0.0は、libffi 3.8.0を無改変の一時ビルドコピーから両ABI向けに静的ビルドし、全回帰、closure生成・呼び出し、両ABIのAPK/ELF 16 KiB整列を含む`test-android-runtime`がPASSしました。
 - 生成されたx86_64とarm64-v8aの`fficonfig.h`はいずれも`FFI_EXEC_STATIC_TRAMP=1`と`FFI_MMAP_EXEC_WRIT=1`で、`FFI_EXEC_TRAMPOLINE_TABLE`は無効でした。従って採用版は、対応ABIでは静的実行トランポリンを優先し、必要時の実行可能マッピングfallbackもコンパイルする構成です。
-- `arm64-v8a`はビルド、静的リンク、ELF/APK整列までPASSしましたが、今回利用可能なVMはx86_64だけのため、arm64での実行は完了条件として残します。
+- `arm64-v8a`はビルド、静的リンク、ELF/APK整列までPASSしました。この時点で利用可能なVMはx86_64だけだったため、arm64実行は後続の実機試験としました。
+
+同日、USB接続したPixel 6実機でも正式版のupstream Android全体試験を再実行しました。実機は`oriole`、Android 17/API 37、`arm64-v8a`、4 KiBページです。
+
+- cardio 1.1.0の`test-android-runtime`は、manual host、Java UI Looper auto host、Android設定制約、両ABI成果物検査を含めてPASSしました。
+- tra-ffic 1.0.0の`test-android-runtime`は、libffi 3.8.0のclosure生成・呼び出しを含む全回帰と、両ABI成果物検査を含めてPASSしました。
+- 実機に残っていた旧`com.example.traffic`テストpackageは別のdebug署名だったため更新を拒否されました。製品アプリではないことを確認してこのテストpackageだけを削除し、1.0.0のテストAPKをclean installして全体試験を再実行しました。
+- arm64実行自体は確認できましたが、このPixel 6の実ページサイズは4 KiBです。arm64の16 KiBページ実行は引き続き完了条件として残します。
 
 #### cardioのAndroidメインLooper統合
 

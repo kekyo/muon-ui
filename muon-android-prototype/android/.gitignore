@@ -1,5 +1,6 @@
 .gradle/
 .cxx/
+.native-dependencies/
 build/
 app/build/
 local.properties

@@ -7,7 +7,12 @@ pnpm-lock.yaml
 # Build outputs
 dist/
 build/
+android/.native-dependencies/
+android/.cxx/
+android/.gradle/
 android/app/.cxx/
+android/app/build/
+android/build/
 out/
 .next/
 .nuxt/

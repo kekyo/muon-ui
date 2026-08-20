@@ -18,6 +18,13 @@ android {
 
         ndk {
             abiFilters.add("x86_64")
+            abiFilters.add("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=c++_shared"
+            }
         }
     }
 
@@ -57,8 +64,13 @@ val buildWebAssets by tasks.registering(Exec::class) {
     commandLine("npm", "run", "build")
 }
 
+val buildNativeDependencies by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("node", "scripts/build-native-dependencies.mjs")
+}
+
 tasks.named("preBuild") {
-    dependsOn(buildWebAssets)
+    dependsOn(buildWebAssets, buildNativeDependencies)
 }
 
 dependencies {

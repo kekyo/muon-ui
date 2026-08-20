@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "vitest run && vite build && cd android && ./gradlew assembleDebug assembleRelease assembleDebugAndroidTest",
+    "test": "vitest run && vite build && node scripts/build-native-dependencies.mjs && cd android && ./gradlew assembleDebug assembleRelease assembleDebugAndroidTest && cd .. && node scripts/verify-native-dependencies.mjs",
     "test:android": "vite build && cd android && ./gradlew connectedDebugAndroidTest"
   },
   "engines": {

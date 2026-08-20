@@ -232,6 +232,7 @@ std::shared_ptr<MuonPluginRuntime> CreateMuonPluginRuntime(
     std::vector<MuonPluginRuntimeLoadEntry> plugins,
     MuonPluginRuntimeServices services) {
   InstallDesktopRuntimeServices(&services);
+  services.dispatcher = &cardio::get_current_dispatcher();
   return std::make_shared<MuonPluginRuntime>(
       ResolveMuonPluginDirectory(plugin_path), std::move(plugins),
       std::move(services));

@@ -184,6 +184,52 @@ public final class MuonActivity extends Activity {
                 : rpcBridge.getActiveFilesystemWatchCountForTest();
     }
 
+    void startNativeRuntimeProbeForTest() {
+        if (rpcBridge == null) {
+            throw new IllegalStateException("The native runtime session is closed");
+        }
+        rpcBridge.startNativeRuntimeProbeForTest();
+    }
+
+    void releaseNativeContextForTest() {
+        if (rpcBridge != null) {
+            rpcBridge.releaseNativeContextForTest();
+        }
+    }
+
+    void clearNativeRuntimeProbeEventsForTest() {
+        if (rpcBridge != null) {
+            rpcBridge.clearNativeRuntimeProbeEventsForTest();
+        }
+    }
+
+    @Nullable String awaitNativeRuntimeProbeResultForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        return rpcBridge == null
+                ? null
+                : rpcBridge.awaitNativeRuntimeProbeResultForTest(timeout, unit);
+    }
+
+    @Nullable String awaitNativeRuntimeProbeSettlementForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        return rpcBridge == null
+                ? null
+                : rpcBridge.awaitNativeRuntimeProbeSettlementForTest(timeout, unit);
+    }
+
+    int getNativeRuntimeProbeResultCountForTest() {
+        return rpcBridge == null ? 0 : rpcBridge.getNativeRuntimeProbeResultCountForTest();
+    }
+
+    @NonNull String getNativeRuntimeDiagnosticsForTest() {
+        if (rpcBridge == null) {
+            throw new IllegalStateException("The native runtime session is closed");
+        }
+        return rpcBridge.getNativeRuntimeDiagnosticsForTest();
+    }
+
     boolean awaitDestroyedForTest(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException {
         return destroyed.await(timeout, unit);
@@ -199,7 +245,7 @@ public final class MuonActivity extends Activity {
             }
         }
         if (rpcBridge != null) {
-            rpcBridge.close();
+            rpcBridge.close(isChangingConfigurations());
             rpcBridge = null;
         }
         if (assetRequestHandler != null) {

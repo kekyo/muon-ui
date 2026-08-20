@@ -122,6 +122,7 @@ static MuonPluginRuntimeServices CreateRuntimeServices(
     cardio::dispatcher* dispatcher,
     std::thread::id owner_thread) {
   MuonPluginRuntimeServices services;
+  services.dispatcher = dispatcher;
   services.is_owner_thread = [owner_thread]() {
     return std::this_thread::get_id() == owner_thread;
   };

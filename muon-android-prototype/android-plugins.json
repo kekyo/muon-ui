@@ -14,6 +14,17 @@
         "alpha.config": "android-registry",
         "channel": "test"
       }
+    },
+    {
+      "name": "muon_test_plugin_cardio",
+      "soname": "libmuon_test_plugin_cardio.so",
+      "source": "../muon-core/test_plugins/muon_test_plugin_cardio.cpp",
+      "artifacts": {
+        "x86_64": "lib/x86_64/libmuon_test_plugin_cardio.so",
+        "arm64-v8a": "lib/arm64-v8a/libmuon_test_plugin_cardio.so"
+      },
+      "allow": ["muon.test.cardio.*"],
+      "config": {}
     }
   ]
 }

@@ -95,6 +95,7 @@ include(
 
 add_library(muon_android_rpc SHARED
   "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugin_registry.cpp"
+  muon_android_process_runtime.cpp
   muon_android_rpc_jni.cpp
   )
 target_compile_features(muon_android_rpc PRIVATE cxx_std_20)

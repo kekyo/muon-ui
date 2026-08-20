@@ -19,6 +19,10 @@
 #include <string>
 #include <vector>
 
+namespace cardio {
+class dispatcher;
+}
+
 struct MuonPluginRuntimeImpl;
 
 /** Identifies the producer of one portable runtime log message. */
@@ -228,6 +232,9 @@ struct MuonPluginRuntimeLoadEntry {
  * Platform services required by the CEF-independent plugin runtime.
  */
 struct MuonPluginRuntimeServices {
+  /** Dispatcher that serializes this runtime's plugin work. */
+  cardio::dispatcher* dispatcher = nullptr;
+
   /** Returns whether the caller is on the serialized runtime owner thread. */
   std::function<bool()> is_owner_thread;
 

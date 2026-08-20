@@ -475,14 +475,15 @@ MuonPluginRuntimeImpl::MuonPluginRuntimeImpl(
     : plugin_directory(std::move(plugin_directory)),
       plugins(std::move(plugins)),
       services(std::move(services)),
-      main_dispatcher(cardio::unsafe_get_current_dispatcher()),
+      main_dispatcher(this->services.dispatcher),
       traffic_drain_state(std::make_shared<MuonTrafficDrainState>()) {
   traffic_drain_state->dispatcher = main_dispatcher;
   traffic_drain_state->impl = this;
   traffic_drain_state_handle =
       std::make_unique<std::shared_ptr<MuonTrafficDrainState>>(
           traffic_drain_state);
-  if (!this->services.is_owner_thread ||
+  if (main_dispatcher == nullptr ||
+      !this->services.is_owner_thread ||
       !this->services.post_owner_task ||
       !this->services.allocate_buffer ||
       !this->services.is_owner_available ||
@@ -3206,8 +3207,7 @@ void MuonPluginRuntime::Invoke(const MuonRpcCallRequest& request,
     decoded_args.function_retains.push_back(std::move(proxy_retain));
   }
 
-  auto* dispatcher = cardio::unsafe_get_current_dispatcher();
-  if (dispatcher == nullptr) {
+  if (impl_->main_dispatcher == nullptr) {
     decoded_args.ResetFunctionBorrows();
     CompleteMuonPluginCallWithError(
         request, completion, "muon main dispatcher is unavailable");
@@ -3215,7 +3215,7 @@ void MuonPluginRuntime::Invoke(const MuonRpcCallRequest& request,
   }
 
   muon_internal::FireAndForgetOnDispatcher(
-      dispatcher,
+      impl_->main_dispatcher,
       [impl = impl_.get(),
        function_ref,
        return_type,

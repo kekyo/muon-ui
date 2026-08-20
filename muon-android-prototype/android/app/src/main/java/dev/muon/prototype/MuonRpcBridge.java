@@ -27,6 +27,8 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /** Adapts trusted WebView messages to the CEF-independent native RPC host. */
 final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoCloseable {
@@ -40,6 +42,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private static final int RESULT_UNSIGNED_INTEGER = 2;
     private static final int RESULT_BOOLEAN = 3;
     private static final int RESULT_BINARY = 4;
+    private static final Handler PROCESS_MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     private static final class PendingBinaryCall {
         final int callId;
@@ -68,6 +71,10 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<Integer, PendingBinaryCall> pendingBinaryCalls = new HashMap<>();
     private final Map<Integer, Runnable> delayedCompletions = new HashMap<>();
+    private final LinkedBlockingQueue<String> nativeRuntimeProbeResults =
+            new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<String> nativeRuntimeProbeSettlements =
+            new LinkedBlockingQueue<>();
     private final MuonAndroidPlatformService platformService;
     private long nativeHandle;
     private JavaScriptReplyProxy replyProxy;
@@ -303,6 +310,25 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     }
 
     @SuppressWarnings("unused")
+    private void onNativeRuntimeProbeResult(int mask) {
+        String thread = Looper.myLooper() == Looper.getMainLooper() ? "main" : "other";
+        nativeRuntimeProbeResults.add(thread + ":" + mask);
+    }
+
+    @SuppressWarnings("unused")
+    private void onNativeRuntimeProbeSettled(boolean delivered) {
+        String thread = Looper.myLooper() == Looper.getMainLooper() ? "main" : "other";
+        nativeRuntimeProbeSettlements.add(thread + ":" + delivered);
+    }
+
+    @SuppressWarnings("unused")
+    private static void scheduleNativeRuntimeStopCompletion() {
+        if (!PROCESS_MAIN_HANDLER.post(MuonRpcBridge::nativeCompleteRuntimeStop)) {
+            throw new IllegalStateException("The Android main Looper is exiting");
+        }
+    }
+
+    @SuppressWarnings("unused")
     private void invokePlatformFunction(
             int callId,
             @NonNull String functionPath,
@@ -454,13 +480,58 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         return platformService.getActiveFilesystemWatchCount();
     }
 
+    void startNativeRuntimeProbeForTest() {
+        if (nativeHandle == 0) {
+            throw new IllegalStateException("The native runtime session is closed");
+        }
+        nativeStartRuntimeProbe(nativeHandle);
+    }
+
+    void releaseNativeContextForTest() {
+        if (nativeHandle != 0) {
+            nativeReleaseContext(nativeHandle);
+        }
+    }
+
+    void clearNativeRuntimeProbeEventsForTest() {
+        nativeRuntimeProbeResults.clear();
+        nativeRuntimeProbeSettlements.clear();
+    }
+
+    @Nullable String awaitNativeRuntimeProbeResultForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        return nativeRuntimeProbeResults.poll(timeout, unit);
+    }
+
+    @Nullable String awaitNativeRuntimeProbeSettlementForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        return nativeRuntimeProbeSettlements.poll(timeout, unit);
+    }
+
+    int getNativeRuntimeProbeResultCountForTest() {
+        return nativeRuntimeProbeResults.size();
+    }
+
+    @NonNull String getNativeRuntimeDiagnosticsForTest() {
+        if (nativeHandle == 0) {
+            throw new IllegalStateException("The native runtime session is closed");
+        }
+        return nativeGetRuntimeDiagnostics(nativeHandle);
+    }
+
     @Override
     public void close() {
+        close(false);
+    }
+
+    void close(boolean preserveRuntime) {
         pendingBinaryCalls.clear();
         cancelAllNativeDelays();
         if (nativeHandle != 0) {
             nativeReleaseContext(nativeHandle);
-            nativeDestroyHost(nativeHandle);
+            nativeDestroyHost(nativeHandle, preserveRuntime);
             nativeHandle = 0;
         }
         platformService.close();
@@ -493,7 +564,14 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     private static native void nativeReleaseContext(long handle);
 
+    private static native void nativeStartRuntimeProbe(long handle);
+
+    private static native void nativeCompleteRuntimeStop();
+
+    @NonNull
+    private static native String nativeGetRuntimeDiagnostics(long handle);
+
     private static native int nativeGetPendingCallCount(long handle);
 
-    private static native void nativeDestroyHost(long handle);
+    private static native void nativeDestroyHost(long handle, boolean preserveRuntime);
 }

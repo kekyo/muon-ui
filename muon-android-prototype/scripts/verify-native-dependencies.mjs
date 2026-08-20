@@ -34,6 +34,9 @@ const expectedDefinitions = [
   'CARDIO_SHARED_LIB=1',
   'CARDIO_WITH_LINUX_IO_URING=0',
 ];
+const expectedPatchFiles = [
+  'patches/libffi/0001-android-x86_64-16k-static-trampoline.patch',
+];
 const abis = [
   {
     abi: 'x86_64',
@@ -126,9 +129,8 @@ const verifyManifest = (entry, commits, expectedHashes) => {
     `${entry.abi}: LDFLAGS mismatch`
   );
   expectCondition(
-    Array.isArray(manifest.libffi.patches) &&
-      manifest.libffi.patches.length === 0,
-    `${entry.abi}: initial patch list must be empty`
+    JSON.stringify(manifest.libffi.patches) === JSON.stringify(expectedPatches),
+    `${entry.abi}: patch list mismatch`
   );
   expectCondition(
     manifest.libffi.patchQueueSha256 === expectedHashes.patchQueue,
@@ -304,8 +306,12 @@ const commits = {
     'HEAD',
   ]),
 };
+const expectedPatches = expectedPatchFiles.map((path) => ({
+  path,
+  sha256: sha256(join(projectRoot, path)),
+}));
 const expectedHashes = {
-  patchQueue: sha256Contents(`${JSON.stringify([])}\n`),
+  patchQueue: sha256Contents(`${JSON.stringify(expectedPatches)}\n`),
   recipe: sha256(join(projectRoot, 'scripts', 'build-native-dependencies.mjs')),
   sourceArchive: expectedLibffiSourceArchive.sha256,
 };
@@ -339,7 +345,7 @@ try {
       'outputs',
       'apk',
       'release',
-      'app-release-unsigned.apk'
+      'app-release.apk'
     ),
     readelf,
     zipalign,

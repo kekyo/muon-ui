@@ -20,10 +20,9 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <iterator>
+#include <fstream>
 #include <limits>
 #include <map>
-#include <set>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -33,6 +32,97 @@ enum class MuonAndroidProcessRuntimeState {
   Running,
   Stopping,
 };
+
+#if defined(MUON_TEST_BUILD)
+enum class MuonAndroidRuntimeStartupFault {
+  None,
+  MissingLibrary,
+  MissingEntry,
+  InitFailure,
+  InvalidMetadata,
+  DuplicatePath,
+  AllowMismatch,
+};
+
+static constexpr char kMuonAndroidFaultPluginSoname[] =
+    "libmuon_test_plugin_function_lifetime.so";
+
+static const muon_plugin_metadata* DeclineMuonAndroidTestPlugin(
+    const muon_plugin_init_context*) {
+  return nullptr;
+}
+
+static const muon_plugin_namespace kMuonAndroidInvalidNamespace = {
+    "invalid namespace",
+    nullptr,
+    nullptr,
+};
+
+static const muon_plugin_namespace* const
+    kMuonAndroidInvalidNamespaces[] = {
+        &kMuonAndroidInvalidNamespace,
+        nullptr,
+};
+
+static const muon_plugin_metadata kMuonAndroidInvalidMetadata = {
+    kMuonAndroidInvalidNamespaces,
+    nullptr,
+    nullptr,
+};
+
+static const muon_plugin_metadata* LoadMuonAndroidInvalidTestPlugin(
+    const muon_plugin_init_context*) {
+  return &kMuonAndroidInvalidMetadata;
+}
+
+static void CompleteMuonAndroidDuplicateFunction(
+    muon_completion_func completion) {
+  completion(nullptr, nullptr);
+}
+
+static const muon_type_descriptor kMuonAndroidVoidType = {
+    MUON_TYPE_VOID,
+    nullptr,
+};
+
+static const muon_plugin_function_metadata
+    kMuonAndroidDuplicateFunction = {
+        "alphaName",
+        reinterpret_cast<muon_native_function>(
+            &CompleteMuonAndroidDuplicateFunction),
+        {0, nullptr, &kMuonAndroidVoidType},
+        nullptr,
+};
+
+static const muon_plugin_function_metadata* const
+    kMuonAndroidDuplicateFunctions[] = {
+        &kMuonAndroidDuplicateFunction,
+        nullptr,
+};
+
+static const muon_plugin_namespace kMuonAndroidDuplicateNamespace = {
+    "muon.test.alpha",
+    nullptr,
+    kMuonAndroidDuplicateFunctions,
+};
+
+static const muon_plugin_namespace* const
+    kMuonAndroidDuplicateNamespaces[] = {
+        &kMuonAndroidDuplicateNamespace,
+        nullptr,
+};
+
+static const muon_plugin_metadata kMuonAndroidDuplicateMetadata = {
+    kMuonAndroidDuplicateNamespaces,
+    nullptr,
+    nullptr,
+};
+
+static const muon_plugin_metadata* LoadMuonAndroidDuplicateTestPlugin(
+    const muon_plugin_init_context*) {
+  return &kMuonAndroidDuplicateMetadata;
+}
+#endif
 
 struct MuonAndroidProcessSession {
   MuonRpcOwner owner;
@@ -67,8 +157,18 @@ struct MuonAndroidProcessRuntimeControllerImpl {
   size_t outstanding_probes = 0;
   bool stop_requested = false;
   bool stop_completion_posted = false;
-  std::set<int> dispatcher_file_descriptors;
-  std::vector<void*> deferred_library_handles;
+  std::map<int, std::string> dispatcher_file_descriptors;
+  uint64_t opened_library_handles = 0;
+  uint64_t closed_library_handles = 0;
+  std::map<void*, std::string> live_library_locators;
+  std::vector<std::pair<void*, std::string>> deferred_library_handles;
+  std::vector<std::string> last_closed_libraries;
+#if defined(MUON_TEST_BUILD)
+  MuonAndroidRuntimeStartupFault next_startup_fault =
+      MuonAndroidRuntimeStartupFault::None;
+  MuonAndroidRuntimeStartupFault active_startup_fault =
+      MuonAndroidRuntimeStartupFault::None;
+#endif
   std::map<int, MuonAndroidProcessSession> sessions;
   std::vector<MuonRpcOwner> pending_probes;
   MuonAndroidPluginCatalog plugin_catalog;
@@ -76,8 +176,17 @@ struct MuonAndroidProcessRuntimeControllerImpl {
   std::shared_ptr<MuonPluginRuntime> plugin_runtime;
 };
 
-static std::set<int> GetOpenFileDescriptors() {
-  auto result = std::set<int>{};
+static std::string GetFileDescriptorTarget(int descriptor) {
+  auto error = std::error_code{};
+  const auto target = std::filesystem::read_symlink(
+      std::filesystem::path{"/proc/self/fd"} /
+          std::to_string(descriptor),
+      error);
+  return error ? std::string{} : target.string();
+}
+
+static std::map<int, std::string> GetOpenFileDescriptors() {
+  auto result = std::map<int, std::string>{};
   auto* directory = ::opendir("/proc/self/fd");
   if (directory == nullptr) {
     return result;
@@ -91,11 +200,52 @@ static std::set<int> GetOpenFileDescriptors() {
         value == directory_fd) {
       continue;
     }
-    result.insert(static_cast<int>(value));
+    const auto descriptor = static_cast<int>(value);
+    result.emplace(descriptor, GetFileDescriptorTarget(descriptor));
   }
   (void)::closedir(directory);
   return result;
 }
+
+#if defined(MUON_TEST_BUILD)
+static std::string GetAddressMappingPermissions(uintptr_t address) {
+  if (address == 0) {
+    return {};
+  }
+  auto mappings = std::ifstream{"/proc/self/maps"};
+  auto line = std::string{};
+  while (std::getline(mappings, line)) {
+    const auto range_end = line.find(' ');
+    const auto separator = line.find('-');
+    if (separator == std::string::npos || range_end == std::string::npos ||
+        separator >= range_end) {
+      continue;
+    }
+    const auto begin_text = line.substr(0, separator);
+    const auto end_text = line.substr(separator + 1,
+                                      range_end - separator - 1);
+    char* begin_parse_end = nullptr;
+    char* end_parse_end = nullptr;
+    const auto begin = std::strtoull(
+        begin_text.c_str(), &begin_parse_end, 16);
+    const auto end = std::strtoull(
+        end_text.c_str(), &end_parse_end, 16);
+    if (begin_parse_end == begin_text.c_str() ||
+        *begin_parse_end != '\0' || end_parse_end == end_text.c_str() ||
+        *end_parse_end != '\0' || address < begin || address >= end) {
+      continue;
+    }
+    const auto permissions_begin = line.find_first_not_of(' ', range_end);
+    if (permissions_begin == std::string::npos) {
+      return {};
+    }
+    const auto permissions_end = line.find(' ', permissions_begin);
+    return line.substr(permissions_begin,
+                       permissions_end - permissions_begin);
+  }
+  return {};
+}
+#endif
 
 static int GetAndroidLogPriority(muon_log_level level) {
   switch (level) {
@@ -147,6 +297,11 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
     return false;
   }
   error_message->clear();
+#if defined(MUON_TEST_BUILD)
+  active_startup_fault = next_startup_fault;
+  next_startup_fault = MuonAndroidRuntimeStartupFault::None;
+#endif
+  last_closed_libraries.clear();
   const auto descriptors_before = GetOpenFileDescriptors();
   try {
     dispatcher_host =
@@ -157,11 +312,11 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   }
   const auto descriptors_after = GetOpenFileDescriptors();
   dispatcher_file_descriptors.clear();
-  std::set_difference(
-      descriptors_after.begin(), descriptors_after.end(),
-      descriptors_before.begin(), descriptors_before.end(),
-      std::inserter(dispatcher_file_descriptors,
-                    dispatcher_file_descriptors.end()));
+  for (const auto& [descriptor, target] : descriptors_after) {
+    if (descriptors_before.find(descriptor) == descriptors_before.end()) {
+      dispatcher_file_descriptors.emplace(descriptor, target);
+    }
+  }
   created_dispatcher_hosts += 1;
   generation += 1;
   state = MuonAndroidProcessRuntimeState::Running;
@@ -170,6 +325,27 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   if (!CreateMuonAndroidPluginLoadEntries(&plugins, error_message)) {
     return false;
   }
+#if defined(MUON_TEST_BUILD)
+  for (auto& plugin : plugins) {
+    if (plugin.library_locator != kMuonAndroidFaultPluginSoname) {
+      continue;
+    }
+    auto fault_allow = std::vector<std::string>{};
+    if (active_startup_fault ==
+        MuonAndroidRuntimeStartupFault::DuplicatePath) {
+      fault_allow.push_back("muon.test.alpha.*");
+    } else if (active_startup_fault ==
+               MuonAndroidRuntimeStartupFault::AllowMismatch) {
+      fault_allow.push_back("muon.test.unavailable.*");
+    }
+    if (!fault_allow.empty() &&
+        !CreateMuonPluginPolicy(
+            fault_allow, &plugin.plugin_policy, error_message)) {
+      return false;
+    }
+    break;
+  }
+#endif
   plugin_catalog = MuonAndroidPluginCatalog{};
   auto ordered_capability_policies =
       std::vector<std::pair<std::string, std::shared_ptr<MuonPluginPolicy>>>{};
@@ -229,26 +405,68 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
     (void)__android_log_write(GetAndroidLogPriority(level), tag,
                               message.c_str());
   };
-  services.open_library = [](const std::string& locator,
-                             std::string* loader_error) -> void* {
+  services.open_library = [this](const std::string& locator,
+                                 std::string* loader_error) -> void* {
+#if defined(MUON_TEST_BUILD)
+    if (active_startup_fault ==
+            MuonAndroidRuntimeStartupFault::MissingLibrary &&
+        locator == kMuonAndroidFaultPluginSoname) {
+      if (loader_error != nullptr) {
+        *loader_error = "test fault: packaged library is missing";
+      }
+      return nullptr;
+    }
+#endif
     (void)::dlerror();
     auto* handle = ::dlopen(locator.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (handle == nullptr && loader_error != nullptr) {
       const auto* diagnostic = ::dlerror();
       *loader_error = diagnostic == nullptr ? "dlopen failed" : diagnostic;
     }
+    if (handle != nullptr) {
+      opened_library_handles += 1;
+      live_library_locators[handle] = locator;
+    }
     return handle;
   };
-  services.find_symbol = [](void* handle, const char* symbol) -> void* {
-    return handle == nullptr || symbol == nullptr
-               ? nullptr
-               : ::dlsym(handle, symbol);
+  services.find_symbol = [this](void* handle, const char* symbol) -> void* {
+    // Release builds do not inject startup faults, but keep one loader shape
+    // across variants so the production lookup path stays identical.
+    (void)this;
+    if (handle == nullptr || symbol == nullptr) {
+      return nullptr;
+    }
+#if defined(MUON_TEST_BUILD)
+    const auto locator = live_library_locators.find(handle);
+    if (locator != live_library_locators.end() &&
+        locator->second == kMuonAndroidFaultPluginSoname &&
+        std::string{symbol} == "muon_init_plugin") {
+      switch (active_startup_fault) {
+        case MuonAndroidRuntimeStartupFault::MissingEntry:
+          return nullptr;
+        case MuonAndroidRuntimeStartupFault::InitFailure:
+          return reinterpret_cast<void*>(&DeclineMuonAndroidTestPlugin);
+        case MuonAndroidRuntimeStartupFault::InvalidMetadata:
+          return reinterpret_cast<void*>(&LoadMuonAndroidInvalidTestPlugin);
+        case MuonAndroidRuntimeStartupFault::DuplicatePath:
+          return reinterpret_cast<void*>(&LoadMuonAndroidDuplicateTestPlugin);
+        default:
+          break;
+      }
+    }
+#endif
+    return ::dlsym(handle, symbol);
   };
   // A plugin Stop coroutine may leave its cardio fire_and_forget cleanup in
   // the dispatcher queue. Keep its DSO mapped until that queue is destroyed.
   services.close_library = [this](void* handle) {
     if (handle != nullptr) {
-      deferred_library_handles.push_back(handle);
+      const auto locator = live_library_locators.find(handle);
+      deferred_library_handles.push_back(
+          {handle,
+           locator == live_library_locators.end()
+               ? std::string{}
+               : locator->second});
     }
   };
 
@@ -357,13 +575,12 @@ void MuonAndroidProcessRuntimeControllerImpl::DrainPendingProbes() {
 
 void MuonAndroidProcessRuntimeControllerImpl::MaybeBeginStop() {
   if (!stop_requested || !sessions.empty() || outstanding_probes != 0 ||
-      state != MuonAndroidProcessRuntimeState::Running ||
-      !plugin_runtime) {
+      state != MuonAndroidProcessRuntimeState::Running) {
     return;
   }
   stop_requested = false;
   state = MuonAndroidProcessRuntimeState::Stopping;
-  plugin_runtime->Stop([this]() {
+  const auto post_completion = [this]() {
     if (stop_completion_posted || dispatcher_host == nullptr ||
         !schedule_stop_completion) {
       return;
@@ -375,7 +592,12 @@ void MuonAndroidProcessRuntimeControllerImpl::MaybeBeginStop() {
           ANDROID_LOG_ERROR, "muon-runtime",
           "Could not schedule Android runtime stop completion");
     }
-  });
+  };
+  if (plugin_runtime) {
+    plugin_runtime->Stop(post_completion);
+  } else {
+    post_completion();
+  }
 }
 
 void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
@@ -387,15 +609,22 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
   dispatcher_host.reset();
   // Dispatcher work-item destructors can execute std::function managers that
   // were instantiated in a plugin DSO, so dlclose must be the final step.
-  for (auto* handle : deferred_library_handles) {
-    if (handle != nullptr) {
-      (void)::dlclose(handle);
+  for (const auto& deferred : deferred_library_handles) {
+    if (deferred.first != nullptr) {
+      (void)::dlclose(deferred.first);
+      closed_library_handles += 1;
+      last_closed_libraries.push_back(deferred.second);
+      live_library_locators.erase(deferred.first);
     }
   }
   deferred_library_handles.clear();
-  for (const auto descriptor : dispatcher_file_descriptors) {
+#if defined(MUON_TEST_BUILD)
+  active_startup_fault = MuonAndroidRuntimeStartupFault::None;
+#endif
+  for (const auto& [descriptor, target] : dispatcher_file_descriptors) {
     errno = 0;
-    if (::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {
+    if ((::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) &&
+        GetFileDescriptorTarget(descriptor) == target) {
       leaked_dispatcher_file_descriptors += 1;
     }
   }
@@ -412,6 +641,22 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
   if (!CreateRuntime(&error_message)) {
     (void)__android_log_write(ANDROID_LOG_ERROR, "muon-runtime",
                               error_message.c_str());
+    auto session_ids = std::vector<int>{};
+    session_ids.reserve(sessions.size());
+    for (const auto& [session_id, session] : sessions) {
+      (void)session;
+      session_ids.push_back(session_id);
+    }
+    for (const auto session_id : session_ids) {
+      const auto iterator = sessions.find(session_id);
+      if (iterator != sessions.end() &&
+          iterator->second.callbacks.runtime_failed) {
+        auto callback = iterator->second.callbacks.runtime_failed;
+        callback(error_message.empty()
+                     ? "Could not restart the Android native runtime"
+                     : error_message);
+      }
+    }
     auto probes = std::move(pending_probes);
     pending_probes.clear();
     for (const auto& owner : probes) {
@@ -423,6 +668,26 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
       if (session != nullptr && session->callbacks.settle_runtime_probe) {
         session->callbacks.settle_runtime_probe(session->available);
       }
+    }
+    return;
+  }
+
+  // A new Activity can be created while asynchronous plugin Stop() callbacks
+  // are still running. Its session remains registered without blocking the
+  // Java main Looper and is attached only after the replacement runtime is
+  // fully constructed.
+  auto session_ids = std::vector<int>{};
+  session_ids.reserve(sessions.size());
+  for (const auto& [session_id, session] : sessions) {
+    (void)session;
+    session_ids.push_back(session_id);
+  }
+  for (const auto session_id : session_ids) {
+    const auto iterator = sessions.find(session_id);
+    if (iterator != sessions.end() &&
+        iterator->second.callbacks.runtime_ready) {
+      auto callback = iterator->second.callbacks.runtime_ready;
+      callback();
     }
   }
 }
@@ -438,14 +703,18 @@ MuonAndroidProcessRuntimeController::~MuonAndroidProcessRuntimeController() =
 bool MuonAndroidProcessRuntimeController::RegisterSession(
     MuonAndroidProcessSessionCallbacks callbacks,
     MuonRpcOwner* owner,
+    bool* runtime_ready,
     std::string* error_message) {
-  if (owner == nullptr || error_message == nullptr ||
+  if (owner == nullptr || runtime_ready == nullptr ||
+      error_message == nullptr ||
       std::this_thread::get_id() != impl_->owner_thread ||
+      !callbacks.runtime_ready || !callbacks.runtime_failed ||
       !callbacks.send_message || !callbacks.deliver_runtime_probe ||
       !callbacks.settle_runtime_probe || impl_->next_owner_id <= 0 ||
       impl_->next_owner_id == std::numeric_limits<int>::max()) {
     return false;
   }
+  *runtime_ready = false;
   error_message->clear();
   MuonRpcOwner new_owner;
   new_owner.browser_id = impl_->next_owner_id;
@@ -464,6 +733,9 @@ bool MuonAndroidProcessRuntimeController::RegisterSession(
     impl_->MaybeBeginStop();
     return false;
   }
+  *runtime_ready =
+      impl_->state == MuonAndroidProcessRuntimeState::Running &&
+      impl_->plugin_runtime && impl_->plugin_runtime->IsReady();
   *owner = std::move(new_owner);
   return true;
 }
@@ -628,6 +900,17 @@ void MuonAndroidProcessRuntimeController::CompletePendingStop() {
 MuonAndroidProcessRuntimeDiagnostics
 MuonAndroidProcessRuntimeController::GetDiagnostics() const {
   MuonAndroidProcessRuntimeDiagnostics diagnostics;
+  switch (impl_->state) {
+    case MuonAndroidProcessRuntimeState::Idle:
+      diagnostics.runtime_state = "idle";
+      break;
+    case MuonAndroidProcessRuntimeState::Running:
+      diagnostics.runtime_state = "running";
+      break;
+    case MuonAndroidProcessRuntimeState::Stopping:
+      diagnostics.runtime_state = "stopping";
+      break;
+  }
   diagnostics.generation = impl_->generation;
   diagnostics.created_dispatcher_hosts = impl_->created_dispatcher_hosts;
   diagnostics.destroyed_dispatcher_hosts = impl_->destroyed_dispatcher_hosts;
@@ -639,7 +922,96 @@ MuonAndroidProcessRuntimeController::GetDiagnostics() const {
       impl_->leaked_dispatcher_file_descriptors;
   diagnostics.outstanding_probes = impl_->outstanding_probes;
   diagnostics.suppressed_probe_results = impl_->suppressed_probe_results;
+  diagnostics.opened_library_handles = impl_->opened_library_handles;
+  diagnostics.closed_library_handles = impl_->closed_library_handles;
+  diagnostics.live_library_handles = impl_->live_library_locators.size();
+  diagnostics.deferred_library_handles =
+      impl_->deferred_library_handles.size();
+  diagnostics.last_closed_libraries = impl_->last_closed_libraries;
+#if defined(MUON_TEST_BUILD)
+  if (impl_->plugin_runtime) {
+    const auto owner = impl_->sessions.empty()
+                           ? MuonRpcOwner{}
+                           : impl_->sessions.begin()->second.owner;
+    const auto function_diagnostics =
+        impl_->plugin_runtime->GetFunctionWrapperDiagnostics(owner);
+    diagnostics.function_owner_sources =
+        function_diagnostics.owner.sources;
+    diagnostics.function_global_sources =
+        function_diagnostics.global.sources;
+    diagnostics.function_global_borrows =
+        function_diagnostics.global.borrows;
+    diagnostics.function_global_proxies =
+        function_diagnostics.global.proxies;
+    diagnostics.function_global_proxy_leases =
+        function_diagnostics.global.proxy_leases;
+    diagnostics.pending_renderer_function_calls =
+        function_diagnostics.pending_renderer_function_calls;
+    diagnostics.traffic_tasks_pending =
+        function_diagnostics.traffic_tasks_pending;
+    diagnostics.ffi_closures_enabled =
+        function_diagnostics.ffi_closures_enabled;
+    diagnostics.ffi_closure_alloc =
+        function_diagnostics.ffi_closure_alloc;
+    diagnostics.ffi_closure_free =
+        function_diagnostics.ffi_closure_free;
+    diagnostics.ffi_closure_live =
+        function_diagnostics.ffi_closure_live;
+    diagnostics.ffi_closure_high_water =
+        function_diagnostics.ffi_closure_high_water;
+    diagnostics.closure_mapping_permissions = GetAddressMappingPermissions(
+        function_diagnostics.ffi_closure_executable_address);
+    if (diagnostics.closure_mapping_permissions.size() >= 3) {
+      diagnostics.closure_writable =
+          diagnostics.closure_mapping_permissions[1] == 'w';
+      diagnostics.closure_executable =
+          diagnostics.closure_mapping_permissions[2] == 'x';
+    }
+  }
+#endif
   diagnostics.owner_thread =
       std::this_thread::get_id() == impl_->owner_thread;
   return diagnostics;
 }
+
+#if defined(MUON_TEST_BUILD)
+bool MuonAndroidProcessRuntimeController::SetStartupFaultForTest(
+    const std::string& fault,
+    std::string* error_message) {
+  if (error_message == nullptr ||
+      std::this_thread::get_id() != impl_->owner_thread) {
+    return false;
+  }
+  error_message->clear();
+  if (impl_->state != MuonAndroidProcessRuntimeState::Idle ||
+      !impl_->sessions.empty() || impl_->dispatcher_host ||
+      impl_->plugin_runtime || !impl_->live_library_locators.empty() ||
+      !impl_->deferred_library_handles.empty()) {
+    *error_message = "Android native runtime is not idle";
+    return false;
+  }
+  if (fault == "missing-library") {
+    impl_->next_startup_fault =
+        MuonAndroidRuntimeStartupFault::MissingLibrary;
+  } else if (fault == "missing-entry") {
+    impl_->next_startup_fault =
+        MuonAndroidRuntimeStartupFault::MissingEntry;
+  } else if (fault == "init-failure") {
+    impl_->next_startup_fault =
+        MuonAndroidRuntimeStartupFault::InitFailure;
+  } else if (fault == "invalid-metadata") {
+    impl_->next_startup_fault =
+        MuonAndroidRuntimeStartupFault::InvalidMetadata;
+  } else if (fault == "duplicate-path") {
+    impl_->next_startup_fault =
+        MuonAndroidRuntimeStartupFault::DuplicatePath;
+  } else if (fault == "allow-mismatch") {
+    impl_->next_startup_fault =
+        MuonAndroidRuntimeStartupFault::AllowMismatch;
+  } else {
+    *error_message = "Unknown Android runtime startup fault: " + fault;
+    return false;
+  }
+  return true;
+}
+#endif

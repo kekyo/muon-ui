@@ -19,6 +19,12 @@
 
 /** Platform callbacks retained for one Android Activity/WebView session. */
 struct MuonAndroidProcessSessionCallbacks {
+  /** Notifies a waiting session that a replacement runtime is ready. */
+  std::function<void()> runtime_ready;
+
+  /** Reports a replacement runtime startup failure to a waiting session. */
+  std::function<void(const std::string& error_message)> runtime_failed;
+
   /** Sends a typed runtime message to this session's WebView transport. */
   std::function<bool(const MuonRpcMessage& message,
                      std::string* error_message)>
@@ -33,6 +39,9 @@ struct MuonAndroidProcessSessionCallbacks {
 
 /** Test-observable process runtime and Android dispatcher lifecycle counts. */
 struct MuonAndroidProcessRuntimeDiagnostics {
+  /** Current process runtime lifecycle state. */
+  std::string runtime_state = "idle";
+
   /** Monotonic identity of the current or most recently created runtime. */
   uint64_t generation = 0;
 
@@ -59,6 +68,66 @@ struct MuonAndroidProcessRuntimeDiagnostics {
 
   /** Probe results suppressed because their owner context was released. */
   uint64_t suppressed_probe_results = 0;
+
+  /** Packaged plugin handles successfully opened in this process. */
+  uint64_t opened_library_handles = 0;
+
+  /** Packaged plugin handles closed after dispatcher destruction. */
+  uint64_t closed_library_handles = 0;
+
+  /** Plugin handles that remain mapped in the current runtime. */
+  size_t live_library_handles = 0;
+
+  /** Plugin handles waiting for dispatcher destruction before dlclose. */
+  size_t deferred_library_handles = 0;
+
+  /** Sonames closed by the most recently stopped runtime, in close order. */
+  std::vector<std::string> last_closed_libraries;
+
+  /** Live renderer function sources belonging to the requesting session. */
+  size_t function_owner_sources = 0;
+
+  /** Live renderer function sources across the process runtime. */
+  size_t function_global_sources = 0;
+
+  /** Active native bridge borrows across all renderer function sources. */
+  size_t function_global_borrows = 0;
+
+  /** Distinct plugin-owned function proxies across the process runtime. */
+  size_t function_global_proxies = 0;
+
+  /** Renderer wrapper leases for plugin-owned proxies across the runtime. */
+  size_t function_global_proxy_leases = 0;
+
+  /** Renderer callback invocations waiting for JavaScript results. */
+  size_t pending_renderer_function_calls = 0;
+
+  /** Whether tra-ffic has deferred finalization work queued. */
+  bool traffic_tasks_pending = false;
+
+  /** Whether libffi closure tracking is enabled in this build. */
+  bool ffi_closures_enabled = false;
+
+  /** Total successful tracked libffi closure allocations. */
+  uint64_t ffi_closure_alloc = 0;
+
+  /** Total tracked libffi closure releases. */
+  uint64_t ffi_closure_free = 0;
+
+  /** Currently live tracked libffi closures. */
+  uint64_t ffi_closure_live = 0;
+
+  /** Highest tracked libffi closure live count. */
+  uint64_t ffi_closure_high_water = 0;
+
+  /** Whether a sampled renderer closure address is in an executable map. */
+  bool closure_executable = false;
+
+  /** Whether that same executable map is writable. */
+  bool closure_writable = false;
+
+  /** Linux map permission field containing the sampled closure address. */
+  std::string closure_mapping_permissions;
 
   /** Whether diagnostics were requested from the runtime owner thread. */
   bool owner_thread = false;
@@ -102,11 +171,13 @@ class MuonAndroidProcessRuntimeController final {
    *
    * @param callbacks Session transport and diagnostic callbacks.
    * @param owner Receives a new monotonic process-wide owner identity.
+   * @param runtime_ready Receives whether the runtime can be used immediately.
    * @param error_message Receives a deterministic startup error.
    * @return true when the session was accepted.
    */
   bool RegisterSession(MuonAndroidProcessSessionCallbacks callbacks,
                        MuonRpcOwner* owner,
+                       bool* runtime_ready,
                        std::string* error_message);
 
   /** Marks a session available when its WebView creates a new context. */
@@ -164,6 +235,12 @@ class MuonAndroidProcessRuntimeController final {
 
   /** Returns process runtime lifecycle diagnostics. */
   MuonAndroidProcessRuntimeDiagnostics GetDiagnostics() const;
+
+#if defined(MUON_TEST_BUILD)
+  /** Selects one deterministic packaged-plugin startup fault for the next run. */
+  bool SetStartupFaultForTest(const std::string& fault,
+                              std::string* error_message);
+#endif
 
   MuonAndroidProcessRuntimeController(
       const MuonAndroidProcessRuntimeController&) = delete;

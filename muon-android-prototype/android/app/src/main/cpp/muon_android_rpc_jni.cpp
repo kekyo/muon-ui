@@ -43,6 +43,8 @@ struct MuonAndroidRpcHost {
   jmethodID cancel_all_platform_calls = nullptr;
   jmethodID deliver_runtime_probe = nullptr;
   jmethodID settle_runtime_probe = nullptr;
+  jmethodID native_host_ready = nullptr;
+  jmethodID native_host_startup_failed = nullptr;
   jclass native_argument_class = nullptr;
   jfieldID native_argument_kind = nullptr;
   jfieldID native_argument_boolean_value = nullptr;
@@ -58,6 +60,7 @@ struct MuonAndroidRpcHost {
   std::shared_ptr<MuonRpcHost> host;
   std::map<std::string, MuonAndroidResolvedRoute> routes_by_path;
   std::string renderer_metadata_json;
+  bool startup_failed = false;
   std::map<uint32_t, MuonRpcHostCompletion> delayed_completions;
   std::map<uint32_t, MuonRpcHostCompletion> platform_completions;
 };
@@ -69,6 +72,9 @@ static MuonAndroidProcessRuntimeController* process_runtime = nullptr;
 static JavaVM* process_virtual_machine = nullptr;
 static jclass process_bridge_class = nullptr;
 static jmethodID schedule_runtime_stop_completion = nullptr;
+#if defined(MUON_TEST_BUILD)
+static std::string pending_runtime_startup_fault;
+#endif
 
 static constexpr size_t kBinaryHeaderLength = 16;
 static constexpr jint kPlatformResultVoid = 0;
@@ -223,6 +229,81 @@ static void AppendJsonString(const std::string& value, std::string* output) {
     }
   }
   output->push_back('"');
+}
+
+static std::string CreateProcessDiagnosticsJson(
+    const MuonAndroidProcessRuntimeDiagnostics& diagnostics) {
+  auto json = std::string{"{\"runtimeState\":"};
+  AppendJsonString(diagnostics.runtime_state, &json);
+  json.append(",\"generation\":");
+  json.append(std::to_string(diagnostics.generation));
+  json.append(",\"createdDispatcherHosts\":");
+  json.append(std::to_string(diagnostics.created_dispatcher_hosts));
+  json.append(",\"destroyedDispatcherHosts\":");
+  json.append(std::to_string(diagnostics.destroyed_dispatcher_hosts));
+  json.append(",\"liveDispatcherHosts\":");
+  json.append(std::to_string(diagnostics.live_dispatcher_hosts));
+  json.append(",\"activeSessions\":");
+  json.append(std::to_string(diagnostics.active_sessions));
+  json.append(",\"runtimeFileDescriptors\":");
+  json.append(std::to_string(diagnostics.runtime_file_descriptors));
+  json.append(",\"leakedDispatcherFileDescriptors\":");
+  json.append(
+      std::to_string(diagnostics.leaked_dispatcher_file_descriptors));
+  json.append(",\"outstandingProbes\":");
+  json.append(std::to_string(diagnostics.outstanding_probes));
+  json.append(",\"suppressedProbeResults\":");
+  json.append(std::to_string(diagnostics.suppressed_probe_results));
+  json.append(",\"openedLibraryHandles\":");
+  json.append(std::to_string(diagnostics.opened_library_handles));
+  json.append(",\"closedLibraryHandles\":");
+  json.append(std::to_string(diagnostics.closed_library_handles));
+  json.append(",\"liveLibraryHandles\":");
+  json.append(std::to_string(diagnostics.live_library_handles));
+  json.append(",\"deferredLibraryHandles\":");
+  json.append(std::to_string(diagnostics.deferred_library_handles));
+  json.append(",\"lastClosedLibraries\":[");
+  for (auto index = size_t{0};
+       index < diagnostics.last_closed_libraries.size(); ++index) {
+    if (index != 0) {
+      json.push_back(',');
+    }
+    AppendJsonString(diagnostics.last_closed_libraries[index], &json);
+  }
+  json.append("],\"functionOwnerSources\":");
+  json.append(std::to_string(diagnostics.function_owner_sources));
+  json.append(",\"functionGlobalSources\":");
+  json.append(std::to_string(diagnostics.function_global_sources));
+  json.append(",\"functionGlobalBorrows\":");
+  json.append(std::to_string(diagnostics.function_global_borrows));
+  json.append(",\"functionGlobalProxies\":");
+  json.append(std::to_string(diagnostics.function_global_proxies));
+  json.append(",\"functionGlobalProxyLeases\":");
+  json.append(std::to_string(diagnostics.function_global_proxy_leases));
+  json.append(",\"pendingRendererFunctionCalls\":");
+  json.append(std::to_string(diagnostics.pending_renderer_function_calls));
+  json.append(",\"trafficTasksPending\":");
+  json.append(diagnostics.traffic_tasks_pending ? "true" : "false");
+  json.append(",\"ffiClosuresEnabled\":");
+  json.append(diagnostics.ffi_closures_enabled ? "true" : "false");
+  json.append(",\"ffiClosureAlloc\":");
+  json.append(std::to_string(diagnostics.ffi_closure_alloc));
+  json.append(",\"ffiClosureFree\":");
+  json.append(std::to_string(diagnostics.ffi_closure_free));
+  json.append(",\"ffiClosureLive\":");
+  json.append(std::to_string(diagnostics.ffi_closure_live));
+  json.append(",\"ffiClosureHighWater\":");
+  json.append(std::to_string(diagnostics.ffi_closure_high_water));
+  json.append(",\"closureExecutable\":");
+  json.append(diagnostics.closure_executable ? "true" : "false");
+  json.append(",\"closureWritable\":");
+  json.append(diagnostics.closure_writable ? "true" : "false");
+  json.append(",\"closureMappingPermissions\":");
+  AppendJsonString(diagnostics.closure_mapping_permissions, &json);
+  json.append(",\"ownerThread\":");
+  json.append(diagnostics.owner_thread ? "true" : "false");
+  json.push_back('}');
+  return json;
 }
 
 template <typename Number>
@@ -1434,6 +1515,68 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   return true;
 }
 
+static void NotifyAndroidRpcHostStartupFailure(
+    MuonAndroidRpcHost* state,
+    const std::string& diagnostic) {
+  if (state == nullptr || state->startup_failed || state->host ||
+      state->bridge == nullptr ||
+      state->native_host_startup_failed == nullptr) {
+    return;
+  }
+  state->startup_failed = true;
+  auto* environment = GetAndroidEnvironment(state);
+  if (environment == nullptr) {
+    return;
+  }
+  const auto message = diagnostic.empty()
+                           ? "Could not start the Android native runtime"
+                           : diagnostic;
+  const auto java_message = environment->NewStringUTF(message.c_str());
+  if (java_message == nullptr) {
+    if (environment->ExceptionCheck()) {
+      environment->ExceptionClear();
+    }
+    return;
+  }
+  environment->CallVoidMethod(
+      state->bridge, state->native_host_startup_failed, java_message);
+  environment->DeleteLocalRef(java_message);
+  if (environment->ExceptionCheck()) {
+    environment->ExceptionClear();
+  }
+}
+
+static void CompleteWaitingAndroidRpcHostStartup(
+    MuonAndroidRpcHost* state) {
+  if (state == nullptr || state->startup_failed || state->host) {
+    return;
+  }
+  auto error_message = std::string{};
+  if (!InitializeHost(state, &error_message)) {
+    NotifyAndroidRpcHostStartupFailure(state, error_message);
+    return;
+  }
+  auto* environment = GetAndroidEnvironment(state);
+  if (environment == nullptr || state->bridge == nullptr ||
+      state->native_host_ready == nullptr) {
+    return;
+  }
+  const auto metadata =
+      environment->NewStringUTF(state->renderer_metadata_json.c_str());
+  if (metadata == nullptr) {
+    if (environment->ExceptionCheck()) {
+      environment->ExceptionClear();
+    }
+    return;
+  }
+  environment->CallVoidMethod(state->bridge, state->native_host_ready,
+                              metadata);
+  environment->DeleteLocalRef(metadata);
+  if (environment->ExceptionCheck()) {
+    environment->ExceptionClear();
+  }
+}
+
 /** Creates the CEF-independent host used by one WebView context. */
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
@@ -1479,6 +1622,10 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
       bridge_class, "onNativeRuntimeProbeResult", "(I)V");
   state->settle_runtime_probe = environment->GetMethodID(
       bridge_class, "onNativeRuntimeProbeSettled", "(Z)V");
+  state->native_host_ready = environment->GetMethodID(
+      bridge_class, "onNativeHostReady", "(Ljava/lang/String;)V");
+  state->native_host_startup_failed = environment->GetMethodID(
+      bridge_class, "onNativeHostStartupFailed", "(Ljava/lang/String;)V");
   const auto local_native_argument_class = environment->FindClass(
       "dev/muon/prototype/MuonRpcBridge$NativeArgument");
   if (local_native_argument_class != nullptr) {
@@ -1515,6 +1662,8 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
       state->cancel_all_platform_calls == nullptr ||
       state->deliver_runtime_probe == nullptr ||
       state->settle_runtime_probe == nullptr ||
+      state->native_host_ready == nullptr ||
+      state->native_host_startup_failed == nullptr ||
       state->native_argument_class == nullptr ||
       state->native_argument_kind == nullptr ||
       state->native_argument_boolean_value == nullptr ||
@@ -1562,7 +1711,28 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
     process_runtime =
         new MuonAndroidProcessRuntimeController(ScheduleRuntimeStopCompletion);
   }
+#if defined(MUON_TEST_BUILD)
+  if (!pending_runtime_startup_fault.empty()) {
+    const auto fault = std::exchange(pending_runtime_startup_fault, {});
+    if (!process_runtime->SetStartupFaultForTest(fault, &error_message)) {
+      environment->DeleteGlobalRef(state->native_argument_class);
+      environment->DeleteGlobalRef(state->bridge);
+      ThrowIllegalState(
+          environment,
+          error_message.empty() ? "Could not set Android startup test fault"
+                                : error_message);
+      return 0;
+    }
+  }
+#endif
   MuonAndroidProcessSessionCallbacks callbacks;
+  callbacks.runtime_ready = [target = state.get()]() {
+    CompleteWaitingAndroidRpcHostStartup(target);
+  };
+  callbacks.runtime_failed = [target = state.get()](
+                                 const std::string& diagnostic) {
+    NotifyAndroidRpcHostStartupFailure(target, diagnostic);
+  };
   callbacks.send_message = [target = state.get()](
                                const MuonRpcMessage& message,
                                std::string* send_error) {
@@ -1574,8 +1744,10 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
   callbacks.settle_runtime_probe = [target = state.get()](bool delivered) {
     SettleRuntimeProbe(target, delivered);
   };
+  auto runtime_ready = false;
   if (!process_runtime->RegisterSession(
-          std::move(callbacks), &state->owner, &error_message)) {
+          std::move(callbacks), &state->owner, &runtime_ready,
+          &error_message)) {
     environment->DeleteGlobalRef(state->native_argument_class);
     environment->DeleteGlobalRef(state->bridge);
     ThrowIllegalState(
@@ -1584,7 +1756,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
                               : error_message);
     return 0;
   }
-  if (!InitializeHost(state.get(), &error_message)) {
+  if (runtime_ready && !InitializeHost(state.get(), &error_message)) {
     process_runtime->UnregisterSession(state->owner, false);
     environment->DeleteGlobalRef(state->native_argument_class);
     environment->DeleteGlobalRef(state->bridge);
@@ -1592,6 +1764,18 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
     return 0;
   }
   return GetAndroidRpcHandle(state.release());
+}
+
+/** Returns whether a waiting RPC host has attached to a running runtime. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_muon_prototype_MuonRpcBridge_nativeIsHostReady(
+    JNIEnv*,
+    jclass,
+    jlong handle) {
+  const auto* state = GetAndroidRpcHost(handle);
+  return state != nullptr && state->host && !state->startup_failed
+             ? JNI_TRUE
+             : JNI_FALSE;
 }
 
 /** Returns plugin metadata captured before the WebView document starts. */
@@ -1961,30 +2145,60 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeGetRuntimeDiagnostics(
   if (state == nullptr || process_runtime == nullptr) {
     return environment->NewStringUTF("{}");
   }
-  const auto diagnostics = process_runtime->GetDiagnostics();
-  auto json = std::string{"{\"generation\":"};
-  json.append(std::to_string(diagnostics.generation));
-  json.append(",\"createdDispatcherHosts\":");
-  json.append(std::to_string(diagnostics.created_dispatcher_hosts));
-  json.append(",\"destroyedDispatcherHosts\":");
-  json.append(std::to_string(diagnostics.destroyed_dispatcher_hosts));
-  json.append(",\"liveDispatcherHosts\":");
-  json.append(std::to_string(diagnostics.live_dispatcher_hosts));
-  json.append(",\"activeSessions\":");
-  json.append(std::to_string(diagnostics.active_sessions));
-  json.append(",\"runtimeFileDescriptors\":");
-  json.append(std::to_string(diagnostics.runtime_file_descriptors));
-  json.append(",\"leakedDispatcherFileDescriptors\":");
-  json.append(
-      std::to_string(diagnostics.leaked_dispatcher_file_descriptors));
-  json.append(",\"outstandingProbes\":");
-  json.append(std::to_string(diagnostics.outstanding_probes));
-  json.append(",\"suppressedProbeResults\":");
-  json.append(std::to_string(diagnostics.suppressed_probe_results));
-  json.append(",\"ownerThread\":");
-  json.append(diagnostics.owner_thread ? "true" : "false");
-  json.push_back('}');
+  const auto json =
+      CreateProcessDiagnosticsJson(process_runtime->GetDiagnostics());
   return environment->NewStringUTF(json.c_str());
+}
+
+/** Returns process diagnostics without requiring a live WebView host. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_muon_prototype_MuonRpcBridge_nativeGetProcessRuntimeDiagnosticsForTest(
+    JNIEnv* environment,
+    jclass) {
+  if (process_runtime == nullptr) {
+    return environment->NewStringUTF(
+        "{\"runtimeState\":\"idle\",\"liveDispatcherHosts\":0}");
+  }
+  const auto json =
+      CreateProcessDiagnosticsJson(process_runtime->GetDiagnostics());
+  return environment->NewStringUTF(json.c_str());
+}
+
+/** Selects one debug-only packaged-plugin startup fault for the next run. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_muon_prototype_MuonRpcBridge_nativeSetRuntimeStartupFaultForTest(
+    JNIEnv* environment,
+    jclass,
+    jstring fault_value) {
+#if defined(MUON_TEST_BUILD)
+  const auto fault = GetJavaString(environment, fault_value);
+  if (fault.empty()) {
+    return JNI_FALSE;
+  }
+  if (process_runtime == nullptr) {
+    static const auto known_faults = std::set<std::string>{
+        "missing-library",
+        "missing-entry",
+        "init-failure",
+        "invalid-metadata",
+        "duplicate-path",
+        "allow-mismatch",
+    };
+    if (known_faults.find(fault) == known_faults.end()) {
+      return JNI_FALSE;
+    }
+    pending_runtime_startup_fault = fault;
+    return JNI_TRUE;
+  }
+  auto error_message = std::string{};
+  return process_runtime->SetStartupFaultForTest(fault, &error_message)
+             ? JNI_TRUE
+             : JNI_FALSE;
+#else
+  (void)environment;
+  (void)fault_value;
+  return JNI_FALSE;
+#endif
 }
 
 /** Returns the number of calls retained by the native RPC host. */

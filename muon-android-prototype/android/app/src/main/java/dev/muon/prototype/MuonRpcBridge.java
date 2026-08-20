@@ -6,7 +6,6 @@
 
 package dev.muon.prototype;
 
-import android.app.Activity;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,11 +26,18 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Adapts trusted WebView messages to the CEF-independent native RPC host. */
 final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoCloseable {
+    static {
+        System.loadLibrary("muon_android_rpc");
+    }
+
     private static final int PROTOCOL_VERSION = 1;
     private static final int BINARY_HEADER_LENGTH = 16;
     private static final int MAXIMUM_ATTACHMENT_COUNT = 1024;
@@ -54,6 +60,8 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private static final int NATIVE_CALL_PLUGIN = 0;
     private static final int NATIVE_CALL_PLUGIN_PROXY = 1;
     private static final Handler PROCESS_MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static final LinkedBlockingQueue<String> NATIVE_RUNTIME_STOP_EVENTS =
+            new LinkedBlockingQueue<>();
 
     /** Flat root argument representation decoded again against native metadata. */
     private static final class NativeArgument {
@@ -157,6 +165,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     }
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final MuonActivity activity;
     private final Map<Integer, PendingBinaryCall> pendingBinaryCalls = new HashMap<>();
     private final Map<Integer, PendingBinaryRendererResult> pendingBinaryRendererResults =
             new HashMap<>();
@@ -166,20 +175,31 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private final LinkedBlockingQueue<String> nativeRuntimeProbeSettlements =
             new LinkedBlockingQueue<>();
     private final MuonAndroidPlatformService platformService;
-    private final String rendererMetadataJson;
+    private String rendererMetadataJson = "";
     private long nativeHandle;
     private JavaScriptReplyProxy replyProxy;
+    private boolean nativeHostReady;
+    private boolean nativeHostStartupFailed;
 
     MuonRpcBridge(
-            @NonNull Activity activity,
+            @NonNull MuonActivity activity,
             @NonNull WebView webView) {
+        this.activity = activity;
         platformService = new MuonAndroidPlatformService(activity, webView);
-        nativeHandle = nativeCreateHost(this);
+        try {
+            nativeHandle = nativeCreateHost(this);
+        } catch (RuntimeException error) {
+            platformService.close();
+            throw error;
+        }
         if (nativeHandle == 0) {
             platformService.close();
             throw new IllegalStateException("Could not create the native muon RPC host");
         }
-        rendererMetadataJson = nativeGetRendererMetadata(nativeHandle);
+        if (nativeIsHostReady(nativeHandle)) {
+            rendererMetadataJson = nativeGetRendererMetadata(nativeHandle);
+            nativeHostReady = true;
+        }
     }
 
     @Override
@@ -596,10 +616,36 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     /** Returns the short trusted-origin script installed before page code. */
     @NonNull String getDocumentStartScript() {
+        if (!nativeHostReady) {
+            throw new IllegalStateException("The Android native host is not ready");
+        }
         return "Object.defineProperty(globalThis," +
                 "'__muon_android_plugin_metadata',{" +
                 "configurable:false,enumerable:false,writable:false,value:" +
                 rendererMetadataJson + "});";
+    }
+
+    boolean isNativeHostReady() {
+        return nativeHostReady;
+    }
+
+    @SuppressWarnings("unused")
+    private void onNativeHostReady(@NonNull String metadataJson) {
+        if (nativeHandle == 0 || nativeHostReady || nativeHostStartupFailed) {
+            return;
+        }
+        rendererMetadataJson = metadataJson;
+        nativeHostReady = true;
+        activity.onNativeHostReady(this);
+    }
+
+    @SuppressWarnings("unused")
+    private void onNativeHostStartupFailed(@NonNull String diagnostic) {
+        if (nativeHandle == 0 || nativeHostReady || nativeHostStartupFailed) {
+            return;
+        }
+        nativeHostStartupFailed = true;
+        activity.onNativeHostStartupFailed(this, diagnostic);
     }
 
     @SuppressWarnings("unused")
@@ -630,9 +676,14 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     @SuppressWarnings("unused")
     private static void scheduleNativeRuntimeStopCompletion() {
-        if (!PROCESS_MAIN_HANDLER.post(MuonRpcBridge::nativeCompleteRuntimeStop)) {
+        if (!PROCESS_MAIN_HANDLER.post(MuonRpcBridge::completeNativeRuntimeStop)) {
             throw new IllegalStateException("The Android main Looper is exiting");
         }
+    }
+
+    private static void completeNativeRuntimeStop() {
+        nativeCompleteRuntimeStop();
+        NATIVE_RUNTIME_STOP_EVENTS.add(nativeGetProcessRuntimeDiagnosticsForTest());
     }
 
     @SuppressWarnings("unused")
@@ -828,6 +879,82 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         return nativeGetRuntimeDiagnostics(nativeHandle);
     }
 
+    static void clearNativeRuntimeStopEventsForTest() {
+        NATIVE_RUNTIME_STOP_EVENTS.clear();
+    }
+
+    @Nullable static String awaitNativeRuntimeStopForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        return NATIVE_RUNTIME_STOP_EVENTS.poll(timeout, unit);
+    }
+
+    @Nullable static String awaitNativeRuntimeIdleForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        long deadline = System.nanoTime() + unit.toNanos(timeout);
+        while (true) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return null;
+            }
+            String diagnostics = getNativeProcessRuntimeDiagnosticsForTest(
+                    remaining, TimeUnit.NANOSECONDS);
+            if (diagnostics == null) {
+                return null;
+            }
+            try {
+                if ("idle".equals(new JSONObject(diagnostics).optString("runtimeState"))) {
+                    return diagnostics;
+                }
+            } catch (JSONException ignored) {
+                // A malformed diagnostic is not an idle-state confirmation.
+            }
+
+            remaining = deadline - System.nanoTime();
+            if (remaining <= 0
+                    || NATIVE_RUNTIME_STOP_EVENTS.poll(
+                            remaining, TimeUnit.NANOSECONDS) == null) {
+                return null;
+            }
+        }
+    }
+
+    private static @Nullable String getNativeProcessRuntimeDiagnosticsForTest(
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return nativeGetProcessRuntimeDiagnosticsForTest();
+        }
+        AtomicReference<String> result = new AtomicReference<>();
+        CountDownLatch completed = new CountDownLatch(1);
+        if (!PROCESS_MAIN_HANDLER.post(() -> {
+            result.set(nativeGetProcessRuntimeDiagnosticsForTest());
+            completed.countDown();
+        }) || !completed.await(timeout, unit)) {
+            return null;
+        }
+        return result.get();
+    }
+
+    static boolean setNativeRuntimeStartupFaultForTest(
+            @NonNull String fault,
+            long timeout,
+            @NonNull TimeUnit unit) throws InterruptedException {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return nativeSetRuntimeStartupFaultForTest(fault);
+        }
+        AtomicBoolean result = new AtomicBoolean();
+        CountDownLatch completed = new CountDownLatch(1);
+        if (!PROCESS_MAIN_HANDLER.post(() -> {
+            result.set(nativeSetRuntimeStartupFaultForTest(fault));
+            completed.countDown();
+        }) || !completed.await(timeout, unit)) {
+            return false;
+        }
+        return result.get();
+    }
+
     @Override
     public void close() {
         close(false);
@@ -847,6 +974,8 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     }
 
     private static native long nativeCreateHost(@NonNull MuonRpcBridge bridge);
+
+    private static native boolean nativeIsHostReady(long handle);
 
     @NonNull
     private static native String nativeGetRendererMetadata(long handle);
@@ -895,6 +1024,12 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private static native void nativeStartRuntimeProbe(long handle);
 
     private static native void nativeCompleteRuntimeStop();
+
+    @NonNull
+    private static native String nativeGetProcessRuntimeDiagnosticsForTest();
+
+    private static native boolean nativeSetRuntimeStartupFaultForTest(
+            @NonNull String fault);
 
     @NonNull
     private static native String nativeGetRuntimeDiagnostics(long handle);

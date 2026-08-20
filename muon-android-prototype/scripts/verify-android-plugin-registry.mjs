@@ -189,7 +189,7 @@ const packages = [
       'outputs',
       'apk',
       'release',
-      'app-release-unsigned.apk'
+      'app-release.apk'
     ),
     prefix: '',
   },

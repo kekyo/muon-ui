@@ -160,6 +160,15 @@ struct MuonFunctionWrapperDiagnostics {
 
   /** Highest tracked libffi closure live count. */
   uint64_t ffi_closure_high_water = 0;
+
+  /** Executable address of one live renderer-source closure, when present. */
+  uintptr_t ffi_closure_executable_address = 0;
+
+  /** Renderer callback invocations waiting for a JavaScript result. */
+  size_t pending_renderer_function_calls = 0;
+
+  /** Whether tra-ffic has deferred finalization work awaiting its dispatcher. */
+  bool traffic_tasks_pending = false;
 };
 #endif
 

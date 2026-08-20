@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { availableParallelism } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -49,7 +49,9 @@ const cardioDefinitions = [
   'CARDIO_SHARED_LIB=1',
   'CARDIO_WITH_LINUX_IO_URING=0',
 ];
-const patches = [];
+const patchFiles = [
+  'patches/libffi/0001-android-x86_64-16k-static-trampoline.patch',
+];
 const abis = [
   {
     abi: 'x86_64',
@@ -86,6 +88,11 @@ const sha256File = (filePath) => sha256Buffer(readFileSync(filePath));
 
 const canonicalJson = (value) => `${JSON.stringify(value)}\n`;
 
+const patches = patchFiles.map((path) => ({
+  path,
+  sha256: sha256File(join(projectRoot, path)),
+}));
+
 const requireExecutable = (filePath) => {
   accessSync(filePath, constants.X_OK);
   return filePath;
@@ -116,6 +123,21 @@ const extractOfficialSource = (archive, destination) => {
   }
   if (result.status !== 0) {
     throw new Error(`tar failed with exit status ${result.status}`);
+  }
+};
+
+const applyLibffiPatches = (sourceRoot) => {
+  const sourceDirectory = relative(repositoryRoot, sourceRoot);
+  for (const patch of patches) {
+    const patchPath = join(projectRoot, patch.path);
+    execute(
+      'git',
+      ['apply', '--check', `--directory=${sourceDirectory}`, patchPath],
+      { cwd: repositoryRoot }
+    );
+    execute('git', ['apply', `--directory=${sourceDirectory}`, patchPath], {
+      cwd: repositoryRoot,
+    });
   }
 };
 
@@ -294,6 +316,7 @@ for (const entry of abis) {
   );
   rmSync(abiRoot, { force: true, recursive: true });
   extractOfficialSource(sourceArchive, sourceRoot);
+  applyLibffiPatches(sourceRoot);
 
   const cc = requireExecutable(
     join(toolchainRoot, `${entry.compilerPrefix}${androidApi}-clang`)

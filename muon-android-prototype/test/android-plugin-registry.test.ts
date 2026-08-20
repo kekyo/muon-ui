@@ -108,6 +108,16 @@ describe('muon Android plugin registry', () => {
       diagnostic: 'artifacts.arm64-v8a',
     },
     {
+      name: 'unsupported ABI artifact',
+      mutate: (registry: Record<string, unknown>) => {
+        const plugins = registry.plugins as Array<Record<string, unknown>>;
+        const artifacts = plugins[0]!.artifacts as Record<string, unknown>;
+        artifacts['armeabi-v7a'] =
+          'lib/armeabi-v7a/libmuon_test_plugin_alpha.so';
+      },
+      diagnostic: 'artifacts.armeabi-v7a is not supported',
+    },
+    {
       name: 'mismatched package artifact',
       mutate: (registry: Record<string, unknown>) => {
         const plugins = registry.plugins as Array<Record<string, unknown>>;

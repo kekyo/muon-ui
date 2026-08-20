@@ -3003,11 +3003,12 @@ MuonPluginRuntime::~MuonPluginRuntime() {
   const auto close_library = impl_->services.close_library;
   auto libraries = std::move(impl_->libraries);
   impl_.reset();
-  for (auto& library : libraries) {
-    if (library.handle != nullptr && close_library) {
-      close_library(library.handle);
+  for (auto library = libraries.rbegin(); library != libraries.rend();
+       ++library) {
+    if (library->handle != nullptr && close_library) {
+      close_library(library->handle);
     }
-    library.handle = nullptr;
+    library->handle = nullptr;
   }
 #if defined(MUON_TRACK_FFI_CLOSURES)
   const auto snapshot = tra_ffic_get_closure_tracker_snapshot();
@@ -3617,6 +3618,21 @@ MuonPluginRuntime::GetFunctionWrapperDiagnostics(
       owner_proxy_ids.insert(lease_entry.second);
     }
     diagnostics.owner.proxies = owner_proxy_ids.size();
+  }
+  diagnostics.pending_renderer_function_calls =
+      impl_->pending_renderer_function_calls.size();
+  diagnostics.traffic_tasks_pending = impl_->HasTrafficTasks();
+  for (const auto* source : impl_->live_renderer_function_sources) {
+    if (source != nullptr && source->function != nullptr) {
+      static_assert(
+          sizeof(source->function) <=
+          sizeof(diagnostics.ffi_closure_executable_address));
+      std::memcpy(
+          &diagnostics.ffi_closure_executable_address,
+          &source->function,
+          sizeof(source->function));
+      break;
+    }
   }
 
 #if defined(MUON_TRACK_FFI_CLOSURES)

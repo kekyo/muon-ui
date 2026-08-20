@@ -10,11 +10,13 @@ import android.app.Activity;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -35,12 +37,10 @@ public final class MuonActivity extends Activity {
     private static final String APP_URL = TRUSTED_ORIGIN + "/index.html";
     private static final String RPC_OBJECT_NAME = "muonAndroidRpc";
     private static final String TEST_OBJECT_NAME = "muonAndroidTest";
-
-    static {
-        System.loadLibrary("muon_android_rpc");
-    }
+    private static final String LOG_TAG = "MuonActivity";
 
     private final CountDownLatch pageReady = new CountDownLatch(1);
+    private final CountDownLatch startupFailureReady = new CountDownLatch(1);
     private final CountDownLatch destroyed = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
@@ -51,6 +51,8 @@ public final class MuonActivity extends Activity {
     private ScriptHandler pluginMetadataScriptHandler;
     private MuonAssetRequestHandler assetRequestHandler;
     private boolean testBridgeInstalled;
+    private boolean pageLoadStarted;
+    @Nullable private String startupFailure;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -93,12 +95,44 @@ public final class MuonActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 finishedPageUrls.add(url);
                 if (APP_URL.equals(url)) {
+                    Log.i(LOG_TAG, "Muon page ready: " + url);
                     pageReady.countDown();
                 }
             }
         });
 
-        rpcBridge = new MuonRpcBridge(this, webView);
+        try {
+            rpcBridge = new MuonRpcBridge(this, webView);
+        } catch (RuntimeException error) {
+            showStartupFailure(error.getMessage() == null
+                    ? error.getClass().getSimpleName()
+                    : error.getMessage());
+            return;
+        }
+        if (rpcBridge.isNativeHostReady()) {
+            startPage(rpcBridge);
+        }
+    }
+
+    void onNativeHostReady(@NonNull MuonRpcBridge source) {
+        if (rpcBridge == source) {
+            startPage(source);
+        }
+    }
+
+    void onNativeHostStartupFailed(
+            @NonNull MuonRpcBridge source,
+            @NonNull String diagnostic) {
+        if (rpcBridge == source) {
+            showStartupFailure(diagnostic);
+        }
+    }
+
+    private void startPage(@NonNull MuonRpcBridge source) {
+        if (rpcBridge != source || pageLoadStarted || startupFailure != null ||
+                webView == null) {
+            return;
+        }
         WebViewCompat.addWebMessageListener(
                 webView,
                 RPC_OBJECT_NAME,
@@ -118,7 +152,20 @@ public final class MuonActivity extends Activity {
         }
 
         setContentView(webView);
+        pageLoadStarted = true;
         webView.loadUrl(APP_URL);
+    }
+
+    private void showStartupFailure(@NonNull String diagnosticText) {
+        if (startupFailure != null || pageLoadStarted) {
+            return;
+        }
+        startupFailure = diagnosticText;
+        Log.e(LOG_TAG, "Native plugin startup failed: " + startupFailure);
+        TextView diagnostic = new TextView(this);
+        diagnostic.setText("muon startup failed: " + startupFailure);
+        setContentView(diagnostic);
+        startupFailureReady.countDown();
     }
 
     private void receiveTestMessage(
@@ -145,6 +192,19 @@ public final class MuonActivity extends Activity {
     boolean awaitPageReadyForTest(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException {
         return pageReady.await(timeout, unit);
+    }
+
+    boolean awaitStartupFailureForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return startupFailureReady.await(timeout, unit);
+    }
+
+    @NonNull String getStartupFailureForTest() {
+        return startupFailure == null ? "" : startupFailure;
+    }
+
+    boolean wasPageLoadStartedForTest() {
+        return pageLoadStarted;
     }
 
     @Nullable String awaitTestMessage(long timeout, @NonNull TimeUnit unit)

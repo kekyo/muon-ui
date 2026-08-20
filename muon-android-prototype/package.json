@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "vitest run && vite build && node scripts/build-native-dependencies.mjs && node scripts/generate-android-plugin-registry.mjs && cd android && ./gradlew assembleDebug assembleRelease assembleDebugAndroidTest bundleRelease && cd .. && node scripts/verify-native-dependencies.mjs && node scripts/verify-android-plugin-registry.mjs",
-    "test:android": "vite build && cd android && ./gradlew connectedDebugAndroidTest"
+    "test": "vitest run && vite build && node scripts/build-native-dependencies.mjs && node scripts/generate-android-plugin-registry.mjs && cd android && ./gradlew assembleDebug assembleRelease assembleDebugAndroidTest buildReleaseApks && cd .. && node scripts/verify-native-dependencies.mjs && node scripts/verify-android-plugin-registry.mjs && node scripts/verify-android-release-apks.mjs",
+    "test:android": "vite build && cd android && ./gradlew connectedDebugAndroidTest buildReleaseApks && cd .. && node scripts/test-android-release-packages.mjs"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

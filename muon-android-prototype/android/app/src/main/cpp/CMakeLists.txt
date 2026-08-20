@@ -81,7 +81,13 @@ target_link_libraries(muon_cardio INTERFACE
   android
   )
 
-set(MUON_BUILD_TESTS OFF)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(MUON_BUILD_TESTS ON)
+  set(MUON_TRACK_FFI_CLOSURES ON)
+else()
+  set(MUON_BUILD_TESTS OFF)
+  set(MUON_TRACK_FFI_CLOSURES OFF)
+endif()
 include("${MUON_CORE_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
 muon_add_plugin_runtime_core(muon_plugin_runtime_core)
 
@@ -105,6 +111,11 @@ target_compile_options(muon_android_rpc PRIVATE
   -Wpedantic
   -Werror
   )
+if(MUON_BUILD_TESTS)
+  target_compile_definitions(muon_android_rpc PRIVATE
+    MUON_TEST_BUILD
+    )
+endif()
 target_include_directories(muon_android_rpc PRIVATE
   "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}"
   )

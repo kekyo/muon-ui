@@ -185,7 +185,41 @@ static std::string GetFileDescriptorTarget(int descriptor) {
   return error ? std::string{} : target.string();
 }
 
-static std::map<int, std::string> GetOpenFileDescriptors() {
+static bool IsDispatcherFileDescriptorTarget(const std::string& target) {
+  return target.rfind("pipe:[", 0) == 0 ||
+         target == "anon_inode:[eventfd]" ||
+         target.rfind("anon_inode:[timerfd", 0) == 0;
+}
+
+static std::string GetEventFileDescriptorIdentity(int descriptor) {
+  auto descriptor_info = std::ifstream{
+      std::filesystem::path{"/proc/self/fdinfo"} /
+      std::to_string(descriptor)};
+  auto line = std::string{};
+  while (std::getline(descriptor_info, line)) {
+    if (line.rfind("eventfd-id:", 0) == 0) {
+      return line;
+    }
+  }
+  return {};
+}
+
+static std::string GetDispatcherFileDescriptorFingerprint(int descriptor) {
+  const auto target = GetFileDescriptorTarget(descriptor);
+  if (!IsDispatcherFileDescriptorTarget(target)) {
+    return {};
+  }
+  if (target != "anon_inode:[eventfd]") {
+    return target;
+  }
+
+  // An eventfd target does not contain an inode. Include its kernel identity
+  // so a different eventfd that reuses the same descriptor is not a leak.
+  const auto identity = GetEventFileDescriptorIdentity(descriptor);
+  return identity.empty() ? std::string{} : target + '|' + identity;
+}
+
+static std::map<int, std::string> GetOpenDispatcherFileDescriptors() {
   auto result = std::map<int, std::string>{};
   auto* directory = ::opendir("/proc/self/fd");
   if (directory == nullptr) {
@@ -201,7 +235,11 @@ static std::map<int, std::string> GetOpenFileDescriptors() {
       continue;
     }
     const auto descriptor = static_cast<int>(value);
-    result.emplace(descriptor, GetFileDescriptorTarget(descriptor));
+    const auto fingerprint =
+        GetDispatcherFileDescriptorFingerprint(descriptor);
+    if (!fingerprint.empty()) {
+      result.emplace(descriptor, fingerprint);
+    }
   }
   (void)::closedir(directory);
   return result;
@@ -302,7 +340,11 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   next_startup_fault = MuonAndroidRuntimeStartupFault::None;
 #endif
   last_closed_libraries.clear();
-  const auto descriptors_before = GetOpenFileDescriptors();
+  // Android and WebView worker threads may open unrelated package, graphics,
+  // and database descriptors while this main-thread constructor runs. Limit
+  // the process snapshot to the native wait descriptor kinds used by the
+  // dispatcher so those concurrent opens are not attributed to cardio.
+  const auto descriptors_before = GetOpenDispatcherFileDescriptors();
   try {
     dispatcher_host =
         std::make_unique<cardio::dispatcher_host_android_auto>();
@@ -310,11 +352,13 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
     *error_message = exception.what();
     return false;
   }
-  const auto descriptors_after = GetOpenFileDescriptors();
+  const auto descriptors_after = GetOpenDispatcherFileDescriptors();
   dispatcher_file_descriptors.clear();
-  for (const auto& [descriptor, target] : descriptors_after) {
-    if (descriptors_before.find(descriptor) == descriptors_before.end()) {
-      dispatcher_file_descriptors.emplace(descriptor, target);
+  for (const auto& [descriptor, fingerprint] : descriptors_after) {
+    const auto previous = descriptors_before.find(descriptor);
+    if (previous == descriptors_before.end() ||
+        previous->second != fingerprint) {
+      dispatcher_file_descriptors.emplace(descriptor, fingerprint);
     }
   }
   created_dispatcher_hosts += 1;
@@ -621,10 +665,11 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
 #if defined(MUON_TEST_BUILD)
   active_startup_fault = MuonAndroidRuntimeStartupFault::None;
 #endif
-  for (const auto& [descriptor, target] : dispatcher_file_descriptors) {
+  for (const auto& [descriptor, fingerprint] :
+       dispatcher_file_descriptors) {
     errno = 0;
     if ((::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) &&
-        GetFileDescriptorTarget(descriptor) == target) {
+        GetDispatcherFileDescriptorFingerprint(descriptor) == fingerprint) {
       leaked_dispatcher_file_descriptors += 1;
     }
   }

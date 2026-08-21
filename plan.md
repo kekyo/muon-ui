@@ -447,12 +447,50 @@ artifact試験はdebug/release APKとrelease AABについて、`arm64-v8a`、`x8
 | 8 | 達成 | production配布時はdebug keyを正式な配布署名へ置換する |
 | 9 | VMとupstream事前試験まで達成 | Pixel 6のmuon結合試験が未実施。root全体にはAndroidと無関係な既存Windows Settings E2E timeoutが1件残る |
 
-従って、今回指定された「ローカルAndroid VMでのテスト実行まで」は完了です。ステップ5全体の最終完了は、利用者がPixel 6を手動接続した後にarm64-v8a・4 KiBのdebug instrumentation、release APK、AAB由来split APKを通し、条件5、6、9の実機欄を更新した時点とします。
+従って、この時点で指定されていた「ローカルAndroid VMでのテスト実行まで」は完了しました。ステップ5全体の実機判定は、利用者がPixel 6を手動接続した後に独立して行い、次節へ記録します。
+
+#### Pixel 6実機完了判定（2026年8月21日）
+
+利用者が手動接続と端末側のUSBデバッグ許可を行った後、serialを`23231FDF600652`へ固定して試験しました。対象はPixel 6（`oriole`）、Android 17/API 37、`arm64-v8a`、実ページサイズ4 KiBです。試験開始前にmodel、device、ABI、API、page sizeを実測し、計画したarm64実機gateと一致することを確認しました。
+
+最初のdebug instrumentation全体実行では25件中4件が失敗し、いずれもcardio host停止後のdispatcher file descriptor診断が0ではなく2件または3件を報告しました。新規processからの2回目の全体実行では25件中1件が失敗し、runtime作成直後5件、再起動後4件という非決定的な差が再現しました。これを修正前のREDとしました。
+
+debug appを単独起動して`/proc/<pid>/fd`と`/proc/<pid>/fdinfo`を実測すると、cardioが作成したdescriptorは2本のpipe、1個のeventfd、1個のtimerfdでした。同時にWebViewまたはAndroid loaderが`base.apk`を開いており、process全体のFD差分をcardioの所有物として記録していたmuon側の診断が、この無関係なFDを非決定的に混入させていました。cardio hostの解放不良ではありませんでした。
+
+対処は`muon_android_process_runtime.cpp`内に限定しました。dispatcherの候補をpipe、eventfd、timerfdへ限定し、eventfdは`/proc/self/fdinfo/<fd>`の`eventfd-id`をfingerprintへ含めました。作成前後および停止後はdescriptor番号だけでなくfingerprintも比較するため、別resourceによる同一番号の再利用もリークとして誤認しません。これはAndroid process内の所有権を判定するmuon固有の診断修正であり、cardio、tra-ffic、libffiのsubmodule変更やupstream対応は不要です。
+
+最終実行結果は次のとおりです。
+
+| 実行 | 結果 | 確認内容 |
+|---|---|---|
+| Pixel 6 debug instrumentation全体 | PASS、25/25 | Java main message、cardio即時・timer・fd・別thread post、plugin completion、Activity再生成、停止中再起動、cancel、startup failure、逆順unload、全resource回収 |
+| cardio lifecycle診断 | PASS | pending call、function lease、plugin task、dispatcher host、pipe/eventfd/timerfdが終了・再起動後に残らない |
+| tra-ffic/libffi実行診断 | PASS | arm64 native library内の直接closure呼び出し、allocation/free均衡、実行可能かつ書き込み不可のcode mapping、pending task 0 |
+| 署名済みrelease APK | PASS | Pixel 6へinstallし、cold start後に`Muon page ready: https://main.asset.muon.invalid/index.html`を確認 |
+| release AAB由来split APK | PASS | bundletoolで生成した端末別splitをinstallし、`base.apk`と`split_config.arm64_v8a.apk`を含む構成およびcold start後のpage-readyを確認 |
+| 修正後のローカルAndroid gate | PASS | `x86_64`・16 KiB VMでdebug instrumentation 25/25、release APK、AAB由来split APKを再実行 |
+| 修正後の`npm test` | Android関連はPASS、root終了コードは1 | Android Vitest 49件、muon-node 40件、muon-core CTest 42/42、muon-core-tester 206件PASS・26件skip。muon-uiは既知のWindows Settings uninstall E2Eだけがtimeoutとなり306/307件 |
+
+実機試験後の完了条件との比較は次のとおりです。
+
+| 条件 | 最終判定 | 根拠・残作業 |
+|---|---|---|
+| 1 | 達成 | なし。Pixel 6でもcardio 1.1.0の公開auto hostをJava main Looper上で使用 |
+| 2 | 達成 | なし。共通runtime coreとAndroid固有host境界を維持 |
+| 3 | 達成 | なし。build-time registry内のpackage sonameだけをload |
+| 4 | 達成 | `x86_64` VMと`arm64-v8a` Pixel 6の双方でmain Looper共存とlifecycle全件を確認 |
+| 5 | 達成 | primitive、64 bit、binary、renderer function、plugin proxy、async completionを両ABIで確認 |
+| 6 | 必須範囲を達成 | 16 KiB `x86_64` VMと4 KiB `arm64-v8a` Pixel 6で直接closureを確認。arm64 16 KiB runtimeは実行環境を利用できる場合の追加確認として残るが、arm64 ELF/APK/AABの16 KiB整列はPASS |
+| 7 | 達成 | libffi submoduleを変更せず、固定recipeとsubmodule外patch queueを維持。Pixel 6のarm64では追加patch不要 |
+| 8 | 達成 | 両ABIのdebug/release APK、release AAB/APKS、ELFおよび16 KiB alignmentを確認 |
+| 9 | Android実機・VM gateを達成 | Android、upstream、desktop core回帰はPASS。root全体の完全GREENだけはAndroidと無関係な既存Windows Settings E2E timeout 1件により未達 |
+
+以上により、ステップ5のAndroid実装、ローカルVM gate、Pixel 6実機gateは完了しました。利用可能な環境がないarm64 16 KiB runtime試験は計画どおり任意の追加互換性gateとして残ります。全project testの完全GREENという条件9の文言だけは既存の非Android E2E失敗により満たしていないため、この失敗をステップ5の変更へ帰属させず明記します。
 
 #### 最終upstream候補
 
 | 対象 | 新たに摘出した課題 | 最終判定 |
 |---|---|---|
-| cardio 1.1.0 | なし | `dispatcher_host_android_auto`はJava main Looper上で正常に動作した。Stop中のActivity再生成競合はmuonのsession lifecycle課題であり、cardio upstream修正対象ではない |
-| tra-ffic 1.0.0 | なし | function marshalling、closure lifetime、deferred task回収を含め正常。tra-ffic upstream修正対象はない |
-| libffi 3.8.0 | x86_64静的トランポリンtableが4 KiB固定で、16 KiBページでは匿名`rwxp`の動的トランポリンへfallbackする | libffi upstream修正候補。muonではsubmodule外のpatch queueでAndroid x86_64 tableを16 KiB化し、W^Xを実測確認済み |
+| cardio 1.1.0 | なし | `dispatcher_host_android_auto`はVMとPixel 6のJava main Looper上で正常に動作した。実機で見つかったFD誤検出はmuonのprocess全体診断に原因があり、muon内で修正済み。cardio upstream修正対象はない |
+| tra-ffic 1.0.0 | なし | 両ABIでfunction marshalling、closure lifetime、deferred task回収が正常に動作した。tra-ffic upstream修正対象はない |
+| libffi 3.8.0 | Pixel 6のarm64実行で新たな課題はなし | 既知のx86_64・16 KiB静的トランポリンtableだけをmuonのsubmodule外patch queueで対処する。Pixel 6では直接closureとW^Xを確認済みで、追加変更は不要 |

@@ -56,12 +56,12 @@ npm test --workspace muon-android-prototype
 
 主な出力は次の場所です。
 
-| 成果物 | path |
-|---|---|
-| debug APK | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| local release APK | `android/app/build/outputs/apk/release/app-release.apk` |
-| release AAB | `android/app/build/outputs/bundle/release/app-release.aab` |
-| release APKS | `android/app/build/outputs/apks/release/app-release.apks` |
+| 成果物            | path                                                       |
+| ----------------- | ---------------------------------------------------------- |
+| debug APK         | `android/app/build/outputs/apk/debug/app-debug.apk`        |
+| local release APK | `android/app/build/outputs/apk/release/app-release.apk`    |
+| release AAB       | `android/app/build/outputs/bundle/release/app-release.aab` |
+| release APKS      | `android/app/build/outputs/apks/release/app-release.apks`  |
 
 local release成果物は試験用に標準Android debug keyで署名します。配布やstore uploadには使用せず、製品側で正式なrelease signingを設定してください。
 

@@ -22,9 +22,11 @@ import android.os.Process;
 import android.system.Os;
 import android.system.OsConstants;
 import android.system.StructPollfd;
+import android.util.Base64;
 
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -32,6 +34,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -43,12 +46,23 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLServerSocket;
 
 @RunWith(AndroidJUnit4.class)
 public final class MuonJavaScriptRuntimeServiceTest {
@@ -178,6 +192,8 @@ public final class MuonJavaScriptRuntimeServiceTest {
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:http\""));
         assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:https\""));
+        assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"fetch\""));
         return runtime;
     }
@@ -247,6 +263,55 @@ public final class MuonJavaScriptRuntimeServiceTest {
                 }
             }
         }
+    }
+
+    private static String readTestAsset(String name) throws IOException {
+        try (InputStream input = InstrumentationRegistry
+                .getInstrumentation()
+                .getContext()
+                .getAssets()
+                .open(name);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            while (true) {
+                int count = input.read(buffer);
+                if (count < 0) {
+                    break;
+                }
+                output.write(buffer, 0, count);
+            }
+            return output.toString(StandardCharsets.US_ASCII.name());
+        }
+    }
+
+    private static SSLContext createLoopbackTlsContext(
+            String certificatePem,
+            String privateKeyPem) throws Exception {
+        CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509");
+        Certificate certificate = certificateFactory.generateCertificate(
+                new ByteArrayInputStream(certificatePem.getBytes(StandardCharsets.US_ASCII)));
+        String encodedKey = privateKeyPem
+                .replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        PrivateKey privateKey = KeyFactory
+                .getInstance("RSA")
+                .generatePrivate(new PKCS8EncodedKeySpec(
+                        Base64.decode(encodedKey, Base64.DEFAULT)));
+        char[] password = new char[0];
+        KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        keyStore.load(null, null);
+        keyStore.setKeyEntry(
+                "localhost",
+                privateKey,
+                password,
+                new Certificate[]{certificate});
+        KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(
+                KeyManagerFactory.getDefaultAlgorithm());
+        keyManagerFactory.init(keyStore, password);
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(keyManagerFactory.getKeyManagers(), null, null);
+        return context;
     }
 
     @Test
@@ -910,6 +975,122 @@ public final class MuonJavaScriptRuntimeServiceTest {
         assertEquals(
                 "/node,/node-get,/fetch,/redirect,/fetch-target,/slow",
                 observedPaths.get());
+    }
+
+    @Test
+    public void supportsNodeHttpsWithCertificateValidation() throws Exception {
+        String certificatePem = readTestAsset("localhost-cert.pem");
+        String privateKeyPem = readTestAsset("localhost-key.pem");
+        SSLContext tlsContext = createLoopbackTlsContext(certificatePem, privateKeyPem);
+        AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+        AtomicReference<String> observedPath = new AtomicReference<>();
+        CountDownLatch serverFinished = new CountDownLatch(1);
+        try (SSLServerSocket server = (SSLServerSocket) tlsContext
+                .getServerSocketFactory()
+                .createServerSocket(
+                        0,
+                        2,
+                        InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(30_000);
+            int port = server.getLocalPort();
+            Thread serverThread = new Thread(() -> {
+                try {
+                    for (int index = 0; index < 2; index++) {
+                        try (Socket connection = server.accept()) {
+                            connection.setSoTimeout(30_000);
+                            InputStream input = connection.getInputStream();
+                            String requestLine;
+                            try {
+                                requestLine = readHttpLine(input);
+                            } catch (SSLException error) {
+                                if (index != 0) {
+                                    throw error;
+                                }
+                                continue;
+                            }
+                            if (index == 0) {
+                                throw new AssertionError(
+                                        "The untrusted TLS certificate was accepted");
+                            }
+                            assertEquals("GET /secure HTTP/1.1", requestLine);
+                            Map<String, String> headers = new HashMap<>();
+                            while (true) {
+                                String line = readHttpLine(input);
+                                if (line == null) {
+                                    throw new EOFException("HTTPS headers ended early");
+                                }
+                                if (line.isEmpty()) {
+                                    break;
+                                }
+                                int separator = line.indexOf(':');
+                                assertTrue(line, separator > 0);
+                                headers.put(
+                                        line.substring(0, separator)
+                                                .trim()
+                                                .toLowerCase(Locale.ROOT),
+                                        line.substring(separator + 1).trim());
+                            }
+                            assertEquals("yes", headers.get("x-secure"));
+                            observedPath.set("/secure");
+                            byte[] responseBody = "secure-response"
+                                    .getBytes(StandardCharsets.UTF_8);
+                            DataOutputStream output = new DataOutputStream(
+                                    connection.getOutputStream());
+                            output.write(("HTTP/1.1 200 OK\r\n"
+                                    + "X-Secure: verified\r\n"
+                                    + "Content-Length: "
+                                    + responseBody.length
+                                    + "\r\n"
+                                    + "Connection: close\r\n"
+                                    + "\r\n")
+                                    .getBytes(StandardCharsets.ISO_8859_1));
+                            output.write(responseBody);
+                            output.flush();
+                        }
+                    }
+                } catch (Throwable error) {
+                    serverFailure.set(error);
+                } finally {
+                    serverFinished.countDown();
+                }
+            }, "muon-quickjs-https-server");
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            try (BoundService binding = bindService();
+                 RuntimeSocket runtime = createRuntime(binding.service, "test-https")) {
+                String root = importModule(runtime, "import", ".");
+                JSONObject response = call(
+                        runtime,
+                        "https",
+                        root,
+                        "exerciseHttps",
+                        new JSONArray().put(port).put(certificatePem));
+                assertTrue(response.toString(), response.getBoolean("ok"));
+                JSONObject values = response
+                        .getJSONObject("value")
+                        .getJSONObject("value");
+                assertTrue(values.getBoolean("moduleAlias"));
+                assertTrue(values.getBoolean("agent"));
+                assertTrue(values.getBoolean("isClientRequest"));
+                assertTrue(values.getBoolean("isIncomingMessage"));
+                assertEquals("https:", values.getString("protocol"));
+                assertEquals(200, values.getInt("statusCode"));
+                assertEquals("verified", values.getString("header"));
+                assertEquals("secure-response", values.getString("body"));
+                assertTrue(values.getBoolean("complete"));
+                assertEquals("ERR_TLS_HANDSHAKE", values.getString("rejectionCode"));
+                assertEquals(
+                        "https://localhost:" + port + "/untrusted",
+                        values.getString("rejectionUrl"));
+                assertEquals("ERR_NOT_SUPPORTED", values.getString("unsafeOptionCode"));
+            }
+            assertTrue(serverFinished.await(30, TimeUnit.SECONDS));
+        }
+        if (serverFailure.get() != null) {
+            throw new AssertionError("The loopback HTTPS server failed", serverFailure.get());
+        }
+        assertEquals("/secure", observedPath.get());
     }
 
     @Test

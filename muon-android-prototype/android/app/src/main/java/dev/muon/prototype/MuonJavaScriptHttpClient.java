@@ -9,6 +9,7 @@ package dev.muon.prototype;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -19,6 +20,13 @@ import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,7 +39,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.TrustManagerFactory;
 
 /** Executes bounded Android HTTP operations on behalf of QuickJS runtimes. */
 final class MuonJavaScriptHttpClient {
@@ -72,14 +83,16 @@ final class MuonJavaScriptHttpClient {
 
     private static final class Operation {
         private final OperationKey key;
+        private final String url;
         private final AtomicBoolean cancelled = new AtomicBoolean(false);
         private final Object flowControl = new Object();
         private volatile HttpURLConnection connection;
         private boolean dataHandled = true;
         private boolean paused;
 
-        private Operation(OperationKey key) {
+        private Operation(OperationKey key, String url) {
             this.key = key;
+            this.url = url;
         }
 
         private void cancel() {
@@ -163,7 +176,7 @@ final class MuonJavaScriptHttpClient {
         Objects.requireNonNull(headersJson, "headersJson");
         Objects.requireNonNull(body, "body");
         OperationKey key = new OperationKey(runtimeId, identifier);
-        Operation operation = new Operation(key);
+        Operation operation = new Operation(key, url);
         if (OPERATIONS.putIfAbsent(key, operation) != null) {
             throw new IllegalStateException("The HTTP operation identifier is already active.");
         }
@@ -266,10 +279,7 @@ final class MuonJavaScriptHttpClient {
             if (!hasAcceptEncoding) {
                 connection.setRequestProperty("Accept-Encoding", "identity");
             }
-            if (certificateAuthority != null && !certificateAuthority.isEmpty()) {
-                throw new ProtocolException(
-                        "Custom certificate authorities require node:https support");
-            }
+            configureCertificateAuthority(connection, certificateAuthority);
             if (body.length > 0) {
                 connection.setDoOutput(true);
                 connection.setFixedLengthStreamingMode(body.length);
@@ -350,6 +360,38 @@ final class MuonJavaScriptHttpClient {
         return connection.getInputStream();
     }
 
+    private static void configureCertificateAuthority(
+            HttpURLConnection connection,
+            String certificateAuthority) throws Exception {
+        if (certificateAuthority == null || certificateAuthority.isEmpty()) {
+            return;
+        }
+        if (!(connection instanceof HttpsURLConnection)) {
+            throw new ProtocolException(
+                    "A custom certificate authority requires an HTTPS URL");
+        }
+        CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509");
+        Collection<? extends Certificate> certificates =
+                certificateFactory.generateCertificates(new ByteArrayInputStream(
+                        certificateAuthority.getBytes(StandardCharsets.UTF_8)));
+        if (certificates.isEmpty()) {
+            throw new CertificateException("No X.509 certificate was found in ca");
+        }
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+        int index = 0;
+        for (Certificate certificate : certificates) {
+            trustStore.setCertificateEntry("muon-ca-" + index, certificate);
+            index++;
+        }
+        TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(
+                TrustManagerFactory.getDefaultAlgorithm());
+        trustManagerFactory.init(trustStore);
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(null, trustManagerFactory.getTrustManagers(), null);
+        ((HttpsURLConnection) connection).setSSLSocketFactory(context.getSocketFactory());
+    }
+
     private static String createResponsePayload(
             HttpURLConnection connection,
             int statusCode,
@@ -390,7 +432,7 @@ final class MuonJavaScriptHttpClient {
                 operation.key.runtimeId,
                 operation.key.identifier,
                 "httpError",
-                createErrorPayload(code, message, ""),
+                createErrorPayload(code, message, operation.url),
                 null);
     }
 
@@ -422,6 +464,9 @@ final class MuonJavaScriptHttpClient {
             }
             if (current instanceof SSLException) {
                 return "ERR_TLS_HANDSHAKE";
+            }
+            if (current instanceof GeneralSecurityException) {
+                return "ERR_TLS_INVALID_CA";
             }
             if (current instanceof ProtocolException) {
                 return "ERR_HTTP_PROTOCOL";

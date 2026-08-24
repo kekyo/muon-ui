@@ -4163,6 +4163,39 @@
     return Math.trunc(normalized);
   };
 
+  const normalizeCertificateAuthority = (value) => {
+    if (value === undefined || value === null) return '';
+    const sources = Array.isArray(value) ? value : [value];
+    if (sources.length === 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'HTTPS ca must contain at least one certificate'
+      );
+    }
+    const certificates = sources.map((source) => {
+      if (typeof source === 'string') return source;
+      if (source instanceof ArrayBuffer || source instanceof Uint8Array) {
+        return Buffer.from(source).toString('utf8');
+      }
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'HTTPS ca entries must be strings, ArrayBuffers, or Uint8Arrays'
+      );
+    });
+    const certificateAuthority = certificates.join('\n');
+    if (
+      certificateAuthority.length === 0 ||
+      certificateAuthority.length > 1024 * 1024 ||
+      certificateAuthority.includes('\0')
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'HTTPS ca must contain between 1 byte and 1 MiB of PEM certificates'
+      );
+    }
+    return certificateAuthority;
+  };
+
   const normalizeHttpRequestArguments = (expectedProtocol, values) => {
     const arguments_ = [...values];
     const callback =
@@ -4226,6 +4259,28 @@
         `Protocol ${url.protocol} is not supported by ${expectedProtocol}`
       );
     }
+    if (expectedProtocol === 'https:') {
+      if (options.rejectUnauthorized === false) {
+        throw createError(
+          'ERR_NOT_SUPPORTED',
+          'Disabling HTTPS certificate verification is not supported'
+        );
+      }
+      for (const optionName of [
+        'checkServerIdentity',
+        'cert',
+        'key',
+        'pfx',
+        'secureContext',
+      ]) {
+        if (options[optionName] !== undefined) {
+          throw createError(
+            'ERR_NOT_SUPPORTED',
+            `HTTPS option ${optionName} is not supported by Android QuickJS`
+          );
+        }
+      }
+    }
     if (url.username !== '' && options.auth === undefined) {
       options.auth = `${decodeURIComponent(url.username)}:${decodeURIComponent(
         url.password
@@ -4256,7 +4311,10 @@
         url: url.href,
         connectTimeout: normalizeHttpTimeout(options.connectTimeout, 30000),
         readTimeout: normalizeHttpTimeout(options.timeout, 30000),
-        certificateAuthority: '',
+        certificateAuthority:
+          expectedProtocol === 'https:'
+            ? normalizeCertificateAuthority(options.ca)
+            : '',
       },
     };
   };
@@ -4675,6 +4733,36 @@
     request: httpRequest,
     validateHeaderName,
     validateHeaderValue,
+  });
+
+  const HttpsAgent = function (options) {
+    if (!(this instanceof HttpsAgent)) return new HttpsAgent(options);
+    Agent.call(this, options);
+    this.defaultPort = 443;
+    this.protocol = 'https:';
+  };
+  HttpsAgent.prototype = Object.create(Agent.prototype);
+  Object.defineProperty(HttpsAgent.prototype, 'constructor', {
+    value: HttpsAgent,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  const httpsRequest = (...values) => createClientRequest('https:', values);
+  const httpsGet = (...values) => {
+    const request = httpsRequest(...values);
+    request.end();
+    return request;
+  };
+  const globalHttpsAgent = new HttpsAgent({
+    keepAlive: true,
+    timeout: 5000,
+  });
+  const httpsModule = Object.freeze({
+    Agent: HttpsAgent,
+    get: httpsGet,
+    globalAgent: globalHttpsAgent,
+    request: httpsRequest,
   });
 
   const normalizeBodyBuffer = (body) => {
@@ -5188,6 +5276,8 @@
     'node:net': netModule,
     http: httpModule,
     'node:http': httpModule,
+    https: httpsModule,
+    'node:https': httpsModule,
   });
 
   const findHostModule = (specifier) => {

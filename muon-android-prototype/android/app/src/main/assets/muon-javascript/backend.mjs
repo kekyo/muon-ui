@@ -40,6 +40,8 @@ import dnsAlias from 'dns';
 import dnsPromises from 'node:dns/promises';
 import http, { ClientRequest, IncomingMessage } from 'node:http';
 import httpAlias from 'http';
+import https from 'node:https';
+import httpsAlias from 'https';
 
 let counter = 0;
 let retainedTcpSocket = null;
@@ -587,6 +589,56 @@ export const exerciseHttpAndFetch = async (port) => {
   };
 };
 
+export const exerciseHttps = async (port, certificateAuthority) => {
+  const rejectedRequest = https.get(`https://localhost:${port}/untrusted`);
+  const [rejection] = await onceEvent(rejectedRequest, 'error');
+
+  let unsafeOptionCode = '';
+  try {
+    https.get({
+      hostname: 'localhost',
+      port,
+      path: '/unsafe',
+      rejectUnauthorized: false,
+    });
+  } catch (error) {
+    unsafeOptionCode = error.code;
+  }
+
+  const request = https.get({
+    hostname: 'localhost',
+    port,
+    path: '/secure',
+    headers: { 'X-Secure': 'yes' },
+    ca: Buffer.from(certificateAuthority),
+  });
+  const [response] = await onceEvent(request, 'response');
+  response.setEncoding('utf8');
+  let body = '';
+  response.on('data', (chunk) => {
+    body += chunk;
+  });
+  await onceEvent(response, 'end');
+
+  return {
+    moduleAlias: https === httpsAlias,
+    agent:
+      https.globalAgent instanceof https.Agent &&
+      https.globalAgent.defaultPort === 443 &&
+      https.globalAgent.protocol === 'https:',
+    isClientRequest: request instanceof ClientRequest,
+    isIncomingMessage: response instanceof IncomingMessage,
+    protocol: request.protocol,
+    statusCode: response.statusCode,
+    header: response.headers['x-secure'],
+    body,
+    complete: response.complete,
+    rejectionCode: rejection.code,
+    rejectionUrl: rejection.url,
+    unsafeOptionCode,
+  };
+};
+
 export const exhaustMemory = () => {
   const blocks = [];
   while (true) {
@@ -612,6 +664,7 @@ globalThis.__muonBackendModule = Object.freeze({
   retainTcpConnection,
   retainedTcpConnectionState,
   exerciseHttpAndFetch,
+  exerciseHttps,
   exhaustMemory,
   spin,
 });

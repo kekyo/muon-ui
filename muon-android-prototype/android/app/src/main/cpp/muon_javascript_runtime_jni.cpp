@@ -2550,7 +2550,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"node:path\",\"node:events\",\"node:buffer\","
             "\"node:timers\",\"node:timers/promises\",\"node:stream\","
             "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
-            "\"node:http\",\"fetch\",\"abort\"]}";
+            "\"node:http\",\"node:https\",\"fetch\",\"abort\"]}";
         initialized = write_frame(host.file_descriptor, handshake);
       }
 

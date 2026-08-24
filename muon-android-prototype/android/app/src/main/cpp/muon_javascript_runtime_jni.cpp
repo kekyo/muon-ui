@@ -817,6 +817,51 @@ static JSValue js_cancel_timer(JSContext* context, JSValueConst this_value,
   return JS_TRUE;
 }
 
+static JSValue js_process_arch(JSContext* context, JSValueConst this_value,
+                               int argument_count,
+                               JSValueConst* arguments) {
+  (void)this_value;
+  (void)arguments;
+  if (argument_count != 0) {
+    return JS_ThrowTypeError(context, "processArch does not accept arguments");
+  }
+#if defined(__aarch64__)
+  return JS_NewString(context, "arm64");
+#elif defined(__arm__)
+  return JS_NewString(context, "arm");
+#elif defined(__x86_64__)
+  return JS_NewString(context, "x64");
+#elif defined(__i386__)
+  return JS_NewString(context, "ia32");
+#else
+  return JS_NewString(context, "unknown");
+#endif
+}
+
+static JSValue js_process_id(JSContext* context, JSValueConst this_value,
+                             int argument_count,
+                             JSValueConst* arguments) {
+  (void)this_value;
+  (void)arguments;
+  if (argument_count != 0) {
+    return JS_ThrowTypeError(context, "processId does not accept arguments");
+  }
+  return JS_NewInt32(context, getpid());
+}
+
+static JSValue js_monotonic_nanoseconds(JSContext* context,
+                                        JSValueConst this_value,
+                                        int argument_count,
+                                        JSValueConst* arguments) {
+  (void)this_value;
+  (void)arguments;
+  if (argument_count != 0) {
+    return JS_ThrowTypeError(
+        context, "monotonicNanoseconds does not accept arguments");
+  }
+  return JS_NewBigInt64(context, steady_nanoseconds());
+}
+
 static std::string socket_error_code(int error) {
   switch (error) {
     case EACCES:
@@ -2111,6 +2156,13 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
                             js_schedule_timer, 2) &&
       install_host_function(host->context, global, "__muonCancelTimer",
                             js_cancel_timer, 1) &&
+      install_host_function(host->context, global, "__muonProcessArch",
+                            js_process_arch, 0) &&
+      install_host_function(host->context, global, "__muonProcessId",
+                            js_process_id, 0) &&
+      install_host_function(host->context, global,
+                            "__muonMonotonicNanoseconds",
+                            js_monotonic_nanoseconds, 0) &&
       install_host_function(host->context, global, "__muonIsIp", js_is_ip,
                             1) &&
       install_host_function(host->context, global, "__muonDnsLookup",
@@ -2927,6 +2979,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"callbacks\",\"node:fs/promises\",\"node:fs\","
             "\"node:path\",\"node:events\",\"node:buffer\","
             "\"node:timers\",\"node:timers/promises\",\"node:stream\","
+            "\"node:process\",\"node:os\","
             "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
             "\"tcp-server\","
             "\"node:http\",\"http-server\",\"node:https\",\"fetch\","

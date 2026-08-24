@@ -13,6 +13,16 @@ import {
   setTimeout,
 } from 'node:timers';
 import { setTimeout as setPromiseTimeout } from 'node:timers/promises';
+import processModule, {
+  arch as processArch,
+  cwd as processCwd,
+  hrtime as processHrtime,
+  platform as processPlatform,
+  uptime as processUptime,
+} from 'node:process';
+import processAlias from 'process';
+import os, { arch as osArch, platform as osPlatform } from 'node:os';
+import osAlias from 'os';
 import {
   PassThrough,
   Readable,
@@ -223,6 +233,61 @@ export const exerciseRuntimePrimitives = async () => {
       staticReason,
       combinedReason: combinedSignal.reason,
       timeoutReasonName,
+    },
+  };
+};
+
+export const exerciseProcessAndOs = async () => {
+  let emittedValue = '';
+  processModule.once('muon-test', (value) => {
+    emittedValue = value;
+  });
+  processModule.emit('muon-test', 'event-ready');
+
+  processModule.env.MUON_TEST_VALUE = 42;
+  const environmentValue = processModule.env.MUON_TEST_VALUE;
+  delete processModule.env.MUON_TEST_VALUE;
+
+  const startUptime = processUptime();
+  const startTime = processHrtime();
+  const startBigint = processHrtime.bigint();
+  await setPromiseTimeout(5);
+  const elapsed = processHrtime(startTime);
+  const elapsedNanoseconds = elapsed[0] * 1_000_000_000 + elapsed[1];
+
+  return {
+    process: {
+      moduleAlias: processModule === processAlias,
+      globalAlias: processModule === globalThis.process,
+      isEventEmitter: processModule instanceof EventEmitter,
+      emittedValue,
+      arch: processArch,
+      platform: processPlatform,
+      cwd: processCwd(),
+      argv: processModule.argv,
+      execArgv: processModule.execArgv,
+      pidIsPositiveInteger:
+        Number.isInteger(processModule.pid) && processModule.pid > 0,
+      version: processModule.version,
+      quickjsVersion: processModule.versions.quickjs,
+      releaseName: processModule.release.name,
+      environmentValue,
+      environmentDeleted: !('MUON_TEST_VALUE' in processModule.env),
+      uptimeIncreased: processUptime() > startUptime,
+      elapsedNanoseconds,
+      bigintIncreased: processHrtime.bigint() > startBigint,
+    },
+    os: {
+      moduleAlias: os === osAlias,
+      arch: osArch(),
+      platform: osPlatform(),
+      type: os.type(),
+      endianness: os.endianness(),
+      eol: os.EOL,
+      devNull: os.devNull,
+      homedir: os.homedir(),
+      tmpdir: os.tmpdir(),
+      userInfo: os.userInfo(),
     },
   };
 };
@@ -1069,6 +1134,7 @@ globalThis.__muonBackendModule = Object.freeze({
   invokeCallback,
   importedPathBasename,
   exerciseRuntimePrimitives,
+  exerciseProcessAndOs,
   exerciseStreamAndUrl,
   exerciseDnsAndTcp,
   exerciseNetServer,

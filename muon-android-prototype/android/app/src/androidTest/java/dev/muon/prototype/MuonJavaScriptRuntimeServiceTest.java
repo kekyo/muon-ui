@@ -16,6 +16,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
@@ -202,6 +203,10 @@ public final class MuonJavaScriptRuntimeServiceTest {
                 capabilities.toString().contains("\"node:https\""));
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"fetch\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:process\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:os\""));
         return runtime;
     }
 
@@ -566,6 +571,86 @@ public final class MuonJavaScriptRuntimeServiceTest {
             assertEquals("static-reason", abort.getString("staticReason"));
             assertEquals("combined-reason", abort.getString("combinedReason"));
             assertEquals("TimeoutError", abort.getString("timeoutReasonName"));
+        }
+    }
+
+    @Test
+    public void supportsNodeProcessAndOs() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-process-os")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "process-os",
+                    root,
+                    "exerciseProcessAndOs",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            String abi = Build.SUPPORTED_ABIS[0];
+            String expectedArchitecture;
+            switch (abi) {
+                case "arm64-v8a":
+                    expectedArchitecture = "arm64";
+                    break;
+                case "armeabi-v7a":
+                    expectedArchitecture = "arm";
+                    break;
+                case "x86_64":
+                    expectedArchitecture = "x64";
+                    break;
+                case "x86":
+                    expectedArchitecture = "ia32";
+                    break;
+                default:
+                    throw new AssertionError("Unsupported test ABI: " + abi);
+            }
+
+            JSONObject process = values.getJSONObject("process");
+            assertTrue(process.getBoolean("moduleAlias"));
+            assertTrue(process.getBoolean("globalAlias"));
+            assertTrue(process.getBoolean("isEventEmitter"));
+            assertEquals("event-ready", process.getString("emittedValue"));
+            assertEquals(expectedArchitecture, process.getString("arch"));
+            assertEquals("android", process.getString("platform"));
+            assertEquals("/", process.getString("cwd"));
+            assertEquals("[\"muon-quickjs\"]", process.getJSONArray("argv").toString());
+            assertEquals("[]", process.getJSONArray("execArgv").toString());
+            assertTrue(process.getBoolean("pidIsPositiveInteger"));
+            assertEquals("v0.0.0-muon-quickjs", process.getString("version"));
+            assertEquals("2026-06-04", process.getString("quickjsVersion"));
+            assertEquals("muon-quickjs", process.getString("releaseName"));
+            assertEquals("42", process.getString("environmentValue"));
+            assertTrue(process.getBoolean("environmentDeleted"));
+            assertTrue(process.getBoolean("uptimeIncreased"));
+            assertTrue(process.getLong("elapsedNanoseconds") > 0);
+            assertTrue(process.getBoolean("bigintIncreased"));
+
+            JSONObject os = values.getJSONObject("os");
+            assertTrue(os.getBoolean("moduleAlias"));
+            assertEquals(expectedArchitecture, os.getString("arch"));
+            assertEquals("android", os.getString("platform"));
+            assertEquals("Android", os.getString("type"));
+            assertEquals("LE", os.getString("endianness"));
+            assertEquals("\n", os.getString("eol"));
+            assertEquals("/dev/null", os.getString("devNull"));
+            assertEquals("/", os.getString("homedir"));
+            assertEquals("/tmp", os.getString("tmpdir"));
+            JSONObject userInfo = os.getJSONObject("userInfo");
+            assertEquals("muon", userInfo.getString("username"));
+            assertEquals(-1, userInfo.getInt("uid"));
+            assertEquals(-1, userInfo.getInt("gid"));
+            assertTrue(userInfo.isNull("shell"));
+            assertEquals("/", userInfo.getString("homedir"));
+
+            assertTrue(request(
+                    runtime,
+                    "shutdown-process-os",
+                    "shutdown",
+                    new JSONObject()).getBoolean("ok"));
         }
     }
 

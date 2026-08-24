@@ -1245,6 +1245,89 @@
     },
   });
 
+  const processStartNanoseconds = __muonMonotonicNanoseconds();
+  const processEnvironmentValues = Object.create(null);
+  processEnvironmentValues.HOME = '/';
+  processEnvironmentValues.TMPDIR = '/tmp';
+  const processEnvironment = new Proxy(processEnvironmentValues, {
+    set: (target, name, value) => {
+      target[name] = String(value);
+      return true;
+    },
+  });
+  const processHrtime = (time) => {
+    let elapsed = __muonMonotonicNanoseconds();
+    if (time !== undefined) {
+      if (
+        !Array.isArray(time) ||
+        time.length !== 2 ||
+        !Number.isInteger(time[0]) ||
+        !Number.isInteger(time[1]) ||
+        time[0] < 0 ||
+        time[1] < 0 ||
+        time[1] >= 1_000_000_000
+      ) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'hrtime time must be a [seconds, nanoseconds] tuple'
+        );
+      }
+      elapsed -= BigInt(time[0]) * 1_000_000_000n + BigInt(time[1]);
+    }
+    return [Number(elapsed / 1_000_000_000n), Number(elapsed % 1_000_000_000n)];
+  };
+  processHrtime.bigint = () => __muonMonotonicNanoseconds();
+
+  const processModule = new EventEmitter();
+  Object.assign(processModule, {
+    arch: __muonProcessArch(),
+    argv: ['muon-quickjs'],
+    argv0: 'muon-quickjs',
+    cwd: () => '/',
+    env: processEnvironment,
+    execArgv: [],
+    exitCode: undefined,
+    hrtime: processHrtime,
+    pid: __muonProcessId(),
+    platform: 'android',
+    release: Object.freeze({ name: 'muon-quickjs' }),
+    title: 'muon-quickjs',
+    uptime: () =>
+      Number(__muonMonotonicNanoseconds() - processStartNanoseconds) /
+      1_000_000_000,
+    version: 'v0.0.0-muon-quickjs',
+    versions: Object.freeze({ quickjs: '2026-06-04' }),
+  });
+
+  const nativeEndianness = (() => {
+    const word = new Uint16Array([0x0102]);
+    return new Uint8Array(word.buffer)[0] === 0x02 ? 'LE' : 'BE';
+  })();
+  const osModule = Object.freeze({
+    EOL: '\n',
+    arch: () => processModule.arch,
+    devNull: '/dev/null',
+    endianness: () => nativeEndianness,
+    homedir: () => '/',
+    machine: () => {
+      if (processModule.arch === 'arm64') return 'aarch64';
+      if (processModule.arch === 'x64') return 'x86_64';
+      if (processModule.arch === 'ia32') return 'i686';
+      return processModule.arch;
+    },
+    platform: () => processModule.platform,
+    tmpdir: () => '/tmp',
+    type: () => 'Android',
+    uptime: processModule.uptime,
+    userInfo: () => ({
+      username: 'muon',
+      uid: -1,
+      gid: -1,
+      shell: null,
+      homedir: '/',
+    }),
+  });
+
   const normalizePath = (value) => {
     const source = String(value).replaceAll('\\', '/');
     const absolute = source.startsWith('/');
@@ -6263,6 +6346,11 @@
       configurable: true,
       writable: true,
     },
+    process: {
+      value: processModule,
+      configurable: true,
+      writable: true,
+    },
   });
 
   const hostModules = Object.freeze({
@@ -6274,6 +6362,10 @@
     'node:path': pathModule,
     events: eventsModule,
     'node:events': eventsModule,
+    process: processModule,
+    'node:process': processModule,
+    os: osModule,
+    'node:os': osModule,
     buffer: bufferModule,
     'node:buffer': bufferModule,
     timers: timersModule,

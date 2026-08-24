@@ -66,26 +66,26 @@ try {
 
 `createNode()`というAPI名は既存コードの生成形を維持するためのもので、runtime自体はNode.jsではありません。Node.js package、npm、CommonJS、Node.js標準library全体との互換性はありません。同梱applicationのES moduleと、次の組み込みmoduleの限定実装を利用できます。
 
-| module                                | 主な対応範囲                                                                                       |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `node:fs/promises`, `node:fs`         | private storage内のread、write、append、copy、directory、metadata、rename、remove                  |
-| `node:path`                           | POSIX形式のpath操作                                                                                |
-| `node:events`                         | `EventEmitter`、`once`、AbortSignal連携                                                            |
-| `node:buffer`                         | `Buffer`の生成、変換、比較、検索                                                                   |
-| `node:timers`, `node:timers/promises` | timeout、interval、immediate、AbortSignal                                                          |
-| `node:stream`, `node:stream/promises` | readable、writable、duplex、transform、pipeline                                                    |
-| `node:url`                            | `URL`、`URLSearchParams`、file URL変換、HTTP option変換                                            |
-| `node:process`                        | Android ABI、pid、単調時刻とruntime内の仮想cwd、env                                                |
-| `node:os`                             | Androidのplatform、ABI、endiannessと仮想home、tmp、user                                            |
-| `node:util`                           | format、inspect、deep equality、promisify、VT除去、代表的な`types`判定                             |
-| `node:assert`, `node:assert/strict`   | sync/async assertionと`AssertionError`                                                             |
-| `node:querystring`                    | parse、stringify、escape、unescape                                                                 |
-| `node:string_decoder`                 | UTF-8、UTF-16LE、base64、latin1、ASCII、hexの分割入力decode                                        |
-| `node:crypto`                         | SHA-256 hash/HMAC、乱数、UUID v4、`timingSafeEqual`                                                |
-| `node:dns`, `node:dns/promises`       | `lookup`とresult order                                                                             |
-| `node:net`                            | TCP clientとloopback限定TCP server                                                                 |
-| `node:http`                           | HTTP clientとloopback限定HTTP/1.0、HTTP/1.1 server                                                 |
-| `node:https`                          | certificate検証を必須とするHTTPS client                                                            |
+| module                                | 主な対応範囲                                                                      |
+| ------------------------------------- | --------------------------------------------------------------------------------- |
+| `node:fs/promises`, `node:fs`         | private storage内のread、write、append、copy、directory、metadata、rename、remove |
+| `node:path`                           | POSIX形式のpath操作                                                               |
+| `node:events`                         | `EventEmitter`、`once`、AbortSignal連携                                           |
+| `node:buffer`                         | `Buffer`の生成、変換、比較、検索                                                  |
+| `node:timers`, `node:timers/promises` | timeout、interval、immediate、AbortSignal                                         |
+| `node:stream`, `node:stream/promises` | readable、writable、duplex、transform、pipeline                                   |
+| `node:url`                            | `URL`、`URLSearchParams`、file URL変換、HTTP option変換                           |
+| `node:process`                        | Android ABI、pid、単調時刻とruntime内の仮想cwd、env                               |
+| `node:os`                             | Androidのplatform、ABI、endiannessと仮想home、tmp、user                           |
+| `node:util`                           | format、inspect、deep equality、promisify、VT除去、代表的な`types`判定            |
+| `node:assert`, `node:assert/strict`   | sync/async assertionと`AssertionError`                                            |
+| `node:querystring`                    | parse、stringify、escape、unescape                                                |
+| `node:string_decoder`                 | UTF-8、UTF-16LE、base64、latin1、ASCII、hexの分割入力decode                       |
+| `node:crypto`                         | SHA-256 hash/HMAC、乱数、UUID v4、`timingSafeEqual`                               |
+| `node:dns`, `node:dns/promises`       | `lookup`とresult order                                                            |
+| `node:net`                            | TCP clientとloopback限定TCP server                                                |
+| `node:http`                           | HTTP clientとloopback限定HTTP/1.0、HTTP/1.1 server                                |
+| `node:https`                          | certificate検証を必須とするHTTPS client                                           |
 
 各moduleは`node:`なしのspecifierでも同じinstanceをimportできます。globalには`Buffer`、timer、`Event`、`EventTarget`、`DOMException`、`AbortController`、`AbortSignal`、`URL`、`URLSearchParams`、`Headers`、`Request`、`Response`、`fetch`、`process`、限定版`crypto`があります。API名と基本的なevent順序はNode.jsまたはWeb APIへ寄せています。表と以下の詳細にないexportやcall shapeは対応対象ではありません。
 
@@ -169,7 +169,7 @@ CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`は
 | QuickJS filesystem binary read                         |                                         16 MiB |
 | hashまたはHMACへの入力                                 |                                         16 MiB |
 | 1回のOS乱数要求                                        |                                          1 MiB |
-| timer delay                                            |                                          60秒 |
+| timer delay                                            |                                           60秒 |
 | TCP listener backlog                                   |                                       4096以下 |
 
 上限到達時は`ERR_MUON_DNS_OPERATION_LIMIT`、`ERR_MUON_TCP_SOCKET_LIMIT`、`ERR_MUON_TCP_SERVER_LIMIT`、`ERR_HTTP_OPERATION_LIMIT`を返します。上限はruntime終了時にも回収され、他runtimeの操作は維持されます。

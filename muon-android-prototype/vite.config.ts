@@ -5,7 +5,7 @@
 
 import prettierMax from 'prettier-max';
 import screwUp from 'screw-up';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [prettierMax(), screwUp()],
@@ -18,6 +18,11 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    exclude: [
+      ...configDefaults.exclude,
+      'android/.generated/**',
+      'android/.native-dependencies/**',
+    ],
     fileParallelism: true,
     restoreMocks: true,
     testTimeout: 60000,

@@ -33,7 +33,12 @@ import {
   pathToFileURL,
   urlToHttpOptions,
 } from 'node:url';
-import net, { Socket, createConnection } from 'node:net';
+import net, {
+  Server as NetServer,
+  Socket,
+  createConnection,
+  createServer as createNetServer,
+} from 'node:net';
 import netAlias from 'net';
 import dns from 'node:dns';
 import dnsAlias from 'dns';
@@ -458,6 +463,95 @@ export const exerciseDnsAndTcp = async (port, closedPort) => {
   };
 };
 
+export const exerciseNetServer = async () => {
+  const events = [];
+  let receivedByServer = '';
+  let acceptedSocketState = null;
+  let resolveConnectionCount;
+  let rejectConnectionCount;
+  const connectionCount = new Promise((resolve, reject) => {
+    resolveConnectionCount = resolve;
+    rejectConnectionCount = reject;
+  });
+  const server = createNetServer(
+    { allowHalfOpen: true, noDelay: true },
+    (socket) => {
+      events.push('connection');
+      acceptedSocketState = {
+        isSocket: socket instanceof Socket,
+        localAddress: socket.localAddress,
+        localFamily: socket.localFamily,
+        localPort: socket.localPort,
+        remoteAddress: socket.remoteAddress,
+        remoteFamily: socket.remoteFamily,
+        readyState: socket.readyState,
+      };
+      server.getConnections((error, count) => {
+        if (error) rejectConnectionCount(error);
+        else resolveConnectionCount(count);
+      });
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => {
+        receivedByServer += chunk;
+        if (receivedByServer === 'loopback-input') {
+          socket.end('loopback-response');
+        }
+      });
+    }
+  );
+  server.on('close', () => events.push('close'));
+  const listening = onceEvent(server, 'listening');
+  server.listen({ port: 0, host: '127.0.0.1', backlog: 8 }, () => {
+    events.push('listening');
+  });
+  await listening;
+  const address = server.address();
+
+  const client = createConnection({
+    host: address.address,
+    port: address.port,
+  });
+  client.setEncoding('utf8');
+  let receivedByClient = '';
+  client.on('data', (chunk) => {
+    receivedByClient += chunk;
+  });
+  const connected = onceEvent(client, 'connect');
+  const clientEnded = onceEvent(client, 'end');
+  const clientClosed = onceEvent(client, 'close');
+  await connected;
+  client.end('loopback-input');
+  await clientEnded;
+  await clientClosed;
+  const activeConnectionCount = await connectionCount;
+
+  const closed = onceEvent(server, 'close');
+  server.close();
+  await closed;
+
+  let nonLoopbackCode = '';
+  try {
+    createNetServer().listen(0, '0.0.0.0');
+  } catch (error) {
+    nonLoopbackCode = error.code;
+  }
+
+  return {
+    moduleAlias: net === netAlias,
+    isServer: server instanceof NetServer,
+    listeningBeforeClose: address !== null,
+    address,
+    addressAfterClose: server.address(),
+    events,
+    receivedByServer,
+    receivedByClient,
+    acceptedSocketState,
+    activeConnectionCount,
+    finalConnectionCount: server.connections,
+    nonLoopbackCode,
+  };
+};
+
 export const retainTcpConnection = async (port, marker) => {
   const socket = createConnection({ host: '127.0.0.1', port });
   await onceEvent(socket, 'connect');
@@ -661,6 +755,7 @@ globalThis.__muonBackendModule = Object.freeze({
   exerciseRuntimePrimitives,
   exerciseStreamAndUrl,
   exerciseDnsAndTcp,
+  exerciseNetServer,
   retainTcpConnection,
   retainedTcpConnectionState,
   exerciseHttpAndFetch,

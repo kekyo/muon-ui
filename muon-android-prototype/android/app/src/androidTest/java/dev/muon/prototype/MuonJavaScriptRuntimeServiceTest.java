@@ -190,6 +190,8 @@ public final class MuonJavaScriptRuntimeServiceTest {
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"tcp\""));
         assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"tcp-server\""));
+        assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:http\""));
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:https\""));
@@ -759,6 +761,48 @@ public final class MuonJavaScriptRuntimeServiceTest {
             throw new AssertionError("The loopback TCP server failed", serverFailure.get());
         }
         assertEquals("quickjs-tcp", receivedByServer.get());
+    }
+
+    @Test
+    public void supportsNodeNetLoopbackServers() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-net-server")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "net-server",
+                    root,
+                    "exerciseNetServer",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+            assertTrue(values.getBoolean("moduleAlias"));
+            assertTrue(values.getBoolean("isServer"));
+            assertTrue(values.getBoolean("listeningBeforeClose"));
+            JSONObject address = values.getJSONObject("address");
+            assertEquals("127.0.0.1", address.getString("address"));
+            assertEquals("IPv4", address.getString("family"));
+            assertTrue(address.getInt("port") > 0);
+            assertTrue(values.isNull("addressAfterClose"));
+            assertEquals(
+                    "[\"listening\",\"connection\",\"close\"]",
+                    values.getJSONArray("events").toString());
+            assertEquals("loopback-input", values.getString("receivedByServer"));
+            assertEquals("loopback-response", values.getString("receivedByClient"));
+            JSONObject accepted = values.getJSONObject("acceptedSocketState");
+            assertTrue(accepted.getBoolean("isSocket"));
+            assertEquals("127.0.0.1", accepted.getString("localAddress"));
+            assertEquals("IPv4", accepted.getString("localFamily"));
+            assertEquals(address.getInt("port"), accepted.getInt("localPort"));
+            assertEquals("127.0.0.1", accepted.getString("remoteAddress"));
+            assertEquals("IPv4", accepted.getString("remoteFamily"));
+            assertEquals("open", accepted.getString("readyState"));
+            assertEquals(1, values.getInt("activeConnectionCount"));
+            assertEquals(0, values.getInt("finalConnectionCount"));
+            assertEquals("EACCES", values.getString("nonLoopbackCode"));
+        }
     }
 
     @Test

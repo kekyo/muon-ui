@@ -105,6 +105,11 @@ struct MuonTcpSocket {
   std::deque<MuonTcpWrite> writes;
 };
 
+struct MuonTcpServer {
+  std::int64_t identifier = 0;
+  int file_descriptor = -1;
+};
+
 struct MuonPendingPromise {
   JSValue promise = JS_UNDEFINED;
 };
@@ -123,6 +128,7 @@ struct MuonJavaScriptHost {
   std::vector<MuonTimer> timers;
   std::shared_ptr<MuonJavaScriptSession> session;
   std::unordered_map<std::int64_t, MuonTcpSocket> tcp_sockets;
+  std::unordered_map<std::int64_t, MuonTcpServer> tcp_servers;
   std::vector<MuonHostEvent> host_events;
   std::atomic<bool>* stop_requested = nullptr;
   std::atomic<std::int64_t> execution_deadline_nanoseconds{0};
@@ -854,6 +860,19 @@ static void queue_socket_error(MuonJavaScriptHost* host,
   host->host_events.push_back(std::move(event));
 }
 
+static void queue_socket_connection_error(MuonJavaScriptHost* host,
+                                          std::int64_t identifier, int error,
+                                          const char* syscall) {
+  MuonHostEvent event;
+  event.identifier = identifier;
+  event.type = "connectionError";
+  event.code = socket_error_code(error);
+  event.message =
+      event.code + ": " + syscall + ": " + std::strerror(error);
+  event.syscall = syscall;
+  host->host_events.push_back(std::move(event));
+}
+
 static bool format_socket_address(const sockaddr_storage& storage,
                                   std::string* address, std::string* family,
                                   int* port) {
@@ -1054,6 +1073,249 @@ static JSValue js_tcp_connect(JSContext* context, JSValueConst this_value,
     queue_socket_connected(host, &iterator->second);
   }
   return JS_UNDEFINED;
+}
+
+static JSValue js_tcp_listen(JSContext* context, JSValueConst this_value,
+                             int argument_count,
+                             JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 4) {
+    return JS_ThrowTypeError(
+        context,
+        "tcpListen requires an identifier, address, port, and backlog");
+  }
+  std::int64_t identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &identifier)) {
+    return JS_EXCEPTION;
+  }
+  if (host->tcp_servers.contains(identifier) ||
+      host->tcp_sockets.contains(identifier)) {
+    return JS_ThrowInternalError(
+        context, "TCP listener identifier is already active");
+  }
+  std::string address;
+  if (!get_js_string(context, arguments[1], &address)) {
+    return JS_EXCEPTION;
+  }
+  std::int32_t port = 0;
+  std::int32_t backlog = 0;
+  if (JS_ToInt32(context, &port, arguments[2]) < 0 ||
+      JS_ToInt32(context, &backlog, arguments[3]) < 0) {
+    return JS_EXCEPTION;
+  }
+  if (port < 0 || port > 65535) {
+    return JS_ThrowRangeError(context,
+                              "TCP listener port must be between 0 and 65535");
+  }
+  if (backlog <= 0 || backlog > 4096) {
+    return JS_ThrowRangeError(
+        context, "TCP listener backlog must be between 1 and 4096");
+  }
+
+  sockaddr_storage bind_address{};
+  socklen_t bind_address_length = 0;
+  int domain = 0;
+  auto* ipv4 = reinterpret_cast<sockaddr_in*>(&bind_address);
+  if (inet_pton(AF_INET, address.c_str(), &ipv4->sin_addr) == 1) {
+    if ((ntohl(ipv4->sin_addr.s_addr) & 0xff000000U) != 0x7f000000U) {
+      return JS_ThrowTypeError(context,
+                               "TCP listeners must use a loopback address");
+    }
+    domain = AF_INET;
+    ipv4->sin_family = AF_INET;
+    ipv4->sin_port = htons(static_cast<std::uint16_t>(port));
+    bind_address_length = sizeof(sockaddr_in);
+  } else {
+    auto* ipv6 = reinterpret_cast<sockaddr_in6*>(&bind_address);
+    if (inet_pton(AF_INET6, address.c_str(), &ipv6->sin6_addr) != 1 ||
+        !IN6_IS_ADDR_LOOPBACK(&ipv6->sin6_addr)) {
+      return JS_ThrowTypeError(context,
+                               "TCP listeners must use a loopback address");
+    }
+    domain = AF_INET6;
+    ipv6->sin6_family = AF_INET6;
+    ipv6->sin6_port = htons(static_cast<std::uint16_t>(port));
+    bind_address_length = sizeof(sockaddr_in6);
+  }
+
+  auto file_descriptor =
+      socket(domain, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
+  if (file_descriptor < 0) {
+    queue_socket_error(host, identifier, errno, "listen");
+    return JS_UNDEFINED;
+  }
+  int enabled = 1;
+  if (setsockopt(file_descriptor, SOL_SOCKET, SO_REUSEADDR, &enabled,
+                 sizeof(enabled)) < 0) {
+    auto error = errno;
+    close(file_descriptor);
+    queue_socket_error(host, identifier, error, "setsockopt");
+    return JS_UNDEFINED;
+  }
+  if (domain == AF_INET6 &&
+      setsockopt(file_descriptor, IPPROTO_IPV6, IPV6_V6ONLY, &enabled,
+                 sizeof(enabled)) < 0) {
+    auto error = errno;
+    close(file_descriptor);
+    queue_socket_error(host, identifier, error, "setsockopt");
+    return JS_UNDEFINED;
+  }
+  if (bind(file_descriptor, reinterpret_cast<sockaddr*>(&bind_address),
+           bind_address_length) < 0 ||
+      listen(file_descriptor, backlog) < 0) {
+    auto error = errno;
+    close(file_descriptor);
+    queue_socket_error(host, identifier, error, "listen");
+    return JS_UNDEFINED;
+  }
+  MuonTcpServer server;
+  server.identifier = identifier;
+  server.file_descriptor = file_descriptor;
+  host->tcp_servers.emplace(identifier, std::move(server));
+
+  sockaddr_storage local{};
+  socklen_t local_length = sizeof(local);
+  MuonHostEvent event;
+  event.identifier = identifier;
+  event.type = "listening";
+  if (getsockname(file_descriptor, reinterpret_cast<sockaddr*>(&local),
+                  &local_length) == 0) {
+    format_socket_address(local, &event.address, &event.family, &event.port);
+  }
+  host->host_events.push_back(std::move(event));
+  return JS_UNDEFINED;
+}
+
+static JSValue js_tcp_accept(JSContext* context, JSValueConst this_value,
+                             int argument_count,
+                             JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 3) {
+    return JS_ThrowTypeError(
+        context,
+        "tcpAccept requires listener and socket identifiers and noDelay");
+  }
+  std::int64_t server_identifier = 0;
+  std::int64_t socket_identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &server_identifier) ||
+      !get_positive_identifier(context, arguments[1], &socket_identifier)) {
+    return JS_EXCEPTION;
+  }
+  if (host->tcp_sockets.contains(socket_identifier) ||
+      host->tcp_servers.contains(socket_identifier)) {
+    return JS_ThrowInternalError(context,
+                                 "Accepted socket identifier is already active");
+  }
+  auto no_delay = JS_ToBool(context, arguments[2]);
+  if (no_delay < 0) {
+    return JS_EXCEPTION;
+  }
+  auto server = host->tcp_servers.find(server_identifier);
+  if (server == host->tcp_servers.end()) {
+    return JS_NULL;
+  }
+  sockaddr_storage remote{};
+  socklen_t remote_length = sizeof(remote);
+  auto file_descriptor =
+      accept4(server->second.file_descriptor,
+              reinterpret_cast<sockaddr*>(&remote), &remote_length,
+              SOCK_NONBLOCK | SOCK_CLOEXEC);
+  if (file_descriptor < 0) {
+    if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+      queue_socket_connection_error(host, server_identifier, errno, "accept");
+    }
+    return JS_NULL;
+  }
+  if (no_delay != 0) {
+    int enabled = 1;
+    if (setsockopt(file_descriptor, IPPROTO_TCP, TCP_NODELAY, &enabled,
+                   sizeof(enabled)) < 0) {
+      auto error = errno;
+      close(file_descriptor);
+      queue_socket_connection_error(host, server_identifier, error,
+                                    "setsockopt");
+      return JS_NULL;
+    }
+  }
+  MuonTcpSocket socket_state;
+  socket_state.identifier = socket_identifier;
+  socket_state.file_descriptor = file_descriptor;
+  socket_state.connecting = false;
+  if (!format_socket_address(remote, &socket_state.remote_address,
+                             &socket_state.remote_family,
+                             &socket_state.remote_port)) {
+    close(file_descriptor);
+    queue_socket_connection_error(host, server_identifier, EIO, "accept");
+    return JS_NULL;
+  }
+  sockaddr_storage local{};
+  socklen_t local_length = sizeof(local);
+  std::string local_address;
+  std::string local_family;
+  int local_port = 0;
+  if (getsockname(file_descriptor, reinterpret_cast<sockaddr*>(&local),
+                  &local_length) < 0 ||
+      !format_socket_address(local, &local_address, &local_family,
+                             &local_port)) {
+    close(file_descriptor);
+    queue_socket_connection_error(host, server_identifier, EIO, "accept");
+    return JS_NULL;
+  }
+  auto [socket_iterator, inserted] =
+      host->tcp_sockets.emplace(socket_identifier, std::move(socket_state));
+  (void)inserted;
+  const auto& accepted_socket = socket_iterator->second;
+
+  auto result = JS_NewObject(context);
+  JS_SetPropertyStr(
+      context, result, "address",
+      JS_NewString(context, accepted_socket.remote_address.c_str()));
+  JS_SetPropertyStr(
+      context, result, "family",
+      JS_NewString(context, accepted_socket.remote_family.c_str()));
+  JS_SetPropertyStr(context, result, "port",
+                    JS_NewInt32(context, accepted_socket.remote_port));
+  JS_SetPropertyStr(context, result, "localAddress",
+                    JS_NewString(context, local_address.c_str()));
+  JS_SetPropertyStr(context, result, "localFamily",
+                    JS_NewString(context, local_family.c_str()));
+  JS_SetPropertyStr(context, result, "localPort",
+                    JS_NewInt32(context, local_port));
+  return result;
+}
+
+static JSValue js_tcp_close_server(JSContext* context,
+                                   JSValueConst this_value,
+                                   int argument_count,
+                                   JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 1) {
+    return JS_ThrowTypeError(
+        context, "tcpCloseServer requires a listener identifier");
+  }
+  std::int64_t identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &identifier)) {
+    return JS_EXCEPTION;
+  }
+  auto server = host->tcp_servers.find(identifier);
+  if (server == host->tcp_servers.end()) {
+    return JS_FALSE;
+  }
+  close(server->second.file_descriptor);
+  host->tcp_servers.erase(server);
+  return JS_TRUE;
 }
 
 static JSValue js_tcp_write(JSContext* context, JSValueConst this_value,
@@ -1807,6 +2069,12 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
                             js_dns_lookup, 3) &&
       install_host_function(host->context, global, "__muonTcpConnect",
                             js_tcp_connect, 4) &&
+      install_host_function(host->context, global, "__muonTcpListen",
+                            js_tcp_listen, 4) &&
+      install_host_function(host->context, global, "__muonTcpAccept",
+                            js_tcp_accept, 3) &&
+      install_host_function(host->context, global, "__muonTcpCloseServer",
+                            js_tcp_close_server, 1) &&
       install_host_function(host->context, global, "__muonTcpWrite",
                             js_tcp_write, 3) &&
       install_host_function(host->context, global, "__muonTcpEnd", js_tcp_end,
@@ -1887,7 +2155,8 @@ static JSValue create_host_event_payload(JSContext* context,
   if (event.type == "write") {
     return JS_NewInt64(context, event.operation_identifier);
   }
-  if (event.type == "end" || event.type == "httpEnd") {
+  if (event.type == "end" || event.type == "httpEnd" ||
+      event.type == "connectionAvailable") {
     return JS_UNDEFINED;
   }
   auto payload = JS_NewObject(context);
@@ -1908,7 +2177,7 @@ static JSValue create_host_event_payload(JSContext* context,
     JS_SetPropertyStr(context, payload, "addresses", addresses);
     return payload;
   }
-  if (event.type == "connect") {
+  if (event.type == "connect" || event.type == "listening") {
     JS_SetPropertyStr(context, payload, "address",
                       JS_NewString(context, event.address.c_str()));
     JS_SetPropertyStr(context, payload, "family",
@@ -2190,6 +2459,47 @@ static void append_tcp_poll_descriptors(
   }
 }
 
+static bool process_tcp_server_poll_event(MuonJavaScriptHost* host,
+                                          std::int64_t identifier,
+                                          short revents) {
+  auto server = host->tcp_servers.find(identifier);
+  if (server == host->tcp_servers.end()) {
+    return true;
+  }
+  if ((revents & POLLIN) != 0) {
+    MuonHostEvent event;
+    event.identifier = identifier;
+    event.type = "connectionAvailable";
+    host->host_events.push_back(std::move(event));
+  }
+  if ((revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+    int error = 0;
+    socklen_t error_length = sizeof(error);
+    if ((revents & POLLNVAL) != 0 ||
+        getsockopt(server->second.file_descriptor, SOL_SOCKET, SO_ERROR, &error,
+                   &error_length) < 0 ||
+        error == 0) {
+      error = (revents & POLLNVAL) != 0 ? EBADF : EIO;
+    }
+    queue_socket_error(host, identifier, error, "accept");
+    close(server->second.file_descriptor);
+    host->tcp_servers.erase(server);
+  }
+  return true;
+}
+
+static void append_tcp_server_poll_descriptors(
+    const MuonJavaScriptHost* host, std::vector<pollfd>* descriptors,
+    std::vector<std::int64_t>* identifiers) {
+  for (const auto& [identifier, server] : host->tcp_servers) {
+    pollfd descriptor{};
+    descriptor.fd = server.file_descriptor;
+    descriptor.events = POLLIN;
+    descriptors->push_back(descriptor);
+    identifiers->push_back(identifier);
+  }
+}
+
 static void process_tcp_deferred_output(MuonJavaScriptHost* host) {
   auto iterator = host->tcp_sockets.begin();
   while (iterator != host->tcp_sockets.end()) {
@@ -2455,6 +2765,11 @@ static void free_host(MuonJavaScriptHost* host) {
     close(socket.file_descriptor);
   }
   host->tcp_sockets.clear();
+  for (auto& [identifier, server] : host->tcp_servers) {
+    (void)identifier;
+    close(server.file_descriptor);
+  }
+  host->tcp_servers.clear();
   if (host->context != nullptr) {
     for (auto& pending : host->pending_promises) {
       JS_FreeValue(host->context, pending.promise);
@@ -2550,6 +2865,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"node:path\",\"node:events\",\"node:buffer\","
             "\"node:timers\",\"node:timers/promises\",\"node:stream\","
             "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
+            "\"tcp-server\","
             "\"node:http\",\"node:https\",\"fetch\",\"abort\"]}";
         initialized = write_frame(host.file_descriptor, handshake);
       }
@@ -2567,6 +2883,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
         }
         std::vector<pollfd> descriptors;
         std::vector<std::int64_t> tcp_identifiers;
+        std::vector<std::int64_t> tcp_server_identifiers;
         pollfd protocol_descriptor{};
         protocol_descriptor.fd = host.file_descriptor;
         protocol_descriptor.events = POLLIN;
@@ -2576,6 +2893,8 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
         event_descriptor.events = POLLIN;
         descriptors.push_back(event_descriptor);
         append_tcp_poll_descriptors(&host, &descriptors, &tcp_identifiers);
+        append_tcp_server_poll_descriptors(
+            &host, &descriptors, &tcp_server_identifiers);
         auto poll_result = poll(descriptors.data(), descriptors.size(),
                                 timer_poll_timeout(&host));
         if (poll_result < 0) {
@@ -2609,6 +2928,17 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
               !process_tcp_poll_event(&host, tcp_identifiers[index], revents)) {
             initialized = false;
             break;
+          }
+        }
+        auto tcp_server_offset = 2 + tcp_identifiers.size();
+        for (std::size_t index = 0; initialized &&
+                                    index < tcp_server_identifiers.size();
+             ++index) {
+          auto revents = descriptors[tcp_server_offset + index].revents;
+          if (revents != 0 && !process_tcp_server_poll_event(
+                                  &host, tcp_server_identifiers[index],
+                                  revents)) {
+            initialized = false;
           }
         }
       }

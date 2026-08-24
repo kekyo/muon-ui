@@ -3435,9 +3435,11 @@
   let nextHostOperationIdentifier = 1;
   const pendingDnsOperations = new Map();
   const activeTcpSockets = new Map();
+  const activeTcpServers = new Map();
   const pendingTcpWrites = new Map();
   const pendingHttpOperations = new Map();
   const tcpSocketState = Symbol('muon.net.socketState');
+  const tcpServerState = Symbol('muon.net.serverState');
   const httpRequestState = Symbol('muon.http.requestState');
   const httpResponseState = Symbol('muon.http.responseState');
   const headersState = Symbol('muon.fetch.headersState');
@@ -4021,6 +4023,273 @@
       },
     },
   });
+
+  const requireTcpServerState = (server) => {
+    const state = server?.[tcpServerState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Server method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const normalizeTcpListenArguments = (values) => {
+    const arguments_ = [...values];
+    const listener =
+      typeof arguments_.at(-1) === 'function' ? arguments_.pop() : undefined;
+    let options;
+    if (
+      arguments_.length > 0 &&
+      arguments_[0] !== null &&
+      typeof arguments_[0] === 'object'
+    ) {
+      options = { ...arguments_[0] };
+    } else {
+      options = { port: arguments_[0] };
+      if (typeof arguments_[1] === 'string') options.host = arguments_[1];
+      else if (arguments_[1] !== undefined) options.backlog = arguments_[1];
+      if (arguments_[2] !== undefined) options.backlog = arguments_[2];
+    }
+    if ('path' in options) {
+      throw createError(
+        'ERR_NOT_SUPPORTED',
+        'Unix domain socket servers are not supported on Android QuickJS'
+      );
+    }
+    const port = Number(options.port);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      throw createError(
+        'ERR_SOCKET_BAD_PORT',
+        'TCP server port must be an integer between 0 and 65535'
+      );
+    }
+    const requestedHost = String(options.host ?? '127.0.0.1');
+    const host = requestedHost === 'localhost' ? '127.0.0.1' : requestedHost;
+    if (host !== '127.0.0.1' && host !== '::1') {
+      throw createError(
+        'EACCES',
+        'Android QuickJS TCP servers are restricted to loopback addresses'
+      );
+    }
+    const backlog = Number(options.backlog ?? 511);
+    if (!Number.isInteger(backlog) || backlog <= 0 || backlog > 4096) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'TCP server backlog must be between 1 and 4096'
+      );
+    }
+    return {
+      listener,
+      options: {
+        ...options,
+        host,
+        port,
+        backlog,
+        noDelay: options.noDelay !== false,
+        keepAlive: options.keepAlive === true,
+        keepAliveInitialDelay: Math.max(
+          0,
+          Number(options.keepAliveInitialDelay) || 0
+        ),
+      },
+    };
+  };
+
+  const finishTcpServerClose = (server, state) => {
+    if (!state.closing || state.connections !== 0 || state.closeScheduled) {
+      return;
+    }
+    state.closeScheduled = true;
+    setCallbackImmediate(() => {
+      if (!state.closing || state.connections !== 0) {
+        state.closeScheduled = false;
+        return;
+      }
+      state.closing = false;
+      state.closeScheduled = false;
+      server.emit('close');
+    });
+  };
+
+  const Server = function (options, connectionListener) {
+    if (!(this instanceof Server))
+      return new Server(options, connectionListener);
+    if (typeof options === 'function') {
+      connectionListener = options;
+      options = {};
+    }
+    const normalizedOptions = options ?? {};
+    EventEmitter.call(this);
+    Object.defineProperty(this, tcpServerState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        nativeStarted: false,
+        listening: false,
+        closing: false,
+        closeScheduled: false,
+        address: null,
+        connections: 0,
+        sockets: new Set(),
+        options: null,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.allowHalfOpen = normalizedOptions.allowHalfOpen === true;
+    this.pauseOnConnect = normalizedOptions.pauseOnConnect === true;
+    this.maxConnections = undefined;
+    this.dropMaxConnection = false;
+    if (connectionListener !== undefined) {
+      if (typeof connectionListener !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'TCP connection listener must be a function'
+        );
+      }
+      this.on('connection', connectionListener);
+    }
+  };
+  Server.prototype = Object.create(EventEmitter.prototype);
+  Object.defineProperty(Server.prototype, 'constructor', {
+    value: Server,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Server.prototype.listen = function (...values) {
+    const state = requireTcpServerState(this);
+    if (state.nativeStarted || state.listening || state.closing) {
+      throw createError(
+        'ERR_SERVER_ALREADY_LISTEN',
+        'Server is already active'
+      );
+    }
+    const normalized = normalizeTcpListenArguments(values);
+    if (normalized.listener) this.once('listening', normalized.listener);
+    state.options = normalized.options;
+    state.nativeStarted = true;
+    activeTcpServers.set(state.identifier, this);
+    try {
+      __muonTcpListen(
+        state.identifier,
+        normalized.options.host,
+        normalized.options.port,
+        normalized.options.backlog
+      );
+    } catch (error) {
+      state.nativeStarted = false;
+      activeTcpServers.delete(state.identifier);
+      throw error;
+    }
+    return this;
+  };
+  Server.prototype.address = function () {
+    const address = requireTcpServerState(this).address;
+    return address === null ? null : { ...address };
+  };
+  Server.prototype.close = function (callback) {
+    const state = requireTcpServerState(this);
+    if (!state.nativeStarted && !state.listening) {
+      const error = createError(
+        'ERR_SERVER_NOT_RUNNING',
+        'Server is not running'
+      );
+      if (typeof callback === 'function') {
+        setCallbackImmediate(() => callback(error));
+        return this;
+      }
+      throw error;
+    }
+    if (typeof callback === 'function') this.once('close', callback);
+    if (state.nativeStarted) __muonTcpCloseServer(state.identifier);
+    state.nativeStarted = false;
+    state.listening = false;
+    state.closing = true;
+    state.address = null;
+    activeTcpServers.delete(state.identifier);
+    finishTcpServerClose(this, state);
+    return this;
+  };
+  Server.prototype.getConnections = function (callback) {
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'getConnections callback must be a function'
+      );
+    }
+    const connections = requireTcpServerState(this).connections;
+    setCallbackImmediate(() => callback(null, connections));
+  };
+  Server.prototype.closeAllConnections = function () {
+    for (const socket of requireTcpServerState(this).sockets) socket.destroy();
+  };
+  Server.prototype.closeIdleConnections = function () {
+    this.closeAllConnections();
+  };
+  Server.prototype.ref = function () {
+    return this;
+  };
+  Server.prototype.unref = function () {
+    return this;
+  };
+  Object.defineProperties(Server.prototype, {
+    listening: {
+      get: function () {
+        return requireTcpServerState(this).listening;
+      },
+    },
+    connections: {
+      get: function () {
+        return requireTcpServerState(this).connections;
+      },
+    },
+  });
+
+  const acceptTcpServerConnection = (server, serverStateValue) => {
+    const socket = new Socket({ allowHalfOpen: server.allowHalfOpen });
+    const socketStateValue = requireTcpSocketState(socket);
+    const connection = __muonTcpAccept(
+      serverStateValue.identifier,
+      socketStateValue.identifier,
+      serverStateValue.options.noDelay
+    );
+    if (connection === null) return;
+    socketStateValue.connected = true;
+    socketStateValue.nativeStarted = true;
+    socketStateValue.noDelay = serverStateValue.options.noDelay;
+    socketStateValue.localAddress = connection.localAddress;
+    socketStateValue.localFamily = connection.localFamily;
+    socketStateValue.localPort = connection.localPort;
+    socketStateValue.remoteAddress = connection.address;
+    socketStateValue.remoteFamily = connection.family;
+    socketStateValue.remotePort = connection.port;
+    activeTcpSockets.set(socketStateValue.identifier, socket);
+    serverStateValue.connections += 1;
+    serverStateValue.sockets.add(socket);
+    socket.once('close', () => {
+      if (serverStateValue.sockets.delete(socket)) {
+        serverStateValue.connections -= 1;
+        finishTcpServerClose(server, serverStateValue);
+      }
+    });
+    if (
+      Number.isInteger(server.maxConnections) &&
+      server.maxConnections >= 0 &&
+      serverStateValue.connections > server.maxConnections
+    ) {
+      server.emit('drop', connection);
+      socket.destroy();
+      return;
+    }
+    if (serverStateValue.options.keepAlive) {
+      socket.setKeepAlive(true, serverStateValue.options.keepAliveInitialDelay);
+    }
+    if (server.pauseOnConnect) socket.pause();
+    server.emit('connection', socket);
+  };
 
   const normalizeHttpHeaderName = (name) => {
     const normalized = String(name).toLowerCase();
@@ -5059,6 +5328,41 @@
       }
       return;
     }
+    const tcpServer = activeTcpServers.get(identifier);
+    if (tcpServer) {
+      const state = requireTcpServerState(tcpServer);
+      if (type === 'listening') {
+        state.listening = true;
+        state.address = {
+          address: payload.address,
+          family: payload.family,
+          port: payload.port,
+        };
+        tcpServer.emit('listening');
+        return;
+      }
+      if (type === 'connectionAvailable') {
+        acceptTcpServerConnection(tcpServer, state);
+        return;
+      }
+      if (type === 'connectionError') {
+        tcpServer.emit(
+          'error',
+          createNetworkError(payload, state.options?.host)
+        );
+        return;
+      }
+      if (type === 'error') {
+        state.nativeStarted = false;
+        state.listening = false;
+        activeTcpServers.delete(identifier);
+        tcpServer.emit(
+          'error',
+          createNetworkError(payload, state.options?.host)
+        );
+        return;
+      }
+    }
     const httpOperation = pendingHttpOperations.get(identifier);
     if (httpOperation) {
       const request = httpOperation.request;
@@ -5171,10 +5475,14 @@
     const socket = new Socket();
     return socket.connect(...values);
   };
+  const createNetServer = (options, connectionListener) =>
+    new Server(options, connectionListener);
   const netModule = Object.freeze({
+    Server,
     Socket,
     connect: createConnection,
     createConnection,
+    createServer: createNetServer,
     isIP,
     isIPv4,
     isIPv6,

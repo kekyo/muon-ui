@@ -38,6 +38,7 @@ android {
     }
 
     buildFeatures {
+        aidl = true
         buildConfig = true
     }
 
@@ -55,6 +56,7 @@ android {
 
     sourceSets {
         getByName("main").assets.directories.add("../../dist")
+        getByName("main").assets.directories.add("../.generated/quickjs-assets")
     }
 
     testOptions {
@@ -72,13 +74,23 @@ val buildNativeDependencies by tasks.registering(Exec::class) {
     commandLine("node", "scripts/build-native-dependencies.mjs")
 }
 
+val prepareQuickJsSource by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("node", "scripts/prepare-quickjs-source.mjs")
+}
+
 val generateAndroidPluginRegistry by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir.parentFile)
     commandLine("node", "scripts/generate-android-plugin-registry.mjs")
 }
 
 tasks.named("preBuild") {
-    dependsOn(buildWebAssets, buildNativeDependencies, generateAndroidPluginRegistry)
+    dependsOn(
+        buildWebAssets,
+        buildNativeDependencies,
+        prepareQuickJsSource,
+        generateAndroidPluginRegistry,
+    )
 }
 
 dependencies {

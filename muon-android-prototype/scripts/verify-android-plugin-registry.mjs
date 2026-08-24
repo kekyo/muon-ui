@@ -23,6 +23,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
+  'libmuon_javascript_runtime.so',
 ];
 
 const execute = (command, args, options = {}) =>

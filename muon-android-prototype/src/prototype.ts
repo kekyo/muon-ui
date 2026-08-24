@@ -4,6 +4,11 @@
 // https://github.com/kekyo/muon-ui
 
 import {
+  createMuonAndroidJavaScriptRuntimeClient,
+  createMuonAndroidJavaScriptRuntimeTransport,
+  type MuonAndroidJavaScriptBridge,
+} from './android-javascript-runtime.js';
+import {
   createMuonWebViewRpcClient,
   createMuonWebViewRpcTransport,
   installMuonWebViewCapabilityBridge,
@@ -27,9 +32,13 @@ if (app === null) {
 const bridge = Reflect.get(globalThis, 'muonAndroidRpc') as
   | MuonWebViewJavaScriptBridge
   | undefined;
+const javaScriptRuntimeBridge = Reflect.get(
+  globalThis,
+  'muonAndroidJavaScriptRuntime'
+) as MuonAndroidJavaScriptBridge | undefined;
 
-if (bridge === undefined) {
-  app.textContent = 'muon Android RPC bridge is unavailable';
+if (bridge === undefined || javaScriptRuntimeBridge === undefined) {
+  app.textContent = 'muon Android native bridge is unavailable';
 } else {
   const rendererMetadata = readMuonAndroidRendererMetadata(
     Reflect.get(globalThis, '__muon_android_plugin_metadata')
@@ -39,11 +48,17 @@ if (bridge === undefined) {
     rendererMetadata
   );
   const uninstallCapabilityBridge = installMuonWebViewCapabilityBridge(client);
-  const androidApi = createMuonAndroidSimpleApi(client, {
-    'muon.browser': 'browser-capability',
-    'muon.environments': 'environment-capability',
-    'muon.fs': 'fs-capability',
-  });
+  const javaScriptRuntimeClient = createMuonAndroidJavaScriptRuntimeClient(
+    createMuonAndroidJavaScriptRuntimeTransport(javaScriptRuntimeBridge)
+  );
+  const androidApi = {
+    ...createMuonAndroidSimpleApi(client, {
+      'muon.browser': 'browser-capability',
+      'muon.environments': 'environment-capability',
+      'muon.fs': 'fs-capability',
+    }),
+    node: javaScriptRuntimeClient,
+  };
   const uninstallNativePluginApi = installMuonAndroidNativePluginApi(
     client,
     rendererMetadata,
@@ -94,6 +109,7 @@ if (bridge === undefined) {
       Reflect.deleteProperty(globalThis, '__muon_android_prototype');
       uninstallNativePluginApi();
       uninstallCapabilityBridge();
+      javaScriptRuntimeClient.dispose();
       client.dispose();
     },
     { once: true }

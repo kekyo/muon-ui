@@ -35,6 +35,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
+  'libmuon_javascript_runtime.so',
 ];
 const forbiddenDependencies = ['libcef', 'libgtk', 'libgio', 'muon-executor'];
 const allowedDependencies = new Set([
@@ -115,6 +116,11 @@ const inspectElf = (readelf, filePath, entry, soname, plugin) => {
       needed.includes('libcardio.so') && needed.includes('libc++_shared.so'),
       `${filePath}: muon runtime DT_NEEDED mismatch`
     );
+  } else if (soname === 'libmuon_javascript_runtime.so') {
+    expectCondition(
+      needed.includes('libc++_shared.so') && needed.includes('liblog.so'),
+      `${filePath}: JavaScript runtime DT_NEEDED mismatch`
+    );
   }
 
   if (plugin) {
@@ -166,6 +172,12 @@ try {
     execute(zipalign, ['-c', '-P', '16', '4', apkPath]);
     entriesByApk.set(apkPath, execute('unzip', ['-Z1', apkPath]).split('\n'));
   }
+  expectCondition(
+    [...entriesByApk.values()].some((entries) =>
+      entries.includes('assets/third-party/quickjs-LICENSE')
+    ),
+    `${archivePath}: QuickJS license asset is missing`
+  );
 
   const masterVariantSuffixes = apkPaths
     .map((apkPath) => /^base-master(_\d+)?\.apk$/.exec(basename(apkPath)))

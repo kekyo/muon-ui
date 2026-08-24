@@ -226,6 +226,7 @@ const verifyApk = (apkPath, readelf, zipalign, temporaryRoot) => {
     const libraryEntries = {
       cardio: `lib/${entry.abi}/libcardio.so`,
       cpp: `lib/${entry.abi}/libc++_shared.so`,
+      javascript: `lib/${entry.abi}/libmuon_javascript_runtime.so`,
       runtime: `lib/${entry.abi}/libmuon_android_rpc.so`,
     };
     for (const libraryEntry of Object.values(libraryEntries)) {
@@ -255,12 +256,23 @@ const verifyApk = (apkPath, readelf, zipalign, temporaryRoot) => {
     verifyElf(readelf, extracted.cpp, entry, [], forbidden);
     verifyElf(
       readelf,
+      extracted.javascript,
+      entry,
+      ['libc++_shared.so', 'liblog.so'],
+      forbidden
+    );
+    verifyElf(
+      readelf,
       extracted.runtime,
       entry,
       ['libcardio.so', 'libc++_shared.so'],
       forbidden
     );
   }
+  expectCondition(
+    entries.includes('assets/third-party/quickjs-LICENSE'),
+    `${apkPath}: missing the QuickJS license asset`
+  );
 };
 
 const verifySubmodulesAreClean = () => {

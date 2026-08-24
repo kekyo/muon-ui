@@ -36,6 +36,8 @@ public final class MuonActivity extends Activity {
     static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
     private static final String APP_URL = TRUSTED_ORIGIN + "/index.html";
     private static final String RPC_OBJECT_NAME = "muonAndroidRpc";
+    private static final String JAVASCRIPT_RUNTIME_OBJECT_NAME =
+            "muonAndroidJavaScriptRuntime";
     private static final String TEST_OBJECT_NAME = "muonAndroidTest";
     private static final String LOG_TAG = "MuonActivity";
 
@@ -48,6 +50,7 @@ public final class MuonActivity extends Activity {
             new LinkedBlockingQueue<>();
     private WebView webView;
     private MuonRpcBridge rpcBridge;
+    private MuonJavaScriptRuntimeBridge javaScriptRuntimeBridge;
     private ScriptHandler pluginMetadataScriptHandler;
     private MuonAssetRequestHandler assetRequestHandler;
     private boolean testBridgeInstalled;
@@ -103,6 +106,7 @@ public final class MuonActivity extends Activity {
 
         try {
             rpcBridge = new MuonRpcBridge(this, webView);
+            javaScriptRuntimeBridge = new MuonJavaScriptRuntimeBridge(this);
         } catch (RuntimeException error) {
             showStartupFailure(error.getMessage() == null
                     ? error.getClass().getSimpleName()
@@ -138,6 +142,11 @@ public final class MuonActivity extends Activity {
                 RPC_OBJECT_NAME,
                 Collections.singleton(TRUSTED_ORIGIN),
                 rpcBridge);
+        WebViewCompat.addWebMessageListener(
+                webView,
+                JAVASCRIPT_RUNTIME_OBJECT_NAME,
+                Collections.singleton(TRUSTED_ORIGIN),
+                javaScriptRuntimeBridge);
         pluginMetadataScriptHandler = WebViewCompat.addDocumentStartJavaScript(
                 webView,
                 rpcBridge.getDocumentStartScript(),
@@ -312,6 +321,9 @@ public final class MuonActivity extends Activity {
         }
         if (webView != null) {
             WebViewCompat.removeWebMessageListener(webView, RPC_OBJECT_NAME);
+            WebViewCompat.removeWebMessageListener(
+                    webView,
+                    JAVASCRIPT_RUNTIME_OBJECT_NAME);
             if (testBridgeInstalled) {
                 WebViewCompat.removeWebMessageListener(webView, TEST_OBJECT_NAME);
                 testBridgeInstalled = false;
@@ -320,6 +332,10 @@ public final class MuonActivity extends Activity {
         if (rpcBridge != null) {
             rpcBridge.close(isChangingConfigurations());
             rpcBridge = null;
+        }
+        if (javaScriptRuntimeBridge != null) {
+            javaScriptRuntimeBridge.close();
+            javaScriptRuntimeBridge = null;
         }
         if (assetRequestHandler != null) {
             assetRequestHandler.close();

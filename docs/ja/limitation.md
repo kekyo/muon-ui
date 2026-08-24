@@ -27,7 +27,7 @@ MuonプラグインRPCは、構成されたHTTPSアセットoriginのメイン�
 
 既定のアセットURLは`https://main.asset.muon.invalid/`で、正式な構成モデルでは`https://{asset_name}.asset.muon.invalid/`を既定templateとします。構成済みのアセットhostはMuonがローカルで完結させ、存在しないアセットも外部ネットワークへfallbackさせません。ただし、誤ったhost設定、アセット専用ではない実在hostの使用、またはプラットフォーム上の想定外の処理がある場合は外部アクセスの可能性があります。templateを変更する場合は、アプリ開発者が所有する専用hostを使用し、`browser.startPage`、CEF版の`network.allow`、`plugin.pages`、originを参照するその他の設定、CSP、ソースコード、テストも整合させてください。関連する全項目は[ネットワークフィルタ検証記録](../../filter-limitation.md)に記載しています。
 
-現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は後続作業です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecar、runtime外部plugin loadも現在は公開しません。Node.js sidecarはnodejs-mobileを用いる別の実装として検討します。利用可能な関数の正確な一覧は[Android API対応方針](../../android-api-compatibility.md)を参照してください。
+現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は後続作業です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecar、runtime外部plugin loadも現在は公開しません。Android試作hostの`muon.node.createNode()`は代わりに別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の正確な一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../muon-android-prototype/README.md)を参照してください。
 
 ## LinuxにおけるCEF sandboxの有効化制限
 

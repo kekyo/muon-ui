@@ -64,11 +64,52 @@ try {
 }
 ```
 
-`createNode()`というAPI名は既存コードの生成形を維持するためのもので、runtime自体はNode.jsではありません。Node.js packageや標準library全体との互換性はありません。現在は同梱application moduleの`.`と、`node:fs/promises`、`node:fs`、`node:path`、`node:timers/promises`の限定実装をimportできます。`fs`、`path`、`timers/promises`という接頭辞なしのspecifierも利用できます。
+`createNode()`というAPI名は既存コードの生成形を維持するためのもので、runtime自体はNode.jsではありません。Node.js package、npm、CommonJS、Node.js標準library全体との互換性はありません。同梱applicationのES moduleと、次の組み込みmoduleの限定実装を利用できます。
+
+| module                                | 主な対応範囲                                                             |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| `node:fs/promises`, `node:fs`         | application private storage内のfile、directory、metadata、rename、remove |
+| `node:path`                           | POSIX path操作                                                           |
+| `node:events`                         | `EventEmitter`と`once`                                                   |
+| `node:buffer`                         | `Buffer`の生成、変換、比較、検索                                         |
+| `node:timers`, `node:timers/promises` | timeout、interval、immediate、AbortSignal                                |
+| `node:stream`, `node:stream/promises` | readable、writable、duplex、transform、pipeline                          |
+| `node:url`                            | `URL`、`URLSearchParams`、file URL変換                                   |
+| `node:dns`, `node:dns/promises`       | `lookup`とresult order                                                   |
+| `node:net`                            | TCP clientとloopback限定TCP server                                       |
+| `node:http`                           | HTTP clientとloopback限定HTTP/1.0、HTTP/1.1 server                       |
+| `node:https`                          | certificate検証を必須とするHTTPS client                                  |
+
+各moduleは`node:`なしのspecifierでも同じinstanceをimportできます。globalには`Buffer`、timer、`Event`、`EventTarget`、`DOMException`、`AbortController`、`AbortSignal`、`URL`、`URLSearchParams`、`Headers`、`Request`、`Response`、`fetch`があります。API名と基本的なevent順序はNode.jsまたはWeb APIへ寄せていますが、実装していないoptionやexportは互換性のためのno-opにせず、明示的なerrorまたはmodule-not-foundとして扱います。
 
 primitive、有限number、64 bit範囲の`bigint`、`ArrayBuffer`/typed array、JSON value、renderer callbackをbridgeで転送します。filesystemはapplication privateな`files/javascript-runtime`配下へ閉じ込められ、複数runtimeで共有します。
 
-各`createNode()`は非公開の`:muon_javascript` Service process内に独立したQuickJS runtimeを作ります。prototypeでは同時runtime数を16、各runtimeのheapを64 MiB、stackを1 MiB、連続したJavaScript実行を2秒に制限します。`release()`はmodule handleとruntimeを回収します。未完了処理はActivity破棄、Service切断、またはruntime終了時にrejectされます。
+各`createNode()`は非公開の`:muon_javascript` Service process内に独立したQuickJS runtimeを作ります。`release()`はmodule handle、timer、DNS要求、socket、listener、HTTP要求とruntimeを回収します。未完了処理はActivity破棄、Service切断、またはruntime終了時にrejectされます。
+
+### ネットワーク境界
+
+prototypeはネットワークAPIを常に組み込むため、main Manifestに`INTERNET`と`ACCESS_LOCAL_NETWORK`を宣言します。Android 17、target SDK 37以降の`ACCESS_LOCAL_NETWORK`はdangerousな実行時権限であり、Manifest宣言だけではLANへ接続できません。Muonのprivate Serviceはpermission UIを表示しないため、LAN機能を使うアプリはActivity側で用途を説明し、通信開始前に権限を要求してください。拒否または後から取り消された場合は、通常のDNS、TCP、HTTP errorとして呼び出し側で処理します。詳細は[Android local network permission](https://developer.android.com/privacy-and-security/local-network-permission)を参照してください。
+
+releaseのNetwork Security Configはcleartextを既定拒否し、`localhost`だけをHTTP試験とloopback server接続の例外にします。外部HTTPやLAN上のHTTPは許可せず、HTTPSではAndroid system CA storeを使います。`node:https`の`ca`で要求単位の追加trust storeを指定できますが、`rejectUnauthorized: false`による検証無効化はできません。Network Security Configは`fetch`、`node:http`、`node:https`が使うAndroid HTTP clientに適用されますが、`node:net`のraw TCPを暗号化するものではありません。詳細は[Android Network Security Configuration](https://developer.android.com/privacy-and-security/security-config)を参照してください。
+
+CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`はQuickJS要求へ適用しません。組み込みapplication codeはアプリ自体と同じ権限を持ち、宛先allowlistもorigin単位の権限分離もありません。配布物へ含めるJavaScriptと接続先はアプリ開発者が管理してください。一方、受信serverは別端末から到達できないIPv4またはIPv6 loopback addressに限定します。
+
+### 実行時上限
+
+| 対象                                                   |                                           上限 |
+| ------------------------------------------------------ | ---------------------------------------------: |
+| 同時QuickJS runtime                                    |                                 16 process全体 |
+| heap / native stack / 連続JS実行                       |              runtimeごとに64 MiB / 1 MiB / 2秒 |
+| 未完了DNS `lookup`                                     |                                runtimeごとに64 |
+| TCP socket                                             | runtimeごとに64。clientとaccepted socketの合計 |
+| TCP listener                                           |                   runtimeごとに8。loopback限定 |
+| 未完了HTTP/HTTPS client要求                            |                                runtimeごとに16 |
+| Android HTTP worker / 待機queue                        |                    Service process全体で4 / 64 |
+| loopback HTTP serverのrequest header                   |                                         16 KiB |
+| HTTP client request body、server request/response body |                                         16 MiB |
+| TCP listener backlog                                   |                                       4096以下 |
+
+上限到達時は`ERR_MUON_DNS_OPERATION_LIMIT`、`ERR_MUON_TCP_SOCKET_LIMIT`、`ERR_MUON_TCP_SERVER_LIMIT`、`ERR_HTTP_OPERATION_LIMIT`を返します。上限はruntime終了時にも回収され、他runtimeの操作は維持されます。
 
 ## Buildとpackage
 

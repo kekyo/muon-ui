@@ -150,6 +150,7 @@ const readelf = join(
   'llvm-readelf'
 );
 const zipalign = join(androidSdk, 'build-tools', buildToolsVersion, 'zipalign');
+const aapt2 = join(androidSdk, 'build-tools', buildToolsVersion, 'aapt2');
 
 const temporaryRoot = mkdtempSync(join(tmpdir(), 'muon-release-apks-'));
 try {
@@ -189,6 +190,64 @@ try {
       new Set(masterVariantSuffixes).size === masterVariantSuffixes.length,
     `${archivePath}: base master variants are missing or duplicated`
   );
+
+  const masterApks = apkPaths.filter((apkPath) =>
+    /^base-master(_\d+)?\.apk$/.test(basename(apkPath))
+  );
+  for (const masterApk of masterApks) {
+    const manifest = execute(aapt2, [
+      'dump',
+      'xmltree',
+      masterApk,
+      '--file',
+      'AndroidManifest.xml',
+    ]);
+    expectCondition(
+      manifest.includes('"android.permission.INTERNET"'),
+      `${masterApk}: INTERNET permission is missing`
+    );
+    expectCondition(
+      manifest.includes('"android.permission.ACCESS_LOCAL_NETWORK"'),
+      `${masterApk}: ACCESS_LOCAL_NETWORK permission is missing`
+    );
+    expectCondition(
+      manifest.includes('android:usesCleartextTraffic(0x010104ec)=false'),
+      `${masterApk}: release cleartext traffic must be disabled`
+    );
+    expectCondition(
+      manifest.includes('android:networkSecurityConfig(0x01010527)='),
+      `${masterApk}: network security config is missing`
+    );
+
+    const resources = execute(aapt2, ['dump', 'resources', masterApk]);
+    const securityConfigPath =
+      /resource 0x[0-9a-f]+ xml\/network_security_config\n\s+\(\) \(file\) ([^ ]+) type=XML/.exec(
+        resources
+      )?.[1];
+    expectCondition(
+      securityConfigPath !== undefined,
+      `${masterApk}: network security config resource is missing`
+    );
+    const securityConfig = execute(aapt2, [
+      'dump',
+      'xmltree',
+      masterApk,
+      '--file',
+      securityConfigPath,
+    ]);
+    expectCondition(
+      /E: base-config[^]*A: cleartextTrafficPermitted=false/.test(
+        securityConfig
+      ),
+      `${masterApk}: base cleartext traffic must be disabled`
+    );
+    expectCondition(
+      /E: domain-config[^]*A: cleartextTrafficPermitted=true[^]*T: 'localhost'/.test(
+        securityConfig
+      ),
+      `${masterApk}: localhost cleartext exception is missing`
+    );
+  }
 
   for (const entry of abis) {
     const nativePrefix = `lib/${entry.abi}/`;

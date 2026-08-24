@@ -7,8 +7,8 @@
   "scripts": {
     "build": "vite build",
     "test": "vitest run && vite build && node scripts/build-native-dependencies.mjs && node scripts/prepare-quickjs-source.mjs && node scripts/generate-android-plugin-registry.mjs && cd android && ./gradlew assembleDebug assembleRelease assembleDebugAndroidTest buildReleaseApks && cd .. && node scripts/verify-quickjs-source.mjs && node scripts/verify-native-dependencies.mjs && node scripts/verify-android-plugin-registry.mjs && node scripts/verify-android-release-apks.mjs",
-    "test:android": "vite build && cd android && ./gradlew connectedDebugAndroidTest buildReleaseApks && cd .. && MUON_ANDROID_TEST_PROFILE=vm-x86_64-16k node scripts/test-android-release-packages.mjs",
-    "test:android:pixel6": "vite build && cd android && ./gradlew connectedDebugAndroidTest buildReleaseApks && cd .. && MUON_ANDROID_TEST_PROFILE=pixel6-arm64-4k node scripts/test-android-release-packages.mjs"
+    "test:android": "vite build && cd android && ./gradlew connectedDebugAndroidTest buildReleaseApks && cd .. && node scripts/verify-android-release-apks.mjs && MUON_ANDROID_TEST_PROFILE=vm-x86_64-16k node scripts/test-android-release-packages.mjs",
+    "test:android:pixel6": "vite build && cd android && ./gradlew connectedDebugAndroidTest buildReleaseApks && cd .. && node scripts/verify-android-release-apks.mjs && MUON_ANDROID_TEST_PROFILE=pixel6-arm64-4k node scripts/test-android-release-packages.mjs"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

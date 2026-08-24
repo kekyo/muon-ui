@@ -534,7 +534,10 @@
         );
       }
       const available = Math.min(value.length, result.length - offset);
-      if (available <= 0) break;
+      if (available <= 0) {
+        if (offset >= result.length) break;
+        continue;
+      }
       Uint8Array.prototype.set.call(
         result,
         value.subarray(0, available),
@@ -3442,6 +3445,7 @@
   const tcpServerState = Symbol('muon.net.serverState');
   const httpRequestState = Symbol('muon.http.requestState');
   const httpResponseState = Symbol('muon.http.responseState');
+  const httpServerResponseState = Symbol('muon.http.serverResponseState');
   const headersState = Symbol('muon.fetch.headersState');
   const requestState = Symbol('muon.fetch.requestState');
   const responseState = Symbol('muon.fetch.responseState');
@@ -4651,6 +4655,7 @@
     this.connection = null;
     Object.defineProperty(this, httpResponseState, {
       value: {
+        kind: 'client',
         identifier: requireHttpRequestState(request).identifier,
         request,
       },
@@ -4668,20 +4673,684 @@
   });
   IncomingMessage.prototype._read = function () {
     const state = this[httpResponseState];
-    if (!this.complete) __muonHttpResume(state.identifier);
+    if (this.complete) return;
+    if (state.kind === 'client') __muonHttpResume(state.identifier);
+    else {
+      state.socket.resume();
+      state.resume();
+    }
   };
   IncomingMessage.prototype._destroy = function (error, callback) {
     const state = this[httpResponseState];
-    if (!this.complete) {
+    if (!this.complete && state.kind === 'client') {
       this.aborted = true;
       pendingHttpOperations.delete(state.identifier);
       __muonHttpCancel(state.identifier);
+    } else if (!this.complete && !state.socket.destroyed) {
+      this.aborted = true;
+      state.socket.destroy(error);
     }
     callback(error);
   };
   IncomingMessage.prototype.setTimeout = function (timeout, callback) {
     const state = this[httpResponseState];
-    state.request.setTimeout(timeout, callback);
+    if (state.kind === 'client') state.request.setTimeout(timeout, callback);
+    else state.socket.setTimeout(timeout, callback);
+    return this;
+  };
+
+  const indexOfHttpBytes = (buffer, pattern, start = 0) => {
+    const last = buffer.byteLength - pattern.byteLength;
+    for (let index = start; index <= last; index += 1) {
+      let matches = true;
+      for (let offset = 0; offset < pattern.byteLength; offset += 1) {
+        if (buffer[index + offset] !== pattern[offset]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return index;
+    }
+    return -1;
+  };
+
+  const createHttpParserError = (code, message) => createError(code, message);
+
+  const parseHttpRequestHead = (head) => {
+    const lines = head.split('\r\n');
+    const requestLine = lines.shift() ?? '';
+    const match = /^([^ ]+) ([^ ]+) HTTP\/(\d+)\.(\d+)$/.exec(requestLine);
+    if (!match) {
+      throw createHttpParserError(
+        'HPE_INVALID_CONSTANT',
+        'Invalid HTTP request line'
+      );
+    }
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(match[1])) {
+      throw createHttpParserError('HPE_INVALID_METHOD', 'Invalid HTTP method');
+    }
+    const major = Number(match[3]);
+    const minor = Number(match[4]);
+    if (major !== 1 || (minor !== 0 && minor !== 1)) {
+      throw createHttpParserError(
+        'HPE_INVALID_VERSION',
+        'Only HTTP/1.0 and HTTP/1.1 requests are supported'
+      );
+    }
+    const headers = [];
+    for (const line of lines) {
+      if (line.startsWith(' ') || line.startsWith('\t')) {
+        throw createHttpParserError(
+          'HPE_INVALID_HEADER_TOKEN',
+          'Folded HTTP request headers are not supported'
+        );
+      }
+      const separator = line.indexOf(':');
+      if (separator <= 0) {
+        throw createHttpParserError(
+          'HPE_INVALID_HEADER_TOKEN',
+          'Invalid HTTP request header'
+        );
+      }
+      const name = line.slice(0, separator);
+      const value = line.slice(separator + 1).trim();
+      normalizeHttpHeaderName(name);
+      normalizeHttpHeaderValue(name, value);
+      headers.push([name, value]);
+    }
+    const contentLengths = headers
+      .filter(([name]) => name.toLowerCase() === 'content-length')
+      .map(([, value]) => value);
+    const transferEncodings = headers
+      .filter(([name]) => name.toLowerCase() === 'transfer-encoding')
+      .map(([, value]) => value.toLowerCase());
+    if (contentLengths.length > 0 && transferEncodings.length > 0) {
+      throw createHttpParserError(
+        'HPE_UNEXPECTED_CONTENT_LENGTH',
+        'HTTP request contains both Content-Length and Transfer-Encoding'
+      );
+    }
+    if (contentLengths.length > 1) {
+      throw createHttpParserError(
+        'HPE_UNEXPECTED_CONTENT_LENGTH',
+        'Duplicate HTTP Content-Length headers are not supported'
+      );
+    }
+    let contentLength = 0;
+    if (contentLengths.length === 1) {
+      if (!/^(0|[1-9][0-9]*)$/.test(contentLengths[0])) {
+        throw createHttpParserError(
+          'HPE_INVALID_CONTENT_LENGTH',
+          'Invalid HTTP Content-Length header'
+        );
+      }
+      contentLength = Number(contentLengths[0]);
+      if (
+        !Number.isSafeInteger(contentLength) ||
+        contentLength > 16 * 1024 * 1024
+      ) {
+        throw createHttpParserError(
+          'HPE_INVALID_CONTENT_LENGTH',
+          'HTTP request body exceeds the 16 MiB limit'
+        );
+      }
+    }
+    let chunked = false;
+    if (transferEncodings.length > 0) {
+      if (
+        transferEncodings.length !== 1 ||
+        transferEncodings[0] !== 'chunked'
+      ) {
+        throw createHttpParserError(
+          'HPE_INVALID_TRANSFER_ENCODING',
+          'Only chunked HTTP transfer encoding is supported'
+        );
+      }
+      chunked = true;
+    }
+    return {
+      method: match[1],
+      url: match[2],
+      httpVersion: `${major}.${minor}`,
+      httpVersionMajor: major,
+      httpVersionMinor: minor,
+      headers,
+      contentLength,
+      chunked,
+    };
+  };
+
+  const createServerIncomingMessage = (socket, parsed, resume) => {
+    const message = Object.create(IncomingMessage.prototype);
+    Readable.call(message);
+    const headers = {};
+    const rawHeaders = [];
+    for (const pair of parsed.headers) {
+      const name = String(pair[0]);
+      const value = String(pair[1]);
+      const normalizedName = name.toLowerCase();
+      rawHeaders.push(name, value);
+      if (normalizedName === 'set-cookie') {
+        if (!Array.isArray(headers[normalizedName])) {
+          headers[normalizedName] = [];
+        }
+        headers[normalizedName].push(value);
+      } else if (headers[normalizedName] === undefined) {
+        headers[normalizedName] = value;
+      } else {
+        const separator = normalizedName === 'cookie' ? '; ' : ', ';
+        headers[normalizedName] += `${separator}${value}`;
+      }
+    }
+    message.statusCode = null;
+    message.statusMessage = null;
+    message.httpVersion = parsed.httpVersion;
+    message.httpVersionMajor = parsed.httpVersionMajor;
+    message.httpVersionMinor = parsed.httpVersionMinor;
+    message.headers = headers;
+    message.headersDistinct = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        Array.isArray(value) ? [...value] : [value],
+      ])
+    );
+    message.rawHeaders = rawHeaders;
+    message.trailers = {};
+    message.trailersDistinct = {};
+    message.rawTrailers = [];
+    message.complete = false;
+    message.aborted = false;
+    message.method = parsed.method;
+    message.url = parsed.url;
+    message.socket = socket;
+    message.connection = socket;
+    Object.defineProperty(message, httpResponseState, {
+      value: { kind: 'server', socket, resume },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    return message;
+  };
+
+  const requireHttpServerResponseState = (response) => {
+    const state = response?.[httpServerResponseState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'ServerResponse method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const ServerResponse = function (request) {
+    if (!(this instanceof ServerResponse)) return new ServerResponse(request);
+    if (!(request instanceof IncomingMessage) || request.socket === null) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'ServerResponse requires a server IncomingMessage'
+      );
+    }
+    Writable.call(this);
+    Object.defineProperty(this, httpServerResponseState, {
+      value: {
+        request,
+        socket: request.socket,
+        headers: new Headers(),
+        chunks: [],
+        bodyLength: 0,
+        headersSent: false,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.req = request;
+    this.socket = request.socket;
+    this.connection = request.socket;
+    this.statusCode = 200;
+    this.statusMessage = undefined;
+    this.sendDate = false;
+  };
+  ServerResponse.prototype = Object.create(Writable.prototype);
+  Object.defineProperty(ServerResponse.prototype, 'constructor', {
+    value: ServerResponse,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  ServerResponse.prototype._write = function (chunk, encoding, callback) {
+    void encoding;
+    const state = requireHttpServerResponseState(this);
+    const copy = Buffer.from(chunk);
+    if (state.bodyLength + copy.byteLength > 16 * 1024 * 1024) {
+      callback(
+        createError(
+          'ERR_HTTP_BODY_LIMIT',
+          'HTTP response body exceeds the 16 MiB limit'
+        )
+      );
+      return;
+    }
+    state.chunks.push(copy);
+    state.bodyLength += copy.byteLength;
+    callback();
+  };
+  ServerResponse.prototype._final = function (callback) {
+    const state = requireHttpServerResponseState(this);
+    const statusCode = Number(this.statusCode);
+    if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 999) {
+      callback(
+        createError('ERR_HTTP_INVALID_STATUS_CODE', 'Invalid HTTP status code')
+      );
+      return;
+    }
+    const suppressBody =
+      state.request.method === 'HEAD' ||
+      statusCode === 204 ||
+      statusCode === 304 ||
+      (statusCode >= 100 && statusCode < 200);
+    const body = suppressBody
+      ? Buffer.alloc(0)
+      : Buffer.concat(state.chunks, state.bodyLength);
+    const transferEncoding = state.headers.get('transfer-encoding');
+    let wireBody = body;
+    if (transferEncoding !== null) {
+      if (transferEncoding.toLowerCase() !== 'chunked') {
+        callback(
+          createError(
+            'ERR_HTTP_INVALID_TRANSFER_ENCODING',
+            'Only chunked HTTP response encoding is supported'
+          )
+        );
+        return;
+      }
+      state.headers.delete('content-length');
+      wireBody = Buffer.concat([
+        Buffer.from(`${body.byteLength.toString(16)}\r\n`, 'latin1'),
+        body,
+        Buffer.from('\r\n0\r\n\r\n', 'latin1'),
+      ]);
+    } else if (!state.headers.has('content-length')) {
+      state.headers.set('Content-Length', body.byteLength);
+    }
+    state.headers.set('Connection', 'close');
+    const statusMessage = String(
+      this.statusMessage ?? STATUS_CODES[statusCode] ?? ''
+    );
+    if (/\r|\n/.test(statusMessage)) {
+      callback(createError('ERR_INVALID_CHAR', 'Invalid HTTP status message'));
+      return;
+    }
+    const headerLines = headerPairs(state.headers)
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join('');
+    const head = Buffer.from(
+      `HTTP/1.1 ${statusCode} ${statusMessage}\r\n${headerLines}\r\n`,
+      'latin1'
+    );
+    state.headersSent = true;
+    state.chunks = [];
+    state.socket.end(Buffer.concat([head, wireBody]), callback);
+  };
+  ServerResponse.prototype._destroy = function (error, callback) {
+    const state = requireHttpServerResponseState(this);
+    if (error && !state.socket.destroyed) state.socket.destroy(error);
+    callback(error);
+  };
+  ServerResponse.prototype.setHeader = function (name, value) {
+    const state = requireHttpServerResponseState(this);
+    if (state.headersSent) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+    if (Array.isArray(value)) {
+      for (const item of value) state.headers.append(name, item);
+    } else {
+      state.headers.set(name, value);
+    }
+    return this;
+  };
+  ServerResponse.prototype.getHeader = function (name) {
+    const state = requireHttpServerResponseState(this);
+    const normalizedName = normalizeHttpHeaderName(name);
+    const entry = state.headers[headersState].get(normalizedName);
+    if (!entry) return undefined;
+    return entry.values.length === 1 ? entry.values[0] : [...entry.values];
+  };
+  ServerResponse.prototype.getHeaderNames = function () {
+    return [
+      ...requireHttpServerResponseState(this).headers[headersState].keys(),
+    ];
+  };
+  ServerResponse.prototype.getHeaders = function () {
+    const result = Object.create(null);
+    for (const name of this.getHeaderNames())
+      result[name] = this.getHeader(name);
+    return result;
+  };
+  ServerResponse.prototype.hasHeader = function (name) {
+    return requireHttpServerResponseState(this).headers.has(name);
+  };
+  ServerResponse.prototype.removeHeader = function (name) {
+    const state = requireHttpServerResponseState(this);
+    if (state.headersSent) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+  };
+  ServerResponse.prototype.writeHead = function (
+    statusCode,
+    statusMessage,
+    headers
+  ) {
+    const state = requireHttpServerResponseState(this);
+    if (state.headersSent) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    if (typeof statusMessage !== 'string') {
+      headers = statusMessage;
+      statusMessage = undefined;
+    }
+    this.statusCode = Number(statusCode);
+    if (statusMessage !== undefined) this.statusMessage = statusMessage;
+    if (headers !== undefined) {
+      let entries = headers;
+      if (
+        Array.isArray(headers) &&
+        headers.length > 0 &&
+        !Array.isArray(headers[0])
+      ) {
+        if (headers.length % 2 !== 0) {
+          throw createError(
+            'ERR_INVALID_ARG_VALUE',
+            'Raw HTTP response headers must contain name/value pairs'
+          );
+        }
+        entries = [];
+        for (let index = 0; index < headers.length; index += 2) {
+          entries.push([headers[index], headers[index + 1]]);
+        }
+      }
+      const normalized = new Headers(entries);
+      for (const [name, value] of headerPairs(normalized)) {
+        state.headers.append(name, value);
+      }
+    }
+    state.headersSent = true;
+    return this;
+  };
+  ServerResponse.prototype.flushHeaders = function () {
+    requireHttpServerResponseState(this).headersSent = true;
+  };
+  ServerResponse.prototype.addTrailers = function () {};
+  ServerResponse.prototype.setTimeout = function (timeout, callback) {
+    requireHttpServerResponseState(this).socket.setTimeout(timeout, callback);
+    return this;
+  };
+  Object.defineProperties(ServerResponse.prototype, {
+    headersSent: {
+      get: function () {
+        return requireHttpServerResponseState(this).headersSent;
+      },
+    },
+    finished: {
+      get: function () {
+        return this.writableEnded;
+      },
+    },
+  });
+
+  const attachHttpServerConnection = (server, socket) => {
+    const headerTerminator = Buffer.from('\r\n\r\n', 'latin1');
+    const lineTerminator = Buffer.from('\r\n', 'latin1');
+    const parser = {
+      buffer: Buffer.alloc(0),
+      mode: 'head',
+      request: null,
+      remaining: 0,
+      chunkLength: 0,
+      bodyLength: 0,
+      processing: false,
+      failed: false,
+    };
+    const consume = (length) => {
+      parser.buffer = Buffer.from(parser.buffer.subarray(length));
+    };
+    const fail = (error) => {
+      if (parser.failed) return;
+      parser.failed = true;
+      if (parser.request && !parser.request.complete) {
+        parser.request.aborted = true;
+      }
+      const handled = server.emit('clientError', error, socket);
+      if (!handled && !socket.destroyed) {
+        socket.end(
+          'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+        );
+      }
+    };
+    const completeRequest = () => {
+      parser.request.complete = true;
+      parser.request.push(null);
+      parser.mode = 'complete';
+      if (parser.buffer.byteLength > 0) {
+        throw createHttpParserError(
+          'HPE_UNEXPECTED_CONTENT',
+          'HTTP pipelining is not supported by Android QuickJS'
+        );
+      }
+    };
+    const pushRequestBody = (chunk) => {
+      if (chunk.byteLength === 0) return true;
+      parser.bodyLength += chunk.byteLength;
+      if (parser.bodyLength > 16 * 1024 * 1024) {
+        throw createHttpParserError(
+          'HPE_INVALID_CONTENT_LENGTH',
+          'HTTP request body exceeds the 16 MiB limit'
+        );
+      }
+      const accepted = parser.request.push(Buffer.from(chunk));
+      if (!accepted) socket.pause();
+      return accepted;
+    };
+    const process = () => {
+      if (parser.processing || parser.failed) return;
+      parser.processing = true;
+      try {
+        while (!parser.failed) {
+          if (parser.mode === 'head') {
+            const end = indexOfHttpBytes(parser.buffer, headerTerminator);
+            if (end < 0) {
+              if (parser.buffer.byteLength > 16 * 1024) {
+                throw createHttpParserError(
+                  'HPE_HEADER_OVERFLOW',
+                  'HTTP request headers exceed the 16 KiB limit'
+                );
+              }
+              return;
+            }
+            const parsed = parseHttpRequestHead(
+              parser.buffer.toString('latin1', 0, end)
+            );
+            consume(end + headerTerminator.byteLength);
+            parser.request = createServerIncomingMessage(
+              socket,
+              parsed,
+              process
+            );
+            const response = new ServerResponse(parser.request);
+            server.emit('request', parser.request, response);
+            if (parsed.chunked) parser.mode = 'chunkSize';
+            else if (parsed.contentLength > 0) {
+              parser.mode = 'fixedBody';
+              parser.remaining = parsed.contentLength;
+            } else {
+              completeRequest();
+              return;
+            }
+            continue;
+          }
+          if (parser.mode === 'fixedBody') {
+            if (parser.buffer.byteLength === 0) return;
+            const length = Math.min(parser.remaining, parser.buffer.byteLength);
+            const chunk = parser.buffer.subarray(0, length);
+            consume(length);
+            parser.remaining -= length;
+            const accepted = pushRequestBody(chunk);
+            if (parser.remaining === 0) completeRequest();
+            if (!accepted || parser.mode === 'complete') return;
+            continue;
+          }
+          if (parser.mode === 'chunkSize') {
+            const end = indexOfHttpBytes(parser.buffer, lineTerminator);
+            if (end < 0) {
+              if (parser.buffer.byteLength > 1024) {
+                throw createHttpParserError(
+                  'HPE_INVALID_CHUNK_SIZE',
+                  'HTTP chunk size line is too long'
+                );
+              }
+              return;
+            }
+            const line = parser.buffer.toString('latin1', 0, end);
+            consume(end + lineTerminator.byteLength);
+            const sizeText = line.split(';', 1)[0].trim();
+            if (!/^[0-9A-Fa-f]+$/.test(sizeText)) {
+              throw createHttpParserError(
+                'HPE_INVALID_CHUNK_SIZE',
+                'Invalid HTTP chunk size'
+              );
+            }
+            parser.chunkLength = Number.parseInt(sizeText, 16);
+            if (
+              !Number.isSafeInteger(parser.chunkLength) ||
+              parser.chunkLength > 16 * 1024 * 1024
+            ) {
+              throw createHttpParserError(
+                'HPE_INVALID_CHUNK_SIZE',
+                'HTTP chunk exceeds the 16 MiB limit'
+              );
+            }
+            parser.mode = parser.chunkLength === 0 ? 'trailers' : 'chunkBody';
+            continue;
+          }
+          if (parser.mode === 'chunkBody') {
+            if (parser.buffer.byteLength < parser.chunkLength + 2) return;
+            if (
+              parser.buffer[parser.chunkLength] !== 13 ||
+              parser.buffer[parser.chunkLength + 1] !== 10
+            ) {
+              throw createHttpParserError(
+                'HPE_INVALID_CHUNK_SIZE',
+                'HTTP chunk is missing its terminator'
+              );
+            }
+            const chunk = parser.buffer.subarray(0, parser.chunkLength);
+            consume(parser.chunkLength + 2);
+            parser.mode = 'chunkSize';
+            if (!pushRequestBody(chunk)) return;
+            continue;
+          }
+          if (parser.mode === 'trailers') {
+            const end = indexOfHttpBytes(parser.buffer, lineTerminator);
+            if (end < 0) return;
+            const line = parser.buffer.toString('latin1', 0, end);
+            consume(end + lineTerminator.byteLength);
+            if (line === '') {
+              completeRequest();
+              return;
+            }
+            const separator = line.indexOf(':');
+            if (separator <= 0) {
+              throw createHttpParserError(
+                'HPE_INVALID_HEADER_TOKEN',
+                'Invalid HTTP trailer header'
+              );
+            }
+            const name = line.slice(0, separator);
+            const value = line.slice(separator + 1).trim();
+            const normalizedName = normalizeHttpHeaderName(name);
+            normalizeHttpHeaderValue(normalizedName, value);
+            parser.request.rawTrailers.push(name, value);
+            parser.request.trailers[normalizedName] = value;
+            parser.request.trailersDistinct[normalizedName] = [value];
+            continue;
+          }
+          return;
+        }
+      } catch (error) {
+        fail(error);
+      } finally {
+        parser.processing = false;
+      }
+    };
+    socket.on('data', (chunk) => {
+      parser.buffer = Buffer.concat([parser.buffer, Buffer.from(chunk)]);
+      process();
+    });
+    socket.on('end', () => {
+      if (!parser.failed && parser.mode !== 'complete') {
+        fail(
+          createHttpParserError(
+            'HPE_INVALID_EOF_STATE',
+            'HTTP request ended before its body was complete'
+          )
+        );
+      }
+    });
+    socket.on('error', (error) => {
+      if (!parser.failed) fail(error);
+    });
+  };
+
+  const HttpServer = function (options, requestListener) {
+    if (!(this instanceof HttpServer)) {
+      return new HttpServer(options, requestListener);
+    }
+    if (typeof options === 'function') {
+      requestListener = options;
+      options = {};
+    }
+    const normalizedOptions = options ?? {};
+    Server.call(this, { ...normalizedOptions, allowHalfOpen: true });
+    this.requestTimeout = Number(normalizedOptions.requestTimeout ?? 300000);
+    this.headersTimeout = Number(normalizedOptions.headersTimeout ?? 60000);
+    this.keepAliveTimeout = Number(normalizedOptions.keepAliveTimeout ?? 5000);
+    this.maxHeadersCount = null;
+    this.timeout = Number(normalizedOptions.timeout ?? 0);
+    this.on('connection', (socket) => {
+      if (this.timeout > 0) socket.setTimeout(this.timeout);
+      attachHttpServerConnection(this, socket);
+    });
+    if (requestListener !== undefined) {
+      if (typeof requestListener !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'HTTP request listener must be a function'
+        );
+      }
+      this.on('request', requestListener);
+    }
+  };
+  HttpServer.prototype = Object.create(Server.prototype);
+  Object.defineProperty(HttpServer.prototype, 'constructor', {
+    value: HttpServer,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  HttpServer.prototype.setTimeout = function (timeout, callback) {
+    const normalized = Number(timeout);
+    if (!Number.isFinite(normalized) || normalized < 0) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'HTTP server timeout must be a non-negative finite number'
+      );
+    }
+    this.timeout = Math.trunc(normalized);
+    if (typeof callback === 'function') this.on('timeout', callback);
     return this;
   };
 
@@ -4965,6 +5634,8 @@
     request.end();
     return request;
   };
+  const createHttpServer = (options, requestListener) =>
+    new HttpServer(options, requestListener);
   const STATUS_CODES = Object.freeze({
     200: 'OK',
     201: 'Created',
@@ -4995,7 +5666,10 @@
     ClientRequest,
     IncomingMessage,
     METHODS,
+    Server: HttpServer,
+    ServerResponse,
     STATUS_CODES,
+    createServer: createHttpServer,
     get: httpGet,
     globalAgent: globalHttpAgent,
     maxHeaderSize: 16384,

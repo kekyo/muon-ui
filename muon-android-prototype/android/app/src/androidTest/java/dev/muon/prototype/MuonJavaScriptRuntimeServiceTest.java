@@ -194,6 +194,8 @@ public final class MuonJavaScriptRuntimeServiceTest {
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:http\""));
         assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"http-server\""));
+        assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:https\""));
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"fetch\""));
@@ -1019,6 +1021,79 @@ public final class MuonJavaScriptRuntimeServiceTest {
         assertEquals(
                 "/node,/node-get,/fetch,/redirect,/fetch-target,/slow",
                 observedPaths.get());
+    }
+
+    @Test
+    public void supportsNodeHttpLoopbackServers() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-http-server")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "http-server",
+                    root,
+                    "exerciseHttpServer",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            assertTrue(values.getBoolean("moduleAlias"));
+            assertTrue(values.getBoolean("isServer"));
+            JSONObject address = values.getJSONObject("address");
+            assertEquals("127.0.0.1", address.getString("address"));
+            assertEquals("IPv4", address.getString("family"));
+            assertTrue(address.getInt("port") > 0);
+            assertTrue(values.isNull("addressAfterClose"));
+
+            JSONObject responseState = values.getJSONObject("responseState");
+            assertTrue(responseState.getBoolean("isServerResponse"));
+            assertTrue(responseState.getBoolean("headersSent"));
+            assertTrue(responseState.getBoolean("finished"));
+            assertEquals(201, responseState.getInt("statusCode"));
+            assertEquals("Created", responseState.getString("statusMessage"));
+            assertEquals("quickjs", responseState.getString("serverHeader"));
+            assertFalse(responseState.getBoolean("removedHeader"));
+
+            JSONObject node = values.getJSONObject("node");
+            assertTrue(node.getBoolean("isIncomingMessage"));
+            assertEquals(201, node.getInt("statusCode"));
+            assertEquals("Created", node.getString("statusMessage"));
+            assertEquals("quickjs", node.getString("serverHeader"));
+            assertTrue(node.isNull("removedHeader"));
+            assertEquals("server-response", node.getString("body"));
+            assertTrue(node.getBoolean("complete"));
+
+            JSONObject fetch = values.getJSONObject("fetch");
+            assertEquals(200, fetch.getInt("status"));
+            JSONObject fetchValue = fetch.getJSONObject("value");
+            assertEquals("POST", fetchValue.getString("method"));
+            assertEquals("fetch-body", fetchValue.getString("body"));
+            assertEquals("quickjs", fetchValue.getString("runtime"));
+
+            JSONArray requests = values.getJSONArray("observedRequests");
+            assertEquals(3, requests.length());
+            assertEquals("POST", requests.getJSONObject(0).getString("method"));
+            assertEquals("/node-server", requests.getJSONObject(0).getString("url"));
+            assertEquals("node-body", requests.getJSONObject(0).getString("body"));
+            assertTrue(requests.getJSONObject(0).getBoolean("complete"));
+            assertEquals("/fetch-server", requests.getJSONObject(1).getString("url"));
+            assertEquals("fetch-body", requests.getJSONObject(1).getString("body"));
+            assertEquals("/chunked", requests.getJSONObject(2).getString("url"));
+            assertEquals("Wikipedia", requests.getJSONObject(2).getString("body"));
+            assertEquals("yes", requests.getJSONObject(2).getString("trailer"));
+
+            String chunked = values.getString("chunkedResponse");
+            assertTrue(chunked, chunked.startsWith("HTTP/1.1 202 Accepted\r\n"));
+            assertTrue(chunked, chunked.toLowerCase(Locale.ROOT)
+                    .contains("transfer-encoding: chunked\r\n"));
+            assertTrue(chunked, chunked.contains("\r\n15\r\nchunked:Wikipedia:yes\r\n0\r\n\r\n"));
+            assertEquals("HPE_INVALID_CONSTANT", values.getString("clientErrorCode"));
+            assertTrue(values.getString("invalidResponse"),
+                    values.getString("invalidResponse")
+                            .startsWith("HTTP/1.1 400 Bad Request\r\n"));
+        }
     }
 
     @Test

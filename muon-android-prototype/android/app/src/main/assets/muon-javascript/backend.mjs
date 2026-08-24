@@ -43,7 +43,13 @@ import netAlias from 'net';
 import dns from 'node:dns';
 import dnsAlias from 'dns';
 import dnsPromises from 'node:dns/promises';
-import http, { ClientRequest, IncomingMessage } from 'node:http';
+import http, {
+  ClientRequest,
+  IncomingMessage,
+  Server as HttpServer,
+  ServerResponse,
+  createServer as createHttpServer,
+} from 'node:http';
 import httpAlias from 'http';
 import https from 'node:https';
 import httpsAlias from 'https';
@@ -683,6 +689,169 @@ export const exerciseHttpAndFetch = async (port) => {
   };
 };
 
+export const exerciseHttpServer = async () => {
+  const observedRequests = [];
+  let responseState = null;
+  let clientErrorCode = '';
+  const server = createHttpServer(
+    { headersTimeout: 5000, requestTimeout: 5000 },
+    (request, response) => {
+      request.setEncoding('utf8');
+      let body = '';
+      request.on('data', (chunk) => {
+        body += chunk;
+      });
+      request.on('end', () => {
+        observedRequests.push({
+          method: request.method,
+          url: request.url,
+          body,
+          host: request.headers.host,
+          trailer: request.trailers['x-trailer'] ?? null,
+          complete: request.complete,
+        });
+        if (request.url === '/node-server') {
+          response.setHeader('X-Remove', 'removed');
+          response.removeHeader('X-Remove');
+          response.writeHead(201, 'Created', {
+            'Content-Type': 'text/plain',
+            'X-Server': 'quickjs',
+          });
+          response.on('finish', () => {
+            responseState = {
+              isServerResponse: response instanceof ServerResponse,
+              headersSent: response.headersSent,
+              finished: response.finished,
+              statusCode: response.statusCode,
+              statusMessage: response.statusMessage,
+              serverHeader: response.getHeader('x-server'),
+              removedHeader: response.hasHeader('x-remove'),
+            };
+          });
+          response.write('server-');
+          response.end('response');
+          return;
+        }
+        if (request.url === '/fetch-server') {
+          response.setHeader('Content-Type', 'application/json');
+          response.end(
+            JSON.stringify({
+              method: request.method,
+              body,
+              runtime: 'quickjs',
+            })
+          );
+          return;
+        }
+        response.setHeader('Transfer-Encoding', 'chunked');
+        response.writeHead(202, 'Accepted');
+        response.end(`chunked:${body}:${request.trailers['x-trailer']}`);
+      });
+    }
+  );
+  server.on('clientError', (error, socket) => {
+    clientErrorCode = error.code;
+    socket.end(
+      'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+    );
+  });
+
+  const listening = onceEvent(server, 'listening');
+  server.listen(0, '127.0.0.1');
+  await listening;
+  const address = server.address();
+
+  const request = http.request({
+    hostname: 'localhost',
+    port: address.port,
+    path: '/node-server',
+    method: 'POST',
+    headers: { 'X-Client': 'node' },
+  });
+  const responseEvent = onceEvent(request, 'response');
+  request.end('node-body');
+  const [nodeResponse] = await responseEvent;
+  nodeResponse.setEncoding('utf8');
+  let nodeBody = '';
+  nodeResponse.on('data', (chunk) => {
+    nodeBody += chunk;
+  });
+  await onceEvent(nodeResponse, 'end');
+
+  const fetchResponse = await fetch(
+    `http://localhost:${address.port}/fetch-server`,
+    { method: 'POST', body: 'fetch-body' }
+  );
+  const fetchValue = await fetchResponse.json();
+
+  const chunkedSocket = createConnection({
+    host: address.address,
+    port: address.port,
+  });
+  chunkedSocket.setEncoding('latin1');
+  let chunkedResponse = '';
+  chunkedSocket.on('data', (chunk) => {
+    chunkedResponse += chunk;
+  });
+  const chunkedConnected = onceEvent(chunkedSocket, 'connect');
+  const chunkedEnded = onceEvent(chunkedSocket, 'end');
+  const chunkedClosed = onceEvent(chunkedSocket, 'close');
+  await chunkedConnected;
+  chunkedSocket.end(
+    `POST /chunked HTTP/1.1\r\nHost: ${address.address}:${address.port}\r\n` +
+      'Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n' +
+      '4\r\nWiki\r\n5\r\npedia\r\n0\r\nX-Trailer: yes\r\n\r\n'
+  );
+  await chunkedEnded;
+  await chunkedClosed;
+
+  const invalidSocket = createConnection({
+    host: address.address,
+    port: address.port,
+  });
+  invalidSocket.setEncoding('latin1');
+  let invalidResponse = '';
+  invalidSocket.on('data', (chunk) => {
+    invalidResponse += chunk;
+  });
+  const invalidConnected = onceEvent(invalidSocket, 'connect');
+  const invalidEnded = onceEvent(invalidSocket, 'end');
+  const invalidClosed = onceEvent(invalidSocket, 'close');
+  await invalidConnected;
+  invalidSocket.end('BROKEN\r\n\r\n');
+  await invalidEnded;
+  await invalidClosed;
+
+  const closed = onceEvent(server, 'close');
+  server.close();
+  await closed;
+
+  return {
+    moduleAlias: http === httpAlias,
+    isServer: server instanceof HttpServer,
+    address,
+    responseState,
+    node: {
+      isIncomingMessage: nodeResponse instanceof IncomingMessage,
+      statusCode: nodeResponse.statusCode,
+      statusMessage: nodeResponse.statusMessage,
+      serverHeader: nodeResponse.headers['x-server'],
+      removedHeader: nodeResponse.headers['x-remove'] ?? null,
+      body: nodeBody,
+      complete: nodeResponse.complete,
+    },
+    fetch: {
+      status: fetchResponse.status,
+      value: fetchValue,
+    },
+    chunkedResponse,
+    clientErrorCode,
+    invalidResponse,
+    observedRequests,
+    addressAfterClose: server.address(),
+  };
+};
+
 export const exerciseHttps = async (port, certificateAuthority) => {
   const rejectedRequest = https.get(`https://localhost:${port}/untrusted`);
   const [rejection] = await onceEvent(rejectedRequest, 'error');
@@ -759,6 +928,7 @@ globalThis.__muonBackendModule = Object.freeze({
   retainTcpConnection,
   retainedTcpConnectionState,
   exerciseHttpAndFetch,
+  exerciseHttpServer,
   exerciseHttps,
   exhaustMemory,
   spin,

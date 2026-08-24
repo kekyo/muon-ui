@@ -722,7 +722,48 @@ static JSValue throw_filesystem_error(JSContext* context, const char* code,
     message.append(": ");
     message.append(error.message());
   }
-  return JS_ThrowInternalError(context, "%s", message.c_str());
+  auto exception = JS_NewError(context);
+  if (JS_IsException(exception)) {
+    return exception;
+  }
+  if (JS_SetPropertyStr(context, exception, "code",
+                        JS_NewString(context, code)) < 0 ||
+      JS_SetPropertyStr(context, exception, "message",
+                        JS_NewStringLen(context, message.data(),
+                                        message.size())) < 0) {
+    JS_FreeValue(context, exception);
+    return JS_EXCEPTION;
+  }
+  return JS_Throw(context, exception);
+}
+
+static const char* filesystem_error_code(const std::error_code& error,
+                                         const char* fallback) {
+  if (error == std::errc::permission_denied) {
+    return "EACCES";
+  }
+  if (error == std::errc::file_exists) {
+    return "EEXIST";
+  }
+  if (error == std::errc::is_a_directory) {
+    return "EISDIR";
+  }
+  if (error == std::errc::no_such_file_or_directory) {
+    return "ENOENT";
+  }
+  if (error == std::errc::not_a_directory) {
+    return "ENOTDIR";
+  }
+  if (error == std::errc::directory_not_empty) {
+    return "ENOTEMPTY";
+  }
+  if (error == std::errc::no_space_on_device) {
+    return "ENOSPC";
+  }
+  if (error == std::errc::read_only_file_system) {
+    return "EROFS";
+  }
+  return fallback;
 }
 
 static JSValue js_post_message(JSContext* context, JSValueConst this_value,
@@ -1997,6 +2038,152 @@ static JSValue js_fs_write_buffer(JSContext* context,
   return write_file_contents(context, host, arguments[0], contents, length);
 }
 
+static JSValue append_file_contents(JSContext* context,
+                                    MuonJavaScriptHost* host,
+                                    JSValueConst path_value,
+                                    const void* contents,
+                                    std::size_t length) {
+  std::filesystem::path path;
+  if (!resolve_filesystem_path(context, host, path_value, &path, false)) {
+    return JS_EXCEPTION;
+  }
+  int file_descriptor = -1;
+  do {
+    file_descriptor = open(path.c_str(),
+                           O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666);
+  } while (file_descriptor < 0 && errno == EINTR);
+  if (file_descriptor < 0) {
+    auto error = std::error_code(errno, std::generic_category());
+    return throw_filesystem_error(
+        context, filesystem_error_code(error, "EIO"), path, error);
+  }
+  auto written = write_exact(file_descriptor, contents, length);
+  auto write_error = written ? std::error_code()
+                             : std::error_code(errno, std::generic_category());
+  auto close_result = close(file_descriptor);
+  if (!written) {
+    return throw_filesystem_error(
+        context, filesystem_error_code(write_error, "EIO"), path,
+        write_error);
+  }
+  if (close_result < 0) {
+    auto error = std::error_code(errno, std::generic_category());
+    return throw_filesystem_error(
+        context, filesystem_error_code(error, "EIO"), path, error);
+  }
+  return JS_UNDEFINED;
+}
+
+static JSValue js_fs_append_text(JSContext* context,
+                                 JSValueConst this_value,
+                                 int argument_count,
+                                 JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 2) {
+    return JS_ThrowTypeError(context, "appendFile requires a path and data");
+  }
+  std::size_t length = 0;
+  const char* contents = JS_ToCStringLen(context, &length, arguments[1]);
+  if (contents == nullptr) {
+    return JS_EXCEPTION;
+  }
+  auto result =
+      append_file_contents(context, host, arguments[0], contents, length);
+  JS_FreeCString(context, contents);
+  return result;
+}
+
+static JSValue js_fs_append_buffer(JSContext* context,
+                                   JSValueConst this_value,
+                                   int argument_count,
+                                   JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 2) {
+    return JS_ThrowTypeError(context, "appendFile requires a path and data");
+  }
+  std::size_t length = 0;
+  auto* contents = JS_GetArrayBuffer(context, &length, arguments[1]);
+  if (contents == nullptr) {
+    return JS_ThrowTypeError(context,
+                             "appendFile data must be an ArrayBuffer");
+  }
+  return append_file_contents(context, host, arguments[0], contents, length);
+}
+
+static JSValue js_fs_copy_file(JSContext* context, JSValueConst this_value,
+                               int argument_count,
+                               JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 3) {
+    return JS_ThrowTypeError(
+        context, "copyFile requires two paths and an exclusive flag");
+  }
+  std::filesystem::path source;
+  std::filesystem::path destination;
+  if (!resolve_filesystem_path(context, host, arguments[0], &source, false) ||
+      !resolve_filesystem_path(context, host, arguments[1], &destination,
+                               false)) {
+    return JS_EXCEPTION;
+  }
+  auto exclusive = JS_ToBool(context, arguments[2]);
+  if (exclusive < 0) {
+    return JS_EXCEPTION;
+  }
+  auto options =
+      exclusive != 0 ? std::filesystem::copy_options::none
+                     : std::filesystem::copy_options::overwrite_existing;
+  std::error_code error;
+  auto copied = std::filesystem::copy_file(source, destination, options, error);
+  if (error || !copied) {
+    auto* code = error ? filesystem_error_code(error, "EIO") : "EEXIST";
+    return throw_filesystem_error(context, code, source, error);
+  }
+  return JS_UNDEFINED;
+}
+
+static JSValue js_fs_rmdir(JSContext* context, JSValueConst this_value,
+                           int argument_count, JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 1) {
+    return JS_ThrowTypeError(context, "rmdir requires one path");
+  }
+  std::filesystem::path path;
+  if (!resolve_filesystem_path(context, host, arguments[0], &path, false)) {
+    return JS_EXCEPTION;
+  }
+  std::error_code error;
+  auto status = std::filesystem::symlink_status(path, error);
+  if (error || status.type() == std::filesystem::file_type::not_found) {
+    auto* code = error ? filesystem_error_code(error, "ENOENT") : "ENOENT";
+    return throw_filesystem_error(context, code, path, error);
+  }
+  if (!std::filesystem::is_directory(status)) {
+    return throw_filesystem_error(context, "ENOTDIR", path, {});
+  }
+  auto removed = std::filesystem::remove(path, error);
+  if (error || !removed) {
+    auto* code = error ? filesystem_error_code(error, "EIO") : "ENOENT";
+    return throw_filesystem_error(context, code, path, error);
+  }
+  return JS_UNDEFINED;
+}
+
 static JSValue js_fs_mkdir(JSContext* context, JSValueConst this_value,
                            int argument_count, JSValueConst* arguments) {
   (void)this_value;
@@ -2275,6 +2462,14 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
                             js_fs_write_text, 2) &&
       install_host_function(host->context, global, "__muonFsWriteBuffer",
                             js_fs_write_buffer, 2) &&
+      install_host_function(host->context, global, "__muonFsAppendText",
+                            js_fs_append_text, 2) &&
+      install_host_function(host->context, global, "__muonFsAppendBuffer",
+                            js_fs_append_buffer, 2) &&
+      install_host_function(host->context, global, "__muonFsCopyFile",
+                            js_fs_copy_file, 3) &&
+      install_host_function(host->context, global, "__muonFsRmdir",
+                            js_fs_rmdir, 1) &&
       install_host_function(host->context, global, "__muonFsMkdir",
                             js_fs_mkdir, 2) &&
       install_host_function(host->context, global, "__muonFsReaddir",

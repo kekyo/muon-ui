@@ -52,6 +52,24 @@ import crypto, {
   timingSafeEqual,
 } from 'node:crypto';
 import cryptoAlias from 'crypto';
+import fs, {
+  appendFile as appendFileCallback,
+  constants as fsConstants,
+  copyFile as copyFileCallback,
+  rmdir as rmdirCallback,
+} from 'node:fs';
+import fsAlias from 'fs';
+import fsPromises, {
+  appendFile,
+  constants as fsPromiseConstants,
+  copyFile,
+  mkdir,
+  readFile,
+  rmdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import fsPromisesAlias from 'fs/promises';
 import {
   PassThrough,
   Readable,
@@ -568,6 +586,122 @@ export const exerciseCrypto = async () => {
     sizeErrorCode,
     algorithmErrorCode,
   };
+};
+
+export const exerciseFilesystemExtensions = async () => {
+  const root = 'node-fs-extensions';
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root, { recursive: true });
+
+  const source = `${root}/source.txt`;
+  await appendFile(source, 'muon');
+  await appendFile(source, Buffer.from('-quickjs'));
+  const appended = await readFile(source, 'utf8');
+
+  const copied = `${root}/copied.txt`;
+  await writeFile(copied, 'replace-me');
+  await copyFile(source, copied);
+  const copiedValue = await readFile(copied, 'utf8');
+
+  let exclusiveErrorCode = '';
+  try {
+    await copyFile(source, copied, fsPromiseConstants.COPYFILE_EXCL);
+  } catch (error) {
+    exclusiveErrorCode = error.code;
+  }
+
+  const callbackFile = `${root}/callback.txt`;
+  await new Promise((resolve, reject) => {
+    appendFileCallback(callbackFile, 'callback', (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    appendFileCallback(callbackFile, '-append', 'utf8', (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  const callbackCopy = `${root}/callback-copy.txt`;
+  await new Promise((resolve, reject) => {
+    copyFileCallback(callbackFile, callbackCopy, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+
+  const callbackExclusiveErrorCode = await new Promise((resolve) => {
+    copyFileCallback(
+      callbackFile,
+      callbackCopy,
+      fsConstants.COPYFILE_EXCL,
+      (error) => resolve(error?.code ?? '')
+    );
+  });
+
+  const promiseDirectory = `${root}/promise-directory`;
+  await mkdir(promiseDirectory);
+  await rmdir(promiseDirectory);
+  let promiseDirectoryRemoved = false;
+  try {
+    await fsPromises.access(promiseDirectory, fsPromiseConstants.F_OK);
+  } catch (error) {
+    promiseDirectoryRemoved = error.code === 'ENOENT';
+  }
+
+  const callbackDirectory = `${root}/callback-directory`;
+  await mkdir(callbackDirectory);
+  await new Promise((resolve, reject) => {
+    rmdirCallback(callbackDirectory, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+
+  let fileRmdirErrorCode = '';
+  try {
+    await rmdir(source);
+  } catch (error) {
+    fileRmdirErrorCode = error.code;
+  }
+
+  let recursiveRmdirErrorCode = '';
+  try {
+    await rmdir(root, { recursive: true });
+  } catch (error) {
+    recursiveRmdirErrorCode = error.code;
+  }
+
+  let appendEncodingErrorCode = '';
+  try {
+    await appendFile(source, 'unsupported', 'latin1');
+  } catch (error) {
+    appendEncodingErrorCode = error.code;
+  }
+
+  const result = {
+    moduleAlias: fs === fsAlias,
+    promisesAlias: fsPromises === fsPromisesAlias,
+    defaultPromises: fs.promises === fsPromises,
+    sharedConstants: fsConstants === fsPromiseConstants,
+    constants: {
+      fOk: fsConstants.F_OK,
+      copyfileExcl: fsConstants.COPYFILE_EXCL,
+    },
+    appended,
+    copiedValue,
+    exclusiveErrorCode,
+    callbackValue: await readFile(callbackFile, 'utf8'),
+    callbackCopiedValue: await readFile(callbackCopy, 'utf8'),
+    callbackExclusiveErrorCode,
+    promiseDirectoryRemoved,
+    fileRmdirErrorCode,
+    recursiveRmdirErrorCode,
+    appendEncodingErrorCode,
+  };
+  await rm(root, { recursive: true, force: true });
+  return result;
 };
 
 export const exerciseStreamAndUrl = async () => {
@@ -1415,6 +1549,7 @@ globalThis.__muonBackendModule = Object.freeze({
   exerciseProcessAndOs,
   exerciseUtilityModules,
   exerciseCrypto,
+  exerciseFilesystemExtensions,
   exerciseStreamAndUrl,
   exerciseDnsAndTcp,
   exerciseNetServer,

@@ -838,6 +838,53 @@ public final class MuonJavaScriptRuntimeServiceTest {
     }
 
     @Test
+    public void supportsExpandedNodeFilesystem() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-expanded-filesystem")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "expanded-filesystem",
+                    root,
+                    "exerciseFilesystemExtensions",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            assertTrue(values.getBoolean("moduleAlias"));
+            assertTrue(values.getBoolean("promisesAlias"));
+            assertTrue(values.getBoolean("defaultPromises"));
+            assertTrue(values.getBoolean("sharedConstants"));
+            assertEquals(0, values.getJSONObject("constants").getInt("fOk"));
+            assertEquals(1, values.getJSONObject("constants").getInt("copyfileExcl"));
+            assertEquals("muon-quickjs", values.getString("appended"));
+            assertEquals("muon-quickjs", values.getString("copiedValue"));
+            assertEquals("EEXIST", values.getString("exclusiveErrorCode"));
+            assertEquals("callback-append", values.getString("callbackValue"));
+            assertEquals("callback-append", values.getString("callbackCopiedValue"));
+            assertEquals(
+                    "EEXIST",
+                    values.getString("callbackExclusiveErrorCode"));
+            assertTrue(values.getBoolean("promiseDirectoryRemoved"));
+            assertEquals("ENOTDIR", values.getString("fileRmdirErrorCode"));
+            assertEquals(
+                    "ERR_INVALID_ARG_VALUE",
+                    values.getString("recursiveRmdirErrorCode"));
+            assertEquals(
+                    "ERR_MUON_JS_UNSUPPORTED_ENCODING",
+                    values.getString("appendEncodingErrorCode"));
+
+            assertTrue(request(
+                    runtime,
+                    "shutdown-expanded-filesystem",
+                    "shutdown",
+                    new JSONObject()).getBoolean("ok"));
+        }
+    }
+
+    @Test
     public void supportsNodeStreamsAndUrls() throws Exception {
         try (BoundService binding = bindService();
              RuntimeSocket runtime = createRuntime(binding.service, "test-stream-url")) {

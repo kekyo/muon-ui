@@ -3470,7 +3470,124 @@
         ? options.encoding
         : undefined;
 
+  const fsConstants = Object.freeze({
+    COPYFILE_EXCL: 1,
+    F_OK: 0,
+  });
+
+  const validateAppendOptions = (options) => {
+    const encoding = readEncoding(options);
+    if (
+      encoding !== undefined &&
+      encoding !== null &&
+      encoding !== 'utf8' &&
+      encoding !== 'utf-8'
+    ) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_ENCODING',
+        `Unsupported encoding: ${encoding}`
+      );
+    }
+    if (options && typeof options === 'object') {
+      if (options.flag !== undefined && options.flag !== 'a') {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'appendFile supports only the default a flag'
+        );
+      }
+      if (options.mode !== undefined && options.mode !== 0o666) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'appendFile supports only the default 0666 mode'
+        );
+      }
+      if (options.flush !== undefined && options.flush !== false) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'appendFile flush is not supported by this runtime'
+        );
+      }
+    }
+  };
+
+  const appendFile = async (path, data, options) => {
+    validateAppendOptions(options);
+    if (typeof data === 'string') {
+      __muonFsAppendText(String(path), data);
+      return;
+    }
+    if (data instanceof Uint8Array) {
+      const exact =
+        data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+          ? data.buffer
+          : data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength
+            );
+      __muonFsAppendBuffer(String(path), exact);
+      return;
+    }
+    if (data instanceof ArrayBuffer) {
+      __muonFsAppendBuffer(String(path), data);
+      return;
+    }
+    throw createError(
+      'ERR_MUON_JS_UNSUPPORTED_VALUE',
+      'appendFile data must be text or bytes'
+    );
+  };
+
+  const copyFile = async (source, destination, mode) => {
+    const normalizedMode = mode === undefined ? 0 : Number(mode);
+    if (
+      !Number.isInteger(normalizedMode) ||
+      (normalizedMode !== 0 && normalizedMode !== fsConstants.COPYFILE_EXCL)
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'copyFile supports only mode 0 or COPYFILE_EXCL'
+      );
+    }
+    __muonFsCopyFile(
+      String(source),
+      String(destination),
+      normalizedMode === fsConstants.COPYFILE_EXCL
+    );
+  };
+
+  const validateRmdirOptions = (options) => {
+    if (options === undefined || options === null) return;
+    if (typeof options !== 'object') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'rmdir options must be an object'
+      );
+    }
+    if (options.recursive === true) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Recursive rmdir is not supported; use rm with recursive instead'
+      );
+    }
+    for (const name of Object.keys(options)) {
+      if (name !== 'recursive') {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          `Unsupported rmdir option: ${name}`
+        );
+      }
+    }
+  };
+
+  const rmdir = async (path, options) => {
+    validateRmdirOptions(options);
+    __muonFsRmdir(String(path));
+  };
+
   const fsPromises = Object.freeze({
+    constants: fsConstants,
+    appendFile,
+    copyFile,
     readFile: async (path, options) => {
       const encoding = readEncoding(options);
       if (encoding === 'utf8' || encoding === 'utf-8') {
@@ -3510,8 +3627,19 @@
     readdir: async (path) => __muonFsReaddir(String(path)),
     stat: async (path) => __muonFsStat(String(path)),
     lstat: async (path) => __muonFsStat(String(path)),
-    access: async (path) => __muonFsAccess(String(path)),
+    access: async (path, mode) => {
+      const normalizedMode =
+        mode === undefined ? fsConstants.F_OK : Number(mode);
+      if (normalizedMode !== fsConstants.F_OK) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'access supports only F_OK existence checks'
+        );
+      }
+      __muonFsAccess(String(path));
+    },
     rename: async (from, to) => __muonFsRename(String(from), String(to)),
+    rmdir,
     unlink: async (path) => __muonFsUnlink(String(path)),
     rm: async (path, options) =>
       __muonFsRm(
@@ -3542,7 +3670,28 @@
     }
   };
 
-  const fsCallbacks = Object.freeze({
+  const fsCallbacks = {
+    constants: fsConstants,
+    appendFile: async (path, data, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(
+        () => fsPromises.appendFile(path, data, options),
+        callback
+      );
+    },
+    copyFile: async (source, destination, mode, callback) => {
+      if (typeof mode === 'function') {
+        callback = mode;
+        mode = undefined;
+      }
+      await invokeFsCallback(
+        () => fsPromises.copyFile(source, destination, mode),
+        callback
+      );
+    },
     readFile: async (path, options, callback) => {
       if (typeof options === 'function') {
         callback = options;
@@ -3572,6 +3721,13 @@
       await invokeFsCallback(() => fsPromises.access(path), callback),
     rename: async (from, to, callback) =>
       await invokeFsCallback(() => fsPromises.rename(from, to), callback),
+    rmdir: async (path, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(() => fsPromises.rmdir(path, options), callback);
+    },
     unlink: async (path, callback) =>
       await invokeFsCallback(() => fsPromises.unlink(path), callback),
     rm: async (path, options, callback) => {
@@ -3581,7 +3737,14 @@
       }
       await invokeFsCallback(() => fsPromises.rm(path, options), callback);
     },
+  };
+  Object.defineProperty(fsCallbacks, 'promises', {
+    value: fsPromises,
+    configurable: false,
+    enumerable: false,
+    writable: false,
   });
+  Object.freeze(fsCallbacks);
 
   let nextTimerIdentifier = 1;
   const activeTimers = new Map();

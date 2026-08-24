@@ -84,7 +84,7 @@ try {
 
 primitive、有限number、64 bit範囲の`bigint`、`ArrayBuffer`/typed array、JSON value、renderer callbackをbridgeで転送します。filesystemはapplication privateな`files/javascript-runtime`配下へ閉じ込められ、複数runtimeで共有します。
 
-各`createNode()`は非公開の`:muon_javascript` Service process内に独立したQuickJS runtimeを作ります。`release()`はmodule handle、timer、DNS要求、socket、listener、HTTP要求とruntimeを回収します。未完了処理はActivity破棄、Service切断、またはruntime終了時にrejectされます。
+各`createNode()`は非公開の`:muon_javascript` Service process内に独立したQuickJS runtimeを作ります。`release()`はmodule handle、timer、DNS要求、socket、listener、HTTP要求とruntimeを回収し、native資源とServiceのlive-runtime登録を解放してから完了します。未完了処理はActivity破棄、Service切断、またはruntime終了時にrejectされます。
 
 ### ネットワーク境界
 
@@ -141,7 +141,7 @@ ANDROID_SERIAL=emulator-5556 \
   npm run test:android --workspace muon-android-prototype
 ```
 
-このgateは`ANDROID_SERIAL`がlocal emulatorであり、Android API 37、`x86_64`、実ページサイズ16384であることを開始時に検証します。その後、debug instrumentation全件、署名済みrelease APKのinstall/start、bundletoolがAABから選択した端末別split APKのinstall/startを行い、WebViewのpage-ready eventを待ちます。時間経過やpollingで成功を推測しません。
+このgateは`ANDROID_SERIAL`がlocal emulatorであり、Android API 37、`x86_64`、実ページサイズ16384であることを開始時に検証します。その後、debug instrumentation全件、署名済みrelease APKのinstall/start、bundletoolがAABから選択した端末別split APKのinstall/startを行い、WebViewのpage-ready eventを待ちます。instrumentationには4個の独立runtimeから各8組のDNS、raw TCP、HTTPを同時実行し、全runtime解放後に新runtimeで再通信する負荷試験を含みます。時間経過やpollingで成功を推測しません。
 
 ## Pixel 6 arm64 gate
 

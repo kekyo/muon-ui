@@ -52,9 +52,12 @@ import java.security.PrivateKey;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -1190,6 +1193,250 @@ public final class MuonJavaScriptRuntimeServiceTest {
             throw new AssertionError(
                     "The network limit server failed",
                     serverFailure.get());
+        }
+    }
+
+    @Test
+    public void sustainsConcurrentNetworkLoadAcrossIndependentRuntimes()
+            throws Exception {
+        final int runtimeCount = 4;
+        final int iterationCount = 8;
+        final int expectedConnectionCount = runtimeCount * iterationCount + 1;
+        AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+        AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+        CountDownLatch tcpServerFinished = new CountDownLatch(1);
+        CountDownLatch httpServerFinished = new CountDownLatch(1);
+        Set<String> tcpMarkers = Collections.synchronizedSet(new HashSet<>());
+        Set<String> httpPaths = Collections.synchronizedSet(new HashSet<>());
+
+        try (ServerSocket tcpServer = new ServerSocket(
+                     0,
+                     expectedConnectionCount,
+                     InetAddress.getByName("127.0.0.1"));
+             ServerSocket httpServer = new ServerSocket(
+                     0,
+                     expectedConnectionCount,
+                     InetAddress.getByName("127.0.0.1"))) {
+            tcpServer.setSoTimeout(120_000);
+            httpServer.setSoTimeout(120_000);
+
+            Thread tcpAcceptor = new Thread(() -> {
+                try {
+                    for (int index = 0; index < expectedConnectionCount; index++) {
+                        try (Socket connection = tcpServer.accept()) {
+                            connection.setSoTimeout(30_000);
+                            ByteArrayOutputStream received = new ByteArrayOutputStream();
+                            byte[] buffer = new byte[256];
+                            while (true) {
+                                int count = connection.getInputStream().read(buffer);
+                                if (count < 0) {
+                                    break;
+                                }
+                                received.write(buffer, 0, count);
+                            }
+                            String marker = received.toString(StandardCharsets.UTF_8.name());
+                            assertTrue(marker, tcpMarkers.add(marker));
+                            connection.getOutputStream().write(
+                                    ("tcp:" + marker).getBytes(StandardCharsets.UTF_8));
+                            connection.getOutputStream().flush();
+                        }
+                    }
+                } catch (Throwable error) {
+                    if (!tcpServer.isClosed()) {
+                        serverFailure.compareAndSet(null, error);
+                    }
+                } finally {
+                    tcpServerFinished.countDown();
+                }
+            }, "muon-quickjs-load-tcp-server");
+            tcpAcceptor.setDaemon(true);
+            tcpAcceptor.start();
+
+            Thread httpAcceptor = new Thread(() -> {
+                try {
+                    for (int index = 0; index < expectedConnectionCount; index++) {
+                        try (Socket connection = httpServer.accept()) {
+                            connection.setSoTimeout(30_000);
+                            InputStream input = connection.getInputStream();
+                            String requestLine = readHttpLine(input);
+                            assertNotNull(requestLine);
+                            String[] requestParts = requestLine.split(" ");
+                            assertEquals(requestLine, 3, requestParts.length);
+                            assertEquals("GET", requestParts[0]);
+                            assertTrue(requestParts[1], httpPaths.add(requestParts[1]));
+                            while (true) {
+                                String line = readHttpLine(input);
+                                assertNotNull(line);
+                                if (line.isEmpty()) {
+                                    break;
+                                }
+                            }
+                            byte[] body = ("http:" + requestParts[1])
+                                    .getBytes(StandardCharsets.UTF_8);
+                            DataOutputStream output = new DataOutputStream(
+                                    connection.getOutputStream());
+                            output.write(("HTTP/1.1 200 OK\r\n"
+                                    + "Content-Type: text/plain; charset=utf-8\r\n"
+                                    + "Content-Length: " + body.length + "\r\n"
+                                    + "Connection: close\r\n"
+                                    + "\r\n")
+                                    .getBytes(StandardCharsets.ISO_8859_1));
+                            output.write(body);
+                            output.flush();
+                        }
+                    }
+                } catch (Throwable error) {
+                    if (!httpServer.isClosed()) {
+                        serverFailure.compareAndSet(null, error);
+                    }
+                } finally {
+                    httpServerFinished.countDown();
+                }
+            }, "muon-quickjs-load-http-server");
+            httpAcceptor.setDaemon(true);
+            httpAcceptor.start();
+
+            try (BoundService binding = bindService()) {
+                RuntimeSocket[] runtimes = new RuntimeSocket[runtimeCount];
+                String[] moduleIds = new String[runtimeCount];
+                JSONObject[] results = new JSONObject[runtimeCount];
+                try {
+                    for (int index = 0; index < runtimeCount; index++) {
+                        runtimes[index] = createRuntime(
+                                binding.service,
+                                "test-network-load-" + index);
+                        moduleIds[index] = importModule(
+                                runtimes[index],
+                                "import-" + index,
+                                ".");
+                    }
+                    assertEquals(runtimeCount, binding.service.getRuntimeCount());
+
+                    CountDownLatch workersReady = new CountDownLatch(runtimeCount);
+                    CountDownLatch startWorkers = new CountDownLatch(1);
+                    CountDownLatch workersFinished = new CountDownLatch(runtimeCount);
+                    for (int index = 0; index < runtimeCount; index++) {
+                        final int runtimeIndex = index;
+                        Thread worker = new Thread(() -> {
+                            workersReady.countDown();
+                            try {
+                                startWorkers.await();
+                                JSONObject response = call(
+                                        runtimes[runtimeIndex],
+                                        "load-" + runtimeIndex,
+                                        moduleIds[runtimeIndex],
+                                        "exerciseConcurrentNetworkLoad",
+                                        new JSONArray()
+                                                .put(tcpServer.getLocalPort())
+                                                .put(httpServer.getLocalPort())
+                                                .put("runtime-" + runtimeIndex)
+                                                .put(iterationCount));
+                                assertTrue(response.toString(), response.getBoolean("ok"));
+                                results[runtimeIndex] = response
+                                        .getJSONObject("value")
+                                        .getJSONObject("value");
+                            } catch (Throwable error) {
+                                workerFailure.compareAndSet(null, error);
+                            } finally {
+                                workersFinished.countDown();
+                            }
+                        }, "muon-quickjs-network-load-" + index);
+                        worker.setDaemon(true);
+                        worker.start();
+                    }
+                    assertTrue(workersReady.await(30, TimeUnit.SECONDS));
+                    startWorkers.countDown();
+                    assertTrue(workersFinished.await(120, TimeUnit.SECONDS));
+
+                    for (int index = 0; index < runtimeCount; index++) {
+                        assertTrue(request(
+                                runtimes[index],
+                                "shutdown-" + index,
+                                "shutdown",
+                                new JSONObject()).getBoolean("ok"));
+                    }
+                    if (workerFailure.get() != null) {
+                        throw new AssertionError(
+                                "A concurrent QuickJS network worker failed",
+                                workerFailure.get());
+                    }
+                    assertEquals(0, binding.service.getRuntimeCount());
+
+                    for (int runtimeIndex = 0;
+                         runtimeIndex < runtimeCount;
+                         runtimeIndex++) {
+                        JSONArray iterations = results[runtimeIndex]
+                                .getJSONArray("iterations");
+                        assertEquals(iterationCount, iterations.length());
+                        for (int iteration = 0;
+                             iteration < iterationCount;
+                             iteration++) {
+                            String marker = "runtime-" + runtimeIndex + "-" + iteration;
+                            JSONObject result = iterations.getJSONObject(iteration);
+                            assertEquals(4, result.getInt("dnsFamily"));
+                            assertEquals("tcp:" + marker, result.getString("tcp"));
+                            assertEquals(
+                                    "http:/load/" + marker,
+                                    result.getString("http"));
+                        }
+                    }
+
+                    try (RuntimeSocket recovered = createRuntime(
+                            binding.service,
+                            "test-network-load-recovered")) {
+                        String recoveredRoot = importModule(
+                                recovered,
+                                "recovered-import",
+                                ".");
+                        JSONObject recoveredResponse = call(
+                                recovered,
+                                "recovered-load",
+                                recoveredRoot,
+                                "exerciseConcurrentNetworkLoad",
+                                new JSONArray()
+                                        .put(tcpServer.getLocalPort())
+                                        .put(httpServer.getLocalPort())
+                                        .put("recovered")
+                                        .put(1));
+                        assertTrue(
+                                recoveredResponse.toString(),
+                                recoveredResponse.getBoolean("ok"));
+                        JSONObject recoveredIteration = recoveredResponse
+                                .getJSONObject("value")
+                                .getJSONObject("value")
+                                .getJSONArray("iterations")
+                                .getJSONObject(0);
+                        assertEquals(4, recoveredIteration.getInt("dnsFamily"));
+                        assertEquals("tcp:recovered-0", recoveredIteration.getString("tcp"));
+                        assertEquals(
+                                "http:/load/recovered-0",
+                                recoveredIteration.getString("http"));
+                        assertTrue(request(
+                                recovered,
+                                "shutdown-recovered",
+                                "shutdown",
+                                new JSONObject()).getBoolean("ok"));
+                    }
+                    assertEquals(0, binding.service.getRuntimeCount());
+                } finally {
+                    binding.service.shutdownAll();
+                    for (RuntimeSocket runtime : runtimes) {
+                        if (runtime != null) {
+                            runtime.close();
+                        }
+                    }
+                }
+            }
+
+            assertTrue(tcpServerFinished.await(30, TimeUnit.SECONDS));
+            assertTrue(httpServerFinished.await(30, TimeUnit.SECONDS));
+            if (serverFailure.get() != null) {
+                throw new AssertionError(
+                        "A concurrent QuickJS network server failed",
+                        serverFailure.get());
+            }
+            assertEquals(expectedConnectionCount, tcpMarkers.size());
+            assertEquals(expectedConnectionCount, httpPaths.size());
         }
     }
 

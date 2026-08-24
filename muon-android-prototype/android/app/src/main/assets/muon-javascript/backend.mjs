@@ -939,6 +939,66 @@ export const exerciseNetworkResourceLimits = async (tcpPort, closedPort) => {
   };
 };
 
+const exchangeTcpLoadMarker = async (port, marker) => {
+  let received = '';
+  const socket = createConnection({
+    host: '127.0.0.1',
+    port,
+    noDelay: true,
+  });
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    received += chunk;
+  });
+  const closed = onceEvent(socket, 'close');
+  socket.end(marker);
+  const [hadError] = await closed;
+  if (hadError) {
+    throw new Error(`TCP load exchange failed for ${marker}`);
+  }
+  return received;
+};
+
+const fetchHttpLoadMarker = async (port, marker) => {
+  const response = await fetch(`http://localhost:${port}/load/${marker}`);
+  if (!response.ok) {
+    throw new Error(`HTTP load request failed with status ${response.status}`);
+  }
+  return await response.text();
+};
+
+const exerciseNetworkLoadIteration = async (tcpPort, httpPort, marker) => {
+  const [lookup, tcp, httpBody] = await Promise.all([
+    dnsPromises.lookup('localhost', { family: 4 }),
+    exchangeTcpLoadMarker(tcpPort, marker),
+    fetchHttpLoadMarker(httpPort, marker),
+  ]);
+  return {
+    dnsFamily: lookup.family,
+    tcp,
+    http: httpBody,
+  };
+};
+
+export const exerciseConcurrentNetworkLoad = async (
+  tcpPort,
+  httpPort,
+  runtimeMarker,
+  iterationCount
+) => {
+  const iterations = [];
+  for (let index = 0; index < iterationCount; index += 1) {
+    iterations.push(
+      exerciseNetworkLoadIteration(
+        tcpPort,
+        httpPort,
+        `${runtimeMarker}-${index}`
+      )
+    );
+  }
+  return { iterations: await Promise.all(iterations) };
+};
+
 export const exerciseHttps = async (port, certificateAuthority) => {
   const rejectedRequest = https.get(`https://localhost:${port}/untrusted`);
   const [rejection] = await onceEvent(rejectedRequest, 'error');
@@ -1017,6 +1077,7 @@ globalThis.__muonBackendModule = Object.freeze({
   exerciseHttpAndFetch,
   exerciseHttpServer,
   exerciseNetworkResourceLimits,
+  exerciseConcurrentNetworkLoad,
   exerciseHttps,
   exhaustMemory,
   spin,

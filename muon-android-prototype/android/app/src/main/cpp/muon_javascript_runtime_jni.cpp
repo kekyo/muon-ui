@@ -128,6 +128,7 @@ struct MuonJavaScriptHost {
   JSRuntime* runtime = nullptr;
   JSContext* context = nullptr;
   std::vector<MuonPendingPromise> pending_promises;
+  std::vector<std::string> deferred_shutdown_responses;
   std::vector<MuonTimer> timers;
   std::shared_ptr<MuonJavaScriptSession> session;
   std::unordered_map<std::int64_t, MuonTcpSocket> tcp_sockets;
@@ -2709,6 +2710,16 @@ static bool process_timers(MuonJavaScriptHost* host) {
   }
 }
 
+static bool is_shutdown_requested(MuonJavaScriptHost* host) {
+  auto global = JS_GetGlobalObject(host->context);
+  auto value =
+      JS_GetPropertyStr(host->context, global, "__muonShouldShutdown");
+  JS_FreeValue(host->context, global);
+  auto result = JS_ToBool(host->context, value);
+  JS_FreeValue(host->context, value);
+  return result > 0;
+}
+
 static bool process_protocol_promises(MuonJavaScriptHost* host) {
   if (!execute_pending_jobs(host)) {
     return false;
@@ -2734,8 +2745,18 @@ static bool process_protocol_promises(MuonJavaScriptHost* host) {
     }
     if (!JS_IsNull(result) && !JS_IsUndefined(result)) {
       std::string response;
-      if (!get_js_string(host->context, result, &response) ||
-          !write_frame(host->file_descriptor, response)) {
+      if (!get_js_string(host->context, result, &response)) {
+        JS_FreeValue(host->context, result);
+        JS_FreeValue(host->context, iterator->promise);
+        host->pending_promises.erase(iterator);
+        return false;
+      }
+      if (is_shutdown_requested(host)) {
+        // A release promise is complete only after native resources and the
+        // live-session registration are gone. Keep the response until that
+        // teardown point while the protocol descriptor remains writable.
+        host->deferred_shutdown_responses.push_back(std::move(response));
+      } else if (!write_frame(host->file_descriptor, response)) {
         JS_FreeValue(host->context, result);
         JS_FreeValue(host->context, iterator->promise);
         host->pending_promises.erase(iterator);
@@ -2750,13 +2771,7 @@ static bool process_protocol_promises(MuonJavaScriptHost* host) {
 }
 
 static bool should_shutdown(MuonJavaScriptHost* host) {
-  auto global = JS_GetGlobalObject(host->context);
-  auto value =
-      JS_GetPropertyStr(host->context, global, "__muonShouldShutdown");
-  JS_FreeValue(host->context, global);
-  auto result = JS_ToBool(host->context, value);
-  JS_FreeValue(host->context, value);
-  return result > 0 && host->pending_promises.empty();
+  return is_shutdown_requested(host) && host->pending_promises.empty();
 }
 
 static int timer_poll_timeout(const MuonJavaScriptHost* host) {
@@ -2994,8 +3009,13 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
     }
   }
   free_host(&host);
-  close_session_descriptors(session);
   remove_session(session);
+  for (const auto& response : host.deferred_shutdown_responses) {
+    if (!write_frame(session->file_descriptor, response)) {
+      break;
+    }
+  }
+  close_session_descriptors(session);
 }
 
 /**

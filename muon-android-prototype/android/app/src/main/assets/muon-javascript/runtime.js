@@ -1301,6 +1301,734 @@
     },
   });
 
+  const urlState = Symbol('muon.url.state');
+  const urlSearchParamsPairs = Symbol('muon.urlSearchParams.pairs');
+  const urlSearchParamsUpdate = Symbol('muon.urlSearchParams.update');
+  const urlSearchParamsInternal = {};
+  const defaultUrlPorts = Object.freeze({
+    ftp: '21',
+    http: '80',
+    https: '443',
+    ws: '80',
+    wss: '443',
+  });
+  const authorityUrlSchemes = new Set([
+    'file',
+    'ftp',
+    'http',
+    'https',
+    'ws',
+    'wss',
+  ]);
+
+  const decodeUrlComponent = (value, label) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      throw createError(
+        'ERR_INVALID_URL',
+        `Invalid percent escape in ${label}`
+      );
+    }
+  };
+
+  const encodeUrlText = (value, safeCharacters) => {
+    const source = String(value);
+    let result = '';
+    for (let index = 0; index < source.length; ) {
+      const point = source.codePointAt(index);
+      const character = String.fromCodePoint(point);
+      if (
+        /^[A-Za-z0-9]$/.test(character) ||
+        safeCharacters.includes(character)
+      ) {
+        result += character;
+      } else if (
+        character === '%' &&
+        /^[0-9A-Fa-f]{2}$/.test(source.slice(index + 1, index + 3))
+      ) {
+        result += `%${source.slice(index + 1, index + 3).toUpperCase()}`;
+        index += 2;
+      } else {
+        result += encodeURIComponent(character);
+      }
+      index += character.length;
+    }
+    return result;
+  };
+
+  const encodeUrlPath = (value) => encodeUrlText(value, "-._~!$&'()*+,;=:@/");
+  const encodeUrlQuery = (value) => encodeUrlText(value, "-._~!$&'()*+,;=:@/?");
+  const encodeUrlHash = (value) => encodeUrlText(value, "-._~!$&'()*+,;=:@/?#");
+  const encodeUrlCredential = (value) =>
+    encodeUrlText(value, "-._~!$&'()*+,;=");
+  const encodeUrlSearchParameter = (value) =>
+    encodeURIComponent(String(value))
+      .replaceAll('%20', '+')
+      .replace(
+        /[!'()~]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+      );
+
+  const normalizeUrlPath = (value) => {
+    const source = String(value);
+    const absolute = source.startsWith('/');
+    const trailingSlash = source.endsWith('/');
+    const parts = [];
+    for (const part of source.split('/')) {
+      const lower = part.toLowerCase();
+      if (part === '' || lower === '.' || lower === '%2e') continue;
+      if (
+        lower === '..' ||
+        lower === '.%2e' ||
+        lower === '%2e.' ||
+        lower === '%2e%2e'
+      ) {
+        if (parts.length > 0) parts.pop();
+        continue;
+      }
+      parts.push(part);
+    }
+    const joined = parts.join('/');
+    const normalized = `${absolute ? '/' : ''}${joined}`;
+    if (trailingSlash && normalized !== '/' && normalized !== '') {
+      return `${normalized}/`;
+    }
+    return normalized || (absolute ? '/' : '');
+  };
+
+  const splitUrlSuffix = (value) => {
+    const hashIndex = value.indexOf('#');
+    const beforeHash = hashIndex < 0 ? value : value.slice(0, hashIndex);
+    const hash = hashIndex < 0 ? '' : value.slice(hashIndex + 1);
+    const queryIndex = beforeHash.indexOf('?');
+    return {
+      path: queryIndex < 0 ? beforeHash : beforeHash.slice(0, queryIndex),
+      query: queryIndex < 0 ? '' : beforeHash.slice(queryIndex + 1),
+      hasQuery: queryIndex >= 0,
+      hash,
+      hasHash: hashIndex >= 0,
+    };
+  };
+
+  const parseUrlHost = (value, scheme) => {
+    let authority = String(value);
+    let username = '';
+    let password = '';
+    const at = authority.lastIndexOf('@');
+    if (at >= 0) {
+      const credentials = authority.slice(0, at);
+      authority = authority.slice(at + 1);
+      const colon = credentials.indexOf(':');
+      username = decodeUrlComponent(
+        colon < 0 ? credentials : credentials.slice(0, colon),
+        'URL username'
+      );
+      password = decodeUrlComponent(
+        colon < 0 ? '' : credentials.slice(colon + 1),
+        'URL password'
+      );
+    }
+
+    let hostname = '';
+    let port = '';
+    if (authority.startsWith('[')) {
+      const close = authority.indexOf(']');
+      if (close < 0) {
+        throw createError('ERR_INVALID_URL', 'IPv6 URL host is missing ]');
+      }
+      hostname = authority.slice(1, close).toLowerCase();
+      const remainder = authority.slice(close + 1);
+      if (remainder !== '') {
+        if (!remainder.startsWith(':')) {
+          throw createError('ERR_INVALID_URL', 'Invalid IPv6 URL host');
+        }
+        port = remainder.slice(1);
+      }
+      if (!/^[0-9A-Fa-f:.]+$/.test(hostname)) {
+        throw createError('ERR_INVALID_URL', 'Invalid IPv6 URL host');
+      }
+    } else {
+      const colon = authority.lastIndexOf(':');
+      if (colon >= 0) {
+        hostname = authority.slice(0, colon);
+        port = authority.slice(colon + 1);
+      } else {
+        hostname = authority;
+      }
+      hostname = hostname.toLowerCase();
+      if (hostname !== '' && !/^[A-Za-z0-9.-]+$/.test(hostname)) {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_HOSTNAME',
+          'Only ASCII, IPv4, and IPv6 URL hostnames are supported'
+        );
+      }
+    }
+    if (port !== '') {
+      if (!/^[0-9]+$/.test(port) || Number(port) > 65535) {
+        throw createError('ERR_INVALID_URL', 'Invalid URL port');
+      }
+      port = String(Number(port));
+      if (defaultUrlPorts[scheme] === port) port = '';
+    }
+    if (scheme !== 'file' && hostname === '') {
+      throw createError('ERR_INVALID_URL', 'URL hostname is required');
+    }
+    return { username, password, hostname, port };
+  };
+
+  const cloneUrlState = (state) => ({
+    scheme: state.scheme,
+    hasAuthority: state.hasAuthority,
+    username: state.username,
+    password: state.password,
+    hostname: state.hostname,
+    port: state.port,
+    pathname: state.pathname,
+    query: state.query,
+    hasQuery: state.hasQuery,
+    hash: state.hash,
+    hasHash: state.hasHash,
+    searchParams: undefined,
+  });
+
+  const parseAbsoluteUrlState = (value) => {
+    const match = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/.exec(value);
+    if (!match) throw createError('ERR_INVALID_URL', 'URL scheme is required');
+    const scheme = match[1].toLowerCase();
+    let remainder = match[2];
+    const hasAuthority = remainder.startsWith('//');
+    if (authorityUrlSchemes.has(scheme) && !hasAuthority) {
+      if (scheme !== 'file') {
+        throw createError('ERR_INVALID_URL', `${scheme}: URL requires //`);
+      }
+      remainder = `//${remainder}`;
+    }
+
+    let host = { username: '', password: '', hostname: '', port: '' };
+    let suffixSource = remainder;
+    if (remainder.startsWith('//')) {
+      suffixSource = remainder.slice(2);
+      const boundary = suffixSource.search(/[/?#]/);
+      const authority =
+        boundary < 0 ? suffixSource : suffixSource.slice(0, boundary);
+      suffixSource = boundary < 0 ? '' : suffixSource.slice(boundary);
+      host = parseUrlHost(authority, scheme);
+    }
+    const suffix = splitUrlSuffix(suffixSource);
+    let pathname = normalizeUrlPath(encodeUrlPath(suffix.path));
+    if (hasAuthority && pathname === '') pathname = '/';
+    return {
+      scheme,
+      hasAuthority: remainder.startsWith('//'),
+      ...host,
+      pathname,
+      query: encodeUrlQuery(suffix.query),
+      hasQuery: suffix.hasQuery,
+      hash: encodeUrlHash(suffix.hash),
+      hasHash: suffix.hasHash,
+      searchParams: undefined,
+    };
+  };
+
+  const parseUrlState = (value, base) => {
+    const source = String(value).trim();
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(source)) {
+      return parseAbsoluteUrlState(source);
+    }
+    if (base === undefined) {
+      throw createError('ERR_INVALID_URL', 'Relative URL requires a base URL');
+    }
+    const baseState =
+      base && typeof base === 'object' && base[urlState]
+        ? base[urlState]
+        : parseAbsoluteUrlState(String(base).trim());
+    if (source.startsWith('//')) {
+      return parseAbsoluteUrlState(`${baseState.scheme}:${source}`);
+    }
+    const result = cloneUrlState(baseState);
+    const suffix = splitUrlSuffix(source);
+    if (source.startsWith('#')) {
+      result.hash = encodeUrlHash(suffix.hash);
+      result.hasHash = true;
+      return result;
+    }
+    if (source.startsWith('?')) {
+      result.query = encodeUrlQuery(suffix.query);
+      result.hasQuery = true;
+      result.hash = encodeUrlHash(suffix.hash);
+      result.hasHash = suffix.hasHash;
+      return result;
+    }
+    if (suffix.path.startsWith('/')) {
+      result.pathname = normalizeUrlPath(encodeUrlPath(suffix.path));
+    } else if (suffix.path !== '') {
+      const slash = result.pathname.lastIndexOf('/');
+      const directory = slash < 0 ? '' : result.pathname.slice(0, slash + 1);
+      result.pathname = normalizeUrlPath(
+        encodeUrlPath(`${directory}${suffix.path}`)
+      );
+    }
+    result.query = encodeUrlQuery(suffix.query);
+    result.hasQuery = suffix.hasQuery;
+    result.hash = encodeUrlHash(suffix.hash);
+    result.hasHash = suffix.hasHash;
+    return result;
+  };
+
+  const serializeUrlHost = (state) => {
+    const hostname = state.hostname.includes(':')
+      ? `[${state.hostname}]`
+      : state.hostname;
+    return `${hostname}${state.port === '' ? '' : `:${state.port}`}`;
+  };
+
+  const serializeUrlState = (state) => {
+    let result = `${state.scheme}:`;
+    if (state.hasAuthority) {
+      result += '//';
+      if (state.username !== '' || state.password !== '') {
+        result += encodeUrlCredential(state.username);
+        if (state.password !== '') {
+          result += `:${encodeUrlCredential(state.password)}`;
+        }
+        result += '@';
+      }
+      result += serializeUrlHost(state);
+    }
+    result += state.pathname;
+    if (state.hasQuery) result += `?${state.query}`;
+    if (state.hasHash) result += `#${state.hash}`;
+    return result;
+  };
+
+  const notifyUrlSearchParams = (parameters) => {
+    const update = parameters[urlSearchParamsUpdate];
+    if (typeof update === 'function') update(parameters.toString());
+  };
+
+  const parseUrlSearchParameters = (value) => {
+    const source = String(value).replace(/^\?/, '');
+    if (source === '') return [];
+    return source.split('&').map((entry) => {
+      const equals = entry.indexOf('=');
+      const name = equals < 0 ? entry : entry.slice(0, equals);
+      const content = equals < 0 ? '' : entry.slice(equals + 1);
+      return [
+        decodeUrlComponent(name.replaceAll('+', ' '), 'search parameter'),
+        decodeUrlComponent(content.replaceAll('+', ' '), 'search parameter'),
+      ];
+    });
+  };
+
+  const URLSearchParams = function (initial, internalKey, update) {
+    if (!(this instanceof URLSearchParams)) {
+      throw new TypeError('URLSearchParams constructor requires new');
+    }
+    let pairs;
+    if (internalKey === urlSearchParamsInternal) {
+      pairs = parseUrlSearchParameters(initial ?? '');
+    } else if (initial === undefined) {
+      pairs = [];
+    } else if (typeof initial === 'string') {
+      pairs = parseUrlSearchParameters(initial);
+    } else if (initial !== null && initial[Symbol.iterator]) {
+      pairs = [];
+      for (const entry of initial) {
+        const tuple = [...entry];
+        if (tuple.length !== 2) {
+          throw createError(
+            'ERR_INVALID_TUPLE',
+            'Each query pair must contain exactly two values'
+          );
+        }
+        pairs.push([String(tuple[0]), String(tuple[1])]);
+      }
+    } else if (initial !== null && typeof initial === 'object') {
+      pairs = Object.keys(initial).map((name) => [
+        String(name),
+        String(initial[name]),
+      ]);
+    } else {
+      pairs = parseUrlSearchParameters(String(initial));
+    }
+    Object.defineProperties(this, {
+      [urlSearchParamsPairs]: { value: pairs, writable: true },
+      [urlSearchParamsUpdate]: {
+        value: internalKey === urlSearchParamsInternal ? update : undefined,
+        writable: true,
+      },
+    });
+  };
+
+  const requireUrlSearchParamsPairs = (parameters) => {
+    const pairs = parameters[urlSearchParamsPairs];
+    if (!Array.isArray(pairs)) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'URLSearchParams method called on an incompatible receiver'
+      );
+    }
+    return pairs;
+  };
+
+  const urlSearchParamsAppend = function (name, value) {
+    requireUrlSearchParamsPairs(this).push([String(name), String(value)]);
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsDelete = function (name, value) {
+    const normalizedName = String(name);
+    const hasValue = value !== undefined;
+    const normalizedValue = String(value);
+    this[urlSearchParamsPairs] = requireUrlSearchParamsPairs(this).filter(
+      (entry) =>
+        entry[0] !== normalizedName ||
+        (hasValue && entry[1] !== normalizedValue)
+    );
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsGet = function (name) {
+    const normalized = String(name);
+    return (
+      requireUrlSearchParamsPairs(this).find(
+        (entry) => entry[0] === normalized
+      )?.[1] ?? null
+    );
+  };
+  const urlSearchParamsGetAll = function (name) {
+    const normalized = String(name);
+    return requireUrlSearchParamsPairs(this)
+      .filter((entry) => entry[0] === normalized)
+      .map((entry) => entry[1]);
+  };
+  const urlSearchParamsHas = function (name, value) {
+    const normalizedName = String(name);
+    const hasValue = value !== undefined;
+    const normalizedValue = String(value);
+    return requireUrlSearchParamsPairs(this).some(
+      (entry) =>
+        entry[0] === normalizedName &&
+        (!hasValue || entry[1] === normalizedValue)
+    );
+  };
+  const urlSearchParamsSet = function (name, value) {
+    const normalizedName = String(name);
+    const normalizedValue = String(value);
+    const pairs = requireUrlSearchParamsPairs(this);
+    const first = pairs.findIndex((entry) => entry[0] === normalizedName);
+    if (first < 0) {
+      pairs.push([normalizedName, normalizedValue]);
+    } else {
+      pairs[first][1] = normalizedValue;
+      for (let index = pairs.length - 1; index > first; index -= 1) {
+        if (pairs[index][0] === normalizedName) pairs.splice(index, 1);
+      }
+    }
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsSort = function () {
+    requireUrlSearchParamsPairs(this).sort((left, right) =>
+      left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0
+    );
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsEntries = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map((entry) => [...entry])
+      [Symbol.iterator]();
+  };
+  const urlSearchParamsKeys = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map((entry) => entry[0])
+      [Symbol.iterator]();
+  };
+  const urlSearchParamsValues = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map((entry) => entry[1])
+      [Symbol.iterator]();
+  };
+  const urlSearchParamsForEach = function (callback, thisArgument) {
+    if (typeof callback !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'callback must be a function');
+    }
+    for (const [name, value] of requireUrlSearchParamsPairs(this)) {
+      Reflect.apply(callback, thisArgument, [value, name, this]);
+    }
+  };
+  const urlSearchParamsToString = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map(
+        ([name, value]) =>
+          `${encodeUrlSearchParameter(name)}=${encodeUrlSearchParameter(value)}`
+      )
+      .join('&');
+  };
+
+  URLSearchParams.prototype.append = urlSearchParamsAppend;
+  URLSearchParams.prototype.delete = urlSearchParamsDelete;
+  URLSearchParams.prototype.get = urlSearchParamsGet;
+  URLSearchParams.prototype.getAll = urlSearchParamsGetAll;
+  URLSearchParams.prototype.has = urlSearchParamsHas;
+  URLSearchParams.prototype.set = urlSearchParamsSet;
+  URLSearchParams.prototype.sort = urlSearchParamsSort;
+  URLSearchParams.prototype.entries = urlSearchParamsEntries;
+  URLSearchParams.prototype.keys = urlSearchParamsKeys;
+  URLSearchParams.prototype.values = urlSearchParamsValues;
+  URLSearchParams.prototype.forEach = urlSearchParamsForEach;
+  URLSearchParams.prototype.toString = urlSearchParamsToString;
+  URLSearchParams.prototype[Symbol.iterator] = urlSearchParamsEntries;
+  Object.defineProperties(URLSearchParams.prototype, {
+    size: {
+      get: function () {
+        return requireUrlSearchParamsPairs(this).length;
+      },
+    },
+    [Symbol.toStringTag]: { value: 'URLSearchParams' },
+  });
+
+  const attachUrlSearchParams = (state) => {
+    const parameters = new URLSearchParams(
+      state.hasQuery ? state.query : '',
+      urlSearchParamsInternal,
+      (query) => {
+        state.query = query;
+        state.hasQuery = query !== '';
+      }
+    );
+    state.searchParams = parameters;
+  };
+
+  const replaceUrlState = (target, state) => {
+    attachUrlSearchParams(state);
+    target[urlState] = state;
+  };
+
+  const URL = function (input, base) {
+    if (!(this instanceof URL)) {
+      throw new TypeError('URL constructor requires new');
+    }
+    Object.defineProperty(this, urlState, {
+      value: undefined,
+      configurable: false,
+      enumerable: false,
+      writable: true,
+    });
+    replaceUrlState(this, parseUrlState(input, base));
+  };
+
+  const requireUrlState = (url) => {
+    const state = url[urlState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'URL method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  Object.defineProperties(URL.prototype, {
+    href: {
+      get: function () {
+        return serializeUrlState(requireUrlState(this));
+      },
+      set: function (value) {
+        replaceUrlState(this, parseUrlState(value, undefined));
+      },
+    },
+    protocol: {
+      get: function () {
+        return `${requireUrlState(this).scheme}:`;
+      },
+      set: function (value) {
+        const match = /^([A-Za-z][A-Za-z0-9+.-]*):?$/.exec(String(value));
+        if (!match)
+          throw createError('ERR_INVALID_URL', 'Invalid URL protocol');
+        requireUrlState(this).scheme = match[1].toLowerCase();
+      },
+    },
+    username: {
+      get: function () {
+        return requireUrlState(this).username;
+      },
+      set: function (value) {
+        requireUrlState(this).username = String(value);
+      },
+    },
+    password: {
+      get: function () {
+        return requireUrlState(this).password;
+      },
+      set: function (value) {
+        requireUrlState(this).password = String(value);
+      },
+    },
+    hostname: {
+      get: function () {
+        return requireUrlState(this).hostname;
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const parsed = parseUrlHost(
+          `${String(value)}${state.port === '' ? '' : `:${state.port}`}`,
+          state.scheme
+        );
+        state.hostname = parsed.hostname;
+      },
+    },
+    port: {
+      get: function () {
+        return requireUrlState(this).port;
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const parsed = parseUrlHost(
+          `${state.hostname.includes(':') ? `[${state.hostname}]` : state.hostname}:${String(value)}`,
+          state.scheme
+        );
+        state.port = parsed.port;
+      },
+    },
+    host: {
+      get: function () {
+        return serializeUrlHost(requireUrlState(this));
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const parsed = parseUrlHost(value, state.scheme);
+        state.hostname = parsed.hostname;
+        state.port = parsed.port;
+      },
+    },
+    origin: {
+      get: function () {
+        const state = requireUrlState(this);
+        return ['ftp', 'http', 'https', 'ws', 'wss'].includes(state.scheme)
+          ? `${state.scheme}://${serializeUrlHost(state)}`
+          : 'null';
+      },
+    },
+    pathname: {
+      get: function () {
+        return requireUrlState(this).pathname;
+      },
+      set: function (value) {
+        requireUrlState(this).pathname = normalizeUrlPath(encodeUrlPath(value));
+      },
+    },
+    search: {
+      get: function () {
+        const state = requireUrlState(this);
+        return state.hasQuery ? `?${state.query}` : '';
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const source = String(value).replace(/^\?/, '');
+        state.query = encodeUrlQuery(source);
+        state.hasQuery = source !== '';
+        state.searchParams[urlSearchParamsPairs] = parseUrlSearchParameters(
+          state.query
+        );
+      },
+    },
+    searchParams: {
+      get: function () {
+        return requireUrlState(this).searchParams;
+      },
+    },
+    hash: {
+      get: function () {
+        const state = requireUrlState(this);
+        return state.hasHash ? `#${state.hash}` : '';
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const source = String(value).replace(/^#/, '');
+        state.hash = encodeUrlHash(source);
+        state.hasHash = source !== '';
+      },
+    },
+    [Symbol.toStringTag]: { value: 'URL' },
+  });
+  URL.prototype.toString = function () {
+    return serializeUrlState(requireUrlState(this));
+  };
+  URL.prototype.toJSON = URL.prototype.toString;
+  URL.canParse = (input, base) => {
+    try {
+      parseUrlState(input, base);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  URL.parse = (input, base) => {
+    try {
+      return new URL(input, base);
+    } catch {
+      return null;
+    }
+  };
+
+  const pathToFileURL = (path) => {
+    const source = String(path);
+    if (!source.startsWith('/')) {
+      throw createError(
+        'ERR_MUON_JS_RELATIVE_FILE_URL',
+        'pathToFileURL requires an absolute POSIX path'
+      );
+    }
+    return new URL(`file://${encodeUrlPath(normalizePath(source))}`);
+  };
+
+  const fileURLToPath = (value) => {
+    const url = value instanceof URL ? value : new URL(value);
+    if (url.protocol !== 'file:') {
+      throw createError('ERR_INVALID_URL_SCHEME', 'URL must use file:');
+    }
+    if (url.hostname !== '' && url.hostname !== 'localhost') {
+      throw createError(
+        'ERR_INVALID_FILE_URL_HOST',
+        'POSIX file URL host must be empty or localhost'
+      );
+    }
+    if (/%2f|%5c/i.test(url.pathname)) {
+      throw createError(
+        'ERR_INVALID_FILE_URL_PATH',
+        'Encoded path separators are not permitted in file URLs'
+      );
+    }
+    return decodeUrlComponent(url.pathname, 'file URL path');
+  };
+
+  const urlToHttpOptions = (value) => {
+    const url = value instanceof URL ? value : new URL(value);
+    const options = {
+      protocol: url.protocol,
+      hostname: url.hostname,
+      hash: url.hash,
+      search: url.search,
+      pathname: url.pathname,
+      path: `${url.pathname}${url.search}`,
+      href: url.href,
+    };
+    if (url.port !== '') options.port = Number(url.port);
+    if (url.username !== '' || url.password !== '') {
+      options.auth = `${url.username}:${url.password}`;
+    }
+    return options;
+  };
+
+  const urlModule = Object.freeze({
+    URL,
+    URLSearchParams,
+    fileURLToPath,
+    pathToFileURL,
+    urlToHttpOptions,
+    format: (value) =>
+      value instanceof URL ? value.href : new URL(value).href,
+  });
+
   const readEncoding = (options) =>
     typeof options === 'string'
       ? options
@@ -1595,6 +2323,1060 @@
     setImmediate: setPromiseImmediate,
   });
 
+  const readableStreamState = Symbol('muon.stream.readableState');
+  const writableStreamState = Symbol('muon.stream.writableState');
+
+  const Stream = function () {
+    if (!(this instanceof Stream)) return new Stream();
+    EventEmitter.call(this);
+  };
+  Stream.prototype = Object.create(EventEmitter.prototype);
+  Object.defineProperty(Stream.prototype, 'constructor', {
+    value: Stream,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+
+  const streamChunkSize = (chunk, objectMode) =>
+    objectMode ? 1 : chunk.byteLength;
+
+  const normalizeStreamChunk = (chunk, encoding, objectMode) => {
+    if (chunk === null) {
+      throw createError(
+        'ERR_STREAM_NULL_VALUES',
+        'Stream chunk cannot be null'
+      );
+    }
+    if (objectMode) return chunk;
+    if (typeof chunk === 'string') return Buffer.from(chunk, encoding);
+    if (chunk instanceof Uint8Array) return Buffer.from(chunk);
+    if (chunk instanceof ArrayBuffer) return Buffer.from(chunk);
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Stream chunk must be text, Buffer, Uint8Array, or ArrayBuffer'
+    );
+  };
+
+  const markStreamDestroyed = (stream, error) => {
+    const readable = stream[readableStreamState];
+    const writable = stream[writableStreamState];
+    if (readable) {
+      readable.destroyed = true;
+      if (error) readable.errored = error;
+    }
+    if (writable) {
+      writable.destroyed = true;
+      if (error) writable.errored = error;
+    }
+  };
+
+  const streamDestroy = function (error) {
+    const readable = this[readableStreamState];
+    const writable = this[writableStreamState];
+    if (readable?.destroyed || writable?.destroyed) return this;
+    markStreamDestroyed(this, error);
+    let completed = false;
+    const complete = (destroyError) => {
+      if (completed) return;
+      completed = true;
+      const finalError = destroyError ?? error;
+      if (finalError) this.emit('error', finalError);
+      if (readable) readable.closed = true;
+      if (writable) writable.closed = true;
+      this.emit('close');
+    };
+    try {
+      this._destroy(error ?? null, complete);
+    } catch (destroyError) {
+      complete(destroyError);
+    }
+    return this;
+  };
+
+  const streamDefaultDestroy = (error, callback) => callback(error);
+
+  const initializeReadable = (stream, options) => {
+    const normalizedOptions = options ?? {};
+    const objectMode = Boolean(normalizedOptions.objectMode);
+    const highWaterMark =
+      normalizedOptions.highWaterMark === undefined
+        ? objectMode
+          ? 16
+          : 16384
+        : Number(normalizedOptions.highWaterMark);
+    if (!Number.isInteger(highWaterMark) || highWaterMark < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Readable highWaterMark must be a non-negative integer'
+      );
+    }
+    Object.defineProperty(stream, readableStreamState, {
+      value: {
+        queue: [],
+        length: 0,
+        objectMode,
+        highWaterMark,
+        ended: false,
+        endEmitted: false,
+        flowing: null,
+        reading: false,
+        destroyed: false,
+        closed: false,
+        errored: null,
+        pipes: new Map(),
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    if (typeof normalizedOptions.read === 'function') {
+      stream._read = normalizedOptions.read;
+    }
+    if (typeof normalizedOptions.destroy === 'function') {
+      stream._destroy = normalizedOptions.destroy;
+    }
+    if (normalizedOptions.signal) {
+      setCallbackImmediate(() =>
+        addAbortSignal(normalizedOptions.signal, stream)
+      );
+    }
+  };
+
+  const requireReadableState = (stream) => {
+    const state = stream[readableStreamState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Readable method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const finishReadable = (stream, state) => {
+    if (
+      !state.endEmitted &&
+      state.ended &&
+      state.length === 0 &&
+      !state.destroyed
+    ) {
+      state.endEmitted = true;
+      state.flowing = false;
+      stream.emit('end');
+    }
+  };
+
+  const invokeReadableRead = (stream, state) => {
+    if (state.reading || state.ended || state.destroyed) return;
+    state.reading = true;
+    try {
+      stream._read(state.highWaterMark);
+    } catch (error) {
+      stream.destroy(error);
+    } finally {
+      state.reading = false;
+    }
+  };
+
+  const shiftReadableChunk = (state) => {
+    const chunk = state.queue.shift();
+    if (chunk !== undefined) {
+      state.length -= streamChunkSize(chunk, state.objectMode);
+    }
+    return chunk;
+  };
+
+  const drainReadable = (stream, state) => {
+    while (state.flowing === true && state.queue.length > 0) {
+      const chunk = shiftReadableChunk(state);
+      stream.emit('data', chunk);
+      if (state.destroyed) return;
+    }
+    if (state.queue.length === 0) {
+      finishReadable(stream, state);
+      if (!state.ended && state.flowing === true) {
+        invokeReadableRead(stream, state);
+      }
+    }
+  };
+
+  const Readable = function (options) {
+    if (!(this instanceof Readable)) return new Readable(options);
+    Stream.call(this);
+    initializeReadable(this, options);
+  };
+  Readable.prototype = Object.create(Stream.prototype);
+  Object.defineProperty(Readable.prototype, 'constructor', {
+    value: Readable,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Readable.prototype._read = () => {};
+  Readable.prototype._destroy = streamDefaultDestroy;
+  Readable.prototype.destroy = streamDestroy;
+  Readable.prototype.push = function (chunk, encoding) {
+    const state = requireReadableState(this);
+    if (state.destroyed) return false;
+    if (chunk === null) {
+      if (state.ended) return false;
+      state.ended = true;
+      this.emit('readable');
+      if (state.flowing === true) drainReadable(this, state);
+      return false;
+    }
+    if (state.ended) {
+      this.destroy(
+        createError('ERR_STREAM_PUSH_AFTER_EOF', 'Cannot push after EOF')
+      );
+      return false;
+    }
+    const normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    if (!state.objectMode && normalized.byteLength === 0) {
+      return state.length < state.highWaterMark;
+    }
+    if (state.flowing === true && state.length === 0) {
+      this.emit('data', normalized);
+    } else {
+      state.queue.push(normalized);
+      state.length += streamChunkSize(normalized, state.objectMode);
+      this.emit('readable');
+    }
+    return state.length < state.highWaterMark;
+  };
+  Readable.prototype.unshift = function (chunk, encoding) {
+    const state = requireReadableState(this);
+    const normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    state.queue.unshift(normalized);
+    state.length += streamChunkSize(normalized, state.objectMode);
+    this.emit('readable');
+  };
+  Readable.prototype.read = function (size) {
+    const state = requireReadableState(this);
+    if (state.length === 0 && !state.ended) invokeReadableRead(this, state);
+    if (state.length === 0) {
+      finishReadable(this, state);
+      return null;
+    }
+    if (state.objectMode) {
+      const value = shiftReadableChunk(state);
+      finishReadable(this, state);
+      return value;
+    }
+    const requested =
+      size === undefined || Number.isNaN(Number(size))
+        ? state.length
+        : Math.max(0, Math.trunc(Number(size)));
+    if (requested === 0 || requested > state.length) return null;
+    if (requested === state.queue[0].byteLength) {
+      const value = shiftReadableChunk(state);
+      finishReadable(this, state);
+      return value;
+    }
+    if (requested < state.queue[0].byteLength) {
+      const first = state.queue[0];
+      const value = first.subarray(0, requested);
+      state.queue[0] = first.subarray(requested);
+      state.length -= requested;
+      return value;
+    }
+    const result = Buffer.alloc(requested);
+    let offset = 0;
+    while (offset < requested) {
+      const chunk = state.queue[0];
+      const count = Math.min(chunk.byteLength, requested - offset);
+      Uint8Array.prototype.set.call(result, chunk.subarray(0, count), offset);
+      offset += count;
+      state.length -= count;
+      if (count === chunk.byteLength) state.queue.shift();
+      else state.queue[0] = chunk.subarray(count);
+    }
+    finishReadable(this, state);
+    return result;
+  };
+  Readable.prototype.pause = function () {
+    const state = requireReadableState(this);
+    state.flowing = false;
+    this.emit('pause');
+    return this;
+  };
+  Readable.prototype.resume = function () {
+    const state = requireReadableState(this);
+    if (state.destroyed) return this;
+    const changed = state.flowing !== true;
+    state.flowing = true;
+    if (changed) this.emit('resume');
+    drainReadable(this, state);
+    return this;
+  };
+  Readable.prototype.isPaused = function () {
+    return requireReadableState(this).flowing === false;
+  };
+  Readable.prototype.on = function (name, listener) {
+    EventEmitter.prototype.on.call(this, name, listener);
+    if (name === 'data') this.resume();
+    return this;
+  };
+  Readable.prototype.addListener = Readable.prototype.on;
+  Readable.prototype.pipe = function (destination, options) {
+    if (!destination || typeof destination.write !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'pipe destination must be writable'
+      );
+    }
+    const state = requireReadableState(this);
+    const shouldEnd = !options || options.end !== false;
+    const dataListener = (chunk) => {
+      if (!destination.write(chunk)) {
+        this.pause();
+        destination.once('drain', () => this.resume());
+      }
+    };
+    const endListener = () => {
+      if (shouldEnd) destination.end();
+    };
+    const errorListener = (error) => destination.destroy(error);
+    state.pipes.set(destination, {
+      dataListener,
+      endListener,
+      errorListener,
+    });
+    this.on('data', dataListener);
+    this.once('end', endListener);
+    this.once('error', errorListener);
+    destination.emit('pipe', this);
+    return destination;
+  };
+  Readable.prototype.unpipe = function (destination) {
+    const state = requireReadableState(this);
+    const destinations = destination ? [destination] : [...state.pipes.keys()];
+    for (const target of destinations) {
+      const listeners = state.pipes.get(target);
+      if (!listeners) continue;
+      this.removeListener('data', listeners.dataListener);
+      this.removeListener('end', listeners.endListener);
+      this.removeListener('error', listeners.errorListener);
+      state.pipes.delete(target);
+      target.emit('unpipe', this);
+    }
+    if (state.pipes.size === 0) state.flowing = false;
+    return this;
+  };
+  Readable.prototype[Symbol.asyncIterator] = async function* () {
+    const state = requireReadableState(this);
+    while (true) {
+      const chunk = this.read();
+      if (chunk !== null) {
+        yield chunk;
+        continue;
+      }
+      if (state.ended || state.destroyed) break;
+      await onceEvent(this, 'readable');
+    }
+    finishReadable(this, state);
+  };
+  Readable.from = (iterable, options) => {
+    if (
+      iterable === null ||
+      iterable === undefined ||
+      (!iterable[Symbol.iterator] && !iterable[Symbol.asyncIterator])
+    ) {
+      throw createError('ERR_INVALID_ARG_TYPE', 'iterable must be iterable');
+    }
+    const source = typeof iterable === 'string' ? [iterable] : iterable;
+    const stream = new Readable({ objectMode: true, ...(options ?? {}) });
+    setCallbackImmediate(async () => {
+      try {
+        for await (const chunk of source) stream.push(chunk);
+        stream.push(null);
+      } catch (error) {
+        stream.destroy(error);
+      }
+    });
+    return stream;
+  };
+  Readable.isDisturbed = (stream) => {
+    const state = stream?.[readableStreamState];
+    return Boolean(state && (state.endEmitted || state.length > 0));
+  };
+  Object.defineProperties(Readable.prototype, {
+    readable: {
+      get: function () {
+        const state = requireReadableState(this);
+        return !state.destroyed && !state.endEmitted;
+      },
+    },
+    readableEnded: {
+      get: function () {
+        return requireReadableState(this).endEmitted;
+      },
+    },
+    readableFlowing: {
+      get: function () {
+        return requireReadableState(this).flowing;
+      },
+    },
+    readableHighWaterMark: {
+      get: function () {
+        return requireReadableState(this).highWaterMark;
+      },
+    },
+    readableLength: {
+      get: function () {
+        return requireReadableState(this).length;
+      },
+    },
+    destroyed: {
+      get: function () {
+        return requireReadableState(this).destroyed;
+      },
+    },
+    closed: {
+      get: function () {
+        return requireReadableState(this).closed;
+      },
+    },
+    errored: {
+      get: function () {
+        return requireReadableState(this).errored;
+      },
+    },
+  });
+
+  const initializeWritable = (stream, options) => {
+    const normalizedOptions = options ?? {};
+    const objectMode = Boolean(normalizedOptions.objectMode);
+    const highWaterMark =
+      normalizedOptions.highWaterMark === undefined
+        ? objectMode
+          ? 16
+          : 16384
+        : Number(normalizedOptions.highWaterMark);
+    if (!Number.isInteger(highWaterMark) || highWaterMark < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Writable highWaterMark must be a non-negative integer'
+      );
+    }
+    Object.defineProperty(stream, writableStreamState, {
+      value: {
+        queue: [],
+        length: 0,
+        objectMode,
+        highWaterMark,
+        defaultEncoding: normalizedOptions.defaultEncoding ?? 'utf8',
+        writing: false,
+        corked: 0,
+        ending: false,
+        ended: false,
+        finished: false,
+        finalizing: false,
+        needDrain: false,
+        destroyed: false,
+        closed: false,
+        errored: null,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    if (typeof normalizedOptions.write === 'function') {
+      stream._write = normalizedOptions.write;
+    }
+    if (typeof normalizedOptions.final === 'function') {
+      stream._final = normalizedOptions.final;
+    }
+    if (typeof normalizedOptions.destroy === 'function') {
+      stream._destroy = normalizedOptions.destroy;
+    }
+    if (normalizedOptions.signal) {
+      setCallbackImmediate(() =>
+        addAbortSignal(normalizedOptions.signal, stream)
+      );
+    }
+  };
+
+  const requireWritableState = (stream) => {
+    const state = stream[writableStreamState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Writable method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const finishWritable = (stream, state) => {
+    if (
+      !state.ending ||
+      state.finished ||
+      state.finalizing ||
+      state.writing ||
+      state.queue.length > 0 ||
+      state.destroyed
+    ) {
+      return;
+    }
+    state.finalizing = true;
+    let completed = false;
+    const complete = (error) => {
+      if (completed) return;
+      completed = true;
+      state.finalizing = false;
+      if (error) {
+        stream.destroy(error);
+        return;
+      }
+      state.finished = true;
+      stream.emit('prefinish');
+      stream.emit('finish');
+    };
+    try {
+      stream._final(complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+
+  const processWritableQueue = (stream, state) => {
+    if (
+      state.writing ||
+      state.corked > 0 ||
+      state.destroyed ||
+      state.queue.length === 0
+    ) {
+      finishWritable(stream, state);
+      return;
+    }
+    const request = state.queue.shift();
+    state.writing = true;
+    let completed = false;
+    const complete = (error) => {
+      if (completed) return;
+      completed = true;
+      state.writing = false;
+      state.length -= request.size;
+      request.callback(error ?? null);
+      if (error) {
+        stream.destroy(error);
+        return;
+      }
+      if (state.needDrain && state.length < state.highWaterMark) {
+        state.needDrain = false;
+        stream.emit('drain');
+      }
+      processWritableQueue(stream, state);
+    };
+    try {
+      stream._write(request.chunk, request.encoding, complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+
+  const Writable = function (options) {
+    if (!(this instanceof Writable)) return new Writable(options);
+    Stream.call(this);
+    initializeWritable(this, options);
+  };
+  Writable.prototype = Object.create(Stream.prototype);
+  Object.defineProperty(Writable.prototype, 'constructor', {
+    value: Writable,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Writable.prototype._write = (chunk, encoding, callback) =>
+    callback(
+      createError('ERR_METHOD_NOT_IMPLEMENTED', '_write() is not implemented')
+    );
+  Writable.prototype._final = (callback) => callback();
+  Writable.prototype._destroy = streamDefaultDestroy;
+  Writable.prototype.destroy = streamDestroy;
+  Writable.prototype.write = function (chunk, encoding, callback) {
+    const state = requireWritableState(this);
+    if (typeof encoding === 'function') {
+      callback = encoding;
+      encoding = undefined;
+    }
+    const completion = typeof callback === 'function' ? callback : () => {};
+    if (state.ending || state.ended) {
+      const error = createError(
+        'ERR_STREAM_WRITE_AFTER_END',
+        'Cannot write after end'
+      );
+      completion(error);
+      this.destroy(error);
+      return false;
+    }
+    if (state.destroyed) {
+      const error = createError(
+        'ERR_STREAM_DESTROYED',
+        'Cannot write after destroy'
+      );
+      completion(error);
+      return false;
+    }
+    const normalizedEncoding = encoding ?? state.defaultEncoding;
+    const normalized = normalizeStreamChunk(
+      chunk,
+      normalizedEncoding,
+      state.objectMode
+    );
+    const size = streamChunkSize(normalized, state.objectMode);
+    state.length += size;
+    state.queue.push({
+      chunk: normalized,
+      encoding: normalizedEncoding,
+      callback: completion,
+      size,
+    });
+    const accepted = state.length < state.highWaterMark;
+    if (!accepted) state.needDrain = true;
+    processWritableQueue(this, state);
+    return accepted;
+  };
+  Writable.prototype.end = function (chunk, encoding, callback) {
+    const state = requireWritableState(this);
+    if (typeof chunk === 'function') {
+      callback = chunk;
+      chunk = undefined;
+      encoding = undefined;
+    } else if (typeof encoding === 'function') {
+      callback = encoding;
+      encoding = undefined;
+    }
+    if (typeof callback === 'function') this.once('finish', callback);
+    if (chunk !== undefined) this.write(chunk, encoding);
+    state.ending = true;
+    state.ended = true;
+    finishWritable(this, state);
+    return this;
+  };
+  Writable.prototype.cork = function () {
+    requireWritableState(this).corked += 1;
+  };
+  Writable.prototype.uncork = function () {
+    const state = requireWritableState(this);
+    if (state.corked > 0) state.corked -= 1;
+    processWritableQueue(this, state);
+  };
+  Writable.prototype.setDefaultEncoding = function (encoding) {
+    normalizeBufferEncoding(encoding);
+    requireWritableState(this).defaultEncoding = String(encoding);
+    return this;
+  };
+  Object.defineProperties(Writable.prototype, {
+    writable: {
+      get: function () {
+        const state = requireWritableState(this);
+        return !state.destroyed && !state.ended;
+      },
+    },
+    writableEnded: {
+      get: function () {
+        return requireWritableState(this).ended;
+      },
+    },
+    writableFinished: {
+      get: function () {
+        return requireWritableState(this).finished;
+      },
+    },
+    writableNeedDrain: {
+      get: function () {
+        return requireWritableState(this).needDrain;
+      },
+    },
+    writableHighWaterMark: {
+      get: function () {
+        return requireWritableState(this).highWaterMark;
+      },
+    },
+    writableLength: {
+      get: function () {
+        return requireWritableState(this).length;
+      },
+    },
+    destroyed: {
+      get: function () {
+        return requireWritableState(this).destroyed;
+      },
+    },
+    closed: {
+      get: function () {
+        return requireWritableState(this).closed;
+      },
+    },
+    errored: {
+      get: function () {
+        return requireWritableState(this).errored;
+      },
+    },
+  });
+
+  const Duplex = function (options) {
+    if (!(this instanceof Duplex)) return new Duplex(options);
+    Stream.call(this);
+    const normalizedOptions = options ?? {};
+    initializeReadable(this, {
+      ...normalizedOptions,
+      objectMode:
+        normalizedOptions.readableObjectMode ?? normalizedOptions.objectMode,
+      highWaterMark:
+        normalizedOptions.readableHighWaterMark ??
+        normalizedOptions.highWaterMark,
+    });
+    initializeWritable(this, {
+      ...normalizedOptions,
+      objectMode:
+        normalizedOptions.writableObjectMode ?? normalizedOptions.objectMode,
+      highWaterMark:
+        normalizedOptions.writableHighWaterMark ??
+        normalizedOptions.highWaterMark,
+    });
+    this.allowHalfOpen = normalizedOptions.allowHalfOpen !== false;
+  };
+  Duplex.prototype = Object.create(Readable.prototype);
+  Object.defineProperty(Duplex.prototype, 'constructor', {
+    value: Duplex,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  for (const name of [
+    '_write',
+    '_final',
+    'write',
+    'end',
+    'cork',
+    'uncork',
+    'setDefaultEncoding',
+  ]) {
+    Duplex.prototype[name] = Writable.prototype[name];
+  }
+  for (const name of [
+    'writable',
+    'writableEnded',
+    'writableFinished',
+    'writableNeedDrain',
+    'writableHighWaterMark',
+    'writableLength',
+  ]) {
+    Object.defineProperty(
+      Duplex.prototype,
+      name,
+      Object.getOwnPropertyDescriptor(Writable.prototype, name)
+    );
+  }
+  Duplex.prototype._destroy = streamDefaultDestroy;
+  Duplex.prototype.destroy = streamDestroy;
+
+  const Transform = function (options) {
+    if (!(this instanceof Transform)) return new Transform(options);
+    Duplex.call(this, options);
+    const normalizedOptions = options ?? {};
+    if (typeof normalizedOptions.transform === 'function') {
+      this._transform = normalizedOptions.transform;
+    }
+    if (typeof normalizedOptions.flush === 'function') {
+      this._flush = normalizedOptions.flush;
+    }
+  };
+  Transform.prototype = Object.create(Duplex.prototype);
+  Object.defineProperty(Transform.prototype, 'constructor', {
+    value: Transform,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Transform.prototype._transform = (chunk, encoding, callback) =>
+    callback(
+      createError(
+        'ERR_METHOD_NOT_IMPLEMENTED',
+        '_transform() is not implemented'
+      )
+    );
+  Transform.prototype._flush = (callback) => callback();
+  Transform.prototype._write = function (chunk, encoding, callback) {
+    let completed = false;
+    const complete = (error, output) => {
+      if (completed) return;
+      completed = true;
+      if (output !== undefined && output !== null) this.push(output);
+      callback(error);
+    };
+    try {
+      this._transform(chunk, encoding, complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+  Transform.prototype._final = function (callback) {
+    let completed = false;
+    const complete = (error, output) => {
+      if (completed) return;
+      completed = true;
+      if (output !== undefined && output !== null) this.push(output);
+      if (!error) this.push(null);
+      callback(error);
+    };
+    try {
+      this._flush(complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+
+  const PassThrough = function (options) {
+    if (!(this instanceof PassThrough)) return new PassThrough(options);
+    Transform.call(this, options);
+  };
+  PassThrough.prototype = Object.create(Transform.prototype);
+  Object.defineProperty(PassThrough.prototype, 'constructor', {
+    value: PassThrough,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  PassThrough.prototype._transform = (chunk, encoding, callback) =>
+    callback(null, chunk);
+
+  const isReadable = (stream) => {
+    const state = stream?.[readableStreamState];
+    return Boolean(state && !state.destroyed && !state.endEmitted);
+  };
+  const isWritable = (stream) => {
+    const state = stream?.[writableStreamState];
+    return Boolean(state && !state.destroyed && !state.ended);
+  };
+  const isDestroyed = (stream) => {
+    const readable = stream?.[readableStreamState];
+    const writable = stream?.[writableStreamState];
+    return Boolean(readable?.destroyed || writable?.destroyed);
+  };
+  const isErrored = (stream) => {
+    const readable = stream?.[readableStreamState];
+    const writable = stream?.[writableStreamState];
+    return Boolean(readable?.errored || writable?.errored);
+  };
+
+  const addAbortSignal = (signal, stream) => {
+    if (!(signal instanceof AbortSignal)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'signal must be an AbortSignal'
+      );
+    }
+    if (!stream || typeof stream.destroy !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'stream must be destroyable');
+    }
+    const abort = () => stream.destroy(createAbortError(signal.reason));
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    stream.once('close', () => signal.removeEventListener('abort', abort));
+    return stream;
+  };
+
+  const finishedStreamPromise = async (stream, options) => {
+    if (!stream || typeof stream.on !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'stream must be an EventEmitter'
+      );
+    }
+    const normalizedOptions = options ?? {};
+    const readable = stream[readableStreamState];
+    const writable = stream[writableStreamState];
+    const waitReadable =
+      normalizedOptions.readable === undefined
+        ? Boolean(readable)
+        : Boolean(normalizedOptions.readable);
+    const waitWritable =
+      normalizedOptions.writable === undefined
+        ? Boolean(writable)
+        : Boolean(normalizedOptions.writable);
+    const isComplete = () =>
+      (!waitReadable || readable?.endEmitted || readable?.destroyed) &&
+      (!waitWritable || writable?.finished || writable?.destroyed);
+    if (isComplete()) {
+      if (readable?.errored) throw readable.errored;
+      if (writable?.errored) throw writable.errored;
+      return;
+    }
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        stream.removeListener('end', check);
+        stream.removeListener('finish', check);
+        stream.removeListener('close', check);
+        stream.removeListener('error', fail);
+        if (normalizedOptions.signal) {
+          normalizedOptions.signal.removeEventListener('abort', abort);
+        }
+      };
+      const settle = (operation, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        operation(value);
+      };
+      const check = () => {
+        if (isComplete()) settle(resolve, undefined);
+      };
+      const fail = (error) => settle(reject, error);
+      const abort = () =>
+        settle(reject, createAbortError(normalizedOptions.signal.reason));
+      stream.on('end', check);
+      stream.on('finish', check);
+      stream.on('close', check);
+      stream.on('error', fail);
+      if (normalizedOptions.signal) {
+        if (normalizedOptions.signal.aborted) abort();
+        else {
+          normalizedOptions.signal.addEventListener('abort', abort, {
+            once: true,
+          });
+        }
+      }
+      check();
+    });
+  };
+
+  const finishedStream = (stream, options, callback) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+    if (typeof callback !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'callback must be a function');
+    }
+    let active = true;
+    setCallbackImmediate(async () => {
+      try {
+        await finishedStreamPromise(stream, options);
+        if (active) callback(null);
+      } catch (error) {
+        if (active) callback(error);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  };
+
+  const normalizePipelineStreams = (values) => {
+    const streams =
+      values.length === 1 && Array.isArray(values[0]) ? values[0] : values;
+    if (streams.length < 2) {
+      throw createError(
+        'ERR_MISSING_ARGS',
+        'pipeline requires at least a source and destination'
+      );
+    }
+    const normalized = [...streams];
+    if (!normalized[0] || typeof normalized[0].pipe !== 'function') {
+      normalized[0] = Readable.from(normalized[0]);
+    }
+    for (const stream of normalized) {
+      if (!stream || typeof stream.on !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'pipeline entries must be streams or an iterable source'
+        );
+      }
+    }
+    return normalized;
+  };
+
+  const pipelineStreamsPromise = async (...values) => {
+    const streams = normalizePipelineStreams(values);
+    const destination = streams.at(-1);
+    const completion = new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        for (const stream of streams) stream.removeListener('error', fail);
+        destination.removeListener('finish', succeed);
+        destination.removeListener('close', close);
+      };
+      const settle = (operation, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        operation(value);
+      };
+      const fail = (error) => {
+        for (const stream of streams) {
+          if (typeof stream.destroy === 'function' && !isDestroyed(stream)) {
+            stream.destroy();
+          }
+        }
+        settle(reject, error);
+      };
+      const succeed = () => settle(resolve, undefined);
+      const close = () => {
+        if (destination.writableFinished || destination.readableEnded) {
+          succeed();
+        } else {
+          fail(
+            createError(
+              'ERR_STREAM_PREMATURE_CLOSE',
+              'Pipeline destination closed prematurely'
+            )
+          );
+        }
+      };
+      for (const stream of streams) stream.on('error', fail);
+      destination.once('finish', succeed);
+      destination.once('close', close);
+    });
+    for (let index = 0; index + 1 < streams.length; index += 1) {
+      streams[index].pipe(streams[index + 1]);
+    }
+    await completion;
+  };
+
+  const pipelineStreams = (...values) => {
+    const callback = values.pop();
+    if (typeof callback !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'callback must be a function');
+    }
+    const streams = normalizePipelineStreams(values);
+    setCallbackImmediate(async () => {
+      try {
+        await pipelineStreamsPromise(...streams);
+        callback(null);
+      } catch (error) {
+        callback(error);
+      }
+    });
+    return streams.at(-1);
+  };
+
+  const streamPromises = Object.freeze({
+    finished: finishedStreamPromise,
+    pipeline: pipelineStreamsPromise,
+  });
+  const streamModule = Object.freeze({
+    Stream,
+    Readable,
+    Writable,
+    Duplex,
+    Transform,
+    PassThrough,
+    addAbortSignal,
+    finished: finishedStream,
+    pipeline: pipelineStreams,
+    isReadable,
+    isWritable,
+    isDestroyed,
+    isErrored,
+    promises: streamPromises,
+  });
+
   Object.defineProperty(globalThis, '__muonDispatchTimer', {
     value: dispatchTimer,
     configurable: false,
@@ -1609,6 +3391,12 @@
     AbortSignal: { value: AbortSignal, configurable: true, writable: true },
     AbortController: {
       value: AbortController,
+      configurable: true,
+      writable: true,
+    },
+    URL: { value: URL, configurable: true, writable: true },
+    URLSearchParams: {
+      value: URLSearchParams,
       configurable: true,
       writable: true,
     },
@@ -1660,6 +3448,12 @@
     'node:timers': timersModule,
     'timers/promises': timersPromises,
     'node:timers/promises': timersPromises,
+    stream: streamModule,
+    'node:stream': streamModule,
+    'stream/promises': streamPromises,
+    'node:stream/promises': streamPromises,
+    url: urlModule,
+    'node:url': urlModule,
   });
 
   const findHostModule = (specifier) => {

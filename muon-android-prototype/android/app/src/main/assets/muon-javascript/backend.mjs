@@ -13,6 +13,26 @@ import {
   setTimeout,
 } from 'node:timers';
 import { setTimeout as setPromiseTimeout } from 'node:timers/promises';
+import {
+  PassThrough,
+  Readable,
+  Transform,
+  Writable,
+  isDestroyed,
+  isReadable,
+  isWritable,
+} from 'node:stream';
+import {
+  finished as finishedStream,
+  pipeline as pipelineStreams,
+} from 'node:stream/promises';
+import {
+  URL,
+  URLSearchParams,
+  fileURLToPath,
+  pathToFileURL,
+  urlToHttpOptions,
+} from 'node:url';
 
 let counter = 0;
 
@@ -186,6 +206,126 @@ export const exerciseRuntimePrimitives = async () => {
   };
 };
 
+export const exerciseStreamAndUrl = async () => {
+  const output = [];
+  const source = Readable.from(
+    [Buffer.from('muon'), Buffer.from('-'), Buffer.from('stream')],
+    { objectMode: false }
+  );
+  const upperCase = new Transform({
+    transform: (chunk, encoding, callback) => {
+      callback(null, Buffer.from(chunk.toString().toUpperCase()));
+    },
+  });
+  const destination = new Writable({
+    highWaterMark: 4,
+    write: (chunk, encoding, callback) => {
+      setTimeout(() => {
+        output.push(chunk.toString());
+        callback();
+      }, 1);
+    },
+  });
+  await pipelineStreams(source, upperCase, destination);
+  await finishedStream(destination);
+
+  const asyncIteratorValues = [];
+  for await (const chunk of Readable.from(
+    [Buffer.from('async'), Buffer.from('-iterator')],
+    { objectMode: false }
+  )) {
+    asyncIteratorValues.push(chunk.toString());
+  }
+
+  const passThroughValues = [];
+  const passThrough = new PassThrough();
+  passThrough.on('data', (chunk) => passThroughValues.push(chunk.toString()));
+  passThrough.write('pass');
+  passThrough.end('-through');
+  await finishedStream(passThrough);
+
+  const slowWrites = [];
+  const slowDestination = new Writable({
+    highWaterMark: 3,
+    write: (chunk, encoding, callback) => {
+      setTimeout(() => {
+        slowWrites.push(chunk.toString());
+        callback();
+      }, 1);
+    },
+  });
+  const acceptedWithoutBackpressure = slowDestination.write('four');
+  if (!acceptedWithoutBackpressure) {
+    await onceEvent(slowDestination, 'drain');
+  }
+  slowDestination.end('done');
+  await finishedStream(slowDestination);
+
+  const stateProbe = new PassThrough();
+  const stateBeforeDestroy = {
+    readable: isReadable(stateProbe),
+    writable: isWritable(stateProbe),
+    destroyed: isDestroyed(stateProbe),
+  };
+  stateProbe.destroy();
+  const stateAfterDestroy = {
+    readable: isReadable(stateProbe),
+    writable: isWritable(stateProbe),
+    destroyed: isDestroyed(stateProbe),
+  };
+
+  const url = new URL(
+    '../child?alpha=1&alpha=2#section',
+    'https://user:pass@example.com:8443/root/base/'
+  );
+  url.searchParams.append('space', 'a b');
+  url.searchParams.set('alpha', '3');
+  url.searchParams.sort();
+  const httpOptions = urlToHttpOptions(url);
+
+  const parameters = new URLSearchParams('?plus=a+b&empty=&dup=x&dup=y');
+  parameters.delete('dup', 'x');
+
+  const fileUrl = pathToFileURL('/data/user/0/app files/é.txt');
+
+  return {
+    stream: {
+      output: output.join(''),
+      asyncIteratorOutput: asyncIteratorValues.join(''),
+      passThroughOutput: passThroughValues.join(''),
+      acceptedWithoutBackpressure,
+      slowWrites,
+      stateBeforeDestroy,
+      stateAfterDestroy,
+    },
+    url: {
+      href: url.href,
+      protocol: url.protocol,
+      username: url.username,
+      password: url.password,
+      hostname: url.hostname,
+      port: url.port,
+      host: url.host,
+      origin: url.origin,
+      pathname: url.pathname,
+      search: url.search,
+      hash: url.hash,
+      alpha: url.searchParams.getAll('alpha'),
+      entries: [...url.searchParams],
+      httpOptions,
+      parameters: {
+        text: parameters.toString(),
+        plus: parameters.get('plus'),
+        hasDuplicate: parameters.has('dup', 'y'),
+        size: parameters.size,
+      },
+      fileHref: fileUrl.href,
+      filePath: fileURLToPath(fileUrl),
+      canParseRelative: URL.canParse('/next', url),
+    },
+  };
+};
+
 export const exhaustMemory = () => {
   const blocks = [];
   while (true) {
@@ -206,6 +346,7 @@ globalThis.__muonBackendModule = Object.freeze({
   invokeCallback,
   importedPathBasename,
   exerciseRuntimePrimitives,
+  exerciseStreamAndUrl,
   exhaustMemory,
   spin,
 });

@@ -1152,7 +1152,8 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"},\"capabilities\":[\"esm\",\"multiple-runtimes\","
             "\"callbacks\",\"node:fs/promises\",\"node:fs\","
             "\"node:path\",\"node:events\",\"node:buffer\","
-            "\"node:timers\",\"node:timers/promises\",\"abort\"]}";
+            "\"node:timers\",\"node:timers/promises\",\"node:stream\","
+            "\"node:url\",\"abort\"]}";
         initialized = write_frame(host.file_descriptor, handshake);
       }
 

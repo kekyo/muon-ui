@@ -158,6 +158,7 @@ public final class MuonActivityTest {
                         const timers = await first.importModule('node:timers/promises');
                         const timer = await timers.setTimeout(10, 'awake');
                         const runtimePrimitives = await firstRoot.exerciseRuntimePrimitives();
+                        const streamAndUrl = await firstRoot.exerciseStreamAndUrl();
 
                         await first.release();
                         const survivingCount = await secondRoot.increment();
@@ -175,6 +176,7 @@ public final class MuonActivityTest {
                           joined,
                           timer,
                           runtimePrimitives,
+                          streamAndUrl,
                           survivingCount
                         }));
                       } catch (error) {
@@ -214,6 +216,12 @@ public final class MuonActivityTest {
             assertFalse(runtimePrimitives
                     .getJSONObject("timers")
                     .getBoolean("cancelledTimeoutCalled"));
+            JSONObject streamAndUrl = result.getJSONObject("streamAndUrl");
+            assertEquals("MUON-STREAM",
+                    streamAndUrl.getJSONObject("stream").getString("output"));
+            assertEquals("https://user:pass@example.com:8443/root/child"
+                            + "?alpha=3&space=a+b#section",
+                    streamAndUrl.getJSONObject("url").getString("href"));
             assertEquals(2, result.getInt("survivingCount"));
         }
     }

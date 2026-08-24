@@ -456,6 +456,79 @@ public final class MuonJavaScriptRuntimeServiceTest {
     }
 
     @Test
+    public void supportsNodeStreamsAndUrls() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-stream-url")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "stream-url",
+                    root,
+                    "exerciseStreamAndUrl",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            JSONObject stream = values.getJSONObject("stream");
+            assertEquals("MUON-STREAM", stream.getString("output"));
+            assertEquals("async-iterator", stream.getString("asyncIteratorOutput"));
+            assertEquals("pass-through", stream.getString("passThroughOutput"));
+            assertFalse(stream.getBoolean("acceptedWithoutBackpressure"));
+            assertEquals("[\"four\",\"done\"]", stream.getJSONArray("slowWrites").toString());
+            assertEquals(
+                    "{\"readable\":true,\"writable\":true,\"destroyed\":false}",
+                    stream.getJSONObject("stateBeforeDestroy").toString());
+            assertEquals(
+                    "{\"readable\":false,\"writable\":false,\"destroyed\":true}",
+                    stream.getJSONObject("stateAfterDestroy").toString());
+
+            JSONObject url = values.getJSONObject("url");
+            assertEquals(
+                    "https://user:pass@example.com:8443/root/child"
+                            + "?alpha=3&space=a+b#section",
+                    url.getString("href"));
+            assertEquals("https:", url.getString("protocol"));
+            assertEquals("user", url.getString("username"));
+            assertEquals("pass", url.getString("password"));
+            assertEquals("example.com", url.getString("hostname"));
+            assertEquals("8443", url.getString("port"));
+            assertEquals("example.com:8443", url.getString("host"));
+            assertEquals("https://example.com:8443", url.getString("origin"));
+            assertEquals("/root/child", url.getString("pathname"));
+            assertEquals("?alpha=3&space=a+b", url.getString("search"));
+            assertEquals("#section", url.getString("hash"));
+            assertEquals("[\"3\"]", url.getJSONArray("alpha").toString());
+            assertEquals(
+                    "[[\"alpha\",\"3\"],[\"space\",\"a b\"]]",
+                    url.getJSONArray("entries").toString());
+
+            JSONObject httpOptions = url.getJSONObject("httpOptions");
+            assertEquals("https:", httpOptions.getString("protocol"));
+            assertEquals("example.com", httpOptions.getString("hostname"));
+            assertEquals(8443, httpOptions.getInt("port"));
+            assertEquals("user:pass", httpOptions.getString("auth"));
+            assertEquals(
+                    "/root/child?alpha=3&space=a+b",
+                    httpOptions.getString("path"));
+
+            JSONObject parameters = url.getJSONObject("parameters");
+            assertEquals("plus=a+b&empty=&dup=y", parameters.getString("text"));
+            assertEquals("a b", parameters.getString("plus"));
+            assertTrue(parameters.getBoolean("hasDuplicate"));
+            assertEquals(3, parameters.getInt("size"));
+            assertEquals(
+                    "file:///data/user/0/app%20files/%C3%A9.txt",
+                    url.getString("fileHref"));
+            assertEquals(
+                    "/data/user/0/app files/é.txt",
+                    url.getString("filePath"));
+            assertTrue(url.getBoolean("canParseRelative"));
+        }
+    }
+
+    @Test
     public void interruptsRunawayJavaScriptWithoutKillingTheService()
             throws Exception {
         try (BoundService binding = bindService();

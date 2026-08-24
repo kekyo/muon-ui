@@ -439,6 +439,17 @@
     'node:timers/promises': timersPromises,
   });
 
+  const findHostModule = (specifier) => {
+    const module = hostModules[specifier];
+    if (!module) {
+      throw createError(
+        'ERR_MUON_JS_MODULE_NOT_FOUND',
+        `Unknown module: ${specifier}`
+      );
+    }
+    return module;
+  };
+
   const findModule = (specifier) => {
     if (specifier === '.') {
       if (!globalThis.__muonBackendModule) {
@@ -449,14 +460,7 @@
       }
       return globalThis.__muonBackendModule;
     }
-    const module = hostModules[specifier];
-    if (!module) {
-      throw createError(
-        'ERR_MUON_JS_MODULE_NOT_FOUND',
-        `Unknown module: ${specifier}`
-      );
-    }
-    return module;
+    return findHostModule(specifier);
   };
 
   const importModule = (specifier) => {
@@ -535,6 +539,12 @@
   };
 
   globalThis.__muonShouldShutdown = false;
+  Object.defineProperty(globalThis, '__muonGetHostModule', {
+    value: findHostModule,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
   globalThis.__muonHandleMessage = async (source) => {
     const message = JSON.parse(source);
     if (message.kind === 'callbackResult') {

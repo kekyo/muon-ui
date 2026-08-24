@@ -221,6 +221,16 @@ public final class MuonJavaScriptRuntimeServiceTest {
                 String firstRoot = importModule(first, "first-import", ".");
                 String secondRoot = importModule(second, "second-import", ".");
 
+                JSONObject importedPathBasename = call(
+                        first,
+                        "imported-path-basename",
+                        firstRoot,
+                        "importedPathBasename",
+                        new JSONArray().put("alpha/value.txt"));
+                assertTrue(importedPathBasename.toString(),
+                        importedPathBasename.getBoolean("ok"));
+                assertEquals("value.txt", importedPathBasename.getString("value"));
+
                 JSONObject firstIncrement = call(
                         first,
                         "first-increment",

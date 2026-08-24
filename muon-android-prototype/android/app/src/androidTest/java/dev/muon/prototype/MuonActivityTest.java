@@ -109,6 +109,9 @@ public final class MuonActivityTest {
                         second = await globalThis.muon.node.createNode();
                         const firstRoot = await first.importModule('.');
                         const secondRoot = await second.importModule('.');
+                        const importedPathBasename = await firstRoot.importedPathBasename(
+                          'alpha/value.txt'
+                        );
                         const firstCount = await firstRoot.increment();
                         const secondCount = await secondRoot.increment();
                         const integer = await firstRoot.echo(18446744073709551615n);
@@ -160,6 +163,7 @@ public final class MuonActivityTest {
                         await second.release();
                         muonAndroidTest.postMessage(JSON.stringify({
                           status: 'resolved',
+                          importedPathBasename,
                           firstCount,
                           secondCount,
                           integer: integer.toString(),
@@ -190,6 +194,7 @@ public final class MuonActivityTest {
             assertNotNull(message);
             JSONObject result = new JSONObject(message);
             assertEquals(message, "resolved", result.getString("status"));
+            assertEquals("value.txt", result.getString("importedPathBasename"));
             assertEquals(1, result.getInt("firstCount"));
             assertEquals(1, result.getInt("secondCount"));
             assertEquals("18446744073709551615", result.getString("integer"));

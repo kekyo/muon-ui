@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -203,6 +204,102 @@ static MuonJavaScriptHost* require_host(JSContext* context) {
     JS_ThrowInternalError(context, "JavaScript runtime host is unavailable");
   }
   return host;
+}
+
+static JSValue get_host_module(JSContext* context, const char* module_name) {
+  auto global = JS_GetGlobalObject(context);
+  auto getter = JS_GetPropertyStr(context, global, "__muonGetHostModule");
+  if (!JS_IsFunction(context, getter)) {
+    JS_FreeValue(context, getter);
+    JS_FreeValue(context, global);
+    return JS_ThrowInternalError(context,
+                                 "JavaScript host module registry is unavailable");
+  }
+  auto argument = JS_NewString(context, module_name);
+  auto module = JS_Call(context, getter, global, 1, &argument);
+  JS_FreeValue(context, argument);
+  JS_FreeValue(context, getter);
+  JS_FreeValue(context, global);
+  return module;
+}
+
+static int for_each_host_module_export(
+    JSContext* context, JSValueConst module,
+    const std::function<int(const char*, JSAtom)>& callback) {
+  JSPropertyEnum* properties = nullptr;
+  std::uint32_t property_count = 0;
+  if (JS_GetOwnPropertyNames(context, &properties, &property_count, module,
+                             JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) {
+    return -1;
+  }
+  auto result = 0;
+  for (std::uint32_t index = 0; index < property_count; ++index) {
+    const char* name = JS_AtomToCString(context, properties[index].atom);
+    if (name == nullptr) {
+      result = -1;
+      break;
+    }
+    if (std::strcmp(name, "default") != 0) {
+      result = callback(name, properties[index].atom);
+    }
+    JS_FreeCString(context, name);
+    if (result < 0) {
+      break;
+    }
+  }
+  JS_FreePropertyEnum(context, properties, property_count);
+  return result;
+}
+
+static int initialize_host_module(JSContext* context, JSModuleDef* definition) {
+  // The loader stores the JavaScript module object until QuickJS instantiates
+  // the synthetic module, when its properties can become ESM exports.
+  auto module = JS_GetModulePrivateValue(context, definition);
+  if (JS_IsException(module)) {
+    return -1;
+  }
+  auto result = JS_SetModuleExport(context, definition, "default",
+                                   JS_DupValue(context, module));
+  if (result >= 0) {
+    result = for_each_host_module_export(
+        context, module, [&](const char* name, JSAtom atom) {
+          auto value = JS_GetProperty(context, module, atom);
+          if (JS_IsException(value)) {
+            return -1;
+          }
+          return JS_SetModuleExport(context, definition, name, value);
+        });
+  }
+  JS_FreeValue(context, module);
+  return result;
+}
+
+static JSModuleDef* load_host_module(JSContext* context,
+                                     const char* module_name, void* opaque) {
+  (void)opaque;
+  auto module = get_host_module(context, module_name);
+  if (JS_IsException(module)) {
+    return nullptr;
+  }
+  if (!JS_IsObject(module)) {
+    JS_FreeValue(context, module);
+    JS_ThrowTypeError(context, "Host module '%s' is not an object", module_name);
+    return nullptr;
+  }
+  auto* definition =
+      JS_NewCModule(context, module_name, initialize_host_module);
+  if (definition == nullptr ||
+      JS_AddModuleExport(context, definition, "default") < 0 ||
+      for_each_host_module_export(
+          context, module, [&](const char* name, JSAtom atom) {
+            (void)atom;
+            return JS_AddModuleExport(context, definition, name);
+          }) < 0) {
+    JS_FreeValue(context, module);
+    return nullptr;
+  }
+  JS_SetModulePrivateValue(context, definition, module);
+  return definition;
 }
 
 static bool resolve_filesystem_path(JSContext* context,
@@ -770,6 +867,8 @@ static bool evaluate_runtime_sources(MuonJavaScriptHost* host,
     return false;
   }
   JS_FreeValue(host->context, runtime_result);
+
+  JS_SetModuleLoaderFunc(host->runtime, nullptr, load_host_module, host);
 
   auto module_result = evaluate_source(host, backend_source,
                                        "muon-javascript/backend.mjs",

@@ -1,5 +1,8 @@
 /* Packaged ES module used to verify the Android QuickJS sidecar. */
 
+import path, { basename } from 'node:path';
+import pathAlias from 'path';
+
 let counter = 0;
 
 export const answer = 42;
@@ -12,6 +15,15 @@ export const increment = () => {
 export const echo = async (value) => value;
 
 export const invokeCallback = async (value, callback) => await callback(value);
+
+export const importedPathBasename = (value) => {
+  if (path !== pathAlias || basename(value) !== pathAlias.basename(value)) {
+    throw new Error(
+      'The packaged module did not receive one shared path module'
+    );
+  }
+  return basename(value);
+};
 
 export const exhaustMemory = () => {
   const blocks = [];
@@ -31,6 +43,7 @@ globalThis.__muonBackendModule = Object.freeze({
   increment,
   echo,
   invokeCallback,
+  importedPathBasename,
   exhaustMemory,
   spin,
 });

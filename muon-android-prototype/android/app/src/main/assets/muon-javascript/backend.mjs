@@ -38,6 +38,20 @@ import querystring from 'node:querystring';
 import querystringAlias from 'querystring';
 import stringDecoderModule, { StringDecoder } from 'node:string_decoder';
 import stringDecoderAlias from 'string_decoder';
+import crypto, {
+  createHash,
+  createHmac,
+  getHashes,
+  getRandomValues,
+  hash as hashValue,
+  randomBytes,
+  randomFill,
+  randomFillSync,
+  randomInt,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
+import cryptoAlias from 'crypto';
 import {
   PassThrough,
   Readable,
@@ -454,6 +468,105 @@ export const exerciseUtilityModules = async () => {
       base64Parts,
       latin1: new StringDecoder('latin1').end(Buffer.from([0xe2])),
     },
+  };
+};
+
+export const exerciseCrypto = async () => {
+  const rollingHash = createHash('sha256');
+  rollingHash.update('a');
+  const copiedDigest = rollingHash.copy().digest('hex');
+  rollingHash.update('bc');
+
+  const callbackRandom = await new Promise((resolve, reject) => {
+    randomBytes(12, (error, value) => {
+      if (error) reject(error);
+      else resolve(value);
+    });
+  });
+
+  const partialFill = Buffer.alloc(8, 0x5a);
+  randomFillSync(partialFill, 2, 4);
+  const callbackFill = await new Promise((resolve, reject) => {
+    randomFill(Buffer.alloc(9), 1, 7, (error, value) => {
+      if (error) reject(error);
+      else resolve(value);
+    });
+  });
+  const callbackInteger = await new Promise((resolve, reject) => {
+    randomInt(20, 30, (error, value) => {
+      if (error) reject(error);
+      else resolve(value);
+    });
+  });
+
+  const randomValues = new Uint16Array(8);
+  const returnedRandomValues = getRandomValues(randomValues);
+  const uuid = randomUUID();
+
+  let lengthErrorCode = '';
+  try {
+    timingSafeEqual(Buffer.from('a'), Buffer.from('ab'));
+  } catch (error) {
+    lengthErrorCode = error.code;
+  }
+
+  let sizeErrorCode = '';
+  try {
+    randomBytes(1024 * 1024 + 1);
+  } catch (error) {
+    sizeErrorCode = error.code;
+  }
+
+  let algorithmErrorCode = '';
+  try {
+    createHash('sha1');
+  } catch (error) {
+    algorithmErrorCode = error.code;
+  }
+
+  return {
+    moduleAlias: crypto === cryptoAlias,
+    globalRandomValues:
+      typeof globalThis.crypto.getRandomValues === 'function' &&
+      typeof globalThis.crypto.randomUUID === 'function',
+    hashes: getHashes(),
+    sha256: createHash('sha256').update('abc').digest('hex'),
+    rollingSha256: rollingHash.digest('hex'),
+    copiedSha256: copiedDigest,
+    sha256Base64: createHash('sha256').update('abc').digest('base64'),
+    oneShotSha256: hashValue('sha256', 'abc'),
+    hmacSha256: createHmac('sha256', 'key')
+      .update('The quick brown fox jumps over the lazy dog')
+      .digest('hex'),
+    randomBytes: {
+      length: randomBytes(32).length,
+      isBuffer: Buffer.isBuffer(randomBytes(4)),
+      callbackLength: callbackRandom.length,
+    },
+    partialFill: {
+      length: partialFill.length,
+      prefixPreserved: partialFill[0] === 0x5a && partialFill[1] === 0x5a,
+      suffixPreserved: partialFill[6] === 0x5a && partialFill[7] === 0x5a,
+      callbackLength: callbackFill.length,
+    },
+    randomInt: {
+      synchronous: randomInt(10, 20),
+      callback: callbackInteger,
+    },
+    randomValues: {
+      sameObject: returnedRandomValues === randomValues,
+      byteLength: randomValues.byteLength,
+    },
+    uuid,
+    uuidVersion: uuid[14],
+    uuidVariant: uuid[19],
+    timingSafeEqual: {
+      equal: timingSafeEqual(Buffer.from('muon'), Buffer.from('muon')),
+      different: timingSafeEqual(Buffer.from('muon'), Buffer.from('node')),
+      lengthErrorCode,
+    },
+    sizeErrorCode,
+    algorithmErrorCode,
   };
 };
 
@@ -1301,6 +1414,7 @@ globalThis.__muonBackendModule = Object.freeze({
   exerciseRuntimePrimitives,
   exerciseProcessAndOs,
   exerciseUtilityModules,
+  exerciseCrypto,
   exerciseStreamAndUrl,
   exerciseDnsAndTcp,
   exerciseNetServer,

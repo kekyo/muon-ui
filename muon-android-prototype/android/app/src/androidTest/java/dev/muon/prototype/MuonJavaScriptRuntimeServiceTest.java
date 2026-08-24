@@ -215,6 +215,8 @@ public final class MuonJavaScriptRuntimeServiceTest {
                 capabilities.toString().contains("\"node:querystring\""));
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:string_decoder\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:crypto\""));
         return runtime;
     }
 
@@ -747,6 +749,89 @@ public final class MuonJavaScriptRuntimeServiceTest {
             assertTrue(request(
                     runtime,
                     "shutdown-utility-modules",
+                    "shutdown",
+                    new JSONObject()).getBoolean("ok"));
+        }
+    }
+
+    @Test
+    public void supportsNodeCrypto() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-crypto")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "crypto",
+                    root,
+                    "exerciseCrypto",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            assertTrue(values.getBoolean("moduleAlias"));
+            assertTrue(values.getBoolean("globalRandomValues"));
+            assertEquals("[\"sha256\"]", values.getJSONArray("hashes").toString());
+            assertEquals(
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                    values.getString("sha256"));
+            assertEquals(
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                    values.getString("rollingSha256"));
+            assertEquals(
+                    "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+                    values.getString("copiedSha256"));
+            assertEquals(
+                    "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=",
+                    values.getString("sha256Base64"));
+            assertEquals(values.getString("sha256"), values.getString("oneShotSha256"));
+            assertEquals(
+                    "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+                    values.getString("hmacSha256"));
+
+            JSONObject randomBytes = values.getJSONObject("randomBytes");
+            assertEquals(32, randomBytes.getInt("length"));
+            assertTrue(randomBytes.getBoolean("isBuffer"));
+            assertEquals(12, randomBytes.getInt("callbackLength"));
+
+            JSONObject partialFill = values.getJSONObject("partialFill");
+            assertEquals(8, partialFill.getInt("length"));
+            assertTrue(partialFill.getBoolean("prefixPreserved"));
+            assertTrue(partialFill.getBoolean("suffixPreserved"));
+            assertEquals(9, partialFill.getInt("callbackLength"));
+
+            JSONObject randomInt = values.getJSONObject("randomInt");
+            assertTrue(randomInt.getInt("synchronous") >= 10);
+            assertTrue(randomInt.getInt("synchronous") < 20);
+            assertTrue(randomInt.getInt("callback") >= 20);
+            assertTrue(randomInt.getInt("callback") < 30);
+
+            JSONObject randomValues = values.getJSONObject("randomValues");
+            assertTrue(randomValues.getBoolean("sameObject"));
+            assertEquals(16, randomValues.getInt("byteLength"));
+
+            String uuid = values.getString("uuid");
+            assertTrue(uuid, uuid.matches(
+                    "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}"
+                            + "-[0-9a-f]{12}$"));
+            assertEquals("4", values.getString("uuidVersion"));
+            assertTrue("89ab".contains(values.getString("uuidVariant")));
+
+            JSONObject timingSafeEqual = values.getJSONObject("timingSafeEqual");
+            assertTrue(timingSafeEqual.getBoolean("equal"));
+            assertFalse(timingSafeEqual.getBoolean("different"));
+            assertEquals(
+                    "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH",
+                    timingSafeEqual.getString("lengthErrorCode"));
+            assertEquals("ERR_OUT_OF_RANGE", values.getString("sizeErrorCode"));
+            assertEquals(
+                    "ERR_CRYPTO_UNKNOWN_HASH",
+                    values.getString("algorithmErrorCode"));
+
+            assertTrue(request(
+                    runtime,
+                    "shutdown-crypto",
                     "shutdown",
                     new JSONObject()).getBoolean("ok"));
         }

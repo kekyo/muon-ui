@@ -51,6 +51,7 @@ static constexpr std::size_t kNetworkReadBufferSize = 64U * 1024U;
 static constexpr std::size_t kMaximumPendingDnsOperations = 64;
 static constexpr std::size_t kMaximumActiveTcpSockets = 64;
 static constexpr std::size_t kMaximumActiveTcpServers = 8;
+static constexpr std::size_t kMaximumRandomBytes = 1024U * 1024U;
 
 struct MuonJavaScriptSession;
 
@@ -860,6 +861,72 @@ static JSValue js_monotonic_nanoseconds(JSContext* context,
         context, "monotonicNanoseconds does not accept arguments");
   }
   return JS_NewBigInt64(context, steady_nanoseconds());
+}
+
+static JSValue js_crypto_random(JSContext* context, JSValueConst this_value,
+                                int argument_count,
+                                JSValueConst* arguments) {
+  (void)this_value;
+  if (argument_count != 1) {
+    return JS_ThrowTypeError(context, "cryptoRandom requires a byte count");
+  }
+  std::int64_t requested = 0;
+  if (JS_ToInt64(context, &requested, arguments[0]) < 0) {
+    return JS_EXCEPTION;
+  }
+  if (requested < 0 ||
+      static_cast<std::uint64_t>(requested) > kMaximumRandomBytes) {
+    return JS_ThrowRangeError(
+        context, "cryptoRandom byte count must be between 0 and 1048576");
+  }
+  auto size = static_cast<std::size_t>(requested);
+  std::vector<std::uint8_t> bytes(size);
+  if (size > 0) {
+    int file_descriptor = -1;
+    do {
+      file_descriptor = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    } while (file_descriptor < 0 && errno == EINTR);
+    if (file_descriptor < 0) {
+      return throw_host_limit_error(context, "ERR_CRYPTO_RANDOM_FAILED",
+                                    "Android random source is unavailable");
+    }
+    auto read = read_exact(file_descriptor, bytes.data(), bytes.size());
+    close(file_descriptor);
+    if (!read) {
+      return throw_host_limit_error(context, "ERR_CRYPTO_RANDOM_FAILED",
+                                    "Unable to read Android random data");
+    }
+  }
+  return JS_NewArrayBufferCopy(context, bytes.data(), bytes.size());
+}
+
+static JSValue js_crypto_timing_safe_equal(JSContext* context,
+                                           JSValueConst this_value,
+                                           int argument_count,
+                                           JSValueConst* arguments) {
+  (void)this_value;
+  if (argument_count != 2) {
+    return JS_ThrowTypeError(
+        context, "cryptoTimingSafeEqual requires two ArrayBuffers");
+  }
+  std::size_t left_length = 0;
+  std::size_t right_length = 0;
+  auto* left = JS_GetArrayBuffer(context, &left_length, arguments[0]);
+  auto* right = JS_GetArrayBuffer(context, &right_length, arguments[1]);
+  if ((left == nullptr && left_length != 0) ||
+      (right == nullptr && right_length != 0)) {
+    return JS_EXCEPTION;
+  }
+  if (left_length != right_length) {
+    return JS_ThrowRangeError(context,
+                              "ArrayBuffers must have equal byte lengths");
+  }
+  volatile std::uint8_t difference = 0;
+  for (std::size_t index = 0; index < left_length; ++index) {
+    difference = static_cast<std::uint8_t>(
+        difference | static_cast<std::uint8_t>(left[index] ^ right[index]));
+  }
+  return difference == 0 ? JS_TRUE : JS_FALSE;
 }
 
 static std::string socket_error_code(int error) {
@@ -2163,6 +2230,11 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
       install_host_function(host->context, global,
                             "__muonMonotonicNanoseconds",
                             js_monotonic_nanoseconds, 0) &&
+      install_host_function(host->context, global, "__muonCryptoRandom",
+                            js_crypto_random, 1) &&
+      install_host_function(host->context, global,
+                            "__muonCryptoTimingSafeEqual",
+                            js_crypto_timing_safe_equal, 2) &&
       install_host_function(host->context, global, "__muonIsIp", js_is_ip,
                             1) &&
       install_host_function(host->context, global, "__muonDnsLookup",
@@ -2981,7 +3053,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"node:timers\",\"node:timers/promises\",\"node:stream\","
             "\"node:process\",\"node:os\","
             "\"node:util\",\"node:assert\",\"node:querystring\","
-            "\"node:string_decoder\","
+            "\"node:string_decoder\",\"node:crypto\","
             "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
             "\"tcp-server\","
             "\"node:http\",\"http-server\",\"node:https\",\"fetch\","

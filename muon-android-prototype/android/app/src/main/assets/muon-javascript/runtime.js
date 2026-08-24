@@ -1524,6 +1524,477 @@
   };
   const stringDecoderModule = Object.freeze({ StringDecoder });
 
+  const maximumCryptoRandomBytes = 1024 * 1024;
+  const maximumCryptoHashBytes = 16 * 1024 * 1024;
+  const sha256Constants = Uint32Array.from([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ]);
+  const rotateRight32 = (value, count) =>
+    (value >>> count) | (value << (32 - count));
+  const sha256 = (input) => {
+    const bitLength = input.length * 8;
+    const paddedLength = Math.ceil((input.length + 9) / 64) * 64;
+    const padded = new Uint8Array(paddedLength);
+    padded.set(input);
+    padded[input.length] = 0x80;
+    const lengthOffset = padded.length - 8;
+    const highLength = Math.floor(bitLength / 0x100000000);
+    const lowLength = bitLength >>> 0;
+    padded[lengthOffset] = highLength >>> 24;
+    padded[lengthOffset + 1] = highLength >>> 16;
+    padded[lengthOffset + 2] = highLength >>> 8;
+    padded[lengthOffset + 3] = highLength;
+    padded[lengthOffset + 4] = lowLength >>> 24;
+    padded[lengthOffset + 5] = lowLength >>> 16;
+    padded[lengthOffset + 6] = lowLength >>> 8;
+    padded[lengthOffset + 7] = lowLength;
+
+    let a0 = 0x6a09e667;
+    let b0 = 0xbb67ae85;
+    let c0 = 0x3c6ef372;
+    let d0 = 0xa54ff53a;
+    let e0 = 0x510e527f;
+    let f0 = 0x9b05688c;
+    let g0 = 0x1f83d9ab;
+    let h0 = 0x5be0cd19;
+    const words = new Uint32Array(64);
+
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let index = 0; index < 16; index += 1) {
+        const wordOffset = offset + index * 4;
+        words[index] =
+          (padded[wordOffset] << 24) |
+          (padded[wordOffset + 1] << 16) |
+          (padded[wordOffset + 2] << 8) |
+          padded[wordOffset + 3];
+      }
+      for (let index = 16; index < 64; index += 1) {
+        const previous = words[index - 15];
+        const previous2 = words[index - 2];
+        const sigma0 =
+          rotateRight32(previous, 7) ^
+          rotateRight32(previous, 18) ^
+          (previous >>> 3);
+        const sigma1 =
+          rotateRight32(previous2, 17) ^
+          rotateRight32(previous2, 19) ^
+          (previous2 >>> 10);
+        words[index] =
+          (words[index - 16] + sigma0 + words[index - 7] + sigma1) >>> 0;
+      }
+
+      let a = a0;
+      let b = b0;
+      let c = c0;
+      let d = d0;
+      let e = e0;
+      let f = f0;
+      let g = g0;
+      let h = h0;
+      for (let index = 0; index < 64; index += 1) {
+        const sum1 =
+          rotateRight32(e, 6) ^ rotateRight32(e, 11) ^ rotateRight32(e, 25);
+        const choose = (e & f) ^ (~e & g);
+        const temporary1 =
+          (h + sum1 + choose + sha256Constants[index] + words[index]) >>> 0;
+        const sum0 =
+          rotateRight32(a, 2) ^ rotateRight32(a, 13) ^ rotateRight32(a, 22);
+        const majority = (a & b) ^ (a & c) ^ (b & c);
+        const temporary2 = (sum0 + majority) >>> 0;
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temporary1) >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (temporary1 + temporary2) >>> 0;
+      }
+      a0 = (a0 + a) >>> 0;
+      b0 = (b0 + b) >>> 0;
+      c0 = (c0 + c) >>> 0;
+      d0 = (d0 + d) >>> 0;
+      e0 = (e0 + e) >>> 0;
+      f0 = (f0 + f) >>> 0;
+      g0 = (g0 + g) >>> 0;
+      h0 = (h0 + h) >>> 0;
+    }
+
+    const digest = new Uint8Array(32);
+    const state = [a0, b0, c0, d0, e0, f0, g0, h0];
+    for (let index = 0; index < state.length; index += 1) {
+      const value = state[index];
+      digest[index * 4] = value >>> 24;
+      digest[index * 4 + 1] = value >>> 16;
+      digest[index * 4 + 2] = value >>> 8;
+      digest[index * 4 + 3] = value;
+    }
+    return digest;
+  };
+
+  const normalizeCryptoAlgorithm = (algorithm) => {
+    const normalized = String(algorithm).toLowerCase().replaceAll('-', '');
+    if (normalized !== 'sha256') {
+      throw createError(
+        'ERR_CRYPTO_UNKNOWN_HASH',
+        `Unsupported hash algorithm: ${algorithm}`
+      );
+    }
+    return 'sha256';
+  };
+  const cryptoInputBytes = (value, encoding) => {
+    if (typeof value === 'string') {
+      return Uint8Array.from(Buffer.from(value, encoding));
+    }
+    if (value instanceof ArrayBuffer) {
+      return Uint8Array.from(new Uint8Array(value));
+    }
+    if (ArrayBuffer.isView(value)) {
+      return Uint8Array.from(
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+      );
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Crypto data must be text, an ArrayBuffer, or an ArrayBuffer view'
+    );
+  };
+  const cryptoOutput = (bytes, encoding) =>
+    encoding === undefined
+      ? Buffer.from(bytes)
+      : Buffer.from(bytes).toString(encoding);
+  const joinCryptoChunks = (chunks, totalLength) => {
+    const bytes = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return bytes;
+  };
+
+  const createHashState = (algorithm, initialChunks) => {
+    normalizeCryptoAlgorithm(algorithm);
+    const state = {
+      chunks: initialChunks.map((chunk) => Uint8Array.from(chunk)),
+      finalized: false,
+      totalLength: initialChunks.reduce(
+        (total, chunk) => total + chunk.length,
+        0
+      ),
+    };
+    const requireActive = () => {
+      if (state.finalized) {
+        throw createError(
+          'ERR_CRYPTO_HASH_FINALIZED',
+          'Digest has already been called'
+        );
+      }
+    };
+    const hash = {
+      update: (value, encoding) => {
+        requireActive();
+        const bytes = cryptoInputBytes(value, encoding);
+        if (state.totalLength + bytes.length > maximumCryptoHashBytes) {
+          throw createError(
+            'ERR_OUT_OF_RANGE',
+            'Hash input exceeds the 16 MiB runtime limit'
+          );
+        }
+        state.chunks.push(bytes);
+        state.totalLength += bytes.length;
+        return hash;
+      },
+      digest: (encoding) => {
+        requireActive();
+        state.finalized = true;
+        return cryptoOutput(
+          sha256(joinCryptoChunks(state.chunks, state.totalLength)),
+          encoding
+        );
+      },
+      copy: () => {
+        requireActive();
+        return createHashState('sha256', state.chunks);
+      },
+    };
+    return hash;
+  };
+  const createHash = (algorithm) => createHashState(algorithm, []);
+
+  const sha256Hmac = (key, data) => {
+    let normalizedKey = key;
+    if (normalizedKey.length > 64) normalizedKey = sha256(normalizedKey);
+    const block = new Uint8Array(64);
+    block.set(normalizedKey);
+    const innerPad = Uint8Array.from(block, (value) => value ^ 0x36);
+    const outerPad = Uint8Array.from(block, (value) => value ^ 0x5c);
+    return sha256(combineBytes(outerPad, sha256(combineBytes(innerPad, data))));
+  };
+  const createHmac = (algorithm, key) => {
+    normalizeCryptoAlgorithm(algorithm);
+    const keyBytes = cryptoInputBytes(key, undefined);
+    if (keyBytes.length > maximumCryptoHashBytes) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'HMAC key exceeds the runtime limit'
+      );
+    }
+    const state = { chunks: [], finalized: false, totalLength: 0 };
+    const hmac = {
+      update: (value, encoding) => {
+        if (state.finalized) {
+          throw createError(
+            'ERR_CRYPTO_HASH_FINALIZED',
+            'Digest has already been called'
+          );
+        }
+        const bytes = cryptoInputBytes(value, encoding);
+        if (state.totalLength + bytes.length > maximumCryptoHashBytes) {
+          throw createError(
+            'ERR_OUT_OF_RANGE',
+            'HMAC input exceeds the 16 MiB runtime limit'
+          );
+        }
+        state.chunks.push(bytes);
+        state.totalLength += bytes.length;
+        return hmac;
+      },
+      digest: (encoding) => {
+        if (state.finalized) {
+          throw createError(
+            'ERR_CRYPTO_HASH_FINALIZED',
+            'Digest has already been called'
+          );
+        }
+        state.finalized = true;
+        return cryptoOutput(
+          sha256Hmac(
+            keyBytes,
+            joinCryptoChunks(state.chunks, state.totalLength)
+          ),
+          encoding
+        );
+      },
+    };
+    return hmac;
+  };
+
+  const validateRandomSize = (size) => {
+    const normalized = Number(size);
+    if (
+      !Number.isInteger(normalized) ||
+      normalized < 0 ||
+      normalized > maximumCryptoRandomBytes
+    ) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Random byte count must be between 0 and 1048576'
+      );
+    }
+    return normalized;
+  };
+  const secureRandomBytes = (size) =>
+    Buffer.from(__muonCryptoRandom(validateRandomSize(size)));
+  const randomBytes = (size, callback) => {
+    if (callback === undefined) return secureRandomBytes(size);
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomBytes callback must be a function'
+      );
+    }
+    let error = null;
+    let bytes;
+    try {
+      bytes = secureRandomBytes(size);
+    } catch (caught) {
+      error = caught;
+    }
+    setCallbackImmediate(callback, error, bytes);
+    return undefined;
+  };
+  const cryptoByteView = (value) => {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Random target must be an ArrayBuffer or ArrayBuffer view'
+    );
+  };
+  const randomFillSync = (target, offset, size) => {
+    const bytes = cryptoByteView(target);
+    const normalizedOffset = offset === undefined ? 0 : Number(offset);
+    const normalizedSize =
+      size === undefined ? bytes.length - normalizedOffset : Number(size);
+    if (
+      !Number.isInteger(normalizedOffset) ||
+      !Number.isInteger(normalizedSize) ||
+      normalizedOffset < 0 ||
+      normalizedSize < 0 ||
+      normalizedOffset + normalizedSize > bytes.length
+    ) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Random fill range is outside the target buffer'
+      );
+    }
+    bytes.set(secureRandomBytes(normalizedSize), normalizedOffset);
+    return target;
+  };
+  const randomFill = (target, offset, size, callback) => {
+    let normalizedOffset = offset;
+    let normalizedSize = size;
+    let normalizedCallback = callback;
+    if (typeof offset === 'function') {
+      normalizedCallback = offset;
+      normalizedOffset = undefined;
+      normalizedSize = undefined;
+    } else if (typeof size === 'function') {
+      normalizedCallback = size;
+      normalizedSize = undefined;
+    }
+    if (typeof normalizedCallback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomFill callback must be a function'
+      );
+    }
+    let error = null;
+    try {
+      randomFillSync(target, normalizedOffset, normalizedSize);
+    } catch (caught) {
+      error = caught;
+    }
+    setCallbackImmediate(normalizedCallback, error, error ? undefined : target);
+  };
+
+  const secureRandomInteger = (minimum, maximum) => {
+    if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomInt bounds must be safe integers'
+      );
+    }
+    const range = maximum - minimum;
+    const sampleSpace = 0x1000000000000;
+    if (range <= 0 || range >= sampleSpace) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'randomInt range must be positive and less than 2^48'
+      );
+    }
+    const limit = Math.floor(sampleSpace / range) * range;
+    while (true) {
+      const bytes = secureRandomBytes(6);
+      let sample = 0;
+      for (const byte of bytes) sample = sample * 256 + byte;
+      if (sample < limit) return minimum + (sample % range);
+    }
+  };
+  const randomInt = (minimum, maximum, callback) => {
+    let normalizedMinimum = minimum;
+    let normalizedMaximum = maximum;
+    let normalizedCallback = callback;
+    if (typeof maximum === 'function') {
+      normalizedCallback = maximum;
+      normalizedMaximum = minimum;
+      normalizedMinimum = 0;
+    } else if (maximum === undefined) {
+      normalizedMaximum = minimum;
+      normalizedMinimum = 0;
+    }
+    if (
+      normalizedCallback !== undefined &&
+      typeof normalizedCallback !== 'function'
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomInt callback must be a function'
+      );
+    }
+    const value = secureRandomInteger(normalizedMinimum, normalizedMaximum);
+    if (normalizedCallback === undefined) return value;
+    setCallbackImmediate(normalizedCallback, null, value);
+    return undefined;
+  };
+  const randomUUID = (options) => {
+    if (
+      options !== undefined &&
+      (options === null || typeof options !== 'object')
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomUUID options must be an object'
+      );
+    }
+    const bytes = secureRandomBytes(16);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = bytes.toString('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+      12,
+      16
+    )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+  const getRandomValues = (target) => {
+    const bytes = cryptoByteView(target);
+    if (bytes.byteLength > 65536) {
+      const error = new Error('Random value target exceeds 65536 bytes');
+      error.name = 'QuotaExceededError';
+      throw error;
+    }
+    randomFillSync(target);
+    return target;
+  };
+  const timingSafeEqual = (left, right) => {
+    const leftBytes = Uint8Array.from(cryptoByteView(left));
+    const rightBytes = Uint8Array.from(cryptoByteView(right));
+    if (leftBytes.length !== rightBytes.length) {
+      throw createError(
+        'ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH',
+        'Input buffers must have the same byte length'
+      );
+    }
+    return __muonCryptoTimingSafeEqual(leftBytes.buffer, rightBytes.buffer);
+  };
+  const hashValue = (algorithm, data, options) => {
+    const encoding =
+      typeof options === 'string'
+        ? options
+        : options?.outputEncoding === undefined
+          ? 'hex'
+          : options.outputEncoding;
+    return createHash(algorithm).update(data).digest(encoding);
+  };
+  const getHashes = () => ['sha256'];
+  const cryptoModule = Object.freeze({
+    createHash,
+    createHmac,
+    getHashes,
+    getRandomValues,
+    hash: hashValue,
+    randomBytes,
+    randomFill,
+    randomFillSync,
+    randomInt,
+    randomUUID,
+    timingSafeEqual,
+  });
+  const globalCrypto = Object.freeze({ getRandomValues, randomUUID });
+
   const eventType = Symbol('muon.event.type');
   const eventTarget = Symbol('muon.event.target');
   const eventCurrentTarget = Symbol('muon.event.currentTarget');
@@ -7228,6 +7699,11 @@
       configurable: true,
       writable: true,
     },
+    crypto: {
+      value: globalCrypto,
+      configurable: true,
+      writable: true,
+    },
   });
 
   const hostModules = Object.freeze({
@@ -7253,6 +7729,8 @@
     'node:querystring': querystringModule,
     string_decoder: stringDecoderModule,
     'node:string_decoder': stringDecoderModule,
+    crypto: cryptoModule,
+    'node:crypto': cryptoModule,
     buffer: bufferModule,
     'node:buffer': bufferModule,
     timers: timersModule,

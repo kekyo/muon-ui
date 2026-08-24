@@ -80,6 +80,7 @@ struct MuonHostEvent {
   std::string code;
   std::string message;
   std::string syscall;
+  std::string payload;
 };
 
 struct MuonTcpWrite {
@@ -136,6 +137,9 @@ struct MuonJavaScriptSession {
   std::mutex dns_result_mutex;
   std::deque<MuonDnsResult> dns_results;
   bool accepts_dns_results = true;
+  std::mutex external_event_mutex;
+  std::deque<MuonHostEvent> external_events;
+  bool accepts_external_events = true;
   std::atomic<bool> stop_requested{false};
 };
 
@@ -161,6 +165,14 @@ static std::mutex g_sessions_mutex;
 static std::condition_variable g_sessions_changed;
 static std::unordered_map<std::string, std::shared_ptr<MuonJavaScriptSession>>
     g_sessions;
+static std::mutex g_java_http_mutex;
+static JavaVM* g_java_virtual_machine = nullptr;
+static jclass g_java_http_client_class = nullptr;
+static jmethodID g_java_http_start_method = nullptr;
+static jmethodID g_java_http_cancel_method = nullptr;
+static jmethodID g_java_http_handle_data_method = nullptr;
+static jmethodID g_java_http_resume_method = nullptr;
+static jmethodID g_java_http_cancel_runtime_method = nullptr;
 
 static std::string dns_error_code(int result) {
   if (result == EAI_NONAME) {
@@ -343,6 +355,93 @@ static void throw_illegal_state(JNIEnv* environment,
   if (exception_class != nullptr) {
     environment->ThrowNew(exception_class, message.c_str());
   }
+}
+
+static bool initialize_java_http_bridge(JNIEnv* environment) {
+  std::lock_guard<std::mutex> lock(g_java_http_mutex);
+  if (g_java_http_client_class != nullptr) {
+    return true;
+  }
+  JavaVM* virtual_machine = nullptr;
+  if (environment->GetJavaVM(&virtual_machine) != JNI_OK) {
+    throw_illegal_state(environment, "Unable to access the Android Java VM.");
+    return false;
+  }
+  auto local_class =
+      environment->FindClass("dev/muon/prototype/MuonJavaScriptHttpClient");
+  if (local_class == nullptr) {
+    environment->ExceptionClear();
+    throw_illegal_state(environment,
+                        "Unable to load the Android HTTP client bridge.");
+    return false;
+  }
+  auto global_class = reinterpret_cast<jclass>(
+      environment->NewGlobalRef(local_class));
+  environment->DeleteLocalRef(local_class);
+  if (global_class == nullptr) {
+    throw_illegal_state(environment,
+                        "Unable to retain the Android HTTP client bridge.");
+    return false;
+  }
+  auto start = environment->GetStaticMethodID(
+      global_class, "start",
+      "(Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;"
+      "Ljava/lang/String;[BIILjava/lang/String;)V");
+  auto cancel = environment->GetStaticMethodID(
+      global_class, "cancel", "(Ljava/lang/String;J)Z");
+  auto handle_data = environment->GetStaticMethodID(
+      global_class, "handleData", "(Ljava/lang/String;JZ)Z");
+  auto resume = environment->GetStaticMethodID(
+      global_class, "resume", "(Ljava/lang/String;J)Z");
+  auto cancel_runtime = environment->GetStaticMethodID(
+      global_class, "cancelRuntime", "(Ljava/lang/String;)V");
+  if (start == nullptr || cancel == nullptr || handle_data == nullptr ||
+      resume == nullptr || cancel_runtime == nullptr) {
+    environment->ExceptionClear();
+    environment->DeleteGlobalRef(global_class);
+    throw_illegal_state(
+        environment, "The Android HTTP client bridge has an invalid API.");
+    return false;
+  }
+  g_java_virtual_machine = virtual_machine;
+  g_java_http_client_class = global_class;
+  g_java_http_start_method = start;
+  g_java_http_cancel_method = cancel;
+  g_java_http_handle_data_method = handle_data;
+  g_java_http_resume_method = resume;
+  g_java_http_cancel_runtime_method = cancel_runtime;
+  return true;
+}
+
+static JNIEnv* attach_java_environment(bool* attached) {
+  *attached = false;
+  if (g_java_virtual_machine == nullptr) {
+    return nullptr;
+  }
+  JNIEnv* environment = nullptr;
+  auto status = g_java_virtual_machine->GetEnv(
+      reinterpret_cast<void**>(&environment), JNI_VERSION_1_6);
+  if (status == JNI_OK) {
+    return environment;
+  }
+  if (status != JNI_EDETACHED ||
+      g_java_virtual_machine->AttachCurrentThread(&environment, nullptr) !=
+          JNI_OK) {
+    return nullptr;
+  }
+  *attached = true;
+  return environment;
+}
+
+static bool finish_java_http_call(JNIEnv* environment, bool attached) {
+  auto succeeded = !environment->ExceptionCheck();
+  if (!succeeded) {
+    environment->ExceptionClear();
+  }
+  if (attached) {
+    g_java_virtual_machine->DetachCurrentThread();
+  }
+  return succeeded;
 }
 
 static bool read_exact(int file_descriptor, void* destination,
@@ -1146,6 +1245,207 @@ static JSValue js_tcp_set_keep_alive(JSContext* context,
   return JS_TRUE;
 }
 
+static JSValue js_http_start(JSContext* context, JSValueConst this_value,
+                             int argument_count, JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 8) {
+    return JS_ThrowTypeError(
+        context,
+        "httpStart requires an identifier, method, URL, headers, body, "
+        "timeouts, and certificate authority");
+  }
+  std::int64_t identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &identifier)) {
+    return JS_EXCEPTION;
+  }
+  std::string method;
+  std::string url;
+  std::string headers;
+  std::string certificate_authority;
+  if (!get_js_string(context, arguments[1], &method) ||
+      !get_js_string(context, arguments[2], &url) ||
+      !get_js_string(context, arguments[3], &headers) ||
+      !get_js_string(context, arguments[7], &certificate_authority)) {
+    return JS_EXCEPTION;
+  }
+  std::size_t body_length = 0;
+  auto* body = JS_GetArrayBuffer(context, &body_length, arguments[4]);
+  if (body == nullptr) {
+    return JS_ThrowTypeError(context, "HTTP request body must be an ArrayBuffer");
+  }
+  if (body_length > kMaximumFrameLength) {
+    return JS_ThrowRangeError(context, "HTTP request body exceeds the limit");
+  }
+  std::int32_t connect_timeout = 0;
+  std::int32_t read_timeout = 0;
+  if (JS_ToInt32(context, &connect_timeout, arguments[5]) < 0 ||
+      JS_ToInt32(context, &read_timeout, arguments[6]) < 0) {
+    return JS_EXCEPTION;
+  }
+  if (connect_timeout < 0 || read_timeout < 0 ||
+      connect_timeout > kMaximumTimerMilliseconds ||
+      read_timeout > kMaximumTimerMilliseconds) {
+    return JS_ThrowRangeError(context,
+                              "HTTP timeout must be between 0 and 60000ms");
+  }
+
+  bool attached = false;
+  auto* environment = attach_java_environment(&attached);
+  if (environment == nullptr || g_java_http_client_class == nullptr) {
+    return JS_ThrowInternalError(context,
+                                 "Android HTTP client bridge is unavailable");
+  }
+  auto runtime_id =
+      environment->NewStringUTF(host->session->runtime_id.c_str());
+  auto java_method = environment->NewStringUTF(method.c_str());
+  auto java_url = environment->NewStringUTF(url.c_str());
+  auto java_headers = environment->NewStringUTF(headers.c_str());
+  auto java_certificate_authority =
+      environment->NewStringUTF(certificate_authority.c_str());
+  auto java_body =
+      environment->NewByteArray(static_cast<jsize>(body_length));
+  if (java_body != nullptr && body_length > 0) {
+    environment->SetByteArrayRegion(
+        java_body, 0, static_cast<jsize>(body_length),
+        reinterpret_cast<const jbyte*>(body));
+  }
+  if (runtime_id != nullptr && java_method != nullptr && java_url != nullptr &&
+      java_headers != nullptr && java_certificate_authority != nullptr &&
+      java_body != nullptr && !environment->ExceptionCheck()) {
+    environment->CallStaticVoidMethod(
+        g_java_http_client_class, g_java_http_start_method, runtime_id,
+        static_cast<jlong>(identifier), java_method, java_url, java_headers,
+        java_body, static_cast<jint>(connect_timeout),
+        static_cast<jint>(read_timeout), java_certificate_authority);
+  }
+  if (java_body != nullptr) {
+    environment->DeleteLocalRef(java_body);
+  }
+  if (java_certificate_authority != nullptr) {
+    environment->DeleteLocalRef(java_certificate_authority);
+  }
+  if (java_headers != nullptr) {
+    environment->DeleteLocalRef(java_headers);
+  }
+  if (java_url != nullptr) {
+    environment->DeleteLocalRef(java_url);
+  }
+  if (java_method != nullptr) {
+    environment->DeleteLocalRef(java_method);
+  }
+  if (runtime_id != nullptr) {
+    environment->DeleteLocalRef(runtime_id);
+  }
+  if (!finish_java_http_call(environment, attached)) {
+    return JS_ThrowInternalError(context,
+                                 "Unable to start the Android HTTP request");
+  }
+  return JS_UNDEFINED;
+}
+
+static JSValue call_java_http_boolean(JSContext* context,
+                                      MuonJavaScriptHost* host,
+                                      jmethodID method,
+                                      std::int64_t identifier,
+                                      bool include_state, bool state) {
+  bool attached = false;
+  auto* environment = attach_java_environment(&attached);
+  if (environment == nullptr || g_java_http_client_class == nullptr) {
+    return JS_ThrowInternalError(context,
+                                 "Android HTTP client bridge is unavailable");
+  }
+  auto runtime_id =
+      environment->NewStringUTF(host->session->runtime_id.c_str());
+  jboolean result = JNI_FALSE;
+  if (runtime_id != nullptr && !environment->ExceptionCheck()) {
+    if (include_state) {
+      result = environment->CallStaticBooleanMethod(
+          g_java_http_client_class, method, runtime_id,
+          static_cast<jlong>(identifier), state ? JNI_TRUE : JNI_FALSE);
+    } else {
+      result = environment->CallStaticBooleanMethod(
+          g_java_http_client_class, method, runtime_id,
+          static_cast<jlong>(identifier));
+    }
+  }
+  if (runtime_id != nullptr) {
+    environment->DeleteLocalRef(runtime_id);
+  }
+  if (!finish_java_http_call(environment, attached)) {
+    return JS_ThrowInternalError(context,
+                                 "Android HTTP client operation failed");
+  }
+  return JS_NewBool(context, result != JNI_FALSE);
+}
+
+static JSValue js_http_cancel(JSContext* context, JSValueConst this_value,
+                              int argument_count, JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 1) {
+    return JS_ThrowTypeError(context,
+                             "httpCancel requires an identifier");
+  }
+  std::int64_t identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &identifier)) {
+    return JS_EXCEPTION;
+  }
+  return call_java_http_boolean(context, host, g_java_http_cancel_method,
+                                identifier, false, false);
+}
+
+static JSValue js_http_handle_data(JSContext* context,
+                                   JSValueConst this_value,
+                                   int argument_count,
+                                   JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 2) {
+    return JS_ThrowTypeError(
+        context, "httpHandleData requires an identifier and pause state");
+  }
+  std::int64_t identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &identifier)) {
+    return JS_EXCEPTION;
+  }
+  auto paused = JS_ToBool(context, arguments[1]);
+  if (paused < 0) {
+    return JS_EXCEPTION;
+  }
+  return call_java_http_boolean(context, host,
+                                g_java_http_handle_data_method, identifier,
+                                true, paused != 0);
+}
+
+static JSValue js_http_resume(JSContext* context, JSValueConst this_value,
+                              int argument_count, JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 1) {
+    return JS_ThrowTypeError(context,
+                             "httpResume requires an identifier");
+  }
+  std::int64_t identifier = 0;
+  if (!get_positive_identifier(context, arguments[0], &identifier)) {
+    return JS_EXCEPTION;
+  }
+  return call_java_http_boolean(context, host, g_java_http_resume_method,
+                                identifier, false, false);
+}
+
 static JSValue js_fs_read_text(JSContext* context, JSValueConst this_value,
                                int argument_count,
                                JSValueConst* arguments) {
@@ -1519,6 +1819,14 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
                             js_tcp_set_no_delay, 2) &&
       install_host_function(host->context, global, "__muonTcpSetKeepAlive",
                             js_tcp_set_keep_alive, 3) &&
+      install_host_function(host->context, global, "__muonHttpStart",
+                            js_http_start, 8) &&
+      install_host_function(host->context, global, "__muonHttpCancel",
+                            js_http_cancel, 1) &&
+      install_host_function(host->context, global, "__muonHttpHandleData",
+                            js_http_handle_data, 2) &&
+      install_host_function(host->context, global, "__muonHttpResume",
+                            js_http_resume, 1) &&
       install_host_function(host->context, global, "__muonFsReadText",
                             js_fs_read_text, 1) &&
       install_host_function(host->context, global, "__muonFsReadBuffer",
@@ -1569,13 +1877,17 @@ static void end_js_execution(MuonJavaScriptHost* host) {
 
 static JSValue create_host_event_payload(JSContext* context,
                                          const MuonHostEvent& event) {
-  if (event.type == "data") {
+  if (event.type == "data" || event.type == "httpData") {
     return JS_NewArrayBufferCopy(context, event.data.data(), event.data.size());
+  }
+  if (event.type == "httpResponse" || event.type == "httpError") {
+    return JS_ParseJSON(context, event.payload.data(), event.payload.size(),
+                        "<android-http-event>");
   }
   if (event.type == "write") {
     return JS_NewInt64(context, event.operation_identifier);
   }
-  if (event.type == "end") {
+  if (event.type == "end" || event.type == "httpEnd") {
     return JS_UNDEFINED;
   }
   auto payload = JS_NewObject(context);
@@ -1641,6 +1953,14 @@ static bool dispatch_host_events(MuonJavaScriptHost* host) {
           JS_NewString(host->context, event.type.c_str()),
           create_host_event_payload(host->context, event),
       };
+      if (JS_IsException(arguments[2])) {
+        JS_FreeValue(host->context, arguments[0]);
+        JS_FreeValue(host->context, arguments[1]);
+        JS_FreeValue(host->context, dispatcher);
+        log_error("Unable to decode a QuickJS host event: " +
+                  take_exception(host->context));
+        return false;
+      }
       begin_js_execution(host);
       auto result = JS_Call(host->context, dispatcher, JS_UNDEFINED, 3,
                             arguments);
@@ -1690,6 +2010,18 @@ static void collect_dns_results(MuonJavaScriptHost* host) {
       event.syscall = "getaddrinfo";
     }
     host->host_events.push_back(std::move(event));
+  }
+}
+
+static void collect_external_events(MuonJavaScriptHost* host) {
+  std::deque<MuonHostEvent> events;
+  {
+    std::lock_guard<std::mutex> lock(host->session->external_event_mutex);
+    events.swap(host->session->external_events);
+  }
+  while (!events.empty()) {
+    host->host_events.push_back(std::move(events.front()));
+    events.pop_front();
   }
 }
 
@@ -2094,7 +2426,30 @@ static int timer_poll_timeout(const MuonJavaScriptHost* host) {
   return static_cast<int>(milliseconds + 1);
 }
 
+static void cancel_java_http_runtime(MuonJavaScriptHost* host) {
+  if (g_java_http_client_class == nullptr || host->session == nullptr) {
+    return;
+  }
+  bool attached = false;
+  auto* environment = attach_java_environment(&attached);
+  if (environment == nullptr) {
+    return;
+  }
+  auto runtime_id =
+      environment->NewStringUTF(host->session->runtime_id.c_str());
+  if (runtime_id != nullptr && !environment->ExceptionCheck()) {
+    environment->CallStaticVoidMethod(g_java_http_client_class,
+                                      g_java_http_cancel_runtime_method,
+                                      runtime_id);
+  }
+  if (runtime_id != nullptr) {
+    environment->DeleteLocalRef(runtime_id);
+  }
+  finish_java_http_call(environment, attached);
+}
+
 static void free_host(MuonJavaScriptHost* host) {
+  cancel_java_http_runtime(host);
   for (auto& [identifier, socket] : host->tcp_sockets) {
     (void)identifier;
     close(socket.file_descriptor);
@@ -2119,6 +2474,11 @@ static void close_session_descriptors(
     std::lock_guard<std::mutex> lock(session->dns_result_mutex);
     session->accepts_dns_results = false;
     session->dns_results.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(session->external_event_mutex);
+    session->accepts_external_events = false;
+    session->external_events.clear();
   }
   std::lock_guard<std::mutex> lock(session->descriptor_mutex);
   if (session->file_descriptor >= 0) {
@@ -2190,12 +2550,13 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"node:path\",\"node:events\",\"node:buffer\","
             "\"node:timers\",\"node:timers/promises\",\"node:stream\","
             "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
-            "\"abort\"]}";
+            "\"node:http\",\"fetch\",\"abort\"]}";
         initialized = write_frame(host.file_descriptor, handshake);
       }
 
       while (initialized && !session->stop_requested.load()) {
         collect_dns_results(&host);
+        collect_external_events(&host);
         if (!dispatch_host_events(&host) || !process_timers(&host) ||
             !process_protocol_promises(&host)) {
           break;
@@ -2240,6 +2601,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
         if ((descriptors[1].revents & POLLIN) != 0) {
           drain_event_file_descriptor(session->event_file_descriptor);
           collect_dns_results(&host);
+          collect_external_events(&host);
         }
         for (std::size_t index = 0; index < tcp_identifiers.size(); ++index) {
           auto revents = descriptors[index + 2].revents;
@@ -2286,6 +2648,9 @@ Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeStart(
       filesystem_root_value.empty()) {
     throw_illegal_state(environment,
                         "Invalid Android JavaScript runtime arguments.");
+    return;
+  }
+  if (!initialize_java_http_bridge(environment)) {
     return;
   }
 
@@ -2393,6 +2758,65 @@ Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeShutdownAll(
   std::unique_lock<std::mutex> lock(g_sessions_mutex);
   g_sessions_changed.wait_for(lock, std::chrono::seconds(5),
                               []() { return g_sessions.empty(); });
+}
+
+/**
+ * Queues one Android HTTP worker event for its owning QuickJS runtime.
+ *
+ * @param environment JNI environment used to copy event data.
+ * @param client_class MuonJavaScriptHttpClient class object.
+ * @param runtime_id Logical runtime identifier.
+ * @param identifier HTTP operation identifier.
+ * @param type Host event type.
+ * @param payload JSON metadata for response and error events.
+ * @param data Optional response body chunk.
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_dev_muon_prototype_MuonJavaScriptHttpClient_nativeOnHttpEvent(
+    JNIEnv* environment, jclass client_class, jstring runtime_id,
+    jlong identifier, jstring type, jstring payload, jbyteArray data) {
+  (void)client_class;
+  auto runtime_id_value = get_jni_string(environment, runtime_id);
+  auto type_value = get_jni_string(environment, type);
+  auto payload_value = get_jni_string(environment, payload);
+  if (environment->ExceptionCheck() || runtime_id_value.empty() ||
+      type_value.empty() || identifier <= 0) {
+    return;
+  }
+  MuonHostEvent event;
+  event.identifier = static_cast<std::int64_t>(identifier);
+  event.type = std::move(type_value);
+  event.payload = std::move(payload_value);
+  if (data != nullptr) {
+    auto length = environment->GetArrayLength(data);
+    if (length > 0) {
+      event.data.resize(static_cast<std::size_t>(length));
+      environment->GetByteArrayRegion(
+          data, 0, length, reinterpret_cast<jbyte*>(event.data.data()));
+      if (environment->ExceptionCheck()) {
+        return;
+      }
+    }
+  }
+  std::shared_ptr<MuonJavaScriptSession> session;
+  {
+    std::lock_guard<std::mutex> lock(g_sessions_mutex);
+    auto iterator = g_sessions.find(runtime_id_value);
+    if (iterator != g_sessions.end()) {
+      session = iterator->second;
+    }
+  }
+  if (session == nullptr || session->stop_requested.load()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(session->external_event_mutex);
+    if (!session->accepts_external_events || session->stop_requested.load()) {
+      return;
+    }
+    session->external_events.push_back(std::move(event));
+    notify_session_event(session);
+  }
 }
 
 /**

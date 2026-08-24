@@ -34,12 +34,18 @@ import org.junit.runner.RunWith;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -169,6 +175,10 @@ public final class MuonJavaScriptRuntimeServiceTest {
                 capabilities.toString().contains("\"node:net\""));
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"tcp\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:http\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"fetch\""));
         return runtime;
     }
 
@@ -215,6 +225,28 @@ public final class MuonJavaScriptRuntimeServiceTest {
                         .put("moduleId", moduleId)
                         .put("exportName", exportName)
                         .put("arguments", arguments));
+    }
+
+    private static String readHttpLine(InputStream input) throws IOException {
+        ByteArrayOutputStream line = new ByteArrayOutputStream();
+        while (true) {
+            int value = input.read();
+            if (value < 0) {
+                if (line.size() == 0) {
+                    return null;
+                }
+                throw new EOFException("HTTP line ended before a newline");
+            }
+            if (value == '\n') {
+                return line.toString(StandardCharsets.ISO_8859_1.name());
+            }
+            if (value != '\r') {
+                line.write(value);
+                if (line.size() > 64 * 1024) {
+                    throw new IOException("HTTP line exceeded the test limit");
+                }
+            }
+        }
     }
 
     @Test
@@ -662,6 +694,222 @@ public final class MuonJavaScriptRuntimeServiceTest {
             throw new AssertionError("The loopback TCP server failed", serverFailure.get());
         }
         assertEquals("quickjs-tcp", receivedByServer.get());
+    }
+
+    @Test
+    public void supportsNodeHttpAndFetchClients() throws Exception {
+        AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+        AtomicReference<String> observedPaths = new AtomicReference<>();
+        CountDownLatch serverFinished = new CountDownLatch(1);
+        try (ServerSocket server = new ServerSocket(
+                0,
+                6,
+                InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(30_000);
+            int port = server.getLocalPort();
+            Thread serverThread = new Thread(() -> {
+                StringBuilder paths = new StringBuilder();
+                try {
+                    for (int index = 0; index < 6; index++) {
+                        try (Socket connection = server.accept()) {
+                            connection.setSoTimeout(30_000);
+                            InputStream input = connection.getInputStream();
+                            String requestLine = readHttpLine(input);
+                            if (requestLine == null) {
+                                throw new EOFException("HTTP request line was missing");
+                            }
+                            String[] requestParts = requestLine.split(" ", 3);
+                            assertEquals(3, requestParts.length);
+                            String method = requestParts[0];
+                            String path = requestParts[1];
+                            if (paths.length() > 0) {
+                                paths.append(',');
+                            }
+                            paths.append(path);
+
+                            Map<String, String> headers = new HashMap<>();
+                            while (true) {
+                                String line = readHttpLine(input);
+                                if (line == null) {
+                                    throw new EOFException("HTTP headers ended early");
+                                }
+                                if (line.isEmpty()) {
+                                    break;
+                                }
+                                int separator = line.indexOf(':');
+                                assertTrue(line, separator > 0);
+                                headers.put(
+                                        line.substring(0, separator)
+                                                .trim()
+                                                .toLowerCase(Locale.ROOT),
+                                        line.substring(separator + 1).trim());
+                            }
+                            int contentLength = Integer.parseInt(
+                                    headers.getOrDefault("content-length", "0"));
+                            byte[] requestBody = new byte[contentLength];
+                            new DataInputStream(input).readFully(requestBody);
+                            String body = new String(requestBody, StandardCharsets.UTF_8);
+
+                            String status;
+                            String extraHeaders;
+                            byte[] responseBody;
+                            switch (path) {
+                                case "/node":
+                                    assertEquals("POST", method);
+                                    assertEquals("node-body", body);
+                                    assertEquals("node", headers.get("x-client"));
+                                    assertEquals("yes", headers.get("x-later"));
+                                    assertFalse(headers.containsKey("x-remove"));
+                                    status = "201 Created";
+                                    extraHeaders = "X-Test: node\r\n"
+                                            + "Content-Type: text/plain; charset=utf-8\r\n";
+                                    responseBody = "node-response"
+                                            .getBytes(StandardCharsets.UTF_8);
+                                    break;
+                                case "/node-get":
+                                    assertEquals("GET", method);
+                                    assertEquals("", body);
+                                    assertEquals("get", headers.get("x-client"));
+                                    status = "200 OK";
+                                    extraHeaders = "X-Test: get\r\n";
+                                    responseBody = "get-response"
+                                            .getBytes(StandardCharsets.UTF_8);
+                                    break;
+                                case "/fetch":
+                                    assertEquals("POST", method);
+                                    assertEquals("fetch-body", body);
+                                    assertEquals("yes", headers.get("x-fetch"));
+                                    status = "200 OK";
+                                    extraHeaders = "X-Test: fetch\r\n"
+                                            + "Content-Type: application/json\r\n";
+                                    responseBody = ("{\"received\":\"fetch-body\","
+                                            + "\"header\":\"fetch\"}")
+                                            .getBytes(StandardCharsets.UTF_8);
+                                    break;
+                                case "/redirect":
+                                    assertEquals("GET", method);
+                                    status = "302 Found";
+                                    extraHeaders = "Location: http://localhost:"
+                                            + port
+                                            + "/fetch-target\r\n";
+                                    responseBody = new byte[0];
+                                    break;
+                                case "/fetch-target":
+                                    assertEquals("GET", method);
+                                    status = "200 OK";
+                                    extraHeaders = "X-Test: redirected\r\n";
+                                    responseBody = "redirected"
+                                            .getBytes(StandardCharsets.UTF_8);
+                                    break;
+                                case "/slow":
+                                    assertEquals("GET", method);
+                                    DataOutputStream slowOutput = new DataOutputStream(
+                                            connection.getOutputStream());
+                                    slowOutput.write(("HTTP/1.1 200 OK\r\n"
+                                            + "Content-Type: text/plain\r\n"
+                                            + "Content-Length: 64\r\n"
+                                            + "Connection: close\r\n"
+                                            + "\r\n")
+                                            .getBytes(StandardCharsets.ISO_8859_1));
+                                    slowOutput.flush();
+                                    while (input.read() >= 0) {
+                                        // Aborting the fetch must close the connection.
+                                    }
+                                    continue;
+                                default:
+                                    throw new AssertionError("Unexpected path: " + path);
+                            }
+
+                            DataOutputStream output = new DataOutputStream(
+                                    connection.getOutputStream());
+                            output.write(("HTTP/1.1 "
+                                    + status
+                                    + "\r\n"
+                                    + extraHeaders
+                                    + "Content-Length: "
+                                    + responseBody.length
+                                    + "\r\n"
+                                    + "Connection: close\r\n"
+                                    + "\r\n")
+                                    .getBytes(StandardCharsets.ISO_8859_1));
+                            output.write(responseBody);
+                            output.flush();
+                        }
+                    }
+                    observedPaths.set(paths.toString());
+                } catch (Throwable error) {
+                    serverFailure.set(error);
+                } finally {
+                    serverFinished.countDown();
+                }
+            }, "muon-quickjs-http-server");
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            try (BoundService binding = bindService();
+                 RuntimeSocket runtime = createRuntime(binding.service, "test-http-fetch")) {
+                String root = importModule(runtime, "import", ".");
+                JSONObject response = call(
+                        runtime,
+                        "http-fetch",
+                        root,
+                        "exerciseHttpAndFetch",
+                        new JSONArray().put(port));
+                assertTrue(response.toString(), response.getBoolean("ok"));
+                JSONObject values = response
+                        .getJSONObject("value")
+                        .getJSONObject("value");
+
+                assertTrue(values.getBoolean("moduleAlias"));
+                JSONObject node = values.getJSONObject("node");
+                JSONObject request = node.getJSONObject("request");
+                assertTrue(request.getBoolean("isClientRequest"));
+                assertEquals("POST", request.getString("method"));
+                assertEquals("/node", request.getString("path"));
+                assertTrue(request.getBoolean("hasClientHeader"));
+                assertEquals("yes", request.getString("laterHeader"));
+                assertFalse(request.getBoolean("removedHeader"));
+                assertTrue(node.getBoolean("isIncomingMessage"));
+                assertEquals(201, node.getInt("statusCode"));
+                assertEquals("Created", node.getString("statusMessage"));
+                assertEquals("node", node.getString("header"));
+                assertTrue(node.getJSONArray("rawHeaders").toString().contains("X-Test"));
+                assertEquals("node-response", node.getString("body"));
+                assertTrue(node.getBoolean("complete"));
+                assertEquals(200, node.getInt("getStatusCode"));
+                assertEquals("get-response", node.getString("getBody"));
+
+                JSONObject fetch = values.getJSONObject("fetch");
+                assertTrue(fetch.getBoolean("globals"));
+                assertTrue(fetch.getBoolean("isResponse"));
+                assertEquals(200, fetch.getInt("status"));
+                assertEquals("OK", fetch.getString("statusText"));
+                assertTrue(fetch.getBoolean("ok"));
+                assertFalse(fetch.getBoolean("redirected"));
+                assertEquals("http://localhost:" + port + "/fetch",
+                        fetch.getString("url"));
+                assertEquals("fetch", fetch.getString("header"));
+                assertEquals("fetch-body",
+                        fetch.getJSONObject("json").getString("received"));
+                assertEquals("fetch",
+                        fetch.getJSONObject("json").getString("header"));
+                assertEquals(200, fetch.getInt("redirectStatus"));
+                assertEquals("http://localhost:" + port + "/fetch-target",
+                        fetch.getString("redirectUrl"));
+                assertTrue(fetch.getBoolean("redirectedResult"));
+                assertEquals("redirected", fetch.getString("redirectBody"));
+                assertEquals("AbortError", fetch.getString("abortName"));
+                assertEquals("stop", fetch.getString("abortReason"));
+                assertTrue(fetch.getBoolean("slowBodyUsed"));
+            }
+            assertTrue(serverFinished.await(30, TimeUnit.SECONDS));
+        }
+        if (serverFailure.get() != null) {
+            throw new AssertionError("The loopback HTTP server failed", serverFailure.get());
+        }
+        assertEquals(
+                "/node,/node-get,/fetch,/redirect,/fetch-target,/slow",
+                observedPaths.get());
     }
 
     @Test

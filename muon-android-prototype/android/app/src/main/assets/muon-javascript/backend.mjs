@@ -38,6 +38,8 @@ import netAlias from 'net';
 import dns from 'node:dns';
 import dnsAlias from 'dns';
 import dnsPromises from 'node:dns/promises';
+import http, { ClientRequest, IncomingMessage } from 'node:http';
+import httpAlias from 'http';
 
 let counter = 0;
 let retainedTcpSocket = null;
@@ -475,6 +477,116 @@ export const retainedTcpConnectionState = () => ({
   destroyed: retainedTcpSocket?.destroyed ?? true,
 });
 
+export const exerciseHttpAndFetch = async (port) => {
+  const request = http.request({
+    protocol: 'http:',
+    hostname: 'localhost',
+    port,
+    path: '/node',
+    method: 'POST',
+    headers: {
+      'X-Client': 'node',
+      'X-Remove': 'removed',
+    },
+  });
+  request.setHeader('X-Later', 'yes');
+  request.removeHeader('X-Remove');
+  const requestState = {
+    isClientRequest: request instanceof ClientRequest,
+    method: request.method,
+    path: request.path,
+    hasClientHeader: request.hasHeader('x-client'),
+    laterHeader: request.getHeader('x-later'),
+    removedHeader: request.hasHeader('x-remove'),
+  };
+  const responseEvent = onceEvent(request, 'response');
+  request.write('node-');
+  request.end('body');
+  const [nodeResponse] = await responseEvent;
+  const isIncomingMessage = nodeResponse instanceof IncomingMessage;
+  nodeResponse.setEncoding('utf8');
+  let nodeBody = '';
+  nodeResponse.on('data', (chunk) => {
+    nodeBody += chunk;
+  });
+  await onceEvent(nodeResponse, 'end');
+
+  const getRequest = http.get(`http://localhost:${port}/node-get`, {
+    headers: { 'X-Client': 'get' },
+  });
+  const [getResponse] = await onceEvent(getRequest, 'response');
+  getResponse.setEncoding('utf8');
+  let getBody = '';
+  getResponse.on('data', (chunk) => {
+    getBody += chunk;
+  });
+  await onceEvent(getResponse, 'end');
+
+  const fetchHeaders = new Headers({ 'X-Fetch': 'yes' });
+  const fetchResponse = await fetch(`http://localhost:${port}/fetch`, {
+    method: 'POST',
+    headers: fetchHeaders,
+    body: 'fetch-body',
+  });
+  const fetchJson = await fetchResponse.json();
+
+  const redirectResponse = await fetch(`http://localhost:${port}/redirect`);
+  const redirectBody = await redirectResponse.text();
+
+  const controller = new AbortController();
+  const slowResponse = await fetch(`http://localhost:${port}/slow`, {
+    signal: controller.signal,
+  });
+  const slowBody = slowResponse.text();
+  controller.abort('stop');
+  let abortName = '';
+  let abortReason = '';
+  try {
+    await slowBody;
+  } catch (error) {
+    abortName = error.name;
+    abortReason = controller.signal.reason;
+  }
+
+  return {
+    moduleAlias: http === httpAlias,
+    node: {
+      request: requestState,
+      isIncomingMessage,
+      statusCode: nodeResponse.statusCode,
+      statusMessage: nodeResponse.statusMessage,
+      header: nodeResponse.headers['x-test'],
+      rawHeaders: nodeResponse.rawHeaders,
+      body: nodeBody,
+      complete: nodeResponse.complete,
+      getStatusCode: getResponse.statusCode,
+      getBody,
+    },
+    fetch: {
+      globals:
+        typeof fetch === 'function' &&
+        typeof Headers === 'function' &&
+        typeof Request === 'function' &&
+        typeof Response === 'function',
+      isResponse: fetchResponse instanceof Response,
+      status: fetchResponse.status,
+      statusText: fetchResponse.statusText,
+      ok: fetchResponse.ok,
+      redirected: fetchResponse.redirected,
+      url: fetchResponse.url,
+      header: fetchResponse.headers.get('x-test'),
+      json: fetchJson,
+      redirectStatus: redirectResponse.status,
+      redirectUrl: redirectResponse.url,
+      redirectedResult: redirectResponse.redirected,
+      redirectBody,
+      abortName,
+      abortReason,
+      slowBodyUsed: slowResponse.bodyUsed,
+    },
+  };
+};
+
 export const exhaustMemory = () => {
   const blocks = [];
   while (true) {
@@ -499,6 +611,7 @@ globalThis.__muonBackendModule = Object.freeze({
   exerciseDnsAndTcp,
   retainTcpConnection,
   retainedTcpConnectionState,
+  exerciseHttpAndFetch,
   exhaustMemory,
   spin,
 });

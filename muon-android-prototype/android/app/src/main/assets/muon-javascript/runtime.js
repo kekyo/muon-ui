@@ -3436,7 +3436,13 @@
   const pendingDnsOperations = new Map();
   const activeTcpSockets = new Map();
   const pendingTcpWrites = new Map();
+  const pendingHttpOperations = new Map();
   const tcpSocketState = Symbol('muon.net.socketState');
+  const httpRequestState = Symbol('muon.http.requestState');
+  const httpResponseState = Symbol('muon.http.responseState');
+  const headersState = Symbol('muon.fetch.headersState');
+  const requestState = Symbol('muon.fetch.requestState');
+  const responseState = Symbol('muon.fetch.responseState');
   let defaultDnsResultOrder = 'verbatim';
 
   const allocateHostOperationIdentifier = () => nextHostOperationIdentifier++;
@@ -4016,6 +4022,943 @@
     },
   });
 
+  const normalizeHttpHeaderName = (name) => {
+    const normalized = String(name).toLowerCase();
+    if (!/^[!#$%&'*+\-.^_`|~0-9a-z]+$/.test(normalized)) {
+      throw createError(
+        'ERR_INVALID_HTTP_TOKEN',
+        `Invalid HTTP header name: ${String(name)}`
+      );
+    }
+    return normalized;
+  };
+
+  const normalizeHttpHeaderValue = (name, value) => {
+    const normalized = String(value);
+    if (/[\0\r\n]/.test(normalized)) {
+      throw createError(
+        'ERR_INVALID_CHAR',
+        `Invalid character in HTTP header ${name}`
+      );
+    }
+    return normalized;
+  };
+
+  const Headers = function (initial) {
+    if (!(this instanceof Headers)) return new Headers(initial);
+    Object.defineProperty(this, headersState, {
+      value: new Map(),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    if (initial instanceof Headers) {
+      for (const [name, value] of initial) this.append(name, value);
+    } else if (initial !== undefined && initial !== null) {
+      if (typeof initial[Symbol.iterator] === 'function') {
+        for (const entry of initial) {
+          if (!Array.isArray(entry) || entry.length !== 2) {
+            throw createError(
+              'ERR_INVALID_ARG_VALUE',
+              'A Headers entry must contain a name and value'
+            );
+          }
+          this.append(entry[0], entry[1]);
+        }
+      } else if (typeof initial === 'object') {
+        for (const [name, value] of Object.entries(initial)) {
+          if (Array.isArray(value)) {
+            for (const item of value) this.append(name, item);
+          } else {
+            this.append(name, value);
+          }
+        }
+      } else {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'Headers initializer must be an object or iterable'
+        );
+      }
+    }
+  };
+  Headers.prototype.append = function (name, value) {
+    const normalizedName = normalizeHttpHeaderName(name);
+    const normalizedValue = normalizeHttpHeaderValue(normalizedName, value);
+    const entry = this[headersState].get(normalizedName);
+    if (entry) entry.values.push(normalizedValue);
+    else {
+      this[headersState].set(normalizedName, {
+        name: String(name),
+        values: [normalizedValue],
+      });
+    }
+  };
+  Headers.prototype.delete = function (name) {
+    this[headersState].delete(normalizeHttpHeaderName(name));
+  };
+  Headers.prototype.get = function (name) {
+    const normalizedName = normalizeHttpHeaderName(name);
+    const entry = this[headersState].get(normalizedName);
+    if (!entry) return null;
+    return entry.values.join(normalizedName === 'cookie' ? '; ' : ', ');
+  };
+  Headers.prototype.getSetCookie = function () {
+    return [...(this[headersState].get('set-cookie')?.values ?? [])];
+  };
+  Headers.prototype.has = function (name) {
+    return this[headersState].has(normalizeHttpHeaderName(name));
+  };
+  Headers.prototype.set = function (name, value) {
+    const normalizedName = normalizeHttpHeaderName(name);
+    this[headersState].set(normalizedName, {
+      name: String(name),
+      values: [normalizeHttpHeaderValue(normalizedName, value)],
+    });
+  };
+  Headers.prototype.entries = function () {
+    const entries = [...this[headersState]].map(([name, entry]) => [
+      name,
+      entry.values.join(name === 'cookie' ? '; ' : ', '),
+    ]);
+    return entries[Symbol.iterator]();
+  };
+  Headers.prototype.keys = function () {
+    return [...this[headersState].keys()][Symbol.iterator]();
+  };
+  Headers.prototype.values = function () {
+    return [...this.entries()].map((entry) => entry[1])[Symbol.iterator]();
+  };
+  Headers.prototype.forEach = function (callback, thisArgument) {
+    for (const [name, value] of this) {
+      Reflect.apply(callback, thisArgument, [value, name, this]);
+    }
+  };
+  Headers.prototype[Symbol.iterator] = Headers.prototype.entries;
+
+  const headerPairs = (headers) => {
+    const pairs = [];
+    for (const entry of headers[headersState].values()) {
+      for (const value of entry.values) pairs.push([entry.name, value]);
+    }
+    return pairs;
+  };
+
+  const normalizeHttpMethod = (method) => {
+    const normalized = String(method ?? 'GET').toUpperCase();
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Z]+$/.test(normalized)) {
+      throw createError('ERR_INVALID_HTTP_TOKEN', 'Invalid HTTP method');
+    }
+    return normalized;
+  };
+
+  const normalizeHttpTimeout = (value, fallback) => {
+    if (value === undefined) return fallback;
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized) || normalized < 0 || normalized > 60000) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'HTTP timeout must be between 0 and 60000ms'
+      );
+    }
+    return Math.trunc(normalized);
+  };
+
+  const normalizeHttpRequestArguments = (expectedProtocol, values) => {
+    const arguments_ = [...values];
+    const callback =
+      typeof arguments_.at(-1) === 'function' ? arguments_.pop() : undefined;
+    let input;
+    let options = {};
+    if (typeof arguments_[0] === 'string' || arguments_[0] instanceof URL) {
+      input = arguments_.shift();
+    }
+    if (arguments_.length > 0) {
+      if (
+        arguments_[0] === null ||
+        typeof arguments_[0] !== 'object' ||
+        Array.isArray(arguments_[0])
+      ) {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'HTTP request options must be an object'
+        );
+      }
+      options = { ...arguments_[0] };
+    } else if (input === undefined && values[0] !== undefined) {
+      options = { ...values[0] };
+    }
+
+    let url;
+    if (input !== undefined) {
+      url = new URL(String(input));
+    } else {
+      const protocol = String(options.protocol ?? expectedProtocol);
+      let hostname = options.hostname;
+      let port = options.port;
+      if (hostname === undefined && options.host !== undefined) {
+        const parsedHost = new URL(`${protocol}//${String(options.host)}`);
+        hostname = parsedHost.hostname;
+        if (port === undefined && parsedHost.port !== '')
+          port = parsedHost.port;
+      }
+      hostname = String(hostname ?? 'localhost');
+      const bracketedHostname =
+        hostname.includes(':') && !hostname.startsWith('[')
+          ? `[${hostname}]`
+          : hostname;
+      const portText =
+        port === undefined || String(port) === '' ? '' : `:${port}`;
+      const path = String(options.path ?? '/');
+      url = new URL(`${protocol}//${bracketedHostname}${portText}${path}`);
+    }
+    if (options.protocol !== undefined) url.protocol = String(options.protocol);
+    if (options.hostname !== undefined) url.hostname = String(options.hostname);
+    if (options.port !== undefined) url.port = String(options.port);
+    if (options.path !== undefined) {
+      const path = String(options.path);
+      const query = path.indexOf('?');
+      url.pathname = query < 0 ? path : path.slice(0, query);
+      url.search = query < 0 ? '' : path.slice(query);
+    }
+    if (url.protocol !== expectedProtocol) {
+      throw createError(
+        'ERR_INVALID_PROTOCOL',
+        `Protocol ${url.protocol} is not supported by ${expectedProtocol}`
+      );
+    }
+    if (url.username !== '' && options.auth === undefined) {
+      options.auth = `${decodeURIComponent(url.username)}:${decodeURIComponent(
+        url.password
+      )}`;
+    }
+    const headers = new Headers(options.headers);
+    if (options.auth !== undefined && !headers.has('authorization')) {
+      headers.set(
+        'Authorization',
+        `Basic ${Buffer.from(String(options.auth)).toString('base64')}`
+      );
+    }
+    return {
+      callback,
+      options: {
+        ...options,
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port:
+          url.port === ''
+            ? url.protocol === 'https:'
+              ? 443
+              : 80
+            : Number(url.port),
+        path: `${url.pathname}${url.search}`,
+        method: normalizeHttpMethod(options.method),
+        headers,
+        url: url.href,
+        connectTimeout: normalizeHttpTimeout(options.connectTimeout, 30000),
+        readTimeout: normalizeHttpTimeout(options.timeout, 30000),
+        certificateAuthority: '',
+      },
+    };
+  };
+
+  const createHttpOperationError = (payload) => {
+    const error = createNetworkError(payload);
+    if (typeof payload?.url === 'string' && payload.url !== '') {
+      error.url = payload.url;
+    }
+    return error;
+  };
+
+  const cleanupHttpAbortSignal = (state) => {
+    if (state.signal && state.abortListener) {
+      state.signal.removeEventListener('abort', state.abortListener);
+      state.abortListener = null;
+    }
+  };
+
+  const IncomingMessage = function (request, payload) {
+    if (!(this instanceof IncomingMessage)) {
+      return new IncomingMessage(request, payload);
+    }
+    Readable.call(this);
+    const headers = {};
+    const rawHeaders = [];
+    for (const pair of payload.headers ?? []) {
+      const name = String(pair[0]);
+      const value = String(pair[1]);
+      const normalizedName = name.toLowerCase();
+      rawHeaders.push(name, value);
+      if (normalizedName === 'set-cookie') {
+        if (!Array.isArray(headers[normalizedName]))
+          headers[normalizedName] = [];
+        headers[normalizedName].push(value);
+      } else if (headers[normalizedName] === undefined) {
+        headers[normalizedName] = value;
+      } else {
+        const separator = normalizedName === 'cookie' ? '; ' : ', ';
+        headers[normalizedName] += `${separator}${value}`;
+      }
+    }
+    this.statusCode = Number(payload.statusCode);
+    this.statusMessage = String(payload.statusMessage ?? '');
+    this.httpVersion = String(payload.httpVersion ?? '1.1');
+    const versionParts = this.httpVersion.split('.');
+    this.httpVersionMajor = Number(versionParts[0] ?? 1);
+    this.httpVersionMinor = Number(versionParts[1] ?? 1);
+    this.headers = headers;
+    this.headersDistinct = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        Array.isArray(value) ? [...value] : [value],
+      ])
+    );
+    this.rawHeaders = rawHeaders;
+    this.trailers = {};
+    this.trailersDistinct = {};
+    this.rawTrailers = [];
+    this.complete = false;
+    this.aborted = false;
+    this.method = null;
+    this.url = String(payload.url ?? '');
+    this.socket = null;
+    this.connection = null;
+    Object.defineProperty(this, httpResponseState, {
+      value: {
+        identifier: requireHttpRequestState(request).identifier,
+        request,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  };
+  IncomingMessage.prototype = Object.create(Readable.prototype);
+  Object.defineProperty(IncomingMessage.prototype, 'constructor', {
+    value: IncomingMessage,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  IncomingMessage.prototype._read = function () {
+    const state = this[httpResponseState];
+    if (!this.complete) __muonHttpResume(state.identifier);
+  };
+  IncomingMessage.prototype._destroy = function (error, callback) {
+    const state = this[httpResponseState];
+    if (!this.complete) {
+      this.aborted = true;
+      pendingHttpOperations.delete(state.identifier);
+      __muonHttpCancel(state.identifier);
+    }
+    callback(error);
+  };
+  IncomingMessage.prototype.setTimeout = function (timeout, callback) {
+    const state = this[httpResponseState];
+    state.request.setTimeout(timeout, callback);
+    return this;
+  };
+
+  const requireHttpRequestState = (request) => {
+    const state = request?.[httpRequestState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'ClientRequest method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const ClientRequest = function (...values) {
+    if (!(this instanceof ClientRequest)) return new ClientRequest(...values);
+    const normalized = normalizeHttpRequestArguments('http:', values);
+    Writable.call(this);
+    Object.defineProperty(this, httpRequestState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        options: normalized.options,
+        headers: normalized.options.headers,
+        chunks: [],
+        bodyLength: 0,
+        started: false,
+        response: null,
+        signal: normalized.options.signal ?? null,
+        abortListener: null,
+        aborted: false,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.method = normalized.options.method;
+    this.path = normalized.options.path;
+    this.protocol = normalized.options.protocol;
+    this.host = `${normalized.options.hostname}:${normalized.options.port}`;
+    this.reusedSocket = false;
+    this.socket = null;
+    this.connection = null;
+    if (normalized.callback) this.once('response', normalized.callback);
+    const state = requireHttpRequestState(this);
+    if (state.signal) {
+      state.abortListener = () => {
+        const error = new DOMException(
+          'The HTTP request was aborted',
+          'AbortError'
+        );
+        this.destroy(error);
+      };
+      if (state.signal.aborted) setCallbackImmediate(state.abortListener);
+      else
+        state.signal.addEventListener('abort', state.abortListener, {
+          once: true,
+        });
+    }
+  };
+  ClientRequest.prototype = Object.create(Writable.prototype);
+  Object.defineProperty(ClientRequest.prototype, 'constructor', {
+    value: ClientRequest,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  ClientRequest.prototype._write = function (chunk, encoding, callback) {
+    void encoding;
+    const state = requireHttpRequestState(this);
+    const copy = Buffer.from(chunk);
+    state.chunks.push(copy);
+    state.bodyLength += copy.byteLength;
+    callback();
+  };
+  ClientRequest.prototype._final = function (callback) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      callback();
+      return;
+    }
+    const body = Buffer.concat(state.chunks, state.bodyLength);
+    const copy = new Uint8Array(body.byteLength);
+    copy.set(body);
+    state.chunks = [];
+    state.started = true;
+    pendingHttpOperations.set(state.identifier, {
+      request: this,
+      response: null,
+    });
+    try {
+      __muonHttpStart(
+        state.identifier,
+        state.options.method,
+        state.options.url,
+        JSON.stringify(headerPairs(state.headers)),
+        copy.buffer,
+        state.options.connectTimeout,
+        state.options.readTimeout,
+        state.options.certificateAuthority
+      );
+      callback();
+    } catch (error) {
+      pendingHttpOperations.delete(state.identifier);
+      callback(error);
+    }
+  };
+  ClientRequest.prototype._destroy = function (error, callback) {
+    const state = requireHttpRequestState(this);
+    const operation = pendingHttpOperations.get(state.identifier);
+    if (operation?.request === this) {
+      pendingHttpOperations.delete(state.identifier);
+      __muonHttpCancel(state.identifier);
+    }
+    if (
+      state.response &&
+      !state.response.complete &&
+      !state.response.destroyed
+    ) {
+      state.response.destroy(error);
+    }
+    cleanupHttpAbortSignal(state);
+    callback(error);
+  };
+  ClientRequest.prototype.setHeader = function (name, value) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+    if (Array.isArray(value)) {
+      for (const item of value) state.headers.append(name, item);
+    } else {
+      state.headers.set(name, value);
+    }
+    return this;
+  };
+  ClientRequest.prototype.getHeader = function (name) {
+    const state = requireHttpRequestState(this);
+    const normalizedName = normalizeHttpHeaderName(name);
+    const entry = state.headers[headersState].get(normalizedName);
+    if (!entry) return undefined;
+    return entry.values.length === 1 ? entry.values[0] : [...entry.values];
+  };
+  ClientRequest.prototype.getHeaderNames = function () {
+    return [...requireHttpRequestState(this).headers[headersState].keys()];
+  };
+  ClientRequest.prototype.getHeaders = function () {
+    const result = Object.create(null);
+    for (const name of this.getHeaderNames())
+      result[name] = this.getHeader(name);
+    return result;
+  };
+  ClientRequest.prototype.hasHeader = function (name) {
+    return requireHttpRequestState(this).headers.has(name);
+  };
+  ClientRequest.prototype.removeHeader = function (name) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+  };
+  ClientRequest.prototype.flushHeaders = function () {
+    return this;
+  };
+  ClientRequest.prototype.setTimeout = function (timeout, callback) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      throw createError(
+        'ERR_HTTP_HEADERS_SENT',
+        'HTTP timeout cannot change after the request starts'
+      );
+    }
+    state.options.readTimeout = normalizeHttpTimeout(timeout, 30000);
+    if (typeof callback === 'function') this.once('timeout', callback);
+    return this;
+  };
+  ClientRequest.prototype.setNoDelay = function () {
+    return this;
+  };
+  ClientRequest.prototype.setSocketKeepAlive = function () {
+    return this;
+  };
+  ClientRequest.prototype.abort = function () {
+    const state = requireHttpRequestState(this);
+    if (!state.aborted) {
+      state.aborted = true;
+      this.emit('abort');
+      this.destroy(
+        new DOMException('The HTTP request was aborted', 'AbortError')
+      );
+    }
+  };
+  Object.defineProperties(ClientRequest.prototype, {
+    aborted: {
+      get: function () {
+        return requireHttpRequestState(this).aborted;
+      },
+    },
+    headersSent: {
+      get: function () {
+        return requireHttpRequestState(this).started;
+      },
+    },
+  });
+
+  const createClientRequest = (protocol, values) => {
+    const normalized = normalizeHttpRequestArguments(protocol, values);
+    const request = Object.create(ClientRequest.prototype);
+    Writable.call(request);
+    Object.defineProperty(request, httpRequestState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        options: normalized.options,
+        headers: normalized.options.headers,
+        chunks: [],
+        bodyLength: 0,
+        started: false,
+        response: null,
+        signal: normalized.options.signal ?? null,
+        abortListener: null,
+        aborted: false,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    request.method = normalized.options.method;
+    request.path = normalized.options.path;
+    request.protocol = normalized.options.protocol;
+    request.host = `${normalized.options.hostname}:${normalized.options.port}`;
+    request.reusedSocket = false;
+    request.socket = null;
+    request.connection = null;
+    if (normalized.callback) request.once('response', normalized.callback);
+    const state = requireHttpRequestState(request);
+    if (state.signal) {
+      state.abortListener = () =>
+        request.destroy(
+          new DOMException('The HTTP request was aborted', 'AbortError')
+        );
+      if (state.signal.aborted) setCallbackImmediate(state.abortListener);
+      else {
+        state.signal.addEventListener('abort', state.abortListener, {
+          once: true,
+        });
+      }
+    }
+    return request;
+  };
+
+  const Agent = function (options) {
+    if (!(this instanceof Agent)) return new Agent(options);
+    EventEmitter.call(this);
+    this.options = { ...(options ?? {}) };
+    this.keepAlive = Boolean(this.options.keepAlive);
+    this.maxSockets = this.options.maxSockets ?? Infinity;
+    this.maxFreeSockets = this.options.maxFreeSockets ?? 256;
+    this.requests = {};
+    this.sockets = {};
+    this.freeSockets = {};
+  };
+  Agent.prototype = Object.create(EventEmitter.prototype);
+  Object.defineProperty(Agent.prototype, 'constructor', {
+    value: Agent,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Agent.prototype.destroy = function () {};
+
+  const validateHeaderName = (name) => {
+    normalizeHttpHeaderName(name);
+  };
+  const validateHeaderValue = (name, value) => {
+    normalizeHttpHeaderValue(normalizeHttpHeaderName(name), value);
+  };
+  const httpRequest = (...values) => createClientRequest('http:', values);
+  const httpGet = (...values) => {
+    const request = httpRequest(...values);
+    request.end();
+    return request;
+  };
+  const STATUS_CODES = Object.freeze({
+    200: 'OK',
+    201: 'Created',
+    204: 'No Content',
+    301: 'Moved Permanently',
+    302: 'Found',
+    303: 'See Other',
+    307: 'Temporary Redirect',
+    308: 'Permanent Redirect',
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    500: 'Internal Server Error',
+  });
+  const METHODS = Object.freeze([
+    'DELETE',
+    'GET',
+    'HEAD',
+    'OPTIONS',
+    'POST',
+    'PUT',
+    'TRACE',
+  ]);
+  const globalHttpAgent = new Agent({ keepAlive: true, timeout: 5000 });
+  const httpModule = Object.freeze({
+    Agent,
+    ClientRequest,
+    IncomingMessage,
+    METHODS,
+    STATUS_CODES,
+    get: httpGet,
+    globalAgent: globalHttpAgent,
+    maxHeaderSize: 16384,
+    request: httpRequest,
+    validateHeaderName,
+    validateHeaderValue,
+  });
+
+  const normalizeBodyBuffer = (body) => {
+    if (body === undefined || body === null) return null;
+    if (typeof body === 'string') return Buffer.from(body);
+    if (body instanceof URLSearchParams) return Buffer.from(body.toString());
+    if (body instanceof ArrayBuffer || body instanceof Uint8Array) {
+      return Buffer.from(body);
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Request or Response body type is not supported'
+    );
+  };
+
+  const Request = function (input, init) {
+    if (!(this instanceof Request)) return new Request(input, init);
+    const source = input instanceof Request ? input[requestState] : null;
+    const options = init ?? {};
+    const url = new URL(source ? source.url : String(input));
+    const method = normalizeHttpMethod(
+      options.method ?? source?.method ?? 'GET'
+    );
+    const body =
+      options.body !== undefined
+        ? normalizeBodyBuffer(options.body)
+        : source?.body
+          ? Buffer.from(source.body)
+          : null;
+    if ((method === 'GET' || method === 'HEAD') && body !== null) {
+      throw new TypeError('GET and HEAD requests cannot have a body');
+    }
+    const headers = new Headers(options.headers ?? source?.headers);
+    if (
+      body !== null &&
+      typeof options.body === 'string' &&
+      !headers.has('content-type')
+    ) {
+      headers.set('Content-Type', 'text/plain;charset=UTF-8');
+    }
+    const redirect = String(options.redirect ?? source?.redirect ?? 'follow');
+    if (!['follow', 'error', 'manual'].includes(redirect)) {
+      throw new TypeError('Request redirect mode is invalid');
+    }
+    const signal = options.signal ?? source?.signal ?? null;
+    if (signal !== null && !(signal instanceof AbortSignal)) {
+      throw new TypeError('Request signal must be an AbortSignal');
+    }
+    Object.defineProperty(this, requestState, {
+      value: { url: url.href, method, headers, body, redirect, signal },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.url = url.href;
+    this.method = method;
+    this.headers = headers;
+    this.redirect = redirect;
+    this.signal = signal;
+    this.credentials = String(options.credentials ?? 'same-origin');
+    this.cache = String(options.cache ?? 'default');
+    this.mode = String(options.mode ?? 'cors');
+    this.referrer = String(options.referrer ?? 'about:client');
+    this.referrerPolicy = String(options.referrerPolicy ?? '');
+    this.integrity = String(options.integrity ?? '');
+    this.keepalive = Boolean(options.keepalive);
+  };
+  Request.prototype.clone = function () {
+    return new Request(this);
+  };
+  Object.defineProperty(Request.prototype, 'body', {
+    get: function () {
+      const body = this[requestState].body;
+      return body === null ? null : Readable.from([Buffer.from(body)]);
+    },
+  });
+  Object.defineProperty(Request.prototype, 'bodyUsed', {
+    get: function () {
+      return false;
+    },
+  });
+
+  const consumeResponseBody = async (response) => {
+    const state = response?.[responseState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Response body method called on an incompatible receiver'
+      );
+    }
+    if (state.bodyUsed) throw new TypeError('Response body was already used');
+    state.bodyUsed = true;
+    if (state.source === null) return Buffer.alloc(0);
+    if (state.source instanceof Uint8Array) return Buffer.from(state.source);
+    const chunks = [];
+    for await (const chunk of state.source) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  };
+
+  const Response = function (body, init) {
+    if (!(this instanceof Response)) return new Response(body, init);
+    const options = init ?? {};
+    const status = Number(options.status ?? 200);
+    if (!Number.isInteger(status) || status < 200 || status > 599) {
+      throw new RangeError('Response status must be between 200 and 599');
+    }
+    const headers = new Headers(options.headers);
+    const source = normalizeBodyBuffer(body);
+    Object.defineProperty(this, responseState, {
+      value: { source, bodyUsed: false },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.status = status;
+    this.statusText = String(options.statusText ?? '');
+    this.headers = headers;
+    this.url = '';
+    this.redirected = false;
+    this.type = 'default';
+  };
+  Object.defineProperties(Response.prototype, {
+    ok: {
+      get: function () {
+        return this.status >= 200 && this.status <= 299;
+      },
+    },
+    body: {
+      get: function () {
+        return this[responseState].source;
+      },
+    },
+    bodyUsed: {
+      get: function () {
+        return this[responseState].bodyUsed;
+      },
+    },
+  });
+  Response.prototype.arrayBuffer = async function () {
+    const body = await consumeResponseBody(this);
+    const copy = new Uint8Array(body.byteLength);
+    copy.set(body);
+    return copy.buffer;
+  };
+  Response.prototype.bytes = async function () {
+    return await consumeResponseBody(this);
+  };
+  Response.prototype.text = async function () {
+    return (await consumeResponseBody(this)).toString('utf8');
+  };
+  Response.prototype.json = async function () {
+    return JSON.parse(await this.text());
+  };
+  Response.prototype.clone = function () {
+    const state = this[responseState];
+    if (state.bodyUsed || !(state.source instanceof Uint8Array)) {
+      throw new TypeError('Streaming Response objects cannot be cloned');
+    }
+    return new Response(Buffer.from(state.source), {
+      status: this.status,
+      statusText: this.statusText,
+      headers: this.headers,
+    });
+  };
+  Response.error = () => {
+    const response = new Response(null, { status: 200 });
+    response.status = 0;
+    response.type = 'error';
+    return response;
+  };
+  Response.json = (value, init) =>
+    new Response(JSON.stringify(value), {
+      ...(init ?? {}),
+      headers: {
+        'Content-Type': 'application/json',
+        ...Object.fromEntries(new Headers(init?.headers)),
+      },
+    });
+  Response.redirect = (url, status = 302) =>
+    new Response(null, { status, headers: { Location: new URL(url).href } });
+
+  const createFetchResponse = (message, redirected) => {
+    const response = Object.create(Response.prototype);
+    const headers = new Headers(
+      message.rawHeaders.reduce((pairs, value, index) => {
+        if (index % 2 === 0) pairs.push([value, message.rawHeaders[index + 1]]);
+        return pairs;
+      }, [])
+    );
+    Object.defineProperty(response, responseState, {
+      value: { source: message, bodyUsed: false },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    response.status = message.statusCode;
+    response.statusText = message.statusMessage;
+    response.headers = headers;
+    response.url = message.url;
+    response.redirected = redirected;
+    response.type = 'basic';
+    return response;
+  };
+
+  const fetchOnce = async (request, redirected) => {
+    const state = request[requestState];
+    if (state.signal?.aborted) {
+      throw new DOMException('The fetch was aborted', 'AbortError');
+    }
+    const url = new URL(state.url);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new TypeError(`Unsupported fetch protocol: ${url.protocol}`);
+    }
+    const clientRequest = createClientRequest(url.protocol, [
+      state.url,
+      {
+        method: state.method,
+        headers: state.headers,
+        signal: state.signal,
+      },
+    ]);
+    const responseEvent = onceEvent(clientRequest, 'response');
+    if (state.body === null) clientRequest.end();
+    else clientRequest.end(state.body);
+    const [message] = await responseEvent;
+    return createFetchResponse(message, redirected);
+  };
+
+  const fetchRequest = async (request, redirectCount, redirected) => {
+    const response = await fetchOnce(request, redirected);
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get('location');
+    if (location === null || request.redirect === 'manual') return response;
+    if (request.redirect === 'error') {
+      response.body?.destroy();
+      throw new TypeError('Redirect encountered while redirect mode is error');
+    }
+    if (redirectCount >= 20) {
+      response.body?.destroy();
+      throw new TypeError('Maximum fetch redirect count was exceeded');
+    }
+    const source = request[requestState];
+    let method = source.method;
+    let body = source.body;
+    if (
+      response.status === 303 ||
+      ((response.status === 301 || response.status === 302) &&
+        method === 'POST')
+    ) {
+      method = 'GET';
+      body = null;
+    }
+    const nextUrl = new URL(location, request.url);
+    const headers = new Headers(source.headers);
+    if (new URL(request.url).origin !== nextUrl.origin) {
+      headers.delete('authorization');
+      headers.delete('cookie');
+    }
+    if (body === null) {
+      headers.delete('content-length');
+      headers.delete('content-type');
+    }
+    response.body?.destroy();
+    return await fetchRequest(
+      new Request(nextUrl, {
+        method,
+        headers,
+        body,
+        redirect: source.redirect,
+        signal: source.signal,
+      }),
+      redirectCount + 1,
+      true
+    );
+  };
+
+  const fetch = async (input, init) => {
+    const request =
+      input instanceof Request
+        ? new Request(input, init)
+        : new Request(input, init);
+    return await fetchRequest(request, 0, false);
+  };
+
   const dispatchHostEvent = (identifier, type, payload) => {
     const pendingDns = pendingDnsOperations.get(identifier);
     if (pendingDns) {
@@ -4027,6 +4970,52 @@
         pendingDns.reject(createNetworkError(payload, pendingDns.hostname));
       }
       return;
+    }
+    const httpOperation = pendingHttpOperations.get(identifier);
+    if (httpOperation) {
+      const request = httpOperation.request;
+      const requestStateValue = requireHttpRequestState(request);
+      if (type === 'httpResponse') {
+        const response = new IncomingMessage(request, payload);
+        httpOperation.response = response;
+        requestStateValue.response = response;
+        request.emit('response', response);
+        return;
+      }
+      if (type === 'httpData') {
+        const response = httpOperation.response;
+        if (!response) {
+          request.destroy(
+            createError(
+              'ERR_HTTP_PROTOCOL',
+              'HTTP response data arrived before response headers'
+            )
+          );
+          return;
+        }
+        const accepted = response.push(Buffer.from(payload));
+        __muonHttpHandleData(identifier, !accepted);
+        return;
+      }
+      if (type === 'httpEnd') {
+        pendingHttpOperations.delete(identifier);
+        cleanupHttpAbortSignal(requestStateValue);
+        if (httpOperation.response) {
+          httpOperation.response.complete = true;
+          httpOperation.response.push(null);
+        }
+        request.emit('close');
+        return;
+      }
+      if (type === 'httpError') {
+        pendingHttpOperations.delete(identifier);
+        cleanupHttpAbortSignal(requestStateValue);
+        const error = createHttpOperationError(payload);
+        if (error.code === 'ETIMEDOUT') request.emit('timeout');
+        if (httpOperation.response) httpOperation.response.destroy(error);
+        else request.destroy(error);
+        return;
+      }
     }
     const socket = activeTcpSockets.get(identifier);
     if (!socket) return;
@@ -4133,6 +5122,10 @@
       configurable: true,
       writable: true,
     },
+    Headers: { value: Headers, configurable: true, writable: true },
+    Request: { value: Request, configurable: true, writable: true },
+    Response: { value: Response, configurable: true, writable: true },
+    fetch: { value: fetch, configurable: true, writable: true },
     Buffer: { value: Buffer, configurable: true, writable: true },
     setTimeout: {
       value: setCallbackTimeout,
@@ -4193,6 +5186,8 @@
     'node:dns/promises': dnsPromises,
     net: netModule,
     'node:net': netModule,
+    http: httpModule,
+    'node:http': httpModule,
   });
 
   const findHostModule = (specifier) => {

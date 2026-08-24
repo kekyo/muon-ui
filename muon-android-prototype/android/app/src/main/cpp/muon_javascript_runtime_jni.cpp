@@ -2980,6 +2980,8 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             "\"node:path\",\"node:events\",\"node:buffer\","
             "\"node:timers\",\"node:timers/promises\",\"node:stream\","
             "\"node:process\",\"node:os\","
+            "\"node:util\",\"node:assert\",\"node:querystring\","
+            "\"node:string_decoder\","
             "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
             "\"tcp-server\","
             "\"node:http\",\"http-server\",\"node:https\",\"fetch\","

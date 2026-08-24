@@ -23,6 +23,21 @@ import processModule, {
 import processAlias from 'process';
 import os, { arch as osArch, platform as osPlatform } from 'node:os';
 import osAlias from 'os';
+import util, {
+  format as formatValue,
+  inspect as inspectValue,
+  isDeepStrictEqual,
+  promisify,
+  stripVTControlCharacters,
+} from 'node:util';
+import utilAlias from 'util';
+import assert from 'node:assert';
+import assertAlias from 'assert';
+import strictAssert from 'node:assert/strict';
+import querystring from 'node:querystring';
+import querystringAlias from 'querystring';
+import stringDecoderModule, { StringDecoder } from 'node:string_decoder';
+import stringDecoderAlias from 'string_decoder';
 import {
   PassThrough,
   Readable,
@@ -288,6 +303,156 @@ export const exerciseProcessAndOs = async () => {
       homedir: os.homedir(),
       tmpdir: os.tmpdir(),
       userInfo: os.userInfo(),
+    },
+  };
+};
+
+export const exerciseUtilityModules = async () => {
+  const add = promisify((left, right, callback) => {
+    setImmediate(callback, null, left + right);
+  });
+  const promisifiedValue = await add(20, 22);
+
+  const fail = promisify((callback) => {
+    const error = new Error('promisified failure');
+    error.code = 'EUTIL';
+    callback(error);
+  });
+  let promisifiedErrorCode = '';
+  try {
+    await fail();
+  } catch (error) {
+    promisifiedErrorCode = error.code;
+  }
+
+  const customSource = (callback) => callback(null, 'source');
+  const customPromisified = async () => 'custom';
+  customSource[promisify.custom] = customPromisified;
+
+  const customInspectable = { hidden: true };
+  customInspectable[inspectValue.custom] = () => 'MuonCustom';
+  const circularLeft = { name: 'muon' };
+  circularLeft.self = circularLeft;
+  const circularRight = { name: 'muon' };
+  circularRight.self = circularRight;
+
+  assert.equal(1, '1');
+  strictAssert.ok(true);
+  strictAssert.strictEqual(42, 42);
+  strictAssert.deepStrictEqual(
+    { value: [1, Buffer.from('muon')] },
+    { value: [1, Buffer.from('muon')] }
+  );
+  strictAssert.match('muon-runtime', /^muon/);
+  strictAssert.throws(() => {
+    throw new TypeError('expected sync error');
+  }, TypeError);
+  await strictAssert.rejects(async () => {
+    throw new Error('expected async error');
+  }, /expected async/);
+
+  let assertionFailure;
+  try {
+    strictAssert.strictEqual(1, 2, 'different values');
+  } catch (error) {
+    assertionFailure = {
+      isAssertionError: error instanceof strictAssert.AssertionError,
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      actual: error.actual,
+      expected: error.expected,
+      operator: error.operator,
+      generatedMessage: error.generatedMessage,
+    };
+  }
+
+  let strictLegacyAliasRejected = false;
+  try {
+    strictAssert.equal(1, '1');
+  } catch (error) {
+    strictLegacyAliasRejected = error.code === 'ERR_ASSERTION';
+  }
+
+  const encodedQuery = querystring.stringify({
+    foo: 'bar',
+    abc: ['xyz', '123'],
+    space: 'a b',
+    symbol: '✓',
+    nil: null,
+    truth: true,
+    object: { value: 1 },
+  });
+  const decodedQuery = querystring.parse(
+    'foo=bar&abc=xyz&abc=123&space=a+b&bad=%zz'
+  );
+
+  const utf8Decoder = new StringDecoder('utf8');
+  const utf8Parts = [
+    utf8Decoder.write(Buffer.from([0xe2])),
+    utf8Decoder.write(Buffer.from([0x82])),
+    utf8Decoder.end(Buffer.from([0xac])),
+  ];
+  const incompleteUtf8Decoder = new StringDecoder('utf8');
+  incompleteUtf8Decoder.write(Buffer.from([0xe2]));
+
+  const utf16Decoder = new StringDecoder('utf16le');
+  const utf16Parts = [
+    utf16Decoder.write(Buffer.from([0x34, 0xd8, 0x1e])),
+    utf16Decoder.end(Buffer.from([0xdd])),
+  ];
+
+  const base64Decoder = new StringDecoder('base64');
+  const base64Parts = [
+    base64Decoder.write(Buffer.from([0x6d, 0x75])),
+    base64Decoder.end(Buffer.from([0x6f, 0x6e])),
+  ];
+
+  return {
+    util: {
+      moduleAlias: util === utilAlias,
+      promisifiedValue,
+      promisifiedErrorCode,
+      customPromisified: promisify(customSource) === customPromisified,
+      formatted: formatValue('name=%s count=%d json=%j %%', 'muon', 2, {
+        ok: true,
+      }),
+      inspected: inspectValue({ name: 'muon', count: 2 }),
+      customInspected: inspectValue(customInspectable),
+      circularInspected: inspectValue(circularLeft),
+      deepCircular: isDeepStrictEqual(circularLeft, circularRight),
+      deepDifferent: isDeepStrictEqual(
+        { value: new Set([1, 2]) },
+        { value: new Set([1, 3]) }
+      ),
+      stripped: stripVTControlCharacters('\u001b[31mmuon\u001b[0m'),
+      types: {
+        bufferIsUint8Array: util.types.isUint8Array(Buffer.from('muon')),
+        promiseIsPromise: util.types.isPromise(Promise.resolve()),
+        mapIsMap: util.types.isMap(new Map()),
+      },
+    },
+    assert: {
+      moduleAlias: assert === assertAlias,
+      strictLegacyAliasRejected,
+      failure: assertionFailure,
+    },
+    querystring: {
+      moduleAlias: querystring === querystringAlias,
+      encodeAlias: querystring.encode === querystring.stringify,
+      decodeAlias: querystring.decode === querystring.parse,
+      encoded: encodedQuery,
+      decoded: decodedQuery,
+      custom: querystring.stringify({ key: ['one', 'two'] }, ';', ':'),
+      malformed: querystring.unescape('%zz'),
+    },
+    stringDecoder: {
+      moduleAlias: stringDecoderModule === stringDecoderAlias,
+      utf8Parts,
+      incompleteUtf8: incompleteUtf8Decoder.end(),
+      utf16Parts,
+      base64Parts,
+      latin1: new StringDecoder('latin1').end(Buffer.from([0xe2])),
     },
   };
 };
@@ -1135,6 +1300,7 @@ globalThis.__muonBackendModule = Object.freeze({
   importedPathBasename,
   exerciseRuntimePrimitives,
   exerciseProcessAndOs,
+  exerciseUtilityModules,
   exerciseStreamAndUrl,
   exerciseDnsAndTcp,
   exerciseNetServer,

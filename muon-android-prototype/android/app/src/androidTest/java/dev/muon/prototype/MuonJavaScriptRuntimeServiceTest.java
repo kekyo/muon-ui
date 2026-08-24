@@ -207,6 +207,14 @@ public final class MuonJavaScriptRuntimeServiceTest {
                 capabilities.toString().contains("\"node:process\""));
         assertTrue(capabilities.toString(),
                 capabilities.toString().contains("\"node:os\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:util\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:assert\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:querystring\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:string_decoder\""));
         return runtime;
     }
 
@@ -649,6 +657,96 @@ public final class MuonJavaScriptRuntimeServiceTest {
             assertTrue(request(
                     runtime,
                     "shutdown-process-os",
+                    "shutdown",
+                    new JSONObject()).getBoolean("ok"));
+        }
+    }
+
+    @Test
+    public void supportsNodeUtilityModules() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-utility-modules")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "utility-modules",
+                    root,
+                    "exerciseUtilityModules",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            JSONObject util = values.getJSONObject("util");
+            assertTrue(util.getBoolean("moduleAlias"));
+            assertEquals(42, util.getInt("promisifiedValue"));
+            assertEquals("EUTIL", util.getString("promisifiedErrorCode"));
+            assertTrue(util.getBoolean("customPromisified"));
+            assertEquals(
+                    "name=muon count=2 json={\"ok\":true} %",
+                    util.getString("formatted"));
+            assertEquals(
+                    "{ name: 'muon', count: 2 }",
+                    util.getString("inspected"));
+            assertEquals("MuonCustom", util.getString("customInspected"));
+            assertTrue(util.getString("circularInspected").contains("[Circular]"));
+            assertTrue(util.getBoolean("deepCircular"));
+            assertFalse(util.getBoolean("deepDifferent"));
+            assertEquals("muon", util.getString("stripped"));
+            JSONObject types = util.getJSONObject("types");
+            assertTrue(types.getBoolean("bufferIsUint8Array"));
+            assertTrue(types.getBoolean("promiseIsPromise"));
+            assertTrue(types.getBoolean("mapIsMap"));
+
+            JSONObject assertValues = values.getJSONObject("assert");
+            assertTrue(assertValues.getBoolean("moduleAlias"));
+            assertTrue(assertValues.getBoolean("strictLegacyAliasRejected"));
+            JSONObject failure = assertValues.getJSONObject("failure");
+            assertTrue(failure.getBoolean("isAssertionError"));
+            assertEquals("AssertionError", failure.getString("name"));
+            assertEquals("ERR_ASSERTION", failure.getString("code"));
+            assertEquals("different values", failure.getString("message"));
+            assertEquals(1, failure.getInt("actual"));
+            assertEquals(2, failure.getInt("expected"));
+            assertEquals("strictEqual", failure.getString("operator"));
+            assertFalse(failure.getBoolean("generatedMessage"));
+
+            JSONObject querystring = values.getJSONObject("querystring");
+            assertTrue(querystring.getBoolean("moduleAlias"));
+            assertTrue(querystring.getBoolean("encodeAlias"));
+            assertTrue(querystring.getBoolean("decodeAlias"));
+            assertEquals(
+                    "foo=bar&abc=xyz&abc=123&space=a%20b&symbol=%E2%9C%93"
+                            + "&nil=&truth=true&object=",
+                    querystring.getString("encoded"));
+            JSONObject decoded = querystring.getJSONObject("decoded");
+            assertEquals("bar", decoded.getString("foo"));
+            assertEquals(
+                    "[\"xyz\",\"123\"]",
+                    decoded.getJSONArray("abc").toString());
+            assertEquals("a b", decoded.getString("space"));
+            assertEquals("%zz", decoded.getString("bad"));
+            assertEquals("key:one;key:two", querystring.getString("custom"));
+            assertEquals("%zz", querystring.getString("malformed"));
+
+            JSONObject decoder = values.getJSONObject("stringDecoder");
+            assertTrue(decoder.getBoolean("moduleAlias"));
+            assertEquals(
+                    "[\"\",\"\",\"€\"]",
+                    decoder.getJSONArray("utf8Parts").toString());
+            assertEquals("�", decoder.getString("incompleteUtf8"));
+            assertEquals(
+                    "[\"\",\"𝄞\"]",
+                    decoder.getJSONArray("utf16Parts").toString());
+            assertEquals(
+                    "[\"\",\"bXVvbg==\"]",
+                    decoder.getJSONArray("base64Parts").toString());
+            assertEquals("â", decoder.getString("latin1"));
+
+            assertTrue(request(
+                    runtime,
+                    "shutdown-utility-modules",
                     "shutdown",
                     new JSONObject()).getBoolean("ok"));
         }

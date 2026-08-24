@@ -647,6 +647,883 @@
     btoa: (value) => encodeBase64(encodeBufferString(value, 'latin1')),
   });
 
+  const bytesEqual = (left, right) => {
+    if (left.byteLength !== right.byteLength) return false;
+    for (let index = 0; index < left.byteLength; index += 1) {
+      if (left[index] !== right[index]) return false;
+    }
+    return true;
+  };
+
+  const enumerableOwnKeys = (value) =>
+    Reflect.ownKeys(value).filter(
+      (key) => Object.getOwnPropertyDescriptor(value, key)?.enumerable === true
+    );
+
+  const mergeSeenPairs = (destination, source) => {
+    for (const [key, value] of source) destination.set(key, value);
+  };
+
+  const deepStrictEqualInternal = (left, right, leftSeen, rightSeen) => {
+    if (Object.is(left, right)) return true;
+    if (
+      left === null ||
+      right === null ||
+      (typeof left !== 'object' && typeof left !== 'function') ||
+      (typeof right !== 'object' && typeof right !== 'function')
+    ) {
+      return false;
+    }
+    if (Object.getPrototypeOf(left) !== Object.getPrototypeOf(right)) {
+      return false;
+    }
+
+    if (leftSeen.has(left) || rightSeen.has(right)) {
+      return leftSeen.get(left) === right && rightSeen.get(right) === left;
+    }
+    leftSeen.set(left, right);
+    rightSeen.set(right, left);
+
+    if (left instanceof Date) {
+      return Object.is(left.getTime(), right.getTime());
+    }
+    if (left instanceof RegExp) {
+      return (
+        left.source === right.source &&
+        left.flags === right.flags &&
+        left.lastIndex === right.lastIndex
+      );
+    }
+    if (left instanceof ArrayBuffer) {
+      return bytesEqual(new Uint8Array(left), new Uint8Array(right));
+    }
+    if (ArrayBuffer.isView(left)) {
+      if (
+        !ArrayBuffer.isView(right) ||
+        left.constructor !== right.constructor
+      ) {
+        return false;
+      }
+      return bytesEqual(
+        new Uint8Array(left.buffer, left.byteOffset, left.byteLength),
+        new Uint8Array(right.buffer, right.byteOffset, right.byteLength)
+      );
+    }
+    if (left instanceof Map) {
+      if (!(right instanceof Map) || left.size !== right.size) return false;
+      const unmatched = [...right.entries()];
+      for (const [leftKey, leftValue] of left) {
+        let match = -1;
+        for (let index = 0; index < unmatched.length; index += 1) {
+          const [rightKey, rightValue] = unmatched[index];
+          const candidateLeftSeen = new Map(leftSeen);
+          const candidateRightSeen = new Map(rightSeen);
+          if (
+            deepStrictEqualInternal(
+              leftKey,
+              rightKey,
+              candidateLeftSeen,
+              candidateRightSeen
+            ) &&
+            deepStrictEqualInternal(
+              leftValue,
+              rightValue,
+              candidateLeftSeen,
+              candidateRightSeen
+            )
+          ) {
+            mergeSeenPairs(leftSeen, candidateLeftSeen);
+            mergeSeenPairs(rightSeen, candidateRightSeen);
+            match = index;
+            break;
+          }
+        }
+        if (match < 0) return false;
+        unmatched.splice(match, 1);
+      }
+      return true;
+    }
+    if (left instanceof Set) {
+      if (!(right instanceof Set) || left.size !== right.size) return false;
+      const unmatched = [...right.values()];
+      for (const leftValue of left) {
+        let match = -1;
+        for (let index = 0; index < unmatched.length; index += 1) {
+          const candidateLeftSeen = new Map(leftSeen);
+          const candidateRightSeen = new Map(rightSeen);
+          if (
+            deepStrictEqualInternal(
+              leftValue,
+              unmatched[index],
+              candidateLeftSeen,
+              candidateRightSeen
+            )
+          ) {
+            mergeSeenPairs(leftSeen, candidateLeftSeen);
+            mergeSeenPairs(rightSeen, candidateRightSeen);
+            match = index;
+            break;
+          }
+        }
+        if (match < 0) return false;
+        unmatched.splice(match, 1);
+      }
+      return true;
+    }
+    if (left instanceof Error) {
+      if (left.name !== right.name || left.message !== right.message) {
+        return false;
+      }
+      if (
+        ('cause' in left || 'cause' in right) &&
+        !deepStrictEqualInternal(left.cause, right.cause, leftSeen, rightSeen)
+      ) {
+        return false;
+      }
+    }
+
+    const leftKeys = enumerableOwnKeys(left);
+    const rightKeys = enumerableOwnKeys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+      if (!rightKeys.some((candidate) => Object.is(candidate, key))) {
+        return false;
+      }
+      if (
+        !deepStrictEqualInternal(left[key], right[key], leftSeen, rightSeen)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const isDeepStrictEqual = (left, right) =>
+    deepStrictEqualInternal(left, right, new Map(), new Map());
+
+  const inspectCustom = Symbol.for('nodejs.util.inspect.custom');
+  const inspectDefaultOptions = {
+    depth: 2,
+    customInspect: true,
+  };
+  const quoteInspectString = (value) =>
+    `'${String(value)
+      .replaceAll('\\', '\\\\')
+      .replaceAll("'", "\\'")
+      .replaceAll('\n', '\\n')
+      .replaceAll('\r', '\\r')}'`;
+  let inspectValue;
+  const inspectInternal = (value, options, depth, ancestors) => {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (typeof value === 'string') return quoteInspectString(value);
+    if (typeof value === 'number') {
+      if (Object.is(value, -0)) return '-0';
+      return String(value);
+    }
+    if (typeof value === 'bigint') return `${value}n`;
+    if (typeof value === 'boolean' || typeof value === 'symbol') {
+      return String(value);
+    }
+    if (typeof value === 'function') {
+      return `[Function${value.name ? `: ${value.name}` : ''}]`;
+    }
+
+    if (
+      options.customInspect !== false &&
+      typeof value[inspectCustom] === 'function'
+    ) {
+      const inspected = Reflect.apply(value[inspectCustom], value, [
+        depth,
+        options,
+        inspectValue,
+      ]);
+      if (inspected !== value) {
+        return typeof inspected === 'string'
+          ? inspected
+          : inspectInternal(inspected, options, depth, ancestors);
+      }
+    }
+    if (ancestors.has(value)) return '[Circular]';
+    if (depth < 0) {
+      if (Array.isArray(value)) return '[Array]';
+      if (value instanceof Map) return `[Map(${value.size})]`;
+      if (value instanceof Set) return `[Set(${value.size})]`;
+      return '[Object]';
+    }
+    if (Buffer.isBuffer(value)) {
+      return `<Buffer ${value.toString('hex').replace(/(..)/g, '$1 ').trim()}>`;
+    }
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime())
+        ? 'Invalid Date'
+        : value.toISOString();
+    }
+    if (value instanceof RegExp) return String(value);
+    if (value instanceof Error) return `[${value.name}: ${value.message}]`;
+
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        return `[ ${value
+          .map((entry) => inspectInternal(entry, options, depth - 1, ancestors))
+          .join(', ')} ]`;
+      }
+      if (value instanceof Map) {
+        const entries = [];
+        for (const [key, entry] of value) {
+          entries.push(
+            `${inspectInternal(key, options, depth - 1, ancestors)} => ${inspectInternal(entry, options, depth - 1, ancestors)}`
+          );
+        }
+        return `Map(${value.size}) { ${entries.join(', ')} }`;
+      }
+      if (value instanceof Set) {
+        const entries = [...value].map((entry) =>
+          inspectInternal(entry, options, depth - 1, ancestors)
+        );
+        return `Set(${value.size}) { ${entries.join(', ')} }`;
+      }
+      const entries = enumerableOwnKeys(value).map((key) => {
+        const name =
+          typeof key === 'symbol'
+            ? `[${String(key)}]`
+            : /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
+              ? key
+              : quoteInspectString(key);
+        return `${name}: ${inspectInternal(
+          value[key],
+          options,
+          depth - 1,
+          ancestors
+        )}`;
+      });
+      return `{ ${entries.join(', ')} }`;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  inspectValue = (value, options) => {
+    const normalized =
+      options === undefined
+        ? { ...inspectDefaultOptions }
+        : typeof options === 'boolean'
+          ? { ...inspectDefaultOptions, showHidden: options }
+          : { ...inspectDefaultOptions, ...options };
+    const depth =
+      normalized.depth === null ? Number.MAX_SAFE_INTEGER : normalized.depth;
+    if (!Number.isInteger(depth) || depth < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'inspect depth must be a non-negative integer or null'
+      );
+    }
+    return inspectInternal(value, normalized, depth, new Set());
+  };
+  inspectValue.custom = inspectCustom;
+  inspectValue.defaultOptions = inspectDefaultOptions;
+
+  const formatWithOptions = (inspectOptions, format, ...arguments_) => {
+    const inspectArgument = (value) => inspectValue(value, inspectOptions);
+    if (typeof format !== 'string') {
+      return [format, ...arguments_]
+        .map((value) =>
+          typeof value === 'string' ? value : inspectArgument(value)
+        )
+        .join(' ');
+    }
+    let argumentIndex = 0;
+    const result = format.replace(/%[sdifjoOc%]/g, (specifier) => {
+      if (specifier === '%%') return '%';
+      if (argumentIndex >= arguments_.length) return specifier;
+      const value = arguments_[argumentIndex++];
+      if (specifier === '%s') {
+        return value !== null && typeof value === 'object'
+          ? inspectArgument(value)
+          : String(value);
+      }
+      if (specifier === '%d') return String(Number(value));
+      if (specifier === '%i') return String(Number.parseInt(value, 10));
+      if (specifier === '%f') return String(Number.parseFloat(value));
+      if (specifier === '%j') {
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return '[Circular]';
+        }
+      }
+      if (specifier === '%c') return '';
+      return inspectArgument(value);
+    });
+    const remaining = arguments_
+      .slice(argumentIndex)
+      .map((value) =>
+        typeof value === 'string' ? value : inspectArgument(value)
+      );
+    return remaining.length === 0 ? result : `${result} ${remaining.join(' ')}`;
+  };
+  const formatValue = (format, ...arguments_) =>
+    formatWithOptions(undefined, format, ...arguments_);
+
+  const promisifyCustom = Symbol.for('nodejs.util.promisify.custom');
+  const promisify = (original) => {
+    if (typeof original !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'promisify original must be a function'
+      );
+    }
+    if (original[promisifyCustom] !== undefined) {
+      if (typeof original[promisifyCustom] !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'promisify custom implementation must be a function'
+        );
+      }
+      return original[promisifyCustom];
+    }
+    return function (...arguments_) {
+      const receiver = this;
+      return new Promise((resolve, reject) => {
+        const callback = (error, value) => {
+          if (error) reject(error);
+          else resolve(value);
+        };
+        try {
+          Reflect.apply(original, receiver, [...arguments_, callback]);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+  };
+  promisify.custom = promisifyCustom;
+
+  const stripVTControlCharacters = (value) =>
+    String(value).replace(/\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+
+  const utilTypes = Object.freeze({
+    isAnyArrayBuffer: (value) => value instanceof ArrayBuffer,
+    isArrayBuffer: (value) => value instanceof ArrayBuffer,
+    isArrayBufferView: (value) => ArrayBuffer.isView(value),
+    isDate: (value) => value instanceof Date,
+    isMap: (value) => value instanceof Map,
+    isNativeError: (value) => value instanceof Error,
+    isPromise: (value) =>
+      value !== null &&
+      (typeof value === 'object' || typeof value === 'function') &&
+      typeof value.then === 'function',
+    isRegExp: (value) => value instanceof RegExp,
+    isSet: (value) => value instanceof Set,
+    isTypedArray: (value) =>
+      ArrayBuffer.isView(value) && !(value instanceof DataView),
+    isUint8Array: (value) => value instanceof Uint8Array,
+  });
+
+  const utilModule = Object.freeze({
+    format: formatValue,
+    formatWithOptions,
+    inspect: inspectValue,
+    isDeepStrictEqual,
+    promisify,
+    stripVTControlCharacters,
+    types: utilTypes,
+  });
+
+  const AssertionError = function (options) {
+    const normalized = options ?? {};
+    const generatedMessage = normalized.message === undefined;
+    const message = generatedMessage
+      ? `Expected values to satisfy ${normalized.operator ?? 'assertion'}`
+      : String(normalized.message);
+    const error = new Error(message);
+    Object.setPrototypeOf(error, AssertionError.prototype);
+    error.name = 'AssertionError';
+    error.code = 'ERR_ASSERTION';
+    error.actual = normalized.actual;
+    error.expected = normalized.expected;
+    error.operator = normalized.operator;
+    error.generatedMessage = generatedMessage;
+    return error;
+  };
+  AssertionError.prototype = Object.create(Error.prototype);
+  Object.defineProperty(AssertionError.prototype, 'constructor', {
+    value: AssertionError,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+
+  const throwAssertion = (actual, expected, operator, message) => {
+    if (message instanceof Error) throw message;
+    throw new AssertionError({ actual, expected, operator, message });
+  };
+  const assertOk = (value, message) => {
+    if (!value) throwAssertion(value, true, '==', message);
+  };
+  const assertEqual = (actual, expected, message) => {
+    if (
+      !(actual == expected || (Number.isNaN(actual) && Number.isNaN(expected)))
+    ) {
+      throwAssertion(actual, expected, 'equal', message);
+    }
+  };
+  const assertNotEqual = (actual, expected, message) => {
+    if (
+      actual == expected ||
+      (Number.isNaN(actual) && Number.isNaN(expected))
+    ) {
+      throwAssertion(actual, expected, 'notEqual', message);
+    }
+  };
+  const assertStrictEqual = (actual, expected, message) => {
+    if (!Object.is(actual, expected)) {
+      throwAssertion(actual, expected, 'strictEqual', message);
+    }
+  };
+  const assertNotStrictEqual = (actual, expected, message) => {
+    if (Object.is(actual, expected)) {
+      throwAssertion(actual, expected, 'notStrictEqual', message);
+    }
+  };
+  const assertDeepStrictEqual = (actual, expected, message) => {
+    if (!isDeepStrictEqual(actual, expected)) {
+      throwAssertion(actual, expected, 'deepStrictEqual', message);
+    }
+  };
+  const assertNotDeepStrictEqual = (actual, expected, message) => {
+    if (isDeepStrictEqual(actual, expected)) {
+      throwAssertion(actual, expected, 'notDeepStrictEqual', message);
+    }
+  };
+  const assertFail = (message) => {
+    if (message instanceof Error) throw message;
+    throwAssertion(undefined, undefined, 'fail', message ?? 'Failed');
+  };
+  const matchesExpectedError = (error, expected) => {
+    if (expected === undefined) return true;
+    if (expected instanceof RegExp) {
+      expected.lastIndex = 0;
+      return expected.test(String(error?.message ?? error));
+    }
+    if (typeof expected === 'function') {
+      if (
+        expected === Error ||
+        (expected.prototype && expected.prototype instanceof Error)
+      ) {
+        return error instanceof expected;
+      }
+      return expected(error) === true;
+    }
+    if (expected !== null && typeof expected === 'object') {
+      return Reflect.ownKeys(expected).every((key) =>
+        isDeepStrictEqual(error?.[key], expected[key])
+      );
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Expected error must be a constructor, predicate, RegExp, or object'
+    );
+  };
+  const assertThrows = (block, expected, message) => {
+    if (typeof block !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.throws block must be a function'
+      );
+    }
+    let thrown = false;
+    let actual;
+    try {
+      block();
+    } catch (error) {
+      thrown = true;
+      actual = error;
+    }
+    if (!thrown) throwAssertion(undefined, expected, 'throws', message);
+    if (!matchesExpectedError(actual, expected)) {
+      throwAssertion(actual, expected, 'throws', message);
+    }
+    return actual;
+  };
+  const assertDoesNotThrow = (block, expected, message) => {
+    if (typeof block !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.doesNotThrow block must be a function'
+      );
+    }
+    try {
+      block();
+    } catch (error) {
+      if (expected === undefined || matchesExpectedError(error, expected)) {
+        throwAssertion(error, undefined, 'doesNotThrow', message);
+      }
+      throw error;
+    }
+  };
+  const assertRejects = async (block, expected, message) => {
+    let rejected = false;
+    let actual;
+    try {
+      const promise = typeof block === 'function' ? block() : block;
+      await promise;
+    } catch (error) {
+      rejected = true;
+      actual = error;
+    }
+    if (!rejected) throwAssertion(undefined, expected, 'rejects', message);
+    if (!matchesExpectedError(actual, expected)) {
+      throwAssertion(actual, expected, 'rejects', message);
+    }
+    return actual;
+  };
+  const assertDoesNotReject = async (block, expected, message) => {
+    try {
+      const promise = typeof block === 'function' ? block() : block;
+      await promise;
+    } catch (error) {
+      if (expected === undefined || matchesExpectedError(error, expected)) {
+        throwAssertion(error, undefined, 'doesNotReject', message);
+      }
+      throw error;
+    }
+  };
+  const assertMatch = (value, expression, message) => {
+    if (!(expression instanceof RegExp)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.match requires a RegExp'
+      );
+    }
+    expression.lastIndex = 0;
+    if (!expression.test(String(value))) {
+      throwAssertion(value, expression, 'match', message);
+    }
+  };
+  const assertDoesNotMatch = (value, expression, message) => {
+    if (!(expression instanceof RegExp)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.doesNotMatch requires a RegExp'
+      );
+    }
+    expression.lastIndex = 0;
+    if (expression.test(String(value))) {
+      throwAssertion(value, expression, 'doesNotMatch', message);
+    }
+  };
+  const assertIfError = (value) => {
+    if (value !== null && value !== undefined) {
+      throwAssertion(
+        value,
+        null,
+        'ifError',
+        `ifError got unwanted exception: ${value}`
+      );
+    }
+  };
+
+  const assertModule = (value, message) => assertOk(value, message);
+  const strictAssertModule = (value, message) => assertOk(value, message);
+  const sharedAssertionMethods = {
+    AssertionError,
+    fail: assertFail,
+    ifError: assertIfError,
+    match: assertMatch,
+    doesNotMatch: assertDoesNotMatch,
+    throws: assertThrows,
+    doesNotThrow: assertDoesNotThrow,
+    rejects: assertRejects,
+    doesNotReject: assertDoesNotReject,
+    ok: assertOk,
+    strictEqual: assertStrictEqual,
+    notStrictEqual: assertNotStrictEqual,
+    deepStrictEqual: assertDeepStrictEqual,
+    notDeepStrictEqual: assertNotDeepStrictEqual,
+  };
+  Object.assign(assertModule, sharedAssertionMethods, {
+    equal: assertEqual,
+    notEqual: assertNotEqual,
+    deepEqual: assertDeepStrictEqual,
+    notDeepEqual: assertNotDeepStrictEqual,
+  });
+  Object.assign(strictAssertModule, sharedAssertionMethods, {
+    equal: assertStrictEqual,
+    notEqual: assertNotStrictEqual,
+    deepEqual: assertDeepStrictEqual,
+    notDeepEqual: assertNotDeepStrictEqual,
+  });
+  assertModule.strict = strictAssertModule;
+  strictAssertModule.strict = strictAssertModule;
+
+  const querystringEscape = (value) => encodeURIComponent(String(value));
+  const querystringUnescape = (value) => {
+    const source = String(value);
+    try {
+      return decodeURIComponent(source);
+    } catch {
+      return source.replace(/(?:%[0-9A-Fa-f]{2})+/g, (encoded) => {
+        const bytes = [];
+        for (let index = 0; index < encoded.length; index += 3) {
+          bytes.push(Number.parseInt(encoded.slice(index + 1, index + 3), 16));
+        }
+        return decodeUtf8(Uint8Array.from(bytes));
+      });
+    }
+  };
+  const querystringPrimitive = (value) => {
+    if (value === null || value === undefined) return '';
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'bigint' ||
+      typeof value === 'boolean'
+    ) {
+      return String(value);
+    }
+    return '';
+  };
+  let querystringModule;
+  const querystringStringify = (object, separator, equals, options) => {
+    if (object === null || typeof object !== 'object') return '';
+    const normalizedSeparator =
+      separator === undefined ? '&' : String(separator);
+    const normalizedEquals = equals === undefined ? '=' : String(equals);
+    const encoder =
+      options?.encodeURIComponent === undefined
+        ? querystringModule.escape
+        : options.encodeURIComponent;
+    if (typeof encoder !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'querystring encoder must be a function'
+      );
+    }
+    const entries = [];
+    for (const key of Object.keys(object)) {
+      const encodedKey = encoder(key);
+      const values = Array.isArray(object[key]) ? object[key] : [object[key]];
+      for (const value of values) {
+        entries.push(
+          `${encodedKey}${normalizedEquals}${encoder(querystringPrimitive(value))}`
+        );
+      }
+    }
+    return entries.join(normalizedSeparator);
+  };
+  const querystringParse = (value, separator, equals, options) => {
+    const result = Object.create(null);
+    if (typeof value !== 'string' || value.length === 0) return result;
+    const normalizedSeparator =
+      separator === undefined ? '&' : String(separator);
+    const normalizedEquals = equals === undefined ? '=' : String(equals);
+    const decoder =
+      options?.decodeURIComponent === undefined
+        ? querystringModule.unescape
+        : options.decodeURIComponent;
+    if (typeof decoder !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'querystring decoder must be a function'
+      );
+    }
+    const maximum =
+      options?.maxKeys === undefined ? 1000 : Number(options.maxKeys);
+    const parts = value.split(normalizedSeparator);
+    const count =
+      maximum === 0 ? parts.length : Math.min(parts.length, maximum);
+    for (let index = 0; index < count; index += 1) {
+      const part = parts[index];
+      const equalsIndex = part.indexOf(normalizedEquals);
+      const encodedKey = equalsIndex < 0 ? part : part.slice(0, equalsIndex);
+      const encodedValue =
+        equalsIndex < 0
+          ? ''
+          : part.slice(equalsIndex + normalizedEquals.length);
+      const key = decoder(encodedKey.replaceAll('+', ' '));
+      const decoded = decoder(encodedValue.replaceAll('+', ' '));
+      if (!(key in result)) result[key] = decoded;
+      else if (Array.isArray(result[key])) result[key].push(decoded);
+      else result[key] = [result[key], decoded];
+    }
+    return result;
+  };
+  querystringModule = {
+    decode: querystringParse,
+    encode: querystringStringify,
+    escape: querystringEscape,
+    parse: querystringParse,
+    stringify: querystringStringify,
+    unescape: querystringUnescape,
+  };
+
+  const stringDecoderState = Symbol('muon.stringDecoder.state');
+  const normalizeStringDecoderEncoding = (encoding) => {
+    const normalized = String(encoding ?? 'utf8')
+      .toLowerCase()
+      .replaceAll('-', '');
+    if (normalized === 'utf8') return 'utf8';
+    if (normalized === 'utf16le' || normalized === 'ucs2') return 'utf16le';
+    if (normalized === 'base64') return 'base64';
+    if (normalized === 'latin1' || normalized === 'binary') return 'latin1';
+    if (normalized === 'ascii') return 'ascii';
+    if (normalized === 'hex') return 'hex';
+    throw createError(
+      'ERR_UNKNOWN_ENCODING',
+      `Unknown StringDecoder encoding: ${encoding}`
+    );
+  };
+  const stringDecoderBytes = (value) => {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'StringDecoder input must be a Buffer, TypedArray, or DataView'
+    );
+  };
+  const combineBytes = (left, right) => {
+    const combined = new Uint8Array(left.byteLength + right.byteLength);
+    combined.set(left, 0);
+    combined.set(right, left.byteLength);
+    return combined;
+  };
+  const completeUtf8Length = (bytes) => {
+    if (bytes.length === 0) return 0;
+    let leadIndex = bytes.length - 1;
+    while (
+      leadIndex >= 0 &&
+      bytes.length - leadIndex <= 4 &&
+      (bytes[leadIndex] & 0xc0) === 0x80
+    ) {
+      leadIndex -= 1;
+    }
+    if (leadIndex < 0) return bytes.length;
+    const lead = bytes[leadIndex];
+    const expected =
+      lead >= 0xc2 && lead <= 0xdf
+        ? 2
+        : lead >= 0xe0 && lead <= 0xef
+          ? 3
+          : lead >= 0xf0 && lead <= 0xf4
+            ? 4
+            : 1;
+    const available = bytes.length - leadIndex;
+    if (expected > available) {
+      for (let index = leadIndex + 1; index < bytes.length; index += 1) {
+        if ((bytes[index] & 0xc0) !== 0x80) return bytes.length;
+      }
+      return leadIndex;
+    }
+    return bytes.length;
+  };
+  const completeUtf16Length = (bytes) => {
+    let complete = bytes.length - (bytes.length % 2);
+    if (complete >= 2) {
+      const last = bytes[complete - 2] | (bytes[complete - 1] << 8);
+      if (last >= 0xd800 && last <= 0xdbff) complete -= 2;
+    }
+    return complete;
+  };
+  const decodeUtf16 = (bytes, final) => {
+    let result = '';
+    let index = 0;
+    while (index + 1 < bytes.length) {
+      const first = bytes[index] | (bytes[index + 1] << 8);
+      index += 2;
+      if (first >= 0xd800 && first <= 0xdbff) {
+        if (index + 1 < bytes.length) {
+          const second = bytes[index] | (bytes[index + 1] << 8);
+          if (second >= 0xdc00 && second <= 0xdfff) {
+            result += String.fromCodePoint(
+              0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+            );
+            index += 2;
+            continue;
+          }
+        }
+        result += '�';
+      } else if (first >= 0xdc00 && first <= 0xdfff) {
+        result += '�';
+      } else {
+        result += String.fromCharCode(first);
+      }
+    }
+    if (final && index < bytes.length) result += '�';
+    return result;
+  };
+  const decodeStringDecoderBytes = (bytes, encoding, final) => {
+    if (encoding === 'utf8') return decodeUtf8(bytes);
+    if (encoding === 'utf16le') return decodeUtf16(bytes, final);
+    if (encoding === 'base64') return encodeBase64(bytes);
+    if (encoding === 'hex') {
+      return Array.from(bytes, (value) =>
+        value.toString(16).padStart(2, '0')
+      ).join('');
+    }
+    if (encoding === 'ascii') {
+      return Array.from(bytes, (value) =>
+        String.fromCharCode(value & 0x7f)
+      ).join('');
+    }
+    return Array.from(bytes, (value) => String.fromCharCode(value)).join('');
+  };
+  const StringDecoder = function (encoding) {
+    if (!(this instanceof StringDecoder)) return new StringDecoder(encoding);
+    const normalized = normalizeStringDecoderEncoding(encoding);
+    Object.defineProperty(this, stringDecoderState, {
+      value: { encoding: normalized, pending: new Uint8Array() },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.encoding = normalized;
+  };
+  StringDecoder.prototype.write = function (value) {
+    const state = this[stringDecoderState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'StringDecoder.write called on an incompatible receiver'
+      );
+    }
+    const bytes = combineBytes(state.pending, stringDecoderBytes(value));
+    const complete =
+      state.encoding === 'utf8'
+        ? completeUtf8Length(bytes)
+        : state.encoding === 'utf16le'
+          ? completeUtf16Length(bytes)
+          : state.encoding === 'base64'
+            ? bytes.length - (bytes.length % 3)
+            : bytes.length;
+    state.pending = Uint8Array.from(bytes.subarray(complete));
+    return decodeStringDecoderBytes(
+      bytes.subarray(0, complete),
+      state.encoding,
+      false
+    );
+  };
+  StringDecoder.prototype.end = function (value) {
+    const state = this[stringDecoderState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'StringDecoder.end called on an incompatible receiver'
+      );
+    }
+    const written = value === undefined ? '' : this.write(value);
+    const trailing = decodeStringDecoderBytes(
+      state.pending,
+      state.encoding,
+      true
+    );
+    state.pending = new Uint8Array();
+    return written + trailing;
+  };
+  const stringDecoderModule = Object.freeze({ StringDecoder });
+
   const eventType = Symbol('muon.event.type');
   const eventTarget = Symbol('muon.event.target');
   const eventCurrentTarget = Symbol('muon.event.currentTarget');
@@ -6366,6 +7243,16 @@
     'node:process': processModule,
     os: osModule,
     'node:os': osModule,
+    util: utilModule,
+    'node:util': utilModule,
+    assert: assertModule,
+    'node:assert': assertModule,
+    'assert/strict': strictAssertModule,
+    'node:assert/strict': strictAssertModule,
+    querystring: querystringModule,
+    'node:querystring': querystringModule,
+    string_decoder: stringDecoderModule,
+    'node:string_decoder': stringDecoderModule,
     buffer: bufferModule,
     'node:buffer': bufferModule,
     timers: timersModule,

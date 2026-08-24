@@ -2325,6 +2325,7 @@
 
   const readableStreamState = Symbol('muon.stream.readableState');
   const writableStreamState = Symbol('muon.stream.writableState');
+  const streamCloseArgument = Symbol('muon.stream.closeArgument');
 
   const Stream = function () {
     if (!(this instanceof Stream)) return new Stream();
@@ -2339,7 +2340,11 @@
   });
 
   const streamChunkSize = (chunk, objectMode) =>
-    objectMode ? 1 : chunk.byteLength;
+    objectMode
+      ? 1
+      : typeof chunk === 'string'
+        ? chunk.length
+        : chunk.byteLength;
 
   const normalizeStreamChunk = (chunk, encoding, objectMode) => {
     if (chunk === null) {
@@ -2384,7 +2389,12 @@
       if (finalError) this.emit('error', finalError);
       if (readable) readable.closed = true;
       if (writable) writable.closed = true;
-      this.emit('close');
+      const closeArgument = this[streamCloseArgument];
+      if (typeof closeArgument === 'function') {
+        this.emit('close', closeArgument(finalError));
+      } else {
+        this.emit('close');
+      }
     };
     try {
       this._destroy(error ?? null, complete);
@@ -2416,6 +2426,7 @@
         queue: [],
         length: 0,
         objectMode,
+        encoding: null,
         highWaterMark,
         ended: false,
         endEmitted: false,
@@ -2532,7 +2543,10 @@
       );
       return false;
     }
-    const normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    let normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    if (state.encoding !== null && !state.objectMode) {
+      normalized = decodeBufferString(normalized, state.encoding);
+    }
     if (!state.objectMode && normalized.byteLength === 0) {
       return state.length < state.highWaterMark;
     }
@@ -2547,7 +2561,10 @@
   };
   Readable.prototype.unshift = function (chunk, encoding) {
     const state = requireReadableState(this);
-    const normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    let normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    if (state.encoding !== null && !state.objectMode) {
+      normalized = decodeBufferString(normalized, state.encoding);
+    }
     state.queue.unshift(normalized);
     state.length += streamChunkSize(normalized, state.objectMode);
     this.emit('readable');
@@ -2563,6 +2580,24 @@
       const value = shiftReadableChunk(state);
       finishReadable(this, state);
       return value;
+    }
+    if (state.encoding !== null) {
+      const requested =
+        size === undefined || Number.isNaN(Number(size))
+          ? state.length
+          : Math.max(0, Math.trunc(Number(size)));
+      if (requested === 0 || requested > state.length) return null;
+      let result = '';
+      while (result.length < requested) {
+        const chunk = state.queue[0];
+        const count = Math.min(chunk.length, requested - result.length);
+        result += chunk.slice(0, count);
+        state.length -= count;
+        if (count === chunk.length) state.queue.shift();
+        else state.queue[0] = chunk.slice(count);
+      }
+      finishReadable(this, state);
+      return result;
     }
     const requested =
       size === undefined || Number.isNaN(Number(size))
@@ -2612,6 +2647,26 @@
   };
   Readable.prototype.isPaused = function () {
     return requireReadableState(this).flowing === false;
+  };
+  Readable.prototype.setEncoding = function (encoding) {
+    const state = requireReadableState(this);
+    const normalized = normalizeBufferEncoding(encoding);
+    if (state.objectMode) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Object-mode streams cannot set a text encoding'
+      );
+    }
+    if (state.encoding === normalized) return this;
+    state.queue = state.queue.map((chunk) =>
+      typeof chunk === 'string' ? chunk : decodeBufferString(chunk, normalized)
+    );
+    state.encoding = normalized;
+    state.length = state.queue.reduce(
+      (total, chunk) => total + chunk.length,
+      0
+    );
+    return this;
   };
   Readable.prototype.on = function (name, listener) {
     EventEmitter.prototype.on.call(this, name, listener);
@@ -3377,6 +3432,684 @@
     promises: streamPromises,
   });
 
+  let nextHostOperationIdentifier = 1;
+  const pendingDnsOperations = new Map();
+  const activeTcpSockets = new Map();
+  const pendingTcpWrites = new Map();
+  const tcpSocketState = Symbol('muon.net.socketState');
+  let defaultDnsResultOrder = 'verbatim';
+
+  const allocateHostOperationIdentifier = () => nextHostOperationIdentifier++;
+
+  const createNetworkError = (payload, hostname) => {
+    const code =
+      typeof payload?.code === 'string' ? payload.code : 'ERR_NETWORK_IO';
+    const error = createError(
+      code,
+      typeof payload?.message === 'string'
+        ? payload.message
+        : `${code}: network operation failed`
+    );
+    error.errno = code;
+    if (typeof payload?.syscall === 'string' && payload.syscall !== '') {
+      error.syscall = payload.syscall;
+    }
+    if (typeof hostname === 'string' && hostname !== '') {
+      error.hostname = hostname;
+    }
+    return error;
+  };
+
+  const isIP = (input) =>
+    typeof input === 'string' ? Number(__muonIsIp(input)) : 0;
+  const isIPv4 = (input) => isIP(input) === 4;
+  const isIPv6 = (input) => isIP(input) === 6;
+
+  const normalizeDnsFamily = (family) => {
+    if (family === undefined || family === null || family === 0) return 0;
+    if (family === 4 || family === 'IPv4') return 4;
+    if (family === 6 || family === 'IPv6') return 6;
+    throw createError(
+      'ERR_INVALID_ARG_VALUE',
+      'DNS family must be 0, 4, 6, IPv4, or IPv6'
+    );
+  };
+
+  const normalizeDnsOrder = (order) => {
+    const normalized = order ?? defaultDnsResultOrder;
+    if (
+      normalized !== 'verbatim' &&
+      normalized !== 'ipv4first' &&
+      normalized !== 'ipv6first'
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'DNS result order must be verbatim, ipv4first, or ipv6first'
+      );
+    }
+    return normalized;
+  };
+
+  const normalizeLookupOptions = (options) => {
+    if (options === undefined || options === null) {
+      return { family: 0, all: false, order: defaultDnsResultOrder };
+    }
+    if (typeof options === 'number' || typeof options === 'string') {
+      return {
+        family: normalizeDnsFamily(options),
+        all: false,
+        order: defaultDnsResultOrder,
+      };
+    }
+    if (typeof options !== 'object' || Array.isArray(options)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'DNS lookup options must be a family or object'
+      );
+    }
+    if (options.hints !== undefined && Number(options.hints) !== 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'DNS lookup hints are not supported by the Android QuickJS runtime'
+      );
+    }
+    let requestedOrder = options.order;
+    if (requestedOrder === undefined && options.verbatim !== undefined) {
+      requestedOrder = options.verbatim ? 'verbatim' : 'ipv4first';
+    }
+    return {
+      family: normalizeDnsFamily(options.family),
+      all: Boolean(options.all),
+      order: normalizeDnsOrder(requestedOrder),
+    };
+  };
+
+  const orderDnsAddresses = (addresses, order) => {
+    if (order === 'verbatim') return addresses;
+    const preferredFamily = order === 'ipv4first' ? 4 : 6;
+    return [...addresses].sort((left, right) => {
+      const leftPreferred = left.family === preferredFamily ? 0 : 1;
+      const rightPreferred = right.family === preferredFamily ? 0 : 1;
+      return leftPreferred - rightPreferred;
+    });
+  };
+
+  const requestDnsAddresses = async (hostname, family) => {
+    const literalFamily = isIP(hostname);
+    if (literalFamily !== 0) {
+      if (family !== 0 && family !== literalFamily) {
+        throw createNetworkError(
+          {
+            code: 'ENOTFOUND',
+            message: `ENOTFOUND: getaddrinfo ${hostname}`,
+            syscall: 'getaddrinfo',
+          },
+          hostname
+        );
+      }
+      return [{ address: hostname, family: literalFamily }];
+    }
+    const identifier = allocateHostOperationIdentifier();
+    return await new Promise((resolve, reject) => {
+      pendingDnsOperations.set(identifier, { hostname, resolve, reject });
+      try {
+        __muonDnsLookup(identifier, hostname, family);
+      } catch (error) {
+        pendingDnsOperations.delete(identifier);
+        reject(error);
+      }
+    });
+  };
+
+  const lookupDnsPromise = async (hostname, options) => {
+    if (typeof hostname !== 'string' || hostname.length === 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'DNS hostname must be a non-empty string'
+      );
+    }
+    const normalized = normalizeLookupOptions(options);
+    const addresses = orderDnsAddresses(
+      await requestDnsAddresses(hostname, normalized.family),
+      normalized.order
+    );
+    if (normalized.all) return addresses;
+    if (addresses.length === 0) {
+      throw createNetworkError(
+        {
+          code: 'ENOTFOUND',
+          message: `ENOTFOUND: getaddrinfo ${hostname}`,
+          syscall: 'getaddrinfo',
+        },
+        hostname
+      );
+    }
+    return addresses[0];
+  };
+
+  const lookupDns = (hostname, options, callback) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'DNS lookup callback is required'
+      );
+    }
+    const normalized = normalizeLookupOptions(options);
+    setCallbackImmediate(async () => {
+      try {
+        const result = await lookupDnsPromise(hostname, normalized);
+        if (normalized.all) callback(null, result);
+        else callback(null, result.address, result.family);
+      } catch (error) {
+        callback(error);
+      }
+    });
+  };
+
+  const setDefaultDnsResultOrder = (order) => {
+    defaultDnsResultOrder = normalizeDnsOrder(order);
+  };
+  const getDefaultDnsResultOrder = () => defaultDnsResultOrder;
+
+  const dnsPromises = {
+    lookup: lookupDnsPromise,
+    setDefaultResultOrder: setDefaultDnsResultOrder,
+    getDefaultResultOrder: getDefaultDnsResultOrder,
+  };
+  Object.freeze(dnsPromises);
+  const dnsModule = {
+    lookup: lookupDns,
+    setDefaultResultOrder: setDefaultDnsResultOrder,
+    getDefaultResultOrder: getDefaultDnsResultOrder,
+    promises: dnsPromises,
+  };
+  Object.freeze(dnsModule);
+
+  const requireTcpSocketState = (socket) => {
+    const state = socket?.[tcpSocketState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Socket method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const normalizeTcpConnectArguments = (values) => {
+    const arguments_ = [...values];
+    const listener =
+      typeof arguments_.at(-1) === 'function' ? arguments_.pop() : undefined;
+    let options;
+    if (
+      arguments_.length === 1 &&
+      arguments_[0] !== null &&
+      typeof arguments_[0] === 'object'
+    ) {
+      options = { ...arguments_[0] };
+    } else {
+      options = {
+        port: arguments_[0],
+        host: arguments_[1],
+      };
+    }
+    if ('path' in options) {
+      throw createError(
+        'ERR_NOT_SUPPORTED',
+        'Unix domain sockets are not supported on Android QuickJS'
+      );
+    }
+    const port = Number(options.port);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      throw createError(
+        'ERR_SOCKET_BAD_PORT',
+        'TCP port must be an integer between 1 and 65535'
+      );
+    }
+    const host =
+      options.host === undefined ? 'localhost' : String(options.host);
+    if (host.length === 0) {
+      throw createError('ERR_INVALID_ARG_VALUE', 'TCP host must not be empty');
+    }
+    return { options: { ...options, host, port }, listener };
+  };
+
+  const resetSocketTimeout = (socket, state) => {
+    if (state.timeoutHandle !== null) {
+      clearCallbackTimeout(state.timeoutHandle);
+      state.timeoutHandle = null;
+    }
+    if (state.timeout > 0 && !socket.destroyed) {
+      state.timeoutHandle = setCallbackTimeout(() => {
+        state.timeoutHandle = null;
+        socket.emit('timeout');
+      }, state.timeout);
+      state.timeoutHandle.unref();
+    }
+  };
+
+  const maybeCloseTcpSocket = (socket, state) => {
+    if (state.remoteEnded && state.localEnded && !socket.destroyed) {
+      socket.destroy();
+    }
+  };
+
+  const requestTcpEnd = (socket, state, callback) => {
+    state.localEnded = true;
+    if (state.nativeStarted) __muonTcpEnd(state.identifier);
+    callback();
+    maybeCloseTcpSocket(socket, state);
+  };
+
+  const startTcpWrite = (socket, state, chunk, callback) => {
+    const identifier = allocateHostOperationIdentifier();
+    const copy = new Uint8Array(chunk.byteLength);
+    copy.set(chunk);
+    pendingTcpWrites.set(identifier, {
+      socket,
+      callback,
+      length: copy.byteLength,
+    });
+    state.pendingWriteIdentifier = identifier;
+    try {
+      if (!__muonTcpWrite(state.identifier, identifier, copy.buffer)) {
+        throw createError('ERR_SOCKET_CLOSED', 'The TCP socket is closed');
+      }
+    } catch (error) {
+      pendingTcpWrites.delete(identifier);
+      state.pendingWriteIdentifier = 0;
+      callback(error);
+    }
+  };
+
+  const Socket = function (options) {
+    if (!(this instanceof Socket)) return new Socket(options);
+    const normalizedOptions = options ?? {};
+    Duplex.call(this, {
+      ...normalizedOptions,
+      allowHalfOpen: normalizedOptions.allowHalfOpen === true,
+    });
+    Object.defineProperty(this, tcpSocketState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        connecting: false,
+        connected: false,
+        nativeStarted: false,
+        remoteEnded: false,
+        localEnded: false,
+        hadError: false,
+        deferredWrite: null,
+        pendingWriteIdentifier: 0,
+        deferredFinal: null,
+        bytesRead: 0,
+        bytesWritten: 0,
+        localAddress: undefined,
+        localFamily: undefined,
+        localPort: undefined,
+        remoteAddress: undefined,
+        remoteFamily: undefined,
+        remotePort: undefined,
+        noDelay: false,
+        keepAlive: false,
+        keepAliveInitialDelay: 0,
+        timeout: 0,
+        timeoutHandle: null,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    Object.defineProperty(this, streamCloseArgument, {
+      value: () => requireTcpSocketState(this).hadError,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  };
+  Socket.prototype = Object.create(Duplex.prototype);
+  Object.defineProperty(Socket.prototype, 'constructor', {
+    value: Socket,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Socket.prototype.connect = function (...values) {
+    const state = requireTcpSocketState(this);
+    if (state.connecting || state.connected || state.nativeStarted) {
+      throw createError('ERR_SOCKET_ALREADY_OPEN', 'Socket is already opening');
+    }
+    const { options, listener } = normalizeTcpConnectArguments(values);
+    if (listener) this.once('connect', listener);
+    state.connecting = true;
+    state.noDelay = Boolean(options.noDelay);
+    setCallbackImmediate(async () => {
+      try {
+        const result = await lookupDnsPromise(options.host, {
+          family: options.family,
+          all: false,
+          order: options.order ?? 'ipv4first',
+        });
+        if (this.destroyed) return;
+        if (isIP(options.host) === 0) {
+          this.emit(
+            'lookup',
+            null,
+            result.address,
+            result.family,
+            options.host
+          );
+        }
+        activeTcpSockets.set(state.identifier, this);
+        state.nativeStarted = true;
+        __muonTcpConnect(
+          state.identifier,
+          result.address,
+          options.port,
+          state.noDelay
+        );
+      } catch (error) {
+        if (isIP(options.host) === 0) {
+          this.emit('lookup', error, undefined, undefined, options.host);
+        }
+        this.destroy(error);
+      }
+    });
+    return this;
+  };
+  Socket.prototype._read = function () {
+    const state = requireTcpSocketState(this);
+    if (state.nativeStarted) __muonTcpSetPaused(state.identifier, false);
+  };
+  Socket.prototype._write = function (chunk, encoding, callback) {
+    void encoding;
+    const state = requireTcpSocketState(this);
+    if (!state.connected) {
+      state.deferredWrite = { chunk, callback };
+      return;
+    }
+    startTcpWrite(this, state, chunk, callback);
+  };
+  Socket.prototype._final = function (callback) {
+    const state = requireTcpSocketState(this);
+    if (!state.connected) {
+      state.deferredFinal = callback;
+      return;
+    }
+    requestTcpEnd(this, state, callback);
+  };
+  Socket.prototype._destroy = function (error, callback) {
+    const state = requireTcpSocketState(this);
+    state.hadError = Boolean(error);
+    state.connecting = false;
+    state.connected = false;
+    if (state.timeoutHandle !== null) {
+      clearCallbackTimeout(state.timeoutHandle);
+      state.timeoutHandle = null;
+    }
+    if (state.pendingWriteIdentifier !== 0) {
+      const pending = pendingTcpWrites.get(state.pendingWriteIdentifier);
+      pendingTcpWrites.delete(state.pendingWriteIdentifier);
+      state.pendingWriteIdentifier = 0;
+      pending?.callback(
+        error ?? createError('ERR_SOCKET_CLOSED', 'Socket closed')
+      );
+    }
+    if (state.deferredWrite !== null) {
+      const pending = state.deferredWrite;
+      state.deferredWrite = null;
+      pending.callback(
+        error ?? createError('ERR_SOCKET_CLOSED', 'Socket closed')
+      );
+    }
+    if (state.deferredFinal !== null) {
+      const pending = state.deferredFinal;
+      state.deferredFinal = null;
+      pending(error ?? null);
+    }
+    activeTcpSockets.delete(state.identifier);
+    if (state.nativeStarted) {
+      __muonTcpClose(state.identifier);
+      state.nativeStarted = false;
+    }
+    callback(error);
+  };
+  Socket.prototype.pause = function () {
+    const result = Readable.prototype.pause.call(this);
+    const state = requireTcpSocketState(this);
+    if (state.nativeStarted) __muonTcpSetPaused(state.identifier, true);
+    return result;
+  };
+  Socket.prototype.resume = function () {
+    const result = Readable.prototype.resume.call(this);
+    const state = requireTcpSocketState(this);
+    if (state.nativeStarted) __muonTcpSetPaused(state.identifier, false);
+    return result;
+  };
+  Socket.prototype.address = function () {
+    const state = requireTcpSocketState(this);
+    if (state.localAddress === undefined) return {};
+    return {
+      address: state.localAddress,
+      family: state.localFamily,
+      port: state.localPort,
+    };
+  };
+  Socket.prototype.setNoDelay = function (noDelay = true) {
+    const state = requireTcpSocketState(this);
+    state.noDelay = Boolean(noDelay);
+    if (state.nativeStarted) {
+      __muonTcpSetNoDelay(state.identifier, state.noDelay);
+    }
+    return this;
+  };
+  Socket.prototype.setKeepAlive = function (enable = false, initialDelay = 0) {
+    const state = requireTcpSocketState(this);
+    state.keepAlive = Boolean(enable);
+    state.keepAliveInitialDelay = Math.max(0, Number(initialDelay) || 0);
+    if (state.nativeStarted) {
+      __muonTcpSetKeepAlive(
+        state.identifier,
+        state.keepAlive,
+        state.keepAliveInitialDelay
+      );
+    }
+    return this;
+  };
+  Socket.prototype.setTimeout = function (timeout, callback) {
+    const state = requireTcpSocketState(this);
+    const normalized = Number(timeout);
+    if (!Number.isFinite(normalized) || normalized < 0) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Socket timeout must be a non-negative finite number'
+      );
+    }
+    state.timeout = Math.trunc(normalized);
+    if (typeof callback === 'function') this.once('timeout', callback);
+    resetSocketTimeout(this, state);
+    return this;
+  };
+  Socket.prototype.ref = function () {
+    return this;
+  };
+  Socket.prototype.unref = function () {
+    return this;
+  };
+  Socket.prototype.destroySoon = function () {
+    return this.end();
+  };
+  Object.defineProperties(Socket.prototype, {
+    connecting: {
+      get: function () {
+        return requireTcpSocketState(this).connecting;
+      },
+    },
+    pending: {
+      get: function () {
+        return requireTcpSocketState(this).connecting;
+      },
+    },
+    bytesRead: {
+      get: function () {
+        return requireTcpSocketState(this).bytesRead;
+      },
+    },
+    bytesWritten: {
+      get: function () {
+        return requireTcpSocketState(this).bytesWritten;
+      },
+    },
+    localAddress: {
+      get: function () {
+        return requireTcpSocketState(this).localAddress;
+      },
+    },
+    localFamily: {
+      get: function () {
+        return requireTcpSocketState(this).localFamily;
+      },
+    },
+    localPort: {
+      get: function () {
+        return requireTcpSocketState(this).localPort;
+      },
+    },
+    remoteAddress: {
+      get: function () {
+        return requireTcpSocketState(this).remoteAddress;
+      },
+    },
+    remoteFamily: {
+      get: function () {
+        return requireTcpSocketState(this).remoteFamily;
+      },
+    },
+    remotePort: {
+      get: function () {
+        return requireTcpSocketState(this).remotePort;
+      },
+    },
+    readyState: {
+      get: function () {
+        const state = requireTcpSocketState(this);
+        if (this.destroyed) return 'closed';
+        if (state.connecting) return 'opening';
+        if (!state.connected) return 'closed';
+        if (state.localEnded) return 'readOnly';
+        if (state.remoteEnded) return 'writeOnly';
+        return 'open';
+      },
+    },
+    bufferSize: {
+      get: function () {
+        return this.writableLength;
+      },
+    },
+    timeout: {
+      get: function () {
+        return requireTcpSocketState(this).timeout;
+      },
+    },
+  });
+
+  const dispatchHostEvent = (identifier, type, payload) => {
+    const pendingDns = pendingDnsOperations.get(identifier);
+    if (pendingDns) {
+      if (type === 'dns') {
+        pendingDnsOperations.delete(identifier);
+        pendingDns.resolve(payload.addresses);
+      } else if (type === 'error') {
+        pendingDnsOperations.delete(identifier);
+        pendingDns.reject(createNetworkError(payload, pendingDns.hostname));
+      }
+      return;
+    }
+    const socket = activeTcpSockets.get(identifier);
+    if (!socket) return;
+    const state = requireTcpSocketState(socket);
+    if (type === 'connect') {
+      state.connecting = false;
+      state.connected = true;
+      state.localAddress = payload.localAddress;
+      state.localFamily = payload.localFamily;
+      state.localPort = payload.localPort;
+      state.remoteAddress = payload.address;
+      state.remoteFamily = payload.family;
+      state.remotePort = payload.port;
+      if (state.keepAlive) {
+        __muonTcpSetKeepAlive(
+          state.identifier,
+          true,
+          state.keepAliveInitialDelay
+        );
+      }
+      resetSocketTimeout(socket, state);
+      socket.emit('connect');
+      socket.emit('ready');
+      if (state.deferredWrite !== null) {
+        const deferred = state.deferredWrite;
+        state.deferredWrite = null;
+        startTcpWrite(socket, state, deferred.chunk, deferred.callback);
+      } else if (state.deferredFinal !== null) {
+        const deferred = state.deferredFinal;
+        state.deferredFinal = null;
+        requestTcpEnd(socket, state, deferred);
+      }
+      return;
+    }
+    if (type === 'write') {
+      const pending = pendingTcpWrites.get(Number(payload));
+      if (!pending) return;
+      pendingTcpWrites.delete(Number(payload));
+      state.pendingWriteIdentifier = 0;
+      state.bytesWritten += pending.length;
+      resetSocketTimeout(socket, state);
+      pending.callback(null);
+      return;
+    }
+    if (type === 'data') {
+      const data = Buffer.from(payload);
+      state.bytesRead += data.byteLength;
+      resetSocketTimeout(socket, state);
+      if (!socket.push(data)) __muonTcpSetPaused(identifier, true);
+      return;
+    }
+    if (type === 'end') {
+      state.remoteEnded = true;
+      socket.push(null);
+      if (!socket.allowHalfOpen && !socket.writableEnded) socket.end();
+      maybeCloseTcpSocket(socket, state);
+      return;
+    }
+    if (type === 'error') {
+      socket.destroy(createNetworkError(payload, state.remoteAddress));
+    }
+  };
+
+  const createConnection = (...values) => {
+    const socket = new Socket();
+    return socket.connect(...values);
+  };
+  const netModule = Object.freeze({
+    Socket,
+    connect: createConnection,
+    createConnection,
+    isIP,
+    isIPv4,
+    isIPv6,
+  });
+
+  Object.defineProperty(globalThis, '__muonDispatchHostEvent', {
+    value: dispatchHostEvent,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+
   Object.defineProperty(globalThis, '__muonDispatchTimer', {
     value: dispatchTimer,
     configurable: false,
@@ -3454,6 +4187,12 @@
     'node:stream/promises': streamPromises,
     url: urlModule,
     'node:url': urlModule,
+    dns: dnsModule,
+    'node:dns': dnsModule,
+    'dns/promises': dnsPromises,
+    'node:dns/promises': dnsPromises,
+    net: netModule,
+    'node:net': netModule,
   });
 
   const findHostModule = (specifier) => {

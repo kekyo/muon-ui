@@ -31,10 +31,14 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -158,7 +162,13 @@ public final class MuonJavaScriptRuntimeServiceTest {
         JSONObject engine = handshake.getJSONObject("engine");
         assertEquals("quickjs", engine.getString("name"));
         assertEquals("2026-06-04", engine.getString("version"));
-        assertTrue(handshake.getJSONArray("capabilities").length() >= 7);
+        JSONArray capabilities = handshake.getJSONArray("capabilities");
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:dns\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"node:net\""));
+        assertTrue(capabilities.toString(),
+                capabilities.toString().contains("\"tcp\""));
         return runtime;
     }
 
@@ -525,6 +535,258 @@ public final class MuonJavaScriptRuntimeServiceTest {
                     "/data/user/0/app files/é.txt",
                     url.getString("filePath"));
             assertTrue(url.getBoolean("canParseRelative"));
+        }
+    }
+
+    @Test
+    public void supportsAsynchronousDnsAndTcpClients() throws Exception {
+        AtomicReference<String> receivedByServer = new AtomicReference<>();
+        AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+        CountDownLatch serverFinished = new CountDownLatch(1);
+        try (ServerSocket server = new ServerSocket(
+                0,
+                1,
+                InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(30_000);
+            int closedPort;
+            try (ServerSocket closedServer = new ServerSocket(
+                    0,
+                    1,
+                    InetAddress.getByName("127.0.0.1"))) {
+                closedPort = closedServer.getLocalPort();
+            }
+            Thread serverThread = new Thread(() -> {
+                try (Socket connection = server.accept()) {
+                    connection.setSoTimeout(30_000);
+                    ByteArrayOutputStream received = new ByteArrayOutputStream();
+                    byte[] buffer = new byte[64];
+                    while (true) {
+                        int count = connection.getInputStream().read(buffer);
+                        if (count < 0) {
+                            break;
+                        }
+                        received.write(buffer, 0, count);
+                    }
+                    receivedByServer.set(received.toString(StandardCharsets.UTF_8.name()));
+                    connection.getOutputStream().write(
+                            "reply:".getBytes(StandardCharsets.UTF_8));
+                    connection.getOutputStream().flush();
+                    connection.getOutputStream().write(
+                            received.toByteArray());
+                    connection.getOutputStream().flush();
+                    connection.shutdownOutput();
+                } catch (Throwable error) {
+                    serverFailure.set(error);
+                } finally {
+                    serverFinished.countDown();
+                }
+            }, "muon-quickjs-tcp-server");
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            try (BoundService binding = bindService();
+                 RuntimeSocket runtime = createRuntime(binding.service, "test-dns-tcp")) {
+                String root = importModule(runtime, "import", ".");
+                JSONObject response = call(
+                        runtime,
+                        "dns-tcp",
+                        root,
+                        "exerciseDnsAndTcp",
+                        new JSONArray()
+                                .put(server.getLocalPort())
+                                .put(closedPort));
+                assertTrue(response.toString(), response.getBoolean("ok"));
+                JSONObject values = response
+                        .getJSONObject("value")
+                        .getJSONObject("value");
+
+                JSONObject modules = values.getJSONObject("modules");
+                assertTrue(modules.getBoolean("netAlias"));
+                assertTrue(modules.getBoolean("dnsAlias"));
+                assertTrue(modules.getBoolean("promises"));
+
+                JSONObject ip = values.getJSONObject("ip");
+                assertEquals(4, ip.getInt("ipv4"));
+                assertEquals(6, ip.getInt("ipv6"));
+                assertEquals(0, ip.getInt("invalid"));
+                assertTrue(ip.getBoolean("isIpv4"));
+                assertTrue(ip.getBoolean("isIpv6"));
+
+                JSONObject dns = values.getJSONObject("dns");
+                assertEquals("127.0.0.1",
+                        dns.getJSONObject("callbackLookup").getString("address"));
+                assertEquals(4,
+                        dns.getJSONObject("callbackLookup").getInt("family"));
+                assertEquals("127.0.0.1",
+                        dns.getJSONObject("promiseLookup").getString("address"));
+                assertEquals(4,
+                        dns.getJSONObject("promiseLookup").getInt("family"));
+                assertTrue(dns.getJSONArray("allLookup").length() >= 1);
+                assertEquals(3, dns.getJSONArray("concurrentLookups").length());
+                assertEquals("ipv4first", dns.getString("resultOrder"));
+
+                JSONObject tcp = values.getJSONObject("tcp");
+                assertTrue(tcp.getBoolean("initiallyConnecting"));
+                assertTrue(tcp.getBoolean("initiallyPending"));
+                assertEquals("opening", tcp.getString("initialReadyState"));
+                assertTrue(tcp.getBoolean("isSocket"));
+                assertEquals("reply:quickjs-tcp", tcp.getString("received"));
+                JSONArray events = tcp.getJSONArray("events");
+                assertEquals("connect", events.getString(0));
+                assertEquals("ready", events.getString(1));
+                assertEquals("end", events.getString(events.length() - 2));
+                assertEquals("close", events.getString(events.length() - 1));
+                JSONObject connection = tcp.getJSONObject("connection");
+                assertEquals("127.0.0.1", connection.getString("remoteAddress"));
+                assertEquals("IPv4", connection.getString("remoteFamily"));
+                assertEquals(server.getLocalPort(), connection.getInt("remotePort"));
+                assertEquals("open", connection.getString("readyState"));
+                assertEquals("IPv4",
+                        connection.getJSONObject("local").getString("family"));
+                assertEquals(11, tcp.getInt("bytesWritten"));
+                assertEquals(17, tcp.getInt("bytesRead"));
+                assertFalse(tcp.getBoolean("hadError"));
+                assertTrue(tcp.getBoolean("destroyed"));
+
+                JSONObject failure = values.getJSONObject("failure");
+                assertEquals("[\"error\",\"close\"]",
+                        failure.getJSONArray("events").toString());
+                assertEquals("ECONNREFUSED", failure.getString("code"));
+                assertEquals("connect", failure.getString("syscall"));
+                assertTrue(failure.getBoolean("hadError"));
+                assertTrue(failure.getBoolean("destroyed"));
+            }
+        }
+        assertTrue(serverFinished.await(30, TimeUnit.SECONDS));
+        if (serverFailure.get() != null) {
+            throw new AssertionError("The loopback TCP server failed", serverFailure.get());
+        }
+        assertEquals("quickjs-tcp", receivedByServer.get());
+    }
+
+    @Test
+    public void isolatesAndClosesTcpSocketsForEachRuntime() throws Exception {
+        AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+        CountDownLatch openedConnections = new CountDownLatch(2);
+        CountDownLatch closedConnections = new CountDownLatch(2);
+        StringBuilder markers = new StringBuilder();
+        try (ServerSocket server = new ServerSocket(
+                0,
+                2,
+                InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(30_000);
+            Thread acceptor = new Thread(() -> {
+                try {
+                    for (int index = 0; index < 2; index++) {
+                        Socket connection = server.accept();
+                        connection.setSoTimeout(30_000);
+                        Thread reader = new Thread(() -> {
+                            boolean opened = false;
+                            try (Socket active = connection) {
+                                byte[] marker = new byte[5];
+                                int offset = 0;
+                                while (offset < marker.length) {
+                                    int count = active.getInputStream().read(
+                                            marker,
+                                            offset,
+                                            marker.length - offset);
+                                    if (count < 0) {
+                                        throw new AssertionError(
+                                                "TCP socket closed before its marker");
+                                    }
+                                    offset += count;
+                                }
+                                synchronized (markers) {
+                                    markers.append(new String(
+                                            marker,
+                                            StandardCharsets.UTF_8));
+                                }
+                                opened = true;
+                                openedConnections.countDown();
+                                while (active.getInputStream().read() >= 0) {
+                                    // Runtime shutdown must eventually close this socket.
+                                }
+                            } catch (Throwable error) {
+                                serverFailure.compareAndSet(null, error);
+                            } finally {
+                                if (!opened) {
+                                    openedConnections.countDown();
+                                }
+                                closedConnections.countDown();
+                            }
+                        }, "muon-quickjs-retained-tcp-reader-" + index);
+                        reader.setDaemon(true);
+                        reader.start();
+                    }
+                } catch (Throwable error) {
+                    serverFailure.compareAndSet(null, error);
+                    while (openedConnections.getCount() > 0) {
+                        openedConnections.countDown();
+                    }
+                    while (closedConnections.getCount() > 0) {
+                        closedConnections.countDown();
+                    }
+                }
+            }, "muon-quickjs-retained-tcp-acceptor");
+            acceptor.setDaemon(true);
+            acceptor.start();
+
+            try (BoundService binding = bindService();
+                 RuntimeSocket first = createRuntime(binding.service, "test-tcp-first");
+                 RuntimeSocket second = createRuntime(binding.service, "test-tcp-second")) {
+                String firstRoot = importModule(first, "first-import", ".");
+                String secondRoot = importModule(second, "second-import", ".");
+                JSONObject firstOpened = call(
+                        first,
+                        "first-open",
+                        firstRoot,
+                        "retainTcpConnection",
+                        new JSONArray().put(server.getLocalPort()).put("one-1"));
+                JSONObject secondOpened = call(
+                        second,
+                        "second-open",
+                        secondRoot,
+                        "retainTcpConnection",
+                        new JSONArray().put(server.getLocalPort()).put("two-2"));
+                assertTrue(firstOpened.toString(), firstOpened.getBoolean("ok"));
+                assertTrue(secondOpened.toString(), secondOpened.getBoolean("ok"));
+                assertTrue(openedConnections.await(30, TimeUnit.SECONDS));
+                if (serverFailure.get() != null) {
+                    throw new AssertionError(
+                            "The retained TCP server failed",
+                            serverFailure.get());
+                }
+
+                assertTrue(request(
+                        first,
+                        "shutdown-first",
+                        "shutdown",
+                        new JSONObject()).getBoolean("ok"));
+                JSONObject surviving = call(
+                        second,
+                        "second-state",
+                        secondRoot,
+                        "retainedTcpConnectionState",
+                        new JSONArray());
+                assertTrue(surviving.toString(), surviving.getBoolean("ok"));
+                JSONObject survivingState = surviving
+                        .getJSONObject("value")
+                        .getJSONObject("value");
+                assertEquals("open", survivingState.getString("readyState"));
+                assertFalse(survivingState.getBoolean("destroyed"));
+                assertTrue(request(
+                        second,
+                        "shutdown-second",
+                        "shutdown",
+                        new JSONObject()).getBoolean("ok"));
+            }
+            assertTrue(closedConnections.await(30, TimeUnit.SECONDS));
+        }
+        if (serverFailure.get() != null) {
+            throw new AssertionError("The retained TCP server failed", serverFailure.get());
+        }
+        synchronized (markers) {
+            assertEquals("one-1two-2", markers.toString());
         }
     }
 

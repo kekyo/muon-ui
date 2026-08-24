@@ -33,8 +33,14 @@ import {
   pathToFileURL,
   urlToHttpOptions,
 } from 'node:url';
+import net, { Socket, createConnection } from 'node:net';
+import netAlias from 'net';
+import dns from 'node:dns';
+import dnsAlias from 'dns';
+import dnsPromises from 'node:dns/promises';
 
 let counter = 0;
+let retainedTcpSocket = null;
 
 export const answer = 42;
 
@@ -326,6 +332,149 @@ export const exerciseStreamAndUrl = async () => {
   };
 };
 
+export const exerciseDnsAndTcp = async (port, closedPort) => {
+  const callbackLookup = await new Promise((resolve, reject) => {
+    dns.lookup('localhost', { family: 4 }, (error, address, family) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ address, family });
+    });
+  });
+  const promiseLookup = await dnsPromises.lookup('localhost', { family: 4 });
+  const allLookup = await dnsPromises.lookup('localhost', {
+    family: 4,
+    all: true,
+  });
+  const concurrentLookups = await Promise.all([
+    dnsPromises.lookup('localhost', { family: 4 }),
+    dnsPromises.lookup('127.0.0.1'),
+    dnsPromises.lookup('localhost', { family: 4 }),
+  ]);
+  dns.setDefaultResultOrder('ipv4first');
+  const resultOrder = dns.getDefaultResultOrder();
+  dns.setDefaultResultOrder('verbatim');
+
+  const events = [];
+  let received = '';
+  let connection = null;
+  const socket = createConnection({
+    host: '127.0.0.1',
+    port,
+    noDelay: true,
+  });
+  const initiallyConnecting = socket.connecting;
+  const initiallyPending = socket.pending;
+  const initialReadyState = socket.readyState;
+  const isSocket = socket instanceof Socket;
+  socket.setEncoding('utf8');
+  socket.on('connect', () => {
+    events.push('connect');
+    connection = {
+      local: socket.address(),
+      remoteAddress: socket.remoteAddress,
+      remoteFamily: socket.remoteFamily,
+      remotePort: socket.remotePort,
+      readyState: socket.readyState,
+    };
+  });
+  socket.on('ready', () => events.push('ready'));
+  socket.on('data', (chunk) => {
+    events.push('data');
+    received += chunk;
+  });
+  socket.on('end', () => events.push('end'));
+  socket.on('close', () => events.push('close'));
+  const closed = onceEvent(socket, 'close');
+  socket.end('quickjs-tcp');
+  const [hadError] = await closed;
+
+  const failedEvents = [];
+  let failureCode = '';
+  let failureSyscall = '';
+  let failureHadError = false;
+  const failedSocket = createConnection({
+    host: '127.0.0.1',
+    port: closedPort,
+  });
+  await new Promise((resolve) => {
+    failedSocket.once('error', (error) => {
+      failedEvents.push('error');
+      failureCode = error.code;
+      failureSyscall = error.syscall;
+    });
+    failedSocket.once('close', (closedWithError) => {
+      failedEvents.push('close');
+      failureHadError = closedWithError;
+      resolve();
+    });
+  });
+
+  return {
+    modules: {
+      netAlias: net === netAlias,
+      dnsAlias: dns === dnsAlias,
+      promises: dns.promises === dnsPromises,
+    },
+    ip: {
+      ipv4: net.isIP('127.0.0.1'),
+      ipv6: net.isIP('2001:db8::1'),
+      invalid: net.isIP('127.0.0.999'),
+      isIpv4: net.isIPv4('127.0.0.1'),
+      isIpv6: net.isIPv6('2001:db8::1'),
+    },
+    dns: {
+      callbackLookup,
+      promiseLookup,
+      allLookup,
+      concurrentLookups,
+      resultOrder,
+    },
+    tcp: {
+      initiallyConnecting,
+      initiallyPending,
+      initialReadyState,
+      isSocket,
+      received,
+      events,
+      connection,
+      bytesWritten: socket.bytesWritten,
+      bytesRead: socket.bytesRead,
+      hadError,
+      destroyed: socket.destroyed,
+    },
+    failure: {
+      events: failedEvents,
+      code: failureCode,
+      syscall: failureSyscall,
+      hadError: failureHadError,
+      destroyed: failedSocket.destroyed,
+    },
+  };
+};
+
+export const retainTcpConnection = async (port, marker) => {
+  const socket = createConnection({ host: '127.0.0.1', port });
+  await onceEvent(socket, 'connect');
+  await new Promise((resolve, reject) => {
+    socket.write(marker, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  retainedTcpSocket = socket;
+  return {
+    readyState: socket.readyState,
+    destroyed: socket.destroyed,
+  };
+};
+
+export const retainedTcpConnectionState = () => ({
+  readyState: retainedTcpSocket?.readyState ?? 'missing',
+  destroyed: retainedTcpSocket?.destroyed ?? true,
+});
+
 export const exhaustMemory = () => {
   const blocks = [];
   while (true) {
@@ -347,6 +496,9 @@ globalThis.__muonBackendModule = Object.freeze({
   importedPathBasename,
   exerciseRuntimePrimitives,
   exerciseStreamAndUrl,
+  exerciseDnsAndTcp,
+  retainTcpConnection,
+  retainedTcpConnectionState,
   exhaustMemory,
   spin,
 });

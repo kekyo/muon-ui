@@ -102,6 +102,17 @@ ANDROID_SERIAL=emulator-5556 \
 
 このgateは`ANDROID_SERIAL`がlocal emulatorであり、Android API 37、`x86_64`、実ページサイズ16384であることを開始時に検証します。その後、debug instrumentation全件、署名済みrelease APKのinstall/start、bundletoolがAABから選択した端末別split APKのinstall/startを行い、WebViewのpage-ready eventを待ちます。時間経過やpollingで成功を推測しません。
 
+## Pixel 6 arm64 gate
+
+ローカルVM gateの完了後、Pixel 6をUSB接続して対象serialを明示します。
+
+```bash
+ANDROID_SERIAL=YOUR_PIXEL_6_SERIAL \
+  npm run test:android:pixel6 --workspace muon-android-prototype
+```
+
+このgateは対象が物理Pixel 6（`oriole`）、Android API 37、`arm64-v8a`、実ページサイズ4096であることを開始時に検証します。VM gateと同じdebug instrumentation全件、署名済みrelease APK、AAB由来の端末別split APKを実機へinstall/startし、WebViewのpage-ready eventまで確認します。
+
 ## Runtimeとlifecycleの制約
 
 process内にはcardio 1.1.0の`dispatcher_host_android_auto`と共通`MuonPluginRuntime`を一組だけ作り、Android main Looperへ接続します。各Activity/WebViewは独立sessionを持ちます。最後の通常sessionが閉じるとpluginの非同期`Stop()`を開始し、逆順unloadとcardio host破棄を同じLooper上で完了します。停止中に新Activityが生成された場合は、Stop完了eventを受けてから新runtimeへattachします。

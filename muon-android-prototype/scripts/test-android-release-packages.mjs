@@ -24,6 +24,32 @@ const activityName = `${packageName}/.MuonActivity`;
 const pageReadyMarker =
   'Muon page ready: https://main.asset.muon.invalid/index.html';
 const serial = process.env.ANDROID_SERIAL;
+const profileName = process.env.MUON_ANDROID_TEST_PROFILE;
+
+const targetProfiles = {
+  'vm-x86_64-16k': {
+    serialPattern: /^emulator-\d+$/,
+    serialDescription: 'one local Android emulator',
+    properties: [
+      ['ro.product.cpu.abi', 'x86_64', 'ABI'],
+      ['ro.build.version.sdk', '37', 'Android SDK'],
+    ],
+    pageSize: '16384',
+    resultName: 'vm',
+  },
+  'pixel6-arm64-4k': {
+    serialPattern: /^(?!emulator-\d+$).+$/,
+    serialDescription: 'one physical Pixel 6',
+    properties: [
+      ['ro.product.model', 'Pixel 6', 'model'],
+      ['ro.product.device', 'oriole', 'device'],
+      ['ro.product.cpu.abi', 'arm64-v8a', 'ABI'],
+      ['ro.build.version.sdk', '37', 'Android SDK'],
+    ],
+    pageSize: '4096',
+    resultName: 'pixel6',
+  },
+};
 
 const expectCondition = (condition, message) => {
   if (!condition) {
@@ -40,8 +66,13 @@ const execute = (command, args, options = {}) =>
   }).trim();
 
 expectCondition(
-  typeof serial === 'string' && /^emulator-\d+$/.test(serial),
-  'ANDROID_SERIAL must identify one local Android emulator'
+  profileName === 'vm-x86_64-16k' || profileName === 'pixel6-arm64-4k',
+  'MUON_ANDROID_TEST_PROFILE must identify a supported test target'
+);
+const targetProfile = targetProfiles[profileName];
+expectCondition(
+  typeof serial === 'string' && targetProfile.serialPattern.test(serial),
+  `ANDROID_SERIAL must identify ${targetProfile.serialDescription}`
 );
 
 const adb = (args) => execute('adb', ['-s', serial, ...args]);
@@ -50,17 +81,15 @@ expectCondition(
   adb(['get-state']) === 'device',
   `${serial}: device is offline`
 );
+for (const [property, expected, label] of targetProfile.properties) {
+  expectCondition(
+    adb(['shell', 'getprop', property]) === expected,
+    `${serial}: expected ${label} ${expected}`
+  );
+}
 expectCondition(
-  adb(['shell', 'getprop', 'ro.product.cpu.abi']) === 'x86_64',
-  `${serial}: expected x86_64 ABI`
-);
-expectCondition(
-  adb(['shell', 'getprop', 'ro.build.version.sdk']) === '37',
-  `${serial}: expected Android SDK 37`
-);
-expectCondition(
-  adb(['shell', 'getconf', 'PAGESIZE']) === '16384',
-  `${serial}: expected a 16 KiB page size`
+  adb(['shell', 'getconf', 'PAGESIZE']) === targetProfile.pageSize,
+  `${serial}: expected page size ${targetProfile.pageSize}`
 );
 
 const launchAndAwaitPage = async (label) => {
@@ -120,4 +149,6 @@ execFileSync(join(androidRoot, 'gradlew'), ['installReleaseBundleApks'], {
 });
 await launchAndAwaitPage('release APK set');
 
-console.log('muon_android_release_package_vm_test: PASS');
+console.log(
+  `muon_android_release_package_${targetProfile.resultName}_test: PASS`
+);

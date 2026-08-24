@@ -1097,6 +1097,103 @@ public final class MuonJavaScriptRuntimeServiceTest {
     }
 
     @Test
+    public void enforcesPerRuntimeNetworkResourceLimits() throws Exception {
+        AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+        CountDownLatch serverFinished = new CountDownLatch(1);
+        Socket[] acceptedConnections = new Socket[65];
+        try (ServerSocket server = new ServerSocket(
+                0,
+                acceptedConnections.length,
+                InetAddress.getByName("127.0.0.1"))) {
+            int closedPort;
+            try (ServerSocket closedServer = new ServerSocket(
+                    0,
+                    1,
+                    InetAddress.getByName("127.0.0.1"))) {
+                closedPort = closedServer.getLocalPort();
+            }
+            Thread acceptor = new Thread(() -> {
+                try {
+                    for (int index = 0; index < acceptedConnections.length; index++) {
+                        acceptedConnections[index] = server.accept();
+                    }
+                } catch (Throwable error) {
+                    if (!server.isClosed()) {
+                        serverFailure.set(error);
+                    }
+                } finally {
+                    for (Socket connection : acceptedConnections) {
+                        if (connection == null) {
+                            continue;
+                        }
+                        try {
+                            connection.close();
+                        } catch (IOException error) {
+                            serverFailure.compareAndSet(null, error);
+                        }
+                    }
+                    serverFinished.countDown();
+                }
+            }, "muon-quickjs-network-limit-server");
+            acceptor.setDaemon(true);
+            acceptor.start();
+
+            try (BoundService binding = bindService();
+                 RuntimeSocket runtime = createRuntime(binding.service, "test-network-limits")) {
+                String root = importModule(runtime, "import", ".");
+                JSONObject response = call(
+                        runtime,
+                        "network-limits",
+                        root,
+                        "exerciseNetworkResourceLimits",
+                        new JSONArray().put(server.getLocalPort()).put(closedPort));
+                assertTrue(response.toString(), response.getBoolean("ok"));
+                JSONObject values = response
+                        .getJSONObject("value")
+                        .getJSONObject("value");
+
+                JSONObject dns = values.getJSONObject("dns");
+                assertEquals(64, dns.getInt("fulfilled"));
+                assertEquals(
+                        "[\"ERR_MUON_DNS_OPERATION_LIMIT\"]",
+                        dns.getJSONArray("codes").toString());
+
+                JSONObject tcp = values.getJSONObject("tcp");
+                assertEquals(64, tcp.getInt("connected"));
+                assertEquals(
+                        "[\"ERR_MUON_TCP_SOCKET_LIMIT\"]",
+                        tcp.getJSONArray("codes").toString());
+
+                JSONObject servers = values.getJSONObject("servers");
+                assertEquals(8, servers.getInt("listening"));
+                assertEquals(
+                        "[\"ERR_MUON_TCP_SERVER_LIMIT\"]",
+                        servers.getJSONArray("codes").toString());
+
+                JSONArray httpCodes = values.getJSONObject("http").getJSONArray("codes");
+                int refused = 0;
+                int limited = 0;
+                for (int index = 0; index < httpCodes.length(); index++) {
+                    String code = httpCodes.getString(index);
+                    if ("ECONNREFUSED".equals(code)) {
+                        refused++;
+                    } else if ("ERR_HTTP_OPERATION_LIMIT".equals(code)) {
+                        limited++;
+                    }
+                }
+                assertEquals(16, refused);
+                assertEquals(1, limited);
+            }
+        }
+        assertTrue(serverFinished.await(30, TimeUnit.SECONDS));
+        if (serverFailure.get() != null) {
+            throw new AssertionError(
+                    "The network limit server failed",
+                    serverFailure.get());
+        }
+    }
+
+    @Test
     public void supportsNodeHttpsWithCertificateValidation() throws Exception {
         String certificatePem = readTestAsset("localhost-cert.pem");
         String privateKeyPem = readTestAsset("localhost-key.pem");

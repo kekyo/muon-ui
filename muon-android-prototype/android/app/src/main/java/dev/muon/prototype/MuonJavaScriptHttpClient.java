@@ -48,10 +48,12 @@ import javax.net.ssl.TrustManagerFactory;
 final class MuonJavaScriptHttpClient {
     private static final int MAXIMUM_WORKER_COUNT = 4;
     private static final int MAXIMUM_QUEUED_OPERATION_COUNT = 64;
+    private static final int MAXIMUM_RUNTIME_OPERATION_COUNT = 16;
     private static final int RESPONSE_BUFFER_SIZE = 64 * 1024;
     private static final AtomicInteger NEXT_THREAD_IDENTIFIER = new AtomicInteger(1);
     private static final ConcurrentHashMap<OperationKey, Operation> OPERATIONS =
             new ConcurrentHashMap<>();
+    private static final Object OPERATION_LOCK = new Object();
     private static final ThreadPoolExecutor EXECUTOR = createExecutor();
 
     private static final class OperationKey {
@@ -176,9 +178,32 @@ final class MuonJavaScriptHttpClient {
         Objects.requireNonNull(headersJson, "headersJson");
         Objects.requireNonNull(body, "body");
         OperationKey key = new OperationKey(runtimeId, identifier);
-        Operation operation = new Operation(key, url);
-        if (OPERATIONS.putIfAbsent(key, operation) != null) {
-            throw new IllegalStateException("The HTTP operation identifier is already active.");
+        Operation operation;
+        synchronized (OPERATION_LOCK) {
+            long runtimeOperationCount = OPERATIONS.keySet().stream()
+                    .filter(candidate -> candidate.runtimeId.equals(runtimeId))
+                    .count();
+            if (runtimeOperationCount >= MAXIMUM_RUNTIME_OPERATION_COUNT) {
+                operation = null;
+            } else {
+                operation = new Operation(key, url);
+                if (OPERATIONS.putIfAbsent(key, operation) != null) {
+                    throw new IllegalStateException(
+                            "The HTTP operation identifier is already active.");
+                }
+            }
+        }
+        if (operation == null) {
+            nativeOnHttpEvent(
+                    runtimeId,
+                    identifier,
+                    "httpError",
+                    createErrorPayload(
+                            "ERR_HTTP_OPERATION_LIMIT",
+                            "The QuickJS runtime HTTP operation limit was reached",
+                            url),
+                    null);
+            return;
         }
         try {
             EXECUTOR.execute(() -> execute(
@@ -191,7 +216,7 @@ final class MuonJavaScriptHttpClient {
                     readTimeout,
                     certificateAuthority));
         } catch (RejectedExecutionException error) {
-            OPERATIONS.remove(key, operation);
+            removeOperation(key, operation);
             nativeOnHttpEvent(
                     runtimeId,
                     identifier,
@@ -205,7 +230,7 @@ final class MuonJavaScriptHttpClient {
     }
 
     static boolean cancel(String runtimeId, long identifier) {
-        Operation operation = OPERATIONS.remove(new OperationKey(runtimeId, identifier));
+        Operation operation = removeOperation(new OperationKey(runtimeId, identifier));
         if (operation == null) {
             return false;
         }
@@ -234,9 +259,21 @@ final class MuonJavaScriptHttpClient {
     static void cancelRuntime(String runtimeId) {
         for (Map.Entry<OperationKey, Operation> entry : OPERATIONS.entrySet()) {
             if (entry.getKey().runtimeId.equals(runtimeId)
-                    && OPERATIONS.remove(entry.getKey(), entry.getValue())) {
+                    && removeOperation(entry.getKey(), entry.getValue())) {
                 entry.getValue().cancel();
             }
+        }
+    }
+
+    private static Operation removeOperation(OperationKey key) {
+        synchronized (OPERATION_LOCK) {
+            return OPERATIONS.remove(key);
+        }
+    }
+
+    private static boolean removeOperation(OperationKey key, Operation operation) {
+        synchronized (OPERATION_LOCK) {
+            return OPERATIONS.remove(key, operation);
         }
     }
 
@@ -344,7 +381,7 @@ final class MuonJavaScriptHttpClient {
             if (connection != null) {
                 connection.disconnect();
             }
-            OPERATIONS.remove(operation.key, operation);
+            removeOperation(operation.key, operation);
         }
     }
 

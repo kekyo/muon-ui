@@ -3441,6 +3441,10 @@
   const activeTcpServers = new Map();
   const pendingTcpWrites = new Map();
   const pendingHttpOperations = new Map();
+  const maximumPendingDnsOperations = 64;
+  const maximumActiveTcpSockets = 64;
+  const maximumActiveTcpServers = 8;
+  const maximumPendingHttpOperations = 16;
   const tcpSocketState = Symbol('muon.net.socketState');
   const tcpServerState = Symbol('muon.net.serverState');
   const httpRequestState = Symbol('muon.http.requestState');
@@ -3560,6 +3564,12 @@
         );
       }
       return [{ address: hostname, family: literalFamily }];
+    }
+    if (pendingDnsOperations.size >= maximumPendingDnsOperations) {
+      throw createError(
+        'ERR_MUON_DNS_OPERATION_LIMIT',
+        `A QuickJS runtime can have at most ${maximumPendingDnsOperations} pending DNS operations`
+      );
     }
     const identifier = allocateHostOperationIdentifier();
     return await new Promise((resolve, reject) => {
@@ -3813,6 +3823,12 @@
             result.address,
             result.family,
             options.host
+          );
+        }
+        if (activeTcpSockets.size >= maximumActiveTcpSockets) {
+          throw createError(
+            'ERR_MUON_TCP_SOCKET_LIMIT',
+            `A QuickJS runtime can have at most ${maximumActiveTcpSockets} active TCP sockets`
           );
         }
         activeTcpSockets.set(state.identifier, this);
@@ -4172,6 +4188,12 @@
       );
     }
     const normalized = normalizeTcpListenArguments(values);
+    if (activeTcpServers.size >= maximumActiveTcpServers) {
+      throw createError(
+        'ERR_MUON_TCP_SERVER_LIMIT',
+        `A QuickJS runtime can have at most ${maximumActiveTcpServers} active TCP servers`
+      );
+    }
     if (normalized.listener) this.once('listening', normalized.listener);
     state.options = normalized.options;
     state.nativeStarted = true;
@@ -4261,6 +4283,11 @@
       serverStateValue.options.noDelay
     );
     if (connection === null) return;
+    if (activeTcpSockets.size >= maximumActiveTcpSockets) {
+      __muonTcpClose(socketStateValue.identifier);
+      server.emit('drop', connection);
+      return;
+    }
     socketStateValue.connected = true;
     socketStateValue.nativeStarted = true;
     socketStateValue.noDelay = serverStateValue.options.noDelay;
@@ -5429,6 +5456,15 @@
     const state = requireHttpRequestState(this);
     if (state.started) {
       callback();
+      return;
+    }
+    if (pendingHttpOperations.size >= maximumPendingHttpOperations) {
+      callback(
+        createError(
+          'ERR_HTTP_OPERATION_LIMIT',
+          `A QuickJS runtime can have at most ${maximumPendingHttpOperations} pending HTTP operations`
+        )
+      );
       return;
     }
     const body = Buffer.concat(state.chunks, state.bodyLength);

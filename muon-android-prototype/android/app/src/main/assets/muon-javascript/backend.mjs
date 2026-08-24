@@ -852,6 +852,93 @@ export const exerciseHttpServer = async () => {
   };
 };
 
+export const exerciseNetworkResourceLimits = async (tcpPort, closedPort) => {
+  const dnsResults = await Promise.allSettled(
+    Array.from({ length: 65 }, () =>
+      dnsPromises.lookup('localhost', { family: 4 })
+    )
+  );
+
+  const sockets = [];
+  const socketResults = [];
+  for (let index = 0; index < 65; index += 1) {
+    const socket = createConnection({ host: '127.0.0.1', port: tcpPort });
+    sockets.push(socket);
+    socketResults.push(
+      new Promise((resolve) => {
+        socket.once('connect', () => resolve({ connected: true, code: '' }));
+        socket.once('error', (error) =>
+          resolve({ connected: false, code: error.code })
+        );
+      })
+    );
+  }
+  const settledSockets = await Promise.all(socketResults);
+  const socketCloses = sockets
+    .filter((socket) => !socket.destroyed)
+    .map((socket) => onceEvent(socket, 'close'));
+  for (const socket of sockets) socket.destroy();
+  await Promise.all(socketCloses);
+
+  const servers = [];
+  const serverErrors = [];
+  for (let index = 0; index < 9; index += 1) {
+    const server = createNetServer();
+    try {
+      server.listen(0, '127.0.0.1');
+      servers.push(server);
+    } catch (error) {
+      serverErrors.push(error.code);
+    }
+  }
+  const serverCloses = servers.map((server) => onceEvent(server, 'close'));
+  for (const server of servers) server.close();
+  await Promise.all(serverCloses);
+
+  const httpResults = [];
+  for (let index = 0; index < 17; index += 1) {
+    const request = http.request({
+      hostname: 'localhost',
+      port: closedPort,
+      path: `/limit-${index}`,
+    });
+    httpResults.push(
+      new Promise((resolve) => {
+        request.once('error', (error) => resolve(error.code));
+        request.once('response', (response) => {
+          response.resume();
+          response.once('end', () => resolve(''));
+        });
+      })
+    );
+    request.end();
+  }
+  const httpCodes = await Promise.all(httpResults);
+
+  return {
+    dns: {
+      fulfilled: dnsResults.filter((result) => result.status === 'fulfilled')
+        .length,
+      codes: dnsResults
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason.code),
+    },
+    tcp: {
+      connected: settledSockets.filter((result) => result.connected).length,
+      codes: settledSockets
+        .filter((result) => !result.connected)
+        .map((result) => result.code),
+    },
+    servers: {
+      listening: servers.length,
+      codes: serverErrors,
+    },
+    http: {
+      codes: httpCodes,
+    },
+  };
+};
+
 export const exerciseHttps = async (port, certificateAuthority) => {
   const rejectedRequest = https.get(`https://localhost:${port}/untrusted`);
   const [rejection] = await onceEvent(rejectedRequest, 'error');
@@ -929,6 +1016,7 @@ globalThis.__muonBackendModule = Object.freeze({
   retainedTcpConnectionState,
   exerciseHttpAndFetch,
   exerciseHttpServer,
+  exerciseNetworkResourceLimits,
   exerciseHttps,
   exhaustMemory,
   spin,

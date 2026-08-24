@@ -48,6 +48,9 @@ static constexpr std::uint32_t kMaximumFrameLength = 16U * 1024U * 1024U;
 static constexpr std::int64_t kExecutionLimitMilliseconds = 2000;
 static constexpr std::int64_t kMaximumTimerMilliseconds = 60000;
 static constexpr std::size_t kNetworkReadBufferSize = 64U * 1024U;
+static constexpr std::size_t kMaximumPendingDnsOperations = 64;
+static constexpr std::size_t kMaximumActiveTcpSockets = 64;
+static constexpr std::size_t kMaximumActiveTcpServers = 8;
 
 struct MuonJavaScriptSession;
 
@@ -142,6 +145,7 @@ struct MuonJavaScriptSession {
   std::mutex descriptor_mutex;
   std::mutex dns_result_mutex;
   std::deque<MuonDnsResult> dns_results;
+  std::size_t pending_dns_operation_count = 0;
   bool accepts_dns_results = true;
   std::mutex external_event_mutex;
   std::deque<MuonHostEvent> external_events;
@@ -290,12 +294,15 @@ static void run_dns_worker(MuonDnsWorker* worker) {
     }
     auto result = resolve_dns_request(request);
     auto session = request.session.lock();
-    if (session == nullptr || session->stop_requested.load()) {
+    if (session == nullptr) {
       continue;
     }
     {
       std::lock_guard<std::mutex> lock(session->dns_result_mutex);
-      if (!session->accepts_dns_results) {
+      if (session->pending_dns_operation_count > 0) {
+        --session->pending_dns_operation_count;
+      }
+      if (session->stop_requested.load() || !session->accepts_dns_results) {
         continue;
       }
       session->dns_results.push_back(std::move(result));
@@ -546,6 +553,22 @@ static MuonJavaScriptHost* require_host(JSContext* context) {
     JS_ThrowInternalError(context, "JavaScript runtime host is unavailable");
   }
   return host;
+}
+
+static JSValue throw_host_limit_error(JSContext* context, const char* code,
+                                      const char* message) {
+  auto error = JS_NewError(context);
+  if (JS_IsException(error)) {
+    return error;
+  }
+  if (JS_SetPropertyStr(context, error, "code", JS_NewString(context, code)) <
+          0 ||
+      JS_SetPropertyStr(context, error, "message",
+                        JS_NewString(context, message)) < 0) {
+    JS_FreeValue(context, error);
+    return JS_EXCEPTION;
+  }
+  return JS_Throw(context, error);
 }
 
 static JSValue get_host_module(JSContext* context, const char* module_name) {
@@ -969,6 +992,16 @@ static JSValue js_dns_lookup(JSContext* context, JSValueConst this_value,
     return JS_ThrowRangeError(context,
                               "dnsLookup hostname or family is invalid");
   }
+  {
+    std::lock_guard<std::mutex> lock(host->session->dns_result_mutex);
+    if (host->session->pending_dns_operation_count >=
+        kMaximumPendingDnsOperations) {
+      return throw_host_limit_error(
+          context, "ERR_MUON_DNS_OPERATION_LIMIT",
+          "The QuickJS runtime DNS operation limit was reached");
+    }
+    ++host->session->pending_dns_operation_count;
+  }
   enqueue_dns_request(
       MuonDnsRequest{host->session, identifier, std::move(hostname), family});
   return JS_UNDEFINED;
@@ -994,6 +1027,11 @@ static JSValue js_tcp_connect(JSContext* context, JSValueConst this_value,
   if (host->tcp_sockets.contains(identifier)) {
     return JS_ThrowInternalError(context,
                                  "TCP socket identifier is already active");
+  }
+  if (host->tcp_sockets.size() >= kMaximumActiveTcpSockets) {
+    return throw_host_limit_error(
+        context, "ERR_MUON_TCP_SOCKET_LIMIT",
+        "The QuickJS runtime TCP socket limit was reached");
   }
   std::string address;
   if (!get_js_string(context, arguments[1], &address)) {
@@ -1096,6 +1134,11 @@ static JSValue js_tcp_listen(JSContext* context, JSValueConst this_value,
       host->tcp_sockets.contains(identifier)) {
     return JS_ThrowInternalError(
         context, "TCP listener identifier is already active");
+  }
+  if (host->tcp_servers.size() >= kMaximumActiveTcpServers) {
+    return throw_host_limit_error(
+        context, "ERR_MUON_TCP_SERVER_LIMIT",
+        "The QuickJS runtime TCP server limit was reached");
   }
   std::string address;
   if (!get_js_string(context, arguments[1], &address)) {
@@ -1232,6 +1275,10 @@ static JSValue js_tcp_accept(JSContext* context, JSValueConst this_value,
     if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
       queue_socket_connection_error(host, server_identifier, errno, "accept");
     }
+    return JS_NULL;
+  }
+  if (host->tcp_sockets.size() >= kMaximumActiveTcpSockets) {
+    close(file_descriptor);
     return JS_NULL;
   }
   if (no_delay != 0) {
@@ -2788,6 +2835,7 @@ static void close_session_descriptors(
   {
     std::lock_guard<std::mutex> lock(session->dns_result_mutex);
     session->accepts_dns_results = false;
+    session->pending_dns_operation_count = 0;
     session->dns_results.clear();
   }
   {

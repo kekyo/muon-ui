@@ -66,23 +66,82 @@ try {
 
 `createNode()`というAPI名は既存コードの生成形を維持するためのもので、runtime自体はNode.jsではありません。Node.js package、npm、CommonJS、Node.js標準library全体との互換性はありません。同梱applicationのES moduleと、次の組み込みmoduleの限定実装を利用できます。
 
-| module                                | 主な対応範囲                                                             |
-| ------------------------------------- | ------------------------------------------------------------------------ |
-| `node:fs/promises`, `node:fs`         | application private storage内のfile、directory、metadata、rename、remove |
-| `node:path`                           | POSIX path操作                                                           |
-| `node:events`                         | `EventEmitter`と`once`                                                   |
-| `node:buffer`                         | `Buffer`の生成、変換、比較、検索                                         |
-| `node:timers`, `node:timers/promises` | timeout、interval、immediate、AbortSignal                                |
-| `node:stream`, `node:stream/promises` | readable、writable、duplex、transform、pipeline                          |
-| `node:url`                            | `URL`、`URLSearchParams`、file URL変換                                   |
-| `node:dns`, `node:dns/promises`       | `lookup`とresult order                                                   |
-| `node:net`                            | TCP clientとloopback限定TCP server                                       |
-| `node:http`                           | HTTP clientとloopback限定HTTP/1.0、HTTP/1.1 server                       |
-| `node:https`                          | certificate検証を必須とするHTTPS client                                  |
+| module                                | 主な対応範囲                                                                                       |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `node:fs/promises`, `node:fs`         | private storage内のread、write、append、copy、directory、metadata、rename、remove                  |
+| `node:path`                           | POSIX形式のpath操作                                                                                |
+| `node:events`                         | `EventEmitter`、`once`、AbortSignal連携                                                            |
+| `node:buffer`                         | `Buffer`の生成、変換、比較、検索                                                                   |
+| `node:timers`, `node:timers/promises` | timeout、interval、immediate、AbortSignal                                                          |
+| `node:stream`, `node:stream/promises` | readable、writable、duplex、transform、pipeline                                                    |
+| `node:url`                            | `URL`、`URLSearchParams`、file URL変換、HTTP option変換                                            |
+| `node:process`                        | Android ABI、pid、単調時刻とruntime内の仮想cwd、env                                                |
+| `node:os`                             | Androidのplatform、ABI、endiannessと仮想home、tmp、user                                            |
+| `node:util`                           | format、inspect、deep equality、promisify、VT除去、代表的な`types`判定                             |
+| `node:assert`, `node:assert/strict`   | sync/async assertionと`AssertionError`                                                             |
+| `node:querystring`                    | parse、stringify、escape、unescape                                                                 |
+| `node:string_decoder`                 | UTF-8、UTF-16LE、base64、latin1、ASCII、hexの分割入力decode                                        |
+| `node:crypto`                         | SHA-256 hash/HMAC、乱数、UUID v4、`timingSafeEqual`                                                |
+| `node:dns`, `node:dns/promises`       | `lookup`とresult order                                                                             |
+| `node:net`                            | TCP clientとloopback限定TCP server                                                                 |
+| `node:http`                           | HTTP clientとloopback限定HTTP/1.0、HTTP/1.1 server                                                 |
+| `node:https`                          | certificate検証を必須とするHTTPS client                                                            |
 
-各moduleは`node:`なしのspecifierでも同じinstanceをimportできます。globalには`Buffer`、timer、`Event`、`EventTarget`、`DOMException`、`AbortController`、`AbortSignal`、`URL`、`URLSearchParams`、`Headers`、`Request`、`Response`、`fetch`があります。API名と基本的なevent順序はNode.jsまたはWeb APIへ寄せていますが、実装していないoptionやexportは互換性のためのno-opにせず、明示的なerrorまたはmodule-not-foundとして扱います。
+各moduleは`node:`なしのspecifierでも同じinstanceをimportできます。globalには`Buffer`、timer、`Event`、`EventTarget`、`DOMException`、`AbortController`、`AbortSignal`、`URL`、`URLSearchParams`、`Headers`、`Request`、`Response`、`fetch`、`process`、限定版`crypto`があります。API名と基本的なevent順序はNode.jsまたはWeb APIへ寄せています。表と以下の詳細にないexportやcall shapeは対応対象ではありません。
 
-primitive、有限number、64 bit範囲の`bigint`、`ArrayBuffer`/typed array、JSON value、renderer callbackをbridgeで転送します。filesystemはapplication privateな`files/javascript-runtime`配下へ閉じ込められ、複数runtimeで共有します。
+### Filesystem API
+
+`node:fs/promises`は次のPromise APIを提供します。
+
+- `access(path[, F_OK])`
+- `appendFile(path, data[, options])`
+- `copyFile(source, destination[, mode])`
+- `mkdir(path[, { recursive }])`
+- `readFile(path[, encoding])`
+- `readdir(path)`
+- `stat(path)`、`lstat(path)`
+- `rename(source, destination)`
+- `rmdir(path)`
+- `rm(path[, { recursive, force }])`
+- `unlink(path)`
+- `writeFile(path, data)`
+
+`node:fs`は同じ操作のerror-first callback形式を提供し、default exportの`promises`からPromise APIも参照できます。`muon.node`のmodule facadeから利用する場合、入れ子の`fs.promises`ではなく`node:fs/promises`を直接importしてください。
+
+filesystemはapplication privateな`files/javascript-runtime`配下へ閉じ込められ、複数runtimeで共有します。絶対pathもこの仮想rootから解決し、`..`による脱出とroot自体の削除を拒否します。text encodingはUTF-8、binary dataは`Buffer`、`Uint8Array`、`ArrayBuffer`を対象とします。`copyFile`のmodeは`0`と`constants.COPYFILE_EXCL`、`access`のmodeは`constants.F_OK`だけを提供します。`rmdir`は空directoryだけを削除し、再帰削除には`rm`を使用します。
+
+`stat`と`lstat`の結果はbridge可能な`size`、`isFile`、`isDirectory`の値に限定され、Node.jsの`Stats` classではありません。現在の`lstat`はsymbolic link固有情報を返しません。file descriptor、stream、watch、permission/owner/time変更、hard link、symbolic link、`content://`、shared storageは提供しません。deprecatedな`fs.exists`も提供しません。
+
+### process、os、utility API
+
+`process`はQuickJS runtimeごとの`EventEmitter`で、`platform`は`android`、`arch`は実行ABI、`cwd()`は仮想root `/`を返します。`env`の変更はそのruntime内だけで保持され、Android processのenvironmentや他runtimeへ反映しません。`hrtime`、`hrtime.bigint`、`uptime`は単調時計を使います。`chdir`、process終了、signal、stdio、IPC、実際のNode.js version情報は提供しません。
+
+`os.homedir()`、`os.tmpdir()`、`os.userInfo()`も仮想filesystemに対応する値です。端末のCPU、memory、network interface、load average、hostnameを公開するAPIではありません。
+
+`node:util`は表に記載した限定exportだけを提供します。`promisify`は通常のerror-first callbackと`util.promisify.custom`に対応しますが、`callbackify`は提供しません。`inspect`とdeep equalityは代表的なArray、Map、Set、typed array、循環参照を扱いますが、Node.js内部型や全optionの完全な表示互換性は保証しません。
+
+`node:assert`と`node:assert/strict`は`ok`、equal系、deep equal系、match系、throws系、rejects系、`ifError`、`fail`を提供します。`node:querystring`は最大key数、重複key、custom encoder/decoderを扱います。新規コードで標準URL queryを扱う場合は`URLSearchParams`も利用できます。
+
+### crypto API
+
+`node:crypto`は次の限定exportを提供します。
+
+- `createHash('sha256')`、one-shot `hash('sha256', data)`
+- `createHmac('sha256', key)`
+- `getHashes()`
+- `randomBytes()`、`randomFill()`、`randomFillSync()`、`randomInt()`
+- `randomUUID()`、`getRandomValues()`
+- `timingSafeEqual()`
+
+乱数はAndroidのOS乱数源を使用します。1回の乱数要求は1 MiB、`getRandomValues()`はWeb APIと同じ65536 byte、1つのhashまたはHMACへの入力は16 MiBまでです。global `crypto`は`getRandomValues()`と`randomUUID()`だけを提供します。Web Cryptoの`subtle`、key import/export、cipher、signature、certificate、TLS API、SHA-256以外のhashは提供しません。
+
+### Node.js互換性の境界
+
+application entry pointは同梱されたES moduleです。`runtime.importModule('.')`と組み込みmoduleのspecifierだけを解決し、端末上のpackage探索やpackage manager実行は行いません。`require()`、CommonJS、`node_modules`、package `exports`、JSON module、native addon、Node-API、REPLは提供しません。
+
+`child_process`、`cluster`、`worker_threads`、`vm`、`v8`、`module`、`async_hooks`、`diagnostics_channel`、`inspector`、`readline`、`tty`、`dgram`、`tls`、`http2`、`zlib`など、表にないNode.js組み込みmoduleはmodule-not-foundになります。
+
+statefulなstream、socket、HTTP request、hashなどは同梱application module内で使用します。rendererとのbridgeはprimitive、有限number、64 bit範囲の`bigint`、`ArrayBuffer`/typed array、JSON value、renderer callbackを転送します。stateful objectやclass instanceをrendererへ直接返さず、application module側で処理してbridge可能な結果を返してください。
 
 各`createNode()`は非公開の`:muon_javascript` Service process内に独立したQuickJS runtimeを作ります。`release()`はmodule handle、timer、DNS要求、socket、listener、HTTP要求とruntimeを回収し、native資源とServiceのlive-runtime登録を解放してから完了します。未完了処理はActivity破棄、Service切断、またはruntime終了時にrejectされます。
 
@@ -107,6 +166,10 @@ CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`は
 | Android HTTP worker / 待機queue                        |                    Service process全体で4 / 64 |
 | loopback HTTP serverのrequest header                   |                                         16 KiB |
 | HTTP client request body、server request/response body |                                         16 MiB |
+| QuickJS filesystem binary read                         |                                         16 MiB |
+| hashまたはHMACへの入力                                 |                                         16 MiB |
+| 1回のOS乱数要求                                        |                                          1 MiB |
+| timer delay                                            |                                          60秒 |
 | TCP listener backlog                                   |                                       4096以下 |
 
 上限到達時は`ERR_MUON_DNS_OPERATION_LIMIT`、`ERR_MUON_TCP_SOCKET_LIMIT`、`ERR_MUON_TCP_SERVER_LIMIT`、`ERR_HTTP_OPERATION_LIMIT`を返します。上限はruntime終了時にも回収され、他runtimeの操作は維持されます。

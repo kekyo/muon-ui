@@ -402,6 +402,60 @@ public final class MuonJavaScriptRuntimeServiceTest {
     }
 
     @Test
+    public void supportsNodeRuntimePrimitives() throws Exception {
+        try (BoundService binding = bindService();
+             RuntimeSocket runtime = createRuntime(binding.service, "test-runtime-primitives")) {
+            String root = importModule(runtime, "import", ".");
+            JSONObject response = call(
+                    runtime,
+                    "runtime-primitives",
+                    root,
+                    "exerciseRuntimePrimitives",
+                    new JSONArray());
+            assertTrue(response.toString(), response.getBoolean("ok"));
+            JSONObject values = response
+                    .getJSONObject("value")
+                    .getJSONObject("value");
+
+            JSONObject events = values.getJSONObject("events");
+            assertEquals(
+                    "[\"pre:first\",\"on:first:true\",\"once:first\",\"pre:second\"]",
+                    events.getJSONArray("values").toString());
+            assertTrue(events.getBoolean("firstEmit"));
+            assertTrue(events.getBoolean("secondEmit"));
+            assertFalse(events.getBoolean("emptyEmit"));
+            assertEquals("event-ready", events.getString("awaitedEvent"));
+
+            JSONObject buffer = values.getJSONObject("buffer");
+            assertEquals("muon✓!", buffer.getString("text"));
+            assertEquals("6d756f6ee29c9321", buffer.getString("hex"));
+            assertEquals("bXVvbuKckyE=", buffer.getString("base64"));
+            assertEquals(7, buffer.getInt("byteLength"));
+            assertTrue(buffer.getBoolean("isBuffer"));
+            assertTrue(buffer.getBoolean("isUint8Array"));
+            assertTrue(buffer.getBoolean("equalsCopy"));
+
+            JSONObject timers = values.getJSONObject("timers");
+            assertEquals("timeout-ready", timers.getString("timeoutValue"));
+            assertEquals("immediate-ready", timers.getString("immediateValue"));
+            assertEquals(2, timers.getInt("intervalCount"));
+            assertEquals(1, timers.getInt("zeroDelayIntervalCount"));
+            assertFalse(timers.getBoolean("cancelledTimeoutCalled"));
+            assertFalse(timers.getBoolean("cancelledImmediateCalled"));
+            assertTrue(timers.getBoolean("initiallyReferenced"));
+            assertFalse(timers.getBoolean("referencedAfterUnref"));
+            assertTrue(timers.getBoolean("referencedAfterRef"));
+
+            JSONObject abort = values.getJSONObject("abort");
+            assertEquals("AbortError", abort.getString("abortName"));
+            assertEquals("ABORT_ERR", abort.getString("abortCode"));
+            assertEquals("static-reason", abort.getString("staticReason"));
+            assertEquals("combined-reason", abort.getString("combinedReason"));
+            assertEquals("TimeoutError", abort.getString("timeoutReasonName"));
+        }
+    }
+
+    @Test
     public void interruptsRunawayJavaScriptWithoutKillingTheService()
             throws Exception {
         try (BoundService binding = bindService();

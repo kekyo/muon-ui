@@ -157,6 +157,7 @@ public final class MuonActivityTest {
                         const joined = await path.join('alpha', 'beta', '..', 'gamma');
                         const timers = await first.importModule('node:timers/promises');
                         const timer = await timers.setTimeout(10, 'awake');
+                        const runtimePrimitives = await firstRoot.exerciseRuntimePrimitives();
 
                         await first.release();
                         const survivingCount = await secondRoot.increment();
@@ -173,6 +174,7 @@ public final class MuonActivityTest {
                           callbackText,
                           joined,
                           timer,
+                          runtimePrimitives,
                           survivingCount
                         }));
                       } catch (error) {
@@ -204,6 +206,14 @@ public final class MuonActivityTest {
             assertEquals("from-quickjs", result.getString("callbackText"));
             assertEquals("alpha/gamma", result.getString("joined"));
             assertEquals("awake", result.getString("timer"));
+            JSONObject runtimePrimitives = result.getJSONObject("runtimePrimitives");
+            assertEquals("muon✓!",
+                    runtimePrimitives.getJSONObject("buffer").getString("text"));
+            assertEquals("AbortError",
+                    runtimePrimitives.getJSONObject("abort").getString("abortName"));
+            assertFalse(runtimePrimitives
+                    .getJSONObject("timers")
+                    .getBoolean("cancelledTimeoutCalled"));
             assertEquals(2, result.getInt("survivingCount"));
         }
     }

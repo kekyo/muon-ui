@@ -47,9 +47,8 @@ struct MuonPendingPromise {
 };
 
 struct MuonTimer {
+  std::int64_t identifier = 0;
   std::chrono::steady_clock::time_point deadline;
-  JSValue resolve = JS_UNDEFINED;
-  JSValue reject = JS_UNDEFINED;
 };
 
 struct MuonJavaScriptHost {
@@ -258,8 +257,17 @@ static int initialize_host_module(JSContext* context, JSModuleDef* definition) {
   if (JS_IsException(module)) {
     return -1;
   }
-  auto result = JS_SetModuleExport(context, definition, "default",
-                                   JS_DupValue(context, module));
+  auto default_export = JS_GetPropertyStr(context, module, "default");
+  if (JS_IsException(default_export)) {
+    JS_FreeValue(context, module);
+    return -1;
+  }
+  if (JS_IsUndefined(default_export)) {
+    JS_FreeValue(context, default_export);
+    default_export = JS_DupValue(context, module);
+  }
+  auto result =
+      JS_SetModuleExport(context, definition, "default", default_export);
   if (result >= 0) {
     result = for_each_host_module_export(
         context, module, [&](const char* name, JSAtom atom) {
@@ -372,35 +380,74 @@ static JSValue js_post_message(JSContext* context, JSValueConst this_value,
   return JS_UNDEFINED;
 }
 
-static JSValue js_sleep(JSContext* context, JSValueConst this_value,
-                        int argument_count, JSValueConst* arguments) {
+static JSValue js_schedule_timer(JSContext* context, JSValueConst this_value,
+                                 int argument_count,
+                                 JSValueConst* arguments) {
   (void)this_value;
   auto* host = require_host(context);
   if (host == nullptr) {
     return JS_EXCEPTION;
   }
-  if (argument_count < 1) {
-    return JS_ThrowTypeError(context, "setTimeout requires a delay");
+  if (argument_count != 2) {
+    return JS_ThrowTypeError(context,
+                             "scheduleTimer requires an identifier and delay");
+  }
+  std::int64_t identifier = 0;
+  if (JS_ToInt64(context, &identifier, arguments[0]) < 0) {
+    return JS_EXCEPTION;
+  }
+  if (identifier <= 0) {
+    return JS_ThrowRangeError(context,
+                              "Timer identifier must be a positive integer");
   }
   std::int64_t delay = 0;
-  if (JS_ToInt64(context, &delay, arguments[0]) < 0) {
+  if (JS_ToInt64(context, &delay, arguments[1]) < 0) {
     return JS_EXCEPTION;
   }
   if (delay < 0 || delay > kMaximumTimerMilliseconds) {
     return JS_ThrowRangeError(context,
                               "Timer delay must be between 0 and 60000 ms");
   }
-  JSValue resolving_functions[2] = {JS_UNDEFINED, JS_UNDEFINED};
-  auto promise = JS_NewPromiseCapability(context, resolving_functions);
-  if (JS_IsException(promise)) {
-    return promise;
+  auto duplicate = std::find_if(
+      host->timers.begin(), host->timers.end(),
+      [identifier](const MuonTimer& timer) {
+        return timer.identifier == identifier;
+      });
+  if (duplicate != host->timers.end()) {
+    return JS_ThrowInternalError(context, "Timer identifier is already active");
   }
   host->timers.push_back(MuonTimer{
+      identifier,
       std::chrono::steady_clock::now() + std::chrono::milliseconds(delay),
-      resolving_functions[0],
-      resolving_functions[1],
   });
-  return promise;
+  return JS_UNDEFINED;
+}
+
+static JSValue js_cancel_timer(JSContext* context, JSValueConst this_value,
+                               int argument_count,
+                               JSValueConst* arguments) {
+  (void)this_value;
+  auto* host = require_host(context);
+  if (host == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (argument_count != 1) {
+    return JS_ThrowTypeError(context, "cancelTimer requires an identifier");
+  }
+  std::int64_t identifier = 0;
+  if (JS_ToInt64(context, &identifier, arguments[0]) < 0) {
+    return JS_EXCEPTION;
+  }
+  auto timer = std::find_if(
+      host->timers.begin(), host->timers.end(),
+      [identifier](const MuonTimer& candidate) {
+        return candidate.identifier == identifier;
+      });
+  if (timer == host->timers.end()) {
+    return JS_FALSE;
+  }
+  host->timers.erase(timer);
+  return JS_TRUE;
 }
 
 static JSValue js_fs_read_text(JSContext* context, JSValueConst this_value,
@@ -754,8 +801,10 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
   auto installed =
       install_host_function(host->context, global, "__muonPostMessage",
                             js_post_message, 1) &&
-      install_host_function(host->context, global, "__muonSleep", js_sleep,
-                            1) &&
+      install_host_function(host->context, global, "__muonScheduleTimer",
+                            js_schedule_timer, 2) &&
+      install_host_function(host->context, global, "__muonCancelTimer",
+                            js_cancel_timer, 1) &&
       install_host_function(host->context, global, "__muonFsReadText",
                             js_fs_read_text, 1) &&
       install_host_function(host->context, global, "__muonFsReadBuffer",
@@ -912,28 +961,45 @@ static bool handle_protocol_message(MuonJavaScriptHost* host,
 }
 
 static bool process_timers(MuonJavaScriptHost* host) {
-  auto now = std::chrono::steady_clock::now();
-  auto iterator = host->timers.begin();
-  while (iterator != host->timers.end()) {
-    if (iterator->deadline > now) {
-      ++iterator;
-      continue;
+  while (true) {
+    auto now = std::chrono::steady_clock::now();
+    auto iterator = std::find_if(
+        host->timers.begin(), host->timers.end(),
+        [now](const MuonTimer& timer) { return timer.deadline <= now; });
+    if (iterator == host->timers.end()) {
+      return true;
     }
+
+    auto identifier = iterator->identifier;
+    host->timers.erase(iterator);
+    auto global = JS_GetGlobalObject(host->context);
+    auto dispatcher =
+        JS_GetPropertyStr(host->context, global, "__muonDispatchTimer");
+    JS_FreeValue(host->context, global);
+    if (!JS_IsFunction(host->context, dispatcher)) {
+      JS_FreeValue(host->context, dispatcher);
+      log_error("QuickJS timer dispatcher is unavailable");
+      return false;
+    }
+    auto argument = JS_NewInt64(host->context, identifier);
     begin_js_execution(host);
-    auto result = JS_Call(host->context, iterator->resolve, JS_UNDEFINED, 0,
-                          nullptr);
+    auto result = JS_Call(host->context, dispatcher, JS_UNDEFINED, 1, &argument);
     end_js_execution(host);
-    JS_FreeValue(host->context, iterator->resolve);
-    JS_FreeValue(host->context, iterator->reject);
-    iterator = host->timers.erase(iterator);
+    JS_FreeValue(host->context, argument);
+    JS_FreeValue(host->context, dispatcher);
     if (JS_IsException(result)) {
-      log_error("QuickJS timer resolution failed: " +
+      log_error("QuickJS timer callback failed: " +
                 take_exception(host->context));
       return false;
     }
     JS_FreeValue(host->context, result);
+    if (!execute_pending_jobs(host)) {
+      return false;
+    }
+
+    // The callback and its promise jobs may add or cancel timers and reallocate
+    // the vector. Restart the search after JavaScript execution.
   }
-  return true;
 }
 
 static bool process_protocol_promises(MuonJavaScriptHost* host) {
@@ -1012,10 +1078,6 @@ static void free_host(MuonJavaScriptHost* host) {
     for (auto& pending : host->pending_promises) {
       JS_FreeValue(host->context, pending.promise);
     }
-    for (auto& timer : host->timers) {
-      JS_FreeValue(host->context, timer.resolve);
-      JS_FreeValue(host->context, timer.reject);
-    }
     JS_FreeContext(host->context);
     host->context = nullptr;
   }
@@ -1089,7 +1151,8 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
             std::string(kQuickJsVersion) +
             "\"},\"capabilities\":[\"esm\",\"multiple-runtimes\","
             "\"callbacks\",\"node:fs/promises\",\"node:fs\","
-            "\"node:path\",\"node:timers/promises\"]}";
+            "\"node:path\",\"node:events\",\"node:buffer\","
+            "\"node:timers\",\"node:timers/promises\",\"abort\"]}";
         initialized = write_frame(host.file_descriptor, handshake);
       }
 

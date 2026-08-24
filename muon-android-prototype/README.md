@@ -12,7 +12,7 @@
 - Android NDK 29.0.14206865、CMake 4.1.2
 - root packageが指定するNode.jsとnpm dependency
 
-repositoryはrecursive submoduleを取得した状態で使用してください。初回buildでは、固定した公式libffi 3.8.0 source archiveと[公式bundletool standalone jar](https://github.com/google/bundletool/releases/tag/1.18.3)をdownloadします。どちらも使用前にSHA-256を検証し、生成manifestへ入力commit、toolchain、configure引数、patch一覧を記録します。
+repositoryはrecursive submoduleを取得した状態で使用してください。初回buildでは、固定した公式libffi 3.8.0 source archive、QuickJS 2026-06-04 source archive、[公式bundletool standalone jar](https://github.com/google/bundletool/releases/tag/1.18.3)をdownloadします。各downloadは使用前にSHA-256を検証します。native dependencyの生成manifestには入力commit、toolchain、configure引数、patch一覧も記録します。
 
 ## Android pluginを同梱する
 
@@ -43,6 +43,32 @@ Android pluginはruntimeにdownloadまたは探索せず、[android-plugins.json
 - desktop用の`path`、`signature`、`salt`はAndroid registryでは使用できません。
 
 registry generatorは入力を検証し、C++ load tableとCMake plugin targetを同じ正規化済みentryから生成します。重複名、重複soname、unsupported ABI、欠落artifact、ELF machine不一致、16 KiB未整列、`muon_init_plugin`欠落はpackage検査で失敗します。
+
+## 組み込みJavaScript runtime
+
+Android simple modeでは、Node.js版と同じ生成形の`muon.node.createNode()`から、独立したQuickJS runtimeを作成できます。
+
+```javascript
+const runtime = await muon.node.createNode();
+
+try {
+  const application = await runtime.importModule('.');
+  console.log(await application.increment());
+
+  const fs = await runtime.importModule('node:fs/promises');
+  await fs.mkdir('example', { recursive: true });
+  await fs.writeFile('example/message.txt', 'hello');
+  console.log(await fs.readFile('example/message.txt', 'utf8'));
+} finally {
+  await runtime.release();
+}
+```
+
+`createNode()`というAPI名は既存コードの生成形を維持するためのもので、runtime自体はNode.jsではありません。Node.js packageや標準library全体との互換性はありません。現在は同梱application moduleの`.`と、`node:fs/promises`、`node:fs`、`node:path`、`node:timers/promises`の限定実装をimportできます。`fs`、`path`、`timers/promises`という接頭辞なしのspecifierも利用できます。
+
+primitive、有限number、64 bit範囲の`bigint`、`ArrayBuffer`/typed array、JSON value、renderer callbackをbridgeで転送します。filesystemはapplication privateな`files/javascript-runtime`配下へ閉じ込められ、複数runtimeで共有します。
+
+各`createNode()`は非公開の`:muon_javascript` Service process内に独立したQuickJS runtimeを作ります。prototypeでは同時runtime数を16、各runtimeのheapを64 MiB、stackを1 MiB、連続したJavaScript実行を2秒に制限します。`release()`はmodule handleとruntimeを回収します。未完了処理はActivity破棄、Service切断、またはruntime終了時にrejectされます。
 
 ## Buildとpackage
 

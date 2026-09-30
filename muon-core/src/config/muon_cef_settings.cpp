@@ -72,6 +72,7 @@ CefSettings CreateMuonCefSettings(
   CefSettings settings;
   settings.no_sandbox = !ShouldEnableCefSandbox();
   settings.use_views_default_popup = true;
+  CefString(&settings.user_agent).FromString(config.browser.user_agent);
   if (config.cdp.enable) {
     settings.remote_debugging_port = config.cdp.port;
   }

@@ -838,16 +838,15 @@ function Test-NamePattern($name, [string[]] $patterns) {
 
 function Find-SearchAppsEdit($window) {
   $searchPatterns = @('Search apps', 'search.*apps', 'apps.*search', 'アプリ.*検索', '検索.*アプリ')
-  $windowRectangle = $window.Current.BoundingRectangle
   $edits = @(Get-VisibleDescendants $window | Where-Object { $_.Current.ControlType -eq $controlTypeEdit })
-  $contentEdits = @($edits | Where-Object { $_.Current.BoundingRectangle.X -gt ($windowRectangle.X + 280) })
-  $named = @($contentEdits | Where-Object { Test-NamePattern $_.Current.Name $searchPatterns })
+  # The app filter can be named only "Search" while Settings also has a global search box.
+  $appFilters = @($edits | Where-Object { $_.Current.AutomationId -eq 'SystemSettings_StorageSense_AppSizesListFilter_DisplayStringValue' })
+  if ($appFilters.Count -gt 0) {
+    return $appFilters[0]
+  }
+  $named = @($edits | Where-Object { Test-NamePattern $_.Current.Name $searchPatterns })
   if ($named.Count -gt 0) {
     return $named[0]
-  }
-  if ($contentEdits.Count -gt 0) {
-    $sorted = @($contentEdits | Sort-Object { $_.Current.BoundingRectangle.Y })
-    return $sorted[0]
   }
   return $null
 }

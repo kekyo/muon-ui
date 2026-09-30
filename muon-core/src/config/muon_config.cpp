@@ -45,6 +45,7 @@ static constexpr char kMuonConfigAssetSignatureKey[] = "signature";
 static constexpr char kMuonConfigAssetSaltKey[] = "salt";
 static constexpr char kMuonConfigBrowserKey[] = "browser";
 static constexpr char kMuonConfigBrowserStartPageKey[] = "startPage";
+static constexpr char kMuonConfigBrowserUserAgentKey[] = "userAgent";
 static constexpr char kMuonConfigBrowserProfilePathKey[] = "profilePath";
 static constexpr char kMuonConfigBrowserInitialWindowStateKey[] =
     "initialWindowState";
@@ -1304,6 +1305,28 @@ static bool ReadBrowserStartPageConfig(yyjson_val* browser,
   return true;
 }
 
+static bool ReadBrowserUserAgentConfig(yyjson_val* browser,
+                                       MuonConfig* config,
+                                       std::string* error_message) {
+  const auto user_agent =
+      yyjson_obj_get(browser, kMuonConfigBrowserUserAgentKey);
+  if (user_agent == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_str(user_agent)) {
+    *error_message = "muon.json browser.userAgent must be a string";
+    return false;
+  }
+  const auto value = ReadJsonString(user_agent);
+  if (value.find_first_of("\r\n\0", 0, 3) != std::string::npos) {
+    *error_message =
+        "muon.json browser.userAgent must not contain CR, LF or NUL";
+    return false;
+  }
+  config->browser.user_agent = value;
+  return true;
+}
+
 static bool ReadBrowserProfileConfig(yyjson_val* browser,
                                      MuonConfig* config,
                                      std::string* error_message) {
@@ -1810,6 +1833,7 @@ static bool ReadBrowserConfig(yyjson_val* root,
     return false;
   }
   if (!ReadBrowserStartPageConfig(browser, config, error_message) ||
+      !ReadBrowserUserAgentConfig(browser, config, error_message) ||
       !ReadBrowserProfileConfig(browser, config, error_message) ||
       !ReadBrowserInitialWindowStateConfig(browser, config, error_message) ||
       !ReadBrowserInitialTitleBarVisibilityConfig(

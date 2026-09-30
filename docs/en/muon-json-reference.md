@@ -23,6 +23,7 @@ The following is an example of `muon.json`:
     "apiBaseUrl": "https://api.example.com"
   },
   "browser": {
+    "userAgent": "MyApp/1.0",
     "initialWindowState": "normal",
     "backgroundColor": "system",
     "titleBarType": "muon",
@@ -145,6 +146,7 @@ In the default validate mode, import `createNode()` from Vite's `muon:node` virt
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
 | `startPage` | `string` | `"asset://main/index.html"` | URL loaded first at startup. |
+| `userAgent` | `string` | `""` (CEF default behavior) | Full User-Agent string used by the browser. |
 | `profile` | `string` | state profile | Directory where the Chromium profile is saved. |
 | `initialWindowState` | `string` | `"normal"` | Window state at startup. |
 | `backgroundColor` | `string` | `"system"` | Browser background color before page load or when the page does not specify a background color. |
@@ -154,6 +156,13 @@ In the default validate mode, import `createNode()` from Vite's `muon:node` virt
 | `keybind` | `object` | `{}` | Keyboard shortcuts assigned to browser operations. |
 | `allowUnsafeJavaScriptParentAccess` | `readonly string[]` | `[]` | List of URLs that allow JavaScript access from popup pages to their parent page. |
 
+- `userAgent` is applied at startup and shared by the main window and popups.
+  For example, `"MyApp/1.0"` sets both the HTTP `User-Agent` header for page loads and `fetch` requests and JavaScript's `navigator.userAgent` to that string.
+  It replaces the entire string rather than appending to the default. Restart the app to apply a change.
+  Omitting it or specifying an empty string uses [CEF's default User-Agent behavior](https://cef-builds.spotifycdn.com/docs/147.0/structcef__settings__t.html).
+  When loading multiple config files, the last specified `userAgent` wins; a file that omits it preserves the previous value. An empty string in a later file clears the override.
+  Non-string values (including `null`) and strings containing CR, LF, or NUL are configuration errors.
+  This setting controls the User-Agent string; it does not provide individual settings for User-Agent Client Hints (`navigator.userAgentData` or `Sec-CH-UA` headers).
 - When `profile` is a relative path, it is resolved relative to `muon.json`.
   If `profile` is not explicitly set, `<appId>/profile/` under the user state directory is used.
 - `initialWindowState` can be `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, or `"fullscreen"`.

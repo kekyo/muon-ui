@@ -259,6 +259,13 @@ struct MuonBrowserConfig {
    */
   std::string start_page = "asset://main/index.html";
   /**
+   * Full User-Agent override shared by browser windows.
+   *
+   * @remarks An empty string leaves CEF's default User-Agent behavior in place.
+   * Explicit values must not contain CR, LF or NUL.
+   */
+  std::string user_agent;
+  /**
    * CEF profile directory path.
    *
    * @remarks Relative paths are resolved from the containing config file for

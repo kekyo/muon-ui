@@ -22,6 +22,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
     "apiBaseUrl": "https://api.example.com"
   },
   "browser": {
+    "userAgent": "MyApp/1.0",
     "initialWindowState": "normal",
     "backgroundColor": "system",
     "titleBarType": "muon",
@@ -143,6 +144,7 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 | キー                                  | 型                                        | 既定値                    | 概要                                                                                     |
 | :------------------------------------ | :---------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------- |
 | `startPage`                           | `string`                                  | `"asset://main/index.html"` | 起動時に最初に読み込むURLです。                                                          |
+| `userAgent`                           | `string`                                  | `""`（CEFの既定動作）      | ブラウザーで使用するUser-Agent文字列全体を指定します。                                   |
 | `profile`                             | `string`                                  | state profile             | Chromiumプロファイルを保存するディレクトリです。                                         |
 | `initialWindowState`                  | `string`                                  | `"normal"`                | 起動時のウインドウ状態です。                                                             |
 | `backgroundColor`                     | `string`                                  | `"system"`                | ページ読み込み前やページが背景色を指定しない場合のブラウザ背景色です。                   |
@@ -152,6 +154,13 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 | `keybind`                             | `object`                                  | `{}`                      | ブラウザ操作に割り当てるキーボードショートカットです。                                   |
 | `allowUnsafeJavaScriptParentAccess`   | `readonly string[]`                       | `[]`                      | popupから親ページへのJavaScriptアクセスを許可するURLリストです。                         |
 
+- `userAgent` は起動時に適用され、メイン画面とポップアップで共通に使用されます。
+  例えば `"MyApp/1.0"` を指定すると、ページの読み込みや `fetch` のHTTP `User-Agent` ヘッダーと、JavaScriptの `navigator.userAgent` がその文字列になります。
+  既定の文字列への追記ではなく、文字列全体の置き換えです。変更の反映にはアプリの再起動が必要です。
+  未指定または空文字列の場合は、[CEFの既定のUser-Agent動作](https://cef-builds.spotifycdn.com/docs/147.0/structcef__settings__t.html)を使用します。
+  複数の設定ファイルを指定した場合は後の `userAgent` が優先され、省略したファイルは前の値を維持します。後のファイルで空文字列を指定すると上書きを解除できます。
+  文字列以外（`null` を含む）、またはCR・LF・NULを含む文字列は設定エラーになります。
+  この項目はUser-Agent文字列用であり、User-Agent Client Hints（`navigator.userAgentData` や `Sec-CH-UA` 系ヘッダー）を個別に設定するものではありません。
 - `profile` に相対パスを指定した場合は、 `muon.json` からの相対パスとして解決されます。
   `profile` を明示しない場合は、ユーザーステートディレクトリの `<appId>/profile/` が使用されます。
 - `initialWindowState` には `"normal"`, `"hidden"`, `"minimized"`, `"maximized"`, `"fullscreen"` を指定出来ます。

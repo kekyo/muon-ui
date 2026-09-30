@@ -78,6 +78,24 @@ static bool TestEnablesCefSandboxWhenLauncherRequestsIt() {
                 "CEF sandbox was not enabled for system setuid runtime");
 }
 
+static bool TestConfiguresUserAgent() {
+  MuonConfig config;
+  auto defaults = CreateMuonCefSettings(config, "/tmp/muon-runtime", {});
+  if (!Expect(ReadCefSettingString(&defaults.user_agent).empty(),
+              "default settings override the CEF user agent")) {
+    return false;
+  }
+  for (const auto* user_agent : {"MyApp/1.0 (Test; +https://example.test/)", ""}) {
+    config.browser.user_agent = user_agent;
+    auto settings = CreateMuonCefSettings(config, "/tmp/muon-runtime", {});
+    if (!Expect(ReadCefSettingString(&settings.user_agent) == user_agent,
+                "configured user agent was not propagated exactly")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool TestConfiguresInsecureLocalhostCommandLine() {
   MuonConfig enabled_config;
   enabled_config.network.local_access.allow_insecure_localhost = true;
@@ -117,6 +135,7 @@ static bool TestConfiguresInsecureLocalhostCommandLine() {
 int main() {
   return TestCreatesLauncherSafeCefSettings() &&
                  TestEnablesCefSandboxWhenLauncherRequestsIt() &&
+                 TestConfiguresUserAgent() &&
                  TestConfiguresInsecureLocalhostCommandLine()
              ? 0
              : 1;

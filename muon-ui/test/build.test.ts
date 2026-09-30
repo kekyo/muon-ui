@@ -686,6 +686,7 @@ describe("muon build", () => {
       `${JSON.stringify(
         {
           asset: { sourcePath: "./old-assets" },
+          browser: { userAgent: "PackagedApp/1.0" },
           network: {
             allow: ["asset://main/**"],
             localAccess: {
@@ -775,6 +776,7 @@ describe("muon build", () => {
     });
     expect(target?.embeddedConfig.browser).toEqual({
       initialTitleBarIcon: appIconAssetUrl,
+      userAgent: "PackagedApp/1.0",
     });
     expect(target?.embeddedConfig.network).toEqual({
       allow: ["asset://main/**"],
@@ -800,6 +802,10 @@ describe("muon build", () => {
     const embeddedLauncher = await readFile(
       join(root, "dist-muon/linux-amd64", "muon-sample"),
     );
+    const launcherConfig = await readFakeLauncherEmbeddedConfig(
+      target?.launcherPath ?? "",
+    );
+    expect(launcherConfig.browser).toEqual(target?.embeddedConfig.browser);
     expect(() => findMuonEmbeddedConfigSlot(embeddedCore)).toThrow("found 0");
     expect(() => findMuonLauncherEmbeddedConfigSlot(embeddedLauncher)).toThrow(
       "found 0",

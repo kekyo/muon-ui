@@ -236,6 +236,8 @@ static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
                                   const std::string& message) {
   return Expect(browser.start_page == "asset://main/index.html",
                 message + " start URL changed") &&
+         Expect(browser.user_agent.empty(),
+                message + " user agent default changed") &&
          Expect(browser.profile == profile,
                 message + " profile path changed") &&
          Expect(browser.initial_window_state ==
@@ -2389,6 +2391,77 @@ static bool RunDebuggerConfigValidationTest(
                                  "cdp.port must be an integer");
 }
 
+static bool RunBrowserUserAgentConfigTest(
+    const std::filesystem::path& test_directory) {
+  const auto base_path = test_directory / "user-agent-base.json";
+  const auto override_path = test_directory / "user-agent-override.json";
+  const auto unrelated_path = test_directory / "user-agent-unrelated.json";
+  const auto empty_path = test_directory / "user-agent-empty.json";
+  if (!Expect(WriteFile(base_path,
+                        R"({browser:{userAgent:'MyApp/1.0 (Test; +https://example.test/)'}})"),
+              "failed to write base user agent config") ||
+      !Expect(WriteFile(override_path,
+                        R"({"browser":{"userAgent":"OtherApp/2.0"}})"),
+              "failed to write overriding user agent config") ||
+      !Expect(WriteFile(unrelated_path,
+                        R"({"browser":{"startPage":"https://example.test/"}})"),
+              "failed to write unrelated browser config") ||
+      !Expect(WriteFile(empty_path, R"({"browser":{"userAgent":""}})"),
+              "failed to write empty user agent config")) {
+    return false;
+  }
+
+  MuonConfig config;
+  return LoadConfigExpectSuccess(base_path, &config) &&
+         Expect(config.browser.user_agent ==
+                    "MyApp/1.0 (Test; +https://example.test/)",
+                "browser.userAgent was not preserved exactly") &&
+         LoadConfigFilesExpectSuccess(
+             {base_path, override_path, unrelated_path}, &config) &&
+         Expect(config.browser.user_agent == "OtherApp/2.0",
+                "later user agent did not override or survive unrelated config") &&
+         Expect(config.browser.start_page == "https://example.test/",
+                "user agent merge lost another browser setting") &&
+         LoadConfigFilesExpectSuccess({base_path, empty_path}, &config) &&
+         Expect(config.browser.user_agent.empty(),
+                "empty user agent did not clear the override") &&
+         LoadConfigExpectSuccess(empty_path, &config) &&
+         Expect(config.browser.user_agent.empty(),
+                "empty user agent was not accepted") &&
+         LoadConfigExpectSuccess(base_path, &config) &&
+         LoadConfigExpectSuccess(unrelated_path, &config) &&
+         Expect(config.browser.user_agent.empty(),
+                "omitted user agent did not use the default");
+}
+
+static bool RunBrowserUserAgentValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto config_path = test_directory / "invalid-browser-user-agent.json";
+  for (const auto* value : {"null", "true", "42", "[]", "{}"}) {
+    if (!Expect(WriteFile(config_path,
+                          std::string("{\"browser\":{\"userAgent\":") +
+                              value + "}}"),
+                "failed to write non-string user agent config") ||
+        !LoadConfigExpectFailure(config_path,
+                                 "browser.userAgent must be a string")) {
+      return false;
+    }
+  }
+  for (const auto* value : {R"("MyApp/1.0\rInjected")",
+                            R"("MyApp/1.0\nInjected")",
+                            R"("MyApp/1.0\u0000Injected")"}) {
+    if (!Expect(WriteFile(config_path,
+                          std::string("{\"browser\":{\"userAgent\":") +
+                              value + "}}"),
+                "failed to write invalid user agent config") ||
+        !LoadConfigExpectFailure(
+            config_path, "browser.userAgent must not contain CR, LF or NUL")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool RunBrowserConfigValidationTest(
     const std::filesystem::path& test_directory) {
   const auto invalid_browser_path = test_directory / "invalid-browser.json";
@@ -3114,6 +3187,8 @@ int main() {
                       RunConfigValidationTest(test_directory) &&
                       RunLogConfigValidationTest(test_directory) &&
                       RunDebuggerConfigValidationTest(test_directory) &&
+                      RunBrowserUserAgentConfigTest(test_directory) &&
+                      RunBrowserUserAgentValidationTest(test_directory) &&
                       RunBrowserConfigValidationTest(test_directory) &&
                       RunBrowserBackgroundColorResolutionTest() &&
                       RunNetworkPolicyTest() &&

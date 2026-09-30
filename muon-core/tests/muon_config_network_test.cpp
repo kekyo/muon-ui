@@ -372,9 +372,11 @@ static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
   WriteTlvBinary(&bytes, {0x0a, 0x10, 0xff});
 
   WriteRawString(&bytes, "browser");
-  BeginTlvObject(&bytes, 3);
+  BeginTlvObject(&bytes, 4);
   WriteRawString(&bytes, "startPage");
   WriteTlvString(&bytes, "https://embedded.example/app");
+  WriteRawString(&bytes, "userAgent");
+  WriteTlvString(&bytes, "EmbeddedApp/1.0");
   WriteRawString(&bytes, "profilePath");
   WriteTlvString(&bytes, "profiles/embedded");
   WriteRawString(&bytes, "backgroundColor");
@@ -1159,6 +1161,8 @@ static bool RunEmbeddedConfigLoadingTest(
                 "embedded config did not ignore command-line config paths") &&
          Expect(config.browser.start_page == "https://embedded.example/app",
                 "embedded browser.startPage was not parsed") &&
+         Expect(config.browser.user_agent == "EmbeddedApp/1.0",
+                "embedded browser.userAgent was not parsed") &&
          Expect(config.browser.profile ==
                     runtime_directory / "profiles/embedded",
                 "embedded browser.profilePath was not resolved from executable "

@@ -2701,6 +2701,11 @@ describe("muon Vite plugin", () => {
     const cefDirectory = await writeFakeCefDirectory();
     await writeBasicViteProject(root);
     await writeProjectMuonConfig(root);
+    const configuredProject = JSON.parse(
+      await readFile(join(root, "muon.json"), "utf8"),
+    ) as Record<string, unknown>;
+    configuredProject.browser = { userAgent: "ViteApp/1.0" };
+    await writeFile(join(root, "muon.json"), JSON.stringify(configuredProject));
     await writeFakeMuonSource(muonDirectory, outputDirectory);
     process.env.BROWSER = "existing-browser";
     process.env.MUON_CACHE_DIR =
@@ -2754,6 +2759,11 @@ describe("muon Vite plugin", () => {
       "-c",
       overrideConfigPath,
     ]);
+    const projectConfig = JSON.parse(await readFile(args[1] ?? "", "utf8")) as {
+      browser: { userAgent: string };
+    };
+    expect(projectConfig.browser.userAgent).toBe("ViteApp/1.0");
+    expect(overrideConfig.browser).not.toHaveProperty("userAgent");
     expect(cwd).toBe(`${stagePath}\n`);
     await expect(access(join(stagePath, "libcef.so"))).resolves.toBeUndefined();
     await expect(

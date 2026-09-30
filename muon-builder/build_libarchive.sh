@@ -170,7 +170,7 @@ case "${TARGET_NAME}" in
 esac
 
 cmake "${cmake_args[@]}"
-cmake --build "${BUILD_DIR}" --target archive_static --config Release -j
+cmake --build "${BUILD_DIR}" --target archive_static --config Release --parallel "$(nproc)"
 
 if [[ ! -f "${LIBRARY}" ]]; then
   echo "libarchive static library was not produced: ${LIBRARY}" >&2

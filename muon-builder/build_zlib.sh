@@ -180,7 +180,7 @@ case "${TARGET_NAME}" in
 esac
 
 cmake "${cmake_args[@]}"
-cmake --build "${BUILD_DIR}" --target zlibstatic --config Release -j
+cmake --build "${BUILD_DIR}" --target zlibstatic --config Release --parallel "$(nproc)"
 cmake --install "${BUILD_DIR}" --config Release --component Development
 
 if [[ ! -f "${LIBRARY}" ||

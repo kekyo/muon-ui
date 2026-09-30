@@ -1556,7 +1556,9 @@ const dispatchRecycleKeyboardShortcut = async (
     await dispatchKeyboardShortcut(driver, event);
     return driver;
   } catch (error) {
-    if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
+    // Any platform may close the old CDP session before key-up completes.
+    // The caller still verifies that a new process starts successfully.
+    if (!isCdpWebSocketFailure(error)) {
       throw error;
     }
     driver.close();
@@ -6581,44 +6583,61 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     );
   });
 
-  it("recycles the process from the configured recycle shortcut", async () => {
-    const running = await startDebugMuonLauncher(
-      [],
-      TEST_NETWORK_ALLOW_PATTERNS,
-      {},
-      createBrowserShortcutConfig({ recycle: "ctrl+shift+f10" }),
-    );
-    let driver: CdpDriver | undefined = undefined;
-    try {
-      driver = await connectToMuonCdp({
-        port: MUON_PORT,
-        timeoutMs: cdpCommandTimeoutMs,
-      });
-      await driver.navigate(
-        "data:text/html,<title>muon recycle shortcut</title>",
-        cdpCommandTimeoutMs,
+  it.each([false, true])(
+    "recycles the process from the configured recycle shortcut (disconnect CDP: %s)",
+    async (disconnectCdp) => {
+      const running = await startDebugMuonLauncher(
+        [],
+        TEST_NETWORK_ALLOW_PATTERNS,
+        {},
+        createBrowserShortcutConfig({ recycle: "ctrl+shift+f10" }),
       );
-      const firstProcessId = await driver.evaluate<number>(
-        "window.muon.environments.getProcessId()",
-      );
-      driver = await dispatchRecycleKeyboardShortcut(
-        driver,
-        ctrlShiftF10RecycleShortcut,
-      );
-      driver?.close();
-      driver = undefined;
-      const recycled = await waitForRecycledMuon(firstProcessId);
-      driver = recycled.driver;
-      expect(recycled.processId).not.toBe(firstProcessId);
-      await expect(driver.evaluate("document.location.href")).resolves.toBe(
-        MUON_APP_URL,
-      );
-    } catch (error) {
-      throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
-    } finally {
-      await stopMuon(running, driver);
-    }
-  });
+      let driver: CdpDriver | undefined = undefined;
+      try {
+        driver = await connectToMuonCdp({
+          port: MUON_PORT,
+          timeoutMs: cdpCommandTimeoutMs,
+        });
+        await driver.navigate(
+          "data:text/html,<title>muon recycle shortcut</title>",
+          cdpCommandTimeoutMs,
+        );
+        const firstProcessId = await driver.evaluate<number>(
+          "window.muon.environments.getProcessId()",
+        );
+        if (disconnectCdp) {
+          const connectedDriver = driver;
+          driver = {
+            ...connectedDriver,
+            send: async <T>(
+              ...args: Parameters<CdpDriver["send"]>
+            ): Promise<T> => {
+              const result = await connectedDriver.send<T>(...args);
+              // Recycle may close CDP before the matching key-up is delivered.
+              connectedDriver.close();
+              return result;
+            },
+          };
+        }
+        driver = await dispatchRecycleKeyboardShortcut(
+          driver,
+          ctrlShiftF10RecycleShortcut,
+        );
+        driver?.close();
+        driver = undefined;
+        const recycled = await waitForRecycledMuon(firstProcessId);
+        driver = recycled.driver;
+        expect(recycled.processId).not.toBe(firstProcessId);
+        await expect(driver.evaluate("document.location.href")).resolves.toBe(
+          MUON_APP_URL,
+        );
+      } catch (error) {
+        throw new Error(`${String(error)}\nMuon stderr:\n${running.stderr}`);
+      } finally {
+        await stopMuon(running, driver);
+      }
+    },
+  );
 
   it("recycles the process from the configured Ctrl+F12 shortcut", async () => {
     const running = await startDebugMuonLauncher(

@@ -40,6 +40,7 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            at-spi2-core \
             build-essential \
             ca-certificates \
             cmake \

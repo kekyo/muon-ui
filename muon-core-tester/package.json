@@ -20,7 +20,7 @@
     "@playwright/mcp": "^0.0.83",
     "@types/node": ">=24.0.0",
     "@types/pngjs": "^6.0.5",
-    "agent-rover": "^0.2.0",
+    "agent-rover": "^0.5.0",
     "async-primitives": ">=1.7.0",
     "express": "5.2.1",
     "gestament": ">=1.4.0",

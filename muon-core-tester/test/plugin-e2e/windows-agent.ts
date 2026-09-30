@@ -9,7 +9,7 @@ import type { WindowsE2eEnvironment } from "./windows-environment.js";
 
 export const WINDOWS_AGENT_CONNECTION_TIMEOUT_MS = 30000;
 
-export const requiredWindowsAgentProtocolVersion = "2026-07-07";
+export const requiredWindowsAgentProtocolVersion = "2026-09-09.1";
 
 export const requiredWindowsAgentFeatureNames = [
   "applications.launch",

@@ -17,11 +17,7 @@ export type MuonTarget =
  * Internal CEF target platform identifier.
  */
 export type MuonCefTarget =
-  | "linux64"
-  | "linuxarm"
-  | "linuxarm64"
-  | "windows32"
-  | "windows64";
+  "linux64" | "linuxarm" | "linuxarm64" | "windows32" | "windows64";
 
 /**
  * muon target operating system family.

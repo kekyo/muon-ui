@@ -265,7 +265,7 @@ const createFakeNodeArtifact = (
   version: string,
   nodeTarget = "linux-x64",
   catalogFile = "linux-x64",
-  content = Buffer.from(`fake Node archive ${version} ${nodeTarget}\n`),
+  content: Buffer = Buffer.from(`fake Node archive ${version} ${nodeTarget}\n`),
 ): FakeNodeArtifact => {
   const extension = catalogFile.endsWith("-zip") ? ".zip" : ".tar.gz";
   const fileName = `node-${version}-${nodeTarget}${extension}`;

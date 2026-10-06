@@ -144,9 +144,7 @@ interface WireCallbackRequest {
 }
 
 type OutgoingWireMessage =
-  | WireSuccessResponse
-  | WireFailureResponse
-  | WireCallbackRequest;
+  WireSuccessResponse | WireFailureResponse | WireCallbackRequest;
 
 interface PendingCallback {
   resolve(value: unknown): void;

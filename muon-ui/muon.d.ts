@@ -78,9 +78,7 @@ declare global {
    * `undefined`, `bigint`, and binary values cannot be nested inside them.
    */
   type MuonNodeArgument =
-    | MuonNodeValue
-    | MuonNodeBinaryArgument
-    | MuonNodeCallback;
+    MuonNodeValue | MuonNodeBinaryArgument | MuonNodeCallback;
 
   /**
    * Value accepted when a renderer callback settles.
@@ -211,10 +209,7 @@ declare global {
 
   /** CEF version selection policy used by muon-launcher. */
   type MuonCefVersionPolicy =
-    | "tested"
-    | "same-major-latest"
-    | "compat-latest"
-    | "exact";
+    "tested" | "same-major-latest" | "compat-latest" | "exact";
 
   /** Launcher settings used on the next muon-launcher startup. */
   interface MuonLauncherSettings {
@@ -368,8 +363,7 @@ declare global {
 
   /** Item inserted into the muon browser native context menu. */
   type MuonBrowserContextMenuItem =
-    | MuonBrowserContextMenuCommandItem
-    | MuonBrowserContextMenuSeparatorItem;
+    MuonBrowserContextMenuCommandItem | MuonBrowserContextMenuSeparatorItem;
 
   /** Context captured when a muon browser context menu command is selected. */
   interface MuonBrowserContextMenuCommand {
@@ -548,8 +542,7 @@ declare global {
 
   /** Event emitted by a muon browser system tray item. */
   type MuonBrowserTrayEvent =
-    | MuonBrowserTrayActivationEvent
-    | MuonBrowserTrayMenuEvent;
+    MuonBrowserTrayActivationEvent | MuonBrowserTrayMenuEvent;
 
   /** Receives muon browser system tray activation and menu events. */
   type MuonBrowserTrayEventHandler = (event: MuonBrowserTrayEvent) => void;

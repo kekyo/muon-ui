@@ -53,10 +53,7 @@ export interface WireCallbackResult {
 
 export type WireResponse = WireSuccessResponse | WireFailureResponse;
 export type WireMessage =
-  | WireRequest
-  | WireResponse
-  | WireCallbackRequest
-  | WireCallbackResult;
+  WireRequest | WireResponse | WireCallbackRequest | WireCallbackResult;
 
 interface MuonNodeBridge {
   waitForShutdown(): Promise<void>;

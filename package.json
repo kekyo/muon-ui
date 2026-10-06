@@ -30,6 +30,7 @@
     "muon-core-tester"
   ],
   "scripts": {
+    "dependencies": "reskill",
     "build": "npm run build --workspaces",
     "build:dist": "bash ./build_package.sh --target dist",
     "dev": "npm run dev --workspace muon-core",
@@ -41,6 +42,9 @@
   },
   "allowScripts": {
     "tesseract.js": false
+  },
+  "devDependencies": {
+    "resolved-killer": ">=1.1.0"
   },
   "engines": {
     "node": ">=20"

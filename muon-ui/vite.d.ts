@@ -9,10 +9,7 @@ import type { Plugin } from "vite";
  * Windows executable artifact kind accepted by code signing options.
  */
 export type MuonWindowsCodeSigningTarget =
-  | "runtime"
-  | "launcher"
-  | "nsisInstaller"
-  | "nsisUninstaller";
+  "runtime" | "launcher" | "nsisInstaller" | "nsisUninstaller";
 
 /**
  * External Windows code signing command options.

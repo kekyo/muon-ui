@@ -38,6 +38,8 @@ const cardioSourceRoot = join(repositoryRoot, 'deps', 'cardio');
 const ndkVersion = '29.0.14206865';
 const androidApi = 24;
 const libffiReleaseTag = 'v3.8.0';
+// Pin the release commit as well as the archive: shallow CI checkouts omit tags.
+const libffiReleaseCommit = '12ffd1f9dc56fcea79d2f742f424301ae668d663';
 const libffiSourceArchiveName = 'libffi-3.8.0.tar.gz';
 const libffiSourceArchiveUrl =
   'https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz';
@@ -242,14 +244,6 @@ const libffiCommit = capture('git', [
   libffiSourceRoot,
   'rev-parse',
   'HEAD',
-]);
-const libffiReleaseCommit = capture('git', [
-  '-C',
-  libffiSourceRoot,
-  'rev-list',
-  '-n',
-  '1',
-  libffiReleaseTag,
 ]);
 if (libffiReleaseCommit !== libffiCommit) {
   throw new Error(

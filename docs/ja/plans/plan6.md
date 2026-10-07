@@ -470,3 +470,21 @@ ANDROID_SERIAL=emulator-5556 node muon-android/scripts/test-packaged-application
 origin/developを取得して分岐がないことを確認し、ローカルdevelopを8b3386cからfeature/androidの14eacc2へfast-forwardでマージした。競合はなく、マージ直後の作業ツリーもクリーンだった。全体テストを実行した4dba1b9との差分は本計画書だけで、製品コード・テスト・ビルド設定が一致することをgit diffで確認した。マージ結果を記録するこの追記も文書のみの変更であり、追加のビルドは必要ない。
 
 これにより第11節の全条件を満たし、plan6を完了した。ローカルdevelopへの取り込みまでを実施し、リモートへのpushとnpmへの公開は行っていない。検証用に起動したエミュレーターは終了した。
+
+### GitHub Actionsで判明した環境依存への対応
+
+developへのリモート反映後、[CI実行37567894842](https://github.com/kekyo/muon-ui/actions/runs/37567894842/job/112619706210)の全体テストが失敗した。Androidの実行テストには到達していない。CodeQLの3ジョブは成功している。
+
+原因は2点ある。Androidの依存ビルドはlibffiのHEADとv3.8.0タグを照合するが、CIの浅いチェックアウトにはタグがない。公式配布アーカイブのSHA-256固定は維持し、[公式v3.8.0](https://github.com/libffi/libffi/releases/tag/v3.8.0)のコミット12ffd1f9dc56fcea79d2f742f424301ae668d663と直接照合する。サブモジュールの内容は変更しない。
+
+ExpressのE2Eは独立したfixtureのlockfileを使うため、ルートのnpm ciが取得するバージョンとは一致しない。今回はcontent-type 2.0.0がキャッシュになく、--offlineで失敗した。ローカルに残っていたキャッシュで準備不足を見落としていた。[npmの--prefer-offline](https://docs.npmjs.com/cli/v11/using-npm/config/#prefer-offline)でキャッシュを優先し、不足する固定版を取得する。lockfileによるバージョン固定と整合性検証は維持する。
+
+追補作業は次の順序で進める。
+
+1. タグなしの浅いチェックアウトで依存ビルドを実行する回帰テストを追加する。変更前の失敗を確認し、コミットの直接照合へ修正して成功させる。
+2. Express E2Eの一方を空の専用npmキャッシュで実行し、変更前の失敗を確認する。LinuxとWindows向け準備のインストール指定を修正し、実際のHTTP応答と終了処理を再検証する。
+3. ルートのnpm testを最後まで実行し、Androidの配布物と16 KiBエミュレーターでの独立アプリも再検証する。結果をここへ記録してコミットする。
+
+完了条件は、両原因の再現テストと全体テストが成功し、Androidの配布から署名APKの更新までを確認できること。GitHub Actions上の再実行結果は、ローカル検証とは分けて記録する。
+
+タグを持たないdepth 1のチェックアウトを一時ディレクトリに作り、依存ビルドの失敗を再現した。コミットの直接照合へ変更した後は、arm64-v8aとx86_64の両方でlibffi.aの生成とmanifestのハッシュ検証が成功した。回帰テストの所要時間は26.93秒だった。公式アーカイブのSHA-256とサブモジュールのコミット検査は維持している。

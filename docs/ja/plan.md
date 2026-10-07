@@ -11,4 +11,4 @@
 - [ ] plans/plan3-2.md: Android対応3-2: 通知の構造（保留）
 - [ ] plans/plan4.md: Android対応4: （保留）
 - [ ] plans/plan5.md: Android対応5: （保留）
-- [ ] plans/plan6.md: Android対応6
+- [x] plans/plan6.md: Android対応6: Androidリリース機能整備

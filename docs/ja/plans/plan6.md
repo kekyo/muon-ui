@@ -313,7 +313,7 @@ RPCのorigin・main frame制限、アセットの拒否動作、プラグイン�
 - [x] npm配布物からの独立E2E、Android端末テスト、ルートの全体テストの実行結果を記録する。
 - [x] 利用者文書と実装が一致し、FCM・QuickJSを含む後続作業の範囲が明示されている。
 - [x] AABを公開する場合は、署名とAAB由来の端末別APKの動作検証が成功する。 今回は公開対象外。
-- [ ] developへのマージ結果を確認し、必要な回帰検証が完了している。
+- [x] developへのマージ結果を確認し、必要な回帰検証が完了している。
 
 テスト結果には対象コミット、コマンド、ツールチェイン、端末条件、成果物のハッシュ、成功・失敗・未実施を記録する。未実施の必須条件がある間はマージ完了としない。
 
@@ -464,3 +464,9 @@ ANDROID_SERIAL=emulator-5556 node muon-android/scripts/test-packaged-application
 4dba1b9のソースに対してルートのnpm testを再実行し、終了コード0で完了した。muon-android 42件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-builderのシェル検証も完了した。muon-core-testerの条件付きskipは開始時と同じ26件である。Windows E2Eはmuon-uiの324件に含まれる。最後のCEF検証は797.90秒かかった。ログはartifacts/plan6/final-all-green.logへ保存した。
 
 第11節のマージ前の必須条件を照合し、すべて満たした。日本語の計画・Android利用手順・セルフビルド手順はyomiyasuで確認し、lintの指摘はない。全体テスト開始後の追記はこの計画書だけで、製品コード、テスト、ビルド設定は変更していない。
+
+### developへのマージ結果
+
+origin/developを取得して分岐がないことを確認し、ローカルdevelopを8b3386cからfeature/androidの14eacc2へfast-forwardでマージした。競合はなく、マージ直後の作業ツリーもクリーンだった。全体テストを実行した4dba1b9との差分は本計画書だけで、製品コード・テスト・ビルド設定が一致することをgit diffで確認した。マージ結果を記録するこの追記も文書のみの変更であり、追加のビルドは必要ない。
+
+これにより第11節の全条件を満たし、plan6を完了した。ローカルdevelopへの取り込みまでを実施し、リモートへのpushとnpmへの公開は行っていない。検証用に起動したエミュレーターは終了した。

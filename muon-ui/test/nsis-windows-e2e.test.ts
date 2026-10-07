@@ -25,7 +25,7 @@ import {
 } from "agent-rover";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import type { MuonBuildTarget } from "../src/build.js";
+import type { MuonDesktopTarget as MuonBuildTarget } from "../src/targets.js";
 import {
   createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,
@@ -350,7 +350,12 @@ const stageRemoteMuonPackCli = async (
     resolve("dist"),
     joinWindowsPath(remoteMuonUiDirectory, "dist"),
   );
-  for (const packageName of ["adm-zip", "commander", "tar-vern"] as const) {
+  for (const packageName of [
+    "adm-zip",
+    "commander",
+    "funcity",
+    "tar-vern",
+  ] as const) {
     await copyLocalDirectoryToRemote(
       agent,
       resolve("..", "node_modules", packageName),

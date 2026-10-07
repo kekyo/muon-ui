@@ -13,7 +13,8 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "rootDir": ".."
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "vite.config.ts"]
 }

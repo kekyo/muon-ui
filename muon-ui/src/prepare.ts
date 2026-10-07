@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import {
   getDefaultMuonTarget,
   normalizeMuonTarget,
-  type MuonTarget,
+  type MuonDesktopTarget,
 } from "./targets.js";
 import {
   createMuonProgressRenderer,
@@ -158,7 +158,7 @@ export interface MuonPrepareResult {
 export const getDefaultMuonPrepareTarget = (
   platform: NodeJS.Platform,
   architecture: NodeJS.Architecture,
-): MuonTarget => {
+): MuonDesktopTarget => {
   try {
     return getDefaultMuonTarget(platform, architecture);
   } catch {

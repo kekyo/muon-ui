@@ -1,0 +1,64 @@
+From: muon downstream build <noreply@muon.local>
+Subject: [PATCH] x86_64: support Android 16 KiB static trampolines
+
+Android x86_64 can use a 16 KiB base page.  The fixed 4 KiB static
+trampoline table is rejected on those systems, which makes closures fall
+back to an anonymous RWX mapping.  Use a 16 KiB table for Android and derive
+the PC-relative parameter offsets from the selected table size.
+
+The change is kept in muon's external dependency patch queue and is applied
+only to the extracted libffi build copy.
+---
+ src/x86/internal64.h | 10 +++++++---
+ src/x86/unix64.S     | 12 ++++++------
+ 2 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/src/x86/internal64.h b/src/x86/internal64.h
+index d0d06f3..eb89374 100644
+--- a/src/x86/internal64.h
++++ b/src/x86/internal64.h
+@@ -25,9 +25,13 @@
+ #if defined(FFI_EXEC_STATIC_TRAMP)
++#if defined(__ANDROID__)
+ /*
+- * For the trampoline code table mapping, a mapping size of 4K (base page size)
+- * is chosen.
++ * Android supports 16K base pages, so its trampoline table must cover one.
+  */
+-#define UNIX64_TRAMP_MAP_SHIFT	12
++#define UNIX64_TRAMP_MAP_SHIFT	14
++#else
++/* Use the conventional 4K base page on other x86-64 systems. */
++#define UNIX64_TRAMP_MAP_SHIFT	12
++#endif
+ #define UNIX64_TRAMP_MAP_SIZE	(1 << UNIX64_TRAMP_MAP_SHIFT)
+ #ifdef ENDBR_PRESENT
+ #define UNIX64_TRAMP_SIZE	40
+diff --git a/src/x86/unix64.S b/src/x86/unix64.S
+index dc39a26..239c0c1 100644
+--- a/src/x86/unix64.S
++++ b/src/x86/unix64.S
+@@ -668,17 +668,17 @@ ENDF(C(ffi_closure_unix64_alt))
+  * - restore the stack pointer to what it was when the trampoline was invoked.
+  */
+ #ifdef ENDBR_PRESENT
+-# define X86_DATA_OFFSET	4077
++# define X86_DATA_OFFSET	UNIX64_TRAMP_MAP_SIZE - 19
+ # ifdef __ILP32__
+-#  define X86_CODE_OFFSET	4069
++#  define X86_CODE_OFFSET	UNIX64_TRAMP_MAP_SIZE - 27
+ # else
+-#  define X86_CODE_OFFSET	4073
++#  define X86_CODE_OFFSET	UNIX64_TRAMP_MAP_SIZE - 23
+ # endif
+ #else
+-# define X86_DATA_OFFSET	4081
++# define X86_DATA_OFFSET	UNIX64_TRAMP_MAP_SIZE - 15
+ # ifdef __ILP32__
+-#  define X86_CODE_OFFSET	4073
++#  define X86_CODE_OFFSET	UNIX64_TRAMP_MAP_SIZE - 23
+ # else
+-#  define X86_CODE_OFFSET	4077
++#  define X86_CODE_OFFSET	UNIX64_TRAMP_MAP_SIZE - 19
+ # endif
+ #endif

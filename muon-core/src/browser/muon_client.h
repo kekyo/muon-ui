@@ -15,9 +15,11 @@
 #include "browser/muon_window_delegate.h"
 #include "config/muon_config.h"
 #include "network/muon_network_policy.h"
+#include "plugins/muon_cef_rpc.h"
 #include "plugins/muon_plugin_runtime.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_shared_buffer.h"
+#include "rpc/muon_rpc_host.h"
 
 #include "include/cef_client.h"
 #include "include/cef_dialog_handler.h"
@@ -59,6 +61,7 @@ class MuonClient final : public CefClient,
    * Creates the browser client.
    *
    * @param plugin_runtime Browser-process plugin runtime.
+   * @param rpc_bridge CEF codec and renderer transport bridge.
    * @param network_policy Browser network access policy.
    * @param plugin_page_policy Page URL policy for plugin API calls.
    * @param plugin_capability_policies Capability policies keyed by bundler
@@ -75,6 +78,7 @@ class MuonClient final : public CefClient,
    * @param linux_desktop_id Desktop identifier for Linux window metadata.
    */
   MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
+             std::shared_ptr<MuonCefRpcBridge> rpc_bridge,
              std::shared_ptr<MuonNetworkPolicy> network_policy,
              std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
              std::map<std::string, std::shared_ptr<MuonPluginPolicy>>
@@ -89,6 +93,9 @@ class MuonClient final : public CefClient,
              bool has_initial_title_bar_icon = false,
              MuonTitleBarIcon initial_title_bar_icon = {},
              std::string linux_desktop_id = "muon");
+
+  /** Detaches the browser client from the CEF RPC transport. */
+  ~MuonClient() override;
 
   /**
    * Returns this object as the browser lifetime handler.
@@ -465,25 +472,30 @@ class MuonClient final : public CefClient,
 
  private:
   struct PendingSharedPayload {
-    MuonPluginInvocationContext context;
+    MuonRpcOwner context;
     std::shared_ptr<MuonSharedBufferPayload> payload;
     std::string error_message;
     bool has_error = false;
   };
 
   struct PendingPluginCall {
-    MuonPluginInvocationContext context;
+    MuonRpcOwner context;
     CefRefPtr<CefBrowser> browser;
     CefRefPtr<CefFrame> frame;
     CefRefPtr<CefListValue> encoded_args;
     int call_id = 0;
     uint32_t function_id = 0;
     std::string proxy_lease_token;
+    std::string capability_id;
+    std::string capability_function_path;
+    int modal_browser_id = 0;
+    bool track_fs_dialog_call = false;
+    bool cancel_fs_dialog_on_owner_close = false;
     bool proxy_call = false;
   };
 
   struct PendingRendererFunctionResultMessage {
-    MuonPluginInvocationContext context;
+    MuonRpcOwner context;
     CefRefPtr<CefProcessMessage> message;
   };
 
@@ -529,7 +541,7 @@ class MuonClient final : public CefClient,
       std::string* error_message);
   static std::string CreatePendingSharedKey(
       const std::string& message_name,
-      const MuonPluginInvocationContext& context,
+      const MuonRpcOwner& context,
       int call_id);
   static bool IsPluginPageAllowed(
       CefRefPtr<CefFrame> frame,
@@ -616,19 +628,25 @@ class MuonClient final : public CefClient,
                                  std::string* error_message);
   void DispatchPluginCall(const PendingPluginCall& call,
                           std::shared_ptr<MuonSharedBufferPayload> payload);
-  bool IsPluginCapabilityAllowed(uint32_t function_id,
-                                 const std::string& capability_id,
-                                 const std::string& function_path,
-                                 std::string* error_message) const;
+  void InvokeRpcPlugin(const MuonRpcCallRequest& request,
+                       MuonRpcHostCompletion completion);
+  void InvokeRpcPlatform(const MuonRpcCallRequest& request,
+                         MuonRpcHostCompletion completion);
+  void SendRpcResult(const MuonRpcCallResult& result);
+  void CompleteRendererFunctionResult(
+      const MuonRpcOwner& owner,
+      CefRefPtr<CefProcessMessage> message,
+      std::shared_ptr<MuonSharedBufferPayload> payload);
+  void RejectRendererFunctionResult(const MuonRpcOwner& owner,
+                                    uint32_t call_id,
+                                    const std::string& error_message);
   void RejectPluginCall(const PendingPluginCall& call,
                         const std::string& error_message);
-  bool IsPluginResultTargetAvailable(
-      const MuonPluginInvocationContext& context,
-      CefRefPtr<CefFrame> frame) const;
-  void SendPluginResult(const MuonPluginInvocationContext& context,
+  CefRefPtr<CefFrame> ResolveRpcFrame(const MuonRpcOwner& owner) const;
+  void SendPluginResult(const MuonRpcOwner& context,
                         CefRefPtr<CefFrame> frame,
                         int call_id,
-                        const MuonPluginCallResult& result);
+                        const MuonRpcCallResult& result);
 
   bool shutdown_started_ = false;
   MuonBrowserConfig browser_config_;
@@ -642,10 +660,10 @@ class MuonClient final : public CefClient,
   std::function<bool(int32_t)> shutdown_requester_;
   std::shared_ptr<MuonAppStorage> app_storage_;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime_;
+  std::shared_ptr<MuonCefRpcBridge> rpc_bridge_;
+  std::shared_ptr<MuonRpcHost> rpc_host_;
   std::shared_ptr<MuonNetworkPolicy> network_policy_;
   std::shared_ptr<MuonNetworkPolicy> plugin_page_policy_;
-  std::map<std::string, std::shared_ptr<MuonPluginPolicy>>
-      plugin_capability_policies_;
   std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy_;
   std::map<int, CefRefPtr<CefBrowser>> browsers_by_id_;
   int pending_fs_dialog_calls_ = 0;
@@ -665,6 +683,9 @@ class MuonClient final : public CefClient,
       pending_renderer_function_result_messages_;
   std::map<std::string, PendingRendererFunctionResultPayload>
       pending_renderer_function_result_payloads_;
+  std::map<std::string, PendingPluginCall> active_rpc_calls_;
+  std::map<std::string, MuonRpcHostCompletion>
+      platform_rpc_completions_;
   std::map<int, ModalBrowserViewDisableState>
       modal_browser_view_disable_states_;
   std::map<int, uint64_t> title_bar_icon_update_generations_;

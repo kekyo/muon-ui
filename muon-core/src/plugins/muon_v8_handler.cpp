@@ -6,6 +6,7 @@
 
 #include "plugins/muon_v8_handler.h"
 
+#include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_function_wrapper_lifecycle.h"
 #include "plugins/muon_js_bridge.h"
 #include "plugins/muon_shared_buffer.h"

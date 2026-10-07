@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+def muon = new groovy.json.JsonSlurper().parse(new File(settingsDir, 'muon-build.json'))
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url = uri(muon.maven); content { includeGroup('dev.muon') } }
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'muon-application'
+include(':app')

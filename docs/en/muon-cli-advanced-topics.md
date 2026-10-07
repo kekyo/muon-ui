@@ -1,5 +1,7 @@
 # muon CLI (Advanced topics)
 
+For Android `prepare`, `build`, and `pack --type apk`, see [building and distributing Android apps](./android.md). The instructions below describe desktop builds; `--all` also selects desktop targets only.
+
 muon is basically intended to be used with the Vite plugin, but it can also be developed without the Vite plugin.
 In that case, use the `muon` CLI command.
 

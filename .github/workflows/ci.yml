@@ -19,7 +19,7 @@ jobs:
   build-test:
     name: Build and test
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -34,6 +34,37 @@ jobs:
         with:
           cache: npm
           node-version: 24
+
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '25.0.3'
+
+      - name: Prepare Android manufacturer toolchain
+        shell: bash
+        run: |
+          cli_root="${RUNNER_TEMP}/muon-android-cli"
+          mkdir -p "${cli_root}"
+          curl --fail --location --silent --show-error \
+            https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip \
+            -o "${cli_root}/tools.zip"
+          echo "0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8  ${cli_root}/tools.zip" | sha256sum --check
+          unzip -q "${cli_root}/tools.zip" -d "${cli_root}"
+          # android-emulator-runner prepends this SDK directory to PATH.
+          cli_latest="${ANDROID_HOME}/cmdline-tools/latest"
+          mkdir -p "${ANDROID_HOME}/cmdline-tools"
+          if [ -e "${cli_latest}" ] || [ -L "${cli_latest}" ]; then
+            mv "${cli_latest}" "${cli_root}/previous-cmdline-tools"
+          fi
+          mv "${cli_root}/cmdline-tools" "${cli_latest}"
+          echo "${cli_latest}/bin" >> "${GITHUB_PATH}"
+          # CI provisions the manufacturer's SDK explicitly. Consumer prepare only diagnoses it.
+          set +o pipefail
+          yes | "${cli_latest}/bin/android" --sdk="${ANDROID_HOME}" sdk install \
+            platforms/android-37.0 build-tools/36.0.0 platform-tools \
+            ndk/29.0.14206865 cmake/4.1.2
+          exit "${PIPESTATUS[1]}"
 
       - name: Install build dependencies
         run: |
@@ -110,6 +141,30 @@ jobs:
 
       - name: Build and test
         run: npm run test
+
+      - name: Enable KVM for Android E2E
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-muon-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test Android runtime and independent npm consumer
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: '37.0'
+          system-image-api-level: '37.1'
+          target: google_apis_ps16k
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -no-audio -no-boot-anim
+          disable-animations: false
+          script: |
+            test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = 16384
+            adb shell df -h /data
+            npm run test:android --workspace muon-android-prototype
+            mkdir -p .run/android-ci
+            npm pack --workspace muon-ui --pack-destination .run/android-ci
+            node muon-android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz
 
   codeql:
     name: Analyze ${{ matrix.language }}

@@ -1514,8 +1514,7 @@ const withTitleBarMuon = async (
   ) => Promise<void>,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   networkAllowPatterns: string[] = TEST_NETWORK_ALLOW_PATTERNS,
@@ -1574,8 +1573,7 @@ const withWindowsTitleBarMuon = async (
   ) => Promise<void>,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<void> => {
@@ -1794,10 +1792,18 @@ windowsTitleBarIt(
     await withWindowsTitleBarMuon(async (driver, _running, window) => {
       let currentWindow = window;
       await runTitleBarStep("navigate to draggable page", async () => {
-        await driver.evaluate('location.href = "asset://main/draggable.html"');
-        await driver.evaluate(
-          'new Promise((resolve) => { const check = () => document.getElementById("no-drag-button") === null ? setTimeout(check, 50) : resolve(true); check(); })',
+        await driver.navigate(
+          "asset://main/draggable.html",
+          cdpCommandTimeoutMs,
         );
+        await expect(
+          driver.evaluate(
+            "({ url: location.href, readyState: document.readyState })",
+          ),
+        ).resolves.toEqual({
+          url: "asset://main/draggable.html",
+          readyState: "complete",
+        });
       });
 
       await runTitleBarStep("click page no-drag control", async () => {
@@ -2172,10 +2178,18 @@ titleBarIt(
     await withTitleBarMuon(async (driver, running, env, initialBounds) => {
       let bounds = initialBounds;
       await runTitleBarStep("navigate to draggable page", async () => {
-        await driver.evaluate('location.href = "asset://main/draggable.html"');
-        await driver.evaluate(
-          'new Promise((resolve) => { const check = () => document.getElementById("no-drag-button") === null ? setTimeout(check, 50) : resolve(true); check(); })',
+        await driver.navigate(
+          "asset://main/draggable.html",
+          cdpCommandTimeoutMs,
         );
+        await expect(
+          driver.evaluate(
+            "({ url: location.href, readyState: document.readyState })",
+          ),
+        ).resolves.toEqual({
+          url: "asset://main/draggable.html",
+          readyState: "complete",
+        });
       });
 
       await runTitleBarStep("click page no-drag control", async () => {

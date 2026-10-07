@@ -4,6 +4,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { prepareMuonAndroid } from "./build.js";
 import { Command } from "commander";
 
 import {
@@ -37,6 +38,8 @@ import type {
 } from "./windows-code-signing.js";
 
 interface PrepareCommandOptions {
+  sdkPath: string | undefined;
+  config: string | undefined;
   muonPath: string | undefined;
   cefPath: string | undefined;
   stageDir: string | undefined;
@@ -495,6 +498,22 @@ const runPackCommand = async (
 const runPrepareCommand = async (
   commandOptions: PrepareCommandOptions,
 ): Promise<void> => {
+  if (commandOptions.target?.trim().toLowerCase() === "android") {
+    const result = await prepareMuonAndroid({
+      ...(commandOptions.config === undefined
+        ? {}
+        : { configPath: commandOptions.config }),
+      ...(commandOptions.sdkPath === undefined
+        ? {}
+        : { android: { sdkPath: commandOptions.sdkPath } }),
+    });
+    console.log(
+      commandOptions.json === true
+        ? JSON.stringify(result, null, 2)
+        : result.sdkPath,
+    );
+    return;
+  }
   const prepareOptions: MuonPrepareOptions = {
     muonPath: commandOptions.muonPath ?? "",
     cefPath: commandOptions.cefPath,
@@ -510,6 +529,9 @@ const runPrepareCommand = async (
     environment: process.env,
     cwd: process.cwd(),
   };
+  if (commandOptions.muonPath === undefined) {
+    throw new Error("Desktop prepare requires --muon-path <path>.");
+  }
   const result = await runMuonPrepare(prepareOptions);
   if (commandOptions.json === true) {
     console.log(JSON.stringify(result, null, 2));
@@ -648,14 +670,14 @@ const createCliCommand = (): Command => {
 
   program
     .command("build")
-    .description("Build CEF-free muon app distribution directories")
+    .description("Build desktop distributions or an Android debug APK")
     .option(
       "--target <target>",
       "public target or comma-separated public targets",
       appendTargetValues,
       [],
     )
-    .option("--all", "build all supported targets")
+    .option("--all", "build all desktop targets")
     .option("--assets <path>", "asset root path")
     .option("--config <path>", "muon config path")
     .option("--icon <path>", "static application PNG icon path")
@@ -697,7 +719,7 @@ const createCliCommand = (): Command => {
     .description("Build and package a muon app")
     .option(
       "--type <type>",
-      "package type or comma-separated package types: zip, tar.gz, tgz, deb, nsis (default: all)",
+      "package types: zip, tar.gz, tgz, deb, nsis; Android: apk (default: all for the selected target)",
       appendPackTypeValues,
     )
     .option(
@@ -706,7 +728,7 @@ const createCliCommand = (): Command => {
       appendTargetValues,
       [],
     )
-    .option("--all", "build all supported targets")
+    .option("--all", "build all desktop targets")
     .option("--config <path>", "muon config path")
     .option("--icon <path>", "static application PNG icon path")
     .option("--windows-icon <path>", "Windows PNG icon resource path")
@@ -777,11 +799,13 @@ const createCliCommand = (): Command => {
 
   program
     .command("prepare")
-    .description("Prepare a muon runtime with CEF files")
-    .requiredOption("--muon-path <path>", "muon runtime file root")
+    .description("Prepare a desktop runtime or the Android toolchain")
+    .option("--muon-path <path>", "desktop muon runtime file root")
     .option("--cef-path <path>", "CEF file root")
     .option("--stage-dir <path>", "prepared runtime output directory")
     .option("--target <target>", "prepare target")
+    .option("--sdk-path <path>", "Android SDK directory")
+    .option("--config <path>", "muon configuration path")
     .option("--cache-dir <path>", "CEF artifact cache directory")
     .option("--force", "rebuild an existing prepared runtime")
     .option("-q, --quiet", "suppress native builder progress messages")

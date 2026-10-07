@@ -12,6 +12,8 @@ CEFをバックエンドで使用する、マルチプラットフォームGUI�
 
 [(English language is here)](./README.md)
 
+AndroidではWebViewを使い、Webアセットを内蔵したdebug APKと署名済みrelease APKを生成できます。Linux x64からのビルドに対応し、通常のアプリ開発にNDK/CMakeは不要です。導入、署名、対応範囲は[Androidアプリのビルド・配布](./docs/ja/android.md)を参照してください。以下のCEF、HMR、ネットワークフィルターの説明はdesktop版を対象とします。
+
 ## これは何?
 
 あなたは、古くなってしまったネイティブGUIアプリケーションを、どうにかして最新のモダン化されたアプリケーションに更新したいと考えたことはありますか？
@@ -62,6 +64,7 @@ Chromium/Chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 - レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、ChromiumやChromeを使用しているのとほぼ同等です。
 - Viteプラグインに対応しています。更に、ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
 - Linux (deb) とWindows (NSIS) のパッケージ生成、あるいはポータブル運用に対応しています。
+- Androidアプリケーションのビルドも可能です (experimental)。
 - DevToolsを使用出来ます。更にCDP (Chrome DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
 - プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限出来ます。
 - 内蔵プラグインを使用して、ローカルファイルへのアクセス・オープンダイアログ・子プロセス起動・ウインドウ操作が可能です。
@@ -78,6 +81,9 @@ Chromium/Chromeから、 `chrome://inspect/` でリモートDevToolsを使用す
 ---
 
 ## muonを始める (高速バージョン)
+
+この節はLinux・Windows向けの手順です。
+Android向けのSDK・JDKの準備、Vite設定、APKの生成・署名は[Androidアプリのビルド・配布](./docs/ja/android.md)を参照してください。
 
 早速muonでアプリケーション（muonアプリ）を作ってみましょう。
 [Viteのテンプレート](https://vite.dev/guide/) を使って、"my-muon-app" を「普通に」作りましょう:
@@ -159,6 +165,7 @@ muonをより詳しく知りたい場合は、以下のドキュメントを参�
 ### ユーザーガイド
 
 - [muonを始める](./docs/ja/getting-started.md)
+- [Androidアプリのビルド・配布](./docs/ja/android.md)
 - [CEFのダウンロードと更新](./docs/ja/cef-download-and-update.md)
 - [muon DevTools](./docs/ja/muon-devtools.md)
 - [ローカルアセットの構成](./docs/ja/local-assets.md)

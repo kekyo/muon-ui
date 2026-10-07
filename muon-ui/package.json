@@ -24,10 +24,11 @@
     "dist",
     "muon.d.ts",
     "muon-virtual-modules.d.ts",
-    "vite.d.ts"
+    "vite.d.ts",
+    "android.d.ts"
   ],
   "scripts": {
-    "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs",
+    "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs && npm run build --workspace muon-android && node ../muon-android/scripts/stage-package.mjs dist/android",
     "build:js": "vite build --mode cjs && vite build --mode esm",
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
@@ -39,6 +40,7 @@
   "dependencies": {
     "adm-zip": ">=0.5.0",
     "commander": ">=14.0.0",
+    "funcity": "^1.5.0",
     "json5": ">=2.2.0",
     "semver": ">=7.8.5",
     "sharp": "^0.35.2",

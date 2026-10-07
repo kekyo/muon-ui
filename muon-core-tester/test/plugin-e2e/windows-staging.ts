@@ -306,7 +306,7 @@ const stageWindowsNodeSupport = async (
     );
     await execFileAsync(
       "npm",
-      ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
+      ["ci", "--prefer-offline", "--ignore-scripts", "--omit=dev"],
       { cwd: localExpressProjectDirectory },
     );
     await rm(join(localExpressProjectDirectory, "node_modules", ".bin"), {

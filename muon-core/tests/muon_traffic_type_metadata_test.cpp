@@ -4,7 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 
-#include "plugins/muon_type_metadata.h"
+#include "plugins/muon_traffic_type_metadata.h"
 
 #include <iostream>
 #include <string>
@@ -167,6 +167,11 @@ static bool RunTrafficTypeMappingTest() {
                 "tra-ffic buffer_view type did not convert to muon") &&
          Expect(muon_type == MUON_TYPE_BUFFER_VIEW,
                 "tra-ffic buffer_view type converted to the wrong muon type") &&
+         Expect(!ConvertTrafficValueTypeToMuon(TRA_FFIC_TYPE_STRUCT,
+                                                &muon_type),
+                "tra-ffic struct type unexpectedly converted to muon") &&
+         Expect(muon_type == MUON_TYPE_BUFFER_VIEW,
+                "rejected tra-ffic struct type changed the target") &&
          Expect(CreateMuonTypeCanonicalKey(Type(MUON_TYPE_BUFFER_VIEW)) ==
                     "buffer_view",
                 "buffer_view canonical key is invalid");

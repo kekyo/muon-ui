@@ -6,12 +6,15 @@
 /**
  * Public muon target platform identifier.
  */
-export type MuonTarget =
+export type MuonDesktopTarget =
   | "linux-amd64"
   | "linux-armhf"
   | "linux-arm64"
   | "windows-i686"
   | "windows-amd64";
+
+/** Public build target. Android is selected explicitly. */
+export type MuonTarget = MuonDesktopTarget | "android";
 
 /**
  * Internal CEF target platform identifier.
@@ -31,7 +34,7 @@ export interface MuonTargetDescriptor {
   /**
    * Public target identifier accepted by muon CLI and Vite options.
    */
-  id: MuonTarget;
+  id: MuonDesktopTarget;
   /**
    * Internal CEF target identifier used for CEF catalog and native builds.
    */
@@ -82,7 +85,7 @@ export interface MuonTargetDescriptor {
 }
 
 /**
- * Supported public muon targets in deterministic build order.
+ * Desktop targets included by default and by --all, in deterministic order.
  */
 export const allMuonTargets = [
   "linux-amd64",
@@ -181,11 +184,11 @@ const targetDescriptors = {
       /^libwinpthread-1\.dll$/,
     ],
   },
-} as const satisfies Record<MuonTarget, MuonTargetDescriptor>;
+} as const satisfies Record<MuonDesktopTarget, MuonTargetDescriptor>;
 
 const targetByCefTarget = Object.fromEntries(
   allMuonTargets.map((target) => [targetDescriptors[target].cefTarget, target]),
-) as Record<MuonCefTarget, MuonTarget>;
+) as Record<MuonCefTarget, MuonDesktopTarget>;
 
 /**
  * Returns metadata for a public muon target.
@@ -194,7 +197,7 @@ const targetByCefTarget = Object.fromEntries(
  * @returns Target descriptor.
  */
 export const getMuonTargetDescriptor = (
-  target: MuonTarget,
+  target: MuonDesktopTarget,
 ): MuonTargetDescriptor => targetDescriptors[target];
 
 /**
@@ -209,7 +212,7 @@ export const getMuonTargetDescriptor = (
  */
 export const getMuonTargetRuntimeAppId = (
   appId: string,
-  target: MuonTarget,
+  target: MuonDesktopTarget,
 ): string => {
   const descriptor = getMuonTargetDescriptor(target);
   return descriptor.os === "windows" ? `${appId}.${descriptor.arch}` : appId;
@@ -227,7 +230,10 @@ export const normalizeMuonTarget = (
   label = "muon target",
 ): MuonTarget => {
   const normalized = target.trim().toLowerCase();
-  if (allMuonTargets.includes(normalized as MuonTarget)) {
+  if (
+    normalized === "android" ||
+    allMuonTargets.includes(normalized as MuonDesktopTarget)
+  ) {
     return normalized as MuonTarget;
   }
   throw new Error(`Unsupported ${label}: ${target}`);
@@ -243,7 +249,7 @@ export const normalizeMuonTarget = (
 export const getDefaultMuonTarget = (
   platform: NodeJS.Platform,
   architecture: NodeJS.Architecture,
-): MuonTarget => {
+): MuonDesktopTarget => {
   if (platform === "win32") {
     if (architecture === "ia32") {
       return "windows-i686";
@@ -276,4 +282,4 @@ export const getDefaultMuonTarget = (
  */
 export const getMuonTargetForCefTarget = (
   cefTarget: MuonCefTarget,
-): MuonTarget => targetByCefTarget[cefTarget];
+): MuonDesktopTarget => targetByCefTarget[cefTarget];

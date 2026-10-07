@@ -12,6 +12,8 @@ A multi-platform GUI application framework that uses CEF as its backend.
 
 [(For Japanese language/日本語はこちら)](./README_ja.md)
 
+Android uses WebView and supports debug APKs and signed release APKs containing your web assets. Build on Linux x64 without NDK/CMake for ordinary applications. See [building and distributing Android apps](./docs/en/android.md) for setup, signing, and support limits. The CEF, HMR, and network filtering descriptions below apply to the desktop backend.
+
 > Please note that this English version of the document was machine-translated and then partially edited, so it may contain inaccuracies.
 > We welcome pull requests to correct any errors in the text.
 
@@ -64,6 +66,7 @@ With the minimal setup, installing the NPM package and adding one line to the co
 - The rendering browser is CEF (Chromium Embedded Framework). From the web application's point of view, this is almost the same as using Chromium or Chrome.
 - Supports the Vite plugin system. It also supports Vite HMR, so previews update in real time during development.
 - Supports Linux (deb) and Windows (NSIS) package generation, and portable distribution.
+- You can also build Android applications (experimental).
 - DevTools can be used. CDP (Chrome DevTools Protocol) is also supported, so remote debugging from external tools is possible.
 - Includes a plugin system. Plugin capabilities can also be restricted by a whitelist filter.
 - Built-in plugins provide access to local files, open dialogs, child process launching, and window operations.
@@ -80,6 +83,8 @@ With the minimal setup, installing the NPM package and adding one line to the co
 ---
 
 ## Getting started with muon (Quick version)
+
+This section covers Linux and Windows. For Android SDK/JDK setup, Vite configuration, and APK building and signing, see [building and distributing Android apps](./docs/en/android.md).
 
 Let's get started by creating an application with muon (a muon app).
 Use a [Vite template](https://vite.dev/guide/) to create "my-muon-app" as you normally would:
@@ -162,6 +167,7 @@ See the following documents for more detailed information about muon.
 ### User guides
 
 - [Getting started with muon](./docs/en/getting-started.md)
+- [Building and distributing Android apps](./docs/en/android.md)
 - [CEF download and update](./docs/en/cef-download-and-update.md)
 - [muon DevTools](./docs/en/muon-devtools.md)
 - [Local asset configuration](./docs/en/local-assets.md)

@@ -124,6 +124,8 @@ static inline bool ConvertTrafficValueTypeToMuon(
     case TRA_FFIC_TYPE_BUFFER_VIEW:
       *target = MUON_TYPE_BUFFER_VIEW;
       return true;
+    case TRA_FFIC_TYPE_STRUCT:
+      return false;
   }
   return false;
 }

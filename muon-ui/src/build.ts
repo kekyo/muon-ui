@@ -3,6 +3,13 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import {
+  buildMuonAndroidTarget,
+  prepareMuonAndroidTarget,
+  type MuonAndroidBuildTargetResult,
+} from "./android.js";
+import type { MuonAndroidOptions } from "../android.js";
+
 import { constants, type Stats } from "node:fs";
 import {
   access,
@@ -41,6 +48,7 @@ import {
   getMuonTargetRuntimeAppId,
   normalizeMuonTarget,
   type MuonTarget,
+  type MuonDesktopTarget,
   type MuonTargetDescriptor,
 } from "./targets.js";
 import {
@@ -130,6 +138,10 @@ export type MuonBuildTarget = MuonTarget;
  * Options for creating redistributable muon app directories.
  */
 export interface MuonBuildOptions {
+  /** Requests the signed release path used by Android packaging. @internal */
+  androidRelease?: boolean;
+  /** Android application metadata and prebuilt plugins. */
+  android?: MuonAndroidOptions;
   /**
    * Project root containing package.json, muon.json, and app assets.
    */
@@ -267,11 +279,11 @@ export interface MuonBuildAssetResult {
 /**
  * Result for one generated target distribution.
  */
-export interface MuonBuildTargetResult {
+export interface MuonDesktopBuildTargetResult {
   /**
    * Public target identifier used by the muon npm package.
    */
-  target: MuonBuildTarget;
+  target: MuonDesktopTarget;
   /**
    * Fixed output directory path for the target.
    */
@@ -311,6 +323,10 @@ export interface MuonBuildTargetResult {
   linuxDesktop?: ResolvedMuonLinuxDesktop;
 }
 
+/** A target result discriminated by its target field. */
+export type MuonBuildTargetResult =
+  MuonDesktopBuildTargetResult | MuonAndroidBuildTargetResult;
+
 /**
  * Result of a muon app build.
  */
@@ -339,7 +355,7 @@ export interface MuonBuildResult {
 /**
  * Returns the host target used by muon build when no explicit target is passed.
  */
-export const getDefaultMuonBuildTarget = (): MuonBuildTarget => {
+export const getDefaultMuonBuildTarget = (): MuonDesktopTarget => {
   return getDefaultMuonPrepareTarget(process.platform, process.arch);
 };
 
@@ -353,16 +369,22 @@ export const normalizeMuonBuildTarget = (target: string): MuonBuildTarget => {
 /**
  * Builds CEF-free muon app distribution directories for one or more targets.
  */
-export const buildMuonApp = async (
+const buildDesktopMuonApp = async (
   options: MuonBuildOptions = {},
-): Promise<MuonBuildResult> => {
+): Promise<
+  Omit<MuonBuildResult, "targets"> & { targets: MuonDesktopBuildTargetResult[] }
+> => {
   const internalOptions = options as InternalMuonBuildOptions;
   const browserProfilePathOverride = internalOptions.browserProfilePathOverride;
   const environment = internalOptions.environment ?? process.env;
   const progress = internalOptions.progress;
   const root = resolve(options.root ?? process.cwd());
   const packageDirectory = resolvePackageDirectory(options.packageDirectory);
-  const targets = resolveBuildTargets(options);
+  const targets = resolveBuildTargets(options).map((target) => {
+    if (target === "android")
+      throw new Error("Android is not a desktop target.");
+    return target;
+  });
   const outputRoot = resolve(root, options.outputRoot ?? ".");
   const packageJson = await readPackageJson(root);
   const appName = resolveAppName(packageJson, options.appName);
@@ -388,8 +410,9 @@ export const buildMuonApp = async (
       ),
     );
   }
+  const { android: _androidBuildConfig, ...desktopConfig } = buildConfig.config;
   const sourceConfig = createPackagedMuonNodeConfig(
-    applyRuntimePluginConfig(buildConfig.config, runtimePluginConfig),
+    applyRuntimePluginConfig(desktopConfig, runtimePluginConfig),
     nodeProject,
   );
   assertNoUserInitialTitleBarIcon(sourceConfig);
@@ -459,10 +482,10 @@ export const buildMuonApp = async (
     ),
   });
 
-  const results: MuonBuildTargetResult[] = [];
+  const results: MuonDesktopBuildTargetResult[] = [];
 
   for (let index = 0; index < targets.length; index += 1) {
-    const target = targets[index] as MuonBuildTarget;
+    const target = targets[index] as MuonDesktopTarget;
     progress?.({
       phase: "build",
       status: `Building muon target ${target} (${index + 1}/${targets.length})`,
@@ -502,6 +525,82 @@ export const buildMuonApp = async (
     appId,
     targets: results,
   };
+};
+
+/**
+ * Builds the explicitly selected desktop and/or Android applications.
+ * @param options - Project, assets, selected targets and platform configuration.
+ * @returns Per-target results discriminated by target.
+ */
+export function buildMuonApp(
+  options: Omit<MuonBuildOptions, "targets"> & {
+    targets?: readonly MuonDesktopTarget[];
+  },
+): Promise<
+  Omit<MuonBuildResult, "targets"> & { targets: MuonDesktopBuildTargetResult[] }
+>;
+export function buildMuonApp(
+  options?: MuonBuildOptions,
+): Promise<MuonBuildResult>;
+export async function buildMuonApp(
+  options: MuonBuildOptions = {},
+): Promise<MuonBuildResult> {
+  const targets = resolveBuildTargets(options);
+  if (!targets.includes("android")) return await buildDesktopMuonApp(options);
+  const root = resolve(options.root ?? process.cwd());
+  const packageJson = await readPackageJson(root);
+  const buildConfig = await readBuildConfig(root, options.configPath);
+  const internal = options as InternalMuonBuildOptions;
+  const android = await buildMuonAndroidTarget({
+    root,
+    packageDirectory: resolvePackageDirectory(options.packageDirectory),
+    packageJson,
+    config: buildConfig.config,
+    configDirectory: buildConfig.directory,
+    options,
+    assets: resolveAssetInput(
+      root,
+      options.assetSourcePath,
+      options.assetPrefix,
+      buildConfig,
+    ),
+    environment: internal.environment ?? process.env,
+    progress: internal.progress,
+  });
+  const desktop = targets.filter((target) => target !== "android");
+  const result: MuonBuildResult =
+    desktop.length === 0
+      ? {
+          root,
+          appName: resolveAppName(packageJson, options.appName),
+          appId: android.applicationId,
+          targets: [],
+        }
+      : await buildDesktopMuonApp({
+          ...options,
+          targets: desktop,
+          allTargets: false,
+        });
+  result.targets.push(android);
+  return result;
+}
+
+/**
+ * Validates and prepares the installed Android toolchain for a project.
+ * @param options - Project and optional Android SDK override.
+ * @returns Validated SDK/JDK paths and the packaged version requirements.
+ */
+export const prepareMuonAndroid = async (options: MuonBuildOptions = {}) => {
+  const root = resolve(options.root ?? process.cwd());
+  const config = await readBuildConfig(root, options.configPath);
+  return await prepareMuonAndroidTarget(
+    root,
+    resolvePackageDirectory(options.packageDirectory),
+    config.config,
+    config.directory,
+    options.android,
+    (options as InternalMuonBuildOptions).environment ?? process.env,
+  );
 };
 
 const resolvePackageDirectory = (
@@ -887,7 +986,7 @@ const buildMuonTarget = async (input: {
   outputRoot: string;
   appName: string;
   appId: string;
-  target: MuonBuildTarget;
+  target: MuonDesktopTarget;
   assetInput: AssetInput;
   sourceConfig: JsonObject;
   windowsResource: ResolvedMuonWindowsResource;
@@ -902,7 +1001,7 @@ const buildMuonTarget = async (input: {
   browserProfilePathOverride: string | undefined;
   includeRuntimeHelper: boolean;
   progress: MuonProgressCallback | undefined;
-}): Promise<MuonBuildTargetResult> => {
+}): Promise<MuonDesktopBuildTargetResult> => {
   const descriptor = getMuonTargetDescriptor(input.target);
   const sourceRuntimePath = join(
     input.packageDirectory,
@@ -1096,7 +1195,7 @@ const verifyTargetInputs = async (input: {
   sourceLauncherPath: string;
   sourceRuntimeHelperPath: string | undefined;
   descriptor: MuonTargetDescriptor;
-  target: MuonBuildTarget;
+  target: MuonDesktopTarget;
 }): Promise<void> => {
   await assertDirectory(
     input.sourceRuntimePath,

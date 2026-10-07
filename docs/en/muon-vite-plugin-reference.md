@@ -1,5 +1,7 @@
 # muon Vite plugin reference
 
+Android requires `pluginAccess: false` and `build.targets: ['android']`. See [building and distributing Android apps](./android.md) for `build.android` options and limitations. Development server, CEF, and virtual-module behavior below applies to desktop applications.
+
 The muon Vite plugin argument `options` is optional.
 When omitted, both development launch and distribution builds use their default behavior.
 
@@ -193,8 +195,8 @@ For a portable distribution, preparation occurs directly in the extracted direct
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
-| `targets` | `readonly string[]` | all supported targets | List of public target IDs to build. |
-| `allTargets` | `boolean` | equivalent to `true` when `targets` is omitted | Whether to build all targets supported by the installed package. |
+| `targets` | `readonly string[]` | all supported desktop targets | List of public target IDs to build. |
+| `allTargets` | `boolean` | equivalent to `true` when `targets` is omitted | Whether to build all desktop targets supported by the installed package. |
 | `appName` | `string` | `name` from `package.json` | Filename of the application launcher. |
 | `appId` | `string` | `name` from `package.json` | Base ID of the runtime application identifier. Windows targets embed `<appId>.<arch>`. |
 | `outputRoot` | `string` | `"."` | Parent directory where target-specific output directories such as `dist-muon/linux-amd64/` are created. |
@@ -206,9 +208,9 @@ For a portable distribution, preparation occurs directly in the extracted direct
 | `linuxDesktop` | `object` | `linux.desktop` | Metadata for Linux desktop entries and icons. |
 | `packageDirectory` | `string` | installed muon package | muon package directory containing `runtime/` and `native/`. |
 
-- When both `targets` and `allTargets` are omitted, all targets supported by the installed muon package are generated.
+- When both `targets` and `allTargets` are omitted, all desktop targets supported by the installed muon package are generated.
   If `allTargets` is `true`, it takes precedence over `targets`.
-  `targets` can specify one of `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, or `windows-amd64`.
+  `targets` can specify one of `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64`, or `android`.
 - When `appName` is omitted, it is generated from `name` in `package.json`.
   If `name` does not exist, `muon-app` is used.
   For scoped package names, the scope is removed, and characters that cannot be used in launcher names are normalized to `-`.

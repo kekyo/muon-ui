@@ -264,7 +264,6 @@ endif()
 
 function(MUON_APPLY_SANITIZERS TARGET_NAME)
   if(MUON_ENABLE_SANITIZERS)
-    get_target_property(MUON_SANITIZER_TARGET_TYPE ${TARGET_NAME} TYPE)
     target_compile_options(${TARGET_NAME} PRIVATE
       -fsanitize=address,leak,undefined
       -fno-omit-frame-pointer
@@ -273,13 +272,6 @@ function(MUON_APPLY_SANITIZERS TARGET_NAME)
       -fsanitize=address,leak,undefined
       -fno-omit-frame-pointer
       )
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
-        MUON_SANITIZER_TARGET_TYPE STREQUAL "EXECUTABLE")
-      target_link_options(${TARGET_NAME} PRIVATE
-        -static-libasan
-        -static-libubsan
-        )
-    endif()
   endif()
 endfunction()
 
@@ -618,9 +610,8 @@ if(NOT EXISTS "${MUON_CARDIO_SHARED_SOURCE}")
   message(FATAL_ERROR
     "cardio shared runtime source is required. Update CARDIO_ROOT to a checkout containing samples/libcardio/libcardio.cpp.")
 endif()
-string(TOLOWER "${CMAKE_BUILD_TYPE}" MUON_BUILD_TYPE_LOWER)
 set(MUON_CARDIO_OUTPUT_DIR
-  "${CMAKE_CURRENT_SOURCE_DIR}/.deps/libcardio/${MUON_TARGET_NAME}/${MUON_BUILD_TYPE_LOWER}")
+  "${CMAKE_CURRENT_BINARY_DIR}/cardio")
 set(MUON_CARDIO_RUNTIME_LIBRARY_NAME
   "libcardio${CMAKE_SHARED_LIBRARY_SUFFIX}")
 set(MUON_CARDIO_CONFIG_DEFINES
@@ -739,10 +730,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   MUON_APPLY_SANITIZERS(muon_executor_supervisor)
 endif()
 
+add_subdirectory(src/rpc rpc-core)
+MUON_APPLY_SANITIZERS(muon_rpc_core)
+
+include(cmake/MuonPluginRuntimeCore.cmake)
+muon_add_plugin_runtime_core(muon_plugin_runtime_core)
+
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
-  src/muon_sha256.cpp
   src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
@@ -766,7 +762,6 @@ set(APP_SOURCES
   src/config/muon_autostart.cpp
   src/config/muon_cef_settings.cpp
   src/config/muon_config.cpp
-  src/config/muon_glob.cpp
   src/config/muon_linux_display_backend.cpp
   src/config/muon_paths.cpp
   src/config/muon_startup.cpp
@@ -785,13 +780,11 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
   src/plugins/builtin/muon_builtin_fs_read_limits.cpp
   src/plugins/builtin/muon_builtin_fs_watch_registry.cpp
-  src/plugins/muon_function_wrapper_lifecycle.cpp
-  src/plugins/muon_plugin_metadata.cpp
-  src/plugins/muon_plugin_policy.cpp
-  src/plugins/muon_plugin_runtime.cpp
+  src/plugins/muon_cef_plugin_metadata.cpp
+  src/plugins/muon_cef_rpc.cpp
+  src/plugins/muon_plugin_runtime_desktop.cpp
   src/plugins/muon_shared_buffer.cpp
   src/plugins/muon_traffic_cardio_operation.cpp
-  src/plugins/muon_type_metadata.cpp
   src/plugins/muon_v8_handler.cpp
   )
 set(APP_HEADERS
@@ -838,17 +831,21 @@ set(APP_HEADERS
   src/plugins/builtin/muon_builtin_fs_dialogs_plugin.h
   src/plugins/builtin/muon_builtin_fs_helpers.h
   src/plugins/builtin/muon_builtin_fs_watch_registry.h
+  src/plugins/muon_cef_plugin_metadata.h
+  src/plugins/muon_cef_rpc.h
   src/plugins/muon_js_bridge.h
   src/plugins/muon_function_wrapper_lifecycle.h
   src/plugins/muon_plugin_metadata.h
   src/plugins/muon_plugin_policy.h
   src/plugins/muon_plugin_runtime.h
-  src/plugins/muon_plugin_value.h
   src/plugins/muon_shared_buffer.h
   src/plugins/muon_traffic_adapter.h
   src/plugins/muon_traffic_cardio_operation.h
+  src/plugins/muon_traffic_type_metadata.h
   src/plugins/muon_type_metadata.h
   src/plugins/muon_v8_handler.h
+  src/rpc/muon_rpc.h
+  src/rpc/muon_rpc_host.h
   src/ui/muon_ui_fs_dialogs.h
   src/ui/muon_ui_title_bar.h
   include/muon_plugin_api.h
@@ -1171,6 +1168,8 @@ set_target_properties(${APP_NAME} PROPERTIES
 target_link_libraries(${APP_NAME} PRIVATE
   muon_ui
   muon_cardio
+  muon_plugin_runtime_core
+  muon_rpc_core
   muon_sha2
   libcef_dll_wrapper
   libcef_lib
@@ -1274,6 +1273,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
 
   add_executable(muon_traffic_type_metadata_test
     tests/muon_traffic_type_metadata_test.cpp
+    src/plugins/muon_traffic_type_metadata.cpp
     src/plugins/muon_type_metadata.cpp
     )
   add_executable(muon_traffic_bridge_test
@@ -1445,6 +1445,13 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
 endif()
 
 enable_testing()
+add_test(
+  NAME cardio_build_variant_isolated
+  COMMAND ${CMAKE_COMMAND}
+    "-DMUON_ARTIFACT=$<TARGET_FILE:cardio_shared>"
+    "-DMUON_BUILD_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/assert_artifact_build_scoped.cmake"
+  )
 add_test(
   NAME runtime_contains_node_plugin
   COMMAND bash -c
@@ -1678,13 +1685,11 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   target_include_directories(muon_builtin_browser_test PRIVATE
     include
     src
-    "${TRA_FFIC_ROOT_RESOLVED}/include"
     )
   target_link_libraries(muon_builtin_browser_test PRIVATE
     libcef_dll_wrapper
     libcef_lib
     yyjson
-    ${LIBFFI_TARGET}
     ${MUON_NATIVE_WHEEL_TARGETS}
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}
@@ -1951,22 +1956,71 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     Threads::Threads
     )
   MUON_APPLY_SANITIZERS(muon_function_wrapper_lifecycle_test)
+  add_executable(muon_plugin_runtime_core_test
+    tests/muon_plugin_runtime_core_test.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_plugin_runtime_core_test)
+  target_compile_features(muon_plugin_runtime_core_test PRIVATE cxx_std_20)
+  target_compile_definitions(muon_plugin_runtime_core_test PRIVATE
+    MUON_TEST_PLUGIN_DIRECTORY="${TEST_PLUGIN_OUTPUT_DIR}"
+    )
+  target_include_directories(muon_plugin_runtime_core_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_plugin_runtime_core_test PRIVATE
+    muon_plugin_runtime_core
+    muon_cardio
+    ${CMAKE_DL_LIBS}
+    )
+  add_dependencies(muon_plugin_runtime_core_test
+    muon_test_plugin_alpha
+    )
+  MUON_APPLY_SANITIZERS(muon_plugin_runtime_core_test)
+  add_executable(muon_rpc_test
+    tests/muon_rpc_test.cpp
+    src/plugins/muon_plugin_metadata.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_rpc_test)
+  target_compile_features(muon_rpc_test PRIVATE cxx_std_20)
+  target_include_directories(muon_rpc_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_rpc_test PRIVATE
+    muon_rpc_core
+    )
+  MUON_APPLY_SANITIZERS(muon_rpc_test)
+  add_executable(muon_rpc_portable_test
+    tests/muon_rpc_portable_test.cpp
+    )
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_rpc_portable_test)
+  target_compile_features(muon_rpc_portable_test PRIVATE cxx_std_20)
+  target_include_directories(muon_rpc_portable_test PRIVATE
+    include
+    src
+    )
+  target_link_libraries(muon_rpc_portable_test PRIVATE
+    muon_rpc_core
+    )
+  MUON_APPLY_SANITIZERS(muon_rpc_portable_test)
   add_executable(muon_plugin_metadata_test
     tests/muon_plugin_metadata_test.cpp
+    src/plugins/muon_cef_plugin_metadata.cpp
+    src/plugins/muon_cef_rpc.cpp
     src/plugins/muon_plugin_metadata.cpp
-    src/plugins/muon_type_metadata.cpp
+    src/plugins/muon_shared_buffer.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_plugin_metadata_test)
   target_compile_features(muon_plugin_metadata_test PRIVATE cxx_std_20)
   target_include_directories(muon_plugin_metadata_test PRIVATE
     include
     src
-    "${TRA_FFIC_ROOT_RESOLVED}/include"
     )
   target_link_libraries(muon_plugin_metadata_test PRIVATE
     libcef_dll_wrapper
     libcef_lib
-    ${LIBFFI_TARGET}
+    muon_rpc_core
     ${CEF_STANDARD_LIBS}
     ${CMAKE_DL_LIBS}
     )
@@ -2045,6 +2099,18 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_test(
     NAME function_wrapper_lifecycle
     COMMAND muon_function_wrapper_lifecycle_test
+    )
+  add_test(
+    NAME plugin_runtime_core
+    COMMAND muon_plugin_runtime_core_test
+    )
+  add_test(
+    NAME rpc
+    COMMAND muon_rpc_test
+    )
+  add_test(
+    NAME rpc_portable
+    COMMAND muon_rpc_portable_test
     )
   add_test(
     NAME plugin_metadata

@@ -6,14 +6,10 @@
 
 #pragma once
 
-#include "browser/muon_builtin_browser.h"
+#include "muon_plugin_api.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "plugins/muon_plugin_policy.h"
-#include "plugins/muon_shared_buffer.h"
-
-#include "include/cef_frame.h"
-#include "include/cef_process_message.h"
-#include "include/cef_values.h"
+#include "rpc/muon_rpc.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,7 +19,108 @@
 #include <string>
 #include <vector>
 
+namespace cardio {
+class dispatcher;
+}
+
 struct MuonPluginRuntimeImpl;
+
+/** Identifies the producer of one portable runtime log message. */
+enum class MuonPluginRuntimeLogSource {
+  /** Message produced by the runtime itself. */
+  Runtime,
+
+  /** Message produced through the native plugin logging helper. */
+  Plugin,
+};
+
+/** One platform-provided native plugin metadata block. */
+struct MuonPluginRuntimePlatformPlugin {
+  /** C ABI metadata registered as an internal plugin. */
+  const muon_plugin_metadata* metadata = nullptr;
+
+  /** Diagnostic source name used in startup errors and warnings. */
+  std::string source;
+};
+
+/** One platform function exposed without a native plugin function pointer. */
+struct MuonPluginRuntimePlatformFunction {
+  /** Internal JavaScript function name. */
+  std::string js_name;
+
+  /** Public function name used by allow filtering. */
+  std::string public_name;
+
+  /** Function argument metadata. */
+  std::vector<MuonTypeMetadata> arg_types;
+
+  /** Promise resolution type. */
+  MuonTypeMetadata return_type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
+
+  /** Nonzero adapter-defined route identifier for this function. */
+  uint32_t route_id = 0;
+};
+
+/** One platform namespace and its JavaScript-visible functions. */
+struct MuonPluginRuntimePlatformNamespace {
+  /** Dot-notation namespace exposed to JavaScript. */
+  std::string plugin_namespace;
+
+  /** Optional JavaScript wrapper setup script. */
+  std::string setup_script;
+
+  /** Platform functions in renderer exposure order. */
+  std::vector<MuonPluginRuntimePlatformFunction> functions;
+};
+
+/** Platform resources produced while internal plugins are initialized. */
+struct MuonPluginRuntimePlatformInitialization {
+  /** Native metadata blocks to register with the internal policy. */
+  std::vector<MuonPluginRuntimePlatformPlugin> plugins;
+
+  /** Platform operation cancellation callbacks owned by the adapter. */
+  std::vector<std::function<void(int owner_id)>>
+      cancel_owner_operations;
+};
+
+/** Optional platform adapter used by desktop built-in plugins and routes. */
+struct MuonPluginRuntimePlatformAdapter {
+  /** Namespace paths external plugins may not claim. */
+  std::vector<std::string> reserved_namespaces;
+
+  /** Platform routes exposed through the internal plugin policy. */
+  std::vector<MuonPluginRuntimePlatformNamespace> namespaces;
+
+  /**
+   * Initializes platform native plugins for one internal load entry.
+   *
+   * @param context Plugin context backed by the portable runtime helpers.
+   * @param initialization Receives metadata and cancellation callbacks.
+   * @param error_message Receives a deterministic initialization error.
+   * @return true when platform resources are initialized.
+   */
+  std::function<bool(
+      const muon_plugin_init_context* context,
+      MuonPluginRuntimePlatformInitialization* initialization,
+      std::string* error_message)> initialize;
+
+  /** Shuts down all resources created by initialize. */
+  std::function<void()> shutdown;
+
+  /** Releases platform state associated with a renderer context. */
+  std::function<void(int renderer_context_id)> release_context;
+
+  /**
+   * Inspects a loaded library for optional platform-owned integration hooks.
+   *
+   * @param handle Opaque library handle returned by the platform loader.
+   * @param cancel_owner_operations Receives owner cleanup callbacks.
+   */
+  std::function<void(
+      void* handle,
+      std::vector<std::function<void(int owner_id)>>*
+          cancel_owner_operations)> library_loaded;
+};
 
 #if defined(MUON_TEST_BUILD)
 /** Test-build counts for one function wrapper lifecycle scope. */
@@ -46,7 +143,7 @@ struct MuonFunctionWrapperDiagnostics {
   /** Counts for the requesting browser, frame, and V8 context. */
   MuonFunctionWrapperDiagnosticCounts owner;
 
-  /** Counts across this browser-process plugin runtime. */
+  /** Counts across this host-process plugin runtime. */
   MuonFunctionWrapperDiagnosticCounts global;
 
   /** Whether libffi closure tracking is compiled into this build. */
@@ -63,19 +160,17 @@ struct MuonFunctionWrapperDiagnostics {
 
   /** Highest tracked libffi closure live count. */
   uint64_t ffi_closure_high_water = 0;
+
+  /** Executable address of one live renderer-source closure, when present. */
+  uintptr_t ffi_closure_executable_address = 0;
+
+  /** Renderer callback invocations waiting for a JavaScript result. */
+  size_t pending_renderer_function_calls = 0;
+
+  /** Whether tra-ffic has deferred finalization work awaiting its dispatcher. */
+  bool traffic_tasks_pending = false;
 };
 #endif
-
-/**
- * Browser registration for one renderer-owned plugin function proxy wrapper.
- */
-struct MuonPluginFunctionProxyRegistration {
-  /** Runtime-wide proxy entry identifier. */
-  uint32_t proxy_id = 0;
-
-  /** Unique decimal token for this renderer wrapper lease. */
-  std::string lease_token;
-};
 
 /**
  * String key-value plugin configuration entry prepared from muon.json.
@@ -99,6 +194,15 @@ struct MuonPluginRuntimeLoadEntry {
    * Plugin file stem, or the reserved internal plugin name.
    */
   std::string plugin;
+  /**
+   * Whether library_locator names a packaged library instead of a desktop
+   * filesystem entry.
+   */
+  bool has_library_locator = false;
+  /**
+   * Platform loader key, such as an Android package soname.
+   */
+  std::string library_locator;
   /**
    * Whether library_directory overrides the runtime-wide plugin directory.
    */
@@ -134,24 +238,58 @@ struct MuonPluginRuntimeLoadEntry {
 };
 
 /**
- * Renderer context that initiated one plugin call.
+ * Platform services required by the CEF-independent plugin runtime.
  */
-struct MuonPluginInvocationContext {
-  int browser_id = 0;
-  std::string frame_id;
-  int renderer_context_id = 0;
-  CefRefPtr<CefFrame> frame;
+struct MuonPluginRuntimeServices {
+  /** Dispatcher that serializes this runtime's plugin work. */
+  cardio::dispatcher* dispatcher = nullptr;
+
+  /** Returns whether the caller is on the serialized runtime owner thread. */
+  std::function<bool()> is_owner_thread;
+
+  /** Posts work to the serialized runtime owner thread. */
+  std::function<bool(std::function<void()> task)> post_owner_task;
+
+  /** Allocates transport-capable writable binary storage. */
+  std::function<std::shared_ptr<MuonRpcBufferStorage>(
+      size_t size,
+      std::string* error_message)> allocate_buffer;
+
+  /** Returns whether an RPC owner can currently receive host messages. */
+  std::function<bool(const MuonRpcOwner& owner)> is_owner_available;
+
+  /** Sends one typed host-to-renderer RPC message. */
+  std::function<bool(const MuonRpcMessage& message,
+                     std::string* error_message)> send_message;
+
+  /** Sends a runtime or plugin message to the platform log sink. */
+  std::function<void(MuonPluginRuntimeLogSource source,
+                     muon_log_level level,
+                     const std::string& message)> emit_log;
+
+  /** Opens a platform library locator and returns its opaque handle. */
+  std::function<void*(const std::string& locator,
+                      std::string* error_message)> open_library;
+
+  /** Resolves one symbol from an opened platform library. */
+  std::function<void*(void* handle, const char* symbol)> find_symbol;
+
+  /** Closes one opened platform library handle. */
+  std::function<void(void* handle)> close_library;
+
+  /** Optional desktop or mobile platform built-in adapter. */
+  std::shared_ptr<MuonPluginRuntimePlatformAdapter> platform_adapter;
 };
 
 /**
- * Browser-process runtime that owns plugin libraries and invokes functions.
+ * Host-process runtime that owns plugin libraries and invokes functions.
  */
 class MuonPluginRuntime final {
  public:
   /**
    * Completion callback used after a native plugin call finishes.
    */
-  using Completion = std::function<void(const MuonPluginCallResult& result)>;
+  using Completion = std::function<void(const MuonRpcCallResult& result)>;
 
   /**
    * Completion callback used after all loaded plugins finish stopping.
@@ -163,9 +301,11 @@ class MuonPluginRuntime final {
    *
    * @param plugin_directory Directory containing plugin shared libraries.
    * @param plugins Explicit plugin load entries.
+   * @param services Platform thread, transport, and buffer services.
    */
   MuonPluginRuntime(std::filesystem::path plugin_directory,
-                    std::vector<MuonPluginRuntimeLoadEntry> plugins);
+                    std::vector<MuonPluginRuntimeLoadEntry> plugins,
+                    MuonPluginRuntimeServices services);
 
   /**
    * Stops pending plugin work and unloads plugin libraries.
@@ -176,6 +316,11 @@ class MuonPluginRuntime final {
    * Returns metadata for all JavaScript-visible functions.
    */
   const std::vector<MuonFunctionMetadata>& GetFunctions() const;
+
+  /**
+   * Returns metadata for all JavaScript-visible namespaces.
+   */
+  const std::vector<MuonNamespaceMetadata>& GetNamespaces() const;
 
   /**
    * Returns true when plugin startup validation succeeded.
@@ -191,133 +336,90 @@ class MuonPluginRuntime final {
    * Stops loaded plugins asynchronously.
    *
    * Repeated calls are coalesced. Every supplied completion runs on the
-   * browser UI thread after all plugin stop callbacks have completed.
+   * runtime owner thread after all plugin stop callbacks have completed.
    *
    * @param completion Callback invoked after plugin shutdown completes.
    */
   void Stop(StopCompletion completion);
 
   /**
-   * Creates the renderer startup metadata dictionary.
-   */
-  CefRefPtr<CefDictionaryValue> CreateRendererMetadata() const;
-
-  /**
-   * Returns the built-in browser operation for a function id.
+   * Returns the adapter-defined platform route for a function id.
    *
    * @param function_id Renderer-visible function id.
-   * @return Browser operation kind, or None for non-browser functions.
+   * @return Nonzero platform route identifier, or zero for plugin functions.
    */
-  MuonBuiltinBrowserFunctionKind GetBuiltinBrowserFunctionKind(
-      uint32_t function_id) const;
+  uint32_t GetPlatformFunctionRouteId(uint32_t function_id) const;
 
   /**
-   * Cancels modal filesystem dialogs owned by the given browser.
+   * Cancels adapter-owned operations associated with the given owner.
    *
-   * @param owner_browser_id CEF browser identifier for the opener window.
+   * @param owner_id Platform owner identifier to release.
    */
-  void CancelFsDialogsForOwner(int owner_browser_id);
+  void CancelPlatformOperationsForOwner(int owner_id);
 
   /**
-   * Invokes a plugin function from browser-process IPC payload.
+   * Resolves the argument types required to decode one invocation.
    *
-   * @param function_id Function id assigned by this runtime.
-   * @param encoded_args CEF list containing encoded JavaScript arguments.
-   * @param completion Completion callback that runs on the browser UI thread.
+   * Proxy calls are accepted only when the owner and wrapper lease match.
+   *
+   * @param request Invocation routing metadata; arguments may be empty.
+   * @param argument_types Receives the recursive argument types.
+   * @param error_message Receives a validation diagnostic.
+   * @return true when the target exists and is callable by the owner.
    */
-  void Invoke(const MuonPluginInvocationContext& context,
-              uint32_t function_id,
-              int call_id,
-              CefRefPtr<CefListValue> encoded_args,
-              std::shared_ptr<MuonSharedBufferPayload> shared_payload,
-              Completion completion);
+  bool GetCallArgumentTypes(const MuonRpcCallRequest& request,
+                            std::vector<MuonTypeMetadata>* argument_types,
+                            std::string* error_message) const;
 
   /**
-   * Invokes a plugin-owned function proxy from renderer-process IPC.
+   * Invokes a fully decoded plugin or plugin-proxy request.
    *
-   * @param context Renderer context that owns the wrapper lease.
-   * @param proxy_id Runtime proxy entry identifier.
-   * @param lease_token Unique wrapper lease token.
-   * @param call_id Renderer call identifier.
-   * @param encoded_args CEF list containing encoded JavaScript arguments.
-   * @param shared_payload Optional shared-buffer argument payload.
-   * @param completion Completion callback that runs on the browser UI thread.
+   * @param request Typed invocation owned by one renderer context.
+   * @param completion Completion callback on the runtime owner thread.
    */
-  void InvokeProxy(const MuonPluginInvocationContext& context,
-                   uint32_t proxy_id,
-                   const std::string& lease_token,
-                   int call_id,
-                   CefRefPtr<CefListValue> encoded_args,
-                   std::shared_ptr<MuonSharedBufferPayload> shared_payload,
-                   Completion completion);
+  void Invoke(const MuonRpcCallRequest& request, Completion completion);
+
+  /**
+   * Resolves the return type for one pending renderer-owned function call.
+   *
+   * @param owner Renderer context that owns the pending source function.
+   * @param call_id Runtime-wide renderer callback call identifier.
+   * @param return_type Receives the recursive return type.
+   * @return true when the pending call belongs to owner.
+   */
+  bool GetRendererFunctionReturnType(const MuonRpcOwner& owner,
+                                     uint32_t call_id,
+                                     MuonTypeMetadata* return_type) const;
 
   /**
    * Completes a renderer-owned function call initiated by a plugin pointer.
    *
-   * @param context Actual browser and frame that sent the result.
-   * @param message Renderer result process message.
-   * @param shared_payload Optional shared-buffer result payload.
+   * @param result Typed renderer result received from the platform adapter.
    */
   void CompleteRendererFunctionCall(
-      const MuonPluginInvocationContext& context,
-      CefRefPtr<CefProcessMessage> message,
-      std::shared_ptr<MuonSharedBufferPayload> shared_payload);
-
-  /**
-   * Creates a shared buffer process message for one plugin-owned buffer view.
-   */
-  bool CreateSharedBufferMessage(
-      const std::string& message_name,
-      int call_id,
-      size_t value_index,
-      const muon_buffer_view& buffer_view,
-      MuonCreatedSharedBufferMessage* created_message,
-      std::string* error_message);
-
-  /**
-   * Registers one plugin-owned function wrapper for the renderer context.
-   *
-   * @param context Renderer context that will own the wrapper lease.
-   * @param function Plugin-owned function pointer.
-   * @param function_type Function signature metadata.
-   * @param registration Receives the proxy id and unique wrapper lease token.
-   * @param error_message Receives a diagnostic on failure.
-   * @return true when one wrapper lease was registered.
-   */
-  bool RegisterPluginFunctionProxy(
-      const MuonPluginInvocationContext& context,
-      muon_native_function function,
-      const MuonTypeMetadata& function_type,
-      MuonPluginFunctionProxyRegistration* registration,
-      std::string* error_message);
+      const MuonRpcRendererFunctionResult& result);
 
   /**
    * Releases one plugin function proxy wrapper lease.
    *
-   * @param context Renderer context requesting the release.
-   * @param proxy_id Runtime proxy entry identifier.
-   * @param lease_token Unique wrapper lease token.
+   * @param release Typed owner and wrapper lease to release.
    */
   void ReleasePluginFunctionProxy(
-      const MuonPluginInvocationContext& context,
-      uint32_t proxy_id,
-      const std::string& lease_token);
+      const MuonRpcPluginProxyRelease& release);
 
   /**
    * Notifies loaded plugins and releases function sources owned by a renderer
    * V8 context.
    *
-   * @param context Renderer context that was released.
-   * @param renderer_context_id Id assigned by the renderer process.
+   * @param release Typed renderer context release notification.
    */
-  void ReleaseFunctionContext(const MuonPluginInvocationContext& context,
-                              int renderer_context_id);
+  void ReleaseFunctionContext(const MuonRpcContextReleased& release);
 
   /**
    * Releases function sources and proxy leases owned by one browser frame.
    *
    * @param browser_id Browser whose frame was destroyed.
-   * @param frame_id Frame identifier assigned by CEF.
+   * @param frame_id Platform frame identifier.
    */
   void ReleaseFunctionFrame(int browser_id, const std::string& frame_id);
 
@@ -332,11 +434,11 @@ class MuonPluginRuntime final {
   /**
    * Returns test-only function wrapper lifecycle diagnostics.
    *
-   * @param context Actual browser, frame, and renderer context owner.
+   * @param owner Browser, frame, and renderer context owner.
    * @return Current owner, global, and libffi closure counts.
    */
   MuonFunctionWrapperDiagnostics GetFunctionWrapperDiagnostics(
-      const MuonPluginInvocationContext& context) const;
+      const MuonRpcOwner& owner) const;
 #endif
 
  private:
@@ -351,8 +453,9 @@ std::filesystem::path ResolveMuonPluginDirectory(
     const std::filesystem::path& plugin_path);
 
 /**
- * Creates the browser-process plugin runtime.
+ * Creates the host-process plugin runtime.
  */
 std::shared_ptr<MuonPluginRuntime> CreateMuonPluginRuntime(
     std::filesystem::path plugin_path,
-    std::vector<MuonPluginRuntimeLoadEntry> plugins);
+    std::vector<MuonPluginRuntimeLoadEntry> plugins,
+    MuonPluginRuntimeServices services);

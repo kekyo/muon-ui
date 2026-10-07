@@ -1,5 +1,7 @@
 # muon.jsonリファレンス
 
+Android固有の`android`節、共通設定の対応範囲、署名の指定は[Androidアプリのビルド・配布](./android.md)を参照してください。以下のCEF設定とNode.js sidecarはdesktop版を対象とします。
+
 `muon.json` は、muonの動作を決定し、いくつかの機能はこのファイルでのみ決定出来ます。
 特に、動作を許可するホワイトリストは、プログラマブルに変更出来ません。
 

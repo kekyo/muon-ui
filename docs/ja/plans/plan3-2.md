@@ -61,9 +61,9 @@ Android WebViewがService Workerの一部を実装していることと、ブラ
 
 ## 現行QuickJS実装はまだこの役割を果たさない
 
-現在のQuickJS Serviceは、Activity生成時にWebView bridgeからbindされます。muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonActivity.java:107
+現在のQuickJS Serviceは、Activity生成時にWebView bridgeからbindされます。muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java:107
 
-Activity破棄時にはruntimeをすべてshutdownしてunbindします。muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonJavaScriptRuntimeBridge.java:310
+Activity破棄時にはruntimeをすべてshutdownしてunbindします。muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonJavaScriptRuntimeBridge.java:310
 
 したがって現在は、
 
@@ -306,9 +306,9 @@ Androidで「インアクティブ」は一つの状態ではありません。
 
 Androidはbackground processを必要に応じてkillでき、`onDestroy()`が必ず呼ばれる保証もありません。[Android process lifecycle](https://developer.android.com/guide/components/activities/process-lifecycle)
 
-現在のMuon試作では、Activityの`onDestroy()`でWebViewを明示的に`destroy()`しています。[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonActivity.java:318)
+現在のMuon試作では、Activityの`onDestroy()`でWebViewを明示的に`destroy()`しています。[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java:318)
 
-次のActivity生成では新しいWebViewを作り、ページを最初から`loadUrl()`します。[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonActivity.java:60)
+次のActivity生成では新しいWebViewを作り、ページを最初から`loadUrl()`します。[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java:60)
 
 したがって製品契約としては、JS instanceとcallbackは一時的なものとして扱うべきです。background移行後も同じinstanceが残ることは最適化として利用できますが、配送保証の根拠にはできません。
 

@@ -23,6 +23,7 @@
     "images/vscode.png"
   ],
   "workspaces": [
+    "muon-android",
     "muon-android-prototype",
     "muon-builder",
     "muon-node",

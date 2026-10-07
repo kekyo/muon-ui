@@ -9,8 +9,8 @@ import {
   createMuonAndroidSimpleApi,
   expandMuonAndroidFunctionAllows,
   muonAndroidBuiltinFunctionPaths,
-} from '../src/android-api.js';
-import type { MuonWebViewRpcClient } from '../src/webview-rpc.js';
+} from '../src/renderer/android-api.js';
+import type { MuonWebViewRpcClient } from '../src/renderer/webview-rpc.js';
 
 const expectedFunctionPaths = [
   'muon.browser.reload',

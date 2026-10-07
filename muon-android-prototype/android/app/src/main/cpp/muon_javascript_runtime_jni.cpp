@@ -383,7 +383,7 @@ static bool initialize_java_http_bridge(JNIEnv* environment) {
     return false;
   }
   auto local_class =
-      environment->FindClass("dev/muon/prototype/MuonJavaScriptHttpClient");
+      environment->FindClass("dev/muon/runtime/MuonJavaScriptHttpClient");
   if (local_class == nullptr) {
     environment->ExceptionClear();
     throw_illegal_state(environment,
@@ -3352,7 +3352,7 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
  * @param filesystem_root App-private filesystem root.
  */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeStart(
+Java_dev_muon_runtime_MuonJavaScriptRuntimeService_nativeStart(
     JNIEnv* environment, jclass service_class, jstring runtime_id,
     jint file_descriptor, jstring runtime_source, jstring backend_source,
     jstring filesystem_root) {
@@ -3435,7 +3435,7 @@ Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeStart(
  * @param runtime_id Logical runtime identifier.
  */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeShutdown(
+Java_dev_muon_runtime_MuonJavaScriptRuntimeService_nativeShutdown(
     JNIEnv* environment, jclass service_class, jstring runtime_id) {
   (void)service_class;
   auto runtime_id_value = get_jni_string(environment, runtime_id);
@@ -3462,7 +3462,7 @@ Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeShutdown(
  * @param service_class MuonJavaScriptRuntimeService class object.
  */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeShutdownAll(
+Java_dev_muon_runtime_MuonJavaScriptRuntimeService_nativeShutdownAll(
     JNIEnv* environment, jclass service_class) {
   (void)environment;
   (void)service_class;
@@ -3493,7 +3493,7 @@ Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeShutdownAll(
  * @param data Optional response body chunk.
  */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonJavaScriptHttpClient_nativeOnHttpEvent(
+Java_dev_muon_runtime_MuonJavaScriptHttpClient_nativeOnHttpEvent(
     JNIEnv* environment, jclass client_class, jstring runtime_id,
     jlong identifier, jstring type, jstring payload, jbyteArray data) {
   (void)client_class;
@@ -3548,7 +3548,7 @@ Java_dev_muon_prototype_MuonJavaScriptHttpClient_nativeOnHttpEvent(
  * @return Number of live QuickJS runtimes.
  */
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeGetRuntimeCount(
+Java_dev_muon_runtime_MuonJavaScriptRuntimeService_nativeGetRuntimeCount(
     JNIEnv* environment, jclass service_class) {
   (void)environment;
   (void)service_class;
@@ -3564,7 +3564,7 @@ Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeGetRuntimeCount(
  * @return QuickJS release version.
  */
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_muon_prototype_MuonJavaScriptRuntimeService_nativeGetEngineVersion(
+Java_dev_muon_runtime_MuonJavaScriptRuntimeService_nativeGetEngineVersion(
     JNIEnv* environment, jclass service_class) {
   (void)service_class;
   return environment->NewStringUTF(kQuickJsVersion);

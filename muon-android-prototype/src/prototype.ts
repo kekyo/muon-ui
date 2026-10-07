@@ -13,10 +13,10 @@ import {
   createMuonWebViewRpcTransport,
   installMuonWebViewCapabilityBridge,
   type MuonWebViewJavaScriptBridge,
-} from './webview-rpc.js';
-import { createMuonAndroidSimpleApi } from './android-api.js';
-import { installMuonAndroidNativePluginApi } from './native-plugin-api.js';
-import { readMuonAndroidRendererMetadata } from './native-plugin-metadata.js';
+} from '../../muon-android/src/renderer/webview-rpc.js';
+import { createMuonAndroidSimpleApi } from '../../muon-android/src/renderer/android-api.js';
+import { installMuonAndroidNativePluginApi } from '../../muon-android/src/renderer/native-plugin-api.js';
+import { readMuonAndroidRendererMetadata } from '../../muon-android/src/renderer/native-plugin-metadata.js';
 
 /** Testable prototype operations that require direct RPC client controls. */
 export interface MuonAndroidPrototypeOperations {

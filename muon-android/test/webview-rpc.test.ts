@@ -11,7 +11,7 @@ import {
   encodeMuonWebViewRpcBinaryFrame,
   installMuonWebViewCapabilityBridge,
   type MuonWebViewRpcTransport,
-} from '../src/webview-rpc.js';
+} from '../src/renderer/webview-rpc.js';
 
 describe('muon WebView RPC client', () => {
   it('matches successful and failed native results to their promises', async () => {

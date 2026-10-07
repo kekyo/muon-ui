@@ -11,7 +11,7 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
         <activity
-            android:name=".MuonActivity"
+            android:name="dev.muon.runtime.MuonActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -19,7 +19,7 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".MuonJavaScriptRuntimeService"
+            android:name="dev.muon.runtime.MuonJavaScriptRuntimeService"
             android:exported="false"
             android:process=":muon_javascript" />
     </application>

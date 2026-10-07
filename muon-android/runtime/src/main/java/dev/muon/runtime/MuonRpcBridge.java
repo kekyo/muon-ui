@@ -4,7 +4,9 @@
  * https://github.com/kekyo/muon-ui
  */
 
-package dev.muon.prototype;
+package dev.muon.runtime;
+
+import android.app.Activity;
 
 import android.net.Uri;
 import android.os.Handler;
@@ -165,7 +167,13 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     }
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final MuonActivity activity;
+    interface Listener {
+        void onNativeHostReady(@NonNull MuonRpcBridge source);
+        void onNativeHostStartupFailed(
+                @NonNull MuonRpcBridge source, @NonNull String diagnostic);
+    }
+
+    private final Listener listener;
     private final Map<Integer, PendingBinaryCall> pendingBinaryCalls = new HashMap<>();
     private final Map<Integer, PendingBinaryRendererResult> pendingBinaryRendererResults =
             new HashMap<>();
@@ -182,9 +190,10 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private boolean nativeHostStartupFailed;
 
     MuonRpcBridge(
-            @NonNull MuonActivity activity,
-            @NonNull WebView webView) {
-        this.activity = activity;
+            @NonNull Activity activity,
+            @NonNull WebView webView,
+            @NonNull Listener listener) {
+        this.listener = listener;
         platformService = new MuonAndroidPlatformService(activity, webView);
         try {
             nativeHandle = nativeCreateHost(this);
@@ -209,7 +218,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             @NonNull Uri sourceOrigin,
             boolean isMainFrame,
             @NonNull JavaScriptReplyProxy currentReplyProxy) {
-        if (!isMainFrame || !MuonActivity.TRUSTED_ORIGIN.equals(sourceOrigin.toString())) {
+        if (!isMainFrame || !MuonAppConfig.TRUSTED_ORIGIN.equals(sourceOrigin.toString())) {
             return;
         }
         replyProxy = currentReplyProxy;
@@ -636,7 +645,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         }
         rendererMetadataJson = metadataJson;
         nativeHostReady = true;
-        activity.onNativeHostReady(this);
+        listener.onNativeHostReady(this);
     }
 
     @SuppressWarnings("unused")
@@ -645,7 +654,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             return;
         }
         nativeHostStartupFailed = true;
-        activity.onNativeHostStartupFailed(this, diagnostic);
+        listener.onNativeHostStartupFailed(this, diagnostic);
     }
 
     @SuppressWarnings("unused")

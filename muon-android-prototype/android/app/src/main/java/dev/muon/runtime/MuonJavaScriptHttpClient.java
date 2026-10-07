@@ -4,7 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 
-package dev.muon.prototype;
+package dev.muon.runtime;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

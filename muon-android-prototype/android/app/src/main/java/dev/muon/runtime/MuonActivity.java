@@ -4,7 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 
-package dev.muon.prototype;
+package dev.muon.runtime;
 
 import android.app.Activity;
 import android.content.pm.ApplicationInfo;
@@ -32,9 +32,9 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /** Hosts the Android WebView backend prototype. */
-public final class MuonActivity extends Activity {
+public final class MuonActivity extends Activity implements MuonRpcBridge.Listener {
     static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
-    private static final String APP_URL = TRUSTED_ORIGIN + "/index.html";
+    private String appUrl;
     private static final String RPC_OBJECT_NAME = "muonAndroidRpc";
     private static final String JAVASCRIPT_RUNTIME_OBJECT_NAME =
             "muonAndroidJavaScriptRuntime";
@@ -71,6 +71,7 @@ public final class MuonActivity extends Activity {
             throw new IllegalStateException("WebView document-start scripts are unavailable");
         }
 
+        appUrl = MuonAppConfig.load(this).startPage;
         assetRequestHandler = new MuonAssetRequestHandler(this);
         assetRequestHandler.configureServiceWorkers();
         webView = new WebView(this);
@@ -97,7 +98,7 @@ public final class MuonActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 finishedPageUrls.add(url);
-                if (APP_URL.equals(url)) {
+                if (appUrl.equals(url)) {
                     Log.i(LOG_TAG, "Muon page ready: " + url);
                     pageReady.countDown();
                 }
@@ -105,7 +106,7 @@ public final class MuonActivity extends Activity {
         });
 
         try {
-            rpcBridge = new MuonRpcBridge(this, webView);
+            rpcBridge = new MuonRpcBridge(this, webView, this);
             javaScriptRuntimeBridge = new MuonJavaScriptRuntimeBridge(this);
         } catch (RuntimeException error) {
             showStartupFailure(error.getMessage() == null
@@ -118,13 +119,13 @@ public final class MuonActivity extends Activity {
         }
     }
 
-    void onNativeHostReady(@NonNull MuonRpcBridge source) {
+    public void onNativeHostReady(@NonNull MuonRpcBridge source) {
         if (rpcBridge == source) {
             startPage(source);
         }
     }
 
-    void onNativeHostStartupFailed(
+    public void onNativeHostStartupFailed(
             @NonNull MuonRpcBridge source,
             @NonNull String diagnostic) {
         if (rpcBridge == source) {
@@ -162,7 +163,7 @@ public final class MuonActivity extends Activity {
 
         setContentView(webView);
         pageLoadStarted = true;
-        webView.loadUrl(APP_URL);
+        webView.loadUrl(appUrl);
     }
 
     private void showStartupFailure(@NonNull String diagnosticText) {

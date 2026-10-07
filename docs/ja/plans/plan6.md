@@ -45,9 +45,9 @@ QuickJSは、利用者のJavaScriptコードをどのようにビルド・同梱
 
 - 公開ビルドと配布形式は[targets.ts](../../../muon-ui/src/targets.ts)、[build-sequence.ts](../../../muon-ui/src/build-sequence.ts)、[build.ts](../../../muon-ui/src/build.ts)、[pack.ts](../../../muon-ui/src/pack.ts)、[vite.ts](../../../muon-ui/src/vite.ts)を参照する。
 - npm配布の入口は[muon-ui/package.json](../../../muon-ui/package.json)と[build_package.sh](../../../build_package.sh)を参照する。
-- Androidの固定設定と署名は[app/build.gradle.kts](../../../muon-android-prototype/android/app/build.gradle.kts)、初期化処理は[prototype.ts](../../../muon-android-prototype/src/prototype.ts)と[MuonActivity.java](../../../muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonActivity.java)を参照する。
+- Androidの固定設定と署名は[app/build.gradle.kts](../../../muon-android-prototype/android/app/build.gradle.kts)、初期化処理は[prototype.ts](../../../muon-android-prototype/src/prototype.ts)と[MuonActivity.java](../../../muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java)を参照する。
 - リポジトリ依存は[build-native-dependencies.mjs](../../../muon-android-prototype/scripts/build-native-dependencies.mjs)、[CMakeLists.txt](../../../muon-android-prototype/android/app/src/main/cpp/CMakeLists.txt)、[generate-android-plugin-registry.mjs](../../../muon-android-prototype/scripts/generate-android-plugin-registry.mjs)を参照する。
-- QuickJSの読み込みは[MuonJavaScriptRuntimeService.java](../../../muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonJavaScriptRuntimeService.java)を参照する。
+- QuickJSの読み込みは[MuonJavaScriptRuntimeService.java](../../../muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonJavaScriptRuntimeService.java)を参照する。
 - 検証方法は[試作README](../../../muon-android-prototype/README.md)、[試作package.json](../../../muon-android-prototype/package.json)、[release検証スクリプト](../../../muon-android-prototype/scripts/test-android-release-packages.mjs)を参照する。
 
 生成済みAPK/AABが作業環境に存在していても、現在のブランチに対する成功結果とはみなさない。調査時に接続端末はなく、端末テストを再実行していない。旧計画に記録されたWindows E2Eの失敗やテスト件数も過去の情報であり、ステップ0で現在の結果を確認する。
@@ -158,7 +158,7 @@ application ID、表示名、versionCode/versionName、アイコン、ABI、必�
 
 アセットの配信先とRPCを受け付けるoriginを同じ設定から生成する。不明アセットや不正なリクエストを外部ネットワークへ転送せず、RPCは信頼済みoriginのmain frameからだけ受け付ける。
 
-Androidで使えないdesktop設定はビルド時に診断する。CEF版の`network.allow`などをAndroidでも同じように強制できるとは説明しない。現在の方針と制約は[Android設定検証](../../../muon-android-prototype/src/android-config.ts)、[ネットワーク制約の調査](../../../filter-limitation.md)、[利用者向け制約](../limitation.md)を参照して整理する。
+Androidで使えないdesktop設定はビルド時に診断する。CEF版の`network.allow`などをAndroidでも同じように強制できるとは説明しない。現在の方針と制約は[Android設定検証](../../../muon-android/src/renderer/android-config.ts)、[ネットワーク制約の調査](../../../filter-limitation.md)、[利用者向け制約](../limitation.md)を参照して整理する。
 
 権限は有効な機能から導出する。`ACCESS_LOCAL_NETWORK`などの実行時権限は、Manifestへ記載するだけで使用できる前提にしない。必要な構成だけで要求し、拒否時の扱いを決める。[Androidのローカルネットワーク権限](https://developer.android.com/privacy-and-security/local-network-permission)
 
@@ -350,3 +350,11 @@ FCMの通知配送、QuickJSの正式な実行APIと利用者コードの同梱�
 - ANDROID_SERIALを各端末へ指定したnpm run test:androidとnpm run test:android:pixel6は成功した。各端末でinstrumentation 44件とrelease APK・AAB由来APKSの検証が成功した。
 - ルートnpm testはmuon-builderのtest_launcher_progress.shでWindows用ハーネス終了後のwineserver -wが終了しなかった。テスト専用prefixのサービスがXサーバー終了後も残っていることを確認し、約10分待機後に当該テストを中断した。他のworkspaceの実行結果は別途追記する。
 - この問題はテストの終了処理として独立修正する。ハーネスの終了コードを確認した後、専用prefixのサービスを停止して待機する。Windows製品コードやWine本体は変更しない。
+
+### ステップ1の実施
+
+共通renderer、基本Android API、RPC、JNIとprocess runtimeをmuon-androidへ移した。Java/JNIの内部名はdev.muon.runtimeへ統一した。試作のActivity、QuickJS、テスト用画面は検証アプリに残した。共通CMakeへ依存先と生成registryの場所を明示して渡す構成にした。
+
+muon/config.jsonのアプリ設定を基本APIから取得するテストを追加した。追加直後はapplicationSettingが返らず失敗し、設定の読み込み実装後に成功した。共通側29件、試作側23件のVitestと、エミュレーター・Pixel 6のinstrumentation各44件が成功した。アプリIDはdev.muon.prototypeのままで内部Java名を変更できることも確認した。
+
+端末テストのコマンドがrelease APKを作り直さず、古いAPKを使用する問題を今回のクラス名変更で再現した。test:androidとtest:android:pixel6へassembleReleaseを加え、現行ソースから作るようにした。debug APKのSHA-256は8ddb8a5d9c1fd9f7ffe7b1289662e372d8565d4404af692f9db9685b241a346c、release APKは15200df70d1592e3def847fe25bac51b318aa89b4209ecfce87cb2ad049cc82b。

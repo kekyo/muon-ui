@@ -4,7 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 
-package dev.muon.prototype;
+package dev.muon.runtime;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -261,6 +261,7 @@ public final class MuonActivityTest {
             JSONObject config = new JSONObject(result.getString("value"));
             assertEquals("android", config.getString("channel"));
             assertEquals("webview", config.getString("backend"));
+            assertEquals("prototype-fixture", config.getString("applicationSetting"));
         }
     }
 

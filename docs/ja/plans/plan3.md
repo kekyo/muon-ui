@@ -46,7 +46,7 @@ Android VMで動く試験用アプリを増やすこと自体は、この計画�
 - 公開targetの定義: [muon-ui/src/targets.ts](muon-ui/src/targets.ts)
 - build処理: [muon-ui/src/build.ts](muon-ui/src/build.ts)
 - pack処理: [muon-ui/src/pack.ts](muon-ui/src/pack.ts)
-- Android設定の試作: [muon-android-prototype/src/android-config.ts](muon-android-prototype/src/android-config.ts)
+- Android設定の試作: [muon-android/src/renderer/android-config.ts](muon-android/src/renderer/android-config.ts)
 - Android試作のビルドおよびテスト: [muon-android-prototype/README.md](muon-android-prototype/README.md)
 
 ## 4. 課題A: Androidの正式ビルドとパッキング

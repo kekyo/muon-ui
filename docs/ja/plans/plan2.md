@@ -8,7 +8,7 @@
 
 - 公開targetとbuild/pack実装: [muon-ui/src/targets.ts](muon-ui/src/targets.ts)、[muon-ui/src/build.ts](muon-ui/src/build.ts)、[muon-ui/src/pack.ts](muon-ui/src/pack.ts)
 - Android試作の実装と実行方法: [muon-android-prototype](muon-android-prototype)、[muon-android-prototype/README.md](muon-android-prototype/README.md)
-- Android APIの実装と方針: [muon-android-prototype/src/android-api.ts](muon-android-prototype/src/android-api.ts)、[android-api-compatibility.md](android-api-compatibility.md)
+- Android APIの実装と方針: [muon-android/src/renderer/android-api.ts](muon-android/src/renderer/android-api.ts)、[android-api-compatibility.md](android-api-compatibility.md)
 - WebViewネットワークの検証記録: [filter-limitation.md](filter-limitation.md)
 - NDKプラグインの実装と端末検証記録: [plan.md](plan.md)
 - 今回実行したリポジトリ全体テスト: `npm test`
@@ -52,7 +52,7 @@
 - CMakeとbuild scriptはrepository root、`muon-core`、`deps/cardio`、`deps/tra-ffic`などの相対配置を前提とする。
 - Android plugin registryは同repository内のC++ sourceだけを受け付ける。
 - アプリ名、version、icon、theme、permission、asset originなどは利用者設定から生成されない。
-- [android-config.ts](muon-android-prototype/src/android-config.ts)にはAndroid向け設定検証器があるが、合成済み`muon.json`を読み込む製品build pipelineには接続されていない。
+- [android-config.ts](muon-android/src/renderer/android-config.ts)にはAndroid向け設定検証器があるが、合成済み`muon.json`を読み込む製品build pipelineには接続されていない。
 
 このため、npmへpackした`muon-ui`だけをクリーンな利用者projectへ導入してAndroidアプリを生成することはできない。
 
@@ -94,7 +94,7 @@ QuickJS、libffi、bundletoolなどのdownloadはversionとSHA-256を固定し�
 
 ### 4.3 公開しているMuon API
 
-Android simple modeの組み込み公開リストは[android-api.ts](muon-android-prototype/src/android-api.ts)に限定される。
+Android simple modeの組み込み公開リストは[android-api.ts](muon-android/src/renderer/android-api.ts)に限定される。
 
 | namespace           | 実装済み関数                                                                                                                                                                                                                                             |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -108,7 +108,7 @@ Android simple modeの組み込み公開リストは[android-api.ts](muon-androi
 - `content://`、Storage Access Framework、shared storageとの接続はない。
 - `muon.launcher`、`muon.executor`、`muon.fs.dialogs`は公開しない。
 - desktop window、system tray、launcher updater、任意process起動、runtime外部library loadに相当するAPIは提供しない。
-- desktopと意味が異なる設定は[android-config.ts](muon-android-prototype/src/android-config.ts)で拒否または警告するが、この検証器はまだ製品buildへ接続されていない。
+- desktopと意味が異なる設定は[android-config.ts](muon-android/src/renderer/android-config.ts)で拒否または警告するが、この検証器はまだ製品buildへ接続されていない。
 
 ### 4.4 WebViewのネットワーク契約
 

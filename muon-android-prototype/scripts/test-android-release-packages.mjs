@@ -20,7 +20,7 @@ const releaseApk = join(
   'app-release.apk'
 );
 const packageName = 'dev.muon.prototype';
-const activityName = `${packageName}/.MuonActivity`;
+const activityName = `${packageName}/dev.muon.runtime.MuonActivity`;
 const pageReadyMarker =
   'Muon page ready: https://main.asset.muon.invalid/index.html';
 const serial = process.env.ANDROID_SERIAL;

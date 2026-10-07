@@ -4,10 +4,11 @@
  * https://github.com/kekyo/muon-ui
  */
 
-package dev.muon.prototype;
+package dev.muon.runtime;
 
 import android.app.Activity;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -47,6 +48,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private static final float MINIMUM_ZOOM = 0.25f;
     private static final float MAXIMUM_ZOOM = 5.0f;
 
+    private final JSONObject configValues;
     private Activity activity;
     private WebView webView;
     private final MuonAndroidFilesystemService filesystemService;
@@ -57,6 +59,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             @NonNull Activity activity,
             @NonNull WebView webView) {
         this.activity = activity;
+        configValues = MuonAppConfig.load(activity).values;
         this.webView = webView;
         filesystemService = new MuonAndroidFilesystemService(
                 new Handler(Looper.getMainLooper()));
@@ -173,11 +176,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         return result;
     }
 
-    @NonNull private static JSONObject createConfigValues() throws JSONException {
-        JSONObject result = new JSONObject();
-        result.put("channel", "android");
-        result.put("backend", "webview");
-        return result;
+    @NonNull private JSONObject createConfigValues() {
+        return configValues;
     }
 
     @NonNull private JSONObject createRuntimeInfo() throws JSONException {
@@ -193,7 +193,13 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         result.put("apiLevel", Build.VERSION.SDK_INT);
         result.put("abi", abi);
         result.put("applicationId", activity.getPackageName());
-        result.put("applicationVersion", BuildConfig.VERSION_NAME);
+        try {
+            PackageInfo application = activity.getPackageManager().getPackageInfo(
+                    activity.getPackageName(), 0);
+            result.put("applicationVersion", application.versionName);
+        } catch (PackageManager.NameNotFoundException error) {
+            throw new IllegalStateException("Installed application metadata is unavailable", error);
+        }
         result.put("webViewPackage", packageName == null ? "" : packageName);
         result.put("webViewVersion", versionName == null ? "" : versionName);
         return result;

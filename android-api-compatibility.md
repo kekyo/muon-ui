@@ -40,7 +40,7 @@
 
 ## 現在のAndroid実装状況
 
-現在の[Android試作](muon-android-prototype/android/app/src/main/cpp/muon_android_rpc_jni.cpp)には、共通RPCを経由する次の組み込みAPIを実装した。simple modeで公開する関数一覧は[Android APIメタデータ](muon-android-prototype/src/android-api.ts)を唯一の公開リストとし、一覧にない関数を動的に作成しない。
+現在の[Android試作](muon-android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)には、共通RPCを経由する次の組み込みAPIを実装した。simple modeで公開する関数一覧は[Android APIメタデータ](muon-android/src/renderer/android-api.ts)を唯一の公開リストとし、一覧にない関数を動的に作成しない。
 
 - `muon.browser`: `reload()`, fullscreen 3関数、zoom 3関数、`close()`
 - `muon.environments`: `getVariables()`, `getConfigValues()`, `getProcessId()`, `getRuntimeInfo()`
@@ -48,7 +48,7 @@
 
 `muon.launcher`、`muon.executor`、`muon.fs.dialogs`、Node.js sidecar、対応表で非対応またはAndroid向け別設計としたbrowser/environment関数は公開リストへ含めていない。`muon.fs.dialogs`は、先に`content://`を`muon.fs`で扱う契約を確定するまで公開しない。
 
-[Android設定検証器](muon-android-prototype/src/android-config.ts)は、Androidで意味を持たない値を拒否し、受理しても適用しないnetwork設定と`plugin.pages`を警告する。これは製品用Android build pipelineへ組み込むための検証プリミティブであり、現在の試作には合成済み`muon.json`を読み込むbuild pipeline自体はまだない。
+[Android設定検証器](muon-android/src/renderer/android-config.ts)は、Androidで意味を持たない値を拒否し、受理しても適用しないnetwork設定と`plugin.pages`を警告する。これは製品用Android build pipelineへ組み込むための検証プリミティブであり、現在の試作には合成済み`muon.json`を読み込むbuild pipeline自体はまだない。
 このため、`getConfigValues()`のrouteと型は実装済みだが、現在返す値は試作用に組み込んだ設定値である。製品buildで合成済み`muon.json`の`config`を渡す接続はbuild pipelineと同時に行う。
 
 現在のGradle設定は`x86_64`だけを対象としている。実機用`arm64-v8a`とbuild-time同梱NDKプラグインはplanのステップ5で扱う。

@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { validateMuonAndroidConfig } from '../src/android-config.js';
+import { validateMuonAndroidConfig } from '../src/renderer/android-config.js';
 
 describe('muon Android configuration', () => {
   it('accepts supported values and warns about unenforced desktop policies', () => {

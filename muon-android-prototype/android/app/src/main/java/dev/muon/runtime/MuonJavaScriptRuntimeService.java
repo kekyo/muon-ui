@@ -4,7 +4,9 @@
  * https://github.com/kekyo/muon-ui
  */
 
-package dev.muon.prototype;
+package dev.muon.runtime;
+
+import dev.muon.prototype.BuildConfig;
 
 import android.app.Service;
 import android.content.Intent;

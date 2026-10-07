@@ -19,7 +19,7 @@ Android WebView版では、CEF版の選択的なネットワーク許可規則�
 
 リリースビルドには`INTERNET`と`ACCESS_LOCAL_NETWORK`の権限を宣言しない。`android:usesCleartextTraffic`も`false`のままとする。計装テストはフィルタ自身の効果をOSの権限拒否と区別する必要があるため、デバッグビルドに限って両権限と平文HTTPを有効にする。
 
-実装は[MuonWebViewNetworkFilter.java](muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonWebViewNetworkFilter.java)に集約した。
+実装は[MuonWebViewNetworkFilter.java](muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonWebViewNetworkFilter.java)に集約した。
 
 ## 遮断に使う層
 
@@ -62,7 +62,7 @@ Android WebView版では、CEF版の選択的なネットワーク許可規則�
 | ローカルネットワーク | エミュレーターのプライベートIPv4アドレスへの`fetch`はサーバーへ到達しない | テストでは`ACCESS_LOCAL_NETWORK`を明示的に許可しており、OS権限ではなくフィルタが遮断した |
 | `data:image/` | 1ピクセルGIFを正常に読み込める | 固定許可リストの例外として維持する |
 
-この結果を固定する計装テストは[MuonNetworkFilterTest.java](muon-android-prototype/android/app/src/androidTest/java/dev/muon/prototype/MuonNetworkFilterTest.java)にある。コールバック範囲の観測には、リリースAPKへ入らないデバッグ専用の[MuonNetworkCapabilityProbeActivity.java](muon-android-prototype/android/app/src/debug/java/dev/muon/prototype/MuonNetworkCapabilityProbeActivity.java)を使用する。
+この結果を固定する計装テストは[MuonNetworkFilterTest.java](muon-android-prototype/android/app/src/androidTest/java/dev/muon/runtime/MuonNetworkFilterTest.java)にある。コールバック範囲の観測には、リリースAPKへ入らないデバッグ専用の[MuonNetworkCapabilityProbeActivity.java](muon-android-prototype/android/app/src/debug/java/dev/muon/runtime/MuonNetworkCapabilityProbeActivity.java)を使用する。
 
 ## CEF版との相違
 
@@ -399,13 +399,13 @@ https://appassets.androidplatform.net/assets/index.html
 
 これは可能で、現在の試作でもすでに実施しています。
 
-[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonActivity.java:90)では、ブリッジを次のoriginだけへ注入しています。
+[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java:90)では、ブリッジを次のoriginだけへ注入しています。
 
 ```text
 https://appassets.androidplatform.net
 ```
 
-さらに[MuonRpcBridge.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonRpcBridge.java:61)で、受信時にも次を検証しています。
+さらに[MuonRpcBridge.java](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java:61)で、受信時にも次を検証しています。
 
 - `sourceOrigin`がアプリ内アセットoriginと一致
 - `isMainFrame=true`
@@ -534,7 +534,7 @@ https://assets.muon.invalid/other/page.html
 
 そのため設計上は、ホスト全体をアプリ内アセット専用にし、`/main/`以外や存在しないアセットについても通常ネットワークへフォールバックさせず、ローカルで404または403を返す必要があります。`/main/`はストレージ名前空間であって、プラグインアクセスの境界ではありません。
 
-また、AndroidのWebMessageオブジェクトは一致するoriginのフレームに注入されます。現在の実装は[MuonRpcBridge.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/prototype/MuonRpcBridge.java:72)で`isMainFrame`を検査しているため、正確な保証は次の表現になります。
+また、AndroidのWebMessageオブジェクトは一致するoriginのフレームに注入されます。現在の実装は[MuonRpcBridge.java](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java:72)で`isMainFrame`を検査しているため、正確な保証は次の表現になります。
 
 > アプリ内アセットoriginのメインフレームから送信されたRPCだけを受理する
 

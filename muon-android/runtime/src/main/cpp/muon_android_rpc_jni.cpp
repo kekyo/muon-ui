@@ -1579,7 +1579,7 @@ static void CompleteWaitingAndroidRpcHostStartup(
 
 /** Creates the CEF-independent host used by one WebView context. */
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
+Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
     JNIEnv* environment,
     jclass bridge_type,
     jobject bridge) {
@@ -1627,7 +1627,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
   state->native_host_startup_failed = environment->GetMethodID(
       bridge_class, "onNativeHostStartupFailed", "(Ljava/lang/String;)V");
   const auto local_native_argument_class = environment->FindClass(
-      "dev/muon/prototype/MuonRpcBridge$NativeArgument");
+      "dev/muon/runtime/MuonRpcBridge$NativeArgument");
   if (local_native_argument_class != nullptr) {
     state->native_argument_class = static_cast<jclass>(
         environment->NewGlobalRef(local_native_argument_class));
@@ -1768,7 +1768,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCreateHost(
 
 /** Returns whether a waiting RPC host has attached to a running runtime. */
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeIsHostReady(
+Java_dev_muon_runtime_MuonRpcBridge_nativeIsHostReady(
     JNIEnv*,
     jclass,
     jlong handle) {
@@ -1780,7 +1780,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeIsHostReady(
 
 /** Returns plugin metadata captured before the WebView document starts. */
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeGetRendererMetadata(
+Java_dev_muon_runtime_MuonRpcBridge_nativeGetRendererMetadata(
     JNIEnv* environment,
     jclass,
     jlong handle) {
@@ -1793,7 +1793,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeGetRendererMetadata(
 
 /** Dispatches one decoded JavaScript call to the native RPC host. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeDispatchCall(
+Java_dev_muon_runtime_MuonRpcBridge_nativeDispatchCall(
     JNIEnv* environment,
     jclass,
     jlong handle,
@@ -1893,7 +1893,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeDispatchCall(
 
 /** Completes a plugin-initiated call to a renderer-owned function. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeCompleteRendererFunctionCall(
+Java_dev_muon_runtime_MuonRpcBridge_nativeCompleteRendererFunctionCall(
     JNIEnv* environment,
     jclass,
     jlong handle,
@@ -1946,7 +1946,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCompleteRendererFunctionCall(
 
 /** Releases one JavaScript wrapper lease for a plugin function proxy. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeReleasePluginProxy(
+Java_dev_muon_runtime_MuonRpcBridge_nativeReleasePluginProxy(
     JNIEnv* environment,
     jclass,
     jlong handle,
@@ -1965,7 +1965,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeReleasePluginProxy(
 
 /** Cancels one native invocation retained by the WebView context. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeCancelCall(
+Java_dev_muon_runtime_MuonRpcBridge_nativeCancelCall(
     JNIEnv*,
     jclass,
     jlong handle,
@@ -1982,7 +1982,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCancelCall(
 
 /** Completes a delayed call scheduled on the Android main looper. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeCompleteDelayedCall(
+Java_dev_muon_runtime_MuonRpcBridge_nativeCompleteDelayedCall(
     JNIEnv*,
     jclass,
     jlong handle,
@@ -2009,7 +2009,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCompleteDelayedCall(
 
 /** Completes an Android service invocation retained by the RPC host. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeCompletePlatformCall(
+Java_dev_muon_runtime_MuonRpcBridge_nativeCompletePlatformCall(
     JNIEnv* environment,
     jclass,
     jlong handle,
@@ -2098,7 +2098,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCompletePlatformCall(
 
 /** Releases all calls owned by the current WebView JavaScript context. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeReleaseContext(
+Java_dev_muon_runtime_MuonRpcBridge_nativeReleaseContext(
     JNIEnv*,
     jclass,
     jlong handle) {
@@ -2113,7 +2113,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeReleaseContext(
 
 /** Starts the packaged cardio integration probe for one WebView session. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeStartRuntimeProbe(
+Java_dev_muon_runtime_MuonRpcBridge_nativeStartRuntimeProbe(
     JNIEnv*,
     jclass,
     jlong handle) {
@@ -2127,7 +2127,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeStartRuntimeProbe(
 
 /** Finalizes asynchronous plugin stop from a later Java main Looper task. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeCompleteRuntimeStop(
+Java_dev_muon_runtime_MuonRpcBridge_nativeCompleteRuntimeStop(
     JNIEnv*,
     jclass) {
   if (process_runtime != nullptr) {
@@ -2137,7 +2137,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeCompleteRuntimeStop(
 
 /** Returns process runtime lifecycle diagnostics as a JSON object. */
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeGetRuntimeDiagnostics(
+Java_dev_muon_runtime_MuonRpcBridge_nativeGetRuntimeDiagnostics(
     JNIEnv* environment,
     jclass,
     jlong handle) {
@@ -2152,7 +2152,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeGetRuntimeDiagnostics(
 
 /** Returns process diagnostics without requiring a live WebView host. */
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeGetProcessRuntimeDiagnosticsForTest(
+Java_dev_muon_runtime_MuonRpcBridge_nativeGetProcessRuntimeDiagnosticsForTest(
     JNIEnv* environment,
     jclass) {
   if (process_runtime == nullptr) {
@@ -2166,7 +2166,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeGetProcessRuntimeDiagnosticsForTest(
 
 /** Selects one debug-only packaged-plugin startup fault for the next run. */
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeSetRuntimeStartupFaultForTest(
+Java_dev_muon_runtime_MuonRpcBridge_nativeSetRuntimeStartupFaultForTest(
     JNIEnv* environment,
     jclass,
     jstring fault_value) {
@@ -2203,7 +2203,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeSetRuntimeStartupFaultForTest(
 
 /** Returns the number of calls retained by the native RPC host. */
 extern "C" JNIEXPORT jint JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeGetPendingCallCount(
+Java_dev_muon_runtime_MuonRpcBridge_nativeGetPendingCallCount(
     JNIEnv*,
     jclass,
     jlong handle) {
@@ -2218,7 +2218,7 @@ Java_dev_muon_prototype_MuonRpcBridge_nativeGetPendingCallCount(
 
 /** Destroys one native RPC host after its JavaScript context was released. */
 extern "C" JNIEXPORT void JNICALL
-Java_dev_muon_prototype_MuonRpcBridge_nativeDestroyHost(
+Java_dev_muon_runtime_MuonRpcBridge_nativeDestroyHost(
     JNIEnv* environment,
     jclass,
     jlong handle,

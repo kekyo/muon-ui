@@ -36,10 +36,7 @@ export interface MuonWebViewRpcCallOptions {
 
 /** The kind of payload represented by a WebView RPC binary frame. */
 export type MuonWebViewRpcBinaryFrameKind =
-  | 'argument'
-  | 'result'
-  | 'renderer-argument'
-  | 'renderer-result';
+  'argument' | 'result' | 'renderer-argument' | 'renderer-result';
 
 /** Values required to encode a WebView RPC binary frame. */
 export interface MuonWebViewRpcBinaryFrame {
@@ -730,8 +727,7 @@ export const createMuonWebViewRpcClient = (
   };
 
   let pluginProxyFinalizer:
-    | FinalizationRegistry<PluginFunctionProxyState>
-    | undefined;
+    FinalizationRegistry<PluginFunctionProxyState> | undefined;
 
   const releasePluginProxy = (state: PluginFunctionProxyState): void => {
     if (state.released) {

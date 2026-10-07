@@ -30,8 +30,7 @@ if (app === null) {
 }
 
 const bridge = Reflect.get(globalThis, 'muonAndroidRpc') as
-  | MuonWebViewJavaScriptBridge
-  | undefined;
+  MuonWebViewJavaScriptBridge | undefined;
 const javaScriptRuntimeBridge = Reflect.get(
   globalThis,
   'muonAndroidJavaScriptRuntime'

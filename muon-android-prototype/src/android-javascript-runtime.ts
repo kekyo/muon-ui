@@ -32,8 +32,7 @@ export interface MuonAndroidJavaScriptBridge {
 
   /** Receives messages posted by the Android host. */
   onmessage:
-    | ((event: MuonAndroidJavaScriptBridgeMessageEvent) => Promise<void>)
-    | null;
+    ((event: MuonAndroidJavaScriptBridgeMessageEvent) => Promise<void>) | null;
 }
 
 /** A module imported into one Android JavaScript runtime. */

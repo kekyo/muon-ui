@@ -1514,8 +1514,7 @@ const withTitleBarMuon = async (
   ) => Promise<void>,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   networkAllowPatterns: string[] = TEST_NETWORK_ALLOW_PATTERNS,
@@ -1574,8 +1573,7 @@ const withWindowsTitleBarMuon = async (
   ) => Promise<void>,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
 ): Promise<void> => {

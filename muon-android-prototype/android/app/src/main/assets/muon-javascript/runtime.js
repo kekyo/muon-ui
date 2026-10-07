@@ -1062,9 +1062,10 @@
     if (!value) throwAssertion(value, true, '==', message);
   };
   const assertEqual = (actual, expected, message) => {
-    if (
-      !(actual == expected || (Number.isNaN(actual) && Number.isNaN(expected)))
-    ) {
+    if (!(
+      actual == expected ||
+      (Number.isNaN(actual) && Number.isNaN(expected))
+    )) {
       throwAssertion(actual, expected, 'equal', message);
     }
   };
@@ -2769,7 +2770,7 @@
   const encodeUrlText = (value, safeCharacters) => {
     const source = String(value);
     let result = '';
-    for (let index = 0; index < source.length; ) {
+    for (let index = 0; index < source.length;) {
       const point = source.codePointAt(index);
       const character = String.fromCodePoint(point);
       if (

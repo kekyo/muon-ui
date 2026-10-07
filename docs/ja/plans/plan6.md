@@ -720,3 +720,23 @@ muonのarm64アプリ配布を、この修正のOTA普及待ちにする必要�
 更新前の完全なバックアップはartifacts/plan6-avd-update/backup/Pixel_6.avdとPixel_6.iniに残した。元へ戻す必要がある場合はAVDを停止し、現在のAVDを退避したうえで、この2項目を/home/kouji/.android/avdへ戻す。元のAPI 37.1イメージもSDKに保持している。
 
 更新情報、ディスク比較結果、移行前後の識別情報、画面、通知・復帰・RPCの結果、再起動後の検証、Androidテストと全体テストのログをartifacts/plan6-avd-updateへ保存した。一時AVD2個と作業用のディスクコピーは削除し、既存のPixel_6も検証後に停止した。AVD一覧は元と同じPixel_4とPixel_6である。今回の完了条件を照合し、修正済み公式イメージへの更新、16 KiBの維持、データ保持、muonの動作、Androidと全体テスト、後片付けが完了したことを確認した。
+
+#### CIのTCP受信順序に依存するテストの修正
+
+[CI実行37607932190](https://github.com/kekyo/muon-ui/actions/runs/37607932190/job/112747883581)では、Androidのinstrumentation 45件のうち、MuonJavaScriptRuntimeServiceTest.isolatesAndClosesTcpSocketsForEachRuntimeが失敗した。期待値one-1two-2に対し、実際の値はtwo-2one-1だった。45件は最後まで実行され、独立npm利用アプリの検証に進む前に停止した。
+
+このテストは、2つのQuickJS runtimeから別々のTCP接続で送った識別子を、サーバー側の2つの受信スレッドで文字列へ連結していた。先に送った接続の読み取りが先に完了する保証はなく、連結順を固定した検証が誤りだった。失敗した比較より前にある、片方のruntime終了後も他方の接続が開いていることと、両runtime終了後に両接続が閉じることの検証は通過していた。
+
+対応は次の順で進める。完了条件は、逆順を確実に作った条件で修正前の失敗と修正後の成功を確認し、識別子の欠落・重複と接続の分離・切断を引き続き検出できること、Androidと全体テストを実行し、一時AVDを片付けることとする。
+
+1. CIと同じAPI 37.1・google_apis_ps16k・x86_64・16 KiBの一時AVDを作る。受信スレッドをCountDownLatchで同期し、2番目の接続を先に記録する条件で元の比較が失敗することを確認する。待ち時間の長さで処理順を調整しない。
+2. 識別子を集合として記録し、one-1とtwo-2が両方そろうことを検証する。接続数は2本に固定されているため、同じ識別子が届く場合も検出できる。逆順を作る条件と、既存の接続分離・切断の検証を残して成功を確認する。
+3. 同じAVDでAndroidの全テストと独立npm利用アプリのビルド・署名・動作を検証し、ルートのnpm testも実行する。結果を記録して一時AVDを終了・削除する。
+
+逆順を作った修正前のテストは、CIと同じone-1two-2とtwo-2one-1の比較エラーで失敗した。集合で比較する修正後は、同じ条件で成功した。再現環境のカーネルは6.12.69-android16-6-g214d1615c480-ab15053784、ページサイズは16384バイトだった。ログとinstrumentationの結果は.run/ci-37607932190へ保存した。
+
+同じAVDでAndroidのinstrumentation 45件がすべて成功し、release APKとAPKセットの検証・インストール・起動も成功した。独立npm利用アプリでは、NDKやCMakeを使わずに公開CLIとViteからdebug APKを生成し、両者の内容が一致することを確認した。署名済みrelease APKの生成・インストール、保存と再読み込み、再起動、1.0.0から1.0.1への更新後のデータ保持も成功した。端末操作のinstrumentationは5回すべて成功し、更新後の画面も目視で確認した。
+
+独立利用アプリの結果と画面は.run/ci-37607932190/consumer-resultsへ保存した。一時AVDのMuon_CI_37607932190と検証用の署名鍵を削除し、AVD一覧が元のPixel_4とPixel_6に戻ったことを確認した。
+
+ルートのnpm testも終了コード0で完了した。muon-android 43件、muon-android-prototype 23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功し、muon-builderの検証も成功した。muon-core-testerの26件は既存の条件によるスキップだった。修正前後の比較、既存の検証条件の維持、Androidと独立利用アプリの検証、全体テスト、後片付けの完了条件を満たしたことを確認した。

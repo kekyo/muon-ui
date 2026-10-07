@@ -1876,7 +1876,8 @@ public final class MuonJavaScriptRuntimeServiceTest {
         AtomicReference<Throwable> serverFailure = new AtomicReference<>();
         CountDownLatch openedConnections = new CountDownLatch(2);
         CountDownLatch closedConnections = new CountDownLatch(2);
-        StringBuilder markers = new StringBuilder();
+        CountDownLatch secondMarkerRecorded = new CountDownLatch(1);
+        Set<String> markers = new HashSet<>();
         try (ServerSocket server = new ServerSocket(
                 0,
                 2,
@@ -1887,6 +1888,7 @@ public final class MuonJavaScriptRuntimeServiceTest {
                     for (int index = 0; index < 2; index++) {
                         Socket connection = server.accept();
                         connection.setSoTimeout(30_000);
+                        boolean firstConnection = index == 0;
                         Thread reader = new Thread(() -> {
                             boolean opened = false;
                             try (Socket active = connection) {
@@ -1903,10 +1905,17 @@ public final class MuonJavaScriptRuntimeServiceTest {
                                     }
                                     offset += count;
                                 }
+                                String value = new String(marker, StandardCharsets.UTF_8);
+                                // Independent socket readers may finish in either order.
+                                // Reproduce the second runtime being observed first without sleeps.
+                                if (firstConnection) {
+                                    assertTrue(secondMarkerRecorded.await(30, TimeUnit.SECONDS));
+                                }
                                 synchronized (markers) {
-                                    markers.append(new String(
-                                            marker,
-                                            StandardCharsets.UTF_8));
+                                    markers.add(value);
+                                }
+                                if (!firstConnection) {
+                                    secondMarkerRecorded.countDown();
                                 }
                                 opened = true;
                                 openedConnections.countDown();
@@ -1993,7 +2002,9 @@ public final class MuonJavaScriptRuntimeServiceTest {
             throw new AssertionError("The retained TCP server failed", serverFailure.get());
         }
         synchronized (markers) {
-            assertEquals("one-1two-2", markers.toString());
+            assertEquals(2, markers.size());
+            assertTrue(markers.toString(), markers.contains("one-1"));
+            assertTrue(markers.toString(), markers.contains("two-2"));
         }
     }
 

@@ -19,6 +19,8 @@ muonプラグインのvirtual moduleインポートのフィルタ機能は、�
 
 ## Android WebViewバックエンド
 
+公開CLIによるAPKの作成方法と検証済み環境は[Androidアプリのビルド・配布](./android.md)を参照してください。公開アプリではFCMとQuickJSを提供していません。以下で触れるQuickJSは試作host専用です。
+
 Android WebViewバックエンドは、WebViewの通常ネットワーク通信をMuonで包括的にinterceptしません。CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`は共通の`muon.json`へ残せますが、AndroidではWebViewの通信を許可または拒否する条件として適用されず、明示設定時に警告されます。
 
 Androidでは、Manifestの`INTERNET`、端末とAPI levelに応じたローカルネットワーク権限、Network Security ConfigがMuonより外側のアプリ全体の制約として作用します。CORSやCSPなどのWeb platformの制約も通常どおり適用されます。`INTERNET`が付与された環境では、Muonの宛先allowlistがなくてもWebViewから外部へ通信できることを前提にしてください。

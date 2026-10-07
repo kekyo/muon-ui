@@ -11,6 +11,8 @@ A multi-platform GUI application framework that uses CEF as its backend.
 
 ## What is this?
 
+Android uses WebView and supports debug APKs and signed release APKs containing your web assets. Build on Linux x64 without NDK/CMake for ordinary applications. See [building and distributing Android apps](https://github.com/kekyo/muon-ui/blob/main/docs/en/android.md) for setup, signing, and support limits. The CEF, HMR, and network filtering descriptions below apply to the desktop backend.
+
 Have you ever wanted to update an aging native GUI application into a modern application?
 Application replacement is extremely complex, and it has always been a hard problem.
 

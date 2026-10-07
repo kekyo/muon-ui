@@ -1,5 +1,7 @@
 # muon.json reference
 
+See [building and distributing Android apps](./android.md) for the `android` section, supported common settings, and signing. The CEF settings and Node.js sidecar below apply to desktop applications.
+
 `muon.json` determines muon's behavior, and some features can only be decided by this file.
 In particular, whitelists that permit behavior cannot be changed programmatically.
 

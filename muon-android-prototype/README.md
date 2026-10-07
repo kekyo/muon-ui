@@ -2,6 +2,8 @@
 
 このdirectoryは、muonのAndroid WebView backendとnative plugin packageを結合検証する試作hostです。公開済みの`muon-ui` Android targetやPlay Store配布物ではありません。
 
+利用者アプリの作成は[Androidアプリのビルド・配布](../docs/ja/android.md)を参照してください。共通ランタイムは`muon-android`から利用します。この試作には公開APKへ含めないQuickJSと試験用プラグインがあります。
+
 ## 対応環境
 
 - Android API 24以降

@@ -20,6 +20,8 @@ Therefore, always take care not to expose unnecessary plugin functions.
 
 ## Android WebView backend
 
+See [building and distributing Android apps](./android.md) for public APK commands and verified environments. FCM and QuickJS are unavailable in public application builds. QuickJS mentioned below applies only to the prototype host.
+
 The Android WebView backend does not comprehensively intercept normal WebView network traffic through muon. CEF settings such as `network.allow`, `network.authorizedOrigin`, and `network.localAccess` may remain in a shared `muon.json`, but Android does not enforce them as allow or deny rules for WebView traffic and emits a warning when they are explicitly configured.
 
 On Android, the Manifest `INTERNET` permission, local-network permissions required by the device and API level, and Network Security Config act as application-wide boundaries outside muon. Web-platform restrictions such as CORS and CSP also apply normally. In an environment with `INTERNET` permission, assume that WebView can communicate externally without a muon destination allowlist.

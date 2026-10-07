@@ -1,5 +1,7 @@
 # muon Viteプラグインリファレンス
 
+Androidでは`pluginAccess: false`と`build.targets: ['android']`を指定します。`build.android`の設定と制限は[Androidアプリのビルド・配布](./android.md)を参照してください。以下の開発サーバー、CEF、virtual moduleの説明はdesktop版を対象とします。
+
 muon Viteプラグインの引数 `options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
 
 ```ts
@@ -192,8 +194,8 @@ portable配布物では展開先へ直接準備され、実行時のNode.jsは�
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |
 | :----------------- | :------------------ | :----------------------------- | :------------------------------------------------------------------------------ |
-| `targets`          | `readonly string[]` | 全対応ターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
-| `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全ターゲットをビルドするかどうかです。      |
+| `targets`          | `readonly string[]` | 全desktopターゲット               | ビルド対象の公開ターゲットIDのリストです。                                      |
+| `allTargets`       | `boolean`           | `targets` 省略時は `true` 相当 | インストール済みパッケージが対応する全desktopターゲットをビルドするかどうかです。      |
 | `appName`          | `string`            | `package.json` の `name`      | アプリケーションランチャーのファイル名です。                                    |
 | `appId`            | `string`            | `package.json` の `name`      | ランタイムアプリ識別子のbase IDです。Windowsターゲットでは `<appId>.<arch>` が埋め込まれます。 |
 | `outputRoot`       | `string`            | `"."`                          | `dist-muon/linux-amd64/` のようなターゲット別出力ディレクトリを作成する親ディレクトリです。 |
@@ -205,9 +207,9 @@ portable配布物では展開先へ直接準備され、実行時のNode.jsは�
 | `linuxDesktop`     | `object`            | `linux.desktop`                | Linux desktop entryとicon用metadataです。                                      |
 | `packageDirectory` | `string`            | インストール済みmuonパッケージ | `runtime/` と `native/` を含むmuonパッケージディレクトリです。                  |
 
-- `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全ターゲットを生成します。
+- `targets` と `allTargets` をどちらも省略した場合は、インストール済みmuonパッケージが対応する全desktopターゲットを生成します。
   `allTargets` が `true` の場合、 `targets` よりも優先されます。
-  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64` のいずれかを指定出来ます。
+  `targets` には `linux-amd64`, `linux-armhf`, `linux-arm64`, `windows-i686`, `windows-amd64`, `android` のいずれかを指定出来ます。
 - `appName` を省略した場合は、 `package.json` にある `name` から生成します。
   `name` が存在しない場合は `muon-app` を使用します。
   scope付きパッケージ名ではscopeを除いた名前を使用し、ランチャー名として使えない文字は `-` に正規化されます。

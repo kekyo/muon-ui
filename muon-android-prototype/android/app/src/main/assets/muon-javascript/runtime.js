@@ -1,0 +1,8074 @@
+/* muon QuickJS runtime protocol and Android host modules. */
+
+'use strict';
+
+(() => {
+  const signed64Minimum = -(1n << 63n);
+  const signed64Maximum = (1n << 63n) - 1n;
+  const unsigned64Maximum = (1n << 64n) - 1n;
+  const base64Alphabet =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const moduleHandles = new Map();
+  const rendererCallbacks = new Map();
+  let nextModuleHandle = 1;
+  let nextCallbackRequest = 1;
+
+  const createError = (code, message) => {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  };
+
+  const encodeBase64 = (value) => {
+    let result = '';
+    for (let index = 0; index < value.length; index += 3) {
+      const first = value[index];
+      const hasSecond = index + 1 < value.length;
+      const hasThird = index + 2 < value.length;
+      const second = hasSecond ? value[index + 1] : 0;
+      const third = hasThird ? value[index + 2] : 0;
+      const packed = (first << 16) | (second << 8) | third;
+      result += base64Alphabet[(packed >>> 18) & 63];
+      result += base64Alphabet[(packed >>> 12) & 63];
+      result += hasSecond ? base64Alphabet[(packed >>> 6) & 63] : '=';
+      result += hasThird ? base64Alphabet[packed & 63] : '=';
+    }
+    return result;
+  };
+
+  const decodeBase64 = (value) => {
+    if (
+      typeof value !== 'string' ||
+      value.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        value
+      )
+    ) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'buffer contains invalid base64 data'
+      );
+    }
+    const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+    const result = new Uint8Array((value.length / 4) * 3 - padding);
+    let output = 0;
+    for (let index = 0; index < value.length; index += 4) {
+      const first = base64Alphabet.indexOf(value[index]);
+      const second = base64Alphabet.indexOf(value[index + 1]);
+      const third =
+        value[index + 2] === '=' ? 0 : base64Alphabet.indexOf(value[index + 2]);
+      const fourth =
+        value[index + 3] === '=' ? 0 : base64Alphabet.indexOf(value[index + 3]);
+      const packed = (first << 18) | (second << 12) | (third << 6) | fourth;
+      if (output < result.length) result[output++] = (packed >>> 16) & 255;
+      if (output < result.length) result[output++] = (packed >>> 8) & 255;
+      if (output < result.length) result[output++] = packed & 255;
+    }
+    if (encodeBase64(result) !== value) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'buffer contains non-canonical base64 data'
+      );
+    }
+    return result;
+  };
+
+  const normalizeJson = (value, ancestors) => {
+    if (
+      value === null ||
+      typeof value === 'boolean' ||
+      typeof value === 'string'
+    ) {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value) || Object.is(value, -0)) {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_VALUE',
+          'JSON containers support only finite numbers other than negative zero'
+        );
+      }
+      return value;
+    }
+    if (typeof value !== 'object' || value === null) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'JSON containers can contain only JSON-compatible values'
+      );
+    }
+    if (ancestors.has(value)) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'JSON containers cannot contain cycles'
+      );
+    }
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        return value.map((entry) => normalizeJson(entry, ancestors));
+      }
+      if (
+        Object.getPrototypeOf(value) !== Object.prototype &&
+        Object.getPrototypeOf(value) !== null
+      ) {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_VALUE',
+          'JSON objects must be plain objects'
+        );
+      }
+      const result = {};
+      for (const key of Object.keys(value)) {
+        result[key] = normalizeJson(value[key], ancestors);
+      }
+      return result;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+
+  const encodeValue = (value) => {
+    if (value === undefined) return { kind: 'undefined' };
+    if (
+      value === null ||
+      typeof value === 'boolean' ||
+      typeof value === 'string'
+    ) {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value) || Object.is(value, -0)) {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_VALUE',
+          'Only finite numbers other than negative zero can cross the bridge'
+        );
+      }
+      return value;
+    }
+    if (typeof value === 'bigint') {
+      if (value >= signed64Minimum && value <= signed64Maximum) {
+        return { kind: 'i64', value: value.toString() };
+      }
+      if (value >= 0n && value <= unsigned64Maximum) {
+        return { kind: 'u64', value: value.toString() };
+      }
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'The bigint value is outside the i64/u64 range'
+      );
+    }
+    if (value instanceof Uint8Array) {
+      return { kind: 'buffer', data: encodeBase64(value) };
+    }
+    if (value instanceof ArrayBuffer) {
+      return { kind: 'buffer', data: encodeBase64(new Uint8Array(value)) };
+    }
+    return { kind: 'json', value: normalizeJson(value, new Set()) };
+  };
+
+  const decodeInteger = (value) => {
+    if (
+      typeof value.value !== 'string' ||
+      !/^(?:0|-?[1-9][0-9]*)$/.test(value.value)
+    ) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'Integer tags must contain a canonical decimal string'
+      );
+    }
+    const decoded = BigInt(value.value);
+    const valid =
+      value.kind === 'i64'
+        ? decoded >= signed64Minimum && decoded <= signed64Maximum
+        : decoded >= 0n && decoded <= unsigned64Maximum;
+    if (!valid) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        `${value.kind} is outside its supported range`
+      );
+    }
+    return decoded;
+  };
+
+  const invokeRendererCallback = async (handle, arguments_) => {
+    const id = `callback-${nextCallbackRequest++}`;
+    let resolveOperation;
+    let rejectOperation;
+    const result = new Promise((resolve, reject) => {
+      resolveOperation = resolve;
+      rejectOperation = reject;
+    });
+    rendererCallbacks.set(id, {
+      resolve: resolveOperation,
+      reject: rejectOperation,
+    });
+    __muonPostMessage(
+      JSON.stringify({
+        kind: 'callback',
+        id,
+        handle,
+        arguments: arguments_.map(encodeValue),
+      })
+    );
+    return await result;
+  };
+
+  const decodeValue = (value) => {
+    if (
+      value === null ||
+      typeof value === 'boolean' ||
+      typeof value === 'string' ||
+      typeof value === 'number'
+    ) {
+      return value;
+    }
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_VALUE',
+        'Wire values must be supported primitives or tagged objects'
+      );
+    }
+    if (value.kind === 'undefined') return undefined;
+    if (value.kind === 'i64' || value.kind === 'u64')
+      return decodeInteger(value);
+    if (value.kind === 'buffer') return decodeBase64(value.data);
+    if (value.kind === 'json') return normalizeJson(value.value, new Set());
+    if (value.kind === 'function' && typeof value.handle === 'string') {
+      return async (...arguments_) =>
+        await invokeRendererCallback(value.handle, arguments_);
+    }
+    throw createError(
+      'ERR_MUON_JS_UNSUPPORTED_VALUE',
+      'The bridge supplied an unknown wire value'
+    );
+  };
+
+  const normalizeBufferEncoding = (encoding) => {
+    const normalized = String(encoding ?? 'utf8').toLowerCase();
+    if (normalized === 'utf8' || normalized === 'utf-8') return 'utf8';
+    if (normalized === 'hex') return 'hex';
+    if (normalized === 'base64') return 'base64';
+    if (normalized === 'base64url') return 'base64url';
+    if (
+      normalized === 'latin1' ||
+      normalized === 'binary' ||
+      normalized === 'ascii'
+    ) {
+      return 'latin1';
+    }
+    throw createError(
+      'ERR_UNKNOWN_ENCODING',
+      `Unknown buffer encoding: ${encoding}`
+    );
+  };
+
+  const encodeUtf8 = (value) => {
+    const source = String(value);
+    const bytes = [];
+    for (let index = 0; index < source.length; index += 1) {
+      let point = source.codePointAt(index);
+      if (point >= 0xd800 && point <= 0xdfff) point = 0xfffd;
+      if (point > 0xffff) index += 1;
+      if (point <= 0x7f) {
+        bytes.push(point);
+      } else if (point <= 0x7ff) {
+        bytes.push(0xc0 | (point >> 6), 0x80 | (point & 0x3f));
+      } else if (point <= 0xffff) {
+        bytes.push(
+          0xe0 | (point >> 12),
+          0x80 | ((point >> 6) & 0x3f),
+          0x80 | (point & 0x3f)
+        );
+      } else {
+        bytes.push(
+          0xf0 | (point >> 18),
+          0x80 | ((point >> 12) & 0x3f),
+          0x80 | ((point >> 6) & 0x3f),
+          0x80 | (point & 0x3f)
+        );
+      }
+    }
+    return Uint8Array.from(bytes);
+  };
+
+  const decodeUtf8 = (bytes) => {
+    let result = '';
+    let index = 0;
+    const continuation = (offset) =>
+      index + offset < bytes.length && (bytes[index + offset] & 0xc0) === 0x80;
+    while (index < bytes.length) {
+      const first = bytes[index];
+      let point = 0xfffd;
+      let length = 1;
+      if (first <= 0x7f) {
+        point = first;
+      } else if (first >= 0xc2 && first <= 0xdf && continuation(1)) {
+        point = ((first & 0x1f) << 6) | (bytes[index + 1] & 0x3f);
+        length = 2;
+      } else if (
+        first >= 0xe0 &&
+        first <= 0xef &&
+        continuation(1) &&
+        continuation(2) &&
+        !(first === 0xe0 && bytes[index + 1] < 0xa0) &&
+        !(first === 0xed && bytes[index + 1] >= 0xa0)
+      ) {
+        point =
+          ((first & 0x0f) << 12) |
+          ((bytes[index + 1] & 0x3f) << 6) |
+          (bytes[index + 2] & 0x3f);
+        length = 3;
+      } else if (
+        first >= 0xf0 &&
+        first <= 0xf4 &&
+        continuation(1) &&
+        continuation(2) &&
+        continuation(3) &&
+        !(first === 0xf0 && bytes[index + 1] < 0x90) &&
+        !(first === 0xf4 && bytes[index + 1] >= 0x90)
+      ) {
+        point =
+          ((first & 0x07) << 18) |
+          ((bytes[index + 1] & 0x3f) << 12) |
+          ((bytes[index + 2] & 0x3f) << 6) |
+          (bytes[index + 3] & 0x3f);
+        length = 4;
+      }
+      result += String.fromCodePoint(point);
+      index += length;
+    }
+    return result;
+  };
+
+  const encodeHexBuffer = (value) => {
+    const source = String(value);
+    const bytes = [];
+    for (let index = 0; index + 1 < source.length; index += 2) {
+      const pair = source.slice(index, index + 2);
+      if (!/^[0-9a-fA-F]{2}$/.test(pair)) break;
+      bytes.push(Number.parseInt(pair, 16));
+    }
+    return Uint8Array.from(bytes);
+  };
+
+  const decodeBufferBase64 = (value, urlSafe) => {
+    let source = String(value).replaceAll(/\s/g, '');
+    if (urlSafe) source = source.replaceAll('-', '+').replaceAll('_', '/');
+    source = source.replace(/=+$/, '');
+    if (!/^[A-Za-z0-9+/]*$/.test(source) || source.length % 4 === 1) {
+      throw createError('ERR_INVALID_ARG_VALUE', 'Invalid base64 data');
+    }
+    source += '='.repeat((4 - (source.length % 4)) % 4);
+    return decodeBase64(source);
+  };
+
+  const encodeBufferString = (value, encoding) => {
+    const normalized = normalizeBufferEncoding(encoding);
+    if (normalized === 'utf8') return encodeUtf8(value);
+    if (normalized === 'hex') return encodeHexBuffer(value);
+    if (normalized === 'base64' || normalized === 'base64url') {
+      return decodeBufferBase64(value, normalized === 'base64url');
+    }
+    return Uint8Array.from(
+      String(value),
+      (character) => character.charCodeAt(0) & 0xff
+    );
+  };
+
+  const decodeBufferString = (bytes, encoding) => {
+    const normalized = normalizeBufferEncoding(encoding);
+    if (normalized === 'utf8') return decodeUtf8(bytes);
+    if (normalized === 'hex') {
+      return Array.from(bytes, (value) =>
+        value.toString(16).padStart(2, '0')
+      ).join('');
+    }
+    if (normalized === 'base64' || normalized === 'base64url') {
+      const encoded = encodeBase64(bytes);
+      return normalized === 'base64url'
+        ? encoded.replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+        : encoded;
+    }
+    return Array.from(bytes, (value) => String.fromCharCode(value)).join('');
+  };
+
+  const bufferMarker = Symbol('muon.buffer');
+  const bufferPrototype = Object.create(Uint8Array.prototype);
+  const markBuffer = (value) => {
+    Object.setPrototypeOf(value, bufferPrototype);
+    return value;
+  };
+
+  const validateBufferSize = (size) => {
+    const normalized = Number(size);
+    if (!Number.isInteger(normalized) || normalized < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Buffer size must be a non-negative integer'
+      );
+    }
+    return normalized;
+  };
+
+  const Buffer = function (value, encodingOrOffset, length) {
+    if (typeof value === 'number') return Buffer.allocUnsafe(value);
+    return Buffer.from(value, encodingOrOffset, length);
+  };
+
+  Object.defineProperty(bufferPrototype, 'constructor', {
+    value: Buffer,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Object.defineProperty(bufferPrototype, bufferMarker, {
+    value: true,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+  Buffer.prototype = bufferPrototype;
+
+  Buffer.from = (value, encodingOrOffset, length) => {
+    if (typeof value === 'string') {
+      return markBuffer(encodeBufferString(value, encodingOrOffset));
+    }
+    if (value instanceof ArrayBuffer) {
+      const offset =
+        encodingOrOffset === undefined ? 0 : Number(encodingOrOffset);
+      const available = value.byteLength - offset;
+      const byteLength = length === undefined ? available : Number(length);
+      if (
+        !Number.isInteger(offset) ||
+        !Number.isInteger(byteLength) ||
+        offset < 0 ||
+        byteLength < 0 ||
+        offset + byteLength > value.byteLength
+      ) {
+        throw createError(
+          'ERR_BUFFER_OUT_OF_BOUNDS',
+          'Buffer view is outside the ArrayBuffer'
+        );
+      }
+      return markBuffer(new Uint8Array(value, offset, byteLength));
+    }
+    if (ArrayBuffer.isView(value)) {
+      return markBuffer(
+        Uint8Array.from(
+          new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+        )
+      );
+    }
+    if (value !== null && typeof value === 'object') {
+      if (value.type === 'Buffer' && Array.isArray(value.data)) {
+        return markBuffer(Uint8Array.from(value.data));
+      }
+      if (typeof value.length === 'number' || value[Symbol.iterator]) {
+        return markBuffer(Uint8Array.from(value));
+      }
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Buffer.from value must be text, bytes, or an ArrayBuffer'
+    );
+  };
+
+  Buffer.alloc = (size, fill, encoding) => {
+    const result = markBuffer(new Uint8Array(validateBufferSize(size)));
+    if (fill !== undefined) result.fill(fill, 0, result.length, encoding);
+    return result;
+  };
+  Buffer.allocUnsafe = (size) =>
+    markBuffer(new Uint8Array(validateBufferSize(size)));
+  Buffer.allocUnsafeSlow = Buffer.allocUnsafe;
+  Buffer.isBuffer = (value) => Boolean(value && value[bufferMarker] === true);
+  Buffer.isEncoding = (encoding) => {
+    try {
+      normalizeBufferEncoding(encoding);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  Buffer.byteLength = (value, encoding) => {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      return value.byteLength;
+    }
+    return encodeBufferString(String(value), encoding).byteLength;
+  };
+  Buffer.compare = (left, right) => {
+    if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'Buffer.compare values must be Uint8Array instances'
+      );
+    }
+    const length = Math.min(left.length, right.length);
+    for (let index = 0; index < length; index += 1) {
+      if (left[index] !== right[index])
+        return left[index] < right[index] ? -1 : 1;
+    }
+    return left.length === right.length
+      ? 0
+      : left.length < right.length
+        ? -1
+        : 1;
+  };
+  Buffer.concat = (list, totalLength) => {
+    if (!Array.isArray(list)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'Buffer.concat list must be an array'
+      );
+    }
+    const length =
+      totalLength === undefined
+        ? list.reduce((sum, value) => sum + value.byteLength, 0)
+        : validateBufferSize(totalLength);
+    const result = Buffer.alloc(length);
+    let offset = 0;
+    for (const value of list) {
+      if (!(value instanceof Uint8Array)) {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'Buffer.concat entries must be Uint8Array instances'
+        );
+      }
+      const available = Math.min(value.length, result.length - offset);
+      if (available <= 0) {
+        if (offset >= result.length) break;
+        continue;
+      }
+      Uint8Array.prototype.set.call(
+        result,
+        value.subarray(0, available),
+        offset
+      );
+      offset += available;
+    }
+    return result;
+  };
+
+  const normalizeBufferIndex = (value, length, fallback) => {
+    if (value === undefined) return fallback;
+    const integer = Math.trunc(Number(value));
+    if (!Number.isFinite(integer)) return integer < 0 ? 0 : length;
+    if (integer < 0) return Math.max(length + integer, 0);
+    return Math.min(integer, length);
+  };
+
+  const bufferToString = function (encoding, start, end) {
+    const from = normalizeBufferIndex(start, this.length, 0);
+    const to = normalizeBufferIndex(end, this.length, this.length);
+    const bytes = new Uint8Array(
+      this.buffer,
+      this.byteOffset + Math.min(from, to),
+      Math.max(to - from, 0)
+    );
+    return decodeBufferString(bytes, encoding);
+  };
+  const bufferEquals = function (other) {
+    return Buffer.compare(this, other) === 0;
+  };
+  const bufferCompare = function (other) {
+    return Buffer.compare(this, other);
+  };
+  const bufferSubarray = function (start, end) {
+    const from = normalizeBufferIndex(start, this.length, 0);
+    const to = normalizeBufferIndex(end, this.length, this.length);
+    return markBuffer(
+      new Uint8Array(
+        this.buffer,
+        this.byteOffset + Math.min(from, to),
+        Math.max(to - from, 0)
+      )
+    );
+  };
+  const bufferFill = function (value, start, end, encoding) {
+    const from = normalizeBufferIndex(start, this.length, 0);
+    const to = normalizeBufferIndex(end, this.length, this.length);
+    if (typeof value === 'number') {
+      Uint8Array.prototype.fill.call(this, value & 0xff, from, to);
+      return this;
+    }
+    const pattern = Buffer.isBuffer(value)
+      ? value
+      : encodeBufferString(String(value), encoding);
+    if (pattern.length === 0) return this;
+    for (let index = from; index < to; index += 1) {
+      this[index] = pattern[(index - from) % pattern.length];
+    }
+    return this;
+  };
+  const bufferWrite = function (value, offset, length, encoding) {
+    const from = normalizeBufferIndex(offset, this.length, 0);
+    const available =
+      length === undefined ? this.length - from : validateBufferSize(length);
+    const source = encodeBufferString(value, encoding);
+    const count = Math.min(available, source.length, this.length - from);
+    Uint8Array.prototype.set.call(this, source.subarray(0, count), from);
+    return count;
+  };
+  const bufferCopy = function (target, targetStart, sourceStart, sourceEnd) {
+    if (!(target instanceof Uint8Array)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'copy target must be a Uint8Array'
+      );
+    }
+    const targetOffset = normalizeBufferIndex(targetStart, target.length, 0);
+    const source = bufferSubarray.call(this, sourceStart, sourceEnd);
+    const count = Math.min(source.length, target.length - targetOffset);
+    Uint8Array.prototype.set.call(
+      target,
+      source.subarray(0, count),
+      targetOffset
+    );
+    return count;
+  };
+  const bufferToJson = function () {
+    return { type: 'Buffer', data: Array.from(this) };
+  };
+
+  bufferPrototype.toString = bufferToString;
+  bufferPrototype.equals = bufferEquals;
+  bufferPrototype.compare = bufferCompare;
+  bufferPrototype.subarray = bufferSubarray;
+  bufferPrototype.slice = bufferSubarray;
+  bufferPrototype.fill = bufferFill;
+  bufferPrototype.write = bufferWrite;
+  bufferPrototype.copy = bufferCopy;
+  bufferPrototype.toJSON = bufferToJson;
+
+  const bufferModule = Object.freeze({
+    Buffer,
+    SlowBuffer: (size) => Buffer.alloc(size),
+    atob: (value) =>
+      decodeBufferString(decodeBufferBase64(value, false), 'latin1'),
+    btoa: (value) => encodeBase64(encodeBufferString(value, 'latin1')),
+  });
+
+  const bytesEqual = (left, right) => {
+    if (left.byteLength !== right.byteLength) return false;
+    for (let index = 0; index < left.byteLength; index += 1) {
+      if (left[index] !== right[index]) return false;
+    }
+    return true;
+  };
+
+  const enumerableOwnKeys = (value) =>
+    Reflect.ownKeys(value).filter(
+      (key) => Object.getOwnPropertyDescriptor(value, key)?.enumerable === true
+    );
+
+  const mergeSeenPairs = (destination, source) => {
+    for (const [key, value] of source) destination.set(key, value);
+  };
+
+  const deepStrictEqualInternal = (left, right, leftSeen, rightSeen) => {
+    if (Object.is(left, right)) return true;
+    if (
+      left === null ||
+      right === null ||
+      (typeof left !== 'object' && typeof left !== 'function') ||
+      (typeof right !== 'object' && typeof right !== 'function')
+    ) {
+      return false;
+    }
+    if (Object.getPrototypeOf(left) !== Object.getPrototypeOf(right)) {
+      return false;
+    }
+
+    if (leftSeen.has(left) || rightSeen.has(right)) {
+      return leftSeen.get(left) === right && rightSeen.get(right) === left;
+    }
+    leftSeen.set(left, right);
+    rightSeen.set(right, left);
+
+    if (left instanceof Date) {
+      return Object.is(left.getTime(), right.getTime());
+    }
+    if (left instanceof RegExp) {
+      return (
+        left.source === right.source &&
+        left.flags === right.flags &&
+        left.lastIndex === right.lastIndex
+      );
+    }
+    if (left instanceof ArrayBuffer) {
+      return bytesEqual(new Uint8Array(left), new Uint8Array(right));
+    }
+    if (ArrayBuffer.isView(left)) {
+      if (
+        !ArrayBuffer.isView(right) ||
+        left.constructor !== right.constructor
+      ) {
+        return false;
+      }
+      return bytesEqual(
+        new Uint8Array(left.buffer, left.byteOffset, left.byteLength),
+        new Uint8Array(right.buffer, right.byteOffset, right.byteLength)
+      );
+    }
+    if (left instanceof Map) {
+      if (!(right instanceof Map) || left.size !== right.size) return false;
+      const unmatched = [...right.entries()];
+      for (const [leftKey, leftValue] of left) {
+        let match = -1;
+        for (let index = 0; index < unmatched.length; index += 1) {
+          const [rightKey, rightValue] = unmatched[index];
+          const candidateLeftSeen = new Map(leftSeen);
+          const candidateRightSeen = new Map(rightSeen);
+          if (
+            deepStrictEqualInternal(
+              leftKey,
+              rightKey,
+              candidateLeftSeen,
+              candidateRightSeen
+            ) &&
+            deepStrictEqualInternal(
+              leftValue,
+              rightValue,
+              candidateLeftSeen,
+              candidateRightSeen
+            )
+          ) {
+            mergeSeenPairs(leftSeen, candidateLeftSeen);
+            mergeSeenPairs(rightSeen, candidateRightSeen);
+            match = index;
+            break;
+          }
+        }
+        if (match < 0) return false;
+        unmatched.splice(match, 1);
+      }
+      return true;
+    }
+    if (left instanceof Set) {
+      if (!(right instanceof Set) || left.size !== right.size) return false;
+      const unmatched = [...right.values()];
+      for (const leftValue of left) {
+        let match = -1;
+        for (let index = 0; index < unmatched.length; index += 1) {
+          const candidateLeftSeen = new Map(leftSeen);
+          const candidateRightSeen = new Map(rightSeen);
+          if (
+            deepStrictEqualInternal(
+              leftValue,
+              unmatched[index],
+              candidateLeftSeen,
+              candidateRightSeen
+            )
+          ) {
+            mergeSeenPairs(leftSeen, candidateLeftSeen);
+            mergeSeenPairs(rightSeen, candidateRightSeen);
+            match = index;
+            break;
+          }
+        }
+        if (match < 0) return false;
+        unmatched.splice(match, 1);
+      }
+      return true;
+    }
+    if (left instanceof Error) {
+      if (left.name !== right.name || left.message !== right.message) {
+        return false;
+      }
+      if (
+        ('cause' in left || 'cause' in right) &&
+        !deepStrictEqualInternal(left.cause, right.cause, leftSeen, rightSeen)
+      ) {
+        return false;
+      }
+    }
+
+    const leftKeys = enumerableOwnKeys(left);
+    const rightKeys = enumerableOwnKeys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+      if (!rightKeys.some((candidate) => Object.is(candidate, key))) {
+        return false;
+      }
+      if (
+        !deepStrictEqualInternal(left[key], right[key], leftSeen, rightSeen)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const isDeepStrictEqual = (left, right) =>
+    deepStrictEqualInternal(left, right, new Map(), new Map());
+
+  const inspectCustom = Symbol.for('nodejs.util.inspect.custom');
+  const inspectDefaultOptions = {
+    depth: 2,
+    customInspect: true,
+  };
+  const quoteInspectString = (value) =>
+    `'${String(value)
+      .replaceAll('\\', '\\\\')
+      .replaceAll("'", "\\'")
+      .replaceAll('\n', '\\n')
+      .replaceAll('\r', '\\r')}'`;
+  let inspectValue;
+  const inspectInternal = (value, options, depth, ancestors) => {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (typeof value === 'string') return quoteInspectString(value);
+    if (typeof value === 'number') {
+      if (Object.is(value, -0)) return '-0';
+      return String(value);
+    }
+    if (typeof value === 'bigint') return `${value}n`;
+    if (typeof value === 'boolean' || typeof value === 'symbol') {
+      return String(value);
+    }
+    if (typeof value === 'function') {
+      return `[Function${value.name ? `: ${value.name}` : ''}]`;
+    }
+
+    if (
+      options.customInspect !== false &&
+      typeof value[inspectCustom] === 'function'
+    ) {
+      const inspected = Reflect.apply(value[inspectCustom], value, [
+        depth,
+        options,
+        inspectValue,
+      ]);
+      if (inspected !== value) {
+        return typeof inspected === 'string'
+          ? inspected
+          : inspectInternal(inspected, options, depth, ancestors);
+      }
+    }
+    if (ancestors.has(value)) return '[Circular]';
+    if (depth < 0) {
+      if (Array.isArray(value)) return '[Array]';
+      if (value instanceof Map) return `[Map(${value.size})]`;
+      if (value instanceof Set) return `[Set(${value.size})]`;
+      return '[Object]';
+    }
+    if (Buffer.isBuffer(value)) {
+      return `<Buffer ${value.toString('hex').replace(/(..)/g, '$1 ').trim()}>`;
+    }
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime())
+        ? 'Invalid Date'
+        : value.toISOString();
+    }
+    if (value instanceof RegExp) return String(value);
+    if (value instanceof Error) return `[${value.name}: ${value.message}]`;
+
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        return `[ ${value
+          .map((entry) => inspectInternal(entry, options, depth - 1, ancestors))
+          .join(', ')} ]`;
+      }
+      if (value instanceof Map) {
+        const entries = [];
+        for (const [key, entry] of value) {
+          entries.push(
+            `${inspectInternal(key, options, depth - 1, ancestors)} => ${inspectInternal(entry, options, depth - 1, ancestors)}`
+          );
+        }
+        return `Map(${value.size}) { ${entries.join(', ')} }`;
+      }
+      if (value instanceof Set) {
+        const entries = [...value].map((entry) =>
+          inspectInternal(entry, options, depth - 1, ancestors)
+        );
+        return `Set(${value.size}) { ${entries.join(', ')} }`;
+      }
+      const entries = enumerableOwnKeys(value).map((key) => {
+        const name =
+          typeof key === 'symbol'
+            ? `[${String(key)}]`
+            : /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
+              ? key
+              : quoteInspectString(key);
+        return `${name}: ${inspectInternal(
+          value[key],
+          options,
+          depth - 1,
+          ancestors
+        )}`;
+      });
+      return `{ ${entries.join(', ')} }`;
+    } finally {
+      ancestors.delete(value);
+    }
+  };
+  inspectValue = (value, options) => {
+    const normalized =
+      options === undefined
+        ? { ...inspectDefaultOptions }
+        : typeof options === 'boolean'
+          ? { ...inspectDefaultOptions, showHidden: options }
+          : { ...inspectDefaultOptions, ...options };
+    const depth =
+      normalized.depth === null ? Number.MAX_SAFE_INTEGER : normalized.depth;
+    if (!Number.isInteger(depth) || depth < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'inspect depth must be a non-negative integer or null'
+      );
+    }
+    return inspectInternal(value, normalized, depth, new Set());
+  };
+  inspectValue.custom = inspectCustom;
+  inspectValue.defaultOptions = inspectDefaultOptions;
+
+  const formatWithOptions = (inspectOptions, format, ...arguments_) => {
+    const inspectArgument = (value) => inspectValue(value, inspectOptions);
+    if (typeof format !== 'string') {
+      return [format, ...arguments_]
+        .map((value) =>
+          typeof value === 'string' ? value : inspectArgument(value)
+        )
+        .join(' ');
+    }
+    let argumentIndex = 0;
+    const result = format.replace(/%[sdifjoOc%]/g, (specifier) => {
+      if (specifier === '%%') return '%';
+      if (argumentIndex >= arguments_.length) return specifier;
+      const value = arguments_[argumentIndex++];
+      if (specifier === '%s') {
+        return value !== null && typeof value === 'object'
+          ? inspectArgument(value)
+          : String(value);
+      }
+      if (specifier === '%d') return String(Number(value));
+      if (specifier === '%i') return String(Number.parseInt(value, 10));
+      if (specifier === '%f') return String(Number.parseFloat(value));
+      if (specifier === '%j') {
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return '[Circular]';
+        }
+      }
+      if (specifier === '%c') return '';
+      return inspectArgument(value);
+    });
+    const remaining = arguments_
+      .slice(argumentIndex)
+      .map((value) =>
+        typeof value === 'string' ? value : inspectArgument(value)
+      );
+    return remaining.length === 0 ? result : `${result} ${remaining.join(' ')}`;
+  };
+  const formatValue = (format, ...arguments_) =>
+    formatWithOptions(undefined, format, ...arguments_);
+
+  const promisifyCustom = Symbol.for('nodejs.util.promisify.custom');
+  const promisify = (original) => {
+    if (typeof original !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'promisify original must be a function'
+      );
+    }
+    if (original[promisifyCustom] !== undefined) {
+      if (typeof original[promisifyCustom] !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'promisify custom implementation must be a function'
+        );
+      }
+      return original[promisifyCustom];
+    }
+    return function (...arguments_) {
+      const receiver = this;
+      return new Promise((resolve, reject) => {
+        const callback = (error, value) => {
+          if (error) reject(error);
+          else resolve(value);
+        };
+        try {
+          Reflect.apply(original, receiver, [...arguments_, callback]);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+  };
+  promisify.custom = promisifyCustom;
+
+  const stripVTControlCharacters = (value) =>
+    String(value).replace(/\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+
+  const utilTypes = Object.freeze({
+    isAnyArrayBuffer: (value) => value instanceof ArrayBuffer,
+    isArrayBuffer: (value) => value instanceof ArrayBuffer,
+    isArrayBufferView: (value) => ArrayBuffer.isView(value),
+    isDate: (value) => value instanceof Date,
+    isMap: (value) => value instanceof Map,
+    isNativeError: (value) => value instanceof Error,
+    isPromise: (value) =>
+      value !== null &&
+      (typeof value === 'object' || typeof value === 'function') &&
+      typeof value.then === 'function',
+    isRegExp: (value) => value instanceof RegExp,
+    isSet: (value) => value instanceof Set,
+    isTypedArray: (value) =>
+      ArrayBuffer.isView(value) && !(value instanceof DataView),
+    isUint8Array: (value) => value instanceof Uint8Array,
+  });
+
+  const utilModule = Object.freeze({
+    format: formatValue,
+    formatWithOptions,
+    inspect: inspectValue,
+    isDeepStrictEqual,
+    promisify,
+    stripVTControlCharacters,
+    types: utilTypes,
+  });
+
+  const AssertionError = function (options) {
+    const normalized = options ?? {};
+    const generatedMessage = normalized.message === undefined;
+    const message = generatedMessage
+      ? `Expected values to satisfy ${normalized.operator ?? 'assertion'}`
+      : String(normalized.message);
+    const error = new Error(message);
+    Object.setPrototypeOf(error, AssertionError.prototype);
+    error.name = 'AssertionError';
+    error.code = 'ERR_ASSERTION';
+    error.actual = normalized.actual;
+    error.expected = normalized.expected;
+    error.operator = normalized.operator;
+    error.generatedMessage = generatedMessage;
+    return error;
+  };
+  AssertionError.prototype = Object.create(Error.prototype);
+  Object.defineProperty(AssertionError.prototype, 'constructor', {
+    value: AssertionError,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+
+  const throwAssertion = (actual, expected, operator, message) => {
+    if (message instanceof Error) throw message;
+    throw new AssertionError({ actual, expected, operator, message });
+  };
+  const assertOk = (value, message) => {
+    if (!value) throwAssertion(value, true, '==', message);
+  };
+  const assertEqual = (actual, expected, message) => {
+    if (!(
+      actual == expected ||
+      (Number.isNaN(actual) && Number.isNaN(expected))
+    )) {
+      throwAssertion(actual, expected, 'equal', message);
+    }
+  };
+  const assertNotEqual = (actual, expected, message) => {
+    if (
+      actual == expected ||
+      (Number.isNaN(actual) && Number.isNaN(expected))
+    ) {
+      throwAssertion(actual, expected, 'notEqual', message);
+    }
+  };
+  const assertStrictEqual = (actual, expected, message) => {
+    if (!Object.is(actual, expected)) {
+      throwAssertion(actual, expected, 'strictEqual', message);
+    }
+  };
+  const assertNotStrictEqual = (actual, expected, message) => {
+    if (Object.is(actual, expected)) {
+      throwAssertion(actual, expected, 'notStrictEqual', message);
+    }
+  };
+  const assertDeepStrictEqual = (actual, expected, message) => {
+    if (!isDeepStrictEqual(actual, expected)) {
+      throwAssertion(actual, expected, 'deepStrictEqual', message);
+    }
+  };
+  const assertNotDeepStrictEqual = (actual, expected, message) => {
+    if (isDeepStrictEqual(actual, expected)) {
+      throwAssertion(actual, expected, 'notDeepStrictEqual', message);
+    }
+  };
+  const assertFail = (message) => {
+    if (message instanceof Error) throw message;
+    throwAssertion(undefined, undefined, 'fail', message ?? 'Failed');
+  };
+  const matchesExpectedError = (error, expected) => {
+    if (expected === undefined) return true;
+    if (expected instanceof RegExp) {
+      expected.lastIndex = 0;
+      return expected.test(String(error?.message ?? error));
+    }
+    if (typeof expected === 'function') {
+      if (
+        expected === Error ||
+        (expected.prototype && expected.prototype instanceof Error)
+      ) {
+        return error instanceof expected;
+      }
+      return expected(error) === true;
+    }
+    if (expected !== null && typeof expected === 'object') {
+      return Reflect.ownKeys(expected).every((key) =>
+        isDeepStrictEqual(error?.[key], expected[key])
+      );
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Expected error must be a constructor, predicate, RegExp, or object'
+    );
+  };
+  const assertThrows = (block, expected, message) => {
+    if (typeof block !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.throws block must be a function'
+      );
+    }
+    let thrown = false;
+    let actual;
+    try {
+      block();
+    } catch (error) {
+      thrown = true;
+      actual = error;
+    }
+    if (!thrown) throwAssertion(undefined, expected, 'throws', message);
+    if (!matchesExpectedError(actual, expected)) {
+      throwAssertion(actual, expected, 'throws', message);
+    }
+    return actual;
+  };
+  const assertDoesNotThrow = (block, expected, message) => {
+    if (typeof block !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.doesNotThrow block must be a function'
+      );
+    }
+    try {
+      block();
+    } catch (error) {
+      if (expected === undefined || matchesExpectedError(error, expected)) {
+        throwAssertion(error, undefined, 'doesNotThrow', message);
+      }
+      throw error;
+    }
+  };
+  const assertRejects = async (block, expected, message) => {
+    let rejected = false;
+    let actual;
+    try {
+      const promise = typeof block === 'function' ? block() : block;
+      await promise;
+    } catch (error) {
+      rejected = true;
+      actual = error;
+    }
+    if (!rejected) throwAssertion(undefined, expected, 'rejects', message);
+    if (!matchesExpectedError(actual, expected)) {
+      throwAssertion(actual, expected, 'rejects', message);
+    }
+    return actual;
+  };
+  const assertDoesNotReject = async (block, expected, message) => {
+    try {
+      const promise = typeof block === 'function' ? block() : block;
+      await promise;
+    } catch (error) {
+      if (expected === undefined || matchesExpectedError(error, expected)) {
+        throwAssertion(error, undefined, 'doesNotReject', message);
+      }
+      throw error;
+    }
+  };
+  const assertMatch = (value, expression, message) => {
+    if (!(expression instanceof RegExp)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.match requires a RegExp'
+      );
+    }
+    expression.lastIndex = 0;
+    if (!expression.test(String(value))) {
+      throwAssertion(value, expression, 'match', message);
+    }
+  };
+  const assertDoesNotMatch = (value, expression, message) => {
+    if (!(expression instanceof RegExp)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'assert.doesNotMatch requires a RegExp'
+      );
+    }
+    expression.lastIndex = 0;
+    if (expression.test(String(value))) {
+      throwAssertion(value, expression, 'doesNotMatch', message);
+    }
+  };
+  const assertIfError = (value) => {
+    if (value !== null && value !== undefined) {
+      throwAssertion(
+        value,
+        null,
+        'ifError',
+        `ifError got unwanted exception: ${value}`
+      );
+    }
+  };
+
+  const assertModule = (value, message) => assertOk(value, message);
+  const strictAssertModule = (value, message) => assertOk(value, message);
+  const sharedAssertionMethods = {
+    AssertionError,
+    fail: assertFail,
+    ifError: assertIfError,
+    match: assertMatch,
+    doesNotMatch: assertDoesNotMatch,
+    throws: assertThrows,
+    doesNotThrow: assertDoesNotThrow,
+    rejects: assertRejects,
+    doesNotReject: assertDoesNotReject,
+    ok: assertOk,
+    strictEqual: assertStrictEqual,
+    notStrictEqual: assertNotStrictEqual,
+    deepStrictEqual: assertDeepStrictEqual,
+    notDeepStrictEqual: assertNotDeepStrictEqual,
+  };
+  Object.assign(assertModule, sharedAssertionMethods, {
+    equal: assertEqual,
+    notEqual: assertNotEqual,
+    deepEqual: assertDeepStrictEqual,
+    notDeepEqual: assertNotDeepStrictEqual,
+  });
+  Object.assign(strictAssertModule, sharedAssertionMethods, {
+    equal: assertStrictEqual,
+    notEqual: assertNotStrictEqual,
+    deepEqual: assertDeepStrictEqual,
+    notDeepEqual: assertNotDeepStrictEqual,
+  });
+  assertModule.strict = strictAssertModule;
+  strictAssertModule.strict = strictAssertModule;
+
+  const querystringEscape = (value) => encodeURIComponent(String(value));
+  const querystringUnescape = (value) => {
+    const source = String(value);
+    try {
+      return decodeURIComponent(source);
+    } catch {
+      return source.replace(/(?:%[0-9A-Fa-f]{2})+/g, (encoded) => {
+        const bytes = [];
+        for (let index = 0; index < encoded.length; index += 3) {
+          bytes.push(Number.parseInt(encoded.slice(index + 1, index + 3), 16));
+        }
+        return decodeUtf8(Uint8Array.from(bytes));
+      });
+    }
+  };
+  const querystringPrimitive = (value) => {
+    if (value === null || value === undefined) return '';
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'bigint' ||
+      typeof value === 'boolean'
+    ) {
+      return String(value);
+    }
+    return '';
+  };
+  let querystringModule;
+  const querystringStringify = (object, separator, equals, options) => {
+    if (object === null || typeof object !== 'object') return '';
+    const normalizedSeparator =
+      separator === undefined ? '&' : String(separator);
+    const normalizedEquals = equals === undefined ? '=' : String(equals);
+    const encoder =
+      options?.encodeURIComponent === undefined
+        ? querystringModule.escape
+        : options.encodeURIComponent;
+    if (typeof encoder !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'querystring encoder must be a function'
+      );
+    }
+    const entries = [];
+    for (const key of Object.keys(object)) {
+      const encodedKey = encoder(key);
+      const values = Array.isArray(object[key]) ? object[key] : [object[key]];
+      for (const value of values) {
+        entries.push(
+          `${encodedKey}${normalizedEquals}${encoder(querystringPrimitive(value))}`
+        );
+      }
+    }
+    return entries.join(normalizedSeparator);
+  };
+  const querystringParse = (value, separator, equals, options) => {
+    const result = Object.create(null);
+    if (typeof value !== 'string' || value.length === 0) return result;
+    const normalizedSeparator =
+      separator === undefined ? '&' : String(separator);
+    const normalizedEquals = equals === undefined ? '=' : String(equals);
+    const decoder =
+      options?.decodeURIComponent === undefined
+        ? querystringModule.unescape
+        : options.decodeURIComponent;
+    if (typeof decoder !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'querystring decoder must be a function'
+      );
+    }
+    const maximum =
+      options?.maxKeys === undefined ? 1000 : Number(options.maxKeys);
+    const parts = value.split(normalizedSeparator);
+    const count =
+      maximum === 0 ? parts.length : Math.min(parts.length, maximum);
+    for (let index = 0; index < count; index += 1) {
+      const part = parts[index];
+      const equalsIndex = part.indexOf(normalizedEquals);
+      const encodedKey = equalsIndex < 0 ? part : part.slice(0, equalsIndex);
+      const encodedValue =
+        equalsIndex < 0
+          ? ''
+          : part.slice(equalsIndex + normalizedEquals.length);
+      const key = decoder(encodedKey.replaceAll('+', ' '));
+      const decoded = decoder(encodedValue.replaceAll('+', ' '));
+      if (!(key in result)) result[key] = decoded;
+      else if (Array.isArray(result[key])) result[key].push(decoded);
+      else result[key] = [result[key], decoded];
+    }
+    return result;
+  };
+  querystringModule = {
+    decode: querystringParse,
+    encode: querystringStringify,
+    escape: querystringEscape,
+    parse: querystringParse,
+    stringify: querystringStringify,
+    unescape: querystringUnescape,
+  };
+
+  const stringDecoderState = Symbol('muon.stringDecoder.state');
+  const normalizeStringDecoderEncoding = (encoding) => {
+    const normalized = String(encoding ?? 'utf8')
+      .toLowerCase()
+      .replaceAll('-', '');
+    if (normalized === 'utf8') return 'utf8';
+    if (normalized === 'utf16le' || normalized === 'ucs2') return 'utf16le';
+    if (normalized === 'base64') return 'base64';
+    if (normalized === 'latin1' || normalized === 'binary') return 'latin1';
+    if (normalized === 'ascii') return 'ascii';
+    if (normalized === 'hex') return 'hex';
+    throw createError(
+      'ERR_UNKNOWN_ENCODING',
+      `Unknown StringDecoder encoding: ${encoding}`
+    );
+  };
+  const stringDecoderBytes = (value) => {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'StringDecoder input must be a Buffer, TypedArray, or DataView'
+    );
+  };
+  const combineBytes = (left, right) => {
+    const combined = new Uint8Array(left.byteLength + right.byteLength);
+    combined.set(left, 0);
+    combined.set(right, left.byteLength);
+    return combined;
+  };
+  const completeUtf8Length = (bytes) => {
+    if (bytes.length === 0) return 0;
+    let leadIndex = bytes.length - 1;
+    while (
+      leadIndex >= 0 &&
+      bytes.length - leadIndex <= 4 &&
+      (bytes[leadIndex] & 0xc0) === 0x80
+    ) {
+      leadIndex -= 1;
+    }
+    if (leadIndex < 0) return bytes.length;
+    const lead = bytes[leadIndex];
+    const expected =
+      lead >= 0xc2 && lead <= 0xdf
+        ? 2
+        : lead >= 0xe0 && lead <= 0xef
+          ? 3
+          : lead >= 0xf0 && lead <= 0xf4
+            ? 4
+            : 1;
+    const available = bytes.length - leadIndex;
+    if (expected > available) {
+      for (let index = leadIndex + 1; index < bytes.length; index += 1) {
+        if ((bytes[index] & 0xc0) !== 0x80) return bytes.length;
+      }
+      return leadIndex;
+    }
+    return bytes.length;
+  };
+  const completeUtf16Length = (bytes) => {
+    let complete = bytes.length - (bytes.length % 2);
+    if (complete >= 2) {
+      const last = bytes[complete - 2] | (bytes[complete - 1] << 8);
+      if (last >= 0xd800 && last <= 0xdbff) complete -= 2;
+    }
+    return complete;
+  };
+  const decodeUtf16 = (bytes, final) => {
+    let result = '';
+    let index = 0;
+    while (index + 1 < bytes.length) {
+      const first = bytes[index] | (bytes[index + 1] << 8);
+      index += 2;
+      if (first >= 0xd800 && first <= 0xdbff) {
+        if (index + 1 < bytes.length) {
+          const second = bytes[index] | (bytes[index + 1] << 8);
+          if (second >= 0xdc00 && second <= 0xdfff) {
+            result += String.fromCodePoint(
+              0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+            );
+            index += 2;
+            continue;
+          }
+        }
+        result += '�';
+      } else if (first >= 0xdc00 && first <= 0xdfff) {
+        result += '�';
+      } else {
+        result += String.fromCharCode(first);
+      }
+    }
+    if (final && index < bytes.length) result += '�';
+    return result;
+  };
+  const decodeStringDecoderBytes = (bytes, encoding, final) => {
+    if (encoding === 'utf8') return decodeUtf8(bytes);
+    if (encoding === 'utf16le') return decodeUtf16(bytes, final);
+    if (encoding === 'base64') return encodeBase64(bytes);
+    if (encoding === 'hex') {
+      return Array.from(bytes, (value) =>
+        value.toString(16).padStart(2, '0')
+      ).join('');
+    }
+    if (encoding === 'ascii') {
+      return Array.from(bytes, (value) =>
+        String.fromCharCode(value & 0x7f)
+      ).join('');
+    }
+    return Array.from(bytes, (value) => String.fromCharCode(value)).join('');
+  };
+  const StringDecoder = function (encoding) {
+    if (!(this instanceof StringDecoder)) return new StringDecoder(encoding);
+    const normalized = normalizeStringDecoderEncoding(encoding);
+    Object.defineProperty(this, stringDecoderState, {
+      value: { encoding: normalized, pending: new Uint8Array() },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.encoding = normalized;
+  };
+  StringDecoder.prototype.write = function (value) {
+    const state = this[stringDecoderState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'StringDecoder.write called on an incompatible receiver'
+      );
+    }
+    const bytes = combineBytes(state.pending, stringDecoderBytes(value));
+    const complete =
+      state.encoding === 'utf8'
+        ? completeUtf8Length(bytes)
+        : state.encoding === 'utf16le'
+          ? completeUtf16Length(bytes)
+          : state.encoding === 'base64'
+            ? bytes.length - (bytes.length % 3)
+            : bytes.length;
+    state.pending = Uint8Array.from(bytes.subarray(complete));
+    return decodeStringDecoderBytes(
+      bytes.subarray(0, complete),
+      state.encoding,
+      false
+    );
+  };
+  StringDecoder.prototype.end = function (value) {
+    const state = this[stringDecoderState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'StringDecoder.end called on an incompatible receiver'
+      );
+    }
+    const written = value === undefined ? '' : this.write(value);
+    const trailing = decodeStringDecoderBytes(
+      state.pending,
+      state.encoding,
+      true
+    );
+    state.pending = new Uint8Array();
+    return written + trailing;
+  };
+  const stringDecoderModule = Object.freeze({ StringDecoder });
+
+  const maximumCryptoRandomBytes = 1024 * 1024;
+  const maximumCryptoHashBytes = 16 * 1024 * 1024;
+  const sha256Constants = Uint32Array.from([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ]);
+  const rotateRight32 = (value, count) =>
+    (value >>> count) | (value << (32 - count));
+  const sha256 = (input) => {
+    const bitLength = input.length * 8;
+    const paddedLength = Math.ceil((input.length + 9) / 64) * 64;
+    const padded = new Uint8Array(paddedLength);
+    padded.set(input);
+    padded[input.length] = 0x80;
+    const lengthOffset = padded.length - 8;
+    const highLength = Math.floor(bitLength / 0x100000000);
+    const lowLength = bitLength >>> 0;
+    padded[lengthOffset] = highLength >>> 24;
+    padded[lengthOffset + 1] = highLength >>> 16;
+    padded[lengthOffset + 2] = highLength >>> 8;
+    padded[lengthOffset + 3] = highLength;
+    padded[lengthOffset + 4] = lowLength >>> 24;
+    padded[lengthOffset + 5] = lowLength >>> 16;
+    padded[lengthOffset + 6] = lowLength >>> 8;
+    padded[lengthOffset + 7] = lowLength;
+
+    let a0 = 0x6a09e667;
+    let b0 = 0xbb67ae85;
+    let c0 = 0x3c6ef372;
+    let d0 = 0xa54ff53a;
+    let e0 = 0x510e527f;
+    let f0 = 0x9b05688c;
+    let g0 = 0x1f83d9ab;
+    let h0 = 0x5be0cd19;
+    const words = new Uint32Array(64);
+
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let index = 0; index < 16; index += 1) {
+        const wordOffset = offset + index * 4;
+        words[index] =
+          (padded[wordOffset] << 24) |
+          (padded[wordOffset + 1] << 16) |
+          (padded[wordOffset + 2] << 8) |
+          padded[wordOffset + 3];
+      }
+      for (let index = 16; index < 64; index += 1) {
+        const previous = words[index - 15];
+        const previous2 = words[index - 2];
+        const sigma0 =
+          rotateRight32(previous, 7) ^
+          rotateRight32(previous, 18) ^
+          (previous >>> 3);
+        const sigma1 =
+          rotateRight32(previous2, 17) ^
+          rotateRight32(previous2, 19) ^
+          (previous2 >>> 10);
+        words[index] =
+          (words[index - 16] + sigma0 + words[index - 7] + sigma1) >>> 0;
+      }
+
+      let a = a0;
+      let b = b0;
+      let c = c0;
+      let d = d0;
+      let e = e0;
+      let f = f0;
+      let g = g0;
+      let h = h0;
+      for (let index = 0; index < 64; index += 1) {
+        const sum1 =
+          rotateRight32(e, 6) ^ rotateRight32(e, 11) ^ rotateRight32(e, 25);
+        const choose = (e & f) ^ (~e & g);
+        const temporary1 =
+          (h + sum1 + choose + sha256Constants[index] + words[index]) >>> 0;
+        const sum0 =
+          rotateRight32(a, 2) ^ rotateRight32(a, 13) ^ rotateRight32(a, 22);
+        const majority = (a & b) ^ (a & c) ^ (b & c);
+        const temporary2 = (sum0 + majority) >>> 0;
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temporary1) >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (temporary1 + temporary2) >>> 0;
+      }
+      a0 = (a0 + a) >>> 0;
+      b0 = (b0 + b) >>> 0;
+      c0 = (c0 + c) >>> 0;
+      d0 = (d0 + d) >>> 0;
+      e0 = (e0 + e) >>> 0;
+      f0 = (f0 + f) >>> 0;
+      g0 = (g0 + g) >>> 0;
+      h0 = (h0 + h) >>> 0;
+    }
+
+    const digest = new Uint8Array(32);
+    const state = [a0, b0, c0, d0, e0, f0, g0, h0];
+    for (let index = 0; index < state.length; index += 1) {
+      const value = state[index];
+      digest[index * 4] = value >>> 24;
+      digest[index * 4 + 1] = value >>> 16;
+      digest[index * 4 + 2] = value >>> 8;
+      digest[index * 4 + 3] = value;
+    }
+    return digest;
+  };
+
+  const normalizeCryptoAlgorithm = (algorithm) => {
+    const normalized = String(algorithm).toLowerCase().replaceAll('-', '');
+    if (normalized !== 'sha256') {
+      throw createError(
+        'ERR_CRYPTO_UNKNOWN_HASH',
+        `Unsupported hash algorithm: ${algorithm}`
+      );
+    }
+    return 'sha256';
+  };
+  const cryptoInputBytes = (value, encoding) => {
+    if (typeof value === 'string') {
+      return Uint8Array.from(Buffer.from(value, encoding));
+    }
+    if (value instanceof ArrayBuffer) {
+      return Uint8Array.from(new Uint8Array(value));
+    }
+    if (ArrayBuffer.isView(value)) {
+      return Uint8Array.from(
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+      );
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Crypto data must be text, an ArrayBuffer, or an ArrayBuffer view'
+    );
+  };
+  const cryptoOutput = (bytes, encoding) =>
+    encoding === undefined
+      ? Buffer.from(bytes)
+      : Buffer.from(bytes).toString(encoding);
+  const joinCryptoChunks = (chunks, totalLength) => {
+    const bytes = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return bytes;
+  };
+
+  const createHashState = (algorithm, initialChunks) => {
+    normalizeCryptoAlgorithm(algorithm);
+    const state = {
+      chunks: initialChunks.map((chunk) => Uint8Array.from(chunk)),
+      finalized: false,
+      totalLength: initialChunks.reduce(
+        (total, chunk) => total + chunk.length,
+        0
+      ),
+    };
+    const requireActive = () => {
+      if (state.finalized) {
+        throw createError(
+          'ERR_CRYPTO_HASH_FINALIZED',
+          'Digest has already been called'
+        );
+      }
+    };
+    const hash = {
+      update: (value, encoding) => {
+        requireActive();
+        const bytes = cryptoInputBytes(value, encoding);
+        if (state.totalLength + bytes.length > maximumCryptoHashBytes) {
+          throw createError(
+            'ERR_OUT_OF_RANGE',
+            'Hash input exceeds the 16 MiB runtime limit'
+          );
+        }
+        state.chunks.push(bytes);
+        state.totalLength += bytes.length;
+        return hash;
+      },
+      digest: (encoding) => {
+        requireActive();
+        state.finalized = true;
+        return cryptoOutput(
+          sha256(joinCryptoChunks(state.chunks, state.totalLength)),
+          encoding
+        );
+      },
+      copy: () => {
+        requireActive();
+        return createHashState('sha256', state.chunks);
+      },
+    };
+    return hash;
+  };
+  const createHash = (algorithm) => createHashState(algorithm, []);
+
+  const sha256Hmac = (key, data) => {
+    let normalizedKey = key;
+    if (normalizedKey.length > 64) normalizedKey = sha256(normalizedKey);
+    const block = new Uint8Array(64);
+    block.set(normalizedKey);
+    const innerPad = Uint8Array.from(block, (value) => value ^ 0x36);
+    const outerPad = Uint8Array.from(block, (value) => value ^ 0x5c);
+    return sha256(combineBytes(outerPad, sha256(combineBytes(innerPad, data))));
+  };
+  const createHmac = (algorithm, key) => {
+    normalizeCryptoAlgorithm(algorithm);
+    const keyBytes = cryptoInputBytes(key, undefined);
+    if (keyBytes.length > maximumCryptoHashBytes) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'HMAC key exceeds the runtime limit'
+      );
+    }
+    const state = { chunks: [], finalized: false, totalLength: 0 };
+    const hmac = {
+      update: (value, encoding) => {
+        if (state.finalized) {
+          throw createError(
+            'ERR_CRYPTO_HASH_FINALIZED',
+            'Digest has already been called'
+          );
+        }
+        const bytes = cryptoInputBytes(value, encoding);
+        if (state.totalLength + bytes.length > maximumCryptoHashBytes) {
+          throw createError(
+            'ERR_OUT_OF_RANGE',
+            'HMAC input exceeds the 16 MiB runtime limit'
+          );
+        }
+        state.chunks.push(bytes);
+        state.totalLength += bytes.length;
+        return hmac;
+      },
+      digest: (encoding) => {
+        if (state.finalized) {
+          throw createError(
+            'ERR_CRYPTO_HASH_FINALIZED',
+            'Digest has already been called'
+          );
+        }
+        state.finalized = true;
+        return cryptoOutput(
+          sha256Hmac(
+            keyBytes,
+            joinCryptoChunks(state.chunks, state.totalLength)
+          ),
+          encoding
+        );
+      },
+    };
+    return hmac;
+  };
+
+  const validateRandomSize = (size) => {
+    const normalized = Number(size);
+    if (
+      !Number.isInteger(normalized) ||
+      normalized < 0 ||
+      normalized > maximumCryptoRandomBytes
+    ) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Random byte count must be between 0 and 1048576'
+      );
+    }
+    return normalized;
+  };
+  const secureRandomBytes = (size) =>
+    Buffer.from(__muonCryptoRandom(validateRandomSize(size)));
+  const randomBytes = (size, callback) => {
+    if (callback === undefined) return secureRandomBytes(size);
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomBytes callback must be a function'
+      );
+    }
+    let error = null;
+    let bytes;
+    try {
+      bytes = secureRandomBytes(size);
+    } catch (caught) {
+      error = caught;
+    }
+    setCallbackImmediate(callback, error, bytes);
+    return undefined;
+  };
+  const cryptoByteView = (value) => {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Random target must be an ArrayBuffer or ArrayBuffer view'
+    );
+  };
+  const randomFillSync = (target, offset, size) => {
+    const bytes = cryptoByteView(target);
+    const normalizedOffset = offset === undefined ? 0 : Number(offset);
+    const normalizedSize =
+      size === undefined ? bytes.length - normalizedOffset : Number(size);
+    if (
+      !Number.isInteger(normalizedOffset) ||
+      !Number.isInteger(normalizedSize) ||
+      normalizedOffset < 0 ||
+      normalizedSize < 0 ||
+      normalizedOffset + normalizedSize > bytes.length
+    ) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Random fill range is outside the target buffer'
+      );
+    }
+    bytes.set(secureRandomBytes(normalizedSize), normalizedOffset);
+    return target;
+  };
+  const randomFill = (target, offset, size, callback) => {
+    let normalizedOffset = offset;
+    let normalizedSize = size;
+    let normalizedCallback = callback;
+    if (typeof offset === 'function') {
+      normalizedCallback = offset;
+      normalizedOffset = undefined;
+      normalizedSize = undefined;
+    } else if (typeof size === 'function') {
+      normalizedCallback = size;
+      normalizedSize = undefined;
+    }
+    if (typeof normalizedCallback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomFill callback must be a function'
+      );
+    }
+    let error = null;
+    try {
+      randomFillSync(target, normalizedOffset, normalizedSize);
+    } catch (caught) {
+      error = caught;
+    }
+    setCallbackImmediate(normalizedCallback, error, error ? undefined : target);
+  };
+
+  const secureRandomInteger = (minimum, maximum) => {
+    if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomInt bounds must be safe integers'
+      );
+    }
+    const range = maximum - minimum;
+    const sampleSpace = 0x1000000000000;
+    if (range <= 0 || range >= sampleSpace) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'randomInt range must be positive and less than 2^48'
+      );
+    }
+    const limit = Math.floor(sampleSpace / range) * range;
+    while (true) {
+      const bytes = secureRandomBytes(6);
+      let sample = 0;
+      for (const byte of bytes) sample = sample * 256 + byte;
+      if (sample < limit) return minimum + (sample % range);
+    }
+  };
+  const randomInt = (minimum, maximum, callback) => {
+    let normalizedMinimum = minimum;
+    let normalizedMaximum = maximum;
+    let normalizedCallback = callback;
+    if (typeof maximum === 'function') {
+      normalizedCallback = maximum;
+      normalizedMaximum = minimum;
+      normalizedMinimum = 0;
+    } else if (maximum === undefined) {
+      normalizedMaximum = minimum;
+      normalizedMinimum = 0;
+    }
+    if (
+      normalizedCallback !== undefined &&
+      typeof normalizedCallback !== 'function'
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomInt callback must be a function'
+      );
+    }
+    const value = secureRandomInteger(normalizedMinimum, normalizedMaximum);
+    if (normalizedCallback === undefined) return value;
+    setCallbackImmediate(normalizedCallback, null, value);
+    return undefined;
+  };
+  const randomUUID = (options) => {
+    if (
+      options !== undefined &&
+      (options === null || typeof options !== 'object')
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'randomUUID options must be an object'
+      );
+    }
+    const bytes = secureRandomBytes(16);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = bytes.toString('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+      12,
+      16
+    )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+  const getRandomValues = (target) => {
+    const bytes = cryptoByteView(target);
+    if (bytes.byteLength > 65536) {
+      const error = new Error('Random value target exceeds 65536 bytes');
+      error.name = 'QuotaExceededError';
+      throw error;
+    }
+    randomFillSync(target);
+    return target;
+  };
+  const timingSafeEqual = (left, right) => {
+    const leftBytes = Uint8Array.from(cryptoByteView(left));
+    const rightBytes = Uint8Array.from(cryptoByteView(right));
+    if (leftBytes.length !== rightBytes.length) {
+      throw createError(
+        'ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH',
+        'Input buffers must have the same byte length'
+      );
+    }
+    return __muonCryptoTimingSafeEqual(leftBytes.buffer, rightBytes.buffer);
+  };
+  const hashValue = (algorithm, data, options) => {
+    const encoding =
+      typeof options === 'string'
+        ? options
+        : options?.outputEncoding === undefined
+          ? 'hex'
+          : options.outputEncoding;
+    return createHash(algorithm).update(data).digest(encoding);
+  };
+  const getHashes = () => ['sha256'];
+  const cryptoModule = Object.freeze({
+    createHash,
+    createHmac,
+    getHashes,
+    getRandomValues,
+    hash: hashValue,
+    randomBytes,
+    randomFill,
+    randomFillSync,
+    randomInt,
+    randomUUID,
+    timingSafeEqual,
+  });
+  const globalCrypto = Object.freeze({ getRandomValues, randomUUID });
+
+  const eventType = Symbol('muon.event.type');
+  const eventTarget = Symbol('muon.event.target');
+  const eventCurrentTarget = Symbol('muon.event.currentTarget');
+  const eventPropagationStopped = Symbol('muon.event.propagationStopped');
+  const eventImmediatePropagationStopped = Symbol(
+    'muon.event.immediatePropagationStopped'
+  );
+  const eventTargetListeners = Symbol('muon.eventTarget.listeners');
+
+  const Event = function (type, options) {
+    if (type === undefined) {
+      throw createError('ERR_MISSING_ARGS', 'Event type is required');
+    }
+    this[eventType] = String(type);
+    this[eventTarget] = null;
+    this[eventCurrentTarget] = null;
+    this[eventPropagationStopped] = false;
+    this[eventImmediatePropagationStopped] = false;
+    this.bubbles = Boolean(options && options.bubbles);
+    this.cancelable = Boolean(options && options.cancelable);
+    this.composed = Boolean(options && options.composed);
+    this.defaultPrevented = false;
+    this.timeStamp = Date.now();
+  };
+  Object.defineProperties(Event.prototype, {
+    type: {
+      get: function () {
+        return this[eventType];
+      },
+    },
+    target: {
+      get: function () {
+        return this[eventTarget];
+      },
+    },
+    currentTarget: {
+      get: function () {
+        return this[eventCurrentTarget];
+      },
+    },
+    eventPhase: { get: () => 2 },
+  });
+  Event.prototype.composedPath = function () {
+    return this[eventTarget] === null ? [] : [this[eventTarget]];
+  };
+  Event.prototype.preventDefault = function () {
+    if (this.cancelable) this.defaultPrevented = true;
+  };
+  Event.prototype.stopPropagation = function () {
+    this[eventPropagationStopped] = true;
+  };
+  Event.prototype.stopImmediatePropagation = function () {
+    this[eventPropagationStopped] = true;
+    this[eventImmediatePropagationStopped] = true;
+  };
+
+  const EventTarget = function () {
+    Object.defineProperty(this, eventTargetListeners, {
+      value: new Map(),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  };
+
+  const requireEventTargetListeners = (target) => {
+    const listeners = target[eventTargetListeners];
+    if (!(listeners instanceof Map)) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'EventTarget method called on an incompatible receiver'
+      );
+    }
+    return listeners;
+  };
+
+  const normalizeEventOptions = (options) =>
+    typeof options === 'boolean'
+      ? { capture: options, once: false, signal: undefined }
+      : {
+          capture: Boolean(options && options.capture),
+          once: Boolean(options && options.once),
+          signal: options && options.signal,
+        };
+
+  const eventTargetRemoveEventListener = function (type, listener, options) {
+    if (listener === null || listener === undefined) return;
+    const listeners = requireEventTargetListeners(this);
+    const name = String(type);
+    const capture = normalizeEventOptions(options).capture;
+    const entries = listeners.get(name);
+    if (!entries) return;
+    const index = entries.findIndex(
+      (entry) => entry.listener === listener && entry.capture === capture
+    );
+    if (index < 0) return;
+    const [entry] = entries.splice(index, 1);
+    if (entries.length === 0) listeners.delete(name);
+    if (entry.abortSignal && entry.abortListener) {
+      entry.abortSignal.removeEventListener('abort', entry.abortListener);
+    }
+  };
+
+  const eventTargetAddEventListener = function (type, listener, options) {
+    if (listener === null || listener === undefined) return;
+    if (
+      typeof listener !== 'function' &&
+      (typeof listener !== 'object' ||
+        typeof listener.handleEvent !== 'function')
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'Event listener must be a function or EventListener object'
+      );
+    }
+    const listeners = requireEventTargetListeners(this);
+    const name = String(type);
+    const normalized = normalizeEventOptions(options);
+    if (normalized.signal && normalized.signal.aborted) return;
+    const entries = listeners.get(name) ?? [];
+    if (
+      entries.some(
+        (entry) =>
+          entry.listener === listener && entry.capture === normalized.capture
+      )
+    ) {
+      return;
+    }
+    const entry = {
+      listener,
+      capture: normalized.capture,
+      once: normalized.once,
+      abortSignal: normalized.signal,
+      abortListener: undefined,
+    };
+    entries.push(entry);
+    listeners.set(name, entries);
+    if (normalized.signal) {
+      entry.abortListener = () =>
+        eventTargetRemoveEventListener.call(this, name, listener, {
+          capture: normalized.capture,
+        });
+      normalized.signal.addEventListener('abort', entry.abortListener, {
+        once: true,
+      });
+    }
+  };
+
+  const eventTargetDispatchEvent = function (event) {
+    if (!(event instanceof Event)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'dispatchEvent requires an Event'
+      );
+    }
+    const listeners = requireEventTargetListeners(this);
+    event[eventTarget] = this;
+    event[eventCurrentTarget] = this;
+    event[eventPropagationStopped] = false;
+    event[eventImmediatePropagationStopped] = false;
+    const entries = [...(listeners.get(event.type) ?? [])];
+    for (const entry of entries) {
+      if (event[eventImmediatePropagationStopped]) break;
+      if (entry.once) {
+        eventTargetRemoveEventListener.call(this, event.type, entry.listener, {
+          capture: entry.capture,
+        });
+      }
+      if (typeof entry.listener === 'function') {
+        Reflect.apply(entry.listener, this, [event]);
+      } else {
+        Reflect.apply(entry.listener.handleEvent, entry.listener, [event]);
+      }
+    }
+    event[eventCurrentTarget] = null;
+    return !event.defaultPrevented;
+  };
+
+  EventTarget.prototype.addEventListener = eventTargetAddEventListener;
+  EventTarget.prototype.removeEventListener = eventTargetRemoveEventListener;
+  EventTarget.prototype.dispatchEvent = eventTargetDispatchEvent;
+
+  const domExceptionCodes = Object.freeze({
+    AbortError: 20,
+    TimeoutError: 23,
+  });
+  const DOMException = function (message, name) {
+    const error = new Error(message === undefined ? '' : String(message));
+    Object.setPrototypeOf(error, DOMException.prototype);
+    error.name = name === undefined ? 'Error' : String(name);
+    Object.defineProperty(error, 'code', {
+      value: domExceptionCodes[error.name] ?? 0,
+      configurable: true,
+      enumerable: true,
+      writable: false,
+    });
+    return error;
+  };
+  DOMException.prototype = Object.create(Error.prototype);
+  Object.defineProperty(DOMException.prototype, 'constructor', {
+    value: DOMException,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+
+  const abortSignalKey = {};
+  const abortSignalAborted = Symbol('muon.abortSignal.aborted');
+  const abortSignalReason = Symbol('muon.abortSignal.reason');
+  const AbortSignal = function (key) {
+    if (key !== abortSignalKey) {
+      throw createError(
+        'ERR_ILLEGAL_CONSTRUCTOR',
+        'AbortSignal cannot be constructed directly'
+      );
+    }
+    EventTarget.call(this);
+    this[abortSignalAborted] = false;
+    this[abortSignalReason] = undefined;
+    this.onabort = null;
+  };
+  AbortSignal.prototype = Object.create(EventTarget.prototype);
+  Object.defineProperty(AbortSignal.prototype, 'constructor', {
+    value: AbortSignal,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Object.defineProperties(AbortSignal.prototype, {
+    aborted: {
+      get: function () {
+        return this[abortSignalAborted];
+      },
+    },
+    reason: {
+      get: function () {
+        return this[abortSignalReason];
+      },
+    },
+  });
+  AbortSignal.prototype.throwIfAborted = function () {
+    if (this[abortSignalAborted]) throw this[abortSignalReason];
+  };
+
+  const abortSignal = (signal, reason) => {
+    if (signal[abortSignalAborted]) return;
+    signal[abortSignalAborted] = true;
+    signal[abortSignalReason] =
+      reason === undefined
+        ? new DOMException('This operation was aborted', 'AbortError')
+        : reason;
+    const event = new Event('abort');
+    signal.dispatchEvent(event);
+    if (typeof signal.onabort === 'function') {
+      Reflect.apply(signal.onabort, signal, [event]);
+    }
+  };
+
+  AbortSignal.abort = (reason) => {
+    const signal = new AbortSignal(abortSignalKey);
+    abortSignal(signal, reason);
+    return signal;
+  };
+  AbortSignal.timeout = (delay) => {
+    const milliseconds = Number(delay);
+    if (!Number.isInteger(milliseconds) || milliseconds < 0) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'AbortSignal timeout must be a non-negative integer'
+      );
+    }
+    const signal = new AbortSignal(abortSignalKey);
+    globalThis.setTimeout(
+      () =>
+        abortSignal(
+          signal,
+          new DOMException('The operation timed out', 'TimeoutError')
+        ),
+      milliseconds
+    );
+    return signal;
+  };
+  AbortSignal.any = (signals) => {
+    if (
+      signals === null ||
+      signals === undefined ||
+      !signals[Symbol.iterator]
+    ) {
+      throw createError('ERR_INVALID_ARG_TYPE', 'signals must be iterable');
+    }
+    const result = new AbortSignal(abortSignalKey);
+    const subscriptions = [];
+    const detach = () => {
+      for (const subscription of subscriptions) {
+        subscription.signal.removeEventListener('abort', subscription.listener);
+      }
+      subscriptions.length = 0;
+    };
+    for (const signal of signals) {
+      if (!(signal instanceof AbortSignal)) {
+        detach();
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'signals entries must be AbortSignal instances'
+        );
+      }
+      if (signal.aborted) {
+        detach();
+        abortSignal(result, signal.reason);
+        return result;
+      }
+      const listener = () => {
+        detach();
+        abortSignal(result, signal.reason);
+      };
+      subscriptions.push({ signal, listener });
+      signal.addEventListener('abort', listener, { once: true });
+    }
+    return result;
+  };
+
+  const AbortController = function () {
+    Object.defineProperty(this, 'signal', {
+      value: new AbortSignal(abortSignalKey),
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  };
+  AbortController.prototype.abort = function (reason) {
+    abortSignal(this.signal, reason);
+  };
+
+  const createAbortError = (reason) => {
+    const error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    error.code = 'ABORT_ERR';
+    error.cause = reason;
+    return error;
+  };
+
+  const eventEmitterListeners = Symbol('muon.eventEmitter.listeners');
+  const eventEmitterMaximum = Symbol('muon.eventEmitter.maximum');
+  const EventEmitter = function () {
+    if (!(this instanceof EventEmitter)) return new EventEmitter();
+    Object.defineProperty(this, eventEmitterListeners, {
+      value: new Map(),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this[eventEmitterMaximum] = undefined;
+  };
+  EventEmitter.defaultMaxListeners = 10;
+
+  const requireEmitterListeners = (emitter) => {
+    const listeners = emitter[eventEmitterListeners];
+    if (!(listeners instanceof Map)) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'EventEmitter method called on an incompatible receiver'
+      );
+    }
+    return listeners;
+  };
+  const validateEventListener = (listener) => {
+    if (typeof listener !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'listener must be a function');
+    }
+  };
+  const addEmitterListener = (emitter, name, listener, prepend) => {
+    validateEventListener(listener);
+    const listeners = requireEmitterListeners(emitter);
+    if (listeners.has('newListener')) {
+      emitter.emit('newListener', name, listener.listener ?? listener);
+    }
+    const entries = listeners.get(name) ?? [];
+    if (prepend) entries.unshift(listener);
+    else entries.push(listener);
+    listeners.set(name, entries);
+    return emitter;
+  };
+  const eventEmitterOn = function (name, listener) {
+    return addEmitterListener(this, name, listener, false);
+  };
+  const eventEmitterPrependListener = function (name, listener) {
+    return addEmitterListener(this, name, listener, true);
+  };
+  const createOnceListener = (emitter, name, listener) => {
+    let fired = false;
+    const wrapper = function (...arguments_) {
+      if (fired) return undefined;
+      fired = true;
+      emitter.removeListener(name, wrapper);
+      return Reflect.apply(listener, emitter, arguments_);
+    };
+    wrapper.listener = listener;
+    return wrapper;
+  };
+  const eventEmitterOnce = function (name, listener) {
+    validateEventListener(listener);
+    return this.on(name, createOnceListener(this, name, listener));
+  };
+  const eventEmitterPrependOnceListener = function (name, listener) {
+    validateEventListener(listener);
+    return this.prependListener(name, createOnceListener(this, name, listener));
+  };
+  const eventEmitterEmit = function (name, ...arguments_) {
+    const listeners = requireEmitterListeners(this);
+    const entries = listeners.get(name);
+    if ((!entries || entries.length === 0) && name === 'error') {
+      const error = arguments_[0];
+      throw error instanceof Error
+        ? error
+        : createError(
+            'ERR_UNHANDLED_ERROR',
+            `Unhandled error: ${String(error)}`
+          );
+    }
+    if (!entries || entries.length === 0) return false;
+    for (const listener of [...entries]) {
+      Reflect.apply(listener, this, arguments_);
+    }
+    return true;
+  };
+  const eventEmitterRemoveListener = function (name, listener) {
+    validateEventListener(listener);
+    const listeners = requireEmitterListeners(this);
+    const entries = listeners.get(name);
+    if (!entries) return this;
+    let removed;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry === listener || entry.listener === listener) {
+        [removed] = entries.splice(index, 1);
+        break;
+      }
+    }
+    if (!removed) return this;
+    if (entries.length === 0) listeners.delete(name);
+    if (listeners.has('removeListener')) {
+      this.emit('removeListener', name, removed.listener ?? removed);
+    }
+    return this;
+  };
+  const eventEmitterRemoveAllListeners = function (name) {
+    const listeners = requireEmitterListeners(this);
+    if (name !== undefined) {
+      for (const listener of [...(listeners.get(name) ?? [])].reverse()) {
+        this.removeListener(name, listener);
+      }
+      return this;
+    }
+    for (const eventName of [...listeners.keys()]) {
+      if (eventName !== 'removeListener') this.removeAllListeners(eventName);
+    }
+    this.removeAllListeners('removeListener');
+    return this;
+  };
+  const eventEmitterListenersFor = function (name) {
+    return (requireEmitterListeners(this).get(name) ?? []).map(
+      (listener) => listener.listener ?? listener
+    );
+  };
+  const eventEmitterRawListeners = function (name) {
+    return [...(requireEmitterListeners(this).get(name) ?? [])];
+  };
+  const eventEmitterListenerCount = function (name, listener) {
+    const entries = requireEmitterListeners(this).get(name) ?? [];
+    if (listener === undefined) return entries.length;
+    return entries.filter(
+      (entry) => entry === listener || entry.listener === listener
+    ).length;
+  };
+  const eventEmitterEventNames = function () {
+    return [...requireEmitterListeners(this).keys()];
+  };
+  const eventEmitterSetMaxListeners = function (maximum) {
+    if (!Number.isInteger(maximum) || maximum < 0) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'maximum listeners must be a non-negative integer'
+      );
+    }
+    this[eventEmitterMaximum] = maximum;
+    return this;
+  };
+  const eventEmitterGetMaxListeners = function () {
+    return this[eventEmitterMaximum] ?? EventEmitter.defaultMaxListeners;
+  };
+
+  EventEmitter.prototype.addListener = eventEmitterOn;
+  EventEmitter.prototype.on = eventEmitterOn;
+  EventEmitter.prototype.prependListener = eventEmitterPrependListener;
+  EventEmitter.prototype.once = eventEmitterOnce;
+  EventEmitter.prototype.prependOnceListener = eventEmitterPrependOnceListener;
+  EventEmitter.prototype.emit = eventEmitterEmit;
+  EventEmitter.prototype.removeListener = eventEmitterRemoveListener;
+  EventEmitter.prototype.off = eventEmitterRemoveListener;
+  EventEmitter.prototype.removeAllListeners = eventEmitterRemoveAllListeners;
+  EventEmitter.prototype.listeners = eventEmitterListenersFor;
+  EventEmitter.prototype.rawListeners = eventEmitterRawListeners;
+  EventEmitter.prototype.listenerCount = eventEmitterListenerCount;
+  EventEmitter.prototype.eventNames = eventEmitterEventNames;
+  EventEmitter.prototype.setMaxListeners = eventEmitterSetMaxListeners;
+  EventEmitter.prototype.getMaxListeners = eventEmitterGetMaxListeners;
+  EventEmitter.listenerCount = (emitter, name) => emitter.listenerCount(name);
+
+  const onceEvent = (emitter, name, options) =>
+    new Promise((resolve, reject) => {
+      const signal = options && options.signal;
+      let settled = false;
+      const usesEventTarget =
+        typeof emitter.on !== 'function' &&
+        typeof emitter.addEventListener === 'function';
+      const remove = (eventName, listener) => {
+        if (usesEventTarget) emitter.removeEventListener(eventName, listener);
+        else emitter.removeListener(eventName, listener);
+      };
+      const add = (eventName, listener) => {
+        if (usesEventTarget) {
+          emitter.addEventListener(eventName, listener, { once: true });
+        } else {
+          emitter.once(eventName, listener);
+        }
+      };
+      const cleanup = () => {
+        remove(name, eventListener);
+        if (!usesEventTarget && name !== 'error')
+          remove('error', errorListener);
+        if (signal) signal.removeEventListener('abort', abortListener);
+      };
+      const eventListener = (...arguments_) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(arguments_);
+      };
+      const errorListener = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const abortListener = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(createAbortError(signal.reason));
+      };
+      if (signal && signal.aborted) {
+        abortListener();
+        return;
+      }
+      add(name, eventListener);
+      if (!usesEventTarget && name !== 'error') add('error', errorListener);
+      if (signal)
+        signal.addEventListener('abort', abortListener, { once: true });
+    });
+
+  const addAbortListener = (signal, listener) => {
+    if (!(signal instanceof AbortSignal)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'signal must be an AbortSignal'
+      );
+    }
+    validateEventListener(listener);
+    if (signal.aborted) listener();
+    else signal.addEventListener('abort', listener, { once: true });
+    const disposeSymbol = Symbol.dispose ?? Symbol.for('nodejs.dispose');
+    return {
+      [disposeSymbol]: () => signal.removeEventListener('abort', listener),
+    };
+  };
+
+  const eventsModule = Object.freeze({
+    default: EventEmitter,
+    EventEmitter,
+    once: onceEvent,
+    addAbortListener,
+    getEventListeners: (emitter, name) =>
+      typeof emitter.listeners === 'function'
+        ? emitter.listeners(name)
+        : (emitter[eventTargetListeners]?.get(String(name)) ?? []).map(
+            (entry) => entry.listener
+          ),
+    getMaxListeners: (emitter) =>
+      typeof emitter.getMaxListeners === 'function'
+        ? emitter.getMaxListeners()
+        : EventEmitter.defaultMaxListeners,
+    listenerCount: (emitter, name) => emitter.listenerCount(name),
+    setMaxListeners: (maximum, ...emitters) => {
+      if (emitters.length === 0) EventEmitter.defaultMaxListeners = maximum;
+      else for (const emitter of emitters) emitter.setMaxListeners(maximum);
+    },
+  });
+
+  const processStartNanoseconds = __muonMonotonicNanoseconds();
+  const processEnvironmentValues = Object.create(null);
+  processEnvironmentValues.HOME = '/';
+  processEnvironmentValues.TMPDIR = '/tmp';
+  const processEnvironment = new Proxy(processEnvironmentValues, {
+    set: (target, name, value) => {
+      target[name] = String(value);
+      return true;
+    },
+  });
+  const processHrtime = (time) => {
+    let elapsed = __muonMonotonicNanoseconds();
+    if (time !== undefined) {
+      if (
+        !Array.isArray(time) ||
+        time.length !== 2 ||
+        !Number.isInteger(time[0]) ||
+        !Number.isInteger(time[1]) ||
+        time[0] < 0 ||
+        time[1] < 0 ||
+        time[1] >= 1_000_000_000
+      ) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'hrtime time must be a [seconds, nanoseconds] tuple'
+        );
+      }
+      elapsed -= BigInt(time[0]) * 1_000_000_000n + BigInt(time[1]);
+    }
+    return [Number(elapsed / 1_000_000_000n), Number(elapsed % 1_000_000_000n)];
+  };
+  processHrtime.bigint = () => __muonMonotonicNanoseconds();
+
+  const processModule = new EventEmitter();
+  Object.assign(processModule, {
+    arch: __muonProcessArch(),
+    argv: ['muon-quickjs'],
+    argv0: 'muon-quickjs',
+    cwd: () => '/',
+    env: processEnvironment,
+    execArgv: [],
+    exitCode: undefined,
+    hrtime: processHrtime,
+    pid: __muonProcessId(),
+    platform: 'android',
+    release: Object.freeze({ name: 'muon-quickjs' }),
+    title: 'muon-quickjs',
+    uptime: () =>
+      Number(__muonMonotonicNanoseconds() - processStartNanoseconds) /
+      1_000_000_000,
+    version: 'v0.0.0-muon-quickjs',
+    versions: Object.freeze({ quickjs: '2026-06-04' }),
+  });
+
+  const nativeEndianness = (() => {
+    const word = new Uint16Array([0x0102]);
+    return new Uint8Array(word.buffer)[0] === 0x02 ? 'LE' : 'BE';
+  })();
+  const osModule = Object.freeze({
+    EOL: '\n',
+    arch: () => processModule.arch,
+    devNull: '/dev/null',
+    endianness: () => nativeEndianness,
+    homedir: () => '/',
+    machine: () => {
+      if (processModule.arch === 'arm64') return 'aarch64';
+      if (processModule.arch === 'x64') return 'x86_64';
+      if (processModule.arch === 'ia32') return 'i686';
+      return processModule.arch;
+    },
+    platform: () => processModule.platform,
+    tmpdir: () => '/tmp',
+    type: () => 'Android',
+    uptime: processModule.uptime,
+    userInfo: () => ({
+      username: 'muon',
+      uid: -1,
+      gid: -1,
+      shell: null,
+      homedir: '/',
+    }),
+  });
+
+  const normalizePath = (value) => {
+    const source = String(value).replaceAll('\\', '/');
+    const absolute = source.startsWith('/');
+    const parts = [];
+    for (const part of source.split('/')) {
+      if (part === '' || part === '.') continue;
+      if (part === '..') {
+        if (parts.length > 0 && parts[parts.length - 1] !== '..') {
+          parts.pop();
+        } else if (!absolute) {
+          parts.push(part);
+        }
+      } else {
+        parts.push(part);
+      }
+    }
+    const normalized = `${absolute ? '/' : ''}${parts.join('/')}`;
+    return normalized || (absolute ? '/' : '.');
+  };
+
+  const pathModule = Object.freeze({
+    sep: '/',
+    delimiter: ':',
+    normalize: (path) => normalizePath(path),
+    isAbsolute: (path) => String(path).startsWith('/'),
+    join: (...parts) =>
+      normalizePath(parts.filter((part) => String(part).length > 0).join('/')),
+    resolve: (...parts) =>
+      `/${normalizePath(parts.join('/')).replace(/^\/+/, '')}`,
+    basename: (path, suffix) => {
+      const name = normalizePath(path).split('/').filter(Boolean).at(-1) ?? '';
+      return suffix && name.endsWith(suffix)
+        ? name.slice(0, -suffix.length)
+        : name;
+    },
+    dirname: (path) => {
+      const normalized = normalizePath(path);
+      const separator = normalized.lastIndexOf('/');
+      return separator < 0 ? '.' : normalized.slice(0, separator) || '/';
+    },
+    extname: (path) => {
+      const name = pathModule.basename(path);
+      const dot = name.lastIndexOf('.');
+      return dot <= 0 ? '' : name.slice(dot);
+    },
+    relative: (from, to) => {
+      const first = normalizePath(from).split('/').filter(Boolean);
+      const second = normalizePath(to).split('/').filter(Boolean);
+      let common = 0;
+      while (common < first.length && first[common] === second[common])
+        common += 1;
+      return (
+        [...first.slice(common).map(() => '..'), ...second.slice(common)].join(
+          '/'
+        ) || ''
+      );
+    },
+  });
+
+  const urlState = Symbol('muon.url.state');
+  const urlSearchParamsPairs = Symbol('muon.urlSearchParams.pairs');
+  const urlSearchParamsUpdate = Symbol('muon.urlSearchParams.update');
+  const urlSearchParamsInternal = {};
+  const defaultUrlPorts = Object.freeze({
+    ftp: '21',
+    http: '80',
+    https: '443',
+    ws: '80',
+    wss: '443',
+  });
+  const authorityUrlSchemes = new Set([
+    'file',
+    'ftp',
+    'http',
+    'https',
+    'ws',
+    'wss',
+  ]);
+
+  const decodeUrlComponent = (value, label) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      throw createError(
+        'ERR_INVALID_URL',
+        `Invalid percent escape in ${label}`
+      );
+    }
+  };
+
+  const encodeUrlText = (value, safeCharacters) => {
+    const source = String(value);
+    let result = '';
+    for (let index = 0; index < source.length;) {
+      const point = source.codePointAt(index);
+      const character = String.fromCodePoint(point);
+      if (
+        /^[A-Za-z0-9]$/.test(character) ||
+        safeCharacters.includes(character)
+      ) {
+        result += character;
+      } else if (
+        character === '%' &&
+        /^[0-9A-Fa-f]{2}$/.test(source.slice(index + 1, index + 3))
+      ) {
+        result += `%${source.slice(index + 1, index + 3).toUpperCase()}`;
+        index += 2;
+      } else {
+        result += encodeURIComponent(character);
+      }
+      index += character.length;
+    }
+    return result;
+  };
+
+  const encodeUrlPath = (value) => encodeUrlText(value, "-._~!$&'()*+,;=:@/");
+  const encodeUrlQuery = (value) => encodeUrlText(value, "-._~!$&'()*+,;=:@/?");
+  const encodeUrlHash = (value) => encodeUrlText(value, "-._~!$&'()*+,;=:@/?#");
+  const encodeUrlCredential = (value) =>
+    encodeUrlText(value, "-._~!$&'()*+,;=");
+  const encodeUrlSearchParameter = (value) =>
+    encodeURIComponent(String(value))
+      .replaceAll('%20', '+')
+      .replace(
+        /[!'()~]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+      );
+
+  const normalizeUrlPath = (value) => {
+    const source = String(value);
+    const absolute = source.startsWith('/');
+    const trailingSlash = source.endsWith('/');
+    const parts = [];
+    for (const part of source.split('/')) {
+      const lower = part.toLowerCase();
+      if (part === '' || lower === '.' || lower === '%2e') continue;
+      if (
+        lower === '..' ||
+        lower === '.%2e' ||
+        lower === '%2e.' ||
+        lower === '%2e%2e'
+      ) {
+        if (parts.length > 0) parts.pop();
+        continue;
+      }
+      parts.push(part);
+    }
+    const joined = parts.join('/');
+    const normalized = `${absolute ? '/' : ''}${joined}`;
+    if (trailingSlash && normalized !== '/' && normalized !== '') {
+      return `${normalized}/`;
+    }
+    return normalized || (absolute ? '/' : '');
+  };
+
+  const splitUrlSuffix = (value) => {
+    const hashIndex = value.indexOf('#');
+    const beforeHash = hashIndex < 0 ? value : value.slice(0, hashIndex);
+    const hash = hashIndex < 0 ? '' : value.slice(hashIndex + 1);
+    const queryIndex = beforeHash.indexOf('?');
+    return {
+      path: queryIndex < 0 ? beforeHash : beforeHash.slice(0, queryIndex),
+      query: queryIndex < 0 ? '' : beforeHash.slice(queryIndex + 1),
+      hasQuery: queryIndex >= 0,
+      hash,
+      hasHash: hashIndex >= 0,
+    };
+  };
+
+  const parseUrlHost = (value, scheme) => {
+    let authority = String(value);
+    let username = '';
+    let password = '';
+    const at = authority.lastIndexOf('@');
+    if (at >= 0) {
+      const credentials = authority.slice(0, at);
+      authority = authority.slice(at + 1);
+      const colon = credentials.indexOf(':');
+      username = decodeUrlComponent(
+        colon < 0 ? credentials : credentials.slice(0, colon),
+        'URL username'
+      );
+      password = decodeUrlComponent(
+        colon < 0 ? '' : credentials.slice(colon + 1),
+        'URL password'
+      );
+    }
+
+    let hostname = '';
+    let port = '';
+    if (authority.startsWith('[')) {
+      const close = authority.indexOf(']');
+      if (close < 0) {
+        throw createError('ERR_INVALID_URL', 'IPv6 URL host is missing ]');
+      }
+      hostname = authority.slice(1, close).toLowerCase();
+      const remainder = authority.slice(close + 1);
+      if (remainder !== '') {
+        if (!remainder.startsWith(':')) {
+          throw createError('ERR_INVALID_URL', 'Invalid IPv6 URL host');
+        }
+        port = remainder.slice(1);
+      }
+      if (!/^[0-9A-Fa-f:.]+$/.test(hostname)) {
+        throw createError('ERR_INVALID_URL', 'Invalid IPv6 URL host');
+      }
+    } else {
+      const colon = authority.lastIndexOf(':');
+      if (colon >= 0) {
+        hostname = authority.slice(0, colon);
+        port = authority.slice(colon + 1);
+      } else {
+        hostname = authority;
+      }
+      hostname = hostname.toLowerCase();
+      if (hostname !== '' && !/^[A-Za-z0-9.-]+$/.test(hostname)) {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_HOSTNAME',
+          'Only ASCII, IPv4, and IPv6 URL hostnames are supported'
+        );
+      }
+    }
+    if (port !== '') {
+      if (!/^[0-9]+$/.test(port) || Number(port) > 65535) {
+        throw createError('ERR_INVALID_URL', 'Invalid URL port');
+      }
+      port = String(Number(port));
+      if (defaultUrlPorts[scheme] === port) port = '';
+    }
+    if (scheme !== 'file' && hostname === '') {
+      throw createError('ERR_INVALID_URL', 'URL hostname is required');
+    }
+    return { username, password, hostname, port };
+  };
+
+  const cloneUrlState = (state) => ({
+    scheme: state.scheme,
+    hasAuthority: state.hasAuthority,
+    username: state.username,
+    password: state.password,
+    hostname: state.hostname,
+    port: state.port,
+    pathname: state.pathname,
+    query: state.query,
+    hasQuery: state.hasQuery,
+    hash: state.hash,
+    hasHash: state.hasHash,
+    searchParams: undefined,
+  });
+
+  const parseAbsoluteUrlState = (value) => {
+    const match = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/.exec(value);
+    if (!match) throw createError('ERR_INVALID_URL', 'URL scheme is required');
+    const scheme = match[1].toLowerCase();
+    let remainder = match[2];
+    const hasAuthority = remainder.startsWith('//');
+    if (authorityUrlSchemes.has(scheme) && !hasAuthority) {
+      if (scheme !== 'file') {
+        throw createError('ERR_INVALID_URL', `${scheme}: URL requires //`);
+      }
+      remainder = `//${remainder}`;
+    }
+
+    let host = { username: '', password: '', hostname: '', port: '' };
+    let suffixSource = remainder;
+    if (remainder.startsWith('//')) {
+      suffixSource = remainder.slice(2);
+      const boundary = suffixSource.search(/[/?#]/);
+      const authority =
+        boundary < 0 ? suffixSource : suffixSource.slice(0, boundary);
+      suffixSource = boundary < 0 ? '' : suffixSource.slice(boundary);
+      host = parseUrlHost(authority, scheme);
+    }
+    const suffix = splitUrlSuffix(suffixSource);
+    let pathname = normalizeUrlPath(encodeUrlPath(suffix.path));
+    if (hasAuthority && pathname === '') pathname = '/';
+    return {
+      scheme,
+      hasAuthority: remainder.startsWith('//'),
+      ...host,
+      pathname,
+      query: encodeUrlQuery(suffix.query),
+      hasQuery: suffix.hasQuery,
+      hash: encodeUrlHash(suffix.hash),
+      hasHash: suffix.hasHash,
+      searchParams: undefined,
+    };
+  };
+
+  const parseUrlState = (value, base) => {
+    const source = String(value).trim();
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(source)) {
+      return parseAbsoluteUrlState(source);
+    }
+    if (base === undefined) {
+      throw createError('ERR_INVALID_URL', 'Relative URL requires a base URL');
+    }
+    const baseState =
+      base && typeof base === 'object' && base[urlState]
+        ? base[urlState]
+        : parseAbsoluteUrlState(String(base).trim());
+    if (source.startsWith('//')) {
+      return parseAbsoluteUrlState(`${baseState.scheme}:${source}`);
+    }
+    const result = cloneUrlState(baseState);
+    const suffix = splitUrlSuffix(source);
+    if (source.startsWith('#')) {
+      result.hash = encodeUrlHash(suffix.hash);
+      result.hasHash = true;
+      return result;
+    }
+    if (source.startsWith('?')) {
+      result.query = encodeUrlQuery(suffix.query);
+      result.hasQuery = true;
+      result.hash = encodeUrlHash(suffix.hash);
+      result.hasHash = suffix.hasHash;
+      return result;
+    }
+    if (suffix.path.startsWith('/')) {
+      result.pathname = normalizeUrlPath(encodeUrlPath(suffix.path));
+    } else if (suffix.path !== '') {
+      const slash = result.pathname.lastIndexOf('/');
+      const directory = slash < 0 ? '' : result.pathname.slice(0, slash + 1);
+      result.pathname = normalizeUrlPath(
+        encodeUrlPath(`${directory}${suffix.path}`)
+      );
+    }
+    result.query = encodeUrlQuery(suffix.query);
+    result.hasQuery = suffix.hasQuery;
+    result.hash = encodeUrlHash(suffix.hash);
+    result.hasHash = suffix.hasHash;
+    return result;
+  };
+
+  const serializeUrlHost = (state) => {
+    const hostname = state.hostname.includes(':')
+      ? `[${state.hostname}]`
+      : state.hostname;
+    return `${hostname}${state.port === '' ? '' : `:${state.port}`}`;
+  };
+
+  const serializeUrlState = (state) => {
+    let result = `${state.scheme}:`;
+    if (state.hasAuthority) {
+      result += '//';
+      if (state.username !== '' || state.password !== '') {
+        result += encodeUrlCredential(state.username);
+        if (state.password !== '') {
+          result += `:${encodeUrlCredential(state.password)}`;
+        }
+        result += '@';
+      }
+      result += serializeUrlHost(state);
+    }
+    result += state.pathname;
+    if (state.hasQuery) result += `?${state.query}`;
+    if (state.hasHash) result += `#${state.hash}`;
+    return result;
+  };
+
+  const notifyUrlSearchParams = (parameters) => {
+    const update = parameters[urlSearchParamsUpdate];
+    if (typeof update === 'function') update(parameters.toString());
+  };
+
+  const parseUrlSearchParameters = (value) => {
+    const source = String(value).replace(/^\?/, '');
+    if (source === '') return [];
+    return source.split('&').map((entry) => {
+      const equals = entry.indexOf('=');
+      const name = equals < 0 ? entry : entry.slice(0, equals);
+      const content = equals < 0 ? '' : entry.slice(equals + 1);
+      return [
+        decodeUrlComponent(name.replaceAll('+', ' '), 'search parameter'),
+        decodeUrlComponent(content.replaceAll('+', ' '), 'search parameter'),
+      ];
+    });
+  };
+
+  const URLSearchParams = function (initial, internalKey, update) {
+    if (!(this instanceof URLSearchParams)) {
+      throw new TypeError('URLSearchParams constructor requires new');
+    }
+    let pairs;
+    if (internalKey === urlSearchParamsInternal) {
+      pairs = parseUrlSearchParameters(initial ?? '');
+    } else if (initial === undefined) {
+      pairs = [];
+    } else if (typeof initial === 'string') {
+      pairs = parseUrlSearchParameters(initial);
+    } else if (initial !== null && initial[Symbol.iterator]) {
+      pairs = [];
+      for (const entry of initial) {
+        const tuple = [...entry];
+        if (tuple.length !== 2) {
+          throw createError(
+            'ERR_INVALID_TUPLE',
+            'Each query pair must contain exactly two values'
+          );
+        }
+        pairs.push([String(tuple[0]), String(tuple[1])]);
+      }
+    } else if (initial !== null && typeof initial === 'object') {
+      pairs = Object.keys(initial).map((name) => [
+        String(name),
+        String(initial[name]),
+      ]);
+    } else {
+      pairs = parseUrlSearchParameters(String(initial));
+    }
+    Object.defineProperties(this, {
+      [urlSearchParamsPairs]: { value: pairs, writable: true },
+      [urlSearchParamsUpdate]: {
+        value: internalKey === urlSearchParamsInternal ? update : undefined,
+        writable: true,
+      },
+    });
+  };
+
+  const requireUrlSearchParamsPairs = (parameters) => {
+    const pairs = parameters[urlSearchParamsPairs];
+    if (!Array.isArray(pairs)) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'URLSearchParams method called on an incompatible receiver'
+      );
+    }
+    return pairs;
+  };
+
+  const urlSearchParamsAppend = function (name, value) {
+    requireUrlSearchParamsPairs(this).push([String(name), String(value)]);
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsDelete = function (name, value) {
+    const normalizedName = String(name);
+    const hasValue = value !== undefined;
+    const normalizedValue = String(value);
+    this[urlSearchParamsPairs] = requireUrlSearchParamsPairs(this).filter(
+      (entry) =>
+        entry[0] !== normalizedName ||
+        (hasValue && entry[1] !== normalizedValue)
+    );
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsGet = function (name) {
+    const normalized = String(name);
+    return (
+      requireUrlSearchParamsPairs(this).find(
+        (entry) => entry[0] === normalized
+      )?.[1] ?? null
+    );
+  };
+  const urlSearchParamsGetAll = function (name) {
+    const normalized = String(name);
+    return requireUrlSearchParamsPairs(this)
+      .filter((entry) => entry[0] === normalized)
+      .map((entry) => entry[1]);
+  };
+  const urlSearchParamsHas = function (name, value) {
+    const normalizedName = String(name);
+    const hasValue = value !== undefined;
+    const normalizedValue = String(value);
+    return requireUrlSearchParamsPairs(this).some(
+      (entry) =>
+        entry[0] === normalizedName &&
+        (!hasValue || entry[1] === normalizedValue)
+    );
+  };
+  const urlSearchParamsSet = function (name, value) {
+    const normalizedName = String(name);
+    const normalizedValue = String(value);
+    const pairs = requireUrlSearchParamsPairs(this);
+    const first = pairs.findIndex((entry) => entry[0] === normalizedName);
+    if (first < 0) {
+      pairs.push([normalizedName, normalizedValue]);
+    } else {
+      pairs[first][1] = normalizedValue;
+      for (let index = pairs.length - 1; index > first; index -= 1) {
+        if (pairs[index][0] === normalizedName) pairs.splice(index, 1);
+      }
+    }
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsSort = function () {
+    requireUrlSearchParamsPairs(this).sort((left, right) =>
+      left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0
+    );
+    notifyUrlSearchParams(this);
+  };
+  const urlSearchParamsEntries = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map((entry) => [...entry])
+      [Symbol.iterator]();
+  };
+  const urlSearchParamsKeys = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map((entry) => entry[0])
+      [Symbol.iterator]();
+  };
+  const urlSearchParamsValues = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map((entry) => entry[1])
+      [Symbol.iterator]();
+  };
+  const urlSearchParamsForEach = function (callback, thisArgument) {
+    if (typeof callback !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'callback must be a function');
+    }
+    for (const [name, value] of requireUrlSearchParamsPairs(this)) {
+      Reflect.apply(callback, thisArgument, [value, name, this]);
+    }
+  };
+  const urlSearchParamsToString = function () {
+    return requireUrlSearchParamsPairs(this)
+      .map(
+        ([name, value]) =>
+          `${encodeUrlSearchParameter(name)}=${encodeUrlSearchParameter(value)}`
+      )
+      .join('&');
+  };
+
+  URLSearchParams.prototype.append = urlSearchParamsAppend;
+  URLSearchParams.prototype.delete = urlSearchParamsDelete;
+  URLSearchParams.prototype.get = urlSearchParamsGet;
+  URLSearchParams.prototype.getAll = urlSearchParamsGetAll;
+  URLSearchParams.prototype.has = urlSearchParamsHas;
+  URLSearchParams.prototype.set = urlSearchParamsSet;
+  URLSearchParams.prototype.sort = urlSearchParamsSort;
+  URLSearchParams.prototype.entries = urlSearchParamsEntries;
+  URLSearchParams.prototype.keys = urlSearchParamsKeys;
+  URLSearchParams.prototype.values = urlSearchParamsValues;
+  URLSearchParams.prototype.forEach = urlSearchParamsForEach;
+  URLSearchParams.prototype.toString = urlSearchParamsToString;
+  URLSearchParams.prototype[Symbol.iterator] = urlSearchParamsEntries;
+  Object.defineProperties(URLSearchParams.prototype, {
+    size: {
+      get: function () {
+        return requireUrlSearchParamsPairs(this).length;
+      },
+    },
+    [Symbol.toStringTag]: { value: 'URLSearchParams' },
+  });
+
+  const attachUrlSearchParams = (state) => {
+    const parameters = new URLSearchParams(
+      state.hasQuery ? state.query : '',
+      urlSearchParamsInternal,
+      (query) => {
+        state.query = query;
+        state.hasQuery = query !== '';
+      }
+    );
+    state.searchParams = parameters;
+  };
+
+  const replaceUrlState = (target, state) => {
+    attachUrlSearchParams(state);
+    target[urlState] = state;
+  };
+
+  const URL = function (input, base) {
+    if (!(this instanceof URL)) {
+      throw new TypeError('URL constructor requires new');
+    }
+    Object.defineProperty(this, urlState, {
+      value: undefined,
+      configurable: false,
+      enumerable: false,
+      writable: true,
+    });
+    replaceUrlState(this, parseUrlState(input, base));
+  };
+
+  const requireUrlState = (url) => {
+    const state = url[urlState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'URL method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  Object.defineProperties(URL.prototype, {
+    href: {
+      get: function () {
+        return serializeUrlState(requireUrlState(this));
+      },
+      set: function (value) {
+        replaceUrlState(this, parseUrlState(value, undefined));
+      },
+    },
+    protocol: {
+      get: function () {
+        return `${requireUrlState(this).scheme}:`;
+      },
+      set: function (value) {
+        const match = /^([A-Za-z][A-Za-z0-9+.-]*):?$/.exec(String(value));
+        if (!match)
+          throw createError('ERR_INVALID_URL', 'Invalid URL protocol');
+        requireUrlState(this).scheme = match[1].toLowerCase();
+      },
+    },
+    username: {
+      get: function () {
+        return requireUrlState(this).username;
+      },
+      set: function (value) {
+        requireUrlState(this).username = String(value);
+      },
+    },
+    password: {
+      get: function () {
+        return requireUrlState(this).password;
+      },
+      set: function (value) {
+        requireUrlState(this).password = String(value);
+      },
+    },
+    hostname: {
+      get: function () {
+        return requireUrlState(this).hostname;
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const parsed = parseUrlHost(
+          `${String(value)}${state.port === '' ? '' : `:${state.port}`}`,
+          state.scheme
+        );
+        state.hostname = parsed.hostname;
+      },
+    },
+    port: {
+      get: function () {
+        return requireUrlState(this).port;
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const parsed = parseUrlHost(
+          `${state.hostname.includes(':') ? `[${state.hostname}]` : state.hostname}:${String(value)}`,
+          state.scheme
+        );
+        state.port = parsed.port;
+      },
+    },
+    host: {
+      get: function () {
+        return serializeUrlHost(requireUrlState(this));
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const parsed = parseUrlHost(value, state.scheme);
+        state.hostname = parsed.hostname;
+        state.port = parsed.port;
+      },
+    },
+    origin: {
+      get: function () {
+        const state = requireUrlState(this);
+        return ['ftp', 'http', 'https', 'ws', 'wss'].includes(state.scheme)
+          ? `${state.scheme}://${serializeUrlHost(state)}`
+          : 'null';
+      },
+    },
+    pathname: {
+      get: function () {
+        return requireUrlState(this).pathname;
+      },
+      set: function (value) {
+        requireUrlState(this).pathname = normalizeUrlPath(encodeUrlPath(value));
+      },
+    },
+    search: {
+      get: function () {
+        const state = requireUrlState(this);
+        return state.hasQuery ? `?${state.query}` : '';
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const source = String(value).replace(/^\?/, '');
+        state.query = encodeUrlQuery(source);
+        state.hasQuery = source !== '';
+        state.searchParams[urlSearchParamsPairs] = parseUrlSearchParameters(
+          state.query
+        );
+      },
+    },
+    searchParams: {
+      get: function () {
+        return requireUrlState(this).searchParams;
+      },
+    },
+    hash: {
+      get: function () {
+        const state = requireUrlState(this);
+        return state.hasHash ? `#${state.hash}` : '';
+      },
+      set: function (value) {
+        const state = requireUrlState(this);
+        const source = String(value).replace(/^#/, '');
+        state.hash = encodeUrlHash(source);
+        state.hasHash = source !== '';
+      },
+    },
+    [Symbol.toStringTag]: { value: 'URL' },
+  });
+  URL.prototype.toString = function () {
+    return serializeUrlState(requireUrlState(this));
+  };
+  URL.prototype.toJSON = URL.prototype.toString;
+  URL.canParse = (input, base) => {
+    try {
+      parseUrlState(input, base);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  URL.parse = (input, base) => {
+    try {
+      return new URL(input, base);
+    } catch {
+      return null;
+    }
+  };
+
+  const pathToFileURL = (path) => {
+    const source = String(path);
+    if (!source.startsWith('/')) {
+      throw createError(
+        'ERR_MUON_JS_RELATIVE_FILE_URL',
+        'pathToFileURL requires an absolute POSIX path'
+      );
+    }
+    return new URL(`file://${encodeUrlPath(normalizePath(source))}`);
+  };
+
+  const fileURLToPath = (value) => {
+    const url = value instanceof URL ? value : new URL(value);
+    if (url.protocol !== 'file:') {
+      throw createError('ERR_INVALID_URL_SCHEME', 'URL must use file:');
+    }
+    if (url.hostname !== '' && url.hostname !== 'localhost') {
+      throw createError(
+        'ERR_INVALID_FILE_URL_HOST',
+        'POSIX file URL host must be empty or localhost'
+      );
+    }
+    if (/%2f|%5c/i.test(url.pathname)) {
+      throw createError(
+        'ERR_INVALID_FILE_URL_PATH',
+        'Encoded path separators are not permitted in file URLs'
+      );
+    }
+    return decodeUrlComponent(url.pathname, 'file URL path');
+  };
+
+  const urlToHttpOptions = (value) => {
+    const url = value instanceof URL ? value : new URL(value);
+    const options = {
+      protocol: url.protocol,
+      hostname: url.hostname,
+      hash: url.hash,
+      search: url.search,
+      pathname: url.pathname,
+      path: `${url.pathname}${url.search}`,
+      href: url.href,
+    };
+    if (url.port !== '') options.port = Number(url.port);
+    if (url.username !== '' || url.password !== '') {
+      options.auth = `${url.username}:${url.password}`;
+    }
+    return options;
+  };
+
+  const urlModule = Object.freeze({
+    URL,
+    URLSearchParams,
+    fileURLToPath,
+    pathToFileURL,
+    urlToHttpOptions,
+    format: (value) =>
+      value instanceof URL ? value.href : new URL(value).href,
+  });
+
+  const readEncoding = (options) =>
+    typeof options === 'string'
+      ? options
+      : options && typeof options === 'object'
+        ? options.encoding
+        : undefined;
+
+  const fsConstants = Object.freeze({
+    COPYFILE_EXCL: 1,
+    F_OK: 0,
+  });
+
+  const validateAppendOptions = (options) => {
+    const encoding = readEncoding(options);
+    if (
+      encoding !== undefined &&
+      encoding !== null &&
+      encoding !== 'utf8' &&
+      encoding !== 'utf-8'
+    ) {
+      throw createError(
+        'ERR_MUON_JS_UNSUPPORTED_ENCODING',
+        `Unsupported encoding: ${encoding}`
+      );
+    }
+    if (options && typeof options === 'object') {
+      if (options.flag !== undefined && options.flag !== 'a') {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'appendFile supports only the default a flag'
+        );
+      }
+      if (options.mode !== undefined && options.mode !== 0o666) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'appendFile supports only the default 0666 mode'
+        );
+      }
+      if (options.flush !== undefined && options.flush !== false) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'appendFile flush is not supported by this runtime'
+        );
+      }
+    }
+  };
+
+  const appendFile = async (path, data, options) => {
+    validateAppendOptions(options);
+    if (typeof data === 'string') {
+      __muonFsAppendText(String(path), data);
+      return;
+    }
+    if (data instanceof Uint8Array) {
+      const exact =
+        data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+          ? data.buffer
+          : data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength
+            );
+      __muonFsAppendBuffer(String(path), exact);
+      return;
+    }
+    if (data instanceof ArrayBuffer) {
+      __muonFsAppendBuffer(String(path), data);
+      return;
+    }
+    throw createError(
+      'ERR_MUON_JS_UNSUPPORTED_VALUE',
+      'appendFile data must be text or bytes'
+    );
+  };
+
+  const copyFile = async (source, destination, mode) => {
+    const normalizedMode = mode === undefined ? 0 : Number(mode);
+    if (
+      !Number.isInteger(normalizedMode) ||
+      (normalizedMode !== 0 && normalizedMode !== fsConstants.COPYFILE_EXCL)
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'copyFile supports only mode 0 or COPYFILE_EXCL'
+      );
+    }
+    __muonFsCopyFile(
+      String(source),
+      String(destination),
+      normalizedMode === fsConstants.COPYFILE_EXCL
+    );
+  };
+
+  const validateRmdirOptions = (options) => {
+    if (options === undefined || options === null) return;
+    if (typeof options !== 'object') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'rmdir options must be an object'
+      );
+    }
+    if (options.recursive === true) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Recursive rmdir is not supported; use rm with recursive instead'
+      );
+    }
+    for (const name of Object.keys(options)) {
+      if (name !== 'recursive') {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          `Unsupported rmdir option: ${name}`
+        );
+      }
+    }
+  };
+
+  const rmdir = async (path, options) => {
+    validateRmdirOptions(options);
+    __muonFsRmdir(String(path));
+  };
+
+  const fsPromises = Object.freeze({
+    constants: fsConstants,
+    appendFile,
+    copyFile,
+    readFile: async (path, options) => {
+      const encoding = readEncoding(options);
+      if (encoding === 'utf8' || encoding === 'utf-8') {
+        return __muonFsReadText(String(path));
+      }
+      if (encoding !== undefined && encoding !== null) {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_ENCODING',
+          `Unsupported encoding: ${encoding}`
+        );
+      }
+      return new Uint8Array(__muonFsReadBuffer(String(path)));
+    },
+    writeFile: async (path, data) => {
+      if (typeof data === 'string') {
+        __muonFsWriteText(String(path), data);
+      } else if (data instanceof Uint8Array) {
+        const exact =
+          data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+            ? data.buffer
+            : data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength
+              );
+        __muonFsWriteBuffer(String(path), exact);
+      } else if (data instanceof ArrayBuffer) {
+        __muonFsWriteBuffer(String(path), data);
+      } else {
+        throw createError(
+          'ERR_MUON_JS_UNSUPPORTED_VALUE',
+          'writeFile data must be text or bytes'
+        );
+      }
+    },
+    mkdir: async (path, options) =>
+      __muonFsMkdir(String(path), Boolean(options && options.recursive)),
+    readdir: async (path) => __muonFsReaddir(String(path)),
+    stat: async (path) => __muonFsStat(String(path)),
+    lstat: async (path) => __muonFsStat(String(path)),
+    access: async (path, mode) => {
+      const normalizedMode =
+        mode === undefined ? fsConstants.F_OK : Number(mode);
+      if (normalizedMode !== fsConstants.F_OK) {
+        throw createError(
+          'ERR_INVALID_ARG_VALUE',
+          'access supports only F_OK existence checks'
+        );
+      }
+      __muonFsAccess(String(path));
+    },
+    rename: async (from, to) => __muonFsRename(String(from), String(to)),
+    rmdir,
+    unlink: async (path) => __muonFsUnlink(String(path)),
+    rm: async (path, options) =>
+      __muonFsRm(
+        String(path),
+        Boolean(options && options.recursive),
+        Boolean(options && options.force)
+      ),
+  });
+
+  const callbackError = (error) => ({
+    name: 'Error',
+    message: error instanceof Error ? error.message : String(error),
+    code:
+      error && typeof error === 'object' && typeof error.code === 'string'
+        ? error.code
+        : 'ERR_MUON_JS_FS',
+  });
+
+  const invokeFsCallback = async (operation, callback) => {
+    if (typeof callback !== 'function') {
+      throw new TypeError('A filesystem callback is required');
+    }
+    try {
+      const value = await operation();
+      await callback(null, value);
+    } catch (error) {
+      await callback(callbackError(error));
+    }
+  };
+
+  const fsCallbacks = {
+    constants: fsConstants,
+    appendFile: async (path, data, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(
+        () => fsPromises.appendFile(path, data, options),
+        callback
+      );
+    },
+    copyFile: async (source, destination, mode, callback) => {
+      if (typeof mode === 'function') {
+        callback = mode;
+        mode = undefined;
+      }
+      await invokeFsCallback(
+        () => fsPromises.copyFile(source, destination, mode),
+        callback
+      );
+    },
+    readFile: async (path, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(
+        () => fsPromises.readFile(path, options),
+        callback
+      );
+    },
+    writeFile: async (path, data, callback) =>
+      await invokeFsCallback(() => fsPromises.writeFile(path, data), callback),
+    mkdir: async (path, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(() => fsPromises.mkdir(path, options), callback);
+    },
+    readdir: async (path, callback) =>
+      await invokeFsCallback(() => fsPromises.readdir(path), callback),
+    stat: async (path, callback) =>
+      await invokeFsCallback(() => fsPromises.stat(path), callback),
+    lstat: async (path, callback) =>
+      await invokeFsCallback(() => fsPromises.lstat(path), callback),
+    access: async (path, callback) =>
+      await invokeFsCallback(() => fsPromises.access(path), callback),
+    rename: async (from, to, callback) =>
+      await invokeFsCallback(() => fsPromises.rename(from, to), callback),
+    rmdir: async (path, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(() => fsPromises.rmdir(path, options), callback);
+    },
+    unlink: async (path, callback) =>
+      await invokeFsCallback(() => fsPromises.unlink(path), callback),
+    rm: async (path, options, callback) => {
+      if (typeof options === 'function') {
+        callback = options;
+        options = undefined;
+      }
+      await invokeFsCallback(() => fsPromises.rm(path, options), callback);
+    },
+  };
+  Object.defineProperty(fsCallbacks, 'promises', {
+    value: fsPromises,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+  Object.freeze(fsCallbacks);
+
+  let nextTimerIdentifier = 1;
+  const activeTimers = new Map();
+  const timerHandleState = Symbol('muon.timer.state');
+
+  const normalizeTimerDelay = (delay, fallback) => {
+    const numeric = delay === undefined ? fallback : Number(delay);
+    if (!Number.isFinite(numeric) || numeric < 0) return 1;
+    const normalized = Math.trunc(numeric);
+    if (normalized > 60000) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Timer delay must be between 0 and 60000 ms'
+      );
+    }
+    return normalized === 0 && fallback > 0 ? fallback : normalized;
+  };
+
+  const scheduleTimerState = (state) =>
+    __muonScheduleTimer(state.identifier, state.delay);
+
+  const dispatchTimer = (identifier) => {
+    const state = activeTimers.get(Number(identifier));
+    if (!state || !state.active) return;
+    try {
+      if (!state.repeating) {
+        state.active = false;
+        activeTimers.delete(state.identifier);
+      }
+      Reflect.apply(state.callback, state.handle, state.arguments);
+      if (state.repeating && state.active) scheduleTimerState(state);
+    } catch (error) {
+      const diagnostic = new Error(
+        `Timer ${state.identifier} callback failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      diagnostic.cause = error;
+      throw diagnostic;
+    }
+  };
+
+  const cancelTimer = (handle) => {
+    const state =
+      handle && typeof handle === 'object'
+        ? handle[timerHandleState]
+        : activeTimers.get(Number(handle));
+    if (!state || !state.active) return;
+    state.active = false;
+    activeTimers.delete(state.identifier);
+    __muonCancelTimer(state.identifier);
+  };
+
+  const createTimerHandle = (state) => {
+    const handle = {};
+    Object.defineProperty(handle, timerHandleState, {
+      value: state,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    handle.hasRef = () => state.referenced;
+    handle.ref = () => {
+      state.referenced = true;
+      return handle;
+    };
+    handle.unref = () => {
+      state.referenced = false;
+      return handle;
+    };
+    handle.refresh = () => {
+      if (state.active) __muonCancelTimer(state.identifier);
+      else {
+        state.active = true;
+        activeTimers.set(state.identifier, state);
+      }
+      scheduleTimerState(state);
+      return handle;
+    };
+    handle.close = () => {
+      cancelTimer(handle);
+      return handle;
+    };
+    handle[Symbol.toPrimitive] = () => state.identifier;
+    const disposeSymbol = Symbol.dispose ?? Symbol.for('nodejs.dispose');
+    handle[disposeSymbol] = () => cancelTimer(handle);
+    return handle;
+  };
+
+  const createTimer = (callback, delay, repeating, arguments_, fallback) => {
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'Timer callback must be a function'
+      );
+    }
+    const state = {
+      identifier: nextTimerIdentifier++,
+      delay: normalizeTimerDelay(delay, fallback),
+      repeating,
+      callback,
+      arguments: arguments_,
+      active: true,
+      referenced: true,
+      handle: undefined,
+    };
+    state.handle = createTimerHandle(state);
+    activeTimers.set(state.identifier, state);
+    scheduleTimerState(state);
+    return state.handle;
+  };
+
+  const setCallbackTimeout = (callback, delay, ...arguments_) =>
+    createTimer(callback, delay, false, arguments_, 1);
+  const clearCallbackTimeout = (handle) => cancelTimer(handle);
+  const setCallbackInterval = (callback, delay, ...arguments_) =>
+    createTimer(callback, delay, true, arguments_, 1);
+  const clearCallbackInterval = (handle) => cancelTimer(handle);
+  const setCallbackImmediate = (callback, ...arguments_) =>
+    createTimer(callback, 0, false, arguments_, 0);
+  const clearCallbackImmediate = (handle) => cancelTimer(handle);
+
+  const setPromiseTimeout = async (delay, value, options) => {
+    const normalizedOptions = options ?? {};
+    if (typeof normalizedOptions !== 'object') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'Timer options must be an object'
+      );
+    }
+    const signal = normalizedOptions.signal;
+    if (signal !== undefined && !(signal instanceof AbortSignal)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'signal must be an AbortSignal'
+      );
+    }
+    if (signal && signal.aborted) throw createAbortError(signal.reason);
+    return await new Promise((resolve, reject) => {
+      let handle;
+      const cleanup = () => {
+        if (signal) signal.removeEventListener('abort', abortListener);
+      };
+      const abortListener = () => {
+        clearCallbackTimeout(handle);
+        cleanup();
+        reject(createAbortError(signal.reason));
+      };
+      handle = setCallbackTimeout(() => {
+        cleanup();
+        resolve(value);
+      }, delay);
+      if (normalizedOptions.ref === false) handle.unref();
+      if (signal)
+        signal.addEventListener('abort', abortListener, { once: true });
+    });
+  };
+
+  const setPromiseImmediate = async (value, options) =>
+    await setPromiseTimeout(0, value, options);
+
+  const timersModule = Object.freeze({
+    setTimeout: setCallbackTimeout,
+    clearTimeout: clearCallbackTimeout,
+    setInterval: setCallbackInterval,
+    clearInterval: clearCallbackInterval,
+    setImmediate: setCallbackImmediate,
+    clearImmediate: clearCallbackImmediate,
+  });
+
+  const timersPromises = Object.freeze({
+    setTimeout: setPromiseTimeout,
+    setImmediate: setPromiseImmediate,
+  });
+
+  const readableStreamState = Symbol('muon.stream.readableState');
+  const writableStreamState = Symbol('muon.stream.writableState');
+  const streamCloseArgument = Symbol('muon.stream.closeArgument');
+
+  const Stream = function () {
+    if (!(this instanceof Stream)) return new Stream();
+    EventEmitter.call(this);
+  };
+  Stream.prototype = Object.create(EventEmitter.prototype);
+  Object.defineProperty(Stream.prototype, 'constructor', {
+    value: Stream,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+
+  const streamChunkSize = (chunk, objectMode) =>
+    objectMode
+      ? 1
+      : typeof chunk === 'string'
+        ? chunk.length
+        : chunk.byteLength;
+
+  const normalizeStreamChunk = (chunk, encoding, objectMode) => {
+    if (chunk === null) {
+      throw createError(
+        'ERR_STREAM_NULL_VALUES',
+        'Stream chunk cannot be null'
+      );
+    }
+    if (objectMode) return chunk;
+    if (typeof chunk === 'string') return Buffer.from(chunk, encoding);
+    if (chunk instanceof Uint8Array) return Buffer.from(chunk);
+    if (chunk instanceof ArrayBuffer) return Buffer.from(chunk);
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Stream chunk must be text, Buffer, Uint8Array, or ArrayBuffer'
+    );
+  };
+
+  const markStreamDestroyed = (stream, error) => {
+    const readable = stream[readableStreamState];
+    const writable = stream[writableStreamState];
+    if (readable) {
+      readable.destroyed = true;
+      if (error) readable.errored = error;
+    }
+    if (writable) {
+      writable.destroyed = true;
+      if (error) writable.errored = error;
+    }
+  };
+
+  const streamDestroy = function (error) {
+    const readable = this[readableStreamState];
+    const writable = this[writableStreamState];
+    if (readable?.destroyed || writable?.destroyed) return this;
+    markStreamDestroyed(this, error);
+    let completed = false;
+    const complete = (destroyError) => {
+      if (completed) return;
+      completed = true;
+      const finalError = destroyError ?? error;
+      if (finalError) this.emit('error', finalError);
+      if (readable) readable.closed = true;
+      if (writable) writable.closed = true;
+      const closeArgument = this[streamCloseArgument];
+      if (typeof closeArgument === 'function') {
+        this.emit('close', closeArgument(finalError));
+      } else {
+        this.emit('close');
+      }
+    };
+    try {
+      this._destroy(error ?? null, complete);
+    } catch (destroyError) {
+      complete(destroyError);
+    }
+    return this;
+  };
+
+  const streamDefaultDestroy = (error, callback) => callback(error);
+
+  const initializeReadable = (stream, options) => {
+    const normalizedOptions = options ?? {};
+    const objectMode = Boolean(normalizedOptions.objectMode);
+    const highWaterMark =
+      normalizedOptions.highWaterMark === undefined
+        ? objectMode
+          ? 16
+          : 16384
+        : Number(normalizedOptions.highWaterMark);
+    if (!Number.isInteger(highWaterMark) || highWaterMark < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Readable highWaterMark must be a non-negative integer'
+      );
+    }
+    Object.defineProperty(stream, readableStreamState, {
+      value: {
+        queue: [],
+        length: 0,
+        objectMode,
+        encoding: null,
+        highWaterMark,
+        ended: false,
+        endEmitted: false,
+        flowing: null,
+        reading: false,
+        destroyed: false,
+        closed: false,
+        errored: null,
+        pipes: new Map(),
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    if (typeof normalizedOptions.read === 'function') {
+      stream._read = normalizedOptions.read;
+    }
+    if (typeof normalizedOptions.destroy === 'function') {
+      stream._destroy = normalizedOptions.destroy;
+    }
+    if (normalizedOptions.signal) {
+      setCallbackImmediate(() =>
+        addAbortSignal(normalizedOptions.signal, stream)
+      );
+    }
+  };
+
+  const requireReadableState = (stream) => {
+    const state = stream[readableStreamState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Readable method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const finishReadable = (stream, state) => {
+    if (
+      !state.endEmitted &&
+      state.ended &&
+      state.length === 0 &&
+      !state.destroyed
+    ) {
+      state.endEmitted = true;
+      state.flowing = false;
+      stream.emit('end');
+    }
+  };
+
+  const invokeReadableRead = (stream, state) => {
+    if (state.reading || state.ended || state.destroyed) return;
+    state.reading = true;
+    try {
+      stream._read(state.highWaterMark);
+    } catch (error) {
+      stream.destroy(error);
+    } finally {
+      state.reading = false;
+    }
+  };
+
+  const shiftReadableChunk = (state) => {
+    const chunk = state.queue.shift();
+    if (chunk !== undefined) {
+      state.length -= streamChunkSize(chunk, state.objectMode);
+    }
+    return chunk;
+  };
+
+  const drainReadable = (stream, state) => {
+    while (state.flowing === true && state.queue.length > 0) {
+      const chunk = shiftReadableChunk(state);
+      stream.emit('data', chunk);
+      if (state.destroyed) return;
+    }
+    if (state.queue.length === 0) {
+      finishReadable(stream, state);
+      if (!state.ended && state.flowing === true) {
+        invokeReadableRead(stream, state);
+      }
+    }
+  };
+
+  const Readable = function (options) {
+    if (!(this instanceof Readable)) return new Readable(options);
+    Stream.call(this);
+    initializeReadable(this, options);
+  };
+  Readable.prototype = Object.create(Stream.prototype);
+  Object.defineProperty(Readable.prototype, 'constructor', {
+    value: Readable,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Readable.prototype._read = () => {};
+  Readable.prototype._destroy = streamDefaultDestroy;
+  Readable.prototype.destroy = streamDestroy;
+  Readable.prototype.push = function (chunk, encoding) {
+    const state = requireReadableState(this);
+    if (state.destroyed) return false;
+    if (chunk === null) {
+      if (state.ended) return false;
+      state.ended = true;
+      this.emit('readable');
+      if (state.flowing === true) drainReadable(this, state);
+      return false;
+    }
+    if (state.ended) {
+      this.destroy(
+        createError('ERR_STREAM_PUSH_AFTER_EOF', 'Cannot push after EOF')
+      );
+      return false;
+    }
+    let normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    if (state.encoding !== null && !state.objectMode) {
+      normalized = decodeBufferString(normalized, state.encoding);
+    }
+    if (!state.objectMode && normalized.byteLength === 0) {
+      return state.length < state.highWaterMark;
+    }
+    if (state.flowing === true && state.length === 0) {
+      this.emit('data', normalized);
+    } else {
+      state.queue.push(normalized);
+      state.length += streamChunkSize(normalized, state.objectMode);
+      this.emit('readable');
+    }
+    return state.length < state.highWaterMark;
+  };
+  Readable.prototype.unshift = function (chunk, encoding) {
+    const state = requireReadableState(this);
+    let normalized = normalizeStreamChunk(chunk, encoding, state.objectMode);
+    if (state.encoding !== null && !state.objectMode) {
+      normalized = decodeBufferString(normalized, state.encoding);
+    }
+    state.queue.unshift(normalized);
+    state.length += streamChunkSize(normalized, state.objectMode);
+    this.emit('readable');
+  };
+  Readable.prototype.read = function (size) {
+    const state = requireReadableState(this);
+    if (state.length === 0 && !state.ended) invokeReadableRead(this, state);
+    if (state.length === 0) {
+      finishReadable(this, state);
+      return null;
+    }
+    if (state.objectMode) {
+      const value = shiftReadableChunk(state);
+      finishReadable(this, state);
+      return value;
+    }
+    if (state.encoding !== null) {
+      const requested =
+        size === undefined || Number.isNaN(Number(size))
+          ? state.length
+          : Math.max(0, Math.trunc(Number(size)));
+      if (requested === 0 || requested > state.length) return null;
+      let result = '';
+      while (result.length < requested) {
+        const chunk = state.queue[0];
+        const count = Math.min(chunk.length, requested - result.length);
+        result += chunk.slice(0, count);
+        state.length -= count;
+        if (count === chunk.length) state.queue.shift();
+        else state.queue[0] = chunk.slice(count);
+      }
+      finishReadable(this, state);
+      return result;
+    }
+    const requested =
+      size === undefined || Number.isNaN(Number(size))
+        ? state.length
+        : Math.max(0, Math.trunc(Number(size)));
+    if (requested === 0 || requested > state.length) return null;
+    if (requested === state.queue[0].byteLength) {
+      const value = shiftReadableChunk(state);
+      finishReadable(this, state);
+      return value;
+    }
+    if (requested < state.queue[0].byteLength) {
+      const first = state.queue[0];
+      const value = first.subarray(0, requested);
+      state.queue[0] = first.subarray(requested);
+      state.length -= requested;
+      return value;
+    }
+    const result = Buffer.alloc(requested);
+    let offset = 0;
+    while (offset < requested) {
+      const chunk = state.queue[0];
+      const count = Math.min(chunk.byteLength, requested - offset);
+      Uint8Array.prototype.set.call(result, chunk.subarray(0, count), offset);
+      offset += count;
+      state.length -= count;
+      if (count === chunk.byteLength) state.queue.shift();
+      else state.queue[0] = chunk.subarray(count);
+    }
+    finishReadable(this, state);
+    return result;
+  };
+  Readable.prototype.pause = function () {
+    const state = requireReadableState(this);
+    state.flowing = false;
+    this.emit('pause');
+    return this;
+  };
+  Readable.prototype.resume = function () {
+    const state = requireReadableState(this);
+    if (state.destroyed) return this;
+    const changed = state.flowing !== true;
+    state.flowing = true;
+    if (changed) this.emit('resume');
+    drainReadable(this, state);
+    return this;
+  };
+  Readable.prototype.isPaused = function () {
+    return requireReadableState(this).flowing === false;
+  };
+  Readable.prototype.setEncoding = function (encoding) {
+    const state = requireReadableState(this);
+    const normalized = normalizeBufferEncoding(encoding);
+    if (state.objectMode) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Object-mode streams cannot set a text encoding'
+      );
+    }
+    if (state.encoding === normalized) return this;
+    state.queue = state.queue.map((chunk) =>
+      typeof chunk === 'string' ? chunk : decodeBufferString(chunk, normalized)
+    );
+    state.encoding = normalized;
+    state.length = state.queue.reduce(
+      (total, chunk) => total + chunk.length,
+      0
+    );
+    return this;
+  };
+  Readable.prototype.on = function (name, listener) {
+    EventEmitter.prototype.on.call(this, name, listener);
+    if (name === 'data') this.resume();
+    return this;
+  };
+  Readable.prototype.addListener = Readable.prototype.on;
+  Readable.prototype.pipe = function (destination, options) {
+    if (!destination || typeof destination.write !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'pipe destination must be writable'
+      );
+    }
+    const state = requireReadableState(this);
+    const shouldEnd = !options || options.end !== false;
+    const dataListener = (chunk) => {
+      if (!destination.write(chunk)) {
+        this.pause();
+        destination.once('drain', () => this.resume());
+      }
+    };
+    const endListener = () => {
+      if (shouldEnd) destination.end();
+    };
+    const errorListener = (error) => destination.destroy(error);
+    state.pipes.set(destination, {
+      dataListener,
+      endListener,
+      errorListener,
+    });
+    this.on('data', dataListener);
+    this.once('end', endListener);
+    this.once('error', errorListener);
+    destination.emit('pipe', this);
+    return destination;
+  };
+  Readable.prototype.unpipe = function (destination) {
+    const state = requireReadableState(this);
+    const destinations = destination ? [destination] : [...state.pipes.keys()];
+    for (const target of destinations) {
+      const listeners = state.pipes.get(target);
+      if (!listeners) continue;
+      this.removeListener('data', listeners.dataListener);
+      this.removeListener('end', listeners.endListener);
+      this.removeListener('error', listeners.errorListener);
+      state.pipes.delete(target);
+      target.emit('unpipe', this);
+    }
+    if (state.pipes.size === 0) state.flowing = false;
+    return this;
+  };
+  Readable.prototype[Symbol.asyncIterator] = async function* () {
+    const state = requireReadableState(this);
+    while (true) {
+      const chunk = this.read();
+      if (chunk !== null) {
+        yield chunk;
+        continue;
+      }
+      if (state.ended || state.destroyed) break;
+      await onceEvent(this, 'readable');
+    }
+    finishReadable(this, state);
+  };
+  Readable.from = (iterable, options) => {
+    if (
+      iterable === null ||
+      iterable === undefined ||
+      (!iterable[Symbol.iterator] && !iterable[Symbol.asyncIterator])
+    ) {
+      throw createError('ERR_INVALID_ARG_TYPE', 'iterable must be iterable');
+    }
+    const source = typeof iterable === 'string' ? [iterable] : iterable;
+    const stream = new Readable({ objectMode: true, ...(options ?? {}) });
+    setCallbackImmediate(async () => {
+      try {
+        for await (const chunk of source) stream.push(chunk);
+        stream.push(null);
+      } catch (error) {
+        stream.destroy(error);
+      }
+    });
+    return stream;
+  };
+  Readable.isDisturbed = (stream) => {
+    const state = stream?.[readableStreamState];
+    return Boolean(state && (state.endEmitted || state.length > 0));
+  };
+  Object.defineProperties(Readable.prototype, {
+    readable: {
+      get: function () {
+        const state = requireReadableState(this);
+        return !state.destroyed && !state.endEmitted;
+      },
+    },
+    readableEnded: {
+      get: function () {
+        return requireReadableState(this).endEmitted;
+      },
+    },
+    readableFlowing: {
+      get: function () {
+        return requireReadableState(this).flowing;
+      },
+    },
+    readableHighWaterMark: {
+      get: function () {
+        return requireReadableState(this).highWaterMark;
+      },
+    },
+    readableLength: {
+      get: function () {
+        return requireReadableState(this).length;
+      },
+    },
+    destroyed: {
+      get: function () {
+        return requireReadableState(this).destroyed;
+      },
+    },
+    closed: {
+      get: function () {
+        return requireReadableState(this).closed;
+      },
+    },
+    errored: {
+      get: function () {
+        return requireReadableState(this).errored;
+      },
+    },
+  });
+
+  const initializeWritable = (stream, options) => {
+    const normalizedOptions = options ?? {};
+    const objectMode = Boolean(normalizedOptions.objectMode);
+    const highWaterMark =
+      normalizedOptions.highWaterMark === undefined
+        ? objectMode
+          ? 16
+          : 16384
+        : Number(normalizedOptions.highWaterMark);
+    if (!Number.isInteger(highWaterMark) || highWaterMark < 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'Writable highWaterMark must be a non-negative integer'
+      );
+    }
+    Object.defineProperty(stream, writableStreamState, {
+      value: {
+        queue: [],
+        length: 0,
+        objectMode,
+        highWaterMark,
+        defaultEncoding: normalizedOptions.defaultEncoding ?? 'utf8',
+        writing: false,
+        corked: 0,
+        ending: false,
+        ended: false,
+        finished: false,
+        finalizing: false,
+        needDrain: false,
+        destroyed: false,
+        closed: false,
+        errored: null,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    if (typeof normalizedOptions.write === 'function') {
+      stream._write = normalizedOptions.write;
+    }
+    if (typeof normalizedOptions.final === 'function') {
+      stream._final = normalizedOptions.final;
+    }
+    if (typeof normalizedOptions.destroy === 'function') {
+      stream._destroy = normalizedOptions.destroy;
+    }
+    if (normalizedOptions.signal) {
+      setCallbackImmediate(() =>
+        addAbortSignal(normalizedOptions.signal, stream)
+      );
+    }
+  };
+
+  const requireWritableState = (stream) => {
+    const state = stream[writableStreamState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Writable method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const finishWritable = (stream, state) => {
+    if (
+      !state.ending ||
+      state.finished ||
+      state.finalizing ||
+      state.writing ||
+      state.queue.length > 0 ||
+      state.destroyed
+    ) {
+      return;
+    }
+    state.finalizing = true;
+    let completed = false;
+    const complete = (error) => {
+      if (completed) return;
+      completed = true;
+      state.finalizing = false;
+      if (error) {
+        stream.destroy(error);
+        return;
+      }
+      state.finished = true;
+      stream.emit('prefinish');
+      stream.emit('finish');
+    };
+    try {
+      stream._final(complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+
+  const processWritableQueue = (stream, state) => {
+    if (
+      state.writing ||
+      state.corked > 0 ||
+      state.destroyed ||
+      state.queue.length === 0
+    ) {
+      finishWritable(stream, state);
+      return;
+    }
+    const request = state.queue.shift();
+    state.writing = true;
+    let completed = false;
+    const complete = (error) => {
+      if (completed) return;
+      completed = true;
+      state.writing = false;
+      state.length -= request.size;
+      request.callback(error ?? null);
+      if (error) {
+        stream.destroy(error);
+        return;
+      }
+      if (state.needDrain && state.length < state.highWaterMark) {
+        state.needDrain = false;
+        stream.emit('drain');
+      }
+      processWritableQueue(stream, state);
+    };
+    try {
+      stream._write(request.chunk, request.encoding, complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+
+  const Writable = function (options) {
+    if (!(this instanceof Writable)) return new Writable(options);
+    Stream.call(this);
+    initializeWritable(this, options);
+  };
+  Writable.prototype = Object.create(Stream.prototype);
+  Object.defineProperty(Writable.prototype, 'constructor', {
+    value: Writable,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Writable.prototype._write = (chunk, encoding, callback) =>
+    callback(
+      createError('ERR_METHOD_NOT_IMPLEMENTED', '_write() is not implemented')
+    );
+  Writable.prototype._final = (callback) => callback();
+  Writable.prototype._destroy = streamDefaultDestroy;
+  Writable.prototype.destroy = streamDestroy;
+  Writable.prototype.write = function (chunk, encoding, callback) {
+    const state = requireWritableState(this);
+    if (typeof encoding === 'function') {
+      callback = encoding;
+      encoding = undefined;
+    }
+    const completion = typeof callback === 'function' ? callback : () => {};
+    if (state.ending || state.ended) {
+      const error = createError(
+        'ERR_STREAM_WRITE_AFTER_END',
+        'Cannot write after end'
+      );
+      completion(error);
+      this.destroy(error);
+      return false;
+    }
+    if (state.destroyed) {
+      const error = createError(
+        'ERR_STREAM_DESTROYED',
+        'Cannot write after destroy'
+      );
+      completion(error);
+      return false;
+    }
+    const normalizedEncoding = encoding ?? state.defaultEncoding;
+    const normalized = normalizeStreamChunk(
+      chunk,
+      normalizedEncoding,
+      state.objectMode
+    );
+    const size = streamChunkSize(normalized, state.objectMode);
+    state.length += size;
+    state.queue.push({
+      chunk: normalized,
+      encoding: normalizedEncoding,
+      callback: completion,
+      size,
+    });
+    const accepted = state.length < state.highWaterMark;
+    if (!accepted) state.needDrain = true;
+    processWritableQueue(this, state);
+    return accepted;
+  };
+  Writable.prototype.end = function (chunk, encoding, callback) {
+    const state = requireWritableState(this);
+    if (typeof chunk === 'function') {
+      callback = chunk;
+      chunk = undefined;
+      encoding = undefined;
+    } else if (typeof encoding === 'function') {
+      callback = encoding;
+      encoding = undefined;
+    }
+    if (typeof callback === 'function') this.once('finish', callback);
+    if (chunk !== undefined) this.write(chunk, encoding);
+    state.ending = true;
+    state.ended = true;
+    finishWritable(this, state);
+    return this;
+  };
+  Writable.prototype.cork = function () {
+    requireWritableState(this).corked += 1;
+  };
+  Writable.prototype.uncork = function () {
+    const state = requireWritableState(this);
+    if (state.corked > 0) state.corked -= 1;
+    processWritableQueue(this, state);
+  };
+  Writable.prototype.setDefaultEncoding = function (encoding) {
+    normalizeBufferEncoding(encoding);
+    requireWritableState(this).defaultEncoding = String(encoding);
+    return this;
+  };
+  Object.defineProperties(Writable.prototype, {
+    writable: {
+      get: function () {
+        const state = requireWritableState(this);
+        return !state.destroyed && !state.ended;
+      },
+    },
+    writableEnded: {
+      get: function () {
+        return requireWritableState(this).ended;
+      },
+    },
+    writableFinished: {
+      get: function () {
+        return requireWritableState(this).finished;
+      },
+    },
+    writableNeedDrain: {
+      get: function () {
+        return requireWritableState(this).needDrain;
+      },
+    },
+    writableHighWaterMark: {
+      get: function () {
+        return requireWritableState(this).highWaterMark;
+      },
+    },
+    writableLength: {
+      get: function () {
+        return requireWritableState(this).length;
+      },
+    },
+    destroyed: {
+      get: function () {
+        return requireWritableState(this).destroyed;
+      },
+    },
+    closed: {
+      get: function () {
+        return requireWritableState(this).closed;
+      },
+    },
+    errored: {
+      get: function () {
+        return requireWritableState(this).errored;
+      },
+    },
+  });
+
+  const Duplex = function (options) {
+    if (!(this instanceof Duplex)) return new Duplex(options);
+    Stream.call(this);
+    const normalizedOptions = options ?? {};
+    initializeReadable(this, {
+      ...normalizedOptions,
+      objectMode:
+        normalizedOptions.readableObjectMode ?? normalizedOptions.objectMode,
+      highWaterMark:
+        normalizedOptions.readableHighWaterMark ??
+        normalizedOptions.highWaterMark,
+    });
+    initializeWritable(this, {
+      ...normalizedOptions,
+      objectMode:
+        normalizedOptions.writableObjectMode ?? normalizedOptions.objectMode,
+      highWaterMark:
+        normalizedOptions.writableHighWaterMark ??
+        normalizedOptions.highWaterMark,
+    });
+    this.allowHalfOpen = normalizedOptions.allowHalfOpen !== false;
+  };
+  Duplex.prototype = Object.create(Readable.prototype);
+  Object.defineProperty(Duplex.prototype, 'constructor', {
+    value: Duplex,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  for (const name of [
+    '_write',
+    '_final',
+    'write',
+    'end',
+    'cork',
+    'uncork',
+    'setDefaultEncoding',
+  ]) {
+    Duplex.prototype[name] = Writable.prototype[name];
+  }
+  for (const name of [
+    'writable',
+    'writableEnded',
+    'writableFinished',
+    'writableNeedDrain',
+    'writableHighWaterMark',
+    'writableLength',
+  ]) {
+    Object.defineProperty(
+      Duplex.prototype,
+      name,
+      Object.getOwnPropertyDescriptor(Writable.prototype, name)
+    );
+  }
+  Duplex.prototype._destroy = streamDefaultDestroy;
+  Duplex.prototype.destroy = streamDestroy;
+
+  const Transform = function (options) {
+    if (!(this instanceof Transform)) return new Transform(options);
+    Duplex.call(this, options);
+    const normalizedOptions = options ?? {};
+    if (typeof normalizedOptions.transform === 'function') {
+      this._transform = normalizedOptions.transform;
+    }
+    if (typeof normalizedOptions.flush === 'function') {
+      this._flush = normalizedOptions.flush;
+    }
+  };
+  Transform.prototype = Object.create(Duplex.prototype);
+  Object.defineProperty(Transform.prototype, 'constructor', {
+    value: Transform,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Transform.prototype._transform = (chunk, encoding, callback) =>
+    callback(
+      createError(
+        'ERR_METHOD_NOT_IMPLEMENTED',
+        '_transform() is not implemented'
+      )
+    );
+  Transform.prototype._flush = (callback) => callback();
+  Transform.prototype._write = function (chunk, encoding, callback) {
+    let completed = false;
+    const complete = (error, output) => {
+      if (completed) return;
+      completed = true;
+      if (output !== undefined && output !== null) this.push(output);
+      callback(error);
+    };
+    try {
+      this._transform(chunk, encoding, complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+  Transform.prototype._final = function (callback) {
+    let completed = false;
+    const complete = (error, output) => {
+      if (completed) return;
+      completed = true;
+      if (output !== undefined && output !== null) this.push(output);
+      if (!error) this.push(null);
+      callback(error);
+    };
+    try {
+      this._flush(complete);
+    } catch (error) {
+      complete(error);
+    }
+  };
+
+  const PassThrough = function (options) {
+    if (!(this instanceof PassThrough)) return new PassThrough(options);
+    Transform.call(this, options);
+  };
+  PassThrough.prototype = Object.create(Transform.prototype);
+  Object.defineProperty(PassThrough.prototype, 'constructor', {
+    value: PassThrough,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  PassThrough.prototype._transform = (chunk, encoding, callback) =>
+    callback(null, chunk);
+
+  const isReadable = (stream) => {
+    const state = stream?.[readableStreamState];
+    return Boolean(state && !state.destroyed && !state.endEmitted);
+  };
+  const isWritable = (stream) => {
+    const state = stream?.[writableStreamState];
+    return Boolean(state && !state.destroyed && !state.ended);
+  };
+  const isDestroyed = (stream) => {
+    const readable = stream?.[readableStreamState];
+    const writable = stream?.[writableStreamState];
+    return Boolean(readable?.destroyed || writable?.destroyed);
+  };
+  const isErrored = (stream) => {
+    const readable = stream?.[readableStreamState];
+    const writable = stream?.[writableStreamState];
+    return Boolean(readable?.errored || writable?.errored);
+  };
+
+  const addAbortSignal = (signal, stream) => {
+    if (!(signal instanceof AbortSignal)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'signal must be an AbortSignal'
+      );
+    }
+    if (!stream || typeof stream.destroy !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'stream must be destroyable');
+    }
+    const abort = () => stream.destroy(createAbortError(signal.reason));
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    stream.once('close', () => signal.removeEventListener('abort', abort));
+    return stream;
+  };
+
+  const finishedStreamPromise = async (stream, options) => {
+    if (!stream || typeof stream.on !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'stream must be an EventEmitter'
+      );
+    }
+    const normalizedOptions = options ?? {};
+    const readable = stream[readableStreamState];
+    const writable = stream[writableStreamState];
+    const waitReadable =
+      normalizedOptions.readable === undefined
+        ? Boolean(readable)
+        : Boolean(normalizedOptions.readable);
+    const waitWritable =
+      normalizedOptions.writable === undefined
+        ? Boolean(writable)
+        : Boolean(normalizedOptions.writable);
+    const isComplete = () =>
+      (!waitReadable || readable?.endEmitted || readable?.destroyed) &&
+      (!waitWritable || writable?.finished || writable?.destroyed);
+    if (isComplete()) {
+      if (readable?.errored) throw readable.errored;
+      if (writable?.errored) throw writable.errored;
+      return;
+    }
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        stream.removeListener('end', check);
+        stream.removeListener('finish', check);
+        stream.removeListener('close', check);
+        stream.removeListener('error', fail);
+        if (normalizedOptions.signal) {
+          normalizedOptions.signal.removeEventListener('abort', abort);
+        }
+      };
+      const settle = (operation, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        operation(value);
+      };
+      const check = () => {
+        if (isComplete()) settle(resolve, undefined);
+      };
+      const fail = (error) => settle(reject, error);
+      const abort = () =>
+        settle(reject, createAbortError(normalizedOptions.signal.reason));
+      stream.on('end', check);
+      stream.on('finish', check);
+      stream.on('close', check);
+      stream.on('error', fail);
+      if (normalizedOptions.signal) {
+        if (normalizedOptions.signal.aborted) abort();
+        else {
+          normalizedOptions.signal.addEventListener('abort', abort, {
+            once: true,
+          });
+        }
+      }
+      check();
+    });
+  };
+
+  const finishedStream = (stream, options, callback) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+    if (typeof callback !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'callback must be a function');
+    }
+    let active = true;
+    setCallbackImmediate(async () => {
+      try {
+        await finishedStreamPromise(stream, options);
+        if (active) callback(null);
+      } catch (error) {
+        if (active) callback(error);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  };
+
+  const normalizePipelineStreams = (values) => {
+    const streams =
+      values.length === 1 && Array.isArray(values[0]) ? values[0] : values;
+    if (streams.length < 2) {
+      throw createError(
+        'ERR_MISSING_ARGS',
+        'pipeline requires at least a source and destination'
+      );
+    }
+    const normalized = [...streams];
+    if (!normalized[0] || typeof normalized[0].pipe !== 'function') {
+      normalized[0] = Readable.from(normalized[0]);
+    }
+    for (const stream of normalized) {
+      if (!stream || typeof stream.on !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'pipeline entries must be streams or an iterable source'
+        );
+      }
+    }
+    return normalized;
+  };
+
+  const pipelineStreamsPromise = async (...values) => {
+    const streams = normalizePipelineStreams(values);
+    const destination = streams.at(-1);
+    const completion = new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        for (const stream of streams) stream.removeListener('error', fail);
+        destination.removeListener('finish', succeed);
+        destination.removeListener('close', close);
+      };
+      const settle = (operation, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        operation(value);
+      };
+      const fail = (error) => {
+        for (const stream of streams) {
+          if (typeof stream.destroy === 'function' && !isDestroyed(stream)) {
+            stream.destroy();
+          }
+        }
+        settle(reject, error);
+      };
+      const succeed = () => settle(resolve, undefined);
+      const close = () => {
+        if (destination.writableFinished || destination.readableEnded) {
+          succeed();
+        } else {
+          fail(
+            createError(
+              'ERR_STREAM_PREMATURE_CLOSE',
+              'Pipeline destination closed prematurely'
+            )
+          );
+        }
+      };
+      for (const stream of streams) stream.on('error', fail);
+      destination.once('finish', succeed);
+      destination.once('close', close);
+    });
+    for (let index = 0; index + 1 < streams.length; index += 1) {
+      streams[index].pipe(streams[index + 1]);
+    }
+    await completion;
+  };
+
+  const pipelineStreams = (...values) => {
+    const callback = values.pop();
+    if (typeof callback !== 'function') {
+      throw createError('ERR_INVALID_ARG_TYPE', 'callback must be a function');
+    }
+    const streams = normalizePipelineStreams(values);
+    setCallbackImmediate(async () => {
+      try {
+        await pipelineStreamsPromise(...streams);
+        callback(null);
+      } catch (error) {
+        callback(error);
+      }
+    });
+    return streams.at(-1);
+  };
+
+  const streamPromises = Object.freeze({
+    finished: finishedStreamPromise,
+    pipeline: pipelineStreamsPromise,
+  });
+  const streamModule = Object.freeze({
+    Stream,
+    Readable,
+    Writable,
+    Duplex,
+    Transform,
+    PassThrough,
+    addAbortSignal,
+    finished: finishedStream,
+    pipeline: pipelineStreams,
+    isReadable,
+    isWritable,
+    isDestroyed,
+    isErrored,
+    promises: streamPromises,
+  });
+
+  let nextHostOperationIdentifier = 1;
+  const pendingDnsOperations = new Map();
+  const activeTcpSockets = new Map();
+  const activeTcpServers = new Map();
+  const pendingTcpWrites = new Map();
+  const pendingHttpOperations = new Map();
+  const maximumPendingDnsOperations = 64;
+  const maximumActiveTcpSockets = 64;
+  const maximumActiveTcpServers = 8;
+  const maximumPendingHttpOperations = 16;
+  const tcpSocketState = Symbol('muon.net.socketState');
+  const tcpServerState = Symbol('muon.net.serverState');
+  const httpRequestState = Symbol('muon.http.requestState');
+  const httpResponseState = Symbol('muon.http.responseState');
+  const httpServerResponseState = Symbol('muon.http.serverResponseState');
+  const headersState = Symbol('muon.fetch.headersState');
+  const requestState = Symbol('muon.fetch.requestState');
+  const responseState = Symbol('muon.fetch.responseState');
+  let defaultDnsResultOrder = 'verbatim';
+
+  const allocateHostOperationIdentifier = () => nextHostOperationIdentifier++;
+
+  const createNetworkError = (payload, hostname) => {
+    const code =
+      typeof payload?.code === 'string' ? payload.code : 'ERR_NETWORK_IO';
+    const error = createError(
+      code,
+      typeof payload?.message === 'string'
+        ? payload.message
+        : `${code}: network operation failed`
+    );
+    error.errno = code;
+    if (typeof payload?.syscall === 'string' && payload.syscall !== '') {
+      error.syscall = payload.syscall;
+    }
+    if (typeof hostname === 'string' && hostname !== '') {
+      error.hostname = hostname;
+    }
+    return error;
+  };
+
+  const isIP = (input) =>
+    typeof input === 'string' ? Number(__muonIsIp(input)) : 0;
+  const isIPv4 = (input) => isIP(input) === 4;
+  const isIPv6 = (input) => isIP(input) === 6;
+
+  const normalizeDnsFamily = (family) => {
+    if (family === undefined || family === null || family === 0) return 0;
+    if (family === 4 || family === 'IPv4') return 4;
+    if (family === 6 || family === 'IPv6') return 6;
+    throw createError(
+      'ERR_INVALID_ARG_VALUE',
+      'DNS family must be 0, 4, 6, IPv4, or IPv6'
+    );
+  };
+
+  const normalizeDnsOrder = (order) => {
+    const normalized = order ?? defaultDnsResultOrder;
+    if (
+      normalized !== 'verbatim' &&
+      normalized !== 'ipv4first' &&
+      normalized !== 'ipv6first'
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'DNS result order must be verbatim, ipv4first, or ipv6first'
+      );
+    }
+    return normalized;
+  };
+
+  const normalizeLookupOptions = (options) => {
+    if (options === undefined || options === null) {
+      return { family: 0, all: false, order: defaultDnsResultOrder };
+    }
+    if (typeof options === 'number' || typeof options === 'string') {
+      return {
+        family: normalizeDnsFamily(options),
+        all: false,
+        order: defaultDnsResultOrder,
+      };
+    }
+    if (typeof options !== 'object' || Array.isArray(options)) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'DNS lookup options must be a family or object'
+      );
+    }
+    if (options.hints !== undefined && Number(options.hints) !== 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'DNS lookup hints are not supported by the Android QuickJS runtime'
+      );
+    }
+    let requestedOrder = options.order;
+    if (requestedOrder === undefined && options.verbatim !== undefined) {
+      requestedOrder = options.verbatim ? 'verbatim' : 'ipv4first';
+    }
+    return {
+      family: normalizeDnsFamily(options.family),
+      all: Boolean(options.all),
+      order: normalizeDnsOrder(requestedOrder),
+    };
+  };
+
+  const orderDnsAddresses = (addresses, order) => {
+    if (order === 'verbatim') return addresses;
+    const preferredFamily = order === 'ipv4first' ? 4 : 6;
+    return [...addresses].sort((left, right) => {
+      const leftPreferred = left.family === preferredFamily ? 0 : 1;
+      const rightPreferred = right.family === preferredFamily ? 0 : 1;
+      return leftPreferred - rightPreferred;
+    });
+  };
+
+  const requestDnsAddresses = async (hostname, family) => {
+    const literalFamily = isIP(hostname);
+    if (literalFamily !== 0) {
+      if (family !== 0 && family !== literalFamily) {
+        throw createNetworkError(
+          {
+            code: 'ENOTFOUND',
+            message: `ENOTFOUND: getaddrinfo ${hostname}`,
+            syscall: 'getaddrinfo',
+          },
+          hostname
+        );
+      }
+      return [{ address: hostname, family: literalFamily }];
+    }
+    if (pendingDnsOperations.size >= maximumPendingDnsOperations) {
+      throw createError(
+        'ERR_MUON_DNS_OPERATION_LIMIT',
+        `A QuickJS runtime can have at most ${maximumPendingDnsOperations} pending DNS operations`
+      );
+    }
+    const identifier = allocateHostOperationIdentifier();
+    return await new Promise((resolve, reject) => {
+      pendingDnsOperations.set(identifier, { hostname, resolve, reject });
+      try {
+        __muonDnsLookup(identifier, hostname, family);
+      } catch (error) {
+        pendingDnsOperations.delete(identifier);
+        reject(error);
+      }
+    });
+  };
+
+  const lookupDnsPromise = async (hostname, options) => {
+    if (typeof hostname !== 'string' || hostname.length === 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'DNS hostname must be a non-empty string'
+      );
+    }
+    const normalized = normalizeLookupOptions(options);
+    const addresses = orderDnsAddresses(
+      await requestDnsAddresses(hostname, normalized.family),
+      normalized.order
+    );
+    if (normalized.all) return addresses;
+    if (addresses.length === 0) {
+      throw createNetworkError(
+        {
+          code: 'ENOTFOUND',
+          message: `ENOTFOUND: getaddrinfo ${hostname}`,
+          syscall: 'getaddrinfo',
+        },
+        hostname
+      );
+    }
+    return addresses[0];
+  };
+
+  const lookupDns = (hostname, options, callback) => {
+    if (typeof options === 'function') {
+      callback = options;
+      options = undefined;
+    }
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'DNS lookup callback is required'
+      );
+    }
+    const normalized = normalizeLookupOptions(options);
+    setCallbackImmediate(async () => {
+      try {
+        const result = await lookupDnsPromise(hostname, normalized);
+        if (normalized.all) callback(null, result);
+        else callback(null, result.address, result.family);
+      } catch (error) {
+        callback(error);
+      }
+    });
+  };
+
+  const setDefaultDnsResultOrder = (order) => {
+    defaultDnsResultOrder = normalizeDnsOrder(order);
+  };
+  const getDefaultDnsResultOrder = () => defaultDnsResultOrder;
+
+  const dnsPromises = {
+    lookup: lookupDnsPromise,
+    setDefaultResultOrder: setDefaultDnsResultOrder,
+    getDefaultResultOrder: getDefaultDnsResultOrder,
+  };
+  Object.freeze(dnsPromises);
+  const dnsModule = {
+    lookup: lookupDns,
+    setDefaultResultOrder: setDefaultDnsResultOrder,
+    getDefaultResultOrder: getDefaultDnsResultOrder,
+    promises: dnsPromises,
+  };
+  Object.freeze(dnsModule);
+
+  const requireTcpSocketState = (socket) => {
+    const state = socket?.[tcpSocketState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Socket method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const normalizeTcpConnectArguments = (values) => {
+    const arguments_ = [...values];
+    const listener =
+      typeof arguments_.at(-1) === 'function' ? arguments_.pop() : undefined;
+    let options;
+    if (
+      arguments_.length === 1 &&
+      arguments_[0] !== null &&
+      typeof arguments_[0] === 'object'
+    ) {
+      options = { ...arguments_[0] };
+    } else {
+      options = {
+        port: arguments_[0],
+        host: arguments_[1],
+      };
+    }
+    if ('path' in options) {
+      throw createError(
+        'ERR_NOT_SUPPORTED',
+        'Unix domain sockets are not supported on Android QuickJS'
+      );
+    }
+    const port = Number(options.port);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      throw createError(
+        'ERR_SOCKET_BAD_PORT',
+        'TCP port must be an integer between 1 and 65535'
+      );
+    }
+    const host =
+      options.host === undefined ? 'localhost' : String(options.host);
+    if (host.length === 0) {
+      throw createError('ERR_INVALID_ARG_VALUE', 'TCP host must not be empty');
+    }
+    return { options: { ...options, host, port }, listener };
+  };
+
+  const resetSocketTimeout = (socket, state) => {
+    if (state.timeoutHandle !== null) {
+      clearCallbackTimeout(state.timeoutHandle);
+      state.timeoutHandle = null;
+    }
+    if (state.timeout > 0 && !socket.destroyed) {
+      state.timeoutHandle = setCallbackTimeout(() => {
+        state.timeoutHandle = null;
+        socket.emit('timeout');
+      }, state.timeout);
+      state.timeoutHandle.unref();
+    }
+  };
+
+  const maybeCloseTcpSocket = (socket, state) => {
+    if (state.remoteEnded && state.localEnded && !socket.destroyed) {
+      socket.destroy();
+    }
+  };
+
+  const requestTcpEnd = (socket, state, callback) => {
+    state.localEnded = true;
+    if (state.nativeStarted) __muonTcpEnd(state.identifier);
+    callback();
+    maybeCloseTcpSocket(socket, state);
+  };
+
+  const startTcpWrite = (socket, state, chunk, callback) => {
+    const identifier = allocateHostOperationIdentifier();
+    const copy = new Uint8Array(chunk.byteLength);
+    copy.set(chunk);
+    pendingTcpWrites.set(identifier, {
+      socket,
+      callback,
+      length: copy.byteLength,
+    });
+    state.pendingWriteIdentifier = identifier;
+    try {
+      if (!__muonTcpWrite(state.identifier, identifier, copy.buffer)) {
+        throw createError('ERR_SOCKET_CLOSED', 'The TCP socket is closed');
+      }
+    } catch (error) {
+      pendingTcpWrites.delete(identifier);
+      state.pendingWriteIdentifier = 0;
+      callback(error);
+    }
+  };
+
+  const Socket = function (options) {
+    if (!(this instanceof Socket)) return new Socket(options);
+    const normalizedOptions = options ?? {};
+    Duplex.call(this, {
+      ...normalizedOptions,
+      allowHalfOpen: normalizedOptions.allowHalfOpen === true,
+    });
+    Object.defineProperty(this, tcpSocketState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        connecting: false,
+        connected: false,
+        nativeStarted: false,
+        remoteEnded: false,
+        localEnded: false,
+        hadError: false,
+        deferredWrite: null,
+        pendingWriteIdentifier: 0,
+        deferredFinal: null,
+        bytesRead: 0,
+        bytesWritten: 0,
+        localAddress: undefined,
+        localFamily: undefined,
+        localPort: undefined,
+        remoteAddress: undefined,
+        remoteFamily: undefined,
+        remotePort: undefined,
+        noDelay: false,
+        keepAlive: false,
+        keepAliveInitialDelay: 0,
+        timeout: 0,
+        timeoutHandle: null,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    Object.defineProperty(this, streamCloseArgument, {
+      value: () => requireTcpSocketState(this).hadError,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  };
+  Socket.prototype = Object.create(Duplex.prototype);
+  Object.defineProperty(Socket.prototype, 'constructor', {
+    value: Socket,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Socket.prototype.connect = function (...values) {
+    const state = requireTcpSocketState(this);
+    if (state.connecting || state.connected || state.nativeStarted) {
+      throw createError('ERR_SOCKET_ALREADY_OPEN', 'Socket is already opening');
+    }
+    const { options, listener } = normalizeTcpConnectArguments(values);
+    if (listener) this.once('connect', listener);
+    state.connecting = true;
+    state.noDelay = Boolean(options.noDelay);
+    setCallbackImmediate(async () => {
+      try {
+        const result = await lookupDnsPromise(options.host, {
+          family: options.family,
+          all: false,
+          order: options.order ?? 'ipv4first',
+        });
+        if (this.destroyed) return;
+        if (isIP(options.host) === 0) {
+          this.emit(
+            'lookup',
+            null,
+            result.address,
+            result.family,
+            options.host
+          );
+        }
+        if (activeTcpSockets.size >= maximumActiveTcpSockets) {
+          throw createError(
+            'ERR_MUON_TCP_SOCKET_LIMIT',
+            `A QuickJS runtime can have at most ${maximumActiveTcpSockets} active TCP sockets`
+          );
+        }
+        activeTcpSockets.set(state.identifier, this);
+        state.nativeStarted = true;
+        __muonTcpConnect(
+          state.identifier,
+          result.address,
+          options.port,
+          state.noDelay
+        );
+      } catch (error) {
+        if (isIP(options.host) === 0) {
+          this.emit('lookup', error, undefined, undefined, options.host);
+        }
+        this.destroy(error);
+      }
+    });
+    return this;
+  };
+  Socket.prototype._read = function () {
+    const state = requireTcpSocketState(this);
+    if (state.nativeStarted) __muonTcpSetPaused(state.identifier, false);
+  };
+  Socket.prototype._write = function (chunk, encoding, callback) {
+    void encoding;
+    const state = requireTcpSocketState(this);
+    if (!state.connected) {
+      state.deferredWrite = { chunk, callback };
+      return;
+    }
+    startTcpWrite(this, state, chunk, callback);
+  };
+  Socket.prototype._final = function (callback) {
+    const state = requireTcpSocketState(this);
+    if (!state.connected) {
+      state.deferredFinal = callback;
+      return;
+    }
+    requestTcpEnd(this, state, callback);
+  };
+  Socket.prototype._destroy = function (error, callback) {
+    const state = requireTcpSocketState(this);
+    state.hadError = Boolean(error);
+    state.connecting = false;
+    state.connected = false;
+    if (state.timeoutHandle !== null) {
+      clearCallbackTimeout(state.timeoutHandle);
+      state.timeoutHandle = null;
+    }
+    if (state.pendingWriteIdentifier !== 0) {
+      const pending = pendingTcpWrites.get(state.pendingWriteIdentifier);
+      pendingTcpWrites.delete(state.pendingWriteIdentifier);
+      state.pendingWriteIdentifier = 0;
+      pending?.callback(
+        error ?? createError('ERR_SOCKET_CLOSED', 'Socket closed')
+      );
+    }
+    if (state.deferredWrite !== null) {
+      const pending = state.deferredWrite;
+      state.deferredWrite = null;
+      pending.callback(
+        error ?? createError('ERR_SOCKET_CLOSED', 'Socket closed')
+      );
+    }
+    if (state.deferredFinal !== null) {
+      const pending = state.deferredFinal;
+      state.deferredFinal = null;
+      pending(error ?? null);
+    }
+    activeTcpSockets.delete(state.identifier);
+    if (state.nativeStarted) {
+      __muonTcpClose(state.identifier);
+      state.nativeStarted = false;
+    }
+    callback(error);
+  };
+  Socket.prototype.pause = function () {
+    const result = Readable.prototype.pause.call(this);
+    const state = requireTcpSocketState(this);
+    if (state.nativeStarted) __muonTcpSetPaused(state.identifier, true);
+    return result;
+  };
+  Socket.prototype.resume = function () {
+    const result = Readable.prototype.resume.call(this);
+    const state = requireTcpSocketState(this);
+    if (state.nativeStarted) __muonTcpSetPaused(state.identifier, false);
+    return result;
+  };
+  Socket.prototype.address = function () {
+    const state = requireTcpSocketState(this);
+    if (state.localAddress === undefined) return {};
+    return {
+      address: state.localAddress,
+      family: state.localFamily,
+      port: state.localPort,
+    };
+  };
+  Socket.prototype.setNoDelay = function (noDelay = true) {
+    const state = requireTcpSocketState(this);
+    state.noDelay = Boolean(noDelay);
+    if (state.nativeStarted) {
+      __muonTcpSetNoDelay(state.identifier, state.noDelay);
+    }
+    return this;
+  };
+  Socket.prototype.setKeepAlive = function (enable = false, initialDelay = 0) {
+    const state = requireTcpSocketState(this);
+    state.keepAlive = Boolean(enable);
+    state.keepAliveInitialDelay = Math.max(0, Number(initialDelay) || 0);
+    if (state.nativeStarted) {
+      __muonTcpSetKeepAlive(
+        state.identifier,
+        state.keepAlive,
+        state.keepAliveInitialDelay
+      );
+    }
+    return this;
+  };
+  Socket.prototype.setTimeout = function (timeout, callback) {
+    const state = requireTcpSocketState(this);
+    const normalized = Number(timeout);
+    if (!Number.isFinite(normalized) || normalized < 0) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'Socket timeout must be a non-negative finite number'
+      );
+    }
+    state.timeout = Math.trunc(normalized);
+    if (typeof callback === 'function') this.once('timeout', callback);
+    resetSocketTimeout(this, state);
+    return this;
+  };
+  Socket.prototype.ref = function () {
+    return this;
+  };
+  Socket.prototype.unref = function () {
+    return this;
+  };
+  Socket.prototype.destroySoon = function () {
+    return this.end();
+  };
+  Object.defineProperties(Socket.prototype, {
+    connecting: {
+      get: function () {
+        return requireTcpSocketState(this).connecting;
+      },
+    },
+    pending: {
+      get: function () {
+        return requireTcpSocketState(this).connecting;
+      },
+    },
+    bytesRead: {
+      get: function () {
+        return requireTcpSocketState(this).bytesRead;
+      },
+    },
+    bytesWritten: {
+      get: function () {
+        return requireTcpSocketState(this).bytesWritten;
+      },
+    },
+    localAddress: {
+      get: function () {
+        return requireTcpSocketState(this).localAddress;
+      },
+    },
+    localFamily: {
+      get: function () {
+        return requireTcpSocketState(this).localFamily;
+      },
+    },
+    localPort: {
+      get: function () {
+        return requireTcpSocketState(this).localPort;
+      },
+    },
+    remoteAddress: {
+      get: function () {
+        return requireTcpSocketState(this).remoteAddress;
+      },
+    },
+    remoteFamily: {
+      get: function () {
+        return requireTcpSocketState(this).remoteFamily;
+      },
+    },
+    remotePort: {
+      get: function () {
+        return requireTcpSocketState(this).remotePort;
+      },
+    },
+    readyState: {
+      get: function () {
+        const state = requireTcpSocketState(this);
+        if (this.destroyed) return 'closed';
+        if (state.connecting) return 'opening';
+        if (!state.connected) return 'closed';
+        if (state.localEnded) return 'readOnly';
+        if (state.remoteEnded) return 'writeOnly';
+        return 'open';
+      },
+    },
+    bufferSize: {
+      get: function () {
+        return this.writableLength;
+      },
+    },
+    timeout: {
+      get: function () {
+        return requireTcpSocketState(this).timeout;
+      },
+    },
+  });
+
+  const requireTcpServerState = (server) => {
+    const state = server?.[tcpServerState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Server method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const normalizeTcpListenArguments = (values) => {
+    const arguments_ = [...values];
+    const listener =
+      typeof arguments_.at(-1) === 'function' ? arguments_.pop() : undefined;
+    let options;
+    if (
+      arguments_.length > 0 &&
+      arguments_[0] !== null &&
+      typeof arguments_[0] === 'object'
+    ) {
+      options = { ...arguments_[0] };
+    } else {
+      options = { port: arguments_[0] };
+      if (typeof arguments_[1] === 'string') options.host = arguments_[1];
+      else if (arguments_[1] !== undefined) options.backlog = arguments_[1];
+      if (arguments_[2] !== undefined) options.backlog = arguments_[2];
+    }
+    if ('path' in options) {
+      throw createError(
+        'ERR_NOT_SUPPORTED',
+        'Unix domain socket servers are not supported on Android QuickJS'
+      );
+    }
+    const port = Number(options.port);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      throw createError(
+        'ERR_SOCKET_BAD_PORT',
+        'TCP server port must be an integer between 0 and 65535'
+      );
+    }
+    const requestedHost = String(options.host ?? '127.0.0.1');
+    const host = requestedHost === 'localhost' ? '127.0.0.1' : requestedHost;
+    if (host !== '127.0.0.1' && host !== '::1') {
+      throw createError(
+        'EACCES',
+        'Android QuickJS TCP servers are restricted to loopback addresses'
+      );
+    }
+    const backlog = Number(options.backlog ?? 511);
+    if (!Number.isInteger(backlog) || backlog <= 0 || backlog > 4096) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'TCP server backlog must be between 1 and 4096'
+      );
+    }
+    return {
+      listener,
+      options: {
+        ...options,
+        host,
+        port,
+        backlog,
+        noDelay: options.noDelay !== false,
+        keepAlive: options.keepAlive === true,
+        keepAliveInitialDelay: Math.max(
+          0,
+          Number(options.keepAliveInitialDelay) || 0
+        ),
+      },
+    };
+  };
+
+  const finishTcpServerClose = (server, state) => {
+    if (!state.closing || state.connections !== 0 || state.closeScheduled) {
+      return;
+    }
+    state.closeScheduled = true;
+    setCallbackImmediate(() => {
+      if (!state.closing || state.connections !== 0) {
+        state.closeScheduled = false;
+        return;
+      }
+      state.closing = false;
+      state.closeScheduled = false;
+      server.emit('close');
+    });
+  };
+
+  const Server = function (options, connectionListener) {
+    if (!(this instanceof Server))
+      return new Server(options, connectionListener);
+    if (typeof options === 'function') {
+      connectionListener = options;
+      options = {};
+    }
+    const normalizedOptions = options ?? {};
+    EventEmitter.call(this);
+    Object.defineProperty(this, tcpServerState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        nativeStarted: false,
+        listening: false,
+        closing: false,
+        closeScheduled: false,
+        address: null,
+        connections: 0,
+        sockets: new Set(),
+        options: null,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.allowHalfOpen = normalizedOptions.allowHalfOpen === true;
+    this.pauseOnConnect = normalizedOptions.pauseOnConnect === true;
+    this.maxConnections = undefined;
+    this.dropMaxConnection = false;
+    if (connectionListener !== undefined) {
+      if (typeof connectionListener !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'TCP connection listener must be a function'
+        );
+      }
+      this.on('connection', connectionListener);
+    }
+  };
+  Server.prototype = Object.create(EventEmitter.prototype);
+  Object.defineProperty(Server.prototype, 'constructor', {
+    value: Server,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Server.prototype.listen = function (...values) {
+    const state = requireTcpServerState(this);
+    if (state.nativeStarted || state.listening || state.closing) {
+      throw createError(
+        'ERR_SERVER_ALREADY_LISTEN',
+        'Server is already active'
+      );
+    }
+    const normalized = normalizeTcpListenArguments(values);
+    if (activeTcpServers.size >= maximumActiveTcpServers) {
+      throw createError(
+        'ERR_MUON_TCP_SERVER_LIMIT',
+        `A QuickJS runtime can have at most ${maximumActiveTcpServers} active TCP servers`
+      );
+    }
+    if (normalized.listener) this.once('listening', normalized.listener);
+    state.options = normalized.options;
+    state.nativeStarted = true;
+    activeTcpServers.set(state.identifier, this);
+    try {
+      __muonTcpListen(
+        state.identifier,
+        normalized.options.host,
+        normalized.options.port,
+        normalized.options.backlog
+      );
+    } catch (error) {
+      state.nativeStarted = false;
+      activeTcpServers.delete(state.identifier);
+      throw error;
+    }
+    return this;
+  };
+  Server.prototype.address = function () {
+    const address = requireTcpServerState(this).address;
+    return address === null ? null : { ...address };
+  };
+  Server.prototype.close = function (callback) {
+    const state = requireTcpServerState(this);
+    if (!state.nativeStarted && !state.listening) {
+      const error = createError(
+        'ERR_SERVER_NOT_RUNNING',
+        'Server is not running'
+      );
+      if (typeof callback === 'function') {
+        setCallbackImmediate(() => callback(error));
+        return this;
+      }
+      throw error;
+    }
+    if (typeof callback === 'function') this.once('close', callback);
+    if (state.nativeStarted) __muonTcpCloseServer(state.identifier);
+    state.nativeStarted = false;
+    state.listening = false;
+    state.closing = true;
+    state.address = null;
+    activeTcpServers.delete(state.identifier);
+    finishTcpServerClose(this, state);
+    return this;
+  };
+  Server.prototype.getConnections = function (callback) {
+    if (typeof callback !== 'function') {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'getConnections callback must be a function'
+      );
+    }
+    const connections = requireTcpServerState(this).connections;
+    setCallbackImmediate(() => callback(null, connections));
+  };
+  Server.prototype.closeAllConnections = function () {
+    for (const socket of requireTcpServerState(this).sockets) socket.destroy();
+  };
+  Server.prototype.closeIdleConnections = function () {
+    this.closeAllConnections();
+  };
+  Server.prototype.ref = function () {
+    return this;
+  };
+  Server.prototype.unref = function () {
+    return this;
+  };
+  Object.defineProperties(Server.prototype, {
+    listening: {
+      get: function () {
+        return requireTcpServerState(this).listening;
+      },
+    },
+    connections: {
+      get: function () {
+        return requireTcpServerState(this).connections;
+      },
+    },
+  });
+
+  const acceptTcpServerConnection = (server, serverStateValue) => {
+    const socket = new Socket({ allowHalfOpen: server.allowHalfOpen });
+    const socketStateValue = requireTcpSocketState(socket);
+    const connection = __muonTcpAccept(
+      serverStateValue.identifier,
+      socketStateValue.identifier,
+      serverStateValue.options.noDelay
+    );
+    if (connection === null) return;
+    if (activeTcpSockets.size >= maximumActiveTcpSockets) {
+      __muonTcpClose(socketStateValue.identifier);
+      server.emit('drop', connection);
+      return;
+    }
+    socketStateValue.connected = true;
+    socketStateValue.nativeStarted = true;
+    socketStateValue.noDelay = serverStateValue.options.noDelay;
+    socketStateValue.localAddress = connection.localAddress;
+    socketStateValue.localFamily = connection.localFamily;
+    socketStateValue.localPort = connection.localPort;
+    socketStateValue.remoteAddress = connection.address;
+    socketStateValue.remoteFamily = connection.family;
+    socketStateValue.remotePort = connection.port;
+    activeTcpSockets.set(socketStateValue.identifier, socket);
+    serverStateValue.connections += 1;
+    serverStateValue.sockets.add(socket);
+    socket.once('close', () => {
+      if (serverStateValue.sockets.delete(socket)) {
+        serverStateValue.connections -= 1;
+        finishTcpServerClose(server, serverStateValue);
+      }
+    });
+    if (
+      Number.isInteger(server.maxConnections) &&
+      server.maxConnections >= 0 &&
+      serverStateValue.connections > server.maxConnections
+    ) {
+      server.emit('drop', connection);
+      socket.destroy();
+      return;
+    }
+    if (serverStateValue.options.keepAlive) {
+      socket.setKeepAlive(true, serverStateValue.options.keepAliveInitialDelay);
+    }
+    if (server.pauseOnConnect) socket.pause();
+    server.emit('connection', socket);
+  };
+
+  const normalizeHttpHeaderName = (name) => {
+    const normalized = String(name).toLowerCase();
+    if (!/^[!#$%&'*+\-.^_`|~0-9a-z]+$/.test(normalized)) {
+      throw createError(
+        'ERR_INVALID_HTTP_TOKEN',
+        `Invalid HTTP header name: ${String(name)}`
+      );
+    }
+    return normalized;
+  };
+
+  const normalizeHttpHeaderValue = (name, value) => {
+    const normalized = String(value);
+    if (/[\0\r\n]/.test(normalized)) {
+      throw createError(
+        'ERR_INVALID_CHAR',
+        `Invalid character in HTTP header ${name}`
+      );
+    }
+    return normalized;
+  };
+
+  const Headers = function (initial) {
+    if (!(this instanceof Headers)) return new Headers(initial);
+    Object.defineProperty(this, headersState, {
+      value: new Map(),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    if (initial instanceof Headers) {
+      for (const [name, value] of initial) this.append(name, value);
+    } else if (initial !== undefined && initial !== null) {
+      if (typeof initial[Symbol.iterator] === 'function') {
+        for (const entry of initial) {
+          if (!Array.isArray(entry) || entry.length !== 2) {
+            throw createError(
+              'ERR_INVALID_ARG_VALUE',
+              'A Headers entry must contain a name and value'
+            );
+          }
+          this.append(entry[0], entry[1]);
+        }
+      } else if (typeof initial === 'object') {
+        for (const [name, value] of Object.entries(initial)) {
+          if (Array.isArray(value)) {
+            for (const item of value) this.append(name, item);
+          } else {
+            this.append(name, value);
+          }
+        }
+      } else {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'Headers initializer must be an object or iterable'
+        );
+      }
+    }
+  };
+  Headers.prototype.append = function (name, value) {
+    const normalizedName = normalizeHttpHeaderName(name);
+    const normalizedValue = normalizeHttpHeaderValue(normalizedName, value);
+    const entry = this[headersState].get(normalizedName);
+    if (entry) entry.values.push(normalizedValue);
+    else {
+      this[headersState].set(normalizedName, {
+        name: String(name),
+        values: [normalizedValue],
+      });
+    }
+  };
+  Headers.prototype.delete = function (name) {
+    this[headersState].delete(normalizeHttpHeaderName(name));
+  };
+  Headers.prototype.get = function (name) {
+    const normalizedName = normalizeHttpHeaderName(name);
+    const entry = this[headersState].get(normalizedName);
+    if (!entry) return null;
+    return entry.values.join(normalizedName === 'cookie' ? '; ' : ', ');
+  };
+  Headers.prototype.getSetCookie = function () {
+    return [...(this[headersState].get('set-cookie')?.values ?? [])];
+  };
+  Headers.prototype.has = function (name) {
+    return this[headersState].has(normalizeHttpHeaderName(name));
+  };
+  Headers.prototype.set = function (name, value) {
+    const normalizedName = normalizeHttpHeaderName(name);
+    this[headersState].set(normalizedName, {
+      name: String(name),
+      values: [normalizeHttpHeaderValue(normalizedName, value)],
+    });
+  };
+  Headers.prototype.entries = function () {
+    const entries = [...this[headersState]].map(([name, entry]) => [
+      name,
+      entry.values.join(name === 'cookie' ? '; ' : ', '),
+    ]);
+    return entries[Symbol.iterator]();
+  };
+  Headers.prototype.keys = function () {
+    return [...this[headersState].keys()][Symbol.iterator]();
+  };
+  Headers.prototype.values = function () {
+    return [...this.entries()].map((entry) => entry[1])[Symbol.iterator]();
+  };
+  Headers.prototype.forEach = function (callback, thisArgument) {
+    for (const [name, value] of this) {
+      Reflect.apply(callback, thisArgument, [value, name, this]);
+    }
+  };
+  Headers.prototype[Symbol.iterator] = Headers.prototype.entries;
+
+  const headerPairs = (headers) => {
+    const pairs = [];
+    for (const entry of headers[headersState].values()) {
+      for (const value of entry.values) pairs.push([entry.name, value]);
+    }
+    return pairs;
+  };
+
+  const normalizeHttpMethod = (method) => {
+    const normalized = String(method ?? 'GET').toUpperCase();
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Z]+$/.test(normalized)) {
+      throw createError('ERR_INVALID_HTTP_TOKEN', 'Invalid HTTP method');
+    }
+    return normalized;
+  };
+
+  const normalizeHttpTimeout = (value, fallback) => {
+    if (value === undefined) return fallback;
+    const normalized = Number(value);
+    if (!Number.isFinite(normalized) || normalized < 0 || normalized > 60000) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'HTTP timeout must be between 0 and 60000ms'
+      );
+    }
+    return Math.trunc(normalized);
+  };
+
+  const normalizeCertificateAuthority = (value) => {
+    if (value === undefined || value === null) return '';
+    const sources = Array.isArray(value) ? value : [value];
+    if (sources.length === 0) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'HTTPS ca must contain at least one certificate'
+      );
+    }
+    const certificates = sources.map((source) => {
+      if (typeof source === 'string') return source;
+      if (source instanceof ArrayBuffer || source instanceof Uint8Array) {
+        return Buffer.from(source).toString('utf8');
+      }
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'HTTPS ca entries must be strings, ArrayBuffers, or Uint8Arrays'
+      );
+    });
+    const certificateAuthority = certificates.join('\n');
+    if (
+      certificateAuthority.length === 0 ||
+      certificateAuthority.length > 1024 * 1024 ||
+      certificateAuthority.includes('\0')
+    ) {
+      throw createError(
+        'ERR_INVALID_ARG_VALUE',
+        'HTTPS ca must contain between 1 byte and 1 MiB of PEM certificates'
+      );
+    }
+    return certificateAuthority;
+  };
+
+  const normalizeHttpRequestArguments = (expectedProtocol, values) => {
+    const arguments_ = [...values];
+    const callback =
+      typeof arguments_.at(-1) === 'function' ? arguments_.pop() : undefined;
+    let input;
+    let options = {};
+    if (typeof arguments_[0] === 'string' || arguments_[0] instanceof URL) {
+      input = arguments_.shift();
+    }
+    if (arguments_.length > 0) {
+      if (
+        arguments_[0] === null ||
+        typeof arguments_[0] !== 'object' ||
+        Array.isArray(arguments_[0])
+      ) {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'HTTP request options must be an object'
+        );
+      }
+      options = { ...arguments_[0] };
+    } else if (input === undefined && values[0] !== undefined) {
+      options = { ...values[0] };
+    }
+
+    let url;
+    if (input !== undefined) {
+      url = new URL(String(input));
+    } else {
+      const protocol = String(options.protocol ?? expectedProtocol);
+      let hostname = options.hostname;
+      let port = options.port;
+      if (hostname === undefined && options.host !== undefined) {
+        const parsedHost = new URL(`${protocol}//${String(options.host)}`);
+        hostname = parsedHost.hostname;
+        if (port === undefined && parsedHost.port !== '')
+          port = parsedHost.port;
+      }
+      hostname = String(hostname ?? 'localhost');
+      const bracketedHostname =
+        hostname.includes(':') && !hostname.startsWith('[')
+          ? `[${hostname}]`
+          : hostname;
+      const portText =
+        port === undefined || String(port) === '' ? '' : `:${port}`;
+      const path = String(options.path ?? '/');
+      url = new URL(`${protocol}//${bracketedHostname}${portText}${path}`);
+    }
+    if (options.protocol !== undefined) url.protocol = String(options.protocol);
+    if (options.hostname !== undefined) url.hostname = String(options.hostname);
+    if (options.port !== undefined) url.port = String(options.port);
+    if (options.path !== undefined) {
+      const path = String(options.path);
+      const query = path.indexOf('?');
+      url.pathname = query < 0 ? path : path.slice(0, query);
+      url.search = query < 0 ? '' : path.slice(query);
+    }
+    if (url.protocol !== expectedProtocol) {
+      throw createError(
+        'ERR_INVALID_PROTOCOL',
+        `Protocol ${url.protocol} is not supported by ${expectedProtocol}`
+      );
+    }
+    if (expectedProtocol === 'https:') {
+      if (options.rejectUnauthorized === false) {
+        throw createError(
+          'ERR_NOT_SUPPORTED',
+          'Disabling HTTPS certificate verification is not supported'
+        );
+      }
+      for (const optionName of [
+        'checkServerIdentity',
+        'cert',
+        'key',
+        'pfx',
+        'secureContext',
+      ]) {
+        if (options[optionName] !== undefined) {
+          throw createError(
+            'ERR_NOT_SUPPORTED',
+            `HTTPS option ${optionName} is not supported by Android QuickJS`
+          );
+        }
+      }
+    }
+    if (url.username !== '' && options.auth === undefined) {
+      options.auth = `${decodeURIComponent(url.username)}:${decodeURIComponent(
+        url.password
+      )}`;
+    }
+    const headers = new Headers(options.headers);
+    if (options.auth !== undefined && !headers.has('authorization')) {
+      headers.set(
+        'Authorization',
+        `Basic ${Buffer.from(String(options.auth)).toString('base64')}`
+      );
+    }
+    return {
+      callback,
+      options: {
+        ...options,
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port:
+          url.port === ''
+            ? url.protocol === 'https:'
+              ? 443
+              : 80
+            : Number(url.port),
+        path: `${url.pathname}${url.search}`,
+        method: normalizeHttpMethod(options.method),
+        headers,
+        url: url.href,
+        connectTimeout: normalizeHttpTimeout(options.connectTimeout, 30000),
+        readTimeout: normalizeHttpTimeout(options.timeout, 30000),
+        certificateAuthority:
+          expectedProtocol === 'https:'
+            ? normalizeCertificateAuthority(options.ca)
+            : '',
+      },
+    };
+  };
+
+  const createHttpOperationError = (payload) => {
+    const error = createNetworkError(payload);
+    if (typeof payload?.url === 'string' && payload.url !== '') {
+      error.url = payload.url;
+    }
+    return error;
+  };
+
+  const cleanupHttpAbortSignal = (state) => {
+    if (state.signal && state.abortListener) {
+      state.signal.removeEventListener('abort', state.abortListener);
+      state.abortListener = null;
+    }
+  };
+
+  const IncomingMessage = function (request, payload) {
+    if (!(this instanceof IncomingMessage)) {
+      return new IncomingMessage(request, payload);
+    }
+    Readable.call(this);
+    const headers = {};
+    const rawHeaders = [];
+    for (const pair of payload.headers ?? []) {
+      const name = String(pair[0]);
+      const value = String(pair[1]);
+      const normalizedName = name.toLowerCase();
+      rawHeaders.push(name, value);
+      if (normalizedName === 'set-cookie') {
+        if (!Array.isArray(headers[normalizedName]))
+          headers[normalizedName] = [];
+        headers[normalizedName].push(value);
+      } else if (headers[normalizedName] === undefined) {
+        headers[normalizedName] = value;
+      } else {
+        const separator = normalizedName === 'cookie' ? '; ' : ', ';
+        headers[normalizedName] += `${separator}${value}`;
+      }
+    }
+    this.statusCode = Number(payload.statusCode);
+    this.statusMessage = String(payload.statusMessage ?? '');
+    this.httpVersion = String(payload.httpVersion ?? '1.1');
+    const versionParts = this.httpVersion.split('.');
+    this.httpVersionMajor = Number(versionParts[0] ?? 1);
+    this.httpVersionMinor = Number(versionParts[1] ?? 1);
+    this.headers = headers;
+    this.headersDistinct = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        Array.isArray(value) ? [...value] : [value],
+      ])
+    );
+    this.rawHeaders = rawHeaders;
+    this.trailers = {};
+    this.trailersDistinct = {};
+    this.rawTrailers = [];
+    this.complete = false;
+    this.aborted = false;
+    this.method = null;
+    this.url = String(payload.url ?? '');
+    this.socket = null;
+    this.connection = null;
+    Object.defineProperty(this, httpResponseState, {
+      value: {
+        kind: 'client',
+        identifier: requireHttpRequestState(request).identifier,
+        request,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  };
+  IncomingMessage.prototype = Object.create(Readable.prototype);
+  Object.defineProperty(IncomingMessage.prototype, 'constructor', {
+    value: IncomingMessage,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  IncomingMessage.prototype._read = function () {
+    const state = this[httpResponseState];
+    if (this.complete) return;
+    if (state.kind === 'client') __muonHttpResume(state.identifier);
+    else {
+      state.socket.resume();
+      state.resume();
+    }
+  };
+  IncomingMessage.prototype._destroy = function (error, callback) {
+    const state = this[httpResponseState];
+    if (!this.complete && state.kind === 'client') {
+      this.aborted = true;
+      pendingHttpOperations.delete(state.identifier);
+      __muonHttpCancel(state.identifier);
+    } else if (!this.complete && !state.socket.destroyed) {
+      this.aborted = true;
+      state.socket.destroy(error);
+    }
+    callback(error);
+  };
+  IncomingMessage.prototype.setTimeout = function (timeout, callback) {
+    const state = this[httpResponseState];
+    if (state.kind === 'client') state.request.setTimeout(timeout, callback);
+    else state.socket.setTimeout(timeout, callback);
+    return this;
+  };
+
+  const indexOfHttpBytes = (buffer, pattern, start = 0) => {
+    const last = buffer.byteLength - pattern.byteLength;
+    for (let index = start; index <= last; index += 1) {
+      let matches = true;
+      for (let offset = 0; offset < pattern.byteLength; offset += 1) {
+        if (buffer[index + offset] !== pattern[offset]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return index;
+    }
+    return -1;
+  };
+
+  const createHttpParserError = (code, message) => createError(code, message);
+
+  const parseHttpRequestHead = (head) => {
+    const lines = head.split('\r\n');
+    const requestLine = lines.shift() ?? '';
+    const match = /^([^ ]+) ([^ ]+) HTTP\/(\d+)\.(\d+)$/.exec(requestLine);
+    if (!match) {
+      throw createHttpParserError(
+        'HPE_INVALID_CONSTANT',
+        'Invalid HTTP request line'
+      );
+    }
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(match[1])) {
+      throw createHttpParserError('HPE_INVALID_METHOD', 'Invalid HTTP method');
+    }
+    const major = Number(match[3]);
+    const minor = Number(match[4]);
+    if (major !== 1 || (minor !== 0 && minor !== 1)) {
+      throw createHttpParserError(
+        'HPE_INVALID_VERSION',
+        'Only HTTP/1.0 and HTTP/1.1 requests are supported'
+      );
+    }
+    const headers = [];
+    for (const line of lines) {
+      if (line.startsWith(' ') || line.startsWith('\t')) {
+        throw createHttpParserError(
+          'HPE_INVALID_HEADER_TOKEN',
+          'Folded HTTP request headers are not supported'
+        );
+      }
+      const separator = line.indexOf(':');
+      if (separator <= 0) {
+        throw createHttpParserError(
+          'HPE_INVALID_HEADER_TOKEN',
+          'Invalid HTTP request header'
+        );
+      }
+      const name = line.slice(0, separator);
+      const value = line.slice(separator + 1).trim();
+      normalizeHttpHeaderName(name);
+      normalizeHttpHeaderValue(name, value);
+      headers.push([name, value]);
+    }
+    const contentLengths = headers
+      .filter(([name]) => name.toLowerCase() === 'content-length')
+      .map(([, value]) => value);
+    const transferEncodings = headers
+      .filter(([name]) => name.toLowerCase() === 'transfer-encoding')
+      .map(([, value]) => value.toLowerCase());
+    if (contentLengths.length > 0 && transferEncodings.length > 0) {
+      throw createHttpParserError(
+        'HPE_UNEXPECTED_CONTENT_LENGTH',
+        'HTTP request contains both Content-Length and Transfer-Encoding'
+      );
+    }
+    if (contentLengths.length > 1) {
+      throw createHttpParserError(
+        'HPE_UNEXPECTED_CONTENT_LENGTH',
+        'Duplicate HTTP Content-Length headers are not supported'
+      );
+    }
+    let contentLength = 0;
+    if (contentLengths.length === 1) {
+      if (!/^(0|[1-9][0-9]*)$/.test(contentLengths[0])) {
+        throw createHttpParserError(
+          'HPE_INVALID_CONTENT_LENGTH',
+          'Invalid HTTP Content-Length header'
+        );
+      }
+      contentLength = Number(contentLengths[0]);
+      if (
+        !Number.isSafeInteger(contentLength) ||
+        contentLength > 16 * 1024 * 1024
+      ) {
+        throw createHttpParserError(
+          'HPE_INVALID_CONTENT_LENGTH',
+          'HTTP request body exceeds the 16 MiB limit'
+        );
+      }
+    }
+    let chunked = false;
+    if (transferEncodings.length > 0) {
+      if (
+        transferEncodings.length !== 1 ||
+        transferEncodings[0] !== 'chunked'
+      ) {
+        throw createHttpParserError(
+          'HPE_INVALID_TRANSFER_ENCODING',
+          'Only chunked HTTP transfer encoding is supported'
+        );
+      }
+      chunked = true;
+    }
+    return {
+      method: match[1],
+      url: match[2],
+      httpVersion: `${major}.${minor}`,
+      httpVersionMajor: major,
+      httpVersionMinor: minor,
+      headers,
+      contentLength,
+      chunked,
+    };
+  };
+
+  const createServerIncomingMessage = (socket, parsed, resume) => {
+    const message = Object.create(IncomingMessage.prototype);
+    Readable.call(message);
+    const headers = {};
+    const rawHeaders = [];
+    for (const pair of parsed.headers) {
+      const name = String(pair[0]);
+      const value = String(pair[1]);
+      const normalizedName = name.toLowerCase();
+      rawHeaders.push(name, value);
+      if (normalizedName === 'set-cookie') {
+        if (!Array.isArray(headers[normalizedName])) {
+          headers[normalizedName] = [];
+        }
+        headers[normalizedName].push(value);
+      } else if (headers[normalizedName] === undefined) {
+        headers[normalizedName] = value;
+      } else {
+        const separator = normalizedName === 'cookie' ? '; ' : ', ';
+        headers[normalizedName] += `${separator}${value}`;
+      }
+    }
+    message.statusCode = null;
+    message.statusMessage = null;
+    message.httpVersion = parsed.httpVersion;
+    message.httpVersionMajor = parsed.httpVersionMajor;
+    message.httpVersionMinor = parsed.httpVersionMinor;
+    message.headers = headers;
+    message.headersDistinct = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        Array.isArray(value) ? [...value] : [value],
+      ])
+    );
+    message.rawHeaders = rawHeaders;
+    message.trailers = {};
+    message.trailersDistinct = {};
+    message.rawTrailers = [];
+    message.complete = false;
+    message.aborted = false;
+    message.method = parsed.method;
+    message.url = parsed.url;
+    message.socket = socket;
+    message.connection = socket;
+    Object.defineProperty(message, httpResponseState, {
+      value: { kind: 'server', socket, resume },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    return message;
+  };
+
+  const requireHttpServerResponseState = (response) => {
+    const state = response?.[httpServerResponseState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'ServerResponse method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const ServerResponse = function (request) {
+    if (!(this instanceof ServerResponse)) return new ServerResponse(request);
+    if (!(request instanceof IncomingMessage) || request.socket === null) {
+      throw createError(
+        'ERR_INVALID_ARG_TYPE',
+        'ServerResponse requires a server IncomingMessage'
+      );
+    }
+    Writable.call(this);
+    Object.defineProperty(this, httpServerResponseState, {
+      value: {
+        request,
+        socket: request.socket,
+        headers: new Headers(),
+        chunks: [],
+        bodyLength: 0,
+        headersSent: false,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.req = request;
+    this.socket = request.socket;
+    this.connection = request.socket;
+    this.statusCode = 200;
+    this.statusMessage = undefined;
+    this.sendDate = false;
+  };
+  ServerResponse.prototype = Object.create(Writable.prototype);
+  Object.defineProperty(ServerResponse.prototype, 'constructor', {
+    value: ServerResponse,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  ServerResponse.prototype._write = function (chunk, encoding, callback) {
+    void encoding;
+    const state = requireHttpServerResponseState(this);
+    const copy = Buffer.from(chunk);
+    if (state.bodyLength + copy.byteLength > 16 * 1024 * 1024) {
+      callback(
+        createError(
+          'ERR_HTTP_BODY_LIMIT',
+          'HTTP response body exceeds the 16 MiB limit'
+        )
+      );
+      return;
+    }
+    state.chunks.push(copy);
+    state.bodyLength += copy.byteLength;
+    callback();
+  };
+  ServerResponse.prototype._final = function (callback) {
+    const state = requireHttpServerResponseState(this);
+    const statusCode = Number(this.statusCode);
+    if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 999) {
+      callback(
+        createError('ERR_HTTP_INVALID_STATUS_CODE', 'Invalid HTTP status code')
+      );
+      return;
+    }
+    const suppressBody =
+      state.request.method === 'HEAD' ||
+      statusCode === 204 ||
+      statusCode === 304 ||
+      (statusCode >= 100 && statusCode < 200);
+    const body = suppressBody
+      ? Buffer.alloc(0)
+      : Buffer.concat(state.chunks, state.bodyLength);
+    const transferEncoding = state.headers.get('transfer-encoding');
+    let wireBody = body;
+    if (transferEncoding !== null) {
+      if (transferEncoding.toLowerCase() !== 'chunked') {
+        callback(
+          createError(
+            'ERR_HTTP_INVALID_TRANSFER_ENCODING',
+            'Only chunked HTTP response encoding is supported'
+          )
+        );
+        return;
+      }
+      state.headers.delete('content-length');
+      wireBody = Buffer.concat([
+        Buffer.from(`${body.byteLength.toString(16)}\r\n`, 'latin1'),
+        body,
+        Buffer.from('\r\n0\r\n\r\n', 'latin1'),
+      ]);
+    } else if (!state.headers.has('content-length')) {
+      state.headers.set('Content-Length', body.byteLength);
+    }
+    state.headers.set('Connection', 'close');
+    const statusMessage = String(
+      this.statusMessage ?? STATUS_CODES[statusCode] ?? ''
+    );
+    if (/\r|\n/.test(statusMessage)) {
+      callback(createError('ERR_INVALID_CHAR', 'Invalid HTTP status message'));
+      return;
+    }
+    const headerLines = headerPairs(state.headers)
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join('');
+    const head = Buffer.from(
+      `HTTP/1.1 ${statusCode} ${statusMessage}\r\n${headerLines}\r\n`,
+      'latin1'
+    );
+    state.headersSent = true;
+    state.chunks = [];
+    state.socket.end(Buffer.concat([head, wireBody]), callback);
+  };
+  ServerResponse.prototype._destroy = function (error, callback) {
+    const state = requireHttpServerResponseState(this);
+    if (error && !state.socket.destroyed) state.socket.destroy(error);
+    callback(error);
+  };
+  ServerResponse.prototype.setHeader = function (name, value) {
+    const state = requireHttpServerResponseState(this);
+    if (state.headersSent) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+    if (Array.isArray(value)) {
+      for (const item of value) state.headers.append(name, item);
+    } else {
+      state.headers.set(name, value);
+    }
+    return this;
+  };
+  ServerResponse.prototype.getHeader = function (name) {
+    const state = requireHttpServerResponseState(this);
+    const normalizedName = normalizeHttpHeaderName(name);
+    const entry = state.headers[headersState].get(normalizedName);
+    if (!entry) return undefined;
+    return entry.values.length === 1 ? entry.values[0] : [...entry.values];
+  };
+  ServerResponse.prototype.getHeaderNames = function () {
+    return [
+      ...requireHttpServerResponseState(this).headers[headersState].keys(),
+    ];
+  };
+  ServerResponse.prototype.getHeaders = function () {
+    const result = Object.create(null);
+    for (const name of this.getHeaderNames())
+      result[name] = this.getHeader(name);
+    return result;
+  };
+  ServerResponse.prototype.hasHeader = function (name) {
+    return requireHttpServerResponseState(this).headers.has(name);
+  };
+  ServerResponse.prototype.removeHeader = function (name) {
+    const state = requireHttpServerResponseState(this);
+    if (state.headersSent) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+  };
+  ServerResponse.prototype.writeHead = function (
+    statusCode,
+    statusMessage,
+    headers
+  ) {
+    const state = requireHttpServerResponseState(this);
+    if (state.headersSent) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    if (typeof statusMessage !== 'string') {
+      headers = statusMessage;
+      statusMessage = undefined;
+    }
+    this.statusCode = Number(statusCode);
+    if (statusMessage !== undefined) this.statusMessage = statusMessage;
+    if (headers !== undefined) {
+      let entries = headers;
+      if (
+        Array.isArray(headers) &&
+        headers.length > 0 &&
+        !Array.isArray(headers[0])
+      ) {
+        if (headers.length % 2 !== 0) {
+          throw createError(
+            'ERR_INVALID_ARG_VALUE',
+            'Raw HTTP response headers must contain name/value pairs'
+          );
+        }
+        entries = [];
+        for (let index = 0; index < headers.length; index += 2) {
+          entries.push([headers[index], headers[index + 1]]);
+        }
+      }
+      const normalized = new Headers(entries);
+      for (const [name, value] of headerPairs(normalized)) {
+        state.headers.append(name, value);
+      }
+    }
+    state.headersSent = true;
+    return this;
+  };
+  ServerResponse.prototype.flushHeaders = function () {
+    requireHttpServerResponseState(this).headersSent = true;
+  };
+  ServerResponse.prototype.addTrailers = function () {};
+  ServerResponse.prototype.setTimeout = function (timeout, callback) {
+    requireHttpServerResponseState(this).socket.setTimeout(timeout, callback);
+    return this;
+  };
+  Object.defineProperties(ServerResponse.prototype, {
+    headersSent: {
+      get: function () {
+        return requireHttpServerResponseState(this).headersSent;
+      },
+    },
+    finished: {
+      get: function () {
+        return this.writableEnded;
+      },
+    },
+  });
+
+  const attachHttpServerConnection = (server, socket) => {
+    const headerTerminator = Buffer.from('\r\n\r\n', 'latin1');
+    const lineTerminator = Buffer.from('\r\n', 'latin1');
+    const parser = {
+      buffer: Buffer.alloc(0),
+      mode: 'head',
+      request: null,
+      remaining: 0,
+      chunkLength: 0,
+      bodyLength: 0,
+      processing: false,
+      failed: false,
+    };
+    const consume = (length) => {
+      parser.buffer = Buffer.from(parser.buffer.subarray(length));
+    };
+    const fail = (error) => {
+      if (parser.failed) return;
+      parser.failed = true;
+      if (parser.request && !parser.request.complete) {
+        parser.request.aborted = true;
+      }
+      const handled = server.emit('clientError', error, socket);
+      if (!handled && !socket.destroyed) {
+        socket.end(
+          'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+        );
+      }
+    };
+    const completeRequest = () => {
+      parser.request.complete = true;
+      parser.request.push(null);
+      parser.mode = 'complete';
+      if (parser.buffer.byteLength > 0) {
+        throw createHttpParserError(
+          'HPE_UNEXPECTED_CONTENT',
+          'HTTP pipelining is not supported by Android QuickJS'
+        );
+      }
+    };
+    const pushRequestBody = (chunk) => {
+      if (chunk.byteLength === 0) return true;
+      parser.bodyLength += chunk.byteLength;
+      if (parser.bodyLength > 16 * 1024 * 1024) {
+        throw createHttpParserError(
+          'HPE_INVALID_CONTENT_LENGTH',
+          'HTTP request body exceeds the 16 MiB limit'
+        );
+      }
+      const accepted = parser.request.push(Buffer.from(chunk));
+      if (!accepted) socket.pause();
+      return accepted;
+    };
+    const process = () => {
+      if (parser.processing || parser.failed) return;
+      parser.processing = true;
+      try {
+        while (!parser.failed) {
+          if (parser.mode === 'head') {
+            const end = indexOfHttpBytes(parser.buffer, headerTerminator);
+            if (end < 0) {
+              if (parser.buffer.byteLength > 16 * 1024) {
+                throw createHttpParserError(
+                  'HPE_HEADER_OVERFLOW',
+                  'HTTP request headers exceed the 16 KiB limit'
+                );
+              }
+              return;
+            }
+            const parsed = parseHttpRequestHead(
+              parser.buffer.toString('latin1', 0, end)
+            );
+            consume(end + headerTerminator.byteLength);
+            parser.request = createServerIncomingMessage(
+              socket,
+              parsed,
+              process
+            );
+            const response = new ServerResponse(parser.request);
+            server.emit('request', parser.request, response);
+            if (parsed.chunked) parser.mode = 'chunkSize';
+            else if (parsed.contentLength > 0) {
+              parser.mode = 'fixedBody';
+              parser.remaining = parsed.contentLength;
+            } else {
+              completeRequest();
+              return;
+            }
+            continue;
+          }
+          if (parser.mode === 'fixedBody') {
+            if (parser.buffer.byteLength === 0) return;
+            const length = Math.min(parser.remaining, parser.buffer.byteLength);
+            const chunk = parser.buffer.subarray(0, length);
+            consume(length);
+            parser.remaining -= length;
+            const accepted = pushRequestBody(chunk);
+            if (parser.remaining === 0) completeRequest();
+            if (!accepted || parser.mode === 'complete') return;
+            continue;
+          }
+          if (parser.mode === 'chunkSize') {
+            const end = indexOfHttpBytes(parser.buffer, lineTerminator);
+            if (end < 0) {
+              if (parser.buffer.byteLength > 1024) {
+                throw createHttpParserError(
+                  'HPE_INVALID_CHUNK_SIZE',
+                  'HTTP chunk size line is too long'
+                );
+              }
+              return;
+            }
+            const line = parser.buffer.toString('latin1', 0, end);
+            consume(end + lineTerminator.byteLength);
+            const sizeText = line.split(';', 1)[0].trim();
+            if (!/^[0-9A-Fa-f]+$/.test(sizeText)) {
+              throw createHttpParserError(
+                'HPE_INVALID_CHUNK_SIZE',
+                'Invalid HTTP chunk size'
+              );
+            }
+            parser.chunkLength = Number.parseInt(sizeText, 16);
+            if (
+              !Number.isSafeInteger(parser.chunkLength) ||
+              parser.chunkLength > 16 * 1024 * 1024
+            ) {
+              throw createHttpParserError(
+                'HPE_INVALID_CHUNK_SIZE',
+                'HTTP chunk exceeds the 16 MiB limit'
+              );
+            }
+            parser.mode = parser.chunkLength === 0 ? 'trailers' : 'chunkBody';
+            continue;
+          }
+          if (parser.mode === 'chunkBody') {
+            if (parser.buffer.byteLength < parser.chunkLength + 2) return;
+            if (
+              parser.buffer[parser.chunkLength] !== 13 ||
+              parser.buffer[parser.chunkLength + 1] !== 10
+            ) {
+              throw createHttpParserError(
+                'HPE_INVALID_CHUNK_SIZE',
+                'HTTP chunk is missing its terminator'
+              );
+            }
+            const chunk = parser.buffer.subarray(0, parser.chunkLength);
+            consume(parser.chunkLength + 2);
+            parser.mode = 'chunkSize';
+            if (!pushRequestBody(chunk)) return;
+            continue;
+          }
+          if (parser.mode === 'trailers') {
+            const end = indexOfHttpBytes(parser.buffer, lineTerminator);
+            if (end < 0) return;
+            const line = parser.buffer.toString('latin1', 0, end);
+            consume(end + lineTerminator.byteLength);
+            if (line === '') {
+              completeRequest();
+              return;
+            }
+            const separator = line.indexOf(':');
+            if (separator <= 0) {
+              throw createHttpParserError(
+                'HPE_INVALID_HEADER_TOKEN',
+                'Invalid HTTP trailer header'
+              );
+            }
+            const name = line.slice(0, separator);
+            const value = line.slice(separator + 1).trim();
+            const normalizedName = normalizeHttpHeaderName(name);
+            normalizeHttpHeaderValue(normalizedName, value);
+            parser.request.rawTrailers.push(name, value);
+            parser.request.trailers[normalizedName] = value;
+            parser.request.trailersDistinct[normalizedName] = [value];
+            continue;
+          }
+          return;
+        }
+      } catch (error) {
+        fail(error);
+      } finally {
+        parser.processing = false;
+      }
+    };
+    socket.on('data', (chunk) => {
+      parser.buffer = Buffer.concat([parser.buffer, Buffer.from(chunk)]);
+      process();
+    });
+    socket.on('end', () => {
+      if (!parser.failed && parser.mode !== 'complete') {
+        fail(
+          createHttpParserError(
+            'HPE_INVALID_EOF_STATE',
+            'HTTP request ended before its body was complete'
+          )
+        );
+      }
+    });
+    socket.on('error', (error) => {
+      if (!parser.failed) fail(error);
+    });
+  };
+
+  const HttpServer = function (options, requestListener) {
+    if (!(this instanceof HttpServer)) {
+      return new HttpServer(options, requestListener);
+    }
+    if (typeof options === 'function') {
+      requestListener = options;
+      options = {};
+    }
+    const normalizedOptions = options ?? {};
+    Server.call(this, { ...normalizedOptions, allowHalfOpen: true });
+    this.requestTimeout = Number(normalizedOptions.requestTimeout ?? 300000);
+    this.headersTimeout = Number(normalizedOptions.headersTimeout ?? 60000);
+    this.keepAliveTimeout = Number(normalizedOptions.keepAliveTimeout ?? 5000);
+    this.maxHeadersCount = null;
+    this.timeout = Number(normalizedOptions.timeout ?? 0);
+    this.on('connection', (socket) => {
+      if (this.timeout > 0) socket.setTimeout(this.timeout);
+      attachHttpServerConnection(this, socket);
+    });
+    if (requestListener !== undefined) {
+      if (typeof requestListener !== 'function') {
+        throw createError(
+          'ERR_INVALID_ARG_TYPE',
+          'HTTP request listener must be a function'
+        );
+      }
+      this.on('request', requestListener);
+    }
+  };
+  HttpServer.prototype = Object.create(Server.prototype);
+  Object.defineProperty(HttpServer.prototype, 'constructor', {
+    value: HttpServer,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  HttpServer.prototype.setTimeout = function (timeout, callback) {
+    const normalized = Number(timeout);
+    if (!Number.isFinite(normalized) || normalized < 0) {
+      throw createError(
+        'ERR_OUT_OF_RANGE',
+        'HTTP server timeout must be a non-negative finite number'
+      );
+    }
+    this.timeout = Math.trunc(normalized);
+    if (typeof callback === 'function') this.on('timeout', callback);
+    return this;
+  };
+
+  const requireHttpRequestState = (request) => {
+    const state = request?.[httpRequestState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'ClientRequest method called on an incompatible receiver'
+      );
+    }
+    return state;
+  };
+
+  const ClientRequest = function (...values) {
+    if (!(this instanceof ClientRequest)) return new ClientRequest(...values);
+    const normalized = normalizeHttpRequestArguments('http:', values);
+    Writable.call(this);
+    Object.defineProperty(this, httpRequestState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        options: normalized.options,
+        headers: normalized.options.headers,
+        chunks: [],
+        bodyLength: 0,
+        started: false,
+        response: null,
+        signal: normalized.options.signal ?? null,
+        abortListener: null,
+        aborted: false,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.method = normalized.options.method;
+    this.path = normalized.options.path;
+    this.protocol = normalized.options.protocol;
+    this.host = `${normalized.options.hostname}:${normalized.options.port}`;
+    this.reusedSocket = false;
+    this.socket = null;
+    this.connection = null;
+    if (normalized.callback) this.once('response', normalized.callback);
+    const state = requireHttpRequestState(this);
+    if (state.signal) {
+      state.abortListener = () => {
+        const error = new DOMException(
+          'The HTTP request was aborted',
+          'AbortError'
+        );
+        this.destroy(error);
+      };
+      if (state.signal.aborted) setCallbackImmediate(state.abortListener);
+      else
+        state.signal.addEventListener('abort', state.abortListener, {
+          once: true,
+        });
+    }
+  };
+  ClientRequest.prototype = Object.create(Writable.prototype);
+  Object.defineProperty(ClientRequest.prototype, 'constructor', {
+    value: ClientRequest,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  ClientRequest.prototype._write = function (chunk, encoding, callback) {
+    void encoding;
+    const state = requireHttpRequestState(this);
+    const copy = Buffer.from(chunk);
+    state.chunks.push(copy);
+    state.bodyLength += copy.byteLength;
+    callback();
+  };
+  ClientRequest.prototype._final = function (callback) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      callback();
+      return;
+    }
+    if (pendingHttpOperations.size >= maximumPendingHttpOperations) {
+      callback(
+        createError(
+          'ERR_HTTP_OPERATION_LIMIT',
+          `A QuickJS runtime can have at most ${maximumPendingHttpOperations} pending HTTP operations`
+        )
+      );
+      return;
+    }
+    const body = Buffer.concat(state.chunks, state.bodyLength);
+    const copy = new Uint8Array(body.byteLength);
+    copy.set(body);
+    state.chunks = [];
+    state.started = true;
+    pendingHttpOperations.set(state.identifier, {
+      request: this,
+      response: null,
+    });
+    try {
+      __muonHttpStart(
+        state.identifier,
+        state.options.method,
+        state.options.url,
+        JSON.stringify(headerPairs(state.headers)),
+        copy.buffer,
+        state.options.connectTimeout,
+        state.options.readTimeout,
+        state.options.certificateAuthority
+      );
+      callback();
+    } catch (error) {
+      pendingHttpOperations.delete(state.identifier);
+      callback(error);
+    }
+  };
+  ClientRequest.prototype._destroy = function (error, callback) {
+    const state = requireHttpRequestState(this);
+    const operation = pendingHttpOperations.get(state.identifier);
+    if (operation?.request === this) {
+      pendingHttpOperations.delete(state.identifier);
+      __muonHttpCancel(state.identifier);
+    }
+    if (
+      state.response &&
+      !state.response.complete &&
+      !state.response.destroyed
+    ) {
+      state.response.destroy(error);
+    }
+    cleanupHttpAbortSignal(state);
+    callback(error);
+  };
+  ClientRequest.prototype.setHeader = function (name, value) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+    if (Array.isArray(value)) {
+      for (const item of value) state.headers.append(name, item);
+    } else {
+      state.headers.set(name, value);
+    }
+    return this;
+  };
+  ClientRequest.prototype.getHeader = function (name) {
+    const state = requireHttpRequestState(this);
+    const normalizedName = normalizeHttpHeaderName(name);
+    const entry = state.headers[headersState].get(normalizedName);
+    if (!entry) return undefined;
+    return entry.values.length === 1 ? entry.values[0] : [...entry.values];
+  };
+  ClientRequest.prototype.getHeaderNames = function () {
+    return [...requireHttpRequestState(this).headers[headersState].keys()];
+  };
+  ClientRequest.prototype.getHeaders = function () {
+    const result = Object.create(null);
+    for (const name of this.getHeaderNames())
+      result[name] = this.getHeader(name);
+    return result;
+  };
+  ClientRequest.prototype.hasHeader = function (name) {
+    return requireHttpRequestState(this).headers.has(name);
+  };
+  ClientRequest.prototype.removeHeader = function (name) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      throw createError('ERR_HTTP_HEADERS_SENT', 'HTTP headers were sent');
+    }
+    state.headers.delete(name);
+  };
+  ClientRequest.prototype.flushHeaders = function () {
+    return this;
+  };
+  ClientRequest.prototype.setTimeout = function (timeout, callback) {
+    const state = requireHttpRequestState(this);
+    if (state.started) {
+      throw createError(
+        'ERR_HTTP_HEADERS_SENT',
+        'HTTP timeout cannot change after the request starts'
+      );
+    }
+    state.options.readTimeout = normalizeHttpTimeout(timeout, 30000);
+    if (typeof callback === 'function') this.once('timeout', callback);
+    return this;
+  };
+  ClientRequest.prototype.setNoDelay = function () {
+    return this;
+  };
+  ClientRequest.prototype.setSocketKeepAlive = function () {
+    return this;
+  };
+  ClientRequest.prototype.abort = function () {
+    const state = requireHttpRequestState(this);
+    if (!state.aborted) {
+      state.aborted = true;
+      this.emit('abort');
+      this.destroy(
+        new DOMException('The HTTP request was aborted', 'AbortError')
+      );
+    }
+  };
+  Object.defineProperties(ClientRequest.prototype, {
+    aborted: {
+      get: function () {
+        return requireHttpRequestState(this).aborted;
+      },
+    },
+    headersSent: {
+      get: function () {
+        return requireHttpRequestState(this).started;
+      },
+    },
+  });
+
+  const createClientRequest = (protocol, values) => {
+    const normalized = normalizeHttpRequestArguments(protocol, values);
+    const request = Object.create(ClientRequest.prototype);
+    Writable.call(request);
+    Object.defineProperty(request, httpRequestState, {
+      value: {
+        identifier: allocateHostOperationIdentifier(),
+        options: normalized.options,
+        headers: normalized.options.headers,
+        chunks: [],
+        bodyLength: 0,
+        started: false,
+        response: null,
+        signal: normalized.options.signal ?? null,
+        abortListener: null,
+        aborted: false,
+      },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    request.method = normalized.options.method;
+    request.path = normalized.options.path;
+    request.protocol = normalized.options.protocol;
+    request.host = `${normalized.options.hostname}:${normalized.options.port}`;
+    request.reusedSocket = false;
+    request.socket = null;
+    request.connection = null;
+    if (normalized.callback) request.once('response', normalized.callback);
+    const state = requireHttpRequestState(request);
+    if (state.signal) {
+      state.abortListener = () =>
+        request.destroy(
+          new DOMException('The HTTP request was aborted', 'AbortError')
+        );
+      if (state.signal.aborted) setCallbackImmediate(state.abortListener);
+      else {
+        state.signal.addEventListener('abort', state.abortListener, {
+          once: true,
+        });
+      }
+    }
+    return request;
+  };
+
+  const Agent = function (options) {
+    if (!(this instanceof Agent)) return new Agent(options);
+    EventEmitter.call(this);
+    this.options = { ...(options ?? {}) };
+    this.keepAlive = Boolean(this.options.keepAlive);
+    this.maxSockets = this.options.maxSockets ?? Infinity;
+    this.maxFreeSockets = this.options.maxFreeSockets ?? 256;
+    this.requests = {};
+    this.sockets = {};
+    this.freeSockets = {};
+  };
+  Agent.prototype = Object.create(EventEmitter.prototype);
+  Object.defineProperty(Agent.prototype, 'constructor', {
+    value: Agent,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  Agent.prototype.destroy = function () {};
+
+  const validateHeaderName = (name) => {
+    normalizeHttpHeaderName(name);
+  };
+  const validateHeaderValue = (name, value) => {
+    normalizeHttpHeaderValue(normalizeHttpHeaderName(name), value);
+  };
+  const httpRequest = (...values) => createClientRequest('http:', values);
+  const httpGet = (...values) => {
+    const request = httpRequest(...values);
+    request.end();
+    return request;
+  };
+  const createHttpServer = (options, requestListener) =>
+    new HttpServer(options, requestListener);
+  const STATUS_CODES = Object.freeze({
+    200: 'OK',
+    201: 'Created',
+    204: 'No Content',
+    301: 'Moved Permanently',
+    302: 'Found',
+    303: 'See Other',
+    307: 'Temporary Redirect',
+    308: 'Permanent Redirect',
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    500: 'Internal Server Error',
+  });
+  const METHODS = Object.freeze([
+    'DELETE',
+    'GET',
+    'HEAD',
+    'OPTIONS',
+    'POST',
+    'PUT',
+    'TRACE',
+  ]);
+  const globalHttpAgent = new Agent({ keepAlive: true, timeout: 5000 });
+  const httpModule = Object.freeze({
+    Agent,
+    ClientRequest,
+    IncomingMessage,
+    METHODS,
+    Server: HttpServer,
+    ServerResponse,
+    STATUS_CODES,
+    createServer: createHttpServer,
+    get: httpGet,
+    globalAgent: globalHttpAgent,
+    maxHeaderSize: 16384,
+    request: httpRequest,
+    validateHeaderName,
+    validateHeaderValue,
+  });
+
+  const HttpsAgent = function (options) {
+    if (!(this instanceof HttpsAgent)) return new HttpsAgent(options);
+    Agent.call(this, options);
+    this.defaultPort = 443;
+    this.protocol = 'https:';
+  };
+  HttpsAgent.prototype = Object.create(Agent.prototype);
+  Object.defineProperty(HttpsAgent.prototype, 'constructor', {
+    value: HttpsAgent,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  const httpsRequest = (...values) => createClientRequest('https:', values);
+  const httpsGet = (...values) => {
+    const request = httpsRequest(...values);
+    request.end();
+    return request;
+  };
+  const globalHttpsAgent = new HttpsAgent({
+    keepAlive: true,
+    timeout: 5000,
+  });
+  const httpsModule = Object.freeze({
+    Agent: HttpsAgent,
+    get: httpsGet,
+    globalAgent: globalHttpsAgent,
+    request: httpsRequest,
+  });
+
+  const normalizeBodyBuffer = (body) => {
+    if (body === undefined || body === null) return null;
+    if (typeof body === 'string') return Buffer.from(body);
+    if (body instanceof URLSearchParams) return Buffer.from(body.toString());
+    if (body instanceof ArrayBuffer || body instanceof Uint8Array) {
+      return Buffer.from(body);
+    }
+    throw createError(
+      'ERR_INVALID_ARG_TYPE',
+      'Request or Response body type is not supported'
+    );
+  };
+
+  const Request = function (input, init) {
+    if (!(this instanceof Request)) return new Request(input, init);
+    const source = input instanceof Request ? input[requestState] : null;
+    const options = init ?? {};
+    const url = new URL(source ? source.url : String(input));
+    const method = normalizeHttpMethod(
+      options.method ?? source?.method ?? 'GET'
+    );
+    const body =
+      options.body !== undefined
+        ? normalizeBodyBuffer(options.body)
+        : source?.body
+          ? Buffer.from(source.body)
+          : null;
+    if ((method === 'GET' || method === 'HEAD') && body !== null) {
+      throw new TypeError('GET and HEAD requests cannot have a body');
+    }
+    const headers = new Headers(options.headers ?? source?.headers);
+    if (
+      body !== null &&
+      typeof options.body === 'string' &&
+      !headers.has('content-type')
+    ) {
+      headers.set('Content-Type', 'text/plain;charset=UTF-8');
+    }
+    const redirect = String(options.redirect ?? source?.redirect ?? 'follow');
+    if (!['follow', 'error', 'manual'].includes(redirect)) {
+      throw new TypeError('Request redirect mode is invalid');
+    }
+    const signal = options.signal ?? source?.signal ?? null;
+    if (signal !== null && !(signal instanceof AbortSignal)) {
+      throw new TypeError('Request signal must be an AbortSignal');
+    }
+    Object.defineProperty(this, requestState, {
+      value: { url: url.href, method, headers, body, redirect, signal },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.url = url.href;
+    this.method = method;
+    this.headers = headers;
+    this.redirect = redirect;
+    this.signal = signal;
+    this.credentials = String(options.credentials ?? 'same-origin');
+    this.cache = String(options.cache ?? 'default');
+    this.mode = String(options.mode ?? 'cors');
+    this.referrer = String(options.referrer ?? 'about:client');
+    this.referrerPolicy = String(options.referrerPolicy ?? '');
+    this.integrity = String(options.integrity ?? '');
+    this.keepalive = Boolean(options.keepalive);
+  };
+  Request.prototype.clone = function () {
+    return new Request(this);
+  };
+  Object.defineProperty(Request.prototype, 'body', {
+    get: function () {
+      const body = this[requestState].body;
+      return body === null ? null : Readable.from([Buffer.from(body)]);
+    },
+  });
+  Object.defineProperty(Request.prototype, 'bodyUsed', {
+    get: function () {
+      return false;
+    },
+  });
+
+  const consumeResponseBody = async (response) => {
+    const state = response?.[responseState];
+    if (!state) {
+      throw createError(
+        'ERR_INVALID_THIS',
+        'Response body method called on an incompatible receiver'
+      );
+    }
+    if (state.bodyUsed) throw new TypeError('Response body was already used');
+    state.bodyUsed = true;
+    if (state.source === null) return Buffer.alloc(0);
+    if (state.source instanceof Uint8Array) return Buffer.from(state.source);
+    const chunks = [];
+    for await (const chunk of state.source) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  };
+
+  const Response = function (body, init) {
+    if (!(this instanceof Response)) return new Response(body, init);
+    const options = init ?? {};
+    const status = Number(options.status ?? 200);
+    if (!Number.isInteger(status) || status < 200 || status > 599) {
+      throw new RangeError('Response status must be between 200 and 599');
+    }
+    const headers = new Headers(options.headers);
+    const source = normalizeBodyBuffer(body);
+    Object.defineProperty(this, responseState, {
+      value: { source, bodyUsed: false },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    this.status = status;
+    this.statusText = String(options.statusText ?? '');
+    this.headers = headers;
+    this.url = '';
+    this.redirected = false;
+    this.type = 'default';
+  };
+  Object.defineProperties(Response.prototype, {
+    ok: {
+      get: function () {
+        return this.status >= 200 && this.status <= 299;
+      },
+    },
+    body: {
+      get: function () {
+        return this[responseState].source;
+      },
+    },
+    bodyUsed: {
+      get: function () {
+        return this[responseState].bodyUsed;
+      },
+    },
+  });
+  Response.prototype.arrayBuffer = async function () {
+    const body = await consumeResponseBody(this);
+    const copy = new Uint8Array(body.byteLength);
+    copy.set(body);
+    return copy.buffer;
+  };
+  Response.prototype.bytes = async function () {
+    return await consumeResponseBody(this);
+  };
+  Response.prototype.text = async function () {
+    return (await consumeResponseBody(this)).toString('utf8');
+  };
+  Response.prototype.json = async function () {
+    return JSON.parse(await this.text());
+  };
+  Response.prototype.clone = function () {
+    const state = this[responseState];
+    if (state.bodyUsed || !(state.source instanceof Uint8Array)) {
+      throw new TypeError('Streaming Response objects cannot be cloned');
+    }
+    return new Response(Buffer.from(state.source), {
+      status: this.status,
+      statusText: this.statusText,
+      headers: this.headers,
+    });
+  };
+  Response.error = () => {
+    const response = new Response(null, { status: 200 });
+    response.status = 0;
+    response.type = 'error';
+    return response;
+  };
+  Response.json = (value, init) =>
+    new Response(JSON.stringify(value), {
+      ...(init ?? {}),
+      headers: {
+        'Content-Type': 'application/json',
+        ...Object.fromEntries(new Headers(init?.headers)),
+      },
+    });
+  Response.redirect = (url, status = 302) =>
+    new Response(null, { status, headers: { Location: new URL(url).href } });
+
+  const createFetchResponse = (message, redirected) => {
+    const response = Object.create(Response.prototype);
+    const headers = new Headers(
+      message.rawHeaders.reduce((pairs, value, index) => {
+        if (index % 2 === 0) pairs.push([value, message.rawHeaders[index + 1]]);
+        return pairs;
+      }, [])
+    );
+    Object.defineProperty(response, responseState, {
+      value: { source: message, bodyUsed: false },
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+    response.status = message.statusCode;
+    response.statusText = message.statusMessage;
+    response.headers = headers;
+    response.url = message.url;
+    response.redirected = redirected;
+    response.type = 'basic';
+    return response;
+  };
+
+  const fetchOnce = async (request, redirected) => {
+    const state = request[requestState];
+    if (state.signal?.aborted) {
+      throw new DOMException('The fetch was aborted', 'AbortError');
+    }
+    const url = new URL(state.url);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new TypeError(`Unsupported fetch protocol: ${url.protocol}`);
+    }
+    const clientRequest = createClientRequest(url.protocol, [
+      state.url,
+      {
+        method: state.method,
+        headers: state.headers,
+        signal: state.signal,
+      },
+    ]);
+    const responseEvent = onceEvent(clientRequest, 'response');
+    if (state.body === null) clientRequest.end();
+    else clientRequest.end(state.body);
+    const [message] = await responseEvent;
+    return createFetchResponse(message, redirected);
+  };
+
+  const fetchRequest = async (request, redirectCount, redirected) => {
+    const response = await fetchOnce(request, redirected);
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get('location');
+    if (location === null || request.redirect === 'manual') return response;
+    if (request.redirect === 'error') {
+      response.body?.destroy();
+      throw new TypeError('Redirect encountered while redirect mode is error');
+    }
+    if (redirectCount >= 20) {
+      response.body?.destroy();
+      throw new TypeError('Maximum fetch redirect count was exceeded');
+    }
+    const source = request[requestState];
+    let method = source.method;
+    let body = source.body;
+    if (
+      response.status === 303 ||
+      ((response.status === 301 || response.status === 302) &&
+        method === 'POST')
+    ) {
+      method = 'GET';
+      body = null;
+    }
+    const nextUrl = new URL(location, request.url);
+    const headers = new Headers(source.headers);
+    if (new URL(request.url).origin !== nextUrl.origin) {
+      headers.delete('authorization');
+      headers.delete('cookie');
+    }
+    if (body === null) {
+      headers.delete('content-length');
+      headers.delete('content-type');
+    }
+    response.body?.destroy();
+    return await fetchRequest(
+      new Request(nextUrl, {
+        method,
+        headers,
+        body,
+        redirect: source.redirect,
+        signal: source.signal,
+      }),
+      redirectCount + 1,
+      true
+    );
+  };
+
+  const fetch = async (input, init) => {
+    const request =
+      input instanceof Request
+        ? new Request(input, init)
+        : new Request(input, init);
+    return await fetchRequest(request, 0, false);
+  };
+
+  const dispatchHostEvent = (identifier, type, payload) => {
+    const pendingDns = pendingDnsOperations.get(identifier);
+    if (pendingDns) {
+      if (type === 'dns') {
+        pendingDnsOperations.delete(identifier);
+        pendingDns.resolve(payload.addresses);
+      } else if (type === 'error') {
+        pendingDnsOperations.delete(identifier);
+        pendingDns.reject(createNetworkError(payload, pendingDns.hostname));
+      }
+      return;
+    }
+    const tcpServer = activeTcpServers.get(identifier);
+    if (tcpServer) {
+      const state = requireTcpServerState(tcpServer);
+      if (type === 'listening') {
+        state.listening = true;
+        state.address = {
+          address: payload.address,
+          family: payload.family,
+          port: payload.port,
+        };
+        tcpServer.emit('listening');
+        return;
+      }
+      if (type === 'connectionAvailable') {
+        acceptTcpServerConnection(tcpServer, state);
+        return;
+      }
+      if (type === 'connectionError') {
+        tcpServer.emit(
+          'error',
+          createNetworkError(payload, state.options?.host)
+        );
+        return;
+      }
+      if (type === 'error') {
+        state.nativeStarted = false;
+        state.listening = false;
+        activeTcpServers.delete(identifier);
+        tcpServer.emit(
+          'error',
+          createNetworkError(payload, state.options?.host)
+        );
+        return;
+      }
+    }
+    const httpOperation = pendingHttpOperations.get(identifier);
+    if (httpOperation) {
+      const request = httpOperation.request;
+      const requestStateValue = requireHttpRequestState(request);
+      if (type === 'httpResponse') {
+        const response = new IncomingMessage(request, payload);
+        httpOperation.response = response;
+        requestStateValue.response = response;
+        request.emit('response', response);
+        return;
+      }
+      if (type === 'httpData') {
+        const response = httpOperation.response;
+        if (!response) {
+          request.destroy(
+            createError(
+              'ERR_HTTP_PROTOCOL',
+              'HTTP response data arrived before response headers'
+            )
+          );
+          return;
+        }
+        const accepted = response.push(Buffer.from(payload));
+        __muonHttpHandleData(identifier, !accepted);
+        return;
+      }
+      if (type === 'httpEnd') {
+        pendingHttpOperations.delete(identifier);
+        cleanupHttpAbortSignal(requestStateValue);
+        if (httpOperation.response) {
+          httpOperation.response.complete = true;
+          httpOperation.response.push(null);
+        }
+        request.emit('close');
+        return;
+      }
+      if (type === 'httpError') {
+        pendingHttpOperations.delete(identifier);
+        cleanupHttpAbortSignal(requestStateValue);
+        const error = createHttpOperationError(payload);
+        if (error.code === 'ETIMEDOUT') request.emit('timeout');
+        if (httpOperation.response) httpOperation.response.destroy(error);
+        else request.destroy(error);
+        return;
+      }
+    }
+    const socket = activeTcpSockets.get(identifier);
+    if (!socket) return;
+    const state = requireTcpSocketState(socket);
+    if (type === 'connect') {
+      state.connecting = false;
+      state.connected = true;
+      state.localAddress = payload.localAddress;
+      state.localFamily = payload.localFamily;
+      state.localPort = payload.localPort;
+      state.remoteAddress = payload.address;
+      state.remoteFamily = payload.family;
+      state.remotePort = payload.port;
+      if (state.keepAlive) {
+        __muonTcpSetKeepAlive(
+          state.identifier,
+          true,
+          state.keepAliveInitialDelay
+        );
+      }
+      resetSocketTimeout(socket, state);
+      socket.emit('connect');
+      socket.emit('ready');
+      if (state.deferredWrite !== null) {
+        const deferred = state.deferredWrite;
+        state.deferredWrite = null;
+        startTcpWrite(socket, state, deferred.chunk, deferred.callback);
+      } else if (state.deferredFinal !== null) {
+        const deferred = state.deferredFinal;
+        state.deferredFinal = null;
+        requestTcpEnd(socket, state, deferred);
+      }
+      return;
+    }
+    if (type === 'write') {
+      const pending = pendingTcpWrites.get(Number(payload));
+      if (!pending) return;
+      pendingTcpWrites.delete(Number(payload));
+      state.pendingWriteIdentifier = 0;
+      state.bytesWritten += pending.length;
+      resetSocketTimeout(socket, state);
+      pending.callback(null);
+      return;
+    }
+    if (type === 'data') {
+      const data = Buffer.from(payload);
+      state.bytesRead += data.byteLength;
+      resetSocketTimeout(socket, state);
+      if (!socket.push(data)) __muonTcpSetPaused(identifier, true);
+      return;
+    }
+    if (type === 'end') {
+      state.remoteEnded = true;
+      socket.push(null);
+      if (!socket.allowHalfOpen && !socket.writableEnded) socket.end();
+      maybeCloseTcpSocket(socket, state);
+      return;
+    }
+    if (type === 'error') {
+      socket.destroy(createNetworkError(payload, state.remoteAddress));
+    }
+  };
+
+  const createConnection = (...values) => {
+    const socket = new Socket();
+    return socket.connect(...values);
+  };
+  const createNetServer = (options, connectionListener) =>
+    new Server(options, connectionListener);
+  const netModule = Object.freeze({
+    Server,
+    Socket,
+    connect: createConnection,
+    createConnection,
+    createServer: createNetServer,
+    isIP,
+    isIPv4,
+    isIPv6,
+  });
+
+  Object.defineProperty(globalThis, '__muonDispatchHostEvent', {
+    value: dispatchHostEvent,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+
+  Object.defineProperty(globalThis, '__muonDispatchTimer', {
+    value: dispatchTimer,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+
+  Object.defineProperties(globalThis, {
+    Event: { value: Event, configurable: true, writable: true },
+    EventTarget: { value: EventTarget, configurable: true, writable: true },
+    DOMException: { value: DOMException, configurable: true, writable: true },
+    AbortSignal: { value: AbortSignal, configurable: true, writable: true },
+    AbortController: {
+      value: AbortController,
+      configurable: true,
+      writable: true,
+    },
+    URL: { value: URL, configurable: true, writable: true },
+    URLSearchParams: {
+      value: URLSearchParams,
+      configurable: true,
+      writable: true,
+    },
+    Headers: { value: Headers, configurable: true, writable: true },
+    Request: { value: Request, configurable: true, writable: true },
+    Response: { value: Response, configurable: true, writable: true },
+    fetch: { value: fetch, configurable: true, writable: true },
+    Buffer: { value: Buffer, configurable: true, writable: true },
+    setTimeout: {
+      value: setCallbackTimeout,
+      configurable: true,
+      writable: true,
+    },
+    clearTimeout: {
+      value: clearCallbackTimeout,
+      configurable: true,
+      writable: true,
+    },
+    setInterval: {
+      value: setCallbackInterval,
+      configurable: true,
+      writable: true,
+    },
+    clearInterval: {
+      value: clearCallbackInterval,
+      configurable: true,
+      writable: true,
+    },
+    setImmediate: {
+      value: setCallbackImmediate,
+      configurable: true,
+      writable: true,
+    },
+    clearImmediate: {
+      value: clearCallbackImmediate,
+      configurable: true,
+      writable: true,
+    },
+    process: {
+      value: processModule,
+      configurable: true,
+      writable: true,
+    },
+    crypto: {
+      value: globalCrypto,
+      configurable: true,
+      writable: true,
+    },
+  });
+
+  const hostModules = Object.freeze({
+    'node:fs/promises': fsPromises,
+    'fs/promises': fsPromises,
+    fs: fsCallbacks,
+    'node:fs': fsCallbacks,
+    path: pathModule,
+    'node:path': pathModule,
+    events: eventsModule,
+    'node:events': eventsModule,
+    process: processModule,
+    'node:process': processModule,
+    os: osModule,
+    'node:os': osModule,
+    util: utilModule,
+    'node:util': utilModule,
+    assert: assertModule,
+    'node:assert': assertModule,
+    'assert/strict': strictAssertModule,
+    'node:assert/strict': strictAssertModule,
+    querystring: querystringModule,
+    'node:querystring': querystringModule,
+    string_decoder: stringDecoderModule,
+    'node:string_decoder': stringDecoderModule,
+    crypto: cryptoModule,
+    'node:crypto': cryptoModule,
+    buffer: bufferModule,
+    'node:buffer': bufferModule,
+    timers: timersModule,
+    'node:timers': timersModule,
+    'timers/promises': timersPromises,
+    'node:timers/promises': timersPromises,
+    stream: streamModule,
+    'node:stream': streamModule,
+    'stream/promises': streamPromises,
+    'node:stream/promises': streamPromises,
+    url: urlModule,
+    'node:url': urlModule,
+    dns: dnsModule,
+    'node:dns': dnsModule,
+    'dns/promises': dnsPromises,
+    'node:dns/promises': dnsPromises,
+    net: netModule,
+    'node:net': netModule,
+    http: httpModule,
+    'node:http': httpModule,
+    https: httpsModule,
+    'node:https': httpsModule,
+  });
+
+  const findHostModule = (specifier) => {
+    const module = hostModules[specifier];
+    if (!module) {
+      throw createError(
+        'ERR_MUON_JS_MODULE_NOT_FOUND',
+        `Unknown module: ${specifier}`
+      );
+    }
+    return module;
+  };
+
+  const findModule = (specifier) => {
+    if (specifier === '.') {
+      if (!globalThis.__muonBackendModule) {
+        throw createError(
+          'ERR_MUON_JS_MODULE',
+          'The packaged module is unavailable'
+        );
+      }
+      return globalThis.__muonBackendModule;
+    }
+    return findHostModule(specifier);
+  };
+
+  const importModule = (specifier) => {
+    const module = findModule(specifier);
+    const moduleId = `module-${nextModuleHandle++}`;
+    moduleHandles.set(moduleId, module);
+    const exports = Object.keys(module).map((name) => {
+      const value = module[name];
+      return typeof value === 'function'
+        ? { name, kind: 'function' }
+        : { name, kind: 'primitive', value: encodeValue(value) };
+    });
+    return { moduleId, descriptor: { exports } };
+  };
+
+  const executeRequest = async (message) => {
+    const parameters = message.params ?? {};
+    if (message.command === 'importModule') {
+      return importModule(parameters.specifier);
+    }
+    if (message.command === 'call') {
+      const module = moduleHandles.get(parameters.moduleId);
+      if (!module) {
+        throw createError(
+          'ERR_MUON_JS_MODULE_RELEASED',
+          'Module handle has been released'
+        );
+      }
+      const operation = module[parameters.exportName];
+      if (typeof operation !== 'function') {
+        throw createError(
+          'ERR_MUON_JS_EXPORT',
+          `Unknown function export: ${parameters.exportName}`
+        );
+      }
+      const arguments_ = Array.isArray(parameters.arguments)
+        ? parameters.arguments.map(decodeValue)
+        : [];
+      return encodeValue(await Reflect.apply(operation, module, arguments_));
+    }
+    if (message.command === 'release') {
+      if (
+        parameters.kind !== 'module' ||
+        typeof parameters.handle !== 'string'
+      ) {
+        throw createError('ERR_MUON_JS_PROTOCOL', 'Invalid release request');
+      }
+      moduleHandles.delete(parameters.handle);
+      return { released: true };
+    }
+    if (message.command === 'shutdown') {
+      moduleHandles.clear();
+      globalThis.__muonShouldShutdown = true;
+      return { shutdown: true };
+    }
+    throw createError(
+      'ERR_MUON_JS_COMMAND',
+      `Unknown command: ${message.command}`
+    );
+  };
+
+  const normalizeError = (error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    let code =
+      error && typeof error === 'object' && typeof error.code === 'string'
+        ? error.code
+        : 'ERR_MUON_JS_RUNTIME';
+    if (message.toLowerCase().includes('out of memory')) {
+      code = 'ERR_MUON_JS_OUT_OF_MEMORY';
+    } else if (message.toLowerCase().includes('interrupted')) {
+      code = 'ERR_MUON_JS_INTERRUPTED';
+    } else if (/^[A-Z][A-Z0-9_]+:/.test(message)) {
+      code = message.slice(0, message.indexOf(':'));
+    }
+    return { code, message };
+  };
+
+  globalThis.__muonShouldShutdown = false;
+  Object.defineProperty(globalThis, '__muonGetHostModule', {
+    value: findHostModule,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+  globalThis.__muonHandleMessage = async (source) => {
+    const message = JSON.parse(source);
+    if (message.kind === 'callbackResult') {
+      const pending = rendererCallbacks.get(message.id);
+      if (pending) {
+        rendererCallbacks.delete(message.id);
+        if (message.ok === true) {
+          pending.resolve(decodeValue(message.value));
+        } else {
+          const details = message.error ?? {};
+          pending.reject(
+            createError(
+              typeof details.code === 'string'
+                ? details.code
+                : 'ERR_MUON_JS_CALLBACK',
+              typeof details.message === 'string'
+                ? details.message
+                : 'Renderer callback failed'
+            )
+          );
+        }
+      }
+      return null;
+    }
+    if (message.kind !== 'request' || typeof message.id !== 'string') {
+      throw createError('ERR_MUON_JS_PROTOCOL', 'Unsupported runtime message');
+    }
+    try {
+      const value = await executeRequest(message);
+      return JSON.stringify({
+        kind: 'response',
+        id: message.id,
+        ok: true,
+        value,
+        error: null,
+      });
+    } catch (error) {
+      return JSON.stringify({
+        kind: 'response',
+        id: message.id,
+        ok: false,
+        value: null,
+        error: normalizeError(error),
+      });
+    }
+  };
+})();

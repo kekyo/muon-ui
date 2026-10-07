@@ -17,6 +17,20 @@ muonプラグインのvirtual moduleインポートのフィルタ機能は、�
 一方で、ページURLのフィルタ（`validate`モードでは自動構成・`simple`モードでは手動構成）は、muonオブジェクトそのものをJavaScriptから参照できなくするため、強固に作用します。
 したがって、不要なプラグイン関数を露出させないように常に注意してください。
 
+## Android WebViewバックエンド
+
+公開CLIによるAPKの作成方法と検証済み環境は[Androidアプリのビルド・配布](./android.md)を参照してください。公開アプリではFCMとQuickJSを提供していません。以下で触れるQuickJSは試作host専用です。
+
+Android WebViewバックエンドは、WebViewの通常ネットワーク通信をMuonで包括的にinterceptしません。CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`は共通の`muon.json`へ残せますが、AndroidではWebViewの通信を許可または拒否する条件として適用されず、明示設定時に警告されます。
+
+Androidでは、Manifestの`INTERNET`、端末とAPI levelに応じたローカルネットワーク権限、Network Security ConfigがMuonより外側のアプリ全体の制約として作用します。CORSやCSPなどのWeb platformの制約も通常どおり適用されます。`INTERNET`が付与された環境では、Muonの宛先allowlistがなくてもWebViewから外部へ通信できることを前提にしてください。
+
+MuonプラグインRPCは、構成されたHTTPSアセットoriginのメインフレームだけから受理します。外部originのメインフレーム、iframe、同一originのサブフレームには公開しません。ただし、信頼したメインフレーム内で実行されるJavaScriptを取得元ファイルごとに区別することはできません。外部scriptを信頼したページへ読み込むと、そのscriptもページと同じ権限を持つため、CSPと依存関係の管理を併用してください。
+
+既定のアセットURLは`https://main.asset.muon.invalid/`で、正式な構成モデルでは`https://{asset_name}.asset.muon.invalid/`を既定templateとします。構成済みのアセットhostはMuonがローカルで完結させ、存在しないアセットも外部ネットワークへfallbackさせません。ただし、誤ったhost設定、アセット専用ではない実在hostの使用、またはプラットフォーム上の想定外の処理がある場合は外部アクセスの可能性があります。templateを変更する場合は、アプリ開発者が所有する専用hostを使用し、`browser.startPage`、CEF版の`network.allow`、`plugin.pages`、originを参照するその他の設定、CSP、ソースコード、テストも整合させてください。関連する全項目は[ネットワークフィルタ検証記録](../../filter-limitation.md)に記載しています。
+
+現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は後続作業です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecar、runtime外部plugin loadも現在は公開しません。Android試作hostの`muon.node.createNode()`は代わりに別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の正確な一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../muon-android-prototype/README.md)を参照してください。
+
 ## LinuxにおけるCEF sandboxの有効化制限
 
 Linuxにおいて、muonアプリが管理者権限で起動されない場合、CEFが必要とする `cef-sandbox` が正しく起動できません。

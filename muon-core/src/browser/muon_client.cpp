@@ -13,6 +13,7 @@
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
+#include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "network/muon_network_request_handler.h"
 #include "browser/muon_window_state.h"
@@ -435,16 +436,15 @@ class CompleteCefFileDialogTask final : public CefTask {
   DISALLOW_COPY_AND_ASSIGN(CompleteCefFileDialogTask);
 };
 
-static MuonPluginInvocationContext CreateMuonPluginInvocationContext(
+static MuonRpcOwner CreateMuonRpcOwner(
     CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame,
     int renderer_context_id = 0) {
-  MuonPluginInvocationContext context;
-  context.browser_id = browser ? browser->GetIdentifier() : 0;
-  context.frame_id = frame ? frame->GetIdentifier().ToString() : "";
-  context.renderer_context_id = renderer_context_id;
-  context.frame = frame;
-  return context;
+  MuonRpcOwner owner;
+  owner.browser_id = browser ? browser->GetIdentifier() : 0;
+  owner.frame_id = frame ? frame->GetIdentifier().ToString() : "";
+  owner.context_id = renderer_context_id;
+  return owner;
 }
 
 #if defined(MUON_TEST_BUILD)
@@ -487,11 +487,15 @@ CreateMuonFunctionWrapperDiagnosticsDictionary(
 #endif
 
 static std::string CreateMuonRendererFunctionResultKey(
-    const MuonPluginInvocationContext& context,
+    const MuonRpcOwner& owner,
     int call_id) {
-  return std::to_string(context.browser_id) + ":" + context.frame_id + ":" +
-         std::to_string(context.renderer_context_id) + ":" +
+  return CreateMuonRpcOwnerKey(owner) + ":" +
          std::to_string(call_id);
+}
+
+static std::string CreateMuonRpcCallKey(const MuonRpcOwner& owner,
+                                        uint32_t call_id) {
+  return CreateMuonRpcOwnerKey(owner) + ":" + std::to_string(call_id);
 }
 
 static bool IsMuonPluginCallMessageName(const std::string& message_name) {
@@ -517,11 +521,6 @@ static int GetMuonPluginCallRendererContextId(
   return 0;
 }
 
-static constexpr char kMuonFunctionValueKindKey[] = "kind";
-static constexpr char kMuonFunctionValueKindPluginProxy[] = "plugin_proxy";
-static constexpr char kMuonFunctionValueProxyIdKey[] = "proxy_id";
-static constexpr char kMuonFunctionValueLeaseTokenKey[] = "lease_token";
-static constexpr char kMuonFunctionValueTypeKey[] = "type_key";
 static constexpr char kMuonFsDialogsNamespace[] = "muon.fs.dialogs";
 static constexpr cef_color_t kMuonModalInputBlockerBackground =
     CefColorSetARGB(1, 0, 0, 0);
@@ -1062,6 +1061,7 @@ static const char* GetMuonBuiltinBrowserFunctionKindName(
 }
 
 MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
+                       std::shared_ptr<MuonCefRpcBridge> rpc_bridge,
                        std::shared_ptr<MuonNetworkPolicy> network_policy,
                        std::shared_ptr<MuonNetworkPolicy> plugin_page_policy,
                        std::map<std::string,
@@ -1086,10 +1086,65 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       shutdown_requester_(std::move(shutdown_requester)),
       app_storage_(std::move(app_storage)),
       plugin_runtime_(std::move(plugin_runtime)),
+      rpc_bridge_(std::move(rpc_bridge)),
       network_policy_(std::move(network_policy)),
       plugin_page_policy_(std::move(plugin_page_policy)),
-      plugin_capability_policies_(std::move(plugin_capability_policies)),
       unsafe_parent_access_policy_(std::move(unsafe_parent_access_policy)) {
+  if (rpc_bridge_) {
+    rpc_bridge_->AttachFrameResolver(
+        [this](const MuonRpcOwner& owner) { return ResolveRpcFrame(owner); });
+  }
+  auto routes = std::vector<MuonRpcFunctionRoute>{};
+  if (plugin_runtime_) {
+    routes.reserve(plugin_runtime_->GetFunctions().size());
+    for (const auto& function : plugin_runtime_->GetFunctions()) {
+      MuonRpcFunctionRoute route;
+      route.function_id = function.id;
+      route.public_path = CreateMuonFunctionPublicPath(function);
+      const auto platform_route_id =
+          plugin_runtime_->GetPlatformFunctionRouteId(function.id);
+      route.kind = platform_route_id == 0
+                       ? MuonRpcRouteKind::Plugin
+                       : MuonRpcRouteKind::Platform;
+      routes.push_back(std::move(route));
+    }
+  }
+  MuonRpcHostServices rpc_services;
+  rpc_services.invoke_plugin =
+      [this](const MuonRpcCallRequest& request,
+             MuonRpcHostCompletion completion) {
+        InvokeRpcPlugin(request, std::move(completion));
+      };
+  rpc_services.invoke_platform =
+      [this](const MuonRpcCallRequest& request,
+             MuonRpcHostCompletion completion) {
+        InvokeRpcPlatform(request, std::move(completion));
+      };
+  rpc_services.cancel_call = [](const MuonRpcCallCancel&) {};
+  rpc_services.release_plugin_proxy =
+      [this](const MuonRpcPluginProxyRelease& release) {
+        if (plugin_runtime_) {
+          plugin_runtime_->ReleasePluginFunctionProxy(release);
+        }
+      };
+  rpc_services.release_context =
+      [this](const MuonRpcContextReleased& release) {
+        if (plugin_runtime_) {
+          plugin_runtime_->ReleaseFunctionContext(release);
+        }
+      };
+  rpc_services.send_result =
+      [this](const MuonRpcCallResult& result) { SendRpcResult(result); };
+  const auto rpc_mode =
+      browser_config_.plugin.mode == kMuonBrowserPluginModeValidate
+          ? MuonRpcHostMode::Validate
+          : MuonRpcHostMode::Simple;
+  auto rpc_error = std::string{};
+  if (!CreateMuonRpcHost(rpc_mode, routes, plugin_capability_policies,
+                         std::move(rpc_services), &rpc_host_, &rpc_error)) {
+    LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelError,
+                   "Failed to initialize muon RPC host: " + rpc_error);
+  }
   tray_service_ = CreateMuonBrowserTrayService(linux_desktop_id_);
   std::string tray_icon_error;
   if (has_initial_title_bar_icon_ &&
@@ -1117,6 +1172,12 @@ MuonClient::MuonClient(std::shared_ptr<MuonPluginRuntime> plugin_runtime,
       << " has_initial_title_bar_icon="
       << FormatMuonCloseDebugBool(has_initial_title_bar_icon_);
   AppendMuonCloseDebugLog(log.str());
+}
+
+MuonClient::~MuonClient() {
+  if (rpc_bridge_) {
+    rpc_bridge_->DetachFrameResolver();
+  }
 }
 
 CefRefPtr<CefLifeSpanHandler> MuonClient::GetLifeSpanHandler() {
@@ -1269,7 +1330,8 @@ bool MuonClient::OnBeforePopup(
 
   client = this;
   if (plugin_runtime_) {
-    extra_info = plugin_runtime_->CreateRendererMetadata();
+    extra_info = CreateMuonRendererMetadata(plugin_runtime_->GetNamespaces(),
+                                            plugin_runtime_->GetFunctions());
     WriteMuonRendererUrlHint(extra_info, url);
   }
   ApplyMuonBrowserBackgroundColor(settings, browser_config_.background_color);
@@ -1292,7 +1354,9 @@ bool MuonClient::OnBeforePopup(
 
   CefRefPtr<CefDictionaryValue> detached_extra_info;
   if (plugin_runtime_) {
-    detached_extra_info = plugin_runtime_->CreateRendererMetadata();
+    detached_extra_info =
+        CreateMuonRendererMetadata(plugin_runtime_->GetNamespaces(),
+                                   plugin_runtime_->GetFunctions());
     if (has_known_target_url) {
       WriteMuonRendererUrlHint(detached_extra_info, url);
     }
@@ -1374,7 +1438,7 @@ void MuonClient::ReleaseFunctionBrowserStateNow(int browser_id) {
     plugin_runtime_->ReleaseFunctionBrowser(browser_id);
   }
   const auto belongs_to_browser = [browser_id](
-                                      const MuonPluginInvocationContext&
+                                      const MuonRpcOwner&
                                           context) {
     return context.browser_id == browser_id;
   };
@@ -1435,7 +1499,7 @@ void MuonClient::ReleaseFunctionFrameStateNow(int browser_id,
     plugin_runtime_->ReleaseFunctionFrame(browser_id, frame_id);
   }
   const auto belongs_to_frame =
-      [browser_id, &frame_id](const MuonPluginInvocationContext& context) {
+      [browser_id, &frame_id](const MuonRpcOwner& context) {
         return context.browser_id == browser_id && context.frame_id == frame_id;
       };
   for (auto iterator = pending_plugin_calls_.begin();
@@ -1528,7 +1592,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     AppendMuonCloseDebugLog(log.str());
   }
   if (plugin_runtime_) {
-    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+    plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   ReleaseFunctionBrowserState(browser_id);
   const auto pending_favicon_request =
@@ -1574,7 +1638,7 @@ void MuonClient::OnRenderProcessTerminated(
   }
   const auto browser_id = browser->GetIdentifier();
   if (plugin_runtime_) {
-    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+    plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   ReleaseFunctionBrowserState(browser_id);
 }
@@ -1722,7 +1786,7 @@ bool MuonClient::RequestCloseAfterPendingFsDialog(
   }
   close_windows_after_pending_fs_dialogs_[browser_id] = window;
   if (plugin_runtime_) {
-    plugin_runtime_->CancelFsDialogsForOwner(browser_id);
+    plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   muon_ui_fs_dialogs_cancel_owner_browser(browser_id);
   ClearModalBrowserViewDisable(browser_id);
@@ -2416,7 +2480,7 @@ bool MuonClient::OnProcessMessageReceived(
     }
     const auto renderer_context_id = args->GetInt(0);
     const auto request_id = args->GetInt(1);
-    const auto invocation_context = CreateMuonPluginInvocationContext(
+    const auto invocation_context = CreateMuonRpcOwner(
         browser, frame, renderer_context_id);
     const auto success = plugin_runtime_ &&
                          IsPluginPageAllowed(frame, plugin_page_policy_);
@@ -2444,7 +2508,7 @@ bool MuonClient::OnProcessMessageReceived(
 #endif
   if (message_name == kMuonPluginProxyReleaseMessageName) {
     const auto args = message->GetArgumentList();
-    if (!plugin_runtime_ || !args || args->GetSize() != 3 ||
+    if (!rpc_host_ || !args || args->GetSize() != 3 ||
         args->GetType(0) != VTYPE_INT ||
         args->GetType(1) != VTYPE_INT ||
         args->GetInt(1) <= 0 ||
@@ -2452,11 +2516,11 @@ bool MuonClient::OnProcessMessageReceived(
         args->GetString(2).ToString().empty()) {
       return true;
     }
-    const auto invocation_context = CreateMuonPluginInvocationContext(
-        browser, frame, args->GetInt(0));
-    plugin_runtime_->ReleasePluginFunctionProxy(
-        invocation_context, static_cast<uint32_t>(args->GetInt(1)),
-        args->GetString(2).ToString());
+    MuonRpcPluginProxyRelease release;
+    release.owner = CreateMuonRpcOwner(browser, frame, args->GetInt(0));
+    release.proxy_id = static_cast<uint32_t>(args->GetInt(1));
+    release.lease_token = args->GetString(2).ToString();
+    (void)rpc_host_->HandleMessage(release);
     return true;
   }
   if (IsMuonPluginCallMessageName(message_name) &&
@@ -2466,7 +2530,7 @@ bool MuonClient::OnProcessMessageReceived(
          message_name == kMuonPluginProxyCallMessageName) &&
         args && args->GetSize() >= 1) {
       PendingPluginCall rejected_call;
-      rejected_call.context = CreateMuonPluginInvocationContext(
+      rejected_call.context = CreateMuonRpcOwner(
           browser, frame,
           GetMuonPluginCallRendererContextId(message_name, args));
       rejected_call.frame = frame;
@@ -2498,7 +2562,7 @@ bool MuonClient::OnProcessMessageReceived(
       payload = nullptr;
       error_message = "Shared buffer call metadata is inconsistent";
     }
-    const auto invocation_context = CreateMuonPluginInvocationContext(
+    const auto invocation_context = CreateMuonRpcOwner(
         browser, frame, renderer_context_id);
     const auto key = CreatePendingSharedKey(message_name,
                                             invocation_context,
@@ -2532,7 +2596,7 @@ bool MuonClient::OnProcessMessageReceived(
     const auto function_id = static_cast<uint32_t>(args->GetInt(1));
     const auto encoded_args = args->GetList(2);
     const auto renderer_context_id = args->GetSize() >= 4 ? args->GetInt(3) : 0;
-    const auto invocation_context = CreateMuonPluginInvocationContext(
+    const auto invocation_context = CreateMuonRpcOwner(
         browser, frame, renderer_context_id);
     PendingPluginCall pending_call;
     pending_call.context = invocation_context;
@@ -2542,6 +2606,13 @@ bool MuonClient::OnProcessMessageReceived(
     pending_call.call_id = call_id;
     pending_call.function_id = function_id;
     pending_call.proxy_call = false;
+    if (args->GetSize() >= 6 &&
+        args->GetType(4) == VTYPE_STRING &&
+        args->GetType(5) == VTYPE_STRING) {
+      pending_call.capability_id = args->GetString(4).ToString();
+      pending_call.capability_function_path =
+          args->GetString(5).ToString();
+    }
     const auto has_shared_placeholders =
         CefListValueHasMuonSharedBufferPlaceholders(encoded_args);
     const auto shared_key =
@@ -2549,24 +2620,6 @@ bool MuonClient::OnProcessMessageReceived(
             ? CreatePendingSharedKey(kMuonPluginCallSharedMessageName,
                                      invocation_context, call_id)
             : std::string{};
-    if (browser_config_.plugin.mode == kMuonBrowserPluginModeValidate) {
-      std::string error_message;
-      if (args->GetSize() < 6 ||
-          !IsPluginCapabilityAllowed(function_id,
-                                     args->GetString(4).ToString(),
-                                     args->GetString(5).ToString(),
-                                     &error_message)) {
-        if (has_shared_placeholders) {
-          pending_plugin_call_payloads_.erase(shared_key);
-        }
-        RejectPluginCall(
-            pending_call,
-            error_message.empty()
-                ? "muon plugin capability is required for validate mode"
-                : error_message);
-        return true;
-      }
-    }
     if (has_shared_placeholders) {
       const auto payload_iterator =
           pending_plugin_call_payloads_.find(shared_key);
@@ -2604,7 +2657,7 @@ bool MuonClient::OnProcessMessageReceived(
             args->GetSize() >= 4 && args->GetType(3) == VTYPE_INT
                 ? args->GetInt(3)
                 : 0;
-        rejected_call.context = CreateMuonPluginInvocationContext(
+        rejected_call.context = CreateMuonRpcOwner(
             browser, frame, renderer_context_id);
         rejected_call.frame = frame;
         rejected_call.call_id = args->GetInt(0);
@@ -2618,7 +2671,7 @@ bool MuonClient::OnProcessMessageReceived(
     const auto proxy_id = static_cast<uint32_t>(args->GetInt(1));
     const auto encoded_args = args->GetList(2);
     const auto renderer_context_id = args->GetInt(3);
-    const auto invocation_context = CreateMuonPluginInvocationContext(
+    const auto invocation_context = CreateMuonRpcOwner(
         browser, frame, renderer_context_id);
     PendingPluginCall pending_call;
     pending_call.context = invocation_context;
@@ -2670,7 +2723,7 @@ bool MuonClient::OnProcessMessageReceived(
       payload = nullptr;
       error_message = "Shared buffer result metadata is inconsistent";
     }
-    const auto sender_context = CreateMuonPluginInvocationContext(
+    const auto sender_context = CreateMuonRpcOwner(
         browser, frame, renderer_context_id);
     const auto result_key =
         CreateMuonRendererFunctionResultKey(sender_context, call_id);
@@ -2680,23 +2733,13 @@ bool MuonClient::OnProcessMessageReceived(
         pending_renderer_function_result_messages_.end()) {
       const auto metadata = metadata_iterator->second;
       pending_renderer_function_result_messages_.erase(metadata_iterator);
-      if (plugin_runtime_) {
-        if (!payload_valid) {
-          const auto error_result =
-              CefProcessMessage::Create(kMuonRendererFunctionResultMessageName);
-          const auto error_args = error_result->GetArgumentList();
-          error_args->SetSize(5);
-          error_args->SetInt(0, call_id);
-          error_args->SetBool(1, false);
-          error_args->SetString(2, error_message);
-          error_args->SetNull(3);
-          error_args->SetInt(4, metadata.context.renderer_context_id);
-          plugin_runtime_->CompleteRendererFunctionCall(
-              metadata.context, error_result, nullptr);
-        } else {
-          plugin_runtime_->CompleteRendererFunctionCall(
-              metadata.context, metadata.message, payload);
-        }
+      if (!payload_valid) {
+        RejectRendererFunctionResult(metadata.context,
+                                     static_cast<uint32_t>(call_id),
+                                     error_message);
+      } else {
+        CompleteRendererFunctionResult(metadata.context, metadata.message,
+                                       payload);
       }
       return true;
     }
@@ -2718,7 +2761,7 @@ bool MuonClient::OnProcessMessageReceived(
           args->GetType(4) != VTYPE_INT) {
         return true;
       }
-      const auto sender_context = CreateMuonPluginInvocationContext(
+      const auto sender_context = CreateMuonRpcOwner(
           browser, frame, args->GetInt(4));
       const auto needs_shared = args->GetBool(1) &&
                                 CefListValueHasMuonSharedBufferPlaceholders(
@@ -2741,26 +2784,16 @@ bool MuonClient::OnProcessMessageReceived(
         const auto pending_payload = payload_iterator->second;
         pending_renderer_function_result_payloads_.erase(payload_iterator);
         if (pending_payload.result.has_error) {
-          const auto error_result =
-              CefProcessMessage::Create(kMuonRendererFunctionResultMessageName);
-          const auto error_args = error_result->GetArgumentList();
-          error_args->SetSize(5);
-          error_args->SetInt(0, call_id);
-          error_args->SetBool(1, false);
-          error_args->SetString(2,
-                                pending_payload.result.error_message);
-          error_args->SetNull(3);
-          error_args->SetInt(4, sender_context.renderer_context_id);
-          plugin_runtime_->CompleteRendererFunctionCall(
-              sender_context, error_result, nullptr);
+          RejectRendererFunctionResult(
+              sender_context, static_cast<uint32_t>(call_id),
+              pending_payload.result.error_message);
           return true;
         }
-        plugin_runtime_->CompleteRendererFunctionCall(
+        CompleteRendererFunctionResult(
             sender_context, message, pending_payload.result.payload);
         return true;
       }
-      plugin_runtime_->CompleteRendererFunctionCall(
-          sender_context, message, nullptr);
+      CompleteRendererFunctionResult(sender_context, message, nullptr);
     }
     return true;
   }
@@ -2770,18 +2803,19 @@ bool MuonClient::OnProcessMessageReceived(
         args->GetType(0) != VTYPE_INT) {
       return true;
     }
-    const auto invocation_context = CreateMuonPluginInvocationContext(
+    const auto invocation_context = CreateMuonRpcOwner(
         browser, frame, args->GetInt(0));
-    if (plugin_runtime_) {
-      plugin_runtime_->ReleaseFunctionContext(invocation_context,
-                                              args->GetInt(0));
+    if (rpc_host_) {
+      MuonRpcContextReleased release;
+      release.owner = invocation_context;
+      (void)rpc_host_->HandleMessage(release);
     }
     const auto belongs_to_released_context =
-        [&invocation_context](const MuonPluginInvocationContext& candidate) {
+        [&invocation_context](const MuonRpcOwner& candidate) {
       return candidate.browser_id == invocation_context.browser_id &&
              candidate.frame_id == invocation_context.frame_id &&
-             candidate.renderer_context_id ==
-                 invocation_context.renderer_context_id;
+             candidate.context_id ==
+                 invocation_context.context_id;
     };
     for (auto iterator = pending_plugin_calls_.begin();
          iterator != pending_plugin_calls_.end();) {
@@ -2815,6 +2849,17 @@ bool MuonClient::OnProcessMessageReceived(
       if (belongs_to_released_context(iterator->second.result.context)) {
         iterator =
             pending_renderer_function_result_payloads_.erase(iterator);
+      } else {
+        ++iterator;
+      }
+    }
+    // The RPC host discards completions after context release. Retire the CEF
+    // call state here; the native completion still owns dialog accounting.
+    for (auto iterator = active_rpc_calls_.begin();
+         iterator != active_rpc_calls_.end();) {
+      if (belongs_to_released_context(iterator->second.context)) {
+        platform_rpc_completions_.erase(iterator->first);
+        iterator = active_rpc_calls_.erase(iterator);
       } else {
         ++iterator;
       }
@@ -3581,11 +3626,11 @@ void MuonClient::ZoomBrowser(CefRefPtr<CefBrowser> browser,
 
 std::string MuonClient::CreatePendingSharedKey(
     const std::string& message_name,
-    const MuonPluginInvocationContext& context,
+    const MuonRpcOwner& context,
     int call_id) {
   return message_name + ":" + std::to_string(context.browser_id) + ":" +
          context.frame_id + ":" +
-         std::to_string(context.renderer_context_id) + ":" +
+         std::to_string(context.context_id) + ":" +
          std::to_string(call_id);
 }
 
@@ -3607,83 +3652,20 @@ bool MuonClient::IsPopupTargetUrlKnown(const std::string& url) {
   return IsMuonKnownPopupTargetUrl(url);
 }
 
-bool MuonClient::IsPluginCapabilityAllowed(
-    uint32_t function_id,
-    const std::string& capability_id,
-    const std::string& function_path,
-    std::string* error_message) const {
-  if (error_message == nullptr) {
-    return false;
-  }
-  if (browser_config_.plugin.mode != kMuonBrowserPluginModeValidate) {
-    return true;
-  }
-  if (capability_id.empty() || function_path.empty()) {
-    *error_message = "muon plugin capability is required for validate mode";
-    return false;
-  }
-  const auto capability_iterator =
-      plugin_capability_policies_.find(capability_id);
-  if (capability_iterator == plugin_capability_policies_.end() ||
-      !capability_iterator->second) {
-    *error_message = "muon plugin capability is unknown: " + capability_id;
-    return false;
-  }
-  if (!capability_iterator->second->IsAllowedFunctionPath(function_path)) {
-    *error_message =
-        "muon plugin capability is not allowed for " + function_path;
-    return false;
-  }
-  if (!plugin_runtime_) {
-    *error_message = "muon plugin runtime is unavailable";
-    return false;
-  }
-  for (const auto& function : plugin_runtime_->GetFunctions()) {
-    if (function.id != function_id) {
-      continue;
-    }
-    const auto expected_function_path = CreateMuonFunctionPublicPath(function);
-    if (expected_function_path != function_path) {
-      *error_message =
-          "muon plugin capability function path does not match the requested "
-          "function";
-      return false;
-    }
-    return true;
-  }
-
-  *error_message = "Unknown muon plugin function";
-  return false;
-}
-
 void MuonClient::DispatchPluginCall(
     const PendingPluginCall& call,
     std::shared_ptr<MuonSharedBufferPayload> payload) {
-  if (!plugin_runtime_) {
+  if (!plugin_runtime_ || !rpc_bridge_ || !rpc_host_) {
+    RejectPluginCall(call, "muon plugin runtime is unavailable");
     return;
   }
-  CefRefPtr<MuonClient> self(this);
-  if (call.proxy_call) {
-    plugin_runtime_->InvokeProxy(
-        call.context, call.function_id, call.proxy_lease_token, call.call_id,
-        call.encoded_args, std::move(payload),
-        [self, frame = call.frame, call_id = call.call_id,
-         invocation_context = call.context](
-            const MuonPluginCallResult& result) {
-          self->SendPluginResult(invocation_context, frame, call_id, result);
-        });
-    return;
-  }
-  const auto browser_function =
-      plugin_runtime_->GetBuiltinBrowserFunctionKind(call.function_id);
-  if (browser_function != MuonBuiltinBrowserFunctionKind::None) {
-    DispatchBuiltinBrowserCall(browser_function, call);
-    return;
-  }
+
+  auto prepared_call = call;
   auto modal_browser_id = 0;
   auto modal_owner_window_handle = CefWindowHandle{};
-  auto invoke_args = call.encoded_args;
-  const auto fs_dialog_call = IsFsDialogFunction(call.function_id);
+  auto invoke_args = prepared_call.encoded_args;
+  const auto fs_dialog_call =
+      !call.proxy_call && IsFsDialogFunction(call.function_id);
   const auto fs_dialog_modal =
       fs_dialog_call && ReadFsDialogModal(call.encoded_args);
   if (fs_dialog_modal) {
@@ -3702,66 +3684,195 @@ void MuonClient::DispatchPluginCall(
       return;
     }
   }
-  const auto track_fs_dialog_call = fs_dialog_call;
-  const auto fs_dialog_browser_id = call.context.browser_id;
-  const auto fs_dialog_policy = fs_dialog_modal
-                                    ? PendingFsDialogPolicy::CancelOnOwnerClose
-                                    : PendingFsDialogPolicy::KeepAliveOnly;
-  CefRefPtr<CefFrame> result_frame = call.frame;
-  if (track_fs_dialog_call &&
-      fs_dialog_policy == PendingFsDialogPolicy::KeepAliveOnly) {
-    result_frame = nullptr;
+  prepared_call.encoded_args = invoke_args;
+  prepared_call.modal_browser_id = modal_browser_id;
+  prepared_call.track_fs_dialog_call = fs_dialog_call;
+  prepared_call.cancel_fs_dialog_on_owner_close = fs_dialog_modal;
+
+  MuonRpcCallRequest request;
+  request.owner = call.context;
+  request.call_id = call.call_id > 0
+                        ? static_cast<uint32_t>(call.call_id)
+                        : 0;
+  request.kind = call.proxy_call ? MuonRpcCallKind::PluginProxy
+                                 : MuonRpcCallKind::Plugin;
+  request.function_id = call.function_id;
+  request.proxy_lease_token = call.proxy_lease_token;
+  request.capability.id = call.capability_id;
+  request.capability.function_path = call.capability_function_path;
+  auto argument_types = std::vector<MuonTypeMetadata>{};
+  auto error_message = std::string{};
+  if (!plugin_runtime_->GetCallArgumentTypes(
+          request, &argument_types, &error_message) ||
+      !rpc_bridge_->DecodeArguments(
+          request.owner, argument_types, invoke_args, std::move(payload),
+          &request.arguments, &error_message)) {
+    if (modal_browser_id != 0) {
+      EndModalBrowserViewDisable(modal_browser_id);
+    }
+    RejectPluginCall(call, error_message.empty()
+                               ? "Invalid muon plugin call"
+                               : error_message);
+    return;
   }
-  if (track_fs_dialog_call) {
-    BeginPendingFsDialogCall(fs_dialog_browser_id, fs_dialog_policy);
+
+  const auto call_key = CreateMuonRpcCallKey(request.owner, request.call_id);
+  if (active_rpc_calls_.find(call_key) != active_rpc_calls_.end()) {
+    if (modal_browser_id != 0) {
+      EndModalBrowserViewDisable(modal_browser_id);
+    }
+    RejectPluginCall(call, "Duplicate muon plugin call");
+    return;
   }
+  active_rpc_calls_.emplace(call_key, std::move(prepared_call));
+  if (!rpc_host_->DispatchCall(request)) {
+    const auto active_iterator = active_rpc_calls_.find(call_key);
+    if (active_iterator != active_rpc_calls_.end() &&
+        active_iterator->second.modal_browser_id != 0) {
+      EndModalBrowserViewDisable(
+          active_iterator->second.modal_browser_id);
+    }
+    active_rpc_calls_.erase(call_key);
+    RejectPluginCall(call, "Invalid muon plugin call");
+  }
+}
+
+void MuonClient::InvokeRpcPlugin(const MuonRpcCallRequest& request,
+                                 MuonRpcHostCompletion completion) {
+  const auto call_key = CreateMuonRpcCallKey(request.owner, request.call_id);
+  const auto call_iterator = active_rpc_calls_.find(call_key);
+  if (!plugin_runtime_ || call_iterator == active_rpc_calls_.end()) {
+    MuonRpcCallResult result;
+    result.owner = request.owner;
+    result.call_id = request.call_id;
+    result.success = false;
+    result.error_message = "muon plugin call state is unavailable";
+    completion(result);
+    return;
+  }
+  const auto call = call_iterator->second;
+  const auto fs_dialog_policy =
+      call.cancel_fs_dialog_on_owner_close
+          ? PendingFsDialogPolicy::CancelOnOwnerClose
+          : PendingFsDialogPolicy::KeepAliveOnly;
+  if (call.track_fs_dialog_call) {
+    BeginPendingFsDialogCall(call.context.browser_id, fs_dialog_policy);
+  }
+  CefRefPtr<MuonClient> self(this);
   plugin_runtime_->Invoke(
-      call.context, call.function_id, call.call_id, invoke_args,
-      std::move(payload),
-      [self, frame = result_frame, call_id = call.call_id,
-       invocation_context = call.context,
-       modal_browser_id,
-       track_fs_dialog_call,
-       fs_dialog_browser_id,
-       fs_dialog_policy](const MuonPluginCallResult& result) {
+      request,
+      [self, completion = std::move(completion), call_key,
+       modal_browser_id = call.modal_browser_id,
+       track_fs_dialog_call = call.track_fs_dialog_call,
+       fs_dialog_browser_id = call.context.browser_id,
+       fs_dialog_policy](const MuonRpcCallResult& result) mutable {
         if (modal_browser_id != 0) {
           self->EndModalBrowserViewDisable(modal_browser_id);
-        }
-        const auto caller_browser_is_alive =
-            self->browsers_by_id_.find(invocation_context.browser_id) !=
-            self->browsers_by_id_.end();
-        const auto should_send_result =
-            !track_fs_dialog_call ||
-            fs_dialog_policy == PendingFsDialogPolicy::CancelOnOwnerClose ||
-            caller_browser_is_alive;
-        if (should_send_result) {
-          auto target_frame = frame;
-          if (!target_frame && caller_browser_is_alive) {
-            const auto browser_iterator =
-                self->browsers_by_id_.find(invocation_context.browser_id);
-            if (browser_iterator != self->browsers_by_id_.end() &&
-                browser_iterator->second) {
-              if (!invocation_context.frame_id.empty()) {
-                target_frame = browser_iterator->second->GetFrameByIdentifier(
-                    invocation_context.frame_id);
-              }
-              if (!target_frame) {
-                target_frame = browser_iterator->second->GetMainFrame();
-              }
-            }
+          const auto active_iterator =
+              self->active_rpc_calls_.find(call_key);
+          if (active_iterator != self->active_rpc_calls_.end()) {
+            active_iterator->second.modal_browser_id = 0;
           }
-          self->SendPluginResult(
-              invocation_context, target_frame, call_id, result);
-        } else {
-          std::ostringstream log;
-          log << "MuonClient DispatchPluginCall skip_detached_fs_dialog_result"
-              << " browser_id=" << invocation_context.browser_id;
-          AppendMuonCloseDebugLog(log.str());
         }
+        completion(result);
         if (track_fs_dialog_call) {
-          self->EndPendingFsDialogCall(fs_dialog_browser_id, fs_dialog_policy);
+          self->EndPendingFsDialogCall(fs_dialog_browser_id,
+                                       fs_dialog_policy);
         }
       });
+}
+
+void MuonClient::InvokeRpcPlatform(const MuonRpcCallRequest& request,
+                                   MuonRpcHostCompletion completion) {
+  const auto call_key = CreateMuonRpcCallKey(request.owner, request.call_id);
+  const auto call_iterator = active_rpc_calls_.find(call_key);
+  if (call_iterator == active_rpc_calls_.end()) {
+    MuonRpcCallResult result;
+    result.owner = request.owner;
+    result.call_id = request.call_id;
+    result.success = false;
+    result.error_message = "muon platform call state is unavailable";
+    completion(result);
+    return;
+  }
+  // Built-in operations preserve the historical ordering that reports the
+  // result before applying the browser action. The synchronous completion
+  // removes active_rpc_calls_, so retain the CEF objects for the whole action.
+  const auto call = call_iterator->second;
+  platform_rpc_completions_[call_key] = std::move(completion);
+  DispatchBuiltinBrowserCall(
+      static_cast<MuonBuiltinBrowserFunctionKind>(
+          plugin_runtime_->GetPlatformFunctionRouteId(request.function_id)),
+      call);
+}
+
+void MuonClient::SendRpcResult(const MuonRpcCallResult& result) {
+  const auto call_key = CreateMuonRpcCallKey(result.owner, result.call_id);
+  const auto call_iterator = active_rpc_calls_.find(call_key);
+  if (call_iterator != active_rpc_calls_.end()) {
+    if (call_iterator->second.modal_browser_id != 0) {
+      EndModalBrowserViewDisable(call_iterator->second.modal_browser_id);
+    }
+    active_rpc_calls_.erase(call_iterator);
+  }
+  platform_rpc_completions_.erase(call_key);
+  auto error_message = std::string{};
+  if (!rpc_bridge_ || !rpc_bridge_->SendMessage(result, &error_message)) {
+    if (!error_message.empty()) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelDebug, error_message);
+    }
+  }
+}
+
+void MuonClient::CompleteRendererFunctionResult(
+    const MuonRpcOwner& owner,
+    CefRefPtr<CefProcessMessage> message,
+    std::shared_ptr<MuonSharedBufferPayload> payload) {
+  if (!plugin_runtime_ || !rpc_bridge_ || !message) {
+    return;
+  }
+  const auto args = message->GetArgumentList();
+  if (!args || args->GetSize() < 1 || args->GetType(0) != VTYPE_INT ||
+      args->GetInt(0) <= 0) {
+    return;
+  }
+  const auto call_id = static_cast<uint32_t>(args->GetInt(0));
+  MuonTypeMetadata return_type;
+  if (!plugin_runtime_->GetRendererFunctionReturnType(
+          owner, call_id, &return_type)) {
+    return;
+  }
+  MuonRpcRendererFunctionResult result;
+  auto error_message = std::string{};
+  if (!rpc_bridge_->DecodeRendererFunctionResult(
+          owner, return_type, message, std::move(payload), &result,
+          &error_message)) {
+    RejectRendererFunctionResult(owner, call_id, error_message);
+    return;
+  }
+  plugin_runtime_->CompleteRendererFunctionCall(result);
+}
+
+void MuonClient::RejectRendererFunctionResult(
+    const MuonRpcOwner& owner,
+    uint32_t call_id,
+    const std::string& error_message) {
+  if (!plugin_runtime_) {
+    return;
+  }
+  MuonTypeMetadata return_type;
+  if (!plugin_runtime_->GetRendererFunctionReturnType(
+          owner, call_id, &return_type)) {
+    return;
+  }
+  MuonRpcRendererFunctionResult result;
+  result.owner = owner;
+  result.call_id = call_id;
+  result.success = false;
+  result.error_message = error_message.empty()
+                             ? "Renderer function result is invalid"
+                             : error_message;
+  plugin_runtime_->CompleteRendererFunctionCall(result);
 }
 
 void MuonClient::DispatchBuiltinBrowserCall(
@@ -3791,9 +3902,11 @@ void MuonClient::DispatchBuiltinBrowserCall(
     AppendMuonCloseDebugLog(log.str());
   }
 
-  MuonPluginCallResult result;
+  MuonRpcCallResult result;
+  result.owner = call.context;
+  result.call_id = static_cast<uint32_t>(call.call_id);
   result.success = true;
-  result.value.type = MUON_TYPE_VOID;
+  result.value.type = CreateMuonPrimitiveType(MUON_TYPE_VOID);
 
   switch (kind) {
     case MuonBuiltinBrowserFunctionKind::Reload:
@@ -3991,7 +4104,7 @@ void MuonClient::DispatchBuiltinBrowserCall(
         return;
       }
       const auto bounds = window->GetBounds();
-      result.value.type = MUON_TYPE_STRING;
+      result.value.type = CreateMuonPrimitiveType(MUON_TYPE_STRING);
       result.value.string_value = "{\"x\":" + std::to_string(bounds.x) +
                                   ",\"y\":" + std::to_string(bounds.y) +
                                   ",\"width\":" +
@@ -4052,7 +4165,7 @@ void MuonClient::DispatchBuiltinBrowserCall(
         RejectPluginCall(call, error_message);
         return;
       }
-      result.value.type = MUON_TYPE_STRING;
+      result.value.type = CreateMuonPrimitiveType(MUON_TYPE_STRING);
       result.value.string_value = tray_id;
       SendPluginResult(call.context, call.frame, call.call_id, result);
       break;
@@ -4195,188 +4308,80 @@ void MuonClient::DispatchBuiltinBrowserCall(
 
 void MuonClient::RejectPluginCall(const PendingPluginCall& call,
                                    const std::string& error_message) {
-  MuonPluginCallResult result;
+  MuonRpcCallResult result;
+  result.owner = call.context;
+  result.call_id = call.call_id > 0
+                       ? static_cast<uint32_t>(call.call_id)
+                       : 0;
   result.success = false;
   result.error_message = error_message;
   SendPluginResult(call.context, call.frame, call.call_id, result);
 }
 
-bool MuonClient::IsPluginResultTargetAvailable(
-    const MuonPluginInvocationContext& context,
-    CefRefPtr<CefFrame> frame) const {
+CefRefPtr<CefFrame> MuonClient::ResolveRpcFrame(
+    const MuonRpcOwner& owner) const {
   CEF_REQUIRE_UI_THREAD();
-  if (!frame || !frame->IsValid()) {
-    return false;
+  if (!IsValidMuonRpcOwner(owner)) {
+    return nullptr;
   }
-  const auto browser_iterator = browsers_by_id_.find(context.browser_id);
+  const auto browser_iterator = browsers_by_id_.find(owner.browser_id);
   if (browser_iterator == browsers_by_id_.end() ||
       !browser_iterator->second || !browser_iterator->second->IsValid()) {
     std::ostringstream log;
-    log << "MuonClient SendPluginResult skip reason=browser_unavailable"
-        << " browser_id=" << context.browser_id;
+    log << "MuonClient ResolveRpcFrame skip reason=browser_unavailable"
+        << " browser_id=" << owner.browser_id;
     AppendMuonCloseDebugLog(log.str());
-    return false;
+    return nullptr;
+  }
+  auto frame = owner.frame_id.empty()
+                   ? browser_iterator->second->GetMainFrame()
+                   : browser_iterator->second->GetFrameByIdentifier(
+                         owner.frame_id);
+  if (!frame || !frame->IsValid()) {
+    std::ostringstream log;
+    log << "MuonClient ResolveRpcFrame skip reason=frame_unavailable"
+        << " browser_id=" << owner.browser_id
+        << " frame_id=" << owner.frame_id;
+    AppendMuonCloseDebugLog(log.str());
+    return nullptr;
   }
   const auto frame_browser = frame->GetBrowser();
   if (!frame_browser || !frame_browser->IsValid() ||
-      frame_browser->GetIdentifier() != context.browser_id) {
+      frame_browser->GetIdentifier() != owner.browser_id) {
     std::ostringstream log;
-    log << "MuonClient SendPluginResult skip reason=detached_frame"
-        << " browser_id=" << context.browser_id;
+    log << "MuonClient ResolveRpcFrame skip reason=detached_frame"
+        << " browser_id=" << owner.browser_id;
     AppendMuonCloseDebugLog(log.str());
-    return false;
+    return nullptr;
   }
-  if (context.frame_id.empty()) {
-    return true;
-  }
-  const auto current_frame =
-      browser_iterator->second->GetFrameByIdentifier(context.frame_id);
-  if (!current_frame || !current_frame->IsValid()) {
-    std::ostringstream log;
-    log << "MuonClient SendPluginResult skip reason=frame_unavailable"
-        << " browser_id=" << context.browser_id
-        << " frame_id=" << context.frame_id;
-    AppendMuonCloseDebugLog(log.str());
-    return false;
-  }
-  return true;
+  return frame;
 }
 
-void MuonClient::SendPluginResult(const MuonPluginInvocationContext& context,
+void MuonClient::SendPluginResult(const MuonRpcOwner& context,
                                    CefRefPtr<CefFrame> frame,
                                    int call_id,
-                                   const MuonPluginCallResult& result) {
+                                   const MuonRpcCallResult& result) {
   CEF_REQUIRE_UI_THREAD();
-  if (!IsPluginResultTargetAvailable(context, frame)) {
+  (void)frame;
+  auto normalized_result = result;
+  normalized_result.owner = context;
+  normalized_result.call_id =
+      call_id > 0 ? static_cast<uint32_t>(call_id) : 0;
+  const auto call_key = CreateMuonRpcCallKey(
+      normalized_result.owner, normalized_result.call_id);
+  const auto completion_iterator =
+      platform_rpc_completions_.find(call_key);
+  if (completion_iterator != platform_rpc_completions_.end()) {
+    auto completion = std::move(completion_iterator->second);
+    platform_rpc_completions_.erase(completion_iterator);
+    completion(normalized_result);
     return;
   }
-
-  const auto message = CefProcessMessage::Create(kMuonPluginResultMessageName);
-  const auto args = message->GetArgumentList();
-  args->SetSize(5);
-  args->SetInt(0, call_id);
-  args->SetBool(1, result.success);
-  args->SetInt(4, context.renderer_context_id);
-  if (!result.success) {
-    args->SetString(2, result.error_message);
-    args->SetNull(3);
-    frame->SendProcessMessage(PID_RENDERER, message);
-    return;
-  }
-
-  args->SetInt(2, static_cast<int>(result.value.type));
-  MuonPluginFunctionProxyRegistration function_registration;
-  switch (result.value.type) {
-    case MUON_TYPE_VOID:
-      args->SetNull(3);
-      break;
-    case MUON_TYPE_BOOL:
-      args->SetBool(3, result.value.bool_value);
-      break;
-    case MUON_TYPE_I8:
-      args->SetInt(3, result.value.i8_value);
-      break;
-    case MUON_TYPE_U8:
-      args->SetInt(3, result.value.u8_value);
-      break;
-    case MUON_TYPE_I16:
-      args->SetInt(3, result.value.i16_value);
-      break;
-    case MUON_TYPE_U16:
-      args->SetInt(3, result.value.u16_value);
-      break;
-    case MUON_TYPE_I32:
-      args->SetInt(3, result.value.i32_value);
-      break;
-    case MUON_TYPE_U32:
-      args->SetDouble(3, static_cast<double>(result.value.u32_value));
-      break;
-    case MUON_TYPE_I64:
-      args->SetString(3, std::to_string(result.value.i64_value));
-      break;
-    case MUON_TYPE_U64:
-      args->SetString(3, std::to_string(result.value.u64_value));
-      break;
-    case MUON_TYPE_F32:
-      args->SetDouble(3, static_cast<double>(result.value.f32_value));
-      break;
-    case MUON_TYPE_F64:
-      args->SetDouble(3, result.value.f64_value);
-      break;
-    case MUON_TYPE_POINTER:
-      args->SetDouble(
-          3,
-          static_cast<double>(reinterpret_cast<uintptr_t>(
-              result.value.pointer_value)));
-      break;
-    case MUON_TYPE_STRING:
-      if (result.value.is_null) {
-        args->SetNull(3);
-        break;
-      }
-      args->SetString(3, result.value.string_value);
-      break;
-    case MUON_TYPE_FUNCTION: {
-      if (result.value.is_null) {
-        args->SetNull(3);
-        break;
-      }
-      auto registration_error = std::string{};
-      if (!plugin_runtime_ ||
-          !plugin_runtime_->RegisterPluginFunctionProxy(
-              context, result.value.function_value,
-              result.value.function_type, &function_registration,
-              &registration_error)) {
-        args->SetBool(1, false);
-        args->SetString(
-            2, registration_error.empty()
-                   ? "Failed to register function result"
-                   : registration_error);
-        args->SetNull(3);
-        break;
-      }
-      const auto encoded_function = CefDictionaryValue::Create();
-      encoded_function->SetString(kMuonFunctionValueKindKey,
-                                  kMuonFunctionValueKindPluginProxy);
-      encoded_function->SetInt(kMuonFunctionValueProxyIdKey,
-                               static_cast<int>(
-                                   function_registration.proxy_id));
-      encoded_function->SetString(
-          kMuonFunctionValueLeaseTokenKey,
-          function_registration.lease_token);
-      encoded_function->SetString(kMuonFunctionValueTypeKey,
-                                  CreateMuonTypeCanonicalKey(
-                                      result.value.function_type));
-      encoded_function->SetDictionary("type",
-                                      CreateMuonTypeMetadataDictionary(
-                                          result.value.function_type));
-      args->SetDictionary(3, encoded_function);
-      break;
+  auto error_message = std::string{};
+  if (!rpc_bridge_ ||
+      !rpc_bridge_->SendMessage(normalized_result, &error_message)) {
+    if (!error_message.empty()) {
+      LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelDebug, error_message);
     }
-    case MUON_TYPE_BUFFER_VIEW: {
-      MuonSharedBufferEntry entry;
-      if (!result.has_shared_buffer_message ||
-          !FindMuonSharedBufferEntry(
-              result.shared_buffer_message.entries, 3, &entry) ||
-          !result.shared_buffer_message.message) {
-        args->SetBool(1, false);
-        args->SetString(2, "Missing plugin buffer result payload");
-        args->SetNull(3);
-        break;
-      }
-      args->SetDictionary(3, CreateMuonSharedBufferPlaceholder(entry));
-      break;
-    }
-    default:
-      args->SetBool(1, false);
-      args->SetString(2, "Unsupported plugin result type");
-      args->SetNull(3);
-      break;
   }
-  if (result.value.type == MUON_TYPE_BUFFER_VIEW && args->GetBool(1) &&
-      result.shared_buffer_message.message) {
-    frame->SendProcessMessage(PID_RENDERER,
-                              result.shared_buffer_message.message);
-  }
-  frame->SendProcessMessage(PID_RENDERER, message);
 }

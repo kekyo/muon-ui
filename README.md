@@ -12,6 +12,8 @@ A multi-platform GUI application framework that uses CEF as its backend.
 
 [(For Japanese language/日本語はこちら)](./README_ja.md)
 
+Android uses WebView and supports debug APKs and signed release APKs containing your web assets. Build on Linux x64 without NDK/CMake for ordinary applications. See [building and distributing Android apps](./docs/en/android.md) for setup, signing, and support limits. The CEF, HMR, and network filtering descriptions below apply to the desktop backend.
+
 > Please note that this English version of the document was machine-translated and then partially edited, so it may contain inaccuracies.
 > We welcome pull requests to correct any errors in the text.
 
@@ -162,6 +164,7 @@ See the following documents for more detailed information about muon.
 ### User guides
 
 - [Getting started with muon](./docs/en/getting-started.md)
+- [Building and distributing Android apps](./docs/en/android.md)
 - [CEF download and update](./docs/en/cef-download-and-update.md)
 - [muon DevTools](./docs/en/muon-devtools.md)
 - [Local asset configuration](./docs/en/local-assets.md)

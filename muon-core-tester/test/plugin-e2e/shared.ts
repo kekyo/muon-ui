@@ -605,11 +605,7 @@ export interface BrowserShortcutConfig {
 }
 
 export type BrowserInitialWindowState =
-  | "normal"
-  | "hidden"
-  | "minimized"
-  | "maximized"
-  | "fullscreen";
+  "normal" | "hidden" | "minimized" | "maximized" | "fullscreen";
 
 export type BrowserInitialTitleBarVisibility = boolean;
 
@@ -2424,8 +2420,7 @@ export const writeMuonConfig = async (
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   logConfig: Record<string, unknown> | undefined = undefined,
@@ -2543,8 +2538,7 @@ interface StartWindowsRemoteMuonOptions {
   browserBackgroundColor: string | undefined;
   browserConfig: BrowserShortcutConfig | undefined;
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined;
+    BrowserInitialTitleBarVisibility | undefined;
   browserInitialTitleBarIcon: string | undefined;
   browserInitialWindowState: BrowserInitialWindowState | undefined;
   browserPluginAllowPatterns: string[] | null;
@@ -3114,8 +3108,7 @@ export const startMuon = async (
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   executablePath: string | undefined = undefined,
@@ -3293,8 +3286,7 @@ export const startDebugMuon = async (
   pluginAllowPatterns = TEST_PLUGIN_ALLOW_PATTERNS,
   configuredPluginNames: string[] = pluginNames,
   browserPluginAllowPatterns:
-    | string[]
-    | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    string[] | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[] = [],
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   includeStandardPlugins = true,
@@ -3304,8 +3296,7 @@ export const startDebugMuon = async (
   assetSalt: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   logConfig: Record<string, unknown> | undefined = undefined,
@@ -3457,8 +3448,7 @@ export const startDebugMuonLauncher = async (
   pluginAllowPatterns = TEST_PLUGIN_ALLOW_PATTERNS,
   configuredPluginNames: string[] = pluginNames,
   browserPluginAllowPatterns:
-    | string[]
-    | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
+    string[] | null = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[] = [],
   browserAllowUnsafeJavaScriptParentAccess: string[] | null = null,
   includeStandardPlugins = true,
@@ -3506,8 +3496,7 @@ export const startGestamentDebugMuon = async (
   assetRoot: string | undefined = undefined,
   browserBackgroundColor: string | undefined = undefined,
   browserInitialTitleBarVisibility:
-    | BrowserInitialTitleBarVisibility
-    | undefined = undefined,
+    BrowserInitialTitleBarVisibility | undefined = undefined,
   browserInitialTitleBarIcon: string | undefined = undefined,
   browserTitleBarType: BrowserTitleBarType | undefined = undefined,
   networkAllowPatterns: string[] = TEST_NETWORK_ALLOW_PATTERNS,

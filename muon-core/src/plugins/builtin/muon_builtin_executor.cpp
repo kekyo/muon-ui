@@ -10,7 +10,7 @@
 #include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_environment_helpers.h"
-#include "plugins/muon_type_metadata.h"
+#include "plugins/muon_traffic_type_metadata.h"
 #include "yyjson.h"
 
 #if defined(_WIN32)

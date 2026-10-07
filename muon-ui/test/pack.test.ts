@@ -31,7 +31,7 @@ import {
 } from "../src/embed-config.js";
 import { packMuonApp } from "../src/pack.js";
 import { createWindowsIconBufferFromPngData } from "../src/windows-icon.js";
-import type { MuonBuildTarget } from "../src/build.js";
+import type { MuonDesktopTarget as MuonBuildTarget } from "../src/targets.js";
 
 const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
@@ -922,6 +922,8 @@ describe("muon pack", () => {
       entries.some((entry) => entry.startsWith("main/sample-base/assets/")),
     ).toBe(true);
     expect(entries).not.toContain("main/index.html");
+    if (target?.target === "android")
+      throw new Error("Expected a desktop target");
     expect(target?.embeddedConfig.browser).toEqual({
       initialTitleBarIcon: "asset://main/.muon/app-icon.png",
       startPage: "asset://main/sample-base/index.html",

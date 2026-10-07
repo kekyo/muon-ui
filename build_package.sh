@@ -277,6 +277,8 @@ stage_targets() {
   local -a arches=("$@")
   printf 'Building JavaScript package entries\n'
   npm run build:js --workspace muon-ui
+  npm run build --workspace muon-android
+  node muon-android/scripts/stage-package.mjs muon-ui/dist/android
 
   printf 'Staging package targets\n'
   if is_full_arch_matrix "${arches[@]}"; then

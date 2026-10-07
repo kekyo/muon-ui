@@ -2329,6 +2329,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         const values = await driver.evaluate<{
           keys: string[];
           runtimeInfo: {
+            backend: "cef";
             name: string;
             executableName: string;
             target: string;
@@ -2380,6 +2381,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         ]);
         expect(values.internalType).toBe("function");
         expect(values.runtimeInfo).toMatchObject({
+          backend: "cef",
           name: "muon-core",
           executableName: expectedRuntimeExecutableName(),
           target: expectedRuntimeTarget(),

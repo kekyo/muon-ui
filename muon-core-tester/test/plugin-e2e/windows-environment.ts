@@ -25,8 +25,7 @@ export interface SkippedWindowsE2eEnvironment {
 }
 
 export type WindowsE2eEnvironmentResult =
-  | ConfiguredWindowsE2eEnvironment
-  | SkippedWindowsE2eEnvironment;
+  ConfiguredWindowsE2eEnvironment | SkippedWindowsE2eEnvironment;
 
 /**
  * Returns true when the Windows remote e2e suite is explicitly enabled.

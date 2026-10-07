@@ -1543,7 +1543,12 @@ declare global {
   }
 
   /** Runtime metadata for the current muon process. */
-  interface MuonRuntimeInfo {
+  type MuonRuntimeInfo = MuonDesktopRuntimeInfo | MuonAndroidRuntimeInfo;
+
+  /** Runtime metadata reported by the desktop CEF backend. */
+  interface MuonDesktopRuntimeInfo {
+    /** Selects the desktop CEF arm of MuonRuntimeInfo. */
+    readonly backend: "cef";
     /** Runtime package name. */
     readonly name: string;
     /** Native executable file name included in the runtime payload. */
@@ -1560,6 +1565,28 @@ declare global {
     readonly cefRuntime: MuonCefRuntimeInfo;
     /** Runtime payload entries copied with muon-core. */
     readonly corePayload: readonly string[];
+  }
+
+  /** Runtime metadata reported by the Android WebView backend. */
+  interface MuonAndroidRuntimeInfo {
+    /** Selects the Android WebView arm of MuonRuntimeInfo. */
+    readonly backend: "android-webview";
+    /** Android operating-system identifier. */
+    readonly os: "android";
+    /** User-visible Android release string. */
+    readonly osVersion: string;
+    /** Android SDK level running this application process. */
+    readonly apiLevel: number;
+    /** Primary ABI selected for this process. */
+    readonly abi: string;
+    /** Android application package name. */
+    readonly applicationId: string;
+    /** Android application version name. */
+    readonly applicationVersion: string;
+    /** Package providing WebView to this process. */
+    readonly webViewPackage: string;
+    /** Version of the WebView provider package. */
+    readonly webViewVersion: string;
   }
 
   /** muon-core build identity. */
@@ -1639,7 +1666,7 @@ declare global {
     /**
      * Return runtime metadata for the current muon process.
      *
-     * @returns A promise for build-time muon-core metadata and runtime CEF metadata.
+     * @returns A promise for backend-specific runtime metadata.
      */
     readonly getRuntimeInfo: () => Promise<MuonRuntimeInfo>;
     /**

@@ -18,12 +18,7 @@ export const MUON_TITLE_BAR_TARGET_TITLE = "muon Title Bar";
  * JSON-compatible value used for CDP parameters and results.
  */
 export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | JsonObject;
+  null | boolean | number | string | JsonValue[] | JsonObject;
 
 /**
  * JSON-compatible object used for CDP parameter dictionaries.

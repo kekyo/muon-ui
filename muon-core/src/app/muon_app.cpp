@@ -27,6 +27,8 @@
 #include "plugins/builtin/muon_builtin_environments.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_plugin_runtime.h"
+#include "plugins/muon_cef_plugin_metadata.h"
+#include "plugins/muon_cef_rpc.h"
 #include "plugins/muon_shared_buffer.h"
 #include "plugins/muon_v8_handler.h"
 
@@ -870,8 +872,10 @@ void MuonApp::OnContextInitialized() {
 
   InitializeMuonBuiltinLauncher(config_.default_version_policy);
   InitializeMuonBuiltinEnvironments(config_.config);
+  const auto rpc_bridge = CreateMuonCefRpcBridge();
   const auto plugin_runtime =
-      CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins));
+      CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins),
+                              rpc_bridge->CreateRuntimeServices());
   const auto stop_plugins_and_quit = [plugin_runtime]() {
     plugin_runtime->Stop([plugin_runtime]() { CefQuitMessageLoop(); });
   };
@@ -929,7 +933,9 @@ void MuonApp::OnContextInitialized() {
     }
     has_initial_title_bar_icon = true;
   }
-  const auto extra_info = plugin_runtime->CreateRendererMetadata();
+  const auto extra_info =
+      CreateMuonRendererMetadata(plugin_runtime->GetNamespaces(),
+                                 plugin_runtime->GetFunctions());
   CefBrowserSettings browser_settings;
   ApplyMuonBrowserBackgroundColor(browser_settings,
                                   config_.browser.background_color);
@@ -938,8 +944,8 @@ void MuonApp::OnContextInitialized() {
   const auto title_bar_background_color =
       CreateMuonTitleBarBackgroundColor(config_.browser.background_color);
   CefRefPtr<MuonClient> client(
-      new MuonClient(plugin_runtime, network_policy, plugin_page_policy_,
-                     plugin_capability_policies_,
+      new MuonClient(plugin_runtime, rpc_bridge, network_policy,
+                     plugin_page_policy_, plugin_capability_policies_,
                      unsafe_parent_access_policy_,
                      [this](int32_t exit_code) {
                        return RequestShutdown(exit_code);

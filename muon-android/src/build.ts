@@ -1,0 +1,283 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon-ui
+
+import {
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { runScriptOnceToText, type FunCityLogEntry } from 'funcity';
+import { runAndroidCommand } from './command.js';
+import { prepareAndroid } from './toolchain.js';
+
+/** ABI shipped by the Muon Android runtime. */
+export type MuonAndroidAbi = 'arm64-v8a' | 'x86_64';
+
+/** Normalized package-owned plugin entry. */
+export interface MuonAndroidPackagedPlugin {
+  /** Logical capability name. */ readonly name: string;
+  /** Packaged ELF soname. */ readonly soname: string;
+  /** Explicitly allowed public function patterns. */ readonly allow: readonly string[];
+  /** Application-owned plugin configuration. */ readonly config: readonly {
+    readonly key: string;
+    readonly value: string;
+  }[];
+  /** Absolute prebuilt library path for each selected ABI. */ readonly libraries: Readonly<
+    Partial<Record<MuonAndroidAbi, string>>
+  >;
+}
+
+/** Explicit inputs used by the Android package builder. */
+export interface MuonAndroidApplicationInput {
+  /** Packaged Muon Android components. */ componentsDirectory: string;
+  /** Directory containing previously built web assets. */ assetsDirectory: string;
+  /** Relative URL path prefix under the trusted asset host. */ assetPath: string;
+  /** Trusted HTTPS entry URL. */ startPage: string;
+  /** Application identifier independent of Muon's Java namespace. */ applicationId: string;
+  /** Launcher label. */ label: string;
+  /** Monotonic Android update number. */ versionCode: number;
+  /** User-facing version. */ versionName: string;
+  /** Selected runtime ABIs. */ abis: readonly MuonAndroidAbi[];
+  /** Manifest permissions, already normalized by the public build boundary. */ permissions: readonly string[];
+  /** Values returned by muon.environments.getConfigValues. */ values: Readonly<
+    Record<string, string>
+  >;
+  /** Explicit prebuilt plugins; an empty array builds a standard app. */ plugins: readonly MuonAndroidPackagedPlugin[];
+  /** Optional PNG icon already converted by the public build boundary. */ icon:
+    string | undefined;
+  /** Owned directory for generated Gradle sources and intermediates. */ projectDirectory: string;
+  /** Destination for APKs and result metadata. */ outputDirectory: string;
+  /** SDK override. */ sdkPath: string | undefined;
+  /** Debug package or unsigned release package. */ variant:
+    'debug' | 'release';
+  /** Process environment. */ environment: NodeJS.ProcessEnv;
+  /** Progress sink, or undefined for a quiet build. */ output:
+    ((text: string) => void) | undefined;
+}
+
+/** Android APK result, without desktop launcher or CEF fields. */
+export interface MuonAndroidApplicationResult {
+  /** Target discriminator. */ readonly target: 'android';
+  /** Absolute APK path. */ readonly packagePath: string;
+  /** Generated Gradle project for diagnostics. */ readonly projectDirectory: string;
+  /** Android variant. */ readonly variant: 'debug' | 'release';
+  /** Included native ABIs. */ readonly abis: readonly MuonAndroidAbi[];
+  /** Application identifier. */ readonly applicationId: string;
+  /** Update version. */ readonly versionCode: number;
+  /** Display version. */ readonly versionName: string;
+  /** Actual signing state. */ readonly signing:
+    'debug' | 'unsigned' | 'release';
+}
+
+const xml = (value: string): string =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+
+const render = async (
+  template: string,
+  variables: ReadonlyMap<string, unknown>
+): Promise<string> => {
+  const logs: FunCityLogEntry[] = [];
+  const value = await runScriptOnceToText(await readFile(template, 'utf8'), {
+    sourceId: template,
+    variables,
+    logs,
+  });
+  if (value === undefined || logs.some((log) => log.type === 'error')) {
+    throw new Error(
+      `Cannot render Android template ${template}: ${JSON.stringify(logs)}`
+    );
+  }
+  return value;
+};
+
+/**
+ * Builds a self-contained APK from the shipped AAR and prebuilt web assets.
+ * @param input - Explicit application, artifact and toolchain inputs.
+ * @returns The APK path and its actual variant/signing state.
+ * @remarks Does not run Vite, compile native code or infer a repository root.
+ */
+export const buildAndroidApplication = async (
+  input: MuonAndroidApplicationInput
+): Promise<MuonAndroidApplicationResult> => {
+  const tools = await prepareAndroid({
+    componentsDirectory: input.componentsDirectory,
+    sdkPath: input.sdkPath,
+    environment: input.environment,
+    prepareGradle: false,
+  });
+  const project = resolve(input.projectDirectory);
+  const assetRelative = relative(resolve(input.assetsDirectory), project);
+  if (
+    assetRelative === '' ||
+    (!assetRelative.startsWith('..') && !isAbsolute(assetRelative))
+  ) {
+    throw new Error(
+      'The generated Android project must be outside the web assets directory.'
+    );
+  }
+  if (
+    isAbsolute(input.assetPath) ||
+    input.assetPath
+      .split(/[\\/]/u)
+      .some((part) => part === '..' || part === 'muon')
+  ) {
+    throw new Error(
+      'Android assetPath must be relative and must not use the reserved muon directory.'
+    );
+  }
+  await rm(project, { recursive: true, force: true });
+  await cp(join(tools.componentsDirectory, 'templates'), project, {
+    recursive: true,
+  });
+  await chmod(join(project, 'gradlew'), 0o755);
+  const assets = join(project, 'app/src/main/assets');
+  await mkdir(assets, { recursive: true });
+  await cp(input.assetsDirectory, join(assets, input.assetPath), {
+    recursive: true,
+    dereference: true,
+  });
+  const frameworkAssets = join(assets, 'muon');
+  try {
+    await stat(frameworkAssets);
+    throw new Error('Web assets must not contain the reserved muon directory.');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await mkdir(frameworkAssets, { recursive: true });
+  await cp(
+    join(tools.componentsDirectory, 'licenses'),
+    join(frameworkAssets, 'licenses'),
+    { recursive: true }
+  );
+  await copyFile(
+    join(tools.componentsDirectory, 'renderer/renderer.js'),
+    join(frameworkAssets, 'renderer.js')
+  );
+  await writeFile(
+    join(frameworkAssets, 'config.json'),
+    JSON.stringify({ startPage: input.startPage, values: input.values })
+  );
+  await writeFile(
+    join(frameworkAssets, 'plugins.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      plugins: input.plugins.map(({ name, soname, allow, config }) => ({
+        name,
+        soname,
+        allow,
+        config,
+      })),
+    })
+  );
+  for (const plugin of input.plugins) {
+    for (const abi of input.abis) {
+      const library = plugin.libraries[abi];
+      if (!library)
+        throw new Error(`${plugin.name} is missing its ${abi} library.`);
+      const destination = join(
+        project,
+        'app/src/main/jniLibs',
+        abi,
+        plugin.soname
+      );
+      await mkdir(dirname(destination), { recursive: true });
+      await copyFile(library, destination);
+    }
+  }
+  await writeFile(
+    join(project, 'muon-build.json'),
+    JSON.stringify(
+      {
+        ...tools.toolchain,
+        applicationId: input.applicationId,
+        versionCode: input.versionCode,
+        versionName: input.versionName,
+        abis: input.abis,
+        maven: pathToFileURL(join(tools.componentsDirectory, 'maven')).href,
+      },
+      null,
+      2
+    )
+  );
+  await writeFile(
+    join(project, 'app/src/main/AndroidManifest.xml'),
+    await render(
+      join(project, 'AndroidManifest.xml.fc'),
+      new Map([['permissions', input.permissions.map(xml)]])
+    )
+  );
+  const resources = join(project, 'app/src/main/res');
+  await mkdir(join(resources, 'values'), { recursive: true });
+  await writeFile(
+    join(resources, 'values/strings.xml'),
+    await render(
+      join(project, 'strings.xml.fc'),
+      new Map([
+        [
+          'label',
+          xml(input.label.replaceAll('\\', '\\\\').replaceAll('"', '\\"')),
+        ],
+      ])
+    )
+  );
+  if (input.icon !== undefined) {
+    await rm(join(resources, 'mipmap/ic_launcher.xml'));
+    await copyFile(input.icon, join(resources, 'mipmap/ic_launcher.png'));
+  }
+  await runAndroidCommand(
+    join(project, 'gradlew'),
+    [
+      '--no-daemon',
+      '--console=plain',
+      input.variant === 'debug' ? ':app:assembleDebug' : ':app:assembleRelease',
+    ],
+    project,
+    {
+      ...input.environment,
+      ANDROID_HOME: tools.sdkPath,
+      ANDROID_SDK_ROOT: tools.sdkPath,
+    },
+    input.output
+  );
+  const name =
+    input.variant === 'debug' ? 'app-debug.apk' : 'app-release-unsigned.apk';
+  const packagePath = join(
+    resolve(input.outputDirectory),
+    `${input.applicationId}-${input.versionCode}-${input.variant}.apk`
+  );
+  await mkdir(dirname(packagePath), { recursive: true });
+  await copyFile(
+    join(project, 'app/build/outputs/apk', input.variant, name),
+    packagePath
+  );
+  const result: MuonAndroidApplicationResult = {
+    target: 'android',
+    packagePath,
+    projectDirectory: project,
+    variant: input.variant,
+    abis: input.abis,
+    applicationId: input.applicationId,
+    versionCode: input.versionCode,
+    versionName: input.versionName,
+    signing: input.variant === 'debug' ? 'debug' : 'unsigned',
+  };
+  await writeFile(
+    `${packagePath}.json`,
+    JSON.stringify(result, null, 2) + '\n'
+  );
+  return result;
+};

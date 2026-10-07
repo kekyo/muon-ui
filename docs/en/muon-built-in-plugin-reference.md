@@ -4,6 +4,8 @@ This chapter writes APIs in the `window.muon.*` form to make plugin namespaces a
 This is also the object hierarchy actually exposed by `plugin.mode: "simple"`.
 In the default `validate` mode, import functions from the corresponding virtual modules and use them.
 
+The Android WebView backend exposes only a subset of the desktop APIs in this chapter. See [Android WebView backend limitations](limitation.md#android-webview-backend) and the [Android API compatibility policy](../../android-api-compatibility.md) for available functions and platform-specific behavior. Functions that are not exposed are not replaced with no-ops.
+
 For example, for `window.muon.executor.spawn`, first allow `muon.executor.spawn` in `plugin.plugins[].imports` or Vite `pluginAccess.plugins[].imports`, then import `spawn` from `muon:executor`:
 
 ```ts
@@ -158,25 +160,34 @@ await window.muon.launcher.triggerUpdate();
 | `getConfigValues()` | none | `Promise<Record<string, string>>` | Returns the effective top-level application `config` values. |
 | `getCommandLine()` | none | `Promise<string[]>` | Returns the command line recorded when muon started. Includes `argv[0]` when available. |
 | `getProcessId()` | none | `Promise<number>` | Returns the native muon process ID. |
-| `getRuntimeInfo()` | none | `Promise<MuonRuntimeInfo>` | Returns muon-core build information, referenced CEF information, and running CEF information. |
+| `getRuntimeInfo()` | none | `Promise<MuonRuntimeInfo>` | Returns runtime information for the current backend. |
 | `getAutostart()` | none | `Promise<boolean \| undefined>` | Returns whether the current app is configured to start automatically when the user session starts. Returns `undefined` if it cannot be determined. |
 | `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>` | Enables or disables autostart. |
 
-- `getRuntimeInfo()` `muonCore` contains `version`, `gitCommitHash`, `buildDate`, and `gitCommitDate`.
-  `buildDate` and `gitCommitDate` are ISO 8601 strings.
+- `getRuntimeInfo()` returns a type discriminated by `backend`.
+  When `backend === "cef"`, it returns the existing muon-core build, referenced CEF, and running CEF information. `muonCore` contains `version`, `gitCommitHash`, `buildDate`, and `gitCommitDate`; the dates are ISO 8601 strings.
+  When `backend === "android-webview"`, it returns the Android OS version/API level, ABI, application ID/version, and WebView provider package/version. CEF-specific fields are absent.
+- The Android WebView backend exposes only `getVariables()`, `getConfigValues()`, `getProcessId()`, and `getRuntimeInfo()` in this namespace. It does not expose `getCommandLine()`, `getAutostart()`, or `setAutostart()`.
+- Android can recreate the app process, so do not use the process ID or runtime information as an installation ID or persistent session ID.
 - `getAutostart()` and `setAutostart()` use the platform backend corresponding to the launch source.
   POSIX desktop uses XDG Autostart, and Windows uses the current user's Run registry entry.
 
 ```js
 const variables = await window.muon.environments.getVariables();
 const config = await window.muon.environments.getConfigValues();
-const commandLine = await window.muon.environments.getCommandLine();
 const processId = await window.muon.environments.getProcessId();
 const runtimeInfo = await window.muon.environments.getRuntimeInfo();
-const autostart = await window.muon.environments.getAutostart();
 
-if (autostart !== true) {
-  await window.muon.environments.setAutostart(true);
+if (runtimeInfo.backend === "android-webview") {
+  console.log(runtimeInfo.apiLevel, runtimeInfo.webViewVersion);
+} else {
+  const commandLine = await window.muon.environments.getCommandLine();
+  const autostart = await window.muon.environments.getAutostart();
+  console.log(runtimeInfo.muonCore.version, runtimeInfo.cefRuntime.version);
+  console.log(commandLine);
+  if (autostart !== true) {
+    await window.muon.environments.setAutostart(true);
+  }
 }
 ```
 
@@ -359,6 +370,7 @@ If an already-aborted signal is passed, the function rejects immediately. If abo
 On Linux, GIO/GVfs is used, so local paths or URIs can be specified for file location arguments passed to normal `muon.fs` functions.
 When `gtk.localOnly: false` in GTK file dialogs and a URI on GVfs is returned as the selection result, that URI can also be passed to normal `muon.fs` functions.
 On non-Linux environments, normal `muon.fs` functions handle paths on the local file system.
+The current Android WebView implementation handles only real filesystem paths allowed by Android. It currently rejects `content://` URIs; direct URI support is deferred. `muon.fs.dialogs` also remains unavailable on Android until that URI contract is implemented.
 
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |

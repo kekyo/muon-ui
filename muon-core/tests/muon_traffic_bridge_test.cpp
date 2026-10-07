@@ -631,8 +631,17 @@ static bool RunDetachedCompletionDrainsOnMainDispatcherTest() {
 
   if (call_started) {
     host.park();
+    tra_ffic_side_destroy(&sides.plugin_side);
+    tra_ffic_side_destroy(&sides.renderer_side);
+    // Side destruction posts finalization after the result requested shutdown.
+    // A gentle second park drains that ready work before the queue is destroyed.
+    host.park();
+    tra_ffic_task_drain_finalization(&sides.queue);
+    tra_ffic_task_queue_destroy(&sides.queue);
+    sides.initialized = false;
+  } else {
+    DestroyTestSides(&sides);
   }
-  DestroyTestSides(&sides);
   if (!passed) {
     return false;
   }

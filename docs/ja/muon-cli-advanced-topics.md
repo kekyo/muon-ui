@@ -1,5 +1,7 @@
 # muon CLI (Advanced topics)
 
+Android向けの`prepare`、`build`、`pack --type apk`は[Androidアプリのビルド・配布](./android.md)を参照してください。以下はdesktop版の手順です。`--all`の対象もdesktopに限ります。
+
 muonは基本的にViteプラグインと共に使用することを想定していますが、Viteプラグインを使用しないで開発することも出来ます。
 その場合は、 `muon` CLIコマンドを使用します。
 

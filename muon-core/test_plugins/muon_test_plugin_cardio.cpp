@@ -15,9 +15,15 @@
 #include <cstdlib>
 #include <memory>
 #include <thread>
+#if CARDIO_HAS_POSIX_FD
 #include <unistd.h>
+#endif
 
 static std::atomic_bool dispatcher_available_at_init = false;
+
+// The Android looper probe uses POSIX descriptors; other hosts retain the
+// shared dispatcher and asynchronous shutdown checks below.
+#if CARDIO_HAS_POSIX_FD
 static std::thread::id dispatcher_init_thread;
 
 static constexpr uint32_t dispatcher_init_bit = 1U << 0;
@@ -29,6 +35,7 @@ static constexpr uint32_t fd_bit = 1U << 5;
 static constexpr uint32_t worker_bit = 1U << 6;
 static constexpr uint32_t all_event_bits =
     direct_bit | timer_bit | fd_bit | worker_bit;
+#endif
 
 static cardio::dispatcher* try_get_current_dispatcher() noexcept {
   try {
@@ -87,6 +94,7 @@ extern "C" void dispatcher_available(muon_completion_func comp) {
   comp(&result, nullptr);
 }
 
+#if CARDIO_HAS_POSIX_FD
 struct DispatcherProbeState {
   muon_completion_func completion = nullptr;
   std::thread::id owner_thread;
@@ -180,16 +188,19 @@ extern "C" void dispatcher_probe(muon_completion_func completion) {
   });
   state->complete_event(direct_bit);
 }
+#endif
 
 static const muon_type_descriptor type_bool = {
     MUON_TYPE_BOOL,
     nullptr,
 };
 
+#if CARDIO_HAS_POSIX_FD
 static const muon_type_descriptor type_u32 = {
     MUON_TYPE_U32,
     nullptr,
 };
+#endif
 
 static const muon_plugin_function_metadata cardio_functions[] = {
     {
@@ -205,18 +216,22 @@ static const muon_plugin_function_metadata cardio_functions[] = {
         {0, nullptr, &type_bool},
         nullptr,
     },
+#if CARDIO_HAS_POSIX_FD
     {
         "dispatcherProbe",
         reinterpret_cast<muon_native_function>(&dispatcher_probe),
         {0, nullptr, &type_u32},
         nullptr,
     },
+#endif
 };
 
 static const muon_plugin_function_metadata* const cardio_functions_pointers[] = {
     &cardio_functions[0],
     &cardio_functions[1],
+#if CARDIO_HAS_POSIX_FD
     &cardio_functions[2],
+#endif
     nullptr,
 };
 
@@ -244,6 +259,8 @@ extern "C" const muon_plugin_metadata* muon_init_plugin(
   (void)context;
   dispatcher_available_at_init.store(
       try_get_current_dispatcher() != nullptr);
+#if CARDIO_HAS_POSIX_FD
   dispatcher_init_thread = std::this_thread::get_id();
+#endif
   return &cardio_metadata;
 }

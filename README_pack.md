@@ -60,6 +60,7 @@ With the minimal setup, installing the NPM package and adding one line to the co
 - The rendering browser is CEF (Chromium Embedded Framework). From the web application's point of view, this is almost the same as using Chromium or Chrome.
 - Supports the Vite plugin system. It also supports Vite HMR, so previews update in real time during development.
 - Supports Linux (deb) and Windows (NSIS) package generation, and portable distribution.
+- You can also build Android applications (experimental).
 - DevTools can be used. CDP (Chrome DevTools Protocol) is also supported, so remote debugging from external tools is possible.
 - Includes a plugin system. Plugin capabilities can also be restricted by a whitelist filter.
 - Built-in plugins provide access to local files, open dialogs, child process launching, and window operations.
@@ -76,6 +77,8 @@ With the minimal setup, installing the NPM package and adding one line to the co
 ---
 
 ## Getting started with muon (Quick version)
+
+This section covers Linux and Windows. For Android SDK/JDK setup, Vite configuration, and APK building and signing, see [building and distributing Android apps](https://github.com/kekyo/muon-ui/blob/main/docs/en/android.md).
 
 Let's get started by creating an application with muon (a muon app).
 Use a [Vite template](https://vite.dev/guide/) to create "my-muon-app" as you normally would:

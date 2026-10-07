@@ -69,10 +69,21 @@ export default defineConfig({
 }
 ```
 
+SDK/JDKの診断とGradleの準備を行います。
+
 ```bash
 npx muon prepare --target android
+```
+
+`muon build`は、上のVite設定を使ってWebアセットのビルドからdebug APKの生成まで実行します。
+
+```bash
 npx muon build --target android
-# Vite設定でAndroidを選んでいれば、こちらも同じdebug APKを生成する
+```
+
+`vite build`でも同じdebug APKを生成できます。`muon build`と`vite build`はどちらか一方で十分です。
+
+```bash
 npx vite build
 ```
 
@@ -80,10 +91,10 @@ APKの出力先は`dist-muon/android/com.example.notes-1-debug.apk`です。同�
 
 Androidは`--target android`またはVite設定で明示的に選びます。既定ターゲットと`--all`はdesktop向けです。Viteの開発サーバーからAndroidを自動起動する機能とHMRは今回の範囲に含みません。
 
-Viteを使わず、すでにビルドしたWebアセットを指定することもできます。
+MuonのViteプラグインを設定していないプロジェクトでは、`--assets`ですでにビルドしたWebアセットを指定できます。
 
 ```bash
-npx muon build --target android --assets-dir ./dist
+npx muon build --target android --assets ./dist
 ```
 
 ## 設定とMuon API
@@ -124,6 +135,8 @@ const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 外部通信が必要なら`permissions`に`android.permission.INTERNET`を追加します。Android版はCEF版の`network.allow`などによる宛先制限を適用しません。HTTPの平文通信は無効です。権限名をManifestに追加するだけでは、ユーザーへの実行時権限要求は行われません。ローカルネットワーク権限など、権限ダイアログが必要な機能は公開経路では未提供です。[Android版の制約](./limitation.md#android-webviewバックエンド)、[Androidのローカルネットワーク権限](https://developer.android.com/privacy-and-security/local-network-permission)
 
 ## release APKへ署名する
+
+上のVite設定を使う場合、`muon pack`でWebアセットのビルドからrelease APKの生成・署名・検証まで行います。事前に`muon build`や`vite build`を実行する必要はありません。
 
 自分で管理するkeystoreを用意し、WebアセットやViteの`public`ディレクトリの外に保存します。次は新しい鍵を作る例です。`keytool`の対話入力でパスワードと証明書情報を指定してください。
 

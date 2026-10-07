@@ -69,10 +69,21 @@ Add application settings to `muon.json` in the project root. Replace `icons/app.
 }
 ```
 
+Check the SDK/JDK installation and prepare Gradle:
+
 ```bash
 npx muon prepare --target android
+```
+
+With the Vite configuration above, `muon build` builds the web assets and generates a debug APK:
+
+```bash
 npx muon build --target android
-# With Android selected in Vite, this produces the same debug APK.
+```
+
+Alternatively, `vite build` generates the same debug APK. Either `muon build` or `vite build` is sufficient:
+
+```bash
 npx vite build
 ```
 
@@ -80,10 +91,10 @@ The APK is written to `dist-muon/android/com.example.notes-1-debug.apk`. Its adj
 
 Select Android explicitly with `--target android` or the Vite configuration. Default targets and `--all` remain desktop targets. Automatic Android launch from the Vite development server and HMR are outside this release's scope.
 
-You can also build from an existing directory of web assets without Vite:
+In a project without the Muon Vite plugin configured, use `--assets` to supply prebuilt web assets:
 
 ```bash
-npx muon build --target android --assets-dir ./dist
+npx muon build --target android --assets ./dist
 ```
 
 ## Configuration and Muon APIs
@@ -124,6 +135,8 @@ Relative `muon.fs` paths refer to the application's private files directory. Dat
 For external networking, add `android.permission.INTERNET` to `permissions`. Android does not enforce CEF's destination policies such as `network.allow`. Cleartext HTTP is disabled. Manifest permissions alone do not request runtime permissions from the user. Features requiring permission dialogs, including local network access, are not available through the public build path. See [Android limitations](./limitation.md#android-webview-backend) and [Android local network permission](https://developer.android.com/privacy-and-security/local-network-permission).
 
 ## Sign a release APK
+
+With the Vite configuration above, `muon pack` builds the web assets, generates a release APK, signs it, and verifies the signature. You do not need to run `muon build` or `vite build` first.
 
 Keep your keystore outside web assets and Vite's `public` directory. To create a new key, run the following and enter its password and certificate details interactively:
 

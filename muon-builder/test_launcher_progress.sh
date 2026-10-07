@@ -632,6 +632,8 @@ int main(void) {
 }
 HARNESS_EOF
 
+# Stop this private prefix after each successful harness before waiting.
+# Wine services may otherwise outlive the temporary X server indefinitely.
 wine_prefix="${OUT_DIR}/wineprefix"
 rm -rf "${wine_prefix}"
 
@@ -643,6 +645,7 @@ x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   "${LAUNCHER_STATE_HARNESS}"
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_state_directory_windows64_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -k
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
@@ -652,6 +655,7 @@ x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows64_fallback_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -k
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
@@ -661,6 +665,7 @@ x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows64_ui_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -k
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
@@ -670,6 +675,7 @@ i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows32_fallback_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -k
 WINEPREFIX="${wine_prefix}" wineserver -w
 
 i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
@@ -679,4 +685,5 @@ i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -lcomctl32 -lgdi32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows32_ui_harness.exe"
+WINEPREFIX="${wine_prefix}" wineserver -k
 WINEPREFIX="${wine_prefix}" wineserver -w

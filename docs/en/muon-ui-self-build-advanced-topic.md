@@ -12,7 +12,13 @@ apt-get install -y \
   nodejs npm
 ```
 
-- Installing Node.js through [nvm](https://github.com/nvm-sh/nvm) may be preferable. Use version 20 or later.
+- Builds are tested with Node.js 24. You can install it through [nvm](https://github.com/nvm-sh/nvm).
+
+Building Muon itself and running the full suite, including Android components, also requires JDK 17–25 and the Android SDK. JDK 25.0.3 is tested. Follow [Android application setup](./android.md#requirements), then install the NDK and CMake for manufacturing native components. Ordinary Muon application developers do not need this addition:
+
+```bash
+android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
+```
 
 ## Build and test
 
@@ -28,11 +34,33 @@ To launch muon with the debug page:
 npm run dev
 ```
 
+## Android device tests
+
+The full suite builds APKs and performs static checks. After connecting through ADB, run device tests separately. The emulator profile is API 37, x86_64, and 16 KiB pages; Pixel 6 uses API 37, arm64-v8a, and 4 KiB pages:
+
+```bash
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-prototype
+```
+
+The independent npm consumer test covers the public CLI/Vite integration, signing, storage, restart, and updates preserving data. It recreates its dedicated device fixture, `dev.muon.e2e.publicconsumer`:
+
+```bash
+npm run build --workspace muon-ui
+mkdir -p .run/android-e2e
+npm pack --workspace muon-ui --pack-destination .run/android-e2e
+ANDROID_SERIAL=your-device-serial node muon-android/scripts/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
+```
+
+Use the actual tgz version. When passing `--plugins`, build the prototype release first. CI runs the same independent application on a 16 KiB emulator.
+
 ## Windows binary e2e tests
 
 To run Windows binary e2e tests, you need a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent.
 This can also be a virtual machine instance.
 Then launch the tests as follows:
+
+muon-ui's Windows E2E also requires Node.js on the remote agent's PATH. Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
 
 ```bash
 export AGENT_ROVER_WIN11_HOST=<agent-host-address>

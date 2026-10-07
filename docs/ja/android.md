@@ -18,7 +18,7 @@ muon-uiのnpmパッケージから、Webアセットを内蔵したAndroid APK�
 
 通常のアプリビルドにはNDK、CMake、Muonのソース取得は不要です。MuonのJava・ネイティブ部品は事前ビルドしたAARとしてnpm内に収録しています。GradleとAndroidXなどの初回取得にはネットワーク接続が必要です。Android Studioと接続端末はビルドの必須条件ではありません。
 
-APKの最低インストールAPIは24ですが、古いOSでの動作は未検証です。WebViewは`WEB_MESSAGE_LISTENER`、`WEB_MESSAGE_ARRAY_BUFFER`、`DOCUMENT_START_SCRIPT`を必要とし、不足時は起動画面に理由を表示します。検証したWebViewは153.0.8010.36です。arm64の16 KiB配置は静的検査済みですが、実行検証はPixel 6の4 KiBとx86_64エミュレーターの16 KiBで行っています。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiBページへの対応](https://developer.android.com/guide/practices/page-sizes)
+APKの最低インストールAPIは24ですが、古いOSでの動作は未検証です。WebViewは`WEB_MESSAGE_LISTENER`、`WEB_MESSAGE_ARRAY_BUFFER`、`DOCUMENT_START_SCRIPT`を必要とし、不足時は起動画面に理由を表示します。検証したWebViewはPixel 6が153.0.8010.36、エミュレーターが149.0.7827.5です。arm64の16 KiB配置は静的検査済みですが、実行検証はPixel 6の4 KiBとx86_64エミュレーターの16 KiBで行っています。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiBページへの対応](https://developer.android.com/guide/practices/page-sizes)
 
 JDKと[Android CLI](https://developer.android.com/tools/agents/android-cli)を用意し、SDKのライセンスを確認したうえで、必要なSDKパッケージをインストールします。
 

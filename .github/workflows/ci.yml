@@ -51,10 +51,17 @@ jobs:
             -o "${cli_root}/tools.zip"
           echo "0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8  ${cli_root}/tools.zip" | sha256sum --check
           unzip -q "${cli_root}/tools.zip" -d "${cli_root}"
-          echo "${cli_root}/cmdline-tools/bin" >> "${GITHUB_PATH}"
+          # android-emulator-runner prepends this SDK directory to PATH.
+          cli_latest="${ANDROID_HOME}/cmdline-tools/latest"
+          mkdir -p "${ANDROID_HOME}/cmdline-tools"
+          if [ -e "${cli_latest}" ] || [ -L "${cli_latest}" ]; then
+            mv "${cli_latest}" "${cli_root}/previous-cmdline-tools"
+          fi
+          mv "${cli_root}/cmdline-tools" "${cli_latest}"
+          echo "${cli_latest}/bin" >> "${GITHUB_PATH}"
           # CI provisions the manufacturer's SDK explicitly. Consumer prepare only diagnoses it.
           set +o pipefail
-          yes | "${cli_root}/cmdline-tools/bin/android" --sdk="${ANDROID_HOME}" sdk install \
+          yes | "${cli_latest}/bin/android" --sdk="${ANDROID_HOME}" sdk install \
             platforms/android-37.0 build-tools/36.0.0 platform-tools \
             ndk/29.0.14206865 cmake/4.1.2
           exit "${PIPESTATUS[1]}"
@@ -153,6 +160,7 @@ jobs:
           disable-animations: false
           script: |
             test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = 16384
+            adb shell df -h /data
             npm run test:android --workspace muon-android-prototype
             mkdir -p .run/android-ci
             npm pack --workspace muon-ui --pack-destination .run/android-ci

@@ -529,3 +529,39 @@ CIの失敗ログ、ローカルの修正前8回・修正後のLinux検証、Win
 ルートのnpm testは終了コード0で完了した。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-builderのシェル検証とmuon-uiのWindows E2Eも成功した。muon-core-testerは既存と同じ26件skipで、CEF検証は819.97秒だった。全体ログもartifacts/plan6-ci2/muon-ci2-all.logへ保存した。
 
 追補の完了条件を照合し、Linux・Windows両方で遷移先の読み込み完了後にウィンドウ操作を検証できること、全体テストが成功することを確認した。追加で修正した試験プラグインも、Windowsのビルド・実機実行とAndroidのFD検証が成功した。修正をローカルdevelopへコミットする。修正後のGitHub Actionsは未実行であり、push後のCI結果で別途確認する。
+
+### CIのAndroidエミュレータで使われるCLIの不一致
+
+[CI実行37580305378](https://github.com/kekyo/muon-ui/actions/runs/37580305378/job/112658199602)では、前回修正したページ遷移の検証を含むルートのnpm testが成功した。続くAndroid E2Eでは、約15 MBの試験用APKをインストールする段階でRequested internal only, but not enough spaceが発生し、instrumentationの開始前に停止した。独立npm利用アプリのビルド・署名・更新検証にも到達していない。
+
+CIはAPI 37.1・google_apis_ps16k・x86_64・Pixel 6のAVDを新規作成するが、データ領域の容量を指定していなかった。手元で成功したPixel_6 AVDはAndroid Studioで作成したもので、disk.dataPartition.sizeが10Gだった。既存AVDでの成功だけを確認し、CIで新規作成するAVDとの差を検証していなかった点を見直す。
+
+最初の対応案は、CIと同じ条件で一時AVDを新規作成してインストール失敗を再現し、[android-emulator-runnerのdisk-size入力](https://github.com/ReactiveCircus/android-emulator-runner/blob/a421e43855164a8197daf9d8d40fe71c6996bb0d/README.md#configurations)で必要な容量を明示することだった。公開入力の説明と実装を確認し、この入力がAVDのdisk.dataPartition.sizeへ反映されることを確認した。
+
+修正後は新規AVDで、CIと同じ順序で16 KiBページの確認、instrumentation、Release APKの起動、npm packから独立利用アプリの署名APK更新までを実行する。ルートのnpm testも実行する。完了条件は、新規AVD上でこれらがすべて成功すること、既存のPixel 6実機と手元のAVDに変更を加えず一時AVDを終了・削除できることである。変更範囲はCIのSDK準備・エミュレータ設定と本計画の検証記録とする。
+
+手元のCommand-line Tools 23では、新規AVDも10Gで作成された。CIの[ランナーイメージにはCommand Line Tools 12.0が入っており](https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md#android)、android-emulator-runnerはその実行パスを優先していた。[Command-line Tools 12の公式配布物](https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip)を一時ディレクトリで調べ、既定の内部ストレージ容量が800 MiBであることを確認した。配布元のチェックサムとの一致も確認した。
+
+同じCLI 12・システムイメージ・Pixel 6プロファイルで一時AVDを新規作成すると、disk.dataPartition.sizeは800Mだった。起動後の/dataは全792,608 KiBに対して空き7,636 KiBとなり、試作アプリのAPKインストールはCIと同じRequested internal only, but not enough spaceで失敗した。これをローカルでのRED確認とする。既存のSDKやAVDは変更していない。
+
+検証のためdisk-sizeを4Gに指定し、起動後の/dataの容量もログに出力した。CLI 23による予備検証では、4G指定に対してエミュレータが実容量を6 GiBに補正し、instrumentation 45件とRelease APKの起動が成功した。ただし、CIで使われるCLI 12で作った新規AVDでも確認する必要があった。
+
+CLI 12で4Gを指定するとAPKのインストールは成功したが、SurfaceFlingerがAssertion failed: !rcEnc->featureInfo()->hasReadColorBufferDmaで終了し、Androidのシステムプロセスが再起動を繰り返した。instrumentationはProcess crashedとなり、テスト開始前に停止した。CLI 12のAVDは、ルートのiniファイルにtarget=android-0を出力していた。CLI 23ではtarget=android-37.1となる。[エミュレータはこのtargetからAPIレベルを判定する](https://android.googlesource.com/platform/external/qemu/+/refs/heads/emu-master-dev/android/emu/avd/src/android/avd/info.c)ため、容量だけを指定する当初の案では、新しいイメージに対して古いAPI用の設定が使われる問題も残っていた。
+
+対応方針を、製造用に取得済みのCLI 23をエミュレータ作成にも使用するよう変更する。[android-emulator-runnerのSDK準備処理](https://github.com/ReactiveCircus/android-emulator-runner/blob/a421e43855164a8197daf9d8d40fe71c6996bb0d/src/sdk-installer.ts)はSDKのcmdline-tools/latestをPATHの先頭に追加するため、GitHub Actionsでは[公式の配置方法](https://developer.android.com/tools/sdkmanager)に従って、検証済みのCLIをこの位置へ配置する。既存CLIはランナーの一時ディレクトリへ退避する。容量の追加指定は取り除き、CLI 23が生成する設定で十分な容量と正常な起動を確認する。起動後の/data容量のログ出力は残す。
+
+追加の完了条件は、ランナーにCLI 12がある状態から修正後の準備手順を実行し、actionと同じPATHでもCLI 23が選択されること、新規AVDでAndroid検証の全工程が成功することである。CLI、エミュレータ、システムイメージのコードは変更しない。
+
+修正したワークフローから準備スクリプトを取り出し、CLI 12をlatestに置いた一時SDKで実行した。公式ZIPのSHA-256検証とSDK準備は終了コード0で完了した。actionと同じPATHを設定すると配置済みのCLI 23が選択され、新規AVDにはtarget=android-37.1、16 KiBページ用のタグ、10Gのデータ領域が設定された。
+
+ルートのnpm testは終了コード0で完了した。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-uiのWindows E2Eとmuon-builderのシェル検証も成功した。muon-core-testerは従来と同じ26件skipで、CEF検証は846.20秒だった。
+
+修正後の新規AVDで、CIのAndroid検証スクリプトも終了コード0で完了した。16 KiBページ、instrumentation 45件、Release APKとAPKセットの起動、npm packからの独立利用、署名APKの生成・起動・再起動・データを保持した更新を確認した。最終画面ではバージョン1.0.1と保存済みデータを目視でも確認した。検証後の/dataには約8.2 GiBの空きがあった。
+
+検証後のログ確認では、バックグラウンドの試作アプリでWebView 149.0.7827.5のonTrimMemoryからSIGILLが1件記録されていた。追加確認として、公開パッケージから作成したアプリをバックグラウンドへ移し、ADBでBACKGROUNDのメモリ解放通知を送ると同じクラッシュを再現した。HIDDENの通知と復帰は成功した。CIで発生した容量不足・SurfaceFlingerの再起動とは別に、muonの処理とシステムWebViewを切り分ける必要がある。muonを含まない最小WebViewアプリを一時ディレクトリで作り、同じ通知で再現するかを確認する。製品コードの変更は原因が分かるまで行わない。
+
+最小アプリはAndroid標準のActivityに[WebView](https://developer.android.com/reference/android/webkit/WebView)を1個配置し、固定のHTMLを読み込むだけとした。muonやAndroidXには依存しない。このアプリでもBACKGROUND通知後に同じlibwebviewchromium.so内の命令位置でSIGILLが発生し、WebView側の問題をmuonなしで再現できた。確認した範囲はAPI 37.1・x86_64・16 KiBページとWebView 149.0.7827.5の組み合わせである。この問題は未解決として残し、対応案は更新後のWebViewまたはシステムイメージで同じ最小アプリを検証し、その後に独立利用アプリのバックグラウンド復帰を再検証することとする。
+
+CIの失敗再現、CLI配置修正後の検証、全体テスト、署名APKと画面、WebView単体の再現コードとログをartifacts/plan6-ci3に保存した。一時AVDと一時SDKを終了・削除し、利用アプリの一時署名鍵も削除した。Pixel 6実機への接続は維持し、実機と既存AVDは変更していない。
+
+今回のCI修正の完了条件を照合し、CLIの選択、新規AVDでのAndroid検証、全体テスト、一時環境の後片付けが完了したことを確認した。変更をローカルdevelopへコミットする。修正後のGitHub Actionsは未実行で、push後の結果は別途確認する。追加で再現したWebViewの問題は、このCI検証の成功とは分けて扱う。

@@ -582,3 +582,65 @@ CIの失敗再現、CLI配置修正後の検証、全体テスト、署名APKと
 4. 判明した原因、実証した影響範囲、未確認の範囲、回避策の有効性を本計画へ記録する。製品コードの変更が必要と判明した場合は、この計画を具体化してから再現テスト、修正、成功確認の順で実施する。最後にルートのnpm testを実行し、検証用のプロセス・AVD・実機の診断用APKを片付ける。
 
 完了条件は、Pixel 6と既知の再現環境の結果を区別して示せること、実アプリの強制終了が起きる条件を証拠とともに説明できること、回避策を実測結果と制約付きで提示できることとする。回避策が確認できない場合は、その事実と試した範囲を記す。特定の組み合わせでの成功を、未検証のすべてのAndroid端末への保証としない。公開パッケージ利用アプリの表示・RPC・データ保持、全体テスト、一時環境の後片付けも完了条件に含める。
+
+調査途中で、WebViewの停止位置は[ChromiumのPmfUtilsによるメモリ量の計算](https://chromium.googlesource.com/chromium/src/+/refs/tags/149.0.7827.5/base/android/pmf_utils.cc)と特定できた。エミュレーターの/proc/pid/statmでは常駐ページ数が共有ページ数より少なくなり、その差を非負のByteSizeへ変換する際にUD2へ到達していた。[稼働カーネル214d1615c480のtask_statm](https://android.googlesource.com/kernel/common/+/214d1615c480/fs/proc/task_mmu.c#98)には、x86の16 KiBエミュレーションで共有ページ数を二重に換算する処理が残っている。[Android側の修正772e4465](https://android.googlesource.com/kernel/common/+/772e4465d7db4282b797c28310aa45861804ddcf)も、この処理によってresident < sharedになる問題を説明している。
+
+この証拠に合わせ、版比較はWebView 149のAPKを4 KiB環境へ配置する試験と、別カーネルを使う既存の16 KiBシステムイメージとの比較を優先する。必要なら、隔離AVDの起動条件だけを変更して16 KiBエミュレーションの有無を比較する。OSから自然に届く通知も診断アプリで記録し、ADBによる疑似通知だけで発生する問題かを確かめる。アプリ側の候補としてWebViewのバックグラウンド破棄を試すが、効果がなければ製品へ組み込まない。カーネルやWebViewを自前で改変する対応は行わない。
+
+#### 原因と通常利用への影響
+
+2026年10月7日の追加検証で、API 37.1・google_apis_ps16k・x86_64のシステムイメージrevision 9に含まれるカーネルの不具合と切り分けた。カーネルは6.12.69-android16-6-g214d1615c480-ab15053784、WebViewは149.0.7827.5である。WebViewの版を変えず、同じイメージ・同じカーネルの起動条件を4 KiBにすると、最小アプリとmuon利用アプリの両方でクラッシュがなくなった。
+
+このカーネルのtask_statmは、共有ページ数を4 KiB単位から16 KiB単位へ換算した後、常駐ページ数の計算でも共有ページ数を再び換算する。そのため、/proc/pid/statmが返す常駐ページ数が共有ページ数より少なくなる場合がある。最小アプリの自然発生時には、通知直前の記録がresident=7676、shared=11346だった。WebViewは両者の差を私有メモリ量として計算するため、負数を扱えないByteSizeへの変換で停止する。
+
+ネイティブライブラリの停止位置0x65dac39にはUD2命令があり、その直前にresident - sharedが負数かを調べる分岐があった。参照する文字列と/proc/self/statm・statusの読み込みもPmfUtilsの実装と一致した。BuildIdはfe49a4ff595b9ff446040a9a7148405da7e1cbd8で、試作・公開パッケージ利用・最小WebViewアプリの各クラッシュが一致する。これはCPUがWebViewの通常の処理命令を実行できない現象ではない。
+
+[ChromiumのMemoryPressureMonitor](https://chromium.googlesource.com/chromium/src/+/refs/tags/149.0.7827.5/base/android/java/src/org/chromium/base/memory/MemoryPressureMonitor.java)は、BACKGROUND通知からプロセス凍結前のメモリ処理を呼ぶ。[PreFreezeBackgroundMemoryTrimmer](https://chromium.googlesource.com/chromium/src/+/refs/tags/149.0.7827.5/base/android/pre_freeze_background_memory_trimmer.cc)がその際にメモリ量を集計する。HIDDEN通知からの復帰では今回のクラッシュを再現しなかった。
+
+ADBでメモリ通知を送らず、HOMEへ移動するだけの試験でも再現した。最小アプリでは17:03:13にHIDDEN通知を受け、17:04:13にOSからBACKGROUND通知が届き、同じ位置でSIGILLになった。公開パッケージから作ったmuon APKも、17:06:39のHOME移動から約61秒後に自然にクラッシュした。ApplicationExitInfoはAPP CRASH(NATIVE)、status=4を記録していた。したがって、この環境では通常のアプリ切り替えでも強制終了に遭遇し得る。発生までの約60秒は今回の環境での観測値であり、すべての端末で同じ時間になるという意味ではない。
+
+停止するのはmuonアプリのメインプロセスであり、JavaScriptの例外処理で回復できる範囲ではない。FCM、QuickJS、muonのRPC、ネイティブプラグインを含まないアプリでも起きるため、それらの利用を避けてもこの原因は除けない。
+
+#### 比較試験
+
+各反復でアプリのデータを保持したまま新しいプロセスを起動し、HIDDEN通知と復帰、BACKGROUND通知と復帰の順で試験した。通知の前後でPIDが一致することと画面内容を確認した。Androidが疑似通知のレベルをプロセスごとに記憶するため、反復の間だけforce-stopしている。クラッシュ後の自動再起動は成功に数えない。
+
+| 環境 | WebView | 最小アプリ | 公開パッケージ利用アプリ |
+| --- | --- | --- | --- |
+| Pixel 6、Android 17、arm64、4 KiB | 153.0.8010.36 | 両通知・復帰が各5回成功 | 両通知・復帰が各5回成功 |
+| API 37.1 revision 9、x86_64、16 KiB、6.12.69 | 149.0.7827.5 | HIDDEN成功、BACKGROUNDでSIGILL。HOME移動だけでも再現 | 同左 |
+| 同じAPI 37.1イメージ・同じカーネル、起動時に4 KiBを指定 | 149.0.7827.5 | 両通知・復帰が各3回成功 | 両通知・復帰が各3回成功。保存後の追加1回も成功 |
+| API 35、x86_64、4 KiB、6.6.50 | 同じ149のAPKを配置 | 両通知・復帰が各3回成功 | 両通知・復帰が各3回成功 |
+| API 36 revision 7、x86_64、16 KiB、6.6.66、RAM 4 GiB | 同じ149のAPKを配置 | 両通知・復帰が各3回成功 | 両通知・復帰が各3回成功。保存後の追加1回も成功 |
+
+Pixel 6のビルドはgoogle/oriole/oriole:17/CP3A.260905.009/16091614:user/release-keysだった。実機のWebView、OS設定、既存アプリのインストール状態は変更していない。muon利用アプリには検証前からsaved-on-deviceが保存されており、通知・復帰とプロセスの再起動後も保持されていた。通知後の画面操作でファイルの書き込み・読み込み、RPCによるページ再読込も成功し、再読込回数が1から2へ増えた。同じ機能は4 KiBの比較AVDとAPI 36の16 KiB AVDでも成功した。
+
+API 36での最初の試験は、エミュレーターのRAMが約2.5 GiBの状態で、HOME移動時にOSがアプリをLOW_MEMORYとして終了させた。ネイティブクラッシュ記録はなく、今回のSIGILLとは区別する。RAMを4 GiBにして再実行した結果を上表に記載した。Pixel 6ではuiautomatorのXML出力完了後に、操作ツール自身が終了コード137になる場合があった。出力完了メッセージと生成済みXMLを確認し、アプリのPID・表示・クラッシュ記録とは別に判定した。
+
+#### 回避策と適用範囲
+
+開発時の回避策として、通常の4 KiB AVDが使える。さらに原因を確認するため、問題のAPI 37.1イメージに対して起動引数の末尾へ-qemu -append page_shift=12を追加した。[カーネルが受け取るpage_shiftの処理](https://android.googlesource.com/kernel/common/+/214d1615c480/mm/page_size_compat.c)も確認し、起動後のgetconf PAGE_SIZEが4096であることを実測した。この条件では同じWebView 149と同じmuon APKが動作し、保存内容を保持した通知・復帰とRPCの検証も通過した。
+
+4 KiBでの成功は16 KiB対応の検証を代替しない。16 KiBのまま確認する場合は、今回成功したAPI 36 revision 7・カーネル6.6.66-android15-8-gd0c43a640eab-ab13812146・RAM 4 GiBが候補になる。将来、API 37.1のイメージを更新する際は、上流の修正を含むカーネルになったことと、同じバックグラウンド試験の成功を確認する。調査時点の[Google公式イメージ一覧](https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-4.xml)では、該当イメージの最新は使用中と同じrevision 9だった。上流に修正があることだけで、SDKから取得できるイメージも修正済みとは扱わない。
+
+アプリ側の回避案として、Activity.onStopでWebViewを親Viewから外してdestroyし、復帰時に作り直す処理を最小アプリで試した。[WebView.destroyの前提](https://developer.android.com/reference/android/webkit/WebView#destroy())に従って破棄しても、BACKGROUND通知からのメモリ集計は残り、同じ位置でクラッシュした。破棄完了のログに続いてtrim=40、resident=7785、shared=11535を記録している。この案には回避効果がないため、muonの製品コードには追加しない。
+
+今回、アプリから公開APIだけで安全に回避できる方法は確認できなかった。通知の握り潰しやWebView内部のコールバック解除は、通常のメモリ管理に干渉するため採用しない。WebViewの版更新だけで解消するとも確認できていない。153.0.8010.36の[PmfUtilsの公開ソース](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.36/base/android/pmf_utils.cc)にも同じ差分の変換が残るので、Pixel 6での成功をWebView更新の効果とは扱わない。
+
+特定した不具合は、x86で4 KiBページを16 KiBに見せる処理で換算が重複するものだった。Pixel 6の通常利用でこの不具合を再現する証拠はなく、5回の通知・復帰とRPC・保存データの検証では正常だった。arm64の実16 KiB端末は今回の実測対象に含めていない。未検証の端末や、別のOS・WebViewの不具合まで含めて強制終了しないことを保証するものではない。
+
+この結論から、muonの製品コード、FCMの方針、JavaScriptの配置・パッケージングを変更する必要はない。今後のCIには、テスト用プロセスを生存確認するバックグラウンド復帰試験と、対象カーネルの確認を加える余地がある。今回は原因と回避策の調査として記録し、CI設定の変更は行っていない。
+
+#### 記録と後片付け
+
+比較に使った操作スクリプトはartifacts/plan6-webview/memory-probe.mjs、復帰後のRPC・保存データの検証はconsumer-after-trim.mjs、自然なバックグラウンド移行の観測はnatural-background.mjsに保存した。最小アプリの元のソースとAPKはartifacts/plan6-ci3/webview-only、通知ログと破棄処理を追加した診断アプリはartifacts/plan6-webview/lifecycle-probeにある。診断アプリの変更だけで試験し、muonの製品コードには変更を加えていない。
+
+各実行の環境情報、PID、画面のXML、ApplicationExitInfo、クラッシュログと、成功したRPC操作後の画面をartifacts/plan6-webviewに保存した。WebViewのAPKとSHA-256、逆アセンブル、文字列の参照位置、対応する上流コード、カーネル修正の差分も保存している。これらの外部コードは参照用であり、改変・ビルド・組み込みは行っていない。
+
+検証用の4個のAVDを終了して削除し、Pixel 6へ追加した診断APKも削除した。既存のSDK・AVDと、Pixel 6の既存アプリは保持している。実機と比較環境の最終画面では、ready表示、保存内容、バージョン1.0.1、再読込回数2を目視確認した。
+
+ルートのnpm testは最後まで実行し、終了コード8だった。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-core-tester 209件が成功した。muon-core-testerは既存と同じ26件skipで、CEF検証は856.56秒だった。muon-uiのWindows E2Eとmuon-builderのシェル検証も成功した。
+
+失敗はmuon-coreのCTestに含まれるtray_linux_dbusの1件で、fixed tray icon had unexpected initial bytesという結果だった。単独で再実行すると成功し、続いてCTest全42件を再実行しても成功した。ただし、初回の全体実行が成功したとは扱わない。現在のテストは2個のトレイを登録し、通知の到着順から固定アイコンと追従アイコンを区別している。順序への依存が不安定要因の候補だが、今回の再実行では再現せず、原因の確定や修正は行っていない。Androidのクラッシュとは別の残課題として記録する。全体ログ、単独再実行、CTest全件再実行のログもartifacts/plan6-webviewへ保存した。
+
+追加調査の完了条件を照合し、Pixel 6と再現環境の比較、通常操作での自然発生、カーネルの原因特定、回避環境での通知・復帰・RPC・データ保持、全体テストの実行と結果の記録、後片付けを完了した。アプリ側の破棄処理には回避効果がなく、製品への追加は不要と判断した。全体テストの初回失敗とarm64の実16 KiB端末が未検証である点は残る。今回の変更は本計画の記録のみとし、ローカルdevelopへコミットする。

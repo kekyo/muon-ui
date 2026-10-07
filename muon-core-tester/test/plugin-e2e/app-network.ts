@@ -607,6 +607,8 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         port: MUON_PORT,
         timeoutMs: cdpCommandTimeoutMs,
       });
+      // DOM controls can appear before the page installs their event handlers.
+      await driver.navigate(MUON_APP_URL, cdpCommandTimeoutMs);
       const result = await driver.evaluate<{
         content: string;
         status: string;
@@ -723,6 +725,8 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
           port: MUON_PORT,
           timeoutMs: cdpCommandTimeoutMs,
         });
+        // Wait for the default page to finish initializing its controls.
+        await driver.navigate(MUON_APP_URL, cdpCommandTimeoutMs);
         const values = await driver.evaluate<{
           sawInitialOutputBeforeInput: boolean;
           clearKeptProcessRunning: boolean;
@@ -901,6 +905,8 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
+      // Wait for the default page to finish initializing its controls.
+      await driver.navigate(MUON_APP_URL, cdpCommandTimeoutMs);
       const browserDemo = await driver.evaluate<{
         status: string;
         state: string;

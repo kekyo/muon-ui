@@ -676,3 +676,47 @@ Androidの公開レビューをChange-Id Iad11b73859278b65820a17df40bcc41b8009c0
 muonのarm64アプリ配布を、この修正のOTA普及待ちにする必要はないと判断した。実機側で回避コードを追加する必要もない。現在必要な対応は、開発・CIで今回の不具合を持つx86_64の16 KiB環境を避け、既に成功した比較環境を使用することになる。端末ごとのOTA収録率や導入率は不明だが、主要なarm64実機でこの原因を回避できるかの判断は、配信率に依存しない。
 
 レビューの取得結果、公開更新ページ、SDKイメージの該当項目、Pixel 6の構成の再確認結果をartifacts/plan6-webview/rolloutへ保存した。今回の完了条件を満たしたことを確認した。変更は調査記録のみで、製品コード・テスト・ビルドへの影響はないため、全体テストは再実行しない。
+
+#### ローカルAVDのシステムイメージ更新
+
+利用者からVMイメージの更新を依頼された。既存のPixel_6 AVDを対象として、次の順で進める。
+
+1. 公式SDK一覧から更新候補を取得し、一時AVDでカーネルの修正、16 KiBページ、最小WebViewアプリとmuon利用アプリのバックグラウンド復帰を確認する。保存・読込・RPCによる再読込も検証する。
+2. 既存AVDの設定・ディスク・スナップショットをバックアップし、ユーザーデータの一致を確認する。既存AVDを検証済みイメージへ切り替え、データを初期化せずに起動する。旧イメージに依存するスナップショットは退避する。移行後の起動・表示・データ保持・バックグラウンド復帰を確認し、起動できなければバックアップから戻す。
+3. 更新後のAVDでAndroidのテストを実行し、ルートのnpm testも実行する。結果と復元に必要な場所を記録し、一時AVDを片付ける。
+
+完了条件は、Pixel_6 AVDが修正を含む公式イメージで起動すること、16 KiBを維持すること、既存データを消去しないこと、今回のクラッシュの再現操作とmuonの機能検証に成功すること、Androidと全体テストの結果を記録することとする。実機Pixel 6、Pixel_4 AVD、製品コード、CI設定は今回の変更対象に含めない。
+
+2026年10月7日に全パッケージを再確認すると、API 37.1はrevision 9のままだが、別パッケージのsystem-images;android-37.2;google_apis_ps16k;x86_64がrevision 6として公開されていた。前節の調査はAPI 37.1内の更新確認にとどまり、API 37.2への移行候補を見落としていた。「取得できる修正版がない」という説明は訂正する。配布元は[Google公式SDKイメージ一覧](https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-4.xml)で、取得ファイルはx86_64-ps16k-37.2_r06.zipである。
+
+[Android CLIの公式手順](https://developer.android.com/tools/agents/android-cli)に従い、既存SDKへAPI 37.2のイメージを追加した。含まれるカーネルは6.12.81-android16-6-g4f69fc7b210c-ab16167562で、[対応するtask_statmのソース](https://android.googlesource.com/kernel/common/+/4f69fc7b210c/fs/proc/task_mmu.c#98)には共有ページ数を二重換算しない修正が入っている。WebViewは再現環境と同じ149.0.7827.5だった。
+
+移行手順は、データ保持の検証結果を受けて見直した。システムイメージの参照先だけを変更すると、端末のAndroid IDが変わり、既存の5個のアプリがなくなった。元のAVDはバックアップから復元した。バックアップのコピーを旧イメージで起動すると元のアプリが存在し、そのコピーを新イメージへ切り替えると同じ問題が起きた。スナップショットのディレクトリを残しても結果は変わらなかった。
+
+[エミュレーターのdrive-share.cpp](https://android.googlesource.com/platform/external/qemu/+/refs/heads/emu-master-dev/android-qemu2-glue/drive-share.cpp)を確認すると、build.propのincremental版がversion_num.cacheの値と異なる場合、ユーザーデータ・暗号化情報・SDカードなどのQCOW2差分ディスクを作り直す。元の保存内容は差分側にあるため、設定変更とコールドブートだけでデータを維持できるという当初の想定が誤っていた。
+
+以後の手順は、停止中のバックアップを読み取り、[qemu-img convertとcompare](https://www.qemu.org/docs/master/tools/qemu-img.html)で各差分と元ディスクを統合した独立ディスクを作り、論理内容の一致を検証する方法へ変更する。ユーザーデータ、暗号化情報、SDカード、キャッシュを一組として扱う。一時AVDで、更新前後のAndroid ID、既存5アプリ、保存データの一致を確認できた場合にだけ、既存AVDへ適用する。元のバックアップは変換の入力として保持し、外部コードとSDKの配布イメージは変更しない。
+
+変換した4ディスクは、いずれも元のQCOW2との差分を含む論理内容が一致した。一時AVDへの適用で、更新前と同じAndroid ID、5アプリ、muon利用アプリのsaved-on-deviceが保持されることを確認した。その後、既存のPixel_6 AVDにも同じディスクを配置し、配置後の内容を再び比較して一致を確認した。設定はAPI 37.2のイメージとRAM 4 GiBへ変更し、データを保持したコールドブートに成功した。
+
+最終構成は次のとおり。
+
+| 項目 | 更新後 |
+| --- | --- |
+| AVD名 | Pixel_6。既存の名前を維持 |
+| システムイメージ | API 37.2、google_apis_ps16k、x86_64、revision 6 |
+| カーネル | 6.12.81-android16-6-g4f69fc7b210c-ab16167562 |
+| ビルド | google/sdk_gphone16k_x86_64/emu64xa16k:17/CP41.260831.007/16416850:userdebug/dev-keys |
+| ページサイズ | 16384バイト |
+| WebView | 149.0.7827.5 |
+| RAM | 4 GiB |
+
+一時AVDでは、最小WebViewアプリとmuon利用アプリのHIDDEN・BACKGROUND通知と復帰が各3回成功した。通知を送らずHOMEへ移動する試験でも、18:16:20のHIDDENに続き、18:17:20にOSからBACKGROUNDが届いて処理を完了した。直前のstatmはresident=16149、shared=11233で、正常な大小関係になっていた。復帰後もPIDは9253のままで、同じWebView 149による以前のSIGILLは再現しなかった。
+
+移行後の既存AVDでも、muon利用アプリの両通知・復帰が各3回成功した。保存済みノートは最初の表示から残っており、保存・読込・RPCによるページ再読込も成功した。再読込回数2と保存内容を画面でも確認した。さらにAndroidを再起動し、元のAndroid ID、5アプリ、保存済みノートが維持されることを確認した。移行のために既存アプリを再インストールする必要はなかった。
+
+既存アプリの状態を保つため、APKを入れ替えるAndroidテストは、同じ更新済みイメージの一時AVDで実行した。ANDROID_SERIALで一時AVDだけを指定し、test:androidのinstrumentation 45件、Release APKとAPKセットの検証がすべて成功した。ルートのnpm testも終了コード0で完了した。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功し、既存の26件skipは維持された。Windows E2Eも成功した。前回失敗していたtray_linux_dbusも、今回は全体実行の中で成功した。
+
+更新前の完全なバックアップはartifacts/plan6-avd-update/backup/Pixel_6.avdとPixel_6.iniに残した。元へ戻す必要がある場合はAVDを停止し、現在のAVDを退避したうえで、この2項目を/home/kouji/.android/avdへ戻す。元のAPI 37.1イメージもSDKに保持している。
+
+更新情報、ディスク比較結果、移行前後の識別情報、画面、通知・復帰・RPCの結果、再起動後の検証、Androidテストと全体テストのログをartifacts/plan6-avd-updateへ保存した。一時AVD2個と作業用のディスクコピーは削除し、既存のPixel_6も検証後に停止した。AVD一覧は元と同じPixel_4とPixel_6である。今回の完了条件を照合し、修正済み公式イメージへの更新、16 KiBの維持、データ保持、muonの動作、Androidと全体テスト、後片付けが完了したことを確認した。

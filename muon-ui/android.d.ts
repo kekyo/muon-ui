@@ -22,6 +22,8 @@ export interface MuonAndroidPluginOptions {
 
 /** Android application options, overriding the muon.json android section. */
 export interface MuonAndroidOptions {
+  /** External keystore and environment variable references used by muon pack. */
+  signing?: MuonAndroidSigningOptions;
   /** Stable reverse-domain application identifier used for installation and updates. */
   applicationId?: string;
   /** Launcher label; defaults to the package name. */
@@ -44,4 +46,16 @@ export interface MuonAndroidOptions {
   fcm?: false;
   /** QuickJS is unavailable in this release. Only false is accepted. */
   quickjs?: false;
+}
+
+/** External release credentials; passwords must not appear in project files. */
+export interface MuonAndroidSigningOptions {
+  /** Path to the application keystore; relative to the supplying configuration. */
+  keystore: string;
+  /** Key alias inside the keystore. */
+  keyAlias: string;
+  /** Environment variable containing the keystore password. */
+  storePasswordEnv: string;
+  /** Environment variable containing the key password; defaults to storePasswordEnv. */
+  keyPasswordEnv?: string;
 }

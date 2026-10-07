@@ -215,6 +215,8 @@ const copyDefinedBuildOptions = (
   input: MuonBuildSequenceOptions,
   usesViteAssets: boolean,
 ): void => {
+  if (input.androidRelease !== undefined)
+    output.androidRelease = input.androidRelease;
   if (input.android !== undefined)
     output.android = { ...output.android, ...input.android };
   if (input.assetSourcePath !== undefined) {

@@ -138,6 +138,8 @@ export type MuonBuildTarget = MuonTarget;
  * Options for creating redistributable muon app directories.
  */
 export interface MuonBuildOptions {
+  /** Requests the signed release path used by Android packaging. @internal */
+  androidRelease?: boolean;
   /** Android application metadata and prebuilt plugins. */
   android?: MuonAndroidOptions;
   /**

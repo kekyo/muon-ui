@@ -3,8 +3,8 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   buildAndroidApplication,
   type MuonAndroidApplicationResult,
@@ -19,9 +19,15 @@ import {
   resolveMuonAppIconPath,
 } from "./app-icon.js";
 import { resolveAndroidPlugins } from "../../muon-android/src/plugins.js";
+import {
+  resolveAndroidSigning,
+  signAndroidApplication,
+} from "../../muon-android/src/signing.js";
 
 /** Result of an Android build, discriminated by target without desktop fields. */
 export interface MuonAndroidBuildTargetResult extends MuonAndroidApplicationResult {
+  /** Public signer certificate digest, present for verified release APKs. */
+  readonly certificateSha256?: string;
   /** Fixed Android output directory relative to the output root. */
   readonly distributionDirectoryName: "dist-muon/android";
   /** Absolute directory containing the APK and its metadata. */
@@ -44,6 +50,32 @@ const strings = (value: unknown, label: string): string[] => {
   if (!Array.isArray(value))
     throw new Error(`${label} must be an array of strings.`);
   return [...new Set(value.map((entry) => string(entry, label)))];
+};
+
+const assertKeystoreIsNotPackaged = async (
+  assets: string,
+  keystore: string,
+): Promise<void> => {
+  const key = await readFile(keystore);
+  const pending = [assets];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const path = await realpath(pending.pop()!);
+    if (visited.has(path)) continue;
+    visited.add(path);
+    const info = await stat(path);
+    if (info.isDirectory()) {
+      for (const name of await readdir(path)) pending.push(join(path, name));
+    } else if (
+      info.isFile() &&
+      info.size === key.length &&
+      (await readFile(path)).equals(key)
+    ) {
+      throw new Error(
+        "The Android keystore must not be included in web assets, including copied or renamed files.",
+      );
+    }
+  }
 };
 const settings = (
   root: string,
@@ -121,6 +153,29 @@ export const buildMuonAndroidTarget = async (input: {
     options.android,
   );
   const android = resolved.merged;
+  const signing =
+    options.androidRelease === true
+      ? resolveAndroidSigning(
+          android.signing,
+          options.android?.signing === undefined ? input.configDirectory : root,
+          input.environment,
+        )
+      : undefined;
+  if (signing !== undefined) {
+    const withinAssets = relative(input.assets.sourcePath, signing.keystore);
+    if (
+      withinAssets === "" ||
+      (!withinAssets.startsWith("..") && !isAbsolute(withinAssets))
+    ) {
+      throw new Error(
+        "The Android keystore must be outside the web assets directory.",
+      );
+    }
+    await assertKeystoreIsNotPackaged(
+      input.assets.sourcePath,
+      signing.keystore,
+    );
+  }
   for (const [key, label] of [
     ["fcm", "FCM"],
     ["quickjs", "QuickJS"],
@@ -270,7 +325,7 @@ export const buildMuonAndroidTarget = async (input: {
     "dist-muon/android",
   );
   input.progress?.({ phase: "build", status: "Building Android APK" });
-  const result = await buildAndroidApplication({
+  let result = await buildAndroidApplication({
     componentsDirectory: join(input.packageDirectory, "android"),
     assetsDirectory: input.assets.sourcePath,
     assetPath,
@@ -293,13 +348,27 @@ export const buildMuonAndroidTarget = async (input: {
     projectDirectory: resolve(root, ".muon/android"),
     outputDirectory: outputPath,
     sdkPath: resolved.sdkPath,
-    variant: "debug",
+    variant: signing === undefined ? "debug" : "release",
     environment: input.environment,
     output:
       input.progress === undefined
         ? undefined
         : (text) => input.progress?.({ phase: "build", status: text.trim() }),
   });
+  if (signing !== undefined) {
+    const tools = await prepareAndroid({
+      componentsDirectory: join(input.packageDirectory, "android"),
+      sdkPath: resolved.sdkPath,
+      environment: input.environment,
+      prepareGradle: false,
+    });
+    result = await signAndroidApplication(
+      result,
+      signing,
+      { sdkPath: tools.sdkPath, buildTools: tools.toolchain.buildTools },
+      input.environment,
+    );
+  }
   return {
     ...result,
     outputPath,

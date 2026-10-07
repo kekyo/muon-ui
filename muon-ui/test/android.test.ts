@@ -124,6 +124,33 @@ describe("public Android builds", () => {
     });
     expect(buildAndroid.mock.calls[0]![0].label).toBe("Explicit");
   });
+  it("refuses to package a copy of the signing keystore with web assets", async () => {
+    const root = await project({
+      android: {
+        signing: {
+          keystore: "release.p12",
+          keyAlias: "release",
+          storePasswordEnv: "MUON_TEST_SIGN_PASSWORD",
+        },
+      },
+    });
+    await writeFile(join(root, "release.p12"), "private signing key bytes");
+    await writeFile(
+      join(root, "assets/renamed.bin"),
+      "private signing key bytes",
+    );
+    const previous = process.env.MUON_TEST_SIGN_PASSWORD;
+    process.env.MUON_TEST_SIGN_PASSWORD = "test password";
+    try {
+      await expect(
+        buildMuonApp({ root, targets: ["android"], androidRelease: true }),
+      ).rejects.toThrow(/keystore.*web assets/i);
+      expect(buildAndroid).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.MUON_TEST_SIGN_PASSWORD;
+      else process.env.MUON_TEST_SIGN_PASSWORD = previous;
+    }
+  });
   it.each([
     [{ android: { fcm: true } }, /FCM.*unavailable/i],
     [{ android: { quickjs: true } }, /QuickJS.*unavailable/i],

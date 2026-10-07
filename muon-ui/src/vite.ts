@@ -8,11 +8,8 @@ export type {
   MuonAndroidOptions,
   MuonAndroidAbi,
   MuonAndroidPluginOptions,
+  MuonAndroidSigningOptions,
 } from "../android.js";
-// muon - Multi-platform GUI application framework that uses CEF as its backend
-// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
-// Under MIT.
-// https://github.com/kekyo/muon-ui
 
 import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";

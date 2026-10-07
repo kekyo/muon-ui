@@ -3,10 +3,13 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import type { MuonAndroidOptions } from "../android.js";
+
 import { spawn } from "node:child_process";
 import { type Stats } from "node:fs";
 import {
   chmod,
+  copyFile,
   cp,
   mkdir,
   readFile,
@@ -46,6 +49,7 @@ import type { MuonViteBuildOptions } from "./vite.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import {
   type MuonDesktopTarget as MuonBuildTarget,
+  type MuonTarget,
   allMuonTargets,
   getMuonTargetDescriptor,
   normalizeMuonTarget,
@@ -129,7 +133,7 @@ type JsonObject = Record<string, unknown>;
 /**
  * muon package output type.
  */
-export type MuonPackType = (typeof supportedPackTypes)[number];
+export type MuonPackType = (typeof supportedPackTypes)[number] | "apk";
 
 /**
  * Linux CEF sandbox strategy used by deb packages.
@@ -140,6 +144,8 @@ export type MuonLinuxSandboxMode = (typeof supportedLinuxSandboxModes)[number];
  * Options for creating redistributable muon package artifacts.
  */
 export interface MuonPackOptions {
+  /** Android options overriding Vite and muon.json settings. */
+  android?: MuonAndroidOptions;
   /**
    * Project root.
    */
@@ -251,7 +257,7 @@ export interface MuonPackArtifact {
   /**
    * muon target packaged in this artifact.
    */
-  target: MuonBuildTarget;
+  target: MuonTarget;
   /**
    * Generated artifact path.
    */
@@ -289,7 +295,7 @@ export interface MuonPackResult {
   /**
    * Target dist directories used as package inputs.
    */
-  targets: MuonBuildTargetResult[];
+  targets: MuonBuildResult["targets"];
   /**
    * Generated package artifacts.
    */
@@ -425,7 +431,9 @@ const normalizePackTypes = (
     throw new Error("Specify at least one package type with --type.");
   }
   for (const type of normalized) {
-    if (!supportedPackTypes.includes(type as MuonPackType)) {
+    if (
+      !supportedPackTypes.includes(type as (typeof supportedPackTypes)[number])
+    ) {
       throw new Error(`Unsupported muon pack type: ${type}`);
     }
   }
@@ -1370,13 +1378,13 @@ const buildPortableTargets = async (input: {
  * @param options Pack options.
  * @returns Generated package artifacts.
  */
-export const packMuonApp = async (
+const packDesktopMuonApp = async (
   options: MuonPackOptions,
+  project: MuonBuildSequenceProject,
 ): Promise<MuonPackResult> => {
   const progress = (options as InternalMuonPackOptions).progress;
   const cwd = resolve(options.root ?? process.cwd());
   const environment = options.environment ?? process.env;
-  const project = await loadMuonBuildSequenceProject(cwd);
   const root = project.root;
   const packageJson = await readPackageJson(root);
   const metadata = resolveMetadata(packageJson, options);
@@ -1614,3 +1622,89 @@ export const packMuonApp = async (
 
 export const muonPackSuppressViteBuildEnvironmentKey =
   muonBuildSequenceSuppressViteBuildEnvironmentKey;
+
+/**
+ * Builds redistributable desktop packages or a verified, signed Android APK.
+ * @param options - Target, artifact, project and signing options.
+ * @returns Built distributions and the package files to distribute.
+ */
+export const packMuonApp = async (
+  options: MuonPackOptions,
+): Promise<MuonPackResult> => {
+  const cwd = resolve(options.root ?? process.cwd());
+  const project = await loadMuonBuildSequenceProject(cwd);
+  const plugin = resolveMuonViteBuildOptions(project.pluginOptions);
+  const targets = [
+    ...new Set(
+      (options.allTargets === true
+        ? [...allMuonTargets]
+        : (options.targets ?? plugin.targets ?? [])
+      )
+        .flatMap((target) => target.split(","))
+        .map((target) => target.trim().toLowerCase()),
+    ),
+  ];
+  const types = options.types
+    ?.flatMap((type) => type.split(","))
+    .map((type) => type.trim().toLowerCase());
+  if (!targets.includes("android") && !types?.includes("apk"))
+    return await packDesktopMuonApp(options, project);
+  if (
+    options.allTargets === true ||
+    targets.length !== 1 ||
+    targets[0] !== "android"
+  )
+    throw new Error("APK packaging requires only --target android.");
+  if (
+    types !== undefined &&
+    (types.length === 0 || types.some((type) => type !== "apk"))
+  )
+    throw new Error("Android supports --type apk only.");
+  const root = project.root;
+  const packageJson = await readPackageJson(root);
+  const metadata = resolveMetadata(packageJson, options);
+  const build = await runMuonBuildSequence(
+    {
+      ...options,
+      root: cwd,
+      targets: ["android"],
+      allTargets: false,
+      androidRelease: true,
+      ...(options.packageVersion === undefined
+        ? {}
+        : {
+            android: {
+              ...options.android,
+              versionName:
+                options.android?.versionName ?? options.packageVersion,
+            },
+          }),
+    },
+    project,
+  );
+  const target = build.targets[0];
+  if (target?.target !== "android" || target.signing !== "release")
+    throw new Error("Android packaging did not produce a signed release APK.");
+  const directory = resolve(
+    root,
+    options.artifactsDir ?? defaultArtifactsDirectory,
+    "apk",
+  );
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, basename(target.packagePath));
+  await copyFile(target.packagePath, path);
+  await writeFile(
+    path + ".json",
+    JSON.stringify({ ...target, packagePath: path }, null, 2) + "\n",
+  );
+  return {
+    root,
+    packageName: metadata.packageName,
+    version: target.versionName,
+    appName: build.appName,
+    appId: target.applicationId,
+    build,
+    targets: build.targets,
+    artifacts: [{ type: "apk", target: "android", path }],
+  };
+};

@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -12,6 +13,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -108,10 +110,26 @@ if (includePlugin) {
     const destination = join(root, 'plugins', abi);
     await mkdir(destination, { recursive: true });
     const library = join(destination, 'libmuon_test_plugin_alpha.so');
-    await copyFile(join(repository, 'muon-android-prototype/android/app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib', abi, 'libmuon_test_plugin_alpha.so'), library);
+    await copyFile(
+      join(
+        repository,
+        'muon-android-prototype/android/app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib',
+        abi,
+        'libmuon_test_plugin_alpha.so'
+      ),
+      library
+    );
     libraries[abi] = library;
   }
-  config.android.plugins = [{ name: 'consumer_alpha', soname: 'libmuon_test_plugin_alpha.so', libraries, allow: ['muon.test.alpha.alphaAdd', 'muon.test.alpha.alphaConfig'], config: { 'alpha.config': 'consumer-registry' } }];
+  config.android.plugins = [
+    {
+      name: 'consumer_alpha',
+      soname: 'libmuon_test_plugin_alpha.so',
+      libraries,
+      allow: ['muon.test.alpha.alphaAdd', 'muon.test.alpha.alphaConfig'],
+      config: { 'alpha.config': 'consumer-registry' },
+    },
+  ];
 }
 await copyFile(join(repository, 'images/muon-256.png'), join(root, 'icon.png'));
 await writeFile(join(root, 'muon.json'), JSON.stringify(config));
@@ -136,7 +154,7 @@ await writeFile(
 );
 await writeFile(
   join(root, 'index.html'),
-  `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Muon Notes</title><style>body{font-family:sans-serif;margin:48px 20px;background:#f3f6fb;color:#102338}h1{font-size:28px}button{font-size:20px;display:block;margin:20px 0;padding:16px}output{display:block;margin:20px 0;font-size:18px}</style></head><body><h1>Packaged Muon Notes</h1><output id="status">Starting</output><output id="saved">Reading</output><output id="generation"></output><output id="plugin"></output><button id="save">Save note</button><button id="reload">Reload page</button><script type="module" src="/main.ts"></script></body></html>`
+  `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Muon Notes</title><style>body{font-family:sans-serif;margin:48px 20px;background:#f3f6fb;color:#102338}h1{font-size:28px}button{font-size:20px;display:block;margin:20px 0;padding:16px}output{display:block;margin:20px 0;font-size:18px}</style></head><body><h1>Packaged Muon Notes</h1><output id="status">Starting</output><output id="saved">Reading</output><output id="generation"></output><output id="plugin"></output><output id="version"></output><button id="save">Save note</button><button id="reload">Reload page</button><script type="module" src="/main.ts"></script></body></html>`
 );
 await writeFile(
   join(root, 'main.ts'),
@@ -149,6 +167,8 @@ sessionStorage.setItem('generation', String(generation));
 document.querySelector<HTMLOutputElement>('#generation')!.textContent = 'Page loads: ' + generation;
 try {
   const runtime = await window.muon.environments.getRuntimeInfo();
+  if (runtime.backend !== 'android-webview') throw new Error('Expected Android backend');
+  document.querySelector<HTMLOutputElement>('#version')!.textContent = 'Version: ' + runtime.applicationVersion;
   if (${includePlugin}) {
     const alpha = (window.muon as MuonApi & { test: { alpha: { alphaAdd: (a: number, b: number) => Promise<number>; alphaConfig: () => Promise<string>; alphaName?: unknown } } }).test.alpha;
     if (alpha.alphaName !== undefined) throw new Error('A denied plugin function was exposed');
@@ -179,6 +199,7 @@ assert.equal(result.target, 'android');
 assert.equal(result.signing, 'debug');
 assert.equal(result.applicationId, applicationId);
 const firstBytes = await readFile(result.packagePath);
+console.log('Public CLI debug APK built');
 await run(process.execPath, [
   join(root, 'node_modules/vite/bin/vite.js'),
   'build',
@@ -222,7 +243,8 @@ for (const apk of [
     join(repository, 'muon-android/observer/build/outputs', apk),
   ]);
 }
-const observe = async (mode) => {
+let observationCount = 0;
+const observe = async (mode, version) => {
   const output = await adb([
     'shell',
     'am',
@@ -235,17 +257,139 @@ const observe = async (mode) => {
     '-e',
     'plugin',
     String(includePlugin),
+    '-e',
+    'version',
+    version,
     'dev.muon.e2e.observer.test/androidx.test.runner.AndroidJUnitRunner',
   ]);
-  await writeFile(join(root, 'instrumentation-' + mode + '.log'), output);
+  await writeFile(
+    join(
+      root,
+      'instrumentation-' +
+        ++observationCount +
+        '-' +
+        version +
+        '-' +
+        mode +
+        '.log'
+    ),
+    output
+  );
   assert.match(output, /OK \(1 test\)/u, output);
   assert.doesNotMatch(output, /FAILURES|INSTRUMENTATION_FAILED/u);
 };
-await adb(['install', '-r', result.packagePath]);
+if (
+  (await adb(['shell', 'pm', 'list', 'packages', applicationId]))
+    .split(/\r?\n/u)
+    .includes('package:' + applicationId)
+)
+  await adb(['uninstall', applicationId]);
+await adb(['install', result.packagePath]);
 await start();
-await observe('operate');
+await observe('operate', '1.0.0');
 await start();
-await observe('verify');
+await observe('verify', '1.0.0');
+await assert.rejects(
+  async () => await muon(['pack', '--target', 'android', '--type', 'apk']),
+  /android.signing/u
+);
+const keyDirectory = await mkdtemp(join(tmpdir(), 'muon-android-test-key-'));
+const keystore = join(keyDirectory, 'application.p12');
+environment.MUON_ANDROID_TEST_STORE_PASSWORD = randomBytes(24).toString('hex');
+await run('keytool', [
+  '-genkeypair',
+  '-keystore',
+  keystore,
+  '-alias',
+  'release',
+  '-keyalg',
+  'RSA',
+  '-keysize',
+  '2048',
+  '-validity',
+  '3650',
+  '-dname',
+  'CN=Muon Android E2E',
+  '-storepass:env',
+  'MUON_ANDROID_TEST_STORE_PASSWORD',
+  '-keypass:env',
+  'MUON_ANDROID_TEST_STORE_PASSWORD',
+]);
+await chmod(keystore, 0o600);
+config.android.signing = {
+  keystore,
+  keyAlias: 'release',
+  storePasswordEnv: 'MUON_ANDROID_TEST_STORE_PASSWORD',
+};
+config.android.versionCode = 2;
+await writeFile(join(root, 'muon.json'), JSON.stringify(config));
+const release = await muon(['pack', '--target', 'android', '--type', 'apk']);
+assert.equal(release.targets[0].signing, 'release');
+assert.match(release.targets[0].certificateSha256, /^[a-f0-9]{64}$/u);
+const releasePath = release.artifacts[0].path;
+console.log('Signed release APK built and verified');
+const certificate = await run(join(sdk, 'build-tools/36.0.0/apksigner'), [
+  'verify',
+  '--print-certs',
+  releasePath,
+]);
+assert.ok(certificate.includes(release.targets[0].certificateSha256));
+const entries = await run('unzip', ['-Z1', releasePath]);
+assert.doesNotMatch(
+  entries,
+  /\.(?:jks|keystore|p12)$|MuonJavaScriptRuntime|quickjs/imu
+);
+const metadata = await readFile(releasePath + '.json', 'utf8');
+assert.ok(
+  !metadata.includes(keystore) &&
+    !metadata.includes(environment.MUON_ANDROID_TEST_STORE_PASSWORD)
+);
+// The previous installation is this driver's debug fixture, which has a different key.
+await adb(['uninstall', applicationId]);
+await adb(['install', releasePath]);
+await start();
+await observe('operate', '1.0.0');
+await start();
+await observe('verify', '1.0.0');
+config.android.versionCode = 3;
+config.android.versionName = '1.0.1';
+await writeFile(join(root, 'muon.json'), JSON.stringify(config));
+const update = await muon(['pack', '--target', 'android', '--type', 'apk']);
+assert.equal(
+  update.targets[0].certificateSha256,
+  release.targets[0].certificateSha256
+);
+assert.equal(update.targets[0].versionCode, 3);
+await adb(['install', '-r', update.artifacts[0].path]);
+await start();
+await observe('verify', '1.0.1');
+const installedComponents = await readdir(minimalSdk);
+assert.ok(
+  !installedComponents.includes('ndk') &&
+    !installedComponents.includes('cmake'),
+  'Consumer must not install native toolchains'
+);
+console.log(
+  'Release installation, operation, restart and data-preserving update passed'
+);
+const sha256 = async (path) =>
+  createHash('sha256')
+    .update(await readFile(path))
+    .digest('hex');
+await writeFile(
+  join(root, 'release-result.json'),
+  JSON.stringify(
+    {
+      serial,
+      release,
+      update,
+      releaseSha256: await sha256(releasePath),
+      updateSha256: await sha256(update.artifacts[0].path),
+    },
+    null,
+    2
+  )
+);
 const screenshot = await execute(
   join(sdk, 'platform-tools/adb'),
   ['-s', serial, 'exec-out', 'screencap', '-p'],
@@ -257,5 +401,5 @@ await writeFile(
   JSON.stringify({ ...result, serial, prepare: prepared }, null, 2)
 );
 console.log(
-  `Packaged Android application: PASS (${serial}, ${result.packagePath})`
+  `Packaged Android application: PASS (${serial}, ${update.artifacts[0].path})`
 );

@@ -37,6 +37,8 @@ public final class PackagedApplicationTest {
     @Test
     public void operatesPackagedApplication() throws Exception {
         requireText("ready:android-webview:package-consumer");
+        String version = InstrumentationRegistry.getArguments().getString("version");
+        if (version != null) requireText("Version: " + version);
         if ("true".equals(InstrumentationRegistry.getArguments().getString("plugin"))) {
             requireText("Plugin: 7:consumer-registry:blocked");
         }
@@ -44,6 +46,7 @@ public final class PackagedApplicationTest {
             requireText("Stored: saved-on-device");
             return;
         }
+        requireText("Stored: empty");
         requireText("Save note").click();
         requireText("Stored: saved-on-device");
         UiObject2 generation = device.wait(Until.findObject(By.pkg(APPLICATION_ID).res("generation")), 60000);

@@ -922,6 +922,8 @@ describe("muon pack", () => {
       entries.some((entry) => entry.startsWith("main/sample-base/assets/")),
     ).toBe(true);
     expect(entries).not.toContain("main/index.html");
+    if (target?.target === "android")
+      throw new Error("Expected a desktop target");
     expect(target?.embeddedConfig.browser).toEqual({
       initialTitleBarIcon: "asset://main/.muon/app-icon.png",
       startPage: "asset://main/sample-base/index.html",

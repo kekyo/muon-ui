@@ -4,7 +4,7 @@
 
 muon-uiのnpm配布物を新規アプリへ導入し、公開CLIでAndroidアプリをビルド・署名・配布でき、端末上で動作する状態にする。その完了を確認してから、`feature/android`を`develop`へマージする。
 
-この文書は、2026年10月7日の分析と対話を保存した実装計画である。実装の調査基準は`27b7f25e`、保存時のブランチ先頭は計画書の移動を行った`a8c8005`である。計画の実装は未着手であり、この文書の保存時にはビルド、全体テスト、端末テスト、マージを行っていない。
+この文書は、2026年10月7日の分析と対話を保存した実装計画である。実装の調査基準は`27b7f25e`、保存時のブランチ先頭は計画書の移動を行った`a8c8005`である。保存時には実装を開始していなかった。2026年10月7日に実施を開始した。進捗と検証結果は末尾の実施記録へ追記する。
 
 [plan4.md](plan4.md)の製品化計画を、今回のマージに必要な範囲へ絞る。[plan5.md](plan5.md)のFCM実装計画は後続作業として残す。今回の優先順位と完了条件は本計画を使用し、旧計画のFCM完成条件を今回のマージ条件として扱わない。
 
@@ -245,7 +245,7 @@ RPCのorigin・main frame制限、アセットの拒否動作、プラグイン�
 
 [現在のCI](../../../.github/workflows/ci.yml)はルートの`npm run test`を実行する。Android workspaceの通常テストはinstrumentation APKを生成するが、接続端末での実行は別コマンドである。CIではAndroid用ツールチェインを明示的に準備し、npm配布物からのビルドとエミュレーター検証を組み込む。物理端末の検証は再現できるコマンドと結果を残す。
 
-待機時間だけで成功を判断せず、アプリの応答、状態、処理完了イベントで同期する。WebViewのブラウザ操作にはPlaywright MCPを使用し、ネイティブ部分は既存のinstrumentationとadbで確認する。利用できない検証手段や端末があれば未実施として記録し、該当する完了条件を未達のまま残す。
+待機時間だけで成功を判断せず、アプリの応答、状態、処理完了イベントで同期する。2026年10月7日の利用者の指示により、Androidの画面操作もADB・instrumentationで検証する。Playwright MCPはこのセッションに接続されていない。利用できない検証手段や端末があれば未実施として記録し、該当する完了条件を未達のまま残す。
 
 アイコンなどの期待画像を追加する場合は目視で確認する。アニメーションなど時間軸の挙動を検証する必要が生じた場合は、動画を記録して結果を確認するテストを追加する。
 
@@ -328,3 +328,25 @@ JavaScript/TypeScript側は既存のnpm、TypeScript、Vite、Vitestと、指定
 機能実装の完了時には時間がかかっても全体テストを実行する。この計画書の保存のように、ビルドへ影響しない文書だけを変更する場合はビルド確認を必要としない。
 
 FCMの通知配送、QuickJSの正式な実行APIと利用者コードの同梱実装、独立したJavaScript更新、実Node.js、独自ネイティブプラグインの汎用ビルド、Windows/macOSでのAndroidビルド、高度な開発時連携は後続候補として扱う。今回の必須作業へ追加する場合は、追加理由と完了条件を本計画へ反映してから着手する。
+
+## 13. 実施記録
+
+### ステップ0の確定事項（2026年10月7日）
+
+- 公開ホストはLinux x64。Node.jsの条件は既存パッケージに合わせる。AGP 9.2.1、Gradle 9.4.1、SDK 37、Build Tools 36.0.0を固定する。JDKは17以上のGradle対応版を必要とし、実行検証はJDK 25.0.3で行う。
+- 公開する形式はdebug APKと利用者の鍵で署名したrelease APK。AABは試作の回帰テストに残し、今回は公開しない。
+- ランタイムの内部Java名はdev.muon.runtimeとし、利用者のapplication IDから独立させる。AARとPOMはdist/android/maven、Gradle雛形とWrapperはtemplates、初期化スクリプトはrendererへ収録する。
+- 最低インストールAPIは24を維持する。保証する実行環境は今回検証するAPI 37とし、古いOSの動作保証は追加検証まで保留する。WebViewの必要条件はWEB_MESSAGE_LISTENER、WEB_MESSAGE_ARRAY_BUFFER、DOCUMENT_START_SCRIPTの機能検出で判定し、不足時は画面に理由を表示する。
+- Android設定はmuon.jsonのandroid節とビルドAPIのandroidオプションで受け取る。優先順位はAPI/Viteの明示指定、muon.json、package.json由来の既定値とする。CLIは既存のアプリ設定・出力オプションを再利用する。applicationId、label、versionCode、versionName、abis、icon、permissions、SDKの場所を扱う。
+- ネイティブプラグインの初期入力は事前ビルド済み共有ライブラリと登録情報に限定する。登録情報はアプリのアセットとして読み込み、共通AARにアプリごとの登録名・ポリシー・設定をコンパイルしない。独自C/C++ソースのコンパイルは後続とする。
+- prepareは既存JDK・SDKを検出して検証し、Wrapperを使える状態にする。不足SDKのインストールコマンドを案内する。SDK・JDKの自動インストールとライセンスの代理受諾は行わない。
+- FCM・QuickJSは公開アプリでは未提供とし、有効化の指定をビルドエラーにする。未指定・無効のアプリには関連サービス、ライブラリ、アセット、権限を加えない。
+- 画面操作は利用者の回答によりADB・instrumentationへ変更した。独立した利用者アプリに対する操作とAPI応答を検証し、製品に試験用ブリッジを入れない。
+
+### 開始時の検証
+
+対象は506e932。Pixel 6はAPI 37、arm64-v8a、4 KiBページ、serialはadb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcp。エミュレーターはemulator-5556、API 37、x86_64、16 KiBページで実行した。
+
+- ANDROID_SERIALを各端末へ指定したnpm run test:androidとnpm run test:android:pixel6は成功した。各端末でinstrumentation 44件とrelease APK・AAB由来APKSの検証が成功した。
+- ルートnpm testはmuon-builderのtest_launcher_progress.shでWindows用ハーネス終了後のwineserver -wが終了しなかった。テスト専用prefixのサービスがXサーバー終了後も残っていることを確認し、約10分待機後に当該テストを中断した。他のworkspaceの実行結果は別途追記する。
+- この問題はテストの終了処理として独立修正する。ハーネスの終了コードを確認した後、専用prefixのサービスを停止して待機する。Windows製品コードやWine本体は変更しない。

@@ -112,8 +112,16 @@ nodeIt(
         await cp(expressFixtureDirectory, nodeProject, { recursive: true });
         await execFileAsync(
           "npm",
-          ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
-          { cwd: nodeProject },
+          ["ci", "--prefer-offline", "--ignore-scripts", "--omit=dev"],
+          {
+            cwd: nodeProject,
+            // The fixture lockfile may differ from the workspace lockfile.
+            // Exercise installation without relying on the developer's cache.
+            env: {
+              ...process.env,
+              npm_config_cache: join(temporaryDirectory, "npm-cache"),
+            },
+          },
         );
       }
 
@@ -212,7 +220,7 @@ nodeIt(
         await cp(expressFixtureDirectory, nodeProject, { recursive: true });
         await execFileAsync(
           "npm",
-          ["ci", "--offline", "--ignore-scripts", "--omit=dev"],
+          ["ci", "--prefer-offline", "--ignore-scripts", "--omit=dev"],
           { cwd: nodeProject },
         );
       }

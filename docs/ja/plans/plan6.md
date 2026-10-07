@@ -488,3 +488,16 @@ ExpressのE2Eは独立したfixtureのlockfileを使うため、ルートのnpm 
 完了条件は、両原因の再現テストと全体テストが成功し、Androidの配布から署名APKの更新までを確認できること。GitHub Actions上の再実行結果は、ローカル検証とは分けて記録する。
 
 タグを持たないdepth 1のチェックアウトを一時ディレクトリに作り、依存ビルドの失敗を再現した。コミットの直接照合へ変更した後は、arm64-v8aとx86_64の両方でlibffi.aの生成とmanifestのハッシュ検証が成功した。回帰テストの所要時間は26.93秒だった。公式アーカイブのSHA-256とサブモジュールのコミット検査は維持している。
+
+修正後に生成したnpm配布物でも、16 KiBエミュレーターのinstrumentation 45件と試作release APK・APKSの検証が成功した。独立プロジェクトではNDKを使わず、CLI/Viteのdebugビルド、署名release APKの生成、画面操作、再起動、versionCode 2から3への更新後のデータ保持まで成功した。最終画面のVersion: 1.0.1と保存内容も目視確認した。配布物・APK・画面・ログはartifacts/plan6-ciへ保存し、検証用エミュレーターは終了した。
+
+| 配布物 | SHA-256 |
+| --- | --- |
+| muon-ui-0.0.1.tgz | 53b2091f88078b38b5e2c59a82f894cd06cda59770d2e02760ed1478f2bbb3c3 |
+| VM、release versionCode 3 | 5ca61aaa05350bcad27e3c5a5702ffc90504d58220f86c8759d2d841d64f4635 |
+
+Expressの回帰テストも、空の専用キャッシュでは変更前にENOTCACHEDとなることを確認した。Linuxの2箇所とWindows向けfixture準備を--prefer-offlineへ変更した。修正後の全体テストでは、独立ExpressアプリのHTTP応答と、listenerが開いた状態でのNodeプロセス終了の両方が成功した。
+
+ルートのnpm testは終了コード0で完了した。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-builderのシェル検証とmuon-uiのWindows E2Eも通過した。muon-core-testerのskipは既存と同じ26件で、CEF検証の所要時間は802.50秒だった。全体ログはartifacts/plan6-ci/muon-ci-all.logへ保存した。
+
+追補の完了条件を照合し、再現テスト、全体テスト、Androidの配布から署名APKの更新までの検証がすべて成功した。修正はローカルdevelopへコミットする。GitHub Actions上での修正後の実行は未確認であり、push後のCI結果で別途確認する。

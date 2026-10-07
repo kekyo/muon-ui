@@ -1,5 +1,7 @@
 # Android FCM push通知 実装計画
 
+本計画は後続作業として保持する。先行するAndroid対応の完成とdevelopへのマージには、[plan6.md](plan6.md)の範囲と完了条件を適用し、FCMの実装完了を前提にしない。
+
 ## 1. 目的と位置付け
 
 この文書は、[plan3-2.md](plan3-2.md)で合意したAndroid通知配送モデルを、現行codebaseへ実装するための実行計画である。[plan4.md](plan4.md)の全体計画を置き換えるものではなく、同文書の「ステップ4: push通知のdurable deliveryを実装する」を、公開契約、component、永続schema、TDD、device gate、commit単位まで具体化する。

@@ -159,9 +159,11 @@ class MuonAndroidProcessRuntimeController final {
    *
    * @param schedule_stop_completion Posts final destruction to a later Java
    * main Looper iteration, after the completing cardio callback has returned.
+   * @param plugins Immutable entries read from this application package.
    */
   explicit MuonAndroidProcessRuntimeController(
-      std::function<bool()> schedule_stop_completion);
+      std::function<bool()> schedule_stop_completion,
+      std::vector<MuonPluginRuntimeLoadEntry> plugins);
 
   /** Releases controller bookkeeping after all native runtime resources stop. */
   ~MuonAndroidProcessRuntimeController();

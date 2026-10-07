@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(muon_android_rpc LANGUAGES C CXX)
 find_package(Threads REQUIRED)
 
-foreach(required MUON_REPOSITORY_ROOT MUON_ANDROID_DEPENDENCY_ROOT MUON_ANDROID_PLUGIN_REGISTRY_ROOT)
+foreach(required MUON_REPOSITORY_ROOT MUON_ANDROID_DEPENDENCY_ROOT)
   if(NOT DEFINED ${required})
     message(FATAL_ERROR "${required} must be supplied by the runtime builder")
   endif()
@@ -89,16 +89,7 @@ endif()
 include("${MUON_CORE_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
 muon_add_plugin_runtime_core(muon_plugin_runtime_core)
 
-if(NOT EXISTS
-    "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugins.cmake")
-  message(FATAL_ERROR
-    "Generate the Android plugin registry before configuring CMake.")
-endif()
-include(
-  "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugins.cmake")
-
 add_library(muon_android_rpc SHARED
-  "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugin_registry.cpp"
   muon_android_process_runtime.cpp
   muon_android_rpc_jni.cpp
   )
@@ -114,9 +105,9 @@ if(MUON_BUILD_TESTS)
     MUON_TEST_BUILD
     )
 endif()
-target_include_directories(muon_android_rpc PRIVATE
-  "${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}"
-  )
+if(MUON_ANDROID_TEST_HOST)
+  target_compile_definitions(muon_android_rpc PRIVATE MUON_ANDROID_TEST_HOST)
+endif()
 target_link_libraries(muon_android_rpc PRIVATE
   "$<LINK_LIBRARY:WHOLE_ARCHIVE,muon_plugin_runtime_core>"
   android
@@ -127,6 +118,3 @@ target_link_libraries(muon_android_rpc PRIVATE
 target_link_options(muon_android_rpc PRIVATE
   -Wl,-z,max-page-size=16384
   )
-if(MUON_ANDROID_PLUGIN_TARGETS)
-  add_dependencies(muon_android_rpc ${MUON_ANDROID_PLUGIN_TARGETS})
-endif()

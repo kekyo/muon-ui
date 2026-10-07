@@ -671,7 +671,7 @@ public final class MuonActivityTest {
             assertTrue(values.getJSONArray("typeKeys").length() >= 31);
             assertEquals("alpha", values.getString("alphaName"));
             assertEquals(42, values.getInt("alphaAdd"));
-            assertEquals("android-registry", values.getString("alphaConfig"));
+            assertEquals("application-asset-registry", values.getString("alphaConfig"));
             assertTrue(values.getBoolean("cardioInit"));
             assertTrue(values.getBoolean("cardioCall"));
             assertFalse(values.getBoolean("bool"));

@@ -196,7 +196,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         this.listener = listener;
         platformService = new MuonAndroidPlatformService(activity, webView);
         try {
-            nativeHandle = nativeCreateHost(this);
+            nativeHandle = nativeCreateHost(this, MuonPackagedPlugin.load(activity));
         } catch (RuntimeException error) {
             platformService.close();
             throw error;
@@ -982,7 +982,8 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         replyProxy = null;
     }
 
-    private static native long nativeCreateHost(@NonNull MuonRpcBridge bridge);
+    private static native long nativeCreateHost(
+            @NonNull MuonRpcBridge bridge, @NonNull MuonPackagedPlugin[] plugins);
 
     private static native boolean nativeIsHostReady(long handle);
 

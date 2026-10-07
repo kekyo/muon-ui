@@ -358,3 +358,27 @@ FCMの通知配送、QuickJSの正式な実行APIと利用者コードの同梱�
 muon/config.jsonのアプリ設定を基本APIから取得するテストを追加した。追加直後はapplicationSettingが返らず失敗し、設定の読み込み実装後に成功した。共通側29件、試作側23件のVitestと、エミュレーター・Pixel 6のinstrumentation各44件が成功した。アプリIDはdev.muon.prototypeのままで内部Java名を変更できることも確認した。
 
 端末テストのコマンドがrelease APKを作り直さず、古いAPKを使用する問題を今回のクラス名変更で再現した。test:androidとtest:android:pixel6へassembleReleaseを加え、現行ソースから作るようにした。debug APKのSHA-256は8ddb8a5d9c1fd9f7ffe7b1289662e372d8565d4404af692f9db9685b241a346c、release APKは15200df70d1592e3def847fe25bac51b318aa89b4209ecfce87cb2ad049cc82b。
+
+### 開始時検証の補足
+
+開始時の全体テストは終了した。Android 52件、muon-node 40件、muon-coreのCTest 42件、muon-core-testerの209件が成功した。muon-core-testerには環境条件による既存の26件のskipがあった。muon-uiは307件中1件がWindows接続先のNode.js不足で失敗した。利用者がNode.jsをインストールしてagent-roverを再起動し、Windows E2Eの再実行は2件とも成功した。muon-builderは前述のWine待機を中断したため、開始時の全体テスト自体は失敗として記録する。最終判定では全体を再実行する。
+
+SDK Platformの実際のパッケージ名はplatforms/android-37.0である。compileSdkとtargetSdkの数値は37とし、配布するtoolchain.jsonでパッケージ名も固定する。
+
+### ステップ2の実施
+
+共有ランタイムをdev.muon:runtime:0.1.0のAAR/POMとして生成した。npmのdist/androidにはmaven、renderer、templates、toolchain.json、licensesを配置する。ステップ2の検証用に内部ビルドAPIをlibへ同梱した。build_package.shとmuon-uiのビルドからも収録処理を呼び出す。
+
+アプリのプラグイン登録はmuon/plugins.jsonへ移した。ネイティブライブラリを変更せず登録設定を変えるテストは、変更前に旧設定値が返って失敗し、移行後に成功した。試作と通常アプリは同じWebViewホストを利用する。通常アプリにはQuickJSサービス・ライブラリ、試験用プラグイン、試験用ページを含めない。起動に必要なWebView機能やアプリ設定が不足する場合は、起動失敗の理由を画面に表示する。
+
+独立アプリの検証コマンドは次のとおり。ANDROID_HOMEとANDROID_SERIALを指定し、npm packで作ったtgzを渡す。検証アプリには試験用RPCブリッジを追加せず、画面に表示した基本APIの応答をADBから確認する。
+
+```bash
+node muon-android/scripts/test-packaged-application.mjs /path/to/muon-ui.tgz
+```
+
+検証ドライバーはリポジトリ外へtgzをインストールする。SDKにはplatforms、build-tools、licensesだけを公開し、NDKを除外する。追加したcompilerガードでCMake・C/C++コンパイラの起動も拒否する。標準アプリのGradle処理は事前ビルド済みライブラリを使用し、同梱アセットから起動する。
+
+エミュレーターとPixel 6の両方で、独立アプリのビルド・インストール・起動とgetRuntimeInfo/getConfigValuesの応答を確認した。初回実行では共通ランタイムに残っていたcardio試験用プラグインの必須条件により失敗した。この条件を試験ホストだけに適用し、両端末で成功した。ライセンス追加前の両APKのSHA-256は同一の7bda7a9614b82f4a145be5f7ecc37f9accb0b433b90c2e77d5cd539488737f60。画面も目視確認した。
+
+共通側Vitest 32件、共有WebViewホストへ移行後のVM instrumentation 44件、試作workspaceの通常テストとネイティブ依存・プラグイン・release成果物の検査も成功した。公開CLI、ViteからのAndroidビルド、利用者の署名はステップ3以降で接続する。

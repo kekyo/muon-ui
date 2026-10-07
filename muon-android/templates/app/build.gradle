@@ -1,0 +1,22 @@
+plugins { id 'com.android.application' }
+def muon = new groovy.json.JsonSlurper().parse(rootProject.file('muon-build.json'))
+android {
+    namespace = muon.applicationId
+    compileSdk = muon.compileSdk
+    buildToolsVersion = muon.buildTools
+    defaultConfig {
+        applicationId = muon.applicationId
+        minSdk = muon.minSdk
+        targetSdk = muon.targetSdk
+        versionCode = muon.versionCode
+        versionName = muon.versionName
+        ndk { abiFilters.addAll(muon.abis) }
+    }
+    buildTypes { release { minifyEnabled = false } }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    packaging { jniLibs { useLegacyPackaging = false } }
+}
+dependencies { implementation "dev.muon:runtime:${muon.runtimeVersion}" }

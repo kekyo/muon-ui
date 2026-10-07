@@ -7,15 +7,21 @@ import prettierMax from 'prettier-max';
 import screwUp from 'screw-up';
 import { configDefaults, defineConfig } from 'vitest/config';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [prettierMax(), screwUp()],
   base: './',
   build: {
     emptyOutDir: true,
+    outDir: mode === 'host' ? 'dist/lib' : 'dist/renderer',
+    rolldownOptions: { external: [/^node:/, 'funcity'] },
     lib: {
-      entry: 'src/renderer/android-api.ts',
-      formats: ['es'],
-      fileName: () => 'android-api.mjs',
+      entry: mode === 'host' ? 'src/index.ts' : 'src/renderer/entry.ts',
+      formats: mode === 'host' ? ['es', 'cjs'] : ['iife'],
+      name: 'MuonAndroidRenderer',
+      fileName: (format) =>
+        mode === 'host'
+          ? `index.${format === 'es' ? 'mjs' : 'cjs'}`
+          : 'renderer.js',
     },
     minify: false,
     sourcemap: true,
@@ -32,4 +38,4 @@ export default defineConfig({
     restoreMocks: true,
     testTimeout: 60000,
   },
-});
+}));

@@ -111,9 +111,11 @@ static const std::vector<std::string> kFilesystemFunctionPaths = {
 
 static const std::vector<std::string> kPlatformFunctionPaths = {
     "muon.environments.getConfigValues",
+#if defined(MUON_ANDROID_TEST_HOST)
     "prototype.fail",
     "prototype.delay",
     "prototype.echoBinary",
+#endif
     "muon.environments.getVariables",
     "muon.environments.getProcessId",
     "muon.environments.getRuntimeInfo",
@@ -935,6 +937,7 @@ static void InvokePlatformFunction(MuonAndroidRpcHost* state,
                                    const MuonRpcCallRequest& request,
                                    MuonRpcHostCompletion completion) {
   auto* environment = GetAndroidEnvironment(state);
+#if defined(MUON_ANDROID_TEST_HOST)
   if (request.capability.function_path == "prototype.fail") {
     CompleteWithFailure(request, "prototype failure", std::move(completion));
     return;
@@ -966,6 +969,7 @@ static void InvokePlatformFunction(MuonAndroidRpcHost* state,
     return;
   }
 
+#endif
   if (environment == nullptr || state->bridge == nullptr ||
       request.arguments.empty() ||
       request.arguments[0].type.type != MUON_TYPE_STRING ||
@@ -1402,12 +1406,14 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
           &browser_policy, error_message)) {
     return false;
   }
+#if defined(MUON_ANDROID_TEST_HOST)
   auto prototype_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateMuonPluginPolicy({"prototype.*"}, &prototype_policy,
                               error_message)) {
     return false;
   }
 
+#endif
   state->routes_by_path.clear();
   auto routes = std::vector<MuonRpcFunctionRoute>{};
   routes.reserve(plugin_catalog.functions.size() +
@@ -1469,10 +1475,14 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   };
   if (!add_policy("environment-capability", environment_policy) ||
       !add_policy("browser-capability", browser_policy) ||
-      !add_policy("fs-capability", filesystem_policy) ||
-      !add_policy("prototype-capability", prototype_policy)) {
+      !add_policy("fs-capability", filesystem_policy)) {
     return false;
   }
+#if defined(MUON_ANDROID_TEST_HOST)
+  if (!add_policy("prototype-capability", prototype_policy)) {
+    return false;
+  }
+#endif
   MuonRpcHostServices services;
   services.invoke_plugin =
       [](const MuonRpcCallRequest& request, MuonRpcHostCompletion completion) {
@@ -1577,12 +1587,69 @@ static void CompleteWaitingAndroidRpcHostStartup(
   }
 }
 
+static bool ReadPackagedPlugins(
+    JNIEnv* environment, jobjectArray inputs,
+    std::vector<MuonPluginRuntimeLoadEntry>* plugins, std::string* error) {
+  if (inputs == nullptr) {
+    *error = "Packaged plugin entries are required";
+    return false;
+  }
+  for (jsize i = 0; i < environment->GetArrayLength(inputs); ++i) {
+    const auto input = environment->GetObjectArrayElement(inputs, i);
+    const auto type = environment->GetObjectClass(input);
+    const auto read_string = [environment, input, type](const char* field) {
+      const auto id = environment->GetFieldID(type, field, "Ljava/lang/String;");
+      const auto value = static_cast<jstring>(
+          environment->GetObjectField(input, id));
+      const auto result = GetJavaString(environment, value);
+      environment->DeleteLocalRef(value);
+      return result;
+    };
+    const auto read_strings = [environment, input, type](const char* field) {
+      const auto id = environment->GetFieldID(type, field, "[Ljava/lang/String;");
+      const auto values = static_cast<jobjectArray>(
+          environment->GetObjectField(input, id));
+      auto result = std::vector<std::string>{};
+      for (jsize n = 0; n < environment->GetArrayLength(values); ++n) {
+        const auto value = static_cast<jstring>(
+            environment->GetObjectArrayElement(values, n));
+        result.push_back(GetJavaString(environment, value));
+        environment->DeleteLocalRef(value);
+      }
+      environment->DeleteLocalRef(values);
+      return result;
+    };
+    auto entry = MuonPluginRuntimeLoadEntry{};
+    entry.plugin = read_string("name");
+    entry.has_library_locator = true;
+    entry.library_locator = read_string("soname");
+    const auto allow = read_strings("allow");
+    const auto keys = read_strings("configKeys");
+    const auto values = read_strings("configValues");
+    environment->DeleteLocalRef(type);
+    environment->DeleteLocalRef(input);
+    if (keys.size() != values.size() ||
+        !CreateMuonPluginPolicy(allow, &entry.plugin_policy, error)) {
+      if (error->empty()) {
+        *error = "Invalid packaged plugin configuration";
+      }
+      return false;
+    }
+    for (size_t n = 0; n < keys.size(); ++n) {
+      entry.config.push_back({keys[n], values[n]});
+    }
+    plugins->push_back(std::move(entry));
+  }
+  return true;
+}
+
 /** Creates the CEF-independent host used by one WebView context. */
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
     JNIEnv* environment,
     jclass bridge_type,
-    jobject bridge) {
+    jobject bridge,
+    jobjectArray plugin_inputs) {
   if (bridge == nullptr) {
     ThrowIllegalState(environment, "The Android RPC bridge is required");
     return 0;
@@ -1708,8 +1775,15 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
                         "Could not initialize the Android process runtime");
       return 0;
     }
-    process_runtime =
-        new MuonAndroidProcessRuntimeController(ScheduleRuntimeStopCompletion);
+    auto plugins = std::vector<MuonPluginRuntimeLoadEntry>{};
+    if (!ReadPackagedPlugins(environment, plugin_inputs, &plugins, &error_message)) {
+      environment->DeleteGlobalRef(state->native_argument_class);
+      environment->DeleteGlobalRef(state->bridge);
+      ThrowIllegalState(environment, error_message);
+      return 0;
+    }
+    process_runtime = new MuonAndroidProcessRuntimeController(
+        ScheduleRuntimeStopCompletion, std::move(plugins));
   }
 #if defined(MUON_TEST_BUILD)
   if (!pending_runtime_startup_fault.empty()) {

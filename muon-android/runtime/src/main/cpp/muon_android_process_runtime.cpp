@@ -6,7 +6,6 @@
 
 #include "muon_android_process_runtime.h"
 
-#include "muon_android_plugin_registry.h"
 #include "muon_cardio_post.h"
 
 #include <android/log.h>
@@ -132,9 +131,11 @@ struct MuonAndroidProcessSession {
 
 struct MuonAndroidProcessRuntimeControllerImpl {
   explicit MuonAndroidProcessRuntimeControllerImpl(
-      std::function<bool()> schedule_stop_completion)
+      std::function<bool()> schedule_stop_completion,
+      std::vector<MuonPluginRuntimeLoadEntry> plugins)
       : owner_thread(std::this_thread::get_id()),
-        schedule_stop_completion(std::move(schedule_stop_completion)) {}
+        schedule_stop_completion(std::move(schedule_stop_completion)),
+        packaged_plugins(std::move(plugins)) {}
 
   bool CreateRuntime(std::string* error_message);
   void StartProbe(const MuonRpcOwner& owner);
@@ -144,6 +145,7 @@ struct MuonAndroidProcessRuntimeControllerImpl {
 
   std::thread::id owner_thread;
   std::function<bool()> schedule_stop_completion;
+  const std::vector<MuonPluginRuntimeLoadEntry> packaged_plugins;
   MuonAndroidProcessRuntimeState state =
       MuonAndroidProcessRuntimeState::Idle;
   int next_owner_id = 1;
@@ -365,10 +367,7 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   generation += 1;
   state = MuonAndroidProcessRuntimeState::Running;
 
-  auto plugins = std::vector<MuonPluginRuntimeLoadEntry>{};
-  if (!CreateMuonAndroidPluginLoadEntries(&plugins, error_message)) {
-    return false;
-  }
+  auto plugins = packaged_plugins;
 #if defined(MUON_TEST_BUILD)
   for (auto& plugin : plugins) {
     if (plugin.library_locator != kMuonAndroidFaultPluginSoname) {
@@ -538,6 +537,7 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
     }
   }
   probe_function_id = 0;
+#if defined(MUON_ANDROID_TEST_HOST)
   for (const auto& function : plugin_runtime->GetFunctions()) {
     if (CreateMuonFunctionPublicPath(function) ==
         "muon.test.cardio.dispatcherProbe") {
@@ -549,6 +549,7 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
     *error_message = "Android cardio probe plugin function is unavailable";
     return false;
   }
+#endif
   DrainPendingProbes();
   return true;
 }
@@ -738,9 +739,10 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
 }
 
 MuonAndroidProcessRuntimeController::MuonAndroidProcessRuntimeController(
-    std::function<bool()> schedule_stop_completion)
+    std::function<bool()> schedule_stop_completion,
+    std::vector<MuonPluginRuntimeLoadEntry> plugins)
     : impl_(std::make_unique<MuonAndroidProcessRuntimeControllerImpl>(
-          std::move(schedule_stop_completion))) {}
+          std::move(schedule_stop_completion), std::move(plugins))) {}
 
 MuonAndroidProcessRuntimeController::~MuonAndroidProcessRuntimeController() =
     default;

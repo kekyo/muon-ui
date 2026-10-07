@@ -72,3 +72,8 @@ target_link_options(muon_javascript_runtime PRIVATE
 set(MUON_ANDROID_TEST_HOST ON)
 add_subdirectory("${MUON_REPOSITORY_ROOT}/muon-android/runtime/src/main/cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/muon-android-runtime")
+
+include("${MUON_ANDROID_PLUGIN_REGISTRY_ROOT}/muon_android_plugins.cmake")
+if(MUON_ANDROID_PLUGIN_TARGETS)
+  add_dependencies(muon_android_rpc ${MUON_ANDROID_PLUGIN_TARGETS})
+endif()

@@ -11,7 +11,7 @@
       },
       "allow": ["muon.test.alpha.*"],
       "config": {
-        "alpha.config": "android-registry",
+        "alpha.config": "application-asset-registry",
         "channel": "test"
       }
     },

@@ -320,11 +320,18 @@ const commits = {
 };
 const expectedPatches = expectedPatchFiles.map((path) => ({
   path,
-  sha256: sha256(join(projectRoot, path)),
+  sha256: sha256(join(repositoryRoot, 'muon-android', path)),
 }));
 const expectedHashes = {
   patchQueue: sha256Contents(`${JSON.stringify(expectedPatches)}\n`),
-  recipe: sha256(join(projectRoot, 'scripts', 'build-native-dependencies.mjs')),
+  recipe: sha256(
+    join(
+      repositoryRoot,
+      'muon-android',
+      'scripts',
+      'build-native-dependencies.mjs'
+    )
+  ),
   sourceArchive: expectedLibffiSourceArchive.sha256,
 };
 

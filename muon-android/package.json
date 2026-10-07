@@ -5,8 +5,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "test": "vitest run && vite build"
+    "build": "npm run build:js && npm run build:runtime",
+    "test": "vitest run && npm run build",
+    "build:runtime": "./gradlew :runtime:publishReleasePublicationToMavenRepository",
+    "build:js": "vite build --mode renderer && vite build --mode host"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -17,5 +19,8 @@
     "typescript": ">=5.9.0",
     "vite": ">=8.0.0",
     "vitest": ">=4.0.0"
+  },
+  "dependencies": {
+    "funcity": "^1.5.0"
   }
 }

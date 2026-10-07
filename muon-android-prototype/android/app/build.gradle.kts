@@ -58,6 +58,7 @@ android {
         getByName("main").java.directories.add("../../../muon-android/runtime/src/main/java")
         getByName("main").assets.directories.add("../../dist")
         getByName("main").assets.directories.add("../.generated/quickjs-assets")
+        getByName("main").assets.directories.add("../.generated/plugin-assets")
     }
 
     testOptions {

@@ -3,6 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import type { MuonAndroidOptions } from "./android.js";
+export type {
+  MuonAndroidOptions,
+  MuonAndroidAbi,
+  MuonAndroidPluginOptions,
+} from "./android.js";
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon-ui
+
 import type { Plugin } from "vite";
 
 /**
@@ -163,6 +174,8 @@ export interface MuonLinuxDesktopOptions {
  * Options for generating muon app distributions after Vite build.
  */
 export interface MuonViteBuildOptions {
+  /** Android metadata and prebuilt plugin inputs. Overrides muon.json android. */
+  android?: MuonAndroidOptions;
   /**
    * Public target identifiers to build.
    *

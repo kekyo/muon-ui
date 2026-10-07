@@ -3,6 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import type { MuonAndroidOptions } from "../android.js";
+export type {
+  MuonAndroidOptions,
+  MuonAndroidAbi,
+  MuonAndroidPluginOptions,
+} from "../android.js";
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon-ui
+
 import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
 import { isAbsolute, resolve } from "node:path";
 
@@ -205,6 +216,8 @@ export interface MuonLinuxDesktopOptions {
  * Options for generating muon app distributions after Vite build.
  */
 export interface MuonViteBuildOptions {
+  /** Android metadata and prebuilt plugin inputs. Overrides muon.json android. */
+  android?: MuonAndroidOptions;
   /**
    * Public target identifiers to build.
    *
@@ -574,6 +587,15 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       return source;
     },
     configureServer: async (server) => {
+      if (
+        typeof options.build === "object" &&
+        options.build.targets?.includes("android")
+      ) {
+        server.config.logger.info(
+          "Android live preview is unavailable. Run vite build and install the generated APK.",
+        );
+        return;
+      }
       const pluginOptions = isMuonDisabledByViteArguments(process.argv)
         ? { ...options, open: false }
         : options;
@@ -676,6 +698,8 @@ const createMuonBuildOptions = (
     options.browserStartPage = packagedAssetOptions.browserStartPage;
   }
 
+  if (buildOptions.android !== undefined)
+    options.android = buildOptions.android;
   if (buildOptions.allTargets !== undefined) {
     options.allTargets = buildOptions.allTargets;
   }

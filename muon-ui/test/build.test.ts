@@ -31,7 +31,8 @@ import {
   findMuonLauncherEmbeddedConfigSlot,
   findMuonEmbeddedConfigSlot,
 } from "../src/embed-config.js";
-import { buildMuonApp, type MuonBuildTarget } from "../src/build.js";
+import { buildMuonApp } from "../src/build.js";
+import type { MuonDesktopTarget as MuonBuildTarget } from "../src/targets.js";
 import {
   createNormalizedIconPngData,
   createWindowsIconBufferFromPngData,
@@ -686,6 +687,7 @@ describe("muon build", () => {
       `${JSON.stringify(
         {
           asset: { sourcePath: "./old-assets" },
+          android: { sdkPath: "/missing/android-sdk", quickjs: true },
           browser: { userAgent: "PackagedApp/1.0" },
           network: {
             allow: ["asset://main/**"],
@@ -710,6 +712,7 @@ describe("muon build", () => {
 
     const [target] = result.targets;
     expect(target?.target).toBe("linux-amd64");
+    expect(target?.embeddedConfig).not.toHaveProperty("android");
     expect(target?.runtimeAppId).toBe("scope.muon-sample");
     expect(target?.outputPath).toBe(join(root, "dist-muon/linux-amd64"));
     expect(target?.launcherPath).toBe(

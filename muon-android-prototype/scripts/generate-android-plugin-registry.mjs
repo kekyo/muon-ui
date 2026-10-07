@@ -3,12 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runScriptOnceToText } from 'funcity';

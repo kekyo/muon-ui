@@ -62,7 +62,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         configValues = MuonAppConfig.load(activity).values;
         this.webView = webView;
         filesystemService = new MuonAndroidFilesystemService(
-                new Handler(Looper.getMainLooper()));
+                new Handler(Looper.getMainLooper()), activity.getFilesDir());
     }
 
     void invoke(

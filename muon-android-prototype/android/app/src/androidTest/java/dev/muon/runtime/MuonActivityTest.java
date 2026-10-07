@@ -969,6 +969,41 @@ public final class MuonActivityTest {
     }
 
     @Test
+    public void storesRelativeFilesystemPathsInPrivateApplicationData() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> reference = new AtomicReference<>();
+            scenario.onActivity(reference::set);
+            MuonActivity activity = reference.get();
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            String name = "relative-data-" + System.nanoTime() + ".txt";
+            activity.clearTestMessages();
+            String script = """
+                    void (async () => {
+                      const path = %s;
+                      try {
+                        await muon.fs.writeTextFile(path, 'persistent application data', 'utf8');
+                        const value = await muon.fs.readTextFile(path, 'utf8');
+                        const canonical = await muon.fs.realpath(path);
+                        muonAndroidTest.postMessage(JSON.stringify({ value, canonical }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({ error: String(error) }));
+                      }
+                    })();
+                    """.formatted(JSONObject.quote(name));
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(script, null));
+            String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject result = new JSONObject(message);
+            assertFalse(message, result.has("error"));
+            assertEquals("persistent application data", result.getString("value"));
+            java.io.File expected = new java.io.File(activity.getFilesDir(), name);
+            assertEquals(expected.getCanonicalPath(), result.getString("canonical"));
+            assertTrue(expected.isFile());
+            assertTrue(expected.delete());
+        }
+    }
+
+    @Test
     public void performsFilesystemOperationsThroughThePublicApi() throws Exception {
         try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
             AtomicReference<MuonActivity> activityReference = new AtomicReference<>();

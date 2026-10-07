@@ -51,6 +51,7 @@ export default defineConfig(({ mode }) => {
           /^node:/,
           "adm-zip",
           "commander",
+          "funcity",
           "sharp",
           "tar-vern",
           "vite",

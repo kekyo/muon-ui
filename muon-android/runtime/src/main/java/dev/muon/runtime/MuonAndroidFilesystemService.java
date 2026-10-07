@@ -108,13 +108,15 @@ final class MuonAndroidFilesystemService implements AutoCloseable {
     private static final int CREATE_DIRECTORY_MODE = 0777;
 
     private final Handler mainHandler;
+    private final File filesDirectory;
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
     private final Map<Integer, Future<?>> pendingOperations = new TreeMap<>();
     private final Set<String> watchLeases = new HashSet<>();
     private boolean closed;
 
-    MuonAndroidFilesystemService(@NonNull Handler mainHandler) {
+    MuonAndroidFilesystemService(@NonNull Handler mainHandler, @NonNull File filesDirectory) {
         this.mainHandler = mainHandler;
+        this.filesDirectory = filesDirectory;
     }
 
     void invoke(
@@ -461,20 +463,20 @@ final class MuonAndroidFilesystemService implements AutoCloseable {
         return (String) value;
     }
 
-    @NonNull private static String requirePath(
+    @NonNull private String requirePath(
             @NonNull JSONArray arguments,
             int index,
             @NonNull String name) throws JSONException, IOException {
         return validatePath(requireString(arguments, index, name), name);
     }
 
-    @NonNull private static String requirePath(
+    @NonNull private String requirePath(
             @NonNull JSONObject object,
             @NonNull String name) throws JSONException, IOException {
         return validatePath(requireString(object, name), name);
     }
 
-    @NonNull private static String validatePath(
+    @NonNull private String validatePath(
             @NonNull String path,
             @NonNull String name) throws IOException {
         validateNoNul(path, name);
@@ -482,7 +484,9 @@ final class MuonAndroidFilesystemService implements AutoCloseable {
             throw new IOException(
                     "content:// is unavailable to Android muon.fs until document URI support is added");
         }
-        return path;
+        // Relative app paths survive process restarts and package updates without
+        // depending on Android's process working directory or storage location.
+        return new File(path).isAbsolute() ? path : new File(filesDirectory, path).getPath();
     }
 
     private static void validateNoNul(@NonNull String value, @NonNull String name)

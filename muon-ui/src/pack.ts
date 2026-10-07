@@ -32,8 +32,7 @@ import {
   getDefaultMuonBuildTarget,
   type MuonBuildOptions,
   type MuonBuildResult,
-  type MuonBuildTarget,
-  type MuonBuildTargetResult,
+  type MuonDesktopBuildTargetResult as MuonBuildTargetResult,
 } from "./build.js";
 import {
   loadMuonBuildSequenceProject,
@@ -46,6 +45,7 @@ import {
 import type { MuonViteBuildOptions } from "./vite.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import {
+  type MuonDesktopTarget as MuonBuildTarget,
   allMuonTargets,
   getMuonTargetDescriptor,
   normalizeMuonTarget,
@@ -296,6 +296,14 @@ export interface MuonPackResult {
   artifacts: MuonPackArtifact[];
 }
 
+const requireDesktopTarget = (
+  target: MuonBuildResult["targets"][number],
+): MuonBuildTargetResult => {
+  if (target.target === "android")
+    throw new Error("Android requires APK packaging.");
+  return target;
+};
+
 interface PackageMetadata {
   packageName: string;
   version: string;
@@ -476,7 +484,12 @@ const normalizePluginBuildTargets = (
 ): MuonBuildTarget[] => {
   return [
     ...new Set(
-      targets.map((target) => normalizeMuonTarget(target, "muon pack target")),
+      targets.map((target) => {
+        const normalized = normalizeMuonTarget(target, "muon pack target");
+        if (normalized === "android")
+          throw new Error("Use --type apk to package Android.");
+        return normalized;
+      }),
     ),
   ];
 };
@@ -1328,7 +1341,7 @@ const buildPortableTargets = async (input: {
     phase: "pack",
     status: "Building portable distributions",
   });
-  const build = await buildMuonApp(
+  const result = await buildMuonApp(
     createPortableBuildOptions({
       project: input.project,
       pluginBuildOptions: input.pluginBuildOptions,
@@ -1343,6 +1356,10 @@ const buildPortableTargets = async (input: {
       progress: input.progress,
     }),
   );
+  const build = {
+    ...result,
+    targets: result.targets.map(requireDesktopTarget),
+  };
   await Promise.all(build.targets.map(writePortableInstallMetadata));
   return new Map(build.targets.map((target) => [target.target, target]));
 };
@@ -1465,7 +1482,11 @@ export const packMuonApp = async (
     phase: "pack",
     status: "Building distributions",
   });
-  const build = await runMuonBuildSequence(buildOptions, project);
+  const result = await runMuonBuildSequence(buildOptions, project);
+  const build = {
+    ...result,
+    targets: result.targets.map(requireDesktopTarget),
+  };
   if (options.packageVersion !== undefined) {
     await reapplyPackWindowsResources(
       build.targets,

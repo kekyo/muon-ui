@@ -25,7 +25,7 @@ import {
 } from "agent-rover";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import type { MuonBuildTarget } from "../src/build.js";
+import type { MuonDesktopTarget as MuonBuildTarget } from "../src/targets.js";
 import {
   createMuonLauncherEmbeddedConfigSlot,
   createMuonEmbeddedConfigSlot,

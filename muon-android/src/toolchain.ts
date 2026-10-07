@@ -111,6 +111,31 @@ export const prepareAndroid = async (
       );
     }
   }
+  const platformProperties = await readFile(
+    join(sdkPath, 'platforms', toolchain.platform, 'source.properties'),
+    'utf8'
+  );
+  if (
+    Number(
+      /^AndroidVersion.ApiLevel\s*=\s*(\S+)/mu.exec(platformProperties)?.[1]
+    ) !== toolchain.compileSdk
+  ) {
+    throw new Error(
+      `Android SDK platform version differs from the required API ${toolchain.compileSdk}: ${sdkPath}`
+    );
+  }
+  const buildProperties = await readFile(
+    join(sdkPath, 'build-tools', toolchain.buildTools, 'source.properties'),
+    'utf8'
+  );
+  if (
+    /^Pkg.Revision\s*=\s*(\S+)/mu.exec(buildProperties)?.[1] !==
+    toolchain.buildTools
+  ) {
+    throw new Error(
+      `Android SDK Build Tools version differs from ${toolchain.buildTools}: ${sdkPath}`
+    );
+  }
   const javaPath = options.environment.JAVA_HOME
     ? join(options.environment.JAVA_HOME, 'bin/java')
     : await findExecutable('java', options.environment);

@@ -94,6 +94,17 @@ const muon = async (args) =>
   JSON.parse(await run(process.execPath, [cli, ...args, '--json']));
 const applicationId = 'dev.muon.e2e.publicconsumer';
 const includePlugin = process.argv.includes('--plugins');
+const inspect = async (path, variant, code, version) => {
+  const { stdout } = await execute(process.execPath, [
+    join(repository, 'muon-android/scripts/verify-consumer-apk.mjs'),
+    path,
+    variant,
+    String(code),
+    version,
+    ...(includePlugin ? ['--plugins'] : []),
+  ]);
+  console.log(stdout.trim());
+};
 const config = {
   android: {
     applicationId,
@@ -199,6 +210,7 @@ assert.equal(result.target, 'android');
 assert.equal(result.signing, 'debug');
 assert.equal(result.applicationId, applicationId);
 const firstBytes = await readFile(result.packagePath);
+await inspect(result.packagePath, 'debug', 1, '1.0.0');
 console.log('Public CLI debug APK built');
 await run(process.execPath, [
   join(root, 'node_modules/vite/bin/vite.js'),
@@ -327,6 +339,7 @@ const release = await muon(['pack', '--target', 'android', '--type', 'apk']);
 assert.equal(release.targets[0].signing, 'release');
 assert.match(release.targets[0].certificateSha256, /^[a-f0-9]{64}$/u);
 const releasePath = release.artifacts[0].path;
+await inspect(releasePath, 'release', 2, '1.0.0');
 console.log('Signed release APK built and verified');
 const certificate = await run(join(sdk, 'build-tools/36.0.0/apksigner'), [
   'verify',
@@ -360,6 +373,7 @@ assert.equal(
   release.targets[0].certificateSha256
 );
 assert.equal(update.targets[0].versionCode, 3);
+await inspect(update.artifacts[0].path, 'release', 3, '1.0.1');
 await adb(['install', '-r', update.artifacts[0].path]);
 await start();
 await observe('verify', '1.0.1');

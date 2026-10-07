@@ -670,14 +670,14 @@ const createCliCommand = (): Command => {
 
   program
     .command("build")
-    .description("Build CEF-free muon app distribution directories")
+    .description("Build desktop distributions or an Android debug APK")
     .option(
       "--target <target>",
       "public target or comma-separated public targets",
       appendTargetValues,
       [],
     )
-    .option("--all", "build all supported targets")
+    .option("--all", "build all desktop targets")
     .option("--assets <path>", "asset root path")
     .option("--config <path>", "muon config path")
     .option("--icon <path>", "static application PNG icon path")
@@ -719,7 +719,7 @@ const createCliCommand = (): Command => {
     .description("Build and package a muon app")
     .option(
       "--type <type>",
-      "package type or comma-separated package types: zip, tar.gz, tgz, deb, nsis (default: all)",
+      "package types: zip, tar.gz, tgz, deb, nsis; Android: apk (default: all for the selected target)",
       appendPackTypeValues,
     )
     .option(
@@ -728,7 +728,7 @@ const createCliCommand = (): Command => {
       appendTargetValues,
       [],
     )
-    .option("--all", "build all supported targets")
+    .option("--all", "build all desktop targets")
     .option("--config <path>", "muon config path")
     .option("--icon <path>", "static application PNG icon path")
     .option("--windows-icon <path>", "Windows PNG icon resource path")

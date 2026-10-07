@@ -540,6 +540,7 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
   await mkdir(join(root, "muon-builder"), { recursive: true });
   await mkdir(join(root, "muon-core"), { recursive: true });
   await mkdir(join(root, "muon-ui", "scripts"), { recursive: true });
+  await mkdir(join(root, "muon-android", "scripts"), { recursive: true });
   await writeFile(join(root, "deps", "tra-ffic", "include", "tra_ffic.h"), "");
   await writeFile(join(root, "deps", "cardio", "include", "cardio.h"), "");
   await writeFile(
@@ -560,6 +561,10 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
   );
   await writeFile(
     join(root, "muon-ui", "scripts", "stage-muon-builder.mjs"),
+    "process.exit(0);\n",
+  );
+  await writeFile(
+    join(root, "muon-android", "scripts", "stage-package.mjs"),
     "process.exit(0);\n",
   );
   await writeExecutableScript(

@@ -74,7 +74,7 @@ describe("GitHub Actions CI", () => {
     }
 
     const buildTestJob = requireMapping(jobs["build-test"], "Build/test job");
-    expect(buildTestJob["timeout-minutes"]).toBe(45);
+    expect(buildTestJob["timeout-minutes"]).toBe(90);
     expect(buildTestJob.permissions).toEqual({ contents: "read" });
     const buildTestSteps = requireSequence(
       buildTestJob.steps,
@@ -233,6 +233,8 @@ describe("GitHub Actions CI", () => {
       "actions/cache",
       "actions/checkout",
       "actions/setup-node",
+      "actions/setup-java",
+      "reactivecircus/android-emulator-runner",
       "github/codeql-action/analyze",
       "github/codeql-action/init",
     ];

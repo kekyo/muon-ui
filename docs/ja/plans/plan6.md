@@ -136,7 +136,7 @@ npx muon build --target android
 npx muon pack --target android --type apk
 ```
 
-この例のAndroid向け動作は未実装であり、完成後の操作案である。`prepare`は環境の確認・準備、`build`はインストール可能なdebug APK、`pack`は配布用release APKを担当する。署名情報は別途設定する。
+この例は計画時の操作案であり、ステップ4までに実装した。`prepare`は環境の確認・準備、`build`はインストール可能なdebug APK、`pack`は配布用release APKを担当する。署名情報は別途設定する。
 
 Vite設定でAndroidを選んだ場合の`npm run build`も同じビルド処理へ接続する。ViteのWebビルドは一度だけ実行し、Gradleから再帰的に同じビルドを起動しない。APKにはビルド済みアセットを含め、配布先で開発サーバーを必要としない。
 
@@ -297,22 +297,22 @@ RPCのorigin・main frame制限、アセットの拒否動作、プラグイン�
 
 ## 11. developへのマージ完了条件
 
-- [ ] Androidツールチェインを文書に記載した手順で準備でき、不足や不整合を説明できる。
-- [ ] npm配布物だけでMuonのAndroid部品を解決でき、元リポジトリやサブモジュールを参照しない。
-- [ ] 標準アプリのビルドでMuonのネイティブ部品を再ビルドせず、通常利用者にNDK/CMakeを要求しない。
-- [ ] 新規の利用者プロジェクトから公開CLIとVite設定でdebug APKを生成できる。
-- [ ] 利用者の画面、アプリ情報、アイコン、Muon設定が反映され、試作用ページやバックエンドコードが混入しない。
-- [ ] 利用者の鍵で署名したrelease APKを生成でき、署名不足を成功扱いにしない。
-- [ ] release APKの新規インストール、画面操作、Muon API、ファイル保存、再起動、更新後のデータ保持が成功する。
-- [ ] arm64-v8aとx86_64の成果物を検査し、必須のVMとPixel 6で検証が成功する。
-- [ ] 16 KiB整列をネイティブ依存とAPK配置について検査し、実行未検証の環境を区別して記録する。
-- [ ] 最低対応OSとWebViewの条件、非対応時の診断が実装と文書で一致する。
-- [ ] FCMとQuickJSが未提供・無効でも通常のMuonアプリが動作し、使用できない機能を明示する。
-- [ ] QuickJSの入力、ESMへのbundle、APK/AAB同梱、アプリと同時更新、識別情報、永続データ分離の方針が確定している。
-- [ ] Android SDKのないdesktop利用者へ追加の準備を要求せず、既存機能の全体テストが成功する。
-- [ ] npm配布物からの独立E2E、Android端末テスト、ルートの全体テストの実行結果を記録する。
-- [ ] 利用者文書と実装が一致し、FCM・QuickJSを含む後続作業の範囲が明示されている。
-- [ ] AABを公開する場合は、署名とAAB由来の端末別APKの動作検証が成功する。
+- [x] Androidツールチェインを文書に記載した手順で準備でき、不足や不整合を説明できる。
+- [x] npm配布物だけでMuonのAndroid部品を解決でき、元リポジトリやサブモジュールを参照しない。
+- [x] 標準アプリのビルドでMuonのネイティブ部品を再ビルドせず、通常利用者にNDK/CMakeを要求しない。
+- [x] 新規の利用者プロジェクトから公開CLIとVite設定でdebug APKを生成できる。
+- [x] 利用者の画面、アプリ情報、アイコン、Muon設定が反映され、試作用ページやバックエンドコードが混入しない。
+- [x] 利用者の鍵で署名したrelease APKを生成でき、署名不足を成功扱いにしない。
+- [x] release APKの新規インストール、画面操作、Muon API、ファイル保存、再起動、更新後のデータ保持が成功する。
+- [x] arm64-v8aとx86_64の成果物を検査し、必須のVMとPixel 6で検証が成功する。
+- [x] 16 KiB整列をネイティブ依存とAPK配置について検査し、実行未検証の環境を区別して記録する。
+- [x] 最低対応OSとWebViewの条件、非対応時の診断が実装と文書で一致する。
+- [x] FCMとQuickJSが未提供・無効でも通常のMuonアプリが動作し、使用できない機能を明示する。
+- [x] QuickJSの入力、ESMへのbundle、APK/AAB同梱、アプリと同時更新、識別情報、永続データ分離の方針が確定している。
+- [x] Android SDKのないdesktop利用者へ追加の準備を要求せず、既存機能の全体テストが成功する。
+- [x] npm配布物からの独立E2E、Android端末テスト、ルートの全体テストの実行結果を記録する。
+- [x] 利用者文書と実装が一致し、FCM・QuickJSを含む後続作業の範囲が明示されている。
+- [x] AABを公開する場合は、署名とAAB由来の端末別APKの動作検証が成功する。 今回は公開対象外。
 - [ ] developへのマージ結果を確認し、必要な回帰検証が完了している。
 
 テスト結果には対象コミット、コマンド、ツールチェイン、端末条件、成果物のハッシュ、成功・失敗・未実施を記録する。未実施の必須条件がある間はマージ完了としない。
@@ -416,3 +416,51 @@ VMとPixel 6の両方でこのE2Eが成功した。VMのrelease APKのSHA-256は
 CIにJDK 25.0.3、固定版SDK・NDK・CMakeの準備と、API 37.1のx86_64・16 KiBエミュレーターでの独立npm E2Eを追加した。JDKとエミュレーター用Actionはcommitで固定する。SDK Command-line Tools 23.0のアーカイブは公式配布元のチェックサムを確認したうえでSHA-256を固定した。GitHub Actions上での実行結果は、ローカルの検証結果とは区別する。
 
 最終全体テストの初回では、既存テストの準備不足を3件検出した。Windows E2Eが手動配置する依存リストにfuncityがなく、配布スクリプトのfixtureにはAndroidステージ処理がなかった。CIテストの期待値も従来の45分とAction一覧のままだった。製品の依存定義と計画のCI追加は正しいため、テスト環境と期待値を更新した。失敗を確認した後の個別再実行では、Windows E2Eを含む22件とCIの1件が成功した。接続先WindowsのNode.jsは24.21.0で正常に動作している。
+
+### 最終端末・配布物の検証
+
+製品コードと検証ドライバーの最終変更はabd8659。利用者文書を加えた89a4757をビルドしてnpm配布物を生成した。その後の4dba1b9は文書のみの変更である。成果物とログはリポジトリ内のartifacts/plan6へ保存した。このディレクトリはGit管理の対象外であり、署名の秘密鍵は含めていない。
+
+| 項目 | 検証環境 |
+| --- | --- |
+| ホスト | Linux x64、Node.js 24.15.0、JDK 25.0.3 |
+| Android製造 | AGP 9.2.1、Gradle 9.4.1、SDK Platform android-37.0 revision 2、Build Tools 36.0.0、NDK 29.0.14206865、CMake 4.1.2 |
+| 利用者ビルド | Platform・Build Tools・licensesだけを参照するSDK、C/C++コンパイラ起動禁止、元リポジトリへの参照なし |
+| Pixel 6 | API 37、arm64-v8a、4096 byteページ、WebView 153.0.8010.36 |
+| エミュレーター | API 37、x86_64、16384 byteページ、WebView 149.0.7827.5、Emulator 37.2.12 |
+| エミュレーターイメージ | system-images/android-37.1/google_apis_ps16k/x86_64 revision 9 |
+
+再現コマンドは次のとおり。ANDROID_HOMEはSDKのパス、ANDROID_SERIALは接続端末を指定する。実行したserialは、VMがemulator-5556、Pixel 6がadb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcpである。
+
+```bash
+npm run build --workspace muon-ui
+mkdir -p /tmp/muon-plan6-final-package
+npm pack --workspace muon-ui --pack-destination /tmp/muon-plan6-final-package
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
+ANDROID_SERIAL=adb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcp npm run test:android:pixel6 --workspace muon-android-prototype
+ANDROID_SERIAL=emulator-5556 node muon-android/scripts/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=adb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcp node muon-android/scripts/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=emulator-5556 node muon-android/scripts/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz --plugins
+```
+
+両端末でinstrumentation 45件、試作release APK、AAB由来APKSの回帰検証が成功した。通常の独立アプリは両端末で、プラグインを追加した独立アプリはVMで成功した。それぞれ、CLI/Viteのdebug APK一致、releaseの署名、保存・再読込、プロセス再起動、同一鍵でversionCode 2から3へ更新した後のデータ保持を確認した。画面も目視で確認した。プラグイン構成では加算、設定値、非許可関数を公開しない動作も成功した。
+
+| 配布物 | SHA-256 |
+| --- | --- |
+| muon-ui-0.0.1.tgz | 78ec391fc922a62a7fd0deb85617145dd7684301f6b286910f5904dfeadffb49 |
+| 通常debug APK、両端末共通 | 365d0fc4ef14d1196502bd471e2208fd5587c55e3b9347f9e87c4010547dd7d6 |
+| Pixel 6、release versionCode 2 | d255f66d935cd4e2386630b929a82add0ee39da714958e32327e2db533727d97 |
+| Pixel 6、release versionCode 3 | 645926a7eadfe5f943a6705596a5c4c4dcb6fb061943dfe263a986bc226abbd5 |
+| VM、release versionCode 2 | d1a532bc941bd63f4f462e7f838d73cf65412a6ee8cd8b284fc0a1b059d95849 |
+| VM、release versionCode 3 | 9b61b1e350af214e3f05985322d513a4b3347fab07bc34fa8387be45afdba7a1 |
+| プラグイン追加VM、release versionCode 3 | e884eaa95429a895d105c0bacefcc0c31eaa1aad64abbea8acb4dd7493920163 |
+
+通常APKはABIごとにlibc++_shared.so、libcardio.so、libmuon_android_rpc.soを含む。全LOAD segmentの整列は16384 byteで、依存ライブラリは同梱物かAndroidシステムライブラリに解決できた。全APKでzipalignの16 KiB検査と署名検証が成功した。npm内のAAR・POM・renderer・Wrapper・型定義を確認し、試作・observer・QuickJS・keystoreを含まないことも検査した。
+
+古いOS、arm64での16 KiB実行、Windows/macOSでのAndroidビルド、GitHub Actions上での実行は未検証として残す。FCM・QuickJS・公開AABは今回の公開範囲に含めない。利用者向けの導入から署名・更新までをdocs/ja/android.mdへ記述し、英語版をdocs/en/android.mdへ反映した。
+
+### 全体テストとマージ前の判定
+
+4dba1b9のソースに対してルートのnpm testを再実行し、終了コード0で完了した。muon-android 42件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-builderのシェル検証も完了した。muon-core-testerの条件付きskipは開始時と同じ26件である。Windows E2Eはmuon-uiの324件に含まれる。最後のCEF検証は797.90秒かかった。ログはartifacts/plan6/final-all-green.logへ保存した。
+
+第11節のマージ前の必須条件を照合し、すべて満たした。日本語の計画・Android利用手順・セルフビルド手順はyomiyasuで確認し、lintの指摘はない。全体テスト開始後の追記はこの計画書だけで、製品コード、テスト、ビルド設定は変更していない。

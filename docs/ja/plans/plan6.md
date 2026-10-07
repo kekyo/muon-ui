@@ -501,3 +501,31 @@ Expressの回帰テストも、空の専用キャッシュでは変更前にENOT
 ルートのnpm testは終了コード0で完了した。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-builderのシェル検証とmuon-uiのWindows E2Eも通過した。muon-core-testerのskipは既存と同じ26件で、CEF検証の所要時間は802.50秒だった。全体ログはartifacts/plan6-ci/muon-ci-all.logへ保存した。
 
 追補の完了条件を照合し、再現テスト、全体テスト、Androidの配布から署名APKの更新までの検証がすべて成功した。修正はローカルdevelopへコミットする。GitHub Actions上での修正後の実行は未確認であり、push後のCI結果で別途確認する。
+
+### CIのウィンドウ操作テストで判明したページ遷移の競合
+
+[CI実行37574326651](https://github.com/kekyo/muon-ui/actions/runs/37574326651/job/112639710070)では、前回修正したタグなしチェックアウトの回帰テストとExpress E2Eの2件が成功した。今回はLinuxのページ内ドラッグ領域を検証するテストが、遷移準備中にInspected target navigated or closedで失敗した。ウィンドウのドラッグ操作には到達していない。全体では208件成功・1件失敗・既存の26件skipとなり、後続のAndroid端末E2Eは実行されなかった。
+
+このテストはlocation.hrefを変更した直後、ページ内のPromiseで移動先の要素を待っていた。Promiseの評価が移動前の文書で始まると、遷移時に実行コンテキストが破棄されて失敗する。同じ処理がWindowsの対応テストにもある。既存のCdpDriver.navigateはフレームとloaderを照合し、遷移・読み込み完了の通知を待つため、両テストをこの操作へ揃える。
+
+対応は、遷移先URLと読み込み完了の検証を追加して失敗を確認し、Linux・Windows両方の遷移待ちを変更する。その後、ウィンドウ操作の対象テストとルートのnpm testを実行する。完了条件は、遷移先の準備完了後に既存のクリック・スクロール・ドラッグ検証が成功し、全体テストも成功すること。Androidの製品コードとビルド設定は今回の変更対象に含めない。
+
+修正前の失敗は上記CIログで確認した。手元では遷移先の状態を検証するassertionを追加し、対象テストを8回実行したが、いずれも成功して競合を再現しなかった。ローカルで再現できたとは扱わず、CIの失敗記録とコード上の待機条件を根拠に修正する。両OSの処理をCdpDriver.navigateへ変更した後、Linuxの対象テストは遷移先URL・document.readyStateの検証を含めて成功した。Windowsは既存のagent-rover接続先で、windows-amd64の対応テストを確認する。
+
+Windows実機テストの準備では、試験用muon_test_plugin_cardio.cppのコンパイルが失敗した。Android対応中のdbe872c5で追加したdispatcherProbeが、POSIXのpipeとcardio::from_fdを無条件に使っていた。ルートのnpm testに含まれるWindows E2Eはパッケージングを検証するもので、Windows向けコアの試験プラグインをビルドしていなかった。この回帰確認の不足を追補する。
+
+失敗したwindows-amd64ビルドを再現記録とし、FDの試験処理とその登録を[cardioが提供するCARDIO_HAS_POSIX_FD](https://github.com/kekyo/libcardio/blob/31e8149ce52cdfdaaa48838ca9de39288074885c/README.md#L764)の有効時に限定する。全プラットフォーム共通のdispatcher初期化・呼び出し・終了の検証は維持する。修正後はWindowsのウィンドウ操作と共通cardio検証を実機で実行し、AndroidのFD検証もinstrumentationで確認する。製品ランタイムや外部ライブラリには変更を加えない。
+
+条件分岐の修正後、windows-amd64のDebug・ReleaseビルドとCDP relayのビルドが成功した。Androidも16 KiBページのエミュレータでinstrumentation 45件、Release APK/APKSの検査、Release APKのインストール・起動を再検証し、すべて成功した。AndroidのdispatcherProbeは引き続きFD・タイマー・ワーカーからの完了通知を検証している。
+
+Windows実機への配置は、最初の2回ともFailed to send binary transfer: write ECANCELEDで中断した。agent-roverのログ画面から保存先を読み取り、稼働中のログをPowerShellのGet-Content経由で取得した。ログには両試行とも、処理プロセスとの通信がThe pipe has been endedで終了した記録があった。通常のfile.readでは共有違反になるため、書き込み中のログを共有して読める方法を使った。
+
+Windows側のagent-roverは0.7.0で、[ファイル転送の既定上限は64 MiB](https://github.com/kekyo/agent-rover/blob/7b12bfdc9d3bb6b626fc4e610706987510c4b385/README.md#agent-limits-advanced-topic)だった。今回のCEF DLLは264,940,544バイト、Debug実行ファイルは291,381,916バイトで上限を超えていた。同じ実行ファイルを別ポートの一時インスタンスとして--max-transfer-size 512付きで起動すると、両ファイルの転送が成功した。クライアント0.5.0とのバージョン差を理由に依存パッケージを更新する必要はなかった。既存インスタンスは維持し、一時インスタンスは検証後に終了する。今後WindowsのコアE2Eを実行する際も、Debug実行ファイルを扱える転送上限を指定する。
+
+転送後の最初の実行では、3件ともCDP接続時のHTTP 500で失敗した。接続先にはホスト名が設定されていたが、[ChromiumのCDPはHostヘッダーをIPアドレスまたはlocalhostに制限する](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/devtools_http_handler.cc)。同じ端末のIPv4アドレスをAGENT_ROVER_WIN11_HOSTに指定して再実行すると、3件すべてが33.20秒で成功した。クリック・スクロール・ドラッグ操作、cardioの初期化・呼び出し、非同期終了をWindows実機で確認できた。204件のskipは今回の実行対象を3件に絞ったためである。一時agent-roverを終了し、元のインスタンスが引き続き利用できることも確認した。
+
+CIの失敗ログ、ローカルの修正前8回・修正後のLinux検証、Windowsビルドの修正前後と実機検証、Android再検証のログはartifacts/plan6-ci2へ保存する。agent-roverのログも認証情報を除いて保存し、転送失敗時の記録を残す。
+
+ルートのnpm testは終了コード0で完了した。muon-android 43件、試作23件、muon-node 40件、muon-ui 324件、muon-coreのCTest 42件、muon-core-tester 209件が成功した。muon-builderのシェル検証とmuon-uiのWindows E2Eも成功した。muon-core-testerは既存と同じ26件skipで、CEF検証は819.97秒だった。全体ログもartifacts/plan6-ci2/muon-ci2-all.logへ保存した。
+
+追補の完了条件を照合し、Linux・Windows両方で遷移先の読み込み完了後にウィンドウ操作を検証できること、全体テストが成功することを確認した。追加で修正した試験プラグインも、Windowsのビルド・実機実行とAndroidのFD検証が成功した。修正をローカルdevelopへコミットする。修正後のGitHub Actionsは未実行であり、push後のCI結果で別途確認する。

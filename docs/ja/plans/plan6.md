@@ -644,3 +644,35 @@ API 36での最初の試験は、エミュレーターのRAMが約2.5 GiBの状�
 失敗はmuon-coreのCTestに含まれるtray_linux_dbusの1件で、fixed tray icon had unexpected initial bytesという結果だった。単独で再実行すると成功し、続いてCTest全42件を再実行しても成功した。ただし、初回の全体実行が成功したとは扱わない。現在のテストは2個のトレイを登録し、通知の到着順から固定アイコンと追従アイコンを区別している。順序への依存が不安定要因の候補だが、今回の再実行では再現せず、原因の確定や修正は行っていない。Androidのクラッシュとは別の残課題として記録する。全体ログ、単独再実行、CTest全件再実行のログもartifacts/plan6-webviewへ保存した。
 
 追加調査の完了条件を照合し、Pixel 6と再現環境の比較、通常操作での自然発生、カーネルの原因特定、回避環境での通知・復帰・RPC・データ保持、全体テストの実行と結果の記録、後片付けを完了した。アプリ側の破棄処理には回避効果がなく、製品への追加は不要と判断した。全体テストの初回失敗とarm64の実16 KiB端末が未検証である点は残る。今回の変更は本計画の記録のみとし、ローカルdevelopへコミットする。
+
+#### 主要端末への修正配信と影響範囲の確認
+
+2026年10月7日、利用者から主要端末へのAndroid修正の配信状況を調べるよう依頼を受けた。修正が必要になるCPU・ページサイズの条件を先に確認し、上流ブランチへの取り込み、SDKイメージの配布、端末のOTA配信を調べた。完了条件は、主要な実機で修正を待つ必要があるかを説明し、公開情報で確認できた配布状況と確認できない範囲を区別して記録することとした。
+
+今回特定した二重換算の不具合は、x86_64で4 KiBのページを16 KiBに見せる環境に限られる。[再現カーネルのpage_size_compat_defs.h](https://android.googlesource.com/kernel/common/+/214d1615c480/include/linux/page_size_compat_defs.h#38)では、CONFIG_X86_64以外の__PAGE_SHIFTは常にPAGE_SHIFTと同じになる。換算関数__page_size_countの除数は__PAGE_SIZE / PAGE_SIZEなので、arm64では4 KiB・16 KiBのどちらも1になる。したがって、修正前の計算式でも共有ページ数は縮小されず、この二重換算によるresident < sharedは生じない。これはソースからの判断であり、すべての端末を実測した結果ではない。[AOSPの16 KiB説明](https://source.android.com/docs/core/architecture/16kb-page-size/16kb)も、arm64のネイティブ16 KiBと、x86_64での16 KiBシミュレーションを区別している。
+
+| 対象 | 今回の不具合に対する判断 | 確認した範囲 |
+| --- | --- | --- |
+| 接続中のPixel 6 | この修正の配信を待つ必要はない | arm64、4 KiB、カーネル6.1.162、セキュリティパッチ2026-09-05。前回の実機試験で通知・復帰が各5回成功 |
+| Pixel・Galaxy・Xiaomiなどのarm64端末、4 KiB | 二重換算の発生条件に該当しない | 上記のカーネル実装から判断。機種別の実測ではない |
+| arm64端末、ネイティブ16 KiB | 同じく発生条件に該当しない | 上記のカーネル実装から判断。実16 KiB端末の動作試験は未実施 |
+| API 37.1・google_apis_ps16k・x86_64、revision 9 | 修正済み環境への移行か、検証済みの別環境が必要 | 前回クラッシュしたイメージと同じrevisionが、現在も公式一覧の最新版 |
+
+前回記した「arm64の実16 KiB端末は未検証」は、実機試験の範囲を示す。今回のソース確認により、この二重換算についてはarm64のネイティブ16 KiBも影響範囲から除外できる。これを、16 KiB対応に関する別の不具合や、WebView全般のクラッシュが起きないという保証には広げない。
+
+Androidの公開レビューをChange-Id Iad11b73859278b65820a17df40bcc41b8009c0e4で照合した。取り込み日はGerritのsubmittedをUTCで記載する。
+
+| 上流ブランチ | 状態・取り込み日 | 修正 |
+| --- | --- | --- |
+| android17-6.18 | MERGED、2026-08-19 | [feb997b9、レビュー4239843](https://android-review.googlesource.com/c/kernel/common/+/4239843) |
+| android16-6.12 | MERGED、2026-08-19 | [772e4465、レビュー4240502](https://android-review.googlesource.com/c/kernel/common/+/4240502) |
+| android16-6.12-2026-06 | MERGED、2026-08-24 | [a7ecd26f、レビュー4245582](https://android-review.googlesource.com/c/kernel/common/+/4245582) |
+| android16-6.12-2025-12 | ABANDONED | [レビュー4241563](https://android-review.googlesource.com/c/kernel/common/+/4241563)。このレビューを取り込み済みの根拠にはしない |
+
+[Googleの10月Pixel更新告知](https://support.google.com/pixelphone/thread/471669543/google-pixel-update-october-2026?hl=en-GB)では、10月6日から端末・通信事業者ごとに段階的に配信するとしている。[Pixelの10月更新一覧](https://source.android.com/docs/security/bulletin/pixel/2026/2026-10-01)と[Samsungの10月SMR](https://security.samsungmobile.com/securityUpdate.smsb)には、今回の不具合番号548500630やtask_statmの修正に対応する記載を確認できなかった。Samsungも地域・機種によって配信時期が変わると説明している。これらの告知だけでは、当該コミットを含むOTAの機種別一覧や、利用者への導入率は分からない。一覧に記載がないことを、未修正の証拠にも使わない。[Xiaomiの更新ページ](https://trust.mi.com/misrc/updates/phone)は取得したHTMLに詳細が含まれず、当該修正の配信を確認する根拠は得られなかった。
+
+一方、[Google公式SDKイメージ一覧](https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-4.xml)は、system-images;android-37.1;google_apis_ps16k;x86_64についてrevision 9とx86_64-ps16k-37.1_r09.zipを返した。上流ブランチで修正済みでも、今回の再現環境で使う配布イメージの更新は確認できない。SDKイメージ更新後にカーネルとバックグラウンド復帰を再検証する方針は維持する。
+
+muonのarm64アプリ配布を、この修正のOTA普及待ちにする必要はないと判断した。実機側で回避コードを追加する必要もない。現在必要な対応は、開発・CIで今回の不具合を持つx86_64の16 KiB環境を避け、既に成功した比較環境を使用することになる。端末ごとのOTA収録率や導入率は不明だが、主要なarm64実機でこの原因を回避できるかの判断は、配信率に依存しない。
+
+レビューの取得結果、公開更新ページ、SDKイメージの該当項目、Pixel 6の構成の再確認結果をartifacts/plan6-webview/rolloutへ保存した。今回の完了条件を満たしたことを確認した。変更は調査記録のみで、製品コード・テスト・ビルドへの影響はないため、全体テストは再実行しない。

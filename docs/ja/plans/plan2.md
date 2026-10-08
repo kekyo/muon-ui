@@ -6,11 +6,11 @@
 
 「試作内で動くこと」と「muon-ui利用者向けの正式機能であること」を区別する。主な根拠は次のとおりである。
 
-- 公開targetとbuild/pack実装: [muon-ui/src/targets.ts](muon-ui/src/targets.ts)、[muon-ui/src/build.ts](muon-ui/src/build.ts)、[muon-ui/src/pack.ts](muon-ui/src/pack.ts)
-- Android試作の実装と実行方法: [muon-android-prototype](muon-android-prototype)、[muon-android-prototype/README.md](muon-android-prototype/README.md)
-- Android APIの実装と方針: [muon-android/src/renderer/android-api.ts](muon-android/src/renderer/android-api.ts)、[android-api-compatibility.md](android-api-compatibility.md)
-- WebViewネットワークの検証記録: [filter-limitation.md](filter-limitation.md)
-- NDKプラグインの実装と端末検証記録: [plan.md](plan.md)
+- 公開targetとbuild/pack実装: [ui/common/targets.ts](../../../ui/common/targets.ts)、[ui/common/build.ts](../../../ui/common/build.ts)、[ui/common/pack.ts](../../../ui/common/pack.ts)
+- Android試作の実装と実行方法: [muon-android-prototype](../../../core/android-test)、[core/android-poc/README.md](../../../core/android-poc/README.md)
+- Android APIの実装と方針: [core/android/renderer/android-api.ts](../../../core/android/renderer/android-api.ts)、[android-api-compatibility.md](../../../android-api-compatibility.md)
+- WebViewネットワークの検証記録: [filter-limitation.md](../../../filter-limitation.md)
+- NDKプラグインの実装と端末検証記録: [plan1.md](./plan1.md)
 - 今回実行したリポジトリ全体テスト: `npm test`
 
 ## 2. 結論
@@ -38,13 +38,13 @@
 
 ### 3.1 Android targetは公開されていない
 
-[targets.ts](muon-ui/src/targets.ts)の`MuonTarget`と`allMuonTargets`には、Linux 3種とWindows 2種だけがある。`android`、`android-arm64-v8a`、`android-x86_64`は存在しない。
+[targets.ts](../../../ui/common/targets.ts)の`MuonTarget`と`allMuonTargets`には、Linux 3種とWindows 2種だけがある。`android`、`android-arm64-v8a`、`android-x86_64`は存在しない。
 
-[pack.ts](muon-ui/src/pack.ts)の成果物形式は`zip`、`tar.gz`、`deb`、`nsis`であり、`apk`、`aab`、`apks`は公開pack形式ではない。公開CLIの`muon build`と`muon pack`へAndroid SDK、NDK、Gradle、署名設定を渡す契約もない。
+[pack.ts](../../../ui/common/pack.ts)の成果物形式は`zip`、`tar.gz`、`deb`、`nsis`であり、`apk`、`aab`、`apks`は公開pack形式ではない。公開CLIの`muon build`と`muon pack`へAndroid SDK、NDK、Gradle、署名設定を渡す契約もない。
 
 ### 3.2 試作は一般の利用者プロジェクトを入力にしない
 
-現在のAndroidアプリは[muon-android-prototype](muon-android-prototype)内の固定Gradle projectである。
+現在のAndroidアプリは[muon-android-prototype](../../../core/android-test)内の固定Gradle projectである。
 
 - application IDとnamespaceは`dev.muon.prototype`で固定されている。
 - Java package、AIDL、JNI、テスト、起動Activityも試作namespaceへ結び付いている。
@@ -52,7 +52,7 @@
 - CMakeとbuild scriptはrepository root、`muon-core`、`deps/cardio`、`deps/tra-ffic`などの相対配置を前提とする。
 - Android plugin registryは同repository内のC++ sourceだけを受け付ける。
 - アプリ名、version、icon、theme、permission、asset originなどは利用者設定から生成されない。
-- [android-config.ts](muon-android/src/renderer/android-config.ts)にはAndroid向け設定検証器があるが、合成済み`muon.json`を読み込む製品build pipelineには接続されていない。
+- [android-config.ts](../../../core/android/renderer/android-config.ts)にはAndroid向け設定検証器があるが、合成済み`muon.json`を読み込む製品build pipelineには接続されていない。
 
 このため、npmへpackした`muon-ui`だけをクリーンな利用者projectへ導入してAndroidアプリを生成することはできない。
 
@@ -94,7 +94,7 @@ QuickJS、libffi、bundletoolなどのdownloadはversionとSHA-256を固定し�
 
 ### 4.3 公開しているMuon API
 
-Android simple modeの組み込み公開リストは[android-api.ts](muon-android/src/renderer/android-api.ts)に限定される。
+Android simple modeの組み込み公開リストは[android-api.ts](../../../core/android/renderer/android-api.ts)に限定される。
 
 | namespace           | 実装済み関数                                                                                                                                                                                                                                             |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -108,7 +108,7 @@ Android simple modeの組み込み公開リストは[android-api.ts](muon-androi
 - `content://`、Storage Access Framework、shared storageとの接続はない。
 - `muon.launcher`、`muon.executor`、`muon.fs.dialogs`は公開しない。
 - desktop window、system tray、launcher updater、任意process起動、runtime外部library loadに相当するAPIは提供しない。
-- desktopと意味が異なる設定は[android-config.ts](muon-android/src/renderer/android-config.ts)で拒否または警告するが、この検証器はまだ製品buildへ接続されていない。
+- desktopと意味が異なる設定は[android-config.ts](../../../core/android/renderer/android-config.ts)で拒否または警告するが、この検証器はまだ製品buildへ接続されていない。
 
 ### 4.4 WebViewのネットワーク契約
 
@@ -124,7 +124,7 @@ WebView自身の通常ネットワークはMuonが包括的にfilterしない。
 
 ### 4.5 NDKプラグイン
 
-Android pluginは[android-plugins.json](muon-android-prototype/android-plugins.json)でbuild前に確定し、両ABI向けnative libraryとしてAPK/AABへ同梱する。
+Android pluginは[android-plugins.json](../../../core/android-test/android-plugins.json)でbuild前に確定し、両ABI向けnative libraryとしてAPK/AABへ同梱する。
 
 - 現在は`alpha`、`cardio`、`function_lifetime`、`recursive_functions`、`types`の5 test pluginを登録する。
 - `allow`とstring `config`をruntime metadataへ反映する。
@@ -167,7 +167,7 @@ native runtimeはCEF非依存の`MuonPluginRuntime` core、cardio 1.1.0のAndroi
 - process全体で同時16 runtime、runtimeごとに64 MiB heap、1 MiB native stack、2秒の連続JS実行などの上限を設ける。
 - `release()`はmodule handle、timer、DNS、socket、listener、HTTP requestとnative runtimeを回収し、未完了処理をrejectする。
 
-現在のapplication moduleは試験用[backend.mjs](muon-android-prototype/android/app/src/main/assets/muon-javascript/backend.mjs)で固定されている。一般の利用者projectを収集、bundle、検証して同梱するpipelineはない。また、Android設定検証器は引き続き`node.project`を拒否する。
+現在のapplication moduleは試験用[backend.mjs](../../../core/android-poc/android/app/src/main/assets/muon-javascript/backend.mjs)で固定されている。一般の利用者projectを収集、bundle、検証して同梱するpipelineはない。また、Android設定検証器は引き続き`node.project`を拒否する。
 
 ## 5. Build、package、署名
 
@@ -190,10 +190,10 @@ npm test --workspace muon-android-prototype
 
 | 成果物            | path                                                                              |
 | ----------------- | --------------------------------------------------------------------------------- |
-| debug APK         | `muon-android-prototype/android/app/build/outputs/apk/debug/app-debug.apk`        |
-| local release APK | `muon-android-prototype/android/app/build/outputs/apk/release/app-release.apk`    |
-| release AAB       | `muon-android-prototype/android/app/build/outputs/bundle/release/app-release.aab` |
-| release APKS      | `muon-android-prototype/android/app/build/outputs/apks/release/app-release.apks`  |
+| debug APK         | `core/android-test/android/app/build/outputs/apk/debug/app-debug.apk`        |
+| local release APK | `core/android-test/android/app/build/outputs/apk/release/app-release.apk`    |
+| release AAB       | `core/android-test/android/app/build/outputs/bundle/release/app-release.aab` |
+| release APKS      | `core/android-test/android/app/build/outputs/apks/release/app-release.apks`  |
 
 release成果物もローカル試験用の標準Android debug keyで署名する。本番keystore、alias、秘密情報供給、Play App Signing、production署名状態のreportingは未実装である。
 
@@ -231,7 +231,7 @@ repository全体では、既知の非Android課題であるWindows Settings unin
 
 各gateは44件のinstrumentation、署名済みrelease APK、AAB由来端末別split APKを実行し、時間待ちではなくpage-ready eventを完了判定に使う。
 
-[plan.md](plan.md)には、QuickJS拡張前のWebView、RPC、NDK plugin、cardio、tra-ffic/libffiについて、16 KiB x86_64 VMと4 KiB Pixel 6でPASSした記録がある。今回の調査時には接続端末がなかったため、QuickJSを含む現行44件は端末上で再実行していない。したがって、現行HEADについて端末gateがGREENであるとはこの文書では断定しない。
+[plan1.md](./plan1.md)には、QuickJS拡張前のWebView、RPC、NDK plugin、cardio、tra-ffic/libffiについて、16 KiB x86_64 VMと4 KiB Pixel 6でPASSした記録がある。今回の調査時には接続端末がなかったため、QuickJSを含む現行44件は端末上で再実行していない。したがって、現行HEADについて端末gateがGREENであるとはこの文書では断定しない。
 
 arm64-v8a成果物の16 KiB整列検査はあるが、16 KiBページのarm64実機またはVMでのruntime実行記録はない。
 
@@ -254,18 +254,18 @@ arm64-v8a成果物の16 KiB整列検査はあるが、16 KiBページのarm64実
 
 - runtimeはNode.jsではなく、限定互換moduleだけを提供する。
 - `node.project`はAndroid設定検証で拒否する。
-- [android-api-compatibility.md](android-api-compatibility.md)はNode.js sidecarと`createNode()`を非対応と記載したままである。
+- [android-api-compatibility.md](../../../android-api-compatibility.md)はNode.js sidecarと`createNode()`を非対応と記載したままである。
 - public APIとしてNode.js互換範囲、versioning、feature detection、project packaging、migrationを定義していない。
 
 正式公開前に、QuickJSをAndroid固有JavaScript runtimeとして別名で公開するか、限定Node.js互換facadeとして明示的に契約するか、実際のNode.js runtimeを採用するかを決める必要がある。現状のAPI名だけからNode.js互換と受け取れる状態は製品契約にできない。
 
 ### 7.3 文書の不整合
 
-[muon-android-prototype/README.md](muon-android-prototype/README.md)は現在の試作に最も近い。一方、次の資料には履歴と現状が混在する。
+[core/android-poc/README.md](../../../core/android-poc/README.md)は現在の試作に最も近い。一方、次の資料には履歴と現状が混在する。
 
-- [android-api-compatibility.md](android-api-compatibility.md)は`x86_64`のみ、NDK plugin後続、Node.js API非対応というQuickJS追加前の記述を含む。
-- [filter-limitation.md](filter-limitation.md)はdeny-all案、native HTTP代理案、通常ネットワーク採用後の確定方針を同じ文書に残す。
-- rootの[README.md](README.md)と[README_ja.md](README_ja.md)はAndroidを利用者向けtargetとして案内しない。これは公開状態としては正しいが、正式対応時には更新が必要である。
+- [android-api-compatibility.md](../../../android-api-compatibility.md)は`x86_64`のみ、NDK plugin後続、Node.js API非対応というQuickJS追加前の記述を含む。
+- [filter-limitation.md](../../../filter-limitation.md)はdeny-all案、native HTTP代理案、通常ネットワーク採用後の確定方針を同じ文書に残す。
+- rootの[README.md](../../../README.md)と[README_ja.md](../../../README_ja.md)はAndroidを利用者向けtargetとして案内しない。これは公開状態としては正しいが、正式対応時には更新が必要である。
 
 ## 8. 現状判定
 

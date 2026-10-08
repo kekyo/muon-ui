@@ -4,7 +4,7 @@ This chapter writes APIs in the `window.muon.*` form to make plugin namespaces a
 This is also the object hierarchy actually exposed by `plugin.mode: "simple"`.
 In the default `validate` mode, import functions from the corresponding virtual modules and use them.
 
-The Android WebView backend exposes only a subset of the desktop APIs in this chapter. See [Android WebView backend limitations](limitation.md#android-webview-backend) and the [Android API compatibility policy](../../android-api-compatibility.md) for available functions and platform-specific behavior. Functions that are not exposed are not replaced with no-ops.
+The Android WebView backend exposes only a subset of the desktop APIs in this chapter. See [Android WebView backend limitations](./limitation.md#android-webview-backend) and the [Android API compatibility policy](../../android-api-compatibility.md) for available functions and platform-specific behavior. Functions that are not exposed are not replaced with no-ops.
 
 For example, for `window.muon.executor.spawn`, first allow `muon.executor.spawn` in `plugin.plugins[].imports` or Vite `pluginAccess.plugins[].imports`, then import `spawn` from `muon:executor`:
 

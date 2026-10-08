@@ -2,20 +2,20 @@
 
 ## 目的
 
-この文書は、[plan.md](plan.md)のステップ4「Android API対応表を定義する」の判断結果である。現行のMuon公開APIを、Android WebView版でも同じ契約で提供するもの、Android固有の制約を伴って提供するもの、別APIとして設計するもの、提供しないものに分類する。
+この文書は、[plan1.md](docs/ja/plans/plan1.md)のステップ4「Android API対応表を定義する」の判断結果である。現行のMuon公開APIを、Android WebView版でも同じ契約で提供するもの、Android固有の制約を伴って提供するもの、別APIとして設計するもの、提供しないものに分類する。
 
 判定対象は、現在の実装が公開する次のAPIである。
 
-- [muon.browser](muon-core/src/browser/muon_builtin_browser.cpp)
-- [muon.launcher](muon-core/src/plugins/builtin/muon_builtin_launcher.cpp)
-- [muon.environments](muon-core/src/plugins/builtin/muon_builtin_environments.cpp)
-- [muon.executor](muon-core/src/plugins/builtin/muon_builtin_executor.cpp)
-- [muon.fs](muon-core/src/plugins/builtin/muon_builtin_fs.cpp)
-- [muon.fs.dialogs](muon-core/src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp)
-- [Node.js sidecar](docs/ja/nodejs-sidecar.md)
+- [muon.browser](./core/cef/src/browser/muon_builtin_browser.cpp)
+- [muon.launcher](./core/cef/src/plugins/builtin/muon_builtin_launcher.cpp)
+- [muon.environments](./core/cef/src/plugins/builtin/muon_builtin_environments.cpp)
+- [muon.executor](./core/cef/src/plugins/builtin/muon_builtin_executor.cpp)
+- [muon.fs](./core/cef/src/plugins/builtin/muon_builtin_fs.cpp)
+- [muon.fs.dialogs](./core/cef/src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp)
+- [Node.js sidecar](./docs/ja/nodejs-sidecar.md)
 - `muon.json`のうち、上記APIやAndroidの実行モデルへ影響する設定
 
-ネットワークとアセットoriginについては、[filter-limitation.md](filter-limitation.md)の「Android WebView検証後の確定方針」を前提とする。Android版はCEF版のネットワークdeny-by-defaultを再現せず、構成されたアセットoriginのメインフレームだけにMuonプラグインRPCを公開する。
+ネットワークとアセットoriginについては、[filter-limitation.md](./filter-limitation.md)の「Android WebView検証後の確定方針」を前提とする。Android版はCEF版のネットワークdeny-by-defaultを再現せず、構成されたアセットoriginのメインフレームだけにMuonプラグインRPCを公開する。
 
 ## 判定区分
 
@@ -40,7 +40,7 @@
 
 ## 現在のAndroid実装状況
 
-現在の[Android試作](muon-android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)には、共通RPCを経由する次の組み込みAPIを実装した。simple modeで公開する関数一覧は[Android APIメタデータ](muon-android/src/renderer/android-api.ts)を唯一の公開リストとし、一覧にない関数を動的に作成しない。
+現在の[Android試作](./core/android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)には、共通RPCを経由する次の組み込みAPIを実装した。simple modeで公開する関数一覧は[Android APIメタデータ](./core/android/renderer/android-api.ts)を唯一の公開リストとし、一覧にない関数を動的に作成しない。
 
 - `muon.browser`: `reload()`, fullscreen 3関数、zoom 3関数、`close()`
 - `muon.environments`: `getVariables()`, `getConfigValues()`, `getProcessId()`, `getRuntimeInfo()`
@@ -48,7 +48,7 @@
 
 `muon.launcher`、`muon.executor`、`muon.fs.dialogs`、Node.js sidecar、対応表で非対応またはAndroid向け別設計としたbrowser/environment関数は公開リストへ含めていない。`muon.fs.dialogs`は、先に`content://`を`muon.fs`で扱う契約を確定するまで公開しない。
 
-[Android設定検証器](muon-android/src/renderer/android-config.ts)は、Androidで意味を持たない値を拒否し、受理しても適用しないnetwork設定と`plugin.pages`を警告する。これは製品用Android build pipelineへ組み込むための検証プリミティブであり、現在の試作には合成済み`muon.json`を読み込むbuild pipeline自体はまだない。
+[Android設定検証器](./core/android/renderer/android-config.ts)は、Androidで意味を持たない値を拒否し、受理しても適用しないnetwork設定と`plugin.pages`を警告する。これは製品用Android build pipelineへ組み込むための検証プリミティブであり、現在の試作には合成済み`muon.json`を読み込むbuild pipeline自体はまだない。
 このため、`getConfigValues()`のrouteと型は実装済みだが、現在返す値は試作用に組み込んだ設定値である。製品buildで合成済み`muon.json`の`config`を渡す接続はbuild pipelineと同時に行う。
 
 現在のGradle設定は`x86_64`だけを対象としている。実機用`arm64-v8a`とbuild-time同梱NDKプラグインはplanのステップ5で扱う。
@@ -160,7 +160,7 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 
 ## `muon.json`のAndroid対応
 
-この表は設定値を無言でdesktopと異なる意味へ変えないための方針である。アセットURLの詳細と移行手順は[filter-limitation.md](filter-limitation.md)の確定方針に従う。
+この表は設定値を無言でdesktopと異なる意味へ変えないための方針である。アセットURLの詳細と移行手順は[filter-limitation.md](./filter-limitation.md)の確定方針に従う。
 
 | 設定 | 判定 | Android版の扱い |
 |---|---|---|

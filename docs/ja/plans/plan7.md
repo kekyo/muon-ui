@@ -16,19 +16,19 @@
 | 組込みAPI | `browser`の8関数、`environments`の4関数、`fs`の22関数を公開 |
 | Node.js／QuickJSとの分離 | 通常の配布アプリはQuickJSなしでプラグインを利用する構成 |
 
-根拠は[プラグイン入力検査](/home/kouji/Projects/muon-ui/muon-android/src/plugins.ts:159)、[共通ランタイムの接続](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/cpp/muon_android_process_runtime.cpp:332)、[相互呼出しの端末テスト](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/androidTest/java/dev/muon/runtime/MuonActivityTest.java:573)、[組込みAPI一覧](/home/kouji/Projects/muon-ui/muon-android/src/renderer/android-api.ts:8)です。
+根拠は[プラグイン入力検査](../../../ui/android/plugins.ts)、[共通ランタイムの接続](../../../core/android/runtime/src/main/cpp/muon_android_process_runtime.cpp)、[相互呼出しの端末テスト](../../../core/android-test/android/app/src/androidTest/java/dev/muon/runtime/MuonActivityTest.java)、[組込みAPI一覧](../../../core/android/renderer/android-api.ts)です。
 
 未接続の箇所は、主に次の4点です。
 
-1. 公開ビルドがsimpleモード限定です。`validate`と通常の`plugin.plugins`設定を拒否し、レンダラーへ渡すモードも`simple`に固定しています。[ビルド側の制限](/home/kouji/Projects/muon-ui/muon-ui/src/android.ts:188)
+1. 公開ビルドがsimpleモード限定です。`validate`と通常の`plugin.plugins`設定を拒否し、レンダラーへ渡すモードも`simple`に固定しています。[ビルド側の制限](../../../ui/android/target.ts)
 
-2. 権限制御の基盤はありますが、設定との接続が不十分です。外部プラグインの`allow`はネイティブ側でも検査します。一方、組込みAPIの許可は固定で、`sources`・`packages`から生成するcapabilityや`plugin.pages`によるページ選別には未接続です。現在のRPC境界は、固定のアセットoriginとメインフレームで制限しています。[RPC初期化](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/cpp/muon_android_rpc_jni.cpp:1376)
+2. 権限制御の基盤はありますが、設定との接続が不十分です。外部プラグインの`allow`はネイティブ側でも検査します。一方、組込みAPIの許可は固定で、`sources`・`packages`から生成するcapabilityや`plugin.pages`によるページ選別には未接続です。現在のRPC境界は、固定のアセットoriginとメインフレームで制限しています。[RPC初期化](../../../core/android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)
 
-3. Vite側にAndroid向けの処理が必要です。関数一覧はデスクトップ用を含み、生成する呼出しコードもAndroidの引数・戻り値変換と統合されていません。また、外部プラグインのワイルドカード展開はホスト上で実行するinspectorに依存しています。Android用`.so`からビルド時メタデータを得る方法を決める必要があります。[モジュール生成](/home/kouji/Projects/muon-ui/muon-ui/src/capability.ts:1266)、[inspector呼出し](/home/kouji/Projects/muon-ui/muon-ui/src/plugin-inspector.ts:206)
+3. Vite側にAndroid向けの処理が必要です。関数一覧はデスクトップ用を含み、生成する呼出しコードもAndroidの引数・戻り値変換と統合されていません。また、外部プラグインのワイルドカード展開はホスト上で実行するinspectorに依存しています。Android用`.so`からビルド時メタデータを得る方法を決める必要があります。[モジュール生成](../../../ui/common/capability.ts)、[inspector呼出し](../../../ui/cef/plugin-inspector.ts)
 
-4. 配布経路の継続検証に不足があります。外部プラグイン入りの独立利用アプリを検証する`--plugins`は存在しますが、現在のCIでは指定していません。[CI設定](/home/kouji/Projects/muon-ui/.github/workflows/ci.yml:151)
+4. 配布経路の継続検証に不足があります。外部プラグイン入りの独立利用アプリを検証する`--plugins`は存在しますが、現在のCIでは指定していません。[CI設定](../../../.github/workflows/ci.yml)
 
-Android固有操作では、既存のfullscreen APIがステータスバーとナビゲーションバーをまとめて表示・非表示にします。ただし、現在のテストが確認しているのは内部のfullscreenフラグです。実際のバー表示や復帰動作の確認を、今回の計画に含める必要があります。バーの色や個別状態を変更する専用APIは、現行コードでは見つかりませんでした。[実装](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/java/dev/muon/runtime/MuonAndroidPlatformService.java:208)、[既存テスト](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/androidTest/java/dev/muon/runtime/MuonActivityTest.java:330)
+Android固有操作では、既存のfullscreen APIがステータスバーとナビゲーションバーをまとめて表示・非表示にします。ただし、現在のテストが確認しているのは内部のfullscreenフラグです。実際のバー表示や復帰動作の確認を、今回の計画に含める必要があります。バーの色や個別状態を変更する専用APIは、現行コードでは見つかりませんでした。[実装](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonAndroidPlatformService.java)、[既存テスト](../../../core/android-test/android/app/src/androidTest/java/dev/muon/runtime/MuonActivityTest.java)
 
 なお、`launcher`、`executor`、`fs.dialogs`、デスクトップ固有のウィンドウ操作は現在公開されていません。これらのAndroid向け新規設計と、今回のプラグインシステムの確立は、計画上で区別します。
 
@@ -61,27 +61,27 @@ Android固有操作では、既存のfullscreen APIがステータスバーと�
 | ページ単位の公開制限 | `CefFrame::IsMain()`と`GetURL()`を使い、ページURLのポリシーを検査する | 条件を満たすメインフレームにだけAPIを公開し、ブラウザ側でも呼出し時に再検査する |
 | 関数単位の権限検査 | ランダムなcapability IDに許可関数を対応付け、要求の関数パスと実際の呼出し先を照合する | IDの欠落、不明なID、許可外の関数、関数パスと実体の不一致を拒否する |
 
-import元の照合とIDの生成は[capability.ts](../../../muon-ui/src/capability.ts)の`matchesCapabilityRuleImporter`、`createMuonCapabilityModuleResolver`、`createCapabilityId`で行う。これはViteが把握しているビルド時のソース情報を使う処理であり、CEF固有の機能ではない。許可されたモジュールから関数を再公開したり、別のコードへ渡したりする利用まで追跡する仕組みではない。
+import元の照合とIDの生成は[capability.ts](../../../ui/common/capability.ts)の`matchesCapabilityRuleImporter`、`createMuonCapabilityModuleResolver`、`createCapabilityId`で行う。これはViteが把握しているビルド時のソース情報を使う処理であり、CEF固有の機能ではない。許可されたモジュールから関数を再公開したり、別のコードへ渡したりする利用まで追跡する仕組みではない。
 
-ページの検査は[muon_app.cpp](../../../muon-core/src/app/muon_app.cpp)の`ShouldExposeMuonApi`と[muon_client.cpp](../../../muon-core/src/browser/muon_client.cpp)の`IsPluginPageAllowed`にある。APIの意味は[CEFのCefFrameリファレンス](https://cef-builds.spotifycdn.com/docs/147.0/classCefFrame.html)と、使用中のCEF 147.0.14の`include/cef_frame.h`のコメントでも確認した。
+ページの検査は[muon_app.cpp](../../../core/cef/src/app/muon_app.cpp)の`ShouldExposeMuonApi`と[muon_client.cpp](../../../core/cef/src/browser/muon_client.cpp)の`IsPluginPageAllowed`にある。APIの意味は[CEFのCefFrameリファレンス](https://cef-builds.spotifycdn.com/docs/147.0/classCefFrame.html)と、使用中のCEF 147.0.14の`include/cef_frame.h`のコメントでも確認した。
 
-validateモードの呼出し入口は、ページのglobalに置く`__muon_plugin_call`である。[muon_v8_handler.cpp](../../../muon-core/src/plugins/muon_v8_handler.cpp)は、JSから渡されたIDと関数パスを受け取り、共通の[muon_rpc_host.cpp](../../../muon-core/src/rpc/muon_rpc_host.cpp)の`ValidateCapability`が権限を検査する。実行中のJSファイル名やnpmパッケージ名との照合は行っていない。
+validateモードの呼出し入口は、ページのglobalに置く`__muon_plugin_call`である。[muon_v8_handler.cpp](../../../core/cef/src/plugins/muon_v8_handler.cpp)は、JSから渡されたIDと関数パスを受け取り、共通の[muon_rpc_host.cpp](../../../core/common/src/rpc/muon_rpc_host.cpp)の`ValidateCapability`が権限を検査する。実行中のJSファイル名やnpmパッケージ名との照合は行っていない。
 
 したがって、同じページ内のコードが別のモジュールの有効なIDを取得すれば、そのIDに許可された関数を呼び出せる。IDを得ても、そのIDに許可していない関数を呼べるわけではない。この限界は既に[virtual moduleインポートの制約](../limitation.md#virtual-moduleインポートのフィルタ機能)にも記載されている。Android対応によって初めて生じる制約ではない。
 
 ### Androidで既にある検査と未接続の部分
 
-[MuonWebViewHost.java](../../../muon-android/runtime/src/main/java/dev/muon/runtime/MuonWebViewHost.java)は、`addWebMessageListener`と`addDocumentStartJavaScript`に`https://main.asset.muon.invalid`の完全一致originを渡している。[MuonRpcBridge.java](../../../muon-android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java)の`onPostMessage`でも、WebViewが渡した`sourceOrigin`と`isMainFrame`を検査する。JSがメッセージ本文へ書いたoriginを信用する構成ではない。
+[MuonWebViewHost.java](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonWebViewHost.java)は、`addWebMessageListener`と`addDocumentStartJavaScript`に`https://main.asset.muon.invalid`の完全一致originを渡している。[MuonRpcBridge.java](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java)の`onPostMessage`でも、WebViewが渡した`sourceOrigin`と`isMainFrame`を検査する。JSがメッセージ本文へ書いたoriginを信用する構成ではない。
 
-[muon_android_rpc_jni.cpp](../../../muon-android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)は、共通RPCホストを内部的には`MuonRpcHostMode::Validate`で作成している。外部プラグインの`allow`に加え、組込みAPIについても固定IDと固定の許可関数で検査する。公開設定がsimple限定であることと、ネイティブ側で関数権限を検査していないことは同義ではない。
+[muon_android_rpc_jni.cpp](../../../core/android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)は、共通RPCホストを内部的には`MuonRpcHostMode::Validate`で作成している。外部プラグインの`allow`に加え、組込みAPIについても固定IDと固定の許可関数で検査する。公開設定がsimple限定であることと、ネイティブ側で関数権限を検査していないことは同義ではない。
 
 残っているのは、Viteで生成するIDと許可関数をAndroidの設定、レンダラーメタデータ、共通RPCホストへ一貫して渡す処理である。現行の組込み用固定IDを残したままvalidateモードを追加すると、意図したimport制限を通らない呼出し経路が残るため、この接続と切替を同じ段階で検証する。
 
-また、CEFでは`__muon_plugin_call`を読取り専用かつ削除不可で公開する一方、Androidの[webview-rpc.ts](../../../muon-android/src/renderer/webview-rpc.ts)では書換え・再定義が可能である。この差は実装上の検討事項であり、WebViewのorigin制限とは別である。入口の属性を揃えても、同じページ内のJSファイルを認証する保証にはならない。
+また、CEFでは`__muon_plugin_call`を読取り専用かつ削除不可で公開する一方、Androidの[webview-rpc.ts](../../../core/android/renderer/webview-rpc.ts)では書換え・再定義が可能である。この差は実装上の検討事項であり、WebViewのorigin制限とは別である。入口の属性を揃えても、同じページ内のJSファイルを認証する保証にはならない。
 
 ### WebMessage APIの仕様から確定できる制約
 
-現行依存は[runtime/build.gradle.kts](../../../muon-android/runtime/build.gradle.kts)にある`androidx.webkit:webkit:1.17.0`である。以下は公式APIリファレンスに加え、Google Mavenが配布する[1.17.0のsources.jar](https://dl.google.com/dl/android/maven2/androidx/webkit/webkit/1.17.0/webkit-1.17.0-sources.jar)内の`WebViewCompat.java`、`JavaScriptExecutionWorld.java`、`JavaScriptReplyProxy.java`のAPIコメントでも確認した。
+現行依存は[runtime/build.gradle.kts](../../../core/android/runtime/build.gradle.kts)にある`androidx.webkit:webkit:1.17.0`である。以下は公式APIリファレンスに加え、Google Mavenが配布する[1.17.0のsources.jar](https://dl.google.com/dl/android/maven2/androidx/webkit/webkit/1.17.0/webkit-1.17.0-sources.jar)内の`WebViewCompat.java`、`JavaScriptExecutionWorld.java`、`JavaScriptReplyProxy.java`のAPIコメントでも確認した。
 
 | 確認事項 | APIの仕様 | Muonへの影響 |
 | --- | --- | --- |
@@ -105,7 +105,7 @@ JSから自己申告したURLを送るだけでは、呼出し側が値を変更
 
 現在のAndroidXには、返信先フレームと実行worldでJSを実行する[JavaScriptReplyProxy.executeJavaScript](https://developer.android.com/reference/androidx/webkit/JavaScriptReplyProxy)もある。しかし、これは非同期のJS実行であり、メッセージに送信時の完全URLが付くAPIではない。文書単位の認証や遷移状態を組み合わせた別方式は追加設計と検証の対象になる。本計画では、その方式によるCEFの`plugin.pages`との完全互換を完了条件に含めない。
 
-現行の[android-config.ts](../../../muon-android/src/renderer/android-config.ts)は`plugin.pages`の明示指定を警告し、公開originを変更しない。これは現在の実装上の扱いである。今回の設定接続では、未対応の狭いページ条件を無視して広いorigin全体へ許可してしまう挙動を避け、対応範囲外の設定はビルド時のエラーとして利用者へ返す方針とする。受理する設定値と省略時の扱いは、段階1で共通設定との整合を確認して記録する。
+現行の[android-config.ts](../../../core/android/renderer/android-config.ts)は`plugin.pages`の明示指定を警告し、公開originを変更しない。これは現在の実装上の扱いである。今回の設定接続では、未対応の狭いページ条件を無視して広いorigin全体へ許可してしまう挙動を避け、対応範囲外の設定はビルド時のエラーとして利用者へ返す方針とする。受理する設定値と省略時の扱いは、段階1で共通設定との整合を確認して記録する。
 
 ### isolated worldは現行バージョンにもある
 
@@ -167,7 +167,7 @@ iframe拒否の検証では、応答が来ないことだけを根拠にせず�
 - 初回分析を本書の先頭へそのまま保存した。
 - CEFのimport検査、ページ検査、capability検査と、Androidの現在の接続をコードで確認した。
 - AndroidX WebKit 1.17.0の公式配布ソースとAPIリファレンスで、通知される送信元情報、origin規則、実行worldのAPIを確認した。
-- 初回調査では関連Vitest 86件が成功した。追加調査では`muon-ui/test/vite.test.ts`からimport元・packageの許可と拒否、`muon.json`との接続、許可関数生成、capability ID共有の6件を実行し、すべて成功した。この追加実行では他の77件を選択対象外とした。
+- 初回調査では関連Vitest 86件が成功した。追加調査では`ui/common-test/vite.test.ts`からimport元・packageの許可と拒否、`muon.json`との接続、許可関数生成、capability ID共有の6件を実行し、すべて成功した。この追加実行では他の77件を選択対象外とした。
 - 接続中のPixel 6はWebView provider `com.google.android.webview`の153.0.8010.36を使用していた。providerのバージョン確認だけを行い、isolated worldのfeature flagや新しいAPKの端末動作は今回検証していない。
 - yomiyasuの文書検査を行い、追記の表現を調整した。文書内のローカルリンク26件は参照先ファイルの存在を確認した。
 - 変更は本計画書だけである。文書変更に伴うビルド、全体テスト、端末テストは行っていない。これらを実装完了時に実行する条件は前節に残した。
@@ -232,7 +232,7 @@ simpleモードでメタデータを省略した外部プラグインに、組�
 
 既存の`enterFullscreen`、`exitFullscreen`、`toggleFullscreen`による4回の遷移も検証する。各遷移でシステムバーのアニメーション終了を待ち、ステータスバーとナビゲーションバーが期待した表示状態を60フレーム連続で保つことを確認する。状態の取得には[WindowInsets.isVisible](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int))、終了通知には[WindowInsetsAnimation.Callback.onEnd](https://developer.android.com/reference/android/view/WindowInsetsAnimation.Callback#onEnd(android.view.WindowInsetsAnimation))を使う。公式リファレンスと導入済みSDKのAPIコメントを照合した。
 
-[動画検証スクリプト](../../../muon-android-prototype/scripts/test-fullscreen-video.mjs)は、このテストの実行中に`adb screenrecord`で動画を記録し、instrumentationの成功と録画ファイルを検査する。表示の正否は前述の状態と終了通知で判定し、可変フレームレートの録画枚数を時間の代わりには使わない。Pixel 6とエミュレーターで記録し、切り出した画像でもバーの非表示と復帰を目視確認した。
+[動画検証スクリプト](../../../core/android-test/scripts/test-fullscreen-video.mjs)は、このテストの実行中に`adb screenrecord`で動画を記録し、instrumentationの成功と録画ファイルを検査する。表示の正否は前述の状態と終了通知で判定し、可変フレームレートの録画枚数を時間の代わりには使わない。Pixel 6とエミュレーターで記録し、切り出した画像でもバーの非表示と復帰を目視確認した。
 
 端末全体テストでは、既存の資源解放テストが最初の停止通知だけを根拠にidleを仮定する問題も見つかった。旧セッションの停止完了時には、次のセッションが既に動作している場合がある。Pixel 6で失敗を再現し、既存のidle待機ヘルパーで実際の停止状態を確認するようにテストを修正した。固定時間の待機は追加していない。修正後は両端末の47件がすべて成功した。
 

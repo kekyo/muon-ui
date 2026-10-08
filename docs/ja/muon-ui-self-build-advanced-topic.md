@@ -20,6 +20,12 @@ Android部品を含むMuon本体のビルドと全体テストには、JDK 17～
 android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 ```
 
+## ソースの配置
+
+実行時の機能は`core/`、CLI・Vite連携・アプリのビルドと配布機能は`ui/`に置いています。それぞれの`common/`は共通処理、`cef/`と`android/`はバックエンド固有の処理です。テストは実装と同じ階層の`common-test/`、`cef-test/`、`android-test/`に置きます。
+
+`core/android-poc/`にはQuickJSの試作と固有テストがあります。周辺機能は、ネイティブビルド支援を`builder/`、Node.jsホストを`node/`に分けています。`ui/`の公開npmパッケージ名は`muon-ui`、`node/`は`muon-node`です。
+
 ## ビルドとテスト
 
 ```bash
@@ -39,8 +45,15 @@ npm run dev
 全体テストはAPKのビルドと静的検査までを行います。端末上の検証はADB接続後に次のコマンドで実行してください。エミュレーターはAPI 37・x86_64・16 KiBページ、Pixel 6はAPI 37・arm64-v8a・4 KiBページを検証対象としています。
 
 ```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-prototype
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-tester
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
+```
+
+QuickJSの試作は別のworkspaceで検証します。
+
+```bash
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 npm配布物だけを使う独立アプリの検証対象は、公開CLI/Vite、署名、保存、再起動、更新後のデータ保持です。端末上の専用テストアプリ`dev.muon.e2e.publicconsumer`は検証のために作り直します。
@@ -49,10 +62,10 @@ npm配布物だけを使う独立アプリの検証対象は、公開CLI/Vite、
 npm run build --workspace muon-ui
 mkdir -p .run/android-e2e
 npm pack --workspace muon-ui --pack-destination .run/android-e2e
-ANDROID_SERIAL=your-device-serial node muon-android/scripts/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=your-device-serial node ui/android-test/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
 ```
 
-tgz名は実際のバージョンに合わせてください。`--plugins`を付ける場合は、先に試作のreleaseをビルドしておきます。CIでも同じ独立アプリを16 KiBエミュレーターで検証します。
+tgz名は実際のバージョンに合わせてください。`--plugins`を付ける場合は、先に`npm test --workspace muon-android-tester`でテストプラグインを生成してください。成果物は`core/android-test/.build/plugins/<abi>/`へ配置されます。`--validate`を併用するとvalidateモードの権限検査も実行します。CIでも同じ独立アプリを16 KiBエミュレーターで検証します。
 
 ## Windowsバイナリのe2eテスト
 

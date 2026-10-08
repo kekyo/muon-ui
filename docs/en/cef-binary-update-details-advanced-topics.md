@@ -98,7 +98,7 @@ Falling back to an existing catalog does not count as a successful refresh, so t
 Runtime preparation places the source distribution and CEF into the runtime.
 When Node.js is required, it installs only `runtimes/node/LICENSE` and `runtimes/node/bin/node` (`node.exe` on Windows) from the official archive.
 npm, Corepack, and all other files in the Node.js archive are not installed.
-When building `muon-core`, the same CEF preparer extracts the build CEF tree into `muon-core/.cef/`.
+When building `muon-core`, the same CEF preparer extracts the build CEF tree into `core/cef/.cef/`.
 
 A prepared runtime has a `.muon-runtime-ready.json` file containing SHA-256 fingerprints corresponding to the source muon distribution, CEF, and the Node.js archive.
 A sentinel of 64 zeroes is used for a component that does not apply, such as Node.js in an app that does not require it. In-place preparation of a portable distribution also uses this sentinel for the source muon fingerprint.

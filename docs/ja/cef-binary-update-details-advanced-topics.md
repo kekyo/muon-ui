@@ -95,7 +95,7 @@ Node.jsランタイムを必要としないアプリではNode.jsカタログは
 
 実行時の準備では配布元distとCEFをruntimeへ配置し、Node.jsが必要なら公式アーカイブから `runtimes/node/LICENSE` と `runtimes/node/bin/node`（Windowsでは `node.exe`）だけを配置します。
 npm、Corepack、その他のNode.jsアーカイブ内ファイルは配置しません。
-`muon-core` のビルド時には同じCEF preparerを使って `muon-core/.cef/` にビルド用のCEFツリーを展開します。
+`muon-core` のビルド時には同じCEF preparerを使って `core/cef/.cef/` にビルド用のCEFツリーを展開します。
 
 準備済みruntimeには `.muon-runtime-ready.json` があり、配布元muon、CEF、Node.jsアーカイブに対応するSHA-256 fingerprintを保持します。
 Node.jsが不要な場合のNode.js fingerprintなど、適用されない構成要素には64桁の`0`からなるsentinelを使用します。ポータブル配布物のin-place準備では、配布元muonのfingerprintにも同じsentinelを使用します。

@@ -128,17 +128,17 @@ jobs:
           path: |-
             ~/.cache/muon/cef-catalog.json
             ~/.cache/muon/artifacts/cef
-            muon-core/.cef
-          key: ${{ runner.os }}-${{ runner.arch }}-cef-linux64-v1-${{ hashFiles('muon-core/build.sh', 'muon-builder/src/prepare_cef.c', 'muon-builder/src/prepare_cef.h') }}
+            core/cef/.cef
+          key: ${{ runner.os }}-${{ runner.arch }}-cef-linux64-v1-${{ hashFiles('core/cef/build.sh', 'builder/src/prepare_cef.c', 'builder/src/prepare_cef.h') }}
 
       - name: Cache native dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |-
-            muon-builder/.deps
-            muon-core/.deps/*.tar.gz
-            muon-core/.deps/src
-          key: ${{ runner.os }}-${{ runner.arch }}-native-deps-v1-${{ steps.native-toolchain.outputs.fingerprint }}-${{ hashFiles('muon-builder/build.sh', 'muon-builder/build_*.sh', 'muon-core/build_*.sh') }}
+            builder/.deps
+            core/cef/.deps/*.tar.gz
+            core/cef/.deps/src
+          key: ${{ runner.os }}-${{ runner.arch }}-native-deps-v1-${{ steps.native-toolchain.outputs.fingerprint }}-${{ hashFiles('builder/build.sh', 'builder/build_*.sh', 'core/cef/build_*.sh') }}
 
       - name: Build and test
         run: npm run test
@@ -162,12 +162,13 @@ jobs:
           script: |
             test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = 16384
             adb shell df -h /data
-            npm run test:android --workspace muon-android-prototype
-            node muon-android-prototype/scripts/test-fullscreen-video.mjs .run/android-ci/fullscreen
+            npm run test:android --workspace muon-android-tester
+            npm run test:android --workspace muon-android-poc
+            node core/android-test/scripts/test-fullscreen-video.mjs .run/android-ci/fullscreen
             mkdir -p .run/android-ci
             npm pack --workspace muon-ui --pack-destination .run/android-ci
-            node muon-android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins
-            node muon-android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
+            node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins
+            node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
 
   codeql:
     name: Analyze ${{ matrix.language }}

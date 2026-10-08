@@ -34,7 +34,7 @@ Public APK builds use the fixed asset origin `https://main.asset.muon.invalid`. 
 
 The current Android `muon.fs` handles real filesystem paths allowed by Android. Direct `content://` URI access and `muon.fs.dialogs` are unsupported. `muon.launcher`, `muon.executor`, and the desktop Node.js sidecar are unavailable. External native plugins packaged inside the APK work in simple and validate modes; adding plugins from outside the APK after installation is unsupported. See [native plugin configuration](./android.md#prebuilt-native-plugins).
 
-In the Android prototype host, `muon.node.createNode()` creates an embedded QuickJS runtime in a separate-process Service and provides a limited set of Node-like modules. It is not compatible with Node.js, npm packages, CommonJS, or the complete standard library. See the [Android API compatibility policy](../../android-api-compatibility.md) for supported functions and the [Android prototype host](../../muon-android-prototype/README.md) for QuickJS modules, network boundaries, and resource limits.
+In the Android prototype host, `muon.node.createNode()` creates an embedded QuickJS runtime in a separate-process Service and provides a limited set of Node-like modules. It is not compatible with Node.js, npm packages, CommonJS, or the complete standard library. See the [Android API compatibility policy](../../android-api-compatibility.md) for supported functions and the [Android prototype host](../../core/android-poc/README.md) for QuickJS modules, network boundaries, and resource limits.
 
 ## Limitations on enabling the CEF sandbox on Linux
 

@@ -25,7 +25,7 @@ Android VMで動く試験用アプリを増やすこと自体は、この計画�
 - Android向けプラグインは事前に登録し、アプリ起動後に任意の共有ライブラリを探索、ダウンロード、ロードしない方針である。
 - 通常のネットワーク通信は、Androidの権限とmuon側の信頼境界を満たす場合に利用できる。
 
-詳細な実行方法と確認済みの範囲は [muon-android-prototype/README.md](muon-android-prototype/README.md)、API差分は [android-api-compatibility.md](android-api-compatibility.md) を参照する。
+詳細な実行方法と確認済みの範囲は [core/android-poc/README.md](../../../core/android-poc/README.md)、API差分は [android-api-compatibility.md](../../../android-api-compatibility.md) を参照する。
 
 ## 3. 現在の到達点と不足
 
@@ -43,11 +43,11 @@ Android VMで動く試験用アプリを増やすこと自体は、この計画�
 
 既存実装上の主な入口は次のとおりである。
 
-- 公開targetの定義: [muon-ui/src/targets.ts](muon-ui/src/targets.ts)
-- build処理: [muon-ui/src/build.ts](muon-ui/src/build.ts)
-- pack処理: [muon-ui/src/pack.ts](muon-ui/src/pack.ts)
-- Android設定の試作: [muon-android/src/renderer/android-config.ts](muon-android/src/renderer/android-config.ts)
-- Android試作のビルドおよびテスト: [muon-android-prototype/README.md](muon-android-prototype/README.md)
+- 公開targetの定義: [ui/common/targets.ts](../../../ui/common/targets.ts)
+- build処理: [ui/common/build.ts](../../../ui/common/build.ts)
+- pack処理: [ui/common/pack.ts](../../../ui/common/pack.ts)
+- Android設定の試作: [core/android/renderer/android-config.ts](../../../core/android/renderer/android-config.ts)
+- Android試作のビルドおよびテスト: [core/android-poc/README.md](../../../core/android-poc/README.md)
 
 ## 4. 課題A: Androidの正式ビルドとパッキング
 
@@ -323,7 +323,7 @@ Node.js Mobileは一般に、1プロセス内で1つのNode.jsランタイムを
 
 可能な限り、既存のmuon-nodeプロトコルとJavaScript側のAPIを維持する。
 
-- `muon-node/1` のメッセージ形式
+- `node/1` のメッセージ形式
 - module facade
 - request/response
 - callback
@@ -518,7 +518,7 @@ AndroidのStorage Access Frameworkは通常のファイルパスではなく `co
 
 ### 8.2 ネットワーク文書の統一
 
-[filter-limitation.md](filter-limitation.md) には、初期検討時のdeny-all方針と、その後に検証した通常ネットワーク許可の条件が混在する可能性がある。最終実装では次を一貫して説明する。
+[filter-limitation.md](../../../filter-limitation.md) には、初期検討時のdeny-all方針と、その後に検証した通常ネットワーク許可の条件が混在する可能性がある。最終実装では次を一貫して説明する。
 
 - 信頼されたアセットoriginからの通常通信
 - Android INTERNET権限

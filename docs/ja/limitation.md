@@ -33,7 +33,7 @@ validateモードの`sources`・`packages`はViteによる直接importの検査�
 
 現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は未対応です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecarも公開しません。外部ネイティブプラグインはAPKへ同梱したものをsimple・validateの両モードで使えますが、インストール後にAPK外から追加する機能はありません。[外部プラグインの設定](./android.md#事前ビルド済みネイティブプラグイン)
 
-Android試作hostの`muon.node.createNode()`は、別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../muon-android-prototype/README.md)を参照してください。
+Android試作hostの`muon.node.createNode()`は、別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../core/android-poc/README.md)を参照してください。
 
 ## LinuxにおけるCEF sandboxの有効化制限
 

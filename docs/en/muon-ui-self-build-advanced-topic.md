@@ -20,6 +20,12 @@ Building Muon itself and running the full suite, including Android components, a
 android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 ```
 
+## Source layout
+
+Runtime code lives in `core/`. The CLI, Vite integration, application builders, and packaging code live in `ui/`. In each component, `common/` contains shared code, while `cef/` and `android/` contain backend implementations. Tests sit beside those directories in `common-test/`, `cef-test/`, and `android-test/`.
+
+`core/android-poc/` contains the QuickJS experiment and its own tests. Native build tools live in `builder/`, and the Node.js host lives in `node/`. The public npm package names remain `muon-ui` for `ui/` and `muon-node` for `node/`.
+
 ## Build and test
 
 ```bash
@@ -39,8 +45,15 @@ npm run dev
 The full suite builds APKs and performs static checks. After connecting through ADB, run device tests separately. The emulator profile is API 37, x86_64, and 16 KiB pages; Pixel 6 uses API 37, arm64-v8a, and 4 KiB pages:
 
 ```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-prototype
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-tester
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
+```
+
+Run the QuickJS experiment in its separate workspace:
+
+```bash
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 The independent npm consumer test covers the public CLI/Vite integration, signing, storage, restart, and updates preserving data. It recreates its dedicated device fixture, `dev.muon.e2e.publicconsumer`:
@@ -49,10 +62,10 @@ The independent npm consumer test covers the public CLI/Vite integration, signin
 npm run build --workspace muon-ui
 mkdir -p .run/android-e2e
 npm pack --workspace muon-ui --pack-destination .run/android-e2e
-ANDROID_SERIAL=your-device-serial node muon-android/scripts/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=your-device-serial node ui/android-test/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
 ```
 
-Use the actual tgz version. When passing `--plugins`, build the prototype release first. CI runs the same independent application on a 16 KiB emulator.
+Use the actual tgz version. Before passing `--plugins`, run `npm test --workspace muon-android-tester` to generate test plugins in `core/android-test/.build/plugins/<abi>/`. Add `--validate` to check validate-mode permissions. CI runs the same independent application on a 16 KiB emulator.
 
 ## Windows binary e2e tests
 

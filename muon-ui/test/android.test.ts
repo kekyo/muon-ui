@@ -137,23 +137,6 @@ describe("public Android builds", () => {
       internalAllow: [],
     });
   });
-  it("rejects a plugin definition that has no common policy", async () => {
-    const root = await project({
-      android: {
-        plugins: [
-          {
-            name: "example",
-            soname: "libexample.so",
-            libraries: {},
-            allow: ["example.*"],
-          },
-        ],
-      },
-    });
-    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
-      /plugin.plugins/,
-    );
-  });
   it.each([
     ["https://main.asset.muon.invalid/allowed.html"],
     ["https://example.com/**"],

@@ -6,7 +6,7 @@ find_package(Threads REQUIRED)
 
 get_filename_component(MUON_REPOSITORY_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/../../../../../.." ABSOLUTE)
-set(MUON_CORE_ROOT "${MUON_REPOSITORY_ROOT}/muon-core")
+set(MUON_COMMON_ROOT "${MUON_REPOSITORY_ROOT}/core/common")
 set(CARDIO_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/cardio")
 set(TRA_FFIC_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/tra-ffic")
 set(MUON_ANDROID_DEPENDENCY_ROOT

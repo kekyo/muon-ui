@@ -49,7 +49,7 @@ set(MUON_ANDROID_PLUGIN_TARGETS)
 {{for plugin plugins}}
 add_library({{plugin.target}} SHARED
   "\${MUON_REPOSITORY_ROOT}/{{plugin.source}}"
-  "\${MUON_CORE_ROOT}/include/muon_plugin_api.h"
+  "\${MUON_COMMON_ROOT}/include/muon_plugin_api.h"
   )
 set_target_properties({{plugin.target}} PROPERTIES
   OUTPUT_NAME "{{plugin.outputName}}"
@@ -62,8 +62,8 @@ target_compile_options({{plugin.target}} PRIVATE
   -Werror
   )
 target_include_directories({{plugin.target}} PRIVATE
-  "\${MUON_CORE_ROOT}/include"
-  "\${MUON_CORE_ROOT}/src"
+  "\${MUON_COMMON_ROOT}/include"
+  "\${MUON_COMMON_ROOT}/src"
   )
 target_link_libraries({{plugin.target}} PRIVATE
   muon_cardio

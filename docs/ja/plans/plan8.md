@@ -95,3 +95,9 @@ observerを`core/android-test`へ移す。Android用テストプラグインの�
 ## 実施記録
 
 2026年10月8日、`feature/plan7`の完了状態から`feature/plan8`を作成した。上記の方針と実装段階を保存し、共有コアの分離から着手する。
+
+### 段階1の結果
+
+共有実装と公開C APIを`core/common`へ、7本の既存テストと共用プラグインを`core/common-test`へ移した。独立したMakefileから既存のRPC、portable RPC、関数寿命、C APIの4テストを実行する。共有ソースが未移動の状態でビルド失敗を確認し、移動・接続後の成功を確認した。ルートの全体テストにも組み込んだ。
+
+CEFの既存ビルドが成功し、共有部分に対応するCTest 7件が成功した。Androidの両ABI向けrelease AARのビルドと公開用Maven成果物の生成も成功した。Androidのプラグイン登録に関するVitest 20件が成功した。検証ログは`/tmp/muon-plan8/step1-*.log`へ保存した。

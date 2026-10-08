@@ -16,7 +16,7 @@ const createValidRegistry = (): unknown => ({
     {
       name: 'muon_test_plugin_alpha',
       soname: 'libmuon_test_plugin_alpha.so',
-      source: '../muon-core/test_plugins/muon_test_plugin_alpha.cpp',
+      source: '../core/common-test/plugins/muon_test_plugin_alpha.cpp',
       artifacts: {
         x86_64: 'lib/x86_64/libmuon_test_plugin_alpha.so',
         'arm64-v8a': 'lib/arm64-v8a/libmuon_test_plugin_alpha.so',
@@ -38,7 +38,7 @@ describe('muon Android plugin registry', () => {
         {
           name: 'muon_test_plugin_alpha',
           soname: 'libmuon_test_plugin_alpha.so',
-          source: '../muon-core/test_plugins/muon_test_plugin_alpha.cpp',
+          source: '../core/common-test/plugins/muon_test_plugin_alpha.cpp',
           artifacts: {
             x86_64: 'lib/x86_64/libmuon_test_plugin_alpha.so',
             'arm64-v8a': 'lib/arm64-v8a/libmuon_test_plugin_alpha.so',
@@ -76,7 +76,7 @@ describe('muon Android plugin registry', () => {
         const duplicate = structuredClone(plugins[0]!);
         duplicate.name = 'second_plugin';
         duplicate.source =
-          '../muon-core/test_plugins/muon_test_plugin_beta.cpp';
+          '../core/common-test/plugins/muon_test_plugin_beta.cpp';
         plugins.push(duplicate);
       },
       diagnostic: 'duplicate plugin soname',

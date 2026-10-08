@@ -37,11 +37,12 @@
     "build": "npm run build --workspaces",
     "build:dist": "bash ./build_package.sh --target dist",
     "dev": "npm run dev --workspace muon-core",
-    "test": "npm run test --workspaces",
+    "test": "npm run test:common && npm run test --workspaces",
     "test:ffi-closures": "npm run test:ffi-closures --workspace muon-core-tester",
     "test:asan": "npm run test:asan --workspace muon-core-tester",
     "test:valgrind": "npm run test:valgrind --workspace muon-core-tester",
-    "pack": "bash ./build_package.sh"
+    "pack": "bash ./build_package.sh",
+    "test:common": "make -C core/common-test test"
   },
   "allowScripts": {
     "tesseract.js": false

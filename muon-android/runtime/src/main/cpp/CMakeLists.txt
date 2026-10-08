@@ -7,13 +7,13 @@ foreach(required MUON_REPOSITORY_ROOT MUON_ANDROID_DEPENDENCY_ROOT)
     message(FATAL_ERROR "${required} must be supplied by the runtime builder")
   endif()
 endforeach()
-set(MUON_CORE_ROOT "${MUON_REPOSITORY_ROOT}/muon-core")
+set(MUON_COMMON_ROOT "${MUON_REPOSITORY_ROOT}/core/common")
 set(CARDIO_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/cardio")
 set(TRA_FFIC_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/tra-ffic")
 set(MUON_ANDROID_DEPENDENCY_ROOT "${MUON_ANDROID_DEPENDENCY_ROOT}/${ANDROID_ABI}")
 
 add_subdirectory(
-  "${MUON_CORE_ROOT}/src/rpc"
+  "${MUON_COMMON_ROOT}/src/rpc"
   "${CMAKE_CURRENT_BINARY_DIR}/muon-rpc-core"
   )
 
@@ -86,7 +86,7 @@ else()
   set(MUON_BUILD_TESTS OFF)
   set(MUON_TRACK_FFI_CLOSURES OFF)
 endif()
-include("${MUON_CORE_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
+include("${MUON_COMMON_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
 muon_add_plugin_runtime_core(muon_plugin_runtime_core)
 
 add_library(muon_android_rpc SHARED

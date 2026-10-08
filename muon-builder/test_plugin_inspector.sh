@@ -16,12 +16,12 @@ rm -rf "${OUT_DIR}"
 mkdir -p "${PLUGIN_DIR}"
 
 "${CC_VALUE}" -std=c99 -fPIC -shared -Wall -Wextra -pedantic \
-  -I"${SCRIPT_DIR}/../muon-core/include" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${PLUGIN_DIR}/valid-plugin.so" \
   "${SCRIPT_DIR}/test/plugin_inspector_valid.c"
 
 "${CC_VALUE}" -std=c99 -fPIC -shared -Wall -Wextra -pedantic \
-  -I"${SCRIPT_DIR}/../muon-core/include" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${PLUGIN_DIR}/invalid-plugin.so" \
   "${SCRIPT_DIR}/test/plugin_inspector_invalid.c"
 

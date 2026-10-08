@@ -258,7 +258,9 @@ public final class MuonNativeRuntimeTest {
             assertEquals(allocationDelta, releaseDelta);
         }
 
-        String stoppedJson = MuonRpcBridge.awaitNativeRuntimeStopForTest(
+        // A prior stop can finish while a newer session is already running.
+        // Assert resource release from the actual idle state, not the first notification.
+        String stoppedJson = MuonRpcBridge.awaitNativeRuntimeIdleForTest(
                 30, TimeUnit.SECONDS);
         assertNotNull(stoppedJson);
         JSONObject stopped = new JSONObject(stoppedJson);

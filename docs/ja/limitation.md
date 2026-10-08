@@ -25,11 +25,15 @@ Android WebViewバックエンドは、WebViewの通常ネットワーク通信�
 
 Androidでは、Manifestの`INTERNET`、端末とAPI levelに応じたローカルネットワーク権限、Network Security ConfigがMuonより外側のアプリ全体の制約として作用します。CORSやCSPなどのWeb platformの制約も通常どおり適用されます。`INTERNET`が付与された環境では、Muonの宛先allowlistがなくてもWebViewから外部へ通信できることを前提にしてください。
 
-MuonプラグインRPCは、構成されたHTTPSアセットoriginのメインフレームだけから受理します。外部originのメインフレーム、iframe、同一originのサブフレームには公開しません。ただし、信頼したメインフレーム内で実行されるJavaScriptを取得元ファイルごとに区別することはできません。外部scriptを信頼したページへ読み込むと、そのscriptもページと同じ権限を持つため、CSPと依存関係の管理を併用してください。
+MuonプラグインRPCは、信頼するHTTPSアセットoriginのメインフレームだけから受理します。外部originのメインフレーム、外部iframe、同一originのiframeからの直接RPCは拒否します。ただし、同一originのiframeから親ページのオブジェクトへアクセスする経路まで隔離する保証はありません。同じページ内のJavaScriptを取得元ファイルごとに認証することもできません。simpleモードでは公開API、validateモードでは取得した有効なcapabilityの許可範囲で呼出しが可能です。CSPと依存関係の管理を併用してください。[WebMessageListenerが通知する送信元情報](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener)
 
-既定のアセットURLは`https://main.asset.muon.invalid/`で、正式な構成モデルでは`https://{asset_name}.asset.muon.invalid/`を既定templateとします。構成済みのアセットhostはMuonがローカルで完結させ、存在しないアセットも外部ネットワークへfallbackさせません。ただし、誤ったhost設定、アセット専用ではない実在hostの使用、またはプラットフォーム上の想定外の処理がある場合は外部アクセスの可能性があります。templateを変更する場合は、アプリ開発者が所有する専用hostを使用し、`browser.startPage`、CEF版の`network.allow`、`plugin.pages`、originを参照するその他の設定、CSP、ソースコード、テストも整合させてください。関連する全項目は[ネットワークフィルタ検証記録](../../filter-limitation.md)に記載しています。
+validateモードの`sources`・`packages`はViteによる直接importの検査です。ネイティブ側ではcapability IDと許可関数を検査します。`plugin.pages`は省略、空配列、`asset://main/**`、`https://main.asset.muon.invalid/**`に対応し、その他の条件はビルド時に拒否します。空配列はブリッジを停止します。origin規則はパスを含む完全URLのフィルタではないため、CEFのページURL globとの完全互換は提供しません。[WebViewCompatの注入規則](https://developer.android.com/reference/androidx/webkit/WebViewCompat)
 
-現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は後続作業です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecar、runtime外部plugin loadも現在は公開しません。Android試作hostの`muon.node.createNode()`は代わりに別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の正確な一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../muon-android-prototype/README.md)を参照してください。
+公開APKのアセットoriginは`https://main.asset.muon.invalid`に固定しています。このhostはMuonがローカルで処理し、存在しないアセットも外部ネットワークへ転送しません。複数アセットhostや独自hostへの変更は公開ビルドでは未対応です。過去の構成案と検証の経緯は[ネットワークフィルタ検証記録](../../filter-limitation.md)を参照してください。
+
+現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は未対応です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecarも公開しません。外部ネイティブプラグインはAPKへ同梱したものをsimple・validateの両モードで使えますが、インストール後にAPK外から追加する機能はありません。[外部プラグインの設定](./android.md#事前ビルド済みネイティブプラグイン)
+
+Android試作hostの`muon.node.createNode()`は、別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../muon-android-prototype/README.md)を参照してください。
 
 ## LinuxにおけるCEF sandboxの有効化制限
 

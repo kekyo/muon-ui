@@ -39,7 +39,7 @@ Add muon-ui as a development dependency in an existing Vite/TypeScript project:
 npm install -D muon-ui
 ```
 
-Configure the Muon plugin in `vite.config.ts`, keeping your existing React or other plugins. Android requires simple mode with `pluginAccess: false`:
+Configure the Muon plugin in `vite.config.ts`, keeping your existing React or other plugins. This example uses simple mode. Validate mode with virtual modules and import permissions is described below:
 
 ```ts
 import { defineConfig } from 'vite';
@@ -119,7 +119,7 @@ Relative paths in `muon.json` resolve from that file's directory. Paths supplied
 
 The default web asset URL is `https://main.asset.muon.invalid/index.html`. A subpath in Vite's `base` is preserved. Set `browser.startPage` to a URL on this origin or `asset://main/…`. External start pages, ZIP assets, and multiple asset hosts are unsupported.
 
-Muon APIs initialize before your application JavaScript. No custom adapter import is needed:
+Muon APIs initialize before your application JavaScript. No custom adapter import is needed. In simple mode:
 
 ```ts
 import type {} from 'muon-ui';
@@ -129,6 +129,43 @@ const config = await window.muon.environments.getConfigValues();
 await window.muon.fs.writeTextFile('note.txt', 'Saved on Android', 'utf8');
 const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 ```
+
+In simple mode, omitting `plugin.plugins` exposes the 34 supported builtin functions. An explicit list loads only its entries: an empty list or a list without `internal` exposes no builtins. Each entry's `allow` restricts functions. Native policy checks also apply to directly constructed RPC calls.
+
+### Import with validate mode
+
+Remove `pluginAccess: false` from Vite and configure allowed importers and functions in `muon.json`:
+
+```json
+{
+  "plugin": {
+    "mode": "validate",
+    "plugins": [{
+      "name": "internal",
+      "imports": [{
+        "sources": ["src/**"],
+        "allow": ["muon.environments.*", "muon.fs.readTextFile", "muon.fs.writeTextFile"]
+      }]
+    }]
+  }
+}
+```
+
+```ts
+import type {} from 'muon-ui';
+import { getRuntimeInfo } from 'muon:environments';
+import { readTextFile, writeTextFile } from 'muon:fs';
+
+const runtime = await getRuntimeInfo();
+await writeTextFile('note.txt', 'Saved on Android', 'utf8');
+const note = await readTextFile('note.txt', 'utf8');
+```
+
+`sources` selects paths relative to the project root; `packages` selects npm package names. Vite checks direct imports, and the native host checks each generated capability ID against its allowed functions. Validate mode does not expose `window.muon`. Unsupported functions and unmatched patterns fail at build time. Build separate Android and desktop JavaScript bundles with their respective targets.
+
+Omitting `plugin.pages` accepts RPC from the trusted asset origin's main frame. Explicit values are limited to `asset://main/**` and `https://main.asset.muon.invalid/**`. An empty list disables the bridge. Unsupported conditions, including path-specific filters, fail the build.
+
+`sources` and `packages` are build-time import checks. Code in the same page that obtains a valid capability can use its allowed functions. Runtime authentication of individual JavaScript files and isolation from same-origin iframes accessing the parent page are not guaranteed. WebMessage supplies origin and main-frame status, without the caller's JavaScript file or full document URL. See [WebMessageListener](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener) and [Android limitations](./limitation.md#android-webview-backend).
 
 Relative `muon.fs` paths refer to the application's private files directory. Data survives updates with the same application ID and signing key, and is removed by uninstalling. `content://` URIs and file dialogs are unavailable. See the [Android API compatibility policy](../../android-api-compatibility.md) for browser, environments, and fs support. Its QuickJS entries apply only to the prototype.
 
@@ -188,24 +225,50 @@ On startup failures, inspect the on-screen diagnostic and logcat. For build fail
 
 ## Prebuilt native plugins
 
-Supply a `.so` for each selected ABI through `android.plugins`. Compiling plugin sources is not provided:
+Supply a `.so` for each selected ABI through `android.plugins`. Put permissions and plugin-specific settings in a matching `plugin.plugins` entry. Compiling plugin sources is not provided:
 
 ```json
-[
-  {
-    "name": "calculator",
-    "soname": "libcalculator.so",
-    "libraries": {
-      "arm64-v8a": "plugins/arm64-v8a/libcalculator.so",
-      "x86_64": "plugins/x86_64/libcalculator.so"
-    },
-    "allow": ["calculator.add"],
-    "config": { "precision": "double" }
+{
+  "android": {
+    "plugins": [{
+      "name": "calculator",
+      "soname": "libcalculator.so",
+      "libraries": {
+        "arm64-v8a": "plugins/arm64-v8a/libcalculator.so",
+        "x86_64": "plugins/x86_64/libcalculator.so"
+      },
+      "metadata": "plugins/calculator.json"
+    }]
+  },
+  "plugin": {
+    "mode": "validate",
+    "plugins": [{
+      "name": "calculator",
+      "imports": [{ "sources": ["src/**"], "allow": ["muon.calculator.*"] }],
+      "config": { "precision": "double" }
+    }]
   }
-]
+}
 ```
 
-`allow` explicitly lists public function names and supports `*` patterns. The builder validates registration names, SONAME, ABI, `muon_init_plugin`, dependencies, and 16 KiB alignment. Configuration values must be strings. Android does not support the default validate mode or virtual-module access control; keep `pluginAccess: false`. See [plugin development](./muon-plugin-develop.md).
+This example uses `import { add } from 'muon:calculator'`. The plugin producer supplies its TypeScript declarations. Add an `internal` entry to use builtins too. In simple mode, place `allow` directly on the entry instead of using `imports`.
+
+The producer supplies the following JSON file as `metadata`. Replace each hash with the library's SHA-256 after stripping and any other post-processing:
+
+```json
+{
+  "schemaVersion": 1,
+  "functions": ["muon.calculator.add"],
+  "sha256": {
+    "arm64-v8a": "<64 lowercase hexadecimal digits>",
+    "x86_64": "<64 lowercase hexadecimal digits>"
+  }
+}
+```
+
+Metadata is required in validate mode. The build checks ABI hashes and resolves exact names and wildcards against each plugin's own function catalog. Startup also checks allowed functions against actual registrations, reporting the plugin name on mismatch. Metadata is optional in simple mode; when supplied, the same checks apply. Android binaries are never executed on the build host.
+
+The builder also validates registration names, SONAME, ABI, `muon_init_plugin`, dependencies, and 16 KiB alignment. Plugin-specific configuration values must be strings. Common `signature` and `salt` settings are rejected on Android; use the metadata's ABI-specific SHA-256 hashes. Buffers, callbacks in both directions, returned native function proxies, and their release follow the shared plugin ABI. See [plugin development](./muon-plugin-develop.md).
 
 ## Follow-up scope
 

@@ -39,7 +39,7 @@ SDKとJDKの配置先は環境に合わせてください。`platform-tools`は�
 npm install -D muon-ui
 ```
 
-`vite.config.ts`のMuonプラグインを次のように構成します。既存のReactなどのプラグインは残してください。Androidでは`pluginAccess: false`を指定し、simpleモードを使います。
+`vite.config.ts`のMuonプラグインを次のように構成します。既存のReactなどのプラグインは残してください。次はsimpleモードの例です。virtual moduleでimport元と許可関数を指定するvalidateモードについては後述します。
 
 ```ts
 import { defineConfig } from 'vite';
@@ -119,7 +119,7 @@ npx muon build --target android --assets ./dist
 
 Webアセットの既定URLは`https://main.asset.muon.invalid/index.html`です。Viteの`base`がサブパスなら、そのパスを反映します。`browser.startPage`はこのoriginのURLか`asset://main/…`で指定します。外部サイトを起動ページにする指定、ZIPアセット、複数アセットhostは未対応です。
 
-Muon APIはアプリのJavaScriptより先に初期化されます。独自adapterのimportは不要です。TypeScriptから使う例を示します。
+Muon APIはアプリのJavaScriptより先に初期化されます。独自adapterのimportは不要です。simpleモードでTypeScriptから使う例を示します。
 
 ```ts
 import type {} from 'muon-ui';
@@ -129,6 +129,43 @@ const config = await window.muon.environments.getConfigValues();
 await window.muon.fs.writeTextFile('note.txt', 'Saved on Android', 'utf8');
 const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 ```
+
+simpleモードでは`plugin.plugins`を省略すると現在対応している34個の組込み関数を公開します。明示した場合は、そのリストだけが対象です。空配列、または`internal`を含まないリストでは組込み関数を公開しません。各エントリーの`allow`で関数を限定でき、直接RPCを組み立てた場合もネイティブ側で権限を検査します。
+
+### validateモードでimportする
+
+Vite設定の`pluginAccess: false`を外し、`muon.json`に許可するimport元と関数を指定します。
+
+```json
+{
+  "plugin": {
+    "mode": "validate",
+    "plugins": [{
+      "name": "internal",
+      "imports": [{
+        "sources": ["src/**"],
+        "allow": ["muon.environments.*", "muon.fs.readTextFile", "muon.fs.writeTextFile"]
+      }]
+    }]
+  }
+}
+```
+
+```ts
+import type {} from 'muon-ui';
+import { getRuntimeInfo } from 'muon:environments';
+import { readTextFile, writeTextFile } from 'muon:fs';
+
+const runtime = await getRuntimeInfo();
+await writeTextFile('note.txt', 'Saved on Android', 'utf8');
+const note = await readTextFile('note.txt', 'utf8');
+```
+
+`sources`にはプロジェクトルートからのソースパス、`packages`には許可するnpmパッケージ名を指定してください。Viteが直接importを検査し、生成したcapability IDと関数の組合せをネイティブ側が検査します。validateモードでは`window.muon`を公開しません。未対応の関数名や、一致する関数がないパターンはビルド時にエラーになります。AndroidとデスクトップのJSは、それぞれのターゲットを指定して別々にビルドしてください。
+
+`plugin.pages`の省略時は、信頼するアセットoriginのメインフレームからRPCを受理します。指定できる値は`asset://main/**`と`https://main.asset.muon.invalid/**`です。空配列ではブリッジを停止し、パス単位などの未対応条件はビルド時に拒否します。
+
+`sources`・`packages`はビルド時のimport検査です。同じページ内で有効なcapabilityを取得したコードは、その許可範囲でRPCを呼べます。呼出し元JSファイルごとの実行時認証や、同一originのiframeから親ページへのアクセスを含む隔離は保証しません。WebMessageが通知する送信元はoriginとメインフレーム判定であり、JSファイル名や文書の完全URLは含まれません。[WebMessageListenerの仕様](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener)、[Android版の制約](./limitation.md#android-webviewバックエンド)
 
 `muon.fs`の相対パスはアプリ専用のfiles領域を指します。同じアプリIDと署名鍵を使えば、更新後も保存データを利用できますが、アンインストールすると削除される点には注意が必要です。`content://`とファイル選択ダイアログは未提供です。基本のbrowser・environments・fs APIの対応範囲は[Android API対応方針](../../android-api-compatibility.md)を参照してください。同文書のQuickJS関連は試作専用です。
 
@@ -188,24 +225,50 @@ adb logcat -s MuonActivity AndroidRuntime chromium
 
 ## 事前ビルド済みネイティブプラグイン
 
-独自プラグインは選択したすべてのABIの`.so`を用意し、`android.plugins`へ登録します。ソースコードからプラグインをビルドする機能はありません。
+独自プラグインは選択したすべてのABIの`.so`を用意し、`android.plugins`へ登録してください。権限とプラグイン固有の設定は、同じ名前の`plugin.plugins`へ記述します。ソースコードからプラグインをビルドする機能はありません。
 
 ```json
-[
-  {
-    "name": "calculator",
-    "soname": "libcalculator.so",
-    "libraries": {
-      "arm64-v8a": "plugins/arm64-v8a/libcalculator.so",
-      "x86_64": "plugins/x86_64/libcalculator.so"
-    },
-    "allow": ["calculator.add"],
-    "config": { "precision": "double" }
+{
+  "android": {
+    "plugins": [{
+      "name": "calculator",
+      "soname": "libcalculator.so",
+      "libraries": {
+        "arm64-v8a": "plugins/arm64-v8a/libcalculator.so",
+        "x86_64": "plugins/x86_64/libcalculator.so"
+      },
+      "metadata": "plugins/calculator.json"
+    }]
+  },
+  "plugin": {
+    "mode": "validate",
+    "plugins": [{
+      "name": "calculator",
+      "imports": [{ "sources": ["src/**"], "allow": ["muon.calculator.*"] }],
+      "config": { "precision": "double" }
+    }]
   }
-]
+}
 ```
 
-`allow`は公開する関数名の明示リストです。`*`によるパターンも使えます。登録名、SONAME、ABI、`muon_init_plugin`、依存ライブラリ、16 KiB整列をビルド前に検査します。設定値は文字列です。既定のvalidateモードとvirtual moduleによる公開制御はAndroidでは未提供なので、`pluginAccess: false`を維持してください。[プラグインの開発](./muon-plugin-develop.md)
+この例では`import { add } from 'muon:calculator'`で呼び出します。関数のTypeScript宣言はプラグインの提供者が用意します。組込みAPIも使う場合は`internal`のエントリーを追加してください。simpleモードでは`imports`の代わりにエントリー直下へ`allow`を指定します。
+
+`metadata`は提供者が配布する次の形式のJSONファイルです。ハッシュの文字列は、stripなどの加工を終えた各ライブラリのSHA-256に置き換えます。
+
+```json
+{
+  "schemaVersion": 1,
+  "functions": ["muon.calculator.add"],
+  "sha256": {
+    "arm64-v8a": "<64桁の小文字16進数>",
+    "x86_64": "<64桁の小文字16進数>"
+  }
+}
+```
+
+validateモードではメタデータが必須です。ビルド時にABI別のハッシュを確認し、完全名とワイルドカードを各プラグインの関数一覧へ照合します。起動時の照合対象は、許可した関数と実際の登録結果です。不一致ならプラグイン名を含むエラーを表示します。simpleモードでは省略できますが、指定した場合は同じ照合を行います。Android用バイナリをホストで実行する必要はありません。
+
+登録名、SONAME、ABI、`muon_init_plugin`、依存ライブラリ、16 KiB整列もビルド前に検査します。プラグイン固有の設定値は文字列です。共通設定の`signature`・`salt`はAndroidでは受理せず、メタデータのABI別SHA-256を使います。バッファ、双方向コールバック、返された関数のプロキシとその解放は共通のプラグインABIに従います。[プラグインの開発](./muon-plugin-develop.md)
 
 ## 今後の範囲
 

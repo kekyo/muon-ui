@@ -215,3 +215,66 @@ APKには、許可した公開関数の一覧も収録する。起動時に実�
 メタデータ読込みとバイナリ差替えのテストを失敗させてから実装した。ネイティブ側でも、誤った関数一覧を受理する状態を再現し、照合追加後に拒否を確認した。許可ソース・npmパッケージと未許可のimport、プラグインごとのワイルドカード展開もテストで確認した。
 
 Pixel 6では、独立したnpm利用アプリへ3つの事前ビルド済みプラグインを導入し、validateモードのvirtual moduleから呼び出した。整数、バッファ、JSへのコールバック、関数を引数・戻り値に持つコールバック、ネイティブ関数のプロキシ、解放後の拒否がdebug・署名付きreleaseで成功した。simple用のプラグインIDによる呼出しは拒否された。メタデータに実在しない許可関数を追加したrelease APKは、起動時にプラグイン名を含む不一致を表示した。正しいAPKへ戻すと保存済みデータを維持して起動できた。段階3の完了条件を満たした。
+
+### 段階4の権限制御検証で補ったケース
+
+simpleモードでメタデータを省略した外部プラグインに、組込み関数のパスを含む`allow`を指定するケースを追加した。外部プラグインのcapabilityを使うと、`internal.allow`が許可していない`muon.fs.unlink`まで実行できた。Pixel 6の独立したnpm利用アプリで、保存した検証用ファイルが削除され、テストが失敗することを確認した。
+
+原因は、組込み関数のルート登録時に許可を絞る処理をvalidateモードに限定していたことである。simpleモードでも同じ登録制限を適用し、外部capabilityが組込み関数の許可範囲を広げないようにした。試作host専用関数は従来の別ポリシーを維持する。
+
+段階1の完了判定には、組込み用の固定IDによる拒否だけでなく、外部プラグインのIDによる組込み関数呼出しも必要だった。本計画の関数権限制御を検証するケースとして、CIのsimpleモード利用アプリにも残す。
+
+修正版では、Pixel 6とx86_64エミュレーターの両方で、同じテストがdebug・署名付きreleaseともに成功した。禁止されたファイル削除は拒否され、検証用ファイルが残ることも確認した。release更新後の保存データ維持と再起動も成功した。
+
+### 段階4の端末検証と配布経路
+
+端末のinstrumentationへ、実際のWebViewが通知したoriginとメインフレーム判定をアプリのRPC受理処理へ渡すテストを追加した。信頼するメインフレームではzoomが変化し、同一originのiframe、外部iframe、外部originのメインフレームでは変化しないことを確認する。応答の有無だけでなく、呼出し対象のAndroid側の状態で拒否を判定する。
+
+既存の`enterFullscreen`、`exitFullscreen`、`toggleFullscreen`による4回の遷移も検証する。各遷移でシステムバーのアニメーション終了を待ち、ステータスバーとナビゲーションバーが期待した表示状態を60フレーム連続で保つことを確認する。状態の取得には[WindowInsets.isVisible](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int))、終了通知には[WindowInsetsAnimation.Callback.onEnd](https://developer.android.com/reference/android/view/WindowInsetsAnimation.Callback#onEnd(android.view.WindowInsetsAnimation))を使う。公式リファレンスと導入済みSDKのAPIコメントを照合した。
+
+[動画検証スクリプト](../../../muon-android-prototype/scripts/test-fullscreen-video.mjs)は、このテストの実行中に`adb screenrecord`で動画を記録し、instrumentationの成功と録画ファイルを検査する。表示の正否は前述の状態と終了通知で判定し、可変フレームレートの録画枚数を時間の代わりには使わない。Pixel 6とエミュレーターで記録し、切り出した画像でもバーの非表示と復帰を目視確認した。
+
+端末全体テストでは、既存の資源解放テストが最初の停止通知だけを根拠にidleを仮定する問題も見つかった。旧セッションの停止完了時には、次のセッションが既に動作している場合がある。Pixel 6で失敗を再現し、既存のidle待機ヘルパーで実際の停止状態を確認するようにテストを修正した。固定時間の待機は追加していない。修正後は両端末の47件がすべて成功した。
+
+検証環境は次のとおりである。
+
+| 端末 | ABI | OS API | ページサイズ | WebView |
+| --- | --- | --- | --- | --- |
+| Pixel 6実機 | arm64-v8a | 37 | 4 KiB | 153.0.8010.36 |
+| Pixel 6プロファイルのエミュレーター | x86_64 | 37 | 16 KiB | 149.0.7827.5 |
+
+最終的なnpm配布物を使う独立アプリでは、両端末でsimple・validateの両モードが成功した。debug、署名付きrelease、release更新、再読込み、再起動、保存データ維持を確認した。3つの外部プラグインの型変換、コールバック、プロキシ解放と権限制御も同じ配布アプリで検証した。validateモードのメタデータ不一致は両端末で起動前に拒否され、正しいAPKへ戻した後もデータを利用できた。APKの内容検査ではQuickJS、FCM、試作hostのテスト用ブリッジが含まれないことを確認した。
+
+既存のrelease APKとAPK setの起動テストも、両端末で成功した。動画と端末ログは、今回の作業環境の`/tmp/muon-plan7-work/`へ保存した。動画の格納先は`pixel6-fullscreen/fullscreen.mp4`と`emulator-fullscreen/fullscreen.mp4`である。
+
+[CI](../../../.github/workflows/ci.yml)には、独立したnpm利用アプリの`--plugins`と`--plugins --validate`を組み込んだ。これにより、組込み関数と外部プラグインの両モード、NDKなしの利用アプリビルド、署名付きreleaseの更新、メタデータ不一致の診断を継続して検証する。既存fullscreenの動画検証も同じジョブへ追加した。CIの録画先は`.run/android-ci/fullscreen`である。
+
+利用者向けの[Android設定](../android.md)、[制約](../limitation.md)、[プラグイン](../muon-plugins.md)、[Vite設定](../muon-vite-plugin-reference.md)、[muon.json](../muon-json-reference.md)を日本語と英語で更新した。simple限定だった説明を改め、共通設定とABI別ライブラリの役割、メタデータ形式、許可判定の範囲を記載した。公開型の追加は段階2と3で行った。
+
+### 全体テストと完了条件の確認
+
+権限制御の最終修正を含む状態で、リポジトリルートの`npm test`を最後まで実行し、終了コード0を確認した。主な集計は次のとおりである。
+
+| 対象 | 結果 |
+| --- | --- |
+| muon-android | 50件成功、JSと両ABIのランタイムビルド成功 |
+| muon-android-prototype | 23件成功、debug・release・テストAPKとAPK setのビルド・内容検査成功 |
+| muon-builder | SHA-256、launcher、runtime helper、inspector、リソース更新、Wineの各検証成功 |
+| muon-node | 40件成功 |
+| muon-ui | 339件成功 |
+| muon-core | CTest 42件成功 |
+| muon-core-tester | 209件成功、既存の環境・実行条件による26件スキップ |
+| Android instrumentation | Pixel 6とx86_64で各47件成功 |
+| 独立したnpm利用アプリ | 両端末でsimple・validateとも成功 |
+| release APK・APK set、fullscreen録画 | 両端末で成功 |
+
+最終ログは`/tmp/muon-plan7-work/all-tests-final.log`に保存した。日本語の追記はyomiyasuで検査し、変更した文書のローカルリンク69件とMarkdownの書式も確認した。
+
+| 計画段階 | 完了条件との照合 |
+| --- | --- |
+| 1. 設定とsimpleモード | 共通設定を反映し、許可外の関数をネイティブ側で拒否する。外部プラグインのIDによる迂回も拒否し、適用できないページ条件をビルド時に診断する |
+| 2. 組込みAPIのvalidate対応 | 34関数のcatalogと呼出し変換を接続した。import元をビルド時に検査し、生成したcapabilityの範囲を端末上で検証した |
+| 3. 外部プラグインのvalidate対応 | ABI別SHA-256と関数一覧を照合し、配布APKで型変換、コールバック、プロキシ解放、不一致時の診断を確認した |
+| 4. 配布・端末検証 | QuickJSなしの配布APKを両ABIで確認した。既存fullscreenの表示・復帰と動画、全体テスト、文書更新、CIへの検証コマンド追加を完了した |
+
+以上により、4段階の完了条件を満たした。Node.jsとQuickJSの製品化、新しいAndroid固有APIは追加していない。JSファイルごとの実行時認証、ページURLのパス単位フィルタ、同一originのiframeを含む隔離については、調査で確定した保証範囲を維持する。

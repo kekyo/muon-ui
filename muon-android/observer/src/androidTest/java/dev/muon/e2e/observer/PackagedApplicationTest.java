@@ -37,6 +37,7 @@ public final class PackagedApplicationTest {
     @Test
     public void operatesPackagedApplication() throws Exception {
         requireText("ready:android-webview:package-consumer");
+        requireText("Policy: blocked");
         String version = InstrumentationRegistry.getArguments().getString("version");
         if (version != null) requireText("Version: " + version);
         if ("true".equals(InstrumentationRegistry.getArguments().getString("plugin"))) {

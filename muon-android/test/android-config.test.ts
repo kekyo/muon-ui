@@ -43,7 +43,6 @@ describe('muon Android configuration', () => {
       })
     ).toEqual({
       warnings: [
-        'muon.json plugin.pages cannot expose Android RPC outside configured asset origins.',
         'muon.json network policy is not enforced by the Android WebView backend.',
       ],
     });
@@ -52,6 +51,14 @@ describe('muon Android configuration', () => {
   it('accepts a minimal shared configuration without warnings', () => {
     expect(validateMuonAndroidConfig({})).toEqual({ warnings: [] });
   });
+  it.each(['*', 'https://external.example/**', 'asset://main/allowed.html'])(
+    'rejects a page rule that Android cannot enforce: %s',
+    (page) => {
+      expect(() =>
+        validateMuonAndroidConfig({ plugin: { pages: [page] } })
+      ).toThrow('plugin.pages');
+    }
+  );
 
   it.each([
     {

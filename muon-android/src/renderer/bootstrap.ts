@@ -33,16 +33,26 @@ export const bootstrapMuonAndroid = (
     client,
     target
   );
+  const api = createMuonAndroidSimpleApi(client, {
+    'muon.browser': 'browser-capability',
+    'muon.environments': 'environment-capability',
+    'muon.fs': 'fs-capability',
+  });
+  const allowed = new Set(metadata.builtinFunctions);
+  const builtin = Object.fromEntries(
+    Object.entries(api).flatMap(([namespace, functions]) => {
+      const selected = Object.entries(functions).filter(([name]) =>
+        allowed.has(`muon.${namespace}.${name}`)
+      );
+      return selected.length === 0
+        ? []
+        : [[namespace, Object.fromEntries(selected)]];
+    })
+  );
   const uninstallApi = installMuonAndroidNativePluginApi(
     client,
     metadata,
-    {
-      muon: createMuonAndroidSimpleApi(client, {
-        'muon.browser': 'browser-capability',
-        'muon.environments': 'environment-capability',
-        'muon.fs': 'fs-capability',
-      }),
-    },
+    Object.keys(builtin).length === 0 ? {} : { muon: builtin },
     target
   );
   return () => {

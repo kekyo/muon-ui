@@ -14,10 +14,6 @@ export interface MuonAndroidPluginOptions {
   soname: string;
   /** Library path for each ABI selected by android.abis. */
   libraries: Partial<Record<MuonAndroidAbi, string>>;
-  /** Allowed public function patterns; an explicit nonempty list is required. */
-  allow: readonly string[];
-  /** Application-owned string configuration passed to the plugin. */
-  config?: Readonly<Record<string, string>>;
 }
 
 /** Android application options, overriding the muon.json android section. */

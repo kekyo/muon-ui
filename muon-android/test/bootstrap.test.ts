@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bootstrapMuonAndroid } from '../src/renderer/bootstrap.js';
+import { muonAndroidBuiltinFunctionPaths } from '../src/renderer/android-api.js';
 import type { MuonWebViewJavaScriptBridge } from '../src/renderer/webview-rpc.js';
 
 describe('packaged Android renderer', () => {
@@ -18,6 +19,7 @@ describe('packaged Android renderer', () => {
         version: 1,
         contextId: 1,
         mode: 'simple',
+        builtinFunctions: muonAndroidBuiltinFunctionPaths,
         namespaces: [],
         functions: [],
       },
@@ -42,5 +44,25 @@ describe('packaged Android renderer', () => {
     await expect(result).resolves.toEqual({ channel: 'consumer' });
     dispose();
     expect(target.muon).toBeUndefined();
+  });
+  it('exposes only the configured built-in functions', () => {
+    const target: Record<PropertyKey, unknown> = {};
+    const dispose = bootstrapMuonAndroid(
+      { onmessage: null, postMessage: () => {} },
+      {
+        version: 1,
+        contextId: 1,
+        mode: 'simple',
+        namespaces: [],
+        functions: [],
+        builtinFunctions: ['muon.environments.getConfigValues'],
+      },
+      target
+    );
+    expect(Object.keys(target.muon as object)).toEqual(['environments']);
+    expect(
+      Object.keys((target.muon as { environments: object }).environments)
+    ).toEqual(['getConfigValues']);
+    dispose();
   });
 });

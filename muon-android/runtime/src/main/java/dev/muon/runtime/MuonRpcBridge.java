@@ -183,6 +183,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private final LinkedBlockingQueue<String> nativeRuntimeProbeSettlements =
             new LinkedBlockingQueue<>();
     private final MuonAndroidPlatformService platformService;
+    private final boolean pluginEnabled;
     private String rendererMetadataJson = "";
     private long nativeHandle;
     private JavaScriptReplyProxy replyProxy;
@@ -194,9 +195,11 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             @NonNull WebView webView,
             @NonNull Listener listener) {
         this.listener = listener;
+        MuonAppConfig config = MuonAppConfig.load(activity);
+        pluginEnabled = config.pluginEnabled;
         platformService = new MuonAndroidPlatformService(activity, webView);
         try {
-            nativeHandle = nativeCreateHost(this, MuonPackagedPlugin.load(activity));
+            nativeHandle = nativeCreateHost(this, MuonPackagedPlugin.load(activity), config.internalAllow);
         } catch (RuntimeException error) {
             platformService.close();
             throw error;
@@ -218,7 +221,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             @NonNull Uri sourceOrigin,
             boolean isMainFrame,
             @NonNull JavaScriptReplyProxy currentReplyProxy) {
-        if (!isMainFrame || !MuonAppConfig.TRUSTED_ORIGIN.equals(sourceOrigin.toString())) {
+        if (!pluginEnabled || !isMainFrame || !MuonAppConfig.TRUSTED_ORIGIN.equals(sourceOrigin.toString())) {
             return;
         }
         replyProxy = currentReplyProxy;
@@ -983,7 +986,8 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     }
 
     private static native long nativeCreateHost(
-            @NonNull MuonRpcBridge bridge, @NonNull MuonPackagedPlugin[] plugins);
+            @NonNull MuonRpcBridge bridge, @NonNull MuonPackagedPlugin[] plugins,
+            @NonNull String[] internalAllow);
 
     private static native boolean nativeIsHostReady(long handle);
 

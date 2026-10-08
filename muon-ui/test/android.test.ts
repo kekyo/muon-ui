@@ -109,6 +109,62 @@ describe("public Android builds", () => {
       }),
     );
   });
+  it("packages the common simple-mode built-in policy", async () => {
+    const root = await project({
+      plugin: {
+        mode: "simple",
+        pages: ["asset://main/**"],
+        plugins: [
+          { name: "internal", allow: ["muon.environments.getConfigValues"] },
+        ],
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].pluginAccess).toEqual({
+      mode: "simple",
+      enabled: true,
+      internalAllow: ["muon.environments.getConfigValues"],
+    });
+  });
+  it("disables plugin exposure when no pages are allowed", async () => {
+    const root = await project({
+      plugin: { mode: "simple", pages: [], plugins: [] },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].pluginAccess).toEqual({
+      mode: "simple",
+      enabled: false,
+      internalAllow: [],
+    });
+  });
+  it("rejects a plugin definition that has no common policy", async () => {
+    const root = await project({
+      android: {
+        plugins: [
+          {
+            name: "example",
+            soname: "libexample.so",
+            libraries: {},
+            allow: ["example.*"],
+          },
+        ],
+      },
+    });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /plugin.plugins/,
+    );
+  });
+  it.each([
+    ["https://main.asset.muon.invalid/allowed.html"],
+    ["https://example.com/**"],
+    ["*"],
+  ])("rejects an unenforceable page policy: %s", async (page) => {
+    const root = await project({ plugin: { mode: "simple", pages: [page] } });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /plugin.pages/,
+    );
+    expect(buildAndroid).not.toHaveBeenCalled();
+  });
   it("lets explicit common CLI metadata override configuration defaults", async () => {
     const root = await project({
       android: { applicationId: "dev.config.app", label: "Configured" },

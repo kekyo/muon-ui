@@ -10,6 +10,7 @@ import android.content.Context;
 import android.net.Uri;
 import androidx.annotation.NonNull;
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -21,6 +22,8 @@ final class MuonAppConfig {
     static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
     final String startPage;
     final JSONObject values;
+    final boolean pluginEnabled;
+    final String[] internalAllow;
 
     private MuonAppConfig(@NonNull JSONObject config) throws JSONException {
         startPage = config.getString("startPage");
@@ -31,6 +34,16 @@ final class MuonAppConfig {
             throw new JSONException("The Android start page must use the trusted asset origin");
         }
         values = config.getJSONObject("values");
+        JSONObject plugin = config.getJSONObject("plugin");
+        if (!"simple".equals(plugin.getString("mode"))) {
+            throw new JSONException("Unsupported Android plugin mode");
+        }
+        pluginEnabled = plugin.getBoolean("enabled");
+        JSONArray allow = plugin.getJSONArray("internalAllow");
+        internalAllow = new String[allow.length()];
+        for (int i = 0; i < internalAllow.length; i++) {
+            internalAllow[i] = allow.getString(i);
+        }
     }
 
     @NonNull static MuonAppConfig load(@NonNull Context context) {

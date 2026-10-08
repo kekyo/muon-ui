@@ -39,6 +39,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     private String bootstrap;
     private String startPage;
     private boolean pageLoadStarted;
+    private boolean pluginEnabled;
     @Nullable private String startupFailure;
 
     MuonWebViewHost(@NonNull Activity activity, @NonNull Listener listener) {
@@ -57,7 +58,9 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                     throw new IllegalStateException("Required WebView feature is unavailable: " + feature);
                 }
             }
-            startPage = MuonAppConfig.load(activity).startPage;
+            MuonAppConfig config = MuonAppConfig.load(activity);
+            startPage = config.startPage;
+            pluginEnabled = config.pluginEnabled;
             assets = new MuonAssetRequestHandler(activity);
             assets.configureServiceWorkers();
             webView = new WebView(activity);
@@ -100,11 +103,13 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         if (source != bridge || pageLoadStarted || startupFailure != null) {
             return;
         }
-        WebViewCompat.addWebMessageListener(webView, RPC_OBJECT_NAME,
-                Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN), bridge);
-        script = WebViewCompat.addDocumentStartJavaScript(webView,
-                bridge.getDocumentStartScript() + "\n" + bootstrap,
-                Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN));
+        if (pluginEnabled) {
+            WebViewCompat.addWebMessageListener(webView, RPC_OBJECT_NAME,
+                    Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN), bridge);
+            script = WebViewCompat.addDocumentStartJavaScript(webView,
+                    bridge.getDocumentStartScript() + "\n" + bootstrap,
+                    Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN));
+        }
         listener.beforePageLoad(webView, bridge);
         activity.setContentView(webView);
         pageLoadStarted = true;

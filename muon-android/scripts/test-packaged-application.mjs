@@ -114,6 +114,22 @@ const config = {
     permissions: ['android.permission.INTERNET'],
   },
   config: { channel: 'package-consumer' },
+  plugin: {
+    mode: 'simple',
+    plugins: [
+      {
+        name: 'internal',
+        allow: [
+          'muon.browser.reload',
+          'muon.environments.getRuntimeInfo',
+          'muon.environments.getConfigValues',
+          'muon.fs.exists',
+          'muon.fs.readTextFile',
+          'muon.fs.writeTextFile',
+        ],
+      },
+    ],
+  },
 };
 if (includePlugin) {
   const libraries = {};
@@ -137,10 +153,13 @@ if (includePlugin) {
       name: 'consumer_alpha',
       soname: 'libmuon_test_plugin_alpha.so',
       libraries,
-      allow: ['muon.test.alpha.alphaAdd', 'muon.test.alpha.alphaConfig'],
-      config: { 'alpha.config': 'consumer-registry' },
     },
   ];
+  config.plugin.plugins.push({
+    name: 'consumer_alpha',
+    allow: ['muon.test.alpha.alphaAdd', 'muon.test.alpha.alphaConfig'],
+    config: { 'alpha.config': 'consumer-registry' },
+  });
 }
 await copyFile(join(repository, 'images/muon-256.png'), join(root, 'icon.png'));
 await writeFile(join(root, 'muon.json'), JSON.stringify(config));
@@ -165,7 +184,7 @@ await writeFile(
 );
 await writeFile(
   join(root, 'index.html'),
-  `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Muon Notes</title><style>body{font-family:sans-serif;margin:48px 20px;background:#f3f6fb;color:#102338}h1{font-size:28px}button{font-size:20px;display:block;margin:20px 0;padding:16px}output{display:block;margin:20px 0;font-size:18px}</style></head><body><h1>Packaged Muon Notes</h1><output id="status">Starting</output><output id="saved">Reading</output><output id="generation"></output><output id="plugin"></output><output id="version"></output><button id="save">Save note</button><button id="reload">Reload page</button><script type="module" src="/main.ts"></script></body></html>`
+  `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Muon Notes</title><style>body{font-family:sans-serif;margin:48px 20px;background:#f3f6fb;color:#102338}h1{font-size:28px}button{font-size:20px;display:block;margin:20px 0;padding:16px}output{display:block;margin:20px 0;font-size:18px}</style></head><body><h1>Packaged Muon Notes</h1><output id="status">Starting</output><output id="saved">Reading</output><output id="generation"></output><output id="plugin"></output><output id="policy"></output><output id="version"></output><button id="save">Save note</button><button id="reload">Reload page</button><script type="module" src="/main.ts"></script></body></html>`
 );
 await writeFile(
   join(root, 'main.ts'),
@@ -185,6 +204,13 @@ try {
     if (alpha.alphaName !== undefined) throw new Error('A denied plugin function was exposed');
     document.querySelector<HTMLOutputElement>('#plugin')!.textContent = 'Plugin: ' + await alpha.alphaAdd(3, 4) + ':' + await alpha.alphaConfig() + ':blocked';
   }
+  if (Reflect.get(window.muon.fs, 'unlink') !== undefined) throw new Error('A denied built-in was exposed');
+  const rawCall = Reflect.get(globalThis, '__muon_plugin_call') as (id: string, path: string, args: unknown[]) => Promise<unknown>;
+  let denied = false;
+  try { await rawCall('fs-capability', 'muon.fs.unlink', [JSON.stringify({ path })]); }
+  catch (error) { if (!String(error).includes('not allowed')) throw error; denied = true; }
+  if (!denied) throw new Error('The native policy accepted a denied built-in');
+  document.querySelector<HTMLOutputElement>('#policy')!.textContent = 'Policy: blocked';
   const config = await window.muon.environments.getConfigValues();
   const data = await window.muon.fs.exists(path) ? await window.muon.fs.readTextFile(path, 'utf8') : 'empty';
   saved.textContent = 'Stored: ' + data;

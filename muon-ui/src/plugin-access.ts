@@ -592,6 +592,26 @@ const validatePluginAccessOptions = (
   return resolved;
 };
 
+/**
+ * Reads and validates public plugin settings for an already loaded configuration.
+ * @param config - Parsed application configuration.
+ * @param defaultMode - Exposure mode used when the application omits it.
+ * @returns Explicit settings, preserving omitted plugin and page lists.
+ */
+export const readMuonPluginAccessOptions = (
+  config: Record<string, unknown>,
+  defaultMode: MuonPluginAccessMode,
+): MuonPluginAccessOptions => {
+  const options = readPluginAccessOptions(config);
+  validatePluginAccessOptions({
+    ...options,
+    mode: options.mode ?? defaultMode,
+    pages: options.pages ?? defaultPluginPages,
+    plugins: options.plugins ?? [],
+  });
+  return options;
+};
+
 const getValidateImportAllow = (
   entry: MuonPluginAccessImportOptions,
   pluginIndex: number,

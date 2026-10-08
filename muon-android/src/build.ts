@@ -22,6 +22,13 @@ import { prepareAndroid } from './toolchain.js';
 /** ABI shipped by the Muon Android runtime. */
 export type MuonAndroidAbi = 'arm64-v8a' | 'x86_64';
 
+/** Package-owned plugin exposure and built-in function policy. */
+export interface MuonAndroidPluginAccess {
+  /** Global API exposure mode. */ readonly mode: 'simple';
+  /** Whether the trusted main frame may use the bridge. */ readonly enabled: boolean;
+  /** Allowed built-in public function paths. */ readonly internalAllow: readonly string[];
+}
+
 /** Normalized package-owned plugin entry. */
 export interface MuonAndroidPackagedPlugin {
   /** Logical capability name. */ readonly name: string;
@@ -52,6 +59,7 @@ export interface MuonAndroidApplicationInput {
     Record<string, string>
   >;
   /** Explicit prebuilt plugins; an empty array builds a standard app. */ plugins: readonly MuonAndroidPackagedPlugin[];
+  /** Validated common plugin access settings. */ pluginAccess: MuonAndroidPluginAccess;
   /** Optional PNG icon already converted by the public build boundary. */ icon:
     string | undefined;
   /** Owned directory for generated Gradle sources and intermediates. */ projectDirectory: string;
@@ -169,7 +177,11 @@ export const buildAndroidApplication = async (
   );
   await writeFile(
     join(frameworkAssets, 'config.json'),
-    JSON.stringify({ startPage: input.startPage, values: input.values })
+    JSON.stringify({
+      startPage: input.startPage,
+      values: input.values,
+      plugin: input.pluginAccess,
+    })
   );
   await writeFile(
     join(frameworkAssets, 'plugins.json'),

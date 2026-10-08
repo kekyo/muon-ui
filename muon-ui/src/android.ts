@@ -19,6 +19,7 @@ import {
   resolveMuonAppIconPath,
 } from "./app-icon.js";
 import { resolveAndroidPlugins } from "../../muon-android/src/plugins.js";
+import { resolveMuonAndroidPluginAccess } from "./android-plugin-access.js";
 import {
   resolveAndroidSigning,
   signAndroidApplication,
@@ -187,17 +188,11 @@ export const buildMuonAndroidTarget = async (input: {
   }
   const { warnings } = validateMuonAndroidConfig(config);
   for (const warning of warnings) process.stderr.write(`Warning: ${warning}\n`);
-  const plugin = object(config.plugin, "plugin");
-  if (
-    (options.runtimePluginConfig?.mode ?? plugin.mode ?? "simple") !== "simple"
-  )
-    throw new Error(
-      "Android plugin.mode currently supports simple only. Use muon({ pluginAccess: false, build: { targets: ['android'] } }) with Vite.",
-    );
-  if (plugin.plugins !== undefined)
-    throw new Error(
-      "Android prebuilt plugins must be configured under android.plugins.",
-    );
+  const pluginConfiguration = resolveMuonAndroidPluginAccess(
+    config,
+    options.runtimePluginConfig,
+    android.plugins ?? [],
+  );
   if (
     config.node !== undefined &&
     Object.keys(object(config.node, "node")).length > 0
@@ -315,7 +310,7 @@ export const buildMuonAndroidTarget = async (input: {
     iconSource === undefined ? [] : [iconSource],
   );
   const plugins = await resolveAndroidPlugins(
-    android.plugins ?? [],
+    pluginConfiguration.plugins,
     abis,
     resolved.pluginsDirectory,
   );
@@ -343,6 +338,7 @@ export const buildMuonAndroidTarget = async (input: {
     abis,
     permissions,
     values,
+    pluginAccess: pluginConfiguration.pluginAccess,
     plugins,
     icon,
     projectDirectory: resolve(root, ".muon/android"),

@@ -28,11 +28,11 @@
     "android.d.ts"
   ],
   "scripts": {
-    "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs && npm run build --workspace muon-android && node ../core/android/scripts/stage-package.mjs dist/android",
-    "build:js": "vite build --mode cjs && vite build --mode esm",
+    "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs && npm run build --workspace muon-android && node scripts/stage-android-runtime.mjs dist/android",
+    "build:js": "vite build --mode cjs && vite build --mode esm && vite build --mode android-host",
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
-    "test:windows-nsis-e2e": "npm run build && MUON_E2E_REMOTE_WINDOWS=1 vitest run test/nsis-windows-e2e.test.ts",
+    "test:windows-nsis-e2e": "npm run build && MUON_E2E_REMOTE_WINDOWS=1 vitest run cef-test/nsis-windows-e2e.test.ts",
     "verify:package-runtime": "node scripts/verify-package-runtime.mjs",
     "pack": "bash ../build_package.sh",
     "dependencies": "reskill"

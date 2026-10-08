@@ -167,8 +167,8 @@ jobs:
             node core/android-test/scripts/test-fullscreen-video.mjs .run/android-ci/fullscreen
             mkdir -p .run/android-ci
             npm pack --workspace muon-ui --pack-destination .run/android-ci
-            node core/android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins
-            node core/android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
+            node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins
+            node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
 
   codeql:
     name: Analyze ${{ matrix.language }}

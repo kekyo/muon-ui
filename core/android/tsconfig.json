@@ -15,5 +15,5 @@
     "sourceMap": true,
     "outDir": "dist"
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vite.config.ts"]
+  "include": ["renderer/**/*.ts", "function-paths.ts", "vite.config.ts"]
 }

@@ -22,7 +22,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createConnection } from "@playwright/mcp";
 import { describe, expect, it } from "vitest";
 
-import { embedMuonConfigInCoreFile } from "../../ui/src/embed-config.js";
+import { embedMuonConfigInCoreFile } from "../../ui/cef/embed-config.js";
 
 const runtimeDirectory = resolve("../cef/.run/test-linux-amd64-release");
 

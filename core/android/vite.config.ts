@@ -5,37 +5,23 @@
 
 import prettierMax from 'prettier-max';
 import screwUp from 'screw-up';
-import { configDefaults, defineConfig } from 'vitest/config';
+import { defineConfig } from 'vite';
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
   plugins: [prettierMax(), screwUp()],
   base: './',
   build: {
     emptyOutDir: true,
-    outDir: mode === 'host' ? 'dist/lib' : 'dist/renderer',
+    outDir: 'dist/renderer',
     rolldownOptions: { external: [/^node:/, 'funcity'] },
     lib: {
-      entry: mode === 'host' ? 'src/index.ts' : 'src/renderer/entry.ts',
-      formats: mode === 'host' ? ['es', 'cjs'] : ['iife'],
+      entry: 'renderer/entry.ts',
+      formats: ['iife'],
       name: 'MuonAndroidRenderer',
-      fileName: (format) =>
-        mode === 'host'
-          ? `index.${format === 'es' ? 'mjs' : 'cjs'}`
-          : 'renderer.js',
+      fileName: () => 'renderer.js',
     },
     minify: false,
     sourcemap: true,
     target: 'es2022',
   },
-  test: {
-    environment: 'node',
-    exclude: [
-      ...configDefaults.exclude,
-      'android/.generated/**',
-      'android/.native-dependencies/**',
-    ],
-    fileParallelism: true,
-    restoreMocks: true,
-    testTimeout: 60000,
-  },
-}));
+});

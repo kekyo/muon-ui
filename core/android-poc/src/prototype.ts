@@ -13,10 +13,10 @@ import {
   createMuonWebViewRpcTransport,
   installMuonWebViewCapabilityBridge,
   type MuonWebViewJavaScriptBridge,
-} from '../../android/src/renderer/webview-rpc.js';
-import { createMuonAndroidSimpleApi } from '../../android/src/renderer/android-api.js';
-import { installMuonAndroidNativePluginApi } from '../../android/src/renderer/native-plugin-api.js';
-import { readMuonAndroidRendererMetadata } from '../../android/src/renderer/native-plugin-metadata.js';
+} from '../../android/renderer/webview-rpc.js';
+import { createMuonAndroidSimpleApi } from '../../android/renderer/android-api.js';
+import { installMuonAndroidNativePluginApi } from '../../android/renderer/native-plugin-api.js';
+import { readMuonAndroidRendererMetadata } from '../../android/renderer/native-plugin-metadata.js';
 
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) {

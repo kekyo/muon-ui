@@ -16,5 +16,13 @@
     "outDir": "dist",
     "rootDir": ".."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vite.config.ts"]
+  "include": [
+    "common/**/*.ts",
+    "common-test/**/*.ts",
+    "cef/**/*.ts",
+    "cef-test/**/*.ts",
+    "android/**/*.ts",
+    "android-test/**/*.ts",
+    "vite.config.ts"
+  ]
 }

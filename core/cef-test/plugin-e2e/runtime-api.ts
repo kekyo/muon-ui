@@ -17,7 +17,7 @@ import { join as nodeJoin } from "node:path";
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
 
-import { embedMuonConfigInCoreFile } from "../../../ui/src/embed-config.js";
+import { embedMuonConfigInCoreFile } from "../../../ui/cef/embed-config.js";
 import {
   MUON_PORT,
   MUON_APP_URL,

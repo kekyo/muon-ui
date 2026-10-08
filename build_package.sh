@@ -278,7 +278,7 @@ stage_targets() {
   printf 'Building JavaScript package entries\n'
   npm run build:js --workspace muon-ui
   npm run build --workspace muon-android
-  node core/android/scripts/stage-package.mjs ui/dist/android
+  node ui/scripts/stage-android-runtime.mjs ui/dist/android
 
   printf 'Staging package targets\n'
   if is_full_arch_matrix "${arches[@]}"; then

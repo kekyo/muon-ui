@@ -13,6 +13,7 @@ import muonNodePackageJson from "../node/package.json" with { type: "json" };
 
 export default defineConfig(({ mode }) => {
   const isCjs = mode === "cjs";
+  const isAndroidHost = mode === "android-host";
 
   return {
     define: {
@@ -24,22 +25,26 @@ export default defineConfig(({ mode }) => {
       prettierMax(),
       screwUp({
         outputMetadataFile: true,
+        outputMetadataFilePath: "common/generated/packageMetadata.ts",
       }),
     ],
     build: {
-      emptyOutDir: isCjs,
+      emptyOutDir: isCjs || isAndroidHost,
+      outDir: isAndroidHost ? ".build/android-host" : "dist",
       lib: {
-        entry: isCjs
-          ? {
-              cli: "src/cli.ts",
-              index: "src/index.ts",
-              vite: "src/vite.ts",
-            }
-          : {
-              index: "src/index.ts",
-              vite: "src/vite.ts",
-            },
-        formats: [isCjs ? "cjs" : "es"],
+        entry: isAndroidHost
+          ? { index: "android/index.ts" }
+          : isCjs
+            ? {
+                cli: "common/cli.ts",
+                index: "common/index.ts",
+                vite: "common/vite.ts",
+              }
+            : {
+                index: "common/index.ts",
+                vite: "common/vite.ts",
+              },
+        formats: isAndroidHost ? ["es", "cjs"] : [isCjs ? "cjs" : "es"],
         fileName: (format, entryName) =>
           `${entryName}${format === "es" ? ".mjs" : ".cjs"}`,
       },

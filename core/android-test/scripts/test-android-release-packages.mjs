@@ -146,12 +146,16 @@ adb(['install', '-r', releaseApk]);
 await launchAndAwaitPage('signed release APK');
 
 execFileSync(
-  includeQuickJs ? resolve(projectRoot, '../android/gradlew') : join(androidRoot, 'gradlew'),
-  ['-p', androidRoot, 'installReleaseBundleApks'], {
-  cwd: androidRoot,
-  env: { ...process.env, ANDROID_SERIAL: serial },
-  stdio: 'inherit',
-});
+  includeQuickJs
+    ? resolve(projectRoot, '../android/gradlew')
+    : join(androidRoot, 'gradlew'),
+  ['-p', androidRoot, 'installReleaseBundleApks'],
+  {
+    cwd: androidRoot,
+    env: { ...process.env, ANDROID_SERIAL: serial },
+    stdio: 'inherit',
+  }
+);
 await launchAndAwaitPage('release APK set');
 
 console.log(

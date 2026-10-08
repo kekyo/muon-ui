@@ -1081,12 +1081,17 @@ describeMuonPluginBridge("muon plugin bridge - app and network", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
-      await expect(
-        popupDriver.evaluate("document.location.href"),
-      ).resolves.toBe(`${MUON_APP_URL}#popup=connected`);
-      await expect(
-        popupDriver.evaluate("window.opener === null"),
-      ).resolves.toBe(true);
+      // Target discovery can report the destination before the renderer has
+      // committed its initial navigation away from about:blank.
+      const openedPage = popupDriver;
+      await expect
+        .poll(async () => await openedPage.evaluate("document.location.href"), {
+          timeout: targetTimeoutMs,
+        })
+        .toBe(`${MUON_APP_URL}#popup=connected`);
+      await expect(openedPage.evaluate("window.opener === null")).resolves.toBe(
+        true,
+      );
       await expect(
         driver.evaluate("document.querySelector('#popup-status')?.textContent"),
       ).resolves.toBe("Popup requested without opener access");

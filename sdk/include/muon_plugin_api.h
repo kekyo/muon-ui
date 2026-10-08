@@ -8,6 +8,16 @@
 
 #include <stdint.h>
 
+/** Plugin ABI revision used by SDK artifact manifests. */
+#define MUON_PLUGIN_ABI_VERSION 1
+
+/** Export a plugin entry point with its unmangled C name. */
+#if defined(_WIN32)
+#define MUON_PLUGIN_EXPORT __declspec(dllexport)
+#else
+#define MUON_PLUGIN_EXPORT __attribute__((visibility("default")))
+#endif
+
 /**
  * @file muon_plugin_api.h
  * @brief Public C ABI used by native muon plugins.

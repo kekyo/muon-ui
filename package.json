@@ -24,6 +24,7 @@
     "images/get-started-android.png"
   ],
   "workspaces": [
+    "sdk",
     "core/android",
     "core/android-test",
     "core/android-poc",

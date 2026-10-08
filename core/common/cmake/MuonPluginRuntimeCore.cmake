@@ -46,7 +46,7 @@ function(muon_add_plugin_runtime_core target_name)
     )
   target_compile_features(${target_name} PUBLIC cxx_std_20)
   target_include_directories(${target_name} PUBLIC
-    "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/include"
+    "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/../../sdk/include"
     "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/src"
     "${TRA_FFIC_ROOT_RESOLVED}/include"
     "${CARDIO_ROOT_RESOLVED}/include"

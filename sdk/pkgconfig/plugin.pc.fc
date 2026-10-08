@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../../../..
+includedir=${prefix}/include
+libdir=${pcfiledir}/..
+
+Name: {{name}}
+Description: muon native plugin development
+Version: 1
+Requires: {{requires}}
+Cflags: -I"${includedir}" {{cflags}}
+Libs: {{libs}}

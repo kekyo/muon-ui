@@ -2813,6 +2813,17 @@ static bool LoadMuonPluginLibrary(
   KeepOrCloseMuonPluginLibrary(
       impl, locator, handle, initial_function_count, metadata->stop,
       metadata->renderer_context_released);
+  if (plugin.has_expected_function_paths) {
+    auto actual = std::set<std::string>{};
+    for (auto index = initial_function_count; index < impl->renderer_functions.size(); ++index) {
+      actual.insert(CreateMuonFunctionPublicPath(impl->renderer_functions[index]));
+    }
+    const auto expected = std::set<std::string>(
+        plugin.expected_function_paths.begin(), plugin.expected_function_paths.end());
+    if (actual != expected) {
+      return FailMuonPluginStartup(impl, "Plugin catalog mismatch: " + plugin_description);
+    }
+  }
   return true;
 }
 

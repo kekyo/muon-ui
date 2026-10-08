@@ -1,6 +1,6 @@
 # muon Vite plugin reference
 
-Android requires `pluginAccess: false` and `build.targets: ['android']`. See [building and distributing Android apps](./android.md) for `build.android` options and limitations. Development server, CEF, and virtual-module behavior below applies to desktop applications.
+Set `build.targets: ['android']` for Android. Use `pluginAccess: false` for simple mode, or configure allowed importers and functions for validate mode. See [building and distributing Android apps](./android.md) for `build.android` options and virtual-module support. Development server and CEF behavior below applies to desktop applications.
 
 The muon Vite plugin argument `options` is optional.
 When omitted, both development launch and distribution builds use their default behavior.
@@ -139,8 +139,9 @@ npm run dev:vite -- --no-muon
 
 `pluginAccess` has the same shape as the `plugin` setting in `muon.json`, and is used to override some settings from the Vite side.
 When omitted, the `plugin` setting from `muon.json` is used as-is, and an omitted `plugin.mode` is treated as `"validate"`.
-In `validate` mode, `window.muon` is not exposed, and plugin functions can be called only from permitted virtual module imports.
-When `node.project` is configured, validate mode also prepares the Node.js runtime and starts a sidecar when `createNode()` is called through the `muon:node` virtual module. `muon:node` requires no `pluginAccess.plugins[].imports` entry or allow setting.
+Validate mode does not expose `window.muon`; applications import permitted virtual modules. Importers are checked at build time, while the native host checks capabilities and allowed functions. These checks do not prevent other code in the same page from using an obtained capability.
+Android also supports validate mode. External plugins require ABI-specific libraries and metadata; page conditions and available functions have Android-specific limits. See [Android configuration](./android.md#import-with-validate-mode).
+On desktop, configuring `node.project` prepares the Node.js runtime in validate mode and starts a sidecar when `createNode()` is called through `muon:node`. This module requires no `pluginAccess.plugins[].imports` entry or allow setting. Public Android APKs provide neither Node.js nor QuickJS.
 For the development server, the Node project and `engines.node` range are preflighted during Vite config resolution, and a failure may be reported as a warning. During a build, validation failures are errors.
 
 ```ts

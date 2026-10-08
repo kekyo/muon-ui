@@ -263,6 +263,22 @@ static bool RunPortablePluginRuntimeTest() {
   plugin.plugin = "muon_test_plugin_alpha";
   plugin.plugin_policy = policy;
   plugin.config.push_back({"alpha.config", "portable"});
+  plugin.has_expected_function_paths = true;
+  plugin.expected_function_paths = {"muon.test.alpha.nonexistent"};
+  {
+    auto mismatch = std::make_shared<MuonPluginRuntime>(
+        std::filesystem::path(MUON_TEST_PLUGIN_DIRECTORY),
+        std::vector<MuonPluginRuntimeLoadEntry>{plugin},
+        CreateRuntimeServices(dispatcher, owner_thread));
+    if (!Expect(!mismatch->IsReady(), "producer catalog mismatch was accepted") ||
+        !Expect(mismatch->GetStartupError().find("catalog mismatch") != std::string::npos,
+                "producer catalog mismatch diagnostic is missing")) {
+      return false;
+    }
+  }
+  plugin.expected_function_paths = {"muon.test.alpha.alphaName",
+                                   "muon.test.alpha.alphaAdd",
+                                   "muon.test.alpha.alphaConfig"};
   auto runtime = std::make_shared<MuonPluginRuntime>(
       std::filesystem::path(MUON_TEST_PLUGIN_DIRECTORY),
       std::vector<MuonPluginRuntimeLoadEntry>{std::move(plugin)},

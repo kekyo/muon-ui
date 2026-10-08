@@ -147,6 +147,10 @@ public final class MuonActivity extends Activity {
         return rpcBridge == null ? 0 : rpcBridge.getNativePendingCallCount();
     }
 
+    @NonNull MuonRpcBridge getRpcBridgeForTest() {
+        return rpcBridge;
+    }
+
     boolean isFullscreenForTest() {
         return rpcBridge != null && rpcBridge.isFullscreenForTest();
     }

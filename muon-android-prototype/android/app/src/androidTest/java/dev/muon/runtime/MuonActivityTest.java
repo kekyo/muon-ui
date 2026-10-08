@@ -13,9 +13,17 @@ import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertTrue;
 
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.view.Choreographer;
+import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebMessageCompat;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -25,9 +33,71 @@ import org.junit.runner.RunWith;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.List;
+import java.util.Collections;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 
 @RunWith(AndroidJUnit4.class)
 public final class MuonActivityTest {
+    @Test
+    public void rejectsForeignAndSubframeRpcBeforeNativeExecution() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> reference = new AtomicReference<>();
+            AtomicReference<WebView> probe = new AtomicReference<>();
+            LinkedBlockingQueue<String> observations = new LinkedBlockingQueue<>();
+            scenario.onActivity(reference::set);
+            assertTrue(reference.get().awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            try {
+                scenario.onActivity(current -> {
+                    WebView view = new WebView(current);
+                    probe.set(view);
+                    view.getSettings().setJavaScriptEnabled(true);
+                    view.setWebViewClient(new WebViewClient() {
+                        @Override public WebResourceResponse shouldInterceptRequest(WebView webView, WebResourceRequest request) {
+                            return new WebResourceResponse("text/html", "UTF-8", new ByteArrayInputStream(
+                                    "<script>muonBoundary.postMessage('foreign-frame')</script>".getBytes(StandardCharsets.UTF_8)));
+                        }
+                    });
+                    // This test-only listener captures authentic WebView origin/frame metadata.
+                    // The application bridge still applies its own boundary before invoking JNI.
+                    WebViewCompat.addWebMessageListener(view, "muonBoundary", Collections.singleton("*"),
+                            (sender, message, origin, mainFrame, reply) -> {
+                                float before = current.getManagedZoomFactorForTest();
+                                current.getRpcBridgeForTest().onPostMessage(sender, new WebMessageCompat(
+                                        "{\"version\":1,\"type\":\"call\",\"callId\":9876,"
+                                        + "\"capabilityId\":\"browser-capability\",\"functionPath\":\"muon.browser.zoomIn\",\"arguments\":[]}"),
+                                        origin, mainFrame, reply);
+                                boolean executed = current.getManagedZoomFactorForTest() > before;
+                                observations.add(message.getData() + "|" + origin + "|" + mainFrame + "|" + executed);
+                            });
+                    view.loadDataWithBaseURL("https://main.asset.muon.invalid/", """
+                            <script>muonBoundary.postMessage('main')</script>
+                            <iframe srcdoc="<script>muonBoundary.postMessage('same-frame')</script>"></iframe>
+                            <iframe src="https://foreign.example.invalid/frame"></iframe>
+                            """, "text/html", "UTF-8", null);
+                });
+                var results = new java.util.HashSet<String>();
+                for (int i = 0; i < 3; i++) {
+                    String result = observations.poll(30, TimeUnit.SECONDS);
+                    assertNotNull("Each real frame must report its dispatch result", result);
+                    results.add(result);
+                }
+                assertEquals(java.util.Set.of(
+                        "main|https://main.asset.muon.invalid|true|true",
+                        "same-frame|https://main.asset.muon.invalid|false|false",
+                        "foreign-frame|https://foreign.example.invalid|false|false"), results);
+                scenario.onActivity(current -> probe.get().loadDataWithBaseURL("https://foreign.example.invalid/",
+                        "<script>muonBoundary.postMessage('foreign-main')</script>", "text/html", "UTF-8", null));
+                assertEquals("foreign-main|https://foreign.example.invalid|true|false",
+                        observations.poll(30, TimeUnit.SECONDS));
+            } finally {
+                scenario.onActivity(current -> { if (probe.get() != null) probe.get().destroy(); });
+            }
+        }
+    }
+
     @Test
     public void servesViteAssetsFromTrustedHttpsOrigin() throws Exception {
         try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
@@ -323,6 +393,68 @@ public final class MuonActivityTest {
             assertFalse(runtime.getString("abi").isEmpty());
             assertFalse(runtime.getString("webViewPackage").isEmpty());
             assertFalse(runtime.getString("webViewVersion").isEmpty());
+        }
+    }
+
+    @Test
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 30)
+    public void animatesExistingFullscreenSystemBars() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> reference = new AtomicReference<>();
+            scenario.onActivity(reference::set);
+            MuonActivity activity = reference.get();
+            assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            String[] commands = {"enterFullscreen", "exitFullscreen", "toggleFullscreen", "toggleFullscreen"};
+            for (int step = 0; step < commands.length; step++) {
+                boolean visible = step % 2 == 1;
+                String command = commands[step];
+                CountDownLatch settled = new CountDownLatch(1);
+                AtomicReference<Choreographer.FrameCallback> frames = new AtomicReference<>();
+                scenario.onActivity(current -> {
+                    var decor = current.getWindow().getDecorView();
+                    boolean[] animated = {false};
+                    int[] stableFrames = {0};
+                    decor.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
+                            WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                        @Override public WindowInsets onProgress(WindowInsets insets,
+                                List<WindowInsetsAnimation> running) {
+                            return insets;
+                        }
+                        @Override public void onEnd(WindowInsetsAnimation animation) {
+                            if ((animation.getTypeMask() & WindowInsets.Type.systemBars()) != 0) animated[0] = true;
+                        }
+                    });
+                    Choreographer.FrameCallback callback = new Choreographer.FrameCallback() {
+                        @Override public void doFrame(long frameTimeNanos) {
+                            WindowInsets insets = decor.getRootWindowInsets();
+                            boolean matches = animated[0] && insets != null
+                                    && insets.isVisible(WindowInsets.Type.statusBars()) == visible
+                                    && insets.isVisible(WindowInsets.Type.navigationBars()) == visible;
+                            stableFrames[0] = matches ? stableFrames[0] + 1 : 0;
+                            if (stableFrames[0] == 60) {
+                                android.util.Log.i("MuonFullscreenTest", command + ": status/navigation visible=" + visible
+                                        + ", stableFrames=60, frameTimeNanos=" + frameTimeNanos);
+                                settled.countDown();
+                            } else {
+                                Choreographer.getInstance().postFrameCallback(this);
+                            }
+                        }
+                    };
+                    frames.set(callback);
+                    Choreographer.getInstance().postFrameCallback(callback);
+                    current.getWebViewForTest().evaluateJavascript(
+                            "void window.muon.browser." + command + "()", null);
+                });
+                try {
+                    assertTrue(command + " must finish its animation and keep both system bars stable",
+                            settled.await(60, TimeUnit.SECONDS));
+                } finally {
+                    scenario.onActivity(current -> {
+                        Choreographer.getInstance().removeFrameCallback(frames.get());
+                        current.getWindow().getDecorView().setWindowInsetsAnimationCallback(null);
+                    });
+                }
+            }
         }
     }
 

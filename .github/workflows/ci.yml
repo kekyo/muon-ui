@@ -78,6 +78,7 @@ jobs:
             curl \
             dbus \
             file \
+            ffmpeg \
             g++-mingw-w64 \
             git \
             libasound2-dev \
@@ -162,9 +163,11 @@ jobs:
             test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = 16384
             adb shell df -h /data
             npm run test:android --workspace muon-android-prototype
+            node muon-android-prototype/scripts/test-fullscreen-video.mjs .run/android-ci/fullscreen
             mkdir -p .run/android-ci
             npm pack --workspace muon-ui --pack-destination .run/android-ci
-            node muon-android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz
+            node muon-android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins
+            node muon-android/scripts/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
 
   codeql:
     name: Analyze ${{ matrix.language }}

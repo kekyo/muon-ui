@@ -81,6 +81,9 @@ export interface MuonAndroidRendererMetadata {
   /** Page exposure mode selected by the Android host. */
   readonly mode: 'simple' | 'validate';
 
+  /** Built-in public function paths allowed by the native host. */
+  readonly builtinFunctions: readonly string[];
+
   /** Loaded and allowed plugin namespaces. */
   readonly namespaces: readonly MuonNativeNamespaceMetadata[];
 
@@ -170,6 +173,8 @@ export const readMuonAndroidRendererMetadata = (
     value.contextId <= 0 ||
     value.contextId > 0x7fffffff ||
     (value.mode !== 'simple' && value.mode !== 'validate') ||
+    !Array.isArray(value.builtinFunctions) ||
+    value.builtinFunctions.some((path) => typeof path !== 'string') ||
     !Array.isArray(value.namespaces) ||
     !Array.isArray(value.functions)
   ) {
@@ -226,6 +231,7 @@ export const readMuonAndroidRendererMetadata = (
     version: 1,
     contextId: value.contextId,
     mode: value.mode,
+    builtinFunctions: Object.freeze([...value.builtinFunctions] as string[]),
     namespaces: Object.freeze(namespaces),
     functions: Object.freeze(functions),
   });

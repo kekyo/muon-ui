@@ -202,7 +202,8 @@ const fileExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const resolveMuonConfigPath = async (
+/** Resolves the explicit or conventional application configuration path. */
+export const resolveMuonConfigPath = async (
   root: string,
   configPath: string | undefined,
 ): Promise<string | undefined> => {
@@ -223,7 +224,8 @@ const resolveMuonConfigPath = async (
   return undefined;
 };
 
-const readJsonObjectFile = async (
+/** Reads a JSON/JSON5 configuration object and reports its source on failure. */
+export const readJsonObjectFile = async (
   path: string,
   label: string,
 ): Promise<JsonObject> => {
@@ -590,6 +592,26 @@ const validatePluginAccessOptions = (
     }
   }
   return resolved;
+};
+
+/**
+ * Reads and validates public plugin settings for an already loaded configuration.
+ * @param config - Parsed application configuration.
+ * @param defaultMode - Exposure mode used when the application omits it.
+ * @returns Explicit settings, preserving omitted plugin and page lists.
+ */
+export const readMuonPluginAccessOptions = (
+  config: Record<string, unknown>,
+  defaultMode: MuonPluginAccessMode,
+): MuonPluginAccessOptions => {
+  const options = readPluginAccessOptions(config);
+  validatePluginAccessOptions({
+    ...options,
+    mode: options.mode ?? defaultMode,
+    pages: options.pages ?? defaultPluginPages,
+    plugins: options.plugins ?? [],
+  });
+  return options;
 };
 
 const getValidateImportAllow = (

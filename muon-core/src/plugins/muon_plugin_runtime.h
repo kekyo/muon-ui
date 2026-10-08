@@ -235,6 +235,10 @@ struct MuonPluginRuntimeLoadEntry {
    * Plugin-defined string key-value configuration entries.
    */
   std::vector<MuonPluginRuntimeConfigEntry> config;
+  /** Whether the producer catalog constrains the registered public functions. */
+  bool has_expected_function_paths = false;
+  /** Exact public functions expected after applying this entry's allow policy. */
+  std::vector<std::string> expected_function_paths;
 };
 
 /**

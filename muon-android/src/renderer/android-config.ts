@@ -109,19 +109,25 @@ const validateBrowserConfig = (browser: ConfigObject | undefined): void => {
   }
 };
 
-const validatePluginConfig = (
-  plugin: ConfigObject | undefined,
-  warnings: string[]
-): void => {
+const validatePluginConfig = (plugin: ConfigObject | undefined): void => {
   if (plugin === undefined) {
     return;
   }
   rejectConfiguredValue(plugin, 'path', 'plugin.path');
 
   if (hasOwn(plugin, 'pages') && plugin.pages !== undefined) {
-    warnings.push(
-      'muon.json plugin.pages cannot expose Android RPC outside configured asset origins.'
-    );
+    if (
+      !Array.isArray(plugin.pages) ||
+      plugin.pages.some(
+        (page) =>
+          page !== 'asset://main/**' &&
+          page !== 'https://main.asset.muon.invalid/**'
+      )
+    ) {
+      throw new Error(
+        'muon.json plugin.pages supports only the whole trusted asset origin (asset://main/** or https://main.asset.muon.invalid/**), or [] to disable RPC.'
+      );
+    }
   }
 
   const plugins = plugin.plugins;
@@ -176,10 +182,7 @@ export const validateMuonAndroidConfig = (
 
   const warnings: string[] = [];
   validateBrowserConfig(requireOptionalSection(config, 'browser', 'browser'));
-  validatePluginConfig(
-    requireOptionalSection(config, 'plugin', 'plugin'),
-    warnings
-  );
+  validatePluginConfig(requireOptionalSection(config, 'plugin', 'plugin'));
   validateNetworkConfig(
     requireOptionalSection(config, 'network', 'network'),
     warnings

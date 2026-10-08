@@ -63,7 +63,12 @@ const expectedLibraries = [
   'libcardio.so',
   'libmuon_android_rpc.so',
 ];
-if (includePlugin) expectedLibraries.push('libmuon_test_plugin_alpha.so');
+if (includePlugin)
+  expectedLibraries.push(
+    'libmuon_test_plugin_alpha.so',
+    'libmuon_test_plugin_types.so',
+    'libmuon_test_plugin_recursive_functions.so'
+  );
 assert.deepEqual(
   entries.filter((entry) => entry.startsWith('lib/')).sort(),
   ['arm64-v8a', 'x86_64']
@@ -94,7 +99,7 @@ try {
   const registry = JSON.parse(
     await readFile(join(directory, 'assets/muon/plugins.json'), 'utf8')
   );
-  assert.equal(registry.plugins.length, includePlugin ? 1 : 0);
+  assert.equal(registry.plugins.length, includePlugin ? 3 : 0);
   for (const entry of entries.filter((name) => name.startsWith('lib/'))) {
     const path = join(directory, entry);
     const abi = entry.split('/')[1];

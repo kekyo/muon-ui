@@ -21,6 +21,8 @@ final class MuonPackagedPlugin {
     final String[] allow;
     final String[] configKeys;
     final String[] configValues;
+    final boolean hasExpectedFunctions;
+    final String[] expectedFunctions;
 
     private MuonPackagedPlugin(@NonNull JSONObject entry) throws JSONException {
         name = entry.getString("name");
@@ -36,6 +38,12 @@ final class MuonPackagedPlugin {
         allow = new String[patterns.length()];
         for (int i = 0; i < allow.length; i++) {
             allow[i] = patterns.getString(i);
+        }
+        hasExpectedFunctions = entry.has("expectedFunctions");
+        JSONArray expected = hasExpectedFunctions ? entry.getJSONArray("expectedFunctions") : new JSONArray();
+        expectedFunctions = new String[expected.length()];
+        for (int i = 0; i < expected.length(); i++) {
+            expectedFunctions[i] = expected.getString(i);
         }
         JSONArray config = entry.getJSONArray("config");
         configKeys = new String[config.length()];

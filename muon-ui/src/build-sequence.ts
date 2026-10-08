@@ -16,6 +16,7 @@ import {
 import {
   flattenVitePluginOptions,
   getMuonVitePluginOptions,
+  getMuonVitePluginRuntimeState,
 } from "./vite-options.js";
 import type { MuonViteBuildOptions, MuonVitePluginOptions } from "./vite.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
@@ -23,6 +24,7 @@ import { mergeMuonWindowsResourceOptions } from "./windows-resource.js";
 import { mergeMuonLinuxDesktopOptions } from "./linux-desktop.js";
 import type { MuonProgressCallback } from "./progress.js";
 import { assertMuonNodeProjectViteBuildIsSafe } from "./node-project.js";
+import type { MuonRuntimePluginConfig } from "./capability.js";
 
 /**
  * Environment variable used to prevent the Vite plugin build hook from running
@@ -30,6 +32,9 @@ import { assertMuonNodeProjectViteBuildIsSafe } from "./node-project.js";
  */
 export const muonBuildSequenceSuppressViteBuildEnvironmentKey =
   "MUON_SUPPRESS_VITE_MUON_BUILD";
+
+/** CLI target override shared with the Vite config loaded in this sequence. */
+export const muonBuildSequenceTargetsEnvironmentKey = "MUON_VITE_BUILD_TARGETS";
 
 /**
  * Resolved project metadata used by the CLI build sequence.
@@ -88,14 +93,25 @@ const hasViteServerProxyConfiguration = (proxy: unknown): boolean =>
   typeof proxy === "object" && proxy !== null && Object.keys(proxy).length > 0;
 
 const withSuppressedMuonViteBuild = async <T>(
+  targets: readonly string[] | undefined,
   action: () => Promise<T>,
 ): Promise<T> => {
   const previous =
     process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
   process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] = "1";
+  const previousTargets = process.env[muonBuildSequenceTargetsEnvironmentKey];
+  if (targets !== undefined) {
+    process.env[muonBuildSequenceTargetsEnvironmentKey] =
+      JSON.stringify(targets);
+  }
   try {
     return await action();
   } finally {
+    if (previousTargets === undefined) {
+      delete process.env[muonBuildSequenceTargetsEnvironmentKey];
+    } else {
+      process.env[muonBuildSequenceTargetsEnvironmentKey] = previousTargets;
+    }
     if (previous === undefined) {
       delete process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey];
     } else {
@@ -130,6 +146,7 @@ const findMuonVitePluginOptions = async (
  */
 export const loadMuonBuildSequenceProject = async (
   cwd: string,
+  targets?: readonly string[],
 ): Promise<MuonBuildSequenceProject> => {
   const resolvedCwd = resolve(cwd);
   let vite: typeof import("vite");
@@ -151,6 +168,7 @@ export const loadMuonBuildSequenceProject = async (
   }
 
   const resolvedConfig = await withSuppressedMuonViteBuild(
+    targets,
     async () =>
       await vite.resolveConfig(
         { root: resolvedCwd, logLevel: "silent" } satisfies InlineConfig,
@@ -200,11 +218,32 @@ export const resolveMuonViteBuildOptions = (
   return typeof pluginOptions?.build === "object" ? pluginOptions.build : {};
 };
 
-const runViteBuild = async (root: string): Promise<void> => {
+const runViteBuild = async (
+  root: string,
+  targets: readonly string[] | undefined,
+): Promise<MuonRuntimePluginConfig | undefined> => {
   const vite = await import("vite");
-  await withSuppressedMuonViteBuild(async () => {
-    await vite.build({ root, logLevel: "silent" } satisfies InlineConfig);
+  let builtConfig: ResolvedConfig | undefined;
+  await withSuppressedMuonViteBuild(targets, async () => {
+    await vite.build({
+      root,
+      logLevel: "silent",
+      plugins: [
+        {
+          name: "muon-build-runtime-config",
+          configResolved: (config) => {
+            builtConfig = config;
+          },
+        },
+      ],
+    } satisfies InlineConfig);
   });
+  // Read the instance that generated the bundle: resolving the config again
+  // creates different capability IDs.
+  return builtConfig?.plugins
+    .map(getMuonVitePluginRuntimeState)
+    .find((state) => state !== undefined)
+    ?.getRuntimePluginConfig();
 };
 
 const hasExplicitTargets = (options: MuonBuildSequenceOptions): boolean =>
@@ -300,7 +339,10 @@ export const runMuonBuildSequence = async (
   const progress = internalOptions.progress;
   const project =
     loadedProject ??
-    (await loadMuonBuildSequenceProject(options.root ?? process.cwd()));
+    (await loadMuonBuildSequenceProject(
+      options.root ?? process.cwd(),
+      options.targets,
+    ));
   const pluginBuildOptions = resolveMuonViteBuildOptions(project.pluginOptions);
   const usesViteAssets = project.pluginOptions !== undefined;
   const buildOptions: MuonBuildOptions = {
@@ -335,7 +377,13 @@ export const runMuonBuildSequence = async (
       phase: "build",
       status: "Running Vite build",
     });
-    await runViteBuild(project.viteBuildRoot);
+    const runtimePluginConfig = await runViteBuild(
+      project.viteBuildRoot,
+      options.targets ?? pluginBuildOptions.targets,
+    );
+    if (runtimePluginConfig !== undefined) {
+      buildOptions.runtimePluginConfig = runtimePluginConfig;
+    }
   } else if (
     options.defaultAllTargets !== undefined &&
     options.allTargets === undefined &&

@@ -6,6 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { muonAndroidBuiltinFunctionPaths } from "../../muon-android/src/function-paths.js";
 
 /**
  * Import-side capability rule for muon plugin virtual modules.
@@ -35,6 +36,8 @@ export interface MuonCapabilityImportOptions {
  * Capability import configuration shared by bundler integrations.
  */
 export interface MuonCapabilityOptions {
+  /** Renderer calling convention and built-in catalog. Defaults to CEF. */
+  backend?: "cef" | "android";
   /**
    * Capability imports allowed by importer path.
    */
@@ -195,6 +198,7 @@ interface ResolvedRule {
   namespace: string;
   moduleName: string;
   functionPaths: readonly string[];
+  backend: "cef" | "android";
 }
 
 const virtualModulePrefix = "\0muon-capability:";
@@ -446,11 +450,14 @@ const getExportedFunctions = (
 
 const createFunctionPathCatalog = (
   functionPaths: readonly string[] | undefined,
+  backend: "cef" | "android",
 ): readonly string[] => {
   const catalog: string[] = [];
   const seen = new Set<string>();
   for (const functionPath of [
-    ...defaultMuonCapabilityFunctionPaths,
+    ...(backend === "android"
+      ? muonAndroidBuiltinFunctionPaths
+      : defaultMuonCapabilityFunctionPaths),
     ...(functionPaths ?? []),
   ]) {
     if (!seen.has(functionPath)) {
@@ -1294,6 +1301,9 @@ const createModuleSource = (rule: ResolvedRule): string => {
         exportName === "removeTray"),
   );
   const exports = exportedFunctions.map(([exportName, functionPath]) => {
+    if (rule.backend === "android") {
+      return createGenericFunctionExport(exportName, rule.id, functionPath);
+    }
     if (
       rule.namespace === "muon.environments" &&
       exportName === "getConfigValues"
@@ -1356,8 +1366,24 @@ export const createMuonCapabilityModuleResolver = (
   root: string,
   options: MuonCapabilityOptions | undefined,
 ): MuonCapabilityModuleResolver => {
-  const rules = [...(options?.imports ?? [])];
-  const functionPaths = createFunctionPathCatalog(options?.functionPaths);
+  const backend = options?.backend ?? "cef";
+  const functionPaths = createFunctionPathCatalog(
+    options?.functionPaths,
+    backend,
+  );
+  const rules = (options?.imports ?? []).map((rule) => {
+    if (backend !== "android") return rule;
+    const allow = new Set<string>();
+    for (const pattern of rule.allow) {
+      const matched = functionPaths.filter((path) =>
+        isGlobMatch(pattern, path, "."),
+      );
+      if (matched.length === 0)
+        throw new Error(`Muon function is unavailable for Android: ${pattern}`);
+      for (const path of matched) allow.add(path);
+    }
+    return { ...rule, allow: [...allow] };
+  });
   for (const rule of rules) {
     validateCapabilityRule(rule);
   }
@@ -1405,6 +1431,7 @@ export const createMuonCapabilityModuleResolver = (
         namespace: parsed.namespace,
         moduleName: parsed.moduleName,
         functionPaths,
+        backend,
       };
     }
 
@@ -1444,6 +1471,7 @@ export const createMuonCapabilityModuleResolver = (
         namespace: source.namespace,
         moduleName: source.moduleName,
         functionPaths,
+        backend,
       });
     },
     getRuntimePluginConfig: () => ({

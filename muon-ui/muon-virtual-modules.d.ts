@@ -6,6 +6,59 @@
 declare module "muon:environments" {
   /** Return the merged application configuration from muon config files. */
   export const getConfigValues: () => Promise<Record<string, string>>;
+  /** Return the process environment variables. */
+  export const getVariables: MuonEnvironmentsApi["getVariables"];
+  /** Return the application process ID. */
+  export const getProcessId: MuonEnvironmentsApi["getProcessId"];
+  /** Return backend and application version information. */
+  export const getRuntimeInfo: MuonEnvironmentsApi["getRuntimeInfo"];
+}
+
+declare module "muon:fs" {
+  /** Read a file as bytes. */
+  export const readFile: MuonFsApi["readFile"];
+  /** Write bytes to a file. */
+  export const writeFile: MuonFsApi["writeFile"];
+  /** Read a text file. */
+  export const readTextFile: MuonFsApi["readTextFile"];
+  /** Write a text file. */
+  export const writeTextFile: MuonFsApi["writeTextFile"];
+  /** Return metadata for a path, following symbolic links. */
+  export const stat: MuonFsApi["stat"];
+  /** Return metadata for a path without following symbolic links. */
+  export const lstat: MuonFsApi["lstat"];
+  /** Check whether a path exists. */
+  export const exists: MuonFsApi["exists"];
+  /** Check access to a path. */
+  export const access: MuonFsApi["access"];
+  /** List directory entries. */
+  export const readdir: MuonFsApi["readdir"];
+  /** Create a directory. */
+  export const mkdir: MuonFsApi["mkdir"];
+  /** Remove a file or directory. */
+  export const rm: MuonFsApi["rm"];
+  /** Remove a file. */
+  export const unlink: MuonFsApi["unlink"];
+  /** Remove a directory. */
+  export const rmdir: MuonFsApi["rmdir"];
+  /** Rename a path. */
+  export const rename: MuonFsApi["rename"];
+  /** Copy a file. */
+  export const copyFile: MuonFsApi["copyFile"];
+  /** Append bytes to a file. */
+  export const appendFile: MuonFsApi["appendFile"];
+  /** Append text to a file. */
+  export const appendTextFile: MuonFsApi["appendTextFile"];
+  /** Change a file's length. */
+  export const truncate: MuonFsApi["truncate"];
+  /** Resolve a canonical path. */
+  export const realpath: MuonFsApi["realpath"];
+  /** Read a symbolic link target. */
+  export const readlink: MuonFsApi["readlink"];
+  /** Create a symbolic link. */
+  export const symlink: MuonFsApi["symlink"];
+  /** Watch a path until the watcher is closed. */
+  export const watch: MuonFsApi["watch"];
 }
 
 declare module "muon:node" {

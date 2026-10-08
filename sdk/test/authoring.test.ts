@@ -253,8 +253,7 @@ it('uses a custom build with vendor sources without writing into the source tree
 
 it('provides CLI diagnostics and an explicit environment usable by custom build tools', async () => {
   const cli = resolve('dist/cli.mjs');
-  const report = await execute(process.execPath, [
-    cli,
+  const report = await execute(cli, [
     'doctor',
     '--target',
     'linux-amd64',

@@ -566,6 +566,13 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
     join(root, "ui", "scripts", "stage-android-runtime.mjs"),
     "process.exit(0);\n",
   );
+  await mkdir(join(root, "sdk", "scripts"), { recursive: true });
+  for (const name of ["stage-package", "verify-package"]) {
+    await writeFile(
+      join(root, "sdk", "scripts", name + ".mjs"),
+      'import { appendFileSync } from "node:fs";\nappendFileSync("sdk-stages.log", JSON.stringify({ script: process.argv[1].split("/").pop(), targets: process.argv.slice(2) }) + "\\n");\n',
+    );
+  }
   await writeExecutableScript(
     join(root, "core/cef", "build_yyjson.sh"),
     "#!/usr/bin/env bash\nset -euo pipefail\n",
@@ -821,6 +828,25 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
     const npmInvocations = await readFile(npmLog, "utf8");
     expect(npmInvocations).toContain("generate:runtime-version-header");
     expect(npmInvocations).toContain("run build --workspace muon-node");
+    expect(npmInvocations).toContain(
+      "run build:js --workspace muon-plugin-sdk",
+    );
+    const stages = (await readFile(join(root, "sdk-stages.log"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(stages).toEqual(
+      ["stage-package.mjs", "verify-package.mjs"].map((script) => ({
+        script,
+        targets: [
+          "windows-i686",
+          "windows-amd64",
+          "android-arm64-v8a",
+          "android-x86_64",
+          "linux-amd64",
+        ],
+      })),
+    );
   });
 
   it("reports the failed Linux package target and log path", async () => {

@@ -276,9 +276,17 @@ build_windows_targets() {
 stage_targets() {
   local -a arches=("$@")
   printf 'Building JavaScript package entries\n'
+  npm run build:js --workspace muon-plugin-sdk
   npm run build:js --workspace muon-ui
   npm run build --workspace muon-android
   node ui/scripts/stage-android-runtime.mjs ui/dist/android
+
+  local -a sdk_targets=(windows-i686 windows-amd64 android-arm64-v8a android-x86_64)
+  for arch in "${arches[@]}"; do
+    sdk_targets+=("$(target_name_for_arch "${arch}")")
+  done
+  node sdk/scripts/stage-package.mjs "${sdk_targets[@]}"
+  node sdk/scripts/verify-package.mjs "${sdk_targets[@]}"
 
   printf 'Staging package targets\n'
   if is_full_arch_matrix "${arches[@]}"; then
@@ -574,6 +582,9 @@ pack_npm_package() {
   mkdir -p "${ARTIFACT_DIR}"
   tarball="$(pack_with_screw_up)"
   verify_tarball_file_list "${tarball}"
+  npm run verify:package --workspace muon-plugin-sdk
+  npm exec --workspace muon-plugin-sdk -- screw-up pack \
+    --pack-destination "${ARTIFACT_DIR}" "${SCRIPT_DIR}/sdk"
 }
 
 declare -a ARCHES=()

@@ -1,5 +1,7 @@
 # Using muon plugins
 
+For local source or prebuilt NPM plugins, see [external plugin integration and distribution](muon-plugin-sdk.md). The permission rules below also apply to external plugins.
+
 So far, this documentation has explained the development lifecycle for building a muon app.
 However, a few capabilities are still missing for a muon app to behave like a native application.
 

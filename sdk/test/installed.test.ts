@@ -11,9 +11,13 @@ it('authors and packs a plugin using only an installed SDK tarball outside the r
   try {
     const packed = JSON.parse(
       (
-        await execute('npm', ['pack', '--json', '--pack-destination', root], {
-          cwd: resolve('.'),
-        })
+        await execute(
+          'npm',
+          ['pack', '--ignore-scripts', '--json', '--pack-destination', root],
+          {
+            cwd: resolve('.'),
+          }
+        )
       ).stdout
     );
     const application = join(root, 'application');

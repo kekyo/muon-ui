@@ -1,0 +1,23 @@
+{
+  "plugin": {
+    "mode": "validate",
+    "plugins": [
+      {
+        "name": "counter",
+        "native": { "source": "../local/muon-plugin.build.json" },
+        "imports": [{ "sources": ["src/**"], "allow": ["muon.counter.*"] }]
+      },
+      {
+        "name": "vendor_counter",
+        "native": { "source": "../vendor-plugin/muon-plugin.build.json" },
+        "imports": [
+          { "sources": ["src/**"], "allow": ["muon.vendor_counter.*"] }
+        ]
+      }
+    ]
+  },
+  "android": {
+    "applicationId": "dev.muon.examples.plugins",
+    "label": "Native plugins"
+  }
+}

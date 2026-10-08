@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "name": "counter",
+  "language": "c++",
+  "functions": ["muon.counter.increment"],
+  "targets": [
+    "linux-amd64",
+    "linux-armhf",
+    "linux-arm64",
+    "windows-i686",
+    "windows-amd64",
+    "android-arm64-v8a",
+    "android-x86_64"
+  ],
+  "sources": ["plugin.cpp"],
+  "build": {
+    "system": "make"
+  },
+  "types": ["index.d.ts"]
+}

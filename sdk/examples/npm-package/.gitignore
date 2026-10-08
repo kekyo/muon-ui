@@ -1,0 +1,7 @@
+.build/
+native/
+include/
+types/
+licenses/
+muon-plugin.json
+*.tgz

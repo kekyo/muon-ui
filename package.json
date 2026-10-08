@@ -20,7 +20,8 @@
   "files": [
     "LICENSE",
     "images/muon-120.png",
-    "images/vscode.png"
+    "images/vscode.png",
+    "images/get-started-android.png"
   ],
   "workspaces": [
     "muon-android",

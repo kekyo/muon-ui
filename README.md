@@ -59,6 +59,10 @@ This lets you build modern local GUI applications with the web technology ecosys
 muon also minimizes the steps required to create a muon application, keeping the barrier to entry low.
 With the minimal setup, installing the NPM package and adding one line to the configuration file is enough to launch your first muon app.
 
+WIP: And once you've created a muon application, you can deploy it directly to Android.
+
+![android](./images/get-started-android.png)
+
 ### Features
 
 - Restricts all network access through a whitelist filter, letting you completely exclude problematic content.

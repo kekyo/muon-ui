@@ -19,6 +19,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  applyMuonNativePluginCatalogs,
   resolveMuonNativePlugins,
   stageMuonNativePlugins,
 } from "../common/native-plugins.js";
@@ -588,7 +589,17 @@ const buildMuonTarget = async (input: {
     [{ name: appIconAssetEntryName, data: await readFile(appIconPath) }],
   );
   const embeddedConfig = createEmbeddedConfig(
-    input.sourceConfig,
+    input.nativeArtifacts.size === 0
+      ? input.sourceConfig
+      : {
+          ...input.sourceConfig,
+          plugin: applyMuonNativePluginCatalogs(
+            input.sourceConfig.plugin as unknown as MuonRuntimePluginConfig,
+            input.nativeArtifacts,
+            input.target,
+            "./plugins",
+          ),
+        },
     asset,
     runtimeAppId,
     input.linuxDesktop.desktopId,

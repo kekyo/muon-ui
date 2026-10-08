@@ -28,7 +28,13 @@ const platformOptions = (command: Command): Command =>
   command
     .addOption(targetOption())
     .option('--android-sdk-path <path>', 'Android SDK directory')
-    .option('--sysroot <path>', 'Cross target development sysroot');
+    .option('--sysroot <path>', 'Cross target development sysroot')
+    .option(
+      '--pkg-config-directories <paths...>',
+      'Explicit target development pkg-config directories'
+    )
+    .option('--cc <executable>', 'C compiler override')
+    .option('--cxx <executable>', 'C++ compiler override');
 const program = new Command()
   .name('muon-plugin')
   .description(
@@ -73,6 +79,9 @@ platformOptions(program.command('doctor'))
               cardio: config.cardio ?? config.language !== 'c',
               buildSystem: config.build?.system ?? 'make',
               tools: config.build?.tools ?? [],
+              ...(config.packages === undefined
+                ? {}
+                : { packages: config.packages }),
             }
           : {}),
       });
@@ -101,6 +110,9 @@ platformOptions(program.command('env'))
         'PKG_CONFIG_PATH',
         'PKG_CONFIG_LIBDIR',
         'PKG_CONFIG_SYSROOT_DIR',
+        'PKG_CONFIG_FDO_SYSROOT_RULES',
+        'CPPFLAGS',
+        'LDFLAGS',
       ]
         .filter((key) => environment[key] !== undefined)
         .map((key) => [key, environment[key]!])

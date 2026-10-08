@@ -12,6 +12,10 @@ import {
 } from "muon-plugin-sdk/artifact";
 import type { MuonPluginTarget, buildPlugin } from "muon-plugin-sdk";
 import type { MuonPluginAccessEntryOptions } from "./plugin-access.js";
+import {
+  selectMuonPluginFunctionPaths,
+  type MuonRuntimePluginConfig,
+} from "./capability.js";
 
 /** An explicit authoring source, common artifact, or prebuilt NPM package. */
 export interface MuonNativePluginReference {
@@ -46,6 +50,10 @@ export const resolveMuonNativePlugins = async (
   for (const plugin of options.plugins) {
     const reference = plugin.native;
     if (!reference) continue;
+    if (plugin.signature !== undefined || plugin.salt !== undefined)
+      throw new Error(
+        `Plugin ${plugin.name} uses target-specific artifact hashes; omit signature and salt from its application entry.`,
+      );
     const selectors = [
       reference.source,
       reference.manifest,
@@ -168,3 +176,41 @@ export const stageMuonNativePlugins = async (
       await copyFile(file.source, file.destination);
   return result;
 };
+
+/**
+ * Adds verified hashes and expected function catalogs to an application's policy.
+ * @param policy - Existing application permissions and capability IDs.
+ * @param artifacts - Verified producer metadata.
+ * @param target - Native target selected for this runtime.
+ * @param path - Directory where these plugins are staged.
+ * @returns Runtime-only policy, containing no source or NPM references.
+ */
+export const applyMuonNativePluginCatalogs = (
+  policy: MuonRuntimePluginConfig,
+  artifacts: ReadonlyMap<string, ResolvedPluginArtifact>,
+  target: MuonPluginTarget,
+  path: string,
+): MuonRuntimePluginConfig => ({
+  ...policy,
+  path,
+  plugins: (policy.plugins ?? []).map((entry) => {
+    const artifact = artifacts.get(entry.name);
+    if (!artifact) return entry;
+    const expectedFunctions = selectMuonPluginFunctionPaths(
+      artifact.manifest.functions,
+      entry.allow,
+    );
+    if (!expectedFunctions.length)
+      throw new Error(
+        `Plugin ${entry.name} has no allowed functions in its producer catalog.`,
+      );
+    return {
+      name: entry.name,
+      allow: entry.allow,
+      ...(entry.config === undefined ? {} : { config: entry.config }),
+      signature: artifact.manifest.targets[target]!.library.sha256,
+      salt: "",
+      expectedFunctions,
+    };
+  }),
+});

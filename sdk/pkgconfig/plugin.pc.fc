@@ -6,5 +6,7 @@ Name: {{name}}
 Description: muon native plugin development
 Version: 1
 Requires: {{requires}}
-Cflags: -I"${includedir}" {{cflags}}
+# These prefix options keep the installed SDK outside PKG_CONFIG_SYSROOT_DIR.
+# System package dependencies still receive the target sysroot as usual.
+Cflags: -iprefix "${prefix}/" -iwithprefixbefore include {{cflags}}
 Libs: {{libs}}

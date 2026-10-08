@@ -14,6 +14,8 @@ export interface MuonAndroidPluginOptions {
   soname: string;
   /** Library path for each ABI selected by android.abis. */
   libraries: Partial<Record<MuonAndroidAbi, string>>;
+  /** Ordinary shared dependencies by ABI, copied beside the plugin. */
+  dependencies?: Partial<Record<MuonAndroidAbi, readonly string[]>>;
   /** Producer catalog JSON path, required for validate mode; resolved like libraries. */
   metadata?: string;
 }

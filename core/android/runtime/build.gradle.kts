@@ -1,14 +1,17 @@
+import groovy.json.JsonSlurper
+
 plugins {
     id("com.android.library")
     id("maven-publish")
 }
+val muonRuntimeProfile = JsonSlurper().parse(rootProject.file("../../sdk/src/runtime-profile.json")) as Map<*, *>
 android {
     namespace = "dev.muon.runtime"
     compileSdk = 37
     buildToolsVersion = "36.0.0"
-    ndkVersion = "29.0.14206865"
+    ndkVersion = muonRuntimeProfile["ndkVersion"] as String
     defaultConfig {
-        minSdk = 24
+        minSdk = (muonRuntimeProfile["androidApi"] as Number).toInt()
         ndk { abiFilters.addAll(listOf("arm64-v8a", "x86_64")) }
         externalNativeBuild { cmake {
             arguments += listOf(

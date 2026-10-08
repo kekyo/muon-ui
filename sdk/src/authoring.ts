@@ -16,6 +16,7 @@ import {
 } from './prerequisites.js';
 import {
   getPluginTarget,
+  muonPluginAndroidApi,
   muonPluginTargets,
   type MuonPluginTarget,
 } from './targets.js';
@@ -27,6 +28,7 @@ export interface PluginBuildCommand {
 }
 /** Source-owned authoring configuration. */
 export interface PluginBuildConfig {
+  /** Plugin-specific target development dependencies checked before building. */ readonly packages?: PluginToolchainOptions['packages'];
   /** Configuration revision. */ readonly schemaVersion: 1;
   /** Plugin registration name. */ readonly name: string;
   /** C99 or C++20; defaults to C++20. */ readonly language?: 'c' | 'c++';
@@ -162,6 +164,7 @@ export const buildPlugin = async (
     language,
     cardio,
     buildSystem: system,
+    ...(config.packages === undefined ? {} : { packages: config.packages }),
     tools: [
       ...(config.build?.tools ?? []),
       ...(config.build?.commands?.map((item) => item.command) ?? []),
@@ -224,11 +227,12 @@ export const buildPlugin = async (
     if (!sources.length)
       throw new Error('Standard Make build requires sources.');
     if (
-      sources.some((path) => /[\s$#]/.test(resolve(source, path))) ||
-      /[\s$#]/.test(sdk)
+      [...sources.map((path) => resolve(source, path)), sdk, output].some(
+        (path) => /[^A-Za-z0-9_./+-]/.test(path)
+      )
     )
       throw new Error(
-        'Standard Make source/SDK paths cannot contain whitespace, $ or #; use a custom build for these paths.'
+        'Standard Make paths support letters, digits, _, ., /, + and -; use CMake or a custom build for other paths.'
       );
     await execute('make', [
       '-f',
@@ -246,7 +250,7 @@ export const buildPlugin = async (
       platform.push(
         `-DCMAKE_TOOLCHAIN_FILE=${join(ndk, 'build/cmake/android.toolchain.cmake')}`,
         `-DANDROID_ABI=${options.target.slice(8)}`,
-        '-DANDROID_PLATFORM=24',
+        `-DANDROID_PLATFORM=${muonPluginAndroidApi}`,
         '-DANDROID_STL=c++_shared'
       );
     } else {

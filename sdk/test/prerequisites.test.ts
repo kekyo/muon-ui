@@ -1,8 +1,13 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
-import { diagnosePluginToolchain } from '../src/index.js';
+import {
+  diagnosePluginToolchain,
+  getNativeBuildEnvironment,
+} from '../src/index.js';
 
 it('reports all missing tools with installation instructions and only requires C for C projects', async () => {
   const empty = await mkdtemp(join(tmpdir(), 'muon-tools-'));
@@ -67,5 +72,49 @@ it('explains how to install the exact Android NDK instead of throwing ENOENT', a
     ).toContain('ndk;29.0.14206865');
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('reports plugin-specific native development packages and their installation instructions', async () => {
+  const report = await diagnosePluginToolchain({
+    target: 'linux-amd64',
+    language: 'c',
+    packages: [
+      {
+        name: 'muon-nonexistent-vendor >= 9',
+        install: 'Install vendor-devel from the vendor repository.',
+        documentation: 'https://example.org/vendor/install',
+      },
+    ],
+  });
+  expect(report.ready).toBe(false);
+  expect(
+    report.issues.find((issue) => issue.id === 'muon-nonexistent-vendor')
+      ?.install
+  ).toContain('vendor-devel');
+});
+
+it('keeps SDK include paths outside a cross sysroot while isolating target pkg-config dependencies', async () => {
+  const sysroot = await mkdtemp(join(tmpdir(), 'muon-sysroot-'));
+  try {
+    const directory = join(sysroot, 'usr/lib/x86_64-linux-gnu/pkgconfig');
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, 'vendor.pc'),
+      'prefix=/usr\nName: vendor\nDescription: vendor test\nVersion: 1\nCflags: -I${prefix}/include/vendor\n'
+    );
+    const environment = await getNativeBuildEnvironment({
+      target: 'linux-amd64',
+      sysroot,
+    });
+    const flags = await promisify(execFile)(
+      'pkg-config',
+      ['--cflags', 'muon-plugin', 'vendor'],
+      { env: environment }
+    );
+    expect(flags.stdout).toContain(sysroot + '/usr/include/vendor');
+    expect(flags.stdout).not.toContain(sysroot + resolve('.'));
+  } finally {
+    await rm(sysroot, { recursive: true, force: true });
   }
 });

@@ -617,20 +617,11 @@ set(MUON_CARDIO_OUTPUT_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/cardio")
 set(MUON_CARDIO_RUNTIME_LIBRARY_NAME
   "libcardio${CMAKE_SHARED_LIBRARY_SUFFIX}")
-set(MUON_CARDIO_CONFIG_DEFINES
-  CARDIO_WITH_LINUX_IO_URING=0
-  CARDIO_WITH_SUPPLEMENTAL=1
-  )
-if(NOT WIN32)
-  list(APPEND MUON_CARDIO_CONFIG_DEFINES
-    CARDIO_HAS_POSIX_FD=1
-    )
-endif()
-if(MUON_CARDIO_GLIB_TARGETS)
-  list(APPEND MUON_CARDIO_CONFIG_DEFINES
-    CARDIO_WITH_GLIB=1
-    CARDIO_WITH_GIO=1
-    )
+include("${MUON_COMMON_ROOT}/../../sdk/cmake/MuonRuntimeProfile.cmake")
+if(WIN32)
+  muon_runtime_cardio_definitions(windows MUON_CARDIO_CONFIG_DEFINES)
+else()
+  muon_runtime_cardio_definitions(linux MUON_CARDIO_CONFIG_DEFINES)
 endif()
 
 add_library(cardio_shared SHARED
@@ -646,7 +637,6 @@ set_target_properties(cardio_shared PROPERTIES
   )
 target_compile_features(cardio_shared PRIVATE cxx_std_20)
 target_compile_definitions(cardio_shared PRIVATE
-  CARDIO_SHARED_LIB=1
   CARDIO_BUILD_SHARED_LIB=1
   ${MUON_CARDIO_CONFIG_DEFINES}
   )
@@ -661,7 +651,6 @@ MUON_APPLY_SANITIZERS(cardio_shared)
 
 add_library(muon_cardio INTERFACE)
 target_compile_definitions(muon_cardio INTERFACE
-  CARDIO_SHARED_LIB=1
   ${MUON_CARDIO_CONFIG_DEFINES}
   )
 target_include_directories(muon_cardio INTERFACE

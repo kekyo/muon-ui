@@ -19,6 +19,7 @@ import {
   getDefaultMuonBuildTarget,
 } from "./build-config.js";
 import {
+  applyMuonNativePluginCatalogs,
   resolveMuonNativePlugins,
   stageMuonNativePlugins,
 } from "./native-plugins.js";
@@ -490,9 +491,25 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
   let loadedCapabilityRuntimePluginConfig: MuonRuntimePluginConfig | undefined =
     undefined;
   let nodeVirtualModuleEnabled = false;
+  let developmentNativeTarget: MuonPluginTarget | undefined;
 
-  const getRuntimePluginConfig = (): MuonRuntimePluginConfig =>
-    resolveMuonRuntimePluginConfig(capabilityResolver, resolvedPluginAccess);
+  const getRuntimePluginConfig = (): MuonRuntimePluginConfig => {
+    const policy = resolveMuonRuntimePluginConfig(
+      capabilityResolver,
+      resolvedPluginAccess,
+    );
+    const artifacts = resolvedPluginAccess?.nativeArtifacts;
+    return developmentNativeTarget === undefined ||
+      artifacts === undefined ||
+      artifacts.size === 0
+      ? policy
+      : applyMuonNativePluginCatalogs(
+          policy,
+          artifacts,
+          developmentNativeTarget,
+          resolvedPluginAccess!.runtimeOverlay.path!,
+        );
+  };
 
   const refreshPluginAccess = async (config: ResolvedConfig): Promise<void> => {
     const targetOverride = process.env[muonBuildSequenceTargetsEnvironmentKey];
@@ -571,11 +588,20 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       resolvedPluginAccess.nativeArtifacts = artifacts;
       if (config.command === "serve" && backend === "cef") {
         const target = nativeTargets[0]!;
+        developmentNativeTarget = target;
         const directory = join(config.root, ".muon/plugins/runtime", target);
         await stageMuonNativePlugins(artifacts, target, directory);
         resolvedPluginAccess.runtimeOverlay = {
           ...resolvedPluginAccess.runtimeOverlay,
           path: directory,
+          plugins:
+            resolvedPluginAccess.runtimeOverlay.plugins ??
+            resolvedPluginAccess.plugins.map(
+              ({ native: _native, imports: _imports, ...entry }) => ({
+                ...entry,
+                allow: entry.allow ?? [],
+              }),
+            ),
         };
       }
     }

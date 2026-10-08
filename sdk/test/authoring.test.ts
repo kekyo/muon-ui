@@ -71,6 +71,18 @@ int main(int argc, char** argv) {
         language,
         buildSystem,
       });
+      if (language === 'c' && buildSystem === 'make') {
+        await writeFile(join(source, 'step.h'), '#define INCREMENT_STEP 1\n');
+        const code = join(source, 'plugin.c');
+        await writeFile(
+          code,
+          '#include "step.h"\n' +
+            (await readFile(code, 'utf8')).replace(
+              'value + 1',
+              'value + INCREMENT_STEP'
+            )
+        );
+      }
       const manifestPath = await buildPlugin({
         configPath: join(source, 'muon-plugin.build.json'),
         target: 'linux-amd64',
@@ -89,6 +101,26 @@ int main(int argc, char** argv) {
           },
         }
       );
+      if (language === 'c' && buildSystem === 'make') {
+        await writeFile(join(source, 'step.h'), '#define INCREMENT_STEP 2\n');
+        await buildPlugin({
+          configPath: join(source, 'muon-plugin.build.json'),
+          target: 'linux-amd64',
+          outputDirectory: join(root, 'outputs', buildSystem),
+        });
+        await expect(
+          execute(
+            join(root, 'driver'),
+            [artifact.targets['linux-amd64']!.library],
+            {
+              env: {
+                ...process.env,
+                LD_LIBRARY_PATH: join(sdk, 'native/linux-amd64/lib'),
+              },
+            }
+          )
+        ).rejects.toMatchObject({ code: 12 });
+      }
       await writeFile(artifact.targets['linux-amd64']!.library, 'corrupt');
       await expect(
         readPluginArtifact(manifestPath, ['linux-amd64'])

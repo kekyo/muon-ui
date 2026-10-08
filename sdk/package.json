@@ -29,7 +29,8 @@
     "cmake",
     "templates",
     "pkgconfig",
-    "licenses"
+    "licenses",
+    "src/runtime-profile.json"
   ],
   "scripts": {
     "build": "vite build --mode cjs && vite build --mode esm && tsc -p tsconfig.build.json && node scripts/stage-native.mjs",

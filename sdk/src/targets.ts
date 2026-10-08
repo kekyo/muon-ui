@@ -1,3 +1,5 @@
+import runtimeProfile from './runtime-profile.json' with { type: 'json' };
+
 /** Supported native plugin compilation targets. */
 export type MuonPluginTarget =
   | 'linux-amd64'
@@ -24,9 +26,13 @@ export interface MuonPluginTargetDescriptor {
 }
 
 /** Plugin ABI supported by this SDK and matching muon runtimes. */
-export const muonPluginAbiVersion = 1;
+export const muonPluginAbiVersion = runtimeProfile.pluginAbi;
 /** NDK revision used by the matching Android runtime. */
-export const muonPluginNdkVersion = '29.0.14206865';
+export const muonPluginNdkVersion = runtimeProfile.ndkVersion;
+/** Android API level required by the shared runtime. */
+export const muonPluginAndroidApi = runtimeProfile.androidApi;
+/** Exact cardio header revision required by the SDK and shared runtime. */
+export const muonPluginCardioHeaderSha256 = runtimeProfile.cardioHeaderSha256;
 /** All targets supported by muon-plugin-sdk. */
 export const muonPluginTargets: readonly MuonPluginTarget[] = [
   'linux-amd64',
@@ -59,8 +65,8 @@ export const getPluginTarget = (
     'linux-arm64': 'aarch64-linux-gnu-',
     'windows-i686': 'i686-w64-mingw32-',
     'windows-amd64': 'x86_64-w64-mingw32-',
-    'android-arm64-v8a': 'aarch64-linux-android24-',
-    'android-x86_64': 'x86_64-linux-android24-',
+    'android-arm64-v8a': `aarch64-linux-android${muonPluginAndroidApi}-`,
+    'android-x86_64': `x86_64-linux-android${muonPluginAndroidApi}-`,
   }[target];
   return {
     target,
@@ -70,22 +76,7 @@ export const getPluginTarget = (
     extension: os === 'windows' ? '.dll' : '.so',
     cardioLibrary: os === 'windows' ? 'libcardio.dll' : 'libcardio.so',
     cardioLinkLibrary: os === 'windows' ? 'libcardio.dll.a' : 'libcardio.so',
-    definitions: [
-      'CARDIO_SHARED_LIB=1',
-      'CARDIO_WITH_LINUX_IO_URING=0',
-      ...(os === 'android'
-        ? ['CARDIO_HAS_POSIX_FD=1']
-        : [
-            'CARDIO_WITH_SUPPLEMENTAL=1',
-            ...(os === 'linux'
-              ? [
-                  'CARDIO_HAS_POSIX_FD=1',
-                  'CARDIO_WITH_GLIB=1',
-                  'CARDIO_WITH_GIO=1',
-                ]
-              : []),
-          ]),
-    ],
+    definitions: runtimeProfile.cardioDefinitions[os],
     packages: os === 'linux' ? ['glib-2.0', 'gio-2.0 >= 2.74'] : [],
     cflags: os === 'windows' ? [] : ['-fPIC', '-pthread'],
     ldflags:

@@ -9,8 +9,10 @@ MUON_CFLAGS := $(shell pkg-config --cflags $(MUON_PACKAGE))
 MUON_LIBS := $(shell pkg-config --libs $(MUON_PACKAGE))
 comma := ,
 MUON_LOADER_FLAGS := $(if $(findstring windows-,$(MUON_TARGET)),,-Wl$(comma)-soname$(comma)$(notdir $(OUTPUT)) -Wl$(comma)-rpath$(comma)'$$ORIGIN')
-.PHONY: all
+.PHONY: all muon-plugin-rebuild
 all: $(OUTPUT)
-$(OUTPUT): $(SOURCES)
+# This minimal single-command build also observes changed headers and flags.
+# Projects needing incremental object builds can supply their own build system.
+$(OUTPUT): $(SOURCES) muon-plugin-rebuild
 	@mkdir -p "$(dir $(OUTPUT))"
 	$(MUON_COMPILER) -std=$(MUON_STANDARD) -Wall -Wextra -Wpedantic -Werror $(CPPFLAGS) $(CFLAGS) $(CXXFLAGS) $(MUON_CFLAGS) -shared $(SOURCES) -o "$@" $(LDFLAGS) $(MUON_LOADER_FLAGS) $(MUON_LIBS) $(LDLIBS)

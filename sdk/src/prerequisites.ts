@@ -20,11 +20,19 @@ export interface PluginPrerequisiteIssue {
 
 /** Native authoring requirements; prebuilt consumers do not use this API. */
 export interface PluginToolchainOptions extends NativeBuildEnvironmentOptions {
+  /** Additional target development libraries required by this plugin. */ packages?: readonly PluginPackagePrerequisite[];
   /** Implementation language; defaults to C++20. */ language?: 'c' | 'c++';
   /** Whether to use cardio; defaults to true for C++. */ cardio?: boolean;
   /** Native build system, defaults to make. */ buildSystem?:
     'make' | 'cmake' | 'custom';
   /** Additional executables required by a custom build. */ tools?: readonly string[];
+}
+
+/** A plugin-specific pkg-config dependency and actionable installation guidance. */
+export interface PluginPackagePrerequisite {
+  /** pkg-config expression, including any minimum version. */ readonly name: string;
+  /** Installation command or source-build instructions for this target. */ readonly install: string;
+  /** Official dependency installation documentation. */ readonly documentation: string;
 }
 
 /** Complete prerequisite report; diagnostics never install software. */
@@ -141,7 +149,7 @@ export const diagnosePluginToolchain = async (
     ],
   ];
   const build = options.buildSystem ?? 'make';
-  if (build === 'make')
+  if (build === 'make' || build === 'cmake')
     tools.push([
       'make',
       'make',
@@ -207,6 +215,19 @@ export const diagnosePluginToolchain = async (
       'https://gcc.gnu.org/onlinedocs/gcc/Directory-Options.html'
     );
   const pkg = await findExecutable('pkg-config', environment);
+  if (pkg)
+    for (const dependency of options.packages ?? []) {
+      try {
+        await execute(pkg, ['--exists', dependency.name], { env: environment });
+      } catch {
+        add(
+          dependency.name.split(' ')[0]!,
+          `Target development package ${dependency.name} is unavailable for ${target.target}.`,
+          dependency.install,
+          dependency.documentation
+        );
+      }
+    }
   if (cardio && pkg)
     for (const dependency of target.packages) {
       try {

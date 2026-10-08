@@ -1,0 +1,26 @@
+{
+  "pluginAbi": 1,
+  "ndkVersion": "29.0.14206865",
+  "androidApi": 24,
+  "cardioHeaderSha256": "9c479b0487588cee284dc0f525916008e2277132a81052a9a7291212ee202af4",
+  "cardioDefinitions": {
+    "linux": [
+      "CARDIO_SHARED_LIB=1",
+      "CARDIO_WITH_LINUX_IO_URING=0",
+      "CARDIO_WITH_SUPPLEMENTAL=1",
+      "CARDIO_HAS_POSIX_FD=1",
+      "CARDIO_WITH_GLIB=1",
+      "CARDIO_WITH_GIO=1"
+    ],
+    "windows": [
+      "CARDIO_SHARED_LIB=1",
+      "CARDIO_WITH_LINUX_IO_URING=0",
+      "CARDIO_WITH_SUPPLEMENTAL=1"
+    ],
+    "android": [
+      "CARDIO_SHARED_LIB=1",
+      "CARDIO_WITH_LINUX_IO_URING=0",
+      "CARDIO_HAS_POSIX_FD=1"
+    ]
+  }
+}

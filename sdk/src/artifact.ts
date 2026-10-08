@@ -17,9 +17,17 @@ import {
 } from 'node:path';
 import { inspectPluginBinary, type PluginBinaryInfo } from './binary.js';
 import {
+  validatePluginLibraryDependencies,
+  type PluginLibraryInspection,
+} from './dependencies.js';
+export { inspectPluginBinary } from './binary.js';
+export { validatePluginLibraryDependencies } from './dependencies.js';
+import {
   getPluginTarget,
   muonPluginAbiVersion,
   muonPluginNdkVersion,
+  muonPluginAndroidApi,
+  muonPluginCardioHeaderSha256,
   type MuonPluginTarget,
 } from './targets.js';
 
@@ -153,7 +161,8 @@ export const readPluginArtifact = async (
     if (
       typeof runtime.cardio !== 'boolean' ||
       (runtime.cardio &&
-        runtime.cardioAbi !== `muon-${muonPluginAbiVersion}-${target}`)
+        runtime.cardioAbi !==
+          `muon-${muonPluginAbiVersion}-${muonPluginCardioHeaderSha256}-${target}`)
     )
       throw new Error('Plugin cardio ABI does not match this runtime.');
     if (
@@ -163,7 +172,8 @@ export const readPluginArtifact = async (
       throw new Error('Plugin C++ runtime does not match this target.');
     if (
       descriptor.os === 'android' &&
-      (runtime.ndk !== muonPluginNdkVersion || runtime.androidApi !== 24)
+      (runtime.ndk !== muonPluginNdkVersion ||
+        runtime.androidApi !== muonPluginAndroidApi)
     )
       throw new Error('Plugin NDK or Android API does not match this runtime.');
     const read = async (
@@ -197,8 +207,15 @@ export const readPluginArtifact = async (
     )
       throw new Error('Plugin dependencies and linkLibraries must be arrays.');
     const dependencies: string[] = [];
-    for (const dependency of entry.dependencies)
-      dependencies.push((await read(dependency, false)).path);
+    const inspections: PluginLibraryInspection[] = [
+      { path: library.path, info: library.info },
+    ];
+    for (const dependency of entry.dependencies) {
+      const inspected = await read(dependency, false);
+      dependencies.push(inspected.path);
+      inspections.push(inspected);
+    }
+    validatePluginLibraryDependencies(inspections, target);
     for (const value of entry.linkLibraries) {
       const file = record(value);
       if (
@@ -305,13 +322,15 @@ export const packagePlugin = async (
       runtime: {
         cardio,
         ...(cardio
-          ? { cardioAbi: `muon-${muonPluginAbiVersion}-${target}` }
+          ? {
+              cardioAbi: `muon-${muonPluginAbiVersion}-${muonPluginCardioHeaderSha256}-${target}`,
+            }
           : {}),
         ...(input.language === 'c'
           ? {}
           : { cpp: descriptor.os === 'android' ? 'c++_shared' : 'libstdc++' }),
         ...(descriptor.os === 'android'
-          ? { ndk: muonPluginNdkVersion, androidApi: 24 }
+          ? { ndk: muonPluginNdkVersion, androidApi: muonPluginAndroidApi }
           : {}),
       },
     };

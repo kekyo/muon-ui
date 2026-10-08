@@ -590,6 +590,23 @@ static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
   }
 
   const auto plugin_access_path = test_directory / "plugin-access.json";
+  const auto plugin_catalog_path = test_directory / "plugin-catalog.json";
+  if (!Expect(WriteFile(plugin_catalog_path,
+                        R"({"plugin":{"plugins":[{"name":"external","allow":["muon.example.*"],"expectedFunctions":"invalid"}]}})"),
+              "failed to write invalid plugin catalog") ||
+      !LoadConfigExpectFailure(plugin_catalog_path, "expectedFunctions")) {
+    return false;
+  }
+  if (!Expect(WriteFile(plugin_catalog_path,
+                        R"({"plugin":{"plugins":[{"name":"external","allow":["muon.example.*"],"expectedFunctions":["muon.example.increment"]}]}})"),
+              "failed to write plugin catalog") ||
+      !LoadConfigExpectSuccess(plugin_catalog_path, &config) ||
+      !Expect(config.plugin.plugins[0].has_expected_functions &&
+                  config.plugin.plugins[0].expected_functions ==
+                      std::vector<std::string>{"muon.example.increment"},
+              "producer function catalog was not preserved")) {
+    return false;
+  }
   if (!Expect(
           WriteFile(
               plugin_access_path,

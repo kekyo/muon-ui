@@ -4,27 +4,17 @@
 // https://github.com/kekyo/muon-ui
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
+import {
+  inspectPluginBinary,
+  validatePluginLibraryDependencies,
+} from "muon-plugin-sdk/artifact";
 import type { MuonAndroidAbi, MuonAndroidPackagedPlugin } from "./build.js";
 
 const runtimeLibraries = new Set([
   "libcardio.so",
   "libc++_shared.so",
   "libmuon_android_rpc.so",
-]);
-const systemLibraries = new Set([
-  "libc.so",
-  "libm.so",
-  "libdl.so",
-  "liblog.so",
-  "libandroid.so",
-  "libjnigraphics.so",
-  "libz.so",
-  "libEGL.so",
-  "libGLESv2.so",
-  "libGLESv3.so",
-  "libOpenSLES.so",
-  "libvulkan.so",
 ]);
 const record = (value: unknown, label: string): Record<string, unknown> => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -37,118 +27,7 @@ const text = (value: unknown, label: string): string => {
   return value;
 };
 
-// ELF64 little-endian is the shared format of the two supported Android ABIs.
-// Validate the actual load segments and dynamic tables without requiring an NDK.
-const inspectLibrary = (
-  data: Buffer,
-  abi: MuonAndroidAbi,
-  soname: string,
-  packaged: ReadonlySet<string>,
-): void => {
-  if (
-    data.length < 64 ||
-    data.readUInt32BE(0) !== 0x7f454c46 ||
-    data[4] !== 2 ||
-    data[5] !== 1 ||
-    data.readUInt16LE(16) !== 3
-  )
-    throw new Error(`${soname} is not an ELF64 little-endian shared library.`);
-  if (data.readUInt16LE(18) !== (abi === "arm64-v8a" ? 183 : 62))
-    throw new Error(`${soname} ELF machine does not match ${abi}.`);
-  const u64 = (offset: number): number => {
-    const value = data.readBigUInt64LE(offset);
-    if (value > BigInt(Number.MAX_SAFE_INTEGER))
-      throw new Error(`${soname} ELF offset is too large.`);
-    return Number(value);
-  };
-  const phoff = u64(32);
-  const phsize = data.readUInt16LE(54);
-  const phnum = data.readUInt16LE(56);
-  let loads = 0;
-  for (let index = 0; index < phnum; index += 1) {
-    const offset = phoff + index * phsize;
-    if (data.readUInt32LE(offset) !== 1) continue;
-    loads += 1;
-    if (
-      u64(offset + 48) < 16384 ||
-      u64(offset + 8) % 16384 !== u64(offset + 16) % 16384
-    )
-      throw new Error(`${soname} ELF load segments must support 16 KiB pages.`);
-  }
-  if (!loads) throw new Error(`${soname} ELF has no load segments.`);
-  const shoff = u64(40);
-  const shsize = data.readUInt16LE(58);
-  const shnum = data.readUInt16LE(60);
-  const sections = Array.from({ length: shnum }, (_, index) => {
-    const offset = shoff + index * shsize;
-    return {
-      type: data.readUInt32LE(offset + 4),
-      offset: u64(offset + 24),
-      size: u64(offset + 32),
-      link: data.readUInt32LE(offset + 40),
-      entrySize: u64(offset + 56),
-    };
-  });
-  const cstring = (
-    table: (typeof sections)[number] | undefined,
-    offset: number,
-  ): string => {
-    if (!table || offset < 0 || offset >= table.size)
-      throw new Error(`${soname} ELF string table is invalid.`);
-    const start = table.offset + offset;
-    const end = data.indexOf(0, start);
-    if (end < start || end >= table.offset + table.size)
-      throw new Error(`${soname} ELF string is unterminated.`);
-    return data.toString("utf8", start, end);
-  };
-  let entrypoint = false;
-  let declaredSoname: string | undefined;
-  for (const section of sections) {
-    if (section.type !== 11 && section.type !== 6) continue;
-    const expectedSize = section.type === 11 ? 24 : 16;
-    if (
-      section.entrySize !== expectedSize ||
-      section.size % expectedSize !== 0 ||
-      section.offset + section.size > data.length
-    )
-      throw new Error(`${soname} ELF dynamic table is invalid.`);
-    for (
-      let offset = section.offset;
-      offset < section.offset + section.size;
-      offset += expectedSize
-    ) {
-      if (section.type === 11) {
-        const name = cstring(sections[section.link], data.readUInt32LE(offset));
-        const binding = data[offset + 4]! >> 4;
-        if (
-          name === "muon_init_plugin" &&
-          data.readUInt16LE(offset + 6) !== 0 &&
-          (binding === 1 || binding === 2) &&
-          (data[offset + 5]! & 3) === 0
-        )
-          entrypoint = true;
-      } else {
-        const tag = u64(offset);
-        if (tag === 1 || tag === 14) {
-          const name = cstring(sections[section.link], u64(offset + 8));
-          if (tag === 14) declaredSoname = name;
-          else if (
-            !runtimeLibraries.has(name) &&
-            !systemLibraries.has(name) &&
-            !packaged.has(name)
-          )
-            throw new Error(
-              `${soname} requires an unpackaged library: ${name}`,
-            );
-        }
-      }
-    }
-  }
-  if (!entrypoint) throw new Error(`${soname} must export muon_init_plugin.`);
-  if (declaredSoname !== soname)
-    throw new Error(`${soname} ELF SONAME must match its packaged name.`);
-};
-
+// Validate ELF inputs without loading them or requiring an Android NDK.
 /**
  * Resolves application-owned prebuilt plugins and validates their Android ELF inputs.
  * @param input - Parsed android.plugins value.
@@ -177,7 +56,7 @@ export const resolveAndroidPlugins = async (
       throw new Error("Android plugin names must be valid and unique.");
     if (!/^lib[A-Za-z0-9_]+\.so$/u.test(soname) || sonames.has(soname))
       throw new Error("Android plugin sonames must be valid and unique.");
-    if (runtimeLibraries.has(soname) || systemLibraries.has(soname))
+    if (runtimeLibraries.has(soname))
       throw new Error(`Android library name is reserved: ${soname}`);
     names.add(name);
     sonames.add(soname);
@@ -217,7 +96,20 @@ export const resolveAndroidPlugins = async (
         !plugin.expectedFunctions.every((path) => typeof path === "string"))
     )
       throw new Error(`Invalid expected functions for Android plugin ${name}.`);
+    const dependencies: Partial<Record<MuonAndroidAbi, readonly string[]>> = {};
+    if (plugin.dependencies !== undefined) {
+      const raw = record(plugin.dependencies, "plugin.dependencies");
+      for (const abi of abis) {
+        const paths = raw[abi] ?? [];
+        if (!Array.isArray(paths))
+          throw new Error("plugin.dependencies entries must be path arrays.");
+        dependencies[abi] = paths.map((path) =>
+          resolve(directory, text(path, "plugin.dependencies path")),
+        );
+      }
+    }
     return {
+      ...(plugin.dependencies === undefined ? {} : { dependencies }),
       name,
       soname,
       allow,
@@ -228,20 +120,41 @@ export const resolveAndroidPlugins = async (
         : { expectedFunctions: plugin.expectedFunctions as string[] }),
     };
   });
-  for (const plugin of result)
-    for (const abi of abis) {
-      try {
-        inspectLibrary(
-          await readFile(plugin.libraries[abi]!),
-          abi,
-          plugin.soname,
-          sonames,
-        );
-      } catch (error) {
-        throw new Error(
-          `Invalid Android plugin ${plugin.name} (${abi}): ${error instanceof Error ? error.message : String(error)}`,
-        );
+  for (const abi of abis) {
+    const files = new Map<
+      string,
+      { path: string; data: Buffer; plugin: boolean }
+    >();
+    for (const plugin of result) {
+      const paths = [
+        plugin.libraries[abi]!,
+        ...(plugin.dependencies?.[abi] ?? []),
+      ];
+      for (let index = 0; index < paths.length; index++) {
+        const path = paths[index]!;
+        const name = index === 0 ? plugin.soname : basename(path);
+        if (!/^lib[A-Za-z0-9_.+-]+\.so$/u.test(name))
+          throw new Error("Invalid Android dependency filename: " + name);
+        const data = await readFile(path);
+        const previous = files.get(name);
+        if (previous && !previous.data.equals(data))
+          throw new Error("Conflicting Android library: " + name);
+        files.set(name, {
+          path,
+          data,
+          plugin: index === 0 || previous?.plugin === true,
+        });
       }
     }
+    const inspected = [...files.entries()].map(([name, file]) => {
+      const info = inspectPluginBinary(file.data, `android-${abi}`);
+      if (info.soname !== name)
+        throw new Error(name + " ELF SONAME must match its packaged name.");
+      if (file.plugin && !info.exports.includes("muon_init_plugin"))
+        throw new Error(name + " must export muon_init_plugin.");
+      return { path: name, info };
+    });
+    validatePluginLibraryDependencies(inspected, `android-${abi}`);
+  }
   return result;
 };

@@ -6,6 +6,7 @@
 package dev.muon.e2e.observer;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertEquals;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -15,6 +16,7 @@ import androidx.test.uiautomator.UiObject2;
 import androidx.test.uiautomator.Until;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Pattern;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -25,12 +27,14 @@ public final class PackagedApplicationTest {
     private final UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
 
     private UiObject2 requireText(String text) throws Exception {
-        UiObject2 view = device.wait(Until.findObject(By.pkg(APPLICATION_ID).text(text)), 60000);
+        UiObject2 view = device.wait(Until.findObject(By.pkg(APPLICATION_ID)
+                .text(Pattern.compile(Pattern.quote(text) + "|failed:.*"))), 60000);
         if (view == null) {
             ByteArrayOutputStream hierarchy = new ByteArrayOutputStream();
             device.dumpWindowHierarchy(hierarchy);
             assertNotNull("Missing " + text + ": " + hierarchy.toString(StandardCharsets.UTF_8.name()), view);
         }
+        assertEquals(text, view.getText());
         return view;
     }
 

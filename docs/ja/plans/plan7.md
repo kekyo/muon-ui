@@ -189,3 +189,15 @@ simpleモードでは、`plugin.plugins`を省略すると現在実装してい�
 段階1では共通設定の拒否、未許可関数の公開、適用できないページ条件の受理をテストで再現してから修正した。`muon-ui`のAndroid・共通設定テスト27件、`muon-android`の全47件、試作の全23件が成功した。Androidランタイムと試作は両ABIでビルドできた。
 
 Pixel 6では、新しくpackしたnpm配布物を独立した利用アプリへ導入し、`test-packaged-application.mjs --plugins`を実行した。共通設定からの外部プラグイン登録と設定値の受渡し、組込み関数の非公開化、許可外の`fs.unlink`を直接RPCで呼んだ場合の拒否を確認した。debug APKと署名付きrelease APKで操作・再読込み・再起動が成功し、releaseの更新後も保存データが維持された。段階1の完了条件を満たした。
+
+### 段階2の接続方式
+
+Androidを対象とするViteビルドでは、組込み関数の一覧を34関数に限定する。virtual moduleは公開APIの引数でブリッジを呼び、ブリッジが既存のAndroid用変換処理を使う。環境情報のJSON、ファイル操作のオプション、バイナリ、watchの変換をsimpleモードと共有する。未実装の完全名と、一致する関数がないワイルドカードはビルド時に拒否する。
+
+CLIは、実際にJSを生成したViteプラグインからcapabilityを受け取り、そのIDと許可関数をAPKへ収録する。設定を読み直してIDを作り直す処理にはしない。CLIのAndroid指定はViteの関数選択にも反映する。Androidとデスクトップでは呼出し変換が異なるため、両者のJSバンドルは別々にビルドする。[Viteのbuild API](https://vite.dev/guide/api-javascript.html#build)と[configResolvedフック](https://vite.dev/guide/api-plugin.html#configresolved)を使用し、導入済みViteの型定義コメントも確認した。
+
+ネイティブ側はvalidateモードで生成済みcapabilityだけを登録する。simple用の固定IDと外部プラグイン名をcapabilityとして受理しない。組込みAPIのルートも共通設定で許可した関数に限定する。公開型が不足していた`muon:fs`と環境情報のvirtual module宣言は、この段階で補った。
+
+関連するVite・Androidビルドの112件とレンダラーの15件が成功した。実機用の観測テストでは、アプリがエラーを表示した場合に、その内容を即座に失敗理由として返すようにした。
+
+Pixel 6の独立したnpm利用アプリで、組込みAPIのvalidateモードがdebug・署名付きreleaseの両方で動作した。ID欠落、不明ID、simple用の固定ID、許可されたIDによる別名前空間の呼出しは拒否された。同じページ内の別scriptへ有効なIDを渡すと、その許可範囲内の呼出しは成功した。再読込み・再起動・release更新後の保存データ維持も確認し、段階2の完了条件を満たした。

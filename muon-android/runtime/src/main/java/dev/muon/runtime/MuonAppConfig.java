@@ -24,6 +24,9 @@ final class MuonAppConfig {
     final JSONObject values;
     final boolean pluginEnabled;
     final String[] internalAllow;
+    final boolean validateMode;
+    final String[] capabilityIds;
+    final String[][] capabilityAllows;
 
     private MuonAppConfig(@NonNull JSONObject config) throws JSONException {
         startPage = config.getString("startPage");
@@ -35,14 +38,28 @@ final class MuonAppConfig {
         }
         values = config.getJSONObject("values");
         JSONObject plugin = config.getJSONObject("plugin");
-        if (!"simple".equals(plugin.getString("mode"))) {
+        String mode = plugin.getString("mode");
+        if (!"simple".equals(mode) && !"validate".equals(mode)) {
             throw new JSONException("Unsupported Android plugin mode");
         }
+        validateMode = "validate".equals(mode);
         pluginEnabled = plugin.getBoolean("enabled");
         JSONArray allow = plugin.getJSONArray("internalAllow");
         internalAllow = new String[allow.length()];
         for (int i = 0; i < internalAllow.length; i++) {
             internalAllow[i] = allow.getString(i);
+        }
+        JSONArray capabilities = validateMode ? plugin.getJSONArray("capabilities") : new JSONArray();
+        capabilityIds = new String[capabilities.length()];
+        capabilityAllows = new String[capabilities.length()][];
+        for (int i = 0; i < capabilities.length(); i++) {
+            JSONObject capability = capabilities.getJSONObject(i);
+            capabilityIds[i] = capability.getString("id");
+            JSONArray paths = capability.getJSONArray("allow");
+            capabilityAllows[i] = new String[paths.length()];
+            for (int j = 0; j < paths.length(); j++) {
+                capabilityAllows[i][j] = paths.getString(j);
+            }
         }
     }
 

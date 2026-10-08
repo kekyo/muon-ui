@@ -137,6 +137,30 @@ describe("public Android builds", () => {
       internalAllow: [],
     });
   });
+  it("packages generated validate capabilities with the matching built-in policy", async () => {
+    const root = await project({});
+    await buildMuonApp({
+      root,
+      targets: ["android"],
+      runtimePluginConfig: {
+        mode: "validate",
+        plugins: [
+          { name: "internal", allow: ["muon.environments.getConfigValues"] },
+        ],
+        capabilities: [
+          { id: "cap-test", allow: ["muon.environments.getConfigValues"] },
+        ],
+      },
+    });
+    expect(buildAndroid.mock.calls[0]![0].pluginAccess).toEqual({
+      mode: "validate",
+      enabled: true,
+      internalAllow: ["muon.environments.getConfigValues"],
+      capabilities: [
+        { id: "cap-test", allow: ["muon.environments.getConfigValues"] },
+      ],
+    });
+  });
   it.each([
     ["https://main.asset.muon.invalid/allowed.html"],
     ["https://example.com/**"],

@@ -37,7 +37,10 @@ import {
   attachMuonVitePluginOptions,
   attachMuonVitePluginRuntimeState,
 } from "./vite-options.js";
-import { muonBuildSequenceSuppressViteBuildEnvironmentKey } from "./build-sequence.js";
+import {
+  muonBuildSequenceSuppressViteBuildEnvironmentKey,
+  muonBuildSequenceTargetsEnvironmentKey,
+} from "./build-sequence.js";
 import { createVitePackagedAssetOptions } from "./vite-assets.js";
 import {
   createMuonProgressRenderer,
@@ -480,6 +483,23 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     resolveMuonRuntimePluginConfig(capabilityResolver, resolvedPluginAccess);
 
   const refreshPluginAccess = async (config: ResolvedConfig): Promise<void> => {
+    const targetOverride = process.env[muonBuildSequenceTargetsEnvironmentKey];
+    const targets: readonly string[] =
+      targetOverride === undefined
+        ? typeof options.build === "object"
+          ? (options.build.targets ?? [])
+          : []
+        : JSON.parse(targetOverride);
+    const normalizedTargets = targets.flatMap((target) =>
+      target.split(",").map((part) => part.trim().toLowerCase()),
+    );
+    const backend = normalizedTargets.includes("android") ? "android" : "cef";
+    if (
+      backend === "android" &&
+      normalizedTargets.some((target) => target !== "android")
+    ) {
+      throw new Error("Build Android and desktop Vite bundles separately.");
+    }
     resolvedPluginAccess = await resolveMuonPluginAccessOptions({
       root: config.root,
       configPath: resolveMuonConfigPathForViteCommand(config, options),
@@ -495,11 +515,14 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
         : {}),
     });
     const pluginFunctionPaths =
-      await collectMuonPluginFunctionPathsForAccess(resolvedPluginAccess);
+      backend === "android"
+        ? []
+        : await collectMuonPluginFunctionPathsForAccess(resolvedPluginAccess);
     capabilityResolver =
       resolvedPluginAccess.mode === "validate"
         ? createMuonCapabilityModuleResolver(config.root, {
             ...resolvedPluginAccess.capabilityOptions,
+            backend,
             functionPaths: pluginFunctionPaths,
           })
         : undefined;

@@ -3,7 +3,10 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { createMuonAndroidSimpleApi } from './android-api.js';
+import {
+  createMuonAndroidSimpleApi,
+  muonAndroidBuiltinFunctionPaths,
+} from './android-api.js';
 import { installMuonAndroidNativePluginApi } from './native-plugin-api.js';
 import type { MuonAndroidRendererMetadata } from './native-plugin-metadata.js';
 import {
@@ -11,7 +14,34 @@ import {
   createMuonWebViewRpcTransport,
   installMuonWebViewCapabilityBridge,
   type MuonWebViewJavaScriptBridge,
+  type MuonWebViewRpcClient,
 } from './webview-rpc.js';
+
+// Virtual modules use public arguments; platform RPC uses Android wire values.
+// Reuse the simple API conversions with the capability supplied by the module.
+const createCapabilityClient = (
+  client: MuonWebViewRpcClient
+): MuonWebViewRpcClient => ({
+  ...client,
+  call: async (id, path, args, options) => {
+    if (
+      !(muonAndroidBuiltinFunctionPaths as readonly string[]).includes(path)
+    ) {
+      return await client.call(id, path, args, options);
+    }
+    const api = createMuonAndroidSimpleApi(client, {
+      'muon.browser': id,
+      'muon.environments': id,
+      'muon.fs': id,
+    });
+    const [, namespace, name] = path.split('.');
+    const functions = Reflect.get(api, namespace!) as object;
+    const call = Reflect.get(functions, name!) as (
+      ...args: readonly unknown[]
+    ) => Promise<unknown>;
+    return await call(...args);
+  },
+});
 
 /**
  * Installs the packaged Android API before application scripts execute.
@@ -30,7 +60,7 @@ export const bootstrapMuonAndroid = (
     metadata
   );
   const uninstallCapabilities = installMuonWebViewCapabilityBridge(
-    client,
+    metadata.mode === 'validate' ? createCapabilityClient(client) : client,
     target
   );
   const api = createMuonAndroidSimpleApi(client, {

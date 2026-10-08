@@ -10,6 +10,7 @@ import {
 import { validateMuonAndroidConfig } from "../../muon-android/src/renderer/android-config.js";
 import type { MuonRuntimePluginConfig } from "./capability.js";
 import { readMuonPluginAccessOptions } from "./plugin-access.js";
+import type { MuonAndroidPluginAccess } from "../../muon-android/src/build.js";
 
 /**
  * Connects common plugin policies to Android library definitions.
@@ -28,11 +29,20 @@ export const resolveMuonAndroidPluginAccess = (
       ? config
       : {
           ...config,
-          plugin: { ...(config.plugin as object | undefined), ...runtime },
+          plugin: {
+            ...(config.plugin as object | undefined),
+            ...runtime,
+            // Runtime entries already contain the allowlist derived from imports.
+            ...(runtime.mode === "validate"
+              ? { mode: "simple", plugins: runtime.plugins ?? [] }
+              : {}),
+          },
         };
   const plugin = readMuonPluginAccessOptions(merged, "simple");
   if ((plugin.mode ?? "simple") !== "simple") {
-    throw new Error("Android plugin.mode currently supports simple only.");
+    throw new Error(
+      "Android plugin.mode validate requires Vite-generated capabilities from the application build.",
+    );
   }
   validateMuonAndroidConfig(merged);
   const entries = plugin.plugins ?? [
@@ -80,12 +90,31 @@ export const resolveMuonAndroidPluginAccess = (
       };
     });
   const internal = entries.find((entry) => entry.name === "internal");
+  const base = {
+    enabled: plugin.pages === undefined || plugin.pages.length > 0,
+    internalAllow: expandMuonAndroidFunctionAllows(internal?.allow ?? []),
+  };
+  const ids = new Set<string>();
+  const pluginAccess: MuonAndroidPluginAccess =
+    runtime?.mode === "validate"
+      ? {
+          ...base,
+          mode: "validate",
+          capabilities: runtime.capabilities.map((entry) => {
+            if (!entry.id || ids.has(entry.id))
+              throw new Error(
+                "Android capability ids must be nonempty and unique.",
+              );
+            ids.add(entry.id);
+            return {
+              id: entry.id,
+              allow: expandMuonAndroidFunctionAllows(entry.allow),
+            };
+          }),
+        }
+      : { ...base, mode: "simple" };
   return {
-    pluginAccess: {
-      mode: "simple" as const,
-      enabled: plugin.pages === undefined || plugin.pages.length > 0,
-      internalAllow: expandMuonAndroidFunctionAllows(internal?.allow ?? []),
-    },
+    pluginAccess,
     plugins,
   };
 };

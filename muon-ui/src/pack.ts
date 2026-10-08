@@ -1632,7 +1632,7 @@ export const packMuonApp = async (
   options: MuonPackOptions,
 ): Promise<MuonPackResult> => {
   const cwd = resolve(options.root ?? process.cwd());
-  const project = await loadMuonBuildSequenceProject(cwd);
+  const project = await loadMuonBuildSequenceProject(cwd, options.targets);
   const plugin = resolveMuonViteBuildOptions(project.pluginOptions);
   const targets = [
     ...new Set(

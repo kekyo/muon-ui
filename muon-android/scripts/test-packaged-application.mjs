@@ -94,6 +94,7 @@ const muon = async (args) =>
   JSON.parse(await run(process.execPath, [cli, ...args, '--json']));
 const applicationId = 'dev.muon.e2e.publicconsumer';
 const includePlugin = process.argv.includes('--plugins');
+const validate = process.argv.includes('--validate');
 const inspect = async (path, variant, code, version) => {
   const { stdout } = await execute(process.execPath, [
     join(repository, 'muon-android/scripts/verify-consumer-apk.mjs'),
@@ -161,6 +162,15 @@ if (includePlugin) {
     config: { 'alpha.config': 'consumer-registry' },
   });
 }
+if (validate) {
+  config.plugin.mode = 'validate';
+  for (const plugin of config.plugin.plugins) {
+    plugin.imports = plugin.name === 'internal'
+      ? ['browser', 'environments', 'fs'].map((namespace) => ({ sources: ['main.ts'], allow: plugin.allow.filter((path) => path.startsWith('muon.' + namespace + '.')) }))
+      : [{ sources: ['main.ts'], allow: plugin.allow }];
+    delete plugin.allow;
+  }
+}
 await copyFile(join(repository, 'images/muon-256.png'), join(root, 'icon.png'));
 await writeFile(join(root, 'muon.json'), JSON.stringify(config));
 await writeFile(
@@ -180,15 +190,35 @@ await writeFile(
 );
 await writeFile(
   join(root, 'vite.config.ts'),
-  `import { defineConfig } from 'vite';\nimport muon from 'muon-ui/vite';\nimport prettierMax from 'prettier-max';\nexport default defineConfig({ base: '/notes/', plugins: [prettierMax(), muon({ pluginAccess: false, build: { targets: ['android'] } })], build: { target: 'es2022' } });\n`
+  `import { defineConfig } from 'vite';\nimport muon from 'muon-ui/vite';\nimport prettierMax from 'prettier-max';\nexport default defineConfig({ base: '/notes/', plugins: [prettierMax(), muon({ ${validate ? '' : 'pluginAccess: false,'} build: { targets: ['android'] } })], build: { target: 'es2022' } });\n`
 );
 await writeFile(
   join(root, 'index.html'),
   `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Muon Notes</title><style>body{font-family:sans-serif;margin:48px 20px;background:#f3f6fb;color:#102338}h1{font-size:28px}button{font-size:20px;display:block;margin:20px 0;padding:16px}output{display:block;margin:20px 0;font-size:18px}</style></head><body><h1>Packaged Muon Notes</h1><output id="status">Starting</output><output id="saved">Reading</output><output id="generation"></output><output id="plugin"></output><output id="policy"></output><output id="version"></output><button id="save">Save note</button><button id="reload">Reload page</button><script type="module" src="/main.ts"></script></body></html>`
 );
+if (validate) {
+  const htmlPath = join(root, 'index.html');
+  await writeFile(htmlPath, (await readFile(htmlPath, 'utf8')).replace('</head>', `<script>
+    const originalCall = globalThis.__muon_plugin_call;
+    globalThis.__muon_plugin_call = async (id, path, args) => {
+      if (path === 'muon.environments.getRuntimeInfo') globalThis.observedCapability = id;
+      return await originalCall(id, path, args);
+    };
+    globalThis.delegatedCall = async (id, path, args) => await originalCall(id, path, args);
+  </script></head>`));
+}
 await writeFile(
   join(root, 'main.ts'),
   `import type {} from 'muon-ui';
+${
+  validate
+    ? `import * as browser from 'muon:browser';
+import * as environments from 'muon:environments';
+import * as fs from 'muon:fs';
+const api = { browser, environments, fs };
+if (Reflect.get(globalThis, 'muon') !== undefined) throw new Error('validate exposed simple globals');`
+    : 'const api = window.muon;'
+}
 const status = document.querySelector<HTMLOutputElement>('#status')!;
 const saved = document.querySelector<HTMLOutputElement>('#saved')!;
 const path = 'note.txt';
@@ -196,7 +226,7 @@ const generation = Number(sessionStorage.getItem('generation') ?? '0') + 1;
 sessionStorage.setItem('generation', String(generation));
 document.querySelector<HTMLOutputElement>('#generation')!.textContent = 'Page loads: ' + generation;
 try {
-  const runtime = await window.muon.environments.getRuntimeInfo();
+  const runtime = await api.environments.getRuntimeInfo();
   if (runtime.backend !== 'android-webview') throw new Error('Expected Android backend');
   document.querySelector<HTMLOutputElement>('#version')!.textContent = 'Version: ' + runtime.applicationVersion;
   if (${includePlugin}) {
@@ -204,23 +234,39 @@ try {
     if (alpha.alphaName !== undefined) throw new Error('A denied plugin function was exposed');
     document.querySelector<HTMLOutputElement>('#plugin')!.textContent = 'Plugin: ' + await alpha.alphaAdd(3, 4) + ':' + await alpha.alphaConfig() + ':blocked';
   }
-  if (Reflect.get(window.muon.fs, 'unlink') !== undefined) throw new Error('A denied built-in was exposed');
+  if (Reflect.get(api.fs, 'unlink') !== undefined) throw new Error('A denied built-in was exposed');
   const rawCall = Reflect.get(globalThis, '__muon_plugin_call') as (id: string, path: string, args: unknown[]) => Promise<unknown>;
   let denied = false;
-  try { await rawCall('fs-capability', 'muon.fs.unlink', [JSON.stringify({ path })]); }
-  catch (error) { if (!String(error).includes('not allowed')) throw error; denied = true; }
+  try { await rawCall('fs-capability', 'muon.fs.unlink', [${validate ? 'path' : 'JSON.stringify({ path })'}]); }
+  catch (error) { if (!/not allowed|capability|Unknown muon plugin function/i.test(String(error))) throw error; denied = true; }
   if (!denied) throw new Error('The native policy accepted a denied built-in');
+  if (${validate}) {
+    const id = Reflect.get(globalThis, 'observedCapability') as string;
+    const delegated = Reflect.get(globalThis, 'delegatedCall') as typeof rawCall;
+    const shared = await delegated(id, 'muon.environments.getConfigValues', []) as Record<string, string>;
+    if (shared.channel !== 'package-consumer') throw new Error('Same-page capability delegation failed');
+    let refusedPath = false;
+    try { await delegated(id, 'muon.fs.exists', [path]); }
+    catch (error) { if (!/not allowed/i.test(String(error))) throw error; refusedPath = true; }
+    if (!refusedPath) throw new Error('Native policy accepted a path outside the valid capability');
+    for (const id of ['', 'unknown-id', 'environment-capability', 'browser-capability']) {
+      let refused = false;
+      try { await rawCall(id, 'muon.environments.getConfigValues', []); }
+      catch (error) { if (!/capability/i.test(String(error))) throw error; refused = true; }
+      if (!refused) throw new Error('Native policy accepted the invalid ID: ' + id);
+    }
+  }
   document.querySelector<HTMLOutputElement>('#policy')!.textContent = 'Policy: blocked';
-  const config = await window.muon.environments.getConfigValues();
-  const data = await window.muon.fs.exists(path) ? await window.muon.fs.readTextFile(path, 'utf8') : 'empty';
+  const config = await api.environments.getConfigValues();
+  const data = await api.fs.exists(path) ? await api.fs.readTextFile(path, 'utf8') : 'empty';
   saved.textContent = 'Stored: ' + data;
   status.textContent = 'ready:' + runtime.backend + ':' + config.channel;
 } catch (error) { status.textContent = 'failed:' + String(error); }
 document.querySelector<HTMLButtonElement>('#save')!.onclick = async () => {
-  try { await window.muon.fs.writeTextFile(path, 'saved-on-device', 'utf8'); saved.textContent = 'Stored: ' + await window.muon.fs.readTextFile(path, 'utf8'); }
+  try { await api.fs.writeTextFile(path, 'saved-on-device', 'utf8'); saved.textContent = 'Stored: ' + await api.fs.readTextFile(path, 'utf8'); }
   catch (error) { status.textContent = 'failed:' + String(error); }
 };
-document.querySelector<HTMLButtonElement>('#reload')!.onclick = async () => { await window.muon.browser.reload(); };
+document.querySelector<HTMLButtonElement>('#reload')!.onclick = async () => { await api.browser.reload(); };
 `
 );
 const prepared = await muon(['prepare', '--target', 'android']);
@@ -242,11 +288,12 @@ await run(process.execPath, [
   join(root, 'node_modules/vite/bin/vite.js'),
   'build',
 ]);
-assert.deepEqual(
-  await readFile(result.packagePath),
-  firstBytes,
-  'CLI and direct Vite build must generate the same APK'
-);
+if (!validate)
+  assert.deepEqual(
+    await readFile(result.packagePath),
+    firstBytes,
+    'CLI and direct Vite build must generate the same APK'
+  );
 const adb = async (args) =>
   (
     await execute(join(sdk, 'platform-tools/adb'), ['-s', serial, ...args], {

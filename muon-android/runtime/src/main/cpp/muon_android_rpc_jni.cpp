@@ -59,6 +59,8 @@ struct MuonAndroidRpcHost {
   MuonRpcOwner owner;
   std::shared_ptr<MuonRpcHost> host;
   std::shared_ptr<MuonPluginPolicy> internal_policy;
+  bool validate_mode = false;
+  std::map<std::string, std::shared_ptr<MuonPluginPolicy>> capability_policies;
   std::map<std::string, MuonAndroidResolvedRoute> routes_by_path;
   std::string renderer_metadata_json;
   bool startup_failed = false;
@@ -376,10 +378,13 @@ static bool AppendFunctionReferenceJson(
 static std::string CreateRendererMetadataJson(
     const MuonAndroidPluginCatalog& catalog,
     int context_id,
-    const std::shared_ptr<MuonPluginPolicy>& internal_policy) {
+    const std::shared_ptr<MuonPluginPolicy>& internal_policy,
+    bool validate_mode) {
   auto output = std::string{"{\"version\":1,\"contextId\":"};
   output.append(std::to_string(context_id));
-  output.append(",\"mode\":\"simple\",\"builtinFunctions\":[");
+  output.append(",\"mode\":");
+  AppendJsonString(validate_mode ? "validate" : "simple", &output);
+  output.append(",\"builtinFunctions\":[");
   auto builtin_paths = kPlatformFunctionPaths;
   builtin_paths.insert(builtin_paths.end(), kFilesystemFunctionPaths.begin(),
                        kFilesystemFunctionPaths.end());
@@ -1476,6 +1481,10 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   auto next_platform_function_id =
       static_cast<uint64_t>(maximum_plugin_function_id) + 1;
   for (const auto& path : platform_paths) {
+    if (state->validate_mode &&
+        !state->internal_policy->IsAllowedFunctionPath(path)) {
+      continue;
+    }
     if (next_platform_function_id >
         std::numeric_limits<uint32_t>::max()) {
       *error_message = "Android RPC function id space is exhausted";
@@ -1496,7 +1505,8 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
         {function_id, path, MuonRpcRouteKind::Platform});
   }
 
-  auto policies = plugin_catalog.capability_policies;
+  auto policies = state->validate_mode ? state->capability_policies
+                                       : plugin_catalog.capability_policies;
   const auto add_policy = [&policies, error_message](
                               const std::string& id,
                               std::shared_ptr<MuonPluginPolicy> policy) {
@@ -1506,13 +1516,14 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
     }
     return true;
   };
-  if (!add_policy("environment-capability", environment_policy) ||
+  if (!state->validate_mode &&
+      (!add_policy("environment-capability", environment_policy) ||
       !add_policy("browser-capability", browser_policy) ||
-      !add_policy("fs-capability", filesystem_policy)) {
+      !add_policy("fs-capability", filesystem_policy))) {
     return false;
   }
 #if defined(MUON_ANDROID_TEST_HOST)
-  if (!add_policy("prototype-capability", prototype_policy)) {
+  if (!state->validate_mode && !add_policy("prototype-capability", prototype_policy)) {
     return false;
   }
 #endif
@@ -1555,7 +1566,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   }
   state->renderer_metadata_json =
       CreateRendererMetadataJson(plugin_catalog, state->owner.context_id,
-                                  state->internal_policy);
+                                  state->internal_policy, state->validate_mode);
   return true;
 }
 
@@ -1684,8 +1695,13 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
     jclass bridge_type,
     jobject bridge,
     jobjectArray plugin_inputs,
-    jobjectArray internal_allow) {
-  if (bridge == nullptr || internal_allow == nullptr) {
+    jobjectArray internal_allow,
+    jboolean validate_mode,
+    jobjectArray capability_ids,
+    jobjectArray capability_allows) {
+  if (bridge == nullptr || internal_allow == nullptr ||
+      capability_ids == nullptr || capability_allows == nullptr ||
+      environment->GetArrayLength(capability_ids) != environment->GetArrayLength(capability_allows)) {
     ThrowIllegalState(environment, "The Android RPC bridge is required");
     return 0;
   }
@@ -1701,6 +1717,33 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
   if (!CreateMuonPluginPolicy(allowed, &state->internal_policy, &policy_error)) {
     ThrowIllegalState(environment, policy_error);
     return 0;
+  }
+  state->validate_mode = validate_mode == JNI_TRUE;
+  for (jsize i = 0; i < environment->GetArrayLength(capability_ids); ++i) {
+    const auto id_value = static_cast<jstring>(
+        environment->GetObjectArrayElement(capability_ids, i));
+    const auto id = GetJavaString(environment, id_value);
+    environment->DeleteLocalRef(id_value);
+    const auto paths = static_cast<jobjectArray>(
+        environment->GetObjectArrayElement(capability_allows, i));
+    if (id.empty() || paths == nullptr || state->capability_policies.count(id) != 0) {
+      if (paths != nullptr) environment->DeleteLocalRef(paths);
+      ThrowIllegalState(environment, "Invalid Android capability declaration");
+      return 0;
+    }
+    auto capability_paths = std::vector<std::string>{};
+    for (jsize j = 0; j < environment->GetArrayLength(paths); ++j) {
+      const auto value = static_cast<jstring>(environment->GetObjectArrayElement(paths, j));
+      capability_paths.push_back(GetJavaString(environment, value));
+      environment->DeleteLocalRef(value);
+    }
+    environment->DeleteLocalRef(paths);
+    auto policy = std::shared_ptr<MuonPluginPolicy>{};
+    if (!CreateMuonPluginPolicy(capability_paths, &policy, &policy_error)) {
+      ThrowIllegalState(environment, policy_error);
+      return 0;
+    }
+    state->capability_policies.emplace(id, std::move(policy));
   }
   if (environment->GetJavaVM(&state->virtual_machine) != JNI_OK) {
     ThrowIllegalState(environment, "Could not access the Android Java VM");

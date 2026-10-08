@@ -55,6 +55,7 @@
     }
   },
   "devDependencies": {
+    "muon-plugin-sdk": "0.0.1",
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
     "@types/semver": ">=7.7.0",

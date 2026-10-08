@@ -12,7 +12,17 @@ export type {
 } from "../android.js";
 
 import type { Plugin, ResolvedConfig, UserConfig, WatchOptions } from "vite";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import {
+  readBuildConfig,
+  resolveBuildTargets,
+  getDefaultMuonBuildTarget,
+} from "./build-config.js";
+import {
+  resolveMuonNativePlugins,
+  stageMuonNativePlugins,
+} from "./native-plugins.js";
+import type { MuonPluginTarget } from "muon-plugin-sdk";
 
 import {
   buildMuonApp,
@@ -63,6 +73,7 @@ type MuonWatchIgnored = NonNullable<WatchOptions["ignored"]>;
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
   progress?: MuonProgressCallback;
+  nativePluginAccess?: MuonResolvedPluginAccessOptions;
 }
 
 const getErrorMessage = (error: unknown): string =>
@@ -515,6 +526,59 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
           }
         : {}),
     });
+    if (
+      resolvedPluginAccess.plugins.some((plugin) => plugin.native !== undefined)
+    ) {
+      const build = typeof options.build === "object" ? options.build : {};
+      const sourceConfig = await readBuildConfig(
+        config.root,
+        resolveMuonConfigPathForViteCommand(config, options),
+      );
+      const android = {
+        ...(sourceConfig.config.android as MuonAndroidOptions | undefined),
+        ...build.android,
+      };
+      const nativeTargets: MuonPluginTarget[] =
+        backend === "android"
+          ? (android.abis ?? ["arm64-v8a", "x86_64"]).map(
+              (abi) => `android-${abi}` as MuonPluginTarget,
+            )
+          : config.command === "serve"
+            ? [getDefaultMuonBuildTarget() as MuonPluginTarget]
+            : resolveBuildTargets({
+                ...build,
+                ...(normalizedTargets.length
+                  ? { targets: normalizedTargets }
+                  : {}),
+              }).map((target) => target as MuonPluginTarget);
+      const sdkPath =
+        android.sdkPath === undefined
+          ? undefined
+          : resolve(
+              build.android?.sdkPath === undefined
+                ? sourceConfig.directory
+                : config.root,
+              android.sdkPath,
+            );
+      const artifacts = await resolveMuonNativePlugins({
+        root: config.root,
+        directory: resolvedPluginAccess.nativeDirectory ?? config.root,
+        plugins: resolvedPluginAccess.plugins,
+        targets: nativeTargets,
+        environment: process.env,
+        ...(sdkPath === undefined ? {} : { androidSdkPath: sdkPath }),
+      });
+      resolvedPluginAccess.nativeArtifacts = artifacts;
+      if (config.command === "serve" && backend === "cef") {
+        const target = nativeTargets[0]!;
+        const directory = join(config.root, ".muon/plugins/runtime", target);
+        await stageMuonNativePlugins(artifacts, target, directory);
+        resolvedPluginAccess.runtimeOverlay = {
+          ...resolvedPluginAccess.runtimeOverlay,
+          path: directory,
+        };
+      }
+    }
     const androidAccess =
       backend === "android" && resolvedPluginAccess.mode === "validate"
         ? await collectMuonAndroidPluginAccess(
@@ -666,6 +730,9 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       const progressRenderer = createMuonProgressRenderer();
       (muonBuildOptions as InternalMuonBuildOptions).progress =
         progressRenderer.report;
+      if (resolvedPluginAccess !== undefined)
+        (muonBuildOptions as InternalMuonBuildOptions).nativePluginAccess =
+          resolvedPluginAccess;
       try {
         await buildMuonApp(muonBuildOptions);
       } finally {
@@ -678,6 +745,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     attachMuonVitePluginOptions(plugin, options),
     {
       getResolvedConfig: () => resolvedConfig,
+      getNativePluginAccess: () => resolvedPluginAccess,
       getRuntimePluginConfig: () =>
         resolvedConfig === undefined
           ? undefined

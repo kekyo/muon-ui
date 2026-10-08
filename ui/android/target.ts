@@ -4,7 +4,10 @@
 // https://github.com/kekyo/muon-ui
 
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
+import { resolveMuonNativePlugins } from "../common/native-plugins.js";
+import type { InternalMuonBuildOptions } from "../common/build-types.js";
 import {
   buildAndroidApplication,
   type MuonAndroidApplicationResult,
@@ -251,11 +254,61 @@ export const buildMuonAndroidTarget = async (input: {
     resolved.pluginsDirectory,
     options.runtimePluginConfig?.mode === "validate",
   );
+  const nativeAccess =
+    (options as InternalMuonBuildOptions).nativePluginAccess ??
+    (await resolveMuonPluginAccessOptions({
+      root,
+      configPath: options.configPath,
+      pluginAccess: { mode: options.runtimePluginConfig?.mode ?? "simple" },
+    }));
+  const artifacts =
+    nativeAccess.nativeArtifacts ??
+    (await resolveMuonNativePlugins({
+      root,
+      directory: nativeAccess.nativeDirectory ?? input.configDirectory,
+      plugins: nativeAccess.plugins,
+      targets: abis.map((abi) => `android-${abi}` as const),
+      environment: input.environment,
+      ...(resolved.sdkPath === undefined
+        ? {}
+        : { androidSdkPath: resolved.sdkPath }),
+    }));
+  const nativeCatalogs = new Map(catalogs);
+  const nativeDefinitions: object[] = [];
+  for (const [name, artifact] of artifacts) {
+    if (nativeCatalogs.has(name))
+      throw new Error(`Duplicate Android plugin definition: ${name}`);
+    nativeCatalogs.set(name, artifact.manifest.functions);
+    const libraries = Object.fromEntries(
+      abis.map((abi) => [abi, artifact.targets[`android-${abi}`]!.library]),
+    );
+    const sonames = new Set(
+      Object.values(libraries).map((path) => basename(path)),
+    );
+    if (sonames.size !== 1)
+      throw new Error(
+        `Android plugin ${name} must use the same SONAME for every ABI.`,
+      );
+    nativeDefinitions.push({
+      name,
+      soname: [...sonames][0],
+      libraries,
+      dependencies: Object.fromEntries(
+        abis.map((abi) => [
+          abi,
+          artifact.targets[`android-${abi}`]!.dependencies,
+        ]),
+      ),
+    });
+  }
   const pluginConfiguration = resolveMuonAndroidPluginAccess(
     config,
     options.runtimePluginConfig,
-    android.plugins ?? [],
-    catalogs,
+    [
+      ...(android.plugins === undefined ? [] : (android.plugins as unknown[])),
+      ...nativeDefinitions,
+    ],
+    nativeCatalogs,
   );
   const permissions = strings(android.permissions ?? [], "android.permissions");
   if (

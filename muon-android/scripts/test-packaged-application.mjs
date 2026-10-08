@@ -133,41 +133,127 @@ const config = {
   },
 };
 if (includePlugin) {
-  const libraries = {};
-  for (const abi of ['arm64-v8a', 'x86_64']) {
-    const destination = join(root, 'plugins', abi);
-    await mkdir(destination, { recursive: true });
-    const library = join(destination, 'libmuon_test_plugin_alpha.so');
-    await copyFile(
-      join(
-        repository,
-        'muon-android-prototype/android/app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib',
-        abi,
-        'libmuon_test_plugin_alpha.so'
-      ),
-      library
-    );
-    libraries[abi] = library;
-  }
-  config.android.plugins = [
+  config.android.plugins = [];
+  const fixtures = [
     {
-      name: 'consumer_alpha',
-      soname: 'libmuon_test_plugin_alpha.so',
-      libraries,
+      stem: 'alpha',
+      namespace: 'alpha',
+      functions: ['alphaName', 'alphaAdd', 'alphaConfig'],
+      allow: ['alphaAdd', 'alphaConfig'],
+      config: { 'alpha.config': 'consumer-registry' },
+    },
+    {
+      stem: 'types',
+      namespace: 'types',
+      functions: [
+        'echoBool',
+        'echoI8',
+        'echoU8',
+        'echoI16',
+        'echoU16',
+        'echoI32',
+        'echoU32',
+        'echoI64',
+        'echoU64',
+        'echoF32',
+        'echoF64',
+        'echoPointer',
+        'echoString',
+        'returnNullString',
+        'returnNullPointer',
+        'stringNullCallbackRoundtrip',
+        'i64CallbackRoundtrip',
+        'u64CallbackRoundtrip',
+        'pointerCallbackRoundtrip',
+        'bufferChecksum',
+        'transformBuffer',
+        'mutateBufferCopy',
+        'returnNormalBuffer',
+        'returnSharedBuffer',
+        'bufferCallbackRoundtrip',
+        'returnBufferFunction',
+        'pointerBitSize',
+        'returnVoid',
+        'rejectValue',
+        'resolveAsync',
+        'resolveTwice',
+      ],
+      allow: ['buffer*', 'returnBufferFunction', 'echoI64'],
+      config: {},
+    },
+    {
+      stem: 'recursive_functions',
+      namespace: 'recursiveFunctions',
+      functions: [
+        'recursiveInvoke',
+        'recursiveReturnFunction',
+        'recursiveFunctionArgRoundtrip',
+        'recursiveBufferReturnFunction',
+      ],
+      allow: ['*'],
+      config: {},
     },
   ];
-  config.plugin.plugins.push({
-    name: 'consumer_alpha',
-    allow: ['muon.test.alpha.alphaAdd', 'muon.test.alpha.alphaConfig'],
-    config: { 'alpha.config': 'consumer-registry' },
-  });
+  for (const fixture of fixtures) {
+    const libraries = {};
+    const sha256 = {};
+    const soname = 'libmuon_test_plugin_' + fixture.stem + '.so';
+    for (const abi of ['arm64-v8a', 'x86_64']) {
+      const destination = join(root, 'plugins', abi);
+      await mkdir(destination, { recursive: true });
+      const library = join(destination, soname);
+      await copyFile(
+        join(
+          repository,
+          'muon-android-prototype/android/app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib',
+          abi,
+          soname
+        ),
+        library
+      );
+      libraries[abi] = library;
+      sha256[abi] = createHash('sha256')
+        .update(await readFile(library))
+        .digest('hex');
+    }
+    const metadata = join(root, 'plugins', fixture.stem + '.json');
+    await writeFile(
+      metadata,
+      JSON.stringify({
+        schemaVersion: 1,
+        functions: fixture.functions.map(
+          (name) => 'muon.test.' + fixture.namespace + '.' + name
+        ),
+        sha256,
+      })
+    );
+    config.android.plugins.push({
+      name: 'consumer_' + fixture.stem,
+      soname,
+      libraries,
+      metadata,
+    });
+    config.plugin.plugins.push({
+      name: 'consumer_' + fixture.stem,
+      allow: fixture.allow.map(
+        (name) => 'muon.test.' + fixture.namespace + '.' + name
+      ),
+      config: fixture.config,
+    });
+  }
 }
 if (validate) {
   config.plugin.mode = 'validate';
   for (const plugin of config.plugin.plugins) {
-    plugin.imports = plugin.name === 'internal'
-      ? ['browser', 'environments', 'fs'].map((namespace) => ({ sources: ['main.ts'], allow: plugin.allow.filter((path) => path.startsWith('muon.' + namespace + '.')) }))
-      : [{ sources: ['main.ts'], allow: plugin.allow }];
+    plugin.imports =
+      plugin.name === 'internal'
+        ? ['browser', 'environments', 'fs'].map((namespace) => ({
+            sources: ['main.ts'],
+            allow: plugin.allow.filter((path) =>
+              path.startsWith('muon.' + namespace + '.')
+            ),
+          }))
+        : [{ sources: ['main.ts'], allow: plugin.allow }];
     delete plugin.allow;
   }
 }
@@ -185,8 +271,28 @@ await writeFile(
       lib: ['ES2022', 'DOM'],
       skipLibCheck: true,
     },
-    include: ['main.ts', 'vite.config.ts'],
+    include: ['main.ts', 'vite.config.ts', 'plugins.d.ts'],
   })
+);
+await writeFile(
+  join(root, 'plugins.d.ts'),
+  `
+declare module 'muon:test.alpha' {
+  export const alphaAdd: (a: number, b: number) => Promise<number>;
+  export const alphaConfig: () => Promise<string>;
+}
+declare module 'muon:test.types' {
+  export const echoI64: (value: number) => Promise<number>;
+  export const bufferChecksum: (value: ArrayBuffer) => Promise<number>;
+  export const bufferCallbackRoundtrip: (callback: (buffer: ArrayBuffer) => ArrayBuffer) => Promise<number>;
+  export const returnBufferFunction: () => Promise<MuonPluginFunctionProxy<[ArrayBuffer], ArrayBuffer>>;
+}
+declare module 'muon:test.recursiveFunctions' {
+  export const recursiveFunctionArgRoundtrip: (callback: (proxy: MuonPluginFunctionProxy<[number], number>) => MuonPluginFunctionProxy<[number], number>) => Promise<number>;
+  export const recursiveInvoke: (callback: (value: number) => number | Promise<number>) => Promise<number>;
+  export const recursiveBufferReturnFunction: (callback: (outer: ArrayBuffer) => (inner: ArrayBuffer) => ArrayBuffer) => Promise<ArrayBuffer>;
+}
+`
 );
 await writeFile(
   join(root, 'vite.config.ts'),
@@ -198,18 +304,34 @@ await writeFile(
 );
 if (validate) {
   const htmlPath = join(root, 'index.html');
-  await writeFile(htmlPath, (await readFile(htmlPath, 'utf8')).replace('</head>', `<script>
+  await writeFile(
+    htmlPath,
+    (await readFile(htmlPath, 'utf8')).replace(
+      '</head>',
+      `<script>
     const originalCall = globalThis.__muon_plugin_call;
     globalThis.__muon_plugin_call = async (id, path, args) => {
       if (path === 'muon.environments.getRuntimeInfo') globalThis.observedCapability = id;
       return await originalCall(id, path, args);
     };
     globalThis.delegatedCall = async (id, path, args) => await originalCall(id, path, args);
-  </script></head>`));
+  </script></head>`
+    )
+  );
 }
 await writeFile(
   join(root, 'main.ts'),
   `import type {} from 'muon-ui';
+${
+  includePlugin && validate
+    ? `import * as alpha from 'muon:test.alpha';
+import * as types from 'muon:test.types';
+import * as recursive from 'muon:test.recursiveFunctions';`
+    : `const test = Reflect.get(globalThis, 'muon')?.test;
+const alpha = test?.alpha as typeof import('muon:test.alpha');
+const types = test?.types as typeof import('muon:test.types');
+const recursive = test?.recursiveFunctions as typeof import('muon:test.recursiveFunctions');`
+}
 ${
   validate
     ? `import * as browser from 'muon:browser';
@@ -230,8 +352,32 @@ try {
   if (runtime.backend !== 'android-webview') throw new Error('Expected Android backend');
   document.querySelector<HTMLOutputElement>('#version')!.textContent = 'Version: ' + runtime.applicationVersion;
   if (${includePlugin}) {
-    const alpha = (window.muon as MuonApi & { test: { alpha: { alphaAdd: (a: number, b: number) => Promise<number>; alphaConfig: () => Promise<string>; alphaName?: unknown } } }).test.alpha;
-    if (alpha.alphaName !== undefined) throw new Error('A denied plugin function was exposed');
+    if (Reflect.get(alpha, 'alphaName') !== undefined) throw new Error('A denied plugin function was exposed');
+    if (await types.echoI64(9007199254740991) !== 9007199254740991) throw new Error('i64 changed');
+    if (await types.bufferChecksum(Uint8Array.from([1, 2, 3, 4]).buffer) !== 10) throw new Error('buffer argument changed');
+    if (await types.bufferCallbackRoundtrip((bytes) => {
+      if (Array.from(new Uint8Array(bytes)).join(',') !== '7,8,9,10') throw new Error('callback buffer changed');
+      return Uint8Array.from([101, 102, 103, 104]).buffer;
+    }) !== 1) throw new Error('callback result changed');
+    const bufferProxy = await types.returnBufferFunction();
+    if (Array.from(new Uint8Array(await bufferProxy(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]).buffer))).join(',') !== '18,19,20,21,22,23,24,25') throw new Error('proxy buffer changed');
+    bufferProxy.release();
+    bufferProxy.release();
+    let released = false;
+    try { await bufferProxy(new ArrayBuffer(4)); } catch (error) { if (!/released/i.test(String(error))) throw error; released = true; }
+    if (!released) throw new Error('released proxy executed');
+    let callbackProxy: MuonPluginFunctionProxy<[number], number> | undefined;
+    await recursive.recursiveFunctionArgRoundtrip((proxy) => { callbackProxy = proxy; return proxy; });
+    if (callbackProxy === undefined || await callbackProxy(41) !== 42) throw new Error('function callback failed');
+    callbackProxy.release();
+    const recursiveBuffer = await recursive.recursiveBufferReturnFunction((outer) => {
+      if (Array.from(new Uint8Array(outer)).join(',') !== '12,13,14,15') throw new Error('outer callback buffer changed');
+      return (inner) => {
+        if (Array.from(new Uint8Array(inner)).join(',') !== '21,22,23,24') throw new Error('inner callback buffer changed');
+        return Uint8Array.from([201, 202, 203, 204]).buffer;
+      };
+    });
+    if (Array.from(new Uint8Array(recursiveBuffer)).join(',') !== '31,32,33,34') throw new Error('recursive result changed');
     document.querySelector<HTMLOutputElement>('#plugin')!.textContent = 'Plugin: ' + await alpha.alphaAdd(3, 4) + ':' + await alpha.alphaConfig() + ':blocked';
   }
   if (Reflect.get(api.fs, 'unlink') !== undefined) throw new Error('A denied built-in was exposed');
@@ -249,6 +395,12 @@ try {
     try { await delegated(id, 'muon.fs.exists', [path]); }
     catch (error) { if (!/not allowed/i.test(String(error))) throw error; refusedPath = true; }
     if (!refusedPath) throw new Error('Native policy accepted a path outside the valid capability');
+    if (${includePlugin}) {
+      let refusedPlugin = false;
+      try { await rawCall('consumer_alpha', 'muon.test.alpha.alphaAdd', [1, 2]); }
+      catch (error) { if (!/capability/i.test(String(error))) throw error; refusedPlugin = true; }
+      if (!refusedPlugin) throw new Error('Native policy accepted the simple plugin ID');
+    }
     for (const id of ['', 'unknown-id', 'environment-capability', 'browser-capability']) {
       let refused = false;
       try { await rawCall(id, 'muon.environments.getConfigValues', []); }
@@ -487,6 +639,44 @@ await writeFile(
   join(root, 'result.json'),
   JSON.stringify({ ...result, serial, prepare: prepared }, null, 2)
 );
+if (validate && includePlugin) {
+  const goodApk = join(root, 'valid-release.apk');
+  await copyFile(update.artifacts[0].path, goodApk);
+  const catalogPath = config.android.plugins[0].metadata;
+  const originalCatalog = await readFile(catalogPath, 'utf8');
+  const originalConfig = JSON.stringify(config);
+  const catalog = JSON.parse(originalCatalog);
+  catalog.functions.push('muon.test.alpha.ghost');
+  config.plugin.plugins
+    .find((entry) => entry.name === 'consumer_alpha')
+    .imports[0].allow.push('muon.test.alpha.ghost');
+  await writeFile(catalogPath, JSON.stringify(catalog));
+  await writeFile(join(root, 'muon.json'), JSON.stringify(config));
+  try {
+    const invalid = await muon([
+      'pack',
+      '--target',
+      'android',
+      '--type',
+      'apk',
+    ]);
+    await copyFile(
+      invalid.artifacts[0].path,
+      join(root, 'invalid-catalog.apk')
+    );
+    await adb(['install', '-r', invalid.artifacts[0].path]);
+    await start();
+    await observe('catalog-mismatch', '1.0.1');
+  } finally {
+    await writeFile(catalogPath, originalCatalog);
+    await writeFile(join(root, 'muon.json'), originalConfig);
+    await copyFile(goodApk, update.artifacts[0].path);
+    await adb(['install', '-r', goodApk]);
+  }
+  await start();
+  await observe('verify', '1.0.1');
+  console.log('Native catalog mismatch rejected; valid APK restored');
+}
 console.log(
   `Packaged Android application: PASS (${serial}, ${update.artifacts[0].path})`
 );

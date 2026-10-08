@@ -17,12 +17,14 @@ import type { MuonAndroidPluginAccess } from "../../muon-android/src/build.js";
  * @param config - Merged application configuration.
  * @param runtime - Vite-generated policy override, or undefined for a CLI build.
  * @param libraries - ABI-specific library definitions from Android settings.
+ * @param catalogs - Verified producer catalogs, required for external validate plugins.
  * @returns Package-owned exposure settings and native plugin inputs.
  */
 export const resolveMuonAndroidPluginAccess = (
   config: Record<string, unknown>,
   runtime: MuonRuntimePluginConfig | undefined,
   libraries: unknown,
+  catalogs: ReadonlyMap<string, readonly string[]> = new Map(),
 ) => {
   const merged =
     runtime === undefined
@@ -50,6 +52,10 @@ export const resolveMuonAndroidPluginAccess = (
   ];
   const names = new Set<string>();
   for (const entry of entries) {
+    if (entry.signature !== undefined || entry.salt !== undefined)
+      throw new Error(
+        "Android plugin signature/salt is unsupported; use ABI-specific SHA-256 metadata.",
+      );
     if (names.has(entry.name))
       throw new Error(`Duplicate plugin.plugins name: ${entry.name}`);
     names.add(entry.name);
@@ -85,7 +91,20 @@ export const resolveMuonAndroidPluginAccess = (
       return {
         ...matches[0],
         name: entry.name,
-        allow: entry.allow,
+        allow: catalogs.has(entry.name)
+          ? expandMuonAndroidFunctionAllows(
+              entry.allow ?? [],
+              catalogs.get(entry.name)!,
+            )
+          : entry.allow,
+        ...(catalogs.has(entry.name)
+          ? {
+              expectedFunctions: expandMuonAndroidFunctionAllows(
+                entry.allow ?? [],
+                catalogs.get(entry.name)!,
+              ),
+            }
+          : {}),
         config: entry.config,
       };
     });
@@ -108,7 +127,10 @@ export const resolveMuonAndroidPluginAccess = (
             ids.add(entry.id);
             return {
               id: entry.id,
-              allow: expandMuonAndroidFunctionAllows(entry.allow),
+              allow: expandMuonAndroidFunctionAllows(entry.allow, [
+                ...muonAndroidBuiltinFunctionPaths,
+                ...[...catalogs.values()].flat(),
+              ]),
             };
           }),
         }

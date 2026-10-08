@@ -42,6 +42,7 @@ export interface MuonAndroidPackagedPlugin {
   /** Logical capability name. */ readonly name: string;
   /** Packaged ELF soname. */ readonly soname: string;
   /** Explicitly allowed public function patterns. */ readonly allow: readonly string[];
+  /** Producer catalog after applying the allow policy, checked when loading. */ readonly expectedFunctions?: readonly string[];
   /** Application-owned plugin configuration. */ readonly config: readonly {
     readonly key: string;
     readonly value: string;
@@ -195,12 +196,15 @@ export const buildAndroidApplication = async (
     join(frameworkAssets, 'plugins.json'),
     JSON.stringify({
       schemaVersion: 1,
-      plugins: input.plugins.map(({ name, soname, allow, config }) => ({
-        name,
-        soname,
-        allow,
-        config,
-      })),
+      plugins: input.plugins.map(
+        ({ name, soname, allow, config, expectedFunctions }) => ({
+          name,
+          soname,
+          allow,
+          config,
+          ...(expectedFunctions === undefined ? {} : { expectedFunctions }),
+        })
+      ),
     })
   );
   for (const plugin of input.plugins) {

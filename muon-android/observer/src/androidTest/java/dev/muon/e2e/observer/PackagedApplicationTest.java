@@ -7,6 +7,7 @@ package dev.muon.e2e.observer;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -40,6 +41,13 @@ public final class PackagedApplicationTest {
 
     @Test
     public void operatesPackagedApplication() throws Exception {
+        if ("catalog-mismatch".equals(InstrumentationRegistry.getArguments().getString("mode"))) {
+            UiObject2 failure = device.wait(Until.findObject(By.pkg(APPLICATION_ID)
+                    .textContains("Plugin catalog mismatch")), 60000);
+            assertNotNull("A mismatched producer catalog must prevent startup", failure);
+            assertTrue(failure.getText().contains("consumer_alpha"));
+            return;
+        }
         requireText("ready:android-webview:package-consumer");
         requireText("Policy: blocked");
         String version = InstrumentationRegistry.getArguments().getString("version");

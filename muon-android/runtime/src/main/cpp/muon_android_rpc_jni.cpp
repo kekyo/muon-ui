@@ -1668,6 +1668,9 @@ static bool ReadPackagedPlugins(
     entry.plugin = read_string("name");
     entry.has_library_locator = true;
     entry.library_locator = read_string("soname");
+    entry.has_expected_function_paths = environment->GetBooleanField(input,
+        environment->GetFieldID(type, "hasExpectedFunctions", "Z")) == JNI_TRUE;
+    entry.expected_function_paths = read_strings("expectedFunctions");
     const auto allow = read_strings("allow");
     const auto keys = read_strings("configKeys");
     const auto values = read_strings("configValues");

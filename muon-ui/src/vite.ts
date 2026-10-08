@@ -32,6 +32,7 @@ import {
   type MuonResolvedPluginAccessOptions,
 } from "./plugin-access.js";
 import { collectMuonPluginFunctionPathsForAccess } from "./plugin-inspector.js";
+import { collectMuonAndroidPluginAccess } from "./android-plugin-catalog.js";
 import { startMuonViteBrowserBridge } from "./vite-internals.js";
 import {
   attachMuonVitePluginOptions,
@@ -514,14 +515,28 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
           }
         : {}),
     });
+    const androidAccess =
+      backend === "android" && resolvedPluginAccess.mode === "validate"
+        ? await collectMuonAndroidPluginAccess(
+            config.root,
+            resolveMuonConfigPathForViteCommand(config, options),
+            typeof options.build === "object"
+              ? options.build.android
+              : undefined,
+            resolvedPluginAccess,
+          )
+        : undefined;
     const pluginFunctionPaths =
       backend === "android"
-        ? []
+        ? (androidAccess?.functionPaths ?? [])
         : await collectMuonPluginFunctionPathsForAccess(resolvedPluginAccess);
     capabilityResolver =
       resolvedPluginAccess.mode === "validate"
         ? createMuonCapabilityModuleResolver(config.root, {
             ...resolvedPluginAccess.capabilityOptions,
+            ...(androidAccess === undefined
+              ? {}
+              : { imports: androidAccess.imports }),
             backend,
             functionPaths: pluginFunctionPaths,
           })

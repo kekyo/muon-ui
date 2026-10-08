@@ -87,19 +87,19 @@ const createFunctionAllowExpression = (allow: string): RegExp => {
  * Expands Android capability allow patterns into available function paths.
  *
  * @param allows - Exact paths or glob patterns requested by a validate build.
+ * @param catalog - Available public functions; defaults to Android builtins.
  * @returns Available Android paths in stable metadata order.
  * @remarks An exact unsupported path, or a pattern matching no Android
  * functions, fails during the build instead of producing a runtime stub.
  */
 export const expandMuonAndroidFunctionAllows = (
-  allows: readonly string[]
-): readonly MuonAndroidBuiltinFunctionPath[] => {
-  const selected = new Set<MuonAndroidBuiltinFunctionPath>();
+  allows: readonly string[],
+  catalog: readonly string[] = muonAndroidBuiltinFunctionPaths
+): readonly string[] => {
+  const selected = new Set<string>();
   for (const allow of allows) {
     if (!allow.includes('*')) {
-      const functionPath = muonAndroidBuiltinFunctionPaths.find(
-        (candidate) => candidate === allow
-      );
+      const functionPath = catalog.find((candidate) => candidate === allow);
       if (functionPath === undefined) {
         throw new Error(`Muon function is unavailable for Android: ${allow}`);
       }
@@ -108,7 +108,7 @@ export const expandMuonAndroidFunctionAllows = (
     }
 
     const expression = createFunctionAllowExpression(allow);
-    const matches = muonAndroidBuiltinFunctionPaths.filter((functionPath) =>
+    const matches = catalog.filter((functionPath) =>
       expression.test(functionPath)
     );
     if (matches.length === 0) {
@@ -120,7 +120,5 @@ export const expandMuonAndroidFunctionAllows = (
       selected.add(functionPath);
     }
   }
-  return muonAndroidBuiltinFunctionPaths.filter((functionPath) =>
-    selected.has(functionPath)
-  );
+  return catalog.filter((functionPath) => selected.has(functionPath));
 };

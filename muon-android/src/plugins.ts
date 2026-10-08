@@ -211,7 +211,22 @@ export const resolveAndroidPlugins = async (
         );
       return { key, value };
     });
-    return { name, soname, allow, libraries, config };
+    if (
+      plugin.expectedFunctions !== undefined &&
+      (!Array.isArray(plugin.expectedFunctions) ||
+        !plugin.expectedFunctions.every((path) => typeof path === 'string'))
+    )
+      throw new Error(`Invalid expected functions for Android plugin ${name}.`);
+    return {
+      name,
+      soname,
+      allow,
+      libraries,
+      config,
+      ...(plugin.expectedFunctions === undefined
+        ? {}
+        : { expectedFunctions: plugin.expectedFunctions as string[] }),
+    };
   });
   for (const plugin of result)
     for (const abi of abis) {

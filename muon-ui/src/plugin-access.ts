@@ -202,7 +202,8 @@ const fileExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const resolveMuonConfigPath = async (
+/** Resolves the explicit or conventional application configuration path. */
+export const resolveMuonConfigPath = async (
   root: string,
   configPath: string | undefined,
 ): Promise<string | undefined> => {
@@ -223,7 +224,8 @@ const resolveMuonConfigPath = async (
   return undefined;
 };
 
-const readJsonObjectFile = async (
+/** Reads a JSON/JSON5 configuration object and reports its source on failure. */
+export const readJsonObjectFile = async (
   path: string,
   label: string,
 ): Promise<JsonObject> => {

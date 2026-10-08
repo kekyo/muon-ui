@@ -20,6 +20,7 @@ import {
 } from "./app-icon.js";
 import { resolveAndroidPlugins } from "../../muon-android/src/plugins.js";
 import { resolveMuonAndroidPluginAccess } from "./android-plugin-access.js";
+import { readAndroidPluginMetadata } from "../../muon-android/src/plugin-metadata.js";
 import {
   resolveAndroidSigning,
   signAndroidApplication,
@@ -188,11 +189,6 @@ export const buildMuonAndroidTarget = async (input: {
   }
   const { warnings } = validateMuonAndroidConfig(config);
   for (const warning of warnings) process.stderr.write(`Warning: ${warning}\n`);
-  const pluginConfiguration = resolveMuonAndroidPluginAccess(
-    config,
-    options.runtimePluginConfig,
-    android.plugins ?? [],
-  );
   if (
     config.node !== undefined &&
     Object.keys(object(config.node, "node")).length > 0
@@ -252,6 +248,18 @@ export const buildMuonAndroidTarget = async (input: {
     return abi;
   });
   if (abis.length === 0) throw new Error("android.abis must not be empty.");
+  const catalogs = await readAndroidPluginMetadata(
+    android.plugins ?? [],
+    abis,
+    resolved.pluginsDirectory,
+    options.runtimePluginConfig?.mode === "validate",
+  );
+  const pluginConfiguration = resolveMuonAndroidPluginAccess(
+    config,
+    options.runtimePluginConfig,
+    android.plugins ?? [],
+    catalogs,
+  );
   const permissions = strings(android.permissions ?? [], "android.permissions");
   if (
     permissions.some(

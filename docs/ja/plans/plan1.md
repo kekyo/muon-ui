@@ -28,15 +28,15 @@ muonをandroidに対応させることを検討します。
 
 現在はCEFが単なる描画部品ではなく、アプリケーション基盤全体に入り込んでいます。
 
-- 起動、サブプロセス、イベントループがCEF依存です。[main.cpp](/home/kouji/Projects/muon-ui/muon-core/src/main.cpp:77)
-- アセット配信、プラグイン起動、ブラウザー生成が同じCEF初期化処理内にあります。[muon_app.cpp](/home/kouji/Projects/muon-ui/muon-core/src/app/muon_app.cpp:871)
-- プラグインランタイムの公開APIからCEF型は分離されていますが、browser builtin種別、filesystem path、dialog cancelなどdesktop固有の境界が残っています。[muon_plugin_runtime.h](/home/kouji/Projects/muon-ui/muon-core/src/plugins/muon_plugin_runtime.h:9)
-- ビルドも常にCEFを要求します。[CMakeLists.txt](/home/kouji/Projects/muon-ui/muon-core/CMakeLists.txt:59)
-- 配布ターゲットはLinux/WindowsとCEFターゲットが1対1に結び付いています。[targets.ts](/home/kouji/Projects/muon-ui/muon-ui/src/targets.ts:7)
+- 起動、サブプロセス、イベントループがCEF依存です。[main.cpp](../../../core/cef/src/main.cpp)
+- アセット配信、プラグイン起動、ブラウザー生成が同じCEF初期化処理内にあります。[muon_app.cpp](../../../core/cef/src/app/muon_app.cpp)
+- プラグインランタイムの公開APIからCEF型は分離されていますが、browser builtin種別、filesystem path、dialog cancelなどdesktop固有の境界が残っています。[muon_plugin_runtime.h](../../../core/common/src/plugins/muon_plugin_runtime.h)
+- ビルドも常にCEFを要求します。[CMakeLists.txt](../../../core/cef/CMakeLists.txt)
+- 配布ターゲットはLinux/WindowsとCEFターゲットが1対1に結び付いています。[targets.ts](../../../ui/common/targets.ts)
 
 そのため、Android対応は「別のブラウザーコントロールを接続する」よりも「CEF依存部分とmuon本体の境界を作る」作業になります。
 
-一方、Viteが生成する公開APIは最終的に`globalThis.__muon_plugin_call`へ集約されています。[capability.ts](/home/kouji/Projects/muon-ui/muon-ui/src/capability.ts:1339)
+一方、Viteが生成する公開APIは最終的に`globalThis.__muon_plugin_call`へ集約されています。[capability.ts](../../../ui/common/capability.ts)
 ここはAndroid用の別トランスポートを差し込める、かなり有効な既存の境界です。
 
 ## 案の比較
@@ -90,7 +90,7 @@ Android側では次を使えます。
 - トップレベル遷移かどうか
 - リクエスト発生元オリジン
 
-を使って許可判定しています。[muon_network_policy.cpp](/home/kouji/Projects/muon-ui/muon-core/src/network/muon_network_policy.cpp:48)
+を使って許可判定しています。[muon_network_policy.cpp](../../../core/cef/src/network/muon_network_policy.cpp)
 
 WebViewの`shouldInterceptRequest`だけでは同等になりません。公式仕様上、
 
@@ -179,7 +179,7 @@ Android版ではネイティブプラグイン互換を求めず、
    メインフレーム、iframe、fetch、XHR、WebSocket、リダイレクト、Service Worker、`blob:`、ローカルネットワークをdeny-by-defaultで検証します。現行契約を満たせなければ、Android仕様を変更するかGeckoViewへ進みます。
 
 4. Android API対応表を定義する
-   reload、fullscreen、zoomなどは実装候補です。一方、minimize、maximize、title bar、window bounds、system tray、launcher updater、Node sidecar、executorはAndroidでは非対応または別APIにすべきです。[ブラウザー組み込み機能一覧](/home/kouji/Projects/muon-ui/muon-core/src/browser/muon_builtin_browser.h:17)
+   reload、fullscreen、zoomなどは実装候補です。一方、minimize、maximize、title bar、window bounds、system tray、launcher updater、Node sidecar、executorはAndroidでは非対応または別APIにすべきです。[ブラウザー組み込み機能一覧](../../../core/cef/src/browser/muon_builtin_browser.h)
 
 5. ネイティブプラグインをNDK対応する
    まず`arm64-v8a`とエミュレーター用`x86_64`を対象にし、プラグインはビルド時同梱とします。cardioはAndroidメインスレッドの既存Looperへ自動接続し、tra-fficはAndroid向けlibffiと静的リンクします。詳細な事前検証、upstreamとの分担、完了条件は次節のとおりです。
@@ -254,7 +254,7 @@ tra-ffic自身にはAndroid固有の機能不良を再現できませんでし�
 
 一方、muonへの最終結合ではlibffi 3.8.0のx86_64静的トランポリンにAndroid 16 KiBページ固有の課題を摘出しました。`FFI_EXEC_STATIC_TRAMP=1`でも、x86_64の`UNIX64_TRAMP_MAP_SHIFT`は4 KiBを表す12に固定されています。[libffi 3.8.0 x86_64 trampoline table](https://github.com/libffi/libffi/blob/v3.8.0/src/x86/internal64.h) `tramp.c`は実ページサイズがこの固定tableより大きい場合に静的トランポリンを無効化するため、16 KiBページVMでは動的トランポリンへfallbackし、closureの実行addressが匿名`rwxp` mappingになりました。[libffi 3.8.0 static trampoline initialization](https://github.com/libffi/libffi/blob/v3.8.0/src/tramp.c) 2026年8月21日時点のlibffi masterにも同じ4 KiB固定値が残っています。[libffi master x86_64 trampoline table](https://github.com/libffi/libffi/blob/master/src/x86/internal64.h)
 
-これはtra-fficのAPIやAndroid対応ではなくlibffi実装側のupstream候補です。muonではlibffi submoduleを変更せず、前節の候補2を採用しました。`muon-android-prototype/patches/libffi/0001-android-x86_64-16k-static-trampoline.patch`をmuon所有のpatch queueに置き、公式source archiveを展開したbuild用copyへ`git apply --check`後に適用します。patchはAndroid x86_64だけtableを16 KiBへ広げ、assemblyのPC-relative offsetをtable sizeから導出します。patch SHA-256は`fe17ff7f99192957575908078593b5182bf660b3a0415ceb6b173080bad07959`で、base libffi commit、recipe、configure引数、両ABIの生成物hashとともにdependency manifestへ固定しました。
+これはtra-fficのAPIやAndroid対応ではなくlibffi実装側のupstream候補です。muonではlibffi submoduleを変更せず、前節の候補2を採用しました。`core/android/patches/libffi/0001-android-x86_64-16k-static-trampoline.patch`をmuon所有のpatch queueに置き、公式source archiveを展開したbuild用copyへ`git apply --check`後に適用します。patchはAndroid x86_64だけtableを16 KiBへ広げ、assemblyのPC-relative offsetをtable sizeから導出します。patch SHA-256は`fe17ff7f99192957575908078593b5182bf660b3a0415ceb6b173080bad07959`で、base libffi commit、recipe、configure引数、両ABIの生成物hashとともにdependency manifestへ固定しました。
 
 修正後の16 KiB x86_64 VMでは、renderer function closureの実行addressが実行可能かつ非書き込みのmappingに入り、allocation/free数が釣り合い、tra-fficのdeferred taskも0へ戻ることを最終`libmuon_android_rpc.so`内で確認しました。arm64-v8aはこのx86_64限定patchの影響を受けず、従来どおり静的トランポリンを使用します。arm64の実行確認は後続のPixel 6 gateに残します。
 

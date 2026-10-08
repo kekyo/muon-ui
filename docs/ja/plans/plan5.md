@@ -1,10 +1,10 @@
 # Android FCM push通知 実装計画
 
-本計画は後続作業として保持する。先行するAndroid対応の完成とdevelopへのマージには、[plan6.md](plan6.md)の範囲と完了条件を適用し、FCMの実装完了を前提にしない。
+本計画は後続作業として保持する。先行するAndroid対応の完成とdevelopへのマージには、[plan6.md](./plan6.md)の範囲と完了条件を適用し、FCMの実装完了を前提にしない。
 
 ## 1. 目的と位置付け
 
-この文書は、[plan3-2.md](plan3-2.md)で合意したAndroid通知配送モデルを、現行codebaseへ実装するための実行計画である。[plan4.md](plan4.md)の全体計画を置き換えるものではなく、同文書の「ステップ4: push通知のdurable deliveryを実装する」を、公開契約、component、永続schema、TDD、device gate、commit単位まで具体化する。
+この文書は、[plan3-2.md](./plan3-2.md)で合意したAndroid通知配送モデルを、現行codebaseへ実装するための実行計画である。[plan4.md](./plan4.md)の全体計画を置き換えるものではなく、同文書の「ステップ4: push通知のdurable deliveryを実装する」を、公開契約、component、永続schema、TDD、device gate、commit単位まで具体化する。
 
 実装の目的は、providerからAndroid端末へ到達したmessageをActivityやWebViewが存在しない状態でもnative層で永続化し、ページJSが次に安全に実行可能になった時点で取りこぼさず配送することである。providerから端末までの配送はproviderのbest effortとし、native inboxへのcommit後はat-least-onceでページへ配送する。
 
@@ -26,7 +26,7 @@
 
 ### 2.2 通知実装へ着手する前のgate
 
-[plan4.md](plan4.md)の実施順序を維持し、通知のproduction codeを試作hostへ先行追加して後から移植することはしない。次を満たしてから本計画のステップ1へ入る。
+[plan4.md](./plan4.md)の実施順序を維持し、通知のproduction codeを試作hostへ先行追加して後から移植することはしない。次を満たしてから本計画のステップ1へ入る。
 
 1. 現在のWindows Settings E2E変更を、通知作業とは別のGREEN commitとして完了している。
 2. root `npm test`が終了code 0である。
@@ -197,7 +197,7 @@ FCM transportのTTL、collapse、priorityはproviderから端末までのbest ef
 
 ### 5.3 `muon.push` API
 
-公開型は`muon-ui/muon.d.ts`へJSDoc付きで追加し、Android push有効buildだけruntime objectを生成する。
+公開型は`ui/muon.d.ts`へJSDoc付きで追加し、Android push有効buildだけruntime objectを生成する。
 
 ```ts
 interface MuonPushRegistration {
@@ -479,7 +479,7 @@ notification small iconのmaster画像を新規作成または変更する場合
 
 対象:
 
-- `muon-ui/muon.d.ts`の公開`muon.push`型
+- `ui/muon.d.ts`の公開`muon.push`型
 - Android target設定型とresolver
 - `muon-android` backendの正規化済みpush descriptor
 - push無効時のcapability非公開
@@ -772,7 +772,7 @@ TDDでは、test追加後に同じ全commandで期待した理由によるREDを
 
 実装完了時に次を一項目ずつ本計画と比較し、満たしていない項目があれば完了扱いにしない。
 
-1. [plan3-2.md](plan3-2.md)の最終契約どおり、inactive時にJSを実行せずmessageをnative側へ保持する。
+1. [plan3-2.md](./plan3-2.md)の最終契約どおり、inactive時にJSを実行せずmessageをnative側へ保持する。
 2. FCM adapterがActivity/WebView不在時にdata messageをinboxへcommitできる。
 3. inbox commitより先にnotification表示またはpage deliveryを行わない。
 4. commit後はcold start、warm resume、通常起動、tap、dismiss、reload、Activity/renderer/process再生成をまたいでat-least-once配送する。

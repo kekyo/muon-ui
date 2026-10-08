@@ -87,7 +87,7 @@ so using `cardio` in your plugin project can significantly simplify the implemen
 Because `cardio` supports `co_await` and `co_return` with C++20 or later, you can implement readable code without callbacks.
 You may, of course, use another library that supports asynchronous processing.
 
-For muon plugin implementation examples, see the [`muon-core/test_plugins/`](../../muon-core/test_plugins/) directory.
+For muon plugin implementation examples, see the [`core/common-test/plugins/`](../../core/common-test/plugins) directory.
 These are test implementations for `muon-core`, but their small size and focus on individual test cases make the minimal implementation easy to understand.
 
 ### Signature metadata

@@ -1,8 +1,8 @@
-# muon Android WebView prototype
+# Android向けQuickJSの試作
 
-このdirectoryは、muonのAndroid WebView backendとnative plugin packageを結合検証する試作hostです。公開済みの`muon-ui` Android targetやPlay Store配布物ではありません。
+Android WebView上の`muon.node.createNode()`から、別プロセスのQuickJSを利用する実験用アプリです。QuickJSの実装と固有テストをこのディレクトリにまとめています。
 
-利用者アプリの作成は[Androidアプリのビルド・配布](../docs/ja/android.md)を参照してください。共通ランタイムは`muon-android`から利用します。この試作には公開APKへ含めないQuickJSと試験用プラグインがあります。
+利用者アプリの作成は[Androidアプリのビルド・配布](../../docs/ja/android.md)を参照してください。共有ランタイムは[core/android](../android)を使用します。製品の回帰テストとテストプラグインは[core/android-test](../android-test)に分離しており、QuickJSは公開APKへ組み込みません。
 
 ## 対応環境
 
@@ -16,39 +16,9 @@
 
 repositoryはrecursive submoduleを取得した状態で使用してください。初回buildでは、固定した公式libffi 3.8.0 source archive、QuickJS 2026-06-04 source archive、[公式bundletool standalone jar](https://github.com/google/bundletool/releases/tag/1.18.3)をdownloadします。各downloadは使用前にSHA-256を検証します。native dependencyの生成manifestには入力commit、toolchain、configure引数、patch一覧も記録します。
 
-## Android pluginを同梱する
-
-Android pluginはruntimeにdownloadまたは探索せず、[android-plugins.json](./android-plugins.json)に記載してAPK/AABへbuild時に同梱します。各entryには次を指定します。
-
-```json
-{
-  "name": "sample_plugin",
-  "soname": "libsample_plugin.so",
-  "source": "../path/inside-this-repository/sample_plugin.cpp",
-  "artifacts": {
-    "x86_64": "lib/x86_64/libsample_plugin.so",
-    "arm64-v8a": "lib/arm64-v8a/libsample_plugin.so"
-  },
-  "allow": ["sample.namespace.*"],
-  "config": {
-    "sample.key": "sample-value"
-  }
-}
-```
-
-- `source`はこのdirectoryからの相対pathで、同じrepository内に存在するC++20 sourceでなければなりません。
-- pluginはMuon plugin APIの`muon_init_plugin`をexportする必要があります。
-- `soname`は`lib<name>.so`形式にします。
-- `x86_64`と`arm64-v8a`の両方を必ず宣言します。生成物は対応する`lib/<abi>/`へ配置されます。
-- `allow`は空にできません。runtimeはload済みmetadataへこのpolicyを適用し、許可された関数だけをWebViewへ公開します。
-- `config`のkeyとvalueはstringです。
-- desktop用の`path`、`signature`、`salt`はAndroid registryでは使用できません。
-
-registry generatorは入力を検証し、C++ load tableとCMake plugin targetを同じ正規化済みentryから生成します。重複名、重複soname、unsupported ABI、欠落artifact、ELF machine不一致、16 KiB未整列、`muon_init_plugin`欠落はpackage検査で失敗します。
-
 ## 組み込みJavaScript runtime
 
-Android simple modeでは、Node.js版と同じ生成形の`muon.node.createNode()`から、独立したQuickJS runtimeを作成できます。
+この試作のsimpleモードでは、Node.js版と同じ生成形の`muon.node.createNode()`から、独立したQuickJS runtimeを作成できます。
 
 ```javascript
 const runtime = await muon.node.createNode();
@@ -178,10 +148,10 @@ CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`は
 
 ## Buildとpackage
 
-repository rootでAndroid workspace全体を実行します。
+リポジトリルートでQuickJS実験用のworkspaceを検証します。
 
 ```bash
-npm test --workspace muon-android-prototype
+npm test --workspace muon-android-poc
 ```
 
 このcommandはWeb assetと両ABI native dependencyをbuildし、registryを生成して、debug/release APK、release AAB、AAB由来APKSを作成します。その後、native dependency、registry、ELF、APK/APKS packageを検査します。
@@ -203,7 +173,7 @@ VM試験は対象serialを明示してrepository rootから実行します。
 
 ```bash
 ANDROID_SERIAL=emulator-5556 \
-  npm run test:android --workspace muon-android-prototype
+  npm run test:android --workspace muon-android-poc
 ```
 
 このgateは`ANDROID_SERIAL`がlocal emulatorであり、Android API 37、`x86_64`、実ページサイズ16384であることを開始時に検証します。その後、debug instrumentation全件、署名済みrelease APKのinstall/start、bundletoolがAABから選択した端末別split APKのinstall/startを行い、WebViewのpage-ready eventを待ちます。instrumentationには4個の独立runtimeから各8組のDNS、raw TCP、HTTPを同時実行し、全runtime解放後に新runtimeで再通信する負荷試験を含みます。時間経過やpollingで成功を推測しません。
@@ -214,15 +184,7 @@ ANDROID_SERIAL=emulator-5556 \
 
 ```bash
 ANDROID_SERIAL=YOUR_PIXEL_6_SERIAL \
-  npm run test:android:pixel6 --workspace muon-android-prototype
+  npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 このgateは対象が物理Pixel 6（`oriole`）、Android API 37、`arm64-v8a`、実ページサイズ4096であることを開始時に検証します。VM gateと同じdebug instrumentation全件、署名済みrelease APK、AAB由来の端末別split APKを実機へinstall/startし、WebViewのpage-ready eventまで確認します。
-
-## Runtimeとlifecycleの制約
-
-process内にはcardio 1.1.0の`dispatcher_host_android_auto`と共通`MuonPluginRuntime`を一組だけ作り、Android main Looperへ接続します。各Activity/WebViewは独立sessionを持ちます。最後の通常sessionが閉じるとpluginの非同期`Stop()`を開始し、逆順unloadとcardio host破棄を同じLooper上で完了します。停止中に新Activityが生成された場合は、Stop完了eventを受けてから新runtimeへattachします。
-
-Androidがapplication processを強制終了した場合、Activity lifecycle callbackやplugin `Stop()`の実行は保証されません。pluginは永続dataの確定や外部transactionの整合性をprocess終了時の`Stop()`だけに依存させず、各操作の完了時に保存してください。
-
-libffi 3.8.0のx86_64静的トランポリンは4 KiB table固定のため、16 KiB VMでは[muon所有patch](./patches/libffi/0001-android-x86_64-16k-static-trampoline.patch)を展開後のbuild用copyへ適用します。libffi submodule自体は変更しません。instrumentationはclosureの実行mappingがexecutableかつnon-writableであることと、allocation/free balanceを実測します。

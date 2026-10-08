@@ -6,7 +6,7 @@ muon-uiのnpm配布物を新規アプリへ導入し、公開CLIでAndroidアプ
 
 この文書は、2026年10月7日の分析と対話を保存した実装計画である。実装の調査基準は`27b7f25e`、保存時のブランチ先頭は計画書の移動を行った`a8c8005`である。保存時には実装を開始していなかった。2026年10月7日に実施を開始した。進捗と検証結果は末尾の実施記録へ追記する。
 
-[plan4.md](plan4.md)の製品化計画を、今回のマージに必要な範囲へ絞る。[plan5.md](plan5.md)のFCM実装計画は後続作業として残す。今回の優先順位と完了条件は本計画を使用し、旧計画のFCM完成条件を今回のマージ条件として扱わない。
+[plan4.md](./plan4.md)の製品化計画を、今回のマージに必要な範囲へ絞る。[plan5.md](./plan5.md)のFCM実装計画は後続作業として残す。今回の優先順位と完了条件は本計画を使用し、旧計画のFCM完成条件を今回のマージ条件として扱わない。
 
 ### 1.1 利用者と合意した範囲
 
@@ -43,12 +43,12 @@ QuickJSは、利用者のJavaScriptコードをどのようにビルド・同梱
 
 実装の主な参照先は次のとおりである。
 
-- 公開ビルドと配布形式は[targets.ts](../../../muon-ui/src/targets.ts)、[build-sequence.ts](../../../muon-ui/src/build-sequence.ts)、[build.ts](../../../muon-ui/src/build.ts)、[pack.ts](../../../muon-ui/src/pack.ts)、[vite.ts](../../../muon-ui/src/vite.ts)を参照する。
-- npm配布の入口は[muon-ui/package.json](../../../muon-ui/package.json)と[build_package.sh](../../../build_package.sh)を参照する。
-- Androidの固定設定と署名は[app/build.gradle.kts](../../../muon-android-prototype/android/app/build.gradle.kts)、初期化処理は[prototype.ts](../../../muon-android-prototype/src/prototype.ts)と[MuonActivity.java](../../../muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java)を参照する。
-- リポジトリ依存は[build-native-dependencies.mjs](../../../muon-android-prototype/scripts/build-native-dependencies.mjs)、[CMakeLists.txt](../../../muon-android-prototype/android/app/src/main/cpp/CMakeLists.txt)、[generate-android-plugin-registry.mjs](../../../muon-android-prototype/scripts/generate-android-plugin-registry.mjs)を参照する。
-- QuickJSの読み込みは[MuonJavaScriptRuntimeService.java](../../../muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonJavaScriptRuntimeService.java)を参照する。
-- 検証方法は[試作README](../../../muon-android-prototype/README.md)、[試作package.json](../../../muon-android-prototype/package.json)、[release検証スクリプト](../../../muon-android-prototype/scripts/test-android-release-packages.mjs)を参照する。
+- 公開ビルドと配布形式は[targets.ts](../../../ui/common/targets.ts)、[build-sequence.ts](../../../ui/common/build-sequence.ts)、[build.ts](../../../ui/common/build.ts)、[pack.ts](../../../ui/common/pack.ts)、[vite.ts](../../../ui/common/vite.ts)を参照する。
+- npm配布の入口は[ui/package.json](../../../ui/package.json)と[build_package.sh](../../../build_package.sh)を参照する。
+- Androidの固定設定と署名は[app/build.gradle.kts](../../../core/android-test/android/app/build.gradle.kts)、初期化処理は[prototype.ts](../../../core/android-test/src/test-host.ts)と[MuonActivity.java](../../../core/android-test/android/app/src/main/java/dev/muon/runtime/MuonActivity.java)を参照する。
+- リポジトリ依存は[build-native-dependencies.mjs](../../../core/android-test/scripts/build-native-dependencies.mjs)、[CMakeLists.txt](../../../core/android-test/android/app/src/main/cpp/CMakeLists.txt)、[generate-android-plugin-registry.mjs](../../../core/android-test/scripts/generate-android-plugin-registry.mjs)を参照する。
+- QuickJSの読み込みは[MuonJavaScriptRuntimeService.java](../../../core/android-poc/android/app/src/main/java/dev/muon/runtime/MuonJavaScriptRuntimeService.java)を参照する。
+- 検証方法は[試作README](../../../core/android-poc/README.md)、[試作package.json](../../../core/android-test/package.json)、[release検証スクリプト](../../../core/android-test/scripts/test-android-release-packages.mjs)を参照する。
 
 生成済みAPK/AABが作業環境に存在していても、現在のブランチに対する成功結果とはみなさない。調査時に接続端末はなく、端末テストを再実行していない。旧計画に記録されたWindows E2Eの失敗やテスト件数も過去の情報であり、ステップ0で現在の結果を確認する。
 
@@ -158,7 +158,7 @@ application ID、表示名、versionCode/versionName、アイコン、ABI、必�
 
 アセットの配信先とRPCを受け付けるoriginを同じ設定から生成する。不明アセットや不正なリクエストを外部ネットワークへ転送せず、RPCは信頼済みoriginのmain frameからだけ受け付ける。
 
-Androidで使えないdesktop設定はビルド時に診断する。CEF版の`network.allow`などをAndroidでも同じように強制できるとは説明しない。現在の方針と制約は[Android設定検証](../../../muon-android/src/renderer/android-config.ts)、[ネットワーク制約の調査](../../../filter-limitation.md)、[利用者向け制約](../limitation.md)を参照して整理する。
+Androidで使えないdesktop設定はビルド時に診断する。CEF版の`network.allow`などをAndroidでも同じように強制できるとは説明しない。現在の方針と制約は[Android設定検証](../../../core/android/renderer/android-config.ts)、[ネットワーク制約の調査](../../../filter-limitation.md)、[利用者向け制約](../limitation.md)を参照して整理する。
 
 権限は有効な機能から導出する。`ACCESS_LOCAL_NETWORK`などの実行時権限は、Manifestへ記載するだけで使用できる前提にしない。必要な構成だけで要求し、拒否時の扱いを決める。[Androidのローカルネットワーク権限](https://developer.android.com/privacy-and-security/local-network-permission)
 
@@ -180,7 +180,7 @@ FCMを追加する場合は明示的に有効化する。無効なアプリに�
 
 今回FCMを提供しない場合は、有効化を要求された時点で未対応と説明する。動作しないAPIを成功したように見せない。将来、制限付きで提供する場合は、受信できる条件と保証しない範囲を実装・テスト・文書で一致させる。
 
-永続inbox、再配送、ACK、バックグラウンド処理などの詳細は[plan5.md](plan5.md)へ残す。これらを今回すべて実装する必要はない。
+永続inbox、再配送、ACK、バックグラウンド処理などの詳細は[plan5.md](./plan5.md)へ残す。これらを今回すべて実装する必要はない。
 
 ## 8. QuickJSのJavaScriptデプロイメント方針
 
@@ -374,7 +374,7 @@ SDK Platformの実際のパッケージ名はplatforms/android-37.0である。c
 独立アプリの検証コマンドは次のとおり。ANDROID_HOMEとANDROID_SERIALを指定し、npm packで作ったtgzを渡す。検証アプリには試験用RPCブリッジを追加せず、画面に表示した基本APIの応答をADBから確認する。
 
 ```bash
-node muon-android/scripts/test-packaged-application.mjs /path/to/muon-ui.tgz
+node ui/android-test/test-packaged-application.mjs /path/to/muon-ui.tgz
 ```
 
 検証ドライバーはリポジトリ外へtgzをインストールする。SDKにはplatforms、build-tools、licensesだけを公開し、NDKを除外する。追加したcompilerガードでCMake・C/C++コンパイラの起動も拒否する。標準アプリのGradle処理は事前ビルド済みライブラリを使用し、同梱アセットから起動する。
@@ -438,9 +438,9 @@ mkdir -p /tmp/muon-plan6-final-package
 npm pack --workspace muon-ui --pack-destination /tmp/muon-plan6-final-package
 ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
 ANDROID_SERIAL=adb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcp npm run test:android:pixel6 --workspace muon-android-prototype
-ANDROID_SERIAL=emulator-5556 node muon-android/scripts/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz
-ANDROID_SERIAL=adb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcp node muon-android/scripts/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz
-ANDROID_SERIAL=emulator-5556 node muon-android/scripts/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz --plugins
+ANDROID_SERIAL=emulator-5556 node ui/android-test/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=adb-23231FDF600652-Nj8Dyu._adb-tls-connect._tcp node ui/android-test/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=emulator-5556 node ui/android-test/test-packaged-application.mjs /tmp/muon-plan6-final-package/muon-ui-0.0.1.tgz --plugins
 ```
 
 両端末でinstrumentation 45件、試作release APK、AAB由来APKSの回帰検証が成功した。通常の独立アプリは両端末で、プラグインを追加した独立アプリはVMで成功した。それぞれ、CLI/Viteのdebug APK一致、releaseの署名、保存・再読込、プロセス再起動、同一鍵でversionCode 2から3へ更新した後のデータ保持を確認した。画面も目視で確認した。プラグイン構成では加算、設定値、非許可関数を公開しない動作も成功した。

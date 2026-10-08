@@ -1,10 +1,10 @@
 # Android製品化計画
 
-今回のdevelopへのマージ範囲と完了条件は、[plan6.md](plan6.md)へ更新した。FCMの通知機能の完成とQuickJSの実行機能の正式提供は今回の必須条件から外し、本書の詳細は後続作業の参考として残す。
+今回のdevelopへのマージ範囲と完了条件は、[plan6.md](./plan6.md)へ更新した。FCMの通知機能の完成とQuickJSの実行機能の正式提供は今回の必須条件から外し、本書の詳細は後続作業の参考として残す。
 
 ## 1. この文書の目的
 
-この文書は、[plan3.md](plan3.md)のAndroid製品化計画を、[plan2.md](plan2.md)に整理した2026年8月25日時点の実装状況と、[plan3-2.md](plan3-2.md)で合意した通知配送設計へ合わせて更新したものである。
+この文書は、[plan3.md](./plan3.md)のAndroid製品化計画を、[plan2.md](./plan2.md)に整理した2026年8月25日時点の実装状況と、[plan3-2.md](./plan3-2.md)で合意した通知配送設計へ合わせて更新したものである。
 
 最終目的は、固定された試作アプリを増やすことではない。一般のmuon-ui利用者が、公開CLIと公開設定だけを使ってAndroidアプリをbuild、test、pack、署名し、ページ主体のcodeからpush通知を利用できる状態にすることである。
 
@@ -112,7 +112,7 @@ WebView自身の通常networkは包括的にinterceptせず、Android Manifest�
 
 API名と設定keyは公開契約stepで確定する。仮に`muon.javascript.createRuntime()`と`javascript.project`を候補としても、仕様決定前に実装へ固定しない。実Node.jsを選ぶ場合は、後述の独立gateを先に通す。
 
-[plan3-2.md](plan3-2.md)で保留したQuickJS対応は、通知のbackground handlerへ適用する。一般用途JavaScript runtimeとしての採否は3.7の独立gateとして維持し、通知配送とは結び付けない。QuickJSを一般用途runtimeとして採用した場合でも、初回通知機能ではinactive時のbackground JS実行を提供しない。background handlerは、native inboxからページJSへの配送が完成した後に、別の公開契約、resource制限、lifecycle gateを伴う後続課題として検討する。
+[plan3-2.md](./plan3-2.md)で保留したQuickJS対応は、通知のbackground handlerへ適用する。一般用途JavaScript runtimeとしての採否は3.7の独立gateとして維持し、通知配送とは結び付けない。QuickJSを一般用途runtimeとして採用した場合でも、初回通知機能ではinactive時のbackground JS実行を提供しない。background handlerは、native inboxからページJSへの配送が完成した後に、別の公開契約、resource制限、lifecycle gateを伴う後続課題として検討する。
 
 ### 3.8 push通知
 
@@ -604,7 +604,7 @@ UI側とService側でgenerationを持ち、旧processの応答を新しいruntim
 初期候補は、exportしない別process Android Serviceにruntimeを置く方式とする。
 
 - UI processからcrashを分離する。
-- Binderはlifecycle制御に限定し、既存`muon-node/1` protocolを運べるtransport境界を維持する。
+- Binderはlifecycle制御に限定し、既存`node/1` protocolを運べるtransport境界を維持する。
 - singleton、同時1 runtime、複数runtime poolのどれを公開するか決める。
 - 複数`createNode`が同じglobalを暗黙共有しない。
 - Service kill、rebind、generation、pending request、shutdown timeoutをtestする。
@@ -708,8 +708,8 @@ Android targetでは非公開にするか、設定時に説明可能なerrorを�
 
 ### 13.3 文書整理
 
-- [android-api-compatibility.md](android-api-compatibility.md)を両ABI、NDK plugin、push通知、QuickJS採否を含む現在の契約へ更新する。
-- [filter-limitation.md](filter-limitation.md)は検証履歴と確定network仕様を明確に分ける。
+- [android-api-compatibility.md](../../../android-api-compatibility.md)を両ABI、NDK plugin、push通知、QuickJS採否を含む現在の契約へ更新する。
+- [filter-limitation.md](../../../filter-limitation.md)は検証履歴と確定network仕様を明確に分ける。
 - 開発者向けにはtoolchain、backend、test gate、diagnosticを記載する。
 - 利用者向けREADME日本語版と英語版には、公開CLI、設定、build、pack、署名、install、push通知の利用方法、制約だけを記載する。
 - WebView provider依存、network policy差、permission、非対応API、JavaScript runtime identityを両言語で一致させる。

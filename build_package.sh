@@ -12,7 +12,7 @@ ARTIFACT_DIR="${ARTIFACT_DIR:-${SCRIPT_DIR}/artifacts}"
 PACKAGE_LOG_DIR="${PACKAGE_LOG_DIR:-${SCRIPT_DIR}/.deps/package-logs}"
 TRA_FFIC_ROOT_HOST="${TRA_FFIC_ROOT_HOST:-${SCRIPT_DIR}/deps/tra-ffic}"
 CARDIO_ROOT_HOST="${CARDIO_ROOT_HOST:-${SCRIPT_DIR}/deps/cardio}"
-MUON_CORE_VERSION_HEADER_RELATIVE="muon-core/.build/package/muon_core_version_generated.h"
+MUON_CORE_VERSION_HEADER_RELATIVE="core/cef/.build/package/muon_core_version_generated.h"
 MUON_CORE_VERSION_HEADER_HOST="${SCRIPT_DIR}/${MUON_CORE_VERSION_HEADER_RELATIVE}"
 MUON_CORE_VERSION_HEADER_CONTAINER="/workspace/${MUON_CORE_VERSION_HEADER_RELATIVE}"
 
@@ -278,19 +278,19 @@ stage_targets() {
   printf 'Building JavaScript package entries\n'
   npm run build:js --workspace muon-ui
   npm run build --workspace muon-android
-  node muon-android/scripts/stage-package.mjs muon-ui/dist/android
+  node core/android/scripts/stage-package.mjs ui/dist/android
 
   printf 'Staging package targets\n'
   if is_full_arch_matrix "${arches[@]}"; then
-    (cd muon-ui && node scripts/stage-muon-builder.mjs --all)
+    (cd ui && node scripts/stage-muon-builder.mjs --all)
   else
     for arch in "${arches[@]}"; do
       local target_name
       target_name="$(target_name_for_arch "${arch}")"
-      (cd muon-ui && node scripts/stage-muon-builder.mjs --target "${target_name}" --dist)
+      (cd ui && node scripts/stage-muon-builder.mjs --target "${target_name}" --dist)
     done
-    (cd muon-ui && node scripts/stage-muon-builder.mjs --target windows-i686 --dist)
-    (cd muon-ui && node scripts/stage-muon-builder.mjs --target windows-amd64 --dist)
+    (cd ui && node scripts/stage-muon-builder.mjs --target windows-i686 --dist)
+    (cd ui && node scripts/stage-muon-builder.mjs --target windows-amd64 --dist)
   fi
 }
 
@@ -336,39 +336,39 @@ validate_linux_artifacts() {
     esac
 
     validate_readelf_header \
-      "muon-ui/dist/native/${target_name}/muon-builder" \
+      "ui/dist/native/${target_name}/muon-builder" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/native/${target_name}/muon-launcher" \
+      "ui/dist/native/${target_name}/muon-launcher" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/native/${target_name}/muon-runtime-helper" \
+      "ui/dist/native/${target_name}/muon-runtime-helper" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/native/${target_name}/muon-plugin-inspector" \
+      "ui/dist/native/${target_name}/muon-plugin-inspector" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/runtime/${target_name}/muon-core" \
+      "ui/dist/runtime/${target_name}/muon-core" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/runtime/${target_name}/muon-executor-supervisor" \
+      "ui/dist/runtime/${target_name}/muon-executor-supervisor" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/runtime/${target_name}/libmuon-ui.so" \
+      "ui/dist/runtime/${target_name}/libmuon-ui.so" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/runtime/${target_name}/libcardio.so" \
+      "ui/dist/runtime/${target_name}/libcardio.so" \
       "${expected_class}" \
       "${expected_machine}"
     validate_readelf_header \
-      "muon-ui/dist/runtime/${target_name}/plugins/node.so" \
+      "ui/dist/runtime/${target_name}/plugins/node.so" \
       "${expected_class}" \
       "${expected_machine}"
   done
@@ -393,7 +393,7 @@ build_dist() {
   export MUON_BUILDER_GIT_COMMIT_HASH
   export MUON_CORE_VERSION_HEADER
   export MUON_NODE_BRIDGE_PREBUILT
-  MUON_BUILDER_VERSION="$(package_version "muon-builder/package.json")"
+  MUON_BUILDER_VERSION="$(package_version "builder/package.json")"
   MUON_BUILDER_GIT_COMMIT_HASH="$(git_commit_hash)"
   generate_core_version_header
   MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_HOST}"
@@ -405,8 +405,8 @@ build_dist() {
   MUON_NODE_BRIDGE_PREBUILT=1
 
   printf 'Preparing shared native source dependencies\n'
-  bash muon-core/build_yyjson.sh
-  bash muon-core/build_miniz.sh
+  bash core/cef/build_yyjson.sh
+  bash core/cef/build_miniz.sh
 
   build_linux_targets "${arches[@]}"
   build_windows_targets
@@ -544,7 +544,7 @@ pack_with_screw_up() {
   pack_output="$(
     npm exec --workspace muon-ui -- screw-up pack \
       --pack-destination "${ARTIFACT_DIR}" \
-      "${SCRIPT_DIR}/muon-ui"
+      "${SCRIPT_DIR}/ui"
   )"
   printf '%s\n' "${pack_output}" >&2
   package_file_name="$(

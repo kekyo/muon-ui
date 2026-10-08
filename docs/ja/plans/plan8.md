@@ -101,3 +101,11 @@ observerを`core/android-test`へ移す。Android用テストプラグインの�
 共有実装と公開C APIを`core/common`へ、7本の既存テストと共用プラグインを`core/common-test`へ移した。独立したMakefileから既存のRPC、portable RPC、関数寿命、C APIの4テストを実行する。共有ソースが未移動の状態でビルド失敗を確認し、移動・接続後の成功を確認した。ルートの全体テストにも組み込んだ。
 
 CEFの既存ビルドが成功し、共有部分に対応するCTest 7件が成功した。Androidの両ABI向けrelease AARのビルドと公開用Maven成果物の生成も成功した。Androidのプラグイン登録に関するVitest 20件が成功した。検証ログは`/tmp/muon-plan8/step1-*.log`へ保存した。
+
+### 段階2の結果
+
+実装とテストを`core/cef`、`core/cef-test`、`core/android`、`core/android-test`へ、公開パッケージと周辺機能を`ui`、`builder`、`node`へ移した。CEFのC++単体テストは`core/cef-test/native`、TypeScriptのテストとドライバーは`core/cef-test`直下へ配置した。npm workspaceの配置とlockfileを更新し、公開パッケージ名は維持した。
+
+移動直後に既存テストの設定読込みが旧パスで失敗することを確認し、import、テストのmock、ビルド定義、配布スクリプトを接続した。新しい場所でCEF releaseをビルドし、CTest 42件が成功した。CEFのテスト基盤26件、UIのAndroid関連27件、公開パッケージ関連20件も成功した。Androidは両ABIのランタイム、テストホストのdebug・release・テストAPK・APK setを生成し、Vitest 23件と既存の依存・プラグイン・配布物検査が成功した。CEFテストドライバーとUIのESM/CJSビルドも成功した。
+
+移動に伴う失敗は、リポジトリからの相対パス、workspaceからの相対パス、ソースファイルからの相対importの違いによるものだった。それぞれの基準を保って参照を更新し、旧ディレクトリへの互換リンクは設けていない。ログは`/tmp/muon-plan8/step2-*.log`へ保存した。

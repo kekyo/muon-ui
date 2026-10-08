@@ -6,7 +6,7 @@ CONTAINER_ENGINE="${CONTAINER_ENGINE:-podman}"
 
 run_dist_ctest() {
   local target="$1"
-  local test_dir="muon-core/.build/dist/${target}/release"
+  local test_dir="core/cef/.build/dist/${target}/release"
   local test_file="${test_dir}/CTestTestfile.cmake"
 
   if [[ "${target}" == "linux-amd64" ]] &&

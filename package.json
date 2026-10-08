@@ -24,13 +24,13 @@
     "images/get-started-android.png"
   ],
   "workspaces": [
-    "muon-android",
-    "muon-android-prototype",
-    "muon-builder",
-    "muon-node",
-    "muon-ui",
-    "muon-core",
-    "muon-core-tester"
+    "core/android",
+    "core/android-test",
+    "builder",
+    "node",
+    "ui",
+    "core/cef",
+    "core/cef-test"
   ],
   "scripts": {
     "dependencies": "reskill",

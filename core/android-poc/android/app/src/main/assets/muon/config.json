@@ -1,0 +1,9 @@
+{
+  "startPage": "https://main.asset.muon.invalid/index.html",
+  "plugin": { "mode": "simple", "enabled": true, "internalAllow": ["muon.**"] },
+  "values": {
+    "channel": "android",
+    "backend": "webview",
+    "applicationSetting": "prototype-fixture"
+  }
+}

@@ -10,7 +10,9 @@ import { runScriptOnceToText } from 'funcity';
 
 import { normalizeAndroidPluginRegistry } from './android-plugin-registry.mjs';
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(
+  process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+);
 const repositoryRoot = resolve(projectRoot, '../..');
 const manifestPath = join(projectRoot, 'android-plugins.json');
 const outputRoot = join(

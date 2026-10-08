@@ -23,11 +23,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-/** Hosts the Android WebView backend prototype. */
+/** Hosts Android runtime regression tests. */
 public final class MuonActivity extends Activity {
     static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
-    private static final String JAVASCRIPT_RUNTIME_OBJECT_NAME =
-            "muonAndroidJavaScriptRuntime";
     private static final String TEST_OBJECT_NAME = "muonAndroidTest";
 
     private final CountDownLatch pageReady = new CountDownLatch(1);
@@ -39,7 +37,6 @@ public final class MuonActivity extends Activity {
             new LinkedBlockingQueue<>();
     private WebView webView;
     private MuonRpcBridge rpcBridge;
-    private MuonJavaScriptRuntimeBridge javaScriptRuntimeBridge;
     private MuonWebViewHost host;
     private boolean testBridgeInstalled;
     @Nullable private String startupFailure;
@@ -52,9 +49,6 @@ public final class MuonActivity extends Activity {
             @Override public void beforePageLoad(@NonNull WebView view, @NonNull MuonRpcBridge bridge) {
                 webView = view;
                 rpcBridge = bridge;
-                javaScriptRuntimeBridge = new MuonJavaScriptRuntimeBridge(MuonActivity.this);
-                WebViewCompat.addWebMessageListener(view, JAVASCRIPT_RUNTIME_OBJECT_NAME,
-                        Collections.singleton(TRUSTED_ORIGIN), javaScriptRuntimeBridge);
                 if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
                     WebViewCompat.addWebMessageListener(view, TEST_OBJECT_NAME,
                             Collections.singleton(TRUSTED_ORIGIN), MuonActivity.this::receiveTestMessage);
@@ -219,17 +213,10 @@ public final class MuonActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
-            WebViewCompat.removeWebMessageListener(
-                    webView,
-                    JAVASCRIPT_RUNTIME_OBJECT_NAME);
             if (testBridgeInstalled) {
                 WebViewCompat.removeWebMessageListener(webView, TEST_OBJECT_NAME);
                 testBridgeInstalled = false;
             }
-        }
-        if (javaScriptRuntimeBridge != null) {
-            javaScriptRuntimeBridge.close();
-            javaScriptRuntimeBridge = null;
         }
         host.close(isChangingConfigurations());
         host = null;

@@ -109,3 +109,11 @@ CEFの既存ビルドが成功し、共有部分に対応するCTest 7件が成�
 移動直後に既存テストの設定読込みが旧パスで失敗することを確認し、import、テストのmock、ビルド定義、配布スクリプトを接続した。新しい場所でCEF releaseをビルドし、CTest 42件が成功した。CEFのテスト基盤26件、UIのAndroid関連27件、公開パッケージ関連20件も成功した。Androidは両ABIのランタイム、テストホストのdebug・release・テストAPK・APK setを生成し、Vitest 23件と既存の依存・プラグイン・配布物検査が成功した。CEFテストドライバーとUIのESM/CJSビルドも成功した。
 
 移動に伴う失敗は、リポジトリからの相対パス、workspaceからの相対パス、ソースファイルからの相対importの違いによるものだった。それぞれの基準を保って参照を更新し、旧ディレクトリへの互換リンクは設けていない。ログは`/tmp/muon-plan8/step2-*.log`へ保存した。
+
+### 段階3の結果
+
+製品テストを`core/android-test`、QuickJS実験を`core/android-poc`へ分離した。製品テストの公開名前空間から`node`を除く期待値で先に失敗を確認し、QuickJSのJava・JNI・JS・アセットと固有テストを移した。observerは`core/android-test/observer`へ、利用アプリ向けのテストプラグイン成果物は`core/android-test/.build/plugins/<abi>`へ配置した。
+
+両アプリのdebug・release・テストAPK・APK setのビルドと配布物検査が成功した。Vitestは製品側20件、QuickJS側3件が成功した。Pixel 6では製品側28件とQuickJS側19件の端末テストが成功し、両アプリの署名付きrelease APKとAPK setの起動も確認した。
+
+QuickJS分離後の端末検証では、製品テスト専用の起動設定がテストプラグインを要求して起動に失敗した。QuickJSホストは製品テスト用のプローブを使わないため、この設定を無効にし、通常の共有ランタイムにQuickJSブリッジを追加する構成へ修正した。共通実装の複製や試作機能の削除は行っていない。ログは`/tmp/muon-plan8/step3-*.log`へ保存した。

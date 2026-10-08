@@ -14,5 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "muon-android-prototype"
+rootProject.name = "muon-android-tests"
 include(":app")
+include(":observer")
+project(":observer").projectDir = file("../observer")

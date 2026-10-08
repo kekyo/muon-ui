@@ -1,0 +1,23 @@
+{
+  "name": "muon-android-poc",
+  "version": "0.0.1",
+  "description": "Experimental QuickJS runtime for the Android backend.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run && vite build && ../android/gradlew -p android assembleDebug assembleRelease assembleDebugAndroidTest buildReleaseApks && node scripts/verify-quickjs-source.mjs && node ../android-test/scripts/verify-native-dependencies.mjs . --quickjs && node ../android-test/scripts/verify-android-plugin-registry.mjs . --quickjs && node ../android-test/scripts/verify-android-release-apks.mjs . --quickjs",
+    "test:android": "vite build && ../android/gradlew -p android connectedDebugAndroidTest assembleRelease buildReleaseApks && node ../android-test/scripts/verify-android-release-apks.mjs . --quickjs && MUON_ANDROID_TEST_PROFILE=vm-x86_64-16k node ../android-test/scripts/test-android-release-packages.mjs . --quickjs",
+    "test:android:pixel6": "vite build && ../android/gradlew -p android connectedDebugAndroidTest assembleRelease buildReleaseApks && node ../android-test/scripts/verify-android-release-apks.mjs . --quickjs && MUON_ANDROID_TEST_PROFILE=pixel6-arm64-4k node ../android-test/scripts/test-android-release-packages.mjs . --quickjs"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "devDependencies": {
+    "prettier-max": ">=1.16.0",
+    "screw-up": ">=1.35.0",
+    "typescript": ">=5.9.0",
+    "vite": ">=8.0.0",
+    "vitest": ">=4.0.0"
+  }
+}

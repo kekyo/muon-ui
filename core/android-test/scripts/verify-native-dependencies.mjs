@@ -16,8 +16,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(
+  process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+);
 const repositoryRoot = resolve(projectRoot, '../..');
+const includeQuickJs = process.argv.includes('--quickjs');
 const androidRoot = join(projectRoot, 'android');
 const dependencyRoot = join(androidRoot, '.native-dependencies');
 const expectedNdkVersion = '29.0.14206865';
@@ -226,7 +229,9 @@ const verifyApk = (apkPath, readelf, zipalign, temporaryRoot) => {
     const libraryEntries = {
       cardio: `lib/${entry.abi}/libcardio.so`,
       cpp: `lib/${entry.abi}/libc++_shared.so`,
-      javascript: `lib/${entry.abi}/libmuon_javascript_runtime.so`,
+      ...(includeQuickJs
+        ? { javascript: `lib/${entry.abi}/libmuon_javascript_runtime.so` }
+        : {}),
       runtime: `lib/${entry.abi}/libmuon_android_rpc.so`,
     };
     for (const libraryEntry of Object.values(libraryEntries)) {
@@ -254,13 +259,20 @@ const verifyApk = (apkPath, readelf, zipalign, temporaryRoot) => {
       forbidden
     );
     verifyElf(readelf, extracted.cpp, entry, [], forbidden);
-    verifyElf(
-      readelf,
-      extracted.javascript,
-      entry,
-      ['libc++_shared.so', 'liblog.so'],
-      forbidden
-    );
+    if (includeQuickJs) {
+      verifyElf(
+        readelf,
+        extracted.javascript,
+        entry,
+        ['libc++_shared.so', 'liblog.so'],
+        forbidden
+      );
+    } else {
+      expectCondition(
+        !entries.some((path) => /quickjs|muon_javascript/i.test(path)),
+        `${apkPath}: QuickJS was included in the production regression host`
+      );
+    }
     verifyElf(
       readelf,
       extracted.runtime,
@@ -270,8 +282,8 @@ const verifyApk = (apkPath, readelf, zipalign, temporaryRoot) => {
     );
   }
   expectCondition(
-    entries.includes('assets/third-party/quickjs-LICENSE'),
-    `${apkPath}: missing the QuickJS license asset`
+    entries.includes('assets/third-party/quickjs-LICENSE') === includeQuickJs,
+    `${apkPath}: unexpected QuickJS license presence`
   );
 };
 

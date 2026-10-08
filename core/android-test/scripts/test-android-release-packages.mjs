@@ -8,7 +8,10 @@ import { once } from 'node:events';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(
+  process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+);
+const includeQuickJs = process.argv.includes('--quickjs');
 const androidRoot = join(projectRoot, 'android');
 const releaseApk = join(
   androidRoot,
@@ -19,7 +22,7 @@ const releaseApk = join(
   'release',
   'app-release.apk'
 );
-const packageName = 'dev.muon.prototype';
+const packageName = includeQuickJs ? 'dev.muon.prototype' : 'dev.muon.testhost';
 const activityName = `${packageName}/dev.muon.runtime.MuonActivity`;
 const pageReadyMarker =
   'Muon page ready: https://main.asset.muon.invalid/index.html';
@@ -142,7 +145,9 @@ const launchAndAwaitPage = async (label) => {
 adb(['install', '-r', releaseApk]);
 await launchAndAwaitPage('signed release APK');
 
-execFileSync(join(androidRoot, 'gradlew'), ['installReleaseBundleApks'], {
+execFileSync(
+  includeQuickJs ? resolve(projectRoot, '../android/gradlew') : join(androidRoot, 'gradlew'),
+  ['-p', androidRoot, 'installReleaseBundleApks'], {
   cwd: androidRoot,
   env: { ...process.env, ANDROID_SERIAL: serial },
   stdio: 'inherit',

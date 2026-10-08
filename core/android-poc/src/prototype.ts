@@ -18,12 +18,6 @@ import { createMuonAndroidSimpleApi } from '../../android/src/renderer/android-a
 import { installMuonAndroidNativePluginApi } from '../../android/src/renderer/native-plugin-api.js';
 import { readMuonAndroidRendererMetadata } from '../../android/src/renderer/native-plugin-metadata.js';
 
-/** Testable prototype operations that require direct RPC client controls. */
-export interface MuonAndroidPrototypeOperations {
-  /** Starts and immediately aborts a delayed native call. */
-  readonly cancelDelayed: () => Promise<unknown>;
-}
-
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) {
   throw new Error('Prototype root element was not found');
@@ -63,20 +57,6 @@ if (bridge === undefined || javaScriptRuntimeBridge === undefined) {
     rendererMetadata,
     { muon: androidApi }
   );
-  const operations: MuonAndroidPrototypeOperations = {
-    cancelDelayed: () => {
-      const controller = new AbortController();
-      const result = client.call(
-        'prototype-capability',
-        'prototype.delay',
-        [],
-        { signal: controller.signal }
-      );
-      controller.abort();
-      return result;
-    },
-  };
-  Reflect.set(globalThis, '__muon_android_prototype', operations);
 
   const heading = document.createElement('h1');
   heading.textContent = 'muon Android prototype';
@@ -105,7 +85,6 @@ if (bridge === undefined || javaScriptRuntimeBridge === undefined) {
   window.addEventListener(
     'pagehide',
     () => {
-      Reflect.deleteProperty(globalThis, '__muon_android_prototype');
       uninstallNativePluginApi();
       uninstallCapabilityBridge();
       javaScriptRuntimeClient.dispose();

@@ -3,13 +3,13 @@ plugins {
 }
 
 android {
-    namespace = "dev.muon.prototype"
+    namespace = "dev.muon.testhost"
     compileSdk = 37
     buildToolsVersion = "36.0.0"
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "dev.muon.prototype"
+        applicationId = "dev.muon.testhost"
         minSdk = 24
         targetSdk = 37
         versionCode = 1
@@ -38,7 +38,6 @@ android {
     }
 
     buildFeatures {
-        aidl = true
         buildConfig = true
     }
 
@@ -57,7 +56,6 @@ android {
     sourceSets {
         getByName("main").java.directories.add("../../../android/runtime/src/main/java")
         getByName("main").assets.directories.add("../../dist")
-        getByName("main").assets.directories.add("../.generated/quickjs-assets")
         getByName("main").assets.directories.add("../.generated/plugin-assets")
     }
 
@@ -76,11 +74,6 @@ val buildNativeDependencies by tasks.registering(Exec::class) {
     commandLine("node", "scripts/build-native-dependencies.mjs")
 }
 
-val prepareQuickJsSource by tasks.registering(Exec::class) {
-    workingDir(rootProject.projectDir.parentFile)
-    commandLine("node", "scripts/prepare-quickjs-source.mjs")
-}
-
 val generateAndroidPluginRegistry by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir.parentFile)
     commandLine("node", "scripts/generate-android-plugin-registry.mjs")
@@ -90,7 +83,6 @@ tasks.named("preBuild") {
     dependsOn(
         buildWebAssets,
         buildNativeDependencies,
-        prepareQuickJsSource,
         generateAndroidPluginRegistry,
     )
 }

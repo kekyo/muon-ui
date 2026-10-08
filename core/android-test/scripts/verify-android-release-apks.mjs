@@ -17,8 +17,11 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizeAndroidPluginRegistry } from './android-plugin-registry.mjs';
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(
+  process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+);
 const repositoryRoot = resolve(projectRoot, '../..');
+const includeQuickJs = process.argv.includes('--quickjs');
 const androidRoot = join(projectRoot, 'android');
 const ndkVersion = '29.0.14206865';
 const buildToolsVersion = '36.0.0';
@@ -35,7 +38,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
-  'libmuon_javascript_runtime.so',
+  ...(includeQuickJs ? ['libmuon_javascript_runtime.so'] : []),
 ];
 const forbiddenDependencies = ['libcef', 'libgtk', 'libgio', 'muon-executor'];
 const allowedDependencies = new Set([
@@ -176,8 +179,8 @@ try {
   expectCondition(
     [...entriesByApk.values()].some((entries) =>
       entries.includes('assets/third-party/quickjs-LICENSE')
-    ),
-    `${archivePath}: QuickJS license asset is missing`
+    ) === includeQuickJs,
+    `${archivePath}: unexpected QuickJS license presence`
   );
 
   const masterVariantSuffixes = apkPaths

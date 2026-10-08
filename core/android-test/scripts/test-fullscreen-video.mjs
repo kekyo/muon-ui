@@ -57,7 +57,7 @@ try {
     '-e',
     'class',
     'dev.muon.runtime.MuonActivityTest#animatesExistingFullscreenSystemBars',
-    'dev.muon.prototype.test/androidx.test.runner.AndroidJUnitRunner'
+    'dev.muon.testhost.test/androidx.test.runner.AndroidJUnitRunner'
   );
   await writeFile(join(output, 'instrumentation.log'), result);
 } finally {

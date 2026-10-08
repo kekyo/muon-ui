@@ -203,12 +203,7 @@ if (includePlugin) {
       await mkdir(destination, { recursive: true });
       const library = join(destination, soname);
       await copyFile(
-        join(
-          repository,
-          'core/android-test/android/app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib',
-          abi,
-          soname
-        ),
+        join(repository, 'core/android-test/.build/plugins', abi, soname),
         library
       );
       libraries[abi] = library;
@@ -478,9 +473,12 @@ const start = async () => {
 // Keep one accessibility connection alive while waiting for actual app state.
 // The observer APK never adds a test bridge or library to the consumer APK.
 await execute(
-  join(repository, 'core/android/gradlew'),
+  join(repository, 'core/android-test/android/gradlew'),
   [':observer:assembleDebug', ':observer:assembleDebugAndroidTest'],
-  { cwd: join(repository, 'core/android'), maxBuffer: 16 * 1024 * 1024 }
+  {
+    cwd: join(repository, 'core/android-test/android'),
+    maxBuffer: 16 * 1024 * 1024,
+  }
 );
 for (const apk of [
   'apk/debug/observer-debug.apk',
@@ -489,7 +487,7 @@ for (const apk of [
   await adb([
     'install',
     '-r',
-    join(repository, 'core/android/observer/build/outputs', apk),
+    join(repository, 'core/android-test/observer/build/outputs', apk),
   ]);
 }
 let observationCount = 0;

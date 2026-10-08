@@ -14,7 +14,9 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = resolve(
+  process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+);
 const version = '1.18.3';
 const archiveName = `bundletool-all-${version}.jar`;
 const archiveUrl =

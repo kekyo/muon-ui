@@ -1481,7 +1481,9 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   auto next_platform_function_id =
       static_cast<uint64_t>(maximum_plugin_function_id) + 1;
   for (const auto& path : platform_paths) {
-    if (state->validate_mode &&
+    // External simple-mode capabilities must not enable denied builtins.
+    // Prototype-only routes use their separate test policy below.
+    if (path.rfind("muon.", 0) == 0 &&
         !state->internal_policy->IsAllowedFunctionPath(path)) {
       continue;
     }

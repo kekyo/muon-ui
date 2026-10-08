@@ -231,13 +231,17 @@ if (includePlugin) {
       name: 'consumer_' + fixture.stem,
       soname,
       libraries,
-      metadata,
+      // Exercise the optional catalog and cross-plugin allow rules in simple mode.
+      ...(validate || fixture.stem !== 'alpha' ? { metadata } : {}),
     });
     config.plugin.plugins.push({
       name: 'consumer_' + fixture.stem,
-      allow: fixture.allow.map(
-        (name) => 'muon.test.' + fixture.namespace + '.' + name
-      ),
+      allow: [
+        ...fixture.allow.map(
+          (name) => 'muon.test.' + fixture.namespace + '.' + name
+        ),
+        ...(!validate && fixture.stem === 'alpha' ? ['muon.fs.unlink'] : []),
+      ],
       config: fixture.config,
     });
   }
@@ -383,9 +387,17 @@ try {
   if (Reflect.get(api.fs, 'unlink') !== undefined) throw new Error('A denied built-in was exposed');
   const rawCall = Reflect.get(globalThis, '__muon_plugin_call') as (id: string, path: string, args: unknown[]) => Promise<unknown>;
   let denied = false;
-  try { await rawCall('fs-capability', 'muon.fs.unlink', [${validate ? 'path' : 'JSON.stringify({ path })'}]); }
+  try { await rawCall('fs-capability', 'muon.fs.unlink', [path]); }
   catch (error) { if (!/not allowed|capability|Unknown muon plugin function/i.test(String(error))) throw error; denied = true; }
   if (!denied) throw new Error('The native policy accepted a denied built-in');
+  if (${includePlugin && !validate}) {
+    const probe = 'policy-probe.txt';
+    await api.fs.writeTextFile(probe, 'preserved', 'utf8');
+    let blocked = false;
+    try { await rawCall('consumer_alpha', 'muon.fs.unlink', [probe]); }
+    catch (error) { if (!/not allowed|Unknown muon plugin function/i.test(String(error))) throw error; blocked = true; }
+    if (!blocked || !await api.fs.exists(probe)) throw new Error('An external capability bypassed the internal allow policy');
+  }
   if (${validate}) {
     const id = Reflect.get(globalThis, 'observedCapability') as string;
     const delegated = Reflect.get(globalThis, 'delegatedCall') as typeof rawCall;

@@ -133,8 +133,8 @@ describe('muon Node project engines', () => {
 
   it('defines the supported range from muon-node package.json in both Vite builds', async () => {
     const root = await mkdtemp(join(tmpdir(), 'muon-node-vite-engines-'));
-    const fixtureNodeDirectory = join(root, 'muon-node');
-    const fixtureUiDirectory = join(root, 'muon-ui');
+    const fixtureNodeDirectory = join(root, 'node');
+    const fixtureUiDirectory = join(root, 'ui');
     const supportedNodeRange = '>=30.4.0 <31';
     try {
       await mkdir(fixtureNodeDirectory, { recursive: true });
@@ -144,7 +144,7 @@ describe('muon Node project engines', () => {
         join(fixtureNodeDirectory, 'vite.config.ts')
       );
       await copyFile(
-        join(workspaceDirectory, 'muon-ui', 'vite.config.ts'),
+        join(workspaceDirectory, 'ui', 'vite.config.ts'),
         join(fixtureUiDirectory, 'vite.config.ts')
       );
       await writeFile(

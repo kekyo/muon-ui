@@ -189,6 +189,28 @@ export const diagnosePluginToolchain = async (
         );
     }
   }
+  if (build === 'cmake' && !issues.some((issue) => issue.id === 'cmake')) {
+    let version: string | undefined;
+    try {
+      version = (
+        await execute('cmake', ['--version'], { env: environment })
+      ).stdout.match(/cmake version (\d+)\.(\d+)/)?.[0];
+    } catch {
+      /* A present but unusable executable is a prerequisite failure. */
+    }
+    const parts = version?.match(/(\d+)\.(\d+)/);
+    if (
+      !parts ||
+      Number(parts[1]) < 3 ||
+      (Number(parts[1]) === 3 && Number(parts[2]) < 24)
+    )
+      add(
+        'cmake-version',
+        `CMake 3.24 or later is required; found ${version ?? 'an unusable executable'}.`,
+        'Install CMake 3.24 or later (sudo apt install cmake, or use the official distribution).',
+        'https://cmake.org/download/'
+      );
+  }
   const required = [
     'include/muon_plugin_api.h',
     `native/${target.target}/lib/pkgconfig/muon-plugin.pc`,

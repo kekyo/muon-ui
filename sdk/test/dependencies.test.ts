@@ -64,6 +64,9 @@ it('loads an ordinary shared dependency and rejects missing or reserved runtime 
     await expect(packagePlugin(options)).rejects.toThrow(
       /unpackaged.*libvendor/
     );
+    await expect(
+      readFile(join(options.outputDirectory, 'muon-plugin.json'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
     const manifest = await packagePlugin({
       ...options,
       targets: {

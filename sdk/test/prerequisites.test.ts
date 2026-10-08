@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
@@ -92,6 +92,29 @@ it('reports plugin-specific native development packages and their installation i
     report.issues.find((issue) => issue.id === 'muon-nonexistent-vendor')
       ?.install
   ).toContain('vendor-devel');
+});
+
+it('diagnoses an installed but incompatible CMake version before configuration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'muon-old-cmake-'));
+  try {
+    await writeFile(
+      join(root, 'cmake'),
+      '#!/bin/sh\necho "cmake version 3.10.2"\n'
+    );
+    await chmod(join(root, 'cmake'), 0o755);
+    const report = await diagnosePluginToolchain({
+      target: 'linux-amd64',
+      language: 'c',
+      buildSystem: 'cmake',
+      environment: { ...process.env, PATH: root + ':' + process.env.PATH },
+    });
+    expect(report.ready).toBe(false);
+    expect(
+      report.issues.find((issue) => issue.id === 'cmake-version')?.install
+    ).toContain('3.24');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 it('keeps SDK include paths outside a cross sysroot while isolating target pkg-config dependencies', async () => {

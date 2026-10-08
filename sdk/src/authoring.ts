@@ -131,7 +131,8 @@ export interface BuildPluginOptions extends Omit<
  * Builds one explicitly selected target and packages its final outputs.
  * @param options - Source config and toolchain selection.
  * @returns Absolute common artifact manifest path.
- * @remarks Source/vendor directories are never used as generated output directories.
+ * @remarks Set outputDirectory when referencing a vendor or installed package's
+ * configuration. Application integration always supplies an application-owned output.
  */
 export const buildPlugin = async (
   options: BuildPluginOptions
@@ -159,6 +160,7 @@ export const buildPlugin = async (
   const system = config.build?.system ?? 'make';
   if (!['make', 'cmake', 'custom'].includes(system))
     throw new Error(`Unsupported plugin build system: ${system}`);
+  const workingDirectory = resolve(source, config.build?.directory ?? '.');
   const report = await diagnosePluginToolchain({
     ...options,
     language,
@@ -168,7 +170,9 @@ export const buildPlugin = async (
     tools: [
       ...(config.build?.tools ?? []),
       ...(config.build?.commands?.map((item) => item.command) ?? []),
-    ],
+    ].map((tool) =>
+      tool.includes('/') ? resolve(workingDirectory, tool) : tool
+    ),
   });
   if (!report.ready) throw new Error(formatPluginToolchainReport(report));
   const target = getPluginTarget(options.target);
@@ -209,7 +213,7 @@ export const buildPlugin = async (
   ): Promise<void> => {
     try {
       await promisify(execFile)(command, [...args], {
-        cwd: resolve(source, config.build?.directory ?? '.'),
+        cwd: workingDirectory,
         env: environment,
         maxBuffer: 16 * 1024 * 1024,
       });
@@ -263,7 +267,7 @@ export const buildPlugin = async (
     }
     await execute('cmake', [
       '-S',
-      resolve(source, config.build?.directory ?? '.'),
+      workingDirectory,
       '-B',
       join(build, 'cmake'),
       `-DMuonPlugin_DIR=${join(sdk, 'cmake')}`,

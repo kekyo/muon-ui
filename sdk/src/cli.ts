@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import {
   buildPlugin,
@@ -78,7 +78,19 @@ platformOptions(program.command('doctor'))
               language: config.language ?? 'c++',
               cardio: config.cardio ?? config.language !== 'c',
               buildSystem: config.build?.system ?? 'make',
-              tools: config.build?.tools ?? [],
+              tools: [
+                ...(config.build?.tools ?? []),
+                ...(config.build?.commands?.map((entry) => entry.command) ??
+                  []),
+              ].map((tool) =>
+                tool.includes('/')
+                  ? resolve(
+                      dirname(resolve(options.config!)),
+                      config.build?.directory ?? '.',
+                      tool
+                    )
+                  : tool
+              ),
               ...(config.packages === undefined
                 ? {}
                 : { packages: config.packages }),

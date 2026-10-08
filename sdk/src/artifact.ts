@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import {
   copyFile,
+  cp,
   mkdir,
+  mkdtemp,
   readFile,
   realpath,
+  rm,
   writeFile,
 } from 'node:fs/promises';
 import {
@@ -269,84 +272,95 @@ export interface PackagePluginOptions {
 export const packagePlugin = async (
   options: PackagePluginOptions
 ): Promise<string> => {
-  const output = resolve(options.outputDirectory);
-  await mkdir(output, { recursive: true });
-  const copy = async (
-    path: string,
-    directory: string
-  ): Promise<PluginArtifactFile> => {
-    const destination = join(directory, basename(path));
-    const absolute = join(output, destination);
-    await mkdir(dirname(absolute), { recursive: true });
-    if (resolve(path) !== absolute) await copyFile(path, absolute);
-    return {
-      path: destination.split(sep).join('/'),
-      sha256: digest(await readFile(absolute)),
+  const destinationRoot = resolve(options.outputDirectory);
+  await mkdir(dirname(destinationRoot), { recursive: true });
+  const output = await mkdtemp(join(dirname(destinationRoot), '.muon-plugin-'));
+  // Validate the entire result before replacing a previously usable package.
+  // Failed validation must allow authors to fix their configuration and retry.
+  try {
+    const copy = async (
+      path: string,
+      directory: string
+    ): Promise<PluginArtifactFile> => {
+      const destination = join(directory, basename(path));
+      const absolute = join(output, destination);
+      await mkdir(dirname(absolute), { recursive: true });
+      if (resolve(path) !== absolute) await copyFile(path, absolute);
+      return {
+        path: destination.split(sep).join('/'),
+        sha256: digest(await readFile(absolute)),
+      };
     };
-  };
-  const resources = async (
-    inputs: readonly string[],
-    directory: string
-  ): Promise<string[]> => {
-    if (new Set(inputs.map((path) => basename(path))).size !== inputs.length)
-      throw new Error(`Duplicate plugin ${directory} filename.`);
-    const result: string[] = [];
-    for (const path of inputs) result.push((await copy(path, directory)).path);
-    return result;
-  };
-  const targets: PluginArtifactManifest['targets'] = {};
-  for (const [key, input] of Object.entries(options.targets)) {
-    const target = key as MuonPluginTarget;
-    const descriptor = getPluginTarget(target);
-    const native = `native/${target}`;
-    const dependencies: PluginArtifactFile[] = [];
-    const linkLibraries: PluginArtifactFile[] = [];
-    if (
-      new Set(
-        [input.library, ...(input.dependencies ?? [])].map((path) =>
-          basename(path).toLowerCase()
-        )
-      ).size !==
-      1 + (input.dependencies?.length ?? 0)
-    )
-      throw new Error('Duplicate plugin native filename.');
-    for (const path of input.dependencies ?? [])
-      dependencies.push(await copy(path, native));
-    for (const path of input.linkLibraries ?? [])
-      linkLibraries.push(await copy(path, `${native}/link`));
-    const cardio = input.cardio ?? input.language !== 'c';
-    targets[target] = {
-      library: await copy(input.library, native),
-      dependencies,
-      linkLibraries,
-      runtime: {
-        cardio,
-        ...(cardio
-          ? {
-              cardioAbi: `muon-${muonPluginAbiVersion}-${muonPluginCardioHeaderSha256}-${target}`,
-            }
-          : {}),
-        ...(input.language === 'c'
-          ? {}
-          : { cpp: descriptor.os === 'android' ? 'c++_shared' : 'libstdc++' }),
-        ...(descriptor.os === 'android'
-          ? { ndk: muonPluginNdkVersion, androidApi: muonPluginAndroidApi }
-          : {}),
-      },
+    const resources = async (
+      inputs: readonly string[],
+      directory: string
+    ): Promise<string[]> => {
+      if (new Set(inputs.map((path) => basename(path))).size !== inputs.length)
+        throw new Error(`Duplicate plugin ${directory} filename.`);
+      const result: string[] = [];
+      for (const path of inputs)
+        result.push((await copy(path, directory)).path);
+      return result;
     };
+    const targets: PluginArtifactManifest['targets'] = {};
+    for (const [key, input] of Object.entries(options.targets)) {
+      const target = key as MuonPluginTarget;
+      const descriptor = getPluginTarget(target);
+      const native = `native/${target}`;
+      const dependencies: PluginArtifactFile[] = [];
+      const linkLibraries: PluginArtifactFile[] = [];
+      if (
+        new Set(
+          [input.library, ...(input.dependencies ?? [])].map((path) =>
+            basename(path).toLowerCase()
+          )
+        ).size !==
+        1 + (input.dependencies?.length ?? 0)
+      )
+        throw new Error('Duplicate plugin native filename.');
+      for (const path of input.dependencies ?? [])
+        dependencies.push(await copy(path, native));
+      for (const path of input.linkLibraries ?? [])
+        linkLibraries.push(await copy(path, `${native}/link`));
+      const cardio = input.cardio ?? input.language !== 'c';
+      targets[target] = {
+        library: await copy(input.library, native),
+        dependencies,
+        linkLibraries,
+        runtime: {
+          cardio,
+          ...(cardio
+            ? {
+                cardioAbi: `muon-${muonPluginAbiVersion}-${muonPluginCardioHeaderSha256}-${target}`,
+              }
+            : {}),
+          ...(input.language === 'c'
+            ? {}
+            : {
+                cpp: descriptor.os === 'android' ? 'c++_shared' : 'libstdc++',
+              }),
+          ...(descriptor.os === 'android'
+            ? { ndk: muonPluginNdkVersion, androidApi: muonPluginAndroidApi }
+            : {}),
+        },
+      };
+    }
+    const manifest: PluginArtifactManifest = {
+      schemaVersion: 1,
+      abiVersion: muonPluginAbiVersion,
+      name: options.name,
+      functions: options.functions,
+      headers: await resources(options.headers ?? [], 'include'),
+      types: await resources(options.types ?? [], 'types'),
+      licenses: await resources(options.licenses ?? [], 'licenses'),
+      targets,
+    };
+    const path = join(output, 'muon-plugin.json');
+    await writeFile(path, JSON.stringify(manifest, null, 2) + '\n');
+    await readPluginArtifact(path, Object.keys(targets) as MuonPluginTarget[]);
+    await cp(output, destinationRoot, { recursive: true });
+    return join(destinationRoot, 'muon-plugin.json');
+  } finally {
+    await rm(output, { recursive: true, force: true });
   }
-  const manifest: PluginArtifactManifest = {
-    schemaVersion: 1,
-    abiVersion: muonPluginAbiVersion,
-    name: options.name,
-    functions: options.functions,
-    headers: await resources(options.headers ?? [], 'include'),
-    types: await resources(options.types ?? [], 'types'),
-    licenses: await resources(options.licenses ?? [], 'licenses'),
-    targets,
-  };
-  const path = join(output, 'muon-plugin.json');
-  await writeFile(path, JSON.stringify(manifest, null, 2) + '\n');
-  await readPluginArtifact(path, Object.keys(targets) as MuonPluginTarget[]);
-  return path;
 };

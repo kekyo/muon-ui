@@ -1,5 +1,12 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -7,6 +14,8 @@ import { afterEach, expect, it } from 'vitest';
 import {
   buildPlugin,
   createPluginProject,
+  getNativeBuildEnvironment,
+  inspectPluginBinary,
   readPluginArtifact,
 } from '../src/index.js';
 
@@ -15,6 +24,21 @@ const directories: string[] = [];
 afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
+});
+
+it('builds the generated Makefile directly with the exported SDK environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'muon-manual-make-'));
+  directories.push(root);
+  await createPluginProject({ directory: root, name: 'direct', language: 'c' });
+  await execute('make', ['-C', root], {
+    env: await getNativeBuildEnvironment({ target: 'linux-amd64' }),
+  });
+  const binary = await readFile(
+    join(root, '.muon-plugin/linux-amd64/direct.so')
+  );
+  expect(inspectPluginBinary(binary, 'linux-amd64').exports).toContain(
+    'muon_init_plugin'
+  );
 });
 
 it.each(['c', 'c++'] as const)(
@@ -174,11 +198,18 @@ it('uses a custom build with vendor sources without writing into the source tree
   );
   const configPath = join(root, 'muon-plugin.build.json');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
+  await mkdir(join(root, 'build-tools'));
+  await writeFile(
+    join(root, 'build-tools/compile'),
+    '#!/bin/sh\nexec gcc "$@"\n'
+  );
+  await chmod(join(root, 'build-tools/compile'), 0o755);
   config.build = {
     system: 'custom',
+    directory: 'build-tools',
     commands: [
       {
-        command: 'gcc',
+        command: './compile',
         args: [
           '-std=c99',
           '-fPIC',
@@ -194,6 +225,16 @@ it('uses a custom build with vendor sources without writing into the source tree
     ],
   };
   await writeFile(configPath, JSON.stringify(config));
+  const report = await execute(process.execPath, [
+    resolve('dist/cli.mjs'),
+    'doctor',
+    '--config',
+    configPath,
+    '--target',
+    'linux-amd64',
+    '--json',
+  ]);
+  expect(JSON.parse(report.stdout)).toEqual({ ready: true, issues: [] });
   const original = await readFile(external);
   const manifest = await buildPlugin({
     configPath,

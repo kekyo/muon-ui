@@ -1,5 +1,9 @@
 /** Functions exposed by the {{name}} native plugin through muon's bridge. */
 export interface {{name}}Plugin {
-  /** Adds one asynchronously to the supplied 32-bit integer. */
+  /**
+   * Adds one asynchronously to the supplied 32-bit integer.
+   * @param value - Input signed 32-bit integer.
+   * @returns The incremented value.
+   */
   increment(value: number): Promise<number>;
 }

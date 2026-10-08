@@ -1,0 +1,26 @@
+#include "muon_plugin_api.h"
+#include <stddef.h>
+
+static void increment(muon_completion_func completion, int32_t value) {
+  const int32_t result = value + 1;
+  completion(&result, NULL);
+}
+
+static const muon_type_descriptor i32 = { MUON_TYPE_I32, NULL };
+static const muon_plugin_function_metadata increment_metadata = {
+  "increment", (muon_native_function)increment, { 1, &i32, &i32 }, NULL
+};
+static const muon_plugin_function_metadata* const functions[] = { &increment_metadata, NULL };
+static const muon_plugin_namespace plugin_namespace = { "muon.{{name}}", NULL, functions };
+static const muon_plugin_namespace* const namespaces[] = { &plugin_namespace, NULL };
+static const muon_plugin_metadata metadata = { namespaces, NULL, NULL };
+
+/**
+ * Registers the plugin's static metadata.
+ * @param context Host helpers, borrowed for the loaded plugin lifetime.
+ * @return Metadata owned by this library until it is unloaded.
+ */
+MUON_PLUGIN_EXPORT const muon_plugin_metadata* muon_init_plugin(const muon_plugin_init_context* context) {
+  (void)context;
+  return &metadata;
+}

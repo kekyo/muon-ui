@@ -1,0 +1,5 @@
+# Set MUON_SDK, MUON_TARGET, CC, CXX and PKG_CONFIG_PATH with muon-plugin env.
+SOURCES := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))plugin.{{extension}}
+LANGUAGE := {{language}}
+OUTPUT ?= $(MUON_OUTPUT)
+include $(MUON_SDK)/make/plugin.mk

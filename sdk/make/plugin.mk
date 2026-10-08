@@ -8,7 +8,7 @@ MUON_STANDARD := $(if $(filter c,$(LANGUAGE)),c99,c++20)
 MUON_CFLAGS := $(shell pkg-config --cflags $(MUON_PACKAGE))
 MUON_LIBS := $(shell pkg-config --libs $(MUON_PACKAGE))
 comma := ,
-MUON_LOADER_FLAGS := $(if $(findstring windows-,$(MUON_TARGET)),,-Wl$(comma)-soname$(comma)$(notdir $(OUTPUT)))
+MUON_LOADER_FLAGS := $(if $(findstring windows-,$(MUON_TARGET)),,-Wl$(comma)-soname$(comma)$(notdir $(OUTPUT)) -Wl$(comma)-rpath$(comma)'$$ORIGIN')
 .PHONY: all
 all: $(OUTPUT)
 $(OUTPUT): $(SOURCES)

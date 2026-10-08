@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+project({{name}} LANGUAGES {{cmakeLanguage}})
+find_package(MuonPlugin CONFIG REQUIRED {{components}})
+add_library({{name}} SHARED plugin.{{extension}})
+target_link_libraries({{name}} PRIVATE Muon::{{cmakeTarget}})
+set_target_properties({{name}} PROPERTIES
+  C_STANDARD 99 C_STANDARD_REQUIRED YES
+  CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES
+  PREFIX "" OUTPUT_NAME "${MUON_PLUGIN_OUTPUT_NAME}"
+  LIBRARY_OUTPUT_DIRECTORY "${MUON_PLUGIN_OUTPUT_DIRECTORY}"
+  RUNTIME_OUTPUT_DIRECTORY "${MUON_PLUGIN_OUTPUT_DIRECTORY}"
+  ARCHIVE_OUTPUT_DIRECTORY "${MUON_PLUGIN_OUTPUT_DIRECTORY}/link"
+  BUILD_WITH_INSTALL_RPATH YES INSTALL_RPATH "$ORIGIN")

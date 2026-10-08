@@ -4,12 +4,20 @@
   "description": "Native C and C++ plugin development kit for muon-ui",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "muon-plugin": "./dist/cli.mjs"
+  },
   "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
+    },
+    "./artifact": {
+      "types": "./dist/types/artifact.d.ts",
+      "import": "./dist/artifact.mjs",
+      "require": "./dist/artifact.cjs"
     },
     "./package.json": "./package.json"
   },
@@ -33,6 +41,7 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "dependencies": {
+    "commander": ">=14.0.0",
     "funcity": "^1.5.0"
   },
   "devDependencies": {

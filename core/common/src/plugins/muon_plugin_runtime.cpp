@@ -2483,10 +2483,8 @@ static void CompleteMuonPluginStop(void* user_data) {
     return;
   }
   auto* impl = state->impl;
-  if (impl->services.is_owner_thread()) {
-    ContinueMuonPluginStop(impl);
-    return;
-  }
+  // Defer even on the owner thread so the plugin callback and its coroutine
+  // can return before a stop completion destroys the runtime and unloads it.
   if (!impl->services.post_owner_task(
           [impl]() { ContinueMuonPluginStop(impl); })) {
     LogMuonPluginRuntimeMessage(

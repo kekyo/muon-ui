@@ -118,6 +118,26 @@ static const muon_plugin_metadata* LoadDisallowedPackagedPlugin(
   return &beta_packaged_metadata;
 }
 
+static bool plugin_stop_callback_active = false;
+
+static void StopPluginWithActiveStack(
+    muon_plugin_stop_completion completion, void* user_data) {
+  plugin_stop_callback_active = true;
+  completion(user_data);
+  plugin_stop_callback_active = false;
+}
+
+static const muon_plugin_metadata stack_stop_metadata = {
+    beta_packaged_namespace_pointers,
+    &StopPluginWithActiveStack,
+    nullptr,
+};
+
+static const muon_plugin_metadata* LoadStackStopPlugin(
+    const muon_plugin_init_context*) {
+  return &stack_stop_metadata;
+}
+
 static MuonPluginRuntimeServices CreateRuntimeServices(
     cardio::dispatcher* dispatcher,
     std::thread::id owner_thread) {
@@ -246,6 +266,47 @@ static bool RunPackagedPluginStartupDiagnosticTests(
              "no allowed functions");
 }
 
+static bool RunPluginStopStackTest() {
+  auto host = cardio::dispatcher_host{};
+  auto services = CreateRuntimeServices(
+      cardio::unsafe_get_current_dispatcher(), std::this_thread::get_id());
+  services.open_library = [](const std::string&, std::string*) -> void* {
+    return reinterpret_cast<void*>(1);
+  };
+  services.find_symbol = [](void*, const char*) -> void* {
+    return reinterpret_cast<void*>(&LoadStackStopPlugin);
+  };
+  services.close_library = [](void*) {};
+  MuonPluginRuntimeLoadEntry plugin;
+  plugin.plugin = "stack-stop";
+  plugin.has_library_locator = true;
+  plugin.library_locator = "stack-stop";
+  auto error_message = std::string{};
+  if (!Expect(CreateMuonPluginPolicy(
+                  {"muon.test.beta.*"}, &plugin.plugin_policy,
+                  &error_message),
+              error_message)) {
+    return false;
+  }
+  auto runtime = std::make_shared<MuonPluginRuntime>(
+      std::filesystem::path{},
+      std::vector<MuonPluginRuntimeLoadEntry>{std::move(plugin)},
+      std::move(services));
+  if (!Expect(runtime->IsReady(), runtime->GetStartupError())) {
+    return false;
+  }
+  auto completed = false;
+  auto completed_inside_plugin = false;
+  runtime->Stop([&]() {
+    completed = true;
+    completed_inside_plugin = plugin_stop_callback_active;
+  });
+  host.park();
+  return Expect(completed, "plugin shutdown did not complete") &&
+         Expect(!completed_inside_plugin,
+                "runtime completed shutdown while the plugin stop callback was active");
+}
+
 static bool RunPortablePluginRuntimeTest() {
   auto group = cardio::dispatcher_group(
       cardio::exit_condition::exit_by_manual);
@@ -363,5 +424,5 @@ static bool RunPortablePluginRuntimeTest() {
 }
 
 int main() {
-  return RunPortablePluginRuntimeTest() ? 0 : 1;
+  return RunPluginStopStackTest() && RunPortablePluginRuntimeTest() ? 0 : 1;
 }

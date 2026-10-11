@@ -309,6 +309,16 @@ describe("Windows e2e paths", () => {
 });
 
 describe("Windows e2e CDP ports", () => {
+  it("preserves the shared agent listener when using another agent port", () => {
+    setWindowsRemoteContext(createFakeWindowsRemoteContext(39396, 39398));
+    try {
+      expect(allocateWindowsRemoteCdpPort()).toBe(39399);
+      expect(allocateWindowsRemoteCdpPort()).toBe(39400);
+    } finally {
+      clearWindowsRemoteContext();
+    }
+  });
+
   it("skips the agent-rover port when allocating remote CDP relay ports", () => {
     setWindowsRemoteContext(createFakeWindowsRemoteContext(39396, 39397));
     try {

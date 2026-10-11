@@ -1011,10 +1011,18 @@ $ErrorActionPreference = 'Stop'
 $heartbeatPath = ${quoteWindowsPowerShellLiteral(heartbeatPath)}
 $marker = ${quoteWindowsPowerShellLiteral(marker)}
 while ($true) {
-  [IO.File]::AppendAllText(
-    $heartbeatPath,
-    ($marker + ':' + [string]$PID + [Environment]::NewLine)
-  )
+  try {
+    [IO.File]::AppendAllText(
+      $heartbeatPath,
+      ($marker + ':' + [string]$PID + [Environment]::NewLine)
+    )
+  } catch {
+    # agent-rover reads briefly deny writes. Retry ERROR_SHARING_VIOLATION
+    # on the next heartbeat without hiding other fixture failures.
+    if (($_.Exception.GetBaseException().HResult -band 0xffff) -ne 32) {
+      throw
+    }
+  }
   Start-Sleep -Milliseconds 100
 }
 `;
@@ -1101,10 +1109,18 @@ $heartbeatPath = ${quoteWindowsPowerShellLiteral(heartbeatPath)}
 $marker = ${quoteWindowsPowerShellLiteral(marker)}
 ${streamSetupScript}
 while ($true) {
-  [IO.File]::AppendAllText(
-    $heartbeatPath,
-    ($marker + ':' + [string]$PID + ':grandchild:' + [string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) + [Environment]::NewLine)
-  )
+  try {
+    [IO.File]::AppendAllText(
+      $heartbeatPath,
+      ($marker + ':' + [string]$PID + ':grandchild:' + [string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) + [Environment]::NewLine)
+    )
+  } catch {
+    # agent-rover reads briefly deny writes. Retry ERROR_SHARING_VIOLATION
+    # on the next heartbeat without hiding other fixture failures.
+    if (($_.Exception.GetBaseException().HResult -band 0xffff) -ne 32) {
+      throw
+    }
+  }
   Write-ExecutorStream $stdout ($marker + ':grandchild:stdout' + [Environment]::NewLine)
   Write-ExecutorStream $stderr ($marker + ':grandchild:stderr' + [Environment]::NewLine)
   Start-Sleep -Milliseconds 50

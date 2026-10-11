@@ -4552,6 +4552,8 @@ export const runBuiltinFsAdditionalOperations = async (
     symlink: {
       error: string;
       lstatType: string;
+      statType: string;
+      direntType: string;
       supported: boolean;
       symbolicLink: boolean;
       readlinkBasename: string;
@@ -4738,6 +4740,8 @@ export const runBuiltinFsAdditionalOperations = async (
     let symlink = {
       error: "",
       lstatType: "",
+      statType: "",
+      direntType: "",
       supported: false,
       symbolicLink: false,
       readlinkBasename: "",
@@ -4746,12 +4750,16 @@ export const runBuiltinFsAdditionalOperations = async (
     const symlinkError = await rejection(async () => {
       await window.muon.fs.symlink(renamedPath, linkPath, "file");
       const linkStat = await window.muon.fs.lstat(linkPath);
+      const targetStat = await window.muon.fs.stat(linkPath);
+      const entries = await window.muon.fs.readdir(rootPath, { withFileTypes: true });
       const readlinkTarget = await window.muon.fs.readlink(linkPath);
       const realpath = await window.muon.fs.realpath(linkPath);
       const linkedText = await window.muon.fs.readTextFile(realpath, "utf8");
       symlink = {
         error: "",
         lstatType: linkStat.type,
+        statType: targetStat.type,
+        direntType: entries.find((entry) => entry.name === "link.txt")?.type ?? "",
         supported: true,
         symbolicLink: linkStat.isSymbolicLink(),
         readlinkBasename: basename(readlinkTarget),
@@ -4935,6 +4943,8 @@ export const runBuiltinFsAdditionalOperations = async (
     expect(values.symlink).toEqual({
       error: "",
       lstatType: "symlink",
+      statType: "file",
+      direntType: "symlink",
       supported: true,
       symbolicLink: true,
       readlinkBasename: "renamed.txt",
@@ -5232,7 +5242,7 @@ export const runBuiltinFsFileUriOperations = async (
   });
   expect(values.partial).toEqual([0, 1, 9, 9, 4]);
   if (values.symlink.supported) {
-    expect(values.symlink).toEqual({
+    expect(values.symlink, JSON.stringify(values.symlink)).toEqual({
       error: "",
       lstatType: "symlink",
       supported: true,

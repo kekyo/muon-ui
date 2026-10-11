@@ -16,6 +16,7 @@
 #include <chrono>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
 #if defined(_WIN32)
@@ -217,6 +218,7 @@ std::string PathToUtf8String(const std::filesystem::path& path) {
 #endif
 }
 
+#if !defined(_WIN32)
 static int64_t FileTimeToUnixMillis(
     std::filesystem::file_time_type file_time) {
   const auto system_time = std::chrono::time_point_cast<
@@ -254,6 +256,7 @@ static bool IsReadonly(std::filesystem::perms permissions) {
       std::filesystem::perms::others_write;
   return (permissions & write_permissions) == std::filesystem::perms::none;
 }
+#endif
 
 static std::string FilesystemErrorMessage(const std::error_code& error) {
 #if defined(_WIN32)
@@ -284,6 +287,7 @@ void ThrowIfNotRegularFile(const std::filesystem::path& path,
   }
 }
 
+#if !defined(_WIN32)
 static uintmax_t ReadFileSize(const std::filesystem::path& path,
                               const std::filesystem::file_status& status) {
   if (!std::filesystem::is_regular_file(status)) {
@@ -294,9 +298,56 @@ static uintmax_t ReadFileSize(const std::filesystem::path& path,
   ThrowFilesystemError("file_size", path, error);
   return size;
 }
+#endif
 
 std::string CreateStatusJson(const std::filesystem::path& path,
                              bool follow_symlink) {
+#if defined(_WIN32)
+  // Query the opened object so lstat and directory entries describe the link
+  // itself, including dangling links, while stat describes its target.
+  const auto flags = FILE_FLAG_BACKUP_SEMANTICS |
+                     (follow_symlink ? 0 : FILE_FLAG_OPEN_REPARSE_POINT);
+  const auto raw_handle = CreateFileW(
+      path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr, OPEN_EXISTING, flags, nullptr);
+  if (raw_handle == INVALID_HANDLE_VALUE) {
+    ThrowFilesystemError(
+        "stat", path, std::error_code(GetLastError(), std::system_category()));
+  }
+  const auto handle = std::unique_ptr<void, decltype(&CloseHandle)>(
+      raw_handle, &CloseHandle);
+  auto information = BY_HANDLE_FILE_INFORMATION{};
+  if (!GetFileInformationByHandle(handle.get(), &information)) {
+    ThrowFilesystemError(
+        "stat", path, std::error_code(GetLastError(), std::system_category()));
+  }
+  auto is_symlink = false;
+  if (!follow_symlink &&
+      (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    auto tag = FILE_ATTRIBUTE_TAG_INFO{};
+    if (!GetFileInformationByHandleEx(
+            handle.get(), FileAttributeTagInfo, &tag, sizeof(tag))) {
+      ThrowFilesystemError(
+          "stat", path, std::error_code(GetLastError(), std::system_category()));
+    }
+    is_symlink = tag.ReparseTag == IO_REPARSE_TAG_SYMLINK ||
+                 tag.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT;
+  }
+  const auto is_directory =
+      (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  const auto type = is_symlink ? "symlink" : is_directory ? "directory" : "file";
+  const auto size = is_symlink || is_directory
+                        ? uint64_t{0}
+                        : (uint64_t{information.nFileSizeHigh} << 32) |
+                              information.nFileSizeLow;
+  const auto file_time =
+      (uint64_t{information.ftLastWriteTime.dwHighDateTime} << 32) |
+      information.ftLastWriteTime.dwLowDateTime;
+  const auto mtime_ms = static_cast<int64_t>(file_time / 10000) -
+                        int64_t{11644473600000};
+  const auto readonly =
+      (information.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
+#else
   std::error_code error;
   const auto status = follow_symlink ? std::filesystem::status(path, error)
                                      : std::filesystem::symlink_status(path,
@@ -308,21 +359,32 @@ std::string CreateStatusJson(const std::filesystem::path& path,
   const auto size = ReadFileSize(path, status);
   const auto last_write_time = std::filesystem::last_write_time(path, error);
   ThrowFilesystemError("last_write_time", path, error);
+  const auto type = FileTypeName(status.type());
+  const auto mtime_ms = FileTimeToUnixMillis(last_write_time);
+  const auto readonly = IsReadonly(status.permissions());
+#endif
 
   auto result = std::string("{\"type\":");
-  AppendJsonString(&result, FileTypeName(status.type()));
+  AppendJsonString(&result, type);
   result += ",\"size\":";
   result += std::to_string(size);
   result += ",\"mtimeMs\":";
-  result += std::to_string(FileTimeToUnixMillis(last_write_time));
+  result += std::to_string(mtime_ms);
   result += ",\"readonly\":";
-  result += IsReadonly(status.permissions()) ? "true" : "false";
+  result += readonly ? "true" : "false";
   result += "}";
   return result;
 }
 
 std::string CreateDirentJson(
     const std::filesystem::directory_entry& entry) {
+#if defined(_WIN32)
+  auto result = std::string("{\"name\":");
+  AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
+  result += ",";
+  result += CreateStatusJson(entry.path(), false).substr(1);
+  return result;
+#else
   std::error_code error;
   const auto status = entry.symlink_status(error);
   ThrowFilesystemError("stat", entry.path(), error);
@@ -340,6 +402,7 @@ std::string CreateDirentJson(
   result += IsReadonly(status.permissions()) ? "true" : "false";
   result += "}";
   return result;
+#endif
 }
 
 static bool ReadOptionalBool(yyjson_val* object,

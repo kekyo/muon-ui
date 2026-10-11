@@ -2316,12 +2316,34 @@ static cardio::promise<std::string> RealpathAsync(
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        std::error_code error;
         const auto target = CreateLocalFilesystemPath(path);
-        const auto canonical = std::filesystem::canonical(target, error);
-        ThrowFilesystemError("realpath", target, error);
+        // Resolve the opened target, including Windows reparse points, before
+        // removing the NT path prefix from the public filesystem result.
+        auto file = MuonFsFile(CreateFileW(
+            target.c_str(), 0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        if (!file.IsOpen()) {
+          ThrowWindowsFilesystemError("realpath", target, GetLastError());
+        }
+        auto canonical = std::wstring(MAX_PATH, L'\0');
+        while (true) {
+          const auto length = GetFinalPathNameByHandleW(
+              file.handle, canonical.data(),
+              static_cast<DWORD>(canonical.size()),
+              FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+          if (length == 0) {
+            ThrowWindowsFilesystemError("realpath", target, GetLastError());
+          }
+          if (length < canonical.size()) {
+            canonical.resize(length);
+            break;
+          }
+          canonical.resize(length);
+        }
         cancellation.throw_if_cancellation_requested();
-        return PathToUtf8String(canonical);
+        return PathToUtf8String(std::filesystem::path(
+            StripWindowsNtPathPrefix(std::move(canonical))));
       });
 }
 

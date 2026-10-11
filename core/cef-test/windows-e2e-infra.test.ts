@@ -3,9 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import type {
@@ -33,6 +33,7 @@ import {
 } from "./plugin-e2e/windows-context.js";
 import {
   cleanupWindowsStagedRuntimeProcesses,
+  stageWindowsRuntime,
   stageWindowsRuntimeDirectory,
 } from "./plugin-e2e/windows-staging.js";
 
@@ -327,6 +328,49 @@ describe("Windows e2e staging", () => {
     debugRuntimeDirectory,
     releaseRuntimeDirectory,
   ] as const;
+
+  it("finds repository-relative runtimes from the nested test workspace", async () => {
+    const repository = resolve("../..");
+    const localDirectory = await mkdtemp(
+      join(repository, ".windows-staging-test-"),
+    );
+    const staged = new Error("Runtime upload observed");
+    const agent = {
+      processes: { list: async () => [] },
+      files: {
+        syncDirectory: async (options: RemoteDirectorySyncOptions) => {
+          expect(
+            await readFile(join(options.localPath, "muon-core.exe"), "utf8"),
+          ).toBe("runtime from the repository root");
+          throw staged;
+        },
+      },
+    } as unknown as RemoteAgent;
+    try {
+      await writeFile(
+        join(localDirectory, "muon-core.exe"),
+        "runtime from the repository root",
+      );
+      await expect(
+        stageWindowsRuntime(
+          agent,
+          {
+            host: "windows.test",
+            httpHost: "linux.test",
+            port: 39397,
+            token: "test-token",
+            workDir: String.raw`C:\muon-e2e`,
+          },
+          {
+            ...resolveWindowsRuntimeTarget("windows-i686"),
+            debugRuntimeDirectory: relative(repository, localDirectory),
+          },
+        ),
+      ).rejects.toBe(staged);
+    } finally {
+      await rm(localDirectory, { recursive: true, force: true });
+    }
+  });
 
   it("terminates stale processes that can hold staged runtime files", async () => {
     const fake = createFakeStagingAgent([

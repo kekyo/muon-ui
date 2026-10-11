@@ -362,12 +362,12 @@ export const stageWindowsRuntime = async (
 
   await stageWindowsRuntimeDirectory(
     agent,
-    resolve("..", target.debugRuntimeDirectory),
+    resolve("../..", target.debugRuntimeDirectory),
     debugRuntimeDirectory,
   );
   await stageWindowsRuntimeDirectory(
     agent,
-    resolve("..", target.releaseRuntimeDirectory),
+    resolve("../..", target.releaseRuntimeDirectory),
     releaseRuntimeDirectory,
   );
   const { nodeExpressProjectDirectory, nodeProjectDirectory } =

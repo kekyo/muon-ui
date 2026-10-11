@@ -12,8 +12,6 @@ CEFをバックエンドで使用する、マルチプラットフォームGUI�
 
 [(English language is here)](./README.md)
 
-AndroidではWebViewを使い、Webアセットを内蔵したdebug APKと署名済みrelease APKを生成できます。Linux x64からのビルドに対応し、通常のアプリ開発にNDK/CMakeは不要です。導入、署名、対応範囲は[Androidアプリのビルド・配布](./docs/ja/android.md)を参照してください。以下のCEF、HMR、ネットワークフィルターの説明はdesktop版を対象とします。
-
 ## これは何?
 
 あなたは、古くなってしまったネイティブGUIアプリケーションを、どうにかして最新のモダン化されたアプリケーションに更新したいと考えたことはありますか？

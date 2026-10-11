@@ -239,3 +239,29 @@ Windowsのファイル操作では、`lstat`がリンクを通常ファイルと
 最新のコード`b762c69`を含む[GitHub CIの実行38107931779](https://github.com/kekyo/muon-ui/actions/runs/38107931779)は、Build and testとCodeQLの3言語の計4ジョブすべてが成功した。ルート全体テスト、Linux・Windowsの独立SDK検証、Android arm64のコンパイル、16 KiBエミュレーターでのAndroidランタイム・QuickJS版・配布APKの検証を通過した。独立したNPM利用アプリも、CEFとAndroidでコンパイラーなしの生成、Playwright MCPによる関数呼出し、不正カタログの拒否が成功した。CIログは`.run/plan9-followup/ci-final.log`に保存した。
 
 追加検証の完了条件を照合し、すべて満たした。10月8日時点で残っていたLinux ARMのCMake、Windows実機の画面操作、GitHub CIの実行確認は完了した。修正を6コミットに分けてfeature/plan9へpushし、外部コードの変更、mainへのマージ、NPM公開は行っていない。
+
+### agent-rover 0.8.0への更新と実機再検証
+
+追加指示に従い、CEFテストとUIのagent-rover依存を0.8.0へ更新した。完了条件は、両workspaceで0.8.0が解決されること、Windows i686・amd64の実機E2Eとルート全体テストが成功することとする。接続が使用中の場合は、0.8.0の再接続待機を使う。
+
+デーモンの生存確認用ファイルでは、agent-roverによる読み取りとPowerShellの追記が競合し、共有違反で子プロセスが終了する問題を再現した。[0.8.0のファイル読み取り処理](https://github.com/kekyo/agent-rover/blob/0.8.0/agents/windows/win32_files.cpp)は、通常の読み取り中に他の書き込みを許可しない。テスト用プロセスでERROR_SHARING_VIOLATIONだけを次の生存通知時に再試行するようにし、それ以外の例外は引き続き失敗とする。修正前の失敗と、修正後のデーモン関連5件の成功を確認した。ログは`.run/agent-rover-0.8.0/heartbeat-lock-red.log`と`windows-daemon-green.log`に保存した。
+
+実機テスト中に[agent-rover 0.8.0](https://github.com/kekyo/agent-rover/tree/0.8.0)の接続が切れ、ネイティブホストが再起動する問題が発生した。agent-roverにアドホック修正を加えて回避し、Muonの実機検証を継続した。
+
+ルート全体テストでは、Linuxのテスト後処理が`/proc`の一覧取得中に終了済みプロセスを参照し、`lstat`のENOENTで失敗した。[Node.jsの処理](https://github.com/nodejs/node/blob/v24.15.0/lib/internal/fs/utils.js)を確認し、一覧取得では名前だけを読み、プロセスごとの確認時に消失を扱うようにした。失敗した終了処理テストは修正後に成功し、`d7fe807`へコミットした。
+
+修正版でのi686全件実行は、agentの再起動なく177件が成功したが、CDP中継のポート確保で1件が失敗した。中継用の連番ポートが、稼働中の共有agentの39397番と衝突していた。接続先を別ポートにした場合も既定ポートを確保しておく回帰テストを追加し、失敗を確認した。両方のagent用ポートを除外すると、Windowsテスト基盤の18件が成功した。修正は`9418091`へコミットし、ログは`cdp-port-{red,green}.log`へ保存した。
+
+検証用agentのログを分けるためにAPPDATAを変更した試行では、NSISのショートカット確認先も変わり、テストが失敗した。これは検証環境の設定に原因があったため、Windows本来のAPPDATAを引き継いで再実行した。NSISの2件が成功し、インストールとWindowsの設定画面からのアンインストールを確認した。ログは`nsis-fixed-green.log`へ保存した。
+
+続くi686全件実行では177件が成功したが、ポップアップの生存確認1件が失敗した。遷移先URLを持つCDP対象へ接続した直後、本文側はまだ`about:blank`だった。個別のテストで本文のURLを待つと成功したが、amd64の全件実行では逆にポップアップだけを閉じるテストが失敗した。終了要求後も対象が残り、待機がタイムアウトしていた。修正前のログは`windows-popup-red.log`と`windows-popup-close-red.log`へ保存した。
+
+ポップアップの準備が終わる前に操作を始めていたため、個別テストへの修正では不足すると判断した。共通の起動処理で本文のURLと[読込み状態](https://html.spec.whatwg.org/multipage/dom.html#dom-document-readystate)が揃うまで[条件付きで待機](https://vitest.dev/api/expect.html#poll)するようにし、個別の待機処理は元へ戻した。メイン画面を閉じる2通りと、ポップアップを閉じる1通りが、i686・amd64の両方で成功した。ログは`popup-family-{i686,amd64}-green.log`へ保存し、修正は`8c75238`へコミットした。
+
+NPMドライバー0.8.0とアドホック修正版のネイティブagentを使い、最新コード`8c75238`のWindows実機E2Eを実行した。i686・amd64のどちらも178件が成功し、29件をスキップして終了コード0で完了した。ログは`.run/agent-rover-0.8.0/windows-fixed-final.log`へ保存した。
+
+2026年10月11日21時19分（日本時間）に実機を解放した。その後、実機接続用の環境変数を除いた状態でルート全体テストを再実行した。今後は実機でのテストが終わった時点で利用枠を解放し、ホスト側のテストと記録作業を続ける。
+
+最終のルート`npm test`は終了コード0で完了した。VitestはSDK15、Android56、Android PoC3、Node40、UI354、CEF211の計679件が成功した。UIの実機用2件は接続設定を外したためスキップしたが、解放前のNSIS検証で両方の成功を確認済みである。CEFの26件は設定上のスキップである。共通C/C++の4件、CEFネイティブの42件、builderの検証、Android両ABIのDebug・Release生成と配布物検査も成功した。ログは`.run/agent-rover-0.8.0/all-tests-local-final.log`へ保存した。
+
+両workspaceのNPM依存は0.8.0で解決され、アドホック修正版を使ったWindows両CPUの実機E2Eと、Muonのルート全体テストが成功した。Muonの修正は`feature/plan9`へコミットした。後日agent-roverのバージョンを更新し、Windows両CPUの実機E2Eを改めて実施する。

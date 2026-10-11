@@ -259,6 +259,31 @@ static bool RunPortablePluginRuntimeTest() {
     return false;
   }
 
+  auto services = CreateRuntimeServices(dispatcher, owner_thread);
+  services.platform_adapter =
+      std::make_shared<MuonPluginRuntimePlatformAdapter>();
+  services.platform_adapter->initialize = [](
+      const muon_plugin_init_context*,
+      MuonPluginRuntimePlatformInitialization*, std::string*) {
+    return true;
+  };
+  services.platform_adapter->shutdown = []() {};
+  MuonPluginRuntimePlatformFunction platform_function;
+  platform_function.js_name = "ready";
+  platform_function.public_name = "ready";
+  platform_function.route_id = 1;
+  services.platform_adapter->namespaces.push_back(
+      {"muon.test.platform", "", {platform_function}});
+  MuonPluginRuntimeLoadEntry internal;
+  internal.plugin = "internal";
+  auto error_message = std::string{};
+  if (!Expect(CreateMuonPluginPolicy(
+                  {"muon.test.platform.*"}, &internal.plugin_policy,
+                  &error_message),
+              error_message)) {
+    return false;
+  }
+
   MuonPluginRuntimeLoadEntry plugin;
   plugin.plugin = "muon_test_plugin_alpha";
   plugin.plugin_policy = policy;
@@ -268,8 +293,8 @@ static bool RunPortablePluginRuntimeTest() {
   {
     auto mismatch = std::make_shared<MuonPluginRuntime>(
         std::filesystem::path(MUON_TEST_PLUGIN_DIRECTORY),
-        std::vector<MuonPluginRuntimeLoadEntry>{plugin},
-        CreateRuntimeServices(dispatcher, owner_thread));
+        std::vector<MuonPluginRuntimeLoadEntry>{internal, plugin},
+        services);
     if (!Expect(!mismatch->IsReady(), "producer catalog mismatch was accepted") ||
         !Expect(mismatch->GetStartupError().find("catalog mismatch") != std::string::npos,
                 "producer catalog mismatch diagnostic is missing")) {
@@ -281,11 +306,11 @@ static bool RunPortablePluginRuntimeTest() {
                                    "muon.test.alpha.alphaConfig"};
   auto runtime = std::make_shared<MuonPluginRuntime>(
       std::filesystem::path(MUON_TEST_PLUGIN_DIRECTORY),
-      std::vector<MuonPluginRuntimeLoadEntry>{std::move(plugin)},
-      CreateRuntimeServices(dispatcher, owner_thread));
+      std::vector<MuonPluginRuntimeLoadEntry>{internal, std::move(plugin)},
+      std::move(services));
   if (!Expect(runtime->IsReady(), runtime->GetStartupError()) ||
-      !Expect(runtime->GetFunctions().size() == 3,
-              "portable runtime did not expose the alpha plugin")) {
+      !Expect(runtime->GetFunctions().size() == 4,
+              "portable runtime did not expose the platform route and alpha plugin")) {
     return false;
   }
 

@@ -5890,25 +5890,13 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         timeoutMs: cdpCommandTimeoutMs,
       });
 
-      // The target list can report the destination before the popup document
-      // leaves about:blank. Close the main browser only after navigation commits.
-      await expect
-        .poll(
-          async () => {
-            if (popupDriver === undefined) {
-              throw new Error("Popup CDP driver is unavailable");
-            }
-            const result = await evaluateWithWindowsCdpReconnect<string>(
-              popupDriver,
-              popupTarget.id,
-              "document.location.href",
-            );
-            popupDriver = result.driver;
-            return result.value;
-          },
-          { timeout: targetTimeoutMs },
-        )
-        .toBe(MUON_APP_URL);
+      const initialPopupHref = await evaluateWithWindowsCdpReconnect<string>(
+        popupDriver,
+        popupTarget.id,
+        "document.location.href",
+      );
+      popupDriver = initialPopupHref.driver;
+      expect(initialPopupHref.value).toBe(MUON_APP_URL);
       driver = await requestBrowserClose(driver);
       driver?.close();
       driver = undefined;

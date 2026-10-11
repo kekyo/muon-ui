@@ -1977,11 +1977,34 @@ export const openPopupTarget = async (
   if (response.exceptionDetails !== undefined) {
     throw new Error("popup open script failed");
   }
-  return await waitForNewPageTarget(
+  const target = await waitForNewPageTarget(
     previousTargetIds,
     targetTimeoutMs,
     (target) => target.url === url,
   );
+  // CDP can list the destination while the popup still owns its initial
+  // about:blank context. Actions scheduled there are lost when it navigates.
+  // Wait for the actual document before callers inspect or close the popup.
+  await expect
+    .poll(
+      async () => {
+        const popupDriver = await connectToMuonCdp({
+          port: MUON_PORT,
+          targetId: target.id,
+          timeoutMs: targetTimeoutMs,
+        });
+        try {
+          return await popupDriver.evaluate<{ href: string; state: string }>(
+            "({ href: document.location.href, state: document.readyState })",
+          );
+        } finally {
+          popupDriver.close();
+        }
+      },
+      { timeout: targetTimeoutMs },
+    )
+    .toEqual({ href: url, state: "complete" });
+  return target;
 };
 
 export const addPopupSizeFeatures = (features: string): string => {

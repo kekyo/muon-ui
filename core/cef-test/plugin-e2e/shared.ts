@@ -5,6 +5,10 @@
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
+  launchWindowsTestProcess,
+  type WindowsTestProcess,
+} from "./windows-agent.js";
+import {
   access as nodeAccess,
   appendFile as nodeAppendFile,
   chmod as nodeChmod,
@@ -542,7 +546,7 @@ export interface RunningWindowsRemoteMuon {
   cdpPort: number;
   configPath: string;
   configDirectory: string;
-  muonProcess: RemoteManagedProcess;
+  muonProcess: WindowsTestProcess;
   relayProcess: RemoteManagedProcess;
   relayProcessId: number;
   runId: number;
@@ -2664,7 +2668,7 @@ const writeWindowsRemoteArtifactText = async (
 const writeWindowsRemoteManagedProcessArtifacts = async (
   directory: string,
   prefix: string,
-  process: RemoteManagedProcess,
+  process: WindowsTestProcess,
 ): Promise<void> => {
   try {
     await writeWindowsRemoteArtifactText(
@@ -2979,7 +2983,7 @@ const startWindowsRemoteMuon = async (
   );
   const cdpPort = allocateWindowsRemoteCdpPort();
   let relay: RunningWindowsRemoteCdpRelay | undefined = undefined;
-  let launched: RemoteManagedProcess;
+  let launched: WindowsTestProcess;
   try {
     relay = await runOperationWithTimeout(
       "Windows CDP relay start",
@@ -2991,17 +2995,17 @@ const startWindowsRemoteMuon = async (
       "Windows remote muon launch",
       windowsRemoteAgentOperationTimeoutMs,
       async () =>
-        await context.agent.processes.launchManaged({
-          arguments: ["-c", configPath],
-          captureStderr: true,
-          captureStdout: true,
-          environment: createWindowsRemoteEnvironment(options.environment),
-          // Daemon lifecycle tests disable the outer job so descendants can
-          // break away and remain observable after Muon exits.
-          killTreeOnRelease: options.killTreeOnRelease,
-          path: executable,
-          workingDirectory: directory,
-        }),
+        await launchWindowsTestProcess(
+          context.agent,
+          {
+            arguments: ["-c", configPath],
+            environment: createWindowsRemoteEnvironment(options.environment),
+            path: executable,
+            workingDirectory: directory,
+          },
+          configDirectory,
+          options.killTreeOnRelease,
+        ),
     );
   } catch (error) {
     if (relay !== undefined) {

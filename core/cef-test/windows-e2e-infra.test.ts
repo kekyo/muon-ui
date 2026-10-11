@@ -108,17 +108,6 @@ const createFakeStagingAgent = (
 };
 
 describe("Windows e2e environment", () => {
-  it("ignores retired explicit agent connection variables", () => {
-    expect(
-      resolveWindowsE2eEnvironment({
-        MUON_E2E_REMOTE_WINDOWS: "1",
-        AGENT_ROVER_WIN11_HOST: "unused.test",
-        AGENT_ROVER_WIN11_TOKEN: "unused-token",
-        AGENT_ROVER_WIN11_PORT: "invalid",
-        AGENT_ROVER_WIN11_WORK_DIR: String.raw`D:\unused`,
-      }),
-    ).toEqual(resolveWindowsE2eEnvironment({ MUON_E2E_REMOTE_WINDOWS: "1" }));
-  });
   it("uses the default agent section without host or token variables", () => {
     expect(
       resolveWindowsE2eEnvironment({ MUON_E2E_REMOTE_WINDOWS: "1" }),
@@ -153,8 +142,7 @@ describe("Windows e2e environment", () => {
   it("skips remote execution when the Windows e2e flag is missing", () => {
     expect(
       resolveWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_TOKEN: "token",
+        MUON_E2E_AGENT_SECTION: "vm",
       }),
     ).toEqual({
       reason: "MUON_E2E_REMOTE_WINDOWS is not set",

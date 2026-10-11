@@ -61,7 +61,8 @@ $(OUT_DIR)/sha2.o: $(SHA2_SOURCE_DIR)/sha2.c $(SHA2_SOURCE_DIR)/sha2.h
 
 $(OUT_DIR)/yyjson.o: $(YYJSON_SOURCE_DIR)/yyjson.c $(YYJSON_SOURCE_DIR)/yyjson.h
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
+	# yyjson's floating-point lookup table is unused on x87 targets.
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-unused-const-variable -c -o "$@" "$<"
 
 $(OUT_DIR)/launcher_progress.o: src/launcher_progress.c src/launcher_progress.h src/prepare_progress.h
 	mkdir -p "$(OUT_DIR)"

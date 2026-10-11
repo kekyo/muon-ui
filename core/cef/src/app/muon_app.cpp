@@ -207,6 +207,7 @@ static void AppendMuonConfigPathArguments(
   }
 }
 
+#if defined(OS_LINUX)
 static std::string TrimAsciiWhitespace(std::string value) {
   auto begin = size_t{0};
   while (begin < value.size() &&
@@ -269,6 +270,7 @@ static void AppendSwitchWithAsciiValue(CefRefPtr<CefCommandLine> command_line,
   cef_value.FromString(value);
   command_line->AppendSwitchWithValue(switch_name, cef_value);
 }
+#endif
 
 static void ConfigureMuonCefLinuxDisplayCommandLine(
     CefRefPtr<CefCommandLine> command_line) {

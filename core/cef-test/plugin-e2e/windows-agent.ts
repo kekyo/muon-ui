@@ -10,7 +10,7 @@ import {
   type RemoteManagedProcess,
 } from "agent-rover";
 
-import type { WindowsE2eEnvironment } from "./windows-environment.js";
+import type { WindowsE2eEnvironment } from "../../../scripts/windows-e2e-environment.js";
 import { joinWindowsPath } from "./windows-context.js";
 
 /** Process operations used by the Windows runtime tests. */
@@ -127,8 +127,6 @@ export const connectWindowsAgent = async (
   config: WindowsE2eEnvironment,
 ): Promise<RemoteAgent> =>
   await connectRemoteAgent({
-    authToken: config.token,
-    host: config.host,
-    port: config.port,
+    section: config.section,
     timeoutMs: WINDOWS_AGENT_CONNECTION_TIMEOUT_MS,
   });

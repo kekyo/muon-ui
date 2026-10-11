@@ -12,7 +12,7 @@ import { promisify } from "node:util";
 
 import type { RemoteAgent } from "agent-rover";
 
-import type { WindowsE2eEnvironment } from "./windows-environment.js";
+import type { WindowsE2eEnvironment } from "../../../scripts/windows-e2e-environment.js";
 import type { WindowsRuntimeTarget } from "./windows-matrix.js";
 import {
   joinWindowsPath,

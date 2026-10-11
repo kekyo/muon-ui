@@ -76,7 +76,6 @@ import {
 import {
   appendWindowsRemoteFile,
   applyWindowsRemoteProcessSnapshot,
-  allocateWindowsRemoteCdpPort,
   createFallbackWindowsRemoteTempDirectory,
   createWindowsRemoteProcessHandle,
   dirnameWindowsPath,
@@ -2865,69 +2864,69 @@ export const cleanupWindowsRemoteTestProcesses = async (): Promise<void> => {
   }
 };
 
-const startWindowsRemoteCdpRelay = async (
-  configDirectory: string,
-  runId: number,
-  cdpPort: number,
-): Promise<RunningWindowsRemoteCdpRelay> => {
-  const context = requireWindowsRemoteContext();
-  const processInfo = await runOperationWithTimeout(
-    "Windows CDP relay launch",
-    windowsRemoteAgentOperationTimeoutMs,
-    async () =>
-      await context.agent.processes.launchManaged({
-        arguments: [String(cdpPort), String(MUON_PORT)],
-        captureStderr: true,
-        captureStdout: true,
-        createNoWindow: true,
-        path: context.runtime.relayExecutablePath,
-        workingDirectory: join(context.runtime.relayExecutablePath, ".."),
-      }),
-  );
-  try {
-    await delay(250);
-    const snapshot = await runOperationWithTimeout(
-      "Windows CDP relay snapshot",
-      windowsRemoteProcessOperationTimeoutMs,
-      async () => await processInfo.rootSnapshot(),
+const startWindowsRemoteCdpRelay =
+  async (): Promise<RunningWindowsRemoteCdpRelay> => {
+    const context = requireWindowsRemoteContext();
+    const processInfo = await runOperationWithTimeout(
+      "Windows CDP relay launch",
+      windowsRemoteAgentOperationTimeoutMs,
+      async () =>
+        await context.agent.processes.launchManaged({
+          arguments: ["0", String(MUON_PORT)],
+          captureStderr: true,
+          captureStdout: true,
+          createNoWindow: true,
+          path: context.runtime.relayExecutablePath,
+          workingDirectory: join(context.runtime.relayExecutablePath, ".."),
+        }),
     );
-    if (!snapshot.running) {
-      const stderr = await runOperationWithTimeout(
-        "Windows CDP relay stderr",
-        windowsRemoteProcessOperationTimeoutMs,
-        async () => await processInfo.stderrText(),
-      );
-      throw new Error(
-        `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
-      );
-    }
-    return { cdpPort, process: processInfo };
-  } catch (error) {
     try {
-      await runOperationWithTimeout(
-        "Windows CDP relay kill after launch failure",
-        windowsRemoteProcessOperationTimeoutMs,
-        async () => {
-          await processInfo.kill();
-        },
-      );
-    } catch {
-      // The relay may already be closed.
+      let cdpPort = 0;
+      await expect
+        .poll(
+          async () => {
+            const stdout = await processInfo.stdoutText();
+            const match = /^MUON_CDP_RELAY_PORT=(\d+)$/m.exec(stdout.trim());
+            if (match !== null) {
+              cdpPort = Number(match[1]);
+              return cdpPort > 0 && cdpPort <= 65535;
+            }
+            if (!(await processInfo.rootSnapshot()).running) {
+              throw new Error(await processInfo.stderrText());
+            }
+            return false;
+          },
+          { timeout: windowsRemoteProcessOperationTimeoutMs },
+        )
+        .toBe(true);
+      context.cdpPort = cdpPort;
+      return { cdpPort, process: processInfo };
+    } catch (error) {
+      try {
+        await runOperationWithTimeout(
+          "Windows CDP relay kill after launch failure",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await processInfo.kill();
+          },
+        );
+      } catch {
+        // The relay may already be closed.
+      }
+      try {
+        await runOperationWithTimeout(
+          "Windows CDP relay release after launch failure",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await processInfo.releaseAsync();
+          },
+        );
+      } catch {
+        // Releasing is a remote agent bookkeeping step only.
+      }
+      throw error;
     }
-    try {
-      await runOperationWithTimeout(
-        "Windows CDP relay release after launch failure",
-        windowsRemoteProcessOperationTimeoutMs,
-        async () => {
-          await processInfo.releaseAsync();
-        },
-      );
-    } catch {
-      // Releasing is a remote agent bookkeeping step only.
-    }
-    throw error;
-  }
-};
+  };
 
 const startWindowsRemoteMuon = async (
   options: StartWindowsRemoteMuonOptions,
@@ -3004,15 +3003,13 @@ const startWindowsRemoteMuon = async (
         options.pluginCapabilities,
       ),
   );
-  const cdpPort = allocateWindowsRemoteCdpPort();
   let relay: RunningWindowsRemoteCdpRelay | undefined = undefined;
   let launched: WindowsTestProcess;
   try {
     relay = await runOperationWithTimeout(
       "Windows CDP relay start",
       windowsRemoteAgentOperationTimeoutMs,
-      async () =>
-        await startWindowsRemoteCdpRelay(configDirectory, runId, cdpPort),
+      async () => await startWindowsRemoteCdpRelay(),
     );
     launched = await runOperationWithTimeout(
       "Windows remote muon launch",

@@ -63,10 +63,10 @@ static DWORD WINAPI relay_connection(LPVOID parameter) {
   return 0;
 }
 
-static int parse_port(const char* value, const char* label) {
+static int parse_port(const char* value, const char* label, int minimum) {
   char* end = NULL;
   const long port = strtol(value, &end, 10);
-  if (end == value || *end != '\0' || port < 1 || port > 65535) {
+  if (end == value || *end != '\0' || port < minimum || port > 65535) {
     fprintf(stderr, "Invalid %s: %s\n", label, value);
     return -1;
   }
@@ -112,8 +112,8 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const int listen_port = parse_port(argv[1], "listen port");
-  const int target_port = parse_port(argv[2], "target port");
+  const int listen_port = parse_port(argv[1], "listen port", 0);
+  const int target_port = parse_port(argv[2], "target port", 1);
   if (listen_port < 0 || target_port < 0) {
     return 2;
   }
@@ -131,14 +131,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  BOOL reuse_address = TRUE;
-  setsockopt(
-      listener,
-      SOL_SOCKET,
-      SO_REUSEADDR,
-      (const char*)&reuse_address,
-      sizeof(reuse_address));
-
   struct sockaddr_in address;
   address.sin_family = AF_INET;
   address.sin_port = htons((u_short)listen_port);
@@ -155,6 +147,16 @@ int main(int argc, char** argv) {
     WSACleanup();
     return 1;
   }
+
+  int address_size = sizeof(address);
+  if (getsockname(listener, (struct sockaddr*)&address, &address_size) != 0) {
+    fprintf(stderr, "getsockname failed: %d\n", WSAGetLastError());
+    closesocket(listener);
+    WSACleanup();
+    return 1;
+  }
+  printf("MUON_CDP_RELAY_PORT=%u\n", (unsigned int)ntohs(address.sin_port));
+  fflush(stdout);
 
   for (;;) {
     SOCKET client = accept(listener, NULL, NULL);

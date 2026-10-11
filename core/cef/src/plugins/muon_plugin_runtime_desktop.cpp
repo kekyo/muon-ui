@@ -173,7 +173,9 @@ static void InstallDesktopRuntimeServices(
       const std::string& locator,
       std::string* error_message) -> void* {
     const auto path = std::filesystem::path(locator);
-    auto* handle = LoadLibraryW(path.wstring().c_str());
+    // Dependencies live beside the plugin; host runtimes remain in the application directory.
+    auto* handle = LoadLibraryExW(path.wstring().c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (handle == nullptr && error_message != nullptr) {
       *error_message = "LoadLibrary failed with error " +
                        std::to_string(GetLastError());

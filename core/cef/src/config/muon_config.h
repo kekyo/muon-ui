@@ -432,6 +432,10 @@ struct MuonStringConfigEntry {
  * One plugin entry from the plugin.plugins array in muon.json.
  */
 struct MuonPluginEntryConfig {
+  /** Whether the producer supplied a catalog to compare after applying allow. */
+  bool has_expected_functions = false;
+  /** Expected allowed public function paths from the verified artifact. */
+  std::vector<std::string> expected_functions;
   /**
    * Plugin file stem, or the reserved internal plugin name.
    */

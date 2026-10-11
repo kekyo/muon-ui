@@ -38,11 +38,8 @@ set_target_properties(libffi_android PROPERTIES
   )
 set(LIBFFI_TARGET libffi_android)
 
-set(MUON_CARDIO_CONFIG_DEFINES
-  CARDIO_HAS_POSIX_FD=1
-  CARDIO_SHARED_LIB=1
-  CARDIO_WITH_LINUX_IO_URING=0
-  )
+include("${MUON_REPOSITORY_ROOT}/sdk/cmake/MuonRuntimeProfile.cmake")
+muon_runtime_cardio_definitions(android MUON_CARDIO_CONFIG_DEFINES)
 add_library(cardio_shared SHARED
   "${CARDIO_ROOT_RESOLVED}/samples/libcardio/libcardio.cpp"
   "${CARDIO_ROOT_RESOLVED}/include/cardio.h"

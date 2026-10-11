@@ -55,10 +55,11 @@
     }
   },
   "devDependencies": {
+    "muon-plugin-sdk": "0.0.1",
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
     "@types/semver": ">=7.7.0",
-    "agent-rover": "^0.5.0",
+    "agent-rover": "^0.10.0",
     "async-primitives": ">=1.7.0",
     "prettier-max": ">=1.16.0",
     "screw-up": ">=1.35.0",

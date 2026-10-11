@@ -8,6 +8,9 @@ import { access, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { parse } from "json5";
+import type { ResolvedPluginArtifact } from "muon-plugin-sdk/artifact";
+import type { MuonNativePluginReference } from "./native-plugins.js";
+export type { MuonNativePluginReference } from "./native-plugins.js";
 
 import type {
   MuonCapabilityImportOptions,
@@ -44,6 +47,8 @@ export interface MuonPluginAccessImportOptions {
  * Plugin entry from public muon plugin access config.
  */
 export interface MuonPluginAccessEntryOptions {
+  /** Explicit local source, artifact or prebuilt NPM plugin reference. */
+  native?: MuonNativePluginReference;
   /**
    * Plugin entry name.
    */
@@ -107,6 +112,10 @@ export interface MuonPluginAccessOptions {
  * Resolved plugin access config used by bundler integrations.
  */
 export interface MuonResolvedPluginAccessOptions {
+  /** Configuration base for native plugin references. */
+  nativeDirectory?: string;
+  /** Verified producer catalogs prepared by CLI or Vite. */
+  nativeArtifacts?: ReadonlyMap<string, ResolvedPluginArtifact>;
   /**
    * Effective plugin exposure mode.
    */
@@ -386,6 +395,28 @@ const readPluginAccessEntryOptions = (
   const options: MuonPluginAccessEntryOptions = {
     name: value.name,
   };
+  if (value.native !== undefined) {
+    if (!isJsonObject(value.native))
+      throw new Error(`muon.json ${configPath}.native must be an object.`);
+    const native: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(value.native)) {
+      if (
+        ![
+          "source",
+          "manifest",
+          "package",
+          "sysroot",
+          "androidSdkPath",
+        ].includes(key) ||
+        typeof entry !== "string" ||
+        !entry ||
+        containsNul(entry)
+      )
+        throw new Error(`Invalid muon.json ${configPath}.native.${key}.`);
+      native[key] = entry;
+    }
+    options.native = native;
+  }
   if (value.signature !== undefined) {
     options.signature = value.signature;
   }
@@ -798,6 +829,10 @@ export const resolveMuonPluginAccessOptions = async ({
       mergePluginAccessOptions(base, { mode: "simple" }),
     );
     return {
+      nativeDirectory:
+        resolvedConfigPath === undefined
+          ? root
+          : resolve(resolvedConfigPath, ".."),
       mode: "simple",
       pages: resolved.pages,
       capabilityOptions: { imports: [] },
@@ -821,6 +856,10 @@ export const resolveMuonPluginAccessOptions = async ({
   };
   return {
     mode: resolved.mode,
+    nativeDirectory:
+      pluginAccess?.plugins === undefined && resolvedConfigPath !== undefined
+        ? resolve(resolvedConfigPath, "..")
+        : root,
     pages: resolved.pages,
     capabilityOptions,
     runtimeOverlay: createRuntimeOverlay(root, resolved, pluginAccess),

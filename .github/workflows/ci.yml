@@ -140,8 +140,27 @@ jobs:
             core/cef/.deps/src
           key: ${{ runner.os }}-${{ runner.arch }}-native-deps-v1-${{ steps.native-toolchain.outputs.fingerprint }}-${{ hashFiles('builder/build.sh', 'builder/build_*.sh', 'core/cef/build_*.sh') }}
 
+      - name: Prepare independent plugin SDK targets
+        run: |
+          npm run build --workspace muon-plugin-sdk
+          node sdk/scripts/stage-native.mjs windows-i686
+          node sdk/scripts/stage-native.mjs windows-amd64
+          node sdk/scripts/stage-native.mjs android-arm64-v8a
+          node sdk/scripts/stage-native.mjs android-x86_64
+
       - name: Build and test
         run: npm run test
+
+      - name: Test independent plugin toolchains and prepare consumer runtime
+        run: |
+          node sdk/scripts/test-target.mjs linux-amd64
+          xvfb-run -a node sdk/scripts/test-target.mjs windows-i686
+          xvfb-run -a node sdk/scripts/test-target.mjs windows-amd64
+          node sdk/scripts/test-target.mjs android-arm64-v8a --compile-only
+          npm run build:target --workspace muon-core -- dist Release linux-amd64
+          (cd ui && node scripts/stage-muon-builder.mjs --target linux-amd64 --dist)
+          node sdk/scripts/stage-package.mjs linux-amd64 android-arm64-v8a android-x86_64
+          node sdk/scripts/verify-package.mjs linux-amd64 windows-i686 windows-amd64 android-arm64-v8a android-x86_64
 
       - name: Enable KVM for Android E2E
         run: |
@@ -169,6 +188,8 @@ jobs:
             npm pack --workspace muon-ui --pack-destination .run/android-ci
             node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins
             node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
+            node sdk/scripts/test-target.mjs android-x86_64
+            xvfb-run -a node sdk/scripts/test-consumer.mjs core/cef/dist-linux-amd64
 
   codeql:
     name: Analyze ${{ matrix.language }}

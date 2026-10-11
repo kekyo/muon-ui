@@ -207,6 +207,7 @@ static void AppendMuonConfigPathArguments(
   }
 }
 
+#if defined(OS_LINUX)
 static std::string TrimAsciiWhitespace(std::string value) {
   auto begin = size_t{0};
   while (begin < value.size() &&
@@ -269,6 +270,7 @@ static void AppendSwitchWithAsciiValue(CefRefPtr<CefCommandLine> command_line,
   cef_value.FromString(value);
   command_line->AppendSwitchWithValue(switch_name, cef_value);
 }
+#endif
 
 static void ConfigureMuonCefLinuxDisplayCommandLine(
     CefRefPtr<CefCommandLine> command_line) {
@@ -857,6 +859,8 @@ void MuonApp::OnContextInitialized() {
     plugin.has_signature_salt = plugin_config.has_salt;
     plugin.signature_salt = plugin_config.salt;
     plugin.plugin_policy = plugin_policy;
+    plugin.has_expected_function_paths = plugin_config.has_expected_functions;
+    plugin.expected_function_paths = plugin_config.expected_functions;
     for (const auto& config_entry : plugin_config.config) {
       plugin.config.push_back({config_entry.key, config_entry.value});
     }

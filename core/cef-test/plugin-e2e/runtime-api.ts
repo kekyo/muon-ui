@@ -779,18 +779,17 @@ const waitForLocalLinuxProcessState = async (
 const listLocalLinuxFixtureProcessIds = async (
   marker: string,
 ): Promise<number[]> => {
-  const entries = await nodeReaddir("/proc", { withFileTypes: true });
+  // File types require extra stat calls on procfs. A process can exit between
+  // enumeration and stat, so read names and handle disappearance per process.
+  const entries = await nodeReaddir("/proc");
   const processIds: number[] = [];
   for (const entry of entries) {
-    if (!/^\d+$/u.test(entry.name)) {
+    if (!/^\d+$/u.test(entry)) {
       continue;
     }
-    const processId = Number(entry.name);
+    const processId = Number(entry);
     try {
-      const commandLine = await nodeReadFile(
-        `/proc/${entry.name}/cmdline`,
-        "utf8",
-      );
+      const commandLine = await nodeReadFile(`/proc/${entry}/cmdline`, "utf8");
       if (commandLine.includes(marker)) {
         processIds.push(processId);
       }
@@ -1011,10 +1010,18 @@ $ErrorActionPreference = 'Stop'
 $heartbeatPath = ${quoteWindowsPowerShellLiteral(heartbeatPath)}
 $marker = ${quoteWindowsPowerShellLiteral(marker)}
 while ($true) {
-  [IO.File]::AppendAllText(
-    $heartbeatPath,
-    ($marker + ':' + [string]$PID + [Environment]::NewLine)
-  )
+  try {
+    [IO.File]::AppendAllText(
+      $heartbeatPath,
+      ($marker + ':' + [string]$PID + [Environment]::NewLine)
+    )
+  } catch {
+    # agent-rover reads briefly deny writes. Retry ERROR_SHARING_VIOLATION
+    # on the next heartbeat without hiding other fixture failures.
+    if (($_.Exception.GetBaseException().HResult -band 0xffff) -ne 32) {
+      throw
+    }
+  }
   Start-Sleep -Milliseconds 100
 }
 `;
@@ -1101,10 +1108,18 @@ $heartbeatPath = ${quoteWindowsPowerShellLiteral(heartbeatPath)}
 $marker = ${quoteWindowsPowerShellLiteral(marker)}
 ${streamSetupScript}
 while ($true) {
-  [IO.File]::AppendAllText(
-    $heartbeatPath,
-    ($marker + ':' + [string]$PID + ':grandchild:' + [string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) + [Environment]::NewLine)
-  )
+  try {
+    [IO.File]::AppendAllText(
+      $heartbeatPath,
+      ($marker + ':' + [string]$PID + ':grandchild:' + [string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) + [Environment]::NewLine)
+    )
+  } catch {
+    # agent-rover reads briefly deny writes. Retry ERROR_SHARING_VIOLATION
+    # on the next heartbeat without hiding other fixture failures.
+    if (($_.Exception.GetBaseException().HResult -band 0xffff) -ne 32) {
+      throw
+    }
+  }
   Write-ExecutorStream $stdout ($marker + ':grandchild:stdout' + [Environment]::NewLine)
   Write-ExecutorStream $stderr ($marker + ':grandchild:stderr' + [Environment]::NewLine)
   Start-Sleep -Milliseconds 50

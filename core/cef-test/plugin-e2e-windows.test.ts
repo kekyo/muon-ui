@@ -15,16 +15,15 @@ import {
   joinWindowsPath,
   setWindowsRemoteContext,
 } from "./plugin-e2e/windows-context.js";
-import { resolveWindowsE2eEnvironment } from "./plugin-e2e/windows-environment.js";
+import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
 import { resolveWindowsRuntimeTarget } from "./plugin-e2e/windows-matrix.js";
+import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.js";
 import { stageWindowsRuntime } from "./plugin-e2e/windows-staging.js";
 
 const windowsE2eEnvironment = resolveWindowsE2eEnvironment(process.env);
 const windowsRuntimeTarget = resolveWindowsRuntimeTarget(
   process.env.MUON_E2E_WINDOWS_TARGET,
 );
-const windowsCdpRelayBasePort =
-  windowsRuntimeTarget.target === "windows-i686" ? 39220 : 39320;
 const describeWindowsE2e =
   windowsE2eEnvironment.status === "configured" ? describe : describe.skip;
 const suiteName =
@@ -48,32 +47,38 @@ if (
   windowsE2eEnvironment.status === "configured" &&
   windowsAgent !== undefined
 ) {
-  const runtime = await stageWindowsRuntime(
-    windowsAgent,
-    windowsE2eEnvironment.config,
-    windowsRuntimeTarget,
-  );
-  await windowsAgent.files.mkdir(
-    joinWindowsPath(
-      windowsE2eEnvironment.config.workDir,
-      windowsRuntimeTarget.target,
-      "tmp",
-    ),
-    { recursive: true },
-  );
-  setWindowsRemoteContext({
-    agent: windowsAgent,
-    cdpHost: windowsE2eEnvironment.config.host,
-    cdpPort: windowsCdpRelayBasePort,
-    environment: windowsE2eEnvironment.config,
-    httpHost: windowsE2eEnvironment.config.httpHost,
-    runtime,
-    tempDirectory: joinWindowsPath(
-      windowsE2eEnvironment.config.workDir,
-      windowsRuntimeTarget.target,
-      "tmp",
-    ),
-  });
+  try {
+    const network = await discoverWindowsTestNetwork(windowsAgent);
+    const runtime = await stageWindowsRuntime(
+      windowsAgent,
+      windowsE2eEnvironment.config,
+      windowsRuntimeTarget,
+    );
+    await windowsAgent.files.mkdir(
+      joinWindowsPath(
+        windowsE2eEnvironment.config.workDir,
+        windowsRuntimeTarget.target,
+        "tmp",
+      ),
+      { recursive: true },
+    );
+    setWindowsRemoteContext({
+      agent: windowsAgent,
+      cdpHost: network.cdpHost,
+      cdpPort: 0,
+      environment: windowsE2eEnvironment.config,
+      httpHost: windowsE2eEnvironment.config.httpHost ?? network.httpHost,
+      runtime,
+      tempDirectory: joinWindowsPath(
+        windowsE2eEnvironment.config.workDir,
+        windowsRuntimeTarget.target,
+        "tmp",
+      ),
+    });
+  } catch (error) {
+    windowsAgent.release();
+    throw error;
+  }
 }
 
 afterAll(async () => {

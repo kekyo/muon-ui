@@ -36,18 +36,14 @@ import {
   getMuonTargetRuntimeAppId,
 } from "../common/targets.js";
 
+import {
+  resolveWindowsE2eEnvironment,
+  type WindowsE2eEnvironment,
+} from "../../scripts/windows-e2e-environment.js";
+
 const execFileAsync = promisify(execFile);
-const defaultWindowsE2ePort = 39397;
-const defaultWindowsE2eWorkDirectory = String.raw`C:\muon-e2e`;
 const windowsPowerShellPath = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
 const localCleanupDirectories: string[] = [];
-
-interface WindowsE2eEnvironment {
-  host: string;
-  port: number;
-  token: string;
-  workDirectory: string;
-}
 
 interface WindowsCommandResult {
   exitCode: number | null;
@@ -68,73 +64,6 @@ interface MuonPackCliJsonResult {
     type: string;
   }[];
 }
-
-const readRequiredEnvironmentValue = (
-  env: Readonly<Record<string, string | undefined>>,
-  name: string,
-): string | undefined => {
-  const value = env[name];
-  if (value === undefined) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? undefined : trimmed;
-};
-
-const readOptionalWindowsE2ePort = (
-  env: Readonly<Record<string, string | undefined>>,
-): number => {
-  const value = env.AGENT_ROVER_WIN11_PORT;
-  if (value === undefined || value.trim() === "") {
-    return defaultWindowsE2ePort;
-  }
-  const trimmed = value.trim();
-  if (!/^[0-9]+$/u.test(trimmed)) {
-    throw new Error("AGENT_ROVER_WIN11_PORT must be an integer.");
-  }
-  return Number(trimmed);
-};
-
-const readOptionalWindowsE2eWorkDirectory = (
-  env: Readonly<Record<string, string | undefined>>,
-): string => {
-  const value = env.AGENT_ROVER_WIN11_WORK_DIR;
-  return value === undefined || value.trim() === ""
-    ? defaultWindowsE2eWorkDirectory
-    : value.trim();
-};
-
-const parseWindowsE2eEnvironment = (
-  env: Readonly<Record<string, string | undefined>>,
-):
-  | { environment: WindowsE2eEnvironment; status: "configured" }
-  | { reason: string; status: "skip" } => {
-  const host = readRequiredEnvironmentValue(env, "AGENT_ROVER_WIN11_HOST");
-  if (host === undefined) {
-    return {
-      reason: "AGENT_ROVER_WIN11_HOST is not set",
-      status: "skip",
-    };
-  }
-
-  const token = readRequiredEnvironmentValue(env, "AGENT_ROVER_WIN11_TOKEN");
-  if (token === undefined) {
-    return {
-      reason: "AGENT_ROVER_WIN11_TOKEN is not set",
-      status: "skip",
-    };
-  }
-
-  return {
-    environment: {
-      host,
-      port: readOptionalWindowsE2ePort(env),
-      token,
-      workDirectory: readOptionalWindowsE2eWorkDirectory(env),
-    },
-    status: "configured",
-  };
-};
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -577,7 +506,7 @@ const createRemoteTestDirectory = async (
   packageName: string,
 ): Promise<string> => {
   const remoteDirectory = joinWindowsPath(
-    environment.workDirectory,
+    environment.workDir,
     "muon-ui-nsis",
     packageName,
   );
@@ -967,7 +896,7 @@ const saveWindowsDiagnostics = async (
   });
 };
 
-const windowsE2eEnvironment = parseWindowsE2eEnvironment(process.env);
+const windowsE2eEnvironment = resolveWindowsE2eEnvironment(process.env);
 const describeWindowsNsis =
   windowsE2eEnvironment.status === "configured" ? describe : describe.skip;
 const suiteName =
@@ -978,9 +907,7 @@ const suiteName =
 const windowsAgent =
   windowsE2eEnvironment.status === "configured"
     ? await connectRemoteAgent({
-        authToken: windowsE2eEnvironment.environment.token,
-        host: windowsE2eEnvironment.environment.host,
-        port: windowsE2eEnvironment.environment.port,
+        section: windowsE2eEnvironment.config.section,
         timeoutMs: 30000,
       })
     : undefined;
@@ -1018,7 +945,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
     const packageName = `muon-pack-e2e-${suffix}`;
     const remoteDirectory = await createRemoteTestDirectory(
       windowsAgent,
-      windowsE2eEnvironment.environment,
+      windowsE2eEnvironment.config,
       packageName,
     );
 
@@ -1108,7 +1035,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
     const localRoot = await createTemporaryDirectory("muon-nsis-e2e-");
     const remoteDirectory = await createRemoteTestDirectory(
       windowsAgent,
-      windowsE2eEnvironment.environment,
+      windowsE2eEnvironment.config,
       packageName,
     );
     const packageDirectory = await createFakeMuonPackageDist(localRoot, [

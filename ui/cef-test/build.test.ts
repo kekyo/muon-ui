@@ -38,6 +38,7 @@ import {
   createWindowsIconBufferFromPngData,
 } from "../cef/windows-icon.js";
 import muon from "../common/vite.js";
+import { buildPlugin, createPluginProject } from "muon-plugin-sdk";
 
 const execFileAsync = promisify(execFile);
 const cleanupDirectories: string[] = [];
@@ -405,6 +406,64 @@ const createDistributionFileBuildProject = async (
   await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
   return { root, packageDirectory };
 };
+
+it("packages an NPM native plugin without its sources, SDK, compiler or inspector", async () => {
+  const { root, packageDirectory } = await createWindowsIconBuildProject(
+    "muon-native-app-",
+    "native-app",
+  );
+  const source = join(root, "author-source");
+  await createPluginProject({
+    directory: source,
+    name: "example",
+    language: "c",
+  });
+  const packaged = join(root, "node_modules/example-native");
+  await buildPlugin({
+    configPath: join(source, "muon-plugin.build.json"),
+    target: "linux-amd64",
+    outputDirectory: packaged,
+  });
+  await writeFile(
+    join(packaged, "package.json"),
+    JSON.stringify({
+      name: "example-native",
+      exports: { "./muon-plugin.json": "./muon-plugin.json" },
+    }),
+  );
+  await rm(source, { recursive: true });
+  await writeFile(
+    join(root, "muon.json"),
+    JSON.stringify({
+      plugin: {
+        mode: "simple",
+        plugins: [
+          {
+            name: "example",
+            native: { package: "example-native" },
+            allow: ["muon.example.*"],
+          },
+        ],
+      },
+    }),
+  );
+  const result = await buildMuonApp({
+    root,
+    packageDirectory,
+    targets: ["linux-amd64"],
+    ...{ environment: { PATH: "", MUON_PLUGIN_INSPECTOR_PATH: "/missing" } },
+  });
+  expect(
+    await readFile(join(result.targets[0]!.outputPath, "plugins/example.so")),
+  ).toEqual(await readFile(join(packaged, "native/linux-amd64/example.so")));
+  expect(
+    (result.targets[0]!.embeddedConfig.plugin as Record<string, unknown>).path,
+  ).toBe("./plugins");
+  expect(
+    (result.targets[0]!.embeddedConfig.plugin as { plugins: object[] })
+      .plugins[0],
+  ).not.toHaveProperty("native");
+});
 
 const writeWindowsIconPngFixture = async (
   iconPath: string,

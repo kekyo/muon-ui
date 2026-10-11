@@ -227,9 +227,14 @@ export const collectMuonPluginFunctionPathsForAccess = async (
   const plugins = pluginAccess.plugins.filter((plugin) =>
     wildcardPluginNames.has(plugin.name),
   );
-  return await collectMuonPluginFunctionPaths({
+  const catalogs = pluginAccess.nativeArtifacts ?? new Map();
+  const producerPaths = plugins.flatMap(
+    (plugin) => catalogs.get(plugin.name)?.manifest.functions ?? [],
+  );
+  const inspected = await collectMuonPluginFunctionPaths({
     pluginPath: pluginAccess.pluginPath,
-    plugins,
+    plugins: plugins.filter((plugin) => !catalogs.has(plugin.name)),
     environment,
   });
+  return [...producerPaths, ...inspected];
 };

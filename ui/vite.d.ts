@@ -309,6 +309,14 @@ export interface MuonVitePluginAccessImportOptions {
  * Plugin entry and capability import configuration for muon virtual modules.
  */
 export interface MuonVitePluginAccessEntryOptions {
+  /** Explicit source config, artifact manifest, or prebuilt NPM package. */
+  readonly native?: {
+    /** Source configuration path, built with muon-plugin-sdk. */ readonly source?: string;
+    /** Prebuilt muon-plugin.json path. */ readonly manifest?: string;
+    /** Installed NPM package exporting ./muon-plugin.json. */ readonly package?: string;
+    /** Cross target development sysroot, used only for source builds. */ readonly sysroot?: string;
+    /** Android SDK override for source builds. */ readonly androidSdkPath?: string;
+  };
   /**
    * Plugin entry name.
    */

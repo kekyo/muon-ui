@@ -1,0 +1,21 @@
+{
+  "name": "muon-plugin-example-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "muon build --target linux-amd64",
+    "dependencies": "reskill"
+  },
+  "dependencies": {
+    "muon-ui": "latest"
+  },
+  "devDependencies": {
+    "muon-plugin-sdk": "latest",
+    "vite": "^8.0.0",
+    "typescript": "^5.9.0",
+    "prettier-max": ">=1.16.0",
+    "resolved-killer": ">=1.1.0"
+  }
+}

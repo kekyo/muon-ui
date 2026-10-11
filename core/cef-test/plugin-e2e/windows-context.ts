@@ -9,7 +9,7 @@ import { win32 } from "node:path";
 
 import type { RemoteAgent, RemoteProcessSnapshot } from "agent-rover";
 
-import type { WindowsE2eEnvironment } from "./windows-environment.js";
+import type { WindowsE2eEnvironment } from "../../../scripts/windows-e2e-environment.js";
 import type { WindowsE2eTargetName } from "./windows-matrix.js";
 
 export interface WindowsRemoteRuntime {
@@ -114,14 +114,6 @@ export const pathToWindowsFileUrlHref = (path: string): string => {
   }
 
   throw new Error(`Expected Windows absolute path: ${path}`);
-};
-
-export const allocateWindowsRemoteCdpPort = (): number => {
-  const context = requireWindowsRemoteContext();
-  do {
-    context.cdpPort += 1;
-  } while (context.cdpPort === context.environment.port);
-  return context.cdpPort;
 };
 
 export const createWindowsRemoteProcessHandle = (

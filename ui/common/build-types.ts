@@ -18,9 +18,12 @@ import type { MuonRuntimePluginConfig } from "./capability.js";
 import type { MuonProgressCallback } from "./progress.js";
 
 import type { JsonObject } from "./build-config.js";
+import type { MuonResolvedPluginAccessOptions } from "./plugin-access.js";
 
 /** Internal build execution settings supplied by CLI and Vite orchestration. */
 export interface InternalMuonBuildOptions extends MuonBuildOptions {
+  /** Native artifacts and references prepared by the Vite instance that made the bundle. */
+  nativePluginAccess?: MuonResolvedPluginAccessOptions;
   /** Browser profile path relative to the generated application. */
   browserProfilePathOverride: string | undefined;
   /** Environment for build subprocesses. */

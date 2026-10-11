@@ -70,6 +70,7 @@ interface InternalMuonBuildSequenceOptions extends MuonBuildSequenceOptions {
 }
 
 interface InternalMuonBuildOptions extends MuonBuildOptions {
+  nativePluginAccess?: import("./plugin-access.js").MuonResolvedPluginAccessOptions;
   environment?: NodeJS.ProcessEnv;
   progress?: MuonProgressCallback;
 }
@@ -221,7 +222,11 @@ export const resolveMuonViteBuildOptions = (
 const runViteBuild = async (
   root: string,
   targets: readonly string[] | undefined,
-): Promise<MuonRuntimePluginConfig | undefined> => {
+): Promise<{
+  runtime: MuonRuntimePluginConfig | undefined;
+  native:
+    import("./plugin-access.js").MuonResolvedPluginAccessOptions | undefined;
+}> => {
   const vite = await import("vite");
   let builtConfig: ResolvedConfig | undefined;
   await withSuppressedMuonViteBuild(targets, async () => {
@@ -240,10 +245,13 @@ const runViteBuild = async (
   });
   // Read the instance that generated the bundle: resolving the config again
   // creates different capability IDs.
-  return builtConfig?.plugins
+  const state = builtConfig?.plugins
     .map(getMuonVitePluginRuntimeState)
-    .find((state) => state !== undefined)
-    ?.getRuntimePluginConfig();
+    .find((state) => state !== undefined);
+  return {
+    runtime: state?.getRuntimePluginConfig(),
+    native: state?.getNativePluginAccess?.(),
+  };
 };
 
 const hasExplicitTargets = (options: MuonBuildSequenceOptions): boolean =>
@@ -381,9 +389,12 @@ export const runMuonBuildSequence = async (
       project.viteBuildRoot,
       options.targets ?? pluginBuildOptions.targets,
     );
-    if (runtimePluginConfig !== undefined) {
-      buildOptions.runtimePluginConfig = runtimePluginConfig;
+    if (runtimePluginConfig.runtime !== undefined) {
+      buildOptions.runtimePluginConfig = runtimePluginConfig.runtime;
     }
+    if (runtimePluginConfig.native !== undefined)
+      (buildOptions as InternalMuonBuildOptions).nativePluginAccess =
+        runtimePluginConfig.native;
   } else if (
     options.defaultAllTargets !== undefined &&
     options.allTargets === undefined &&

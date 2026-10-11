@@ -6,6 +6,7 @@
 import type { ResolvedConfig } from "vite";
 
 import type { MuonRuntimePluginConfig } from "./capability.js";
+import type { MuonResolvedPluginAccessOptions } from "./plugin-access.js";
 import type { MuonVitePluginOptions } from "./vite.js";
 import { isMuonWindowsCodeSigningOptions } from "../cef/windows-code-signing.js";
 
@@ -28,6 +29,8 @@ interface MuonVitePluginWithOptions {
  * Internal state exposed by a resolved muon Vite plugin instance.
  */
 export interface MuonVitePluginRuntimeState {
+  /** Returns the native artifacts used by the same bundle and catalog. */
+  getNativePluginAccess?: () => MuonResolvedPluginAccessOptions | undefined;
   /**
    * Returns the Vite config resolved for this plugin instance.
    */

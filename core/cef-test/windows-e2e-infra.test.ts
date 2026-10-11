@@ -3,9 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import type {
@@ -20,19 +20,11 @@ import {
   resolveWindowsRuntimeTarget,
   windowsRuntimeTargets,
 } from "./plugin-e2e/windows-matrix.js";
-import {
-  parseWindowsE2eEnvironment,
-  resolveWindowsE2eEnvironment,
-} from "./plugin-e2e/windows-environment.js";
-import {
-  allocateWindowsRemoteCdpPort,
-  clearWindowsRemoteContext,
-  pathToWindowsFileUrlHref,
-  setWindowsRemoteContext,
-  type WindowsRemoteContext,
-} from "./plugin-e2e/windows-context.js";
+import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
+import { pathToWindowsFileUrlHref } from "./plugin-e2e/windows-context.js";
 import {
   cleanupWindowsStagedRuntimeProcesses,
+  stageWindowsRuntime,
   stageWindowsRuntimeDirectory,
 } from "./plugin-e2e/windows-staging.js";
 
@@ -115,132 +107,47 @@ const createFakeStagingAgent = (
   };
 };
 
-const createFakeWindowsRemoteContext = (
-  cdpPort: number,
-  reservedPort: number,
-): WindowsRemoteContext => ({
-  agent: {} as RemoteAgent,
-  cdpHost: "192.0.2.10",
-  cdpPort,
-  environment: {
-    host: "192.0.2.10",
-    httpHost: "192.0.2.1",
-    port: reservedPort,
-    token: "token",
-    workDir: String.raw`C:\muon-e2e`,
-  },
-  httpHost: "192.0.2.1",
-  runtime: {
-    debugRuntimeDirectory: String.raw`C:\muon-e2e\windows-amd64\debug`,
-    nodeExpressProjectDirectory: String.raw`C:\muon-e2e\windows-amd64\node-express-project`,
-    nodeProjectDirectory: String.raw`C:\muon-e2e\windows-amd64\node-project`,
-    releaseRuntimeDirectory: String.raw`C:\muon-e2e\windows-amd64\release`,
-    relayExecutablePath: String.raw`C:\muon-e2e\windows-amd64\muon-cdp-relay.exe`,
-    target: "windows-amd64",
-  },
-  tempDirectory: String.raw`C:\muon-e2e\windows-amd64\tmp`,
-});
-
 describe("Windows e2e environment", () => {
+  it("uses the default agent section without host or token variables", () => {
+    expect(
+      resolveWindowsE2eEnvironment({ MUON_E2E_REMOTE_WINDOWS: "1" }),
+    ).toEqual({
+      config: {
+        section: "default",
+        httpHost: undefined,
+        workDir: String.raw`C:\muon-e2e`,
+      },
+      status: "configured",
+    });
+  });
+
+  it("selects a named section and Muon-specific test paths", () => {
+    expect(
+      resolveWindowsE2eEnvironment({
+        MUON_E2E_REMOTE_WINDOWS: "1",
+        MUON_E2E_AGENT_SECTION: " vm ",
+        MUON_E2E_REMOTE_HTTP_HOST: "10.10.0.1",
+        MUON_E2E_REMOTE_WORK_DIR: String.raw`D:\muon-test`,
+      }),
+    ).toEqual({
+      config: {
+        section: "vm",
+        httpHost: "10.10.0.1",
+        workDir: String.raw`D:\muon-test`,
+      },
+      status: "configured",
+    });
+  });
+
   it("skips remote execution when the Windows e2e flag is missing", () => {
     expect(
       resolveWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_TOKEN: "token",
+        MUON_E2E_AGENT_SECTION: "vm",
       }),
     ).toEqual({
       reason: "MUON_E2E_REMOTE_WINDOWS is not set",
       status: "skip",
     });
-  });
-
-  it("uses the Windows agent configuration when remote execution is enabled", () => {
-    expect(
-      resolveWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_TOKEN: "token",
-        MUON_E2E_REMOTE_WINDOWS: "1",
-      }),
-    ).toEqual({
-      config: {
-        host: "192.0.2.10",
-        httpHost: "192.0.2.1",
-        port: 39397,
-        token: "token",
-        workDir: String.raw`C:\muon-e2e`,
-      },
-      status: "configured",
-    });
-  });
-
-  it("skips when the Windows agent host is missing", () => {
-    expect(
-      parseWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_TOKEN: "token",
-      }),
-    ).toEqual({
-      reason: "AGENT_ROVER_WIN11_HOST is not set",
-      status: "skip",
-    });
-  });
-
-  it("skips when the Windows agent token is empty", () => {
-    expect(
-      parseWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_TOKEN: " ",
-      }),
-    ).toEqual({
-      reason: "AGENT_ROVER_WIN11_TOKEN is not set",
-      status: "skip",
-    });
-  });
-
-  it("uses defaults for optional port and work directory", () => {
-    expect(
-      parseWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_TOKEN: "token",
-      }),
-    ).toEqual({
-      config: {
-        host: "192.0.2.10",
-        httpHost: "192.0.2.1",
-        port: 39397,
-        token: "token",
-        workDir: String.raw`C:\muon-e2e`,
-      },
-      status: "configured",
-    });
-  });
-
-  it("uses an explicit remote HTTP host when provided", () => {
-    expect(
-      parseWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_TOKEN: "token",
-        MUON_E2E_REMOTE_HTTP_HOST: "10.10.0.1",
-      }),
-    ).toEqual({
-      config: {
-        host: "192.0.2.10",
-        httpHost: "10.10.0.1",
-        port: 39397,
-        token: "token",
-        workDir: String.raw`C:\muon-e2e`,
-      },
-      status: "configured",
-    });
-  });
-
-  it("rejects invalid optional ports", () => {
-    expect(() =>
-      parseWindowsE2eEnvironment({
-        AGENT_ROVER_WIN11_HOST: "192.0.2.10",
-        AGENT_ROVER_WIN11_PORT: "abc",
-        AGENT_ROVER_WIN11_TOKEN: "token",
-      }),
-    ).toThrow("AGENT_ROVER_WIN11_PORT must be an integer from 1 to 65535");
   });
 });
 
@@ -307,18 +214,6 @@ describe("Windows e2e paths", () => {
   });
 });
 
-describe("Windows e2e CDP ports", () => {
-  it("skips the agent-rover port when allocating remote CDP relay ports", () => {
-    setWindowsRemoteContext(createFakeWindowsRemoteContext(39396, 39397));
-    try {
-      expect(allocateWindowsRemoteCdpPort()).toBe(39398);
-      expect(allocateWindowsRemoteCdpPort()).toBe(39399);
-    } finally {
-      clearWindowsRemoteContext();
-    }
-  });
-});
-
 describe("Windows e2e staging", () => {
   const debugRuntimeDirectory = String.raw`C:\muon-e2e\windows-i686\debug`;
   const releaseRuntimeDirectory = String.raw`C:\muon-e2e\windows-i686\release`;
@@ -327,6 +222,47 @@ describe("Windows e2e staging", () => {
     debugRuntimeDirectory,
     releaseRuntimeDirectory,
   ] as const;
+
+  it("finds repository-relative runtimes from the nested test workspace", async () => {
+    const repository = resolve("../..");
+    const localDirectory = await mkdtemp(
+      join(repository, ".windows-staging-test-"),
+    );
+    const staged = new Error("Runtime upload observed");
+    const agent = {
+      processes: { list: async () => [] },
+      files: {
+        syncDirectory: async (options: RemoteDirectorySyncOptions) => {
+          expect(
+            await readFile(join(options.localPath, "muon-core.exe"), "utf8"),
+          ).toBe("runtime from the repository root");
+          throw staged;
+        },
+      },
+    } as unknown as RemoteAgent;
+    try {
+      await writeFile(
+        join(localDirectory, "muon-core.exe"),
+        "runtime from the repository root",
+      );
+      await expect(
+        stageWindowsRuntime(
+          agent,
+          {
+            section: "default",
+            httpHost: "linux.test",
+            workDir: String.raw`C:\muon-e2e`,
+          },
+          {
+            ...resolveWindowsRuntimeTarget("windows-i686"),
+            debugRuntimeDirectory: relative(repository, localDirectory),
+          },
+        ),
+      ).rejects.toBe(staged);
+    } finally {
+      await rm(localDirectory, { recursive: true, force: true });
+    }
+  });
 
   it("terminates stale processes that can hold staged runtime files", async () => {
     const fake = createFakeStagingAgent([

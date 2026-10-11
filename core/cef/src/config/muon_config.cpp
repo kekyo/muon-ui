@@ -2648,6 +2648,18 @@ static bool ReadPluginConfig(yyjson_val* root,
                                  &plugin_config.allow, error_message)) {
       return false;
     }
+    if (yyjson_obj_get(entry, "expectedFunctions") != nullptr) {
+      if (plugin_config.name == kMuonInternalPluginName ||
+          !ReadRequiredStringArray(entry, "expectedFunctions",
+                                   config_path + ".expectedFunctions",
+                                   &plugin_config.expected_functions, error_message)) {
+        if (plugin_config.name == kMuonInternalPluginName) {
+          *error_message = "expectedFunctions is supported only for external plugins";
+        }
+        return false;
+      }
+      plugin_config.has_expected_functions = true;
+    }
     if (!ReadStringConfig(entry, kMuonConfigPluginEntryConfigKey,
                           config_path + ".config", &plugin_config.config,
                           error_message)) {

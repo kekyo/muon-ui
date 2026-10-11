@@ -1,0 +1,75 @@
+{
+  "name": "muon-plugin-sdk",
+  "version": "0.0.1",
+  "description": "Native C and C++ plugin development kit for muon-ui",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "muon-plugin": "./dist/cli.mjs"
+  },
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./artifact": {
+      "types": "./dist/types/artifact.d.ts",
+      "import": "./dist/artifact.mjs",
+      "require": "./dist/artifact.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "include",
+    "native",
+    "make",
+    "cmake",
+    "templates",
+    "pkgconfig",
+    "licenses",
+    "src/runtime-profile.json",
+    "LICENSE",
+    "README.md",
+    "README_ja.md",
+    "examples"
+  ],
+  "scripts": {
+    "build": "npm run build:js && node scripts/stage-native.mjs",
+    "stage:target": "node scripts/stage-native.mjs",
+    "test": "npm run build && vitest run",
+    "dependencies": "reskill",
+    "build:js": "vite build --mode cjs && vite build --mode esm && tsc -p tsconfig.build.json && node --input-type=module -e \"import { chmod } from 'node:fs/promises'; await chmod('dist/cli.mjs', 0o755)\"",
+    "stage:package": "node scripts/stage-package.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
+    "prepack": "npm run verify:package",
+    "test:target": "node scripts/test-target.mjs",
+    "test:consumer": "node scripts/test-consumer.mjs"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "dependencies": {
+    "commander": ">=14.0.0",
+    "funcity": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": ">=24.0.0",
+    "prettier-max": ">=1.16.0",
+    "resolved-killer": ">=1.1.0",
+    "screw-up": ">=1.35.0",
+    "typescript": ">=5.9.0",
+    "vite": ">=8.0.0",
+    "vitest": ">=4.0.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@playwright/mcp": "^0.0.83"
+  },
+  "author": "Kouji Matsui (@kekyo@mi.kekyo.net)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kekyo/muon-ui.git",
+    "directory": "sdk"
+  }
+}

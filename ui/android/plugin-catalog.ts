@@ -49,11 +49,17 @@ export const collectMuonAndroidPluginAccess = async (
     options?.plugins === undefined && path !== undefined ? dirname(path) : root,
     true,
   );
+  const allCatalogs = new Map(catalogs);
+  for (const [name, artifact] of access.nativeArtifacts ?? []) {
+    if (allCatalogs.has(name))
+      throw new Error(`Duplicate Android plugin definition: ${name}`);
+    allCatalogs.set(name, artifact.manifest.functions);
+  }
   const imports = access.plugins.flatMap((plugin) => {
     const catalog =
       plugin.name === "internal"
         ? muonAndroidBuiltinFunctionPaths
-        : catalogs.get(plugin.name);
+        : allCatalogs.get(plugin.name);
     if (catalog === undefined)
       throw new Error(
         `Android plugin ${plugin.name} requires a matching android.plugins metadata entry.`,
@@ -63,5 +69,5 @@ export const collectMuonAndroidPluginAccess = async (
       allow: expandMuonAndroidFunctionAllows(rule.allow ?? [], catalog),
     }));
   });
-  return { imports, functionPaths: [...catalogs.values()].flat() };
+  return { imports, functionPaths: [...allCatalogs.values()].flat() };
 };

@@ -5,7 +5,7 @@
 
 COMMON := ../common
 OUT := .build/portable
-CPPFLAGS += -I$(COMMON)/include -I$(COMMON)/src
+CPPFLAGS += -I../../sdk/include -I$(COMMON)/src
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -Werror -pthread
 CFLAGS += -std=c99 -Wall -Wextra -Wpedantic -Werror
 RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \

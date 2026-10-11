@@ -2483,10 +2483,8 @@ static void CompleteMuonPluginStop(void* user_data) {
     return;
   }
   auto* impl = state->impl;
-  if (impl->services.is_owner_thread()) {
-    ContinueMuonPluginStop(impl);
-    return;
-  }
+  // Defer even on the owner thread so the plugin callback and its coroutine
+  // can return before a stop completion destroys the runtime and unloads it.
   if (!impl->services.post_owner_task(
           [impl]() { ContinueMuonPluginStop(impl); })) {
     LogMuonPluginRuntimeMessage(
@@ -2815,8 +2813,12 @@ static bool LoadMuonPluginLibrary(
       metadata->renderer_context_released);
   if (plugin.has_expected_function_paths) {
     auto actual = std::set<std::string>{};
-    for (auto index = initial_function_count; index < impl->renderer_functions.size(); ++index) {
-      actual.insert(CreateMuonFunctionPublicPath(impl->renderer_functions[index]));
+    // Platform routes exist only in renderer_functions. Compare this library's
+    // native registrations without including those unrelated routes.
+    for (auto index = initial_function_count;
+         index < impl->registered_functions.size(); ++index) {
+      actual.insert(CreateMuonFunctionPublicPath(
+          impl->registered_functions[index]->metadata));
     }
     const auto expected = std::set<std::string>(
         plugin.expected_function_paths.begin(), plugin.expected_function_paths.end());

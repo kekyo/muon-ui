@@ -61,7 +61,8 @@ $(OUT_DIR)/sha2.o: $(SHA2_SOURCE_DIR)/sha2.c $(SHA2_SOURCE_DIR)/sha2.h
 
 $(OUT_DIR)/yyjson.o: $(YYJSON_SOURCE_DIR)/yyjson.c $(YYJSON_SOURCE_DIR)/yyjson.h
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
+	# yyjson's floating-point lookup table is unused on x87 targets.
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-unused-const-variable -c -o "$@" "$<"
 
 $(OUT_DIR)/launcher_progress.o: src/launcher_progress.c src/launcher_progress.h src/prepare_progress.h
 	mkdir -p "$(OUT_DIR)"
@@ -93,9 +94,9 @@ $(RUNTIME_HELPER_TARGET): src/muon_runtime_helper.c src/prepare.h src/common.h s
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o "$@" src/muon_runtime_helper.c "$(LIB_TARGET)" $(LDLIBS)
 endif
 
-$(PLUGIN_INSPECTOR_TARGET): src/muon_plugin_inspector.c src/common.h ../core/common/include/muon_plugin_api.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(LIB_TARGET)
+$(PLUGIN_INSPECTOR_TARGET): src/muon_plugin_inspector.c src/common.h ../sdk/include/muon_plugin_api.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(LIB_TARGET)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../core/common/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) -o "$@" src/muon_plugin_inspector.c "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../sdk/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) -o "$@" src/muon_plugin_inspector.c "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
 
 clean:
 	rm -f "$(PREPARE_TARGET)" "$(LAUNCHER_TARGET)" $(if $(strip $(RUNTIME_HELPER_TARGET)),"$(RUNTIME_HELPER_TARGET)") "$(PLUGIN_INSPECTOR_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/launcher_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(LAUNCHER_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)

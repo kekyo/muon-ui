@@ -18,6 +18,12 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  applyMuonNativePluginCatalogs,
+  resolveMuonNativePlugins,
+  stageMuonNativePlugins,
+} from "../common/native-plugins.js";
+import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
 
 import AdmZip from "adm-zip";
 
@@ -130,6 +136,33 @@ export const buildDesktopMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
+  const sourcePluginConfig = buildConfig.config.plugin;
+  const hasNativeReferences =
+    isJsonObject(sourcePluginConfig) &&
+    Array.isArray(sourcePluginConfig.plugins) &&
+    sourcePluginConfig.plugins.some(
+      (entry) => isJsonObject(entry) && entry.native !== undefined,
+    );
+  const nativeAccess =
+    internalOptions.nativePluginAccess ??
+    (hasNativeReferences
+      ? await resolveMuonPluginAccessOptions({
+          root,
+          configPath: options.configPath,
+          pluginAccess: { mode: options.runtimePluginConfig?.mode ?? "simple" },
+        })
+      : undefined);
+  const nativeArtifacts =
+    nativeAccess === undefined
+      ? new Map()
+      : (nativeAccess.nativeArtifacts ??
+        (await resolveMuonNativePlugins({
+          root,
+          directory: nativeAccess.nativeDirectory ?? buildConfig.directory,
+          plugins: nativeAccess.plugins,
+          targets,
+          environment,
+        })));
   const nodeProject = await resolveMuonNodeProject(
     buildConfig.config,
     buildConfig.directory,
@@ -155,6 +188,15 @@ export const buildDesktopMuonApp = async (
     applyRuntimePluginConfig(desktopConfig, runtimePluginConfig),
     nodeProject,
   );
+  if (nativeArtifacts.size > 0) {
+    const plugin = sourceConfig.plugin as JsonObject;
+    plugin.path = "./plugins";
+    if (Array.isArray(plugin.plugins))
+      plugin.plugins = plugin.plugins.map((entry: JsonObject) => {
+        const { native: _native, ...runtime } = entry;
+        return runtime;
+      });
+  }
   assertNoUserInitialTitleBarIcon(sourceConfig);
   assertNoUserNodeRuntime(sourceConfig);
   const resolvedBuildConfig: BuildConfig = {
@@ -239,6 +281,7 @@ export const buildDesktopMuonApp = async (
       target,
       assetInput,
       sourceConfig,
+      nativeArtifacts,
       windowsResource,
       windowsCodeSigning,
       linuxDesktop,
@@ -434,6 +477,10 @@ const buildMuonTarget = async (input: {
   target: MuonDesktopTarget;
   assetInput: AssetInput;
   sourceConfig: JsonObject;
+  nativeArtifacts: ReadonlyMap<
+    string,
+    import("muon-plugin-sdk/artifact").ResolvedPluginArtifact
+  >;
   windowsResource: ResolvedMuonWindowsResource;
   windowsCodeSigning: ResolvedMuonWindowsCodeSigning | undefined;
   linuxDesktop: ResolvedMuonLinuxDesktop;
@@ -524,6 +571,12 @@ const buildMuonTarget = async (input: {
     await stageMuonNodeProject(input.nodeProject, outputPath);
   }
   await copyDistributionFiles(input.distributionFiles, outputPath);
+  if (input.nativeArtifacts.size > 0)
+    await stageMuonNativePlugins(
+      input.nativeArtifacts,
+      input.target,
+      join(outputPath, "plugins"),
+    );
 
   input.progress?.({
     phase: "build",
@@ -536,7 +589,17 @@ const buildMuonTarget = async (input: {
     [{ name: appIconAssetEntryName, data: await readFile(appIconPath) }],
   );
   const embeddedConfig = createEmbeddedConfig(
-    input.sourceConfig,
+    input.nativeArtifacts.size === 0
+      ? input.sourceConfig
+      : {
+          ...input.sourceConfig,
+          plugin: applyMuonNativePluginCatalogs(
+            input.sourceConfig.plugin as unknown as MuonRuntimePluginConfig,
+            input.nativeArtifacts,
+            input.target,
+            "./plugins",
+          ),
+        },
     asset,
     runtimeAppId,
     input.linuxDesktop.desktopId,

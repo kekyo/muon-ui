@@ -71,6 +71,8 @@ export interface MuonCapabilityRuntimeEntry {
  * Runtime plugin entry generated for muon-core config overlays.
  */
 export interface MuonRuntimePluginEntryConfig {
+  /** Verified producer catalog after applying the application allow policy. */
+  expectedFunctions?: readonly string[];
   /**
    * Plugin entry name.
    */
@@ -329,6 +331,20 @@ const globToRegExp = (glob: string, separator: string): RegExp => {
 
 const isGlobMatch = (glob: string, value: string, separator: string): boolean =>
   globToRegExp(glob, separator).test(value);
+
+/**
+ * Selects producer catalog entries using the runtime's dot-separated glob policy.
+ * @param catalog - Public function paths from a verified native artifact.
+ * @param allow - Application-owned permission patterns.
+ * @returns The concrete expected runtime catalog after applying permissions.
+ */
+export const selectMuonPluginFunctionPaths = (
+  catalog: readonly string[],
+  allow: readonly string[],
+): readonly string[] =>
+  catalog.filter((path) =>
+    allow.some((pattern) => isGlobMatch(pattern, path, ".")),
+  );
 
 const containsGlob = (value: string): boolean => value.includes("*");
 

@@ -69,19 +69,29 @@ tgz名は実際のバージョンに合わせてください。`--plugins`を付
 
 ## Windowsバイナリのe2eテスト
 
-Windowsバイナリのe2eテストを実行するには、 [agent-rover](https://github.com/kekyo/agent-rover/) のリモートエージェントを起動した Windows 11 (amd64) のマシンが必要です。
-仮想マシンも使用できます。次のコマンドでテストを起動してください。
+Windowsバイナリのe2eテストには、[agent-rover](https://github.com/kekyo/agent-rover/)のリモートエージェントを起動したWindows 11（amd64）のマシンが必要です。仮想マシンも使用できます。接続先のPATHにはNode.jsも必要です。Node.js 24で検証しています。インストール後はagent-roverを再起動し、新しいPATHを反映してください。
 
-muon-uiのWindows E2Eでは接続先のPATHにNode.jsも必要です。Node.js 24で検証しています。インストール後はagent-roverを再起動し、新しいPATHを反映してください。
+接続にはagent-rover 0.10.0の標準設定を使います。[公式READMEの接続設定](https://github.com/kekyo/agent-rover/blob/0.10.0/README_ja.md#接続設定ファイル)に従い、テストを起動するユーザーのホームディレクトリにある`~/.agent-rover`へ接続先を登録してください。既に登録済みなら、ホストやトークンを環境変数へ転記する必要はありません。
 
-```bash
-export AGENT_ROVER_WIN11_HOST=<agent-host-address>
-export AGENT_ROVER_WIN11_TOKEN=<agent-token>
+設定ファイルの例です。
 
-npm run test:windows-e2e --workspace muon-core-tester
+```ini
+[default]
+test-agent.example.com=<access-token>
 ```
 
-あるいは、環境変数が定義されていれば、 `npm run test` で一括テストにWindows e2eテストが含まれます。
+次のコマンドでWindows i686・amd64の画面テストと、インストーラーの実機テストを実行できます。
+
+```bash
+npm run test:windows-e2e --workspace muon-core-tester
+npm run test:windows-nsis-e2e --workspace muon-ui
+```
+
+既定では`default`セクションを使います。別のセクションを選ぶ場合は、コマンドに`MUON_E2E_AGENT_SECTION=vm`などを指定してください。接続先の選択と使用中の再試行はSDKが行います。SDKは実行時の作業ディレクトリにある`.agent-rover`を優先するため、npm workspace内に同名ファイルを置く場合は設定の優先順位に注意してください。
+
+実機テストは、`MUON_E2E_REMOTE_WINDOWS=1`を設定する上記の専用コマンドで有効になります。通常の`npm test`ではスキップする仕様です。各スイートは終了時に接続を解放します。
+
+実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
 
 ## パッケージ生成
 

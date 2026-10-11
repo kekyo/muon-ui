@@ -5,6 +5,10 @@
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
+  launchWindowsTestProcess,
+  type WindowsTestProcess,
+} from "./windows-agent.js";
+import {
   access as nodeAccess,
   appendFile as nodeAppendFile,
   chmod as nodeChmod,
@@ -72,7 +76,6 @@ import {
 import {
   appendWindowsRemoteFile,
   applyWindowsRemoteProcessSnapshot,
-  allocateWindowsRemoteCdpPort,
   createFallbackWindowsRemoteTempDirectory,
   createWindowsRemoteProcessHandle,
   dirnameWindowsPath,
@@ -542,7 +545,7 @@ export interface RunningWindowsRemoteMuon {
   cdpPort: number;
   configPath: string;
   configDirectory: string;
-  muonProcess: RemoteManagedProcess;
+  muonProcess: WindowsTestProcess;
   relayProcess: RemoteManagedProcess;
   relayProcessId: number;
   runId: number;
@@ -1973,11 +1976,34 @@ export const openPopupTarget = async (
   if (response.exceptionDetails !== undefined) {
     throw new Error("popup open script failed");
   }
-  return await waitForNewPageTarget(
+  const target = await waitForNewPageTarget(
     previousTargetIds,
     targetTimeoutMs,
     (target) => target.url === url,
   );
+  // CDP can list the destination while the popup still owns its initial
+  // about:blank context. Actions scheduled there are lost when it navigates.
+  // Wait for the actual document before callers inspect or close the popup.
+  await expect
+    .poll(
+      async () => {
+        const popupDriver = await connectToMuonCdp({
+          port: MUON_PORT,
+          targetId: target.id,
+          timeoutMs: targetTimeoutMs,
+        });
+        try {
+          return await popupDriver.evaluate<{ href: string; state: string }>(
+            "({ href: document.location.href, state: document.readyState })",
+          );
+        } finally {
+          popupDriver.close();
+        }
+      },
+      { timeout: targetTimeoutMs },
+    )
+    .toEqual({ href: url, state: "complete" });
+  return target;
 };
 
 export const addPopupSizeFeatures = (features: string): string => {
@@ -2664,7 +2690,7 @@ const writeWindowsRemoteArtifactText = async (
 const writeWindowsRemoteManagedProcessArtifacts = async (
   directory: string,
   prefix: string,
-  process: RemoteManagedProcess,
+  process: WindowsTestProcess,
 ): Promise<void> => {
   try {
     await writeWindowsRemoteArtifactText(
@@ -2838,69 +2864,69 @@ export const cleanupWindowsRemoteTestProcesses = async (): Promise<void> => {
   }
 };
 
-const startWindowsRemoteCdpRelay = async (
-  configDirectory: string,
-  runId: number,
-  cdpPort: number,
-): Promise<RunningWindowsRemoteCdpRelay> => {
-  const context = requireWindowsRemoteContext();
-  const processInfo = await runOperationWithTimeout(
-    "Windows CDP relay launch",
-    windowsRemoteAgentOperationTimeoutMs,
-    async () =>
-      await context.agent.processes.launchManaged({
-        arguments: [String(cdpPort), String(MUON_PORT)],
-        captureStderr: true,
-        captureStdout: true,
-        createNoWindow: true,
-        path: context.runtime.relayExecutablePath,
-        workingDirectory: join(context.runtime.relayExecutablePath, ".."),
-      }),
-  );
-  try {
-    await delay(250);
-    const snapshot = await runOperationWithTimeout(
-      "Windows CDP relay snapshot",
-      windowsRemoteProcessOperationTimeoutMs,
-      async () => await processInfo.rootSnapshot(),
+const startWindowsRemoteCdpRelay =
+  async (): Promise<RunningWindowsRemoteCdpRelay> => {
+    const context = requireWindowsRemoteContext();
+    const processInfo = await runOperationWithTimeout(
+      "Windows CDP relay launch",
+      windowsRemoteAgentOperationTimeoutMs,
+      async () =>
+        await context.agent.processes.launchManaged({
+          arguments: ["0", String(MUON_PORT)],
+          captureStderr: true,
+          captureStdout: true,
+          createNoWindow: true,
+          path: context.runtime.relayExecutablePath,
+          workingDirectory: join(context.runtime.relayExecutablePath, ".."),
+        }),
     );
-    if (!snapshot.running) {
-      const stderr = await runOperationWithTimeout(
-        "Windows CDP relay stderr",
-        windowsRemoteProcessOperationTimeoutMs,
-        async () => await processInfo.stderrText(),
-      );
-      throw new Error(
-        `Windows CDP relay exited with ${String(snapshot.exitCode)}\n${stderr}`,
-      );
-    }
-    return { cdpPort, process: processInfo };
-  } catch (error) {
     try {
-      await runOperationWithTimeout(
-        "Windows CDP relay kill after launch failure",
-        windowsRemoteProcessOperationTimeoutMs,
-        async () => {
-          await processInfo.kill();
-        },
-      );
-    } catch {
-      // The relay may already be closed.
+      let cdpPort = 0;
+      await expect
+        .poll(
+          async () => {
+            const stdout = await processInfo.stdoutText();
+            const match = /^MUON_CDP_RELAY_PORT=(\d+)$/m.exec(stdout.trim());
+            if (match !== null) {
+              cdpPort = Number(match[1]);
+              return cdpPort > 0 && cdpPort <= 65535;
+            }
+            if (!(await processInfo.rootSnapshot()).running) {
+              throw new Error(await processInfo.stderrText());
+            }
+            return false;
+          },
+          { timeout: windowsRemoteProcessOperationTimeoutMs },
+        )
+        .toBe(true);
+      context.cdpPort = cdpPort;
+      return { cdpPort, process: processInfo };
+    } catch (error) {
+      try {
+        await runOperationWithTimeout(
+          "Windows CDP relay kill after launch failure",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await processInfo.kill();
+          },
+        );
+      } catch {
+        // The relay may already be closed.
+      }
+      try {
+        await runOperationWithTimeout(
+          "Windows CDP relay release after launch failure",
+          windowsRemoteProcessOperationTimeoutMs,
+          async () => {
+            await processInfo.releaseAsync();
+          },
+        );
+      } catch {
+        // Releasing is a remote agent bookkeeping step only.
+      }
+      throw error;
     }
-    try {
-      await runOperationWithTimeout(
-        "Windows CDP relay release after launch failure",
-        windowsRemoteProcessOperationTimeoutMs,
-        async () => {
-          await processInfo.releaseAsync();
-        },
-      );
-    } catch {
-      // Releasing is a remote agent bookkeeping step only.
-    }
-    throw error;
-  }
-};
+  };
 
 const startWindowsRemoteMuon = async (
   options: StartWindowsRemoteMuonOptions,
@@ -2977,31 +3003,29 @@ const startWindowsRemoteMuon = async (
         options.pluginCapabilities,
       ),
   );
-  const cdpPort = allocateWindowsRemoteCdpPort();
   let relay: RunningWindowsRemoteCdpRelay | undefined = undefined;
-  let launched: RemoteManagedProcess;
+  let launched: WindowsTestProcess;
   try {
     relay = await runOperationWithTimeout(
       "Windows CDP relay start",
       windowsRemoteAgentOperationTimeoutMs,
-      async () =>
-        await startWindowsRemoteCdpRelay(configDirectory, runId, cdpPort),
+      async () => await startWindowsRemoteCdpRelay(),
     );
     launched = await runOperationWithTimeout(
       "Windows remote muon launch",
       windowsRemoteAgentOperationTimeoutMs,
       async () =>
-        await context.agent.processes.launchManaged({
-          arguments: ["-c", configPath],
-          captureStderr: true,
-          captureStdout: true,
-          environment: createWindowsRemoteEnvironment(options.environment),
-          // Daemon lifecycle tests disable the outer job so descendants can
-          // break away and remain observable after Muon exits.
-          killTreeOnRelease: options.killTreeOnRelease,
-          path: executable,
-          workingDirectory: directory,
-        }),
+        await launchWindowsTestProcess(
+          context.agent,
+          {
+            arguments: ["-c", configPath],
+            environment: createWindowsRemoteEnvironment(options.environment),
+            path: executable,
+            workingDirectory: directory,
+          },
+          configDirectory,
+          options.killTreeOnRelease,
+        ),
     );
   } catch (error) {
     if (relay !== undefined) {
@@ -4548,6 +4572,8 @@ export const runBuiltinFsAdditionalOperations = async (
     symlink: {
       error: string;
       lstatType: string;
+      statType: string;
+      direntType: string;
       supported: boolean;
       symbolicLink: boolean;
       readlinkBasename: string;
@@ -4734,6 +4760,8 @@ export const runBuiltinFsAdditionalOperations = async (
     let symlink = {
       error: "",
       lstatType: "",
+      statType: "",
+      direntType: "",
       supported: false,
       symbolicLink: false,
       readlinkBasename: "",
@@ -4742,12 +4770,16 @@ export const runBuiltinFsAdditionalOperations = async (
     const symlinkError = await rejection(async () => {
       await window.muon.fs.symlink(renamedPath, linkPath, "file");
       const linkStat = await window.muon.fs.lstat(linkPath);
+      const targetStat = await window.muon.fs.stat(linkPath);
+      const entries = await window.muon.fs.readdir(rootPath, { withFileTypes: true });
       const readlinkTarget = await window.muon.fs.readlink(linkPath);
       const realpath = await window.muon.fs.realpath(linkPath);
       const linkedText = await window.muon.fs.readTextFile(realpath, "utf8");
       symlink = {
         error: "",
         lstatType: linkStat.type,
+        statType: targetStat.type,
+        direntType: entries.find((entry) => entry.name === "link.txt")?.type ?? "",
         supported: true,
         symbolicLink: linkStat.isSymbolicLink(),
         readlinkBasename: basename(readlinkTarget),
@@ -4931,6 +4963,8 @@ export const runBuiltinFsAdditionalOperations = async (
     expect(values.symlink).toEqual({
       error: "",
       lstatType: "symlink",
+      statType: "file",
+      direntType: "symlink",
       supported: true,
       symbolicLink: true,
       readlinkBasename: "renamed.txt",
@@ -5228,7 +5262,7 @@ export const runBuiltinFsFileUriOperations = async (
   });
   expect(values.partial).toEqual([0, 1, 9, 9, 4]);
   if (values.symlink.supported) {
-    expect(values.symlink).toEqual({
+    expect(values.symlink, JSON.stringify(values.symlink)).toEqual({
       error: "",
       lstatType: "symlink",
       supported: true,

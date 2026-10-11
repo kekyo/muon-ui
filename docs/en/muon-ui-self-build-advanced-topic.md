@@ -69,20 +69,27 @@ Use the actual tgz version. Before passing `--plugins`, run `npm test --workspac
 
 ## Windows binary e2e tests
 
-To run Windows binary e2e tests, you need a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent.
-This can also be a virtual machine instance.
-Then launch the tests as follows:
+Windows binary e2e tests require a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent. A virtual machine is also supported. Node.js must be on the remote agent's PATH; Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
 
-muon-ui's Windows E2E also requires Node.js on the remote agent's PATH. Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
+Connections use agent-rover 0.10.0's standard configuration. Follow the [official connection configuration guide](https://github.com/kekyo/agent-rover/blob/0.10.0/README.md#connection-configuration) to register test machines in `~/.agent-rover` in the home directory of the user running the tests. If they are already registered, there is no need to copy hosts or tokens into environment variables.
 
-```bash
-export AGENT_ROVER_WIN11_HOST=<agent-host-address>
-export AGENT_ROVER_WIN11_TOKEN=<agent-token>
+Example `~/.agent-rover`:
 
-npm run test:windows-e2e --workspace muon-core-tester
+```ini
+[default]
+test-agent.example.com=<access-token>
 ```
 
-Alternatively, if the environment variables are defined, `npm run test` includes the Windows e2e tests in the full test run.
+Run the Windows i686/amd64 screen tests and the installer tests with:
+
+```bash
+npm run test:windows-e2e --workspace muon-core-tester
+npm run test:windows-nsis-e2e --workspace muon-ui
+```
+
+Tests use the `default` section unless you specify another section, for example by prefixing the command with `MUON_E2E_AGENT_SECTION=vm`. The SDK selects a machine and retries when machines are busy. It prioritizes `.agent-rover` in the current working directory, so account for this precedence if you place a configuration file inside an npm workspace.
+
+Regular `npm test` runs skip tests on remote machines. The dedicated commands above set `MUON_E2E_REMOTE_WINDOWS=1` to enable them. Each suite releases its connection when it finishes. Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
 
 ## Package generation
 

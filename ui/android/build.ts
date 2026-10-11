@@ -13,7 +13,14 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { pathToFileURL } from "node:url";
 import { runScriptOnceToText, type FunCityLogEntry } from "funcity";
 import { runAndroidCommand } from "./command.js";
@@ -39,6 +46,9 @@ export type MuonAndroidPluginAccess = {
 
 /** Normalized package-owned plugin entry. */
 export interface MuonAndroidPackagedPlugin {
+  /** Ordinary shared libraries copied beside the plugin for each ABI. */ readonly dependencies?: Readonly<
+    Partial<Record<MuonAndroidAbi, readonly string[]>>
+  >;
   /** Logical capability name. */ readonly name: string;
   /** Packaged ELF soname. */ readonly soname: string;
   /** Explicitly allowed public function patterns. */ readonly allow: readonly string[];
@@ -220,6 +230,11 @@ export const buildAndroidApplication = async (
       );
       await mkdir(dirname(destination), { recursive: true });
       await copyFile(library, destination);
+      for (const dependency of plugin.dependencies?.[abi] ?? [])
+        await copyFile(
+          dependency,
+          join(dirname(destination), basename(dependency)),
+        );
     }
   }
   await writeFile(

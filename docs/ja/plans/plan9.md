@@ -201,3 +201,41 @@ SDKをnpm packして別ディレクトリへインストールし、そのSDKで
 最終のルートnpm testは終了コード0で完了した。VitestはSDK15、Android56、Android PoC3、Node40、ui356、CEFブラウザー209の計679テストが成功した。CEFの26件は、Windows実機用E2Eと明示的に有効化するストレステストのスキップである。共通C/C++の4テスト、CEFネイティブの42テスト、builderの検証、Android両ABIのDebug・Release生成と配布物検査も成功した。ログは/tmp/plan9-all-tests-verified.logに保存した。全体テスト中に行ったCLIの実行権限の修正は、SDKの15テストを再実行して成功し、npx muon-plugin doctorの直接起動も確認した。
 
 完了条件を上記の成果物と照合した。対象別の制約は、Linux ARMのCMake未導入とWindows実機でのCEF画面操作の未実施であり、各段階に記録した。7ターゲットのSDK配布物検査とNPM包装、独立NPM利用者の実行検証は成功している。CIは定義を追加してactionlintで検査し、GitHub上での実行結果とは区別した。feature/plan9へ段階ごとにコミットし、外部コードの変更とmainへのマージは行っていない。
+
+### 追加検証（2026年10月11日）
+
+CMakeを導入したとの連絡を受け、残っていた検証を進める。完了条件は、Linux ARM両環境でのCMakeビルドと呼出し、Windows両CPUでの実機検証、GitHub CIの成功、修正後のルート全体テストの成功とする。失敗が見つかった場合は再現を確認して修正し、対象の検証をやり直す。
+
+- [x] Linux ARM両環境でC/C++のCMakeビルド、関数呼出し、終了処理が成功する。
+- [x] Windows両CPUの実機でSDKのC/C++呼出し、画面操作、正常終了、誤ったカタログの拒否が成功する。
+- [x] Windows両CPUの実機E2Eが成功する。
+- [x] 修正後のルート全体テストが成功する。
+- [x] 最新のコードを含むGitHub CIが成功する。
+
+Linux armhf・arm64の既存コンテナーでCMake 3.25.1を確認した。検査済みのSDKをnpm packし、リポジトリ外へ展開した配布物とテスト用ソースだけを各コンテナーへ渡した。両環境でC99とC++20・cardioのCMakeビルド、関数呼出し、終了処理が成功した。C++版では非同期完了も確認した。ログは`.run/plan9-followup/arm-cmake.log`に保存した。
+
+Windowsビルドで見つかった未使用警告は、Linux専用ヘルパーのコンパイル条件と、[yyjson 0.12.0のソース](https://github.com/ibireme/yyjson/blob/0.12.0/src/yyjson.c)にあるx87向けビルドで使われない定数によるものだった。警告をエラーにするコンパイルで失敗を確認し、Linux専用ヘルパーをLinuxでのみ定義するようにした。yyjsonは外部ソースを変更せず、そのソースのコンパイルに限って未使用定数の警告を抑制した。修正後のコンパイルは成功し、`18e2af5`へコミットした。
+
+Windows実機E2Eでは、テストworkspaceの移動後も旧階層を基準にランタイムを探し、起動前に失敗していた。リポジトリからの相対パスでランタイムを取得するテストを追加し、失敗を確認した。参照元をリポジトリルートへ修正すると、基盤テスト17件が成功した。修正は`c79c17b`へコミットした。
+
+WindowsのSDK画面検証では、内部APIと外部プラグインを併用すると、正しい関数カタログを拒否する不具合が見つかった。ネイティブ関数の登録数を、内部APIも含む画面向け関数一覧の添字として使っていたためである。共通ランタイムのテストに内部APIとの併用を加えると、Linuxでも同じ失敗を再現できた。照合対象をそのプラグインが登録したネイティブ関数に限定し、正しいカタログの受入れ、誤ったカタログの拒否、関数呼出しと終了処理が成功した。修正は`7bd3fc5`へコミットした。RED・GREENのログは`.run/plan9-followup/catalog-platform-{red,green}.log`に保存した。
+
+追加検証で失敗が見つかったため、完了前に次の順序で修正と再検証を行う。まず、SDKのC++プラグイン終了時に、終了コールバックから戻る前にDLLを解放する問題を直す。次に、WindowsのデーモンE2Eをagent-roverの管理ジョブから独立して起動できるようにし、シンボリックリンクの情報取得を直す。各修正は失敗したテストで成功を確認して個別にコミットする。その後、SDKのWindows両CPUの画面操作・終了・不正カタログ拒否、Windows E2E、ルート全体テスト、最新の修正を含むGitHub CIを実行する。
+
+デーモンの実機E2Eは、agent-roverの管理ジョブ内で起動したMuonから子プロセスを独立させられず、4件が失敗した。`killTreeOnRelease: false`も起動時のジョブ所属は変えないため、デーモン検証時は独立したアプリ起動APIを使うようにした。制約の拒否も含む5件が成功し、`c8641be`へコミットした。agent-roverの動作は[0.5.0の起動処理](https://github.com/kekyo/agent-rover/blob/0.5.0/agents/windows/win32_process.cpp)と公開APIで確認した。
+
+SDKのC++プラグインは画面からの呼出し後、終了時にアクセス違反を起こした。Windowsのイベントログでは、解放済みのプラグインDLLへ戻っていた。終了コールバックの実行中にホストの終了完了処理が呼ばれないことを共通ランタイムのテストに加え、失敗を確認した。終了完了処理を所有スレッドの次のタスクへ送り、コールバックとコルーチンが戻ってから解放するようにすると成功した。修正は`abbee7d`へコミットした。
+
+Windows i686・amd64の実機で、リポジトリ外へインストールしたSDKによるC99・C++20とMake・CMakeの計8通りが、関数呼出しと終了処理に成功した。各CPUのCEFアプリをPlaywright MCPで操作し、4プラグインすべてが42を返すこと、通常の依存DLLを読み込めること、C++の非同期完了後にアプリが正常終了することを確認した。誤った提供者カタログも起動時に拒否した。ログは`.run/plan9-followup/windows-sdk-mcp-final-success.log`、画面は`.run/plan9-followup/playwright/windows-{i686,amd64}/sdk-windows.png`に保存した。
+
+Windowsのファイル操作では、`lstat`がリンクを通常ファイルと判定し、`realpath`がリンク先を解決していなかった。実機E2Eで失敗を確認し、リンクを追うかどうかを指定してWindowsのファイルハンドルを開き、種類・サイズ・更新日時・読取り専用属性と正規化済みのパスを取得するようにした。`stat`、`lstat`、ディレクトリ一覧、`file:` URI経由の`realpath`を含むファイル操作テストが成功した。修正は`b762c69`へコミットし、ログは`.run/plan9-followup/windows-symlink-final-green.log`へ保存した。利用したAPIの仕様は[CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)と[GetFinalPathNameByHandleW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)で確認した。
+
+修正後のWindows実機E2Eは、i686・amd64のどちらも178件が成功し、29件をスキップして終了コード0で完了した。デーモン、ファイル操作、非同期プラグインの終了処理を含む。ログは`.run/plan9-followup/windows-{i686,amd64}-final.log`に保存した。
+
+修正後のルート`npm test`は終了コード0で完了した。VitestはSDK15、Android56、Android PoC3、Node40、ui356、CEF210の計680件が成功した。CEFの26件は設定上のスキップである。共通C/C++の4件、CEFネイティブの42件、builderの検証、Android両ABIのDebug・Release生成と配布物検査も成功した。ログは`.run/plan9-followup/all-tests-final.log`に保存した。
+
+外部依存からの診断も確認した。AndroidのAPKセット生成では、[bundletool 1.18.3](https://github.com/google/bundletool/releases/tag/1.18.3)に同梱されたprotobufが`sun.misc.Unsafe::arrayBaseOffset`を呼び、Java 25が非推奨警告を出す。CIの依存ビルドでは、[libffi 3.8.0のJava raw API](https://github.com/libffi/libffi/blob/v3.8.0/src/java_raw_api.c)内の非推奨関数呼出しと、[bzip2 1.0.8](https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz)の関数をコンパイラーがインライン展開しない旨の警告が出た。発生箇所は外部コードであり、外部依存の更新時に再確認する項目として記録した。これらの診断と、今回修正したMuon側の未使用警告を区別している。
+
+最新のコード`b762c69`を含む[GitHub CIの実行38107931779](https://github.com/kekyo/muon-ui/actions/runs/38107931779)は、Build and testとCodeQLの3言語の計4ジョブすべてが成功した。ルート全体テスト、Linux・Windowsの独立SDK検証、Android arm64のコンパイル、16 KiBエミュレーターでのAndroidランタイム・QuickJS版・配布APKの検証を通過した。独立したNPM利用アプリも、CEFとAndroidでコンパイラーなしの生成、Playwright MCPによる関数呼出し、不正カタログの拒否が成功した。CIログは`.run/plan9-followup/ci-final.log`に保存した。
+
+追加検証の完了条件を照合し、すべて満たした。10月8日時点で残っていたLinux ARMのCMake、Windows実機の画面操作、GitHub CIの実行確認は完了した。修正を6コミットに分けてfeature/plan9へpushし、外部コードの変更、mainへのマージ、NPM公開は行っていない。

@@ -402,13 +402,14 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
   An import rule that specifies neither is a configuration error.
 - `plugins[].imports[].allow` is the function path allowed for that import source in `validate` mode.
   It is required and cannot be an empty array.
-  It can use the same glob syntax as `plugins[].allow`, and the specified glob is passed directly to runtime-side permission validation.
+  It can use the same glob syntax as `plugins[].allow`. On desktop, the specified glob is passed directly to runtime-side permission validation.
   On the other hand, when generating named exports for virtual modules such as `muon:executor`, the Vite side expands them to concrete function paths.
-  Built-in plugin function lists are expanded from the catalog held by muon-ui. External plugin wildcards are collected during Vite dev/build by loading the plugin with `muon-plugin-inspector` and reading metadata from `muon_init_plugin()`.
+  Built-in plugin function lists are expanded from the catalog held by muon-ui. On desktop, external plugin wildcards are collected during Vite dev/build by loading the plugin with `muon-plugin-inspector` and reading metadata from `muon_init_plugin()`.
   The inspector uses `plugins[].config` and `signature`/`salt` for initialization and signature verification, but it does not call the bodies of exposed functions.
   If a wildcard cannot be expanded to any concrete named export, Vite reports an error.
+  Android uses producer-supplied JSON function catalogs and ABI-specific SHA-256 hashes, expanding each plugin's permissions into concrete function paths. See [Android native plugins](./android.md#prebuilt-native-plugins) for configuration.
 
-> Note: `capabilities`, `signature`, and `salt`, which are not listed here, are values automatically calculated and inserted during `muon build` or `muon pack`.
+> Note: `capabilities` are generated at build time. On desktop, `signature` and `salt` are also calculated and inserted by `muon build` or `muon pack`. On Android, omit those two fields and use ABI-specific SHA-256 hashes.
 > Their explanation is omitted.
 
 ## log key

@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+project(example_vendor LANGUAGES C)
+add_library(example_vendor SHARED counter.c)
+target_include_directories(example_vendor PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+set_target_properties(example_vendor PROPERTIES C_STANDARD 99)

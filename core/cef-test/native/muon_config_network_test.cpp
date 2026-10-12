@@ -1,0 +1,3231 @@
+/* muon - Multi-platform GUI application framework that uses CEF as its backend
+ * Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+ * Under MIT.
+ * https://github.com/kekyo/muon-ui
+ */
+
+#include "config/muon_config.h"
+#include "config/muon_startup.h"
+#include "browser/muon_browser_background_color.h"
+#include "network/muon_network_policy.h"
+#include "plugins/muon_plugin_policy.h"
+
+#include "include/internal/cef_types.h"
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#ifndef MUON_CORE_SOURCE_DIR
+#define MUON_CORE_SOURCE_DIR "."
+#endif
+
+static bool Expect(bool condition, const std::string& message) {
+  if (!condition) {
+    std::cerr << message << "\n";
+    return false;
+  }
+  return true;
+}
+
+static std::filesystem::path CreateTestDirectory() {
+  std::error_code error;
+  const auto base = std::filesystem::temp_directory_path(error);
+  if (error) {
+    return {};
+  }
+  const auto unique =
+      std::to_string(std::chrono::steady_clock::now()
+                         .time_since_epoch()
+                         .count());
+  const auto directory = base / ("muon-config-network-" + unique);
+  if (!std::filesystem::create_directories(directory, error) || error) {
+    return {};
+  }
+  return directory;
+}
+
+static bool WriteFile(const std::filesystem::path& path,
+                      const std::string& content) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    return false;
+  }
+  output << content;
+  return static_cast<bool>(output);
+}
+
+static bool LoadConfigExpectSuccess(const std::filesystem::path& path,
+                                    MuonConfig* config) {
+  std::string error_message;
+  return Expect(LoadMuonConfig(path, config, &error_message), error_message);
+}
+
+static bool LoadConfigExpectFailure(const std::filesystem::path& path,
+                                    const std::string& expected_message) {
+  MuonConfig config;
+  std::string error_message;
+  return Expect(!LoadMuonConfig(path, &config, &error_message),
+                "invalid config was accepted") &&
+         Expect(error_message.find(expected_message) != std::string::npos,
+                "config error did not contain: " + expected_message);
+}
+
+static bool LoadConfigFilesExpectSuccess(
+    const std::vector<std::filesystem::path>& paths,
+    MuonConfig* config) {
+  std::string error_message;
+  return Expect(LoadMuonConfigFiles(paths, config, &error_message),
+                error_message);
+}
+
+static bool LoadConfigFilesExpectFailure(
+    const std::vector<std::filesystem::path>& paths,
+    const std::string& expected_message) {
+  MuonConfig config;
+  std::string error_message;
+  return Expect(!LoadMuonConfigFiles(paths, &config, &error_message),
+                "invalid config file sequence was accepted") &&
+         Expect(error_message.find(expected_message) != std::string::npos,
+                "config files error did not contain: " + expected_message);
+}
+
+static const std::string* FindStringConfigValue(
+    const std::vector<MuonStringConfigEntry>& entries,
+    const std::string& key) {
+  for (const auto& entry : entries) {
+    if (entry.key == key) {
+      return &entry.value;
+    }
+  }
+  return nullptr;
+}
+
+static void SetTestLaunchSource(const std::string& launch_source) {
+  std::string executable = "muon";
+  std::string switch_argument =
+      std::string(kMuonLaunchSourceSwitchPrefix) + launch_source;
+  char* argv[] = {executable.data(), switch_argument.data()};
+  SetMuonStartupCommandLine(2, argv);
+}
+
+static void SetTestDefaultLaunchSource() {
+  std::string executable = "muon";
+  char* argv[] = {executable.data()};
+  SetMuonStartupCommandLine(1, argv);
+}
+
+static void SetEnvironmentValue(const char* name, const std::string& value) {
+#if defined(_WIN32)
+  _putenv_s(name, value.c_str());
+#else
+  setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void ClearEnvironment(const char* name) {
+#if defined(_WIN32)
+  _putenv_s(name, "");
+#else
+  unsetenv(name);
+#endif
+}
+
+static void SetEnvironment(const char* name, const std::filesystem::path& path) {
+  SetEnvironmentValue(name, path.string());
+}
+
+static std::filesystem::path SetTestStateHome(
+    const std::filesystem::path& test_directory,
+    const std::string& name) {
+  const auto state_home = test_directory / name;
+#if defined(_WIN32)
+  SetEnvironment("LOCALAPPDATA", state_home);
+#else
+  SetEnvironment("XDG_STATE_HOME", state_home);
+#endif
+  return state_home;
+}
+
+static std::filesystem::path GetTestDefaultProfilePath(
+    const std::filesystem::path& state_home,
+    const std::string& app_id) {
+  return state_home / app_id / "profile";
+}
+
+static bool ExpectShortcut(const MuonKeyboardShortcut& shortcut,
+                           bool enabled,
+                           int windows_key_code,
+                           uint32_t modifiers,
+                           const std::string& message,
+                           bool accepts_shift_variant = false) {
+  return Expect(shortcut.enabled == enabled, message + " enabled changed") &&
+         Expect(shortcut.windows_key_code == windows_key_code,
+                message + " key code changed") &&
+         Expect(shortcut.modifiers == modifiers,
+                message + " modifiers changed") &&
+         Expect(shortcut.accepts_shift_variant == accepts_shift_variant,
+                message + " shift variant changed");
+}
+
+static bool ExpectBrowserBackgroundSystem(
+    const MuonBrowserBackgroundColorConfig& background_color,
+    const std::string& message) {
+  return Expect(background_color.mode == kMuonBrowserBackgroundColorSystem,
+                message + " mode changed") &&
+         Expect(background_color.red == 0, message + " red changed") &&
+         Expect(background_color.green == 0, message + " green changed") &&
+         Expect(background_color.blue == 0, message + " blue changed");
+}
+
+static bool ExpectBrowserBackgroundRgb(
+    const MuonBrowserBackgroundColorConfig& background_color,
+    uint8_t red,
+    uint8_t green,
+    uint8_t blue,
+    const std::string& message) {
+  return Expect(background_color.mode == kMuonBrowserBackgroundColorRgb,
+                message + " mode changed") &&
+         Expect(background_color.red == red, message + " red changed") &&
+         Expect(background_color.green == green,
+                message + " green changed") &&
+         Expect(background_color.blue == blue, message + " blue changed");
+}
+
+static bool ExpectResolvedBrowserBackgroundColor(
+    const MuonResolvedBrowserBackgroundColor& resolved_color,
+    uint8_t red,
+    uint8_t green,
+    uint8_t blue,
+    const std::string& message) {
+  return Expect(resolved_color.has_color, message + " was not resolved") &&
+         Expect(CefColorGetA(resolved_color.color) == 0xff,
+                message + " alpha changed") &&
+         Expect(CefColorGetR(resolved_color.color) == red,
+                message + " red changed") &&
+         Expect(CefColorGetG(resolved_color.color) == green,
+                message + " green changed") &&
+         Expect(CefColorGetB(resolved_color.color) == blue,
+                message + " blue changed");
+}
+
+static bool ExpectLogDefaults(const MuonLogConfig& log,
+                              const std::string& message) {
+  return Expect(log.level == kMuonLogLevelInfo,
+                message + " global level changed") &&
+         Expect(log.output.type == kMuonLogOutputStderr,
+                message + " output type changed") &&
+         Expect(log.output.path.empty(), message + " output path changed") &&
+         Expect(log.muon == kMuonLogLevelInfo,
+                message + " muon level changed") &&
+         Expect(log.cef == kMuonLogLevelWarning,
+                message + " cef level changed") &&
+         Expect(log.console == kMuonLogLevelDebug,
+                message + " console level changed") &&
+         Expect(log.plugin == kMuonLogLevelInfo,
+                message + " plugin level changed");
+}
+
+static bool ExpectBrowserDefaults(const MuonBrowserConfig& browser,
+                                  const std::filesystem::path& profile,
+                                  const std::string& message) {
+  return Expect(browser.start_page == "asset://main/index.html",
+                message + " start URL changed") &&
+         Expect(browser.user_agent.empty(),
+                message + " user agent default changed") &&
+         Expect(browser.profile == profile,
+                message + " profile path changed") &&
+         Expect(browser.initial_window_state ==
+                    kMuonBrowserInitialWindowStateNormal,
+                message + " initial window state changed") &&
+         Expect(browser.context_menu_mode ==
+                    kMuonBrowserContextMenuModeStandard,
+                message + " context menu mode changed") &&
+         Expect(browser.title_bar == kMuonBrowserTitleBarMuon,
+                message + " title bar mode changed") &&
+         Expect(browser.initial_title_bar_visibility,
+                message + " initial title bar visibility changed") &&
+         ExpectBrowserBackgroundSystem(browser.background_color,
+                                       message + " background color") &&
+         Expect(browser.plugin.mode == kMuonBrowserPluginModeValidate,
+                message + " plugin mode changed") &&
+         Expect(browser.plugin.allow.size() == 1,
+                message + " plugin page allowlist count changed") &&
+         Expect(browser.plugin.allow[0] == "asset://main/**",
+                message + " plugin page pattern changed") &&
+         Expect(browser.plugin.capabilities.empty(),
+                message + " plugin capabilities changed") &&
+         Expect(browser.allow_unsafe_javascript_parent_access.empty(),
+                message + " unsafe parent access allowlist count changed") &&
+         ExpectShortcut(browser.devtools, false, 0, 0,
+                        message + " devtools shortcut") &&
+         ExpectShortcut(browser.reload, false, 0, 0,
+                        message + " reload shortcut") &&
+         ExpectShortcut(browser.hard_reload, false, 0, 0,
+                        message + " hardReload shortcut") &&
+         ExpectShortcut(browser.fullscreen, false, 0, 0,
+                        message + " fullscreen shortcut") &&
+         ExpectShortcut(browser.zoom_in, false, 0, 0,
+                        message + " zoomIn shortcut") &&
+         ExpectShortcut(browser.zoom_out, false, 0, 0,
+                        message + " zoomOut shortcut") &&
+         ExpectShortcut(browser.reset_zoom, false, 0, 0,
+                        message + " resetZoom shortcut") &&
+         ExpectShortcut(browser.recycle, false, 0, 0,
+                        message + " recycle shortcut");
+}
+
+static bool ExpectDefaultNetworkAllow(const MuonNetworkConfig& network,
+                                      const std::string& message) {
+  return Expect(network.allow.size() == 2,
+                message + " allowlist count changed") &&
+         Expect(network.allow[0] == "asset://**",
+                message + " asset pattern changed") &&
+         Expect(network.allow[1] == "data:image/**",
+                message + " image data pattern changed");
+}
+
+static bool ExpectDebuggerConfig(const MuonDebuggerConfig& cdp,
+                                 bool enable,
+                                 int port,
+                                 const std::string& message) {
+  return Expect(cdp.enable == enable, message + " enable changed") &&
+         Expect(cdp.port == port, message + " port changed");
+}
+
+static bool ExpectAuthorizedOrigin(
+    const MuonAuthorizedOriginConfig& origin,
+    const std::string& scheme,
+    const std::string& domain,
+    int port,
+    const std::string& message) {
+  return Expect(origin.scheme == scheme, message + " scheme changed") &&
+         Expect(origin.domain == domain, message + " domain changed") &&
+         Expect(origin.port == port, message + " port changed");
+}
+
+static void WriteVarUint(std::vector<uint8_t>* bytes, uint64_t value) {
+  do {
+    auto next = static_cast<uint8_t>(value & 0x7f);
+    value >>= 7;
+    if (value != 0) {
+      next = static_cast<uint8_t>(next | 0x80);
+    }
+    bytes->push_back(next);
+  } while (value != 0);
+}
+
+static void WriteRawString(std::vector<uint8_t>* bytes,
+                           const std::string& value) {
+  WriteVarUint(bytes, value.size());
+  bytes->insert(bytes->end(), value.begin(), value.end());
+}
+
+static void WriteTlvString(std::vector<uint8_t>* bytes,
+                           const std::string& value) {
+  bytes->push_back(4);
+  WriteRawString(bytes, value);
+}
+
+static void WriteTlvBinary(std::vector<uint8_t>* bytes,
+                           const std::vector<uint8_t>& value) {
+  bytes->push_back(5);
+  WriteVarUint(bytes, value.size());
+  bytes->insert(bytes->end(), value.begin(), value.end());
+}
+
+static void WriteTlvBool(std::vector<uint8_t>* bytes, bool value) {
+  bytes->push_back(value ? 2 : 1);
+}
+
+static void BeginTlvObject(std::vector<uint8_t>* bytes, size_t entry_count) {
+  bytes->push_back(7);
+  WriteVarUint(bytes, entry_count);
+}
+
+static void BeginTlvArray(std::vector<uint8_t>* bytes, size_t entry_count) {
+  bytes->push_back(6);
+  WriteVarUint(bytes, entry_count);
+}
+
+static std::vector<uint8_t> CreateEmbeddedConfigPayload() {
+  std::vector<uint8_t> bytes;
+  BeginTlvObject(&bytes, 5);
+
+  WriteRawString(&bytes, "asset");
+  BeginTlvObject(&bytes, 3);
+  WriteRawString(&bytes, "sourcePath");
+  WriteTlvString(&bytes, "assets.zip");
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(
+      &bytes,
+      {0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+       0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+       0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+       0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad});
+  WriteRawString(&bytes, "salt");
+  WriteTlvBinary(&bytes, {0x0a, 0x10, 0xff});
+
+  WriteRawString(&bytes, "browser");
+  BeginTlvObject(&bytes, 4);
+  WriteRawString(&bytes, "startPage");
+  WriteTlvString(&bytes, "https://embedded.example/app");
+  WriteRawString(&bytes, "userAgent");
+  WriteTlvString(&bytes, "EmbeddedApp/1.0");
+  WriteRawString(&bytes, "profilePath");
+  WriteTlvString(&bytes, "profiles/embedded");
+  WriteRawString(&bytes, "backgroundColor");
+  WriteTlvBinary(&bytes, {0x12, 0x3a, 0xbc});
+
+  WriteRawString(&bytes, "cdp");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "enable");
+  WriteTlvBool(&bytes, true);
+
+  WriteRawString(&bytes, "network");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "localAccess");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "allowInsecureLocalhost");
+  WriteTlvBool(&bytes, true);
+
+  WriteRawString(&bytes, "plugin");
+  BeginTlvObject(&bytes, 2);
+  WriteRawString(&bytes, "path");
+  WriteTlvString(&bytes, "plugins");
+  WriteRawString(&bytes, "plugins");
+  BeginTlvArray(&bytes, 1);
+  BeginTlvObject(&bytes, 4);
+  WriteRawString(&bytes, "name");
+  WriteTlvString(&bytes, "embedded_plugin");
+  WriteRawString(&bytes, "allow");
+  BeginTlvArray(&bytes, 1);
+  WriteTlvString(&bytes, "embedded.*");
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(
+      &bytes,
+      {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+       0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
+       0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+       0x1e, 0x1f});
+  WriteRawString(&bytes, "salt");
+  WriteTlvBinary(&bytes, {0xde, 0xad, 0xbe, 0xef});
+
+  return bytes;
+}
+
+static std::vector<uint8_t> CreateEmbeddedAssetSignaturePayload(
+    size_t signature_size) {
+  std::vector<uint8_t> bytes;
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "asset");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(&bytes, std::vector<uint8_t>(signature_size, 0x5a));
+  return bytes;
+}
+
+static std::vector<uint8_t> CreateEmbeddedPluginSignaturePayload(
+    size_t signature_size) {
+  std::vector<uint8_t> bytes;
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "plugin");
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "plugins");
+  BeginTlvArray(&bytes, 1);
+  BeginTlvObject(&bytes, 1);
+  WriteRawString(&bytes, "signature");
+  WriteTlvBinary(&bytes, std::vector<uint8_t>(signature_size, 0x5a));
+  return bytes;
+}
+
+static bool LoadEmbeddedConfigExpectFailure(
+    const std::vector<uint8_t>& payload,
+    const std::filesystem::path& runtime_directory,
+    const std::string& expected_message) {
+  std::vector<uint8_t> slot;
+  std::string error_message;
+  if (!Expect(CreateMuonEmbeddedConfigSlot(payload, &slot, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  MuonConfig config;
+  std::vector<std::filesystem::path> config_paths;
+  auto embedded = false;
+  return Expect(!LoadMuonStartupConfigFromEmbeddedSlot(
+                    {"muon"}, slot.data(), slot.size(), runtime_directory,
+                    &config, &config_paths, &embedded, &error_message),
+                "invalid embedded asset signature was accepted") &&
+         Expect(error_message.find(expected_message) != std::string::npos,
+                "embedded config error did not contain: " +
+                    expected_message);
+}
+
+static bool RunConfigLoadingTest(const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  SetTestDefaultLaunchSource();
+  const auto state_home =
+      SetTestStateHome(test_directory, "config-loading-state");
+  const auto default_profile = GetTestDefaultProfilePath(state_home, "muon");
+  if (!LoadConfigExpectSuccess(test_directory / "missing.json", &config)) {
+    return false;
+  }
+  if (!ExpectDefaultNetworkAllow(config.network, "missing muon.json") ||
+      !Expect(!config.asset.has_from,
+              "missing muon.json configured asset.sourcePath") ||
+      !Expect(!config.asset.has_signature,
+              "missing muon.json configured asset.signature") ||
+      !Expect(!config.asset.has_salt,
+              "missing muon.json configured asset.salt") ||
+      !Expect(config.network.authorized_origin.empty(),
+              "missing muon.json did not produce an empty authorized origin "
+              "list") ||
+      !ExpectBrowserDefaults(config.browser, default_profile,
+                             "missing browser config") ||
+      !Expect(config.plugin.plugins.empty(),
+              "missing muon.json did not produce an empty plugin list") ||
+      !Expect(config.plugin.path == std::filesystem::path("./plugins"),
+              "missing muon.json default plugin path is wrong") ||
+      !ExpectLogDefaults(config.log, "missing log config") ||
+      !ExpectDebuggerConfig(config.cdp, false, 9222,
+                            "missing cdp config") ||
+      !Expect(config.default_version_policy == "tested",
+              "missing muon.json defaultVersionPolicy is wrong") ||
+      !Expect(config.desktop_id == "muon",
+              "missing muon.json desktopId is wrong") ||
+      !Expect(config.app_id == "muon",
+              "missing muon.json appId is wrong")) {
+    return false;
+  }
+
+  const auto no_network_path = test_directory / "no-network.json";
+  if (!Expect(WriteFile(no_network_path, "{}"),
+              "failed to write no-network config") ||
+      !LoadConfigExpectSuccess(no_network_path, &config)) {
+    return false;
+  }
+  if (!ExpectDefaultNetworkAllow(config.network, "missing network.allow") ||
+      !Expect(config.network.authorized_origin.empty(),
+              "missing network.authorizedOrigin default list is not empty") ||
+      !ExpectBrowserDefaults(config.browser, default_profile,
+                             "default browser config") ||
+      !Expect(config.plugin.plugins.empty(),
+              "missing plugins did not produce an empty plugin list") ||
+      !Expect(config.plugin.path == std::filesystem::path("./plugins"),
+              "missing plugin.path default is wrong") ||
+      !ExpectLogDefaults(config.log, "default log config") ||
+      !ExpectDebuggerConfig(config.cdp, false, 9222,
+                            "default cdp config") ||
+      !Expect(config.default_version_policy == "tested",
+              "default defaultVersionPolicy is wrong") ||
+      !Expect(config.desktop_id == "muon", "default desktopId is wrong") ||
+      !Expect(config.app_id == "muon", "default appId is wrong")) {
+    return false;
+  }
+
+  const auto default_policy_path =
+      test_directory / "default-version-policy.json";
+  if (!Expect(WriteFile(default_policy_path,
+                        R"({"launcher":{"defaultVersionPolicy":"compat-latest","desktopId":"com.example.App"}})"),
+              "failed to write defaultVersionPolicy config") ||
+      !LoadConfigExpectSuccess(default_policy_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.default_version_policy == "compat-latest",
+              "defaultVersionPolicy was not parsed") ||
+      !Expect(config.desktop_id == "com.example.App",
+              "desktopId was not parsed")) {
+    return false;
+  }
+
+  const auto root_default_policy_path =
+      test_directory / "root-default-version-policy.json";
+  if (!Expect(WriteFile(root_default_policy_path,
+                        R"({"defaultVersionPolicy":"compat-latest"})"),
+              "failed to write root defaultVersionPolicy config") ||
+      !LoadConfigExpectSuccess(root_default_policy_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.default_version_policy == "tested",
+              "root defaultVersionPolicy should be ignored") ||
+      !Expect(config.desktop_id == "muon",
+              "root config should keep default desktopId")) {
+    return false;
+  }
+
+  const auto network_without_allow_path =
+      test_directory / "network-without-allow.json";
+  if (!Expect(WriteFile(network_without_allow_path, R"({"network":{}})"),
+              "failed to write network-without-allow config") ||
+      !LoadConfigExpectSuccess(network_without_allow_path, &config)) {
+    return false;
+  }
+  if (!ExpectDefaultNetworkAllow(config.network,
+                                 "network object without allow") ||
+      !Expect(config.browser.plugin.allow.size() == 1,
+              "network object without allow changed plugin page allowlist") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "network object without allow plugin page pattern is wrong")) {
+    return false;
+  }
+
+  const auto empty_plugins_path = test_directory / "empty-plugins.json";
+  if (!Expect(WriteFile(empty_plugins_path,
+                        R"({"plugin":{"path":"custom-plugins","plugins":[]}})"),
+              "failed to write empty plugins config") ||
+      !LoadConfigExpectSuccess(empty_plugins_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.plugin.plugins.empty(),
+              "explicit empty plugins did not produce an empty plugin list") ||
+      !Expect(config.plugin.path == test_directory / "custom-plugins",
+              "explicit plugin.path was not parsed")) {
+    return false;
+  }
+
+  const auto plugin_access_path = test_directory / "plugin-access.json";
+  const auto plugin_catalog_path = test_directory / "plugin-catalog.json";
+  if (!Expect(WriteFile(plugin_catalog_path,
+                        R"({"plugin":{"plugins":[{"name":"external","allow":["muon.example.*"],"expectedFunctions":"invalid"}]}})"),
+              "failed to write invalid plugin catalog") ||
+      !LoadConfigExpectFailure(plugin_catalog_path, "expectedFunctions")) {
+    return false;
+  }
+  if (!Expect(WriteFile(plugin_catalog_path,
+                        R"({"plugin":{"plugins":[{"name":"external","allow":["muon.example.*"],"expectedFunctions":["muon.example.increment"]}]}})"),
+              "failed to write plugin catalog") ||
+      !LoadConfigExpectSuccess(plugin_catalog_path, &config) ||
+      !Expect(config.plugin.plugins[0].has_expected_functions &&
+                  config.plugin.plugins[0].expected_functions ==
+                      std::vector<std::string>{"muon.example.increment"},
+              "producer function catalog was not preserved")) {
+    return false;
+  }
+  if (!Expect(
+          WriteFile(
+              plugin_access_path,
+              R"({"plugin":{"mode":"simple","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.executor.*"],"config":{"executor.spawn.allow":"glob:/usr/bin/**\nglob:/opt/app/bin/**","executor.empty":"","executor.mode":"strict"},"imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+          "failed to write plugin access config") ||
+      !LoadConfigExpectSuccess(plugin_access_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.plugin.mode == kMuonBrowserPluginModeSimple,
+              "plugin.mode was not parsed") ||
+      !Expect(config.browser.plugin.allow.size() == 2,
+              "plugin.pages pattern count is wrong") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "first plugin.pages pattern changed") ||
+      !Expect(config.browser.plugin.allow[1] == "data:**",
+              "second plugin.pages pattern changed") ||
+      !Expect(config.browser.plugin.capabilities.size() == 1,
+              "plugin.capabilities count is wrong") ||
+      !Expect(config.browser.plugin.capabilities[0].id == "cap-1",
+              "plugin.capabilities id changed") ||
+      !Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
+              "plugin.capabilities allow count is wrong") ||
+      !Expect(config.browser.plugin.capabilities[0].allow[0] ==
+                  "muon.executor.spawn",
+              "plugin.capabilities allow changed") ||
+      !Expect(config.plugin.plugins.size() == 1,
+              "plugin.plugins entry count changed") ||
+      !Expect(config.plugin.plugins[0].name == "internal",
+              "plugin.plugins entry name changed") ||
+      !Expect(config.plugin.plugins[0].allow.size() == 1,
+              "plugin.plugins allow count changed") ||
+      !Expect(config.plugin.plugins[0].allow[0] == "muon.executor.*",
+              "plugin.plugins allow value changed") ||
+      !Expect(config.plugin.plugins[0].config.size() == 3,
+              "plugin.plugins config entry count changed") ||
+      !Expect(config.plugin.plugins[0].config[0].key ==
+                  "executor.spawn.allow",
+              "first plugin.plugins config key changed") ||
+      !Expect(config.plugin.plugins[0].config[0].value ==
+                  "glob:/usr/bin/**\nglob:/opt/app/bin/**",
+              "first plugin.plugins config value changed") ||
+      !Expect(config.plugin.plugins[0].config[1].key == "executor.empty",
+              "second plugin.plugins config key changed") ||
+      !Expect(config.plugin.plugins[0].config[1].value.empty(),
+              "second plugin.plugins config value changed") ||
+      !Expect(config.plugin.plugins[0].config[2].key == "executor.mode",
+              "third plugin.plugins config key changed") ||
+      !Expect(config.plugin.plugins[0].config[2].value == "strict",
+              "third plugin.plugins config value changed")) {
+    return false;
+  }
+
+  const auto empty_network_allow_path =
+      test_directory / "empty-network-allow.json";
+  if (!Expect(WriteFile(empty_network_allow_path,
+                        R"({"network":{"allow":[]}})"),
+              "failed to write empty network allow config") ||
+      !LoadConfigExpectSuccess(empty_network_allow_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.network.allow.empty(),
+              "explicit empty network.allow did not override the default") ||
+      !Expect(config.network.authorized_origin.empty(),
+              "explicit empty network.allow changed authorized origin list") ||
+      !Expect(config.browser.plugin.allow.size() == 1,
+              "explicit empty network.allow changed plugin page allowlist") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "explicit empty network.allow changed plugin page pattern") ||
+      !Expect(config.plugin.plugins.empty(),
+              "explicit empty network.allow changed plugin list")) {
+    return false;
+  }
+
+  const auto empty_plugin_pages_path =
+      test_directory / "empty-plugin-pages.json";
+  if (!Expect(WriteFile(empty_plugin_pages_path,
+                        R"({"plugin":{"pages":[]}})"),
+              "failed to write empty plugin pages config") ||
+      !LoadConfigExpectSuccess(empty_plugin_pages_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.plugin.allow.empty(),
+              "explicit empty plugin.pages did not override the "
+              "default") ||
+      !ExpectDefaultNetworkAllow(config.network,
+                                 "explicit empty plugin.pages")) {
+    return false;
+  }
+
+  const auto empty_unsafe_parent_access_path =
+      test_directory / "empty-unsafe-parent-access.json";
+  if (!Expect(WriteFile(empty_unsafe_parent_access_path,
+                        R"({"browser":{"allowUnsafeJavaScriptParentAccess":[]}})"),
+              "failed to write empty unsafe parent access config") ||
+      !LoadConfigExpectSuccess(empty_unsafe_parent_access_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.allow_unsafe_javascript_parent_access.empty(),
+              "explicit empty browser.allowUnsafeJavaScriptParentAccess did "
+              "not override the default") ||
+      !Expect(config.browser.plugin.allow.size() == 1,
+              "explicit empty browser.allowUnsafeJavaScriptParentAccess "
+              "changed plugin page allowlist") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "explicit empty browser.allowUnsafeJavaScriptParentAccess "
+              "changed plugin page pattern")) {
+    return false;
+  }
+
+  const auto system_background_color_path =
+      test_directory / "system-background-color.json";
+  if (!Expect(WriteFile(system_background_color_path,
+                        R"({"browser":{"backgroundColor":"system"}})"),
+              "failed to write system background color config") ||
+      !LoadConfigExpectSuccess(system_background_color_path, &config)) {
+    return false;
+  }
+  if (!ExpectBrowserBackgroundSystem(config.browser.background_color,
+                                     "explicit system background color")) {
+    return false;
+  }
+
+  const auto empty_authorized_origin_path =
+      test_directory / "empty-authorized-origin.json";
+  if (!Expect(WriteFile(empty_authorized_origin_path,
+                        R"({"network":{"authorizedOrigin":[]}})"),
+              "failed to write empty authorizedOrigin config") ||
+      !LoadConfigExpectSuccess(empty_authorized_origin_path, &config)) {
+    return false;
+  }
+  if (!ExpectDefaultNetworkAllow(config.network,
+                                 "explicit empty network.authorizedOrigin") ||
+      !Expect(config.network.authorized_origin.empty(),
+              "explicit empty network.authorizedOrigin did not produce an "
+              "empty list")) {
+    return false;
+  }
+
+  const auto allow_path = test_directory / "allow.json";
+  if (!Expect(WriteFile(allow_path,
+                        R"({"asset":{"sourcePath":"packed/assets.zip","signature":"BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD","salt":"0A10ff"},"browser":{"startPage":"https://example.com/app","profilePath":"profiles/custom","initialWindowState":"maximized","contextMenu":{"mode":"custom"},"initialTitleBarVisibility":false,"initialTitleBarIcon":"icons/app.png","backgroundColor":"#123abc","titleBarType":"native","allowUnsafeJavaScriptParentAccess":["asset://main/**","https://example.com/popups/**"]},"network":{"allow":["data:**","https://example.com/**"],"authorizedOrigin":[{"scheme":"HTTPS","domain":"LOGIN.LIVE.COM"},{"scheme":"http","domain":"LOCALHOST","port":8080}]},"cdp":{"enable":true,"port":9333},"plugin":{"path":"./custom-plugins","mode":"validate","pages":["asset://main/**","data:**"],"capabilities":[{"id":"cap-1","allow":["muon.executor.spawn"]}],"plugins":[{"name":"internal","allow":["muon.browser.*","muon.fs.readFile"]},{"name":"foobar","allow":["foobar.*"],"signature":"BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD","salt":"DEADBEEF"}]}})"),
+              "failed to write allow config") ||
+      !LoadConfigExpectSuccess(allow_path, &config)) {
+    return false;
+  }
+  return Expect(config.network.allow.size() == 2,
+                "network.allow pattern count is wrong") &&
+         Expect(config.network.allow[0] == "data:**",
+                "first network.allow pattern changed") &&
+         Expect(config.network.allow[1] == "https://example.com/**",
+                "second network.allow pattern changed") &&
+         Expect(config.network.authorized_origin.size() == 2,
+                "network.authorizedOrigin entry count is wrong") &&
+         ExpectAuthorizedOrigin(config.network.authorized_origin[0], "https",
+                                "login.live.com", 0,
+                                "first network.authorizedOrigin") &&
+         ExpectAuthorizedOrigin(config.network.authorized_origin[1], "http",
+                                "localhost", 8080,
+                                "second network.authorizedOrigin") &&
+         Expect(config.browser.start_page == "https://example.com/app",
+                "browser.startPage was not parsed") &&
+         Expect(config.browser.profile == test_directory / "profiles/custom",
+                "browser.profilePath was not parsed") &&
+         Expect(config.browser.initial_window_state ==
+                    kMuonBrowserInitialWindowStateMaximized,
+                "browser.initialWindowState was not parsed") &&
+         Expect(config.browser.context_menu_mode ==
+                    kMuonBrowserContextMenuModeCustom,
+                "browser.contextMenu.mode was not parsed") &&
+         ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
+                                    0x3a, 0xbc,
+                                    "browser.backgroundColor was not parsed") &&
+         Expect(config.browser.title_bar == kMuonBrowserTitleBarNative,
+                "browser.titleBarType was not parsed") &&
+         Expect(!config.browser.initial_title_bar_visibility,
+                "browser.initialTitleBarVisibility was not parsed") &&
+         Expect(config.browser.has_initial_title_bar_icon,
+                "browser.initialTitleBarIcon was not marked present") &&
+         Expect(config.browser.initial_title_bar_icon == "icons/app.png",
+                "browser.initialTitleBarIcon was not parsed") &&
+         Expect(config.browser.plugin.allow.size() == 2,
+                "plugin.pages pattern count is wrong") &&
+         Expect(config.browser.plugin.mode == kMuonBrowserPluginModeValidate,
+                "plugin.mode was not parsed") &&
+         Expect(config.browser.plugin.allow[0] == "asset://main/**",
+                "first plugin.pages pattern changed") &&
+         Expect(config.browser.plugin.allow[1] == "data:**",
+                "second plugin.pages pattern changed") &&
+         Expect(config.browser.plugin.capabilities.size() == 1,
+                "plugin.capabilities count is wrong") &&
+         Expect(config.browser.plugin.capabilities[0].id == "cap-1",
+                "plugin.capabilities id changed") &&
+         Expect(config.browser.plugin.capabilities[0].allow.size() == 1,
+                "plugin.capabilities allow count is wrong") &&
+         Expect(config.browser.plugin.capabilities[0].allow[0] ==
+                    "muon.executor.spawn",
+                "plugin.capabilities allow changed") &&
+         Expect(config.browser.allow_unsafe_javascript_parent_access.size() ==
+                    2,
+                "browser.allowUnsafeJavaScriptParentAccess pattern count is "
+                "wrong") &&
+         Expect(config.browser.allow_unsafe_javascript_parent_access[0] ==
+                    "asset://main/**",
+                "first browser.allowUnsafeJavaScriptParentAccess pattern "
+                "changed") &&
+         Expect(config.browser.allow_unsafe_javascript_parent_access[1] ==
+                    "https://example.com/popups/**",
+                "second browser.allowUnsafeJavaScriptParentAccess pattern "
+                "changed") &&
+         ExpectDebuggerConfig(config.cdp, true, 9333,
+                              "cdp config") &&
+         Expect(config.plugin.path == test_directory / "custom-plugins",
+                "plugin.path was not parsed") &&
+         Expect(config.plugin.plugins.size() == 2,
+                "plugins entry count is wrong") &&
+         Expect(config.plugin.plugins[0].name == "internal",
+                "internal plugin name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 2,
+                "internal plugin allow pattern count is wrong") &&
+         Expect(config.plugin.plugins[0].allow[0] == "muon.browser.*",
+                "first internal plugin allow pattern changed") &&
+         Expect(config.plugin.plugins[0].allow[1] == "muon.fs.readFile",
+                "second internal plugin allow pattern changed") &&
+         Expect(config.plugin.plugins[1].name == "foobar",
+                "external plugin name changed") &&
+         Expect(config.plugin.plugins[1].allow.size() == 1,
+                "external plugin allow pattern count is wrong") &&
+         Expect(config.plugin.plugins[1].allow[0] == "foobar.*",
+                "external plugin allow pattern changed") &&
+         Expect(config.plugin.plugins[1].has_signature,
+                "external plugin signature was not marked present") &&
+         Expect(config.plugin.plugins[1].signature ==
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "external plugin signature was not normalized") &&
+         Expect(config.plugin.plugins[1].has_salt,
+                "external plugin salt was not marked present") &&
+         Expect(config.plugin.plugins[1].salt.size() == 4,
+                "external plugin salt byte count changed") &&
+         Expect(config.plugin.plugins[1].salt[0] == 0xde &&
+                    config.plugin.plugins[1].salt[1] == 0xad &&
+                    config.plugin.plugins[1].salt[2] == 0xbe &&
+                    config.plugin.plugins[1].salt[3] == 0xef,
+                "external plugin salt bytes changed") &&
+         Expect(config.asset.has_from, "asset.sourcePath was not parsed") &&
+         Expect(config.asset.from == test_directory / "packed/assets.zip",
+                "asset.sourcePath was not resolved from config directory") &&
+         Expect(config.asset.has_signature,
+                "asset.signature was not parsed") &&
+         Expect(config.asset.signature ==
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "asset.signature was not normalized") &&
+         Expect(config.asset.has_salt, "asset.salt was not parsed") &&
+         Expect(config.asset.salt.size() == 3,
+                "asset.salt byte count changed") &&
+         Expect(config.asset.salt[0] == 0x0a && config.asset.salt[1] == 0x10 &&
+                    config.asset.salt[2] == 0xff,
+                "asset.salt bytes changed");
+}
+
+static bool RunConfigJson5LoadingTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  const auto json_path = test_directory / "json5-content.json";
+  if (!Expect(WriteFile(json_path,
+                        R"({
+  // JSON5 comment
+  browser: {
+    startPage: 'https://example.com/json5',
+  },
+  network: {
+    allow: [
+      'https://json5.example/**',
+    ],
+  },
+})"),
+              "failed to write JSON5 config") ||
+      !LoadConfigExpectSuccess(json_path, &config)) {
+    return false;
+  }
+  return Expect(config.browser.start_page == "https://example.com/json5",
+                "JSON5 browser.startPage was not parsed") &&
+         Expect(config.network.allow.size() == 1,
+                "JSON5 network.allow count is wrong") &&
+         Expect(config.network.allow[0] == "https://json5.example/**",
+                "JSON5 network.allow pattern changed");
+}
+
+static bool RunNodeConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  const auto without_node_path = test_directory / "without-node.json";
+  if (!Expect(WriteFile(without_node_path, R"({})"),
+              "failed to write config without node") ||
+      !LoadConfigExpectSuccess(without_node_path, &config) ||
+      !Expect(!config.node.has_project,
+              "config without node enabled the Node host")) {
+    return false;
+  }
+
+  const auto node_path = test_directory / "with-node.json";
+  if (!Expect(
+          WriteFile(node_path,
+                    R"({"node":{"project":"projects/backend"}})"),
+          "failed to write node config") ||
+      !LoadConfigExpectSuccess(node_path, &config) ||
+      !Expect(config.node.has_project,
+              "node.project did not enable the Node host") ||
+      !Expect(config.node.project ==
+                  test_directory / "projects/backend",
+              "node.project was not resolved from the config directory")) {
+    return false;
+  }
+
+  const auto absolute_project =
+      (test_directory / "absolute-backend").lexically_normal();
+  const auto absolute_node_path = test_directory / "absolute-node.json";
+  if (!Expect(
+          WriteFile(
+              absolute_node_path,
+              "{\"node\":{\"project\":\"" +
+                  absolute_project.generic_string() + "\"}}"),
+          "failed to write absolute node config") ||
+      !LoadConfigExpectSuccess(absolute_node_path, &config) ||
+      !Expect(config.node.has_project,
+              "absolute node.project did not enable the Node host") ||
+      !Expect(config.node.project == absolute_project,
+              "absolute node.project was changed")) {
+    return false;
+  }
+
+  const auto invalid_node_path = test_directory / "invalid-node.json";
+  const auto missing_project_path =
+      test_directory / "node-without-project.json";
+  const auto empty_project_path =
+      test_directory / "node-empty-project.json";
+  const auto numeric_project_path =
+      test_directory / "node-numeric-project.json";
+  return Expect(WriteFile(invalid_node_path, R"({"node":[]})"),
+                "failed to write invalid node config") &&
+         LoadConfigExpectFailure(invalid_node_path,
+                                 "muon.json node must be an object") &&
+         Expect(WriteFile(missing_project_path, R"({"node":{}})"),
+                "failed to write node config without project") &&
+         LoadConfigExpectFailure(
+             missing_project_path,
+             "muon.json node.project must be a string") &&
+         Expect(
+             WriteFile(empty_project_path,
+                       R"({"node":{"project":""}})"),
+             "failed to write empty node.project config") &&
+         LoadConfigExpectFailure(
+             empty_project_path,
+             "muon.json node.project must not be empty") &&
+         Expect(
+             WriteFile(numeric_project_path,
+                       R"({"node":{"project":42}})"),
+             "failed to write numeric node.project config") &&
+         LoadConfigExpectFailure(
+             numeric_project_path,
+             "muon.json node.project must be a string");
+}
+
+static bool ExpectDebugConfig(const std::filesystem::path& path,
+                              const std::string& message) {
+  MuonConfig config;
+  return LoadConfigExpectSuccess(path, &config) &&
+         Expect(config.browser.plugin.mode == kMuonBrowserPluginModeSimple,
+                message + " plugin.mode is not simple") &&
+         Expect(config.browser.plugin.allow.size() == 2,
+                message + " plugin.pages pattern count is wrong") &&
+         Expect(config.browser.plugin.allow[0] == "asset://main/**",
+                message + " first plugin.pages pattern changed") &&
+         Expect(config.browser.plugin.allow[1] == "data:**",
+                message + " second plugin.pages pattern changed") &&
+         Expect(config.plugin.plugins.size() == 1,
+                message + " plugin.plugins entry count changed") &&
+         Expect(config.plugin.plugins[0].name == "internal",
+                message + " plugin.plugins entry name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 1,
+                message + " plugin.plugins allow count changed") &&
+         Expect(config.plugin.plugins[0].allow[0] == "muon.**",
+                message + " plugin.plugins allow value changed");
+}
+
+static bool RunDebugConfigLoadingTest() {
+  const auto config_directory =
+      std::filesystem::path(MUON_CORE_SOURCE_DIR) / "config";
+  return ExpectDebugConfig(config_directory / "muon.dev.json",
+                           "muon.dev.json") &&
+         ExpectDebugConfig(config_directory / "muon.dev.linux.json",
+                           "muon.dev.linux.json");
+}
+
+static bool RunLaunchSourceProfilePathTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+
+  SetTestLaunchSource("none");
+  const auto state_home = SetTestStateHome(test_directory, "profile-state");
+  SetEnvironmentValue("MUON_LAUNCHER_APP_ID", "com.example Launcher");
+  const auto env_path = test_directory / "profile-env.json";
+  if (!Expect(WriteFile(env_path, "{}"),
+              "failed to write environment appId profile config") ||
+      !LoadConfigExpectSuccess(env_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.app_id == "com.example.Launcher",
+              "environment appId was not used") ||
+      !Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Launcher"),
+              "environment appId should select state default profile")) {
+    return false;
+  }
+
+  const auto none_path = test_directory / "profile-none.json";
+  if (!Expect(WriteFile(none_path,
+                        R"({"launcher":{"appId":"com.example.Profile"}})"),
+              "failed to write none profile config") ||
+      !LoadConfigExpectSuccess(none_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Profile"),
+              "none launch source should use state default profile")) {
+    return false;
+  }
+
+  SetTestLaunchSource("normal");
+  const auto normal_path = test_directory / "profile-normal.json";
+  if (!Expect(WriteFile(normal_path,
+                        R"({"launcher":{"appId":"com.example.Profile"}})"),
+              "failed to write normal profile config") ||
+      !LoadConfigExpectSuccess(normal_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.profile ==
+                  GetTestDefaultProfilePath(state_home,
+                                            "com.example.Profile"),
+              "normal launch source should use state default profile")) {
+    return false;
+  }
+
+  const auto explicit_path = test_directory / "profile-explicit.json";
+  if (!Expect(WriteFile(explicit_path,
+                        R"({"browser":{"profilePath":"profiles/custom"}})"),
+              "failed to write explicit profile config") ||
+      !LoadConfigExpectSuccess(explicit_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.browser.profile == test_directory / "profiles/custom",
+              "explicit browser.profilePath should override launch source")) {
+    return false;
+  }
+
+  ClearEnvironment("MUON_LAUNCHER_APP_ID");
+  return true;
+}
+
+static bool ExpectDefaultConfigStart(
+    const std::filesystem::path& test_directory,
+    const std::string& expected_start,
+    const std::string& message) {
+  MuonConfig config;
+  return LoadConfigExpectSuccess(test_directory / "muon.json", &config) &&
+         Expect(config.browser.start_page == expected_start, message);
+}
+
+static bool RunDefaultConfigSearchOrderTest(
+    const std::filesystem::path& test_directory) {
+  const auto json5_path = test_directory / "muon.json5";
+  const auto jsonc_path = test_directory / "muon.jsonc";
+  const auto json_path = test_directory / "muon.json";
+  if (!Expect(WriteFile(json5_path,
+                        R"({browser:{startPage:'https://example.com/json5',},})"),
+              "failed to write muon.json5") ||
+      !Expect(WriteFile(jsonc_path,
+                        R"({browser:{startPage:'https://example.com/jsonc',},})"),
+              "failed to write muon.jsonc") ||
+      !Expect(WriteFile(json_path,
+                        R"({browser:{startPage:'https://example.com/json',},})"),
+              "failed to write muon.json")) {
+    return false;
+  }
+
+  std::error_code error;
+  if (!ExpectDefaultConfigStart(test_directory, "https://example.com/json5",
+                                "muon.json5 was not preferred") ||
+      !Expect(std::filesystem::remove(json5_path, error) && !error,
+              "failed to remove muon.json5") ||
+      !ExpectDefaultConfigStart(test_directory, "https://example.com/jsonc",
+                                "muon.jsonc was not preferred") ||
+      !Expect(std::filesystem::remove(jsonc_path, error) && !error,
+              "failed to remove muon.jsonc") ||
+      !ExpectDefaultConfigStart(test_directory, "https://example.com/json",
+                                "muon.json fallback was not used")) {
+    return false;
+  }
+  return true;
+}
+
+static bool RunCommandLineConfigPathTest(
+    const std::filesystem::path& test_directory) {
+  std::vector<std::filesystem::path> config_paths;
+  std::string error_message;
+  if (!Expect(GetMuonConfigPathsFromCommandLine(
+                  {"muon", "--ozone-platform=x11"}, &config_paths,
+                  &error_message),
+              error_message) ||
+      !Expect(config_paths.empty(),
+              "command line without -c produced config paths")) {
+    return false;
+  }
+
+  const auto first_path = test_directory / "first.json";
+  const auto second_path = test_directory / "second.json";
+  if (!Expect(GetMuonConfigPathsFromCommandLine(
+                  {"muon", "-c", first_path.string(), "--disable-gpu", "-c",
+                   second_path.string()},
+                  &config_paths, &error_message),
+              error_message) ||
+      !Expect(config_paths.size() == 2,
+              "multiple -c entries were not collected") ||
+      !Expect(config_paths[0] == first_path.lexically_normal(),
+              "first -c path changed") ||
+      !Expect(config_paths[1] == second_path.lexically_normal(),
+              "second -c path changed")) {
+    return false;
+  }
+
+  return Expect(!GetMuonConfigPathsFromCommandLine(
+                    {"muon", "-c"}, &config_paths, &error_message),
+                "missing -c path was accepted") &&
+         Expect(error_message.find("requires a path") != std::string::npos,
+                "missing -c path error message is wrong");
+}
+
+static bool RunEmbeddedConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  const auto runtime_directory = test_directory / "embedded-runtime";
+  std::error_code error;
+  if (!Expect(std::filesystem::create_directories(runtime_directory, error) &&
+                  !error,
+              "failed to create embedded runtime directory")) {
+    return false;
+  }
+
+  const auto payload = CreateEmbeddedConfigPayload();
+  std::vector<uint8_t> slot;
+  std::string error_message;
+  if (!Expect(CreateMuonEmbeddedConfigSlot(payload, &slot, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  MuonConfig config;
+  std::vector<std::filesystem::path> config_paths;
+  auto embedded = false;
+  if (!Expect(LoadMuonStartupConfigFromEmbeddedSlot(
+                  {"muon", "-c"}, slot.data(), slot.size(), runtime_directory,
+                  &config, &config_paths, &embedded, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  return Expect(embedded, "embedded config was not detected") &&
+         Expect(config_paths.empty(),
+                "embedded config did not ignore command-line config paths") &&
+         Expect(config.browser.start_page == "https://embedded.example/app",
+                "embedded browser.startPage was not parsed") &&
+         Expect(config.browser.user_agent == "EmbeddedApp/1.0",
+                "embedded browser.userAgent was not parsed") &&
+         Expect(config.browser.profile ==
+                    runtime_directory / "profiles/embedded",
+                "embedded browser.profilePath was not resolved from executable "
+                "directory") &&
+         ExpectBrowserBackgroundRgb(config.browser.background_color, 0x12,
+                                    0x3a, 0xbc,
+                                    "embedded browser.backgroundColor") &&
+         Expect(config.cdp.enable, "embedded cdp.enable was not parsed") &&
+         Expect(
+             config.network.local_access.allow_insecure_localhost,
+             "embedded network.localAccess.allowInsecureLocalhost was not "
+             "parsed") &&
+         Expect(config.plugin.path == runtime_directory / "plugins",
+                "embedded plugin.path was not resolved from executable "
+                "directory") &&
+         Expect(config.plugin.plugins.size() == 1,
+                "embedded plugin entry count changed") &&
+         Expect(config.plugin.plugins[0].name == "embedded_plugin",
+                "embedded plugin name changed") &&
+         Expect(config.plugin.plugins[0].allow.size() == 1,
+                "embedded plugin allow count changed") &&
+         Expect(config.plugin.plugins[0].allow[0] == "embedded.*",
+                "embedded plugin allow changed") &&
+         Expect(config.plugin.plugins[0].has_signature,
+                "embedded plugin signature was not marked present") &&
+         Expect(config.plugin.plugins[0].signature ==
+                    "000102030405060708090a0b0c0d0e0f"
+                    "101112131415161718191a1b1c1d1e1f",
+                "embedded binary plugin signature was not restored") &&
+         Expect(config.plugin.plugins[0].has_salt,
+                "embedded plugin salt was not marked present") &&
+         Expect(config.plugin.plugins[0].salt.size() == 4,
+                "embedded plugin salt byte count changed") &&
+         Expect(config.plugin.plugins[0].salt[0] == 0xde &&
+                    config.plugin.plugins[0].salt[1] == 0xad &&
+                    config.plugin.plugins[0].salt[2] == 0xbe &&
+                    config.plugin.plugins[0].salt[3] == 0xef,
+                "embedded binary plugin salt was not restored") &&
+         Expect(config.asset.has_from,
+                "embedded asset.sourcePath was not parsed") &&
+         Expect(config.asset.from == runtime_directory / "assets.zip",
+                "embedded asset.sourcePath was not resolved from executable "
+                "directory") &&
+         Expect(config.asset.has_signature,
+                "embedded asset.signature was not parsed") &&
+         Expect(config.asset.signature ==
+                    "ba7816bf8f01cfea414140de5dae2223"
+                    "b00361a396177a9cb410ff61f20015ad",
+                "embedded binary asset.signature was not restored") &&
+         Expect(config.asset.has_salt, "embedded asset.salt was not parsed") &&
+         Expect(config.asset.salt.size() == 3,
+                "embedded asset.salt byte count changed") &&
+         Expect(config.asset.salt[0] == 0x0a && config.asset.salt[1] == 0x10 &&
+                    config.asset.salt[2] == 0xff,
+                "embedded binary asset.salt was not restored");
+}
+
+static bool RunEmbeddedAssetSignatureLengthValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto runtime_directory =
+      test_directory / "embedded-signature-length-runtime";
+  return LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedAssetSignaturePayload(31), runtime_directory,
+             "Embedded muon config asset.signature must be 32 bytes") &&
+         LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedAssetSignaturePayload(33), runtime_directory,
+             "Embedded muon config asset.signature must be 32 bytes");
+}
+
+static bool RunEmbeddedPluginSignatureLengthValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto runtime_directory =
+      test_directory / "embedded-plugin-signature-length-runtime";
+  return LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedPluginSignaturePayload(31), runtime_directory,
+             "Embedded muon config plugin.plugins[].signature must be 32 "
+             "bytes") &&
+         LoadEmbeddedConfigExpectFailure(
+             CreateEmbeddedPluginSignaturePayload(33), runtime_directory,
+             "Embedded muon config plugin.plugins[].signature must be 32 "
+             "bytes");
+}
+
+static bool RunEmbeddedConfigEmptySlotTest(
+    const std::filesystem::path& test_directory) {
+  std::vector<uint8_t> slot(kMuonEmbeddedConfigSlotSize);
+  for (auto index = size_t{0}; index < slot.size(); ++index) {
+    slot[index] = GetMuonEmbeddedConfigEmptySlotByte(index);
+  }
+
+  const auto config_path = test_directory / "non-embedded-command.json";
+  if (!Expect(WriteFile(
+                  config_path,
+                  R"({"browser":{"startPage":"https://command.example/app"}})"),
+              "failed to write command-line config")) {
+    return false;
+  }
+
+  MuonConfig config;
+  std::vector<std::filesystem::path> config_paths;
+  auto embedded = true;
+  std::string error_message;
+  if (!Expect(LoadMuonStartupConfigFromEmbeddedSlot(
+                  {"muon", "-c", config_path.string()}, slot.data(),
+                  slot.size(), test_directory, &config, &config_paths,
+                  &embedded, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  return Expect(!embedded, "empty slot was treated as embedded config") &&
+         Expect(config_paths.size() == 1,
+                "non-embedded startup did not preserve -c config path") &&
+         Expect(config.browser.start_page == "https://command.example/app",
+                "non-embedded startup did not load command-line config");
+}
+
+static bool RunConfigOverrideLoadingTest(
+    const std::filesystem::path& test_directory) {
+  const auto first_directory = test_directory / "override-first";
+  const auto second_directory = test_directory / "override-second";
+  std::error_code error;
+  if (!Expect(std::filesystem::create_directories(first_directory, error) &&
+                  !error,
+              "failed to create first override directory") ||
+      !Expect(std::filesystem::create_directories(second_directory, error) &&
+                  !error,
+              "failed to create second override directory")) {
+    return false;
+  }
+
+  const auto first_path = first_directory / "muon.json";
+  const auto second_path = second_directory / "override.json";
+  if (!Expect(WriteFile(
+                  first_path,
+                  R"({"asset":{"sourcePath":"assets-first","signature":"1111111111111111111111111111111111111111111111111111111111111111","salt":"11"},"log":{"level":"warning","output":{"type":"file","path":"logs/first.log"},"sources":{"console":"error"}},"browser":{"startPage":"https://first.example/app","profilePath":"profiles/first","initialWindowState":"hidden","backgroundColor":"111111","titleBarType":"native","keybind":{"devtools":"f12"}},"network":{"allow":["https://first.example/**","data:**"],"authorizedOrigin":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"same.example"}]},"cdp":{"enable":false,"port":9333},"plugin":{"path":"plugins-first","pages":["asset://first/**"],"plugins":[{"name":"internal","allow":["muon.fs.*"]}]}})"),
+              "failed to write first override config") ||
+      !Expect(WriteFile(
+                  second_path,
+                  R"({"asset":{"sourcePath":"assets-second.zip","signature":"2222222222222222222222222222222222222222222222222222222222222222","salt":"22ff"},"log":{"level":"debug","sources":{"plugin":"off"}},"browser":{"startPage":"https://second.example/app","initialWindowState":"fullscreen","backgroundColor":"ABCDEF","titleBarType":"muon"},"network":{"allow":["data:**","https://second.example/**"],"authorizedOrigin":[{"domain":"same.example","scheme":"https"},{"scheme":"https","domain":"same.example","port":443},{"scheme":"http","domain":"added.example"}]},"cdp":{"enable":true},"plugin":{"path":"plugins-second","pages":["asset://first/**","asset://second/**"],"plugins":[{"allow":["muon.fs.*"],"name":"internal"},{"name":"foobar","allow":["foobar.*"]}]}})"),
+              "failed to write second override config")) {
+    return false;
+  }
+
+  MuonConfig config;
+  if (!LoadConfigFilesExpectSuccess({first_path, second_path}, &config)) {
+    return false;
+  }
+
+  if (!Expect(config.browser.start_page == "https://second.example/app",
+              "later scalar browser.startPage did not override") ||
+      !Expect(config.browser.profile == first_directory / "profiles/first",
+              "browser.profilePath was not resolved from its config directory") ||
+      !Expect(config.browser.initial_window_state ==
+                  kMuonBrowserInitialWindowStateFullscreen,
+              "later scalar browser.initialWindowState did not override") ||
+      !ExpectBrowserBackgroundRgb(
+          config.browser.background_color, 0xab, 0xcd, 0xef,
+          "later scalar browser.backgroundColor did not override") ||
+      !Expect(config.browser.title_bar == kMuonBrowserTitleBarMuon,
+              "later scalar browser.titleBarType did not override") ||
+      !Expect(config.browser.plugin.allow.size() == 2,
+              "plugin.pages array was not replaced by later config") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://first/**",
+              "plugin.pages first value changed") ||
+      !Expect(config.browser.plugin.allow[1] == "asset://second/**",
+              "plugin.pages second value changed") ||
+      !ExpectShortcut(config.browser.devtools, true, 0x7B, 0,
+                      "merged devtools shortcut") ||
+      !Expect(config.network.allow.size() == 3,
+              "network.allow array was not merged by equality") ||
+      !Expect(config.network.allow[0] == "https://first.example/**",
+              "network.allow existing first value changed") ||
+      !Expect(config.network.allow[1] == "data:**",
+              "network.allow duplicate value changed") ||
+      !Expect(config.network.allow[2] == "https://second.example/**",
+              "network.allow unique value was not appended") ||
+      !Expect(config.network.authorized_origin.size() == 4,
+              "network.authorizedOrigin array was not merged by equality") ||
+      !ExpectAuthorizedOrigin(config.network.authorized_origin[0], "https",
+                              "first.example", 0,
+                              "first network.authorizedOrigin changed") ||
+      !ExpectAuthorizedOrigin(config.network.authorized_origin[1], "https",
+                              "same.example", 0,
+                              "duplicate network.authorizedOrigin changed") ||
+      !ExpectAuthorizedOrigin(config.network.authorized_origin[2], "https",
+                              "same.example", 443,
+                              "distinct network.authorizedOrigin was not "
+                              "appended") ||
+      !ExpectAuthorizedOrigin(config.network.authorized_origin[3], "http",
+                              "added.example", 0,
+                              "appended network.authorizedOrigin") ||
+      !ExpectDebuggerConfig(config.cdp, true, 9333,
+                            "merged cdp config") ||
+      !Expect(config.plugin.path == second_directory / "plugins-second",
+              "plugin.path was not resolved from the later config directory") ||
+      !Expect(config.plugin.plugins.size() == 2,
+              "plugin.plugins array was not replaced by later config") ||
+      !Expect(config.plugin.plugins[0].name == "internal",
+              "plugin.plugins duplicate entry changed") ||
+      !Expect(config.plugin.plugins[0].allow.size() == 1,
+              "plugin.plugins duplicate entry allow changed") ||
+      !Expect(config.plugin.plugins[0].allow[0] == "muon.fs.*",
+              "plugin.plugins duplicate entry allow value changed") ||
+      !Expect(config.plugin.plugins[1].name == "foobar",
+              "plugin.plugins unique entry name changed") ||
+      !Expect(config.plugin.plugins[1].allow[0] == "foobar.*",
+              "plugin.plugins unique entry allow changed")) {
+    return false;
+  }
+  if (!Expect(config.asset.has_from,
+              "merged config did not preserve asset.sourcePath") ||
+      !Expect(config.asset.from == second_directory / "assets-second.zip",
+              "asset.sourcePath was not resolved from the later config directory") ||
+      !Expect(config.asset.has_signature,
+              "merged config did not preserve asset.signature") ||
+      !Expect(config.asset.signature ==
+                  "22222222222222222222222222222222"
+                  "22222222222222222222222222222222",
+              "asset.signature was not overridden by the later config") ||
+      !Expect(config.asset.has_salt,
+              "merged config did not preserve asset.salt") ||
+      !Expect(config.asset.salt.size() == 2,
+              "merged asset.salt byte count changed") ||
+      !Expect(config.asset.salt[0] == 0x22 && config.asset.salt[1] == 0xff,
+              "asset.salt was not overridden by the later config")) {
+    return false;
+  }
+
+  if (!Expect(config.log.level == kMuonLogLevelDebug,
+              "later log.level did not override") ||
+      !Expect(config.log.output.type == kMuonLogOutputFile,
+              "log.output object was not preserved by merge") ||
+      !Expect(config.log.output.path == first_directory / "logs/first.log",
+              "log.output.path was not resolved from its config directory") ||
+      !Expect(config.log.muon == kMuonLogLevelDebug,
+              "merged log.level did not set muon baseline") ||
+      !Expect(config.log.cef == kMuonLogLevelDebug,
+              "merged log.level did not set cef baseline") ||
+      !Expect(config.log.console == kMuonLogLevelError,
+              "merged log.sources.console was not preserved") ||
+      !Expect(config.log.plugin == kMuonLogLevelOff,
+              "merged log.sources.plugin was not applied")) {
+    return false;
+  }
+
+  const auto explicit_search_directory = test_directory / "explicit-search";
+  if (!Expect(std::filesystem::create_directories(explicit_search_directory,
+                                                  error) &&
+                  !error,
+              "failed to create explicit search directory") ||
+      !Expect(WriteFile(explicit_search_directory / "muon.jsonc",
+                        R"({browser:{startPage:"https://jsonc.example/app"}})"),
+              "failed to write explicit search config") ||
+      !LoadConfigFilesExpectSuccess(
+          {explicit_search_directory / "muon.json"}, &config) ||
+      !Expect(config.browser.start_page == "https://jsonc.example/app",
+              "explicit muon.json path did not search muon.jsonc")) {
+    return false;
+  }
+
+  return LoadConfigFilesExpectFailure(
+             {test_directory / "missing-explicit.json"}, "does not exist") &&
+         LoadConfigFilesExpectFailure(
+             {test_directory / "missing-search" / "muon.json"},
+             "does not exist");
+}
+
+static bool RunLocalAccessConfigTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  const auto local_access_path = test_directory / "local-access.json";
+  if (!Expect(
+          WriteFile(
+              local_access_path,
+              R"({"network":{"localAccess":{"allowInsecureLocalhost":true,"loopbackOrigins":[{"scheme":"ASSET","domain":"MAIN"}],"localNetworkOrigins":[{"scheme":"https","domain":"ROUTER.EXAMPLE","port":8443}]}}})"),
+          "failed to write local access config") ||
+      !LoadConfigExpectSuccess(local_access_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.network.local_access.allow_insecure_localhost,
+              "network.localAccess.allowInsecureLocalhost was not parsed") ||
+      !Expect(config.network.local_access.loopback_origins.size() == 1,
+              "network.localAccess.loopbackOrigins was not parsed") ||
+      !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[0],
+                              "asset", "main", 0,
+                              "network.localAccess.loopbackOrigins") ||
+      !Expect(config.network.local_access.local_network_origins.size() == 1,
+              "network.localAccess.localNetworkOrigins was not parsed") ||
+      !ExpectAuthorizedOrigin(
+          config.network.local_access.local_network_origins[0], "https",
+          "router.example", 8443,
+          "network.localAccess.localNetworkOrigins")) {
+    return false;
+  }
+
+  const auto empty_path = test_directory / "empty-local-access.json";
+  if (!Expect(WriteFile(empty_path, R"({"network":{"localAccess":{}}})"),
+              "failed to write empty local access config") ||
+      !LoadConfigExpectSuccess(empty_path, &config) ||
+      !Expect(!config.network.local_access.allow_insecure_localhost,
+              "empty allowInsecureLocalhost default was not false") ||
+      !Expect(config.network.local_access.loopback_origins.empty(),
+              "empty loopbackOrigins default was not empty") ||
+      !Expect(config.network.local_access.local_network_origins.empty(),
+              "empty localNetworkOrigins default was not empty")) {
+    return false;
+  }
+
+  const auto first_path = test_directory / "local-access-first.json";
+  const auto second_path = test_directory / "local-access-second.json";
+  if (!Expect(
+          WriteFile(
+              first_path,
+              R"({"network":{"localAccess":{"allowInsecureLocalhost":true,"loopbackOrigins":[{"scheme":"asset","domain":"main"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"}]}}})"),
+          "failed to write first local access override") ||
+      !Expect(
+          WriteFile(
+              second_path,
+              R"({"network":{"localAccess":{"allowInsecureLocalhost":false,"loopbackOrigins":[{"domain":"main","scheme":"asset"},{"scheme":"https","domain":"second.example"}],"localNetworkOrigins":[{"scheme":"https","domain":"first.example"},{"scheme":"https","domain":"second.example"}]}}})"),
+          "failed to write second local access override") ||
+      !LoadConfigFilesExpectSuccess({first_path, second_path}, &config)) {
+    return false;
+  }
+  if (!Expect(!config.network.local_access.allow_insecure_localhost,
+              "later allowInsecureLocalhost false did not override true") ||
+      !Expect(config.network.local_access.loopback_origins.size() == 2,
+              "loopbackOrigins was not merged by equality") ||
+      !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[0],
+                              "asset", "main", 0,
+                              "merged loopback origin") ||
+      !ExpectAuthorizedOrigin(config.network.local_access.loopback_origins[1],
+                              "https", "second.example", 0,
+                              "appended loopback origin") ||
+      !Expect(config.network.local_access.local_network_origins.size() == 2,
+              "localNetworkOrigins was not merged by equality")) {
+    return false;
+  }
+
+  const auto invalid_object_path =
+      test_directory / "invalid-local-access-object.json";
+  const auto invalid_loopback_path =
+      test_directory / "invalid-loopback-origins.json";
+  const auto invalid_local_network_path =
+      test_directory / "invalid-local-network-origins.json";
+  const auto invalid_allow_insecure_localhost_path =
+      test_directory / "invalid-allow-insecure-localhost.json";
+  return Expect(WriteFile(invalid_object_path,
+                          R"({"network":{"localAccess":true}})"),
+                "failed to write invalid local access object") &&
+         Expect(WriteFile(
+                    invalid_loopback_path,
+                    R"({"network":{"localAccess":{"loopbackOrigins":true}}})"),
+                "failed to write invalid loopback origins") &&
+         Expect(WriteFile(
+                    invalid_local_network_path,
+                    R"({"network":{"localAccess":{"localNetworkOrigins":[{"scheme":"http"}]}}})"),
+                "failed to write invalid local network origins") &&
+         Expect(WriteFile(
+                    invalid_allow_insecure_localhost_path,
+                    R"({"network":{"localAccess":{"allowInsecureLocalhost":"true"}}})"),
+                "failed to write invalid allowInsecureLocalhost") &&
+         LoadConfigExpectFailure(invalid_object_path,
+                                 "network.localAccess must be an object") &&
+         LoadConfigExpectFailure(
+             invalid_loopback_path,
+             "network.localAccess.loopbackOrigins must be an array") &&
+         LoadConfigExpectFailure(
+             invalid_local_network_path,
+             "network.localAccess.localNetworkOrigins[0].domain is required") &&
+         LoadConfigExpectFailure(
+             invalid_allow_insecure_localhost_path,
+             "network.localAccess.allowInsecureLocalhost must be a boolean");
+}
+
+static bool RunApplicationConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  const auto empty_path = test_directory / "application-config-empty.json";
+  const auto first_path = test_directory / "application-config-first.json";
+  const auto second_path = test_directory / "application-config-second.json";
+  const auto invalid_object_path =
+      test_directory / "application-config-invalid-object.json";
+  const auto invalid_value_path =
+      test_directory / "application-config-invalid-value.json";
+  const auto empty_key_path =
+      test_directory / "application-config-empty-key.json";
+  const auto nul_key_path =
+      test_directory / "application-config-nul-key.json";
+  const auto nul_value_path =
+      test_directory / "application-config-nul-value.json";
+  const auto duplicate_key_path =
+      test_directory / "application-config-duplicate-key.json";
+  if (!Expect(WriteFile(empty_path, R"({"config":{}})"),
+              "failed to write empty application config") ||
+      !Expect(WriteFile(
+                  first_path,
+                  R"({"config":{"apiBaseUrl":"https://api.example","preserved":"first","empty":"not-empty"}})"),
+              "failed to write first application config") ||
+      !Expect(WriteFile(
+                  second_path,
+                  R"({"config":{"apiBaseUrl":"/api","added":"second","empty":""}})"),
+              "failed to write second application config") ||
+      !Expect(WriteFile(invalid_object_path, R"({"config":true})"),
+              "failed to write invalid application config object") ||
+      !Expect(WriteFile(invalid_value_path,
+                        R"({"config":{"apiBaseUrl":42}})"),
+              "failed to write invalid application config value") ||
+      !Expect(WriteFile(empty_key_path, R"({"config":{"":"value"}})"),
+              "failed to write empty application config key") ||
+      !Expect(WriteFile(nul_key_path,
+                        R"({"config":{"api\u0000BaseUrl":"value"}})"),
+              "failed to write NUL application config key") ||
+      !Expect(WriteFile(nul_value_path,
+                        R"({"config":{"apiBaseUrl":"value\u0000"}})"),
+              "failed to write NUL application config value") ||
+      !Expect(WriteFile(
+                  duplicate_key_path,
+                  R"({"config":{"apiBaseUrl":"first","apiBaseUrl":"second"}})"),
+              "failed to write duplicate application config key")) {
+    return false;
+  }
+
+  MuonConfig config;
+  if (!LoadConfigExpectSuccess(empty_path, &config) ||
+      !Expect(config.config.empty(),
+              "empty application config produced entries") ||
+      !LoadConfigFilesExpectSuccess({first_path, second_path}, &config)) {
+    return false;
+  }
+
+  const auto api_base_url = FindStringConfigValue(config.config, "apiBaseUrl");
+  const auto preserved = FindStringConfigValue(config.config, "preserved");
+  const auto added = FindStringConfigValue(config.config, "added");
+  const auto empty = FindStringConfigValue(config.config, "empty");
+  return Expect(config.config.size() == 4,
+                "merged application config entry count changed") &&
+         Expect(api_base_url != nullptr && *api_base_url == "/api",
+                "later application config value did not override") &&
+         Expect(preserved != nullptr && *preserved == "first",
+                "earlier application config value was not preserved") &&
+         Expect(added != nullptr && *added == "second",
+                "later application config value was not added") &&
+         Expect(empty != nullptr && empty->empty(),
+                "empty application config value did not override") &&
+         LoadConfigExpectFailure(invalid_object_path,
+                                 "config must be an object") &&
+         LoadConfigExpectFailure(invalid_value_path,
+                                 "config.apiBaseUrl must be a string") &&
+         LoadConfigExpectFailure(empty_key_path,
+                                 "config key must not be empty") &&
+         LoadConfigExpectFailure(nul_key_path,
+                                 "config key must not contain NUL") &&
+         LoadConfigExpectFailure(nul_value_path,
+                                 "config.apiBaseUrl must not contain NUL") &&
+         LoadConfigExpectFailure(duplicate_key_path,
+                                 "config has duplicate key: apiBaseUrl");
+}
+
+static bool RunBrowserConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  SetTestDefaultLaunchSource();
+  const auto state_home = SetTestStateHome(test_directory, "browser-state");
+  const auto default_profile = GetTestDefaultProfilePath(state_home, "muon");
+  const auto browser_path = test_directory / "browser.json";
+  if (!Expect(WriteFile(
+                  browser_path,
+                  R"({"browser":{"keybind":{"devtools":" f12 ","reload":"F5","hardReload":"ctrl+shift+r","fullscreen":"f11","zoomIn":"ctrl+plus","zoomOut":"ctrl+minus","resetZoom":"ctrl+0","recycle":"ctrl+shift+f10"}}})"),
+              "failed to write browser config") ||
+      !LoadConfigExpectSuccess(browser_path, &config)) {
+    return false;
+  }
+  if (!ExpectShortcut(config.browser.devtools, true, 0x7B, 0,
+                      "f12 devtools shortcut") ||
+      !ExpectShortcut(config.browser.reload, true, 0x74, 0,
+                      "f5 reload shortcut") ||
+      !ExpectShortcut(config.browser.hard_reload, true, 0x52,
+                      kMuonShortcutModifierControl |
+                          kMuonShortcutModifierShift,
+                      "ctrl+shift+r hardReload shortcut") ||
+      !ExpectShortcut(config.browser.fullscreen, true, 0x7A, 0,
+                      "f11 fullscreen shortcut") ||
+      !ExpectShortcut(config.browser.zoom_in, true, 0xBB,
+                      kMuonShortcutModifierControl,
+                      "ctrl+plus zoomIn shortcut", true) ||
+      !ExpectShortcut(config.browser.zoom_out, true, 0xBD,
+                      kMuonShortcutModifierControl,
+                      "ctrl+minus zoomOut shortcut") ||
+      !ExpectShortcut(config.browser.reset_zoom, true, 0x30,
+                      kMuonShortcutModifierControl,
+                      "ctrl+0 resetZoom shortcut") ||
+      !ExpectShortcut(config.browser.recycle, true, 0x79,
+                      kMuonShortcutModifierControl |
+                          kMuonShortcutModifierShift,
+                      "ctrl+shift+f10 recycle shortcut") ||
+      !Expect(config.browser.start_page == "asset://main/index.html",
+              "browser shortcut config changed default start URL") ||
+      !Expect(config.browser.profile == default_profile,
+              "browser shortcut config changed default profile path") ||
+      !Expect(config.browser.plugin.allow.size() == 1,
+              "browser shortcut config changed default plugin page allowlist") ||
+      !Expect(config.browser.plugin.allow[0] == "asset://main/**",
+              "browser shortcut config default plugin page pattern is wrong")) {
+    return false;
+  }
+
+  struct InitialWindowStateCase {
+    const char* value;
+    MuonBrowserInitialWindowState expected;
+  };
+  const InitialWindowStateCase initial_window_state_cases[] = {
+      {"normal", kMuonBrowserInitialWindowStateNormal},
+      {"hidden", kMuonBrowserInitialWindowStateHidden},
+      {"minimized", kMuonBrowserInitialWindowStateMinimized},
+      {"maximized", kMuonBrowserInitialWindowStateMaximized},
+      {"fullscreen", kMuonBrowserInitialWindowStateFullscreen},
+  };
+  for (const auto& test_case : initial_window_state_cases) {
+    const auto path =
+        test_directory /
+        (std::string("browser-initial-window-state-") + test_case.value +
+         ".json");
+    const auto content =
+        std::string(R"({"browser":{"initialWindowState":")") +
+        test_case.value + R"("}})";
+    if (!Expect(WriteFile(path, content),
+                "failed to write browser initial window state config") ||
+        !LoadConfigExpectSuccess(path, &config) ||
+        !Expect(config.browser.initial_window_state == test_case.expected,
+                std::string("browser.initialWindowState was not parsed: ") +
+                    test_case.value)) {
+      return false;
+    }
+  }
+
+  const auto initial_title_bar_visible_path =
+      test_directory / "browser-initial-title-bar-visible.json";
+  if (!Expect(WriteFile(initial_title_bar_visible_path,
+                        R"({"browser":{"initialTitleBarVisibility":true}})"),
+              "failed to write visible initial title bar config") ||
+      !LoadConfigExpectSuccess(initial_title_bar_visible_path, &config) ||
+      !Expect(config.browser.initial_title_bar_visibility,
+              "browser.initialTitleBarVisibility true was not parsed")) {
+    return false;
+  }
+
+  const auto initial_title_bar_hidden_path =
+      test_directory / "browser-initial-title-bar-hidden.json";
+  if (!Expect(WriteFile(initial_title_bar_hidden_path,
+                        R"({"browser":{"initialTitleBarVisibility":false}})"),
+              "failed to write hidden initial title bar config") ||
+      !LoadConfigExpectSuccess(initial_title_bar_hidden_path, &config) ||
+      !Expect(!config.browser.initial_title_bar_visibility,
+              "browser.initialTitleBarVisibility false was not parsed")) {
+    return false;
+  }
+
+  const auto combo_path = test_directory / "browser-combo.json";
+  if (!Expect(WriteFile(
+                  combo_path,
+                  R"({"browser":{"keybind":{"devtools":" shift + F9 ","reload":"CONTROL + SHIFT + i","zoomIn":"meta + equal"}}})"),
+              "failed to write browser combo config") ||
+      !LoadConfigExpectSuccess(combo_path, &config)) {
+    return false;
+  }
+  return ExpectShortcut(config.browser.devtools, true, 0x78,
+                        kMuonShortcutModifierShift,
+                        "shift+f9 devtools shortcut") &&
+         ExpectShortcut(config.browser.reload, true, 0x49,
+                        kMuonShortcutModifierControl |
+                            kMuonShortcutModifierShift,
+                        "ctrl+shift+i reload shortcut") &&
+         ExpectShortcut(config.browser.zoom_in, true, 0xBB,
+                        kMuonShortcutModifierMeta,
+                        "meta+equal zoomIn shortcut");
+}
+
+static bool RunLogConfigLoadingTest(
+    const std::filesystem::path& test_directory) {
+  MuonConfig config;
+  const auto file_log_path = test_directory / "file-log.json";
+  if (!Expect(WriteFile(
+                  file_log_path,
+                  R"({"log":{"level":"error","output":{"type":"file","path":"logs/muon.log"},"sources":{"console":"debug","plugin":"off"}}})"),
+              "failed to write file log config") ||
+      !LoadConfigExpectSuccess(file_log_path, &config)) {
+    return false;
+  }
+  if (!Expect(config.log.level == kMuonLogLevelError,
+              "log.level was not parsed") ||
+      !Expect(config.log.output.type == kMuonLogOutputFile,
+              "log.output.type file was not parsed") ||
+      !Expect(config.log.output.path == test_directory / "logs/muon.log",
+              "log.output.path was not parsed") ||
+      !Expect(config.log.muon == kMuonLogLevelError,
+              "log.level did not set muon source baseline") ||
+      !Expect(config.log.cef == kMuonLogLevelError,
+              "log.level did not set cef source baseline") ||
+      !Expect(config.log.console == kMuonLogLevelDebug,
+              "log.sources.console did not override baseline") ||
+      !Expect(config.log.plugin == kMuonLogLevelOff,
+              "log.sources.plugin did not parse off")) {
+    return false;
+  }
+
+  const auto partial_sources_path = test_directory / "log-sources.json";
+  if (!Expect(WriteFile(partial_sources_path,
+                        R"({"log":{"sources":{"plugin":"debug"}}})"),
+              "failed to write partial log sources config") ||
+      !LoadConfigExpectSuccess(partial_sources_path, &config)) {
+    return false;
+  }
+  return Expect(config.log.level == kMuonLogLevelInfo,
+                "partial sources changed global log level") &&
+         Expect(config.log.muon == kMuonLogLevelInfo,
+                "partial sources did not use global muon baseline") &&
+         Expect(config.log.cef == kMuonLogLevelInfo,
+                "partial sources did not use global cef baseline") &&
+         Expect(config.log.console == kMuonLogLevelInfo,
+                "partial sources did not use global console baseline") &&
+         Expect(config.log.plugin == kMuonLogLevelDebug,
+                "partial sources plugin override was not parsed");
+}
+
+static bool RunConfigValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto invalid_json_path = test_directory / "invalid-json.json";
+  const auto invalid_launcher_path =
+      test_directory / "invalid-launcher.json";
+  const auto invalid_network_path = test_directory / "invalid-network.json";
+  const auto invalid_allow_path = test_directory / "invalid-allow.json";
+  const auto invalid_entry_path = test_directory / "invalid-entry.json";
+  const auto invalid_default_version_policy_type_path =
+      test_directory / "invalid-default-version-policy-type.json";
+  const auto invalid_default_version_policy_path =
+      test_directory / "invalid-default-version-policy.json";
+  const auto invalid_desktop_id_type_path =
+      test_directory / "invalid-desktop-id-type.json";
+  const auto empty_desktop_id_path =
+      test_directory / "empty-desktop-id.json";
+  const auto invalid_authorized_origin_path =
+      test_directory / "invalid-authorized-origin.json";
+  const auto invalid_authorized_origin_entry_path =
+      test_directory / "invalid-authorized-origin-entry.json";
+  const auto missing_authorized_origin_scheme_path =
+      test_directory / "missing-authorized-origin-scheme.json";
+  const auto invalid_authorized_origin_scheme_path =
+      test_directory / "invalid-authorized-origin-scheme.json";
+  const auto missing_authorized_origin_domain_path =
+      test_directory / "missing-authorized-origin-domain.json";
+  const auto invalid_authorized_origin_domain_path =
+      test_directory / "invalid-authorized-origin-domain.json";
+  const auto invalid_authorized_origin_port_path =
+      test_directory / "invalid-authorized-origin-port.json";
+  const auto out_of_range_authorized_origin_port_path =
+      test_directory / "out-of-range-authorized-origin-port.json";
+  const auto invalid_plugin_path = test_directory / "invalid-plugin.json";
+  const auto invalid_plugin_pages_path =
+      test_directory / "invalid-plugin-pages.json";
+  const auto invalid_plugin_page_entry_path =
+      test_directory / "invalid-plugin-page-entry.json";
+  const auto invalid_plugin_mode_type_path =
+      test_directory / "invalid-plugin-mode-type.json";
+  const auto empty_plugin_mode_path =
+      test_directory / "empty-plugin-mode.json";
+  const auto unknown_plugin_mode_path =
+      test_directory / "unknown-plugin-mode.json";
+  const auto invalid_plugin_capabilities_path =
+      test_directory / "invalid-plugin-capabilities.json";
+  const auto invalid_plugin_capability_entry_path =
+      test_directory / "invalid-plugin-capability-entry.json";
+  const auto invalid_plugin_capability_id_path =
+      test_directory / "invalid-plugin-capability-id.json";
+  const auto empty_plugin_capability_id_path =
+      test_directory / "empty-plugin-capability-id.json";
+  const auto invalid_plugin_capability_allow_path =
+      test_directory / "invalid-plugin-capability-allow.json";
+  const auto legacy_plugins_path = test_directory / "legacy-plugins.json";
+  const auto invalid_plugin_path_type_path =
+      test_directory / "invalid-plugin-path-type.json";
+  const auto empty_plugin_path_path =
+      test_directory / "empty-plugin-path.json";
+  const auto invalid_plugins_path = test_directory / "invalid-plugins.json";
+  const auto invalid_plugin_entry_object_path =
+      test_directory / "invalid-plugin-entry-object.json";
+  const auto missing_plugin_name_path =
+      test_directory / "missing-plugin-name.json";
+  const auto invalid_plugin_name_type_path =
+      test_directory / "invalid-plugin-name-type.json";
+  const auto invalid_plugin_name_path =
+      test_directory / "invalid-plugin-name.json";
+  const auto duplicate_plugin_path =
+      test_directory / "duplicate-plugin.json";
+  const auto missing_plugin_allow_path =
+      test_directory / "missing-plugin-allow.json";
+  const auto runtime_imports_without_allow_path =
+      test_directory / "runtime-imports-without-allow.json";
+  const auto invalid_plugin_signature_type_path =
+      test_directory / "invalid-plugin-signature-type.json";
+  const auto short_plugin_signature_path =
+      test_directory / "short-plugin-signature.json";
+  const auto long_plugin_signature_path =
+      test_directory / "long-plugin-signature.json";
+  const auto non_hex_plugin_signature_path =
+      test_directory / "non-hex-plugin-signature.json";
+  const auto internal_plugin_signature_path =
+      test_directory / "internal-plugin-signature.json";
+  const auto missing_plugin_salt_path =
+      test_directory / "missing-plugin-salt.json";
+  const auto invalid_plugin_salt_type_path =
+      test_directory / "invalid-plugin-salt-type.json";
+  const auto odd_plugin_salt_path =
+      test_directory / "odd-plugin-salt.json";
+  const auto non_hex_plugin_salt_path =
+      test_directory / "non-hex-plugin-salt.json";
+  const auto internal_plugin_salt_path =
+      test_directory / "internal-plugin-salt.json";
+  const auto invalid_plugin_allow_path =
+      test_directory / "invalid-plugin-allow.json";
+  const auto invalid_plugin_entry_path =
+      test_directory / "invalid-plugin-entry.json";
+  const auto invalid_plugin_config_path =
+      test_directory / "invalid-plugin-config.json";
+  const auto invalid_plugin_config_value_path =
+      test_directory / "invalid-plugin-config-value.json";
+  const auto empty_plugin_config_key_path =
+      test_directory / "empty-plugin-config-key.json";
+  const auto nul_plugin_config_key_path =
+      test_directory / "nul-plugin-config-key.json";
+  const auto nul_plugin_config_value_path =
+      test_directory / "nul-plugin-config-value.json";
+  const auto duplicate_plugin_config_key_path =
+      test_directory / "duplicate-plugin-config-key.json";
+  const auto invalid_asset_path = test_directory / "invalid-asset.json";
+  const auto invalid_asset_from_type_path =
+      test_directory / "invalid-asset-from-type.json";
+  const auto empty_asset_from_path =
+      test_directory / "empty-asset-from.json";
+  const auto invalid_asset_signature_type_path =
+      test_directory / "invalid-asset-signature-type.json";
+  const auto short_asset_signature_path =
+      test_directory / "short-asset-signature.json";
+  const auto long_asset_signature_path =
+      test_directory / "long-asset-signature.json";
+  const auto non_hex_asset_signature_path =
+      test_directory / "non-hex-asset-signature.json";
+  const auto invalid_asset_salt_type_path =
+      test_directory / "invalid-asset-salt-type.json";
+  const auto odd_asset_salt_path =
+      test_directory / "odd-asset-salt.json";
+  const auto non_hex_asset_salt_path =
+      test_directory / "non-hex-asset-salt.json";
+  return Expect(WriteFile(invalid_json_path, "{"),
+                "failed to write invalid JSON config") &&
+         Expect(WriteFile(invalid_launcher_path, R"({"launcher":true})"),
+                "failed to write invalid launcher config") &&
+         Expect(WriteFile(invalid_network_path, R"({"network":true})"),
+                "failed to write invalid network config") &&
+         Expect(WriteFile(invalid_allow_path,
+                          R"({"network":{"allow":"data:**"}})"),
+                "failed to write invalid allow config") &&
+         Expect(WriteFile(invalid_entry_path,
+                          R"({"network":{"allow":["data:**",42]}})"),
+                "failed to write invalid allow entry config") &&
+         Expect(WriteFile(invalid_default_version_policy_type_path,
+                          R"({"launcher":{"defaultVersionPolicy":42}})"),
+                "failed to write invalid defaultVersionPolicy type config") &&
+         Expect(WriteFile(invalid_default_version_policy_path,
+                          R"({"launcher":{"defaultVersionPolicy":"invalid"}})"),
+                "failed to write invalid defaultVersionPolicy config") &&
+         Expect(WriteFile(invalid_desktop_id_type_path,
+                          R"({"launcher":{"desktopId":42}})"),
+                "failed to write invalid desktopId type config") &&
+         Expect(WriteFile(empty_desktop_id_path,
+                          R"({"launcher":{"desktopId":"   "}})"),
+                "failed to write empty desktopId config") &&
+         Expect(WriteFile(invalid_authorized_origin_path,
+                          R"({"network":{"authorizedOrigin":true}})"),
+                "failed to write invalid authorizedOrigin config") &&
+         Expect(WriteFile(invalid_authorized_origin_entry_path,
+                          R"({"network":{"authorizedOrigin":[true]}})"),
+                "failed to write invalid authorizedOrigin entry config") &&
+         Expect(WriteFile(missing_authorized_origin_scheme_path,
+                          R"({"network":{"authorizedOrigin":[{"domain":"login.live.com"}]}})"),
+                "failed to write missing authorizedOrigin scheme config") &&
+         Expect(WriteFile(invalid_authorized_origin_scheme_path,
+                          R"({"network":{"authorizedOrigin":[{"scheme":42,"domain":"login.live.com"}]}})"),
+                "failed to write invalid authorizedOrigin scheme config") &&
+         Expect(WriteFile(missing_authorized_origin_domain_path,
+                          R"({"network":{"authorizedOrigin":[{"scheme":"https"}]}})"),
+                "failed to write missing authorizedOrigin domain config") &&
+         Expect(WriteFile(invalid_authorized_origin_domain_path,
+                          R"({"network":{"authorizedOrigin":[{"scheme":"https","domain":"*.live.com"}]}})"),
+                "failed to write invalid authorizedOrigin domain config") &&
+         Expect(WriteFile(invalid_authorized_origin_port_path,
+                          R"({"network":{"authorizedOrigin":[{"scheme":"https","domain":"login.live.com","port":"443"}]}})"),
+                "failed to write invalid authorizedOrigin port config") &&
+         Expect(WriteFile(out_of_range_authorized_origin_port_path,
+                          R"({"network":{"authorizedOrigin":[{"scheme":"https","domain":"login.live.com","port":65536}]}})"),
+                "failed to write out-of-range authorizedOrigin port config") &&
+         Expect(WriteFile(invalid_plugin_path, R"({"plugin":true})"),
+                "failed to write invalid plugin config") &&
+         Expect(WriteFile(invalid_plugin_pages_path,
+                          R"({"plugin":{"pages":"asset://main/**"}})"),
+                "failed to write invalid plugin pages config") &&
+         Expect(WriteFile(invalid_plugin_page_entry_path,
+                          R"({"plugin":{"pages":["asset://main/**",42]}})"),
+                "failed to write invalid plugin pages entry config") &&
+         Expect(WriteFile(invalid_plugin_mode_type_path,
+                          R"({"plugin":{"mode":42}})"),
+                "failed to write invalid plugin mode type config") &&
+         Expect(WriteFile(empty_plugin_mode_path,
+                          R"({"plugin":{"mode":""}})"),
+                "failed to write empty plugin mode config") &&
+         Expect(WriteFile(unknown_plugin_mode_path,
+                          R"({"plugin":{"mode":"strict"}})"),
+                "failed to write unknown plugin mode config") &&
+         Expect(WriteFile(invalid_plugin_capabilities_path,
+                          R"({"plugin":{"capabilities":true}})"),
+                "failed to write invalid plugin capabilities config") &&
+         Expect(WriteFile(invalid_plugin_capability_entry_path,
+                          R"({"plugin":{"capabilities":[true]}})"),
+                "failed to write invalid plugin capability entry config") &&
+         Expect(WriteFile(invalid_plugin_capability_id_path,
+                          R"({"plugin":{"capabilities":[{"id":42,"allow":["muon.executor.spawn"]}]}})"),
+                "failed to write invalid plugin capability id config") &&
+         Expect(WriteFile(empty_plugin_capability_id_path,
+                          R"({"plugin":{"capabilities":[{"id":"","allow":["muon.executor.spawn"]}]}})"),
+                "failed to write empty plugin capability id config") &&
+         Expect(WriteFile(invalid_plugin_capability_allow_path,
+                          R"({"plugin":{"capabilities":[{"id":"cap-1","allow":"muon.executor.spawn"}]}})"),
+                "failed to write invalid plugin capability allow config") &&
+         Expect(WriteFile(legacy_plugins_path, R"({"plugins":[]})"),
+                "failed to write legacy plugins config") &&
+         Expect(WriteFile(invalid_plugin_path_type_path,
+                          R"({"plugin":{"path":42}})"),
+                "failed to write invalid plugin.path type config") &&
+         Expect(WriteFile(empty_plugin_path_path,
+                          R"({"plugin":{"path":""}})"),
+                "failed to write empty plugin.path config") &&
+         Expect(WriteFile(invalid_plugins_path,
+                          R"({"plugin":{"plugins":true}})"),
+                "failed to write invalid plugins config") &&
+         Expect(WriteFile(invalid_plugin_entry_object_path,
+                          R"({"plugin":{"plugins":[true]}})"),
+                "failed to write invalid plugin entry object config") &&
+         Expect(WriteFile(missing_plugin_name_path,
+                          R"({"plugin":{"plugins":[{"allow":["muon.**"]}]}})"),
+                "failed to write missing plugin name config") &&
+         Expect(WriteFile(invalid_plugin_name_type_path,
+                          R"({"plugin":{"plugins":[{"name":42,"allow":["muon.**"]}]}})"),
+                "failed to write invalid plugin name type config") &&
+         Expect(WriteFile(invalid_plugin_name_path,
+                          R"({"plugin":{"plugins":[{"name":"../bad","allow":["muon.**"]}]}})"),
+                "failed to write invalid plugin name config") &&
+         Expect(WriteFile(duplicate_plugin_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"]},{"name":"internal","allow":["muon.fs.*"]}]}})"),
+                "failed to write duplicate plugin config") &&
+         Expect(WriteFile(missing_plugin_allow_path,
+                          R"({"plugin":{"plugins":[{"name":"internal"}]}})"),
+                "failed to write missing plugin allow config") &&
+         Expect(WriteFile(runtime_imports_without_allow_path,
+                          R"({"plugin":{"mode":"validate","plugins":[{"name":"internal","imports":[{"sources":["src/native/**"],"allow":["muon.executor.spawn"]}]}]}})"),
+                "failed to write runtime imports without allow config") &&
+         Expect(WriteFile(invalid_plugin_signature_type_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":42}]}})"),
+                "failed to write invalid plugin signature type config") &&
+         Expect(WriteFile(short_plugin_signature_path,
+                          "{\"plugin\":{\"plugins\":[{\"name\":\"foobar\","
+                          "\"allow\":[\"foobar.*\"],\"signature\":\"" +
+                              std::string(63, 'a') + "\"}]}}"),
+                "failed to write short plugin signature config") &&
+         Expect(WriteFile(long_plugin_signature_path,
+                          "{\"plugin\":{\"plugins\":[{\"name\":\"foobar\","
+                          "\"allow\":[\"foobar.*\"],\"signature\":\"" +
+                              std::string(65, 'a') + "\"}]}}"),
+                "failed to write long plugin signature config") &&
+         Expect(WriteFile(non_hex_plugin_signature_path,
+                          "{\"plugin\":{\"plugins\":[{\"name\":\"foobar\","
+                          "\"allow\":[\"foobar.*\"],\"signature\":\"" +
+                              std::string(63, 'a') + "x\"}]}}"),
+                "failed to write non-hex plugin signature config") &&
+         Expect(WriteFile(internal_plugin_signature_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"signature":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]}})"),
+                "failed to write internal plugin signature config") &&
+         Expect(WriteFile(missing_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"signature":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]}})"),
+                "failed to write missing plugin salt config") &&
+         Expect(WriteFile(invalid_plugin_salt_type_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":42}]}})"),
+                "failed to write invalid plugin salt type config") &&
+         Expect(WriteFile(odd_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":"abc"}]}})"),
+                "failed to write odd plugin salt config") &&
+         Expect(WriteFile(non_hex_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"foobar","allow":["foobar.*"],"salt":"0x"}]}})"),
+                "failed to write non-hex plugin salt config") &&
+         Expect(WriteFile(internal_plugin_salt_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"salt":"deadbeef"}]}})"),
+                "failed to write internal plugin salt config") &&
+         Expect(WriteFile(invalid_plugin_allow_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":"muon.**"}]}})"),
+                "failed to write invalid plugin allow config") &&
+         Expect(WriteFile(invalid_plugin_entry_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**",42]}]}})"),
+                "failed to write invalid plugin allow entry config") &&
+         Expect(WriteFile(invalid_plugin_config_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":true}]}})"),
+                "failed to write invalid plugin config object config") &&
+         Expect(WriteFile(invalid_plugin_config_value_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor.enabled":true}}]}})"),
+                "failed to write invalid plugin config value config") &&
+         Expect(WriteFile(empty_plugin_config_key_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"":"value"}}]}})"),
+                "failed to write empty plugin config key config") &&
+         Expect(WriteFile(nul_plugin_config_key_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor\u0000mode":"value"}}]}})"),
+                "failed to write NUL plugin config key config") &&
+         Expect(WriteFile(nul_plugin_config_value_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor.mode":"value\u0000"}}]}})"),
+                "failed to write NUL plugin config value config") &&
+         Expect(WriteFile(duplicate_plugin_config_key_path,
+                          R"({"plugin":{"plugins":[{"name":"internal","allow":["muon.**"],"config":{"executor.mode":"strict","executor.mode":"loose"}}]}})"),
+                "failed to write duplicate plugin config key config") &&
+         Expect(WriteFile(invalid_asset_path, R"({"asset":true})"),
+                "failed to write invalid asset config") &&
+         Expect(WriteFile(invalid_asset_from_type_path,
+                          R"({"asset":{"sourcePath":42}})"),
+                "failed to write invalid asset.sourcePath type config") &&
+         Expect(WriteFile(empty_asset_from_path,
+                          R"({"asset":{"sourcePath":""}})"),
+                "failed to write empty asset.sourcePath config") &&
+         Expect(WriteFile(invalid_asset_signature_type_path,
+                          R"({"asset":{"signature":42}})"),
+                "failed to write invalid asset.signature type config") &&
+         Expect(WriteFile(short_asset_signature_path,
+                          "{\"asset\":{\"signature\":\"" +
+                              std::string(63, 'a') + "\"}}"),
+                "failed to write short asset.signature config") &&
+         Expect(WriteFile(long_asset_signature_path,
+                          "{\"asset\":{\"signature\":\"" +
+                              std::string(65, 'a') + "\"}}"),
+                "failed to write long asset.signature config") &&
+         Expect(WriteFile(non_hex_asset_signature_path,
+                          "{\"asset\":{\"signature\":\"" +
+                              std::string(63, 'a') + "x\"}}"),
+                "failed to write non-hex asset.signature config") &&
+         Expect(WriteFile(invalid_asset_salt_type_path,
+                          R"({"asset":{"salt":42}})"),
+                "failed to write invalid asset.salt type config") &&
+         Expect(WriteFile(odd_asset_salt_path,
+                          R"({"asset":{"salt":"abc"}})"),
+                "failed to write odd asset.salt config") &&
+         Expect(WriteFile(non_hex_asset_salt_path,
+                          R"({"asset":{"salt":"0x"}})"),
+                "failed to write non-hex asset.salt config") &&
+         LoadConfigExpectFailure(invalid_json_path, "Invalid muon.json") &&
+         LoadConfigExpectFailure(invalid_launcher_path,
+                                 "launcher must be an object") &&
+         LoadConfigExpectFailure(invalid_network_path,
+                                 "network must be an object") &&
+         LoadConfigExpectFailure(invalid_allow_path,
+                                 "network.allow must be an array") &&
+         LoadConfigExpectFailure(invalid_entry_path,
+                                 "network.allow entries must be strings") &&
+         LoadConfigExpectFailure(invalid_default_version_policy_type_path,
+                                 "launcher.defaultVersionPolicy must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(invalid_default_version_policy_path,
+                                 "launcher.defaultVersionPolicy has unknown "
+                                 "value") &&
+         LoadConfigExpectFailure(invalid_desktop_id_type_path,
+                                 "launcher.desktopId must be a string") &&
+         LoadConfigExpectFailure(empty_desktop_id_path,
+                                 "launcher.desktopId must not be empty") &&
+         LoadConfigExpectFailure(invalid_authorized_origin_path,
+                                 "network.authorizedOrigin must be an array") &&
+         LoadConfigExpectFailure(invalid_authorized_origin_entry_path,
+                                 "network.authorizedOrigin[0] must be an "
+                                 "object") &&
+         LoadConfigExpectFailure(missing_authorized_origin_scheme_path,
+                                 "network.authorizedOrigin[0].scheme is "
+                                 "required") &&
+         LoadConfigExpectFailure(invalid_authorized_origin_scheme_path,
+                                 "network.authorizedOrigin[0].scheme must be "
+                                 "a string") &&
+         LoadConfigExpectFailure(missing_authorized_origin_domain_path,
+                                 "network.authorizedOrigin[0].domain is "
+                                 "required") &&
+         LoadConfigExpectFailure(invalid_authorized_origin_domain_path,
+                                 "without separators or wildcards") &&
+         LoadConfigExpectFailure(invalid_authorized_origin_port_path,
+                                 "network.authorizedOrigin[0].port must be an "
+                                 "integer") &&
+         LoadConfigExpectFailure(out_of_range_authorized_origin_port_path,
+                                 "network.authorizedOrigin[0].port must be an "
+                                 "integer") &&
+         LoadConfigExpectFailure(invalid_plugin_path,
+                                 "plugin must be an object") &&
+         LoadConfigExpectFailure(invalid_plugin_pages_path,
+                                 "plugin.pages must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_page_entry_path,
+                                 "plugin.pages entries must be strings") &&
+         LoadConfigExpectFailure(invalid_plugin_mode_type_path,
+                                 "plugin.mode must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_mode_path,
+                                 "plugin.mode must not be empty") &&
+         LoadConfigExpectFailure(unknown_plugin_mode_path,
+                                 "plugin.mode has unknown value") &&
+         LoadConfigExpectFailure(invalid_plugin_capabilities_path,
+                                 "plugin.capabilities must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_entry_path,
+                                 "plugin.capabilities entries must be objects") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_id_path,
+                                 "plugin.capabilities.id must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_capability_id_path,
+                                 "plugin.capabilities.id must not be empty") &&
+         LoadConfigExpectFailure(invalid_plugin_capability_allow_path,
+                                 "plugin.capabilities.allow must be an array") &&
+         LoadConfigExpectFailure(legacy_plugins_path,
+                                 "plugins is no longer supported") &&
+         LoadConfigExpectFailure(invalid_plugin_path_type_path,
+                                 "plugin.path must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_path_path,
+                                 "plugin.path must not be empty") &&
+         LoadConfigExpectFailure(invalid_plugins_path,
+                                 "plugin.plugins must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_entry_object_path,
+                                 "plugin.plugins[0] must be an object") &&
+         LoadConfigExpectFailure(missing_plugin_name_path,
+                                 "plugin.plugins[0].name is required") &&
+         LoadConfigExpectFailure(invalid_plugin_name_type_path,
+                                 "plugin.plugins[0].name must be a string") &&
+         LoadConfigExpectFailure(invalid_plugin_name_path,
+                                 "plugin.plugins entry name must be a file "
+                                 "name stem") &&
+         LoadConfigExpectFailure(duplicate_plugin_path,
+                                 "duplicate plugin entry") &&
+         LoadConfigExpectFailure(missing_plugin_allow_path,
+                                 "plugin.plugins[0].allow is required") &&
+         LoadConfigExpectFailure(runtime_imports_without_allow_path,
+                                 "validate imports require Vite capability "
+                                 "generation") &&
+         LoadConfigExpectFailure(invalid_plugin_signature_type_path,
+                                 "plugin.plugins[0].signature must be a string") &&
+         LoadConfigExpectFailure(short_plugin_signature_path,
+                                 "plugin.plugins[0].signature must be a "
+                                 "64-character SHA-256 hex string") &&
+         LoadConfigExpectFailure(long_plugin_signature_path,
+                                 "plugin.plugins[0].signature must be a "
+                                 "64-character SHA-256 hex string") &&
+         LoadConfigExpectFailure(non_hex_plugin_signature_path,
+                                 "plugin.plugins[0].signature must be a "
+                                 "64-character SHA-256 hex string") &&
+         LoadConfigExpectFailure(internal_plugin_signature_path,
+                                 "plugin.plugins[0].signature is not supported "
+                                 "for internal") &&
+         LoadConfigExpectFailure(missing_plugin_salt_path,
+                                 "plugin.plugins[0].signature requires "
+                                 "plugin.plugins[0].salt") &&
+         LoadConfigExpectFailure(invalid_plugin_salt_type_path,
+                                 "plugin.plugins[0].salt must be a string") &&
+         LoadConfigExpectFailure(odd_plugin_salt_path,
+                                 "plugin.plugins[0].salt must be a "
+                                 "hexadecimal byte string") &&
+         LoadConfigExpectFailure(non_hex_plugin_salt_path,
+                                 "plugin.plugins[0].salt must be a "
+                                 "hexadecimal byte string") &&
+         LoadConfigExpectFailure(internal_plugin_salt_path,
+                                 "plugin.plugins[0].salt is not supported "
+                                 "for internal") &&
+         LoadConfigExpectFailure(invalid_plugin_allow_path,
+                                 "plugin.plugins[0].allow must be an array") &&
+         LoadConfigExpectFailure(invalid_plugin_entry_path,
+                                 "plugin.plugins[0].allow entries must be strings") &&
+         LoadConfigExpectFailure(invalid_plugin_config_path,
+                                 "plugin.plugins[0].config must be an object") &&
+         LoadConfigExpectFailure(invalid_plugin_config_value_path,
+                                 "plugin.plugins[0].config.executor.enabled "
+                                 "must be a string") &&
+         LoadConfigExpectFailure(empty_plugin_config_key_path,
+                                 "plugin.plugins[0].config key must not be "
+                                 "empty") &&
+         LoadConfigExpectFailure(nul_plugin_config_key_path,
+                                 "plugin.plugins[0].config key must not "
+                                 "contain NUL") &&
+         LoadConfigExpectFailure(nul_plugin_config_value_path,
+                                 "plugin.plugins[0].config.executor.mode "
+                                 "must not contain NUL") &&
+         LoadConfigExpectFailure(duplicate_plugin_config_key_path,
+                                 "plugin.plugins[0].config has duplicate "
+                                 "key") &&
+         LoadConfigExpectFailure(invalid_asset_path,
+                                 "asset must be an object") &&
+         LoadConfigExpectFailure(invalid_asset_from_type_path,
+                                 "asset.sourcePath must be a string") &&
+         LoadConfigExpectFailure(empty_asset_from_path,
+                                 "asset.sourcePath must not be empty") &&
+         LoadConfigExpectFailure(invalid_asset_signature_type_path,
+                                 "asset.signature must be a string") &&
+         LoadConfigExpectFailure(short_asset_signature_path,
+                                 "asset.signature must be a 64-character "
+                                 "SHA-256 hex string") &&
+         LoadConfigExpectFailure(long_asset_signature_path,
+                                 "asset.signature must be a 64-character "
+                                 "SHA-256 hex string") &&
+         LoadConfigExpectFailure(non_hex_asset_signature_path,
+                                 "asset.signature must be a 64-character "
+                                 "SHA-256 hex string") &&
+         LoadConfigExpectFailure(invalid_asset_salt_type_path,
+                                 "asset.salt must be a string") &&
+         LoadConfigExpectFailure(odd_asset_salt_path,
+                                 "asset.salt must be a hexadecimal byte "
+                                 "string") &&
+         LoadConfigExpectFailure(non_hex_asset_salt_path,
+                                 "asset.salt must be a hexadecimal byte "
+                                 "string");
+}
+
+static bool RunLogConfigValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto invalid_log_path = test_directory / "invalid-log.json";
+  const auto invalid_level_path = test_directory / "invalid-log-level.json";
+  const auto unknown_level_path =
+      test_directory / "unknown-log-level.json";
+  const auto invalid_output_path = test_directory / "invalid-log-output.json";
+  const auto invalid_output_type_path =
+      test_directory / "invalid-log-output-type.json";
+  const auto unknown_output_type_path =
+      test_directory / "unknown-log-output-type.json";
+  const auto missing_file_path =
+      test_directory / "missing-log-file-path.json";
+  const auto non_file_path_path =
+      test_directory / "non-file-log-path.json";
+  const auto invalid_sources_path =
+      test_directory / "invalid-log-sources.json";
+  const auto unknown_source_path =
+      test_directory / "unknown-log-source.json";
+  const auto invalid_source_level_path =
+      test_directory / "invalid-log-source-level.json";
+  const auto unsupported_platform_output_path =
+      test_directory / "unsupported-log-output.json";
+  return Expect(WriteFile(invalid_log_path, R"({"log":true})"),
+                "failed to write invalid log config") &&
+         Expect(WriteFile(invalid_level_path, R"({"log":{"level":1}})"),
+                "failed to write invalid log level config") &&
+         Expect(WriteFile(unknown_level_path,
+                          R"({"log":{"level":"trace"}})"),
+                "failed to write unknown log level config") &&
+         Expect(WriteFile(invalid_output_path,
+                          R"({"log":{"output":true}})"),
+                "failed to write invalid log output config") &&
+         Expect(WriteFile(invalid_output_type_path,
+                          R"({"log":{"output":{"type":1}}})"),
+                "failed to write invalid log output type config") &&
+         Expect(WriteFile(unknown_output_type_path,
+                          R"({"log":{"output":{"type":"journald"}}})"),
+                "failed to write unknown log output type config") &&
+         Expect(WriteFile(missing_file_path,
+                          R"({"log":{"output":{"type":"file"}}})"),
+                "failed to write missing log file path config") &&
+         Expect(WriteFile(non_file_path_path,
+                          R"({"log":{"output":{"type":"stderr","path":"muon.log"}}})"),
+                "failed to write non-file path config") &&
+         Expect(WriteFile(invalid_sources_path,
+                          R"({"log":{"sources":true}})"),
+                "failed to write invalid log sources config") &&
+         Expect(WriteFile(unknown_source_path,
+                          R"({"log":{"sources":{"network":"debug"}}})"),
+                "failed to write unknown log source config") &&
+         Expect(WriteFile(invalid_source_level_path,
+                          R"({"log":{"sources":{"console":1}}})"),
+                "failed to write invalid log source level config") &&
+         Expect(WriteFile(unsupported_platform_output_path,
+                          R"({"log":{"output":{"type":"debug"}}})"),
+                "failed to write unsupported log output config") &&
+         LoadConfigExpectFailure(invalid_log_path,
+                                 "log must be an object") &&
+         LoadConfigExpectFailure(invalid_level_path,
+                                 "log.level must be a string") &&
+         LoadConfigExpectFailure(unknown_level_path,
+                                 "log.level has unknown level") &&
+         LoadConfigExpectFailure(invalid_output_path,
+                                 "log.output must be an object") &&
+         LoadConfigExpectFailure(invalid_output_type_path,
+                                 "log.output.type must be a string") &&
+         LoadConfigExpectFailure(unknown_output_type_path,
+                                 "log.output.type is unknown") &&
+         LoadConfigExpectFailure(missing_file_path,
+                                 "log.output.path is required") &&
+         LoadConfigExpectFailure(non_file_path_path,
+                                 "log.output.path is only valid") &&
+         LoadConfigExpectFailure(invalid_sources_path,
+                                 "log.sources must be an object") &&
+         LoadConfigExpectFailure(unknown_source_path,
+                                 "log.sources has unknown source") &&
+         LoadConfigExpectFailure(invalid_source_level_path,
+                                 "log.sources.console must be a string") &&
+         LoadConfigExpectFailure(unsupported_platform_output_path,
+                                 "only supported on win32");
+}
+
+static bool RunDebuggerConfigValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto invalid_debugger_path = test_directory / "invalid-cdp.json";
+  const auto invalid_debugger_enable_path =
+      test_directory / "invalid-cdp-enable.json";
+  const auto invalid_debugger_port_path =
+      test_directory / "invalid-cdp-port.json";
+  const auto out_of_range_debugger_port_path =
+      test_directory / "out-of-range-cdp-port.json";
+  return Expect(WriteFile(invalid_debugger_path, R"({"cdp":true})"),
+                "failed to write invalid cdp config") &&
+         Expect(WriteFile(invalid_debugger_enable_path,
+                          R"({"cdp":{"enable":"true"}})"),
+                "failed to write invalid cdp enable config") &&
+         Expect(WriteFile(invalid_debugger_port_path,
+                          R"({"cdp":{"port":"9222"}})"),
+                "failed to write invalid cdp port config") &&
+         Expect(WriteFile(out_of_range_debugger_port_path,
+                          R"({"cdp":{"port":1023}})"),
+                "failed to write out-of-range cdp port config") &&
+         LoadConfigExpectFailure(invalid_debugger_path,
+                                 "cdp must be an object") &&
+         LoadConfigExpectFailure(invalid_debugger_enable_path,
+                                 "cdp.enable must be a boolean") &&
+         LoadConfigExpectFailure(invalid_debugger_port_path,
+                                 "cdp.port must be an integer") &&
+         LoadConfigExpectFailure(out_of_range_debugger_port_path,
+                                 "cdp.port must be an integer");
+}
+
+static bool RunBrowserUserAgentConfigTest(
+    const std::filesystem::path& test_directory) {
+  const auto base_path = test_directory / "user-agent-base.json";
+  const auto override_path = test_directory / "user-agent-override.json";
+  const auto unrelated_path = test_directory / "user-agent-unrelated.json";
+  const auto empty_path = test_directory / "user-agent-empty.json";
+  if (!Expect(WriteFile(base_path,
+                        R"({browser:{userAgent:'MyApp/1.0 (Test; +https://example.test/)'}})"),
+              "failed to write base user agent config") ||
+      !Expect(WriteFile(override_path,
+                        R"({"browser":{"userAgent":"OtherApp/2.0"}})"),
+              "failed to write overriding user agent config") ||
+      !Expect(WriteFile(unrelated_path,
+                        R"({"browser":{"startPage":"https://example.test/"}})"),
+              "failed to write unrelated browser config") ||
+      !Expect(WriteFile(empty_path, R"({"browser":{"userAgent":""}})"),
+              "failed to write empty user agent config")) {
+    return false;
+  }
+
+  MuonConfig config;
+  return LoadConfigExpectSuccess(base_path, &config) &&
+         Expect(config.browser.user_agent ==
+                    "MyApp/1.0 (Test; +https://example.test/)",
+                "browser.userAgent was not preserved exactly") &&
+         LoadConfigFilesExpectSuccess(
+             {base_path, override_path, unrelated_path}, &config) &&
+         Expect(config.browser.user_agent == "OtherApp/2.0",
+                "later user agent did not override or survive unrelated config") &&
+         Expect(config.browser.start_page == "https://example.test/",
+                "user agent merge lost another browser setting") &&
+         LoadConfigFilesExpectSuccess({base_path, empty_path}, &config) &&
+         Expect(config.browser.user_agent.empty(),
+                "empty user agent did not clear the override") &&
+         LoadConfigExpectSuccess(empty_path, &config) &&
+         Expect(config.browser.user_agent.empty(),
+                "empty user agent was not accepted") &&
+         LoadConfigExpectSuccess(base_path, &config) &&
+         LoadConfigExpectSuccess(unrelated_path, &config) &&
+         Expect(config.browser.user_agent.empty(),
+                "omitted user agent did not use the default");
+}
+
+static bool RunBrowserUserAgentValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto config_path = test_directory / "invalid-browser-user-agent.json";
+  for (const auto* value : {"null", "true", "42", "[]", "{}"}) {
+    if (!Expect(WriteFile(config_path,
+                          std::string("{\"browser\":{\"userAgent\":") +
+                              value + "}}"),
+                "failed to write non-string user agent config") ||
+        !LoadConfigExpectFailure(config_path,
+                                 "browser.userAgent must be a string")) {
+      return false;
+    }
+  }
+  for (const auto* value : {R"("MyApp/1.0\rInjected")",
+                            R"("MyApp/1.0\nInjected")",
+                            R"("MyApp/1.0\u0000Injected")"}) {
+    if (!Expect(WriteFile(config_path,
+                          std::string("{\"browser\":{\"userAgent\":") +
+                              value + "}}"),
+                "failed to write invalid user agent config") ||
+        !LoadConfigExpectFailure(
+            config_path, "browser.userAgent must not contain CR, LF or NUL")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool RunBrowserConfigValidationTest(
+    const std::filesystem::path& test_directory) {
+  const auto invalid_browser_path = test_directory / "invalid-browser.json";
+  const auto invalid_keybinds_path =
+      test_directory / "invalid-browser-keybind.json";
+  const auto invalid_devtools_path =
+      test_directory / "invalid-browser-devtools.json";
+  const auto invalid_zoom_path =
+      test_directory / "invalid-browser-zoom.json";
+  const auto invalid_recycle_path =
+      test_directory / "invalid-browser-recycle.json";
+  const auto empty_shortcut_path =
+      test_directory / "invalid-browser-empty-shortcut.json";
+  const auto unknown_key_path =
+      test_directory / "invalid-browser-unknown-key.json";
+  const auto duplicate_modifier_path =
+      test_directory / "invalid-browser-duplicate-modifier.json";
+  const auto missing_key_path =
+      test_directory / "invalid-browser-missing-key.json";
+  const auto multiple_keys_path =
+      test_directory / "invalid-browser-multiple-keys.json";
+  const auto duplicate_assignment_path =
+      test_directory / "invalid-browser-duplicate-assignment.json";
+  const auto overlapping_assignment_path =
+      test_directory / "invalid-browser-overlapping-assignment.json";
+  const auto invalid_browser_plugin_path =
+      test_directory / "invalid-browser-plugin.json";
+  const auto invalid_browser_plugin_allow_path =
+      test_directory / "invalid-browser-plugin-allow.json";
+  const auto invalid_browser_plugin_entry_path =
+      test_directory / "invalid-browser-plugin-entry.json";
+  const auto invalid_browser_plugin_mode_path =
+      test_directory / "invalid-browser-plugin-mode.json";
+  const auto empty_browser_plugin_mode_path =
+      test_directory / "empty-browser-plugin-mode.json";
+  const auto unknown_browser_plugin_mode_path =
+      test_directory / "unknown-browser-plugin-mode.json";
+  const auto invalid_unsafe_parent_access_path =
+      test_directory / "invalid-unsafe-parent-access.json";
+  const auto invalid_unsafe_parent_access_entry_path =
+      test_directory / "invalid-unsafe-parent-access-entry.json";
+  const auto invalid_browser_start_path =
+      test_directory / "invalid-browser-start.json";
+  const auto empty_browser_start_path =
+      test_directory / "empty-browser-start.json";
+  const auto invalid_browser_profile_path =
+      test_directory / "invalid-browser-profile.json";
+  const auto empty_browser_profile_path =
+      test_directory / "empty-browser-profile.json";
+  const auto invalid_initial_window_state_path =
+      test_directory / "invalid-browser-initial-window-state.json";
+  const auto empty_initial_window_state_path =
+      test_directory / "empty-browser-initial-window-state.json";
+  const auto unknown_initial_window_state_path =
+      test_directory / "unknown-browser-initial-window-state.json";
+  const auto invalid_context_menu_path =
+      test_directory / "invalid-browser-context-menu.json";
+  const auto invalid_context_menu_mode_path =
+      test_directory / "invalid-browser-context-menu-mode.json";
+  const auto empty_context_menu_mode_path =
+      test_directory / "empty-browser-context-menu-mode.json";
+  const auto unknown_context_menu_mode_path =
+      test_directory / "unknown-browser-context-menu-mode.json";
+  const auto invalid_initial_title_bar_visibility_path =
+      test_directory / "invalid-browser-initial-title-bar-visibility.json";
+  const auto invalid_initial_title_bar_icon_path =
+      test_directory / "invalid-browser-initial-title-bar-icon.json";
+  const auto empty_initial_title_bar_icon_path =
+      test_directory / "empty-browser-initial-title-bar-icon.json";
+  const auto invalid_background_color_path =
+      test_directory / "invalid-browser-background-color.json";
+  const auto empty_background_color_path =
+      test_directory / "empty-browser-background-color.json";
+  const auto short_background_color_path =
+      test_directory / "short-browser-background-color.json";
+  const auto alpha_background_color_path =
+      test_directory / "alpha-browser-background-color.json";
+  const auto named_background_color_path =
+      test_directory / "named-browser-background-color.json";
+  const auto invalid_title_bar_path =
+      test_directory / "invalid-browser-title-bar.json";
+  const auto empty_title_bar_path =
+      test_directory / "empty-browser-title-bar.json";
+  const auto unknown_title_bar_path =
+      test_directory / "unknown-browser-title-bar.json";
+  return Expect(WriteFile(invalid_browser_path, R"({"browser":true})"),
+                "failed to write invalid browser config") &&
+         Expect(WriteFile(invalid_browser_start_path,
+                          R"({"browser":{"startPage":42}})"),
+                "failed to write invalid browser start config") &&
+         Expect(WriteFile(empty_browser_start_path,
+                          R"({"browser":{"startPage":""}})"),
+                "failed to write empty browser start config") &&
+         Expect(WriteFile(invalid_browser_profile_path,
+                          R"({"browser":{"profilePath":42}})"),
+                "failed to write invalid browser profile config") &&
+         Expect(WriteFile(empty_browser_profile_path,
+                          R"({"browser":{"profilePath":""}})"),
+                "failed to write empty browser profile config") &&
+         Expect(WriteFile(invalid_initial_window_state_path,
+                          R"({"browser":{"initialWindowState":42}})"),
+                "failed to write invalid initial window state config") &&
+         Expect(WriteFile(empty_initial_window_state_path,
+                          R"({"browser":{"initialWindowState":""}})"),
+                "failed to write empty initial window state config") &&
+         Expect(WriteFile(unknown_initial_window_state_path,
+                          R"({"browser":{"initialWindowState":"iconified"}})"),
+                "failed to write unknown initial window state config") &&
+         Expect(WriteFile(invalid_context_menu_path,
+                          R"({"browser":{"contextMenu":true}})"),
+                "failed to write invalid context menu config") &&
+         Expect(WriteFile(invalid_context_menu_mode_path,
+                          R"({"browser":{"contextMenu":{"mode":42}}})"),
+                "failed to write invalid context menu mode config") &&
+         Expect(WriteFile(empty_context_menu_mode_path,
+                          R"({"browser":{"contextMenu":{"mode":""}}})"),
+                "failed to write empty context menu mode config") &&
+         Expect(WriteFile(unknown_context_menu_mode_path,
+                          R"({"browser":{"contextMenu":{"mode":"native"}}})"),
+                "failed to write unknown context menu mode config") &&
+         Expect(WriteFile(invalid_initial_title_bar_visibility_path,
+                          R"({"browser":{"initialTitleBarVisibility":"hidden"}})"),
+                "failed to write invalid initial title bar visibility config") &&
+         Expect(WriteFile(invalid_initial_title_bar_icon_path,
+                          R"({"browser":{"initialTitleBarIcon":42}})"),
+                "failed to write invalid initial title bar icon config") &&
+         Expect(WriteFile(empty_initial_title_bar_icon_path,
+                          R"({"browser":{"initialTitleBarIcon":""}})"),
+                "failed to write empty initial title bar icon config") &&
+         Expect(WriteFile(invalid_background_color_path,
+                          R"({"browser":{"backgroundColor":42}})"),
+                "failed to write invalid background color config") &&
+         Expect(WriteFile(empty_background_color_path,
+                          R"({"browser":{"backgroundColor":""}})"),
+                "failed to write empty background color config") &&
+         Expect(WriteFile(short_background_color_path,
+                          R"({"browser":{"backgroundColor":"#123"}})"),
+                "failed to write short background color config") &&
+         Expect(WriteFile(alpha_background_color_path,
+                          R"({"browser":{"backgroundColor":"ff123456"}})"),
+                "failed to write alpha background color config") &&
+         Expect(WriteFile(named_background_color_path,
+                          R"({"browser":{"backgroundColor":"black"}})"),
+                "failed to write named background color config") &&
+         Expect(WriteFile(invalid_title_bar_path,
+                          R"({"browser":{"titleBarType":42}})"),
+                "failed to write invalid title bar config") &&
+         Expect(WriteFile(empty_title_bar_path,
+                          R"({"browser":{"titleBarType":""}})"),
+                "failed to write empty title bar config") &&
+         Expect(WriteFile(unknown_title_bar_path,
+                          R"({"browser":{"titleBarType":"system"}})"),
+                "failed to write unknown title bar config") &&
+         Expect(WriteFile(invalid_keybinds_path,
+                          R"({"browser":{"keybind":true}})"),
+                "failed to write invalid browser keybind config") &&
+         Expect(WriteFile(invalid_devtools_path,
+                          R"({"browser":{"keybind":{"devtools":true}}})"),
+                "failed to write invalid devtools config") &&
+         Expect(WriteFile(invalid_zoom_path,
+                          R"({"browser":{"keybind":{"zoomIn":true}}})"),
+                "failed to write invalid zoom config") &&
+         Expect(WriteFile(invalid_recycle_path,
+                          R"({"browser":{"keybind":{"recycle":true}}})"),
+                "failed to write invalid recycle config") &&
+         Expect(WriteFile(empty_shortcut_path,
+                          R"({"browser":{"keybind":{"devtools":" "}}})"),
+                "failed to write empty shortcut config") &&
+         Expect(WriteFile(unknown_key_path,
+                          R"({"browser":{"keybind":{"devtools":"ctrl+comma"}}})"),
+                "failed to write unknown key config") &&
+         Expect(WriteFile(duplicate_modifier_path,
+                          R"({"browser":{"keybind":{"devtools":"ctrl+control+i"}}})"),
+                "failed to write duplicate modifier config") &&
+         Expect(WriteFile(missing_key_path,
+                          R"({"browser":{"keybind":{"devtools":"shift+ctrl"}}})"),
+                "failed to write missing key config") &&
+         Expect(WriteFile(multiple_keys_path,
+                          R"({"browser":{"keybind":{"devtools":"f5+r"}}})"),
+                "failed to write multiple keys config") &&
+         Expect(WriteFile(
+                    duplicate_assignment_path,
+                    R"({"browser":{"keybind":{"devtools":"shift+f9","recycle":"SHIFT + F9"}}})"),
+                "failed to write duplicate assignment config") &&
+         Expect(WriteFile(
+                    overlapping_assignment_path,
+                    R"({"browser":{"keybind":{"zoomIn":"ctrl+plus","resetZoom":"ctrl+equal"}}})"),
+                "failed to write overlapping assignment config") &&
+         Expect(WriteFile(invalid_browser_plugin_path,
+                          R"({"browser":{"plugin":true}})"),
+                "failed to write invalid browser plugin config") &&
+         Expect(WriteFile(invalid_browser_plugin_allow_path,
+                          R"({"browser":{"plugin":{"allow":"asset://main/**"}}})"),
+                "failed to write invalid browser plugin allow config") &&
+         Expect(WriteFile(invalid_browser_plugin_entry_path,
+                          R"({"browser":{"plugin":{"allow":["asset://main/**",42]}}})"),
+                "failed to write invalid browser plugin allow entry config") &&
+         Expect(WriteFile(invalid_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":42}}})"),
+                "failed to write invalid browser plugin mode config") &&
+         Expect(WriteFile(empty_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":""}}})"),
+                "failed to write empty browser plugin mode config") &&
+         Expect(WriteFile(unknown_browser_plugin_mode_path,
+                          R"({"browser":{"plugin":{"mode":"strict"}}})"),
+                "failed to write unknown browser plugin mode config") &&
+         Expect(WriteFile(invalid_unsafe_parent_access_path,
+                          R"({"browser":{"allowUnsafeJavaScriptParentAccess":"asset://main/**"}})"),
+                "failed to write invalid unsafe parent access config") &&
+         Expect(WriteFile(invalid_unsafe_parent_access_entry_path,
+                          R"({"browser":{"allowUnsafeJavaScriptParentAccess":["asset://main/**",42]}})"),
+                "failed to write invalid unsafe parent access entry config") &&
+         LoadConfigExpectFailure(invalid_browser_path,
+                                 "browser must be an object") &&
+         LoadConfigExpectFailure(invalid_browser_start_path,
+                                 "browser.startPage must be a string") &&
+         LoadConfigExpectFailure(empty_browser_start_path,
+                                 "browser.startPage must not be empty") &&
+         LoadConfigExpectFailure(invalid_browser_profile_path,
+                                 "browser.profilePath must be a string") &&
+         LoadConfigExpectFailure(empty_browser_profile_path,
+                                 "browser.profilePath must not be empty") &&
+         LoadConfigExpectFailure(invalid_initial_window_state_path,
+                                 "browser.initialWindowState must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(empty_initial_window_state_path,
+                                 "browser.initialWindowState must not be "
+                                 "empty") &&
+         LoadConfigExpectFailure(unknown_initial_window_state_path,
+                                 "browser.initialWindowState has unknown "
+                                 "value") &&
+         LoadConfigExpectFailure(invalid_context_menu_path,
+                                 "browser.contextMenu must be an object") &&
+         LoadConfigExpectFailure(invalid_context_menu_mode_path,
+                                 "browser.contextMenu.mode must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(empty_context_menu_mode_path,
+                                 "browser.contextMenu.mode must not be "
+                                 "empty") &&
+         LoadConfigExpectFailure(unknown_context_menu_mode_path,
+                                 "browser.contextMenu.mode has unknown "
+                                 "value") &&
+         LoadConfigExpectFailure(invalid_initial_title_bar_visibility_path,
+                                 "browser.initialTitleBarVisibility must be a "
+                                 "boolean") &&
+         LoadConfigExpectFailure(invalid_initial_title_bar_icon_path,
+                                 "browser.initialTitleBarIcon must be a "
+                                 "string") &&
+         LoadConfigExpectFailure(empty_initial_title_bar_icon_path,
+                                 "browser.initialTitleBarIcon must not be "
+                                 "empty") &&
+         LoadConfigExpectFailure(invalid_background_color_path,
+                                 "browser.backgroundColor must be a string") &&
+         LoadConfigExpectFailure(empty_background_color_path,
+                                 "browser.backgroundColor must not be empty") &&
+         LoadConfigExpectFailure(short_background_color_path,
+                                 "browser.backgroundColor has unknown value") &&
+         LoadConfigExpectFailure(alpha_background_color_path,
+                                 "browser.backgroundColor has unknown value") &&
+         LoadConfigExpectFailure(named_background_color_path,
+                                 "browser.backgroundColor has unknown value") &&
+         LoadConfigExpectFailure(invalid_title_bar_path,
+                                 "browser.titleBarType must be a string") &&
+         LoadConfigExpectFailure(empty_title_bar_path,
+                                 "browser.titleBarType must not be empty") &&
+         LoadConfigExpectFailure(unknown_title_bar_path,
+                                 "browser.titleBarType has unknown value") &&
+         LoadConfigExpectFailure(invalid_keybinds_path,
+                                 "browser.keybind must be an object") &&
+         LoadConfigExpectFailure(invalid_devtools_path,
+                                 "browser.keybind.devtools must be a string") &&
+         LoadConfigExpectFailure(invalid_zoom_path,
+                                 "browser.keybind.zoomIn must be a string") &&
+         LoadConfigExpectFailure(invalid_recycle_path,
+                                 "browser.keybind.recycle must be a string") &&
+         LoadConfigExpectFailure(empty_shortcut_path,
+                                 "shortcut must not be empty") &&
+         LoadConfigExpectFailure(unknown_key_path, "unsupported key") &&
+         LoadConfigExpectFailure(duplicate_modifier_path,
+                                 "duplicate modifier") &&
+         LoadConfigExpectFailure(missing_key_path, "must include a key") &&
+         LoadConfigExpectFailure(multiple_keys_path, "multiple keys") &&
+         LoadConfigExpectFailure(duplicate_assignment_path,
+                                 "must not use overlapping shortcuts") &&
+         LoadConfigExpectFailure(overlapping_assignment_path,
+                                 "must not use overlapping shortcuts") &&
+         LoadConfigExpectFailure(invalid_browser_plugin_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(invalid_browser_plugin_allow_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(invalid_browser_plugin_entry_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(invalid_browser_plugin_mode_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(empty_browser_plugin_mode_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(unknown_browser_plugin_mode_path,
+                                 "browser.plugin is no longer supported") &&
+         LoadConfigExpectFailure(
+             invalid_unsafe_parent_access_path,
+             "browser.allowUnsafeJavaScriptParentAccess must be an array") &&
+         LoadConfigExpectFailure(
+             invalid_unsafe_parent_access_entry_path,
+             "browser.allowUnsafeJavaScriptParentAccess entries must be "
+             "strings");
+}
+
+static bool RunBrowserBackgroundColorResolutionTest() {
+  MuonBrowserBackgroundColorConfig rgb_config;
+  rgb_config.mode = kMuonBrowserBackgroundColorRgb;
+  rgb_config.red = 0x12;
+  rgb_config.green = 0x34;
+  rgb_config.blue = 0x56;
+  const auto rgb_resolved = ResolveMuonBrowserBackgroundColorForSystemScheme(
+      rgb_config, kMuonSystemColorSchemeUnknown);
+
+  MuonBrowserBackgroundColorConfig system_config;
+  system_config.mode = kMuonBrowserBackgroundColorSystem;
+  const auto system_dark_resolved =
+      ResolveMuonBrowserBackgroundColorForSystemScheme(
+          system_config, kMuonSystemColorSchemeDark);
+  const auto system_light_resolved =
+      ResolveMuonBrowserBackgroundColorForSystemScheme(
+          system_config, kMuonSystemColorSchemeLight);
+  const auto system_unknown_resolved =
+      ResolveMuonBrowserBackgroundColorForSystemScheme(
+          system_config, kMuonSystemColorSchemeUnknown);
+
+  return ExpectResolvedBrowserBackgroundColor(
+             rgb_resolved, 0x12, 0x34, 0x56,
+             "explicit RGB background color") &&
+         ExpectResolvedBrowserBackgroundColor(system_dark_resolved, 0, 0, 0,
+                                             "system dark background color") &&
+         ExpectResolvedBrowserBackgroundColor(
+             system_light_resolved, 0xff, 0xff, 0xff,
+             "system light background color") &&
+         Expect(!system_unknown_resolved.has_color,
+                "unknown system background color was resolved");
+}
+
+static bool RunNetworkPolicyTest() {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonNetworkPolicy(
+                  {"asset://main/**", "data:**", "https://example.com/*",
+                   "https://deep.example.com/**",
+                   "https://*.wild.example.net/**",
+                   "https://query.example.com/search?*", "literal:\\*"},
+                  &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  return Expect(policy->IsAllowedUrl("asset://main/index.html"),
+                "configured asset URL was not allowed") &&
+         Expect(policy->IsAllowedUrl("asset://main/nested/index.html"),
+                "configured nested asset URL was not allowed") &&
+         Expect(!policy->IsAllowedUrl("asset://other/index.html"),
+                "unconfigured asset origin was allowed") &&
+         Expect(!policy->IsAllowedUrl("asset://main-other/index.html"),
+                "unconfigured asset prefix was allowed") &&
+         Expect(!policy->IsAllowedUrl("asset://main"),
+                "asset URL outside the configured glob was allowed") &&
+         Expect(policy->IsAllowedUrl("data:text/html,<title>ok</title>"),
+                "matching data URL was not allowed") &&
+         Expect(policy->IsAllowedUrl("https://example.com/allowed"),
+                "matching HTTPS URL was not allowed") &&
+         Expect(policy->IsAllowedUrl("https://deep.example.com/allowed/path"),
+                "deep HTTPS URL was not allowed") &&
+         Expect(policy->IsAllowedUrl(
+                    "https://one.two.wild.example.net/allowed/path"),
+                "wildcard host URL was not allowed") &&
+         Expect(policy->IsAllowedUrl(
+                    "https://query.example.com/search?term=ok"),
+                "matching query URL was not allowed") &&
+         Expect(policy->IsAllowedUrl("literal:*"),
+                "escaped network wildcard was not treated as a literal") &&
+         Expect(!policy->IsAllowedUrl("prefix-data:text/html"),
+                "partial glob match was allowed") &&
+         Expect(!policy->IsAllowedUrl("DATA:text/html,<title>ok</title>"),
+                "case-insensitive network glob match was allowed") &&
+         Expect(!policy->IsAllowedUrl("https://example.com/allowed/path"),
+                "single network wildcard crossed a path separator") &&
+         Expect(!policy->IsAllowedUrl(
+                    "https://query.example.com/search?term=ok#fragment"),
+                "single network wildcard crossed a hash separator") &&
+         Expect(!policy->IsAllowedUrl("literal:x"),
+                "escaped network wildcard matched other characters") &&
+         Expect(!policy->IsAllowedUrl("https://blocked.example/"),
+                "blocked URL was allowed");
+}
+
+static bool RunDefaultNetworkPolicyPatternTest() {
+  const MuonNetworkConfig network;
+  if (!ExpectDefaultNetworkAllow(network, "default network")) {
+    return false;
+  }
+
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonNetworkPolicy(network.allow, &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  return Expect(policy->IsAllowedUrl("asset://main/index.html"),
+                "default network allowlist rejected the main asset namespace") &&
+         Expect(policy->IsAllowedUrl("asset://other/index.html"),
+                "default network allowlist rejected another asset namespace") &&
+         Expect(policy->IsAllowedUrl("data:image/png;base64,iVBORw0KGgo="),
+                "default network allowlist rejected image data") &&
+         Expect(!policy->IsAllowedUrl("data:text/html,<title>ok</title>"),
+                "default network allowlist allowed non-image data");
+}
+
+static bool RunNetworkPolicyEmptyTest() {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  return Expect(CreateMuonNetworkPolicy({}, &policy, &error_message),
+                error_message) &&
+         Expect(!policy->IsAllowedUrl("asset://main/index.html"),
+                "empty network allowlist allowed an asset URL") &&
+         Expect(!policy->IsAllowedUrl("data:text/html,<title>ok</title>"),
+                "empty network allowlist allowed a data URL");
+}
+
+static bool RunNetworkAuthorizedOriginPolicyTest() {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonNetworkPolicy(
+                  {"asset://main/**"},
+                  {{"https", "login.live.com", 0},
+                   {"http", "localhost", 8080}},
+                  &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  return Expect(policy->IsAllowedRequest("asset://main/index.html", true, ""),
+                "glob-allowed URL was not allowed") &&
+         Expect(policy->IsAllowedRequest("https://login.live.com/oauth", true,
+                                         ""),
+                "authorized origin target navigation was not allowed") &&
+         Expect(policy->IsAllowedRequest("https://login.live.com:443/oauth",
+                                         true, ""),
+                "authorized origin target standard port was not allowed") &&
+         Expect(!policy->IsAllowedRequest("https://blocked.example/", true,
+                                          "https://login.live.com"),
+                "top-level redirect to an unauthorized origin was allowed") &&
+         Expect(policy->IsAllowedRequest("https://blocked.example/script.js",
+                                         false,
+                                         "https://login.live.com"),
+                "authorized initiator request was not allowed") &&
+         Expect(policy->IsAllowedRequest("https://blocked.example/script.js",
+                                         false,
+                                         "https://login.live.com:443"),
+                "authorized initiator standard port was not allowed") &&
+         Expect(policy->IsAllowedRequest("https://blocked.example/script.js",
+                                         false,
+                                         "http://localhost:8080"),
+                "authorized non-standard port initiator was not allowed") &&
+         Expect(!policy->IsAllowedRequest("https://blocked.example/script.js",
+                                          false, "http://localhost"),
+                "initiator without the configured non-standard port was "
+                "allowed") &&
+         Expect(!policy->IsAllowedRequest("https://blocked.example/script.js",
+                                          false, "https://evil.example"),
+                "unauthorized initiator request was allowed") &&
+         Expect(!policy->IsAllowedRequest("https://blocked.example/script.js",
+                                          false, ""),
+                "empty initiator request was allowed") &&
+         Expect(!policy->IsAllowedRequest("https://blocked.example/script.js",
+                                          false, "not an origin"),
+                "invalid initiator request was allowed") &&
+         Expect(!policy->IsAllowedRequest("http://login.live.com/oauth", true,
+                                          ""),
+                "same domain with a different scheme was allowed") &&
+         Expect(!policy->IsAllowedRequest(
+                    "https://sub.login.live.com/oauth", true, ""),
+                "subdomain of authorized origin was allowed");
+}
+
+static bool RunLocalAccessPermissionPolicyTest() {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonNetworkPolicy(
+                  {"asset://main/**"}, {},
+                  {{"asset", "main", 0}, {"https", "loopback.example", 0}},
+                  {{"asset", "main", 0}, {"https", "lan.example", 8443}},
+                  &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+
+  const auto loopback =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOOPBACK_NETWORK);
+  const auto local_network =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOCAL_NETWORK);
+  const auto legacy =
+      static_cast<uint32_t>(CEF_PERMISSION_TYPE_LOCAL_NETWORK_ACCESS);
+  const auto unrelated = static_cast<uint32_t>(CEF_PERMISSION_TYPE_CLIPBOARD);
+
+  return Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", loopback) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured loopback permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", local_network) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured local network permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", loopback | local_network) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured combined permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", legacy) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "configured legacy permission was not accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "https://loopback.example", loopback) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "default HTTPS port did not match loopback origin") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "https://lan.example:8443", local_network) ==
+                    MuonLocalAccessPermissionDecision::kAccept,
+                "explicit local network port did not match") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "https://loopback.example", legacy) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "legacy permission did not require both origin lists") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://other", loopback) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "unconfigured loopback origin was accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", loopback | unrelated) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "mixed local and unrelated permissions were accepted") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", unrelated) ==
+                    MuonLocalAccessPermissionDecision::kUnhandled,
+                "unrelated permission was handled") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "asset://main", 0) ==
+                    MuonLocalAccessPermissionDecision::kUnhandled,
+                "empty permission request was handled") &&
+         Expect(policy->GetLocalAccessPermissionDecision(
+                    "not an origin", loopback) ==
+                    MuonLocalAccessPermissionDecision::kDeny,
+                "invalid requesting origin was accepted");
+}
+
+static bool ExpectInvalidNetworkGlob(
+    const std::vector<std::string>& allow_patterns) {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  return Expect(!CreateMuonNetworkPolicy(allow_patterns, &policy,
+                                         &error_message),
+                "invalid network glob was accepted") &&
+         Expect(error_message.find("Invalid network.allow glob") !=
+                    std::string::npos,
+                "invalid network glob error message is missing context");
+}
+
+static bool RunInvalidNetworkGlobTest() {
+  return ExpectInvalidNetworkGlob({""}) &&
+         ExpectInvalidNetworkGlob({"data:\\"}) &&
+         ExpectInvalidNetworkGlob({"https://example.com/***"}) &&
+         ExpectInvalidNetworkGlob({"https://example.com**"});
+}
+
+static bool ExpectInvalidPluginPagesGlob(
+    const std::vector<std::string>& allow_patterns) {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  return Expect(!CreateMuonUrlPolicy(allow_patterns, "plugin.pages",
+                                     &policy, &error_message),
+                "invalid plugin.pages glob was accepted") &&
+         Expect(error_message.find("Invalid plugin.pages glob") !=
+                    std::string::npos,
+                "invalid plugin.pages glob error message is missing "
+                "context");
+}
+
+static bool RunInvalidPluginPagesGlobTest() {
+  return ExpectInvalidPluginPagesGlob({""}) &&
+         ExpectInvalidPluginPagesGlob({"data:\\"}) &&
+         ExpectInvalidPluginPagesGlob({"https://example.com/***"}) &&
+         ExpectInvalidPluginPagesGlob({"https://example.com**"});
+}
+
+static bool ExpectInvalidUnsafeParentAccessGlob(
+    const std::vector<std::string>& allow_patterns) {
+  std::shared_ptr<MuonNetworkPolicy> policy;
+  std::string error_message;
+  return Expect(
+             !CreateMuonUrlPolicy(
+                 allow_patterns, "browser.allowUnsafeJavaScriptParentAccess",
+                 &policy, &error_message),
+             "invalid browser.allowUnsafeJavaScriptParentAccess glob was "
+             "accepted") &&
+         Expect(error_message.find(
+                    "Invalid browser.allowUnsafeJavaScriptParentAccess glob") !=
+                    std::string::npos,
+                "invalid browser.allowUnsafeJavaScriptParentAccess glob error "
+                "message is missing context");
+}
+
+static bool RunInvalidUnsafeParentAccessGlobTest() {
+  return ExpectInvalidUnsafeParentAccessGlob({""}) &&
+         ExpectInvalidUnsafeParentAccessGlob({"data:\\"}) &&
+         ExpectInvalidUnsafeParentAccessGlob({"https://example.com/***"}) &&
+         ExpectInvalidUnsafeParentAccessGlob({"https://example.com**"});
+}
+
+static bool RunPluginPolicyTest() {
+  std::shared_ptr<MuonPluginPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonPluginPolicy(
+                  {"muon.fs.readFile", "muon.browser.*",
+                   "muon.**.readFile", "literal.\\*", "case.Plugin"},
+                  &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+	  return Expect(policy->IsAllowedFunctionPath("muon.fs.readFile"),
+	                "matching plugin function was not allowed") &&
+	         Expect(policy->HasAllowPatterns(),
+	                "non-empty plugin policy reported no allow patterns") &&
+         Expect(policy->IsAllowedFunctionPath("muon.browser.reload"),
+                "matching plugin wildcard was not allowed") &&
+         Expect(policy->IsAllowedFunctionPath("muon.deep.nested.readFile"),
+                "matching plugin deep wildcard was not allowed") &&
+         Expect(policy->IsAllowedFunctionPath("literal.*"),
+                "escaped plugin wildcard was not treated as a literal") &&
+         Expect(policy->IsAllowedFunctionPath("case.Plugin"),
+                "matching case-sensitive plugin function was not allowed") &&
+         Expect(!policy->IsAllowedFunctionPath("prefix-muon.fs.readFile"),
+                "partial plugin glob match was allowed") &&
+         Expect(!policy->IsAllowedFunctionPath(
+                    "muon.browser.navigation.reload"),
+                "single plugin wildcard crossed a namespace separator") &&
+         Expect(!policy->IsAllowedFunctionPath("muon.fs.writeFile"),
+                "blocked plugin function was allowed") &&
+         Expect(!policy->IsAllowedFunctionPath("literal.x"),
+                "escaped plugin wildcard matched other characters") &&
+         Expect(!policy->IsAllowedFunctionPath("case.plugin"),
+                "case-insensitive plugin glob match was allowed");
+}
+
+static bool RunPluginPolicyDeepWildcardTest() {
+  std::shared_ptr<MuonPluginPolicy> policy;
+  std::string error_message;
+  if (!Expect(CreateMuonPluginPolicy({"muon.**"}, &policy, &error_message),
+              error_message)) {
+    return false;
+  }
+  return Expect(policy->IsAllowedFunctionPath("muon.fs.writeFile"),
+                "plugin deep wildcard did not match a nested function") &&
+         Expect(policy->IsAllowedFunctionPath(
+                    "muon.browser.navigation.reload"),
+                "plugin deep wildcard did not cross namespace separators") &&
+         Expect(!policy->IsAllowedFunctionPath("prefix-muon.fs.writeFile"),
+                "plugin deep wildcard allowed a partial match") &&
+         Expect(!policy->IsAllowedFunctionPath("Muon.fs.writeFile"),
+                "plugin deep wildcard matched a different case");
+}
+
+static bool RunPluginPolicyEmptyTest() {
+  std::shared_ptr<MuonPluginPolicy> policy;
+  std::string error_message;
+	  return Expect(CreateMuonPluginPolicy({}, &policy, &error_message),
+	                error_message) &&
+	         Expect(!policy->HasAllowPatterns(),
+	                "empty plugin policy reported allow patterns") &&
+	         Expect(!policy->IsAllowedFunctionPath("muon.browser.reload"),
+	                "empty plugin allowlist allowed a function");
+}
+
+static bool ExpectInvalidPluginGlob(
+    const std::vector<std::string>& allow_patterns) {
+  std::shared_ptr<MuonPluginPolicy> policy;
+  std::string error_message;
+  return Expect(!CreateMuonPluginPolicy(allow_patterns, &policy,
+                                        &error_message),
+                "invalid plugin glob was accepted") &&
+         Expect(error_message.find("Invalid plugin allow glob") !=
+                    std::string::npos,
+                "invalid plugin glob error message is missing context");
+}
+
+static bool RunPluginPolicyInvalidGlobTest() {
+  return ExpectInvalidPluginGlob({""}) &&
+         ExpectInvalidPluginGlob({"muon\\"}) &&
+         ExpectInvalidPluginGlob({"muon.***"}) &&
+         ExpectInvalidPluginGlob({"muon**readFile"});
+}
+
+int main() {
+  const auto test_directory = CreateTestDirectory();
+  if (!Expect(!test_directory.empty(), "failed to create test directory")) {
+    return 1;
+  }
+
+  const auto passed = RunConfigLoadingTest(test_directory) &&
+                      RunConfigJson5LoadingTest(test_directory) &&
+                      RunNodeConfigLoadingTest(test_directory) &&
+                      RunDebugConfigLoadingTest() &&
+                      RunLaunchSourceProfilePathTest(test_directory) &&
+                      RunDefaultConfigSearchOrderTest(test_directory) &&
+                      RunCommandLineConfigPathTest(test_directory) &&
+                      RunEmbeddedConfigLoadingTest(test_directory) &&
+                      RunEmbeddedAssetSignatureLengthValidationTest(
+                          test_directory) &&
+                      RunEmbeddedPluginSignatureLengthValidationTest(
+                          test_directory) &&
+                      RunEmbeddedConfigEmptySlotTest(test_directory) &&
+                      RunConfigOverrideLoadingTest(test_directory) &&
+                      RunLocalAccessConfigTest(test_directory) &&
+                      RunApplicationConfigLoadingTest(test_directory) &&
+                      RunBrowserConfigLoadingTest(test_directory) &&
+                      RunLogConfigLoadingTest(test_directory) &&
+                      RunConfigValidationTest(test_directory) &&
+                      RunLogConfigValidationTest(test_directory) &&
+                      RunDebuggerConfigValidationTest(test_directory) &&
+                      RunBrowserUserAgentConfigTest(test_directory) &&
+                      RunBrowserUserAgentValidationTest(test_directory) &&
+                      RunBrowserConfigValidationTest(test_directory) &&
+                      RunBrowserBackgroundColorResolutionTest() &&
+                      RunNetworkPolicyTest() &&
+                      RunDefaultNetworkPolicyPatternTest() &&
+                      RunNetworkPolicyEmptyTest() &&
+                      RunNetworkAuthorizedOriginPolicyTest() &&
+                      RunLocalAccessPermissionPolicyTest() &&
+                      RunInvalidNetworkGlobTest() &&
+                      RunInvalidPluginPagesGlobTest() &&
+                      RunInvalidUnsafeParentAccessGlobTest() &&
+                      RunPluginPolicyTest() &&
+                      RunPluginPolicyDeepWildcardTest() &&
+                      RunPluginPolicyEmptyTest() &&
+                      RunPluginPolicyInvalidGlobTest();
+
+  std::error_code error;
+  std::filesystem::remove_all(test_directory, error);
+  return passed ? 0 : 1;
+}

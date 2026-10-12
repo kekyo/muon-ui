@@ -1,0 +1,23 @@
+{
+  "name": "muon-android",
+  "version": "0.0.1",
+  "description": "Android runtime for muon-ui.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:js && npm run build:runtime",
+    "test": "npm run build",
+    "build:runtime": "./gradlew :runtime:publishReleasePublicationToMavenRepository",
+    "build:js": "vite build"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "devDependencies": {
+    "prettier-max": ">=1.16.0",
+    "screw-up": ">=1.35.0",
+    "typescript": ">=5.9.0",
+    "vite": ">=8.0.0",
+    "vitest": ">=4.0.0"
+  }
+}

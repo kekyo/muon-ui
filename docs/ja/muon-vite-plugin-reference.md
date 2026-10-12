@@ -1,6 +1,6 @@
 # muon Viteプラグインリファレンス
 
-Androidでは`pluginAccess: false`と`build.targets: ['android']`を指定します。`build.android`の設定と制限は[Androidアプリのビルド・配布](./android.md)を参照してください。以下の開発サーバー、CEF、virtual moduleの説明はdesktop版を対象とします。
+Androidでは`build.targets: ['android']`を指定します。simpleモードでは`pluginAccess: false`を使い、validateモードでは許可するimport元と関数を設定してください。`build.android`とvirtual moduleの対応範囲は[Androidアプリのビルド・配布](./android.md)を参照してください。以下の開発サーバーとCEFの説明はdesktop版を対象とします。
 
 muon Viteプラグインの引数 `options` は省略可能で、省略時は開発起動と配布用ビルドのどちらも既定動作を使用します。
 
@@ -138,8 +138,9 @@ npm run dev:vite -- --no-muon
 
 `pluginAccess` は、`muon.json` の `plugin` 設定と同じ形で、Vite側から一部を上書きするための設定です。
 省略した場合は `muon.json` の `plugin` 設定をそのまま使用し、`plugin.mode` の省略時は `"validate"` として扱います。
-`validate` モードでは `window.muon` は公開されず、プラグイン関数は許可されたvirtual module importからだけ呼び出せます。
-`node.project` が設定されている場合、`validate` モードでもNode.js runtimeを準備し、`muon:node` virtual moduleから `createNode()` を呼ぶとsidecarを起動します。`muon:node`に `pluginAccess.plugins[].imports` やallow設定は不要です。
+`validate`モードでは`window.muon`を公開せず、許可したvirtual moduleをimportして関数を呼び出します。import元の検査はビルド時に行い、ネイティブ側ではcapabilityと許可関数を検査します。同じページ内でcapabilityを取得した別のコードからの呼出しは防ぎません。
+Androidでもvalidateモードを使えます。外部プラグインにはABI別ライブラリとメタデータが必要です。ページ条件と対応関数にはAndroid固有の制約があります。[Androidの設定](./android.md#validateモードでimportする)
+デスクトップで`node.project`を設定した場合は、`validate`モードでもNode.js runtimeを準備し、`muon:node`から`createNode()`を呼ぶとsidecarを起動します。`muon:node`に`pluginAccess.plugins[].imports`やallow設定は不要です。Androidの公開APKではNode.js・QuickJSを提供しません。
 開発サーバーではNodeプロジェクトと`engines.node`のrangeがVite config解決時にpreflightされ、失敗は警告として報告される場合があります。build時にはエラーとして検証されます。
 
 ```ts

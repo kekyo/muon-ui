@@ -399,13 +399,14 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
   どちらも指定しないimportルールは設定エラーです。
 - `plugins[].imports[].allow` は `validate` モードでそのimport元に許可する関数パスです。
   必須かつ空配列不可です。
-  `plugins[].allow` と同じglob構文を使用でき、runtime側の権限検証には指定したglobがそのまま渡されます。
+  `plugins[].allow` と同じglob構文を使用でき、デスクトップではruntime側の権限検証に指定したglobがそのまま渡されます。
   一方、`muon:executor` などのvirtual moduleのnamed exportを生成するときは、Vite側で具体的な関数パスに展開されます。
-  内蔵プラグインの関数一覧はmuon-uiが持つcatalogから展開され、外部プラグインのwildcardはVite dev/build時に `muon-plugin-inspector` がプラグインをロードして `muon_init_plugin()` のmetadataから収集します。
+  内蔵プラグインの関数一覧はmuon-uiが持つcatalogから展開されます。デスクトップでは、外部プラグインのwildcardはVite dev/build時に `muon-plugin-inspector` がプラグインをロードして `muon_init_plugin()` のmetadataから収集します。
   inspectorは `plugins[].config` と `signature`/`salt` を使用して初期化と署名検証を行いますが、公開関数の本体は呼び出しません。
   wildcardが1件も具体的なnamed exportに展開できない場合は、Vite側でエラーになります。
+  Androidでは、外部プラグインの提供者が配布するJSONの関数一覧とABI別SHA-256を使い、各プラグインの許可を具体的な関数パスへ展開します。設定方法は[Androidの外部プラグイン](./android.md#事前ビルド済みネイティブプラグイン)を参照してください。
 
-> 注釈: ここに挙げられていない `capabilities`, `signature`, `salt` については、 `muon build` または `muon pack` 時に自動的に計算・挿入される値です。
+> 注釈: `capabilities`はビルド時に生成される値です。デスクトップでは`signature`と`salt`も`muon build`または`muon pack`時に計算・挿入されます。Androidではこの2項目を指定せず、ABI別SHA-256を使います。
 > 解説は省略します。
 
 ## logキー

@@ -20,6 +20,12 @@ Android部品を含むMuon本体のビルドと全体テストには、JDK 17～
 android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 ```
 
+## ソースの配置
+
+実行時の機能は`core/`、CLI・Vite連携・アプリのビルドと配布機能は`ui/`に置いています。それぞれの`common/`は共通処理、`cef/`と`android/`はバックエンド固有の処理です。テストは実装と同じ階層の`common-test/`、`cef-test/`、`android-test/`に置きます。
+
+`core/android-poc/`にはQuickJSの試作と固有テストがあります。周辺機能は、ネイティブビルド支援を`builder/`、Node.jsホストを`node/`に分けています。`ui/`の公開npmパッケージ名は`muon-ui`、`node/`は`muon-node`です。
+
 ## ビルドとテスト
 
 ```bash
@@ -39,8 +45,15 @@ npm run dev
 全体テストはAPKのビルドと静的検査までを行います。端末上の検証はADB接続後に次のコマンドで実行してください。エミュレーターはAPI 37・x86_64・16 KiBページ、Pixel 6はAPI 37・arm64-v8a・4 KiBページを検証対象としています。
 
 ```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-prototype
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-tester
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
+```
+
+QuickJSの試作は別のworkspaceで検証します。
+
+```bash
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 npm配布物だけを使う独立アプリの検証対象は、公開CLI/Vite、署名、保存、再起動、更新後のデータ保持です。端末上の専用テストアプリ`dev.muon.e2e.publicconsumer`は検証のために作り直します。
@@ -49,26 +62,36 @@ npm配布物だけを使う独立アプリの検証対象は、公開CLI/Vite、
 npm run build --workspace muon-ui
 mkdir -p .run/android-e2e
 npm pack --workspace muon-ui --pack-destination .run/android-e2e
-ANDROID_SERIAL=your-device-serial node muon-android/scripts/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=your-device-serial node ui/android-test/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
 ```
 
-tgz名は実際のバージョンに合わせてください。`--plugins`を付ける場合は、先に試作のreleaseをビルドしておきます。CIでも同じ独立アプリを16 KiBエミュレーターで検証します。
+tgz名は実際のバージョンに合わせてください。`--plugins`を付ける場合は、先に`npm test --workspace muon-android-tester`でテストプラグインを生成してください。成果物は`core/android-test/.build/plugins/<abi>/`へ配置されます。`--validate`を併用するとvalidateモードの権限検査も実行します。CIでも同じ独立アプリを16 KiBエミュレーターで検証します。
 
 ## Windowsバイナリのe2eテスト
 
-Windowsバイナリのe2eテストを実行するには、 [agent-rover](https://github.com/kekyo/agent-rover/) のリモートエージェントを起動した Windows 11 (amd64) のマシンが必要です。
-仮想マシンも使用できます。次のコマンドでテストを起動してください。
+Windowsバイナリのe2eテストには、[agent-rover](https://github.com/kekyo/agent-rover/)のリモートエージェントを起動したWindows 11（amd64）のマシンが必要です。仮想マシンも使用できます。接続先のPATHにはNode.jsも必要です。Node.js 24で検証しています。インストール後はagent-roverを再起動し、新しいPATHを反映してください。
 
-muon-uiのWindows E2Eでは接続先のPATHにNode.jsも必要です。Node.js 24で検証しています。インストール後はagent-roverを再起動し、新しいPATHを反映してください。
+接続にはagent-rover 0.10.0の標準設定を使います。[公式READMEの接続設定](https://github.com/kekyo/agent-rover/blob/0.10.0/README_ja.md#接続設定ファイル)に従い、テストを起動するユーザーのホームディレクトリにある`~/.agent-rover`へ接続先を登録してください。既に登録済みなら、ホストやトークンを環境変数へ転記する必要はありません。
 
-```bash
-export AGENT_ROVER_WIN11_HOST=<agent-host-address>
-export AGENT_ROVER_WIN11_TOKEN=<agent-token>
+設定ファイルの例です。
 
-npm run test:windows-e2e --workspace muon-core-tester
+```ini
+[win11]
+test-agent.example.com=<access-token>
 ```
 
-あるいは、環境変数が定義されていれば、 `npm run test` で一括テストにWindows e2eテストが含まれます。
+通常の`npm test`で、Windows i686・amd64の画面テストとインストーラーの実機テストも実行します。実機テストだけを実行するコマンドは次のとおりです。
+
+```bash
+npm run test:windows-e2e --workspace muon-core-tester
+npm run test:windows-nsis-e2e --workspace muon-ui
+```
+
+既定では`win11`セクションを使います。別のセクションを選ぶ場合は、コマンドに`MUON_E2E_AGENT_SECTION=vm`などを指定してください。接続先の選択と使用中の再試行はSDKが行います。SDKは実行時の作業ディレクトリにある`.agent-rover`を優先するため、npm workspace内に同名ファイルを置く場合は設定の優先順位に注意してください。
+
+設定ファイルがない場合など、SDKが接続を確立できなかった場合のみ、理由を表示して実機テストをスキップします。接続後のビルド・転送・検証のエラーはテストの失敗です。ローカルビルド中と各スイートの終了時には、実機への接続を解放します。
+
+実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
 
 ## パッケージ生成
 

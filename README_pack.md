@@ -67,6 +67,7 @@ WIP: And once you've created a muon application, you can deploy it directly to A
 - You can also build Android applications (experimental).
 - DevTools can be used. CDP (Chrome DevTools Protocol) is also supported, so remote debugging from external tools is possible.
 - Includes a plugin system. Plugin capabilities can also be restricted by a whitelist filter.
+- An independent SDK supports C/C++ plugin development and distribution as prebuilt NPM packages.
 - Built-in plugins provide access to local files, open dialogs, child process launching, and window operations.
 
 ### Environment

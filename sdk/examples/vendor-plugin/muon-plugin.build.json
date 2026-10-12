@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "name": "vendor_counter",
+  "language": "c",
+  "functions": ["muon.vendor_counter.increment"],
+  "targets": [
+    "linux-amd64",
+    "linux-armhf",
+    "linux-arm64",
+    "windows-i686",
+    "windows-amd64",
+    "android-arm64-v8a",
+    "android-x86_64"
+  ],
+  "sources": ["plugin.c"],
+  "build": {
+    "system": "cmake",
+    "args": ["-DVENDOR_SOURCE_DIR={{source}}/../vendor-source"]
+  },
+  "types": ["index.d.ts"],
+  "dependencies": {
+    "linux-amd64": ["{{build}}/libmuon_example_vendor.so"],
+    "linux-armhf": ["{{build}}/libmuon_example_vendor.so"],
+    "linux-arm64": ["{{build}}/libmuon_example_vendor.so"],
+    "windows-i686": ["{{build}}/libmuon_example_vendor.dll"],
+    "windows-amd64": ["{{build}}/libmuon_example_vendor.dll"],
+    "android-arm64-v8a": ["{{build}}/libmuon_example_vendor.so"],
+    "android-x86_64": ["{{build}}/libmuon_example_vendor.so"]
+  }
+}

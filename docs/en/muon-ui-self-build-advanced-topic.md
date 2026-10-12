@@ -20,6 +20,12 @@ Building Muon itself and running the full suite, including Android components, a
 android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 ```
 
+## Source layout
+
+Runtime code lives in `core/`. The CLI, Vite integration, application builders, and packaging code live in `ui/`. In each component, `common/` contains shared code, while `cef/` and `android/` contain backend implementations. Tests sit beside those directories in `common-test/`, `cef-test/`, and `android-test/`.
+
+`core/android-poc/` contains the QuickJS experiment and its own tests. Native build tools live in `builder/`, and the Node.js host lives in `node/`. The public npm package names remain `muon-ui` for `ui/` and `muon-node` for `node/`.
+
 ## Build and test
 
 ```bash
@@ -39,8 +45,15 @@ npm run dev
 The full suite builds APKs and performs static checks. After connecting through ADB, run device tests separately. The emulator profile is API 37, x86_64, and 16 KiB pages; Pixel 6 uses API 37, arm64-v8a, and 4 KiB pages:
 
 ```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-prototype
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-prototype
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-tester
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
+```
+
+Run the QuickJS experiment in its separate workspace:
+
+```bash
+ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
+ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 The independent npm consumer test covers the public CLI/Vite integration, signing, storage, restart, and updates preserving data. It recreates its dedicated device fixture, `dev.muon.e2e.publicconsumer`:
@@ -49,27 +62,36 @@ The independent npm consumer test covers the public CLI/Vite integration, signin
 npm run build --workspace muon-ui
 mkdir -p .run/android-e2e
 npm pack --workspace muon-ui --pack-destination .run/android-e2e
-ANDROID_SERIAL=your-device-serial node muon-android/scripts/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
+ANDROID_SERIAL=your-device-serial node ui/android-test/test-packaged-application.mjs .run/android-e2e/muon-ui-0.0.1.tgz
 ```
 
-Use the actual tgz version. When passing `--plugins`, build the prototype release first. CI runs the same independent application on a 16 KiB emulator.
+Use the actual tgz version. Before passing `--plugins`, run `npm test --workspace muon-android-tester` to generate test plugins in `core/android-test/.build/plugins/<abi>/`. Add `--validate` to check validate-mode permissions. CI runs the same independent application on a 16 KiB emulator.
 
 ## Windows binary e2e tests
 
-To run Windows binary e2e tests, you need a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent.
-This can also be a virtual machine instance.
-Then launch the tests as follows:
+Windows binary e2e tests require a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent. A virtual machine is also supported. Node.js must be on the remote agent's PATH; Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
 
-muon-ui's Windows E2E also requires Node.js on the remote agent's PATH. Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
+Connections use agent-rover 0.10.0's standard configuration. Follow the [official connection configuration guide](https://github.com/kekyo/agent-rover/blob/0.10.0/README.md#connection-configuration) to register test machines in `~/.agent-rover` in the home directory of the user running the tests. If they are already registered, there is no need to copy hosts or tokens into environment variables.
 
-```bash
-export AGENT_ROVER_WIN11_HOST=<agent-host-address>
-export AGENT_ROVER_WIN11_TOKEN=<agent-token>
+Example `~/.agent-rover`:
 
-npm run test:windows-e2e --workspace muon-core-tester
+```ini
+[win11]
+test-agent.example.com=<access-token>
 ```
 
-Alternatively, if the environment variables are defined, `npm run test` includes the Windows e2e tests in the full test run.
+Regular `npm test` runs also execute the Windows i686/amd64 screen tests and the installer tests. To run only the remote Windows tests, use:
+
+```bash
+npm run test:windows-e2e --workspace muon-core-tester
+npm run test:windows-nsis-e2e --workspace muon-ui
+```
+
+Tests use the `win11` section unless you specify another section, for example by prefixing the command with `MUON_E2E_AGENT_SECTION=vm`. The SDK selects a machine and retries when machines are busy. It prioritizes `.agent-rover` in the current working directory, so account for this precedence if you place a configuration file inside an npm workspace.
+
+Remote tests are skipped only when the SDK cannot establish a connection, such as when the configuration file is missing. The skip reason is printed. Build, transfer, and assertion errors after a successful connection fail the tests. Connections are released during local builds and when each suite finishes.
+
+Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
 
 ## Package generation
 

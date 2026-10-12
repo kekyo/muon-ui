@@ -1,0 +1,19 @@
+{
+  "name": "muon-example-counter",
+  "version": "1.0.0",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts"
+    },
+    "./muon-plugin.json": "./muon-plugin.json"
+  },
+  "files": [
+    "muon-plugin.json",
+    "native",
+    "include",
+    "types",
+    "licenses"
+  ]
+}

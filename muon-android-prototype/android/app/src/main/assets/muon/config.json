@@ -1,8 +1,0 @@
-{
-  "startPage": "https://main.asset.muon.invalid/index.html",
-  "values": {
-    "channel": "android",
-    "backend": "webview",
-    "applicationSetting": "prototype-fixture"
-  }
-}

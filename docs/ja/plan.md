@@ -1,6 +1,6 @@
 # 計画
 
-現在はAndroid対応の plans/plan6.md を実施中。
+[plan8](plans/plan8.md)のディレクトリ整理を完了。コア・利用者向け機能とバックエンドによる配置へ移行し、全体テストとAndroid端末検証を実施した。
 タスクリストとして簡潔に記載。詳細は各 plans/ 内の資料を参照。
 
 ## 実施内容
@@ -12,3 +12,6 @@
 - [ ] plans/plan4.md: Android対応4: （保留）
 - [ ] plans/plan5.md: Android対応5: （保留）
 - [x] plans/plan6.md: Android対応6: Androidリリース機能整備
+
+- [x] [plans/plan7.md](plans/plan7.md): Androidプラグインの権限設定と配布経路の継続検証
+- [x] [plans/plan8.md](plans/plan8.md): コア・利用者向け機能とバックエンドによるディレクトリ整理

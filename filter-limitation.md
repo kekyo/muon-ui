@@ -19,7 +19,7 @@ Android WebView版では、CEF版の選択的なネットワーク許可規則�
 
 リリースビルドには`INTERNET`と`ACCESS_LOCAL_NETWORK`の権限を宣言しない。`android:usesCleartextTraffic`も`false`のままとする。計装テストはフィルタ自身の効果をOSの権限拒否と区別する必要があるため、デバッグビルドに限って両権限と平文HTTPを有効にする。
 
-実装は[MuonWebViewNetworkFilter.java](muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonWebViewNetworkFilter.java)に集約した。
+この節で参照していた`MuonWebViewNetworkFilter.java`は現行ツリーにない。現在のホスト実装は[MuonWebViewHost.java](core/android/runtime/src/main/java/dev/muon/runtime/MuonWebViewHost.java)にある。
 
 ## 遮断に使う層
 
@@ -62,7 +62,7 @@ Android WebView版では、CEF版の選択的なネットワーク許可規則�
 | ローカルネットワーク | エミュレーターのプライベートIPv4アドレスへの`fetch`はサーバーへ到達しない | テストでは`ACCESS_LOCAL_NETWORK`を明示的に許可しており、OS権限ではなくフィルタが遮断した |
 | `data:image/` | 1ピクセルGIFを正常に読み込める | 固定許可リストの例外として維持する |
 
-この結果を固定する計装テストは[MuonNetworkFilterTest.java](muon-android-prototype/android/app/src/androidTest/java/dev/muon/runtime/MuonNetworkFilterTest.java)にある。コールバック範囲の観測には、リリースAPKへ入らないデバッグ専用の[MuonNetworkCapabilityProbeActivity.java](muon-android-prototype/android/app/src/debug/java/dev/muon/runtime/MuonNetworkCapabilityProbeActivity.java)を使用する。
+この結果を固定する計装テストは[MuonNetworkFilterTest.java](./core/android-test/android/app/src/androidTest/java/dev/muon/runtime/MuonNetworkFilterTest.java)にある。コールバック範囲の観測には、リリースAPKへ入らないデバッグ専用の[MuonNetworkCapabilityProbeActivity.java](./core/android-test/android/app/src/debug/java/dev/muon/runtime/MuonNetworkCapabilityProbeActivity.java)を使用する。
 
 ## CEF版との相違
 
@@ -249,7 +249,7 @@ origin判定がないため、ローカルURLが`network.allow`に含まれ、Ma
 
 結論として、WebViewの通常ネットワークアクセスを全面的に認める場合、CEF版muonのネットワークポリシーはほぼすべて諦めることになります。その代わり、POSTボディー、Cookie、リダイレクト、WebSocket、Service WorkerなどはWebView本来の仕組みで動作します。
 
-現在のCEF側の判定は[muon_network_policy.cpp](/home/kouji/Projects/muon-ui/muon-core/src/network/muon_network_policy.cpp)に集約されていますが、Android版ではこの判定層自体が存在しない形になります。
+現在のCEF側の判定は[muon_network_policy.cpp](./core/cef/src/network/muon_network_policy.cpp)に集約されていますが、Android版ではこの判定層自体が存在しない形になります。
 
 ## 諦める機能
 
@@ -399,13 +399,13 @@ https://appassets.androidplatform.net/assets/index.html
 
 これは可能で、現在の試作でもすでに実施しています。
 
-[MuonActivity.java](/home/kouji/Projects/muon-ui/muon-android-prototype/android/app/src/main/java/dev/muon/runtime/MuonActivity.java:90)では、ブリッジを次のoriginだけへ注入しています。
+[MuonActivity.java](./core/android-test/android/app/src/main/java/dev/muon/runtime/MuonActivity.java)では、ブリッジを次のoriginだけへ注入しています。
 
 ```text
 https://appassets.androidplatform.net
 ```
 
-さらに[MuonRpcBridge.java](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java:61)で、受信時にも次を検証しています。
+さらに[MuonRpcBridge.java](./core/android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java)で、受信時にも次を検証しています。
 
 - `sourceOrigin`がアプリ内アセットoriginと一致
 - `isMainFrame=true`
@@ -534,7 +534,7 @@ https://assets.muon.invalid/other/page.html
 
 そのため設計上は、ホスト全体をアプリ内アセット専用にし、`/main/`以外や存在しないアセットについても通常ネットワークへフォールバックさせず、ローカルで404または403を返す必要があります。`/main/`はストレージ名前空間であって、プラグインアクセスの境界ではありません。
 
-また、AndroidのWebMessageオブジェクトは一致するoriginのフレームに注入されます。現在の実装は[MuonRpcBridge.java](/home/kouji/Projects/muon-ui/muon-android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java:72)で`isMainFrame`を検査しているため、正確な保証は次の表現になります。
+また、AndroidのWebMessageオブジェクトは一致するoriginのフレームに注入されます。現在の実装は[MuonRpcBridge.java](./core/android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java)で`isMainFrame`を検査しているため、正確な保証は次の表現になります。
 
 > アプリ内アセットoriginのメインフレームから送信されたRPCだけを受理する
 
@@ -553,7 +553,7 @@ https://<専用ホスト>/main/<path>
 
 CEFはHTTP/HTTPSの組み込みschemeにも、ドメインを限定したscheme handlerを登録できます。[CEF Scheme Handler](https://chromiumembedded.github.io/cef/general_usage.html)
 
-現在は[muon_app.cpp](/home/kouji/Projects/muon-ui/muon-core/src/app/muon_app.cpp:901)で`asset://main`だけを登録し、[muon_app_scheme.cpp](/home/kouji/Projects/muon-ui/muon-core/src/app/muon_app_scheme.cpp:177)も`asset`以外を拒否しています。実装時には以下が必要です。
+現在は[muon_app.cpp](./core/cef/src/app/muon_app.cpp)で`asset://main`だけを登録し、[muon_app_scheme.cpp](./core/cef/src/app/muon_app_scheme.cpp)も`asset`以外を拒否しています。実装時には以下が必要です。
 
 - `asset://main/<path>`とHTTPSの`/main/<path>`を同じストレージキーへ変換する
 - HTTPS専用ホストでは、未知のパスもhandler内で404にする
@@ -692,7 +692,7 @@ Android公式も、ローカルアセットには組織が所有するドメイ�
 - 一般ネットワークはWebViewへ任せるが、信頼するアセットホストだけは外部へフォールバックさせない
 - CEFの`asset://`に対するポリシー互換性を別途定義する
 
-また、現在の[filter-limitation.md](/home/kouji/Projects/muon-ui/filter-limitation.md:5)には、冒頭のdeny-by-default仕様と後半の全面許可案が併存しています。最終仕様化するときは、今回の決定に合わせて旧結論を置き換える必要があります。
+また、現在の[filter-limitation.md](./filter-limitation.md)には、冒頭のdeny-by-default仕様と後半の全面許可案が併存しています。最終仕様化するときは、今回の決定に合わせて旧結論を置き換える必要があります。
 
 ----
 
@@ -750,7 +750,7 @@ CEFの`asset://`については、今回の方針から次の位置付けにな�
 
 このため、上記「推奨する進め方」のステップ3に記載したdeny-by-defaultは採否を判断するための検証条件として完了したものとし、Android製品仕様には採用しない。この追記は、先行するネットワーク制御案と矛盾する箇所について、検証後の最終判断として優先する。
 
-詳細な検証結果と制約は[filter-limitation.md](/home/kouji/Projects/muon-ui/filter-limitation.md)に記録している。実装時には、同文書に残っているdeny-by-default案、ネイティブHTTP代理案、通常通信採用案を、今回確定した仕様が明瞭になるよう整理する。
+詳細な検証結果と制約は[filter-limitation.md](./filter-limitation.md)に記録している。実装時には、同文書に残っているdeny-by-default案、ネイティブHTTP代理案、通常通信採用案を、今回確定した仕様が明瞭になるよう整理する。
 
 ### Android版のネットワーク契約
 

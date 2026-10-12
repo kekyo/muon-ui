@@ -1,20 +1,6 @@
 # Developing muon plugins
 
-Welcome to the world of muon plugins.
-
-A muon plugin is a gateway that lets JavaScript in CEF access any capability in the native world.
-By developing a plugin, you can perform literally any operating system operation.
-For example, by invoking Linux system calls, third-party libraries, or Windows APIs,
-you can control powerful capabilities from a page that CEF and muon's built-in plugins cannot provide.
-
-However.
-
-Stop here and think again. The road ahead can be difficult.
-
-- A muon plugin must be implemented in C or C++.
-- A crash can terminate the entire muon app process.
-- If a capability can be implemented with muon's built-in plugins, there is no need to implement a muon plugin yourself.
-  In particular, if you are interested in this development, you should review the capabilities in the `muon.executor` namespace first.
+Muon plugins use C/C++ and a common C ABI across CEF on Linux/Windows and Android. See the [SDK guide](muon-plugin-sdk.md) for independent projects, prerequisite diagnostics, Make/CMake integration, and NPM distribution. The following sections describe the native API and invocation rules.
 
 ## Overview
 
@@ -87,7 +73,7 @@ so using `cardio` in your plugin project can significantly simplify the implemen
 Because `cardio` supports `co_await` and `co_return` with C++20 or later, you can implement readable code without callbacks.
 You may, of course, use another library that supports asynchronous processing.
 
-For muon plugin implementation examples, see the [`muon-core/test_plugins/`](../../muon-core/test_plugins/) directory.
+For muon plugin implementation examples, see the [`core/common-test/plugins/`](../../core/common-test/plugins) directory.
 These are test implementations for `muon-core`, but their small size and focus on individual test cases make the minimal implementation easy to understand.
 
 ### Signature metadata

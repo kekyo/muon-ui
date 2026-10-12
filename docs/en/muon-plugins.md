@@ -1,5 +1,7 @@
 # Using muon plugins
 
+For local source or prebuilt NPM plugins, see [external plugin integration and distribution](muon-plugin-sdk.md). The permission rules below also apply to external plugins.
+
 So far, this documentation has explained the development lifecycle for building a muon app.
 However, a few capabilities are still missing for a muon app to behave like a native application.
 
@@ -11,6 +13,8 @@ This is called a "muon plugin".
 
 The basic muon plugin capabilities are provided by muon's built-in plugins.
 You can also implement the muon plugin API and load it into muon to extend functionality in the same way as the built-in plugins.
+
+Android supports simple and validate modes, with 34 builtin functions and ABI-specific external libraries packaged inside the APK. The process-launching example below is desktop-specific. See [building and distributing Android apps](./android.md) for supported functions, configuration, and access-control boundaries.
 
 The following example launches a child process by using a muon built-in plugin.
 

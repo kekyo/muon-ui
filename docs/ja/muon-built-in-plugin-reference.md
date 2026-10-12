@@ -4,7 +4,7 @@
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
 既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
 
-Android WebViewバックエンドは、この章にあるデスクトップAPIの一部だけを公開します。Androidで利用できる関数とプラットフォーム固有の挙動は、[Android WebViewバックエンドの制約](limitation.md#android-webviewバックエンド)と[Android API対応方針](../../android-api-compatibility.md)を参照してください。公開されない関数をno-opへ置き換えることはありません。
+Android WebViewバックエンドは、この章にあるデスクトップAPIの一部だけを公開します。Androidで利用できる関数とプラットフォーム固有の挙動は、[Android WebViewバックエンドの制約](./limitation.md#android-webviewバックエンド)と[Android API対応方針](../../android-api-compatibility.md)を参照してください。公開されない関数をno-opへ置き換えることはありません。
 
 例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、
 `muon:executor` から `spawn` をインポートします:

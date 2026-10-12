@@ -65,8 +65,7 @@ export const requireWindowsRemoteContext = (): WindowsRemoteContext => {
 };
 
 export const isWindowsRemoteE2e = (): boolean =>
-  getWindowsRemoteContext() !== undefined ||
-  process.env.MUON_E2E_REMOTE_WINDOWS === "1";
+  getWindowsRemoteContext() !== undefined;
 
 export const isWindowsAbsolutePath = (path: string): boolean =>
   /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");

@@ -728,9 +728,7 @@ export const TEST_NETWORK_ALLOW_PATTERNS = ["asset://main/**", "data:**"];
 export const TEST_BROWSER_PLUGIN_ALLOW_PATTERNS = TEST_NETWORK_ALLOW_PATTERNS;
 export const TEST_PLUGIN_ALLOW_PATTERNS = ["muon.**"];
 const windowsRemoteContextAtLoad = getWindowsRemoteContext();
-const isWindowsRemoteAtLoad =
-  windowsRemoteContextAtLoad !== undefined ||
-  process.env.MUON_E2E_REMOTE_WINDOWS === "1";
+const isWindowsRemoteAtLoad = windowsRemoteContextAtLoad !== undefined;
 export const DEBUG_MUON_DIRECTORY =
   windowsRemoteContextAtLoad?.runtime.debugRuntimeDirectory ??
   resolve("..", "cef", ".run", "test-linux-amd64-debug");

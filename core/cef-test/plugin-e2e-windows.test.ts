@@ -24,39 +24,42 @@ const windowsE2eEnvironment = resolveWindowsE2eEnvironment(process.env);
 const windowsRuntimeTarget = resolveWindowsRuntimeTarget(
   process.env.MUON_E2E_WINDOWS_TARGET,
 );
+const connection = await connectWindowsAgent(
+  windowsE2eEnvironment,
+  windowsRuntimeTarget,
+);
 const describeWindowsE2e =
-  windowsE2eEnvironment.status === "configured" ? describe : describe.skip;
+  connection.status === "connected" ? describe : describe.skip;
 const suiteName =
-  windowsE2eEnvironment.status === "configured"
+  connection.status === "connected"
     ? `Windows agent-rover e2e (${windowsRuntimeTarget.target})`
-    : `Windows agent-rover e2e (${windowsE2eEnvironment.reason})`;
+    : `Windows agent-rover e2e (${windowsRuntimeTarget.target}: ${connection.reason})`;
 
 const windowsAgent =
-  windowsE2eEnvironment.status === "configured"
-    ? await connectWindowsAgent(windowsE2eEnvironment.config)
-    : undefined;
+  connection.status === "connected" ? connection.agent : undefined;
 
-if (windowsE2eEnvironment.status === "configured") {
+if (connection.status === "skip") {
+  process.stderr.write(`Skipping ${suiteName}\n`);
+}
+
+if (windowsAgent !== undefined) {
   vi.setConfig({
     hookTimeout: 180000,
     testTimeout: 180000,
   });
 }
 
-if (
-  windowsE2eEnvironment.status === "configured" &&
-  windowsAgent !== undefined
-) {
+if (windowsAgent !== undefined) {
   try {
     const network = await discoverWindowsTestNetwork(windowsAgent);
     const runtime = await stageWindowsRuntime(
       windowsAgent,
-      windowsE2eEnvironment.config,
+      windowsE2eEnvironment,
       windowsRuntimeTarget,
     );
     await windowsAgent.files.mkdir(
       joinWindowsPath(
-        windowsE2eEnvironment.config.workDir,
+        windowsE2eEnvironment.workDir,
         windowsRuntimeTarget.target,
         "tmp",
       ),
@@ -66,11 +69,11 @@ if (
       agent: windowsAgent,
       cdpHost: network.cdpHost,
       cdpPort: 0,
-      environment: windowsE2eEnvironment.config,
-      httpHost: windowsE2eEnvironment.config.httpHost ?? network.httpHost,
+      environment: windowsE2eEnvironment,
+      httpHost: windowsE2eEnvironment.httpHost ?? network.httpHost,
       runtime,
       tempDirectory: joinWindowsPath(
-        windowsE2eEnvironment.config.workDir,
+        windowsE2eEnvironment.workDir,
         windowsRuntimeTarget.target,
         "tmp",
       ),
@@ -88,9 +91,6 @@ afterAll(async () => {
 
 describeWindowsE2e(suiteName, { concurrent: false }, () => {
   it("connects to a Windows agent with required capabilities", async () => {
-    if (windowsE2eEnvironment.status !== "configured") {
-      throw new Error(windowsE2eEnvironment.reason);
-    }
     if (windowsAgent === undefined) {
       throw new Error("Windows agent is not connected");
     }
@@ -122,7 +122,7 @@ describeWindowsE2e(suiteName, { concurrent: false }, () => {
   });
 });
 
-if (windowsE2eEnvironment.status === "configured") {
+if (windowsAgent !== undefined) {
   await import("./plugin-e2e/app-network.js");
   await import("./plugin-e2e/browser-background.js");
   await import("./plugin-e2e/title-bar.js");

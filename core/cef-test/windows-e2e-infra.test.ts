@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   RemoteAgent,
   RemoteDirectorySyncOptions,
@@ -21,7 +21,10 @@ import {
   windowsRuntimeTargets,
 } from "./plugin-e2e/windows-matrix.js";
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
-import { pathToWindowsFileUrlHref } from "./plugin-e2e/windows-context.js";
+import {
+  isWindowsRemoteE2e,
+  pathToWindowsFileUrlHref,
+} from "./plugin-e2e/windows-context.js";
 import {
   cleanupWindowsStagedRuntimeProcesses,
   stageWindowsRuntime,
@@ -109,45 +112,42 @@ const createFakeStagingAgent = (
 
 describe("Windows e2e environment", () => {
   it("uses the win11 agent section without host or token variables", () => {
-    expect(
-      resolveWindowsE2eEnvironment({ MUON_E2E_REMOTE_WINDOWS: "1" }),
-    ).toEqual({
-      config: {
-        section: "win11",
-        httpHost: undefined,
-        workDir: String.raw`C:\muon-e2e`,
-      },
-      status: "configured",
+    expect(resolveWindowsE2eEnvironment({})).toEqual({
+      section: "win11",
+      httpHost: undefined,
+      workDir: String.raw`C:\muon-e2e`,
     });
   });
 
   it("selects a named section and Muon-specific test paths", () => {
     expect(
       resolveWindowsE2eEnvironment({
-        MUON_E2E_REMOTE_WINDOWS: "1",
         MUON_E2E_AGENT_SECTION: " vm ",
         MUON_E2E_REMOTE_HTTP_HOST: "10.10.0.1",
         MUON_E2E_REMOTE_WORK_DIR: String.raw`D:\muon-test`,
       }),
     ).toEqual({
-      config: {
-        section: "vm",
-        httpHost: "10.10.0.1",
-        workDir: String.raw`D:\muon-test`,
-      },
-      status: "configured",
+      section: "vm",
+      httpHost: "10.10.0.1",
+      workDir: String.raw`D:\muon-test`,
     });
   });
 
-  it("skips remote execution when the Windows e2e flag is missing", () => {
+  it.each(["0", "1"])("ignores the removed Windows opt-in flag %s", (value) => {
     expect(
       resolveWindowsE2eEnvironment({
-        MUON_E2E_AGENT_SECTION: "vm",
+        MUON_E2E_REMOTE_WINDOWS: value,
       }),
-    ).toEqual({
-      reason: "MUON_E2E_REMOTE_WINDOWS is not set",
-      status: "skip",
-    });
+    ).toEqual(resolveWindowsE2eEnvironment({}));
+  });
+
+  it("does not select Windows mode through the removed opt-in flag", () => {
+    vi.stubEnv("MUON_E2E_REMOTE_WINDOWS", "1");
+    try {
+      expect(isWindowsRemoteE2e()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

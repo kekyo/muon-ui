@@ -80,7 +80,7 @@ Windowsバイナリのe2eテストには、[agent-rover](https://github.com/keky
 test-agent.example.com=<access-token>
 ```
 
-次のコマンドでWindows i686・amd64の画面テストと、インストーラーの実機テストを実行できます。
+通常の`npm test`で、Windows i686・amd64の画面テストとインストーラーの実機テストも実行します。実機テストだけを実行するコマンドは次のとおりです。
 
 ```bash
 npm run test:windows-e2e --workspace muon-core-tester
@@ -89,7 +89,7 @@ npm run test:windows-nsis-e2e --workspace muon-ui
 
 既定では`win11`セクションを使います。別のセクションを選ぶ場合は、コマンドに`MUON_E2E_AGENT_SECTION=vm`などを指定してください。接続先の選択と使用中の再試行はSDKが行います。SDKは実行時の作業ディレクトリにある`.agent-rover`を優先するため、npm workspace内に同名ファイルを置く場合は設定の優先順位に注意してください。
 
-実機テストは、`MUON_E2E_REMOTE_WINDOWS=1`を設定する上記の専用コマンドで有効になります。通常の`npm test`ではスキップする仕様です。各スイートは終了時に接続を解放します。
+設定ファイルがない場合など、SDKが接続を確立できなかった場合のみ、理由を表示して実機テストをスキップします。接続後のビルド・転送・検証のエラーはテストの失敗です。ローカルビルド中と各スイートの終了時には、実機への接続を解放します。
 
 実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
 

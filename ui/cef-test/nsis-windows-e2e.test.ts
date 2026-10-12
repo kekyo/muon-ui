@@ -18,11 +18,7 @@ import { basename, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import {
-  connectRemoteAgent,
-  saveDiagnostics,
-  type RemoteAgent,
-} from "agent-rover";
+import { saveDiagnostics, type RemoteAgent } from "agent-rover";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MuonDesktopTarget as MuonBuildTarget } from "../common/targets.js";
@@ -37,6 +33,7 @@ import {
 } from "../common/targets.js";
 
 import {
+  connectWindowsE2eAgent,
   resolveWindowsE2eEnvironment,
   type WindowsE2eEnvironment,
 } from "../../scripts/windows-e2e-environment.js";
@@ -897,22 +894,22 @@ const saveWindowsDiagnostics = async (
 };
 
 const windowsE2eEnvironment = resolveWindowsE2eEnvironment(process.env);
+const connection = await connectWindowsE2eAgent(windowsE2eEnvironment);
 const describeWindowsNsis =
-  windowsE2eEnvironment.status === "configured" ? describe : describe.skip;
+  connection.status === "connected" ? describe : describe.skip;
 const suiteName =
-  windowsE2eEnvironment.status === "configured"
+  connection.status === "connected"
     ? "NSIS Windows Settings uninstall e2e"
-    : `NSIS Windows Settings uninstall e2e (${windowsE2eEnvironment.reason})`;
+    : `NSIS Windows Settings uninstall e2e (${connection.reason})`;
 
 const windowsAgent =
-  windowsE2eEnvironment.status === "configured"
-    ? await connectRemoteAgent({
-        section: windowsE2eEnvironment.config.section,
-        timeoutMs: 30000,
-      })
-    : undefined;
+  connection.status === "connected" ? connection.agent : undefined;
 
-if (windowsE2eEnvironment.status === "configured") {
+if (connection.status === "skip") {
+  process.stderr.write(`Skipping ${suiteName}\n`);
+}
+
+if (windowsAgent !== undefined) {
   vi.setConfig({
     hookTimeout: 300000,
     testTimeout: 300000,
@@ -931,10 +928,7 @@ afterAll(() => {
 
 describeWindowsNsis(suiteName, { concurrent: false }, () => {
   it("runs muon pack on Windows and skips deb when dpkg-deb is unavailable", async () => {
-    if (
-      windowsAgent === undefined ||
-      windowsE2eEnvironment.status !== "configured"
-    ) {
+    if (windowsAgent === undefined) {
       throw new Error("Windows e2e environment is not configured.");
     }
 
@@ -945,7 +939,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
     const packageName = `muon-pack-e2e-${suffix}`;
     const remoteDirectory = await createRemoteTestDirectory(
       windowsAgent,
-      windowsE2eEnvironment.config,
+      windowsE2eEnvironment,
       packageName,
     );
 
@@ -1006,10 +1000,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
   });
 
   it("is visible in Windows Settings and can be uninstalled from it", async () => {
-    if (
-      windowsAgent === undefined ||
-      windowsE2eEnvironment.status !== "configured"
-    ) {
+    if (windowsAgent === undefined) {
       throw new Error("Windows e2e environment is not configured.");
     }
 
@@ -1035,7 +1026,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
     const localRoot = await createTemporaryDirectory("muon-nsis-e2e-");
     const remoteDirectory = await createRemoteTestDirectory(
       windowsAgent,
-      windowsE2eEnvironment.config,
+      windowsE2eEnvironment,
       packageName,
     );
     const packageDirectory = await createFakeMuonPackageDist(localRoot, [

@@ -3,14 +3,19 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import {
-  connectRemoteAgent,
-  type RemoteAgent,
-  type RemoteApplicationLaunchOptions,
-  type RemoteManagedProcess,
+import type {
+  RemoteAgent,
+  RemoteApplicationLaunchOptions,
+  RemoteManagedProcess,
 } from "agent-rover";
 
-import type { WindowsE2eEnvironment } from "../../../scripts/windows-e2e-environment.js";
+import {
+  connectWindowsE2eAgent,
+  type WindowsE2eConnection,
+  type WindowsE2eEnvironment,
+} from "../../../scripts/windows-e2e-environment.js";
+import { buildWindowsRuntime } from "./windows-build.js";
+import type { WindowsRuntimeTarget } from "./windows-matrix.js";
 import { joinWindowsPath } from "./windows-context.js";
 
 /** Process operations used by the Windows runtime tests. */
@@ -96,8 +101,6 @@ export const launchWindowsTestProcess = async (
   };
 };
 
-export const WINDOWS_AGENT_CONNECTION_TIMEOUT_MS = 30000;
-
 export const requiredWindowsAgentProtocolVersion = "2026-09-09.1";
 
 export const requiredWindowsAgentFeatureNames = [
@@ -123,10 +126,23 @@ export const requiredWindowsAgentFeatureNames = [
   "windows",
 ] as const;
 
+/**
+ * Prepares local Windows binaries, then connects for runtime testing.
+ * @param config Standard agent section and Muon-specific paths.
+ * @param target Windows runtime architecture to prepare.
+ * @returns A test session to release, or a connection failure reason.
+ * @remarks The initial availability check is released before local compilation.
+ * Build failures propagate; only SDK connection failures can skip the suite.
+ */
 export const connectWindowsAgent = async (
   config: WindowsE2eEnvironment,
-): Promise<RemoteAgent> =>
-  await connectRemoteAgent({
-    section: config.section,
-    timeoutMs: WINDOWS_AGENT_CONNECTION_TIMEOUT_MS,
-  });
+  target: WindowsRuntimeTarget,
+): Promise<WindowsE2eConnection> => {
+  const probe = await connectWindowsE2eAgent(config);
+  if (probe.status === "skip") {
+    return probe;
+  }
+  probe.agent.release();
+  await buildWindowsRuntime(target);
+  return await connectWindowsE2eAgent(config);
+};

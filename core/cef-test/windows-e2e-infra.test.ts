@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type {
   RemoteAgent,
   RemoteDirectorySyncOptions,
@@ -21,10 +21,7 @@ import {
   windowsRuntimeTargets,
 } from "./plugin-e2e/windows-matrix.js";
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
-import {
-  isWindowsRemoteE2e,
-  pathToWindowsFileUrlHref,
-} from "./plugin-e2e/windows-context.js";
+import { pathToWindowsFileUrlHref } from "./plugin-e2e/windows-context.js";
 import {
   cleanupWindowsStagedRuntimeProcesses,
   stageWindowsRuntime,
@@ -131,23 +128,6 @@ describe("Windows e2e environment", () => {
       httpHost: "10.10.0.1",
       workDir: String.raw`D:\muon-test`,
     });
-  });
-
-  it.each(["0", "1"])("ignores the removed Windows opt-in flag %s", (value) => {
-    expect(
-      resolveWindowsE2eEnvironment({
-        MUON_E2E_REMOTE_WINDOWS: value,
-      }),
-    ).toEqual(resolveWindowsE2eEnvironment({}));
-  });
-
-  it("does not select Windows mode through the removed opt-in flag", () => {
-    vi.stubEnv("MUON_E2E_REMOTE_WINDOWS", "1");
-    try {
-      expect(isWindowsRemoteE2e()).toBe(false);
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 });
 

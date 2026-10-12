@@ -76,7 +76,7 @@ Windowsバイナリのe2eテストには、[agent-rover](https://github.com/keky
 設定ファイルの例です。
 
 ```ini
-[default]
+[win11]
 test-agent.example.com=<access-token>
 ```
 
@@ -87,7 +87,7 @@ npm run test:windows-e2e --workspace muon-core-tester
 npm run test:windows-nsis-e2e --workspace muon-ui
 ```
 
-既定では`default`セクションを使います。別のセクションを選ぶ場合は、コマンドに`MUON_E2E_AGENT_SECTION=vm`などを指定してください。接続先の選択と使用中の再試行はSDKが行います。SDKは実行時の作業ディレクトリにある`.agent-rover`を優先するため、npm workspace内に同名ファイルを置く場合は設定の優先順位に注意してください。
+既定では`win11`セクションを使います。別のセクションを選ぶ場合は、コマンドに`MUON_E2E_AGENT_SECTION=vm`などを指定してください。接続先の選択と使用中の再試行はSDKが行います。SDKは実行時の作業ディレクトリにある`.agent-rover`を優先するため、npm workspace内に同名ファイルを置く場合は設定の優先順位に注意してください。
 
 実機テストは、`MUON_E2E_REMOTE_WINDOWS=1`を設定する上記の専用コマンドで有効になります。通常の`npm test`ではスキップする仕様です。各スイートは終了時に接続を解放します。
 

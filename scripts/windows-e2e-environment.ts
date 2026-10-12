@@ -32,7 +32,7 @@ export const resolveWindowsE2eEnvironment = (
   }
   return {
     config: {
-      section: env.MUON_E2E_AGENT_SECTION?.trim() || "default",
+      section: env.MUON_E2E_AGENT_SECTION?.trim() || "win11",
       httpHost: env.MUON_E2E_REMOTE_HTTP_HOST?.trim() || undefined,
       workDir: env.MUON_E2E_REMOTE_WORK_DIR?.trim() || String.raw`C:\muon-e2e`,
     },

@@ -76,7 +76,7 @@ Connections use agent-rover 0.10.0's standard configuration. Follow the [officia
 Example `~/.agent-rover`:
 
 ```ini
-[default]
+[win11]
 test-agent.example.com=<access-token>
 ```
 
@@ -87,7 +87,7 @@ npm run test:windows-e2e --workspace muon-core-tester
 npm run test:windows-nsis-e2e --workspace muon-ui
 ```
 
-Tests use the `default` section unless you specify another section, for example by prefixing the command with `MUON_E2E_AGENT_SECTION=vm`. The SDK selects a machine and retries when machines are busy. It prioritizes `.agent-rover` in the current working directory, so account for this precedence if you place a configuration file inside an npm workspace.
+Tests use the `win11` section unless you specify another section, for example by prefixing the command with `MUON_E2E_AGENT_SECTION=vm`. The SDK selects a machine and retries when machines are busy. It prioritizes `.agent-rover` in the current working directory, so account for this precedence if you place a configuration file inside an npm workspace.
 
 Regular `npm test` runs skip tests on remote machines. The dedicated commands above set `MUON_E2E_REMOTE_WINDOWS=1` to enable them. Each suite releases its connection when it finishes. Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
 

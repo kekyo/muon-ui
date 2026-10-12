@@ -108,12 +108,12 @@ const createFakeStagingAgent = (
 };
 
 describe("Windows e2e environment", () => {
-  it("uses the default agent section without host or token variables", () => {
+  it("uses the win11 agent section without host or token variables", () => {
     expect(
       resolveWindowsE2eEnvironment({ MUON_E2E_REMOTE_WINDOWS: "1" }),
     ).toEqual({
       config: {
-        section: "default",
+        section: "win11",
         httpHost: undefined,
         workDir: String.raw`C:\muon-e2e`,
       },
@@ -249,7 +249,7 @@ describe("Windows e2e staging", () => {
         stageWindowsRuntime(
           agent,
           {
-            section: "default",
+            section: "win11",
             httpHost: "linux.test",
             workDir: String.raw`C:\muon-e2e`,
           },

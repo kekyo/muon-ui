@@ -605,7 +605,7 @@ static void *progress_thread_main(void *parameter) {
   MuonLauncherProgressBackend *backend =
       (MuonLauncherProgressBackend *)parameter;
   for (;;) {
-    MuonPrepareProgress event;
+    MuonPrepareProgress event = {0};
     char status[sizeof(backend->status)];
     int has_event = 0;
     int stop_requested = 0;

@@ -38,6 +38,6 @@ In the Android prototype host, `muon.node.createNode()` creates an embedded Quic
 
 ## Limitations on enabling the CEF sandbox on Linux
 
-On Linux, when a muon app is not started with administrator privileges, the `cef-sandbox` required by CEF cannot be started correctly.
-This occurs when build artifact files output under `dist-muon/` are launched directly with user privileges.
-To launch correctly, either start with administrator privileges or install the `deb` package through APT so that `cef-sandbox` can be started with administrator privileges.
+Ordinary muon distributions disable the CEF sandbox. To use the setuid mode, generate a deb with `muon pack --type deb --linux-sandbox=setuid` and install it through APT. This mode requires system installation and a root-owned sandbox helper. See [CEF sandbox setup on Linux](https://chromiumembedded.github.io/cef/sandbox_setup.html#linux).
+
+AppImage and tar.gz do not support setuid mode and reject that option during packaging. AppImage startup does not elevate privileges or change the host's sandbox configuration.

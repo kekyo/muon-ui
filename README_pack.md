@@ -63,7 +63,7 @@ WIP: And once you've created a muon application, you can deploy it directly to A
 - Provided as an easy-to-use NPM package, so you can turn your web application project into a native GUI application without complex configuration or changes.
 - The rendering browser is CEF (Chromium Embedded Framework). From the web application's point of view, this is almost the same as using Chromium or Chrome.
 - Supports the Vite plugin system. It also supports Vite HMR, so previews update in real time during development.
-- Supports Linux (deb) and Windows (NSIS) package generation, and portable distribution.
+- Supports Linux (deb and AppImage) and Windows (NSIS) package generation, and portable distribution.
 - You can also build Android applications (experimental).
 - DevTools can be used. CDP (Chrome DevTools Protocol) is also supported, so remote debugging from external tools is possible.
 - Includes a plugin system. Plugin capabilities can also be restricted by a whitelist filter.

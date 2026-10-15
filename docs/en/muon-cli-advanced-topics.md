@@ -92,3 +92,48 @@ npx muon build --icon icons/app.png --linux-name "My App"
 
 > Note: When generated assets are collected directly by the muon CLI without the Vite plugin, the CLI itself does not resolve virtual modules for plugin references through `import`.
 > Bundle code that uses the validate-mode `muon:node` module with Vite first. To access Node.js integration from assets that do not pass through Vite, use `window.muon.node.createNode()` in `simple` mode.
+
+## Creating and running AppImages
+
+An AppImage is a single Linux executable that runs without an installer. Create a separate file for each CPU architecture:
+
+```bash
+npx muon pack --type appimage --target linux-amd64
+npx muon pack --type appimage --target linux-armhf
+npx muon pack --type appimage --target linux-arm64
+```
+
+The output is `artifacts/<packageName>-<version>-<target>.AppImage`. Omitting `--type` also includes AppImage among the Linux formats. This format cannot be selected for Windows or Android.
+
+The packaging host requires Linux, Node.js, `readelf` from binutils, `file`, a standard shell, and coreutils. On Debian and Ubuntu, install missing tools with `apt-get install binutils file`. An amd64 host can also produce ARM AppImages. The first pack downloads fixed versions of appimagetool and the target CPU's runtime, verifying their SHA-256 hashes. Later builds reuse `$XDG_CACHE_HOME/muon/appimage`, or `~/.cache/muon/appimage` when unset. Set `MUON_APPIMAGE_TOOLS_DIR` to use another directory. See [appimagetool](https://github.com/AppImage/appimagetool/tree/1.9.1) and [the runtime](https://github.com/AppImage/type2-runtime/tree/20251108).
+
+Distribute the file matching the user's CPU, grant execute permission, and run it:
+
+```bash
+chmod +x ./my-app-1.0.0-linux-amd64.AppImage
+./my-app-1.0.0-linux-amd64.AppImage
+```
+
+CEF is not bundled. The existing launcher downloads it on first startup, along with the required Node.js runtime for apps using `node.project`. CEF selection policies are shared with deb, including policies other than `tested`. Prepared runtimes and valid download caches are reused, but selecting an uncached version or lacking a required catalog needs network access. This format does not guarantee an offline first launch.
+
+Downloaded archives share a cache under `$XDG_CACHE_HOME/muon/`, or `~/.cache/muon/` when unset. Set `MUON_CACHE_DIR` to use another location.
+
+The AppImage contents are read-only. CEF, Node.js, and startup state are prepared under `$XDG_STATE_HOME/<appId>/runtime/`, or `~/.local/state/<appId>/runtime/` when unset. Profile placement follows the application's `browser.profilePath`. After moving an AppImage, launch it directly once to update its menu entry and existing enabled autostart entry. This does not enable autostart implicitly. See [storage locations and removal](./package-install-location-advanced-topics.md).
+
+Normal startup requires kernel FUSE support and permission to use it. The selected runtime statically includes the userspace FUSE library, so a separate `libfuse2` installation is unnecessary. Use extract-and-run where FUSE is unavailable. See [the type2-runtime configuration](https://github.com/AppImage/type2-runtime/blob/20251108/README.md) and [extraction](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
+
+```bash
+./my-app-1.0.0-linux-amd64.AppImage --appimage-extract-and-run
+```
+
+Menu and autostart entries retain the original AppImage path but do not store this argument. To launch through these entries in a session without FUSE, set `APPIMAGE_EXTRACT_AND_RUN=1` in the session environment. CEF setuid sandbox mode is exclusive to deb; `--linux-sandbox=setuid` is rejected when packaging an AppImage. See [sandbox limitations](./limitation.md#limitations-on-enabling-the-cef-sandbox-on-linux).
+
+### Linux runtime environment
+
+Distribution binaries use Ubuntu 20.04 as their build baseline. amd64 has been tested on Ubuntu 20.04 and 24.04; armhf and arm64 have been tested by running their Ubuntu 20.04 containers through QEMU. This does not include physical ARM GPU or audio device testing.
+
+GTK, GLib, and their required modules are bundled. glibc, the C++ runtime, NSS, ALSA, X11/Wayland, GPU drivers, GBM, and other host libraries remain OS dependencies. The runtime environment needs these desktop libraries, CA certificates, and `curl`. Placing an AppImage in a minimal container does not supply all required host libraries.
+
+Minimum requirements are derived from the CEF used to build muon and all completed native components. The current baseline build requires glibc 2.29 or later, `libstdc++6` package version 9 or later, GBM 21.1 or later, and other libraries. Meeting these numbers alone does not guarantee support for an arbitrary distribution. Details are available in the NPM package's `dist/runtime/<target>/linux-dependencies.json.txt` and adjacent `linux-dependencies.json`. `linux-bundle.json` records bundled files, their sources, and license locations.
+
+Selecting a future CEF at runtime still uses requirements derived from the build reference CEF; additional requirements of that future version are not recalculated. Native plugins requiring newer libraries also need to be built for the intended environment. See [CEF's Linux build environment](https://chromiumembedded.github.io/cef/branches_and_building.html).

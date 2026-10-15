@@ -497,6 +497,13 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linux-amd64/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-armhf/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-arm64/muon-executor-supervisor"
+  local linux_target
+  for linux_target in linux-amd64 linux-armhf linux-arm64; do
+    require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json"
+    require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json.txt"
+    require_pack_file "dist/runtime/${linux_target}/linux-bundle.json"
+    reject_pack_file "dist/runtime/${linux_target}/libcef.so"
+  done
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"
   require_pack_file "dist/runtime/windows-amd64/libcardio.dll"
   require_pack_file "dist/runtime/linux-amd64/plugins/node.so"

@@ -88,6 +88,7 @@ jobs:
             libnss3-dev \
             libxss-dev \
             ninja-build \
+            podman \
             wine \
             wine32:i386 \
             wine64 \
@@ -140,6 +141,12 @@ jobs:
             core/cef/.deps/src
           key: ${{ runner.os }}-${{ runner.arch }}-native-deps-v1-${{ steps.native-toolchain.outputs.fingerprint }}-${{ hashFiles('builder/build.sh', 'builder/build_*.sh', 'core/cef/build_*.sh') }}
 
+      - name: Cache verified AppImage tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/muon/appimage
+          key: ${{ runner.os }}-${{ runner.arch }}-appimage-${{ hashFiles('ui/cef/appimage-tools.ts') }}
+
       - name: Prepare independent plugin SDK targets
         run: |
           npm run build --workspace muon-plugin-sdk
@@ -157,10 +164,17 @@ jobs:
           xvfb-run -a node sdk/scripts/test-target.mjs windows-i686
           xvfb-run -a node sdk/scripts/test-target.mjs windows-amd64
           node sdk/scripts/test-target.mjs android-arm64-v8a --compile-only
-          npm run build:target --workspace muon-core -- dist Release linux-amd64
-          (cd ui && node scripts/stage-muon-builder.mjs --target linux-amd64 --dist)
+          bash prereq.sh --arch amd64 --jobs 2
+          bash build_package.sh --target dist --arch amd64 --jobs 2
+          npm run verify:package-runtime --workspace muon-ui -- linux-amd64 windows-i686 windows-amd64
           node sdk/scripts/stage-package.mjs linux-amd64 android-arm64-v8a android-x86_64
           node sdk/scripts/verify-package.mjs linux-amd64 windows-i686 windows-amd64 android-arm64-v8a android-x86_64
+
+      - name: Test Linux packages from the independent npm consumer
+        run: |
+          mkdir -p .run/linux-package-ci
+          npm pack --workspace muon-ui --ignore-scripts --pack-destination .run/linux-package-ci
+          node ui/cef-test/test-packaged-appimage.mts .run/linux-package-ci/muon-ui-*.tgz linux-amd64
 
       - name: Enable KVM for Android E2E
         run: |

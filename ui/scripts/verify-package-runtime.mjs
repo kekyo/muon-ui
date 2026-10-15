@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { access, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRuntimeTargets = {
@@ -124,7 +124,15 @@ await assertMissing(join("dist", "native", "muon-launcher.ico"));
 await assertMissing(join("dist", "native", "muon-launcher.png"));
 await assertExists(join("dist", "native", "muon-256.png"));
 
-for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
+const requestedTargets = process.argv.slice(2);
+const targets =
+  requestedTargets.length === 0
+    ? Object.keys(packageRuntimeTargets)
+    : requestedTargets;
+for (const target of targets) {
+  const descriptor = packageRuntimeTargets[target];
+  if (descriptor === undefined)
+    throw new Error(`Unknown package target: ${target}`);
   const nativePath = join("dist", "native", target);
   const runtimePath = join("dist", "runtime", target);
   const expectedPayload = [
@@ -151,6 +159,21 @@ for (const [target, descriptor] of Object.entries(packageRuntimeTargets)) {
   if (target.startsWith("windows-")) {
     await assertHasMatchingFile(runtimePath, /^libgcc_s_.*-1\.dll$/);
     await assertExists(join(runtimePath, "libstdc++-6.dll"));
+  } else {
+    for (const name of [
+      "linux-dependencies.json",
+      "linux-dependencies.json.txt",
+      "linux-bundle.json",
+    ])
+      await assertExists(join(runtimePath, name));
+    const libraries = JSON.parse(
+      await readFile(join(runtimePath, "linux-bundle.json"), "utf8"),
+    );
+    for (const library of libraries) {
+      await assertExists(join(runtimePath, library.file));
+      await assertExists(join(runtimePath, library.license));
+    }
+    await assertMissing(join(runtimePath, "libcef.so"));
   }
   await assertMissing(join(runtimePath, "THIRD_PARTY_NOTICES.md"));
   await assertMissing(join(runtimePath, "muon-runtime.json"));

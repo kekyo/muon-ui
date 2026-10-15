@@ -203,7 +203,7 @@ int main(int argc, char* argv[]) {
     CefString(&settings.resources_dir_path).FromString(resource_dir);
     CefString(&settings.locales_dir_path).FromString(resource_dir + "/locales");
     CefString(&settings.browser_subprocess_path)
-        .FromString(resource_dir + "/muon");
+        .FromString(resource_dir + "/muon-core");
     CefString(&settings.root_cache_path)
         .FromString(resource_dir + "/metadata-test-cache");
   }

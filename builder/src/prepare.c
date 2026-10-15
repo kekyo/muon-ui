@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 #include <ctype.h>
+#include <errno.h>
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,11 +17,13 @@
 #include <windows.h>
 #else
 #include <pthread.h>
+#include <unistd.h>
 #endif
 
 #include "prepare.h"
 #include "prepare_cef.h"
 #include "prepare_node.h"
+#include "linux_module_cache.h"
 #include "launcher_config.h"
 #include "common.h"
 #include "muon_runtime_info_generated.h"
@@ -1457,6 +1460,65 @@ static char *create_runtime_ready_content(const char *muon_fingerprint,
   return result;
 }
 
+static int prepare_linux_module_caches(const char *directory,
+                                       const char *runtime_directory) {
+#ifdef _WIN32
+  (void)directory;
+  (void)runtime_directory;
+  return 0;
+#else
+  char *absolute = NULL;
+  if (runtime_directory[0] == '/') {
+    absolute = muon_duplicate_path_string(runtime_directory);
+  } else {
+    size_t capacity = 256;
+    for (;;) {
+      char *cwd = (char *)malloc(capacity);
+      if (cwd == NULL) return -1;
+      if (getcwd(cwd, capacity) != NULL) {
+        absolute = muon_path_join(cwd, runtime_directory);
+        free(cwd);
+        break;
+      }
+      const int error_code = errno;
+      free(cwd);
+      if (error_code != ERANGE || capacity > SIZE_MAX / 2) return -1;
+      capacity *= 2;
+    }
+  }
+  if (absolute == NULL) return -1;
+  static const char *const templates[] = {
+      "linux/gtk-immodules.cache.in", "linux/gdk-pixbuf-loaders.cache.in"};
+  static const char *const outputs[] = {
+      "linux/gtk-immodules.cache", "linux/gdk-pixbuf-loaders.cache"};
+  int result = 0;
+  for (size_t index = 0; index < sizeof(templates) / sizeof(templates[0]);
+       index += 1) {
+    char *input = muon_path_join(directory, templates[index]);
+    char *output = muon_path_join(directory, outputs[index]);
+    char *source = NULL;
+    char *rendered = NULL;
+    if (input == NULL || output == NULL) {
+      result = -1;
+    } else if (muon_path_exists(input)) {
+      source = muon_read_text_file(input);
+      if (source != NULL)
+        rendered = muon_expand_linux_module_cache(source, absolute);
+      // Use the published path, not the transaction's temporary directory.
+      if (rendered == NULL || muon_write_text_file(output, rendered) != 0)
+        result = -1;
+    }
+    free(input);
+    free(output);
+    free(source);
+    free(rendered);
+    if (result != 0) break;
+  }
+  free(absolute);
+  return result;
+#endif
+}
+
 static int prepare_staging_locked(
     const PrepareOptions *options, const MuonRuntimeInfo *runtime_info,
     const char *cef_path, int cef_is_archive, const char *node_archive_path,
@@ -1492,7 +1554,8 @@ static int prepare_staging_locked(
   }
   if (!options->force && muon_path_exists(ready_path) &&
       muon_ready_file_matches(ready_path, ready_content)) {
-    if (save_launcher_config_to_directory(options, options->stage_dir) != 0) {
+    if (prepare_linux_module_caches(options->stage_dir, options->stage_dir) != 0 ||
+        save_launcher_config_to_directory(options, options->stage_dir) != 0) {
       goto cleanup;
     }
     prepare_result = set_prepare_result(
@@ -1546,7 +1609,8 @@ static int prepare_staging_locked(
                      node_artifact->version,
                      (unsigned long long)node_file_count);
   }
-  if (save_launcher_config_to_directory(options, temporary_directory) != 0 ||
+  if (prepare_linux_module_caches(temporary_directory, options->stage_dir) != 0 ||
+      save_launcher_config_to_directory(options, temporary_directory) != 0 ||
       muon_write_text_file(temporary_ready, ready_content) != 0) {
     goto cleanup;
   }
@@ -1603,7 +1667,8 @@ static int prepare_runtime_in_place_locked(
   if (!options->force && muon_path_exists(ready_path) &&
       muon_ready_file_matches(ready_path, ready_content)) {
     const int set_result =
-        save_launcher_config_to_directory(options, options->muon_path) == 0
+        prepare_linux_module_caches(options->muon_path, options->muon_path) == 0 &&
+                save_launcher_config_to_directory(options, options->muon_path) == 0
             ? set_prepare_result(result, options->muon_path,
                                  options->muon_path, cef_path, 1)
             : -1;
@@ -1656,7 +1721,8 @@ static int prepare_runtime_in_place_locked(
                      node_artifact->version,
                      (unsigned long long)node_file_count);
   }
-  if (save_launcher_config_to_directory(options, options->muon_path) != 0 ||
+  if (prepare_linux_module_caches(options->muon_path, options->muon_path) != 0 ||
+      save_launcher_config_to_directory(options, options->muon_path) != 0 ||
       muon_write_text_file(ready_path, ready_content) != 0) {
     goto cleanup;
   }

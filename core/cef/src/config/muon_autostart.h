@@ -29,6 +29,8 @@ struct MuonAutostartOptions final {
   std::filesystem::path executable_path;
   /** Launch source that selects the platform backend. */
   std::string launch_source;
+  /** Stable application ID for AppImage registrations; empty for other installs. */
+  std::string appimage_id;
 };
 
 /**
@@ -64,3 +66,14 @@ bool GetMuonAutostartStatus(const MuonAutostartOptions& options,
 bool SetMuonAutostart(const MuonAutostartOptions& options,
                       bool enabled,
                       std::string* error_message);
+
+/**
+ * Updates an enabled, muon-managed AppImage registration after relocation.
+ *
+ * @param options Autostart backend options, including the current AppImage path.
+ * @param error_message Receives a diagnostic on failure.
+ * @return true when refreshed or when no managed, enabled entry needs updating.
+ * @remarks Does not enable autostart or modify other applications' entries.
+ */
+bool RefreshMuonAppImageAutostart(const MuonAutostartOptions& options,
+                                 std::string* error_message);

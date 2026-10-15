@@ -240,3 +240,25 @@ For a portable distribution, preparation occurs directly in the extracted direct
 
 > Note: `packageDirectory` is an argument intended for tests and package verification.
 > Its explanation is omitted.
+
+## Generating AppImages
+
+`vite build` generates distribution directories. To create an AppImage, a single Linux executable, run the following command from the project root.
+
+```bash
+npx muon pack --type appimage --target linux-amd64
+```
+
+`muon pack` reads the muon settings from `vite.config.*` and performs both the Vite build and AppImage packaging. A separate `vite build` is unnecessary. Select the package format with the CLI's `--type` option. The Vite plugin has no `type` or `pack` option for selecting a package format.
+
+To register an npm script, add the following entry to `scripts` in `package.json`.
+
+```json
+{
+  "scripts": {
+    "pack:appimage": "muon pack --type appimage --target linux-amd64"
+  }
+}
+```
+
+Run it with `npm run pack:appimage`. See [Creating and running AppImages](./muon-cli-advanced-topics.md#creating-and-running-appimages) for output paths, ARM targets, and required tools.

@@ -5,6 +5,8 @@ RUNTIME_HELPER_TARGET ?=
 PLUGIN_INSPECTOR_TARGET ?= $(OUT_DIR)/muon-plugin-inspector
 LIB_TARGET ?= $(OUT_DIR)/libmuon-builder.a
 CPPFLAGS ?=
+# Keep file sizes and directory inode numbers representable on 32-bit targets.
+override CPPFLAGS += -D_FILE_OFFSET_BITS=64
 CFLAGS ?= -std=c99 -Os -DNDEBUG -Wall -Wextra -pedantic
 LDFLAGS ?= -s -static
 LAUNCHER_CPPFLAGS ?=
@@ -24,14 +26,22 @@ SHA2_SOURCE_DIR ?= ../deps/sha2
 SHA2_CPPFLAGS := -I"$(SHA2_SOURCE_DIR)"
 LDLIBS ?=
 
-PREPARE_OBJECTS := $(OUT_DIR)/prepare.o $(OUT_DIR)/prepare_cef.o $(OUT_DIR)/prepare_node.o $(OUT_DIR)/launcher_config.o $(OUT_DIR)/common.o $(OUT_DIR)/sha1.o $(OUT_DIR)/sha2.o $(OUT_DIR)/yyjson.o
+PREPARE_OBJECTS := $(OUT_DIR)/prepare.o $(OUT_DIR)/prepare_cef.o $(OUT_DIR)/prepare_node.o $(OUT_DIR)/linux_module_cache.o $(OUT_DIR)/launcher_config.o $(OUT_DIR)/common.o $(OUT_DIR)/sha1.o $(OUT_DIR)/sha2.o $(OUT_DIR)/yyjson.o
 PREPARE_RESOURCE_OBJECTS := $(OUT_DIR)/muon_prepare_resource.o $(OUT_DIR)/engraver.o
 
 .PHONY: all clean
 
 all: $(LIB_TARGET) $(PREPARE_TARGET) $(LAUNCHER_TARGET) $(RUNTIME_HELPER_TARGET) $(PLUGIN_INSPECTOR_TARGET)
 
-$(OUT_DIR)/prepare.o: src/prepare.c src/prepare.h src/prepare_progress.h src/prepare_cef.h src/prepare_node.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(VERSION_HEADER) $(RUNTIME_INFO_HEADER)
+.PHONY: test-linux-module-cache
+test-linux-module-cache: $(OUT_DIR)/linux_module_cache_test
+	"$<"
+
+$(OUT_DIR)/linux_module_cache_test: test/linux_module_cache_test.c src/linux_module_cache.c src/linux_module_cache.h
+	mkdir -p "$(OUT_DIR)"
+	$(CC) $(CFLAGS) -Isrc -o "$@" test/linux_module_cache_test.c src/linux_module_cache.c
+
+$(OUT_DIR)/prepare.o: src/prepare.c src/prepare.h src/prepare_progress.h src/prepare_cef.h src/prepare_node.h src/linux_module_cache.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(VERSION_HEADER) $(RUNTIME_INFO_HEADER)
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 
@@ -42,6 +52,10 @@ $(OUT_DIR)/prepare_cef.o: src/prepare_cef.c src/prepare_cef.h src/prepare_progre
 $(OUT_DIR)/prepare_node.o: src/prepare_node.c src/prepare_node.h src/prepare_progress.h src/common.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
+
+$(OUT_DIR)/linux_module_cache.o: src/linux_module_cache.c src/linux_module_cache.h
+	mkdir -p "$(OUT_DIR)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 
 $(OUT_DIR)/launcher_config.o: src/launcher_config.c src/launcher_config.h src/prepare_node.h src/prepare_progress.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h
 	mkdir -p "$(OUT_DIR)"

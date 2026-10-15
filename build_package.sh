@@ -122,7 +122,7 @@ platform_for_arch() {
 }
 
 image_for_arch() {
-  printf 'localhost/muon-pack-native-debian-bookworm-%s:latest\n' "$1"
+  printf 'localhost/muon-pack-native-ubuntu-focal-%s:latest\n' "$1"
 }
 
 split_arch_list() {
@@ -416,6 +416,8 @@ build_dist() {
   bash core/cef/build_yyjson.sh
   bash core/cef/build_miniz.sh
 
+  npm run build:linux-dependencies --workspace muon-ui
+
   build_linux_targets "${arches[@]}"
   build_windows_targets
   stage_targets "${arches[@]}"
@@ -495,6 +497,13 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linux-amd64/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-armhf/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-arm64/muon-executor-supervisor"
+  local linux_target
+  for linux_target in linux-amd64 linux-armhf linux-arm64; do
+    require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json"
+    require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json.txt"
+    require_pack_file "dist/runtime/${linux_target}/linux-bundle.json"
+    reject_pack_file "dist/runtime/${linux_target}/libcef.so"
+  done
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"
   require_pack_file "dist/runtime/windows-amd64/libcardio.dll"
   require_pack_file "dist/runtime/linux-amd64/plugins/node.so"

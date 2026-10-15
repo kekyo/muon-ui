@@ -9,6 +9,32 @@ import {
   packagePlugin,
   readPluginArtifact,
 } from '../src/index.js';
+import { validatePluginLibraryDependencies } from '../src/dependencies.js';
+
+it.each([
+  ['linux-amd64', 'ld-linux-x86-64.so.2'],
+  ['linux-armhf', 'ld-linux-armhf.so.3'],
+  ['linux-arm64', 'ld-linux-aarch64.so.1'],
+] as const)('uses the host dynamic loader for %s plugins', (target, loader) => {
+  const info = {
+    exports: ['muon_init_plugin'],
+    needed: [loader],
+    soname: undefined,
+    runpath: [],
+  };
+  expect(() =>
+    validatePluginLibraryDependencies([{ path: 'plugin.so', info }], target)
+  ).not.toThrow();
+  expect(() =>
+    validatePluginLibraryDependencies([{ path: loader, info }], target)
+  ).toThrow(/reserved/);
+  expect(() =>
+    validatePluginLibraryDependencies(
+      [{ path: 'plugin.so', info: { ...info, needed: ['ld-foreign.so'] } }],
+      target
+    )
+  ).toThrow(/unpackaged/);
+});
 
 it('loads an ordinary shared dependency and rejects missing or reserved runtime libraries', async () => {
   const root = await mkdtemp(join(tmpdir(), 'muon-dependencies-'));

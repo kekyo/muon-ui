@@ -65,7 +65,7 @@ WIP: そして、muonアプリケーションを作ったら、そのままAndro
 - 扱いやすいNPMパッケージとして提供され、あなたのウェブアプリケーションプロジェクトを簡単にネイティブGUIアプリケーション化出来ます。複雑な構成や変更は不要です。
 - レンダリングを担うブラウザはCEF (Chromium Embedded Framework)です。つまり、ウェブアプリケーションから見た場合は、ChromiumやChromeを使用しているのとほぼ同等です。
 - Viteプラグインに対応しています。更に、ViteのHMRに対応しているため、開発時にプレビューのリアルタイム更新を行えます。
-- Linux (deb) とWindows (NSIS) のパッケージ生成、あるいはポータブル運用に対応しています。
+- Linux（deb、AppImage）とWindows（NSIS）のパッケージ生成、ポータブル運用に対応しています。
 - Androidアプリケーションのビルドも可能です (experimental)。
 - DevToolsを使用出来ます。更にCDP (Chrome DevTools Protocol)に対応しているため、外部からリモートデバッグを行うことが出来ます。
 - プラグインシステムを備えています。また、プラグインの機能は、ホワイトリストフィルターで制限出来ます。
@@ -157,7 +157,7 @@ muonアプリのパッケージ化を行うのも簡単です:
 npx muon pack
 ```
 
-これで、LinuxとWindowsの各パッケージ(deb, nsis形式)が生成され、 `artifacts/` ディレクトリに生成されます。
+LinuxとWindowsの配布物を`artifacts/`へ生成します。Linux向けのAppImageは、CPUごとに一つのファイルとして配布できます。作成方法と実行環境は[muon CLI](./docs/ja/muon-cli-advanced-topics.md#appimageの作成と実行)を参照してください。
 
 ---
 

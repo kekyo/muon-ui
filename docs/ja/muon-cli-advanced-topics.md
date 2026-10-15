@@ -90,3 +90,48 @@ npx muon build --icon icons/app.png --linux-name "My App"
 
 > 注釈: Viteプラグインを使わず、生成済みアセットをmuon CLIで直接収録する場合、CLI自身はvirtual moduleの解決（`import`によるmuonプラグインの参照）を行いません。
 > `validate` モードの `muon:node` を使用するコードはViteで事前にbundleしてください。Viteを介さないアセットからNode.js機能を参照する場合は `simple` モードの `window.muon.node.createNode()`を使用します。
+
+## AppImageの作成と実行
+
+AppImageは、インストーラーを使わずに起動できるLinux向けの単一ファイルです。CPUごとに次のコマンドで作成します。
+
+```bash
+npx muon pack --type appimage --target linux-amd64
+npx muon pack --type appimage --target linux-armhf
+npx muon pack --type appimage --target linux-arm64
+```
+
+生成先は`artifacts/<packageName>-<version>-<target>.AppImage`です。`--type`を省略した場合も、Linuxの生成形式にAppImageを含めます。WindowsとAndroid向けには選択できません。
+
+作成環境にはLinux、Node.js、`binutils`の`readelf`、`file`、通常のシェルとcoreutilsが必要です。Debian・Ubuntuでは`apt-get install binutils file`で不足分を導入できます。amd64のホストからARM向けにも生成できます。固定バージョンのappimagetoolと対象CPU用の起動プログラムは、初回のpackで取得し、SHA-256を検証します。以後は`$XDG_CACHE_HOME/muon/appimage`、未指定なら`~/.cache/muon/appimage`を再利用します。`MUON_APPIMAGE_TOOLS_DIR`で別の保存先を指定できます。[appimagetool](https://github.com/AppImage/appimagetool/tree/1.9.1)、[起動プログラム](https://github.com/AppImage/type2-runtime/tree/20251108)
+
+実行するCPUに合うファイルを配布し、実行権限を付けて起動してください。
+
+```bash
+chmod +x ./my-app-1.0.0-linux-amd64.AppImage
+./my-app-1.0.0-linux-amd64.AppImage
+```
+
+CEFは同梱しません。初回起動では既存のlauncherがCEFを取得し、`node.project`を使うアプリでは必要なNode.jsも取得します。CEF選択ポリシーはdebと共通で、`tested`以外もそのまま使用できます。準備済みランタイムや有効な取得キャッシュは再利用しますが、未取得のバージョンを選ぶ場合や必要なカタログがない場合には通信が必要です。初回からのオフライン起動を保証する形式ではありません。
+
+取得アーカイブの共有キャッシュは`$XDG_CACHE_HOME/muon/`、未指定なら`~/.cache/muon/`に保存します。`MUON_CACHE_DIR`で別の保存先を指定できます。
+
+AppImageの内容は読み取り専用です。CEF、Node.js、起動状態は`$XDG_STATE_HOME/<appId>/runtime/`へ準備し、未指定なら`~/.local/state/<appId>/runtime/`を使います。プロファイルはアプリの`browser.profilePath`設定に従います。AppImageを移動した後は新しい場所から一度直接起動すると、メニューと有効な自動起動の登録先を更新します。自動起動を新たに有効にすることはありません。[保存先と登録の削除](./package-install-location-advanced-topics.md)
+
+通常の起動にはカーネルのFUSE機能と利用権限が必要です。muonが使用する起動プログラムはFUSEのユーザー空間ライブラリを静的に含むため、`libfuse2`を別途導入する必要はありません。FUSEを利用できない環境では展開実行を使ってください。[type2-runtimeの構成](https://github.com/AppImage/type2-runtime/blob/20251108/README.md)、[展開実行](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
+
+```bash
+./my-app-1.0.0-linux-amd64.AppImage --appimage-extract-and-run
+```
+
+メニューや自動起動には元のAppImageのパスを登録し、この引数は保存しません。FUSEを使えないセッションから登録経由で起動する場合は、セッションの環境変数`APPIMAGE_EXTRACT_AND_RUN=1`を設定してください。CEF sandboxのsetuid方式はdeb専用で、AppImageに`--linux-sandbox=setuid`を指定するとpack時にエラーになります。[sandboxの制約](./limitation.md#linuxにおけるcef-sandboxの有効化制限)
+
+### Linuxの実行環境
+
+配布バイナリの基準環境はUbuntu 20.04です。amd64ではUbuntu 20.04コンテナと24.04ホストで検証し、armhf・arm64ではUbuntu 20.04の対象CPU用コンテナをQEMUで実行して確認しています。ARM実機のGPUや音声デバイスの検証を含むものではありません。
+
+GTK・GLibなどの共有ライブラリと必要なモジュールを同梱します。glibc、C++ランタイム、NSS、ALSA、X11・Wayland、GPUドライバーとGBMなどはホスト側を使用します。実行環境にはこれらのデスクトップ用ライブラリ、CA証明書、`curl`が必要です。例えば最小構成のコンテナには、AppImageだけを置いても実行に必要なライブラリがそろいません。
+
+最低要件は、muonをビルドした際のCEFと完成した全ネイティブ部品から算出します。現在の基準ビルドでは、glibc 2.29以上、`libstdc++6`のパッケージ版9以上、GBM 21.1以上などの要求があります。これらの数値だけを満たす任意のディストリビューションでの動作を保証するものではありません。詳細はNPM配布物の`dist/runtime/<target>/linux-dependencies.json.txt`と同じ場所の`linux-dependencies.json`で確認できます。同梱ファイルの取得元とライセンスは`linux-bundle.json`に記録します。
+
+実行時に将来のCEFを選んだ場合も、ビルド時の参照CEFから計算した要件を使用します。そのCEF固有の追加要件は再判定しません。ネイティブプラグインがさらに新しいライブラリを必要とする場合は、対象環境に合わせてプラグインもビルドしてください。[CEFのLinux実行環境](https://chromiumembedded.github.io/cef/branches_and_building.html)

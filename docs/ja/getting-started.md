@@ -238,6 +238,7 @@ npx muon pack --target windows
 npx muon pack --target amd64
 npx muon pack --type tgz
 npx muon pack --type nsis
+npx muon pack --type appimage --target linux-amd64
 npx muon pack --target linux-amd64 --type tgz,deb 
 npx muon pack --target windows-amd64 --type nsis
 ```
@@ -245,13 +246,15 @@ npx muon pack --target windows-amd64 --type nsis
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
   muon Viteプラグインが無い場合や未指定時は、すべての対応ターゲットをパッケージ候補にします。
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定出来ます。
-- `--type` は `zip`, `tgz`, `tar.gz`, `deb`, `nsis` をカンマ区切りまたは複数指定出来ます。
-  省略時は `zip`, `tgz`, `deb`, `nsis` のすべてを対象にします。
+- `--type` は `zip`, `tgz`, `tar.gz`, `deb`, `appimage`, `nsis` をカンマ区切りまたは複数指定出来ます。
+  省略時は `zip`, `tgz`, `deb`, `appimage`, `nsis` のすべてを対象にします。
 - `zip` はWindowsターゲットだけで使用でき、各 `<packageName>/<target>` ディレクトリを含むポータブルZIPです。
 - `tgz` または `tar.gz` はLinuxターゲットだけで使用でき、各 `<packageName>/<target>` ディレクトリを含むポータブルgzip圧縮tarです。
   `tgz` は `tar.gz` の別名で、出力ファイル名は常に `*.tar.gz` です。
   ポータブル配布物にはCEFバイナリとNode.jsランタイム本体を含めず、初回起動時に展開先の `<packageName>/<target>` 直下へCEFと、必要な場合だけ `runtimes/node/` 配下へNode.jsランタイムを準備します。
   プロファイルも同じディレクトリ直下の `profile/` が使われます。
+- `appimage`はLinuxターゲット向けの単一実行ファイルです。`artifacts/<packageName>-<version>-<target>.AppImage`へ出力します。
+  CEFは初回起動時に取得します。作成環境と起動方法は[AppImageの作成と実行](./muon-cli-advanced-topics.md#appimageの作成と実行)を参照してください。
 - `deb` はLinuxターゲットだけで使用でき、実行環境のPATH上に `dpkg-deb` が必要です。
   Debian/Ubuntuでは、 `sudo apt install dpkg-deb` でインストール出来ます。
 - `nsis` はWindowsターゲットだけで使用でき、実行環境のPATH上に `makensis` が必要です。

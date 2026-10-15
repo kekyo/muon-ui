@@ -29,6 +29,11 @@ const linuxSystem = [
   'libgobject-2.0.so.0',
   'libgio-2.0.so.0',
 ];
+const linuxLoaders = {
+  'linux-amd64': 'ld-linux-x86-64.so.2',
+  'linux-armhf': 'ld-linux-armhf.so.3',
+  'linux-arm64': 'ld-linux-aarch64.so.1',
+};
 const windowsSystem = [
   'kernel32.dll',
   'user32.dll',
@@ -100,6 +105,11 @@ export const validatePluginLibraryDependencies = (
         : os === 'windows'
           ? windowsSystem
           : linuxSystem),
+      // ARM stack-protector imports can name the dynamic loader directly.
+      // It is a host dependency, never an ordinary packaged library.
+      ...(target in linuxLoaders
+        ? [linuxLoaders[target as keyof typeof linuxLoaders]]
+        : []),
     ].map(normalize)
   );
   const system = (name: string): boolean =>

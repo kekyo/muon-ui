@@ -96,8 +96,17 @@ import {
   type LinuxDependencyManifest,
 } from "./linux-dependency-manifest.js";
 import { getLinuxAppDependencies } from "./linux-app-dependencies.js";
+import { ensureLinuxAppImageTools } from "./appimage-tools.js";
+import { createLinuxAppDir, createLinuxAppImage } from "./linux-appimage.js";
+import type { LinuxDependencyTarget } from "./linux-dependencies.js";
 
-const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
+const supportedPackTypes = [
+  "zip",
+  "tar.gz",
+  "deb",
+  "appimage",
+  "nsis",
+] as const;
 
 const supportedLinuxSandboxModes = ["disabled", "setuid"] as const;
 
@@ -275,6 +284,7 @@ const packTypeSupportsTarget = (
     (type === "zip" && descriptor.os === "windows") ||
     (type === "tar.gz" && descriptor.os === "linux") ||
     (type === "deb" && descriptor.os === "linux") ||
+    (type === "appimage" && descriptor.os === "linux") ||
     (type === "nsis" && descriptor.os === "windows")
   );
 };
@@ -506,21 +516,9 @@ const writePortableInstallMetadata = async (
   );
 };
 
-const packageDeb = async (
-  root: string,
+const getDistributionLinuxDependencies = async (
   target: MuonBuildTargetResult,
-  metadata: PackageMetadata,
-  artifactsRoot: string,
-  packageBuildRoot: string,
-  environment: NodeJS.ProcessEnv,
-  linuxSandbox: MuonLinuxSandboxMode,
-  progress: MuonProgressCallback | undefined,
-): Promise<MuonPackArtifact | undefined> => {
-  const descriptor = getMuonTargetDescriptor(target.target);
-  if (descriptor.os !== "linux") {
-    throw new Error(`Unsupported deb target: ${target.target}`);
-  }
-  const architecture = descriptor.arch;
+): Promise<string[]> => {
   const manifestPath = join(target.outputPath, "linux-dependencies.json");
   let manifest: LinuxDependencyManifest;
   try {
@@ -539,10 +537,87 @@ const packageDeb = async (
     );
   // t64 packages may satisfy old names through versioned Provides when their
   // ABI is compatible. Do not claim blanket compatibility for 32-bit time_t.
-  const dependencies = await getLinuxAppDependencies(
+  return await getLinuxAppDependencies(
     manifest,
     await collectLinuxElfFiles(target.outputPath),
   );
+};
+
+const packageAppImage = async (
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+  artifactsRoot: string,
+  packageBuildRoot: string,
+  environment: NodeJS.ProcessEnv,
+  allowSkip: boolean,
+  progress: MuonProgressCallback | undefined,
+): Promise<MuonPackArtifact | undefined> => {
+  if (!target.target.startsWith("linux-") || target.linuxDesktop === undefined)
+    throw new Error(`Unsupported AppImage target: ${target.target}`);
+  await getDistributionLinuxDependencies(target);
+  let tools;
+  try {
+    tools = await ensureLinuxAppImageTools(
+      target.target as LinuxDependencyTarget,
+      environment,
+      progress,
+    );
+  } catch (error) {
+    if (
+      allowSkip &&
+      (error as NodeJS.ErrnoException).code ===
+        "MUON_APPIMAGE_TOOLS_UNAVAILABLE"
+    ) {
+      progress?.({
+        phase: "pack",
+        status: `Warning: ${(error as Error).message} Skipping appimage package for ${target.target}.`,
+      });
+      return undefined;
+    }
+    throw error;
+  }
+  const directory = join(
+    packageBuildRoot,
+    "appimage",
+    `${metadata.packageName}-${target.target}.AppDir`,
+  );
+  await createLinuxAppDir(
+    target.outputPath,
+    basename(target.launcherPath),
+    target.linuxDesktop,
+    directory,
+  );
+  const output = join(
+    artifactsRoot,
+    `${metadata.packageName}-${metadata.version}-${target.target}.AppImage`,
+  );
+  progress?.({ phase: "pack", status: "Running appimagetool" });
+  await createLinuxAppImage(
+    directory,
+    output,
+    tools,
+    metadata.version,
+    environment,
+  );
+  return { type: "appimage", target: target.target, path: output };
+};
+
+const packageDeb = async (
+  root: string,
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+  artifactsRoot: string,
+  packageBuildRoot: string,
+  environment: NodeJS.ProcessEnv,
+  linuxSandbox: MuonLinuxSandboxMode,
+  progress: MuonProgressCallback | undefined,
+): Promise<MuonPackArtifact | undefined> => {
+  const descriptor = getMuonTargetDescriptor(target.target);
+  if (descriptor.os !== "linux") {
+    throw new Error(`Unsupported deb target: ${target.target}`);
+  }
+  const architecture = descriptor.arch;
+  const dependencies = await getDistributionLinuxDependencies(target);
   const packageRoot = join(
     packageBuildRoot,
     "deb",
@@ -1341,6 +1416,16 @@ export const packDesktopMuonApp = async (
           packageBuildRoot,
           environment,
           linuxSandbox,
+          progress,
+        );
+      } else if (type === "appimage") {
+        artifact = await packageAppImage(
+          target,
+          metadata,
+          artifactsRoot,
+          packageBuildRoot,
+          environment,
+          options.types === undefined,
           progress,
         );
       } else {

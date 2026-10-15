@@ -20,7 +20,7 @@ import {
 } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
 
@@ -43,6 +43,7 @@ import {
 } from "vitest";
 
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "../cef/prepare.js";
+import { createLinuxAppDir } from "../cef/linux-appimage.js";
 import {
   createMuonLauncherEmbeddedConfigSlot,
   embedMuonConfigInLauncherFile,
@@ -3987,6 +3988,78 @@ requestedAtUnix=123
             pathname === `/${artifact.version}/${artifact.fileName}`,
         ),
     ).toHaveLength(1);
+  });
+
+  it("prepares and launches from a read-only AppDir using writable user state", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory("muon-appdir-state-");
+    const dataHome = await createTemporaryDirectory("muon-appdir-data-");
+    const root = await createTemporaryDirectory("muon-appdir-");
+    const directory = join(root, "日本語 ' sample.AppDir");
+    const appId = "scope.appimage-readonly";
+    const launcher = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
+    });
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      "#!/bin/sh\npwd\nprintf '%s\\n' \"$@\"\n",
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    const icon = join(fixture.muonPath, "icon.png");
+    await writeFile(icon, "icon fixture");
+    await createLinuxAppDir(
+      fixture.muonPath,
+      basename(launcher),
+      {
+        desktopId: appId,
+        name: "Read-only sample",
+        comment: "",
+        categories: ["Utility"],
+        startupNotify: false,
+        iconPath: icon,
+        iconFileName: "icon.png",
+        configFileName: "muon-desktop.json",
+      },
+      directory,
+    );
+    const protect = async (path: string, readonly: boolean): Promise<void> => {
+      for (const entry of await readdir(path, { withFileTypes: true })) {
+        const child = join(path, entry.name);
+        if (entry.isDirectory()) await protect(child, readonly);
+        else if (!entry.isSymbolicLink()) {
+          const mode = (await stat(child)).mode;
+          await chmod(child, readonly ? mode & ~0o222 : mode | 0o200);
+        }
+      }
+      await chmod(path, readonly ? 0o555 : 0o755);
+    };
+    await protect(directory, true);
+    const environment = {
+      ...process.env,
+      MUON_CACHE_DIR: fixture.cacheDir,
+      MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      XDG_STATE_HOME: stateHome,
+      XDG_DATA_HOME: dataHome,
+    };
+    const runtime = getLinuxPortableStateRuntimePath(stateHome, appId);
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { stdout } = await execFileAsync(
+          join(directory, "AppRun"),
+          ["two words", "日本語"],
+          { cwd: root, env: environment },
+        );
+        expect(stdout).toBe(`${runtime}\ntwo words\n日本語\n`);
+        await expect(
+          access(join(runtime, "libcef.so")),
+        ).resolves.toBeUndefined();
+        await expect(
+          access(join(directory, "usr/lib/muon/libcef.so")),
+        ).rejects.toThrow();
+      }
+    } finally {
+      await protect(directory, false);
+    }
   });
 
   it("launchers a portable runtime in the user state directory and forwards the core exit code", async () => {

@@ -309,3 +309,17 @@ amd64では、Ubuntu 20.04のコンテナとUbuntu 24.04のホストのそれぞ
 依存解析とpackの51件、buildとpackの90件、prepareの84件のテストを実行した。新規モジュール、追加プラグインの最低要件、システムパッケージ内部の依存の扱い、キャッシュの配置変換について、修正前の失敗と修正後の成功を確認している。全体テストとARMでのGUI実行は後続段階で実施する。
 
 amd64・armhf・arm64のdebを生成し、各対象のUbuntu 20.04環境で`apt-get -s install`による依存解決が成功した。3対象のビルド、最低要件の根拠の記録、debの依存解決、基準環境でのサンプル起動という段階2の完了条件を満たした。
+
+### 段階3　AppImageの生成と実行時CEF取得
+
+公開の配布形式とCLIへ`appimage`を追加した。形式を省略した場合もLinuxの生成対象に含める。AppDirの`usr/lib/muon`へ通常のbuild成果物を配置し、`AppRun`からlauncherへ接続する。配布情報は`type: appimage`、`runtimeMode: user`とし、既存のユーザー領域への準備処理を使う。CEFやNode.jsはAppImageへ収録しない。debと同じ依存情報でアプリ固有のELFも検査する。
+
+生成にはappimagetool 1.9.1、起動用プログラムにはtype2-runtime 20251108を使用する。ホストCPU用のツールと出力CPU用の起動プログラムを分け、両方のSHA-256を検証する。初回は公式配布元から取得し、`XDG_CACHE_HOME`または`~/.cache`の`muon/appimage`以下へ保存する。保存先は`MUON_APPIMAGE_TOOLS_DIR`で変更できる。取得済みなら通信せず再利用し、改変されたキャッシュは拒否する。[appimagetool 1.9.1](https://github.com/AppImage/appimagetool/releases/tag/1.9.1)、[type2-runtime 20251108](https://github.com/AppImage/type2-runtime/releases/tag/20251108)
+
+appimagetoolには`--runtime-file`で検証済みの起動プログラムを渡し、最新版の自動取得を使わない。生成ツール自体は展開実行するため、pack時にFUSEは不要である。同時に複数のAppImageを生成できるよう、ツールを展開する一時ディレクトリは呼出しごとに分けた。`file`などのホストツールが不足する場合は導入方法を表示する。AppImageを明示したpackでは不足をエラーにし、形式を省略したpackでは警告とともにAppImage生成を省略する。[appimagetoolの引数](https://github.com/AppImage/appimagetool/blob/1.9.1/README.md)、[展開実行の実装](https://github.com/AppImage/type2-runtime/blob/20251108/src/runtime/runtime.c)
+
+amd64のサンプルから約14MiBのAppImageを生成した。CEF未取得の状態で通信を遮断すると取得が失敗し、通信を戻して同じキャッシュから再起動するとCEFの取得と画面表示が成功した。さらに、取得済みアーカイブのキャッシュを使い、別の空の状態ディレクトリで通信を遮断したまま起動した場合も、実行環境を準備して画面を表示できた。CEFポリシーには既存の`tested`を指定し、取得方式は変更していない。
+
+通常のFUSE起動で、AppImageのマウントが読み取り専用であることと、CEF・準備状態・プロファイルがユーザーの状態ディレクトリへ保存されることを確認した。Playwright MCPでサンプル画面、日本語のファイル書込み・改名・読込みを確認し、画面キャプチャも目視で確認した。記録は`.deps/plan10-appimage/`に保存した。
+
+AppRunの引数転送、読み取り専用AppDirからの準備と再起動、複数AppImageの同時生成、CPUと形式の組合せ、setuid指定の拒否、ツールのハッシュ検証をテストした。packとツール取得の41件、および読み取り専用AppDirの起動テストが成功した。単一AppImageからの表示、マウント外への準備、キャッシュ再利用、通信失敗後の再試行という段階3の完了条件を満たした。メニュー・自動起動とARMでの実行確認は段階4で扱う。

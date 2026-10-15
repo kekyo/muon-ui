@@ -175,6 +175,63 @@ static bool RunLaunchSourceParsingTest() {
                 "last launch source should win");
 }
 
+static bool RunAppImageRelocationTest(
+    const std::filesystem::path& test_directory) {
+  const auto user_config = test_directory / "appimage-config";
+  SetEnvironment("XDG_CONFIG_HOME", user_config);
+  SetEnvironment("XDG_CONFIG_DIRS", test_directory / "empty-system-config");
+  SetEnvironment("MUON_LAUNCHER_APP_ID", "scope.appimage");
+  const auto original = test_directory / "日本語 original.AppImage";
+  SetEnvironment("MUON_LAUNCHER_APPIMAGE", original);
+  MuonAutostartOptions options;
+  std::string error;
+  if (!Expect(CreateDefaultMuonAutostartOptions(&options, &error), error) ||
+      !Expect(options.executable_path == original,
+              "AppImage autostart must use the distribution path") ||
+      !Expect(SetMuonAutostart(options, true, &error), error)) return false;
+  const auto desktop = user_config / "autostart" / "scope.appimage.desktop";
+  if (!Expect(std::filesystem::exists(desktop),
+              "AppImage autostart must use a stable application ID")) return false;
+  {
+    std::ofstream output(desktop, std::ios::app);
+    output << "OnlyShowIn=GNOME;\n";
+  }
+
+  const auto moved = test_directory / "renamed 日本語 $ %f \\ \".AppImage";
+  SetEnvironment("MUON_LAUNCHER_APPIMAGE", moved);
+  if (!Expect(CreateDefaultMuonAutostartOptions(&options, &error), error) ||
+      !Expect(RefreshMuonAppImageAutostart(options, &error), error) ||
+      !ExpectStatus(options, kMuonAutostartStatusEnabled,
+                    "relocated AppImage must remain enabled")) return false;
+  std::ifstream input(desktop);
+  const std::string content((std::istreambuf_iterator<char>(input)), {});
+  if (!Expect(content.find("original.AppImage") == std::string::npos,
+              "relocation must replace the old command") ||
+      !Expect(content.find("renamed 日本語") != std::string::npos,
+              "relocation must register the new command") ||
+      !Expect(content.find("OnlyShowIn=GNOME;") != std::string::npos,
+              "relocation must preserve user-added desktop restrictions")) return false;
+
+  const auto hidden = content + "Hidden=true\n";
+  if (!Expect(WriteFile(desktop, hidden), "write Hidden entry") ||
+      !Expect(RefreshMuonAppImageAutostart(options, &error), error) ||
+      !ExpectStatus(options, kMuonAutostartStatusDisabled,
+                    "refresh must preserve a disabled registration")) return false;
+  const auto foreign = "[Desktop Entry]\nType=Application\nName=foreign\nExec=/foreign\n";
+  if (!Expect(WriteFile(desktop, foreign), "write foreign entry") ||
+      !Expect(RefreshMuonAppImageAutostart(options, &error), error)) return false;
+  std::ifstream foreign_input(desktop);
+  const std::string actual((std::istreambuf_iterator<char>(foreign_input)), {});
+  if (!Expect(actual == foreign, "refresh must preserve foreign registrations") ||
+      !Expect(SetMuonAutostart(options, false, &error), error) ||
+      !Expect(RefreshMuonAppImageAutostart(options, &error), error) ||
+      !Expect(!std::filesystem::exists(desktop),
+              "refresh must not enable autostart implicitly")) return false;
+  unsetenv("MUON_LAUNCHER_APPIMAGE");
+  unsetenv("MUON_LAUNCHER_APP_ID");
+  return true;
+}
+
 int main() {
   const auto test_directory = CreateTestDirectory();
   if (!Expect(!test_directory.empty(), "failed to create test directory")) {
@@ -186,7 +243,8 @@ int main() {
       RunXdgAutostartRoundtripTest(test_directory, "none") &&
       RunXdgSystemShadowTest(test_directory) &&
       RunUnknownLaunchSourceTest(test_directory) &&
-      RunLaunchSourceParsingTest();
+      RunLaunchSourceParsingTest() &&
+      RunAppImageRelocationTest(test_directory);
 
   std::error_code error;
   std::filesystem::remove_all(test_directory, error);

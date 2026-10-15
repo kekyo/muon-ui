@@ -562,7 +562,8 @@ beforeAll(async () => {
   );
   prepareExecutablePath = binaries.prepareExecutablePath;
   launcherExecutablePath = binaries.launcherExecutablePath;
-});
+  // Switching between the baseline compiler and host GCC rebuilds native dependencies.
+}, 180000);
 
 afterAll(async () => {
   for (const directory of suiteCleanupDirectories.splice(0)) {
@@ -4062,6 +4063,75 @@ requestedAtUnix=123
     }
   });
 
+  it("registers the original AppImage across relocation and clears inherited AppImage context for other installs", async () => {
+    const fixture = await createPrepareFixture();
+    const root = await createTemporaryDirectory("muon-appimage-desktop-");
+    const stateHome = join(root, "state");
+    const dataHome = join(root, "data");
+    const appId = "scope.appimage-desktop";
+    const launcher = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
+    });
+    await writeLinuxDesktopFiles(fixture.muonPath, {
+      desktopId: appId,
+      name: "AppImage sample",
+      comment: "",
+      categories: ["Utility"],
+      startupNotify: false,
+    });
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      JSON.stringify({ type: "appimage", runtimeMode: "user" }),
+    );
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      '#!/bin/sh\nprintf "%s\\n" "${MUON_LAUNCHER_APPIMAGE-unset}"\n',
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    const environment = {
+      ...process.env,
+      MUON_CACHE_DIR: fixture.cacheDir,
+      MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      XDG_STATE_HOME: stateHome,
+      XDG_DATA_HOME: dataHome,
+      MUON_LAUNCHER_APPIMAGE: "/inherited/foreign.AppImage",
+    };
+    const desktop = getUserDesktopEntryPath(dataHome, appId);
+    for (const name of [
+      '日本語 " $ % sample.AppImage',
+      "移動後 \\ %f.AppImage",
+    ]) {
+      const original = join(root, name);
+      await writeFile(original, '#!/bin/sh\nprintf "original AppImage\\n"\n');
+      await chmod(original, 0o755);
+      const { stdout } = await execFileAsync(launcher, [], {
+        env: { ...environment, APPIMAGE: original },
+      });
+      expect(stdout).toBe(`${original}\n`);
+      const entry = await readFile(desktop, "utf8");
+      expect(entry).toContain(
+        `Icon=${getLinuxPortableStateRuntimePath(stateHome, appId)}/muon-desktop-icon.png`,
+      );
+      try {
+        const launched = await execFileAsync("gio", ["launch", desktop], {
+          env: environment,
+        });
+        expect(launched.stdout).toBe("original AppImage\n");
+      } catch (error) {
+        throw new Error(`${String(error)}\n${entry}`, { cause: error });
+      }
+    }
+
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      JSON.stringify({ type: "portable", runtimeMode: "in-place" }),
+    );
+    const { stdout } = await execFileAsync(launcher, [], {
+      env: { ...environment, APPIMAGE: "/inherited/foreign.AppImage" },
+    });
+    expect(stdout).toBe("unset\n");
+  });
+
   it("launchers a portable runtime in the user state directory and forwards the core exit code", async () => {
     const fixture = await createPrepareFixture();
     const stateHome = await createTemporaryDirectory("muon-launcher-state-");
@@ -4717,79 +4787,93 @@ exit 17
     });
   });
 
-  it("uses embedded defaultVersionPolicy when launcher ini omits versionPolicy", async () => {
-    const compatible = await createFakeCefArchive(createTemporaryDirectory, {
-      archiveFileName: "cef-launcher-compatible.tar.bz2",
-      archiveRootName: "cef_binary_launcher_compatible_linux64_minimal",
-      libcefContent: "launcher compatible cef library\n",
-    });
-    const fixture = await createPrepareFixture(undefined, [
-      {
-        version: "launcher-compatible",
-        chromiumVersion: "199.0.0.0",
-        archive: compatible,
-      },
-      {
-        version: "fake-cef",
-        chromiumVersion: "100.0.0.0",
-        archive: getEmbeddedCefArchive(),
-      },
-    ]);
-    await writeLauncherIni(
-      fixture.muonPath,
-      `[runtime]
+  it.each(["standalone", "appimage"])(
+    "uses embedded defaultVersionPolicy for %s when launcher ini omits versionPolicy",
+    async (installType) => {
+      const compatible = await createFakeCefArchive(createTemporaryDirectory, {
+        archiveFileName: "cef-launcher-compatible.tar.bz2",
+        archiveRootName: "cef_binary_launcher_compatible_linux64_minimal",
+        libcefContent: "launcher compatible cef library\n",
+      });
+      const fixture = await createPrepareFixture(undefined, [
+        {
+          version: "launcher-compatible",
+          chromiumVersion: "199.0.0.0",
+          archive: compatible,
+        },
+        {
+          version: "fake-cef",
+          chromiumVersion: "100.0.0.0",
+          archive: getEmbeddedCefArchive(),
+        },
+      ]);
+      if (installType === "appimage") {
+        await writeFile(
+          join(fixture.muonPath, "muon-install.json"),
+          JSON.stringify({ type: "appimage", runtimeMode: "user" }),
+        );
+      }
+      await writeLauncherIni(
+        fixture.muonPath,
+        `[runtime]
 catalogRefreshIntervalSeconds=604800
 
 [cef]
 lastCatalogUpdateUnix=0
 `,
-    );
-    const stateHome = await createTemporaryDirectory("muon-launcher-state-");
-    const appId = "compat.sample";
-    const stateRuntimePath = getLinuxPortableStateRuntimePath(stateHome, appId);
-    const outputDirectory = await createTemporaryDirectory(
-      "muon-launcher-output-",
-    );
-    const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
-    await writeFile(
-      join(fixture.muonPath, "muon-core"),
-      `#!/usr/bin/env bash
+      );
+      const stateHome = await createTemporaryDirectory("muon-launcher-state-");
+      const appId = "compat.sample";
+      const stateRuntimePath = getLinuxPortableStateRuntimePath(
+        stateHome,
+        appId,
+      );
+      const outputDirectory = await createTemporaryDirectory(
+        "muon-launcher-output-",
+      );
+      const escapedOutput = outputDirectory.replaceAll("'", "'\\''");
+      await writeFile(
+        join(fixture.muonPath, "muon-core"),
+        `#!/usr/bin/env bash
 set -euo pipefail
 pwd > '${escapedOutput}/cwd.txt'
 exit 17
 `,
-    );
-    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
-    const appLauncherPath = await writeEmbeddedLauncher(fixture, {
-      launcher: {
-        appId,
-        defaultVersionPolicy: "compat-latest",
-      },
-    });
-
-    await expect(
-      execFileAsync(appLauncherPath, [], {
-        cwd: fixture.projectPath,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          MUON_CACHE_DIR: fixture.cacheDir,
-          MUON_CEF_CATALOG_URL: fixture.catalogPath,
-          XDG_STATE_HOME: stateHome,
+      );
+      await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+      const appLauncherPath = await writeEmbeddedLauncher(fixture, {
+        launcher: {
+          appId,
+          defaultVersionPolicy: "compat-latest",
         },
-      }),
-    ).rejects.toMatchObject({ code: 17 });
+      });
 
-    await expect(
-      readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
-    ).resolves.toBe("launcher compatible cef library\n");
-    await expect(access(join(fixture.muonPath, "libcef.so"))).rejects.toThrow();
-    await expect(
-      readFile(join(stateRuntimePath, "muon-launcher.ini"), "utf8"),
-    ).resolves.toMatch(
-      /^\[runtime\]\ncatalogRefreshIntervalSeconds=604800\n\n\[cef\]\nlastCatalogUpdateUnix=\d+\n\n\[node\]\nlastCatalogUpdateUnix=0\n\n\[update\]\nrequested=false\nrequestedAtUnix=0\n$/,
-    );
-  });
+      await expect(
+        execFileAsync(appLauncherPath, [], {
+          cwd: fixture.projectPath,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MUON_CACHE_DIR: fixture.cacheDir,
+            MUON_CEF_CATALOG_URL: fixture.catalogPath,
+            XDG_STATE_HOME: stateHome,
+          },
+        }),
+      ).rejects.toMatchObject({ code: 17 });
+
+      await expect(
+        readFile(join(stateRuntimePath, "libcef.so"), "utf8"),
+      ).resolves.toBe("launcher compatible cef library\n");
+      await expect(
+        access(join(fixture.muonPath, "libcef.so")),
+      ).rejects.toThrow();
+      await expect(
+        readFile(join(stateRuntimePath, "muon-launcher.ini"), "utf8"),
+      ).resolves.toMatch(
+        /^\[runtime\]\ncatalogRefreshIntervalSeconds=604800\n\n\[cef\]\nlastCatalogUpdateUnix=\d+\n\n\[node\]\nlastCatalogUpdateUnix=0\n\n\[update\]\nrequested=false\nrequestedAtUnix=0\n$/,
+      );
+    },
+  );
 
   it("rejects an invalid embedded defaultVersionPolicy during launcher", async () => {
     const fixture = await createPrepareFixture();

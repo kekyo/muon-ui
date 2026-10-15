@@ -26,6 +26,7 @@
 #include "browser/muon_native_wheel_forwarder.h"
 #include "browser/muon_title_bar.h"
 #include "config/muon_cef_settings.h"
+#include "config/muon_autostart.h"
 #include "config/muon_config.h"
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
@@ -91,6 +92,12 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   if (exit_code >= 0) {
     ShutdownMuonLogger();
     return exit_code;
+  }
+
+  MuonAutostartOptions autostart_options;
+  if (!CreateDefaultMuonAutostartOptions(&autostart_options, &error_message) ||
+      !RefreshMuonAppImageAutostart(autostart_options, &error_message)) {
+    std::fprintf(stderr, "muon autostart update failed: %s\n", error_message.c_str());
   }
 
   auto settings =

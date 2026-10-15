@@ -323,3 +323,23 @@ amd64のサンプルから約14MiBのAppImageを生成した。CEF未取得の�
 通常のFUSE起動で、AppImageのマウントが読み取り専用であることと、CEF・準備状態・プロファイルがユーザーの状態ディレクトリへ保存されることを確認した。Playwright MCPでサンプル画面、日本語のファイル書込み・改名・読込みを確認し、画面キャプチャも目視で確認した。記録は`.deps/plan10-appimage/`に保存した。
 
 AppRunの引数転送、読み取り専用AppDirからの準備と再起動、複数AppImageの同時生成、CPUと形式の組合せ、setuid指定の拒否、ツールのハッシュ検証をテストした。packとツール取得の41件、および読み取り専用AppDirの起動テストが成功した。単一AppImageからの表示、マウント外への準備、キャッシュ再利用、通信失敗後の再試行という段階3の完了条件を満たした。メニュー・自動起動とARMでの実行確認は段階4で扱う。
+
+### 段階4　デスクトップ連携と対象別の実行確認
+
+launcherは、配布情報がAppImageの場合に限り`APPIMAGE`から元ファイルの絶対パスを解決する。メニューの起動先にはこのパスを使い、アイコンには状態ディレクトリへコピーしたファイルを使う。AppDirを手動で展開して直接起動した場合など、元のAppImageが分からない場合は従来の状態ディレクトリのlauncherを参照する。
+
+自動起動にはlauncherが確定した専用の環境情報を渡す。通常の配布形式ではこの情報を消去し、親プロセスが使っていた別のAppImageを誤って登録しない。登録ファイル名にはアプリIDを使うため、AppImageを移動・改名しても同じ登録を更新できる。起動時に更新するのは、同じアプリIDを持ち、有効になっているmuonの登録だけである。登録がない場合、自動起動を無効にした場合、別のアプリが作った場合は変更しない。更新時には`OnlyShowIn`など利用者が加えた設定も保持する。[自動起動の仕様](https://specifications.freedesktop.org/autostart/latest/)
+
+デスクトップ情報の`Exec`では、値のエスケープと引数の引用を別々に行う。空白、日本語、引用符、バックスラッシュ、ドル記号、パーセント記号を含むパスから、GIOを使って実際に起動するテストを追加した。GIOはパーセント記号の展開前に実行ファイルを検査するため、その文字を含むパスでは`/usr/bin/env`を経由する。シェルへのコマンド文字列の引渡しは行わない。[Execの仕様](https://specifications.freedesktop.org/desktop-entry/latest/exec-variables.html)、[GIOの実装](https://github.com/GNOME/glib/blob/2.74.7/gio/gdesktopappinfo.c)
+
+amd64では、共有ライブラリに依存するSDKの`vendor_counter`プラグインとNode.jsを含むサンプルをAppImageにした。Ubuntu 24.04で通常起動し、Playwright MCPからプラグインの計算結果42とNode.jsのCPU識別子`x64`を確認した。終了してマウントがなくなった後、メニューの登録から再起動できた。さらに日本語を含む別の場所へ移動・改名し、`--appimage-extract-and-run`で起動すると、メニューと自動起動の参照先が更新された。終了後に自動起動の登録から起動し、最後にAPIで無効にできることも確認した。アイコンの参照先は全過程でマウント外にあった。
+
+ARM向けプラグインの検証では、スタック保護用シンボルをOSの動的ローダーから参照するバイナリを、SDKが同梱漏れと判定していた。対象CPUのローダーをホスト側の依存として認め、プラグインへのローダー同梱は拒否するように修正した。検査の失敗と修正後の成功を確認し、通常の共有依存を持つプラグインを3対象へパッケージできた。
+
+armhfの展開実行では、32bitのファイル情報APIが大きなinode番号を扱えず、AppDirのファイルを列挙できない問題も見つかった。builderのコンパイルで`_FILE_OFFSET_BITS=64`を指定するように変更した。3GiBの疎なファイルのサイズ取得とディレクトリのコピーを検証するテストを追加し、armhfで修正前の`EOVERFLOW`と修正後の成功を確認した。テストは通常のbuilderテストにも組み込んだ。[ファイル情報APIの切替](https://man7.org/linux/man-pages/man7/feature_test_macros.7.html)
+
+ARMの試行にはUbuntu 20.04の対象CPU用コンテナとQEMUのユーザーモードエミュレーションを使っている。この環境のbinfmt_misc設定はAppImage固有のヘッダーバイトを認識しないため、AppImageにはQEMUを明示している。arm64ではGPUプロセスの起動に失敗したため、コンテナのseccomp制限を外し、`--no-zygote --in-process-gpu`を付けて試行した。この条件で画面表示、共有依存を持つプラグイン、Node.js、ファイルの書込み・改名・読込みが成功した。画面キャプチャも目視で確認した。これらは検証環境の起動条件であり、配布物の既定オプションには追加していない。[binfmt_miscの照合規則](https://docs.kernel.org/admin-guide/binfmt-misc.html)、[Chromiumの起動オプション](https://github.com/chromium/chromium/blob/147.0.7727.138/content/public/common/content_switches.cc)
+
+デスクトップ連携の追加後、prepareの86件が成功した。`compat-latest`を指定したAppImageでも既存の候補選択を使うことを追加で確認し、このテストを含むprepareのケース数は87件となった。基準環境のコンパイラとホストGCCの切替による依存物の再ビルドが60秒を超えたため、このテストファイルの初期化だけは180秒まで待つようにした。自動起動のネイティブテストでは、移動後の更新、無効状態の保持、他の登録の保持を確認した。
+
+armhfの修正後のAppImage実行と、段階4全体の完了条件の照合を続けている。対象別の生成物、起動記録、MCPの結果、画面キャプチャは`.deps/plan10-appimage/`に保存している。

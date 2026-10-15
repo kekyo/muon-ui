@@ -5,6 +5,9 @@
 
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #endif
 
 #include <errno.h>
@@ -39,6 +42,7 @@
 #define MUON_DESKTOP_ICON_FILE_NAME "muon-desktop-icon.png"
 #define MUON_INSTALL_CONFIG_FILE_NAME "muon-install.json"
 #define MUON_LAUNCHER_APP_ID_ENVIRONMENT "MUON_LAUNCHER_APP_ID"
+#define MUON_LAUNCHER_APPIMAGE_ENVIRONMENT "MUON_LAUNCHER_APPIMAGE"
 #define MUON_CEF_SANDBOX_ENVIRONMENT "MUON_CEF_SANDBOX"
 #define MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT "--muon-launch-from=normal"
 
@@ -275,6 +279,7 @@ typedef struct {
 
 typedef struct {
   int is_deb;
+  int is_appimage;
   int is_portable;
   int is_system_setuid;
   char *launcher_path;
@@ -433,8 +438,8 @@ static char *quote_desktop_exec_argument(const char *value) {
   }
   for (const char *cursor = value; *cursor != '\0'; cursor += 1) {
     if (*cursor == '"' || *cursor == '\\' || *cursor == '$' ||
-        *cursor == '`') {
-      if (string_builder_append_char(&builder, '\\') != 0) {
+        *cursor == '`' || *cursor == '%') {
+      if (string_builder_append_char(&builder, *cursor == '%' ? '%' : '\\') != 0) {
         string_builder_free(&builder);
         return NULL;
       }
@@ -448,7 +453,10 @@ static char *quote_desktop_exec_argument(const char *value) {
     string_builder_free(&builder);
     return NULL;
   }
-  return string_builder_take(&builder);
+  char *quoted = string_builder_take(&builder);
+  char *escaped = quoted == NULL ? NULL : escape_desktop_string(quoted);
+  free(quoted);
+  return escaped;
 }
 
 static char *create_desktop_exec_command(const char *launcher_path) {
@@ -456,11 +464,14 @@ static char *create_desktop_exec_command(const char *launcher_path) {
   if (quoted_launcher == NULL) {
     return NULL;
   }
-  const size_t size = strlen(quoted_launcher) + 1 +
+  // GIO validates argv[0] before expanding %% into a literal percent sign.
+  // Keep such paths in argv[1] so its executable lookup can find env first.
+  const char *prefix = strchr(launcher_path, '%') == NULL ? "" : "/usr/bin/env ";
+  const size_t size = strlen(prefix) + strlen(quoted_launcher) + 1 +
                       strlen(MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT) + 1;
   char *result = (char *)malloc(size);
   if (result != NULL) {
-    snprintf(result, size, "%s %s", quoted_launcher,
+    snprintf(result, size, "%s%s %s", prefix, quoted_launcher,
              MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT);
   }
   free(quoted_launcher);
@@ -738,6 +749,7 @@ static int read_desktop_config(const char *runtime_dir,
 
 static void install_config_init(MuonInstallConfig *config) {
   config->is_deb = 0;
+  config->is_appimage = 0;
   config->is_portable = 0;
   config->is_system_setuid = 0;
   config->launcher_path = NULL;
@@ -784,6 +796,28 @@ static int read_install_config(const char *runtime_dir, MuonInstallConfig *confi
       return -1;
     }
     config->is_portable = 1;
+    yyjson_doc_free(document);
+    return 0;
+  }
+  if (strcmp(yyjson_get_str(type), "appimage") == 0) {
+    yyjson_val *runtime_mode = yyjson_obj_get(root, "runtimeMode");
+    if (!yyjson_is_str(runtime_mode) ||
+        strcmp(yyjson_get_str(runtime_mode), "user") != 0) {
+      yyjson_doc_free(document);
+      fprintf(stderr, "muon-launcher: AppImage runtimeMode must be user.\n");
+      return -1;
+    }
+    config->is_appimage = 1;
+    const char *original = getenv("APPIMAGE");
+    // A manually extracted AppDir has no original AppImage to register.
+    if (original != NULL && original[0] != '\0') {
+      if (original[0] == '/') config->launcher_path = realpath(original, NULL);
+      if (config->launcher_path == NULL) {
+        yyjson_doc_free(document);
+        fprintf(stderr, "muon-launcher: cannot resolve the original AppImage.\n");
+        return -1;
+      }
+    }
     yyjson_doc_free(document);
     return 0;
   }
@@ -883,7 +917,9 @@ static int update_linux_desktop_entry(const char *runtime_dir,
     }
   } else {
     const char *launcher_name = file_name_from_path(launcher_path);
-    char *runtime_launcher_path = muon_path_join(runtime_dir, launcher_name);
+    char *runtime_launcher_path = install.is_appimage && install.launcher_path != NULL
+                                      ? duplicate_string(install.launcher_path)
+                                      : muon_path_join(runtime_dir, launcher_name);
     char *icon_path = runtime_launcher_path == NULL
                           ? NULL
                           : muon_path_join(runtime_dir, desktop.icon_file_name);
@@ -905,6 +941,7 @@ static int update_linux_desktop_entry(const char *runtime_dir,
 #else
 typedef struct {
   int is_deb;
+  int is_appimage;
   int is_portable;
   int is_system_setuid;
   char *launcher_path;
@@ -1045,7 +1082,8 @@ static char **create_core_argv(const char *core_path, int argc, char **argv) {
 }
 
 static int launch_core(const char *runtime_dir, const char *core_path,
-                       const char *app_id, int enable_cef_sandbox, int argc,
+                       const char *app_id, const char *appimage_path,
+                       int enable_cef_sandbox, int argc,
                        char **argv) {
   char **core_argv = create_core_argv(core_path, argc, argv);
   if (core_argv == NULL) {
@@ -1053,6 +1091,7 @@ static int launch_core(const char *runtime_dir, const char *core_path,
     return 1;
   }
 #ifdef _WIN32
+  (void)appimage_path;
   if (_chdir(runtime_dir) != 0) {
     perror(runtime_dir);
     free(core_argv);
@@ -1093,6 +1132,12 @@ static int launch_core(const char *runtime_dir, const char *core_path,
     return 1;
   }
   if (child == 0) {
+    if (appimage_path == NULL) {
+      unsetenv(MUON_LAUNCHER_APPIMAGE_ENVIRONMENT);
+    } else if (setenv(MUON_LAUNCHER_APPIMAGE_ENVIRONMENT, appimage_path, 1) != 0) {
+      perror(MUON_LAUNCHER_APPIMAGE_ENVIRONMENT);
+      _exit(1);
+    }
     char *module_root = muon_path_join(runtime_dir, "linux");
     if (module_root == NULL) _exit(1);
     if (muon_path_exists(module_root)) {
@@ -1290,6 +1335,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "muon-launcher: failed to update desktop entry.\n");
     }
     exit_code = launch_core(runtime_dir, core_path, app_id,
+                            install.is_appimage ? install.launcher_path : NULL,
                             install.is_system_setuid, argc, argv);
   } while (exit_code == MUON_RECYCLE_EXIT_CODE);
   free(launcher_path);

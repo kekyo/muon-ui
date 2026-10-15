@@ -276,7 +276,6 @@ build_windows_targets() {
 stage_targets() {
   local -a arches=("$@")
   printf 'Building JavaScript package entries\n'
-  npm run build:js --workspace muon-plugin-sdk
   npm run build:js --workspace muon-ui
   npm run build --workspace muon-android
   node ui/scripts/stage-android-runtime.mjs ui/dist/android
@@ -407,6 +406,9 @@ build_dist() {
   MUON_CORE_VERSION_HEADER="${MUON_CORE_VERSION_HEADER_HOST}"
 
   assert_native_dependency_checkouts
+
+  printf 'Building plugin SDK JavaScript entries\n'
+  npm run build:js --workspace muon-plugin-sdk
 
   printf 'Building shared Node bridge\n'
   npm run build --workspace muon-node

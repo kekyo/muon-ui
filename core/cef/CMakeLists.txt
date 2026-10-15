@@ -151,6 +151,15 @@ if(MINGW)
 endif()
 
 find_package(CEF REQUIRED)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Use paths relative to each deployed binary instead of the working directory.
+  list(REMOVE_ITEM CEF_LINKER_FLAGS "-Wl,-rpath,.")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+      CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
+    # GCC 10 requires this switch in addition to -std=c++20.
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>")
+  endif()
+endif()
 find_package(Threads REQUIRED)
 
 if(NOT MUON_CEF_API_VERSION)
@@ -1188,6 +1197,15 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(${APP_NAME} PRIVATE
     muon_executor_supervisor_protocol
     )
+  # The payload is copied into a per-user runtime and may be relocated again.
+  # Private libraries share CEF's $ORIGIN search path beside libcef.so.
+  foreach(MUON_RUNTIME_TARGET IN ITEMS
+      ${APP_NAME} muon_ui cardio_shared muon_executor_supervisor)
+    set_target_properties(${MUON_RUNTIME_TARGET} PROPERTIES
+      BUILD_WITH_INSTALL_RPATH ON
+      INSTALL_RPATH "\$ORIGIN"
+      )
+  endforeach()
 endif()
 target_include_directories(${APP_NAME} PRIVATE
   "${MUON_GENERATED_INCLUDE_DIR}"

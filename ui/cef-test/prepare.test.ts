@@ -1744,6 +1744,71 @@ describe("embedded Node runtime requirement", () => {
 });
 
 describe("muon-builder", () => {
+  it("relocates Linux module caches to the final runtime directory on preparation and reuse", async () => {
+    const fixture = await createPrepareFixture();
+    fixture.stageDir = join(fixture.projectPath, '日本語 runtime "quoted"');
+    await mkdir(join(fixture.muonPath, "linux"));
+    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"]) {
+      await writeFile(
+        join(fixture.muonPath, "linux", `${name}.cache.in`),
+        '"@MUON_RUNTIME@/linux/lib/module.so"\n',
+      );
+    }
+    await prepareFixture(fixture);
+    const expected = `"${fixture.stageDir.replaceAll('"', '\\"')}/linux/lib/module.so"\n`;
+    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"]) {
+      const path = join(fixture.stageDir, "linux", `${name}.cache`);
+      expect(await readFile(path, "utf8")).toBe(expected);
+      await writeFile(path, "stale path\n");
+    }
+    expect((await prepareFixture(fixture)).cacheHit).toBe(true);
+    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"])
+      expect(
+        await readFile(
+          join(fixture.stageDir, "linux", `${name}.cache`),
+          "utf8",
+        ),
+      ).toBe(expected);
+  });
+
+  it("launches with private Linux module paths while preserving the input method selection", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = join(fixture.projectPath, "日本語 state");
+    const appId = "scope.linux-modules";
+    const runtime = getLinuxPortableStateRuntimePath(stateHome, appId);
+    await mkdir(join(fixture.muonPath, "linux"));
+    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"])
+      await writeFile(
+        join(fixture.muonPath, "linux", `${name}.cache.in`),
+        '"@MUON_RUNTIME@/linux/lib/module.so"\n',
+      );
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      '#!/bin/sh\nprintf "%s\\n" "$GTK_EXE_PREFIX" "$GTK_IM_MODULE_FILE" "$GDK_PIXBUF_MODULE_FILE" "$MUON_LINUX_MODULE_ROOT" "$GTK_IM_MODULE"\n',
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    const launcher = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
+    });
+    const { stdout } = await execFileAsync(launcher, [], {
+      env: {
+        ...process.env,
+        MUON_CACHE_DIR: fixture.cacheDir,
+        MUON_CEF_CATALOG_URL: fixture.catalogPath,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: join(fixture.projectPath, "data"),
+        GTK_IM_MODULE: "ibus",
+      },
+    });
+    expect(stdout.trim().split("\n")).toEqual([
+      join(runtime, "linux"),
+      join(runtime, "linux/gtk-immodules.cache"),
+      join(runtime, "linux/gdk-pixbuf-loaders.cache"),
+      join(runtime, "linux"),
+      "ibus",
+    ]);
+  });
+
   it("stages explicit CEF Release/Resources files and the whole muon directory", async () => {
     const fixture = await createPrepareFixture();
 

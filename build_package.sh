@@ -122,7 +122,7 @@ platform_for_arch() {
 }
 
 image_for_arch() {
-  printf 'localhost/muon-pack-native-debian-bookworm-%s:latest\n' "$1"
+  printf 'localhost/muon-pack-native-ubuntu-focal-%s:latest\n' "$1"
 }
 
 split_arch_list() {
@@ -415,6 +415,8 @@ build_dist() {
   printf 'Preparing shared native source dependencies\n'
   bash core/cef/build_yyjson.sh
   bash core/cef/build_miniz.sh
+
+  npm run build:linux-dependencies --workspace muon-ui
 
   build_linux_targets "${arches[@]}"
   build_windows_targets

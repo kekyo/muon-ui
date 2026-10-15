@@ -276,7 +276,6 @@ export const auditLinuxDependencies = async (
   const queue = [...new Set(roots)];
   const byPath = new Map<string, LinuxElfInfo>();
   const resolutions: Record<string, Record<string, string>> = {};
-  const issues: LinuxDependencyIssue[] = [];
   const paths = options.libraryPaths.map((path) => resolve(path));
   for (let index = 0; index < queue.length; index++) {
     const path = queue[index]!;
@@ -290,7 +289,38 @@ export const auditLinuxDependencies = async (
       if (provider) {
         edges[name] = provider;
         queue.push(provider);
-      } else issues.push({ kind: "library", binary: path, requirement: name });
+      }
+    }
+  }
+  return {
+    target: options.target,
+    roots: [...new Set(roots)],
+    binaries: [...byPath.values()],
+    resolutions,
+    issues: validateLinuxDependencyGraph([...byPath.values()], resolutions),
+  };
+};
+
+/**
+ * Validates symbol sets in a resolved graph, including a saved build baseline.
+ * @param binaries - ELF metadata for all files in the graph.
+ * @param resolutions - Direct library resolution edges.
+ * @returns Every unresolved mandatory library, version or symbol.
+ */
+export const validateLinuxDependencyGraph = (
+  binaries: readonly LinuxElfInfo[],
+  resolutions: Readonly<Record<string, Record<string, string>>>,
+): LinuxDependencyIssue[] => {
+  const byPath = new Map(binaries.map((binary) => [binary.path, binary]));
+  const issues: LinuxDependencyIssue[] = [];
+  for (const binary of binaries) {
+    for (const name of binary.needed) {
+      if (!resolutions[binary.path]?.[name])
+        issues.push({
+          kind: "library",
+          binary: binary.path,
+          requirement: name,
+        });
     }
   }
   for (const binary of byPath.values()) {
@@ -340,11 +370,5 @@ export const auditLinuxDependencies = async (
         });
     }
   }
-  return {
-    target: options.target,
-    roots: [...new Set(roots)],
-    binaries: [...byPath.values()],
-    resolutions,
-    issues,
-  };
+  return issues;
 };

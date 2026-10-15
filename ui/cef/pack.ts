@@ -91,6 +91,12 @@ import {
   readPackageJson,
   resolveMetadata,
 } from "../common/pack-metadata.js";
+import {
+  collectLinuxElfFiles,
+  type LinuxDependencyManifest,
+} from "./linux-dependency-manifest.js";
+import { getLinuxAppDependencies } from "./linux-app-dependencies.js";
+
 const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
 
 const supportedLinuxSandboxModes = ["disabled", "setuid"] as const;
@@ -109,38 +115,6 @@ const portableInstallMetadata = {
   type: "portable",
   runtimeMode: "in-place",
 } as const;
-// Keep both names for Debian t64 and pre-t64 runtime packages.
-
-const debRuntimeDependencies = [
-  "libc6",
-  "libgcc-s1",
-  "libstdc++6",
-  "libffi8",
-  "libexpat1",
-  "libdbus-1-3",
-  "libglib2.0-0t64 | libglib2.0-0",
-  "libgtk-3-0t64 | libgtk-3-0",
-  "libatk-bridge2.0-0t64 | libatk-bridge2.0-0",
-  "libatk1.0-0t64 | libatk1.0-0",
-  "libatspi2.0-0t64 | libatspi2.0-0",
-  "libcups2t64 | libcups2",
-  "libnspr4",
-  "libnss3",
-  "libgbm1",
-  "libasound2t64 | libasound2",
-  "libudev1",
-  "libx11-6",
-  "libxcb1",
-  "libxcomposite1",
-  "libxdamage1",
-  "libxext6",
-  "libxfixes3",
-  "libxi6",
-  "libxkbcommon0",
-  "libxrandr2",
-  "libcairo2",
-  "libpango-1.0-0",
-] as const;
 
 const requireDesktopTarget = (
   target: MuonBuildResult["targets"][number],
@@ -547,6 +521,28 @@ const packageDeb = async (
     throw new Error(`Unsupported deb target: ${target.target}`);
   }
   const architecture = descriptor.arch;
+  const manifestPath = join(target.outputPath, "linux-dependencies.json");
+  let manifest: LinuxDependencyManifest;
+  try {
+    manifest = JSON.parse(
+      await readFile(manifestPath, "utf8"),
+    ) as LinuxDependencyManifest;
+  } catch (error) {
+    throw new Error(
+      `Cannot read Linux build dependency metadata: ${manifestPath}`,
+      { cause: error },
+    );
+  }
+  if (manifest.audit.target !== target.target)
+    throw new Error(
+      `Linux dependency metadata does not match ${target.target}`,
+    );
+  // t64 packages may satisfy old names through versioned Provides when their
+  // ABI is compatible. Do not claim blanket compatibility for 32-bit time_t.
+  const dependencies = await getLinuxAppDependencies(
+    manifest,
+    await collectLinuxElfFiles(target.outputPath),
+  );
   const packageRoot = join(
     packageBuildRoot,
     "deb",
@@ -640,7 +636,7 @@ const packageDeb = async (
       `Version: ${metadata.version}`,
       `Architecture: ${architecture}`,
       `Maintainer: ${metadata.author}`,
-      `Depends: ${debRuntimeDependencies.join(", ")}`,
+      `Depends: ${dependencies.join(", ")}`,
       `Description: ${metadata.description}`,
       "",
     ].join("\n"),

@@ -17,6 +17,10 @@ import {
   calculateLinuxDebianDependencies,
   type LinuxDebianDependencies,
 } from "./linux-debian-dependencies.js";
+import {
+  readLinuxDebianLibraries,
+  type LinuxDebianLibrary,
+} from "./linux-debian-symbols.js";
 
 /** CEF provenance taken from the native build, never from a runtime policy. */
 export interface LinuxReferenceCef {
@@ -50,6 +54,8 @@ export interface LinuxDependencyManifestOptions {
 export interface LinuxDependencyManifest {
   /** Format version. */
   schemaVersion: 1;
+  /** Runtime tools/data required outside ELF linkage, as Debian package names. */
+  runtimePackages: string[];
   /** Exact build-time CEF reference. */
   referenceCef: LinuxReferenceCef;
   /** Baseline provenance used for ABI and Debian package checks. */
@@ -65,6 +71,8 @@ export interface LinuxDependencyManifest {
   audit: LinuxDependencyAudit;
   /** Calculated Debian constraints, absent when the ABI audit fails. */
   debian: LinuxDebianDependencies | undefined;
+  /** Baseline system package symbols used when an app adds native plugins. */
+  debianLibraries: Record<string, LinuxDebianLibrary>;
 }
 
 const execute = promisify(execFile);
@@ -104,20 +112,34 @@ export const readLinuxReferenceCef = async (
   };
 };
 
-const collectElfFiles = async (directory: string): Promise<string[]> => {
+/**
+ * Finds ELF inputs under a native build output directory without executing them.
+ * @param directory - CEF, runtime or launcher output directory.
+ * @returns Linked executables and shared libraries, excluding intermediate objects.
+ */
+export const collectLinuxElfFiles = async (
+  directory: string,
+): Promise<string[]> => {
   const files: string[] = [];
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort(
     (left, right) => left.name.localeCompare(right.name, "en"),
   )) {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await collectElfFiles(path)));
+    if (entry.isDirectory()) files.push(...(await collectLinuxElfFiles(path)));
     else if (entry.isFile() || entry.isSymbolicLink()) {
       const handle = await open(path, "r");
       try {
-        const header = Buffer.alloc(4);
-        const { bytesRead } = await handle.read(header, 0, 4, 0);
-        if (bytesRead === 4 && header.readUInt32LE(0) === 0x464c457f)
-          files.push(path);
+        if (!(await handle.stat()).isFile()) continue;
+        const header = Buffer.alloc(20);
+        const { bytesRead } = await handle.read(header, 0, header.length, 0);
+        if (
+          bytesRead === header.length &&
+          header.readUInt32LE(0) === 0x464c457f
+        ) {
+          const type =
+            header[5] === 2 ? header.readUInt16BE(16) : header.readUInt16LE(16);
+          if (type === 2 || type === 3) files.push(path);
+        }
       } finally {
         await handle.close();
       }
@@ -143,7 +165,7 @@ export const createLinuxDependencyManifest = async (
   const files: string[] = [];
   const labels = new Map<string, string>();
   for (const [kind, directory] of directories) {
-    for (const path of await collectElfFiles(directory)) {
+    for (const path of await collectLinuxElfFiles(directory)) {
       const canonical = await realpath(path);
       if (!labels.has(canonical)) {
         files.push(canonical);
@@ -183,8 +205,19 @@ export const createLinuxDependencyManifest = async (
     env: { ...process.env, LC_ALL: "C" },
   });
   const label = (path: string): string => labels.get(path) ?? path;
+  const systemLibraries = audit.binaries
+    .filter((binary) => !labels.has(binary.path) && binary.soname !== undefined)
+    .map((binary) => binary.soname!);
   return {
     schemaVersion: 1,
+    // CEF/Node acquisition invokes curl and relies on the host trust store.
+    // Neither requirement can be discovered from the muon ELF dependency graph.
+    runtimePackages: ["ca-certificates", "curl"],
+    debianLibraries: await readLinuxDebianLibraries(
+      systemLibraries,
+      options.target.slice("linux-".length),
+      "/var/lib/dpkg/info",
+    ),
     referenceCef: options.referenceCef,
     baseline: {
       osRelease: await readFile("/etc/os-release", "utf8"),

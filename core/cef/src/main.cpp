@@ -11,11 +11,16 @@
 #endif
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 #include <cardio.h>
+
+#if CARDIO_WITH_GLIB
+#include <gio/gio.h>
+#endif
 
 #include "app/muon_app.h"
 #include "browser/muon_native_wheel_forwarder.h"
@@ -63,6 +68,12 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   // Initialize the dispatcher before CEF can invoke UI-thread callbacks.
   cardio::dispatcher* dispatcher = nullptr;
 #if CARDIO_WITH_GLIB
+  // Register the compatible modules shipped with the runtime before GIO's
+  // first extension lookup. Their cache keeps module loading lazy.
+  if (const auto module_root = std::getenv("MUON_LINUX_MODULE_ROOT")) {
+    const auto modules = std::string(module_root) + "/lib/gio/modules";
+    g_io_modules_scan_all_in_directory(modules.c_str());
+  }
   cardio::dispatcher_group_glib group;
   cardio::dispatcher_host_glib_auto d(group);
   dispatcher = &d;

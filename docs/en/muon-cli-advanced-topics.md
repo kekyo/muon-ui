@@ -130,7 +130,7 @@ Menu and autostart entries retain the original AppImage path but do not store th
 
 ### Linux runtime environment
 
-Distribution binaries use Ubuntu 20.04 as their build baseline. amd64 has been tested on Ubuntu 20.04 and 24.04; armhf and arm64 have been tested by running their Ubuntu 20.04 containers through QEMU. This does not include physical ARM GPU or audio device testing.
+Distribution binaries use Ubuntu 20.04 as their build baseline. amd64 has been tested in an Ubuntu 20.04 container and on an Ubuntu 24.04 host; armhf and arm64 have been tested by running their Ubuntu 20.04 containers through QEMU. This does not include physical ARM GPU or audio device testing.
 
 GTK, GLib, and their required modules are bundled. glibc, the C++ runtime, NSS, ALSA, X11/Wayland, GPU drivers, GBM, and other host libraries remain OS dependencies. The runtime environment needs these desktop libraries, CA certificates, and `curl`. Placing an AppImage in a minimal container does not supply all required host libraries.
 

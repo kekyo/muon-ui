@@ -554,7 +554,6 @@ const packageAppImage = async (
 ): Promise<MuonPackArtifact | undefined> => {
   if (!target.target.startsWith("linux-") || target.linuxDesktop === undefined)
     throw new Error(`Unsupported AppImage target: ${target.target}`);
-  await getDistributionLinuxDependencies(target);
   let tools;
   try {
     tools = await ensureLinuxAppImageTools(
@@ -576,6 +575,7 @@ const packageAppImage = async (
     }
     throw error;
   }
+  await getDistributionLinuxDependencies(target);
   const directory = join(
     packageBuildRoot,
     "appimage",
@@ -615,6 +615,17 @@ const packageDeb = async (
   const descriptor = getMuonTargetDescriptor(target.target);
   if (descriptor.os !== "linux") {
     throw new Error(`Unsupported deb target: ${target.target}`);
+  }
+  // Missing host tools skip this format before inspecting Linux ELF metadata.
+  // This also keeps portable packaging usable on hosts without binutils.
+  try {
+    await runTool("dpkg-deb", ["--version"], root, environment);
+  } catch (error) {
+    if (isUnavailableToolError(error, "dpkg-deb")) {
+      reportSkippedUnavailableTool(progress, "dpkg-deb", "deb", target.target);
+      return undefined;
+    }
+    throw error;
   }
   const architecture = descriptor.arch;
   const dependencies = await getDistributionLinuxDependencies(target);

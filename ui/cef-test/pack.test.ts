@@ -570,6 +570,7 @@ const createFakePackagingToolEnvironment = async (
     "dpkg-deb",
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then exit 0; fi
 args=("$@")
 output_path="\${args[$((\${#args[@]} - 1))]}"
 mkdir -p "$(dirname "$output_path")"
@@ -989,6 +990,9 @@ describe("muon pack", () => {
     ]);
     const emptyPathDirectory = join(root, "empty-path");
     await mkdir(emptyPathDirectory, { recursive: true });
+    await rm(
+      join(packageDirectory, "runtime/linux-amd64/linux-dependencies.json"),
+    );
     await writeViteProject(root, packageDirectory, [
       "linux-amd64",
       "windows-amd64",
@@ -1015,6 +1019,9 @@ describe("muon pack", () => {
     );
     expect(result.stderr).toContain(
       "Warning: makensis is not available; skipping nsis package for windows-amd64.",
+    );
+    expect(result.stderr).toContain(
+      "Skipping appimage package for linux-amd64.",
     );
   });
 
@@ -1332,6 +1339,7 @@ describe("muon pack", () => {
       "dpkg-deb",
       `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then exit 0; fi
 printf '%s\\n' "$@" > '${logPath}'
 args=("$@")
 package_root="\${args[$((\${#args[@]} - 2))]}"
@@ -1541,6 +1549,7 @@ printf 'deb\\n' > "$output_path"
       "dpkg-deb",
       `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then exit 0; fi
 printf '%s\\n' "$@" > '${logPath}'
 args=("$@")
 output_path="\${args[$((\${#args[@]} - 1))]}"

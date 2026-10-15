@@ -239,3 +239,25 @@ portable配布物では展開先へ直接準備され、実行時のNode.jsは�
 
 > 注釈: `packageDirectory` については、テストやパッケージ検証向けの引数です。
 > 解説は省略します。
+
+## AppImageの生成
+
+`vite build`では配布用ディレクトリを生成します。Linux向けの単一実行ファイルであるAppImageを生成する場合は、プロジェクトのルートで次のコマンドを実行してください。
+
+```bash
+npx muon pack --type appimage --target linux-amd64
+```
+
+`muon pack`は`vite.config.*`のmuon設定を読み取り、ViteビルドからAppImage生成まで実行します。事前の`vite build`は不要です。配布形式はCLIの`--type`で指定します。Viteプラグインには配布形式を指定する`type`や`pack`オプションはありません。
+
+npmスクリプトに登録する場合は、`package.json`の`scripts`へ次の項目を追加してください。
+
+```json
+{
+  "scripts": {
+    "pack:appimage": "muon pack --type appimage --target linux-amd64"
+  }
+}
+```
+
+`npm run pack:appimage`で実行できます。出力先やARM向けの指定、必要なツールは[AppImageの作成と実行](./muon-cli-advanced-topics.md#appimageの作成と実行)を参照してください。

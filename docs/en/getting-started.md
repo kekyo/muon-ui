@@ -242,6 +242,7 @@ npx muon pack --target windows
 npx muon pack --target amd64
 npx muon pack --type tgz
 npx muon pack --type nsis
+npx muon pack --type appimage --target linux-amd64
 npx muon pack --target linux-amd64 --type tgz,deb 
 npx muon pack --target windows-amd64 --type nsis
 ```
@@ -250,13 +251,15 @@ npx muon pack --target windows-amd64 --type nsis
   When omitted, the Vite plugin `build` setting is used.
   If there is no muon Vite plugin or the setting is omitted, all supported targets become package candidates.
   In addition to complete target names, platform names `linux` and `windows`, and architecture names `amd64`, `arm64`, `armhf`, and `i686`, can also be specified.
-- `--type` can specify `zip`, `tgz`, `tar.gz`, `deb`, and `nsis`, either comma-separated or as multiple options.
-  When omitted, all of `zip`, `tgz`, `deb`, and `nsis` are targeted.
+- `--type` can specify `zip`, `tgz`, `tar.gz`, `deb`, `appimage`, and `nsis`, either comma-separated or as multiple options.
+  When omitted, all of `zip`, `tgz`, `deb`, `appimage`, and `nsis` are targeted.
 - `zip` is only available for Windows targets and creates a portable ZIP containing each `<packageName>/<target>` directory.
 - `tgz` or `tar.gz` is only available for Linux targets and creates a portable gzip-compressed tar archive containing each `<packageName>/<target>` directory.
   `tgz` is an alias for `tar.gz`, and the output filename is always `*.tar.gz`.
   Portable distributions do not include CEF binaries or the Node.js runtime itself. On first launch, CEF is prepared directly under the extracted `<packageName>/<target>` directory, and the Node.js runtime is prepared under `runtimes/node/` only when required.
   The profile is also stored in `profile/` under the same directory.
+- `appimage` creates a single Linux executable at `artifacts/<packageName>-<version>-<target>.AppImage`.
+  CEF is downloaded on first launch. See [Creating and running AppImages](./muon-cli-advanced-topics.md#creating-and-running-appimages) for packaging requirements and launch instructions.
 - `deb` is only available for Linux targets and requires `dpkg-deb` on the runtime `PATH`.
   On Debian/Ubuntu, install it with `sudo apt install dpkg-deb`.
 - `nsis` is only available for Windows targets and requires `makensis` on the runtime `PATH`.

@@ -5,6 +5,8 @@ RUNTIME_HELPER_TARGET ?=
 PLUGIN_INSPECTOR_TARGET ?= $(OUT_DIR)/muon-plugin-inspector
 LIB_TARGET ?= $(OUT_DIR)/libmuon-builder.a
 CPPFLAGS ?=
+# Keep file sizes and directory inode numbers representable on 32-bit targets.
+override CPPFLAGS += -D_FILE_OFFSET_BITS=64
 CFLAGS ?= -std=c99 -Os -DNDEBUG -Wall -Wextra -pedantic
 LDFLAGS ?= -s -static
 LAUNCHER_CPPFLAGS ?=

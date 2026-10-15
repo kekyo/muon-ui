@@ -1842,6 +1842,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     muon_ui
     yyjson
     )
+  # The relocated UI library resolves cardio beside itself. Stage that library
+  # before linking this runtime consumer, including on a clean build.
+  add_dependencies(muon_ui_title_bar_manifest_test muon_runtime_files)
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
   add_executable(muon_icon_test
     ../cef-test/native/muon_icon_test.cpp
@@ -2047,6 +2050,12 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/plugins/muon_shared_buffer.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_plugin_metadata_test)
+  # CEF loads ICU beside libcef before applying settings. Select the staged
+  # runtime, where icudtl.dat is present, instead of CEF's Release directory.
+  set_target_properties(muon_plugin_metadata_test PROPERTIES
+    BUILD_RPATH "${MUON_RUNTIME_DIR}"
+    )
+  add_dependencies(muon_plugin_metadata_test muon_runtime_files)
   target_compile_features(muon_plugin_metadata_test PRIVATE cxx_std_20)
   target_include_directories(muon_plugin_metadata_test PRIVATE
     "${MUON_COMMON_ROOT}/../../sdk/include"

@@ -87,10 +87,10 @@ download_archive() {
   for url in "${ZLIB_URLS[@]}"; do
     rm -f "${TMP_ARCHIVE}"
     echo "Downloading ${ZLIB_PACKAGE} from ${url}" >&2
+    # Ubuntu 20.04 provides curl 7.68, before --retry-all-errors was added.
     if ! curl \
       -fL \
       --retry 2 \
-      --retry-all-errors \
       --retry-delay 2 \
       --retry-max-time 120 \
       --connect-timeout 15 \

@@ -106,7 +106,8 @@ fi
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
-CFLAGS_VALUE="${CFLAGS:--O2 -DNDEBUG -D_FILE_OFFSET_BITS=64 -Wall -Winline}"
+# The baseline compiler may legitimately decline bzip2's inline hints.
+CFLAGS_VALUE="${CFLAGS:--O2 -DNDEBUG -D_FILE_OFFSET_BITS=64 -Wall}"
 sources=(
   blocksort
   huffman

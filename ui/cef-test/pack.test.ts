@@ -198,6 +198,38 @@ const createFakeMuonPackageDist = async (
         join(runtimeDirectory, "muon-executor-supervisor"),
         `${target} executor supervisor\n`,
       );
+      await writeFile(
+        join(runtimeDirectory, "linux-dependencies.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          runtimePackages: ["ca-certificates", "curl"],
+          referenceCef: {
+            version: "build-reference",
+            archive: "cef.tar.bz2",
+            sha1: "a".repeat(40),
+            url: "https://example.invalid/cef.tar.bz2",
+          },
+          baseline: { osRelease: "fixture", packages: [], readelf: "fixture" },
+          audit: {
+            target,
+            roots: [],
+            binaries: [],
+            resolutions: {},
+            issues: [],
+          },
+          debian: {
+            depends: [
+              "libc6 (>= 2.28)",
+              "libgbm1 (>= 21.1.0)",
+              "libnss3 (>= 2:3.30)",
+            ],
+            tool: "fixture",
+            diagnostics: [],
+          },
+          debianLibraries: {},
+        }),
+      );
+      await writeFile(join(runtimeDirectory, "linux-bundle.json"), "[]\n");
     }
     const nodePluginFileName = target.startsWith("windows-")
       ? "node.dll"
@@ -538,6 +570,7 @@ const createFakePackagingToolEnvironment = async (
     "dpkg-deb",
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then exit 0; fi
 args=("$@")
 output_path="\${args[$((\${#args[@]} - 1))]}"
 mkdir -p "$(dirname "$output_path")"
@@ -586,6 +619,96 @@ afterEach(async () => {
 });
 
 describe("muon pack", () => {
+  it("packages a Linux AppImage that forwards arguments through AppRun", async () => {
+    const root = await createTemporaryDirectory("muon-pack-appimage-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeExecutable(
+      join(packageDirectory, "native/linux-amd64/muon-launcher"),
+      Buffer.concat([
+        Buffer.from("#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 0\n"),
+        createMuonLauncherEmbeddedConfigSlot(),
+      ]),
+    );
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+
+    const result = await packMuonApp({ root, types: ["appimage"] });
+    const artifact = result.artifacts[0]!;
+    expect(artifact.type).toBe("appimage");
+    expect(artifact.target).toBe("linux-amd64");
+    const { stdout } = await execFileAsync(artifact.path, [
+      "--appimage-extract-and-run",
+      "two words",
+      "日本語",
+      "$(false)",
+    ]);
+    expect(stdout).toBe("two words\n日本語\n$(false)\n");
+    await execFileAsync(artifact.path, ["--appimage-extract"], { cwd: root });
+    const payload = join(root, "squashfs-root/usr/lib/muon");
+    expect(
+      JSON.parse(await readFile(join(payload, "muon-install.json"), "utf8")),
+    ).toEqual({ type: "appimage", runtimeMode: "user" });
+    await expect(exists(join(payload, "libcef.so"))).resolves.toBe(false);
+    await expect(
+      exists(join(payload, "linux-dependencies.json")),
+    ).resolves.toBe(true);
+  });
+
+  it("packages independent AppImages concurrently", async () => {
+    const roots = await Promise.all(
+      ["first", "second"].map(async (name) => {
+        const root = await createTemporaryDirectory(`muon-appimage-${name}-`);
+        const packageDirectory = await createFakeMuonPackageDist(root, [
+          "linux-amd64",
+        ]);
+        await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+        return root;
+      }),
+    );
+    const results = await Promise.all(
+      roots.map(
+        async (root) => await packMuonApp({ root, types: ["appimage"] }),
+      ),
+    );
+    for (const result of results) {
+      const { stderr } = await execFileAsync(result.artifacts[0]!.path, [
+        "--appimage-version",
+      ]);
+      expect(stderr).toContain("dd6cebe");
+    }
+  });
+
+  it("rejects AppImage requests for Windows and Android", async () => {
+    const root = await createTemporaryDirectory("muon-appimage-target-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "windows-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["windows-amd64"]);
+    for (const target of ["windows-amd64", "android"]) {
+      await expect(
+        packMuonApp({ root, targets: [target], types: ["appimage"] }),
+      ).rejects.toThrow(/No valid muon pack target|apk/);
+    }
+  });
+
+  it("rejects AppImage packaging when its host tools are unavailable", async () => {
+    const root = await createTemporaryDirectory("muon-appimage-missing-tool-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    await writeViteProject(root, packageDirectory, ["linux-amd64"]);
+    const path = join(root, "empty-path");
+    await mkdir(path);
+    await expect(
+      packMuonApp({
+        root,
+        types: ["appimage"],
+        environment: { ...process.env, PATH: path },
+      }),
+    ).rejects.toThrow("Install file and coreutils");
+  });
+
   it("builds Vite output once and packages the configured Linux target as a tar.gz archive", async () => {
     const root = await createTemporaryDirectory("muon-pack-tar-gz-");
     const packageDirectory = await createFakeMuonPackageDist(root, [
@@ -867,6 +990,9 @@ describe("muon pack", () => {
     ]);
     const emptyPathDirectory = join(root, "empty-path");
     await mkdir(emptyPathDirectory, { recursive: true });
+    await rm(
+      join(packageDirectory, "runtime/linux-amd64/linux-dependencies.json"),
+    );
     await writeViteProject(root, packageDirectory, [
       "linux-amd64",
       "windows-amd64",
@@ -893,6 +1019,9 @@ describe("muon pack", () => {
     );
     expect(result.stderr).toContain(
       "Warning: makensis is not available; skipping nsis package for windows-amd64.",
+    );
+    expect(result.stderr).toContain(
+      "Skipping appimage package for linux-amd64.",
     );
   });
 
@@ -1210,6 +1339,7 @@ describe("muon pack", () => {
       "dpkg-deb",
       `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then exit 0; fi
 printf '%s\\n' "$@" > '${logPath}'
 args=("$@")
 package_root="\${args[$((\${#args[@]} - 2))]}"
@@ -1279,36 +1409,7 @@ printf 'deb\\n' > "$output_path"
         "Version: 1.2.3",
         "Architecture: amd64",
         "Maintainer: muon Tester",
-        [
-          "Depends: libc6",
-          "libgcc-s1",
-          "libstdc++6",
-          "libffi8",
-          "libexpat1",
-          "libdbus-1-3",
-          "libglib2.0-0t64 | libglib2.0-0",
-          "libgtk-3-0t64 | libgtk-3-0",
-          "libatk-bridge2.0-0t64 | libatk-bridge2.0-0",
-          "libatk1.0-0t64 | libatk1.0-0",
-          "libatspi2.0-0t64 | libatspi2.0-0",
-          "libcups2t64 | libcups2",
-          "libnspr4",
-          "libnss3",
-          "libgbm1",
-          "libasound2t64 | libasound2",
-          "libudev1",
-          "libx11-6",
-          "libxcb1",
-          "libxcomposite1",
-          "libxdamage1",
-          "libxext6",
-          "libxfixes3",
-          "libxi6",
-          "libxkbcommon0",
-          "libxrandr2",
-          "libcairo2",
-          "libpango-1.0-0",
-        ].join(", "),
+        "Depends: ca-certificates, curl, libc6 (>= 2.28), libgbm1 (>= 21.1.0), libnss3 (>= 2:3.30)",
         "Description: Packed sample",
         "",
       ].join("\n"),
@@ -1448,6 +1549,7 @@ printf 'deb\\n' > "$output_path"
       "dpkg-deb",
       `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then exit 0; fi
 printf '%s\\n' "$@" > '${logPath}'
 args=("$@")
 output_path="\${args[$((\${#args[@]} - 1))]}"
@@ -1522,6 +1624,15 @@ printf 'deb\\n' > "$output_path"
       allFakePackageTargets,
     );
     await writeViteProject(root, packageDirectory, allFakePackageTargets);
+
+    await expect(
+      packMuonApp({
+        root,
+        types: ["appimage"],
+        targets: ["linux-amd64"],
+        linuxSandbox: "setuid",
+      }),
+    ).rejects.toThrow("--linux-sandbox=setuid is supported only");
 
     await expect(
       packMuonApp({
@@ -1979,6 +2090,9 @@ fi
       "windows-amd64",
     ]);
     expect(getArtifactSummary(result.artifacts)).toEqual([
+      "appimage:linux-amd64:packed-sample-1.2.3-linux-amd64.AppImage",
+      "appimage:linux-arm64:packed-sample-1.2.3-linux-arm64.AppImage",
+      "appimage:linux-armhf:packed-sample-1.2.3-linux-armhf.AppImage",
       "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
       "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
       "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
@@ -2020,6 +2134,9 @@ fi
         selector: "linux",
         expectedTargets: ["linux-amd64", "linux-armhf", "linux-arm64"],
         expectedArtifacts: [
+          "appimage:linux-amd64:packed-sample-1.2.3-linux-amd64.AppImage",
+          "appimage:linux-arm64:packed-sample-1.2.3-linux-arm64.AppImage",
+          "appimage:linux-armhf:packed-sample-1.2.3-linux-armhf.AppImage",
           "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
           "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
           "deb:linux-armhf:packed-sample-1.2.3-armhf.deb",
@@ -2032,6 +2149,7 @@ fi
         selector: "amd64",
         expectedTargets: ["linux-amd64", "windows-amd64"],
         expectedArtifacts: [
+          "appimage:linux-amd64:packed-sample-1.2.3-linux-amd64.AppImage",
           "deb:linux-amd64:packed-sample-1.2.3-amd64.deb",
           "nsis:windows-amd64:packed-sample-1.2.3-amd64-setup.exe",
           "tar.gz:linux-amd64:packed-sample-1.2.3-linux-amd64.tar.gz",
@@ -2042,6 +2160,7 @@ fi
         selector: "arm64",
         expectedTargets: ["linux-arm64"],
         expectedArtifacts: [
+          "appimage:linux-arm64:packed-sample-1.2.3-linux-arm64.AppImage",
           "deb:linux-arm64:packed-sample-1.2.3-arm64.deb",
           "tar.gz:linux-arm64:packed-sample-1.2.3-linux-arm64.tar.gz",
         ],

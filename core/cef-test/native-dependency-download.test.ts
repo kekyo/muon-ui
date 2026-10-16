@@ -25,7 +25,7 @@ const zlibSha256 =
   "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16";
 
 describe("native dependency downloads", () => {
-  it("accepts only verified zlib downloads and cleans up after all sources fail", async () => {
+  it("uses baseline curl options, verifies zlib downloads and cleans up after all sources fail", async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "muon-zlib-download-"),
     );
@@ -73,9 +73,19 @@ while [[ "$#" -gt 0 ]]; do
       output_path="$2"
       shift 2
       ;;
-    *)
+    -fL)
+      shift
+      ;;
+    --retry|--retry-delay|--retry-max-time|--connect-timeout|--max-time)
+      shift 2
+      ;;
+    https://*)
       url="$1"
       shift
+      ;;
+    *)
+      echo "Unsupported curl 7.68 option: $1" >&2
+      exit 2
       ;;
   esac
 done

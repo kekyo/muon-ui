@@ -3080,19 +3080,20 @@ class MuonBuiltinFsRuntime final {
           "fail_ready dispatcher=" +
               FormatMuonCloseDebugPointer(completion_dispatcher) +
               " message=" + message);
-      co_await RunMuonFsCompletionOnDispatcher(
-          completion_dispatcher,
-          [completion,
-           completions_enabled,
-           cancel_function_ref,
-           operation_id,
-           message = std::move(message)] {
-            AppendMuonFsDiagnosticLog(operation_id, "fail_dispatch");
-            if (completions_enabled->load()) {
-              CompleteMuonError(completion, message);
-            }
-            cancel_function_ref->Release();
-          });
+      auto dispatch_failure = [completion,
+                               completions_enabled,
+                               cancel_function_ref,
+                               operation_id,
+                               message = std::move(message)] {
+        AppendMuonFsDiagnosticLog(operation_id, "fail_dispatch");
+        if (completions_enabled->load()) {
+          CompleteMuonError(completion, message);
+        }
+        cancel_function_ref->Release();
+      };
+      auto dispatched = RunMuonFsCompletionOnDispatcher(
+          completion_dispatcher, dispatch_failure);
+      co_await dispatched;
     };
     auto complete_operation = [complete_copy = std::move(complete_copy),
                                completions_enabled,
@@ -3106,28 +3107,32 @@ class MuonBuiltinFsRuntime final {
           operation_id,
           "complete_ready dispatcher=" +
               FormatMuonCloseDebugPointer(completion_dispatcher));
-      co_await RunMuonFsCompletionOnDispatcher(
-          completion_dispatcher,
-          [complete_copy = std::move(complete_copy),
-           completions_enabled,
-           cancel_function_ref,
-           operation_id,
-           args_tuple = std::move(args_tuple)]() mutable {
-            AppendMuonFsDiagnosticLog(operation_id, "complete_dispatch");
-            if (completions_enabled->load()) {
-              std::apply(
-                  [&complete_copy](auto&&... values) {
-                    if constexpr (sizeof...(values) == 0) {
-                      complete_copy();
-                    } else {
-                      complete_copy(
-                          std::forward<decltype(values)>(values)...);
-                    }
-                  },
-                  std::move(args_tuple));
-            }
-            cancel_function_ref->Release();
-          });
+      // Keep the captured result in a named object across suspension. Older
+      // GCC coroutine implementations mis-handle non-trivial temporary
+      // captures inside a co_await expression:
+      // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99576
+      auto dispatch_completion = [complete_copy = std::move(complete_copy),
+                                  completions_enabled,
+                                  cancel_function_ref,
+                                  operation_id,
+                                  args_tuple = std::move(args_tuple)]() mutable {
+        AppendMuonFsDiagnosticLog(operation_id, "complete_dispatch");
+        if (completions_enabled->load()) {
+          std::apply(
+              [&complete_copy](auto&&... values) {
+                if constexpr (sizeof...(values) == 0) {
+                  complete_copy();
+                } else {
+                  complete_copy(std::forward<decltype(values)>(values)...);
+                }
+              },
+              std::move(args_tuple));
+        }
+        cancel_function_ref->Release();
+      };
+      auto dispatched = RunMuonFsCompletionOnDispatcher(
+          completion_dispatcher, dispatch_completion);
+      co_await dispatched;
     };
     auto operation = RunMuonTrafficCardioOperation<Result>(
         cancellation,

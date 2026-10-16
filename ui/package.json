@@ -30,6 +30,7 @@
   "scripts": {
     "build": "npm run build:js && npm run build --workspace muon-builder && node scripts/stage-muon-builder.mjs && npm run build --workspace muon-android && node scripts/stage-android-runtime.mjs dist/android",
     "build:js": "vite build --mode cjs && vite build --mode esm && vite build --mode android-host",
+    "build:linux-dependencies": "vite build --mode linux-dependencies",
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
     "test:windows-nsis-e2e": "npm run build && vitest run cef-test/nsis-windows-e2e.test.ts",

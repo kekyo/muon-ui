@@ -9,6 +9,7 @@ import {
   cp,
   mkdir,
   readdir,
+  readFile,
   rm,
   stat,
 } from "node:fs/promises";
@@ -317,6 +318,21 @@ const stageRuntimeTarget = async (target) => {
   };
   for (const item of descriptor.runtimePayload) {
     await copyRuntimeItem(item);
+  }
+  if (target.startsWith("linux-")) {
+    for (const file of [
+      "linux-dependencies.json",
+      "linux-dependencies.json.txt",
+      "linux-bundle.json",
+    ])
+      await copyRuntimeItem(file);
+    const libraries = JSON.parse(
+      await readFile(resolve(sourcePath, "linux-bundle.json"), "utf8"),
+    );
+    for (const library of libraries) {
+      await copyRuntimeItem(library.file);
+      await copyRuntimeItem(library.license);
+    }
   }
   if (descriptor.runtimeOptionalPayloadPatterns !== undefined) {
     const entries = await readdir(sourcePath);

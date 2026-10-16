@@ -37,6 +37,6 @@ Android試作hostの`muon.node.createNode()`は、別process Serviceの組み込
 
 ## LinuxにおけるCEF sandboxの有効化制限
 
-Linuxにおいて、muonアプリが管理者権限で起動されない場合、CEFが必要とする `cef-sandbox` が正しく起動できません。
-これは、 `dist-muon/` 配下に出力されたビルド成果物ファイルを、ユーザー権限で直接起動した場合に発生します。
-正しく起動するには、管理者権限で起動するか、あるいは `deb` パッケージをAPTインストールして、 `cef-sandbox` を管理者権限で起動できるようにする必要があります。
+通常のmuon配布物ではCEF sandboxを無効にしています。setuid方式を使用する場合は、`muon pack --type deb --linux-sandbox=setuid`で生成したdebをAPTからインストールしてください。この方式ではシステム領域への配置と、root所有のsandbox補助プログラムが必要です。[CEF sandboxのLinux設定](https://chromiumembedded.github.io/cef/sandbox_setup.html#linux)
+
+AppImageとtar.gzはsetuid方式に対応せず、上記の指定をpack時に拒否します。AppImageの起動時に管理者権限を取得したり、ホストのsandbox設定を変更したりする機能はありません。

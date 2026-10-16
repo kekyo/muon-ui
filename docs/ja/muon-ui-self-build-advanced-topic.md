@@ -123,3 +123,29 @@ npm run pack
 パッケージ生成の入口は`build_package.sh`です。生成オプションを直接渡したい場合は、`build_package.sh`を実行してください。
 
 - サポートされているすべてのアーキテクチャ向けにネイティブコードをビルドおよびテストするため、非常に長い時間がかかります（30分以上かかる可能性があります）。
+
+### Linuxの基準ビルドと依存情報
+
+Linux配布物は`prereq.sh`が作るUbuntu 20.04のコンテナでビルドします。GCC 10と、共有ライブラリの基準環境を定義する`scripts/linux-baseline.Containerfile`を使用します。必要なGLib 2.74.7は公式ソースから専用の場所へビルドし、GTKなどと共に配布物へ含めます。ホストOSのGLibを置き換える手順ではありません。[GLibの配布元](https://download.gnome.org/sources/glib/2.74/)
+
+CEFや基準環境を更新した場合は、イメージと配布物を作り直してください。amd64だけを確認する場合は、両方のコマンドへ`--arch amd64`を付けます。
+
+```bash
+bash prereq.sh --force
+bash build_package.sh --target dist
+```
+
+対象ごとの`core/cef/dist-linux-*/linux-dependencies.json`に、ビルドで使ったCEF、ライブラリの要求、基準環境、debの依存条件を保存します。同じ場所の`.json.txt`が可読版です。`linux-bundle.json`には同梱ファイルのハッシュ、出自、ライセンスの配置先を記録します。ビルド中に要求シンボルや必要なライブラリを解決できなければ、報告を出して失敗します。
+
+これらの情報とライブラリは`ui/dist/runtime/<target>/`へ収録します。アプリをpackするときは、この記録とアプリ自身のネイティブ部品から要求を合成するため、CEFを再取得する必要はありません。実行時のCEF選択ポリシーを変えても、解析入力のCEFは変わりません。
+
+NPM配布前の検査と、独立したアプリからのAppImage・deb・tar.gz生成は次のコマンドで確認できます。単一対象のビルド後は、検査コマンドの末尾へ`linux-amd64`を指定してください。
+
+```bash
+npm run verify:package-runtime --workspace muon-ui
+mkdir -p .run/linux-package-check
+npm pack --workspace muon-ui --ignore-scripts --pack-destination .run/linux-package-check
+node ui/cef-test/test-packaged-appimage.mts .run/linux-package-check/muon-ui-0.0.1.tgz linux-amd64 linux-armhf linux-arm64
+```
+
+tgz名は実際のバージョンに合わせてください。この検査は一時ディレクトリへNPM配布物をインストールし、公開CLIから3形式を生成します。同梱ファイルとライセンス、依存情報、CEFを含まないことを確認します。AppImage生成ツールはハッシュを検証して取得・キャッシュします。CIではamd64の基準ビルドから同じ検査を実行します。通常の`npm test`は開発ビルドの検査も行うため、NPMを作る前には配布用のstagingを済ませてください。

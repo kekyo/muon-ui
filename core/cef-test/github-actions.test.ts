@@ -251,8 +251,10 @@ describe("GitHub Actions CI", () => {
       .map((step) => step.run)
       .filter((value): value is string => typeof value === "string")
       .join("\n");
+    // CI consumers need the baseline distribution build. Release packaging
+    // and publication remain disabled; only build_package's dist mode is used.
     expect(runCommands).not.toMatch(
-      /(?:build_package|build:dist|npm\s+run\s+pack|npm\s+publish)/,
+      /(?:build_package\.sh(?!\s+--target\s+dist\b)|build:dist|npm\s+run\s+pack|npm\s+publish)/,
     );
   });
 });

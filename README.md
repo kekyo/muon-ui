@@ -25,7 +25,7 @@ Application replacement is extremely complex, and it has always been a hard prob
 The causes vary widely, so there is no magic solution that makes everything easy.
 Even so, everyone wants to modernize with as little cost as possible.
 
-muon (/ˈmjuːɒn/) is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework).
+muon (/ˈmjuːɒn/) is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework) or Android WebView.
 You have probably heard of similar projects such as [Electron](https://www.electronjs.org/).
 
 Roughly speaking, muon is framework software in the same category.
@@ -43,13 +43,15 @@ In practice, access is denied by default.
 You may think that using CEF without access to websites around the world is a waste.
 However, we believe that this is the biggest reason existing solutions have become very complex and difficult to handle.
 
+> Note: Network access restrictions work differently with Android WebView.
+
 muon also does not completely forbid access to external resources.
 Because the policy is whitelist-based, permitted websites remain accessible.
 
 muon also includes a plugin system with fully asynchronous processing for interoperability with native libraries.
 These features are enabled from explicit configuration, so unused capabilities are not left open.
 
-Because muon is based on CEF, Chromium features such as WebGL, WebGPU, WebAssembly, Web workers, and Local storage are available as expected.
+Because muon is based on CEF or Android WebView, Chromium features such as WebGL, WebGPU, WebAssembly, Web workers, and Local storage are available as expected.
 DevTools can be shown. CDP (Chrome DevTools Protocol) is also available, so you can debug with VS Code, connect Playwright, or control the app externally.
 You can also use remote DevTools from Chromium/Chrome through `chrome://inspect/`.
 
@@ -59,18 +61,22 @@ This lets you build modern local GUI applications with the web technology ecosys
 muon also minimizes the steps required to create a muon application, keeping the barrier to entry low.
 With the minimal setup, installing the NPM package and adding one line to the configuration file is enough to launch your first muon app.
 
-WIP: And once you've created a muon application, you can deploy it directly to Android.
+You can deploy muon applications to Linux, Windows, and Android.
 
 ![android](./images/get-started-android.png)
+
+> Note: Android builds are still experimental, and we are working toward completion.
+
+muon can generate deb packages, AppImages, or tarballs for Linux, and Nullsoft Scriptable Install System (NSIS) installers or ZIP files for Windows.
 
 ### Features
 
 - Restricts all network access through a whitelist filter, letting you completely exclude problematic content.
 - Provided as an easy-to-use NPM package, so you can turn your web application project into a native GUI application without complex configuration or changes.
-- The rendering browser is CEF (Chromium Embedded Framework). From the web application's point of view, this is almost the same as using Chromium or Chrome.
+- The rendering browser is CEF (Chromium Embedded Framework) or Android WebView. From the web application's point of view, this is almost the same as using Chromium or Chrome.
 - Supports the Vite plugin system. It also supports Vite HMR, so previews update in real time during development.
-- Supports Linux (deb) and Windows (NSIS) package generation, and portable distribution.
-- You can also build Android applications (experimental).
+- Supports Linux (deb and AppImage) and Windows (NSIS) package generation, and portable distribution.
+- You can also build Android applications (Experimental).
 - DevTools can be used. CDP (Chrome DevTools Protocol) is also supported, so remote debugging from external tools is possible.
 - Includes a plugin system. Plugin capabilities can also be restricted by a whitelist filter.
 - An independent SDK supports C/C++ plugin development and distribution as prebuilt NPM packages.
@@ -161,7 +167,7 @@ Packaging a muon app is also simple:
 npx muon pack
 ```
 
-This generates Linux and Windows packages (in deb and NSIS formats) in the `artifacts/` directory.
+This generates Linux and Windows distribution files in `artifacts/`. Linux AppImages provide a single file for each CPU architecture. See [the muon CLI](./docs/en/muon-cli-advanced-topics.md#creating-and-running-appimages) for packaging commands and runtime requirements.
 
 ---
 

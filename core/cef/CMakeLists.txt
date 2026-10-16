@@ -151,6 +151,15 @@ if(MINGW)
 endif()
 
 find_package(CEF REQUIRED)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Use paths relative to each deployed binary instead of the working directory.
+  list(REMOVE_ITEM CEF_LINKER_FLAGS "-Wl,-rpath,.")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+      CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
+    # GCC 10 requires this switch in addition to -std=c++20.
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>")
+  endif()
+endif()
 find_package(Threads REQUIRED)
 
 if(NOT MUON_CEF_API_VERSION)
@@ -1188,6 +1197,15 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(${APP_NAME} PRIVATE
     muon_executor_supervisor_protocol
     )
+  # The payload is copied into a per-user runtime and may be relocated again.
+  # Private libraries share CEF's $ORIGIN search path beside libcef.so.
+  foreach(MUON_RUNTIME_TARGET IN ITEMS
+      ${APP_NAME} muon_ui cardio_shared muon_executor_supervisor)
+    set_target_properties(${MUON_RUNTIME_TARGET} PROPERTIES
+      BUILD_WITH_INSTALL_RPATH ON
+      INSTALL_RPATH "\$ORIGIN"
+      )
+  endforeach()
 endif()
 target_include_directories(${APP_NAME} PRIVATE
   "${MUON_GENERATED_INCLUDE_DIR}"
@@ -1824,6 +1842,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     muon_ui
     yyjson
     )
+  # The relocated UI library resolves cardio beside itself. Stage that library
+  # before linking this runtime consumer, including on a clean build.
+  add_dependencies(muon_ui_title_bar_manifest_test muon_runtime_files)
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
   add_executable(muon_icon_test
     ../cef-test/native/muon_icon_test.cpp
@@ -2029,6 +2050,12 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/plugins/muon_shared_buffer.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_plugin_metadata_test)
+  # CEF loads ICU beside libcef before applying settings. Select the staged
+  # runtime, where icudtl.dat is present, instead of CEF's Release directory.
+  set_target_properties(muon_plugin_metadata_test PROPERTIES
+    BUILD_RPATH "${MUON_RUNTIME_DIR}"
+    )
+  add_dependencies(muon_plugin_metadata_test muon_runtime_files)
   target_compile_features(muon_plugin_metadata_test PRIVATE cxx_std_20)
   target_include_directories(muon_plugin_metadata_test PRIVATE
     "${MUON_COMMON_ROOT}/../../sdk/include"

@@ -16,7 +16,8 @@ import { type MuonLinuxDesktopOptions } from "../cef/linux-desktop.js";
 /**
  * muon package output type.
  */
-export type MuonPackType = "zip" | "tar.gz" | "deb" | "nsis" | "apk";
+export type MuonPackType =
+  "zip" | "tar.gz" | "deb" | "appimage" | "nsis" | "apk";
 
 /**
  * Linux CEF sandbox strategy used by deb packages.
@@ -36,7 +37,7 @@ export interface MuonPackOptions {
   /**
    * Package artifact types to generate.
    *
-   * @remarks Defaults to zip, tar.gz, deb, and nsis when omitted.
+   * @remarks Defaults to zip, tar.gz, deb, appimage, and nsis when omitted.
    */
   types?: readonly string[];
   /**

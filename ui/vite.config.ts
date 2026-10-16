@@ -14,6 +14,7 @@ import muonNodePackageJson from "../node/package.json" with { type: "json" };
 export default defineConfig(({ mode }) => {
   const isCjs = mode === "cjs";
   const isAndroidHost = mode === "android-host";
+  const isLinuxDependencies = mode === "linux-dependencies";
 
   return {
     define: {
@@ -29,22 +30,32 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     build: {
-      emptyOutDir: isCjs || isAndroidHost,
-      outDir: isAndroidHost ? ".build/android-host" : "dist",
+      emptyOutDir: isCjs || isAndroidHost || isLinuxDependencies,
+      outDir: isLinuxDependencies
+        ? ".build/linux-dependencies"
+        : isAndroidHost
+          ? ".build/android-host"
+          : "dist",
       lib: {
-        entry: isAndroidHost
-          ? { index: "android/index.ts" }
-          : isCjs
-            ? {
-                cli: "common/cli.ts",
-                index: "common/index.ts",
-                vite: "common/vite.ts",
-              }
-            : {
-                index: "common/index.ts",
-                vite: "common/vite.ts",
-              },
-        formats: isAndroidHost ? ["es", "cjs"] : [isCjs ? "cjs" : "es"],
+        entry: isLinuxDependencies
+          ? { "linux-dependencies": "cef/linux-dependencies-cli.ts" }
+          : isAndroidHost
+            ? { index: "android/index.ts" }
+            : isCjs
+              ? {
+                  cli: "common/cli.ts",
+                  index: "common/index.ts",
+                  vite: "common/vite.ts",
+                }
+              : {
+                  index: "common/index.ts",
+                  vite: "common/vite.ts",
+                },
+        formats: isLinuxDependencies
+          ? ["es"]
+          : isAndroidHost
+            ? ["es", "cjs"]
+            : [isCjs ? "cjs" : "es"],
         fileName: (format, entryName) =>
           `${entryName}${format === "es" ? ".mjs" : ".cjs"}`,
       },

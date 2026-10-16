@@ -724,6 +724,56 @@ afterEach(async () => {
 });
 
 describe("muon build", () => {
+  it("carries the Linux baseline libraries, notices and dependency report into the app", async () => {
+    const root = await createTemporaryDirectory("muon-build-baseline-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const source = join(packageDirectory, "runtime/linux-amd64");
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ name: "baseline-app" }),
+    );
+    await mkdir(join(root, "assets"));
+    await writeFile(
+      join(root, "assets/index.html"),
+      "<!doctype html><title>baseline</title>",
+    );
+    await writeFile(
+      join(source, "linux-dependencies.json"),
+      JSON.stringify({ referenceCef: { version: "build-reference" } }),
+    );
+    await writeFile(
+      join(source, "linux-bundle.json"),
+      JSON.stringify([
+        { file: "libfixture.so.1", license: "licenses/linux/fixture.txt" },
+      ]),
+    );
+    await writeFile(join(source, "libfixture.so.1"), "private library");
+    await mkdir(join(source, "licenses/linux"), { recursive: true });
+    await writeFile(
+      join(source, "licenses/linux/fixture.txt"),
+      "redistribution notice",
+    );
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      assetSourcePath: "assets",
+    });
+    const output = result.targets[0]!.outputPath;
+    expect(
+      JSON.parse(
+        await readFile(join(output, "linux-dependencies.json"), "utf8"),
+      ).referenceCef.version,
+    ).toBe("build-reference");
+    expect(await readFile(join(output, "libfixture.so.1"), "utf8")).toBe(
+      "private library",
+    );
+    expect(
+      await readFile(join(output, "licenses/linux/fixture.txt"), "utf8"),
+    ).toBe("redistribution notice");
+    expect(await exists(join(output, "libcef.so"))).toBe(false);
+  });
+
   it("creates a CEF-free target distribution with embedded config and SHA-256-signed assets", async () => {
     const root = await createTemporaryDirectory("muon-build-app-");
     const packageDirectory = await createFakeMuonPackageDist(root);

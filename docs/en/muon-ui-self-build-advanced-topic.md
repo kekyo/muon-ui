@@ -123,3 +123,29 @@ This package script delegates to `build_package.sh`.
 If you want to pass package generation options directly, you can run `build_package.sh` directly.
 
 - Because native code is built and tested for all supported architectures, this takes a very long time and may take more than 30 minutes.
+
+### Linux baseline builds and dependency reports
+
+Linux distributions are built in Ubuntu 20.04 containers prepared by `prereq.sh`, using GCC 10 and the library baseline in `scripts/linux-baseline.Containerfile`. Required GLib 2.74.7 is built from upstream source in a private prefix and distributed with GTK and related libraries. This does not replace the host OS's GLib. See [GLib source releases](https://download.gnome.org/sources/glib/2.74/).
+
+After changing CEF or the baseline, rebuild both the images and distribution files. To check only amd64, add `--arch amd64` to both commands:
+
+```bash
+bash prereq.sh --force
+bash build_package.sh --target dist
+```
+
+Each target's `core/cef/dist-linux-*/linux-dependencies.json` records the build reference CEF, library requirements, baseline, and deb dependencies. The adjacent `.json.txt` is the readable report. `linux-bundle.json` records bundled file hashes, provenance, and license locations. Unresolved required symbols or libraries cause the build to fail with a report.
+
+These records and libraries are staged under `ui/dist/runtime/<target>/`. Application packaging combines the recorded requirements with those of the application's native components without downloading CEF again. Changing the runtime CEF selection policy does not change the analysis reference.
+
+Run the package validation and independent AppImage, deb, and tar.gz consumer check as follows. After building a single target, append `linux-amd64` to the validation command:
+
+```bash
+npm run verify:package-runtime --workspace muon-ui
+mkdir -p .run/linux-package-check
+npm pack --workspace muon-ui --ignore-scripts --pack-destination .run/linux-package-check
+node ui/cef-test/test-packaged-appimage.mts .run/linux-package-check/muon-ui-0.0.1.tgz linux-amd64 linux-armhf linux-arm64
+```
+
+Use the actual package version in the tgz filename. This check installs the NPM archive in a temporary directory and generates all three formats through the public CLI. It checks bundled files, licenses, dependency records, and the absence of CEF. AppImage tools are downloaded, verified by hash, and cached. CI runs this check from an amd64 baseline build. Ordinary `npm test` also checks development builds, so stage distribution targets before creating the NPM archive.

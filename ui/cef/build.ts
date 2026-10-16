@@ -16,7 +16,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { tmpdir } from "node:os";
 import {
   applyMuonNativePluginCatalogs,
@@ -58,6 +66,7 @@ import {
   type ResolvedMuonWindowsCodeSigning,
 } from "./windows-code-signing.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "../common/app-icon.js";
+import { readLinuxBundleProvenance } from "./linux-bundle-provenance.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import type { MuonProgressCallback } from "../common/progress.js";
 import {
@@ -755,6 +764,33 @@ const copyRuntimeFiles = async (
       join(sourceRuntimePath, fileName),
       join(outputPath, fileName),
     );
+  }
+  if (
+    descriptor.os === "linux" &&
+    (await statOrUndefined(
+      join(sourceRuntimePath, "linux-dependencies.json"),
+    )) !== undefined
+  ) {
+    for (const name of ["linux-dependencies.json", "linux-bundle.json"])
+      await copyFile(join(sourceRuntimePath, name), join(outputPath, name));
+    for (const library of await readLinuxBundleProvenance(sourceRuntimePath)) {
+      if (!/^licenses\/linux\/[^/]+\.txt$/.test(library.license))
+        throw new Error(
+          `Invalid bundled library license path: ${library.license}`,
+        );
+      await mkdir(dirname(join(outputPath, library.file)), { recursive: true });
+      await copyFile(
+        join(sourceRuntimePath, library.file),
+        join(outputPath, library.file),
+      );
+      await mkdir(dirname(join(outputPath, library.license)), {
+        recursive: true,
+      });
+      await copyFile(
+        join(sourceRuntimePath, library.license),
+        join(outputPath, library.license),
+      );
+    }
   }
   if (descriptor.optionalRuntimeFilePatterns !== undefined) {
     const fileNames = await readdir(sourceRuntimePath);

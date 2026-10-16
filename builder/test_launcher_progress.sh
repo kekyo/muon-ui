@@ -118,6 +118,7 @@ gcc -std=c99 -Wall -Wextra -pedantic \
 cat >"${LAUNCHER_STATE_HARNESS}" <<'HARNESS_EOF'
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #endif
 
 #include <stdio.h>
@@ -367,6 +368,7 @@ cat >"${install_config_dir}/muon-install.json" <<'INSTALL_CONFIG_EOF'
 INSTALL_CONFIG_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
+    -Werror=implicit-function-declaration -Werror=int-conversion \
 	  -I"${SCRIPT_DIR}/src" \
 	  -I"${SCRIPT_DIR}/../deps/sha2" \
 	  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \

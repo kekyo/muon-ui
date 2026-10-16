@@ -39,6 +39,7 @@ struct DesktopAutostartEntry final {
   bool hidden = false;
   bool has_exec = false;
   std::string exec;
+  std::string appimage_id;
 };
 #else
 static constexpr wchar_t kWindowsRunKey[] =
@@ -70,14 +71,22 @@ static bool ValidateAutostartOptions(const MuonAutostartOptions& options,
     *error_message = "Autostart executable path has no file name";
     return false;
   }
+  if (!options.appimage_id.empty() &&
+      (options.appimage_id == "." || options.appimage_id == ".." ||
+       options.appimage_id.find_first_not_of(
+           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") !=
+           std::string::npos)) {
+    *error_message = "Invalid AppImage application ID";
+    return false;
+  }
   return true;
 }
 
 #if !defined(_WIN32)
 
-static std::string GetAutostartEntryName(
-    const std::filesystem::path& executable_path) {
-  return executable_path.stem().string();
+static std::string GetAutostartEntryName(const MuonAutostartOptions& options) {
+  return options.appimage_id.empty() ? options.executable_path.stem().string()
+                                     : options.appimage_id;
 }
 
 static std::filesystem::path GetAutostartDesktopFilePath(
@@ -180,8 +189,22 @@ static std::string EscapeDesktopExecArgument(std::string_view value) {
       case '\\':
       case '$':
       case '`':
-        escaped.push_back('\\');
-        escaped.push_back(character);
+        // Desktop string escaping is decoded before Exec argument quoting.
+        escaped += "\\\\";
+        if (character == '\\') escaped += "\\\\";
+        else escaped.push_back(character);
+        break;
+      case '%':
+        escaped += "%%";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
         break;
       default:
         escaped.push_back(character);
@@ -190,6 +213,14 @@ static std::string EscapeDesktopExecArgument(std::string_view value) {
   }
   escaped.push_back('"');
   return escaped;
+}
+
+static std::string CreateDesktopExecCommand(
+    const std::filesystem::path& executable) {
+  const auto path = executable.string();
+  // GIO checks argv[0] before expanding %% in desktop command lines.
+  const auto prefix = path.find('%') == std::string::npos ? "" : "/usr/bin/env ";
+  return prefix + EscapeDesktopExecArgument(path);
 }
 
 static std::string CreateEnabledDesktopEntry(
@@ -206,8 +237,11 @@ static std::string CreateEnabledDesktopEntry(
   content += "\n";
   content += kDesktopEntryExecKey;
   content += "=";
-  content += EscapeDesktopExecArgument(options.executable_path.string());
+  content += CreateDesktopExecCommand(options.executable_path);
   content += "\nTerminal=false\n";
+  if (!options.appimage_id.empty()) {
+    content += "X-muon-AppImage-ID=" + options.appimage_id + "\n";
+  }
   return content;
 }
 
@@ -227,6 +261,7 @@ static bool ReadDesktopAutostartEntry(const std::filesystem::path& path,
   entry->hidden = false;
   entry->has_exec = false;
   entry->exec.clear();
+  entry->appimage_id.clear();
 
   std::error_code error;
   const auto exists = std::filesystem::exists(path, error);
@@ -270,6 +305,8 @@ static bool ReadDesktopAutostartEntry(const std::filesystem::path& path,
     } else if (key == kDesktopEntryExecKey) {
       entry->has_exec = true;
       entry->exec = value;
+    } else if (key == "X-muon-AppImage-ID") {
+      entry->appimage_id = value;
     }
   }
   if (!input.eof() && input.fail()) {
@@ -280,7 +317,26 @@ static bool ReadDesktopAutostartEntry(const std::filesystem::path& path,
 }
 
 static std::string ExtractDesktopExecCommand(const std::string& exec) {
-  const auto source = TrimAscii(exec);
+  std::string decoded;
+  for (size_t index = 0; index < exec.size(); ++index) {
+    if (exec[index] == '\\' && index + 1 < exec.size()) {
+      const auto next = exec[index + 1];
+      if (next == '\\' || next == 's' || next == 'n' || next == 'r' || next == 't') {
+        ++index;
+        decoded.push_back(next == 's' ? ' ' : next == 'n' ? '\n' :
+                          next == 'r' ? '\r' : next == 't' ? '\t' : '\\');
+        continue;
+      }
+    }
+    if (exec[index] == '%' && index + 1 < exec.size() && exec[index + 1] == '%') {
+      ++index;
+    }
+    decoded.push_back(exec[index]);
+  }
+  auto source = TrimAscii(decoded);
+  if (source.starts_with("/usr/bin/env ")) {
+    source = TrimAscii(source.substr(std::string_view("/usr/bin/env ").size()));
+  }
   if (source.empty()) {
     return "";
   }
@@ -353,7 +409,7 @@ static bool HasSystemDesktopEntry(const std::string& entry_name,
 static bool GetXdgAutostartStatus(const MuonAutostartOptions& options,
                                   MuonAutostartStatus* status,
                                   std::string* error_message) {
-  const auto entry_name = GetAutostartEntryName(options.executable_path);
+  const auto entry_name = GetAutostartEntryName(options);
   std::filesystem::path user_directory;
   if (!GetXdgUserAutostartDirectory(&user_directory, error_message)) {
     return false;
@@ -389,7 +445,7 @@ static bool GetXdgAutostartStatus(const MuonAutostartOptions& options,
 static bool SetXdgAutostart(const MuonAutostartOptions& options,
                             bool enabled,
                             std::string* error_message) {
-  const auto entry_name = GetAutostartEntryName(options.executable_path);
+  const auto entry_name = GetAutostartEntryName(options);
   std::filesystem::path user_directory;
   if (!GetXdgUserAutostartDirectory(&user_directory, error_message) ||
       !EnsureDirectory(user_directory, error_message)) {
@@ -619,6 +675,19 @@ bool CreateDefaultMuonAutostartOptions(MuonAutostartOptions* options,
   error_message->clear();
   options->executable_path.clear();
   options->launch_source = GetMuonStartupLaunchSource();
+  options->appimage_id.clear();
+#if !defined(_WIN32)
+  // Only the launcher sets this context after checking its install metadata.
+  // APPIMAGE alone may belong to an unrelated process that launched muon.
+  const auto* appimage = std::getenv("MUON_LAUNCHER_APPIMAGE");
+  const auto* app_id = std::getenv("MUON_LAUNCHER_APP_ID");
+  if (appimage != nullptr && appimage[0] == '/' && app_id != nullptr &&
+      app_id[0] != '\0') {
+    options->executable_path = appimage;
+    options->appimage_id = app_id;
+    return muon_internal::ValidateAutostartOptions(*options, error_message);
+  }
+#endif
   if (!GetMuonExecutablePath(&options->executable_path)) {
     *error_message = "Failed to resolve muon executable path";
     return false;
@@ -667,5 +736,60 @@ bool SetMuonAutostart(const MuonAutostartOptions& options,
   return muon_internal::SetWindowsAutostart(options, enabled, error_message);
 #else
   return muon_internal::SetXdgAutostart(options, enabled, error_message);
+#endif
+}
+
+bool RefreshMuonAppImageAutostart(const MuonAutostartOptions& options,
+                                 std::string* error_message) {
+  if (!muon_internal::ValidateAutostartOptions(options, error_message)) {
+    return false;
+  }
+#if !defined(_WIN32)
+  if (options.appimage_id.empty() ||
+      !muon_internal::IsDefaultAutostartLaunchSource(options.launch_source)) {
+    return true;
+  }
+  std::filesystem::path directory;
+  if (!muon_internal::GetXdgUserAutostartDirectory(&directory, error_message)) {
+    return false;
+  }
+  const auto path = muon_internal::GetAutostartDesktopFilePath(
+      directory, options.appimage_id);
+  muon_internal::DesktopAutostartEntry entry;
+  if (!muon_internal::ReadDesktopAutostartEntry(path, &entry, error_message)) {
+    return false;
+  }
+  if (!entry.exists || entry.hidden || !entry.has_exec ||
+      entry.appimage_id != options.appimage_id) {
+    return true;
+  }
+  const auto command =
+      muon_internal::CreateDesktopExecCommand(options.executable_path);
+  if (entry.exec == command) return true;
+
+  // Retain user-added keys such as OnlyShowIn when replacing the command.
+  std::ifstream input(path);
+  std::string content;
+  std::string line;
+  auto in_desktop_entry = false;
+  while (std::getline(input, line)) {
+    const auto trimmed = muon_internal::TrimAscii(line);
+    if (!trimmed.empty() && trimmed.front() == '[' && trimmed.back() == ']') {
+      in_desktop_entry = trimmed == "[Desktop Entry]";
+    }
+    const auto separator = trimmed.find('=');
+    if (in_desktop_entry && separator != std::string::npos &&
+        muon_internal::TrimAscii(trimmed.substr(0, separator)) == "Exec") {
+      line = "Exec=" + command;
+    }
+    content += line + "\n";
+  }
+  if (!input.eof() || input.bad()) {
+    *error_message = "Failed to read autostart file: " + path.string();
+    return false;
+  }
+  return muon_internal::WriteTextFile(path, content, error_message);
+#else
+  return true;
 #endif
 }

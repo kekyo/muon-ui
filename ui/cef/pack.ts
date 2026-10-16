@@ -91,7 +91,22 @@ import {
   readPackageJson,
   resolveMetadata,
 } from "../common/pack-metadata.js";
-const supportedPackTypes = ["zip", "tar.gz", "deb", "nsis"] as const;
+import {
+  collectLinuxElfFiles,
+  type LinuxDependencyManifest,
+} from "./linux-dependency-manifest.js";
+import { getLinuxAppDependencies } from "./linux-app-dependencies.js";
+import { ensureLinuxAppImageTools } from "./appimage-tools.js";
+import { createLinuxAppDir, createLinuxAppImage } from "./linux-appimage.js";
+import type { LinuxDependencyTarget } from "./linux-dependencies.js";
+
+const supportedPackTypes = [
+  "zip",
+  "tar.gz",
+  "deb",
+  "appimage",
+  "nsis",
+] as const;
 
 const supportedLinuxSandboxModes = ["disabled", "setuid"] as const;
 
@@ -109,38 +124,6 @@ const portableInstallMetadata = {
   type: "portable",
   runtimeMode: "in-place",
 } as const;
-// Keep both names for Debian t64 and pre-t64 runtime packages.
-
-const debRuntimeDependencies = [
-  "libc6",
-  "libgcc-s1",
-  "libstdc++6",
-  "libffi8",
-  "libexpat1",
-  "libdbus-1-3",
-  "libglib2.0-0t64 | libglib2.0-0",
-  "libgtk-3-0t64 | libgtk-3-0",
-  "libatk-bridge2.0-0t64 | libatk-bridge2.0-0",
-  "libatk1.0-0t64 | libatk1.0-0",
-  "libatspi2.0-0t64 | libatspi2.0-0",
-  "libcups2t64 | libcups2",
-  "libnspr4",
-  "libnss3",
-  "libgbm1",
-  "libasound2t64 | libasound2",
-  "libudev1",
-  "libx11-6",
-  "libxcb1",
-  "libxcomposite1",
-  "libxdamage1",
-  "libxext6",
-  "libxfixes3",
-  "libxi6",
-  "libxkbcommon0",
-  "libxrandr2",
-  "libcairo2",
-  "libpango-1.0-0",
-] as const;
 
 const requireDesktopTarget = (
   target: MuonBuildResult["targets"][number],
@@ -301,6 +284,7 @@ const packTypeSupportsTarget = (
     (type === "zip" && descriptor.os === "windows") ||
     (type === "tar.gz" && descriptor.os === "linux") ||
     (type === "deb" && descriptor.os === "linux") ||
+    (type === "appimage" && descriptor.os === "linux") ||
     (type === "nsis" && descriptor.os === "windows")
   );
 };
@@ -532,6 +516,92 @@ const writePortableInstallMetadata = async (
   );
 };
 
+const getDistributionLinuxDependencies = async (
+  target: MuonBuildTargetResult,
+): Promise<string[]> => {
+  const manifestPath = join(target.outputPath, "linux-dependencies.json");
+  let manifest: LinuxDependencyManifest;
+  try {
+    manifest = JSON.parse(
+      await readFile(manifestPath, "utf8"),
+    ) as LinuxDependencyManifest;
+  } catch (error) {
+    throw new Error(
+      `Cannot read Linux build dependency metadata: ${manifestPath}`,
+      { cause: error },
+    );
+  }
+  if (manifest.audit.target !== target.target)
+    throw new Error(
+      `Linux dependency metadata does not match ${target.target}`,
+    );
+  // t64 packages may satisfy old names through versioned Provides when their
+  // ABI is compatible. Do not claim blanket compatibility for 32-bit time_t.
+  return await getLinuxAppDependencies(
+    manifest,
+    await collectLinuxElfFiles(target.outputPath),
+  );
+};
+
+const packageAppImage = async (
+  target: MuonBuildTargetResult,
+  metadata: PackageMetadata,
+  artifactsRoot: string,
+  packageBuildRoot: string,
+  environment: NodeJS.ProcessEnv,
+  allowSkip: boolean,
+  progress: MuonProgressCallback | undefined,
+): Promise<MuonPackArtifact | undefined> => {
+  if (!target.target.startsWith("linux-") || target.linuxDesktop === undefined)
+    throw new Error(`Unsupported AppImage target: ${target.target}`);
+  let tools;
+  try {
+    tools = await ensureLinuxAppImageTools(
+      target.target as LinuxDependencyTarget,
+      environment,
+      progress,
+    );
+  } catch (error) {
+    if (
+      allowSkip &&
+      (error as NodeJS.ErrnoException).code ===
+        "MUON_APPIMAGE_TOOLS_UNAVAILABLE"
+    ) {
+      progress?.({
+        phase: "pack",
+        status: `Warning: ${(error as Error).message} Skipping appimage package for ${target.target}.`,
+      });
+      return undefined;
+    }
+    throw error;
+  }
+  await getDistributionLinuxDependencies(target);
+  const directory = join(
+    packageBuildRoot,
+    "appimage",
+    `${metadata.packageName}-${target.target}.AppDir`,
+  );
+  await createLinuxAppDir(
+    target.outputPath,
+    basename(target.launcherPath),
+    target.linuxDesktop,
+    directory,
+  );
+  const output = join(
+    artifactsRoot,
+    `${metadata.packageName}-${metadata.version}-${target.target}.AppImage`,
+  );
+  progress?.({ phase: "pack", status: "Running appimagetool" });
+  await createLinuxAppImage(
+    directory,
+    output,
+    tools,
+    metadata.version,
+    environment,
+  );
+  return { type: "appimage", target: target.target, path: output };
+};
+
 const packageDeb = async (
   root: string,
   target: MuonBuildTargetResult,
@@ -546,7 +616,19 @@ const packageDeb = async (
   if (descriptor.os !== "linux") {
     throw new Error(`Unsupported deb target: ${target.target}`);
   }
+  // Missing host tools skip this format before inspecting Linux ELF metadata.
+  // This also keeps portable packaging usable on hosts without binutils.
+  try {
+    await runTool("dpkg-deb", ["--version"], root, environment);
+  } catch (error) {
+    if (isUnavailableToolError(error, "dpkg-deb")) {
+      reportSkippedUnavailableTool(progress, "dpkg-deb", "deb", target.target);
+      return undefined;
+    }
+    throw error;
+  }
   const architecture = descriptor.arch;
+  const dependencies = await getDistributionLinuxDependencies(target);
   const packageRoot = join(
     packageBuildRoot,
     "deb",
@@ -640,7 +722,7 @@ const packageDeb = async (
       `Version: ${metadata.version}`,
       `Architecture: ${architecture}`,
       `Maintainer: ${metadata.author}`,
-      `Depends: ${debRuntimeDependencies.join(", ")}`,
+      `Depends: ${dependencies.join(", ")}`,
       `Description: ${metadata.description}`,
       "",
     ].join("\n"),
@@ -1345,6 +1427,16 @@ export const packDesktopMuonApp = async (
           packageBuildRoot,
           environment,
           linuxSandbox,
+          progress,
+        );
+      } else if (type === "appimage") {
+        artifact = await packageAppImage(
+          target,
+          metadata,
+          artifactsRoot,
+          packageBuildRoot,
+          environment,
+          options.types === undefined,
           progress,
         );
       } else {

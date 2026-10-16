@@ -234,6 +234,7 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 - When launched from a portable distribution (`.tar.gz`), `muon-launcher` prepares CEF directly under the extracted `<packageName>/<target>` directory, places the CEF profile in `profile/` under the same directory, and creates or updates `~/.local/share/applications/<desktopId>.desktop`.
   The `Exec`, `TryExec`, and `Icon` values in this desktop entry point to absolute paths under the extracted directory.
 - When restarted from the same extracted location, the prepared CEF is reused. When launched from a distribution extracted to another directory, CEF preparation and desktop entry update are performed for that location.
+- AppImage prepares its runtime in the user's state directory and registers the original AppImage for menu and enabled autostart entries. Launch it directly after moving or renaming it to update these entries. See [creating and running AppImages](./muon-cli-advanced-topics.md#creating-and-running-appimages).
 - `muon pack --type deb` generates `/usr/share/applications/<desktopId>.desktop` and `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png`.
   Runtimes installed by deb contain `muon-install.json`, and `muon-launcher` does not create a new desktop entry in the user's home directory.
   Only when an existing muon-managed user desktop entry exists, it is updated to a deb-aware entry with `TryExec=/usr/bin/<packageName>`.

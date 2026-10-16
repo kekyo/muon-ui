@@ -719,7 +719,7 @@ const createCliCommand = (): Command => {
     .description("Build and package a muon app")
     .option(
       "--type <type>",
-      "package types: zip, tar.gz, tgz, deb, nsis; Android: apk (default: all for the selected target)",
+      "package types: zip, tar.gz, tgz, deb, appimage, nsis; Android: apk (default: all for the selected target)",
       appendPackTypeValues,
     )
     .option(

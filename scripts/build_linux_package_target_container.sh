@@ -57,6 +57,7 @@ require_command make
 require_command ninja
 require_command pkg-config
 require_command readelf
+require_command node
 
 cd /workspace
 
@@ -74,3 +75,11 @@ file "builder/dist-${MUON_PACKAGE_TARGET}/muon-builder"
 readelf -h "builder/dist-${MUON_PACKAGE_TARGET}/muon-builder" >/dev/null
 file "core/cef/dist-${MUON_PACKAGE_TARGET}/muon-core"
 readelf -h "core/cef/dist-${MUON_PACKAGE_TARGET}/muon-core" >/dev/null
+
+node ui/.build/linux-dependencies/linux-dependencies.mjs \
+  --target "${MUON_PACKAGE_TARGET}" \
+  --cmake-cache "core/cef/.build/dist/${MUON_PACKAGE_TARGET}/release/CMakeCache.txt" \
+  --runtime "core/cef/dist-${MUON_PACKAGE_TARGET}" \
+  --native "builder/dist-${MUON_PACKAGE_TARGET}" \
+  --bundle-baseline /opt/muon-baseline/source.json \
+  --output "core/cef/dist-${MUON_PACKAGE_TARGET}/linux-dependencies.json"

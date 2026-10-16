@@ -672,6 +672,29 @@ describe("muon-ui package root export", () => {
       await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
       await writeFile(join(runtimeDirectory, "CREDITS.md"), "credits\n");
       await writeFile(
+        join(runtimeDirectory, "linux-dependencies.json"),
+        "{}\n",
+      );
+      await writeFile(
+        join(runtimeDirectory, "linux-dependencies.json.txt"),
+        "audit\n",
+      );
+      await writeFile(
+        join(runtimeDirectory, "linux-bundle.json"),
+        JSON.stringify([
+          { file: "libexample.so.1", license: "licenses/example.txt" },
+        ]),
+      );
+      await writeFile(
+        join(runtimeDirectory, "libexample.so.1"),
+        "private library\n",
+      );
+      await mkdir(join(runtimeDirectory, "licenses"));
+      await writeFile(
+        join(runtimeDirectory, "licenses/example.txt"),
+        "license\n",
+      );
+      await writeFile(
         join(runtimeDirectory, "plugins", "node.so"),
         "node plugin\n",
       );
@@ -708,6 +731,18 @@ describe("muon-ui package root export", () => {
       );
       expect((await stat(supervisorPath)).mode & 0o111).not.toBe(0);
       await expect(
+        readFile(
+          join(stagedRuntimeDirectory, "linux-dependencies.json.txt"),
+          "utf8",
+        ),
+      ).resolves.toBe("audit\n");
+      await expect(
+        readFile(join(stagedRuntimeDirectory, "libexample.so.1"), "utf8"),
+      ).resolves.toBe("private library\n");
+      await expect(
+        readFile(join(stagedRuntimeDirectory, "licenses/example.txt"), "utf8"),
+      ).resolves.toBe("license\n");
+      await expect(
         readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
       ).resolves.toBe("node plugin\n");
       await expect(
@@ -725,11 +760,70 @@ describe("muon-ui package root export", () => {
     }
   });
 
-  it("uses vendored native dependency checkouts for package builds by default", async () => {
+  it("rejects incomplete Linux dependency payloads before publishing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "muon-package-verify-"));
+    cleanupDirectories.push(root);
+    const native = join(root, "dist/native/linux-amd64");
+    const runtime = join(root, "dist/runtime/linux-amd64");
+    await mkdir(native, { recursive: true });
+    await mkdir(join(runtime, "plugins"), { recursive: true });
+    await mkdir(join(runtime, "licenses"));
+    await writeFile(join(root, "dist/native/muon-256.png"), "icon");
+    for (const name of [
+      "muon-builder",
+      "muon-launcher",
+      "muon-plugin-inspector",
+    ])
+      await writeExecutableScript(join(native, name), "native");
+    for (const name of [
+      "muon-core",
+      "libmuon-ui.so",
+      "libcardio.so",
+      "muon-executor-supervisor",
+      "plugins/node.so",
+      "plugins/node-bridge.mjs",
+      "CREDITS.md",
+    ])
+      await writeExecutableScript(join(runtime, name), "payload");
+    const verify = async () =>
+      await execFileAsync(
+        process.execPath,
+        [resolve("scripts/verify-package-runtime.mjs"), "linux-amd64"],
+        { cwd: root },
+      );
+    await expect(verify()).rejects.toThrow("linux-dependencies.json");
+    await writeFile(join(runtime, "linux-dependencies.json"), "{}\n");
+    await writeFile(join(runtime, "linux-dependencies.json.txt"), "audit\n");
+    await writeFile(
+      join(runtime, "linux-bundle.json"),
+      JSON.stringify([
+        { file: "libexample.so.1", license: "licenses/example.txt" },
+      ]),
+    );
+    await expect(verify()).rejects.toThrow("libexample.so.1");
+    await writeFile(join(runtime, "libexample.so.1"), "private library");
+    await expect(verify()).rejects.toThrow("licenses/example.txt");
+    await writeFile(join(runtime, "licenses/example.txt"), "license");
+    await expect(verify()).resolves.toMatchObject({ stderr: "" });
+    await writeFile(join(runtime, "libcef.so"), "CEF");
+    await expect(verify()).rejects.toThrow("libcef.so");
+  });
+
+  it("builds packages with an unbuilt SDK and vendored native dependencies", async () => {
     const root = await createFakePackageBuildRoot();
     const binDirectory = join(root, "bin");
     const containerLog = join(root, "container.log");
     const npmLog = join(root, "npm.log");
+    await copyFile(
+      resolve("..", "sdk", "package.json"),
+      join(root, "sdk", "package.json"),
+    );
+    await mkdir(join(root, "node_modules"));
+    await symlink("../sdk", join(root, "node_modules", "muon-plugin-sdk"));
+    await writeFile(
+      join(root, "ui", "sdk-consumer.ts"),
+      'import type * as sdk from "muon-plugin-sdk";\nimport type * as artifact from "muon-plugin-sdk/artifact";\n',
+    );
     await mkdir(binDirectory, { recursive: true });
     await writeExecutableScript(
       join(binDirectory, "fake-container"),
@@ -751,6 +845,15 @@ exit 1
       `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "\${MUON_FAKE_NPM_LOG:?}"
+if [[ "$*" == "run build:js --workspace muon-plugin-sdk" ]]; then
+  mkdir -p sdk/dist/types
+  for entry in index artifact; do
+    printf 'export {};\\n' > "sdk/dist/types/\${entry}.d.ts"
+  done
+fi
+if [[ "$*" == "run build:linux-dependencies --workspace muon-ui" ]]; then
+  node "\${MUON_FAKE_TSC_PATH:?}" --noEmit --skipLibCheck --module ESNext --moduleResolution Bundler ui/sdk-consumer.ts >&2
+fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
   output_path=""
   for arg in "$@"; do
@@ -798,6 +901,7 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
           CONTAINER_ENGINE: join(binDirectory, "fake-container"),
           MUON_FAKE_CONTAINER_LOG: containerLog,
           MUON_FAKE_NPM_LOG: npmLog,
+          MUON_FAKE_TSC_PATH: tscPath,
         },
       },
     );
@@ -894,6 +998,12 @@ HEADER
   exit 0
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "build" && " $* " == *" --workspace muon-node "* ]]; then
+  exit 0
+fi
+if [[ "$*" == "run build:js --workspace muon-plugin-sdk" ]]; then
+  exit 0
+fi
+if [[ "\${1:-}" == "run" && "\${2:-}" == "build:linux-dependencies" ]]; then
   exit 0
 fi
 printf 'Unexpected fake npm invocation: %s\\n' "$*" >&2

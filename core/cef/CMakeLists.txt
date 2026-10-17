@@ -1128,6 +1128,8 @@ if(WIN32)
   list(APPEND APP_SOURCES
     "${MUON_CORE_WINDOWS_RESOURCE_PATH}"
     )
+  set_source_files_properties("${MUON_CORE_WINDOWS_RESOURCE_PATH}" PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/muon_core.manifest")
 endif()
 if(MUON_CORE_VERSION_HEADER)
   get_filename_component(MUON_CORE_VERSION_HEADER_ABSOLUTE

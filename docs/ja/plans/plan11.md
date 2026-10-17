@@ -81,7 +81,7 @@ Linux側の`gtk_dialog_run`を、表示開始と`response`、`destroy`などの�
 
 親のクライアント領域で入力を遮る処理に、ダイアログを提示するクリック経路を追加する。現在の`CefPanel`にはボタン押下通知がないため、公開APIでクリックを受け取れる構成を選ぶ。`CefButtonDelegate::OnButtonPressed`は検討候補であり、具体的なView構成は入力遮断とフォーカスのテストを通して決める。[CEFのButtonDelegate](https://cef-builds.spotifycdn.com/docs/147.0/classCefButtonDelegate.html)
 
-`OnWindowActivationChanged`からも、親が持つ操作対象のダイアログを提示する。クリック経路とアクティブ化経路を両方用意し、フォーカス変更が起きないクリックを取りこぼさない。`muon.browser.activate`のようにアプリから親をアクティブ化する経路も確認する。[CEFのWindowDelegate](https://cef-builds.spotifycdn.com/docs/147.0/classCefWindowDelegate.html)
+`OnWindowActivationChanged`からも、親が持つ操作対象のダイアログを提示する。クリック経路とアクティブ化経路を両方用意し、フォーカス変更が起きないクリックを取りこぼさない。アプリから親へフォーカスを移す`muon.browser.focus()`も確認する。[CEFのWindowDelegate](https://cef-builds.spotifycdn.com/docs/147.0/classCefWindowDelegate.html)
 
 独自タイトルバーの操作、キーボードショートカット、ウインドウサイズ変更時の入力遮断範囲も対象に含める。BrowserView上のパネルだけで親全体を保護できたとは判断しない。OS側のタイトルバー操作はウインドウマネージャーにも依存するため、Windowsの動作との比較を実機で確認する。
 
@@ -189,8 +189,8 @@ Windowsの回帰は利用可能ならWineで確認する。Wine固有の問題�
 ## 最終完了条件
 
 - [x] 対象のGTKファイルダイアログがGTKのモーダル実行ループに依存せず表示・応答・終了できる。
-- [ ] 親への実際のクリックと親の再アクティブ化から、操作対象のダイアログへ戻れる。
-- [ ] BrowserView、独自タイトルバー、キーボード経路で親への操作を禁止できる。
+- [x] 親への実際のクリックと親の再アクティブ化から、操作対象のダイアログへ戻れる。
+- [x] BrowserView、独自タイトルバー、キーボード経路で親への操作を禁止できる。
 - [ ] 複数の子やさらに子を持つダイアログで、操作対象と親の入力禁止を正しく管理できる。
 - [ ] 最後の子が閉じた後、元の入力可否と有効なフォーカス先を復元できる。
 - [ ] 取消、生成失敗、親の破棄、アプリ終了で通知が重複せず、操作や入力禁止が残らない。
@@ -202,8 +202,15 @@ Windowsの回帰は利用可能ならWineで確認する。Wine固有の問題�
 
 ## 実施記録
 
+段階2の検証で、既存のテスト用ウインドウマネージャーが`_NET_ACTIVE_WINDOW`への対応を公開しながら、アクティブ化要求を処理していないことを確認した。GTKが送る正規の要求を検証するため、テスト環境にもアクティブ化とフォーカス通知の処理を追加した。子を閉じたときも所有関係に従って親へ戻す。アプリ側ではウインドウマネージャーを迂回しない。
+
 - 2026年10月17日: muon-uiとelder-termsのコード、関連テスト、CEF・GTK・Win32の公開APIを調査した。分析結果と3段階の実装計画を本書へ保存した。実装、ビルド、動作テストは未実施。
 - 2026年10月17日、段階1: 開始APIが完了前に戻らないことをネイティブテストで再現した。GTKの表示を予約し、応答、非表示、破棄から完了する処理へ変更した。完了した操作と表示予約を解放し、shutdownを既存の終了処理へ接続した。
 - 段階1の検証: Linux Debugビルドとテストドライバーのビルドが警告なしで成功した。`ctest --test-dir core/cef/.build/test/linux-amd64/debug -R '^muon_ui_fs_dialogs' --output-on-failure`の2件で、複数所有元、表示予約中のキャンセル、表示順と独立した終了、終了通知の重複、生成失敗、完了通知からの再入とshutdownを確認した。実行には既存のXvfb・DBusラッパーを使用した。
 - 段階1のE2E検証: `npm run test:vitest --workspace muon-core-tester -- plugin-e2e.test.ts -t 'muon plugin bridge - native dialogs'`の8件が成功した。Playwright MCPから先に開いたダイアログをAbortSignalで中断し、後から開いたダイアログが残ることと、最後の中断後に親のクリック処理が再開することを確認した。既存テストでも選択、取消、親終了、非モーダル表示、通常のポップアップを確認した。検証環境はXvfbのX11であり、XWayland、ネイティブWayland、Windowsはこの段階では未検証。
 - 継続して調べる結果: 初回の広いテスト名抽出では、`app and network`の`keeps no-opener popup access disconnected even for unsafe parent access matches`が新規ページの待機でタイムアウトした。ファイルダイアログの8件は成功している。このタイムアウトの原因と再現性は段階3の回帰確認で調べる。
+- 2026年10月17日、段階2: 親へのクリックで、別のウインドウに隠れたダイアログへ戻らない失敗を確認した。CEFのボタンViewで親への入力を受け、ウインドウのアクティブ化通知と`muon.browser.focus()`からも操作対象の子へ戻すようにした。独自タイトルバー、ショートカット、サイズ変更後の領域も入力禁止の対象とし、終了時に元の有効状態と利用可能なフォーカス先を復元する。
+- 段階2の子管理: X11の所有関係を設定し、同じ親の子はアクティブ化された順に管理する。GTKが内部で作る確認画面も追跡し、表示中の最も深い子を提示する。子の非表示、破棄、親の終了に伴う参照の解放をネイティブテストで確認した。独立したGTKウインドウグループによって、確認画面が別の所有元を操作できなくすることを防ぐ。
+- 段階2のX11検証: Linux Debugビルドは警告なしで成功し、関連E2Eの8件が成功した。親のクリック、フォーカス変更なしのクリック、アプリからのフォーカス要求、WMによるアクティブ化、タイトルバーの3ボタン、F5/F12、サイズ変更後のクリックについて、ネイティブ入力、実フォーカス、録画の連続フレームを検証した。基準画像は目視で確認した。選択後に元のボタンをEnterで操作できることも確認した。
+- 段階2のXWayland検証: Weston 13の上でrootful Xwaylandとテスト用WMを組み合わせ、ネイティブテスト2件と前面化の動画E2Eが成功した。Weston 13標準のrootless構成では表示とAbortSignalによる中断は成功したが、前面化は失敗した。標準XWMの`weston_wm_handle_client_message`に`_NET_ACTIVE_WINDOW`の処理がないことを確認しており、この構成での前面化を検証済みとは扱わない。[Weston 13のXWM実装](https://gitlab.freedesktop.org/wayland/weston/-/blob/13.0.0/xwayland/window-manager.c)
+- 段階2のネイティブWayland調査: CEFとGTKをともにWaylandで起動し、表示と中断は確認できた。通信記録ではGTKの子が`set_parent(nil)`を送り、親との所有関係は成立していなかった。参照CEFの`GetWindowHandle`はプラットフォームのaccelerated widgetを返し、GTKへ渡すWayland外部参照ハンドルを得る公開経路は確認できていない。ネイティブWaylandの所有関係と前面化は未解決とし、対応範囲をユーザーへ確認中である。バックエンドをX11へ固定する変更は加えていない。[参照CEFのハンドル取得実装](https://github.com/chromiumembedded/cef/blob/76d2442/libcef/browser/views/view_util_aura.cc)

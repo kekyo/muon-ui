@@ -750,6 +750,7 @@ set(APP_SOURCES
   src/browser/muon_browser_view_delegate.cpp
   src/browser/muon_builtin_browser.cpp
   src/browser/muon_client.cpp
+  src/browser/muon_modal_input.cpp
   src/browser/muon_context_menu.cpp
   src/browser/muon_default_title_bar_icon.cpp
   src/browser/muon_icon.cpp
@@ -809,6 +810,7 @@ set(APP_HEADERS
   src/browser/muon_title_bar.h
   src/browser/muon_title_bar_loader.h
   src/browser/muon_window_delegate.h
+  src/browser/muon_modal_input.h
   src/browser/muon_window_state.h
   src/browser/muon_window_title.h
   src/browser/show_dev_tools_task.h
@@ -1692,6 +1694,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     src/log/muon_close_debug_log.cpp
     src/browser/muon_native_wheel_forwarder.cpp
     src/browser/muon_title_bar.cpp
+    src/browser/muon_modal_input.cpp
     src/config/muon_linux_display_backend.cpp
     src/config/muon_startup.cpp
     ${MUON_COMMON_ROOT}/src/plugins/muon_type_metadata.cpp
@@ -1744,6 +1747,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       src/browser/muon_tray_service.cpp
       src/browser/muon_icon.cpp
       src/browser/muon_title_bar.cpp
+      src/browser/muon_modal_input.cpp
       src/config/muon_linux_display_backend.cpp
       src/config/muon_paths.cpp
       src/log/muon_close_debug_log.cpp
@@ -1781,6 +1785,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       src/browser/muon_tray_service.cpp
       src/browser/muon_icon.cpp
       src/browser/muon_title_bar.cpp
+      src/browser/muon_modal_input.cpp
       src/config/muon_linux_display_backend.cpp
       src/config/muon_paths.cpp
       src/log/muon_close_debug_log.cpp
@@ -1857,7 +1862,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       )
     target_include_directories(muon_ui_fs_dialogs_test PRIVATE src)
     target_link_libraries(muon_ui_fs_dialogs_test PRIVATE
-      muon_ui PkgConfig::MUON_GTK3)
+      muon_ui PkgConfig::MUON_GTK3 PkgConfig::MUON_X11)
     add_dependencies(muon_ui_fs_dialogs_test muon_runtime_files)
     MUON_APPLY_SANITIZERS(muon_ui_fs_dialogs_test)
     add_test(NAME muon_ui_fs_dialogs

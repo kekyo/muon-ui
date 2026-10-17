@@ -7,10 +7,12 @@
 #include "ui/muon_ui_fs_dialogs.h"
 
 #include <gtk/gtk.h>
+#include <gdk/gdkx.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <source_location>
 #include <string>
 
 struct Result {
@@ -51,7 +53,9 @@ static void Completed(void* data, const char* paths, const char* error) {
   result.window_visible_on_completion = FindDialog(result.title) != nullptr;
 }
 
-static void WaitFor(const std::function<bool()>& condition) {
+static void WaitFor(const std::function<bool()>& condition,
+                     const std::source_location location =
+                         std::source_location::current()) {
   bool timed_out = false;
   const auto timeout = g_timeout_add_seconds(30, [](gpointer data) -> gboolean {
     *static_cast<bool*>(data) = true;
@@ -59,6 +63,9 @@ static void WaitFor(const std::function<bool()>& condition) {
   }, &timed_out);
   while (!condition() && !timed_out) {
     g_main_context_iteration(nullptr, TRUE);
+  }
+  if (timed_out) {
+    std::fprintf(stderr, "Dialog state wait timed out at line %u\n", location.line());
   }
   Check(!timed_out, "Timed out waiting for a dialog state change");
   g_source_remove(timeout);
@@ -118,6 +125,9 @@ static void TestIndependentOwners() {
   Check(!gtk_window_get_modal(GTK_WINDOW(FindDialog(first.title))) &&
             !gtk_window_get_modal(GTK_WINDOW(FindDialog(other.title))),
         "File dialogs must not grab GTK's unrelated windows");
+  Check(gtk_window_get_group(GTK_WINDOW(FindDialog(first.title))) !=
+            gtk_window_get_group(GTK_WINDOW(FindDialog(other.title))),
+        "Nested modal confirmations must be isolated from other owners");
   // Closing the earliest dialog must complete even while later ones remain.
   gtk_dialog_response(GTK_DIALOG(FindDialog(first.title)), GTK_RESPONSE_CANCEL);
   Check(first.calls == 1 && second.calls == 0 && other.calls == 0,
@@ -156,6 +166,110 @@ static void TestTerminationSignals() {
               !result.window_visible_on_completion,
           "Response, hide and destroy must complete exactly once");
   }
+}
+
+static void TestPresentationAndNativeOwner() {
+  auto* owner = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  gtk_widget_add_events(owner, GDK_PROPERTY_CHANGE_MASK);
+  gtk_widget_show(owner);
+  auto* native_owner = gtk_widget_get_window(owner);
+  auto* display = gdk_x11_display_get_xdisplay(gtk_widget_get_display(owner));
+  const auto owner_id = gdk_x11_window_get_xid(native_owner);
+  Result first, second, other;
+  first.title = "owned first";
+  second.title = "owned second";
+  other.title = "other owner dialog";
+  auto first_handle = muon_ui_fs_dialog_operation_handle{};
+  const auto options = std::string("{\"title\":\"owned first\",") +
+      "\"__muonOwnerWindowBackend\":\"x11\",\"__muonOwnerWindowHandle\":\"" +
+      std::to_string(owner_id) + "\"}";
+  Check(muon_ui_fs_dialogs_run(MUON_UI_FS_DIALOG_SELECT_FILE, options.c_str(),
+                               80, Completed, &first, &first_handle) == 0,
+        "Owned dialog should start");
+  WaitFor([&]() { return FindDialog(first.title) != nullptr; });
+  auto* first_window = GTK_WINDOW(FindDialog(first.title));
+  Window transient_owner = None;
+  Check(XGetTransientForHint(display,
+              gdk_x11_window_get_xid(gtk_widget_get_window(GTK_WIDGET(first_window))),
+              &transient_owner) && transient_owner == owner_id,
+        "The GTK chooser must be transient for the supplied X11 owner");
+
+  auto second_handle = Start(second, 80);
+  WaitFor([&]() {
+    return FindDialog(second.title) &&
+        gtk_window_is_active(GTK_WINDOW(FindDialog(second.title)));
+  });
+  auto other_handle = Start(other, 90);
+  WaitFor([&]() {
+    return FindDialog(other.title) &&
+        gtk_window_is_active(GTK_WINDOW(FindDialog(other.title)));
+  });
+  Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
+        "A visible owned dialog should be presented");
+  WaitFor([&]() {
+    return gtk_window_is_active(GTK_WINDOW(FindDialog(second.title)));
+  });
+  // Repeated presentation must not register another operation or acquire an
+  // extra owner block. Selecting an older sibling changes the current branch.
+  Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
+        "Repeated presentation should remain possible");
+  gtk_window_present_with_time(first_window, gdk_x11_get_server_time(native_owner));
+  WaitFor([&]() { return gtk_window_is_active(first_window); });
+  auto* nested = gtk_dialog_new_with_buttons(
+      "nested confirmation", first_window, GTK_DIALOG_MODAL,
+      "Cancel", GTK_RESPONSE_CANCEL, nullptr);
+  gtk_widget_show_all(nested);
+  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(nested)); });
+  Check(gtk_window_get_group(GTK_WINDOW(nested)) == gtk_window_get_group(first_window),
+        "A nested confirmation must inherit only its chooser's input group");
+  Check(muon_ui_fs_dialogs_present_owner_browser(90, 0) == 1,
+        "An unrelated owner must still be presentable during a confirmation");
+  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(FindDialog(other.title))); });
+  Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
+        "The current branch should remain presentable");
+  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(nested)); });
+  gtk_widget_hide(nested);
+  Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
+        "Hiding a nested confirmation must return to its chooser");
+  WaitFor([&]() { return gtk_window_is_active(first_window); });
+  Check(!gtk_widget_get_visible(nested), "Presentation must not revive hidden children");
+  gtk_widget_destroy(nested);
+  muon_ui_fs_dialogs_cancel(first_handle);
+  Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
+        "Closing the current sibling should leave the earlier one presentable");
+  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(FindDialog(second.title))); });
+  auto* child = gtk_dialog_new_with_buttons(
+      "cancel branch child", GTK_WINDOW(FindDialog(second.title)),
+      GTK_DIALOG_MODAL, "Cancel", GTK_RESPONSE_CANCEL, nullptr);
+  auto* grandchild = gtk_dialog_new_with_buttons(
+      "cancel branch grandchild", GTK_WINDOW(child), GTK_DIALOG_MODAL,
+      "Cancel", GTK_RESPONSE_CANCEL, nullptr);
+  bool child_destroyed = false, grandchild_destroyed = false;
+  g_signal_connect(child, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
+    *static_cast<bool*>(data) = true;
+  }), &child_destroyed);
+  g_signal_connect(grandchild, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
+    *static_cast<bool*>(data) = true;
+  }), &grandchild_destroyed);
+  gtk_widget_show_all(child);
+  gtk_widget_show_all(grandchild);
+  muon_ui_fs_dialogs_cancel(second_handle);
+  Check(child_destroyed && grandchild_destroyed && second.calls == 1,
+        "Canceling a chooser must destroy all of its nested confirmations once");
+  Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 0,
+        "Closing all siblings must release their owner");
+  muon_ui_fs_dialogs_cancel(other_handle);
+  gtk_widget_destroy(owner);
+
+  Result destroyed_owner;
+  auto handle = muon_ui_fs_dialog_operation_handle{};
+  Check(muon_ui_fs_dialogs_run(MUON_UI_FS_DIALOG_SELECT_FILE, options.c_str(),
+                               80, Completed, &destroyed_owner, &handle) == 0,
+        "A destroyed owner should fail asynchronously");
+  WaitFor([&]() { return destroyed_owner.calls == 1; });
+  Check(!destroyed_owner.error.empty() &&
+            muon_ui_fs_dialogs_present_owner_browser(80, 0) == 0,
+        "A destroyed native owner must not leave an orphaned dialog");
 }
 
 static void TestFailureAndShutdown() {
@@ -227,6 +341,7 @@ int main(int argc, char** argv) {
   TestDeferredStart();
   TestIndependentOwners();
   TestTerminationSignals();
+  TestPresentationAndNativeOwner();
   TestFailureAndShutdown();
   TestReentrantShutdown();
   muon_ui_fs_dialogs_shutdown();

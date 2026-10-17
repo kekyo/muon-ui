@@ -550,6 +550,12 @@ void UnregisterMuonTitleBarController(
 void ClearMuonTitleBarRegistrations();
 
 /**
+ * Reapplies saved draggable regions after modal input blocking changes.
+ * @param window Owner window.
+ */
+void UpdateRegisteredMuonDraggableRegions(CefRefPtr<CefWindow> window);
+
+/**
  * Updates the registered custom title bar, if any.
  */
 void SetRegisteredMuonTitleBarTitle(CefRefPtr<CefWindow> window,

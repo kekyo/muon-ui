@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #if defined(_WIN32)
 #if defined(MUON_UI_BUILDING_LIBRARY)
 #define MUON_UI_API __declspec(dllexport)
@@ -98,6 +100,21 @@ MUON_UI_API void muon_ui_fs_dialogs_cancel(
  */
 MUON_UI_API void muon_ui_fs_dialogs_cancel_owner_browser(
     int owner_browser_id);
+
+/**
+ * Presents the visible modal dialog currently used by an owner on the UI thread.
+ *
+ * Nested GTK confirmations take priority over their file chooser. This does not
+ * create a dialog, revive a hidden operation, or change the owner's block count.
+ * On Windows the native IFileDialog owner already handles activation.
+ *
+ * @param owner_browser_id Owner identifier supplied when starting the dialog.
+ * @param event_time Native user-event timestamp, or 0 when unavailable. On X11
+ * the server time is obtained immediately for a request without a timestamp.
+ * @return 1 when a visible GTK dialog was presented; otherwise 0.
+ */
+MUON_UI_API int muon_ui_fs_dialogs_present_owner_browser(
+    int owner_browser_id, uint32_t event_time);
 
 #ifdef __cplusplus
 }

@@ -9,11 +9,14 @@ import type { AppWindow } from "agent-rover";
 import { createConnection } from "@playwright/mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { spawn } from "node:child_process";
+import { PNG } from "pngjs";
 
 import {
   cdpCommandTimeoutMs,
   connectToMuonCdp,
   describeMuonPluginBridge,
+  execFileAsync,
   findGestamentNativeDialogButtonByLabel,
   findGestamentNativeWindow,
   getCurrentTargetIds,
@@ -23,6 +26,7 @@ import {
   MUON_PORT,
   processExitTimeoutMs,
   readNativeFileDialogProbeResult,
+  sendNativeClickWithoutFocus,
   rm,
   startDebugMuon,
   startGestamentDebugMuon,
@@ -64,6 +68,31 @@ const containsPoint = (bounds: WindowBounds, point: Point): boolean =>
   point.x <= bounds.x + bounds.width &&
   point.y >= bounds.y &&
   point.y <= bounds.y + bounds.height;
+
+const isNativeWindowFocused = async (
+  windowId: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<boolean> => {
+  const { stdout } = await execFileAsync("xdotool", ["getwindowfocus"], {
+    env: environment,
+  });
+  let focused = Number(stdout.trim());
+  while (focused > 1) {
+    if (focused === Number(windowId)) return true;
+    // GTK may focus an input-only child instead of its public top-level XID.
+    const tree = await execFileAsync(
+      "xwininfo",
+      ["-id", String(focused), "-tree"],
+      {
+        env: environment,
+      },
+    );
+    const parent = /Parent window id: (0x[0-9a-f]+)/i.exec(tree.stdout)?.[1];
+    if (parent === undefined) return false;
+    focused = Number(parent);
+  }
+  return false;
+};
 
 const chooseBrowserClickPoint = (
   browserBounds: WindowBounds,
@@ -753,6 +782,24 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
       const selectedPath = join(testDirectory, "selected.txt");
       await writeFile(selectedPath, "selected", "utf8");
       const running = await startGestamentDebugMuon();
+      const environment = {
+        ...process.env,
+        ...(await running.app.environment()),
+      };
+      const competitor = spawn(
+        "xmessage",
+        [
+          "-title",
+          "muon modal competitor",
+          "-geometry",
+          "500x400+500+150",
+          "Independent window",
+        ],
+        { env: environment, stdio: "ignore" },
+      );
+      let recording: ReturnType<typeof spawn> | undefined;
+      let recordingFinished: Promise<number | null> | undefined;
+      let recordingError = "";
       try {
         const page = createCounterPage(pageTitle, pageButtonLabel);
         await running.driver.navigate(
@@ -760,6 +807,14 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           cdpCommandTimeoutMs,
         );
         const browserBounds = await readBrowserWindowBounds(running.driver);
+        await sendNativeClickWithoutFocus(pageTitle, 32, 96, environment);
+        await expect
+          .poll(
+            async () =>
+              await running.driver.evaluate<number>("window.__muonCounter"),
+          )
+          .toBe(1);
+        await running.driver.evaluate("window.__muonCounter = 0");
         await waitForMuonFsSelectFile(running.driver, cdpCommandTimeoutMs);
         await startNativeFileDialogProbe(running.driver, {
           buttonLabel,
@@ -779,15 +834,299 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           cdpCommandTimeoutMs,
         );
         await moveDialogAwayFromBrowserClickPoint(match.window, browserBounds);
-        await clickBrowserWindow(running.app, browserBounds, match.window);
+        const dialogBounds = await match.window.bounds();
+        const videoDirectory = await mkdtemp(
+          join(tmpdir(), "muon-modal-video-"),
+        );
+        const capture = await running.app.capture();
+        await writeFile(join(videoDirectory, "reference.png"), capture.image);
+        const reference = PNG.sync.read(capture.image);
+        const area = {
+          x: dialogBounds.x + 250,
+          y: dialogBounds.y + 76,
+          width: 200,
+          height: 16,
+        };
+        const frameSize = reference.width * reference.height * 3;
+        const ratios: number[] = [];
+        const phases: { label: string; frame: number }[] = [];
+        let pending: Buffer = Buffer.alloc(0);
+        recording = spawn(
+          "ffmpeg",
+          [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "x11grab",
+            "-framerate",
+            "15",
+            "-draw_mouse",
+            "0",
+            "-video_size",
+            `${reference.width}x${reference.height}`,
+            "-i",
+            environment.DISPLAY ?? "",
+            "-map",
+            "0:v",
+            "-c:v",
+            "ffv1",
+            "-pix_fmt",
+            "bgr0",
+            join(videoDirectory, "modal-input.mkv"),
+            "-map",
+            "0:v",
+            "-c:v",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+          ],
+          { env: environment, stdio: ["pipe", "pipe", "pipe"] },
+        );
+        recordingFinished = new Promise((resolve) => {
+          recording?.once("error", (error) => {
+            recordingError += String(error);
+            resolve(null);
+          });
+          recording?.once("close", resolve);
+        });
+        recording.stderr?.on("data", (bytes: Buffer) => {
+          recordingError += bytes.toString();
+        });
+        recording.stdout?.on("data", (bytes: Buffer) => {
+          pending = Buffer.concat([pending, bytes]);
+          while (pending.length >= frameSize) {
+            const frame = pending.subarray(0, frameSize);
+            pending = pending.subarray(frameSize);
+            let different = 0;
+            for (let y = area.y; y < area.y + area.height; ++y) {
+              for (let x = area.x; x < area.x + area.width; ++x) {
+                const pixel = y * reference.width + x;
+                if (
+                  [0, 1, 2].some(
+                    (channel) =>
+                      Math.abs(
+                        (frame[pixel * 3 + channel] ?? 0) -
+                          (reference.data[pixel * 4 + channel] ?? 0),
+                      ) > 12,
+                  )
+                )
+                  ++different;
+              }
+            }
+            ratios.push(different / (area.width * area.height));
+          }
+        });
+        const expectVideo = async (
+          label: string,
+          visible: boolean,
+        ): Promise<void> => {
+          const after = ratios.length;
+          await expect
+            .poll(
+              () => {
+                expect(recording?.exitCode, recordingError).toBeNull();
+                const samples = ratios.slice(
+                  Math.max(after, ratios.length - 6),
+                );
+                return (
+                  samples.length === 6 &&
+                  samples.every((ratio) =>
+                    visible ? ratio < 0.04 : ratio > 0.2,
+                  )
+                );
+              },
+              {
+                timeout: cdpCommandTimeoutMs,
+                message: `${label}: ${videoDirectory}`,
+              },
+            )
+            .toBe(true);
+          phases.push({ label, frame: ratios.length });
+          await writeFile(
+            join(videoDirectory, "phases.json"),
+            JSON.stringify(phases, null, 2),
+          );
+        };
+        await expectVideo("initial dialog", true);
+        const { stdout: competitorId } = await execFileAsync(
+          "xdotool",
+          [
+            "search",
+            "--sync",
+            "--onlyvisible",
+            "--name",
+            "^muon modal competitor$",
+          ],
+          { env: environment },
+        );
+        await execFileAsync(
+          "xdotool",
+          [
+            "windowmove",
+            competitorId.trim(),
+            String(area.x - 20),
+            String(area.y - 20),
+          ],
+          { env: environment },
+        );
+        await execFileAsync(
+          "xdotool",
+          [
+            "windowactivate",
+            "--sync",
+            competitorId.trim(),
+            "windowfocus",
+            "--sync",
+            competitorId.trim(),
+          ],
+          { env: environment },
+        );
+        expect(
+          (
+            await execFileAsync("xdotool", ["getwindowfocus"], {
+              env: environment,
+            })
+          ).stdout.trim(),
+        ).toBe(competitorId.trim());
+        await expectVideo("covered by another window", false);
+        await sendNativeClickWithoutFocus(pageTitle, 32, 96, environment);
         const countWhileDialogOpen = await running.driver.evaluate<number>(
           "window.__muonCounter",
         );
-        try {
-          await match.window.activate();
-        } catch {
-          // Activation is best-effort; the next step can still find the button.
+        const dialogId = String(
+          Number((await match.window.x11Info()).windowId),
+        );
+        await expect
+          .poll(
+            async () => await isNativeWindowFocused(dialogId, environment),
+            { timeout: cdpCommandTimeoutMs },
+          )
+          .toBe(true);
+        await expectVideo("owner click without activation", true);
+
+        const { stdout: ownerId } = await execFileAsync(
+          "xdotool",
+          ["search", "--name", `^${pageTitle}$`],
+          { env: environment },
+        );
+        // Each attempt starts with an independent window covering the chooser.
+        // Parent activation, native client clicks and custom controls must all
+        // return to the chooser without executing the parent's action.
+        for (const interaction of [
+          "focus API",
+          "window activation",
+          "client click",
+          "minimize control",
+          "maximize control",
+          "close control",
+        ]) {
+          await execFileAsync(
+            "xdotool",
+            ["windowactivate", "--sync", competitorId.trim()],
+            { env: environment, timeout: cdpCommandTimeoutMs },
+          );
+          await expectVideo(`${interaction}: covered`, false);
+          if (interaction === "focus API") {
+            await running.driver.evaluate("window.muon.browser.focus()");
+          } else if (interaction === "window activation") {
+            await execFileAsync("xdotool", ["windowactivate", ownerId.trim()], {
+              env: environment,
+            });
+          } else if (interaction === "client click") {
+            await clickBrowserWindow(running.app, browserBounds, match.window);
+          } else {
+            const offset =
+              interaction === "minimize control"
+                ? 82
+                : interaction === "maximize control"
+                  ? 50
+                  : 18;
+            await running.app.input.moveMouseTo(
+              browserBounds.x + browserBounds.width - offset,
+              browserBounds.y + 18,
+            );
+            await running.app.input.setMouseButton("left", true);
+            await running.app.input.setMouseButton("left", false);
+          }
+          await expect
+            .poll(
+              async () => await isNativeWindowFocused(dialogId, environment),
+              { timeout: cdpCommandTimeoutMs },
+            )
+            .toBe(true);
+          await expectVideo(`${interaction}: dialog restored`, true);
+          expect(await readBrowserWindowBounds(running.driver)).toEqual(
+            browserBounds,
+          );
+          expect(
+            await running.driver.evaluate<number>("window.__muonCounter"),
+          ).toBe(0);
         }
+
+        const targetsBeforeKeys = await getCurrentTargetIds();
+        for (const key of ["F5", "F12"]) {
+          await execFileAsync(
+            "xdotool",
+            ["windowactivate", "--sync", competitorId.trim()],
+            { env: environment, timeout: cdpCommandTimeoutMs },
+          );
+          await execFileAsync(
+            "xdotool",
+            ["windowfocus", ownerId.trim(), "key", key],
+            { env: environment },
+          );
+          await expect
+            .poll(
+              async () => await isNativeWindowFocused(dialogId, environment),
+              { timeout: cdpCommandTimeoutMs, message: key },
+            )
+            .toBe(true);
+          expect(
+            await running.driver.evaluate<number>("window.__muonCounter"),
+          ).toBe(0);
+          expect(await getCurrentTargetIds()).toEqual(targetsBeforeKeys);
+          await expectVideo(`${key}: dialog restored`, true);
+        }
+
+        const enlargedBounds = {
+          ...browserBounds,
+          width: browserBounds.width + 64,
+          height: browserBounds.height + 64,
+        };
+        await running.driver.evaluate(
+          `window.muon.browser.setWindowBounds(${JSON.stringify(enlargedBounds)})`,
+        );
+        await expect
+          .poll(async () => await readBrowserWindowBounds(running.driver))
+          .toEqual(enlargedBounds);
+        await execFileAsync(
+          "xdotool",
+          ["windowactivate", "--sync", competitorId.trim()],
+          { env: environment, timeout: cdpCommandTimeoutMs },
+        );
+        await running.app.input.moveMouseTo(
+          enlargedBounds.x + 32,
+          enlargedBounds.y + enlargedBounds.height - 16,
+        );
+        await running.app.input.setMouseButton("left", true);
+        await running.app.input.setMouseButton("left", false);
+        await expect
+          .poll(
+            async () => await isNativeWindowFocused(dialogId, environment),
+            { timeout: cdpCommandTimeoutMs },
+          )
+          .toBe(true);
+        expect(
+          await running.driver.evaluate<number>("window.__muonCounter"),
+        ).toBe(0);
+        await expectVideo("resized owner: dialog restored", true);
+        await running.driver.evaluate(
+          `window.muon.browser.setWindowBounds(${JSON.stringify(browserBounds)})`,
+        );
 
         await dialogButton.click();
         await expect(
@@ -802,16 +1141,50 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           cdpCommandTimeoutMs,
         );
 
+        await expect
+          .poll(
+            async () =>
+              await running.driver.evaluate<{
+                focused: boolean;
+                active: string;
+              }>(
+                "({ focused: document.hasFocus(), active: document.activeElement?.tagName })",
+              ),
+            {
+              timeout: cdpCommandTimeoutMs,
+              message:
+                "Original browser focus should resume after dialog completion",
+            },
+          )
+          .toEqual({ focused: true, active: "BUTTON" });
+        await running.app.input.pressKey("Return");
+        await expect
+          .poll(
+            async () =>
+              await running.driver.evaluate<number>("window.__muonCounter"),
+            {
+              timeout: cdpCommandTimeoutMs,
+              message:
+                "Original browser focus should resume after dialog completion",
+            },
+          )
+          .toBe(1);
+
         await clickBrowserWindow(running.app, browserBounds, undefined);
         const countAfterDialogClosed = await running.driver.evaluate<number>(
           "window.__muonCounter",
         );
 
         expect(countWhileDialogOpen).toBe(0);
-        expect(countAfterDialogClosed).toBe(1);
+        expect(countAfterDialogClosed).toBe(2);
       } finally {
+        recording?.stdin?.write("q\n");
+        const recordingExit =
+          recordingFinished === undefined ? 0 : await recordingFinished;
+        competitor.kill();
         await stopGestamentMuon(running);
         await rm(testDirectory, { recursive: true, force: true });
+        expect(recordingExit, recordingError).toBe(0);
       }
     });
 

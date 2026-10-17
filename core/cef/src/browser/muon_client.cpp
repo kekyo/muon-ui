@@ -10,6 +10,7 @@
 #include "browser/muon_browser_view_delegate.h"
 #include "browser/muon_default_title_bar_icon.h"
 #include "browser/muon_icon.h"
+#include "browser/muon_modal_input.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_delegate.h"
 #include "plugins/muon_js_bridge.h"
@@ -20,6 +21,7 @@
 #include "browser/muon_window_title.h"
 #include "browser/show_dev_tools_task.h"
 #include "config/muon_startup.h"
+#include "config/muon_linux_display_backend.h"
 #include "log/muon_close_debug_log.h"
 #include "log/muon_log.h"
 #include "muon_json_helpers.h"
@@ -34,13 +36,13 @@
 #include "include/cef_task.h"
 #include "include/cef_urlrequest.h"
 #include "include/views/cef_browser_view.h"
-#include "include/views/cef_panel.h"
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_helpers.h"
 
 #include "yyjson.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -522,8 +524,6 @@ static int GetMuonPluginCallRendererContextId(
 }
 
 static constexpr char kMuonFsDialogsNamespace[] = "muon.fs.dialogs";
-static constexpr cef_color_t kMuonModalInputBlockerBackground =
-    CefColorSetARGB(1, 0, 0, 0);
 
 struct MuonCefFileDialogState {
   CefRefPtr<CefFileDialogCallback> callback;
@@ -1591,6 +1591,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
         << FormatMuonCloseDebugBool(message_loop_quit_requested_);
     AppendMuonCloseDebugLog(log.str());
   }
+  ClearModalBrowserViewDisable(browser_id, false);
   if (plugin_runtime_) {
     plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
@@ -1606,7 +1607,6 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   title_bar_tray_icons_by_browser_.erase(browser_id);
   close_windows_after_pending_fs_dialogs_.erase(browser_id);
   close_windows_after_keep_alive_fs_dialogs_.erase(browser_id);
-  ClearModalBrowserViewDisable(browser_id);
   ClearContextMenuRegistrationForBrowser(browser_id);
   ClearTrayRegistrationsForBrowser(browser_id);
   browsers_by_id_.erase(browser_id);
@@ -1785,11 +1785,11 @@ bool MuonClient::RequestCloseAfterPendingFsDialog(
     return false;
   }
   close_windows_after_pending_fs_dialogs_[browser_id] = window;
+  ClearModalBrowserViewDisable(browser_id, false);
   if (plugin_runtime_) {
     plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
   muon_ui_fs_dialogs_cancel_owner_browser(browser_id);
-  ClearModalBrowserViewDisable(browser_id);
   std::ostringstream log;
   log << "MuonClient RequestCloseAfterPendingFsDialog browser_id="
       << browser_id
@@ -2325,6 +2325,14 @@ bool MuonClient::HandleBrowserShortcut(CefRefPtr<CefBrowser> browser,
                                        const CefKeyEvent& event,
                                        bool* is_keyboard_shortcut) {
   CEF_REQUIRE_UI_THREAD();
+  if (browser) {
+    const auto modal = modal_browser_view_disable_states_.find(
+        browser->GetIdentifier());
+    if (modal != modal_browser_view_disable_states_.end()) {
+      PresentMuonModalDialog(modal->second.window);
+      return true;
+    }
+  }
   if (event.type != KEYEVENT_RAWKEYDOWN && event.type != KEYEVENT_KEYDOWN) {
     return false;
   }
@@ -3047,6 +3055,16 @@ bool MuonClient::CreateFsDialogArgsWithOwnerBrowserId(
     owner_options += std::string(",\"") +
                      kMuonFsDialogsOwnerWindowHandleOption + "\":\"" +
                      std::to_string(owner_window_handle_value) + "\"";
+#if defined(OS_LINUX)
+    const auto backend = ResolveMuonLinuxDisplayBackend(
+        GetMuonStartupCommandLine(), std::getenv("XDG_SESSION_TYPE"),
+        std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"));
+    const auto backend_name = backend == kMuonLinuxDisplayBackendX11 ? "x11"
+        : backend == kMuonLinuxDisplayBackendWayland ? "wayland" : "unknown";
+    owner_options += std::string(",\"") +
+                     kMuonFsDialogsOwnerWindowBackendOption + "\":\"" +
+                     backend_name + "\"";
+#endif
   }
   owner_options_json.insert(
       insertion_position,
@@ -3094,25 +3112,19 @@ bool MuonClient::BeginModalBrowserViewDisable(
   auto& state = modal_browser_view_disable_states_[resolved_browser_id];
   if (state.depth == 0) {
     state.browser_view = browser_view;
+    state.window = window;
+    state.restore_focus = window->GetFocusedView();
     state.restore_browser_view_enabled = browser_view->IsEnabled();
     if (state.restore_browser_view_enabled) {
       browser_view->SetEnabled(false);
     }
     // CEF BrowserView disabling does not reliably stop native child-window
-    // input on Linux, so cover the browser area with a focusable overlay.
-    const auto input_blocker = CefPanel::CreatePanel(nullptr);
-    if (input_blocker) {
-      input_blocker->SetFocusable(true);
-      input_blocker->SetBackgroundColor(kMuonModalInputBlockerBackground);
-      const auto overlay = window->AddOverlayView(
-          input_blocker, CEF_DOCKING_MODE_CUSTOM, true);
-      if (overlay) {
-        overlay->SetBounds(browser_view->GetBounds());
-        overlay->SetVisible(true);
-        input_blocker->RequestFocus();
-        state.overlay_controller = overlay;
-      }
-    }
+    // input on Linux, so cover the full client area, including the title bar.
+    state.overlay_controller = CreateMuonModalInputOverlay(
+        window, [resolved_browser_id]() {
+          muon_ui_fs_dialogs_present_owner_browser(resolved_browser_id, 0);
+        });
+    UpdateRegisteredMuonDraggableRegions(window);
   }
   state.depth += 1;
   if (browser_id != nullptr) {
@@ -3132,35 +3144,44 @@ void MuonClient::EndModalBrowserViewDisable(int browser_id) {
   auto& state = it->second;
   state.depth -= 1;
   if (state.depth > 0) {
+    PresentMuonModalDialog(state.window);
     return;
   }
-  const auto browser_view = state.browser_view;
-  const auto overlay_controller = state.overlay_controller;
-  const auto restore_browser_view_enabled = state.restore_browser_view_enabled;
-  modal_browser_view_disable_states_.erase(it);
-  if (overlay_controller && overlay_controller->IsValid()) {
-    overlay_controller->Destroy();
-  }
-  if (restore_browser_view_enabled && browser_view && browser_view->IsValid()) {
-    browser_view->SetEnabled(true);
-  }
+  ClearModalBrowserViewDisable(browser_id, true);
 }
 
-void MuonClient::ClearModalBrowserViewDisable(int browser_id) {
+void MuonClient::ClearModalBrowserViewDisable(int browser_id, bool restore_focus) {
   const auto it = modal_browser_view_disable_states_.find(browser_id);
   if (it == modal_browser_view_disable_states_.end()) {
     return;
   }
   const auto browser_view = it->second.browser_view;
+  const auto window = it->second.window;
+  const auto focus = it->second.restore_focus;
   const auto overlay_controller = it->second.overlay_controller;
+  const auto current_focus = window && window->IsValid()
+      ? window->GetFocusedView() : nullptr;
+  const auto can_restore_focus = restore_focus &&
+      (!current_focus || (overlay_controller && overlay_controller->IsValid() &&
+       current_focus->IsSame(overlay_controller->GetContentsView())));
   const auto restore_browser_view_enabled =
       it->second.restore_browser_view_enabled;
   modal_browser_view_disable_states_.erase(it);
+  UnregisterMuonModalInput(window);
   if (overlay_controller && overlay_controller->IsValid()) {
     overlay_controller->Destroy();
   }
   if (restore_browser_view_enabled && browser_view && browser_view->IsValid()) {
     browser_view->SetEnabled(true);
+  }
+  if (window && window->IsValid() && !window->IsClosed()) {
+    UpdateRegisteredMuonDraggableRegions(window);
+    if (can_restore_focus && window->IsVisible() && focus && focus->IsValid() &&
+        focus->IsFocusable() && focus->GetWindow() &&
+        focus->GetWindow()->IsSame(window) &&
+        !window->GetFocusedView()) {
+      focus->RequestFocus();
+    }
   }
 }
 
@@ -3987,6 +4008,11 @@ void MuonClient::DispatchBuiltinBrowserCall(
         return;
       }
       SendPluginResult(call.context, call.frame, call.call_id, result);
+#if defined(OS_LINUX)
+      if (PresentMuonModalDialog(window)) {
+        break;
+      }
+#endif
       ShowMuonWindow(window);
       window->Activate();
       browser_view->RequestFocus();

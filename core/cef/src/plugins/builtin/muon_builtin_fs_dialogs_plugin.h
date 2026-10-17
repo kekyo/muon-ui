@@ -23,6 +23,10 @@ inline constexpr char kMuonFsDialogsOwnerBrowserIdOption[] =
 inline constexpr char kMuonFsDialogsOwnerWindowHandleOption[] =
     "__muonOwnerWindowHandle";
 
+/** Native display backend of the owner's handle, supplied by the browser. */
+inline constexpr char kMuonFsDialogsOwnerWindowBackendOption[] =
+    "__muonOwnerWindowBackend";
+
 /**
  * Optional internal symbol exported by the built-in filesystem dialogs plugin.
  */

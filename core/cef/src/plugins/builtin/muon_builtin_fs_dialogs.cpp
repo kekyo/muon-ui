@@ -37,6 +37,7 @@
 #include <windows.h>
 #else
 #include <gtk/gtk.h>
+#include <gdk/gdkx.h>
 #endif
 
 namespace muon_internal {
@@ -219,6 +220,7 @@ struct MuonFsDialogOptions {
   bool modal = true;
   bool confirm_overwrite = true;
   std::uintptr_t owner_window_handle = 0;
+  std::string owner_window_backend;
   std::vector<MuonFsDialogFilter> filters;
   MuonFsGtkDialogOptions gtk;
   MuonFsWin32DialogOptions win32;
@@ -435,6 +437,7 @@ static bool ParseDialogOptions(const char* options_json,
                                std::string* error_message) {
   MuonJsonDocument document(nullptr);
   yyjson_val* root = nullptr;
+  bool has_owner_window_backend = false;
   if (!ParseJsonObjectOptions(options_json, &document, &root,
                               error_message)) {
     return false;
@@ -457,7 +460,10 @@ static bool ParseDialogOptions(const char* options_json,
          ParseGtkOptions(root, &options->gtk, error_message) &&
          ParseWin32Options(root, &options->win32, error_message) &&
          ParseOwnerWindowHandle(root, &options->owner_window_handle,
-                                error_message);
+                                error_message) &&
+         ReadOptionalString(root, kMuonFsDialogsOwnerWindowBackendOption,
+                            &has_owner_window_backend,
+                            &options->owner_window_backend, error_message);
 }
 
 static bool IsMultipleDialog(MuonFsDialogKind kind) {
@@ -980,6 +986,22 @@ static GtkWidget* CreateGtkNativeDialog(
   // CEF owns parent input blocking. A GTK modal grab would also block dialogs
   // belonging to unrelated browser windows in the default window group.
   gtk_window_set_modal(GTK_WINDOW(dialog), FALSE);
+  // GTK's internal overwrite/error dialogs inherit this group from their
+  // transient parent, so their modal grabs cannot affect another chooser.
+  auto group = MuonGObjectPtr(gtk_window_group_new());
+  gtk_window_group_add_window(GTK_WINDOW_GROUP(group.get()), GTK_WINDOW(dialog));
+  if (options.modal && options.owner_window_handle != 0 &&
+      options.owner_window_backend == "x11" &&
+      GDK_IS_X11_DISPLAY(gtk_widget_get_display(dialog))) {
+    auto parent = MuonGObjectPtr(gdk_x11_window_foreign_new_for_display(
+        gtk_widget_get_display(dialog), options.owner_window_handle));
+    if (parent.get() == nullptr || gdk_window_is_destroyed(GDK_WINDOW(parent.get()))) {
+      throw std::runtime_error("The filesystem dialog owner no longer exists");
+    }
+    gtk_widget_realize(dialog);
+    gdk_window_set_transient_for(gtk_widget_get_window(dialog),
+                                 GDK_WINDOW(parent.get()));
+  }
   return dialog_holder.release();
 }
 
@@ -994,11 +1016,13 @@ struct muon_ui_fs_dialog_operation {
   muon_ui_fs_dialog_completion completion = nullptr;
   void* user_data = nullptr;
   bool completed = false;
+  bool modal = true;
 #if defined(_WIN32)
   std::shared_ptr<muon_internal::MuonFsNativeDialogCancellation> cancellation =
       std::make_shared<muon_internal::MuonFsNativeDialogCancellation>();
 #else
   GtkWidget* dialog = nullptr;
+  std::vector<GtkWidget*> child_dialogs;
   guint start_source = 0;
 #endif
 };
@@ -1012,6 +1036,9 @@ static std::map<muon_ui_fs_dialog_operation*,
 static std::map<int, std::vector<muon_ui_fs_dialog_operation*>>
     g_muon_ui_fs_dialog_operations_by_owner;
 static bool g_muon_ui_fs_dialogs_initialized = false;
+#if !defined(_WIN32)
+static gulong g_muon_gtk_dialog_map_hook = 0;
+#endif
 
 static muon_internal::MuonFsDialogKind ToMuonFsDialogKind(
     muon_ui_fs_dialog_kind kind) {
@@ -1064,6 +1091,14 @@ static void CompleteMuonUiFsDialogOperation(
   if (operation->start_source != 0) {
     g_source_remove(std::exchange(operation->start_source, 0));
   }
+  const auto children = std::exchange(operation->child_dialogs, {});
+  for (auto* child : children) {
+    g_signal_handlers_disconnect_by_data(child, operation);
+  }
+  for (auto entry = children.rbegin(); entry != children.rend(); ++entry) {
+    gtk_widget_destroy(*entry);
+    g_object_unref(*entry);
+  }
   auto* dialog = std::exchange(operation->dialog, nullptr);
   if (dialog != nullptr) {
     // Disconnect before destruction: response, hide and destroy may otherwise
@@ -1102,6 +1137,81 @@ static void OnMuonGtkDialogClosed(GtkWidget* dialog, gpointer data) {
   CompleteMuonUiFsDialogOperation(
       static_cast<muon_ui_fs_dialog_operation*>(data), "[]", nullptr);
 }
+
+static void OnMuonGtkDialogActivation(GObject* dialog,
+                                       GParamSpec* property,
+                                       gpointer data) {
+  (void)property;
+  if (!gtk_window_is_active(GTK_WINDOW(dialog))) {
+    return;
+  }
+  auto* operation = static_cast<muon_ui_fs_dialog_operation*>(data);
+  const auto found = g_muon_ui_fs_dialog_operations_by_owner.find(
+      operation->owner_browser_id);
+  if (found != g_muon_ui_fs_dialog_operations_by_owner.end()) {
+    auto& order = found->second;
+    order.erase(std::remove(order.begin(), order.end(), operation), order.end());
+    order.push_back(operation);
+  }
+}
+
+static void OnMuonGtkChildDestroyed(GtkWidget* child, gpointer data) {
+  auto* operation = static_cast<muon_ui_fs_dialog_operation*>(data);
+  auto& children = operation->child_dialogs;
+  children.erase(std::remove(children.begin(), children.end(), child),
+                  children.end());
+  g_signal_handlers_disconnect_by_data(child, operation);
+  g_object_unref(child);
+}
+
+static gboolean OnMuonGtkWindowMapped(GSignalInvocationHint* hint,
+                                       guint value_count,
+                                       const GValue* values,
+                                       gpointer data) {
+  (void)hint;
+  (void)value_count;
+  (void)data;
+  auto* widget = GTK_WIDGET(g_value_get_object(values));
+  if (!GTK_IS_WINDOW(widget)) {
+    return TRUE;
+  }
+  for (auto* parent = gtk_window_get_transient_for(GTK_WINDOW(widget));
+       parent != nullptr; parent = gtk_window_get_transient_for(parent)) {
+    for (const auto& [handle, operation] : g_muon_ui_fs_dialog_operations) {
+      if (operation->completed || operation->dialog != GTK_WIDGET(parent)) {
+        continue;
+      }
+      auto& children = operation->child_dialogs;
+      if (std::find(children.begin(), children.end(), widget) == children.end()) {
+        children.push_back(GTK_WIDGET(g_object_ref(widget)));
+        g_signal_connect(widget, "notify::is-active",
+                         G_CALLBACK(OnMuonGtkDialogActivation), handle);
+        g_signal_connect_after(widget, "destroy",
+                               G_CALLBACK(OnMuonGtkChildDestroyed), handle);
+      }
+      return TRUE;
+    }
+  }
+  return TRUE;
+}
+
+static GtkWindow* FindMuonGtkDialogLeaf(GtkWindow* parent) {
+  auto* windows = gtk_window_list_toplevels();
+  auto* child = static_cast<GtkWindow*>(nullptr);
+  for (auto* entry = windows; entry != nullptr; entry = entry->next) {
+    auto* candidate = GTK_WINDOW(entry->data);
+    if (gtk_window_get_transient_for(candidate) == parent &&
+        gtk_widget_get_visible(GTK_WIDGET(candidate)) &&
+        !gtk_widget_in_destruction(GTK_WIDGET(candidate))) {
+      child = candidate;
+      if (gtk_window_is_active(candidate)) {
+        break;
+      }
+    }
+  }
+  g_list_free(windows);
+  return child == nullptr ? parent : FindMuonGtkDialogLeaf(child);
+}
 #endif
 
 static void RunMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
@@ -1116,6 +1226,7 @@ static void RunMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
       throw std::runtime_error(error);
     }
     const auto kind = ToMuonFsDialogKind(operation->kind);
+    operation->modal = options.modal;
 #if defined(_WIN32)
     const auto result = muon_internal::CreateStringArrayJson(
         muon_internal::RunWin32NativeDialog(kind, options,
@@ -1123,12 +1234,21 @@ static void RunMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
     CompleteMuonUiFsDialogOperation(operation, result.c_str(), nullptr);
 #else
     auto* dialog = muon_internal::CreateGtkNativeDialog(kind, options);
+    if (g_muon_gtk_dialog_map_hook == 0) {
+      // GTK creates overwrite and error dialogs itself. Observe their mapping
+      // to follow activation of the entire owned branch without polling.
+      g_muon_gtk_dialog_map_hook = g_signal_add_emission_hook(
+          g_signal_lookup("map", GTK_TYPE_WIDGET), 0,
+          OnMuonGtkWindowMapped, nullptr, nullptr);
+    }
     operation->dialog = GTK_WIDGET(g_object_ref(dialog));
     g_signal_connect(dialog, "response", G_CALLBACK(OnMuonGtkDialogResponse),
                      operation);
     g_signal_connect(dialog, "hide", G_CALLBACK(OnMuonGtkDialogClosed), operation);
     g_signal_connect_after(dialog, "destroy", G_CALLBACK(OnMuonGtkDialogClosed),
                            operation);
+    g_signal_connect(dialog, "notify::is-active", G_CALLBACK(OnMuonGtkDialogActivation),
+                     operation);
     gtk_widget_show_all(dialog);
 #endif
   } catch (const std::exception& error) {
@@ -1174,6 +1294,12 @@ extern "C" void muon_ui_fs_dialogs_shutdown(void) {
   for (const auto& [handle, operation] : operations) {
     muon_ui_fs_dialogs_cancel(handle);
   }
+#if !defined(_WIN32)
+  if (g_muon_gtk_dialog_map_hook != 0) {
+    g_signal_remove_emission_hook(g_signal_lookup("map", GTK_TYPE_WIDGET),
+                                  std::exchange(g_muon_gtk_dialog_map_hook, 0));
+  }
+#endif
 }
 
 extern "C" int muon_ui_fs_dialogs_run(
@@ -1240,4 +1366,36 @@ extern "C" void muon_ui_fs_dialogs_cancel_owner_browser(int owner_browser_id) {
   for (const auto& operation : operations) {
     muon_ui_fs_dialogs_cancel(operation.get());
   }
+}
+
+extern "C" int muon_ui_fs_dialogs_present_owner_browser(
+    int owner_browser_id, uint32_t event_time) {
+#if defined(_WIN32)
+  (void)owner_browser_id;
+  (void)event_time;
+#else
+  const auto found = g_muon_ui_fs_dialog_operations_by_owner.find(owner_browser_id);
+  if (found == g_muon_ui_fs_dialog_operations_by_owner.end()) {
+    return 0;
+  }
+  for (auto entry = found->second.rbegin(); entry != found->second.rend(); ++entry) {
+    auto* operation = *entry;
+    if (!operation->modal || operation->dialog == nullptr ||
+        !gtk_widget_get_visible(operation->dialog) || operation->completed) {
+      continue;
+    }
+    auto* target = FindMuonGtkDialogLeaf(GTK_WINDOW(operation->dialog));
+    auto* native_window = gtk_widget_get_window(GTK_WIDGET(target));
+    if (event_time == 0 && native_window && GDK_IS_X11_WINDOW(native_window)) {
+      // CEF's button and activation callbacks do not expose a native event.
+      // Obtain time at the request, without deferring to the next idle frame.
+      gdk_window_set_events(native_window, static_cast<GdkEventMask>(
+          gdk_window_get_events(native_window) | GDK_PROPERTY_CHANGE_MASK));
+      event_time = gdk_x11_get_server_time(native_window);
+    }
+    gtk_window_present_with_time(target, event_time);
+    return 1;
+  }
+#endif
+  return 0;
 }

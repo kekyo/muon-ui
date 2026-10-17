@@ -1,5 +1,6 @@
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,10 +23,14 @@ typedef struct {
   Atom utf8_string;
   Atom wm_change_state;
   Atom wm_state;
+  Atom wm_protocols;
+  Atom wm_take_focus;
+  Atom timestamp;
 } MuonAtoms;
 
 typedef struct {
   Window window;
+  Window transient_for;
   int saved_x;
   int saved_y;
   unsigned int saved_width;
@@ -39,6 +44,7 @@ typedef struct {
   Display *display;
   Window root;
   Window wm_window;
+  Window active_window;
   MuonAtoms atoms;
   MuonManagedWindow *windows;
   size_t window_count;
@@ -78,6 +84,9 @@ static MuonAtoms CreateAtoms(Display *display) {
   atoms.utf8_string = InternAtom(display, "UTF8_STRING");
   atoms.wm_change_state = InternAtom(display, "WM_CHANGE_STATE");
   atoms.wm_state = InternAtom(display, "WM_STATE");
+  atoms.wm_protocols = InternAtom(display, "WM_PROTOCOLS");
+  atoms.wm_take_focus = InternAtom(display, "WM_TAKE_FOCUS");
+  atoms.timestamp = InternAtom(display, "_MUON_WM_TIMESTAMP");
   return atoms;
 }
 
@@ -108,17 +117,70 @@ static void UpdateClientList(MuonWindowManager *manager) {
                   manager->atoms.net_client_list, XA_WINDOW, 32,
                   PropModeReplace, (unsigned char *)client_windows,
                   (int)manager->window_count);
-  if (manager->window_count > 0) {
-    const Window active = manager->windows[manager->window_count - 1].window;
+  if (manager->active_window != None) {
     XChangeProperty(manager->display, manager->root,
                     manager->atoms.net_active_window, XA_WINDOW, 32,
-                    PropModeReplace, (const unsigned char *)&active, 1);
+                    PropModeReplace,
+                    (const unsigned char *)&manager->active_window, 1);
   } else {
     XDeleteProperty(manager->display, manager->root,
                     manager->atoms.net_active_window);
   }
   XFlush(manager->display);
   free(client_windows);
+}
+
+static Time GetServerTime(MuonWindowManager *manager) {
+  XSelectInput(manager->display, manager->wm_window, PropertyChangeMask);
+  XChangeProperty(manager->display, manager->wm_window, manager->atoms.timestamp,
+                  XA_INTEGER, 32, PropModeAppend, NULL, 0);
+  XEvent event;
+  do {
+    XWindowEvent(manager->display, manager->wm_window, PropertyChangeMask,
+                  &event);
+  } while (event.xproperty.atom != manager->atoms.timestamp);
+  return event.xproperty.time;
+}
+
+static void ActivateWindow(MuonWindowManager *manager, Window window) {
+  XWindowAttributes attributes;
+  if (!XGetWindowAttributes(manager->display, window, &attributes) ||
+      attributes.map_state != IsViewable || attributes.override_redirect) {
+    return;
+  }
+  // This test WM accepts all activation requests in dispatch order. Both focus
+  // requests must carry the same real server time: a delayed WM_TAKE_FOCUS with
+  // CurrentTime could otherwise override a later activation (ICCCM 4.1.7).
+  const Time timestamp = GetServerTime(manager);
+  XRaiseWindow(manager->display, window);
+  XWMHints *hints = XGetWMHints(manager->display, window);
+  if (hints == NULL || !(hints->flags & InputHint) || hints->input) {
+    XSetInputFocus(manager->display, window, RevertToPointerRoot, timestamp);
+  }
+  if (hints != NULL) {
+    XFree(hints);
+  }
+  Atom *protocols = NULL;
+  int count = 0;
+  if (XGetWMProtocols(manager->display, window, &protocols, &count)) {
+    for (int i = 0; i < count; ++i) {
+      if (protocols[i] == manager->atoms.wm_take_focus) {
+        XEvent focus;
+        memset(&focus, 0, sizeof(focus));
+        focus.xclient.type = ClientMessage;
+        focus.xclient.window = window;
+        focus.xclient.message_type = manager->atoms.wm_protocols;
+        focus.xclient.format = 32;
+        focus.xclient.data.l[0] = (long)manager->atoms.wm_take_focus;
+        focus.xclient.data.l[1] = (long)timestamp;
+        XSendEvent(manager->display, window, False, NoEventMask, &focus);
+        break;
+      }
+    }
+    XFree(protocols);
+  }
+  manager->active_window = window;
+  UpdateClientList(manager);
 }
 
 static int AddWindow(MuonWindowManager *manager, Window window) {
@@ -141,6 +203,7 @@ static int AddWindow(MuonWindowManager *manager, Window window) {
   MuonManagedWindow managed_window;
   memset(&managed_window, 0, sizeof(managed_window));
   managed_window.window = window;
+  XGetTransientForHint(manager->display, window, &managed_window.transient_for);
   manager->windows[manager->window_count] = managed_window;
   manager->window_count += 1;
   UpdateClientList(manager);
@@ -152,11 +215,21 @@ static void RemoveWindow(MuonWindowManager *manager, Window window) {
     if (manager->windows[i].window != window) {
       continue;
     }
+    const Window transient_for = manager->windows[i].transient_for;
     if (i + 1 < manager->window_count) {
       memmove(&manager->windows[i], &manager->windows[i + 1],
               sizeof(MuonManagedWindow) * (manager->window_count - i - 1));
     }
     manager->window_count -= 1;
+    if (manager->active_window == window) {
+      manager->active_window = None;
+      if (FindWindow(manager, transient_for) != NULL) {
+        ActivateWindow(manager, transient_for);
+      } else if (manager->window_count > 0) {
+        ActivateWindow(manager,
+            manager->windows[manager->window_count - 1].window);
+      }
+    }
     UpdateClientList(manager);
     return;
   }
@@ -292,6 +365,7 @@ static void HandleMapRequest(MuonWindowManager *manager,
 
   AddWindow(manager, event->window);
   XMapWindow(manager->display, event->window);
+  ActivateWindow(manager, event->window);
   XFlush(manager->display);
 }
 
@@ -540,7 +614,9 @@ int main(void) {
         HandleConfigureRequest(&manager, &event.xconfigurerequest);
         break;
       case ClientMessage:
-        if (event.xclient.message_type == manager.atoms.net_wm_state) {
+        if (event.xclient.message_type == manager.atoms.net_active_window) {
+          ActivateWindow(&manager, event.xclient.window);
+        } else if (event.xclient.message_type == manager.atoms.net_wm_state) {
           HandleWindowStateMessage(&manager, &event.xclient);
         } else if (event.xclient.message_type ==
                    manager.atoms.net_wm_moveresize) {

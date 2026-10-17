@@ -505,6 +505,8 @@ class MuonClient final : public CefClient,
 
   struct ModalBrowserViewDisableState {
     CefRefPtr<CefBrowserView> browser_view;
+    CefRefPtr<CefWindow> window;
+    CefRefPtr<CefView> restore_focus;
     CefRefPtr<CefOverlayController> overlay_controller;
     bool restore_browser_view_enabled = false;
     int depth = 0;
@@ -552,12 +554,12 @@ class MuonClient final : public CefClient,
   static void ZoomBrowser(CefRefPtr<CefBrowser> browser,
                           cef_zoom_command_t command);
   bool IsFsDialogFunction(uint32_t function_id) const;
-  bool BeginModalBrowserViewDisable(const PendingPluginCall& call,
+  bool BeginModalBrowserViewDisable(CefRefPtr<CefBrowser> browser,
                                     int* browser_id,
                                     CefWindowHandle* owner_window_handle,
                                     std::string* error_message);
   void EndModalBrowserViewDisable(int browser_id);
-  void ClearModalBrowserViewDisable(int browser_id);
+  void ClearModalBrowserViewDisable(int browser_id, bool restore_focus);
   void ClearContextMenuRegistrationForBrowser(int browser_id);
   bool SetContextMenuItemsForBrowser(const PendingPluginCall& call,
                                      std::string* error_message);

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity name="muon.Core" version="1.0.0.0" type="win32" processorArchitecture="*" />
+  <!-- Chromium creates layered child windows in the GPU subprocess. Windows
+       requires an OS compatibility declaration in that executable's manifest.
+       https://learn.microsoft.com/en-us/windows/win32/winmsg/using-windows#using-layered-windows -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>

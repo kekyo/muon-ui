@@ -5,6 +5,7 @@
  */
 
 #include "browser/muon_title_bar.h"
+#include "browser/muon_modal_input.h"
 
 #include "browser/muon_icon.h"
 #include "config/muon_linux_display_backend.h"
@@ -722,6 +723,9 @@ static bool ForwardPageDraggableRegionWheel(
   if (!page_regions.browser_view || (delta_x == 0 && delta_y == 0)) {
     return false;
   }
+  if (IsMuonModalInputBlocked(page_regions.browser_view->GetWindow())) {
+    return true;
+  }
 
   const auto browser = page_regions.browser_view->GetBrowser();
   if (!browser) {
@@ -748,14 +752,16 @@ static void ApplyMuonDraggableRegions(CefWindow* window) {
 
   std::vector<CefDraggableRegion> regions;
   const auto page_regions = g_muon_page_draggable_regions.find(key);
-  if (page_regions != g_muon_page_draggable_regions.end()) {
+  if (!IsMuonModalInputBlocked(window) &&
+      page_regions != g_muon_page_draggable_regions.end()) {
     AppendBrowserViewDraggableRegions(
         &regions, page_regions->second.browser_view.get(),
         page_regions->second.regions);
   }
   const auto title_bar_regions =
       g_muon_title_bar_draggable_regions.find(key);
-  if (title_bar_regions != g_muon_title_bar_draggable_regions.end()) {
+  if (!IsMuonModalInputBlocked(window) &&
+      title_bar_regions != g_muon_title_bar_draggable_regions.end()) {
     AppendDraggableRegions(&regions, title_bar_regions->second);
   }
 
@@ -1097,6 +1103,10 @@ static void EraseRegisteredMuonTitleBarController(
 }
 
 }  // namespace
+
+void UpdateRegisteredMuonDraggableRegions(CefRefPtr<CefWindow> window) {
+  ApplyMuonDraggableRegions(window.get());
+}
 
 MuonTitleBarManifest CreateNativeMuonTitleBarManifest() {
   return {};
@@ -1663,6 +1673,9 @@ bool MuonTitleBarController::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 
 void MuonTitleBarController::HandleAction(const std::string& action) {
   const auto window = ResolveWindow();
+  if (PresentMuonModalDialog(window)) {
+    return;
+  }
   {
     std::ostringstream log;
     log << "TitleBarController HandleAction controller="

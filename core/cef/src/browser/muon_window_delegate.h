@@ -130,6 +130,14 @@ class MuonWindowDelegate final : public CefWindowDelegate {
                              const CefRect& new_bounds) override;
 
   /**
+   * Keeps modal input coverage aligned with the full client area.
+   * @param view Top-level window whose layout changed.
+   * @param new_bounds New bounds in parent coordinates.
+   */
+  void OnLayoutChanged(CefRefPtr<CefView> view,
+                       const CefRect& new_bounds) override;
+
+  /**
    * Allows closing after the browser host accepts the close request.
    *
    * @param window Window that may close.

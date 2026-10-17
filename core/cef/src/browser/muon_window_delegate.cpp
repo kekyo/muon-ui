@@ -7,6 +7,7 @@
 #include "browser/muon_window_delegate.h"
 
 #include "browser/muon_native_wheel_forwarder.h"
+#include "browser/muon_modal_input.h"
 #include "browser/muon_title_bar.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
@@ -203,6 +204,7 @@ void MuonWindowDelegate::OnWindowCreated(CefRefPtr<CefWindow> window) {
 }
 
 void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
+  UnregisterMuonModalInput(window);
   {
     std::ostringstream log;
     log << "WindowDelegate OnWindowDestroyed begin this="
@@ -238,19 +240,29 @@ void MuonWindowDelegate::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
 
 void MuonWindowDelegate::OnWindowActivationChanged(CefRefPtr<CefWindow> window,
                                                    bool active) {
-  (void)window;
   if (title_bar_controller_) {
     title_bar_controller_->SetActive(active);
+  }
+  if (active) {
+    PresentMuonModalDialog(window);
   }
 }
 
 void MuonWindowDelegate::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
                                                const CefRect& new_bounds) {
   (void)new_bounds;
+  UpdateMuonModalInputBounds(window);
   if (title_bar_controller_) {
     title_bar_controller_->SetMaximized(window && window->IsMaximized());
     title_bar_controller_->UpdateDraggableRegions(window);
   }
+}
+
+void MuonWindowDelegate::OnLayoutChanged(CefRefPtr<CefView> view,
+                                         const CefRect& new_bounds) {
+  (void)new_bounds;
+  const auto panel = view->AsPanel();
+  UpdateMuonModalInputBounds(panel ? panel->AsWindow() : nullptr);
 }
 
 bool MuonWindowDelegate::CanClose(CefRefPtr<CefWindow> window) {
@@ -368,7 +380,9 @@ cef_runtime_style_t MuonWindowDelegate::GetWindowRuntimeStyle() {
 
 bool MuonWindowDelegate::OnKeyEvent(CefRefPtr<CefWindow> window,
                                     const CefKeyEvent& event) {
-  (void)window;
+  if (PresentMuonModalDialog(window)) {
+    return true;
+  }
   if (is_devtools_ || !shortcut_handler_ || !browser_view_ ||
       !browser_view_->IsValid() ||
       browser_view_->HasFocus()) {

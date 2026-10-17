@@ -366,7 +366,7 @@ const applyRemoteCdpOptions = (
 ): ConnectOptions => {
   const context = getWindowsRemoteContext();
   if (context === undefined) {
-    return options;
+    return { ...options, port: options.port ?? MUON_PORT };
   }
   return {
     ...options,
@@ -722,7 +722,34 @@ type GestamentChildContainer = GtkWidgetElement & {
   getChildCount: () => Promise<number>;
 };
 
-export const MUON_PORT = 9222;
+// Allow concurrent checkouts to keep their application and test connections separate.
+/** Loopback CDP port configured explicitly or allocated for this test process. */
+export const MUON_PORT = await (async () => {
+  const configuredPort = process.env.MUON_E2E_CDP_PORT;
+  if (configuredPort !== undefined) {
+    const port = Number(configuredPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("MUON_E2E_CDP_PORT must be an integer from 1 to 65535.");
+    }
+    return port;
+  }
+  return await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close();
+        reject(new Error("No loopback CDP port was allocated"));
+        return;
+      }
+      probe.close((error) => {
+        if (error) reject(error);
+        else resolve(address.port);
+      });
+    });
+  });
+})();
 export const MUON_APP_URL = "asset://main/index.html";
 export const TEST_NETWORK_ALLOW_PATTERNS = ["asset://main/**", "data:**"];
 export const TEST_BROWSER_PLUGIN_ALLOW_PATTERNS = TEST_NETWORK_ALLOW_PATTERNS;
@@ -1011,8 +1038,43 @@ static void SendWheel(Display* display, long root_x, long root_y,
   XTestFakeButtonEvent(display, (unsigned int)button, False, CurrentTime);
 }
 
+static void SendClickWithoutFocus(Display* display, Window window,
+                                   int x, int y) {
+  const Window root = DefaultRootWindow(display);
+  const Window clock = XCreateSimpleWindow(display, root, 0, 0, 1, 1, 0, 0, 0);
+  const Atom marker_atom = XInternAtom(display, "_MUON_INPUT_TIMESTAMP", False);
+  XSelectInput(display, clock, PropertyChangeMask);
+  const unsigned char marker = 0;
+  XChangeProperty(display, clock, marker_atom, XA_INTEGER, 8,
+                   PropModeReplace, &marker, 1);
+  XEvent timestamp;
+  XWindowEvent(display, clock, PropertyChangeMask, &timestamp);
+  XEvent click;
+  memset(&click, 0, sizeof(click));
+  click.xbutton.type = ButtonPress;
+  click.xbutton.display = display;
+  click.xbutton.window = window;
+  click.xbutton.root = root;
+  click.xbutton.time = timestamp.xproperty.time;
+  click.xbutton.x = x;
+  click.xbutton.y = y;
+  click.xbutton.button = Button1;
+  click.xbutton.same_screen = True;
+  Window child = None;
+  XTranslateCoordinates(display, window, root, x, y,
+                          &click.xbutton.x_root, &click.xbutton.y_root, &child);
+  // Deliver to Chromium's connection even when it selects XI2 events instead
+  // of core button masks. No WM click-to-focus action runs before this event.
+  XSendEvent(display, window, False, NoEventMask, &click);
+  click.xbutton.type = ButtonRelease;
+  click.xbutton.state = Button1Mask;
+  XSendEvent(display, window, False, NoEventMask, &click);
+  XDestroyWindow(display, clock);
+  XSync(display, False);
+}
+
 int main(int argc, char** argv) {
-  if (argc != 3 && argc != 6) {
+  if (argc != 3 && argc != 5 && argc != 6) {
     fprintf(stderr,
             "Usage: %s <window-title> <shortcut>\n"
             "       %s <window-title> wheel <root-x> <root-y> <direction>\n",
@@ -1031,6 +1093,13 @@ int main(int argc, char** argv) {
     fprintf(stderr, "Window not found: %s\n", argv[1]);
     XCloseDisplay(display);
     return 3;
+  }
+
+  if (argc == 5 && strcmp(argv[2], "click-no-focus") == 0) {
+    SendClickWithoutFocus(display, window, (int)ParseCoordinate(argv[3], "x"),
+                           (int)ParseCoordinate(argv[4], "y"));
+    XCloseDisplay(display);
+    return 0;
   }
 
   XWindowAttributes attributes;
@@ -1805,6 +1874,30 @@ const ensureNativeInputSenderBuilt = async (): Promise<string> => {
   ]);
   nativeInputSenderBuilt = true;
   return nativeInputSenderBinaryPath;
+};
+
+/**
+ * Sends a native click without activating its window through the WM first.
+ * @param windowTitle Exact X11 title of the owner.
+ * @param x Horizontal client coordinate in pixels.
+ * @param y Vertical client coordinate in pixels.
+ * @param environment Environment of the app's display session.
+ */
+export const sendNativeClickWithoutFocus = async (
+  windowTitle: string,
+  x: number,
+  y: number,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> => {
+  const sender = await ensureNativeInputSenderBuilt();
+  await execFileAsync(
+    sender,
+    [windowTitle, "click-no-focus", String(x), String(y)],
+    {
+      env: environment,
+      timeout: cdpCommandTimeoutMs,
+    },
+  );
 };
 
 export const sendNativeKeyboardShortcut = async (

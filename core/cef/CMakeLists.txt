@@ -1870,6 +1870,13 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     add_test(NAME muon_ui_fs_dialogs_no_display
       COMMAND "${CMAKE_COMMAND}" -E env DISPLAY= WAYLAND_DISPLAY= GDK_BACKEND=x11
         "${MUON_RUNTIME_DIR}/muon_ui_fs_dialogs_test" --no-display)
+    find_program(MUON_WESTON_EXECUTABLE weston)
+    if(MUON_WESTON_EXECUTABLE)
+      add_test(NAME muon_ui_fs_dialogs_wayland
+        COMMAND node "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/run-wayland-command.mjs"
+          "${MUON_WESTON_EXECUTABLE}"
+          "${MUON_RUNTIME_DIR}/muon_ui_fs_dialogs_test" --wayland)
+    endif()
   endif()
   add_executable(muon_icon_test
     ../cef-test/native/muon_icon_test.cpp

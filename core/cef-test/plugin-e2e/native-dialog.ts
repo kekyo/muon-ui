@@ -11,6 +11,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { spawn } from "node:child_process";
 import { PNG } from "pngjs";
+import {
+  mkdtemp as makeHostDirectory,
+  writeFile as writeHostFile,
+} from "node:fs/promises";
+import { tmpdir as hostTmpdir } from "node:os";
 
 import {
   cdpCommandTimeoutMs,
@@ -218,9 +223,14 @@ const createFileInputPage = (pageTitle: string): string =>
       }
     </style>
     <input id="file" type="file" />
+    <button id="counter" style="position:absolute;left:0;top:140px;width:120px;height:80px">Counter</button>
     <script>
       const input = document.querySelector("#file");
       window.__muonFileInputChanged = false;
+      window.__muonCounter = 0;
+      document.querySelector("#counter").addEventListener("click", () => {
+        window.__muonCounter += 1;
+      });
       input.addEventListener("change", () => {
         window.__muonFileInputChanged = true;
       });
@@ -448,6 +458,200 @@ const startWindowsNativeDialogMuon = async (
   );
 
 describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
+  it("preserves standard JavaScript dialogs and before-unload cancellation", async () => {
+    const pageTitle = "muon standard dialogs";
+    const local = isLocalLinuxNativeDialogE2e
+      ? await startGestamentDebugMuon()
+      : undefined;
+    const remote =
+      local === undefined ? await startWindowsNativeDialogMuon() : undefined;
+    const driver =
+      local?.driver ?? (await connectToMuonCdp({ port: MUON_PORT }));
+    const context = isWindowsRemoteE2e()
+      ? requireWindowsRemoteContext()
+      : undefined;
+    const client = new Client({ name: "muon-standard-dialogs", version: "1" });
+    const server = await createConnection({
+      browser: {
+        cdpEndpoint: `http://${context?.cdpHost ?? "127.0.0.1"}:${context?.cdpPort ?? MUON_PORT}`,
+      },
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const call = async (
+      name: string,
+      args: Record<string, unknown>,
+    ): Promise<string> => {
+      const response = await client.callTool({ name, arguments: args });
+      const text = (response.content as Array<{ text?: string }>)
+        .map((item) => item.text ?? "")
+        .join("\n");
+      expect(response.isError, text).not.toBe(true);
+      return text;
+    };
+    const evidence = await makeHostDirectory(
+      `${hostTmpdir()}/muon-js-dialogs-`,
+    );
+    try {
+      await driver.navigate(
+        `data:text/html;charset=utf-8,${createCounterPage(pageTitle, "Counter")}`,
+        cdpCommandTimeoutMs,
+      );
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tabs = await call("browser_tabs", { action: "list" });
+      const tab = tabs.match(/- (\d+):[^\n]*muon standard dialogs/)?.[1];
+      expect(tab, tabs).toBeDefined();
+      await call("browser_tabs", { action: "select", index: Number(tab) });
+      const ownerBounds = await readBrowserWindowBounds(driver);
+      const captureDialog = async (name: string): Promise<void> => {
+        let image = Buffer.alloc(0);
+        // The CDP opening event precedes native painting. Wait for the standard
+        // dialog's primary button to render before recording visual evidence.
+        await expect
+          .poll(
+            async () => {
+              const capture =
+                local !== undefined
+                  ? await local.app.capture()
+                  : await context!.agent.screenshot();
+              image = Buffer.from(capture.image);
+              const png = PNG.sync.read(image);
+              let bluePixels = 0;
+              for (
+                let y = Math.max(
+                  0,
+                  Math.floor(ownerBounds.y + ownerBounds.height / 4),
+                );
+                y <
+                Math.min(
+                  png.height,
+                  ownerBounds.y + (ownerBounds.height * 3) / 4,
+                );
+                y += 1
+              ) {
+                for (
+                  let x = Math.max(
+                    0,
+                    Math.floor(ownerBounds.x + ownerBounds.width / 4),
+                  );
+                  x <
+                  Math.min(
+                    png.width,
+                    ownerBounds.x + (ownerBounds.width * 3) / 4,
+                  );
+                  x += 1
+                ) {
+                  const offset = (y * png.width + x) * 4;
+                  const red = png.data[offset]!;
+                  const green = png.data[offset + 1]!;
+                  const blue = png.data[offset + 2]!;
+                  if (blue > red + 50 && blue > green + 20 && red < 150)
+                    bluePixels += 1;
+                }
+              }
+              return bluePixels;
+            },
+            { timeout: cdpCommandTimeoutMs },
+          )
+          .toBeGreaterThan(500);
+        await writeHostFile(`${evidence}/${name}.png`, image);
+      };
+      for (const scenario of [
+        {
+          type: "alert",
+          expression:
+            'alert("Alert probe"); window.dialogResult = "acknowledged"',
+          accept: true,
+          result: "acknowledged",
+        },
+        {
+          type: "confirm",
+          expression: 'window.dialogResult = confirm("Confirm probe")',
+          accept: false,
+          result: false,
+        },
+        {
+          type: "prompt",
+          expression: 'window.dialogResult = prompt("Prompt probe", "initial")',
+          accept: true,
+          result: "entered",
+        },
+      ]) {
+        const opened = driver.waitForEvent<{
+          type: string;
+          hasBrowserHandler: boolean;
+        }>("Page.javascriptDialogOpening", cdpCommandTimeoutMs);
+        await call("browser_evaluate", {
+          function: `() => { setTimeout(() => { ${scenario.expression}; }, 0); }`,
+        });
+        expect(await opened).toMatchObject({
+          type: scenario.type,
+          hasBrowserHandler: true,
+        });
+        await captureDialog(scenario.type);
+        if (local !== undefined) {
+          await clickBrowserWindow(local.app, ownerBounds, undefined);
+        } else {
+          await clickWindowsBrowserWindow(
+            await waitForWindowsWindowByTitle(pageTitle),
+            undefined,
+          );
+        }
+        await call("browser_handle_dialog", {
+          accept: scenario.accept,
+          ...(scenario.type === "prompt" ? { promptText: "entered" } : {}),
+        });
+        await expect
+          .poll(async () => await driver.evaluate("window.dialogResult"))
+          .toEqual(scenario.result);
+        expect(await driver.evaluate("window.__muonCounter")).toBe(0);
+      }
+      await call("browser_evaluate", {
+        function:
+          '() => { window.onbeforeunload = (event) => { event.preventDefault(); event.returnValue = ""; }; }',
+      });
+      // A native user interaction supplies the activation required by Chromium.
+      if (local !== undefined) {
+        await clickBrowserWindow(
+          local.app,
+          await readBrowserWindowBounds(driver),
+          undefined,
+        );
+      } else {
+        await clickWindowsBrowserWindow(
+          await waitForWindowsWindowByTitle(pageTitle),
+          undefined,
+        );
+      }
+      const opening = driver.waitForEvent<{
+        type: string;
+        hasBrowserHandler: boolean;
+      }>("Page.javascriptDialogOpening", cdpCommandTimeoutMs);
+      await call("browser_evaluate", {
+        function: "() => { setTimeout(() => { location.reload(); }, 0); }",
+      });
+      expect(await opening).toMatchObject({
+        type: "beforeunload",
+        hasBrowserHandler: true,
+      });
+      await captureDialog("beforeunload");
+      await call("browser_handle_dialog", { accept: false });
+      expect(await driver.evaluate("document.title")).toBe(pageTitle);
+      expect(await driver.evaluate("window.__muonCounter")).toBe(1);
+      await call("browser_evaluate", {
+        function: "() => { window.onbeforeunload = null; }",
+      });
+    } finally {
+      await client.close();
+      await server.close();
+      if (local !== undefined) await stopGestamentMuon(local);
+      if (remote !== undefined) {
+        await stopMuon(remote, driver);
+      }
+    }
+  });
+
   if (isLocalLinuxNativeDialogE2e) {
     it("aborts an earlier GTK file dialog while a later dialog remains open through AbortSignal", async () => {
       const running = await startGestamentDebugMuon();
@@ -653,6 +857,41 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           await delay(100);
         }
         expect(counter).toBe(1);
+        await popupDriver.evaluate(`(() => {
+          document.title = "muon independent owner";
+          document.body.innerHTML = '<button style="position:fixed;inset:0;width:100%;height:100%">Independent</button>';
+          window.independentClicks = 0;
+          document.querySelector("button").onclick = () => { window.independentClicks += 1; };
+        })()`);
+        await popupDriver.evaluate("window.muon.browser.show()");
+        await running.driver.evaluate(`(() => {
+          window.ownerDialogAbort = new AbortController();
+          window.ownerDialogDone = (async () => {
+            try { await window.muon.fs.dialogs.selectFile({ title: "muon other owner remains usable", signal: window.ownerDialogAbort.signal }); }
+            catch (error) { return error.name; }
+          })();
+        })()`);
+        await findGestamentNativeWindow(
+          running.app,
+          "muon other owner remains usable",
+          cdpCommandTimeoutMs,
+        );
+        await popupDriver.evaluate("window.muon.browser.focus()");
+        await sendNativeClickWithoutFocus("muon independent owner", 32, 96, {
+          ...process.env,
+          ...(await running.app.environment()),
+        });
+        await expect
+          .poll(
+            async () => await popupDriver!.evaluate("window.independentClicks"),
+          )
+          .toBe(1);
+        expect(await running.driver.evaluate("window.__muonCounter")).toBe(1);
+        expect(
+          await running.driver.evaluate(
+            "(async () => { window.ownerDialogAbort.abort(); return await window.ownerDialogDone; })()",
+          ),
+        ).toBe("AbortError");
       } finally {
         popupDriver?.close();
         await stopGestamentMuon(running);
@@ -726,9 +965,117 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
       }
     });
 
+    it("returns to an overwrite confirmation and aborts its entire dialog branch", async () => {
+      const directory = await mkdtemp(join(tmpdir(), "muon-overwrite-"));
+      await writeFile(join(directory, "existing.txt"), "keep", "utf8");
+      const running = await startGestamentDebugMuon();
+      const environment = {
+        ...process.env,
+        ...(await running.app.environment()),
+      };
+      try {
+        await running.driver.navigate(
+          `data:text/html;charset=utf-8,${createCounterPage("muon overwrite owner", "Counter")}`,
+          cdpCommandTimeoutMs,
+        );
+        await waitForMuonFsSelectFile(running.driver, cdpCommandTimeoutMs);
+        await running.driver.evaluate(`(() => {
+          window.saveController = new AbortController();
+          window.saveCompletion = (async () => {
+            try {
+              await window.muon.fs.dialogs.selectSaveFile({ title: "muon overwrite save", defaultPath: ${JSON.stringify(directory)}, defaultName: "existing.txt", signal: window.saveController.signal });
+              return "selected";
+            } catch (error) { return error.name; }
+          })();
+        })()`);
+        const chooser = await findGestamentNativeWindow(
+          running.app,
+          "muon overwrite save",
+          cdpCommandTimeoutMs,
+        );
+        const chooserId = Number((await chooser.window.x11Info()).windowId);
+        const save = await findGestamentNativeDialogButtonByLabel(
+          running.app,
+          chooser.window,
+          "Save",
+          cdpCommandTimeoutMs,
+        );
+        await save.click();
+        let confirmationId = "";
+        await expect
+          .poll(
+            async () => {
+              const clients = await execFileAsync(
+                "xprop",
+                ["-root", "_NET_CLIENT_LIST"],
+                { env: environment },
+              );
+              for (const id of clients.stdout.match(/0x[0-9a-f]+/gi) ?? []) {
+                const property = await execFileAsync(
+                  "xprop",
+                  ["-id", String(id), "WM_TRANSIENT_FOR"],
+                  { env: environment },
+                );
+                if (
+                  Number(/0x[0-9a-f]+/i.exec(property.stdout)?.[0]) ===
+                  chooserId
+                ) {
+                  confirmationId = id;
+                  return true;
+                }
+              }
+              return false;
+            },
+            { timeout: cdpCommandTimeoutMs },
+          )
+          .toBe(true);
+        await sendNativeClickWithoutFocus(
+          "muon overwrite owner",
+          32,
+          96,
+          environment,
+        );
+        await expect
+          .poll(
+            async () =>
+              await isNativeWindowFocused(confirmationId, environment),
+          )
+          .toBe(true);
+        expect(await running.driver.evaluate("window.__muonCounter")).toBe(0);
+        expect(
+          await running.driver.evaluate(
+            "(async () => { window.saveController.abort(); return await window.saveCompletion; })()",
+          ),
+        ).toBe("AbortError");
+        await waitForGestamentNativeWindowClosed(
+          running.app,
+          "muon overwrite save",
+          cdpCommandTimeoutMs,
+        );
+        const remaining = await execFileAsync("xwininfo", ["-root", "-tree"], {
+          env: environment,
+        });
+        expect(remaining.stdout).not.toContain(
+          `0x${Number(confirmationId).toString(16)}`,
+        );
+        await clickBrowserWindow(
+          running.app,
+          await readBrowserWindowBounds(running.driver),
+          undefined,
+        );
+        expect(await running.driver.evaluate("window.__muonCounter")).toBe(1);
+      } finally {
+        await stopGestamentMuon(running);
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
     it("uses the muon UI dialog provider for CEF file inputs", async () => {
       const pageTitle = "muon cef file input dialog";
       const dialogTitle = "Open";
+      const directory = await mkdtemp(join(tmpdir(), "muon-html-file-"));
+      const selectedPath = join(directory, "selected.txt");
+      await writeFile(selectedPath, "HTML selection", "utf8");
       const running = await startGestamentDebugMuon();
       try {
         await running.driver.navigate(
@@ -743,6 +1090,31 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           dialogTitle,
           cdpCommandTimeoutMs,
         );
+        const environment = {
+          ...process.env,
+          ...(await running.app.environment()),
+        };
+        const owner = await execFileAsync(
+          "xdotool",
+          ["search", "--name", `^${pageTitle}$`],
+          { env: environment },
+        );
+        const dialogId = String((await match.window.x11Info()).windowId);
+        const ownership = await execFileAsync(
+          "xprop",
+          ["-id", dialogId, "WM_TRANSIENT_FOR"],
+          { env: environment },
+        );
+        expect(Number(/0x[0-9a-f]+/i.exec(ownership.stdout)?.[0])).toBe(
+          Number(owner.stdout.trim()),
+        );
+        await sendNativeClickWithoutFocus(pageTitle, 32, 180, environment);
+        await expect
+          .poll(async () => await isNativeWindowFocused(dialogId, environment))
+          .toBe(true);
+        expect(
+          await running.driver.evaluate<number>("window.__muonCounter"),
+        ).toBe(0);
         const cancelButton = await findGestamentNativeDialogButtonByLabel(
           running.app,
           match.window,
@@ -768,8 +1140,66 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           changed: false,
           fileCount: 0,
         });
+        await sendNativeClickWithoutFocus(pageTitle, 32, 180, environment);
+        await expect
+          .poll(
+            async () =>
+              await running.driver.evaluate<number>("window.__muonCounter"),
+          )
+          .toBe(1);
+        await clickBrowserWindow(running.app, browserBounds, undefined);
+        const selection = await findGestamentNativeWindow(
+          running.app,
+          dialogTitle,
+          cdpCommandTimeoutMs,
+        );
+        const selectionId = String((await selection.window.x11Info()).windowId);
+        await expect
+          .poll(
+            async () => await isNativeWindowFocused(selectionId, environment),
+          )
+          .toBe(true);
+        await running.app.input.setModifier("control", true);
+        try {
+          await running.app.input.pressKey("l");
+        } finally {
+          await running.app.input.setModifier("control", false);
+        }
+        await execFileAsync(
+          "xdotool",
+          ["type", "--clearmodifiers", "--delay", "0", selectedPath],
+          { env: environment },
+        );
+        const openButton = await findGestamentNativeDialogButtonByLabel(
+          running.app,
+          selection.window,
+          "Open",
+          cdpCommandTimeoutMs,
+        );
+        await openButton.click();
+        await expect
+          .poll(
+            async () =>
+              await running.driver.evaluate("window.__muonFileInputChanged"),
+            { timeout: cdpCommandTimeoutMs },
+          )
+          .toBe(true);
+        expect(
+          await running.driver.evaluate(
+            'document.querySelector("#file").files[0].text()',
+          ),
+        ).toBe("HTML selection");
+        await clickBrowserWindow(running.app, browserBounds, undefined);
+        await findGestamentNativeWindow(
+          running.app,
+          dialogTitle,
+          cdpCommandTimeoutMs,
+        );
+        await closeOwnerBrowserWindow(running.driver);
+        await expectGestamentMuonExitedNormally(running.app);
       } finally {
         await stopGestamentMuon(running);
+        await rm(directory, { recursive: true, force: true });
       }
     });
 
@@ -1291,6 +1721,75 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
       }
     });
 
+    it("does not reveal a hidden owner when its modal dialog is canceled", async () => {
+      const running = await startGestamentDebugMuon();
+      const environment = {
+        ...process.env,
+        ...(await running.app.environment()),
+      };
+      try {
+        await running.driver.navigate(
+          `data:text/html;charset=utf-8,${createCounterPage("muon hidden owner", "Counter")}`,
+          cdpCommandTimeoutMs,
+        );
+        const owner = await execFileAsync(
+          "xdotool",
+          ["search", "--name", "^muon hidden owner$"],
+          { env: environment },
+        );
+        const ownerId = owner.stdout.trim();
+        await running.driver.evaluate(`(() => {
+          window.hiddenDialogAbort = new AbortController();
+          window.hiddenDialogDone = (async () => {
+            try { await window.muon.fs.dialogs.selectFile({ title: "muon hidden owner dialog", signal: window.hiddenDialogAbort.signal }); }
+            catch (error) { return error.name; }
+          })();
+        })()`);
+        await findGestamentNativeWindow(
+          running.app,
+          "muon hidden owner dialog",
+          cdpCommandTimeoutMs,
+        );
+        await running.driver.evaluate("window.muon.browser.hide()");
+        await expect
+          .poll(
+            async () =>
+              (
+                await execFileAsync("xwininfo", ["-id", ownerId], {
+                  env: environment,
+                })
+              ).stdout,
+          )
+          .toContain("IsUnMapped");
+        expect(
+          await running.driver.evaluate(
+            "(async () => { window.hiddenDialogAbort.abort(); return await window.hiddenDialogDone; })()",
+          ),
+        ).toBe("AbortError");
+        await waitForGestamentNativeWindowClosed(
+          running.app,
+          "muon hidden owner dialog",
+          cdpCommandTimeoutMs,
+        );
+        expect(
+          (
+            await execFileAsync("xwininfo", ["-id", ownerId], {
+              env: environment,
+            })
+          ).stdout,
+        ).toContain("IsUnMapped");
+        await running.driver.evaluate("window.muon.browser.show()");
+        await clickBrowserWindow(
+          running.app,
+          await readBrowserWindowBounds(running.driver),
+          undefined,
+        );
+        expect(await running.driver.evaluate("window.__muonCounter")).toBe(1);
+      } finally {
+        await stopGestamentMuon(running);
+      }
+    });
+
     it("keeps a non-modal GTK file dialog open when the opener browser closes", async () => {
       const pageTitle = "muon non-modal dialog owner close";
       const title = "muon Non Modal Owner Close Probe";
@@ -1511,6 +2010,11 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
         await clickWindowsBrowserWindow(browserWindow, undefined);
 
         const dialog = await waitForWindowsDialogByTitleRegex(dialogTitle);
+        await expect
+          .poll(
+            async () => (await waitForWindowsWindowByTitle(pageTitle)).enabled,
+          )
+          .toBe(false);
         try {
           await dialog.activate();
           await dialog.focus();
@@ -1542,6 +2046,11 @@ describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
           changed: false,
           fileCount: 0,
         });
+        await expect
+          .poll(
+            async () => (await waitForWindowsWindowByTitle(pageTitle)).enabled,
+          )
+          .toBe(true);
       } finally {
         await stopMuon(running, driver);
       }

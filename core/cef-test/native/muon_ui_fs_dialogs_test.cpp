@@ -8,6 +8,7 @@
 
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
+#include <gdk/gdkwayland.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -66,6 +67,24 @@ static void WaitFor(const std::function<bool()>& condition,
   }
   if (timed_out) {
     std::fprintf(stderr, "Dialog state wait timed out at line %u\n", location.line());
+    if (GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
+      Window focused = None;
+      int revert = 0;
+      XGetInputFocus(gdk_x11_display_get_xdisplay(gdk_display_get_default()),
+                     &focused, &revert);
+      std::fprintf(stderr, "X11 focus: %lu\n", focused);
+    }
+    auto* windows = gtk_window_list_toplevels();
+    for (auto* entry = windows; entry; entry = entry->next) {
+      auto* window = GTK_WINDOW(entry->data);
+      auto* native = gtk_widget_get_window(GTK_WIDGET(window));
+      const auto* title = gtk_window_get_title(window);
+      std::fprintf(stderr, "Window %s visible=%d active=%d xid=%lu\n",
+          title ? title : "(untitled)", gtk_widget_get_visible(GTK_WIDGET(window)),
+          gtk_window_is_active(window), native && GDK_IS_X11_WINDOW(native) ?
+          gdk_x11_window_get_xid(native) : 0);
+    }
+    g_list_free(windows);
   }
   Check(!timed_out, "Timed out waiting for a dialog state change");
   g_source_remove(timeout);
@@ -168,6 +187,35 @@ static void TestTerminationSignals() {
   }
 }
 
+static bool IsActive(GtkWindow* window) {
+  if (!gtk_window_is_active(window)) {
+    return false;
+  }
+  auto* native = gtk_widget_get_window(GTK_WIDGET(window));
+  auto* display = gdk_x11_display_get_xdisplay(
+      gtk_widget_get_display(GTK_WIDGET(window)));
+  const auto target = gdk_x11_window_get_xid(native);
+  Window focused = None;
+  int revert = 0;
+  XGetInputFocus(display, &focused, &revert);
+  // GTK's cached activation flag can still describe a preceding focus event.
+  // Wait for both the native focus and GTK notification before the next action.
+  while (focused > PointerRoot) {
+    if (focused == target) {
+      return true;
+    }
+    Window root = None, parent = None;
+    Window* children = nullptr;
+    unsigned int count = 0;
+    const auto queried = XQueryTree(display, focused, &root, &parent,
+                                    &children, &count);
+    if (children) XFree(children);
+    if (!queried || focused == root) return false;
+    focused = parent;
+  }
+  return false;
+}
+
 static void TestPresentationAndNativeOwner() {
   auto* owner = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_widget_add_events(owner, GDK_PROPERTY_CHANGE_MASK);
@@ -197,47 +245,47 @@ static void TestPresentationAndNativeOwner() {
   auto second_handle = Start(second, 80);
   WaitFor([&]() {
     return FindDialog(second.title) &&
-        gtk_window_is_active(GTK_WINDOW(FindDialog(second.title)));
+        IsActive(GTK_WINDOW(FindDialog(second.title)));
   });
   auto other_handle = Start(other, 90);
   WaitFor([&]() {
     return FindDialog(other.title) &&
-        gtk_window_is_active(GTK_WINDOW(FindDialog(other.title)));
+        IsActive(GTK_WINDOW(FindDialog(other.title)));
   });
   Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
         "A visible owned dialog should be presented");
   WaitFor([&]() {
-    return gtk_window_is_active(GTK_WINDOW(FindDialog(second.title)));
+    return IsActive(GTK_WINDOW(FindDialog(second.title)));
   });
   // Repeated presentation must not register another operation or acquire an
   // extra owner block. Selecting an older sibling changes the current branch.
   Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
         "Repeated presentation should remain possible");
   gtk_window_present_with_time(first_window, gdk_x11_get_server_time(native_owner));
-  WaitFor([&]() { return gtk_window_is_active(first_window); });
+  WaitFor([&]() { return IsActive(first_window); });
   auto* nested = gtk_dialog_new_with_buttons(
       "nested confirmation", first_window, GTK_DIALOG_MODAL,
       "Cancel", GTK_RESPONSE_CANCEL, nullptr);
   gtk_widget_show_all(nested);
-  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(nested)); });
+  WaitFor([&]() { return IsActive(GTK_WINDOW(nested)); });
   Check(gtk_window_get_group(GTK_WINDOW(nested)) == gtk_window_get_group(first_window),
         "A nested confirmation must inherit only its chooser's input group");
   Check(muon_ui_fs_dialogs_present_owner_browser(90, 0) == 1,
         "An unrelated owner must still be presentable during a confirmation");
-  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(FindDialog(other.title))); });
+  WaitFor([&]() { return IsActive(GTK_WINDOW(FindDialog(other.title))); });
   Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
         "The current branch should remain presentable");
-  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(nested)); });
+  WaitFor([&]() { return IsActive(GTK_WINDOW(nested)); });
   gtk_widget_hide(nested);
   Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
         "Hiding a nested confirmation must return to its chooser");
-  WaitFor([&]() { return gtk_window_is_active(first_window); });
+  WaitFor([&]() { return IsActive(first_window); });
   Check(!gtk_widget_get_visible(nested), "Presentation must not revive hidden children");
   gtk_widget_destroy(nested);
   muon_ui_fs_dialogs_cancel(first_handle);
   Check(muon_ui_fs_dialogs_present_owner_browser(80, 0) == 1,
         "Closing the current sibling should leave the earlier one presentable");
-  WaitFor([&]() { return gtk_window_is_active(GTK_WINDOW(FindDialog(second.title))); });
+  WaitFor([&]() { return IsActive(GTK_WINDOW(FindDialog(second.title))); });
   auto* child = gtk_dialog_new_with_buttons(
       "cancel branch child", GTK_WINDOW(FindDialog(second.title)),
       GTK_DIALOG_MODAL, "Cancel", GTK_RESPONSE_CANCEL, nullptr);
@@ -322,6 +370,52 @@ static void TestReentrantShutdown() {
         "Shutdown must reject further operations until reinitialized");
 }
 
+static void TestTransientPopupLifetime() {
+  Result result;
+  result.title = "popup lifetime";
+  const auto handle = Start(result, 100);
+  WaitFor([&]() { return FindDialog(result.title) != nullptr; });
+  // GTK reuses tooltip windows. They can be transient for a chooser but are
+  // owned by GTK, and must not be destroyed as an owned confirmation dialog.
+  auto* popup = gtk_window_new(GTK_WINDOW_POPUP);
+  g_object_ref(popup);
+  bool destroyed = false;
+  g_signal_connect(popup, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
+    *static_cast<bool*>(data) = true;
+  }), &destroyed);
+  gtk_window_set_transient_for(GTK_WINDOW(popup), GTK_WINDOW(FindDialog(result.title)));
+  gtk_widget_show(popup);
+  muon_ui_fs_dialogs_cancel(handle);
+  Check(!destroyed, "Closing a chooser must preserve reusable GTK popup windows");
+  gtk_widget_hide(popup);
+  gtk_widget_show(popup);
+  Check(gtk_widget_get_visible(popup), "A GTK popup must remain reusable");
+  gtk_widget_destroy(popup);
+  g_object_unref(popup);
+}
+
+static void TestWaylandModality() {
+  Check(GDK_IS_WAYLAND_DISPLAY(gdk_display_get_default()),
+        "Wayland modality must run on a native Wayland display");
+  for (const auto modal : {true, false}) {
+    Result result;
+    result.title = "wayland modality";
+    const auto options = std::string("{\"title\":\"wayland modality\",\"modal\":") +
+        (modal ? "true}" : "false}");
+    auto handle = muon_ui_fs_dialog_operation_handle{};
+    Check(muon_ui_fs_dialogs_run(MUON_UI_FS_DIALOG_SELECT_FILE, options.c_str(),
+                                 110, Completed, &result, &handle) == 0,
+          "Wayland dialog should start asynchronously");
+    Check(result.calls == 0, "Wayland display must not block the start API");
+    WaitFor([&]() { return FindDialog(result.title) != nullptr; });
+    Check(gtk_window_get_modal(GTK_WINDOW(FindDialog(result.title))) == modal,
+          "Native Wayland must preserve the requested GTK modality");
+    muon_ui_fs_dialogs_cancel(handle);
+    Check(result.calls == 1 && !result.window_visible_on_completion,
+          "Wayland cancellation must close the dialog and complete once");
+  }
+}
+
 int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--no-display") {
     Check(muon_ui_fs_dialogs_initialize() == 0, "UI initialization failed");
@@ -338,9 +432,15 @@ int main(int argc, char** argv) {
   }
   Check(gtk_init_check(&argc, &argv), "GTK initialization failed");
   Check(muon_ui_fs_dialogs_initialize() == 0, "UI initialization failed");
+  if (argc == 2 && std::string(argv[1]) == "--wayland") {
+    TestWaylandModality();
+    muon_ui_fs_dialogs_shutdown();
+    return 0;
+  }
   TestDeferredStart();
   TestIndependentOwners();
   TestTerminationSignals();
+  TestTransientPopupLifetime();
   TestPresentationAndNativeOwner();
   TestFailureAndShutdown();
   TestReentrantShutdown();

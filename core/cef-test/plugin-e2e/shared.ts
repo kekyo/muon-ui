@@ -366,7 +366,7 @@ const applyRemoteCdpOptions = (
 ): ConnectOptions => {
   const context = getWindowsRemoteContext();
   if (context === undefined) {
-    return options;
+    return { ...options, port: options.port ?? MUON_PORT };
   }
   return {
     ...options,
@@ -722,7 +722,11 @@ type GestamentChildContainer = GtkWidgetElement & {
   getChildCount: () => Promise<number>;
 };
 
-export const MUON_PORT = 9222;
+// Allow concurrent checkouts to keep their application and test connections separate.
+export const MUON_PORT = Number(process.env.MUON_E2E_CDP_PORT ?? "9222");
+if (!Number.isInteger(MUON_PORT) || MUON_PORT < 1 || MUON_PORT > 65535) {
+  throw new Error("MUON_E2E_CDP_PORT must be an integer from 1 to 65535.");
+}
 export const MUON_APP_URL = "asset://main/index.html";
 export const TEST_NETWORK_ALLOW_PATTERNS = ["asset://main/**", "data:**"];
 export const TEST_BROWSER_PLUGIN_ALLOW_PATTERNS = TEST_NETWORK_ALLOW_PATTERNS;

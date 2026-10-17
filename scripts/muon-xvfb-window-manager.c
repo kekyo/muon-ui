@@ -25,6 +25,7 @@ typedef struct {
   Atom wm_state;
   Atom wm_protocols;
   Atom wm_take_focus;
+  Atom timestamp;
 } MuonAtoms;
 
 typedef struct {
@@ -85,6 +86,7 @@ static MuonAtoms CreateAtoms(Display *display) {
   atoms.wm_state = InternAtom(display, "WM_STATE");
   atoms.wm_protocols = InternAtom(display, "WM_PROTOCOLS");
   atoms.wm_take_focus = InternAtom(display, "WM_TAKE_FOCUS");
+  atoms.timestamp = InternAtom(display, "_MUON_WM_TIMESTAMP");
   return atoms;
 }
 
@@ -128,13 +130,28 @@ static void UpdateClientList(MuonWindowManager *manager) {
   free(client_windows);
 }
 
-static void ActivateWindow(MuonWindowManager *manager, Window window,
-                            Time timestamp) {
+static Time GetServerTime(MuonWindowManager *manager) {
+  XSelectInput(manager->display, manager->wm_window, PropertyChangeMask);
+  XChangeProperty(manager->display, manager->wm_window, manager->atoms.timestamp,
+                  XA_INTEGER, 32, PropModeAppend, NULL, 0);
+  XEvent event;
+  do {
+    XWindowEvent(manager->display, manager->wm_window, PropertyChangeMask,
+                  &event);
+  } while (event.xproperty.atom != manager->atoms.timestamp);
+  return event.xproperty.time;
+}
+
+static void ActivateWindow(MuonWindowManager *manager, Window window) {
   XWindowAttributes attributes;
   if (!XGetWindowAttributes(manager->display, window, &attributes) ||
       attributes.map_state != IsViewable || attributes.override_redirect) {
     return;
   }
+  // This test WM accepts all activation requests in dispatch order. Both focus
+  // requests must carry the same real server time: a delayed WM_TAKE_FOCUS with
+  // CurrentTime could otherwise override a later activation (ICCCM 4.1.7).
+  const Time timestamp = GetServerTime(manager);
   XRaiseWindow(manager->display, window);
   XWMHints *hints = XGetWMHints(manager->display, window);
   if (hints == NULL || !(hints->flags & InputHint) || hints->input) {
@@ -207,10 +224,10 @@ static void RemoveWindow(MuonWindowManager *manager, Window window) {
     if (manager->active_window == window) {
       manager->active_window = None;
       if (FindWindow(manager, transient_for) != NULL) {
-        ActivateWindow(manager, transient_for, CurrentTime);
+        ActivateWindow(manager, transient_for);
       } else if (manager->window_count > 0) {
         ActivateWindow(manager,
-            manager->windows[manager->window_count - 1].window, CurrentTime);
+            manager->windows[manager->window_count - 1].window);
       }
     }
     UpdateClientList(manager);
@@ -348,7 +365,7 @@ static void HandleMapRequest(MuonWindowManager *manager,
 
   AddWindow(manager, event->window);
   XMapWindow(manager->display, event->window);
-  ActivateWindow(manager, event->window, CurrentTime);
+  ActivateWindow(manager, event->window);
   XFlush(manager->display);
 }
 
@@ -598,8 +615,7 @@ int main(void) {
         break;
       case ClientMessage:
         if (event.xclient.message_type == manager.atoms.net_active_window) {
-          ActivateWindow(&manager, event.xclient.window,
-                          (Time)event.xclient.data.l[1]);
+          ActivateWindow(&manager, event.xclient.window);
         } else if (event.xclient.message_type == manager.atoms.net_wm_state) {
           HandleWindowStateMessage(&manager, &event.xclient);
         } else if (event.xclient.message_type ==

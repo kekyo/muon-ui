@@ -38,6 +38,7 @@
 #else
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
+#include <gdk/gdkwayland.h>
 #endif
 
 namespace muon_internal {
@@ -983,9 +984,10 @@ static GtkWidget* CreateGtkNativeDialog(
   }
   ApplyGtkFilters(chooser, options);
   ApplyGtkDefaultPath(chooser, kind, options);
-  // CEF owns parent input blocking. A GTK modal grab would also block dialogs
-  // belonging to unrelated browser windows in the default window group.
-  gtk_window_set_modal(GTK_WINDOW(dialog), FALSE);
+  // CEF owns parent input blocking on X11/XWayland. Native Wayland also applies
+  // the requested modality through GTK.
+  gtk_window_set_modal(GTK_WINDOW(dialog), options.modal &&
+      GDK_IS_WAYLAND_DISPLAY(gtk_widget_get_display(dialog)));
   // GTK's internal overwrite/error dialogs inherit this group from their
   // transient parent, so their modal grabs cannot affect another chooser.
   auto group = MuonGObjectPtr(gtk_window_group_new());
@@ -1172,7 +1174,9 @@ static gboolean OnMuonGtkWindowMapped(GSignalInvocationHint* hint,
   (void)value_count;
   (void)data;
   auto* widget = GTK_WIDGET(g_value_get_object(values));
-  if (!GTK_IS_WINDOW(widget)) {
+  // Transient tooltip/popup windows are reusable GTK-owned infrastructure,
+  // not confirmation dialogs whose lifetime belongs to this operation.
+  if (!GTK_IS_DIALOG(widget)) {
     return TRUE;
   }
   for (auto* parent = gtk_window_get_transient_for(GTK_WINDOW(widget));
@@ -1200,7 +1204,8 @@ static GtkWindow* FindMuonGtkDialogLeaf(GtkWindow* parent) {
   auto* child = static_cast<GtkWindow*>(nullptr);
   for (auto* entry = windows; entry != nullptr; entry = entry->next) {
     auto* candidate = GTK_WINDOW(entry->data);
-    if (gtk_window_get_transient_for(candidate) == parent &&
+    if (GTK_IS_DIALOG(candidate) &&
+        gtk_window_get_transient_for(candidate) == parent &&
         gtk_widget_get_visible(GTK_WIDGET(candidate)) &&
         !gtk_widget_in_destruction(GTK_WIDGET(candidate))) {
       child = candidate;

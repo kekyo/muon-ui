@@ -400,39 +400,44 @@ class CompleteCefFileDialogTask final : public CefTask {
   CompleteCefFileDialogTask(
       CefRefPtr<CefFileDialogCallback> callback,
       std::vector<std::string> file_paths,
-      std::string error_message)
+      std::string error_message,
+      std::function<void()> release_modal,
+      std::function<void()> finish_pending)
       : callback_(callback),
         file_paths_(std::move(file_paths)),
-        error_message_(std::move(error_message)) {}
+        error_message_(std::move(error_message)),
+        release_modal_(std::move(release_modal)),
+        finish_pending_(std::move(finish_pending)) {}
 
   void Execute() override {
     CEF_REQUIRE_UI_THREAD();
 
-    if (!callback_) {
-      return;
-    }
+    // Release input only after the native dialog has disappeared, and keep the
+    // browser lifetime until CEF has consumed the selection or cancellation.
+    release_modal_();
     if (!error_message_.empty()) {
       LogMuonMessage(kMuonLogSourceMuon, kMuonLogLevelWarning,
                      "CEF file dialog failed: " + error_message_);
       callback_->Cancel();
-      return;
-    }
-    if (file_paths_.empty()) {
+    } else if (file_paths_.empty()) {
       callback_->Cancel();
-      return;
+    } else {
+      std::vector<CefString> cef_paths;
+      cef_paths.reserve(file_paths_.size());
+      for (const auto& path : file_paths_) {
+        cef_paths.push_back(path);
+      }
+      callback_->Continue(cef_paths);
     }
-    std::vector<CefString> cef_paths;
-    cef_paths.reserve(file_paths_.size());
-    for (const auto& path : file_paths_) {
-      cef_paths.push_back(path);
-    }
-    callback_->Continue(cef_paths);
+    finish_pending_();
   }
 
  private:
   CefRefPtr<CefFileDialogCallback> callback_;
   std::vector<std::string> file_paths_;
   std::string error_message_;
+  std::function<void()> release_modal_;
+  std::function<void()> finish_pending_;
 
   IMPLEMENT_REFCOUNTING(CompleteCefFileDialogTask);
   DISALLOW_COPY_AND_ASSIGN(CompleteCefFileDialogTask);
@@ -527,7 +532,8 @@ static constexpr char kMuonFsDialogsNamespace[] = "muon.fs.dialogs";
 
 struct MuonCefFileDialogState {
   CefRefPtr<CefFileDialogCallback> callback;
-  muon_ui_fs_dialog_operation_handle operation = nullptr;
+  std::function<void()> release_modal;
+  std::function<void()> finish_pending;
 };
 
 static bool GetMuonUiDialogKindFromCefMode(
@@ -776,7 +782,9 @@ static void CompleteCefFileDialog(
   }
   CefPostTask(TID_UI, new CompleteCefFileDialogTask(
                           state->callback, std::move(paths),
-                          std::move(parsed_error)));
+                          std::move(parsed_error),
+                          std::move(state->release_modal),
+                          std::move(state->finish_pending)));
 }
 
 static uint32_t ReadMuonShortcutModifiers(const CefKeyEvent& event) {
@@ -1592,6 +1600,7 @@ void MuonClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     AppendMuonCloseDebugLog(log.str());
   }
   ClearModalBrowserViewDisable(browser_id, false);
+  muon_ui_fs_dialogs_cancel_owner_browser(browser_id);
   if (plugin_runtime_) {
     plugin_runtime_->CancelPlatformOperationsForOwner(browser_id);
   }
@@ -2424,23 +2433,51 @@ bool MuonClient::OnFileDialog(
     return true;
   }
 
-  auto state = std::make_unique<MuonCefFileDialogState>();
-  state->callback = callback;
   const auto options_json = CreateCefFileDialogOptionsJson(
       mode, title, default_file_path, accept_filters, accept_extensions,
       accept_descriptions);
-  const auto owner_browser_id = browser ? browser->GetIdentifier() : 0;
-  auto* raw_state = state.release();
-  auto operation = muon_ui_fs_dialog_operation_handle{};
-  const auto started = muon_ui_fs_dialogs_run(
-      kind, options_json.c_str(), owner_browser_id, &CompleteCefFileDialog,
-      raw_state, &operation);
-  if (started != 0) {
-    state.reset(raw_state);
+  int owner_browser_id = 0;
+  CefWindowHandle owner_window_handle = 0;
+  std::string error_message;
+  if (!BeginModalBrowserViewDisable(browser, &owner_browser_id,
+                                    &owner_window_handle, &error_message)) {
     callback->Cancel();
     return true;
   }
-  raw_state->operation = operation;
+  auto args = CefListValue::Create();
+  args->SetString(0, options_json);
+  CefRefPtr<CefListValue> owned_args;
+  if (!CreateFsDialogArgsWithOwnerBrowserId(
+          args, owner_browser_id, owner_window_handle, &owned_args,
+          &error_message)) {
+    EndModalBrowserViewDisable(owner_browser_id);
+    callback->Cancel();
+    return true;
+  }
+  const auto owned_options_json = owned_args->GetString(0).ToString();
+  BeginPendingFsDialogCall(owner_browser_id, PendingFsDialogPolicy::CancelOnOwnerClose);
+  auto state = std::make_unique<MuonCefFileDialogState>();
+  state->callback = callback;
+  const auto self = CefRefPtr<MuonClient>(this);
+  state->release_modal = [self, owner_browser_id]() {
+    self->EndModalBrowserViewDisable(owner_browser_id);
+  };
+  state->finish_pending = [self, owner_browser_id]() {
+    self->EndPendingFsDialogCall(owner_browser_id,
+                                 PendingFsDialogPolicy::CancelOnOwnerClose);
+  };
+  auto* raw_state = state.release();
+  auto operation = muon_ui_fs_dialog_operation_handle{};
+  const auto started = muon_ui_fs_dialogs_run(
+      kind, owned_options_json.c_str(), owner_browser_id, &CompleteCefFileDialog,
+      raw_state, &operation);
+  if (started != 0) {
+    state.reset(raw_state);
+    state->release_modal();
+    callback->Cancel();
+    state->finish_pending();
+    return true;
+  }
   return true;
 }
 
@@ -3092,7 +3129,7 @@ bool MuonClient::IsFsDialogFunction(uint32_t function_id) const {
 }
 
 bool MuonClient::BeginModalBrowserViewDisable(
-    const PendingPluginCall& call,
+    CefRefPtr<CefBrowser> browser,
     int* browser_id,
     CefWindowHandle* owner_window_handle,
     std::string* error_message) {
@@ -3104,11 +3141,11 @@ bool MuonClient::BeginModalBrowserViewDisable(
   }
   CefRefPtr<CefBrowserView> browser_view;
   CefRefPtr<CefWindow> window;
-  if (!GetBrowserViewAndWindow(call.browser, &browser_view, &window,
+  if (!GetBrowserViewAndWindow(browser, &browser_view, &window,
                                error_message)) {
     return false;
   }
-  const auto resolved_browser_id = call.browser->GetIdentifier();
+  const auto resolved_browser_id = browser->GetIdentifier();
   auto& state = modal_browser_view_disable_states_[resolved_browser_id];
   if (state.depth == 0) {
     state.browser_view = browser_view;
@@ -3691,7 +3728,7 @@ void MuonClient::DispatchPluginCall(
       fs_dialog_call && ReadFsDialogModal(call.encoded_args);
   if (fs_dialog_modal) {
     std::string error_message;
-    if (!BeginModalBrowserViewDisable(call, &modal_browser_id,
+    if (!BeginModalBrowserViewDisable(call.browser, &modal_browser_id,
                                       &modal_owner_window_handle,
                                       &error_message)) {
       RejectPluginCall(call, error_message);

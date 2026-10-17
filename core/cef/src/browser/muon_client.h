@@ -554,7 +554,7 @@ class MuonClient final : public CefClient,
   static void ZoomBrowser(CefRefPtr<CefBrowser> browser,
                           cef_zoom_command_t command);
   bool IsFsDialogFunction(uint32_t function_id) const;
-  bool BeginModalBrowserViewDisable(const PendingPluginCall& call,
+  bool BeginModalBrowserViewDisable(CefRefPtr<CefBrowser> browser,
                                     int* browser_id,
                                     CefWindowHandle* owner_window_handle,
                                     std::string* error_message);

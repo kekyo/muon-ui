@@ -1017,6 +1017,7 @@ bool InitializeMuonBuiltinFsDialogs(const muon_plugin_init_context* context,
 }
 
 void ShutdownMuonBuiltinFsDialogs() {
+  muon_ui_fs_dialogs_shutdown();
   muon_internal::g_fs_dialogs_helpers = nullptr;
 }
 

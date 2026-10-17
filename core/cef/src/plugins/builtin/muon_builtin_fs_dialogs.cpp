@@ -94,27 +94,6 @@ static void CancelNativeDialog(void* native_dialog,
     });
   }
 }
-#else
-static gboolean CancelGtkDialogOnMainContext(gpointer data) {
-  auto* dialog = static_cast<GtkWidget*>(data);
-  if (dialog != nullptr && GTK_IS_DIALOG(dialog) &&
-      !gtk_widget_in_destruction(dialog)) {
-    gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL);
-  }
-  if (dialog != nullptr) {
-    g_object_unref(dialog);
-  }
-  return G_SOURCE_REMOVE;
-}
-
-static void CancelNativeDialog(void* native_dialog) {
-  auto* dialog = static_cast<GtkWidget*>(native_dialog);
-  if (dialog != nullptr) {
-    g_object_ref(dialog);
-    g_main_context_invoke(nullptr, CancelGtkDialogOnMainContext, dialog);
-  }
-}
-#endif
 
 void MuonFsNativeDialogCancellation::Cancel() {
   void* native_dialog = nullptr;
@@ -130,12 +109,8 @@ void MuonFsNativeDialogCancellation::Cancel() {
     owner_window_handle = owner_window_handle_;
     native_dialog_dispatcher = native_dialog_dispatcher_;
   }
-#if defined(_WIN32)
   CancelNativeDialog(
       native_dialog, native_dialog_dispatcher, owner_window_handle);
-#else
-  CancelNativeDialog(native_dialog);
-#endif
 }
 
 bool MuonFsNativeDialogCancellation::IsCanceled() const {
@@ -206,6 +181,8 @@ class MuonNativeDialogCancellationAttachment final {
   void* native_dialog_ = nullptr;
   bool attached_ = false;
 };
+
+#endif
 
 struct MuonFsDialogFilter {
   std::string name;
@@ -842,33 +819,6 @@ class MuonGObjectPtr final {
   gpointer value_ = nullptr;
 };
 
-class MuonGtkWidgetPtr final {
- public:
-  explicit MuonGtkWidgetPtr(GtkWidget* source = nullptr)
-      : value_(source) {}
-
-  ~MuonGtkWidgetPtr() {
-    Reset();
-  }
-
-  MuonGtkWidgetPtr(const MuonGtkWidgetPtr&) = delete;
-  MuonGtkWidgetPtr& operator=(const MuonGtkWidgetPtr&) = delete;
-
-  GtkWidget* get() const {
-    return value_;
-  }
-
-  void Reset(GtkWidget* next = nullptr) {
-    if (value_ != nullptr) {
-      gtk_widget_destroy(value_);
-    }
-    value_ = next;
-  }
-
- private:
-  GtkWidget* value_ = nullptr;
-};
-
 static void EnsureGtkInitialized() {
   static bool initialized = false;
   static bool attempted = false;
@@ -997,10 +947,9 @@ static std::vector<std::string> ReadGtkDialogResults(GtkFileChooser* chooser,
   return results;
 }
 
-static std::vector<std::string> RunGtkNativeDialog(
+static GtkWidget* CreateGtkNativeDialog(
     MuonFsDialogKind kind,
-    const MuonFsDialogOptions& options,
-    std::shared_ptr<MuonFsNativeDialogCancellation> cancellation) {
+    const MuonFsDialogOptions& options) {
   EnsureGtkInitialized();
   const auto title = options.has_title ? options.title : std::string{};
   const auto accept_label = options.has_button_label
@@ -1013,7 +962,8 @@ static std::vector<std::string> RunGtkNativeDialog(
   if (dialog == nullptr) {
     throw std::runtime_error("Failed to create GTK file chooser dialog");
   }
-  auto dialog_holder = MuonGtkWidgetPtr(dialog);
+  auto dialog_holder = std::unique_ptr<GtkWidget, decltype(&gtk_widget_destroy)>(
+      dialog, gtk_widget_destroy);
   auto* chooser = GTK_FILE_CHOOSER(dialog);
   gtk_file_chooser_set_select_multiple(chooser, IsMultipleDialog(kind));
   gtk_file_chooser_set_local_only(chooser, options.gtk.local_only);
@@ -1027,41 +977,13 @@ static std::vector<std::string> RunGtkNativeDialog(
   }
   ApplyGtkFilters(chooser, options);
   ApplyGtkDefaultPath(chooser, kind, options);
-  gtk_widget_show_all(dialog);
-  auto cancellation_attachment = MuonNativeDialogCancellationAttachment(
-      std::move(cancellation), dialog, 0);
-  if (!cancellation_attachment.attached()) {
-    return {};
-  }
-  const auto response = gtk_dialog_run(GTK_DIALOG(dialog));
-  cancellation_attachment.Detach();
-  if (response != GTK_RESPONSE_ACCEPT) {
-    return {};
-  }
-  auto results = ReadGtkDialogResults(chooser, kind);
-  return results;
+  // CEF owns parent input blocking. A GTK modal grab would also block dialogs
+  // belonging to unrelated browser windows in the default window group.
+  gtk_window_set_modal(GTK_WINDOW(dialog), FALSE);
+  return dialog_holder.release();
 }
 
 #endif
-
-std::string RunMuonFsNativeDialog(MuonFsDialogKind kind,
-                                  const char* options_json,
-                                  std::shared_ptr<
-                                      MuonFsNativeDialogCancellation>
-                                      cancellation) {
-  MuonFsDialogOptions options;
-  std::string error_message;
-  if (!ParseDialogOptions(options_json, &options, &error_message)) {
-    throw std::runtime_error(error_message);
-  }
-#if defined(_WIN32)
-  return CreateStringArrayJson(
-      RunWin32NativeDialog(kind, options, std::move(cancellation)));
-#else
-  return CreateStringArrayJson(
-      RunGtkNativeDialog(kind, options, std::move(cancellation)));
-#endif
-}
 
 }  // namespace muon_internal
 
@@ -1071,18 +993,27 @@ struct muon_ui_fs_dialog_operation {
   int owner_browser_id = 0;
   muon_ui_fs_dialog_completion completion = nullptr;
   void* user_data = nullptr;
-  std::shared_ptr<muon_internal::MuonFsNativeDialogCancellation> cancellation;
   bool completed = false;
+#if defined(_WIN32)
+  std::shared_ptr<muon_internal::MuonFsNativeDialogCancellation> cancellation =
+      std::make_shared<muon_internal::MuonFsNativeDialogCancellation>();
+#else
+  GtkWidget* dialog = nullptr;
+  guint start_source = 0;
+#endif
 };
 
-namespace {
-
-std::vector<std::unique_ptr<muon_ui_fs_dialog_operation>>
+// All operations, including cancellation and completion, run on the UI thread.
+// Dispatch callbacks retain their operation while completion removes it from
+// the registry, so reentrant shutdown cannot invalidate a callback's state.
+static std::map<muon_ui_fs_dialog_operation*,
+                std::shared_ptr<muon_ui_fs_dialog_operation>>
     g_muon_ui_fs_dialog_operations;
-std::map<int, std::vector<muon_ui_fs_dialog_operation*>>
+static std::map<int, std::vector<muon_ui_fs_dialog_operation*>>
     g_muon_ui_fs_dialog_operations_by_owner;
+static bool g_muon_ui_fs_dialogs_initialized = false;
 
-muon_internal::MuonFsDialogKind ToMuonFsDialogKind(
+static muon_internal::MuonFsDialogKind ToMuonFsDialogKind(
     muon_ui_fs_dialog_kind kind) {
   switch (kind) {
     case MUON_UI_FS_DIALOG_SELECT_FILE:
@@ -1099,64 +1030,107 @@ muon_internal::MuonFsDialogKind ToMuonFsDialogKind(
   throw std::runtime_error("Unsupported filesystem dialog kind");
 }
 
-bool IsValidMuonUiFsDialogKind(muon_ui_fs_dialog_kind kind) {
-  switch (kind) {
-    case MUON_UI_FS_DIALOG_SELECT_FILE:
-    case MUON_UI_FS_DIALOG_SELECT_FILES:
-    case MUON_UI_FS_DIALOG_SELECT_DIRECTORY:
-    case MUON_UI_FS_DIALOG_SELECT_DIRECTORIES:
-    case MUON_UI_FS_DIALOG_SELECT_SAVE_FILE:
-      return true;
-  }
-  return false;
+static bool IsValidMuonUiFsDialogKind(muon_ui_fs_dialog_kind kind) {
+  return kind >= MUON_UI_FS_DIALOG_SELECT_FILE &&
+         kind <= MUON_UI_FS_DIALOG_SELECT_SAVE_FILE;
 }
 
-void UnregisterMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
-  if (operation == nullptr || operation->owner_browser_id <= 0) {
-    return;
-  }
+static void UnregisterMuonUiFsDialogOperation(
+    muon_ui_fs_dialog_operation* operation) {
   const auto owner_iterator =
       g_muon_ui_fs_dialog_operations_by_owner.find(operation->owner_browser_id);
-  if (owner_iterator == g_muon_ui_fs_dialog_operations_by_owner.end()) {
+  if (owner_iterator != g_muon_ui_fs_dialog_operations_by_owner.end()) {
+    auto& operations = owner_iterator->second;
+    operations.erase(std::remove(operations.begin(), operations.end(), operation),
+                     operations.end());
+    if (operations.empty()) {
+      g_muon_ui_fs_dialog_operations_by_owner.erase(owner_iterator);
+    }
+  }
+  g_muon_ui_fs_dialog_operations.erase(operation);
+}
+
+static void CompleteMuonUiFsDialogOperation(
+    muon_ui_fs_dialog_operation* operation,
+    const char* result_json,
+    const char* error_message) {
+  const auto found = g_muon_ui_fs_dialog_operations.find(operation);
+  if (found == g_muon_ui_fs_dialog_operations.end() || operation->completed) {
     return;
   }
-  auto& operations = owner_iterator->second;
-  operations.erase(std::remove(operations.begin(), operations.end(), operation),
-                   operations.end());
-  if (operations.empty()) {
-    g_muon_ui_fs_dialog_operations_by_owner.erase(owner_iterator);
+  const auto keep_alive = found->second;
+  operation->completed = true;
+#if !defined(_WIN32)
+  if (operation->start_source != 0) {
+    g_source_remove(std::exchange(operation->start_source, 0));
+  }
+  auto* dialog = std::exchange(operation->dialog, nullptr);
+  if (dialog != nullptr) {
+    // Disconnect before destruction: response, hide and destroy may otherwise
+    // reenter completion. GTK selections have already been copied by this point.
+    g_signal_handlers_disconnect_by_data(dialog, operation);
+    if (!gtk_widget_in_destruction(dialog)) {
+      gtk_widget_hide(dialog);
+      gtk_widget_destroy(dialog);
+    }
+    g_object_unref(dialog);
+  }
+#endif
+  UnregisterMuonUiFsDialogOperation(operation);
+  operation->completion(operation->user_data, result_json, error_message);
+}
+
+#if !defined(_WIN32)
+static void OnMuonGtkDialogResponse(GtkDialog* dialog,
+                                    gint response,
+                                    gpointer data) {
+  auto* operation = static_cast<muon_ui_fs_dialog_operation*>(data);
+  try {
+    const auto paths = response == GTK_RESPONSE_ACCEPT
+        ? muon_internal::ReadGtkDialogResults(
+              GTK_FILE_CHOOSER(dialog), ToMuonFsDialogKind(operation->kind))
+        : std::vector<std::string>{};
+    const auto result = muon_internal::CreateStringArrayJson(paths);
+    CompleteMuonUiFsDialogOperation(operation, result.c_str(), nullptr);
+  } catch (const std::exception& error) {
+    CompleteMuonUiFsDialogOperation(operation, nullptr, error.what());
   }
 }
 
-void CompleteMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation,
-                                     const char* result_json,
-                                     const char* error_message) {
-  if (operation == nullptr) {
-    return;
-  }
-  muon_ui_fs_dialog_completion completion = nullptr;
-  void* user_data = nullptr;
+static void OnMuonGtkDialogClosed(GtkWidget* dialog, gpointer data) {
+  (void)dialog;
+  CompleteMuonUiFsDialogOperation(
+      static_cast<muon_ui_fs_dialog_operation*>(data), "[]", nullptr);
+}
+#endif
+
+static void RunMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
   if (operation->completed) {
     return;
   }
-  operation->completed = true;
-  completion = operation->completion;
-  user_data = operation->user_data;
-  UnregisterMuonUiFsDialogOperation(operation);
-  if (completion != nullptr) {
-    completion(user_data, result_json, error_message);
-  }
-}
-
-void RunMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
-  if (operation == nullptr) {
-    return;
-  }
   try {
-    auto result_json = muon_internal::RunMuonFsNativeDialog(
-        ToMuonFsDialogKind(operation->kind), operation->options_json.c_str(),
-        operation->cancellation);
-    CompleteMuonUiFsDialogOperation(operation, result_json.c_str(), nullptr);
+    muon_internal::MuonFsDialogOptions options;
+    std::string error;
+    if (!muon_internal::ParseDialogOptions(
+            operation->options_json.c_str(), &options, &error)) {
+      throw std::runtime_error(error);
+    }
+    const auto kind = ToMuonFsDialogKind(operation->kind);
+#if defined(_WIN32)
+    const auto result = muon_internal::CreateStringArrayJson(
+        muon_internal::RunWin32NativeDialog(kind, options,
+                                            operation->cancellation));
+    CompleteMuonUiFsDialogOperation(operation, result.c_str(), nullptr);
+#else
+    auto* dialog = muon_internal::CreateGtkNativeDialog(kind, options);
+    operation->dialog = GTK_WIDGET(g_object_ref(dialog));
+    g_signal_connect(dialog, "response", G_CALLBACK(OnMuonGtkDialogResponse),
+                     operation);
+    g_signal_connect(dialog, "hide", G_CALLBACK(OnMuonGtkDialogClosed), operation);
+    g_signal_connect_after(dialog, "destroy", G_CALLBACK(OnMuonGtkDialogClosed),
+                           operation);
+    gtk_widget_show_all(dialog);
+#endif
   } catch (const std::exception& error) {
     CompleteMuonUiFsDialogOperation(operation, nullptr, error.what());
   } catch (...) {
@@ -1164,45 +1138,42 @@ void RunMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
   }
 }
 
+static void PostMuonUiFsDialogOperation(
+    const std::shared_ptr<muon_ui_fs_dialog_operation>& operation) {
 #if defined(_WIN32)
-void PostMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
-  auto* dispatcher = cardio::unsafe_get_current_dispatcher();
-  if (dispatcher == nullptr) {
-    CompleteMuonUiFsDialogOperation(
-        operation, nullptr, "muon main dispatcher is unavailable");
-    return;
-  }
   muon_internal::FireAndForgetOnDispatcher(
-      dispatcher, [operation]() { RunMuonUiFsDialogOperation(operation); });
-}
+      cardio::unsafe_get_current_dispatcher(),
+      [operation]() { RunMuonUiFsDialogOperation(operation.get()); });
 #else
-gboolean RunMuonUiFsDialogOperationOnMainContext(gpointer raw_operation) {
-  RunMuonUiFsDialogOperation(
-      static_cast<muon_ui_fs_dialog_operation*>(raw_operation));
-  return G_SOURCE_REMOVE;
-}
-
-void PostMuonUiFsDialogOperation(muon_ui_fs_dialog_operation* operation) {
-  g_main_context_invoke(
-      nullptr, RunMuonUiFsDialogOperationOnMainContext, operation);
-}
+  // g_main_context_invoke can run synchronously when called from the UI thread.
+  // An idle source guarantees that run returns its handle before any callback.
+  operation->start_source = g_idle_add_full(
+      G_PRIORITY_DEFAULT,
+      [](gpointer data) -> gboolean {
+        const auto current =
+            *static_cast<std::shared_ptr<muon_ui_fs_dialog_operation>*>(data);
+        current->start_source = 0;
+        RunMuonUiFsDialogOperation(current.get());
+        return G_SOURCE_REMOVE;
+      },
+      new std::shared_ptr<muon_ui_fs_dialog_operation>(operation),
+      [](gpointer data) {
+        delete static_cast<std::shared_ptr<muon_ui_fs_dialog_operation>*>(data);
+      });
 #endif
-
-}  // namespace
+}
 
 extern "C" int muon_ui_fs_dialogs_initialize(void) {
+  g_muon_ui_fs_dialogs_initialized = true;
   return 0;
 }
 
 extern "C" void muon_ui_fs_dialogs_shutdown(void) {
-  std::vector<muon_ui_fs_dialog_operation*> operations;
-  for (const auto& operation : g_muon_ui_fs_dialog_operations) {
-    operations.push_back(operation.get());
+  g_muon_ui_fs_dialogs_initialized = false;
+  const auto operations = g_muon_ui_fs_dialog_operations;
+  for (const auto& [handle, operation] : operations) {
+    muon_ui_fs_dialogs_cancel(handle);
   }
-  for (auto* operation : operations) {
-    muon_ui_fs_dialogs_cancel(operation);
-  }
-  g_muon_ui_fs_dialog_operations_by_owner.clear();
 }
 
 extern "C" int muon_ui_fs_dialogs_run(
@@ -1215,8 +1186,8 @@ extern "C" int muon_ui_fs_dialogs_run(
   if (out_operation != nullptr) {
     *out_operation = nullptr;
   }
-  if (!IsValidMuonUiFsDialogKind(kind) || options_json == nullptr ||
-      completion == nullptr) {
+  if (!g_muon_ui_fs_dialogs_initialized || !IsValidMuonUiFsDialogKind(kind) ||
+      options_json == nullptr || completion == nullptr) {
     return 1;
   }
 #if defined(_WIN32)
@@ -1224,57 +1195,49 @@ extern "C" int muon_ui_fs_dialogs_run(
     return 1;
   }
 #endif
-
-  auto operation = std::make_unique<muon_ui_fs_dialog_operation>();
+  auto operation = std::make_shared<muon_ui_fs_dialog_operation>();
   operation->kind = kind;
   operation->options_json = options_json;
   operation->owner_browser_id = owner_browser_id > 0 ? owner_browser_id : 0;
   operation->completion = completion;
   operation->user_data = user_data;
-  operation->cancellation =
-      std::make_shared<muon_internal::MuonFsNativeDialogCancellation>();
   auto* raw_operation = operation.get();
   if (operation->owner_browser_id > 0) {
     g_muon_ui_fs_dialog_operations_by_owner[
         operation->owner_browser_id].push_back(raw_operation);
   }
-  g_muon_ui_fs_dialog_operations.push_back(std::move(operation));
+  g_muon_ui_fs_dialog_operations.emplace(raw_operation, operation);
   if (out_operation != nullptr) {
     *out_operation = raw_operation;
   }
-  PostMuonUiFsDialogOperation(raw_operation);
+  PostMuonUiFsDialogOperation(operation);
   return 0;
 }
 
 extern "C" void muon_ui_fs_dialogs_cancel(
-    muon_ui_fs_dialog_operation_handle operation) {
-  if (operation == nullptr) {
+    muon_ui_fs_dialog_operation_handle handle) {
+  const auto found = g_muon_ui_fs_dialog_operations.find(handle);
+  if (found == g_muon_ui_fs_dialog_operations.end()) {
     return;
   }
-  auto cancellation =
-      std::shared_ptr<muon_internal::MuonFsNativeDialogCancellation>();
-  if (operation->completed) {
-    return;
-  }
-  cancellation = operation->cancellation;
-  if (cancellation) {
-    cancellation->Cancel();
-  }
+  const auto operation = found->second;
+#if defined(_WIN32)
+  operation->cancellation->Cancel();
+#else
+  CompleteMuonUiFsDialogOperation(handle, "[]", nullptr);
+#endif
 }
 
-extern "C" void muon_ui_fs_dialogs_cancel_owner_browser(
-    int owner_browser_id) {
-  if (owner_browser_id <= 0) {
+extern "C" void muon_ui_fs_dialogs_cancel_owner_browser(int owner_browser_id) {
+  const auto found = g_muon_ui_fs_dialog_operations_by_owner.find(owner_browser_id);
+  if (found == g_muon_ui_fs_dialog_operations_by_owner.end()) {
     return;
   }
-  std::vector<muon_ui_fs_dialog_operation*> operations;
-  const auto owner_iterator =
-      g_muon_ui_fs_dialog_operations_by_owner.find(owner_browser_id);
-  if (owner_iterator == g_muon_ui_fs_dialog_operations_by_owner.end()) {
-    return;
+  std::vector<std::shared_ptr<muon_ui_fs_dialog_operation>> operations;
+  for (auto* handle : found->second) {
+    operations.push_back(g_muon_ui_fs_dialog_operations.at(handle));
   }
-  operations = owner_iterator->second;
-  for (auto* operation : operations) {
-    muon_ui_fs_dialogs_cancel(operation);
+  for (const auto& operation : operations) {
+    muon_ui_fs_dialogs_cancel(operation.get());
   }
 }

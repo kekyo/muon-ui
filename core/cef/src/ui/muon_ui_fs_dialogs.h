@@ -32,7 +32,7 @@ typedef enum muon_ui_fs_dialog_kind {
 } muon_ui_fs_dialog_kind;
 
 /**
- * Opaque handle for an active filesystem dialog operation.
+ * Opaque handle, valid until the operation's completion callback begins.
  */
 typedef struct muon_ui_fs_dialog_operation*
     muon_ui_fs_dialog_operation_handle;
@@ -62,7 +62,10 @@ MUON_UI_API int muon_ui_fs_dialogs_initialize(void);
 MUON_UI_API void muon_ui_fs_dialogs_shutdown(void);
 
 /**
- * Runs a filesystem dialog asynchronously.
+ * Runs a filesystem dialog asynchronously on the UI thread.
+ *
+ * All functions in this API must be called on the UI thread. Completion runs
+ * on the same thread, after this function returns and the dialog is closed.
  *
  * @param kind Dialog operation to run.
  * @param options_json JSON object string with normalized dialog options.
@@ -81,13 +84,17 @@ MUON_UI_API int muon_ui_fs_dialogs_run(
     muon_ui_fs_dialog_operation_handle* out_operation);
 
 /**
- * Cancels an active filesystem dialog operation.
+ * Cancels an active filesystem dialog operation on the UI thread.
+ *
+ * @param operation Active handle. Completion may run before this call returns.
  */
 MUON_UI_API void muon_ui_fs_dialogs_cancel(
     muon_ui_fs_dialog_operation_handle operation);
 
 /**
- * Cancels active filesystem dialogs owned by a browser.
+ * Cancels active filesystem dialogs owned by a browser on the UI thread.
+ *
+ * @param owner_browser_id Owner identifier supplied when starting the dialog.
  */
 MUON_UI_API void muon_ui_fs_dialogs_cancel_owner_browser(
     int owner_browser_id);

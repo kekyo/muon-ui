@@ -6,6 +6,9 @@
 import { expect, it } from "vitest";
 import type { GtkApp, GtkWindowElement } from "gestament";
 import type { AppWindow } from "agent-rover";
+import { createConnection } from "@playwright/mcp";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import {
   cdpCommandTimeoutMs,
@@ -417,6 +420,120 @@ const startWindowsNativeDialogMuon = async (
 
 describeMuonPluginBridge("muon plugin bridge - native dialogs", () => {
   if (isLocalLinuxNativeDialogE2e) {
+    it("aborts an earlier GTK file dialog while a later dialog remains open through AbortSignal", async () => {
+      const running = await startGestamentDebugMuon();
+      const client = new Client({
+        name: "muon-dialog-lifecycle",
+        version: "1",
+      });
+      const server = await createConnection({
+        browser: { cdpEndpoint: `http://127.0.0.1:${MUON_PORT}` },
+      });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      const call = async (
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<string> => {
+        const response = await client.callTool({ name, arguments: args });
+        const content = response.content as Array<{
+          type: string;
+          text?: string;
+        }>;
+        const result = content.map((item) => item.text ?? "").join("\n");
+        expect(response.isError, result).not.toBe(true);
+        return result;
+      };
+      try {
+        await running.driver.navigate(
+          `data:text/html;charset=utf-8,${createCounterPage("muon abort lifecycle", "Counter")}`,
+          cdpCommandTimeoutMs,
+        );
+        await waitForMuonFsSelectFile(running.driver, cdpCommandTimeoutMs);
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        const tabs = await call("browser_tabs", { action: "list" });
+        const tab = tabs.match(/- (\d+):[^\n]*muon abort lifecycle/)?.[1];
+        expect(tab, tabs).toBeDefined();
+        await call("browser_tabs", { action: "select", index: Number(tab) });
+        await call("browser_evaluate", {
+          function: `() => {
+            window.abortDialogs = ["earlier", "later"].map((title) => {
+              const controller = new AbortController();
+              const state = { controller, status: "pending", completion: undefined };
+              state.completion = (async () => {
+                try {
+                  await window.muon.fs.dialogs.selectFile({
+                    title: "muon abort " + title,
+                    signal: controller.signal,
+                  });
+                  state.status = "selected";
+                } catch (error) {
+                  state.status = error.name;
+                }
+                return state.status;
+              })();
+              return state;
+            });
+          }`,
+        });
+        await findGestamentNativeWindow(
+          running.app,
+          "muon abort earlier",
+          cdpCommandTimeoutMs,
+        );
+        await findGestamentNativeWindow(
+          running.app,
+          "muon abort later",
+          cdpCommandTimeoutMs,
+        );
+        const first = await call("browser_evaluate", {
+          function: `async () => {
+            window.abortDialogs[0].controller.abort();
+            return await window.abortDialogs[0].completion;
+          }`,
+        });
+        expect(first).toContain("AbortError");
+        await waitForGestamentNativeWindowClosed(
+          running.app,
+          "muon abort earlier",
+          cdpCommandTimeoutMs,
+        );
+        expect(
+          await call("browser_evaluate", {
+            function: `() => window.abortDialogs[1].status`,
+          }),
+        ).toContain("pending");
+        await findGestamentNativeWindow(
+          running.app,
+          "muon abort later",
+          cdpCommandTimeoutMs,
+        );
+        const second = await call("browser_evaluate", {
+          function: `async () => {
+            window.abortDialogs[1].controller.abort();
+            return await window.abortDialogs[1].completion;
+          }`,
+        });
+        expect(second).toContain("AbortError");
+        await waitForGestamentNativeWindowClosed(
+          running.app,
+          "muon abort later",
+          cdpCommandTimeoutMs,
+        );
+        await clickBrowserWindow(
+          running.app,
+          await readBrowserWindowBounds(running.driver),
+          undefined,
+        );
+        expect(await running.driver.evaluate("window.__muonCounter")).toBe(1);
+      } finally {
+        await client.close();
+        await server.close();
+        await stopGestamentMuon(running);
+      }
+    });
+
     it("keeps the opener browser view clickable while an opener popup is open", async () => {
       const pageTitle = "muon opener popup parent input";
       const buttonLabel = "muon Parent Input Counter";

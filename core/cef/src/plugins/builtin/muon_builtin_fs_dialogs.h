@@ -28,6 +28,7 @@ enum class MuonFsDialogKind {
   SelectSaveFile,
 };
 
+#if defined(_WIN32)
 /**
  * Shared cancellation state for an active native filesystem dialog.
  */
@@ -54,7 +55,7 @@ class MuonFsNativeDialogCancellation final {
   /**
    * Attaches a platform-native dialog pointer while it is active.
    *
-   * @param native_dialog GtkWidget* on GTK, IFileDialog* on Win32.
+   * @param native_dialog IFileDialog* on Win32.
    * @param owner_window_handle Native owner window handle on Win32, or 0.
    * @return false when cancellation was already requested.
    */
@@ -74,20 +75,6 @@ class MuonFsNativeDialogCancellation final {
   mutable std::mutex mutex_;
 };
 
-/**
- * Shows a native filesystem dialog and returns selected paths as JSON.
- *
- * @param kind Dialog operation to run.
- * @param options_json JSON object string with normalized dialog options.
- * @param cancellation Dialog cancellation state, or nullptr when native cancel
- *   is unavailable.
- * @return JSON string array. GTK returns local paths when available and URI
- *   strings for non-local GVfs selections.
- */
-std::string RunMuonFsNativeDialog(MuonFsDialogKind kind,
-                                  const char* options_json,
-                                  std::shared_ptr<
-                                      MuonFsNativeDialogCancellation>
-                                      cancellation);
+#endif
 
 }  // namespace muon_internal

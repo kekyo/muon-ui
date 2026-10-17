@@ -1846,6 +1846,26 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   # before linking this runtime consumer, including on a clean build.
   add_dependencies(muon_ui_title_bar_manifest_test muon_runtime_files)
   MUON_APPLY_SANITIZERS(muon_ui_title_bar_manifest_test)
+  if(NOT WIN32)
+    add_executable(muon_ui_fs_dialogs_test
+      ../cef-test/native/muon_ui_fs_dialogs_test.cpp
+      )
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_ui_fs_dialogs_test)
+    target_compile_features(muon_ui_fs_dialogs_test PRIVATE cxx_std_20)
+    set_target_properties(muon_ui_fs_dialogs_test PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}"
+      )
+    target_include_directories(muon_ui_fs_dialogs_test PRIVATE src)
+    target_link_libraries(muon_ui_fs_dialogs_test PRIVATE
+      muon_ui PkgConfig::MUON_GTK3)
+    add_dependencies(muon_ui_fs_dialogs_test muon_runtime_files)
+    MUON_APPLY_SANITIZERS(muon_ui_fs_dialogs_test)
+    add_test(NAME muon_ui_fs_dialogs
+      COMMAND "${MUON_RUNTIME_DIR}/muon_ui_fs_dialogs_test")
+    add_test(NAME muon_ui_fs_dialogs_no_display
+      COMMAND "${CMAKE_COMMAND}" -E env DISPLAY= WAYLAND_DISPLAY= GDK_BACKEND=x11
+        "${MUON_RUNTIME_DIR}/muon_ui_fs_dialogs_test" --no-display)
+  endif()
   add_executable(muon_icon_test
     ../cef-test/native/muon_icon_test.cpp
     src/browser/muon_icon.cpp

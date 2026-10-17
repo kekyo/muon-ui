@@ -366,7 +366,7 @@ const applyRemoteCdpOptions = (
 ): ConnectOptions => {
   const context = getWindowsRemoteContext();
   if (context === undefined) {
-    return options;
+    return { ...options, port: options.port ?? MUON_PORT };
   }
   return {
     ...options,
@@ -722,7 +722,23 @@ type GestamentChildContainer = GtkWidgetElement & {
   getChildCount: () => Promise<number>;
 };
 
-export const MUON_PORT = 9222;
+/** Loopback CDP port allocated independently for this test process. */
+export const MUON_PORT = await new Promise<number>((resolve, reject) => {
+  const probe = createServer();
+  probe.once("error", reject);
+  probe.listen(0, "127.0.0.1", () => {
+    const address = probe.address();
+    if (address === null || typeof address === "string") {
+      probe.close();
+      reject(new Error("No loopback CDP port was allocated"));
+      return;
+    }
+    probe.close((error) => {
+      if (error) reject(error);
+      else resolve(address.port);
+    });
+  });
+});
 export const MUON_APP_URL = "asset://main/index.html";
 export const TEST_NETWORK_ALLOW_PATTERNS = ["asset://main/**", "data:**"];
 export const TEST_BROWSER_PLUGIN_ALLOW_PATTERNS = TEST_NETWORK_ALLOW_PATTERNS;

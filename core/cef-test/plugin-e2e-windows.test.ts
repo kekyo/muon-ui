@@ -124,6 +124,7 @@ describeWindowsE2e(suiteName, { concurrent: false }, () => {
 
 if (windowsAgent !== undefined) {
   await import("./plugin-e2e/app-network.js");
+  await import("./plugin-e2e/webgl.js");
   await import("./plugin-e2e/browser-background.js");
   await import("./plugin-e2e/title-bar.js");
   await import("./plugin-e2e/runtime-api.js");

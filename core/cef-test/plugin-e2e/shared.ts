@@ -723,10 +723,33 @@ type GestamentChildContainer = GtkWidgetElement & {
 };
 
 // Allow concurrent checkouts to keep their application and test connections separate.
-export const MUON_PORT = Number(process.env.MUON_E2E_CDP_PORT ?? "9222");
-if (!Number.isInteger(MUON_PORT) || MUON_PORT < 1 || MUON_PORT > 65535) {
-  throw new Error("MUON_E2E_CDP_PORT must be an integer from 1 to 65535.");
-}
+/** Loopback CDP port configured explicitly or allocated for this test process. */
+export const MUON_PORT = await (async () => {
+  const configuredPort = process.env.MUON_E2E_CDP_PORT;
+  if (configuredPort !== undefined) {
+    const port = Number(configuredPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("MUON_E2E_CDP_PORT must be an integer from 1 to 65535.");
+    }
+    return port;
+  }
+  return await new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close();
+        reject(new Error("No loopback CDP port was allocated"));
+        return;
+      }
+      probe.close((error) => {
+        if (error) reject(error);
+        else resolve(address.port);
+      });
+    });
+  });
+})();
 export const MUON_APP_URL = "asset://main/index.html";
 export const TEST_NETWORK_ALLOW_PATTERNS = ["asset://main/**", "data:**"];
 export const TEST_BROWSER_PLUGIN_ALLOW_PATTERNS = TEST_NETWORK_ALLOW_PATTERNS;

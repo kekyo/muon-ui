@@ -4513,6 +4513,153 @@ describe("muon run CLI", () => {
   });
 });
 
+describe.skipIf(process.platform !== "linux")(
+  "Linux runtime module environment",
+  () => {
+    for (const launcher of [
+      "Vite",
+      "CLI",
+      "POSIX script",
+      "core supervisor",
+    ] as const) {
+      it.each([
+        { bundled: true, libraryPath: "/existing/libraries" },
+        { bundled: true, libraryPath: "" },
+        { bundled: true, libraryPath: undefined },
+        { bundled: false, libraryPath: "/existing/libraries" },
+      ])(
+        `${launcher} selects compatible modules: %j`,
+        async ({ bundled, libraryPath }) => {
+          const root = await createTemporaryDirectory("muon modules 日本語 ' ");
+          const runtime = join(root, "runtime source");
+          const capturedPath = join(root, "environment.json");
+          await writeFakeMuonSource(runtime, root);
+          await writeFile(
+            getMuonExecutablePath(runtime, "linux"),
+            `#!${process.execPath}
+require("node:fs").writeFileSync(${JSON.stringify(capturedPath)}, JSON.stringify({
+  environment: process.env,
+  runtime: process.cwd(),
+}));
+`,
+          );
+          if (bundled) {
+            await mkdir(join(runtime, "linux"));
+            await writeFile(
+              join(runtime, "linux", "gtk-immodules.cache.in"),
+              "",
+            );
+            await writeFile(
+              join(runtime, "linux", "gdk-pixbuf-loaders.cache.in"),
+              "",
+            );
+          }
+          const inherited = {
+            GTK_EXE_PREFIX: "/host/gtk",
+            GTK_PATH: "/host/gtk/modules",
+            GTK_IM_MODULE_FILE: "/host/gtk-immodules.cache",
+            GDK_PIXBUF_MODULE_FILE: "/host/gdk-pixbuf-loaders.cache",
+            MUON_LINUX_MODULE_ROOT: "/host/linux",
+            LD_LIBRARY_PATH: libraryPath,
+            GTK_IM_MODULE: "ibus",
+            MUON_TEST_CUSTOM_ENV: "preserved",
+          };
+          for (const [key, value] of Object.entries(inherited)) {
+            vi.stubEnv(key, value);
+          }
+          try {
+            if (launcher === "Vite" || launcher === "CLI") {
+              const cefDirectory = await writeFakeCefDirectory();
+              process.env.MUON_CACHE_DIR = join(root, "cache");
+              await writeBasicViteProject(root);
+              await writeProjectMuonConfig(root);
+              if (launcher === "Vite") {
+                await startServer(
+                  root,
+                  {
+                    muonPath: runtime,
+                    cefPath: cefDirectory,
+                    stagePath: undefined,
+                    enableDebugger: undefined,
+                    open: undefined,
+                  },
+                  false,
+                );
+                await wait(() => existsSync(capturedPath));
+              } else {
+                const assets = await writeDevAssets(root);
+                const result = await runMuonCli(root, [
+                  "run",
+                  "--muon-path",
+                  runtime,
+                  "--cef-path",
+                  cefDirectory,
+                  "--assets",
+                  assets,
+                  "--json",
+                ]);
+                expect(result.stderr).toBe("");
+                expect(result.exitCode).toBe(0);
+              }
+            } else if (launcher === "POSIX script") {
+              const overrideConfigPath = join(root, "override.json");
+              await writeFile(overrideConfigPath, "{}");
+              const scriptPath = join(root, "launch.sh");
+              await writeFile(
+                scriptPath,
+                createMuonLaunchScript({
+                  muonExecutablePath: getMuonExecutablePath(runtime, "linux"),
+                  projectConfigPath: undefined,
+                  overrideConfigPath,
+                  platform: "linux",
+                }),
+              );
+              await execFileAsync("bash", [scriptPath]);
+            } else {
+              await execFileAsync(process.execPath, [
+                getMuonCoreDevSupervisorPath(),
+                runtime,
+              ]);
+            }
+            const captured = JSON.parse(
+              await readFile(capturedPath, "utf8"),
+            ) as {
+              environment: NodeJS.ProcessEnv;
+              runtime: string;
+            };
+            expect(captured.environment).toMatchObject({
+              ...inherited,
+              ...(bundled
+                ? {
+                    GTK_EXE_PREFIX: join(captured.runtime, "linux"),
+                    GTK_PATH: join(captured.runtime, "linux/lib/gtk-3.0"),
+                    GTK_IM_MODULE_FILE: join(
+                      captured.runtime,
+                      "linux/gtk-immodules.cache",
+                    ),
+                    GDK_PIXBUF_MODULE_FILE: join(
+                      captured.runtime,
+                      "linux/gdk-pixbuf-loaders.cache",
+                    ),
+                    MUON_LINUX_MODULE_ROOT: join(captured.runtime, "linux"),
+                    LD_LIBRARY_PATH:
+                      captured.runtime + (libraryPath ? `:${libraryPath}` : ""),
+                  }
+                : {}),
+            });
+            // Preparing a child must not redirect modules in the parent Vite/Node process.
+            for (const [key, value] of Object.entries(inherited)) {
+              expect(process.env[key]).toBe(value);
+            }
+          } finally {
+            vi.unstubAllEnvs();
+          }
+        },
+      );
+    }
+  },
+);
+
 describe("muon launch scripts", () => {
   it("runs the POSIX script with paths containing spaces", async () => {
     const root = await createTemporaryDirectory("muon vite shell root ");

@@ -15,6 +15,7 @@ import type { ViteDevServer } from "vite";
 
 import { ensureMuonGitignoreEntry } from "../common/gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
+import { createMuonRuntimeEnvironment } from "./runtime-environment.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import type { MuonVitePluginOptions } from "../common/vite.js";
 import {
@@ -153,6 +154,7 @@ const createPosixMuonLaunchScript = ({
   muonExecutablePath,
   projectConfigPath,
   overrideConfigPath,
+  platform,
 }: MuonLaunchScriptOptions): string => `#!/usr/bin/env bash
 set -euo pipefail
 MUON_RECYCLE_EXIT_CODE=${muonRecycleExitCode}
@@ -182,6 +184,20 @@ fi
 MUON_CONFIG_ARGS+=("-c" "$MUON_OVERRIDE_CONFIG")
 
 cd "$MUON_EXECUTABLE_DIRECTORY"
+${
+  // Keep direct shell launches aligned with the distribution launcher's modules.
+  platform === "linux"
+    ? `if [[ -d "$MUON_EXECUTABLE_DIRECTORY/linux" ]]; then
+  export GTK_EXE_PREFIX="$MUON_EXECUTABLE_DIRECTORY/linux"
+  export GTK_PATH="$MUON_EXECUTABLE_DIRECTORY/linux/lib/gtk-3.0"
+  export GTK_IM_MODULE_FILE="$MUON_EXECUTABLE_DIRECTORY/linux/gtk-immodules.cache"
+  export GDK_PIXBUF_MODULE_FILE="$MUON_EXECUTABLE_DIRECTORY/linux/gdk-pixbuf-loaders.cache"
+  export MUON_LINUX_MODULE_ROOT="$MUON_EXECUTABLE_DIRECTORY/linux"
+  export LD_LIBRARY_PATH="$MUON_EXECUTABLE_DIRECTORY\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+`
+    : ""
+}
 while true; do
   set +e
   "$MUON_EXECUTABLE" "\${MUON_CONFIG_ARGS[@]}"
@@ -550,7 +566,11 @@ export const startMuonViteBrowserBridge = async ({
             projectConfig.path,
             paths.overrideConfigPath,
           ),
-          environment,
+          createMuonRuntimeEnvironment(
+            preparedRuntime.stagePath,
+            platform,
+            environment,
+          ),
           setCurrentChild,
         );
         if (!closing && exitCode !== muonRecycleExitCode) {

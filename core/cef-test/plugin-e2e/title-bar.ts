@@ -5,6 +5,9 @@
 
 import type { ServerResponse } from "node:http";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createConnection } from "@playwright/mcp";
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
 import type { AppWindow, ScreenRect } from "agent-rover";
@@ -18,6 +21,7 @@ import {
   listCdpTargets,
   mkdir,
   mkdtemp,
+  MUON_PORT,
   parseXpropWindowStateAtoms,
   parseXpropWindowTitle,
   processExitTimeoutMs,
@@ -1137,7 +1141,7 @@ const doubleClickWindowsTitleBar = async (): Promise<void> => {
   await delay(150);
 };
 
-const connectToWindowsTitleBarCdp = async (): Promise<CdpDriver> => {
+const connectToTitleBarCdp = async (): Promise<CdpDriver> => {
   const deadline = Date.now() + cdpCommandTimeoutMs;
   let lastTargets = "";
   let lastError: unknown = undefined;
@@ -1167,7 +1171,7 @@ const connectToWindowsTitleBarCdp = async (): Promise<CdpDriver> => {
     await delay(100);
   }
   throw new Error(
-    `Timed out connecting to Windows title bar CDP target. Last targets: ${lastTargets}. Last error: ${String(lastError)}`,
+    `Timed out connecting to title bar CDP target. Last targets: ${lastTargets}. Last error: ${String(lastError)}`,
   );
 };
 
@@ -1641,6 +1645,152 @@ const isLocalLinuxTitleBarE2e =
 const titleBarIt = isLocalLinuxTitleBarE2e && !shouldUseValgrind ? it : it.skip;
 const windowsTitleBarIt = isWindowsRemoteE2e() ? it : it.skip;
 
+// Exercise the rendered title bar, including inherited icon colors, rather
+// than the CSS manifest. A fixed application background must remain readable
+// when the desktop theme changes independently of it.
+const contrastIt = isWindowsRemoteE2e() ? windowsTitleBarIt : titleBarIt;
+contrastIt.each(["#060c12", "#f8fafc", "#808080"])(
+  "keeps custom title bar text and controls legible on %s in either desktop theme",
+  async (backgroundColor) => {
+    const verify = async () => {
+      const context = isWindowsRemoteE2e()
+        ? requireWindowsRemoteContext()
+        : undefined;
+      const driver = await connectToTitleBarCdp();
+      const client = new Client({
+        name: "muon-titlebar-contrast",
+        version: "1",
+      });
+      const server = await createConnection({
+        browser: {
+          cdpEndpoint: `http://${context?.cdpHost ?? "127.0.0.1"}:${context?.cdpPort ?? MUON_PORT}`,
+        },
+      });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const response = await client.callTool({ name, arguments: args });
+        const text = (response.content as { type: string; text: string }[])
+          .filter((item) => item.type === "text")
+          .map((item) => item.text)
+          .join("\n");
+        expect(response.isError, text).not.toBe(true);
+        return text;
+      };
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        const tabs = await call("browser_tabs", { action: "list" });
+        const tab = tabs.match(/- (\d+):[^\n]*muon Title Bar/)?.[1];
+        expect(tab, tabs).toBeDefined();
+        await call("browser_tabs", { action: "select", index: Number(tab) });
+        for (const colorScheme of ["light", "dark"]) {
+          await driver.send("Emulation.setEmulatedMedia", {
+            features: [{ name: "prefers-color-scheme", value: colorScheme }],
+          });
+          const result = await call("browser_evaluate", {
+            function: `() => {
+              const bar = document.getElementById("muon-title-bar");
+              const title = document.getElementById("muon-title");
+              const controls = [...document.querySelectorAll(".control")];
+              const canvas = document.createElement("canvas");
+              canvas.width = canvas.height = 1;
+              const ctx = canvas.getContext("2d", { willReadFrequently: true });
+              const pixel = (...colors) => {
+                ctx.clearRect(0, 0, 1, 1);
+                for (const color of colors) {
+                  ctx.fillStyle = color;
+                  ctx.fillRect(0, 0, 1, 1);
+                }
+                return [...ctx.getImageData(0, 0, 1, 1).data];
+              };
+              const luminance = (rgba) => {
+                const linear = rgba.slice(0, 3).map(value => {
+                  const s = value / 255;
+                  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+                });
+                return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+              };
+              const contrast = (foreground, background) => {
+                const a = luminance(foreground);
+                const b = luminance(background);
+                return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+              };
+              const background = getComputedStyle(document.body).backgroundColor;
+              const originalClasses = bar.className;
+              const states = [];
+              try {
+                for (const active of [true, false]) {
+                  bar.classList.toggle("inactive", !active);
+                  for (const maximized of [false, true]) {
+                    bar.classList.toggle("maximized", maximized);
+                    const textColor = getComputedStyle(title).color;
+                    states.push({
+                      active,
+                      maximized,
+                      titleContrast: contrast(pixel(textColor), pixel(background)),
+                      controls: controls.map(button => {
+                        const style = getComputedStyle(button);
+                        const icon = button.querySelector(".icon");
+                        const glyph = getComputedStyle(icon, "::before");
+                        const color = button.dataset.action === "maximize"
+                          ? glyph.borderTopColor : glyph.backgroundColor;
+                        const backdrop = button.dataset.action === "maximize" && maximized
+                          ? getComputedStyle(icon, "::after").backgroundColor : "transparent";
+                        return {
+                          action: button.dataset.action,
+                          visible: style.display !== "none" && style.visibility === "visible" && button.getBoundingClientRect().width > 0,
+                          contrast: contrast(pixel(color), pixel(background, style.backgroundColor, backdrop))
+                        };
+                      })
+                    });
+                  }
+                }
+              } finally {
+                bar.className = originalClasses;
+              }
+              return { background: pixel(background), states };
+            }`,
+          });
+          const match = /### Result\n([\s\S]*?)(?:\n###|$)/.exec(result);
+          expect(match, result).not.toBeNull();
+          const actual = JSON.parse(match![1]!);
+          expect(actual.background).toEqual([
+            ...backgroundColor
+              .slice(1)
+              .match(/../g)!
+              .map((hex) => parseInt(hex, 16)),
+            255,
+          ]);
+          for (const state of actual.states) {
+            const label = `${backgroundColor}, ${colorScheme}, active=${state.active}, maximized=${state.maximized}`;
+            expect(state.titleContrast, label).toBeGreaterThanOrEqual(
+              state.active ? 4.5 : 3,
+            );
+            expect(state.controls).toHaveLength(3);
+            for (const control of state.controls) {
+              expect(control.visible, `${label}, ${control.action}`).toBe(true);
+              expect(
+                control.contrast,
+                `${label}, ${control.action}`,
+              ).toBeGreaterThanOrEqual(3);
+            }
+          }
+        }
+      } finally {
+        await client.close();
+        await server.close();
+        driver.close();
+      }
+    };
+    if (isWindowsRemoteE2e()) {
+      await withWindowsTitleBarMuon(verify, backgroundColor);
+    } else {
+      await withTitleBarMuon(verify, backgroundColor);
+    }
+  },
+);
+
 windowsTitleBarIt(
   "renders and controls the Windows custom title bar",
   async () => {
@@ -1678,7 +1828,7 @@ windowsTitleBarIt(
   "uses themed Windows custom title bar close button colors",
   async () => {
     await withWindowsTitleBarMuon(async () => {
-      const titleBarDriver = await connectToWindowsTitleBarCdp();
+      const titleBarDriver = await connectToTitleBarCdp();
       try {
         await runTitleBarStep(
           "verify light close hover color",

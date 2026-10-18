@@ -248,6 +248,13 @@ static std::string CreateTitleBarBackgroundCss(
          R"CSS(;
   --muon-titlebar-bg-inactive-bottom: )CSS" + color +
          R"CSS(;
+  /* A configured background is independent of the desktop theme. Keep both
+     active and inactive controls readable against that same background. */
+  --muon-titlebar-fg: contrast-color(var(--muon-titlebar-bg-bottom));
+  --muon-titlebar-fg-inactive: color-mix(
+    in srgb, var(--muon-titlebar-fg) 85%, var(--muon-titlebar-bg-bottom)
+  );
+  --muon-titlebar-icon-backdrop: var(--muon-titlebar-bg-bottom);
 }
 )CSS";
 }

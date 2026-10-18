@@ -207,7 +207,7 @@ export const createLinuxDependencyManifest = async (
   const label = (path: string): string => labels.get(path) ?? path;
   const systemLibraries = audit.binaries
     .filter((binary) => !labels.has(binary.path) && binary.soname !== undefined)
-    .map((binary) => binary.soname!);
+    .map((binary) => ({ path: binary.path, soname: binary.soname! }));
   return {
     schemaVersion: 1,
     // CEF/Node acquisition invokes curl and relies on the host trust store.
@@ -215,8 +215,7 @@ export const createLinuxDependencyManifest = async (
     runtimePackages: ["ca-certificates", "curl"],
     debianLibraries: await readLinuxDebianLibraries(
       systemLibraries,
-      options.target.slice("linux-".length),
-      "/var/lib/dpkg/info",
+      "/var/lib/dpkg",
     ),
     referenceCef: options.referenceCef,
     baseline: {

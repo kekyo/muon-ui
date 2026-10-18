@@ -93,6 +93,7 @@ jobs:
             wine32:i386 \
             wine64 \
             x11-utils \
+            xdotool \
             xvfb
 
       - name: Install npm dependencies

@@ -10,10 +10,11 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -99,9 +100,12 @@ const createLibraries = async () => {
   return { root, good, old, consumer };
 };
 
-const createTemporaryMetadataDirectory = async (): Promise<string> => {
+const createTemporaryDpkgDirectory = async (): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), "muon-debian-symbols-"));
   directories.push(directory);
+  await mkdir(join(directory, "info"));
+  // dpkg's multiarch database format uses architecture-qualified control files.
+  await writeFile(join(directory, "info/format"), "1\n");
   return directory;
 };
 
@@ -422,10 +426,16 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")(
         plugin,
       ]);
       const binary = await inspectLinuxElf(plugin, "linux-amd64");
+      const audit = await auditLinuxDependencies({
+        target: "linux-amd64",
+        files: [plugin],
+        libraryPaths: ["/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu"],
+      });
       const libraries = await readLinuxDebianLibraries(
-        binary.needed,
-        "amd64",
-        "/var/lib/dpkg/info",
+        audit.binaries
+          .filter((item) => item.soname !== undefined)
+          .map((item) => ({ path: item.path, soname: item.soname! })),
+        "/var/lib/dpkg",
       );
       expect(
         getLinuxDebianSymbolDependencies(
@@ -438,22 +448,40 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")(
     });
 
     it("keeps library fallbacks and additional symbol dependency templates", async () => {
-      const metadata = join(
-        await createTemporaryMetadataDirectory(),
-        "libfixture1:amd64.symbols",
+      const directory = await createTemporaryDpkgDirectory();
+      const metadata = join(directory, "info");
+      const fixture = join(directory, "libfixture.so.1");
+      const fallback = join(directory, "libfallback.so.1");
+      await writeFile(fixture, "");
+      await writeFile(fallback, "");
+      await writeFile(
+        join(directory, "status"),
+        ["libfixture1", "libfallback1"]
+          .map(
+            (name) =>
+              `Package: ${name}\nStatus: install ok installed\nArchitecture: amd64\nMulti-Arch: same\nVersion: 4.0\nMaintainer: Muon <muon@example.invalid>\nDescription: Dependency metadata fixture\n\n`,
+          )
+          .join(""),
+      );
+      await writeFile(join(metadata, "libfixture1:amd64.list"), `${fixture}\n`);
+      await writeFile(
+        join(metadata, "libfallback1:amd64.list"),
+        `${fallback}\n`,
       );
       await writeFile(
-        metadata,
+        join(metadata, "libfixture1:amd64.symbols"),
         "libfixture.so.1 libfixture1 #MINVER#\n| libfixture-driver #MINVER#\n basic@Base 1.0\n accelerated@Base 2:3.1-1~test 1\n",
       );
       await writeFile(
-        join(dirname(metadata), "libfallback1:amd64.shlibs"),
+        join(metadata, "libfallback1:amd64.shlibs"),
         "libfallback 1 libfallback1 (>= 4.0)\nudeb: libfallback 1 libfallback1-udeb\n",
       );
       const libraries = await readLinuxDebianLibraries(
-        ["libfixture.so.1", "libfallback.so.1"],
-        "amd64",
-        dirname(metadata),
+        [
+          { path: fixture, soname: "libfixture.so.1" },
+          { path: fallback, soname: "libfallback.so.1" },
+        ],
+        directory,
       );
       expect(
         getLinuxDebianSymbolDependencies(libraries["libfixture.so.1"]!, [
@@ -469,9 +497,100 @@ describe.skipIf(process.platform !== "linux" || process.arch !== "x64")(
         getLinuxDebianSymbolDependencies(libraries["libfallback.so.1"]!, []),
       ).toEqual(["libfallback1 (>= 4.0)"]);
       await expect(
-        readLinuxDebianLibraries(["missing.so.1"], "amd64", dirname(metadata)),
+        readLinuxDebianLibraries(
+          [{ path: fixture, soname: "missing.so.1" }],
+          directory,
+        ),
       ).rejects.toThrow("missing.so.1");
     });
+
+    it.each(["symbols", "shlibs"])(
+      "uses the resolved library's package %s when another ABI has the same SONAME",
+      async (format) => {
+        const directory = await createTemporaryDpkgDirectory();
+        const metadata = join(directory, "info");
+        await mkdir(join(directory, "lib64"));
+        await mkdir(join(directory, "lib32"));
+        await symlink(join(directory, "lib64"), join(directory, "lib"));
+        const provider = join(directory, "lib64/libfixture.so.1");
+        const otherAbi = join(directory, "lib32/libfixture.so.1");
+        await writeFile(provider, "");
+        await writeFile(otherAbi, "");
+        await writeFile(
+          join(directory, "status"),
+          ["libfixture1", "libfixture1-32"]
+            .map(
+              (name) =>
+                `Package: ${name}\nStatus: install ok installed\nArchitecture: amd64\n${name === "libfixture1" ? "Multi-Arch: same\n" : ""}Version: 99.0\nMaintainer: Muon <muon@example.invalid>\nDescription: Dependency metadata fixture\n\n`,
+            )
+            .join(""),
+        );
+        await writeFile(
+          join(metadata, "libfixture1:amd64.list"),
+          `${join(directory, "lib/libfixture.so.1")}\n`,
+        );
+        await writeFile(join(metadata, "libfixture1-32.list"), `${otherAbi}\n`);
+        await writeFile(
+          join(metadata, "libfixture1:amd64.symbols"),
+          "libfixture.so.1 libfixture1 #MINVER#\n available@Base 2.0\n",
+        );
+        await writeFile(
+          join(metadata, "libfixture1:amd64.shlibs"),
+          "libfixture 1 libfixture1 (>= 3.0)\n",
+        );
+        if (format === "shlibs")
+          await rm(join(metadata, "libfixture1:amd64.symbols"));
+        await writeFile(
+          join(metadata, "libfixture1-32.symbols"),
+          "libfixture.so.1 libfixture1-32 #MINVER#\n available@Base 99.0\n",
+        );
+        await writeFile(
+          join(metadata, "libfixture1-32.shlibs"),
+          "libfixture 1 libfixture1-32 (>= 99.0)\n",
+        );
+        const libraries = await readLinuxDebianLibraries(
+          [{ path: provider, soname: "libfixture.so.1" }],
+          directory,
+        );
+        const library = libraries["libfixture.so.1"]!;
+        expect(library.source).toBe(`libfixture1:amd64.${format}`);
+        expect(
+          getLinuxDebianSymbolDependencies(library, [
+            { name: "available", version: undefined, weak: false },
+          ]),
+        ).toEqual(
+          format === "symbols"
+            ? ["libfixture1", "libfixture1 (>= 2.0)"]
+            : ["libfixture1 (>= 3.0)"],
+        );
+        expect(
+          getLinuxDebianSymbolDependencies(library, [
+            { name: "unlisted", version: undefined, weak: false },
+          ]),
+        ).toEqual(
+          format === "symbols"
+            ? ["libfixture1", "libfixture1 (>= 3.0)"]
+            : ["libfixture1 (>= 3.0)"],
+        );
+        // A same-named file outside the installed package is not that package's
+        // library, and two claimed owners must not silently select one of them.
+        const unowned = join(directory, "libfixture.so.1");
+        await writeFile(unowned, "");
+        await expect(
+          readLinuxDebianLibraries(
+            [{ path: unowned, soname: "libfixture.so.1" }],
+            directory,
+          ),
+        ).rejects.toThrow("No Debian package owns");
+        await writeFile(join(metadata, "libfixture1-32.list"), `${provider}\n`);
+        await expect(
+          readLinuxDebianLibraries(
+            [{ path: provider, soname: "libfixture.so.1" }],
+            directory,
+          ),
+        ).rejects.toThrow("Ambiguous Debian package ownership");
+      },
+    );
 
     it("composes plugin requirements from the saved baseline and rejects unavailable symbols or libraries", async () => {
       const fixture = await createLibraries();

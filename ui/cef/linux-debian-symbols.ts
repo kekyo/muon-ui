@@ -3,9 +3,11 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { realpath } from "node:fs/promises";
+import { basename } from "node:path";
+import { promisify } from "node:util";
 
 import type { LinuxElfSymbol } from "./linux-dependencies.js";
 
@@ -23,30 +25,85 @@ export interface LinuxDebianLibrary {
   fallback: string | undefined;
 }
 
-/**
- * Retains the baseline package information needed to audit later app plugins.
- * @param sonames - System libraries in the audited dependency graph.
- * @param architecture - Debian architecture of that graph.
- * @param directory - Installed dpkg metadata directory.
- * @returns Package metadata indexed by SONAME.
- */
-export const readLinuxDebianLibraries = async (
-  sonames: readonly string[],
-  architecture: string,
+/** System library selected by the target's ELF dependency audit. */
+export interface LinuxDebianLibraryProvider {
+  /** Resolved library file, whose owning package supplies dependency metadata. */
+  path: string;
+  /** Shared library name recorded in the audited ELF. */
+  soname: string;
+}
+
+const execute = promisify(execFile);
+
+const queryDpkg = async (
+  directory: string,
+  args: readonly string[],
+): Promise<string> => {
+  const { stdout } = await execute(
+    "dpkg-query",
+    [`--admindir=${directory}`, ...args],
+    { env: { ...process.env, LC_ALL: "C" }, maxBuffer: 16 * 1024 * 1024 },
+  );
+  return stdout;
+};
+
+const findLibraryPackage = async (
+  path: string,
+  directory: string,
+): Promise<string> => {
+  // Search by filename, then compare canonical paths. On merged-/usr systems,
+  // dpkg may still record /lib while the ELF audit has resolved it to /usr/lib.
+  // Multilib packages may own the same filename under a different directory.
+  const pattern = `*/${basename(path).replace(/[\\*?\[]/g, "\\$&")}`;
+  let output: string;
+  try {
+    output = await queryDpkg(directory, ["--search", pattern]);
+  } catch (error) {
+    if ((error as { code: unknown }).code !== 1) throw error;
+    throw new Error(`No Debian package owns ${path}`, { cause: error });
+  }
+  const packages = new Set<string>();
+  for (const line of output.split("\n")) {
+    const entry = line.match(/^(\S+(?:, \S+)*): (\/.*)$/);
+    if (!entry) continue;
+    let candidate: string;
+    try {
+      candidate = await realpath(entry[2]!);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (candidate === path)
+      for (const name of entry[1]!.split(", ")) packages.add(name);
+  }
+  if (packages.size !== 1)
+    throw new Error(
+      packages.size
+        ? `Ambiguous Debian package ownership for ${path}: ${[...packages].join(", ")}`
+        : `No Debian package owns ${path}`,
+    );
+  return [...packages][0]!;
+};
+
+const readPackageLibraries = async (
+  packageName: string,
   directory: string,
 ): Promise<Record<string, LinuxDebianLibrary>> => {
-  const wanted = new Set(sonames);
   const result: Record<string, LinuxDebianLibrary> = {};
-  const files = (await readdir(directory))
-    .filter((name) => {
-      const match = name.match(/^(.*?)(?::([^:]+))?\.(symbols|shlibs)$/);
-      return match && (match[2] === undefined || match[2] === architecture);
-    })
-    .sort();
+  const files = (
+    await queryDpkg(directory, ["--control-list", packageName])
+  ).split("\n");
   // Read installed binary metadata, not source-package templates with patterns
   // and architecture tags. Its public format is documented in deb-symbols(5).
-  for (const file of files.filter((name) => name.endsWith(".symbols"))) {
-    const text = await readFile(join(directory, file), "utf8");
+  // Use dpkg-query's public control-file interface instead of scanning unrelated
+  // packages or depending on the internal layout of its metadata directory.
+  if (files.includes("symbols")) {
+    const file = `${packageName}.symbols`;
+    const text = await queryDpkg(directory, [
+      "--control-show",
+      packageName,
+      "symbols",
+    ]);
     const hash = createHash("sha256").update(text).digest("hex");
     let current: LinuxDebianLibrary | undefined;
     for (const line of text.split("\n")) {
@@ -69,8 +126,6 @@ export const readLinuxDebianLibraries = async (
         const header = line.match(/^(\S+) (.+)$/);
         if (!header)
           throw new Error(`Invalid Debian library entry in ${file}: ${line}`);
-        current = undefined;
-        if (!wanted.has(header[1]!)) continue;
         if (result[header[1]!])
           throw new Error(
             `Ambiguous Debian symbol information for ${header[1]}`,
@@ -86,8 +141,13 @@ export const readLinuxDebianLibraries = async (
       }
     }
   }
-  for (const file of files.filter((name) => name.endsWith(".shlibs"))) {
-    const text = await readFile(join(directory, file), "utf8");
+  if (files.includes("shlibs")) {
+    const file = `${packageName}.shlibs`;
+    const text = await queryDpkg(directory, [
+      "--control-show",
+      packageName,
+      "shlibs",
+    ]);
     for (const line of text.split("\n")) {
       if (!line.trim() || line.startsWith("#")) continue;
       const entry = line.match(/^(?:(\w+):\s+)?(\S+)\s+(\S+)\s+(.+)$/);
@@ -98,7 +158,6 @@ export const readLinuxDebianLibraries = async (
         `${entry[2]}.so.${entry[3]}`,
         `${entry[2]}-${entry[3]}.so`,
       ]) {
-        if (!wanted.has(soname)) continue;
         if (result[soname]) {
           result[soname]!.fallback ??= entry[4]!;
         } else
@@ -112,9 +171,43 @@ export const readLinuxDebianLibraries = async (
       }
     }
   }
-  for (const soname of wanted) {
-    if (!result[soname])
+  return result;
+};
+
+/**
+ * Retains the baseline package information needed to audit later app plugins.
+ * @param libraries - System library files selected by the ELF dependency audit.
+ * @param directory - dpkg administrative directory, normally /var/lib/dpkg.
+ * @returns Metadata from each resolved file's owning package, indexed by SONAME.
+ * @remarks Rejects ambiguous file ownership or conflicting providers rather than
+ * selecting another ABI's package merely because its SONAME is the same.
+ */
+export const readLinuxDebianLibraries = async (
+  libraries: readonly LinuxDebianLibraryProvider[],
+  directory: string,
+): Promise<Record<string, LinuxDebianLibrary>> => {
+  const result: Record<string, LinuxDebianLibrary> = {};
+  const providers = new Map<string, string>();
+  const packages = new Map<string, Record<string, LinuxDebianLibrary>>();
+  for (const { path, soname } of libraries) {
+    const canonical = await realpath(path);
+    const previous = providers.get(soname);
+    if (previous !== undefined) {
+      if (previous !== canonical)
+        throw new Error(`Conflicting Debian library providers for ${soname}`);
+      continue;
+    }
+    providers.set(soname, canonical);
+    const packageName = await findLibraryPackage(canonical, directory);
+    let metadata = packages.get(packageName);
+    if (metadata === undefined) {
+      metadata = await readPackageLibraries(packageName, directory);
+      packages.set(packageName, metadata);
+    }
+    const library = metadata[soname];
+    if (!library)
       throw new Error(`No baseline Debian package information for ${soname}`);
+    result[soname] = library;
   }
   return result;
 };

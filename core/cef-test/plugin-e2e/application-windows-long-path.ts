@@ -119,7 +119,7 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
   const run = async (
     configPath: string,
     config: unknown,
-    source: string,
+    source: string | { evaluate: string; operate: () => Promise<void> },
     environment: Record<string, string>,
   ): Promise<unknown> => {
     const context = requireWindowsRemoteContext();
@@ -186,10 +186,21 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
         const [a, b] = InMemoryTransport.createLinkedPair();
         await server.connect(b);
         await client.connect(a);
-        const result = await client.callTool({
-          name: "browser_evaluate",
-          arguments: { function: source },
-        });
+        const operations = await Promise.allSettled([
+          client.callTool({
+            name: "browser_evaluate",
+            arguments: {
+              function: typeof source === "string" ? source : source.evaluate,
+            },
+          }),
+          typeof source === "string" ? Promise.resolve() : source.operate(),
+        ] as const);
+        for (const operation of operations) {
+          if (operation.status === "rejected") throw operation.reason;
+        }
+        const evaluation = operations[0];
+        if (evaluation.status !== "fulfilled") throw evaluation.reason;
+        const result = evaluation.value;
         const text = (result.content as { type: string; text: string }[])
           .filter((item) => item.type === "text")
           .map((item) => item.text)
@@ -747,5 +758,99 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
         ),
       ).toEqual({ value: "Node 日本語😀", cwd: config.node.project });
     });
+  }
+
+  for (const kind of ["selectFile", "selectSaveFile"] as const) {
+    for (const length of [140, 300, 1100, 4200]) {
+      it(`uses the requested ${length}-unit native ${kind} folder and reuses its returned path`, async () => {
+        const directory = longDirectory(length);
+        const filename = kind === "selectFile" ? "選択😀.txt" : "保存😀.txt";
+        const selected = win32.join(directory, filename);
+        await write(win32.join(directory, "選択😀.txt"), "dialog input");
+        const dialogTitle = `Muon path dialog ${kind} ${length}`;
+        const buttonLabel = "Use selected path";
+        const value = await run(
+          win32.join(root, "dialog.json"),
+          configuration(),
+          {
+            evaluate: `async () => {
+            const path = await muon.fs.dialogs.${kind}(${JSON.stringify({ title: dialogTitle, buttonLabel, defaultPath: directory, defaultName: filename })});
+            if (!path) throw new Error('No path was selected');
+            // Shell results may use an 8.3 alias or an explicit namespace. The
+            // fixture names have no trailing dots/spaces, so compare canonical
+            // identities with the optional local namespace removed.
+            const ordinary = value => value.startsWith(String.fromCharCode(92, 92, 63, 92)) ? value.slice(4) : value;
+            const parent = path.slice(0, path.lastIndexOf('\\\\'));
+            const canonicalParent = ordinary(await muon.fs.realpath(parent));
+            if (canonicalParent !== ${JSON.stringify(directory)}) throw new Error('Unexpected selected directory: ' + canonicalParent);
+            ${kind === "selectSaveFile" ? "await muon.fs.writeFile(path, new TextEncoder().encode('dialog input'));" : ""}
+            return {path:ordinary(await muon.fs.realpath(path)), text:new TextDecoder().decode(await muon.fs.readFile(path))};
+          }`,
+            operate: async () => {
+              const { agent } = requireWindowsRemoteContext();
+              const dialog = await agent.waitForWindow(
+                { title: dialogTitle, visible: true },
+                { timeoutMs: 10000 },
+              );
+              try {
+                await dialog.activate();
+                const input = await vi.waitUntil(
+                  async () =>
+                    (await dialog.descendants({ maxDepth: 8 })).find(
+                      (entry) =>
+                        entry.visible &&
+                        entry.enabled &&
+                        entry.className === "Edit" &&
+                        entry.bounds.width >= 80,
+                    ),
+                  { timeout: 10000, interval: 100 },
+                );
+                await agent.mouse.click({
+                  x: input.bounds.x + input.bounds.width / 2,
+                  y: input.bounds.y + input.bounds.height / 2,
+                });
+                await agent.keyboard.press("A", { modifiers: ["Control"] });
+                await agent.keyboard.pasteText(filename, {
+                  restoreClipboard: true,
+                });
+                const button = await vi.waitUntil(
+                  async () =>
+                    (await dialog.descendants({ maxDepth: 8 })).find(
+                      (entry) =>
+                        entry.visible &&
+                        entry.enabled &&
+                        entry.title === buttonLabel,
+                    ),
+                  { timeout: 10000, interval: 100 },
+                );
+                const { bounds } = button;
+                await agent.mouse.click({
+                  x: bounds.x + bounds.width / 2,
+                  y: bounds.y + bounds.height / 2,
+                });
+                await agent.waitForNoWindow(
+                  { title: dialogTitle, visible: true },
+                  { timeoutMs: 10000 },
+                );
+              } finally {
+                // An OS validation dialog must not leave a modal window behind
+                // if the shell cannot use the requested path.
+                const pending = await agent.findWindows({
+                  title: dialogTitle,
+                  visible: true,
+                });
+                if (pending.length !== 0) {
+                  await agent.keyboard.press("Escape");
+                  await agent.keyboard.press("Escape");
+                }
+              }
+            },
+          },
+          {},
+        );
+        expect(value).toEqual({ path: selected, text: "dialog input" });
+        expect((await read(selected)).toString()).toBe("dialog input");
+      });
+    }
   }
 });

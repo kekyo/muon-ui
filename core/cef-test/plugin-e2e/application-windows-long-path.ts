@@ -229,6 +229,7 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
     await execFileAsync("make", [
       "windows-long-path-fixture",
       "windows-path-plugin",
+      "windows-path-process",
       `WINDOWS_TARGET=${context.runtime.target}`,
     ]);
     fixture = win32.join(root, "fixture.exe");
@@ -547,6 +548,204 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
       expect(entries.map((entry) => entry.name)).toEqual(
         expect.arrayContaining(["Default", "Local State"]),
       );
+    });
+  }
+
+  for (const length of [140, 300, 1100]) {
+    it(`runs an executor child at ${length} units with Unicode arguments, environment and streams`, async () => {
+      const executable = win32.join(longDirectory(length), "実行😀.exe");
+      await write(
+        executable,
+        await localReadFile(
+          localJoin(
+            ".run",
+            "windows-long-path",
+            requireWindowsRemoteContext().runtime.target,
+            "path-process.exe",
+          ),
+        ),
+      );
+      const args = ["io", '引用"と空白 😀', "末尾\\", "", "長".repeat(1400)];
+      const value = "環境😀" + executable;
+      const result = await run(
+        win32.join(root, "executor.json"),
+        configuration(),
+        `async () => {
+          const child = await muon.executor.spawn(${JSON.stringify({ command: executable, args, cwd: root, env: { MUON_PATH_VALUE: value } })});
+          await child.writeStdin("入力😀\\n");
+          await child.closeStdin();
+          const result = await child.wait();
+          const search = await muon.executor.spawn({command: 'cmd.exe', args: ['/d', '/c', 'exit', '23'], cwd: ${JSON.stringify(root)}});
+          const searchCode = (await search.wait()).exitCode;
+          const decoder = new TextDecoder();
+          const stdout = decoder.decode(result.stdout);
+          const newline = stdout.indexOf('\\n');
+          return {code: result.exitCode, searchCode, report: JSON.parse(stdout.slice(0, newline)),
+            stdin: stdout.slice(newline + 1), stderr: decoder.decode(result.stderr)};
+        }`,
+        {},
+      );
+      expect(result).toEqual({
+        code: 37,
+        searchCode: 23,
+        report: { args, cwd: root, value, appId: "" },
+        stdin: "入力😀\n",
+        stderr: "process-stderr\n",
+      });
+    });
+  }
+
+  it("loads an executor DLL by a long Unicode path and still finds a bare system library", async () => {
+    const directory = longDirectory(500);
+    await preparePlugin(directory);
+    expect(
+      await run(
+        win32.join(root, "executor-library.json"),
+        configuration(),
+        `async () => {
+        const executor = muon.executor;
+        const library = await executor.loadLibrary(${JSON.stringify(win32.join(directory, "path-dependency.dll"))});
+        try {
+          const value = await library.getFunction('path_dependency_value', {argTypes: [], returnType: executor.int32Type});
+          const system = await executor.loadLibrary('kernel32.dll');
+          try {
+            const pid = await system.getFunction('GetCurrentProcessId', {argTypes: [], returnType: executor.uint32Type});
+            return {value: await value(), hasPid: (await pid()) > 0};
+          } finally { await system.release(); }
+        } finally { await library.release(); }
+      }`,
+        {},
+      ),
+    ).toEqual({ value: 42, hasPid: true });
+  });
+
+  it("terminates a long-path executor child and its descendant after readiness", async () => {
+    const executable = win32.join(longDirectory(500), "子孫😀.exe");
+    await write(
+      executable,
+      await localReadFile(
+        localJoin(
+          ".run",
+          "windows-long-path",
+          requireWindowsRemoteContext().runtime.target,
+          "path-process.exe",
+        ),
+      ),
+    );
+    const ids = (await run(
+      win32.join(root, "executor-tree.json"),
+      configuration(),
+      `async () => {
+        let ready;
+        const started = new Promise(resolve => { ready = resolve; });
+        let output = '';
+        const child = await muon.executor.spawn({ command: ${JSON.stringify(executable)}, args: ['tree'],
+          cwd: ${JSON.stringify(root)}, onStdout: chunk => {
+            output += new TextDecoder().decode(chunk);
+            if (output.includes('\\n')) ready(Number(output.trim()));
+          }});
+        try {
+          const descendant = await started;
+          await child.kill();
+          await child.wait();
+          return [child.processId, descendant];
+        } finally { await child.release(); }
+      }`,
+      {},
+    )) as number[];
+    expect(ids).toHaveLength(2);
+    for (const id of ids) {
+      expect(id).toBeGreaterThan(0);
+      expect(
+        (
+          await requireWindowsRemoteContext().agent.processes.waitForExit(id, {
+            timeoutMs: 30000,
+          })
+        ).running,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a long executor cwd without substituting another directory", async () => {
+    const directory = longDirectory(300);
+    await write(win32.join(directory, "marker"), "cwd");
+    const executable = win32.join(root, "process.exe");
+    await write(
+      executable,
+      await localReadFile(
+        localJoin(
+          ".run",
+          "windows-long-path",
+          requireWindowsRemoteContext().runtime.target,
+          "path-process.exe",
+        ),
+      ),
+    );
+    for (const cwd of [directory, "\\\\?\\" + directory]) {
+      await expect(
+        run(
+          win32.join(root, "executor-cwd.json"),
+          configuration(),
+          `async () => {
+        const child = await muon.executor.spawn(${JSON.stringify({ command: executable, cwd })});
+        const result = await child.wait();
+        return JSON.parse(new TextDecoder().decode(result.stdout)).cwd;
+      }`,
+          {},
+        ),
+      ).rejects.toThrow(/cwd.*short.*Windows/);
+    }
+  });
+
+  for (const length of [140, 300, 1100]) {
+    it(`handles a ${length}-unit Unicode Node project with an explicit short-cwd workaround when needed`, async () => {
+      const directory = longDirectory(length);
+      await write(
+        win32.join(directory, "package.json"),
+        JSON.stringify({ type: "module" }),
+      );
+      await write(
+        win32.join(directory, "実装😀.mjs"),
+        "export const value = () => 'Node 日本語😀'; export const cwd = () => process.cwd();",
+      );
+      const config = { ...configuration(), node: { project: directory } };
+      let specifier = "./実装😀.mjs";
+      if (length >= 260) {
+        await expect(
+          run(
+            win32.join(root, "node-project-long.json"),
+            config,
+            "async () => { const node = await muon.node.createNode(); await node.release(); }",
+            {},
+          ),
+        ).rejects.toThrow(
+          /node\.project requires a short Windows working directory/,
+        );
+        config.node.project = win32.join(root, "data");
+        await write(
+          win32.join(config.node.project, "package.json"),
+          JSON.stringify({ type: "module" }),
+        );
+        specifier =
+          "./" +
+          win32
+            .relative(config.node.project, win32.join(directory, "実装😀.mjs"))
+            .replaceAll("\\", "/");
+      }
+      expect(
+        await run(
+          win32.join(root, "node-project.json"),
+          config,
+          `async () => {
+          const node = await muon.node.createNode();
+          try {
+            const module = await node.importModule(${JSON.stringify(specifier)});
+            return {value: await module.value(), cwd: await module.cwd()};
+          } finally { await node.release(); }
+        }`,
+          {},
+        ),
+      ).toEqual({ value: "Node 日本語😀", cwd: config.node.project });
     });
   }
 });

@@ -5,11 +5,17 @@ LONG_PATH_TEST = .run/windows-long-path/$(WINDOWS_TARGET)/path-test.exe
 DOWNLOAD_FIXTURE = .run/windows-long-path/$(WINDOWS_TARGET)/download-fixture.exe
 PATH_PLUGIN = .run/windows-long-path/$(WINDOWS_TARGET)/path-plugin.dll
 PATH_PLUGIN_DEPENDENCY = .run/windows-long-path/$(WINDOWS_TARGET)/path-dependency.dll
+PATH_PROCESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-process.exe
 
-.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin
+.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process
 windows-long-path-fixture: $(LONG_PATH_FIXTURE)
 windows-path-test: $(LONG_PATH_FIXTURE) $(LONG_PATH_TEST) $(DOWNLOAD_FIXTURE)
 windows-path-plugin: $(PATH_PLUGIN)
+windows-path-process: $(PATH_PROCESS)
+
+$(PATH_PROCESS): plugin-e2e/windows-path-process.c
+	mkdir -p "$(@D)"
+	$(WINDOWS_CC) -std=c99 -Wall -Wextra -Werror -pedantic -municode -static -o "$@" "$<"
 
 $(PATH_PLUGIN_DEPENDENCY): plugin-e2e/windows-path-plugin.c
 	mkdir -p "$(@D)"

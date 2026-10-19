@@ -160,8 +160,27 @@ static int roundtrip(const wchar_t *path, const wchar_t *reference) {
       ? 0 : fail("roundtrip contents", ERROR_INVALID_DATA);
 }
 
+static int check_manifest(const wchar_t *executable) {
+  ACTCTXW description = {0};
+  description.cbSize = sizeof(description);
+  description.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID;
+  description.lpSource = executable;
+  description.lpResourceName = MAKEINTRESOURCEW(1);
+  HANDLE context = CreateActCtxW(&description);
+  if (context == INVALID_HANDLE_VALUE) return fail("CreateActCtxW", GetLastError());
+  wchar_t value[16] = {0};
+  BOOL queried = QueryActCtxSettingsW(0, context,
+      L"http://schemas.microsoft.com/SMI/2016/WindowsSettings", L"longPathAware",
+      value, sizeof(value) / sizeof(value[0]), NULL);
+  DWORD error = GetLastError();
+  ReleaseActCtx(context);
+  if (!queried) return fail("QueryActCtxSettingsW(longPathAware)", error);
+  return !wcscmp(value, L"true") ? 0 : fail("longPathAware value", ERROR_INVALID_DATA);
+}
+
 int wmain(int argc, wchar_t **argv) {
   if (argc == 2 && !wcscmp(argv[1], L"contracts")) return contracts();
+  if (argc == 3 && !wcscmp(argv[1], L"manifest")) return check_manifest(argv[2]);
   if (argc != 4) return 2;
   int directory = !wcscmp(argv[1], L"directory");
   wchar_t *path = prepare_path(argv[2], directory, !wcscmp(argv[1], L"utf8"));

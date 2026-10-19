@@ -16,6 +16,8 @@ PLUGIN_INSPECTOR_LDFLAGS ?= $(LDFLAGS)
 PLUGIN_INSPECTOR_LDLIBS ?=
 PREPARE_WINDOWS_RESOURCE_OBJECTS ?=
 LAUNCHER_RESOURCE_OBJECTS ?=
+PLUGIN_INSPECTOR_RESOURCE_OBJECTS ?=
+WINDRES ?= windres
 VERSION_HEADER ?=
 RUNTIME_INFO_HEADER ?=
 AR ?= ar
@@ -94,6 +96,21 @@ $(LIB_TARGET): $(PREPARE_OBJECTS)
 	rm -f "$@"
 	$(AR) rcs "$@" $(PREPARE_OBJECTS)
 
+ifneq ($(strip $(PREPARE_WINDOWS_RESOURCE_OBJECTS)),)
+$(PREPARE_WINDOWS_RESOURCE_OBJECTS): $(OUT_DIR)/muon_prepare.rc src/muon_prepare.manifest
+	$(WINDRES) -I src -I ../images "$<" "$@"
+endif
+
+ifneq ($(strip $(LAUNCHER_RESOURCE_OBJECTS)),)
+$(LAUNCHER_RESOURCE_OBJECTS): $(OUT_DIR)/muon_launcher.rc src/muon_launcher.manifest
+	$(WINDRES) -I src -I ../images "$<" "$@"
+endif
+
+ifneq ($(strip $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS)),)
+$(PLUGIN_INSPECTOR_RESOURCE_OBJECTS): $(OUT_DIR)/muon_plugin_inspector.rc src/muon_plugin_inspector.manifest
+	$(WINDRES) -I src -I ../images "$<" "$@"
+endif
+
 $(PREPARE_TARGET): src/muon_prepare.c src/prepare.h src/prepare_progress.h src/muon_prepare_resource.h $(LIB_TARGET) $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o "$@" src/muon_prepare.c $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
@@ -108,9 +125,9 @@ $(RUNTIME_HELPER_TARGET): src/muon_runtime_helper.c src/prepare.h src/common.h s
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o "$@" src/muon_runtime_helper.c "$(LIB_TARGET)" $(LDLIBS)
 endif
 
-$(PLUGIN_INSPECTOR_TARGET): src/muon_plugin_inspector.c src/common.h ../sdk/include/muon_plugin_api.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(LIB_TARGET)
+$(PLUGIN_INSPECTOR_TARGET): src/muon_plugin_inspector.c src/common.h ../sdk/include/muon_plugin_api.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(LIB_TARGET) $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../sdk/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) -o "$@" src/muon_plugin_inspector.c "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../sdk/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) -o "$@" src/muon_plugin_inspector.c $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
 
 clean:
-	rm -f "$(PREPARE_TARGET)" "$(LAUNCHER_TARGET)" $(if $(strip $(RUNTIME_HELPER_TARGET)),"$(RUNTIME_HELPER_TARGET)") "$(PLUGIN_INSPECTOR_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/launcher_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(LAUNCHER_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)
+	rm -f "$(PREPARE_TARGET)" "$(LAUNCHER_TARGET)" $(if $(strip $(RUNTIME_HELPER_TARGET)),"$(RUNTIME_HELPER_TARGET)") "$(PLUGIN_INSPECTOR_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/launcher_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(LAUNCHER_RESOURCE_OBJECTS) $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)

@@ -6457,6 +6457,81 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     }
   });
 
+  windowsIt(
+    "activates long path awareness in each product executable",
+    async () => {
+      const context = getWindowsRemoteContext();
+      if (context === undefined)
+        throw new Error("Windows agent is not connected");
+      const target = context.runtime.target;
+      await execFileAsync("make", [
+        "windows-path-test",
+        `WINDOWS_TARGET=${target}`,
+      ]);
+      const directory = await mkdtemp(join(tmpdir(), "muon-manifest-"));
+      const probe = join(directory, "path-test.exe");
+      try {
+        await writeFile(
+          probe,
+          await nodeReadFile(
+            nodeJoin(".run", "windows-long-path", target, "path-test.exe"),
+          ),
+        );
+        for (const configuration of ["debug", "release"]) {
+          const runtime =
+            configuration === "debug"
+              ? context.runtime.debugRuntimeDirectory
+              : context.runtime.releaseRuntimeDirectory;
+          for (const name of [
+            "muon-core",
+            "muon-launcher",
+            "muon-builder",
+            "muon-plugin-inspector",
+          ]) {
+            let executable = join(runtime, `${name}.exe`);
+            if (name === "muon-builder" || name === "muon-plugin-inspector") {
+              executable = join(directory, `${configuration}-${name}.exe`);
+              await writeFile(
+                executable,
+                await nodeReadFile(
+                  nodeJoin(
+                    "..",
+                    "..",
+                    "builder",
+                    ".run",
+                    `test-${target}-${configuration}`,
+                    `${name}.exe`,
+                  ),
+                ),
+              );
+            }
+            const process = await context.agent.processes.launchManaged({
+              path: probe,
+              arguments: ["manifest", executable],
+              workingDirectory: directory,
+              captureStdout: true,
+              captureStderr: true,
+              createNoWindow: true,
+            });
+            try {
+              const result = await process.waitForExit({ timeoutMs: 30000 });
+              expect
+                .soft(
+                  result.root.exitCode,
+                  `${configuration} ${name}: ${await process.stderrText()}`,
+                )
+                .toBe(0);
+            } finally {
+              await process.releaseAsync();
+            }
+          }
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("enforces the configured readFile byte limit", async () => {
     const directory = await mkdtemp(join(tmpdir(), "muon-fs-limit-"));
     const sourcePath = join(directory, "source.bin");

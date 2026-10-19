@@ -943,6 +943,14 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
       if (windowsAgent === undefined)
         throw new Error("Windows e2e environment is not configured.");
       await expectMakensisAvailable();
+      // The UI build clears dist, so stage the real Windows payload again
+      // through the same script used when assembling the distribution.
+      await execFileAsync(process.execPath, [
+        "scripts/stage-muon-builder.mjs",
+        "--target",
+        target,
+        "--dist",
+      ]);
       const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
       const packageName = `muon-nsis-path-${suffix}`;
       const appId = `muon.nsis.path.${suffix}`;

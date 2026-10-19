@@ -57,6 +57,7 @@ beforeAll(async () => {
   for (const target of targets) {
     await execFileAsync("make", [
       "windows-path-test",
+      "windows-path-autostart",
       `WINDOWS_TARGET=${target}`,
     ]);
   }
@@ -85,7 +86,7 @@ beforeAll(async () => {
   expect(privilege.code, privilege.stderr).toBe(0);
   expect(privilege.stdout.trim()).toBe("False");
   for (const target of targets) {
-    for (const exe of ["fixture", "path-test"]) {
+    for (const exe of ["fixture", "path-test", "path-autostart"]) {
       await agent.files.writeFile(
         win32.join(directory, `${target}-${exe}.exe`),
         await readFile(`.run/windows-long-path/${target}/${exe}.exe`),
@@ -106,6 +107,17 @@ afterAll(async () => {
 describe.each(targets)(
   "native Windows paths (%s, policy=0, ordinary user)",
   (target) => {
+    it.each([140, 259, 260, 261, 1100])(
+      "keeps a %i-unit quoted Run command within the Windows autostart limit",
+      async (length) => {
+        const result = await run(
+          win32.join(directory, `${target}-path-autostart.exe`),
+          [String(length)],
+        );
+        expect(result.code, result.stderr).toBe(0);
+      },
+    );
+
     const exercise = async (
       mode: string,
       input: (path: string) => string,

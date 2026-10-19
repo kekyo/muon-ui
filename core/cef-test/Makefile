@@ -1,5 +1,6 @@
 WINDOWS_TARGET ?= windows-amd64
 WINDOWS_CC = $(if $(filter windows-i686,$(WINDOWS_TARGET)),i686,x86_64)-w64-mingw32-gcc
+WINDOWS_CXX = $(if $(filter windows-i686,$(WINDOWS_TARGET)),i686,x86_64)-w64-mingw32-g++
 LONG_PATH_FIXTURE = .run/windows-long-path/$(WINDOWS_TARGET)/fixture.exe
 LONG_PATH_TEST = .run/windows-long-path/$(WINDOWS_TARGET)/path-test.exe
 DOWNLOAD_FIXTURE = .run/windows-long-path/$(WINDOWS_TARGET)/download-fixture.exe
@@ -7,13 +8,20 @@ PATH_PLUGIN = .run/windows-long-path/$(WINDOWS_TARGET)/path-plugin.dll
 PATH_PLUGIN_DEPENDENCY = .run/windows-long-path/$(WINDOWS_TARGET)/path-dependency.dll
 PATH_PROCESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-process.exe
 PATH_PROGRESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-progress.exe
+PATH_AUTOSTART = .run/windows-long-path/$(WINDOWS_TARGET)/path-autostart.exe
+AUTOSTART_SOURCES = ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp
 
-.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process windows-path-progress
+.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process windows-path-progress windows-path-autostart
 windows-long-path-fixture: $(LONG_PATH_FIXTURE)
 windows-path-test: $(LONG_PATH_FIXTURE) $(LONG_PATH_TEST) $(DOWNLOAD_FIXTURE)
 windows-path-plugin: $(PATH_PLUGIN)
 windows-path-process: $(PATH_PROCESS)
 windows-path-progress: $(PATH_PROGRESS)
+windows-path-autostart: $(PATH_AUTOSTART)
+
+$(PATH_AUTOSTART): plugin-e2e/windows-path-autostart.cpp $(AUTOSTART_SOURCES) ../cef/src/config/muon_autostart.h
+	mkdir -p "$(@D)"
+	$(WINDOWS_CXX) -std=c++20 -Wall -Wextra -Werror -pedantic -municode -static -I../cef/src -o "$@" "$<" $(AUTOSTART_SOURCES) -ladvapi32
 
 $(PATH_PROGRESS): plugin-e2e/windows-path-progress.c ../../builder/src/launcher_progress.c ../../builder/src/launcher_progress.h ../../builder/src/prepare_progress.h
 	mkdir -p "$(@D)"

@@ -187,8 +187,26 @@ enum class LocalFilesystemIoUsage {
 std::filesystem::path CreateLocalFilesystemIoPath(
     std::string_view value, LocalFilesystemIoUsage usage);
 std::string PathToUtf8String(const std::filesystem::path& path);
+/**
+ * Reads the type and CRT-compatible permission flags of a native I/O path.
+ * @param path Path already converted for the receiving filesystem operation.
+ * @param follow_symlink Whether to describe a link's target instead of the link.
+ * @return File type and permission flags without CRT path-length restrictions.
+ * @throws std::runtime_error When the object cannot be inspected.
+ */
+std::filesystem::file_status ReadFilesystemStatus(
+    const std::filesystem::path& path, bool follow_symlink);
 std::string CreateStatusJson(const std::filesystem::path& path,
                              bool follow_symlink);
+#if defined(_WIN32)
+/**
+ * Serializes a Windows directory entry obtained by native enumeration.
+ * @param path Exact child path, including its extended-length parent.
+ * @return Entry name and metadata, describing a link rather than its target.
+ * @throws std::runtime_error When entry metadata cannot be read.
+ */
+std::string CreateDirentJson(const std::filesystem::path& path);
+#endif
 std::string CreateDirentJson(
     const std::filesystem::directory_entry& entry);
 void ThrowFilesystemError(const char* action,

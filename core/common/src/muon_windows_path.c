@@ -12,10 +12,6 @@
 #include <string.h>
 #include <wchar.h>
 
-// The native limit includes the NUL and namespace prefix. Individual components
-// and filesystem-specific limits remain the responsibility of the I/O API.
-#define MUON_WINDOWS_PATH_MAX_UNITS 32766u
-
 static DWORD allocate_path(size_t length, wchar_t **result) {
   if (length > MUON_WINDOWS_PATH_MAX_UNITS ||
       length > SIZE_MAX / sizeof(wchar_t) - 1) {

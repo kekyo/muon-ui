@@ -10,6 +10,13 @@
 #include <stddef.h>
 #include <windows.h>
 
+/**
+ * Maximum UTF-16 path length excluding NUL and including any namespace prefix.
+ * The native limit includes the NUL and namespace prefix. Individual components
+ * and filesystem-specific limits remain the responsibility of the I/O API.
+ */
+#define MUON_WINDOWS_PATH_MAX_UNITS 32766u
+
 #ifdef __cplusplus
 extern "C" {
 #endif

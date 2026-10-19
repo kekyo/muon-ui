@@ -304,9 +304,7 @@ void ThrowFilesystemError(const char* action,
 
 void ThrowIfNotRegularFile(const std::filesystem::path& path,
                            std::string_view message) {
-  std::error_code error;
-  const auto status = std::filesystem::symlink_status(path, error);
-  ThrowFilesystemError("stat", path, error);
+  const auto status = ReadFilesystemStatus(path, false);
   if (!std::filesystem::is_regular_file(status)) {
     throw std::runtime_error(std::string(message));
   }
@@ -325,9 +323,14 @@ static uintmax_t ReadFileSize(const std::filesystem::path& path,
 }
 #endif
 
-std::string CreateStatusJson(const std::filesystem::path& path,
-                             bool follow_symlink) {
 #if defined(_WIN32)
+struct WindowsFileStatus {
+  BY_HANDLE_FILE_INFORMATION information;
+  bool is_symlink;
+};
+
+static WindowsFileStatus ReadWindowsFileStatus(
+    const std::filesystem::path& path, bool follow_symlink) {
   // Query the opened object so lstat and directory entries describe the link
   // itself, including dangling links, while stat describes its target.
   const auto flags = FILE_FLAG_BACKUP_SEMANTICS |
@@ -358,6 +361,49 @@ std::string CreateStatusJson(const std::filesystem::path& path,
     is_symlink = tag.ReparseTag == IO_REPARSE_TAG_SYMLINK ||
                  tag.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT;
   }
+  return {information, is_symlink};
+}
+#endif
+
+std::filesystem::file_status ReadFilesystemStatus(
+    const std::filesystem::path& path, bool follow_symlink) {
+#if defined(_WIN32)
+  // MinGW's filesystem::status uses _wstat64, which rejects extended paths.
+  const auto status = ReadWindowsFileStatus(path, follow_symlink);
+  const auto directory = (status.information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  const auto type = status.is_symlink ? std::filesystem::file_type::symlink
+      : directory ? std::filesystem::file_type::directory : std::filesystem::file_type::regular;
+  auto permissions = std::filesystem::perms::owner_read | std::filesystem::perms::group_read |
+      std::filesystem::perms::others_read;
+  if ((status.information.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0) {
+    permissions |= std::filesystem::perms::owner_write | std::filesystem::perms::group_write |
+        std::filesystem::perms::others_write;
+  }
+  auto extension = path.extension().native();
+  std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) {
+    return c >= L'A' && c <= L'Z' ? static_cast<wchar_t>(c + L'a' - L'A') : c;
+  });
+  if (directory || extension == L".exe" || extension == L".com" ||
+      extension == L".bat" || extension == L".cmd") {
+    permissions |= std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
+        std::filesystem::perms::others_exec;
+  }
+  return std::filesystem::file_status(type, permissions);
+#else
+  std::error_code error;
+  const auto status = follow_symlink ? std::filesystem::status(path, error)
+      : std::filesystem::symlink_status(path, error);
+  ThrowFilesystemError("stat", path, error);
+  return status;
+#endif
+}
+
+std::string CreateStatusJson(const std::filesystem::path& path,
+                             bool follow_symlink) {
+#if defined(_WIN32)
+  const auto status = ReadWindowsFileStatus(path, follow_symlink);
+  const auto& information = status.information;
+  const auto is_symlink = status.is_symlink;
   const auto is_directory =
       (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
   const auto type = is_symlink ? "symlink" : is_directory ? "directory" : "file";
@@ -401,14 +447,20 @@ std::string CreateStatusJson(const std::filesystem::path& path,
   return result;
 }
 
+#if defined(_WIN32)
+std::string CreateDirentJson(const std::filesystem::path& path) {
+  auto result = std::string("{\"name\":");
+  AppendJsonString(&result, PathToUtf8String(path.filename()));
+  result += ",";
+  result += CreateStatusJson(path, false).substr(1);
+  return result;
+}
+#endif
+
 std::string CreateDirentJson(
     const std::filesystem::directory_entry& entry) {
 #if defined(_WIN32)
-  auto result = std::string("{\"name\":");
-  AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
-  result += ",";
-  result += CreateStatusJson(entry.path(), false).substr(1);
-  return result;
+  return CreateDirentJson(entry.path());
 #else
   std::error_code error;
   const auto status = entry.symlink_status(error);
@@ -700,9 +752,13 @@ static bool HasAnyPermission(std::filesystem::perms permissions,
 
 bool CanAccessPath(const std::filesystem::path& path,
                    const MuonFsAccessOptions& options) {
-  std::error_code error;
-  const auto status = std::filesystem::status(path, error);
-  if (error || status.type() == std::filesystem::file_type::not_found) {
+  auto status = std::filesystem::file_status{};
+  try {
+    status = ReadFilesystemStatus(path, true);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (status.type() == std::filesystem::file_type::not_found) {
     return false;
   }
   const auto permissions = status.permissions();

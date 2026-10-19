@@ -476,6 +476,10 @@ i686で使う例外処理方式であるDW2では、EXEに静的リンクした�
 
 ランチャーの起動処理もUnicode化し、準備済みruntimeへの起動と再起動を実行する。Node.jsは既存の明示的な実行ファイル指定を維持し、長いプロジェクトやbridgeを扱えるか確認する。長いcwdは独立した試験とし、OSとCEFの制約を超えるために別のcwdへ黙って変更しない。
 
+段階5の実機調査では、300 UTF-16コード単位の作業ディレクトリを渡すと、`CreateProcessW`は通常表記と拡張長表記の両方で拒否した。同梱Node.jsでも、通常表記と`path.toNamespacedPath`による表記の両方で`process.chdir`が`ENAMETOOLONG`となった。Node bridgeを介さない単独のNode.jsでも、i686とamd64の両方で再現した。[Windowsのカレントディレクトリの制限](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setcurrentdirectory)と[libuvの作業ディレクトリ変更](https://github.com/libuv/libuv/blob/v1.51.0/src/win/util.c#L198-L253)を参照する。
+
+Windowsでは、子プロセスの`cwd`、ランチャーのruntime、作業ディレクトリになる`node.project`について、解決後の長さが260 UTF-16コード単位以上なら短い場所を指定する診断を返す。OSが拒否する指定を別の場所へ置き換えない。Node.jsは短いプロジェクトを作業ディレクトリにして、長い場所のモジュールを絶対パスで読み込む方法を検証する。ランチャーはローカルのCEFアーカイブをキャッシュへ用意し、長い配布元から短いUnicode runtimeへの準備・起動・終了コード88による再起動を製品EXEで確認する。短いパスの探索、引数、環境変数、標準入出力、プロセスツリーの終了も合格条件に含める。
+
 完了条件は、muonが制御する子プロセス起動で長い実行ファイルパスとUnicode引数を扱え、コマンド名検索、終了コード、キャンセル、子孫の終了が従来どおり機能すること。配布元と実行先を分けたランチャー起動と再起動も成功すること。外部EXE自身の未対応は具体的な対象と条件を記録する。
 
 コミットの目安は`fix: launch Windows executables with explicit Unicode paths`。

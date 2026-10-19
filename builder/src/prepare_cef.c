@@ -95,13 +95,15 @@ static int run_curl_download(const char *url, const char *destination,
                              const char *status,
                              MuonPrepareProgressCallback progress_callback,
                              void *progress_user_data) {
+  char *file_argument = muon_external_file_path(destination);
+  if (file_argument == NULL) return -1;
   for (int attempt = 0; attempt < kCurlDownloadAttemptCount; attempt += 1) {
     const int final_attempt = attempt + 1 == kCurlDownloadAttemptCount;
     const int resume = attempt > 0 && file_has_download_progress(destination);
     char *fresh_argv[] = {"curl", (char *)curl_flags, "-o",
-                          (char *)destination, (char *)url, NULL};
+                          file_argument, (char *)url, NULL};
     char *resume_argv[] = {"curl", (char *)curl_flags, "-C", "-",
-                           "-o",   (char *)destination, (char *)url, NULL};
+                           "-o",   file_argument, (char *)url, NULL};
     char **argv = resume ? resume_argv : fresh_argv;
     if (attempt > 0) {
       muon_print_error("Retrying download: attempt %d/%d\n", attempt + 1,
@@ -122,12 +124,14 @@ static int run_curl_download(const char *url, const char *destination,
                          MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status));
     if (result == 0 ||
         (expected_size != 0 && file_size_equals(destination, expected_size))) {
+      free(file_argument);
       return 0;
     }
     if (resume) {
       muon_remove_recursive(destination);
     }
   }
+  free(file_argument);
   return -1;
 }
 
@@ -162,9 +166,10 @@ static int copy_url_to_file_progress(
       MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status);
 }
 
-static const char *get_catalog_url(void) {
-  const char *url = getenv("MUON_CEF_CATALOG_URL");
-  return url == NULL || url[0] == '\0' ? kDefaultCefCatalogUrl : url;
+static char *get_catalog_url(void) {
+  char *url = NULL;
+  if (muon_get_environment("MUON_CEF_CATALOG_URL", &url) != 0) return NULL;
+  return url == NULL ? muon_duplicate_string(kDefaultCefCatalogUrl) : url;
 }
 
 static char *url_encode_artifact_name(const char *file_name) {
@@ -190,7 +195,8 @@ static char *url_encode_artifact_name(const char *file_name) {
 }
 
 static char *resolve_artifact_url(const char *file_name) {
-  const char *catalog_url = get_catalog_url();
+  char *catalog_url = get_catalog_url();
+  if (catalog_url == NULL) return NULL;
   const char *slash = strrchr(catalog_url, '/');
 #ifdef _WIN32
   const char *backslash = strrchr(catalog_url, '\\');
@@ -205,11 +211,13 @@ static char *resolve_artifact_url(const char *file_name) {
   char *artifact_name =
       is_http ? url_encode_artifact_name(file_name) : muon_duplicate_string(file_name);
   if (artifact_name == NULL) {
+    free(catalog_url);
     return NULL;
   }
   char *result = (char *)malloc(base_size + strlen(artifact_name) + 1);
   if (result == NULL) {
     free(artifact_name);
+    free(catalog_url);
     return NULL;
   }
   if (base_size != 0) {
@@ -217,6 +225,7 @@ static char *resolve_artifact_url(const char *file_name) {
   }
   memcpy(result + base_size, artifact_name, strlen(artifact_name) + 1);
   free(artifact_name);
+  free(catalog_url);
   return result;
 }
 
@@ -268,13 +277,20 @@ int muon_prepare_ensure_cef_catalog_cache_with_status_progress(
     free(temporary_path);
     return 0;
   }
+  char *catalog_url = get_catalog_url();
+  if (catalog_url == NULL) {
+    free(catalog_path);
+    free(temporary_path);
+    return -1;
+  }
   int result = 0;
   const int copy_result =
       progress_callback == NULL
-          ? copy_url_to_file(get_catalog_url(), temporary_path)
-          : copy_url_to_file_progress(get_catalog_url(), temporary_path, 0,
+          ? copy_url_to_file(catalog_url, temporary_path)
+          : copy_url_to_file_progress(catalog_url, temporary_path, 0,
                                       "Checking for CEF updates...",
                                       progress_callback, progress_user_data);
+  free(catalog_url);
   if (copy_result == 0) {
     result = muon_atomic_replace(temporary_path, catalog_path);
     if (result == 0 && updated != NULL) {

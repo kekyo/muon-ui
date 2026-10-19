@@ -4,12 +4,17 @@
 // https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { connectRemoteAgent, type RemoteAgent } from "agent-rover";
+import {
+  connectRemoteAgent,
+  type RemoteAgent,
+  type RemoteManagedProcess,
+} from "agent-rover";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
@@ -177,6 +182,10 @@ beforeAll(async () => {
     await agent.files.writeFile(
       win32.join(directory, `${target}-path-test.exe`),
       await readFile(`.run/windows-long-path/${target}/path-test.exe`),
+    );
+    await agent.files.writeFile(
+      win32.join(directory, `${target}-download-fixture.exe`),
+      await readFile(`.run/windows-long-path/${target}/download-fixture.exe`),
     );
     await agent.files.writeFile(
       win32.join(directory, `${target}-fixture.exe`),
@@ -545,6 +554,23 @@ describe.each(targets)(
               ["Node license"],
             );
           }
+          const previous = win32.join(
+            output,
+            "runtimes",
+            "node",
+            "previous.txt",
+          );
+          await fixture("write", previous, ["previous installation"]);
+          const interrupted = await run(
+            win32.join(directory, `${target}-builder-test.exe`),
+            ["node-failure", ioPath(archive), ioPath(output)],
+            undefined,
+          );
+          expect(interrupted.code).toBe(1);
+          expect(interrupted.stderr).toContain(
+            "Injected runtime commit failure",
+          );
+          await builder("contents", previous, ["previous installation"]);
           const failed = await run(
             win32.join(directory, `${target}-builder-test.exe`),
             ["node", ioPath(invalid), ioPath(output)],
@@ -768,6 +794,216 @@ describe.each(targets)(
           ]);
         } finally {
           await fixture("remove", root);
+        }
+      },
+    );
+
+    it.each([
+      [140, false, "http", false],
+      [300, false, "local", true],
+      [300, true, "local", true],
+      [300, false, "http", true],
+      [4200, false, "http", true],
+      [300, true, "http", true],
+    ] as const)(
+      "acquires verified runtime archives at %i units (extended=%s, source=%s, Unicode=%s)",
+      async (length, extended, transport, unicode) => {
+        const root = win32.join(
+          directory,
+          target + "-transfer-" + transport + "-" + length,
+        );
+        const parent = directoryOfLength(
+          win32.join(root, unicode ? "日本語 😀" : "ascii"),
+          length,
+        );
+        const dist =
+          transport === "http"
+            ? win32.join(root, "dist")
+            : win32.join(parent, "dist");
+        const source = win32.join(parent, "source");
+        const cefOutput = win32.join(parent, "cef");
+        const output = win32.join(parent, "runtime");
+        const cache = win32.join(parent, "cache");
+        const ioPath = (path: string) => (extended ? "\\\\?\\" : "") + path;
+        const nodeTarget = target === "windows-amd64" ? "win-x64" : "win-x86";
+        const nodeName = "node-v24.4.0-" + nodeTarget + ".zip";
+        const cefData = await readFile(join(localDirectory, "cef.tar.bz2"));
+        const nodeData = await readFile(
+          join(localDirectory, target + "-node.zip"),
+        );
+        let server: RemoteManagedProcess | undefined;
+        try {
+          await fixture("mkdir", win32.join(dist, "v24.4.0"));
+          await fixture("copy", win32.join(dist, "cef.tar.bz2"), [
+            win32.join(directory, "cef.tar.bz2"),
+          ]);
+          await fixture("copy", win32.join(dist, "v24.4.0", nodeName), [
+            win32.join(directory, target + "-node.zip"),
+          ]);
+          await fixture("write", win32.join(dist, "cef-catalog.json"), [
+            JSON.stringify({
+              [target === "windows-amd64" ? "windows64" : "windows32"]: {
+                versions: [
+                  {
+                    cef_version: "test-cef",
+                    channel: "stable",
+                    chromium_version: "test-chromium",
+                    files: [
+                      {
+                        name: "cef.tar.bz2",
+                        sha1: createHash("sha1").update(cefData).digest("hex"),
+                        size: cefData.length,
+                        type: "minimal",
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          ]);
+          await fixture("write", win32.join(dist, "index.json"), [
+            JSON.stringify([
+              {
+                version: "v24.4.0",
+                lts: "Krypton",
+                files: [nodeTarget + "-zip"],
+              },
+            ]),
+          ]);
+          const checksums = win32.join(dist, "v24.4.0", "SHASUMS256.txt");
+          await fixture("write", checksums, [
+            createHash("sha256").update(nodeData).digest("hex") +
+              "  " +
+              nodeName +
+              "\n",
+          ]);
+          await fixture("mkdir", source);
+          await fixture("write", win32.join(source, "muon-core.exe"), [
+            "core payload",
+          ]);
+          let cefUrl = ioPath(win32.join(dist, "cef-catalog.json"));
+          let nodeUrl = ioPath(dist);
+          if (transport === "http") {
+            server = await agent.processes.launchManaged({
+              path: win32.join(directory, target + "-download-fixture.exe"),
+              arguments: ["\\\\?\\" + dist],
+              workingDirectory: directory,
+              createNoWindow: true,
+              captureStdout: true,
+              captureStderr: true,
+            });
+            const activeServer = server;
+            await expect
+              .poll(async () => await activeServer.stdoutText(), {
+                timeout: 30000,
+              })
+              .toMatch(/^READY \d+/);
+            const ready = (await server.stdoutText()).match(/^READY (\d+)/);
+            expect(ready).not.toBeNull();
+            nodeUrl = "http://127.0.0.1:" + ready![1];
+            cefUrl = nodeUrl + "/cef-catalog.json";
+            const progress = await run(
+              win32.join(directory, target + "-builder-test.exe"),
+              [
+                "download",
+                ioPath(win32.join(parent, "progress.tar.bz2")),
+                nodeUrl + "/cef.tar.bz2",
+                String(cefData.length),
+              ],
+              undefined,
+            );
+            expect(progress.code, progress.stderr).toBe(0);
+            expect(progress.stdout.trim()).toBe(
+              createHash("sha256").update(cefData).digest("hex"),
+            );
+          }
+          const processEnvironment = {
+            MUON_CEF_CATALOG_URL: cefUrl,
+            MUON_NODE_DIST_URL: nodeUrl,
+          };
+          const buildtime = await run(
+            win32.join(directory, target + "-muon-builder.exe"),
+            [
+              "buildtime",
+              "--version",
+              "test-cef",
+              "--target",
+              target,
+              "--output-dir",
+              ioPath(cefOutput),
+              "--cache-dir",
+              ioPath(cache),
+              "--json",
+            ],
+            processEnvironment,
+          );
+          expect(buildtime.code, buildtime.stderr).toBe(0);
+          expect(JSON.parse(buildtime.stdout)).toMatchObject({
+            target,
+            version: "test-cef",
+          });
+          await builder(
+            "contents",
+            win32.join(cefOutput, "Release", "libcef.dll"),
+            ["CEF payload"],
+          );
+          const arguments_ = [
+            "runtime",
+            "--muon-path",
+            ioPath(source),
+            "--cef-path",
+            ioPath(cefOutput),
+            "--stage-dir",
+            ioPath(output),
+            "--cache-dir",
+            ioPath(cache),
+            "--target",
+            target,
+            "--node-runtime-requirement",
+            JSON.stringify({
+              required: true,
+              engineRangeSpecified: false,
+              engineRange: "*",
+              comparatorSets: [[]],
+            }),
+            "--json",
+          ];
+          for (const cacheHit of [false, true]) {
+            const runtime = await run(
+              win32.join(directory, target + "-muon-builder.exe"),
+              arguments_,
+              processEnvironment,
+            );
+            expect(runtime.code, runtime.stderr).toBe(0);
+            expect(JSON.parse(runtime.stdout)).toMatchObject({ cacheHit });
+            await builder(
+              "contents",
+              win32.join(output, "runtimes", "node", "bin", "node.exe"),
+              ["Node payload"],
+            );
+          }
+          await fixture("remove", checksums);
+          await fixture("write", checksums, [
+            "0".repeat(64) + "  " + nodeName + "\n",
+          ]);
+          const corrupted = await run(
+            win32.join(directory, target + "-muon-builder.exe"),
+            [...arguments_, "--force"],
+            processEnvironment,
+          );
+          expect(corrupted.code).not.toBe(0);
+          expect(corrupted.stderr).toContain("SHA-256 mismatch");
+          await builder(
+            "contents",
+            win32.join(output, "runtimes", "node", "bin", "node.exe"),
+            ["Node payload"],
+          );
+        } finally {
+          try {
+            if (server !== undefined) await server.releaseAsync();
+          } finally {
+            await fixture("remove", root);
+          }
         }
       },
     );

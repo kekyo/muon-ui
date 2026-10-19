@@ -16,7 +16,21 @@
 #include "muon_prepare_resource.h"
 
 static int fail_resource_write;
+static int fail_runtime_replace;
+static int runtime_replace_calls;
 size_t __real_fwrite(const void *buffer, size_t size, size_t count, FILE *file);
+int __real_muon_atomic_replace(const char *source, const char *destination);
+
+// Fail after the old runtime has been backed up, then allow its restoration.
+int __wrap_muon_atomic_replace(const char *source, const char *destination) {
+  if (fail_runtime_replace && ++runtime_replace_calls == 2) {
+    fputs("Injected runtime commit failure\n", stderr);
+    errno = EACCES;
+    SetLastError(ERROR_ACCESS_DENIED);
+    return -1;
+  }
+  return __real_muon_atomic_replace(source, destination);
+}
 
 // Inject a disk-write failure after real bytes reach the output. The observable
 // contract is a failed resource update with no partial PE left on disk.
@@ -277,7 +291,46 @@ static int node_archive(const char *path, const char *output) {
       ? 0 : fail("Node archive installation");
 }
 
+typedef struct {
+  unsigned int calls;
+  unsigned long long current;
+  unsigned long long total;
+} DownloadProgress;
+
+static void download_progress(const MuonPrepareProgress *progress, void *context) {
+  DownloadProgress *state = context;
+  ++state->calls;
+  state->current = progress->current;
+  state->total = progress->total;
+}
+
+static int download(int argc, char **argv) {
+  (void)argc;
+  char *filename = muon_external_file_path(argv[2]);
+  if (filename == NULL) return fail("download output path");
+  char *end = NULL;
+  unsigned long long expected = strtoull(argv[4], &end, 10);
+  if (expected == 0 || *end != '\0') { free(filename); return 2; }
+  char *arguments[] = {"curl", "-fsL", "-o", filename, argv[3], NULL};
+  DownloadProgress progress = {0};
+  int result = muon_run_process_with_file_progress(arguments, argv[2], expected,
+      download_progress, &progress, MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING,
+      "Downloading test archive");
+  free(filename);
+  if (result != 0 || progress.calls < 2 || progress.current != expected ||
+      progress.total != expected) return fail("download progress");
+  unsigned long long actual = 0;
+  char hash[SHA256_DIGEST_STRING_LENGTH];
+  if (muon_get_file_size(argv[2], &actual) != 0 || actual != expected ||
+      muon_sha256_file_hex(argv[2], hash) != 0) return fail("download contents");
+  puts(hash);
+  return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 5 && !wcscmp(argv[1], L"download")) {
+    return muon_windows_main(argc, argv, download);
+  }
   if (argc == 5 && !wcscmp(argv[1], L"resource-failure")) {
     wchar_t *arguments[] = {argv[0], L"resource", L"--input", argv[2],
         L"--updates-json", argv[3], L"--output", argv[4], NULL};
@@ -312,7 +365,8 @@ int wmain(int argc, wchar_t **argv) {
     result = limits(path);
   } else if ((!wcscmp(argv[1], L"cef") || !wcscmp(argv[1], L"cef-force")) && other != NULL) {
     result = cef_archive(path, other, !wcscmp(argv[1], L"cef-force"));
-  } else if (!wcscmp(argv[1], L"node") && other != NULL) {
+  } else if ((!wcscmp(argv[1], L"node") || !wcscmp(argv[1], L"node-failure")) && other != NULL) {
+    fail_runtime_replace = !wcscmp(argv[1], L"node-failure");
     result = node_archive(path, other);
   } else if (!wcscmp(argv[1], L"remove")) {
     result = muon_remove_recursive(path) == 0 && !muon_path_exists(path) ? 0 : fail("recursive remove");

@@ -576,13 +576,15 @@ static int run_curl_download(
     const char *url, const char *destination, const char *curl_flags,
     const char *status, MuonPrepareProgressCallback progress_callback,
     void *progress_user_data) {
+  char *file_argument = muon_external_file_path(destination);
+  if (file_argument == NULL) return -1;
   for (int attempt = 0; attempt < kCurlDownloadAttemptCount; attempt += 1) {
     const int final_attempt = attempt + 1 == kCurlDownloadAttemptCount;
     const int resume = attempt > 0 && file_has_download_progress(destination);
     char *fresh_argv[] = {"curl", (char *)curl_flags, "-o",
-                          (char *)destination, (char *)url, NULL};
+                          file_argument, (char *)url, NULL};
     char *resume_argv[] = {"curl", (char *)curl_flags, "-C", "-",
-                           "-o",   (char *)destination, (char *)url, NULL};
+                           "-o",   file_argument, (char *)url, NULL};
     char **argv = resume ? resume_argv : fresh_argv;
     if (attempt > 0) {
       muon_print_error("Retrying Node.js download: attempt %d/%d\n",
@@ -602,12 +604,14 @@ static int run_curl_download(
                          progress_user_data,
                          MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status));
     if (result == 0) {
+      free(file_argument);
       return 0;
     }
     if (resume) {
       muon_remove_recursive(destination);
     }
   }
+  free(file_argument);
   return -1;
 }
 
@@ -633,16 +637,21 @@ static int copy_url_to_file(
       MUON_PREPARE_PROGRESS_PHASE_DOWNLOADING, status);
 }
 
-static const char *get_node_dist_url(void) {
-  const char *override = getenv("MUON_NODE_DIST_URL");
-  return override == NULL || override[0] == '\0' ? kDefaultNodeDistUrl
-                                                 : override;
+static char *get_node_dist_url(void) {
+  char *override = NULL;
+  if (muon_get_environment("MUON_NODE_DIST_URL", &override) != 0) return NULL;
+  return override == NULL ? muon_duplicate_string(kDefaultNodeDistUrl) : override;
 }
 
 static char *create_node_dist_url(const char *first, const char *second) {
-  const char *base = get_node_dist_url();
+  char *base = get_node_dist_url();
+  if (base == NULL) return NULL;
+  char separator = '/';
+#ifdef _WIN32
+  if (strncmp(base, "\\\\?\\", 4) == 0) separator = '\\';
+#endif
   size_t base_length = strlen(base);
-  while (base_length > 1 && base[base_length - 1] == '/') {
+  while (base_length > 1 && (base[base_length - 1] == '/' || base[base_length - 1] == separator)) {
     base_length -= 1;
   }
   const size_t first_length =
@@ -654,22 +663,24 @@ static char *create_node_dist_url(const char *first, const char *second) {
   char *result = (char *)malloc(base_length + first_length + second_length +
                                 separator_count + 1);
   if (result == NULL) {
+    free(base);
     return NULL;
   }
   size_t offset = 0;
   memcpy(result + offset, base, base_length);
   offset += base_length;
   if (first_length != 0) {
-    result[offset++] = '/';
+    result[offset++] = separator;
     memcpy(result + offset, first, first_length);
     offset += first_length;
   }
   if (second_length != 0) {
-    result[offset++] = '/';
+    result[offset++] = separator;
     memcpy(result + offset, second, second_length);
     offset += second_length;
   }
   result[offset] = '\0';
+  free(base);
   return result;
 }
 

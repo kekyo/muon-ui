@@ -132,6 +132,15 @@ struct archive;
 int muon_archive_read_open_file(struct archive *reader, const char *path);
 
 /**
+ * Creates an owned UTF-8 filename argument for a Unicode-aware external tool.
+ * @param path Filesystem path, resolved once on Windows.
+ * @return Filename to free, or NULL with errno set on failure.
+ * @remarks Windows applies the shared file-I/O prefix rules. The receiving tool
+ * must support extended paths; this is not for shell, URL or executable arguments.
+ */
+char *muon_external_file_path(const char *path);
+
+/**
  * Renames a filesystem entry with the platform's ordinary rename semantics.
  * @param source Existing UTF-8 path.
  * @param destination Destination UTF-8 path.

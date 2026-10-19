@@ -1763,6 +1763,18 @@ int muon_archive_read_open_file(struct archive *reader, const char *path) {
 #endif
 }
 
+char *muon_external_file_path(const char *path) {
+#ifdef _WIN32
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return NULL;
+  char *result = muon_utf8_from_wide(native.value);
+  muon_windows_path_destroy(&native);
+  return result;
+#else
+  return muon_duplicate_string(path);
+#endif
+}
+
 int muon_extract_tar_bz2_archive_progress(
     const char *archive_path, const char *destination, int strip_components,
     size_t *file_count, MuonPrepareProgressCallback progress_callback,
@@ -2053,11 +2065,95 @@ static pid_t wait_for_child_process(pid_t pid, int *status, int options) {
 }
 #endif
 
+#ifdef _WIN32
+static int append_command_character(wchar_t *buffer, size_t *length, wchar_t value) {
+  // CreateProcessW counts the terminator in its 32767-unit command-line limit.
+  if (*length == 32766) {
+    errno = E2BIG;
+    SetLastError(ERROR_BAD_LENGTH);
+    return -1;
+  }
+  if (buffer != NULL) buffer[*length] = value;
+  ++*length;
+  return 0;
+}
+
+static int append_command_argument(wchar_t *buffer, size_t *length, const wchar_t *value) {
+  if (append_command_character(buffer, length, L'"') != 0) return -1;
+  for (;;) {
+    size_t backslashes = 0;
+    while (*value == L'\\') { ++backslashes; ++value; }
+    if (*value == L'"' || *value == L'\0') backslashes *= 2;
+    while (backslashes > 0) {
+      if (append_command_character(buffer, length, L'\\') != 0) return -1;
+      --backslashes;
+    }
+    if (*value == L'\0') break;
+    if (*value == L'"' && append_command_character(buffer, length, L'\\') != 0) return -1;
+    if (append_command_character(buffer, length, *value++) != 0) return -1;
+  }
+  return append_command_character(buffer, length, L'"');
+}
+
+static HANDLE start_windows_process(char *const argv[]) {
+  if (argv == NULL || argv[0] == NULL || argv[0][0] == '\0') {
+    windows_path_error(ERROR_INVALID_PARAMETER);
+    return NULL;
+  }
+  wchar_t *command = NULL;
+  for (int pass = 0; pass < 2; ++pass) {
+    size_t length = 0;
+    for (size_t index = 0; argv[index] != NULL; ++index) {
+      wchar_t *argument = muon_wide_from_utf8(argv[index]);
+      if (argument == NULL) { free(command); return NULL; }
+      int result = index == 0 ? 0 : append_command_character(command, &length, L' ');
+      if (result == 0) result = append_command_argument(command, &length, argument);
+      free(argument);
+      if (result != 0) { free(command); return NULL; }
+    }
+    if (pass == 0) {
+      command = malloc((length + 1) * sizeof(wchar_t));
+      if (command == NULL) return NULL;
+    } else {
+      command[length] = L'\0';
+    }
+  }
+  muon_windows_path application = {0};
+  // A bare command keeps Windows executable search. A supplied path is resolved
+  // once and passed separately, so its length is not limited by argv[0] parsing.
+  if (strpbrk(argv[0], "/\\:") != NULL &&
+      muon_windows_io_path(argv[0], MUON_WINDOWS_PATH_FILE, &application) != 0) {
+    free(command);
+    return NULL;
+  }
+  STARTUPINFOW startup = {0};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process = {0};
+  BOOL started = CreateProcessW(application.value, command, NULL, NULL, TRUE, 0,
+                                NULL, NULL, &startup, &process);
+  DWORD error = started ? ERROR_SUCCESS : GetLastError();
+  free(command);
+  muon_windows_path_destroy(&application);
+  if (!started) { windows_path_error(error); return NULL; }
+  CloseHandle(process.hThread);
+  return process.hProcess;
+}
+#endif
+
 static int run_process(char *const argv[], int report_command_failure) {
 #ifdef _WIN32
-  const intptr_t status =
-      _spawnvp(_P_WAIT, argv[0], (const char *const *)argv);
-  if (status < 0) {
+  HANDLE process = start_windows_process(argv);
+  if (process == NULL) {
+    muon_print_errno(argv[0]);
+    return -1;
+  }
+  DWORD status = 0;
+  BOOL finished = WaitForSingleObject(process, INFINITE) == WAIT_OBJECT_0 &&
+      GetExitCodeProcess(process, &status);
+  DWORD error = finished ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(process);
+  if (!finished) {
+    windows_path_error(error);
     muon_print_errno(argv[0]);
     return -1;
   }
@@ -2104,13 +2200,11 @@ static int run_process_with_file_progress(
   muon_report_progress(progress_callback, progress_user_data, phase, status, 0,
                        total, total != 0);
 #ifdef _WIN32
-  const intptr_t process_handle_value =
-      _spawnvp(_P_NOWAIT, argv[0], (const char *const *)argv);
-  if (process_handle_value < 0) {
+  HANDLE process_handle = start_windows_process(argv);
+  if (process_handle == NULL) {
     muon_print_errno(argv[0]);
     return -1;
   }
-  HANDLE process_handle = (HANDLE)process_handle_value;
   for (;;) {
     const DWORD wait_result =
         WaitForSingleObject(process_handle, MUON_PROGRESS_POLL_MILLISECONDS);

@@ -168,6 +168,24 @@ bool ParseTruncateLength(const char* options_json,
 
 std::string NormalizeLocalPathOrFileUri(std::string_view value);
 std::filesystem::path CreateLocalFilesystemPath(std::string_view value);
+/** Native I/O requirements, separate from URI decoding and symlink payloads. */
+enum class LocalFilesystemIoUsage {
+  /** An individual file, using extended syntax only when necessary. */
+  File,
+  /** Directory creation or traversal, preserving exact child names. */
+  Tree,
+};
+/**
+ * Resolves a local path or file URI once for a native filesystem operation.
+ * @param value UTF-8 caller input, including a supported file URI.
+ * @param usage Requirements of the operation receiving the path.
+ * @return Owned native path; on Windows, normalized and extended as needed.
+ * @throws std::system_error When the Windows path cannot be converted.
+ * @remarks Does not require existence. Do not use for relative symlink targets,
+ * public return values, process arguments, or shell/CEF configuration.
+ */
+std::filesystem::path CreateLocalFilesystemIoPath(
+    std::string_view value, LocalFilesystemIoUsage usage);
 std::string PathToUtf8String(const std::filesystem::path& path);
 std::string CreateStatusJson(const std::filesystem::path& path,
                              bool follow_symlink);

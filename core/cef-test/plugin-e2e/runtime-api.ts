@@ -16,6 +16,9 @@ import { tmpdir as nodeTmpdir } from "node:os";
 import { join as nodeJoin } from "node:path";
 import { PNG } from "pngjs";
 import { expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createConnection } from "@playwright/mcp";
 
 import { embedMuonConfigInCoreFile } from "../../../ui/cef/embed-config.js";
 import {
@@ -6297,6 +6300,159 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         });
       });
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("reads and writes ordinary long Windows paths", async () => {
+    const context = getWindowsRemoteContext();
+    if (context === undefined)
+      throw new Error("Windows agent is not connected");
+    // This prerequisite is independent of the I/O assertions below. The
+    // required baseline has policy disabled; never change a shared machine.
+    const query = await context.agent.processes.launchManaged({
+      path: "reg.exe",
+      arguments: [
+        "query",
+        String.raw`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`,
+        "/v",
+        "LongPathsEnabled",
+      ],
+      captureStdout: true,
+      captureStderr: true,
+      createNoWindow: true,
+    });
+    try {
+      const result = await query.waitForExit({ timeoutMs: 30000 });
+      const stdout = await query.stdoutText();
+      expect(result.root.exitCode, await query.stderrText()).toBe(0);
+      const value = /LongPathsEnabled\s+REG_DWORD\s+0x([0-9a-f]+)/iu.exec(
+        stdout,
+      );
+      expect(value, stdout).not.toBeNull();
+      expect(Number.parseInt(value![1]!, 16)).toBe(0);
+    } finally {
+      await query.releaseAsync();
+    }
+    const target = context.runtime.target;
+    await execFileAsync("make", [
+      "windows-long-path-fixture",
+      `WINDOWS_TARGET=${target}`,
+    ]);
+    const directory = await mkdtemp(join(tmpdir(), "muon-long-path-"));
+    const fixture = join(directory, "fixture.exe");
+    await writeFile(
+      fixture,
+      await nodeReadFile(
+        nodeJoin(".run", "windows-long-path", target, "fixture.exe"),
+      ),
+    );
+    const runFixture = async (
+      operation: string,
+      path: string,
+    ): Promise<void> => {
+      const process = await context.agent.processes.launchManaged({
+        path: fixture,
+        arguments: [operation, `\\\\?\\${path}`],
+        workingDirectory: directory,
+        captureStdout: true,
+        captureStderr: true,
+        createNoWindow: true,
+      });
+      try {
+        const result = await process.waitForExit({ timeoutMs: 30000 });
+        expect(result.root.exitCode, await process.stderrText()).toBe(0);
+      } finally {
+        await process.releaseAsync();
+      }
+    };
+    const dataDirectory = join(directory, "日本語😀");
+    try {
+      const paths: string[] = [];
+      for (const length of [259, 260, 261, 300, 1100, 4200]) {
+        let parent = join(dataDirectory, String(length));
+        while (parent.length + 102 < length)
+          parent = join(parent, "d".repeat(80));
+        const path = join(
+          parent,
+          `${"f".repeat(length - parent.length - 5)}.txt`,
+        );
+        expect(path.length).toBe(length);
+        expect(path.startsWith("\\\\?\\")).toBe(false);
+        await runFixture("mkdir", parent);
+        paths.push(path);
+      }
+      await withMuon([], async () => {
+        const server = await createConnection({
+          browser: {
+            cdpEndpoint: `http://${context.cdpHost}:${context.cdpPort}`,
+          },
+        });
+        const client = new Client({
+          name: "muon-long-path",
+          version: "1.0.0",
+        });
+        const [clientTransport, serverTransport] =
+          InMemoryTransport.createLinkedPair();
+        try {
+          await server.connect(serverTransport);
+          await client.connect(clientTransport);
+          // CEF exposes the title bar as a separate page. CDP page ordering
+          // is not stable, so select the application page by its test title.
+          const tabs = await client.callTool({
+            name: "browser_tabs",
+            arguments: { action: "list" },
+          });
+          expect(tabs.isError).not.toBe(true);
+          const tabText = (tabs.content as { type: string; text: string }[])
+            .filter((item) => item.type === "text")
+            .map((item) => item.text)
+            .join("\n");
+          const matches = [
+            ...tabText.matchAll(
+              /^- (\d+): (?:\(current\) )?\[muon test\]\(/gmu,
+            ),
+          ];
+          expect(matches).toHaveLength(1);
+          const selected = await client.callTool({
+            name: "browser_tabs",
+            arguments: { action: "select", index: Number(matches[0]![1]) },
+          });
+          expect(selected.isError).not.toBe(true);
+          const result = await client.callTool({
+            name: "browser_evaluate",
+            arguments: {
+              function: `async () => {
+                const contents = [];
+                for (const path of ${JSON.stringify(paths)}) {
+                  try {
+                    await window.muon.fs.writeTextFile(path, "long path roundtrip", "utf8");
+                    contents.push(await window.muon.fs.readTextFile(path, "utf8"));
+                  } catch (error) {
+                    throw new Error("UTF-16 path length " + path.length + ": " + String(error));
+                  }
+                }
+                return contents;
+              }`,
+            },
+          });
+          const text = (result.content as { type: string; text: string }[])
+            .filter((item) => item.type === "text")
+            .map((item) => item.text)
+            .join("\n");
+          expect(result.isError, text).not.toBe(true);
+          const match = /### Result\n([\s\S]*?)(?:\n###|$)/u.exec(text);
+          expect(match, text).not.toBeNull();
+          expect(JSON.parse(match![1]!)).toEqual(
+            paths.map(() => "long path roundtrip"),
+          );
+        } finally {
+          await client.close();
+          await server.close();
+        }
+      });
+    } finally {
+      await runFixture("remove", dataDirectory);
       await rm(directory, { recursive: true, force: true });
     }
   });

@@ -24,6 +24,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include "muon_windows_path.h"
 #endif
 
 namespace muon_internal {
@@ -205,6 +206,30 @@ std::filesystem::path CreateLocalFilesystemPath(std::string_view value) {
   return std::filesystem::path(Utf8ToWidePath(normalized));
 #else
   return std::filesystem::path(normalized);
+#endif
+}
+
+std::filesystem::path CreateLocalFilesystemIoPath(
+    std::string_view value, LocalFilesystemIoUsage usage) {
+#if defined(_WIN32)
+  const auto input = NormalizeLocalPathOrFileUri(value);
+  auto path = muon_windows_path{};
+  const auto owner = std::unique_ptr<muon_windows_path,
+      decltype(&muon_windows_path_destroy)>(&path, &muon_windows_path_destroy);
+  auto error = muon_windows_path_normalize_utf8(input.data(), input.size(), &path);
+  if (error == ERROR_SUCCESS) {
+    error = muon_windows_path_for_io(&path,
+        usage == LocalFilesystemIoUsage::Tree ? MUON_WINDOWS_PATH_TREE
+                                             : MUON_WINDOWS_PATH_FILE);
+  }
+  if (error != ERROR_SUCCESS) {
+    throw std::system_error(static_cast<int>(error), std::system_category(),
+                            "Filesystem path conversion failed");
+  }
+  return std::filesystem::path(path.value);
+#else
+  (void)usage;
+  return CreateLocalFilesystemPath(value);
 #endif
 }
 

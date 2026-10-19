@@ -672,6 +672,16 @@ target_link_libraries(muon_cardio INTERFACE
   )
 
 if(WIN32)
+  add_library(muon_windows_path STATIC
+    "${MUON_COMMON_ROOT}/src/muon_windows_path.c"
+    "${MUON_COMMON_ROOT}/include/muon_windows_path.h"
+    )
+  target_compile_features(muon_windows_path PRIVATE c_std_99)
+  target_include_directories(muon_windows_path PUBLIC
+    "${MUON_COMMON_ROOT}/include"
+    )
+  MUON_APPLY_SANITIZERS(muon_windows_path)
+
   add_library(muon_windows_job_process STATIC
     src/platform/muon_windows_job_process.cpp
     src/platform/muon_windows_job_process.h
@@ -926,6 +936,7 @@ target_link_libraries(muon_ui PRIVATE
   )
 if(WIN32)
   target_link_libraries(muon_ui PRIVATE
+    muon_windows_path
     ole32
     shell32
     uuid
@@ -1190,6 +1201,7 @@ target_link_libraries(${APP_NAME} PRIVATE
   )
 if(WIN32)
   target_link_libraries(${APP_NAME} PRIVATE
+    muon_windows_path
     advapi32
     comctl32
     muon_windows_job_process
@@ -1916,6 +1928,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_internal_helpers_test)
+  if(WIN32)
+    target_link_libraries(muon_internal_helpers_test PRIVATE muon_windows_path)
+  endif()
   add_executable(muon_config_network_test
     ../cef-test/native/muon_config_network_test.cpp
     src/muon_json_helpers.cpp

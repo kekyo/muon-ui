@@ -613,11 +613,10 @@ static void ValidateWindowsRegularFile(HANDLE file) {
   }
 }
 
-static MuonFsFile OpenRegularFileSync(std::string path,
+static MuonFsFile OpenRegularFileSync(const std::filesystem::path& target_path,
                                       MuonFsOpenMode mode,
                                       cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
-  const auto target_path = CreateLocalFilesystemPath(path);
   if (mode == MuonFsOpenMode::Read) {
     const auto preflight_error = WindowsRegularFilePreflightError(target_path);
     if (!preflight_error.empty()) {
@@ -658,7 +657,7 @@ static MuonFsFile OpenRegularFileSync(std::string path,
 
 static cardio::promise<MuonFsFile> OpenRegularFileAsync(
     MuonFsIoContext& context,
-    std::string path,
+    std::filesystem::path path,
     MuonFsOpenMode mode,
     cardio::cancellation cancellation) {
   (void)context;
@@ -692,14 +691,13 @@ static cardio::promise<MuonFsFile> OpenRegularFileAsync(
 
 static cardio::promise<std::string> RegularFileReadPreflightAsync(
     MuonFsIoContext& context,
-    std::string path,
+    std::filesystem::path path,
     cardio::cancellation cancellation) {
   (void)context;
   auto preflight = RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target_path = CreateLocalFilesystemPath(path);
-        const auto error = WindowsRegularFilePreflightError(target_path);
+        const auto error = WindowsRegularFilePreflightError(path);
         cancellation.throw_if_cancellation_requested();
         return error;
       });
@@ -829,7 +827,7 @@ static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
 template <typename Result, typename Body>
 static cardio::promise<Result> WithOpenRegularFileAsync(
     MuonFsIoContext& context,
-    std::string path,
+    std::filesystem::path path,
     MuonFsOpenMode mode,
     cardio::cancellation cancellation,
     Body body) {
@@ -1024,8 +1022,9 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
       co_return AllocateResultBuffer(helpers, 0);
     }
     cancellation.throw_if_cancellation_requested();
+    auto target_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
     auto preflight_promise = RegularFileReadPreflightAsync(
-        context, path, cancellation);
+        context, target_path, cancellation);
     const auto preflight_error = co_await preflight_promise;
     if (!preflight_error.empty()) {
       co_return MuonFsBufferResult(preflight_error);
@@ -1033,7 +1032,7 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
     cancellation.throw_if_cancellation_requested();
     auto result_promise = WithOpenRegularFileAsync<MuonFsBufferResult>(
         context,
-        std::move(path),
+        std::move(target_path),
         MuonFsOpenMode::Read,
         cancellation,
         [&context, helpers, options, max_bytes, cancellation](MuonFsFile& file) {
@@ -1055,8 +1054,9 @@ static cardio::promise<MuonFsStringResult> ReadTextAsync(
   co_await start_gate;
   try {
     cancellation.throw_if_cancellation_requested();
+    auto target_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
     auto preflight_promise = RegularFileReadPreflightAsync(
-        context, path, cancellation);
+        context, target_path, cancellation);
     const auto preflight_error = co_await preflight_promise;
     if (!preflight_error.empty()) {
       co_return MuonFsStringResult{std::string{}, preflight_error};
@@ -1064,7 +1064,7 @@ static cardio::promise<MuonFsStringResult> ReadTextAsync(
     cancellation.throw_if_cancellation_requested();
     auto read_promise = WithOpenRegularFileAsync<MuonFsStringResult>(
         context,
-        std::move(path),
+        std::move(target_path),
         MuonFsOpenMode::Read,
         cancellation,
         [&context, max_bytes, cancellation](MuonFsFile& file) {
@@ -1085,7 +1085,7 @@ static cardio::promise<void> WriteBytesAsync(
     cardio::cancellation cancellation) {
   auto write_promise = WithOpenRegularFileAsync<void>(
       context,
-      std::move(path),
+      CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File),
       options.has_position ? MuonFsOpenMode::WriteAt
                            : MuonFsOpenMode::WriteTruncate,
       cancellation,

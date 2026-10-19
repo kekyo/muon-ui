@@ -1,5 +1,23 @@
 # 制約
 
+## Windowsの長いパス
+
+Windows版の`muon.fs`は、従来の`MAX_PATH`（終端文字を含め260文字）を超えるローカルパスを通常の表記で扱えます。長いパスのために管理者権限、`LongPathsEnabled`の変更、再起動を求めることはありません。builderによる取得・展開・コピーにも同じ方針を適用しています。長さはUTF-16のコード単位で数えます。例えば、日本語の多くは1、絵文字の多くは2となります。
+
+この対応には、次の配置上の制約が残ります。
+
+| 対象 | 利用条件 |
+| --- | --- |
+| CEFを実行するruntime、プロファイル、一時ディレクトリ | 短い通常表記のパスを使用してください。内部ファイル名を追加する余裕も必要です。長いデータパスへアクセスできることは、CEF自体を同じ場所から起動できる保証にはなりません。 |
+| `browser.profilePath` | 解決後のパスが260以上、または`\\?\`で始まる場合は起動を拒否します。保存先を別の場所へ自動変更することはありません。 |
+| launcherのruntime、`muon.executor`の`cwd`、`node.project` | Windowsの作業ディレクトリとして使うパスは260未満が必要です。Node.jsで深い階層のモジュールを使う場合は、短いプロジェクトルートから相対パスで読み込んでください。 |
+| NSISとショートカット | インストール先は同梱ファイル名を含めた長さで制限されます。[インストール先の説明](./package-install-location-advanced-topics.md)を参照してください。 |
+| 自動起動 | 引用符を含むRunキーの登録コマンド全体が260以内である必要があります。 |
+
+CEFの配置条件は、参照Chromiumに残る[実行場所の固定長処理](https://github.com/chromium/chromium/blob/147.0.7727.138/base/base_paths_win.cc)と[一時ディレクトリ等の処理](https://github.com/chromium/chromium/blob/147.0.7727.138/base/files/file_util_win.cc)によるものです。作業ディレクトリとプロセス起動の関係は[Windowsの仕様](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setcurrentdirectory)、自動起動の上限は[Runキーの仕様](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)を参照してください。
+
+ファイルシステムには、パス要素ごとの長さや拡張長パス全体の上限もあります。muonは名前を切り詰めて処理を続けません。`\\?\`で始まる拡張長表記は解析規則も異なるため、ファイルI/O用の表記をCEF設定、シェル、URI、外部プロセスの引数へ一律に付けないでください。[Windowsのパス長と解析規則](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+
 ## WaylandとVulkan
 
 現在のCEF (`147.0.14+g76d2442`) は、Linux+Wayland環境において、Vulkanとの併用を完全にサポートしていません。多くの場合、この組み合わせは問題を引き起こすとの事なので、muonではLinux表示バックエンドがWaylandと判定された場合に、自動的にCEFのVulkan関連機能を無効化します。

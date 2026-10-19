@@ -173,6 +173,8 @@ await window.muon.launcher.triggerUpdate();
 - `getAutostart()` と `setAutostart()` は、起動時のlaunch sourceに応じたプラットフォームバックエンドを使用します。
   POSIX desktopではXDG Autostart、Windowsでは現在のユーザーのRun registry entryを使用します。
 
+Windowsの自動起動では、引用符を含む登録コマンド全体が260 UTF-16コード単位以内である必要があります。UTF-16はWindowsの文字列表現で、日本語文字の多くは1単位、絵文字の多くは2単位として数えます。上限を超える場合は`setAutostart(true)`が`Windows Run command is too long`でrejectされ、登録は作成されません。[Runキーの上限](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)
+
 ```js
 const variables = await window.muon.environments.getVariables();
 const config = await window.muon.environments.getConfigValues();
@@ -265,6 +267,8 @@ const baseUrl = config.apiBaseUrl;
 Linuxでは、起動時に作成した同一プロセスグループ内をプロセスツリーとして扱います。
 プロセス自身がそのグループから離脱した場合は管理対象外です。
 WindowsではJob Objectに属するプロセスが管理対象です。
+
+Windowsでは、`command`に長い実行ファイルパスを指定できます。引数は`args`へ分けてください。単なるコマンド名の場合は従来どおり検索されます。`cwd`には、解決後に260 UTF-16コード単位未満となる作業ディレクトリを指定してください。子プロセス自身が受け取る引数や扱うファイルの上限は、そのプログラムの仕様に従います。[Windowsのプロセス起動と作業ディレクトリ](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setcurrentdirectory)
 
 ```js
 const child = await window.muon.executor.spawn({
@@ -370,6 +374,10 @@ Linux環境ではGIO/GVfsを利用するため、通常の `muon.fs` 関数に�
 GTKファイルダイアログで `gtk.localOnly: false` の場合にGVfs上のURIが選択結果として返ったときも、そのURIを通常の `muon.fs` 関数へ渡せます。
 Linux以外の環境では、通常の `muon.fs` 関数はローカルファイルシステム上のパスを扱います。
 Android WebViewバックエンドの現在の実装は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIは現在rejectされ、直接指定する対応は後続作業です。`muon.fs.dialogs`も、そのURIを扱う契約が実装されるまではAndroidへ公開されません。
+
+Windowsでは、通常表記の長いパスを読み書き、列挙、コピー、移動、削除、監視などに使用できます。長いパスのための管理者操作やOS設定の変更は不要です。相対パスは既存の基準ディレクトリから解決されます。`symlink()`の相対ターゲットは、リンク内に相対表記で保存されます。
+
+`realpath()`は同じ対象を表せる場合に通常の絶対パスを返します。入力で明示した`\\?\`や、末尾空白・ピリオドなどの名前を正確に表すために必要な接頭辞は保持します。`readlink()`が返す相対ターゲットも相対のままです。返却パスは接頭辞を手動で除かず、次の`muon.fs`操作へ渡してください。`readdir()`が返す名前も文字を削らずに扱ってください。[Windowsの配置制約とパス長](./limitation.md#windowsの長いパス)
 
 | 関数                                             | 引数                                                                                                                 | 戻り値                    | 説明                                                                                                                                                       |
 | :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -477,6 +485,8 @@ await watcher.close();
 
 `window.muon.fs.dialogs` は、ネイティブファイルダイアログを表示します。
 この名前空間の関数はファイルやディレクトリを作成・変更せず、ユーザーが選択したパスまたはURIを返すだけです。
+
+Windowsの選択結果は、OSのシェルにより8.3形式の短い別名や`\\?\`付きのパスになる場合があります。指定した初期フォルダーと文字列表記が同じとは限りません。返されたパスをそのまま`muon.fs`へ渡してください。ファイルI/Oとシェルの長いパス対応は別の制約です。[Microsoftのシェルに関する説明](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
 
 | 関数                          | 引数                                | 戻り値                    | 説明                                                                          |
 | :---------------------------- | :---------------------------------- | :------------------------ | :---------------------------------------------------------------------------- |

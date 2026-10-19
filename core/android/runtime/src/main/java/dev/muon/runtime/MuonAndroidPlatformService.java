@@ -56,11 +56,16 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             @NonNull Activity activity,
             @NonNull WebView webView) {
         this.activity = activity;
-        configValues = MuonAppConfig.load(activity).values;
+        MuonAppConfig config = MuonAppConfig.load(activity);
+        configValues = config.values;
         this.webView = webView;
         filesystemService = new MuonAndroidFilesystemService(
                 new Handler(Looper.getMainLooper()), activity.getFilesDir());
-        systemBarsService = new MuonAndroidSystemBarsService(activity.getWindow());
+        Object retained = activity.getLastNonConfigurationInstance();
+        systemBarsService = new MuonAndroidSystemBarsService(activity.getWindow(),
+                activity.getResources().getDisplayMetrics().density,
+                config.systemBars,
+                retained instanceof String ? (String) retained : null);
     }
 
     void invoke(
@@ -79,7 +84,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             return;
         }
         if (functionPath.startsWith("muon.android.systemBars.")) {
-            systemBarsService.invoke(functionPath, arguments, attachments, completion);
+            systemBarsService.invoke(callId, functionPath, arguments, attachments, completion);
             return;
         }
         if (arguments.length() != 0 || attachments.length != 0) {
@@ -144,11 +149,15 @@ final class MuonAndroidPlatformService implements AutoCloseable {
 
     void cancel(int callId) {
         filesystemService.cancel(callId);
+        systemBarsService.cancel(callId);
     }
 
     void cancelAll() {
         filesystemService.cancelAll();
+        systemBarsService.cancelAll();
     }
+
+    MuonAndroidSystemBarsService getSystemBarsService() { return systemBarsService; }
 
     boolean isFullscreen() {
         return systemBarsService.isFullscreen();

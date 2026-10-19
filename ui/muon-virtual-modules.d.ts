@@ -8,6 +8,10 @@ declare module "muon:android.systemBars" {
   export const configure: MuonAndroidSystemBarsApi["configure"];
   /** Read requested and observed Android system bar visibility. */
   export const getState: MuonAndroidSystemBarsApi["getState"];
+  /** Read system, cutout, gesture, keyboard and remaining content insets in CSS pixels. */
+  export const getInsets: MuonAndroidSystemBarsApi["getInsets"];
+  /** Subscribe to initial insets and changes until the returned handle is closed. */
+  export const watchInsets: MuonAndroidSystemBarsApi["watchInsets"];
 }
 
 declare module "muon:environments" {

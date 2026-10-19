@@ -6,6 +6,26 @@
 /** ABI supported by the prebuilt Muon Android runtime. */
 export type MuonAndroidAbi = "arm64-v8a" | "x86_64";
 
+/** Initial Android content placement and system bar appearance. */
+export interface MuonAndroidSystemBarsOptions {
+  /** Web content placement; defaults to safe-area. */
+  readonly contentLayout?: "safe-area" | "edge-to-edge";
+  /** Top status bar configuration. */
+  readonly statusBar?: {
+    /** Whether to show the status bar; defaults to true. */
+    readonly visible?: boolean;
+    /** Icon color; omission inherits the Android theme. */
+    readonly icons?: "light" | "dark";
+  };
+  /** Bottom navigation bar configuration. */
+  readonly navigationBar?: {
+    /** Whether to show the navigation bar; defaults to true. */
+    readonly visible?: boolean;
+    /** Icon color; dark icons require Android API 26 or later. */
+    readonly icons?: "light" | "dark";
+  };
+}
+
 /** Prebuilt native plugin bundled in the application. */
 export interface MuonAndroidPluginOptions {
   /** Unique plugin registration name. */
@@ -22,6 +42,8 @@ export interface MuonAndroidPluginOptions {
 
 /** Android application options, overriding the muon.json android section. */
 export interface MuonAndroidOptions {
+  /** Initial system bars and safe-area policy, applied before JavaScript starts. */
+  systemBars?: MuonAndroidSystemBarsOptions;
   /** External keystore and environment variable references used by muon pack. */
   signing?: MuonAndroidSigningOptions;
   /** Stable reverse-domain application identifier used for installation and updates. */

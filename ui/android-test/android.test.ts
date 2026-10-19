@@ -50,6 +50,60 @@ const project = async (config: unknown): Promise<string> => {
 };
 
 describe("public Android builds", () => {
+  it("normalizes initial system bars without treating an omitted window state as normal", async () => {
+    const root = await project({
+      android: {
+        systemBars: {
+          statusBar: { visible: false, icons: "light" },
+          contentLayout: "edge-to-edge",
+        },
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].systemBars).toEqual({
+      statusBar: { visible: false, icons: "light" },
+      navigationBar: { visible: true },
+      contentLayout: "edge-to-edge",
+    });
+  });
+  it("applies fullscreen to both initial bars while retaining the requested layout and icon appearance", async () => {
+    const root = await project({
+      browser: { initialWindowState: "fullscreen" },
+      android: { systemBars: { navigationBar: { icons: "dark" } } },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].systemBars).toEqual({
+      statusBar: { visible: false },
+      navigationBar: { visible: false, icons: "dark" },
+      contentLayout: "safe-area",
+    });
+  });
+  it.each([
+    {
+      browser: { initialWindowState: "normal" },
+      android: { systemBars: { statusBar: { visible: false } } },
+    },
+    {
+      browser: { initialWindowState: "fullscreen" },
+      android: { systemBars: { navigationBar: { visible: true } } },
+    },
+    { android: { systemBars: { contentLayout: "fit" } } },
+    { android: { systemBars: { statusBar: { visible: "false" } } } },
+    { android: { systemBars: { statusBar: { icons: "automatic" } } } },
+    { android: { systemBars: { navigationBar: { color: "black" } } } },
+    { android: { systemBars: null } },
+  ])(
+    "rejects invalid or conflicting initial system bar settings before packaging: %j",
+    async (config) => {
+      const root = await project(config);
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(
+        /system.?bar|contentLayout|statusBar|navigationBar|icons/i,
+      );
+      expect(buildAndroid).not.toHaveBeenCalled();
+    },
+  );
   it("accepts an explicit Android target without changing desktop defaults", () => {
     expect(normalizeMuonBuildTarget("android")).toBe("android");
     expect(allMuonTargets).not.toContain("android");

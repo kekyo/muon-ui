@@ -25,6 +25,7 @@ import { pathToFileURL } from "node:url";
 import { runScriptOnceToText, type FunCityLogEntry } from "funcity";
 import { runAndroidCommand } from "./command.js";
 import { prepareAndroid } from "./toolchain.js";
+import type { MuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
 
 /** ABI shipped by the Muon Android runtime. */
 export type MuonAndroidAbi = "arm64-v8a" | "x86_64";
@@ -74,6 +75,7 @@ export interface MuonAndroidApplicationInput {
   /** User-facing version. */ versionName: string;
   /** Selected runtime ABIs. */ abis: readonly MuonAndroidAbi[];
   /** Manifest permissions, already normalized by the public build boundary. */ permissions: readonly string[];
+  /** Initial layout and system bar appearance, applied before page startup. */ systemBars: MuonAndroidInitialSystemBars;
   /** Values returned by muon.environments.getConfigValues. */ values: Readonly<
     Record<string, string>
   >;
@@ -199,6 +201,7 @@ export const buildAndroidApplication = async (
     JSON.stringify({
       startPage: input.startPage,
       values: input.values,
+      systemBars: input.systemBars,
       plugin: input.pluginAccess,
     }),
   );

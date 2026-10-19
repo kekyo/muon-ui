@@ -260,9 +260,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
                     nativeCancelCall(nativeHandle, callId);
                 }
             } else if ("release".equals(type) && nativeHandle != 0) {
-                pendingBinaryCalls.clear();
-                pendingBinaryRendererResults.clear();
-                nativeReleaseContext(nativeHandle);
+                releasePageContext();
             }
         } catch (JSONException ignored) {
             // Malformed transport messages do not cross the native RPC boundary.
@@ -841,6 +839,17 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
 
     boolean isFullscreenForTest() {
         return platformService.isFullscreen();
+    }
+
+    MuonAndroidSystemBarsService getSystemBarsService() {
+        return platformService.getSystemBarsService();
+    }
+
+    void releasePageContext() {
+        pendingBinaryCalls.clear();
+        pendingBinaryRendererResults.clear();
+        if (nativeHandle != 0) { nativeReleaseContext(nativeHandle); }
+        replyProxy = null;
     }
 
     float getManagedZoomFactorForTest() {

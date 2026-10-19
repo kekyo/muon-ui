@@ -132,6 +132,8 @@ static const std::vector<std::string> kPlatformFunctionPaths = {
     "muon.browser.close",
     "muon.android.systemBars.configure",
     "muon.android.systemBars.getState",
+    "muon.android.systemBars.getInsets",
+    "muon.android.systemBars.watchInsets",
 };
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {
@@ -1449,7 +1451,8 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   auto system_bars_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateBuiltinPolicy(
           state,
-          {"muon.android.systemBars.configure", "muon.android.systemBars.getState"},
+          {"muon.android.systemBars.configure", "muon.android.systemBars.getState",
+           "muon.android.systemBars.getInsets", "muon.android.systemBars.watchInsets"},
           &system_bars_policy, error_message)) {
     return false;
   }

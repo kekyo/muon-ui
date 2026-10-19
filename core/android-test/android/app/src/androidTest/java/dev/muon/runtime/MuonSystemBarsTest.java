@@ -110,8 +110,8 @@ public final class MuonSystemBarsTest {
                     "{\"statusBar\":{\"visible\":1}}",
                     "{\"statusBar\":{\"visible\":\"false\"}}",
                     "{\"statusBars\":{\"visible\":true}}",
-                    "{\"contentLayout\":\"safe-area\"}",
-                    "{\"statusBar\":{\"icons\":\"light\"}}",
+                    "{\"contentLayout\":\"invalid\"}",
+                    "{\"statusBar\":{\"icons\":\"invalid\"}}",
                     "{\"statusBar\":{\"visible\":true},\"navigationBar\":{\"visible\":\"false\"}}"
             };
             for (String options : invalidOptions) {

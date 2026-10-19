@@ -49,6 +49,8 @@ const expectedFunctionPaths = [
   'muon.fs.watch',
   'muon.android.systemBars.configure',
   'muon.android.systemBars.getState',
+  'muon.android.systemBars.getInsets',
+  'muon.android.systemBars.watchInsets',
 ] as const;
 
 describe('muon Android API metadata', () => {

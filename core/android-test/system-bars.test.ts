@@ -8,6 +8,29 @@ import { createMuonAndroidSimpleApi } from '../android/renderer/android-api.js';
 import type { MuonWebViewRpcClient } from '../android/renderer/webview-rpc.js';
 
 describe('Android system bar API', () => {
+  it('configures layout and icon appearance independently of fullscreen visibility', async () => {
+    const call = vi.fn<MuonWebViewRpcClient['call']>().mockResolvedValue(null);
+    const api = createMuonAndroidSimpleApi(
+      { call, dispose: () => {}, getPendingCallCount: () => 0 },
+      {
+        'muon.browser': 'browser-capability',
+        'muon.environments': 'environment-capability',
+        'muon.fs': 'fs-capability',
+        'muon.android.systemBars': 'system-bars-capability',
+      }
+    );
+    const options = {
+      contentLayout: 'edge-to-edge',
+      statusBar: { icons: 'light' },
+      navigationBar: { icons: 'dark' },
+    } as const;
+    await api.android.systemBars.configure(options);
+    expect(call).toHaveBeenCalledWith(
+      'system-bars-capability',
+      'muon.android.systemBars.configure',
+      [JSON.stringify(options)]
+    );
+  });
   it('sends a partial visibility configuration and decodes requested and actual state', async () => {
     const state = {
       requested: {
@@ -56,7 +79,8 @@ describe('Android system bar API', () => {
     { navigationBar: { visible: null } },
     { navigationBar: { unknown: true } },
     { unknown: true },
-    { contentLayout: 'edge-to-edge' },
+    { contentLayout: 'fit' },
+    { statusBar: { icons: 'automatic' } },
   ])(
     'rejects unsupported or malformed settings before native dispatch: %j',
     async (options) => {

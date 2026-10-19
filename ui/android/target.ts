@@ -14,6 +14,7 @@ import {
 } from "./build.js";
 import { prepareAndroid } from "./toolchain.js";
 import { validateMuonAndroidConfig } from "../../core/android/renderer/android-config.js";
+import { resolveMuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
 import type { MuonAndroidOptions } from "../android.js";
 import type { MuonBuildOptions } from "../common/build.js";
 import type { MuonProgressCallback } from "../common/progress.js";
@@ -195,13 +196,10 @@ export const buildMuonAndroidTarget = async (input: {
   )
     throw new Error("node is unavailable in Android application builds.");
   const browser = object(config.browser, "browser");
-  if (
-    browser.initialWindowState !== undefined &&
-    browser.initialWindowState !== "normal"
-  )
-    throw new Error(
-      "Android browser.initialWindowState currently supports normal only; use the runtime fullscreen API.",
-    );
+  const systemBars = resolveMuonAndroidInitialSystemBars(
+    android.systemBars,
+    browser.initialWindowState,
+  );
   if (
     browser.contextMenu !== undefined &&
     object(browser.contextMenu, "browser.contextMenu").mode !== "standard"
@@ -395,6 +393,7 @@ export const buildMuonAndroidTarget = async (input: {
     ),
     abis,
     permissions,
+    systemBars,
     values,
     pluginAccess: pluginConfiguration.pluginAccess,
     plugins,

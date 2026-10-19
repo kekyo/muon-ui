@@ -22,6 +22,7 @@ final class MuonAppConfig {
     static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
     final String startPage;
     final JSONObject values;
+    final JSONObject systemBars;
     final boolean pluginEnabled;
     final String[] internalAllow;
     final boolean validateMode;
@@ -37,6 +38,7 @@ final class MuonAppConfig {
             throw new JSONException("The Android start page must use the trusted asset origin");
         }
         values = config.getJSONObject("values");
+        systemBars = config.has("systemBars") ? config.getJSONObject("systemBars") : new JSONObject();
         JSONObject plugin = config.getJSONObject("plugin");
         String mode = plugin.getString("mode");
         if (!"simple".equals(mode) && !"validate".equals(mode)) {

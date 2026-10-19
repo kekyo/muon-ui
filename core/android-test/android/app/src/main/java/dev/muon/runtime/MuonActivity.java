@@ -211,6 +211,11 @@ public final class MuonActivity extends Activity {
     }
 
     @Override
+    @Nullable public Object onRetainNonConfigurationInstance() {
+        return host == null ? null : host.retainRequestedState();
+    }
+
+    @Override
     protected void onDestroy() {
         if (webView != null) {
             if (testBridgeInstalled) {

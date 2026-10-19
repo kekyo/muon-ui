@@ -10,7 +10,7 @@ CEF版の通知には共通APIとOS固有拡張を組み合わせる案2を採�
 
 実装はAndroidから始め、CEFのLinux・Windowsへ進める。CEFでは実行中の通知操作を先に完成させ、次に通知からのアプリ起動を追加する。対象OSの通知実装ができるまでは関数一覧へ登録せず、実装途中の制限と実行環境による差は`getCapabilities()`で示す。
 
-作成・更新日は2026年10月19日。Android調査の基準コミットは`7194a156ce13ebaeee1317fbe3a19b7a5afc70d0`、CEF通知の追加調査は`a23e3cc`を基準とする。本書は実装前の計画であり、以下のAPI名、設定項目、動作は追加する仕様を示す。現在の作業は計画書の更新までとし、実装と検証の結果は実施後に記録する。
+作成日は2026年10月19日、進捗記録の更新日は2026年10月20日。Android調査の基準コミットは`7194a156ce13ebaeee1317fbe3a19b7a5afc70d0`、CEF通知の追加調査は`a23e3cc`を基準とする。以下のAPI名、設定項目、動作は採用した計画を示す。実装済みの範囲と未解決の事項は末尾の進捗記録に記載する。
 
 ## 用語と対象範囲
 
@@ -66,7 +66,7 @@ CEF版の通知には共通APIとOS固有拡張を組み合わせる案2を採�
 | `muon.notifications` | `post(options)`、`cancel(id)`、`getStatus(options?)` | 共通形式での投稿・更新・取り消し、アプリ全体と用途分類別の投稿可否。 |
 | `muon.notifications` | `getCapabilities()` | 現在の実装と実行環境で利用できる通知機能。 |
 | `muon.notifications` | `getPendingEvents()`、`watchEvents(handler)`、`acknowledgeEvent(eventId)` | 起動時と実行中の通知操作を、同じイベント形式で受け取る。 |
-| `muon.android.systemBars` | `configure(options)`、`getState()`、`getInsets()`、`watchInsets(handler)` | バー別の表示と配色、配置方針、実際の表示状態、安全領域。 |
+| `muon.android.systemBars` | `configure(options)`、`getState()`、`getInsets()`、`watchInsets(handler)` | バー別の表示と配色、配置方針、OSが報告する表示状態、安全領域。 |
 | `muon.android.notifications` | `getPermissionState()`、`requestPermission()`、`ensureChannel(options)`、`getChannels()` | Androidの通知権限とチャンネルの作成・状態取得。 |
 | `muon.android.settings` | `isAvailable(target)`、`open(target, options?)` | 自アプリの情報、通知全体、指定チャンネルの設定画面への遷移。 |
 | `muon.windows.notifications`、`muon.linux.notifications` | 具体的な操作が必要になった時点で定義する。 | 共通形式で表現できないOS固有操作。今回の初期公開には含めない。 |
@@ -114,19 +114,19 @@ await cancel("export-completed");
 
 Android 16以降を対象とするアプリは、Android 16上でedge-to-edgeの強制を無効化できない。`safe-area`はコンテンツを安全領域へ配置するmuonの方針として実現する。ウインドウがカットアウト領域へ広がらないことを保証するAPIにはしない。[Android 16の変更](https://developer.android.com/about/versions/16/behavior-changes-16)、[カットアウトの扱い](https://developer.android.com/develop/ui/views/layout/display-cutout)
 
-`getState()`は指定した値と実際のバーの表示状態を分けて返す。スワイプ、マルチウインドウ、OS側の制御による差を観測できるようにする。全画面操作の成功を、バーが常に非表示であり続ける保証とはしない。[immersive mode](https://developer.android.com/develop/ui/views/layout/immersive)、[WindowInsetsControllerCompatの仕様とAPIコメント](https://developer.android.com/reference/androidx/core/view/WindowInsetsControllerCompat)
+`getState()`はアプリの要求を`requested`、OSの公開APIが報告する状態を`actual`として分けて返す。`actual`は画面上の表示を直接検出する値ではない。スワイプで一時表示されたバーをOSが非表示と報告する場合があるため、一時表示の検出は保証しない。Insetsをまだ取得できない場合は表示状態を`null`とし、API 29以前ではAndroidXによる近似値を返す。全画面操作の成功を、バーが常に非表示であり続ける保証とはしない。[immersive mode](https://developer.android.com/develop/ui/views/layout/immersive)、[WindowInsetsControllerCompatの仕様とAPIコメント](https://developer.android.com/reference/androidx/core/view/WindowInsetsControllerCompat)
 
 既存の`enterFullscreen()`は上下のバーの非表示を要求し、`exitFullscreen()`は両方の表示を要求する。`toggleFullscreen()`は共有している要求状態を切り替える。個別APIで片方だけを隠した状態は全画面要求とは扱わず、toggleでは両方を隠す。バーの一時表示だけで要求状態を変更しない。これらの操作では`contentLayout`やアイコンの配色を変更しない。
 
 ### InsetsとCSSへの公開
 
-`getInsets()`と`watchInsets()`ではシステムバー、カットアウト、システムジェスチャー、ソフトウェアキーボードの余白を区別する。キーボードの表示で、ノッチを避けるための余白まで変わったように見せない。安全領域の合成では各辺の必要量を求め、バーとカットアウトの値を単純加算しない。[edge-to-edgeとInsets](https://developer.android.com/develop/ui/views/layout/edge-to-edge)
+`getInsets()`と`watchInsets()`ではシステムバー、カットアウト、システムジェスチャー、ソフトウェアキーボード（IME）の余白を区別する。キーボードの表示で、ノッチを避けるための余白まで変わったように見せない。安全領域の合成では各辺の必要量を求め、バーとカットアウトの値を単純加算しない。[edge-to-edgeとInsets](https://developer.android.com/develop/ui/views/layout/edge-to-edge)
 
 Web側に渡す値はCSSピクセルを基本とし、端末の物理ピクセル、画面密度、WebViewのページズームとの換算方法を定義する。回転、ウインドウサイズの変更、キーボード表示、既存のズームAPIに追従する。換算結果は実際のDOMの位置とネイティブ領域を比較して検証する。
 
 必要な余白は`--muon-safe-area-top`などのCSS変数としても公開する。`safe-area`ではネイティブ側ですでに処理した分を再適用させず、Web側に残る余白を示す。生のInsetsと、コンテンツが追加で避ける量を型と名前で区別する。標準の`env(safe-area-inset-*)`をmuonの値と同一と仮定しない。
 
-`watchInsets()`は購読時点の状態と、その後の変更を届ける。解除可能なハンドルを返し、明示的な解除、ページ遷移、リロード、Activityの破棄で購読を解放する。アプリ側に定期的な取得を要求しない。
+`watchInsets()`は購読時点の状態と、その後の変更を届ける。初回の通知は購読ハンドルを返した後に届け、ハンドルの`close()`は通知処理の中でも呼べるようにする。解除可能なハンドルを返し、明示的な解除、ページ遷移、リロード、Activityの破棄で購読を解放する。アプリ側に定期的な取得を要求しない。
 
 ### 起動時設定
 
@@ -370,7 +370,7 @@ LinuxのCEFテストは`npm test`に含まれる。通知サービスを制御�
 
 Android端末は`ANDROID_SERIAL`で指定し、x86_64・16 KiBページとarm64実機の既存の検証を維持する。追加のOS境界試験はその環境に適したinstrumentationの実行を用意する。利用できない端末・権限・依存ツールによって必須ケースを実行できない場合は、未検証として記録し、完了とはしない。
 
-今回の計画書保存は文書のみの変更であり、ビルドや製品テストの対象ではない。保存時には内容の照合、日本語の推敲、相対リンク、Markdownと差分を確認する。
+計画書だけを変更する場合は、内容の照合、日本語の推敲、相対リンク、Markdownと差分を確認する。実装を変更した場合は、その変更に必要なビルドと製品テストも実行する。
 
 ## 全体の完了条件
 
@@ -389,4 +389,43 @@ Android端末は`ANDROID_SERIAL`で指定し、x86_64・16 KiBページとarm64�
 
 Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。共通APIとOS固有拡張、対応機能と投稿可否、共通設定、Windows・Linuxの実装候補、通知の所有期間、クリック起動と配布登録を記載した。実装段階を9段階へ更新し、各段階で観測できる成果物、検証方法、完了条件を追加した。予約通知・FCM・継続実行・逆方向の設定連携、Web標準APIの互換機能は後続対象として残している。
 
-実装段階と全体の完了条件は未達成である。本書の保存を、機能実装や端末検証の完了とは扱わない。
+全体の完了条件は未達成である。本書の保存を、機能実装や端末検証の完了とは扱わない。
+
+## 進捗記録
+
+2026年10月20日時点で、`feature/plan13`の段階1と段階2を完了した。段階3以降の通知権限、設定画面、Android・CEF通知は未実装である。
+
+| 段階 | 状態 | 実装・検証した範囲 |
+| --- | --- | --- |
+| 1 | 完了 | `00bd0c5 feat: add Android system bar plugin APIs`。階層名前空間、simple・validate、許可フィルター、上下別の表示と既存fullscreenの状態共有を実装した。TypeScriptと実機のテストで未実装時の失敗と実装後の成功を確認した。 |
+| 2 | 完了 | 配置方式、Insetsの取得・購読、CSS変数、アイコン配色、初期設定とActivity再生成を実装した。一時表示中の状態取得は、承認されたOS報告値の契約へ変更した。 |
+| 3〜9 | 未着手 | 段階3の公開Android APIと既存コードの接続点を調査した。実装は段階2の完了後に進める。 |
+
+段階2のInsetsは`unit: 'css-px'`を持ち、システムバー、カットアウト、ジェスチャー領域、IMEを分けて返す。`safeArea`はバーとカットアウトの各辺の最大値で、`contentSafeArea`はWeb側で追加する余白である。`safe-area`では`contentSafeArea`と対応するCSS変数を0にし、ネイティブ側の余白を重ねて適用しない。購読は初期状態と変更後の状態を返し、`close()`とページ破棄で解放する。
+
+初期値は`android.systemBars`から生成し、ページの読み込み前に適用する。`browser.initialWindowState`を明示した場合は上下のバーへ接続し、Android側の明示値と矛盾するとビルドを失敗させる。Activityの構成変更では実行中の要求を復元し、新規プロセスでは設定ファイルの初期値を使う。
+
+Pixel 6のAndroid 17 / API 37、arm64、3ボタンナビゲーションで、DOMの位置とCSS値、回転、ズーム、IMEの区別、購読解除、ページ再読み込み、Activity再生成を検証した。Androidのinstrumentationテスト全41件が成功した。renderer側の全72件とPlaywright MCPの操作試験1件も成功した。初回のInsets通知から購読を解除するケースでは、修正前の失敗と修正後の成功を確認した。API 24のエミュレーターでは、WebViewに依存しないWindowテスト2件で初期設定、濃色ナビゲーションアイコンの原子的な拒否、初回Insets待機とキャンセルを確認した。この結果をAPI 24でのWeb全体の検証成功とは扱わない。
+
+Playwright MCPによるWeb操作では、edge-to-edgeの下端InsetsとCSS変数が48 CSS px、DOM上の余白が約47.7 pxとなり、許容差内で一致した。safe-areaで追加の余白が0になることと、購読の開始・停止も確認した。全画面操作、IME開閉、スワイプによるバーの一時表示は録画し、状態を表す画面上のマーカーと、操作部品・キーボード・OSのナビゲーション操作部の実フレームを照合した。
+
+追加した検証入口は次のとおりである。動画の実行前には、テストホストとinstrumentationのAPKをビルドする。
+
+```bash
+ANDROID_SERIAL=<device> npm run test:android-system-bars-e2e --workspace muon-ui
+ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs <output-directory> fullscreen
+ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs <output-directory> ime
+ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs <output-directory> transient
+```
+
+### 一時表示中の状態取得についての合意
+
+Pixel 6 / API 37では、スワイプでバーが物理的に表示されている間も、公開`WindowInsets.isVisible()`の値は非表示だった。動画と実画面のピクセルでは出現と自動消失を確認できたが、`getState().actual`はどちらも`false`だった。要求状態は両バーとも非表示のままであり、既存fullscreenとの状態共有は維持されている。[WindowInsetsの公開API](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int))、[Androidの一時表示処理とコメント](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java)
+
+2026年10月20日に、`actual`を「OSの公開APIが報告する状態」と定義し、一時表示の検出を保証しない契約への変更が承認された。本文と公開型の説明にこの制約を反映した。スワイプによる一時表示と自動消失は、APIの値とは別に動画のフレームで検証する。
+
+### 残る検証とビルド警告
+
+段階9の全体テスト、各OS境界、16 KiB環境、Windows・Linux、配布物の検証は未完了である。バーと配置については、ジェスチャーナビゲーション、マルチウインドウ、API 35・36の境界も残っている。ここまでの実機試験や個別テストを、その代替にはしない。
+
+UIのCJSビルドでは、既存の`__dirname`と`import.meta.url`の分岐に対して`EMPTY_IMPORT_META`警告を確認した。CJSで使われる`__dirname`側の動作はパッケージテストで確認しており、段階9でビルド設定と合わせて警告を解消する。型検証と整形の処理時間に対する`PLUGIN_TIMINGS`の表示も、段階9のビルド確認で扱う。Androidランタイムの今回のビルドでは警告を検出していない。

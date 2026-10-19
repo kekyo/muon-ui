@@ -9,6 +9,7 @@ export type {
   MuonAndroidAbi,
   MuonAndroidPluginOptions,
   MuonAndroidSigningOptions,
+  MuonAndroidSystemBarsOptions,
 } from "./android.js";
 
 import type { Plugin } from "vite";

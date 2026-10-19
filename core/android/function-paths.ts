@@ -50,7 +50,12 @@ export const filesystemFunctionNames = [
 ] as const;
 
 /** Android system bar functions implemented by the runtime. */
-export const systemBarsFunctionNames = ['configure', 'getState'] as const;
+export const systemBarsFunctionNames = [
+  'configure',
+  'getState',
+  'getInsets',
+  'watchInsets',
+] as const;
 
 /** Fully-qualified built-in function paths implemented by the Android backend. */
 export const muonAndroidBuiltinFunctionPaths = [

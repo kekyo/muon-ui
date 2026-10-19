@@ -157,7 +157,7 @@ public final class MuonActivityTest {
                     api.getJSONArray("namespaces").toString());
             assertEquals(8, api.getJSONArray("browser").length());
             assertEquals(22, api.getJSONArray("fs").length());
-            assertEquals("[\"configure\",\"getState\"]", api.getJSONArray("systemBars").toString());
+            assertEquals("[\"configure\",\"getState\",\"getInsets\",\"watchInsets\"]", api.getJSONArray("systemBars").toString());
             assertFalse(api.getBoolean("hasHardReload"));
         }
     }
@@ -270,6 +270,19 @@ public final class MuonActivityTest {
             scenario.onActivity(reference::set);
             MuonActivity activity = reference.get();
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      await muon.android.systemBars.configure({contentLayout:'edge-to-edge'});
+                      globalThis.animationInsets = [];
+                      globalThis.animationWatch = await muon.android.systemBars.watchInsets(snapshot => {
+                        animationInsets.push(snapshot);
+                      });
+                      muonAndroidTest.postMessage('watching');
+                    })();
+                    """, null));
+            assertEquals("watching", activity.awaitTestMessage(30, TimeUnit.SECONDS));
+            long previousRevision = 0;
             String[] commands = {"enterFullscreen", "exitFullscreen", "toggleFullscreen", "toggleFullscreen"};
             for (int step = 0; step < commands.length; step++) {
                 boolean visible = step % 2 == 1;
@@ -320,7 +333,34 @@ public final class MuonActivityTest {
                         current.getWindow().getDecorView().setWindowInsetsAnimationCallback(null);
                     });
                 }
+                activity.clearTestMessages();
+                scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                        void (async () => {
+                          const snapshot = await muon.android.systemBars.getInsets();
+                          const css = getComputedStyle(document.documentElement);
+                          muonAndroidTest.postMessage(JSON.stringify({snapshot,
+                            revisions:animationInsets.map(value => value.revision),
+                            top:parseFloat(css.getPropertyValue('--muon-safe-area-top')),
+                            bottom:parseFloat(css.getPropertyValue('--muon-safe-area-bottom'))}));
+                        })();
+                        """, null));
+                String observed = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+                assertNotNull(observed);
+                JSONObject result = new JSONObject(observed);
+                JSONObject snapshot = result.getJSONObject("snapshot");
+                long currentRevision = snapshot.getLong("revision");
+                assertTrue(currentRevision > previousRevision);
+                JSONArray revisions = result.getJSONArray("revisions");
+                assertTrue(revisions.length() > 0);
+                assertEquals(currentRevision, revisions.getLong(revisions.length() - 1));
+                assertEquals(visible, snapshot.getJSONObject("systemBars").getDouble("top") > 0);
+                assertEquals(visible, snapshot.getJSONObject("systemBars").getDouble("bottom") > 0);
+                assertEquals(snapshot.getJSONObject("safeArea").getDouble("top"), result.getDouble("top"), 0.01);
+                assertEquals(snapshot.getJSONObject("safeArea").getDouble("bottom"), result.getDouble("bottom"), 0.01);
+                previousRevision = currentRevision;
             }
+            scenario.onActivity(current -> current.getWebViewForTest()
+                    .evaluateJavascript("void animationWatch.close();", null));
         }
     }
 

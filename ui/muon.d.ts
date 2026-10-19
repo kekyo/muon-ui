@@ -45,10 +45,18 @@ declare global {
     readonly systemBars: MuonAndroidSystemBarsApi;
   }
 
+  /** Placement of web content relative to system bars and display cutouts. */
+  type MuonAndroidContentLayout = "safe-area" | "edge-to-edge";
+
+  /** Color of the system bar icons, independently of the content background. */
+  type MuonAndroidSystemBarIcons = "light" | "dark";
+
   /** Partial configuration of one Android system bar. */
   interface MuonAndroidSystemBarOptions {
     /** Whether the bar should be visible; omission preserves its request. */
     readonly visible?: boolean;
+    /** Icon color; omission preserves the current appearance. */
+    readonly icons?: MuonAndroidSystemBarIcons;
   }
 
   /** Partial Android system bar configuration. */
@@ -57,38 +65,54 @@ declare global {
     readonly statusBar?: MuonAndroidSystemBarOptions;
     /** Bottom navigation bar configuration. */
     readonly navigationBar?: MuonAndroidSystemBarOptions;
+    /** Placement policy; omission preserves the current layout. */
+    readonly contentLayout?: MuonAndroidContentLayout;
   }
 
-  /** Requested and observed Android system bar visibility. */
+  /** Requested layout and requested and observed Android system bar appearance. */
   interface MuonAndroidSystemBarsState {
     /** Application requests, unaffected by transient system bar reveals. */
     readonly requested: {
+      /** Requested web content placement. */
+      readonly contentLayout: MuonAndroidContentLayout;
       /** Status bar request. */
       readonly statusBar: {
         /** Whether the application requests the bar to remain visible. */
         readonly visible: boolean;
+        /** Requested icon color, or null when inherited from the theme. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
       };
       /** Navigation bar request. */
       readonly navigationBar: {
         /** Whether the application requests the bar to remain visible. */
         readonly visible: boolean;
+        /** Requested icon color, or null when inherited from the theme. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
       };
     };
     /**
-     * Visibility observed through window insets.
-     * @remarks Null means insets are not available yet. On API 29 and earlier,
-     * AndroidX reports an approximation of the platform visibility.
+     * Visibility and icon appearance reported by Android's public window APIs.
+     * @remarks Null means window insets are not available yet. Visibility is an
+     * OS-reported value, not a measurement of rendered screen pixels. Transient
+     * swipe overlays may remain reported as hidden. On API 29 and earlier,
+     * AndroidX approximates visibility from the available inset information.
+     * @see https://developer.android.com/reference/android/view/WindowInsets#isVisible(int)
+     * @see https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java
      */
     readonly actual: {
-      /** Observed status bar visibility. */
+      /** Status bar state reported by Android. */
       readonly statusBar: {
-        /** Whether the bar is visible, or null before insets are available. */
+        /** Whether Android reports the bar as visible; null before insets are available. */
         readonly visible: boolean | null;
+        /** Icon appearance reported by Android, or null before insets are available. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
       };
-      /** Observed navigation bar visibility. */
+      /** Navigation bar state reported by Android. */
       readonly navigationBar: {
-        /** Whether the bar is visible, or null before insets are available. */
+        /** Whether Android reports the bar as visible; null before insets are available. */
         readonly visible: boolean | null;
+        /** Icon appearance reported by Android, or null before insets are available. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
       };
     };
   }
@@ -96,8 +120,8 @@ declare global {
   /** Android system bar operations. */
   interface MuonAndroidSystemBarsApi {
     /**
-     * Update the requested visibility of either system bar.
-     * @param options - Partial configuration; omitted bars retain their request.
+     * Updates bar visibility, icon colors, and web content placement.
+     * @param options - Partial configuration; omitted settings retain their request.
      * @returns Completion of the request, before any OS animation finishes.
      * @remarks Unsupported keys and invalid values are rejected. Hidden bars
      * remain available through the system's transient swipe gesture.
@@ -106,10 +130,77 @@ declare global {
       options: MuonAndroidSystemBarsOptions,
     ) => Promise<void>;
     /**
-     * Read requested and observed visibility without changing the request.
+     * Reads requested layout and bar appearance without changing the request.
      * @returns Current system bar state, including unknown observations.
      */
     readonly getState: () => Promise<MuonAndroidSystemBarsState>;
+    /**
+     * Read the current geometry after the first window insets become available.
+     * @returns Insets in CSS pixels at the current page scale.
+     */
+    readonly getInsets: () => Promise<MuonAndroidSystemBarsInsets>;
+    /**
+     * Subscribe to the initial geometry and subsequent changes without polling.
+     * @param listener - Receives CSS-pixel snapshots serially.
+     * @returns A handle that releases the subscription and cancels its pending wait.
+     * @remarks The first callback runs after the caller receives the handle.
+     * Changes may be coalesced while the listener is running. Listener
+     * errors are logged and do not stop later updates. Transport errors are logged
+     * and close the subscription. Page destruction also releases subscriptions.
+     */
+    readonly watchInsets: (
+      listener: MuonAndroidInsetsListener,
+    ) => Promise<MuonAndroidInsetsWatcher>;
+  }
+
+  /** Insets measured from each edge, in CSS pixels. */
+  interface MuonAndroidInsets {
+    /** Distance from the top edge. */
+    readonly top: number;
+    /** Distance from the right edge. */
+    readonly right: number;
+    /** Distance from the bottom edge. */
+    readonly bottom: number;
+    /** Distance from the left edge. */
+    readonly left: number;
+  }
+
+  /** Native insets and the remaining web content clearance at the current scale. */
+  interface MuonAndroidSystemBarsInsets {
+    /** Monotonic revision within the current WebView host. */
+    readonly revision: number;
+    /** Unit of all edge distances after applying the WebView page scale. */
+    readonly unit: "css-px";
+    /** Current web content placement policy. */
+    readonly contentLayout: MuonAndroidContentLayout;
+    /** Insets occupied by visible system bars. */
+    readonly systemBars: MuonAndroidInsets;
+    /** Insets needed to avoid the display cutout. */
+    readonly displayCutout: MuonAndroidInsets;
+    /** Areas reserved for system navigation gestures. */
+    readonly systemGestures: MuonAndroidInsets;
+    /** Software keyboard insets, independent of the safe area. */
+    readonly ime: MuonAndroidInsets;
+    /** Per-edge maximum of systemBars and displayCutout. */
+    readonly safeArea: MuonAndroidInsets;
+    /** Remaining clearance for web content; zero in safe-area layout. */
+    readonly contentSafeArea: MuonAndroidInsets;
+  }
+
+  /** Receives one insets snapshot, with updates serialized until it settles. */
+  type MuonAndroidInsetsListener = (
+    insets: MuonAndroidSystemBarsInsets,
+  ) => void | Promise<void>;
+
+  /** Owns a page-local Android insets subscription. */
+  interface MuonAndroidInsetsWatcher {
+    /**
+     * Release the subscription without waiting for another geometry change.
+     * @returns Completion of release; repeated calls share the same operation.
+     * @remarks May be awaited from inside a listener. It prevents further listener
+     * calls, but does not wait for a listener that is already executing.
+     */
+    readonly close: () => Promise<void>;
   }
 
   /**

@@ -1499,21 +1499,26 @@ void value;
   it("provides Android system bar types in simple and validate modes", async () => {
     await expect(
       runTypeScriptConsumer(
-        `import { configure, getState } from "muon:android.systemBars";
-await configure({ statusBar: { visible: false } });
+        `import { configure, getState, getInsets, watchInsets } from "muon:android.systemBars";
+await configure({ statusBar: { visible: false, icons: "light" }, contentLayout: "edge-to-edge" });
 await window.muon.android?.systemBars.configure({ navigationBar: { visible: true } });
 const state = await getState();
+const insets = await getInsets();
+const unit: "css-px" = insets.unit;
+const watcher = await watchInsets(async (snapshot) => { const bottom: number = snapshot.contentSafeArea.bottom; void bottom; });
+await watcher.close();
 const requested: boolean = state.requested.statusBar.visible;
 const observed: boolean | null = state.actual.navigationBar.visible;
 // @ts-expect-error Visibility is a boolean request, never a string.
 await configure({ statusBar: { visible: "false" } });
-// @ts-expect-error Unknown Android-only features are not advertised yet.
-await configure({ contentLayout: "edge-to-edge" });
+// @ts-expect-error Unsupported layout modes are rejected.
+await configure({ contentLayout: "fit" });
 // @ts-expect-error Observations must account for insets not being available yet.
 const guaranteed: boolean = state.actual.statusBar.visible;
 void requested;
 void observed;
 void guaranteed;
+void unit;
 `,
         ["muon-ui"],
       ),

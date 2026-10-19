@@ -34,6 +34,13 @@ public final class MuonAppActivity extends Activity {
     }
 
     @Override
+    @Nullable public Object onRetainNonConfigurationInstance() {
+        // Only immutable requested settings survive a configuration change; a fresh
+        // process always starts from the packaged configuration.
+        return host == null ? null : host.retainRequestedState();
+    }
+
+    @Override
     protected void onDestroy() {
         if (host != null) { host.close(isChangingConfigurations()); host = null; }
         super.onDestroy();

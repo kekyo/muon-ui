@@ -39,9 +39,7 @@ const createCapabilityClient = (
     for (const segment of path.split('.').slice(1)) {
       value = Reflect.get(value as object, segment);
     }
-    const call = value as (
-      ...args: readonly unknown[]
-    ) => Promise<unknown>;
+    const call = value as (...args: readonly unknown[]) => Promise<unknown>;
     return await call(...args);
   },
 });

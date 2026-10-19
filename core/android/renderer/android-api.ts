@@ -4,6 +4,11 @@
 // https://github.com/kekyo/muon-ui
 
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
+import {
+  createMuonAndroidSystemBarsApi,
+  type MuonAndroidSystemBarsApi,
+} from './system-bars-api.js';
+export * from './system-bars-api.js';
 
 import {
   browserFunctionNames,
@@ -29,71 +34,6 @@ export interface MuonAndroidCapabilityIds {
 
   /** Capability for Android system bar operations. */
   readonly 'muon.android.systemBars': string;
-}
-
-/** Partial configuration of one Android system bar. */
-export interface MuonAndroidSystemBarOptions {
-  /** Whether the bar should be visible; omission preserves its current request. */
-  readonly visible?: boolean;
-}
-
-/** Partial Android system bar configuration. */
-export interface MuonAndroidSystemBarsOptions {
-  /** Top status bar configuration. */
-  readonly statusBar?: MuonAndroidSystemBarOptions;
-  /** Bottom navigation bar configuration. */
-  readonly navigationBar?: MuonAndroidSystemBarOptions;
-}
-
-/** Requested and observed Android system bar visibility. */
-export interface MuonAndroidSystemBarsState {
-  /** Application requests, unaffected by transient system bar reveals. */
-  readonly requested: {
-    /** Status bar request. */
-    readonly statusBar: {
-      /** Whether the application requests the bar to remain visible. */
-      readonly visible: boolean;
-    };
-    /** Navigation bar request. */
-    readonly navigationBar: {
-      /** Whether the application requests the bar to remain visible. */
-      readonly visible: boolean;
-    };
-  };
-  /**
-   * Visibility observed through window insets.
-   * @remarks Null means insets are not available yet. On API 29 and earlier,
-   * AndroidX reports an approximation of the platform visibility.
-   */
-  readonly actual: {
-    /** Observed status bar visibility. */
-    readonly statusBar: {
-      /** Whether the bar is visible, or null before insets are available. */
-      readonly visible: boolean | null;
-    };
-    /** Observed navigation bar visibility. */
-    readonly navigationBar: {
-      /** Whether the bar is visible, or null before insets are available. */
-      readonly visible: boolean | null;
-    };
-  };
-}
-
-/** Android system bar operations. */
-export interface MuonAndroidSystemBarsApi {
-  /**
-   * Updates the requested visibility of either system bar.
-   * @param options - Partial configuration; omitted bars retain their request.
-   * @returns Completion of the request, before any OS animation finishes.
-   * @remarks Unsupported keys and invalid values are rejected. Hidden bars
-   * remain available through the system's transient swipe gesture.
-   */
-  readonly configure: (options: MuonAndroidSystemBarsOptions) => Promise<void>;
-  /**
-   * Reads requested and observed visibility without changing the request.
-   * @returns Current system bar state, including unknown observations.
-   */
-  readonly getState: () => Promise<MuonAndroidSystemBarsState>;
 }
 
 /** Android browser functions available in simple mode. */
@@ -465,33 +405,6 @@ const parseNativeJson = async <T>(source: Promise<unknown>): Promise<T> => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const normalizeSystemBarsOptions = (
-  options: MuonAndroidSystemBarsOptions
-): MuonAndroidSystemBarsOptions => {
-  if (!isRecord(options)) {
-    throw new TypeError('System bar options must be an object');
-  }
-  const result: Record<string, { visible?: boolean }> = {};
-  for (const [name, bar] of Object.entries(options)) {
-    if (name !== 'statusBar' && name !== 'navigationBar') {
-      throw new TypeError(`Unsupported system bar option: ${name}`);
-    }
-    if (!isRecord(bar)) {
-      throw new TypeError(`${name} must be an object`);
-    }
-    for (const [key, value] of Object.entries(bar)) {
-      if (key !== 'visible') {
-        throw new TypeError(`Unsupported ${name} option: ${key}`);
-      }
-      if (typeof value !== 'boolean') {
-        throw new TypeError(`${name}.visible must be a boolean`);
-      }
-    }
-    result[name] = bar.visible === undefined ? {} : { visible: bar.visible as boolean };
-  }
-  return result;
-};
 
 const validatePath = (value: string, name = 'path'): string => {
   if (typeof value !== 'string' || value.length === 0) {
@@ -1185,20 +1098,9 @@ export const createMuonAndroidSimpleApi = (
     }),
     fs: createMuonAndroidFsApi(client, capabilityIds['muon.fs']),
     android: Object.freeze({
-      systemBars: Object.freeze({
-        configure: async (options: MuonAndroidSystemBarsOptions): Promise<void> => {
-          await client.call(
-            capabilityIds['muon.android.systemBars'],
-            'muon.android.systemBars.configure',
-            [JSON.stringify(normalizeSystemBarsOptions(options))]
-          );
-        },
-        getState: async (): Promise<MuonAndroidSystemBarsState> =>
-          await parseNativeJson<MuonAndroidSystemBarsState>(client.call(
-            capabilityIds['muon.android.systemBars'],
-            'muon.android.systemBars.getState',
-            []
-          )),
-      }),
+      systemBars: createMuonAndroidSystemBarsApi(
+        client,
+        capabilityIds['muon.android.systemBars']
+      ),
     }),
   });

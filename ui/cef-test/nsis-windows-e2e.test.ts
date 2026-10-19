@@ -13,13 +13,17 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { saveDiagnostics, type RemoteAgent } from "agent-rover";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createConnection } from "@playwright/mcp";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { discoverWindowsTestNetwork } from "../../core/cef-test/plugin-e2e/windows-network.js";
 
 import type { MuonDesktopTarget as MuonBuildTarget } from "../common/targets.js";
 import {
@@ -953,14 +957,26 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
         windowsE2eEnvironment,
         packageName,
       );
-      const packageDirectory = await createFakeMuonPackageDist(localRoot, [
-        target,
-      ]);
+      const packageDirectory = resolve("dist");
       await writeViteProject(
         localRoot,
         packageDirectory,
         [target],
         packageName,
+      );
+      const cdpPort = 19421;
+      await writeFile(
+        join(localRoot, "muon.json"),
+        JSON.stringify({
+          network: { allow: ["asset://main/**"] },
+          plugin: {
+            mode: "simple",
+            pages: ["asset://main/**"],
+            plugins: [{ name: "internal", allow: ["muon.**"] }],
+          },
+          browser: { titleBarType: "native" },
+          cdp: { enable: true, port: cdpPort },
+        }),
       );
       await execFileAsync(
         "make",
@@ -1100,13 +1116,14 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
           windowsAgent,
           remoteRoot,
           "registered",
-          `[pscustomobject]@{ Installed=(Get-ItemProperty -LiteralPath ${quotePowerShellString(registry)}).InstallLocation; Shortcut=(${shortcutScript}) } | ConvertTo-Json -Compress`,
+          `[pscustomobject]@{ Installed=(Get-ItemProperty -LiteralPath ${quotePowerShellString(registry)}).InstallLocation; Shortcut=(${shortcutScript}); State=(Join-Path $env:LOCALAPPDATA ${quotePowerShellString(identity.runtimeAppId)}) } | ConvertTo-Json -Compress`,
           30000,
         );
         expectWindowsCommandSucceeded(registered, "installed shortcut");
         const installed = JSON.parse(registered.stdout) as {
           Installed: string;
           Shortcut: string;
+          State: string;
         };
         expect(installed.Installed).toBe(shortDirectory);
         const launcher = joinWindowsPath(shortDirectory, `${packageName}.exe`);
@@ -1122,6 +1139,170 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
           ),
           "Unicode shortcut target",
         );
+        expect(await windowsAgent.files.exists(installed.State)).toBe(false);
+        // Seed the real CEF archive obtained when building this target. The
+        // launcher must still verify, extract and prepare a fresh runtime.
+        const cmakeCache = await readFile(
+          resolve(`../core/cef/.build/dist/${target}/release/CMakeCache.txt`),
+          "utf8",
+        );
+        const archiveName = /^MUON_CEF_PACKAGE:STRING=(.+)$/m
+          .exec(cmakeCache)?.[1]
+          ?.trim();
+        if (!archiveName)
+          throw new Error("Build the Windows distribution before NSIS e2e.");
+        const localCache =
+          process.env.MUON_CACHE_DIR ??
+          (process.env.XDG_CACHE_HOME
+            ? join(process.env.XDG_CACHE_HOME, "muon")
+            : join(homedir(), ".cache", "muon"));
+        const remoteCache = joinWindowsPath(remoteRoot, "cache");
+        await writeRemoteFile(
+          windowsAgent,
+          joinWindowsPath(remoteCache, "artifacts", "cef", archiveName),
+          await readFile(join(localCache, "artifacts", "cef", archiveName)),
+        );
+        await execFileAsync(process.execPath, ["build-windows-cdp-relay.mjs"], {
+          cwd: resolve("../core/cef-test"),
+        });
+        const relayPath = joinWindowsPath(remoteRoot, "relay.exe");
+        await copyLocalFileToRemote(
+          windowsAgent,
+          resolve(
+            `../core/cef-test/.run/windows-cdp-relay/${target}/muon-cdp-relay.exe`,
+          ),
+          relayPath,
+        );
+        const network = await discoverWindowsTestNetwork(windowsAgent);
+        const relay = await windowsAgent.processes.launchManaged({
+          path: relayPath,
+          arguments: ["0", String(cdpPort)],
+          captureStdout: true,
+          captureStderr: true,
+          createNoWindow: true,
+        });
+        let launched:
+          | Awaited<ReturnType<typeof windowsAgent.processes.launchManaged>>
+          | undefined;
+        try {
+          const port = await vi.waitUntil(
+            async () => {
+              const match = /^MUON_CDP_RELAY_PORT=(\d+)$/m.exec(
+                await relay.stdoutText(),
+              );
+              return match ? Number(match[1]) : false;
+            },
+            { timeout: 30000, interval: 100 },
+          );
+          const script = `$ErrorActionPreference = 'Stop'; $app = Start-Process -FilePath ${quotePowerShellString(installed.Shortcut)} -Wait -PassThru; exit $app.ExitCode`;
+          launched = await windowsAgent.processes.launchManaged({
+            path: windowsPowerShellPath,
+            arguments: [
+              "-NoProfile",
+              "-EncodedCommand",
+              Buffer.from(script, "utf16le").toString("base64"),
+            ],
+            workingDirectory: remoteRoot,
+            environment: { MUON_CACHE_DIR: remoteCache },
+            captureStdout: true,
+            captureStderr: true,
+          });
+          const endpoint = `http://${network.cdpHost}:${port}`;
+          await vi.waitUntil(
+            async () => {
+              if (!(await launched!.rootSnapshot()).running)
+                throw new Error(
+                  `Shortcut launch failed: ${await launched!.stderrText()}`,
+                );
+              try {
+                const response = await fetch(endpoint + "/json/list", {
+                  signal: AbortSignal.timeout(1000),
+                });
+                const pages = (await response.json()) as { title: string }[];
+                return pages.some((page) => page.title === "nsis e2e");
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 120000, interval: 250 },
+          );
+          const server = await createConnection({
+            browser: { cdpEndpoint: endpoint },
+          });
+          const client = new Client({
+            name: "muon-nsis-runtime",
+            version: "1.0.0",
+          });
+          try {
+            const [a, b] = InMemoryTransport.createLinkedPair();
+            await server.connect(b);
+            await client.connect(a);
+            const dataPath = joinWindowsPath(
+              directoryOfLength(300),
+              "配布😀.txt",
+            );
+            const result = await client.callTool({
+              name: "browser_evaluate",
+              arguments: {
+                function: `async () => {
+                await muon.fs.mkdir(${JSON.stringify(win32.dirname(dataPath))}, {recursive: true});
+                await muon.fs.writeFile(${JSON.stringify(dataPath)}, new TextEncoder().encode('日本語😀'));
+                return { body: document.body.textContent.trim(),
+                  target: (await muon.environments.getRuntimeInfo()).target,
+                  pid: await muon.environments.getProcessId(),
+                  data: new TextDecoder().decode(await muon.fs.readFile(${JSON.stringify(dataPath)})) };
+              }`,
+              },
+            });
+            const output = (result.content as { type: string; text: string }[])
+              .filter((item) => item.type === "text")
+              .map((item) => item.text)
+              .join("\n");
+            expect(result.isError, output).not.toBe(true);
+            const match = /### Result\n([\s\S]*?)(?:\n###|$)/u.exec(output);
+            expect(match, output).not.toBeNull();
+            const value = JSON.parse(match![1]!) as {
+              body: string;
+              target: string;
+              pid: number;
+              data: string;
+            };
+            expect(value).toMatchObject({
+              body: "nsis e2e",
+              target,
+              data: "日本語😀",
+            });
+            const processPath = await runWindowsPowerShell(
+              windowsAgent,
+              remoteRoot,
+              "runtime-process",
+              `(Get-Process -Id ${value.pid}).Path | ConvertTo-Json -Compress`,
+              30000,
+            );
+            expectWindowsCommandSucceeded(
+              processPath,
+              "prepared runtime process",
+            );
+            expect(JSON.parse(processPath.stdout)).toBe(
+              joinWindowsPath(installed.State, "runtime", "muon-core.exe"),
+            );
+            await client.callTool({
+              name: "browser_tabs",
+              arguments: { action: "close" },
+            });
+          } finally {
+            await client.close();
+            await server.close();
+          }
+          const exited = await launched.waitForExit({
+            timeoutMs: 30000,
+            intervalMs: 100,
+          });
+          expect(exited.root.exitCode, await launched.stderrText()).toBe(0);
+        } finally {
+          await launched?.releaseAsync();
+          await relay.releaseAsync();
+        }
         expectWindowsCommandSucceeded(
           await runWindowsProcess(
             windowsAgent,
@@ -1138,6 +1319,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
             timeout: 30000,
           })
           .toBe(false);
+        expect(await windowsAgent.files.exists(installed.State)).toBe(false);
         const removed = await runWindowsPowerShell(
           windowsAgent,
           remoteRoot,
@@ -1166,7 +1348,7 @@ describeWindowsNsis(suiteName, { concurrent: false }, () => {
           windowsAgent,
           remoteRoot,
           "cleanup-registration",
-          `Remove-Item -LiteralPath ${quotePowerShellString(registry)} -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath (${shortcutScript}) -Force -ErrorAction SilentlyContinue`,
+          `Remove-Item -LiteralPath ${quotePowerShellString(registry)} -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath (${shortcutScript}) -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA ${quotePowerShellString(identity.runtimeAppId)}) -Recurse -Force -ErrorAction SilentlyContinue`,
           30000,
         );
         expectWindowsCommandSucceeded(

@@ -45,7 +45,7 @@ UNCは`\\server\share\...`で表すネットワーク共有へのパスである
 | --- | --- |
 | OS設定が無効または有効で、通常表記の長いローカル絶対パス | muonが管理するファイル操作とbuilderの準備処理の基本的な対応対象とする。対応APIの入口で拡張長パスへ変換する。 |
 | 通常の相対パスを解決した結果が長くなる | 元の基準ディレクトリで一度だけ絶対化し、その結果をI/Oへ渡す。長い作業ディレクトリからのプロセス起動とは分けて検証する。 |
-| 通常表記のUNCパス | ファイル操作の対象に含め、利用できる共有先で検証する。共有先の権限やファイルシステム固有の制約は別に扱う。 |
+| 通常表記のUNCパス | ファイル操作の対象に含める。今回の試験ではネットワーク環境の準備が必要なI/Oを除外し、文字列変換を検証する。共有先の権限やファイルシステム固有の制約は別に扱う。 |
 | 呼出し元が明示した拡張長パス | 対応するファイルAPIへ渡す際に接頭辞を破損させない。DLL、シェル、URIなどへ一律に流用しない。 |
 | シンボリックリンクに保存する相対ターゲット | 相対のまま保つ。リンクの作成場所・読取り対象のパスと、リンク内部へ保存する文字列を区別する。 |
 | CEF設定、シェル、子プロセスの引数、URI | ファイルI/O用の拡張長パスへ一律に変換しない。受渡し先ごとの公開仕様と実機結果で判断する。 |
@@ -368,7 +368,30 @@ NSISでは通常のインストール、ショートカットからの起動、�
 | コピー・更新・復元 | 長い入力と出力の両方を通す。出力側の失敗でも旧runtime、元ファイル、署名検査の結果を維持する。 |
 | エラーと上限 | NUL以降を切り捨てて成功しない。無効入力やOS上限超過で別名のファイルを作らない。割当ての解放と元のエラーが保たれる。 |
 
-UNCは共有名を含めた長さで確認する。変換関数のUNC試験と共有先への実際のI/O試験を区別し、共有先がない状態で後者を完了扱いにしない。ローカル絶対パスでの必須実装は先に進められるが、UNC対応を文書へ記載するには実際の共有先での成功が必要である。
+UNCは共有名を含めた文字列長とルートの変換を確認する。共有先への実際のI/Oは、以下の追加指示に従い、ネットワーク環境の準備が必要なものを今回の対象から除く。文字列変換の成功と共有先へのI/Oの成功を区別して記録する。
+
+### .NET BCLに対応するローカル試験
+
+.NET 10.0.0のBCL（基本クラスライブラリ）のテストを調査し、以下の振る舞いをmuonへ移す。参照するタグを固定し、元のテスト名とmuon側の検証内容を対応づける。C#の例外型や.NET専用のAPIを再現するのではなく、muonの公開APIで操作結果・内容・対象の同一性を確認する。
+
+| .NETの試験と出典 | muonで確認する振る舞い |
+| --- | --- |
+| [IOInputs.GetPathsLongerThanMaxPath / GetPathsLongerThanMaxDirectory](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/PortedCommon/IOInputs.cs) | 終端NULを除くUTF-16長でファイル260・261・262、ディレクトリ248・249・250を生成する。既存の259・247と300・1024超・4096超も残す。 |
+| [Directory_CreateDirectory.DirectoryLongerThanMaxPath_Succeeds / ExtendedDirectoryLongerThanLegacyMaxPath_Succeeds](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/Directory/CreateDirectory.cs) | 通常入力と明示的な拡張長入力から階層を作成し、存在と内容を確認する。末尾区切り、既存ディレクトリ、途中にファイルがある失敗も含める。 |
+| [File_Create.ValidCreation_LongPathExtendedSyntax / CreateInParentDirectory](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/File/Create.cs) | 500文字の拡張長ディレクトリ内のファイル作成と読書き、存在しない要素を含む `missing/../file` の解決を確認する。 |
+| [Directory_GetFiles.EnumerateFilesOverLegacyMaxPath / EnumerateFilesDirectoryOverLegacyMaxPath](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/Directory/GetFiles.cs) | 親が250文字で子を含めると260前後になる場合と、親自体が270文字の場合に、7〜12文字の異なる6個の名前を列挙し、各ファイルの内容を照合する。 |
+| [File_Move.OverMaxPathWorks_Windows](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/File/Move.cs) | 短いファイルを260・261・262文字の移動先へ改名し、元の場所へ戻す。移動元の消失と内容の保持を往復で確認する。 |
+| [File_Copy.ShortenLongPath](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/File/Copy.cs) | 多数の `/.` を含む長い入力がコピー元自身に解決される場合、コピーを拒否して元の内容を保持する。正常なコピーでは入力と出力の両方を長くする。 |
+| [PathTests.GetFullPath_NormalizedLongPathTooLong / GetFullPath_PathTooLong](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.Runtime.Extensions.Tests/System/IO/PathTests_Windows.cs) | 正規化後も260を超える入力、正規化で短くなる入力、絶対化により長くなる入力を分ける。32767・32768文字の拒否は試験プロセス内で生成し、プロセス起動の引数上限と混同しない。 |
+| [Directory_CreateDirectory.DirectoryWithComponentLongerThanMaxComponentAsPath_ThrowsException](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/Directory/CreateDirectory.cs) | 全体長と要素長を区別し、255文字の名前を扱えても256文字の要素は拒否すること、失敗時に短く切った別名を作成・更新しないことを確認する。 |
+| [Directory_Delete.LongPathExtendedDirectory / RecursiveDeletingDoesntFollowLinks](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/Directory/Delete.cs) | 長い階層を削除し、再解析ポイントの先にあるツリー外のディレクトリと内容を残す。リンク作成権限の制約は長いパスの成否と分ける。 |
+| [EnumerableTests.EnumerateDirectories_TrailingDot](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/Directory/EnumerableTests.cs) | 通常名と末尾ピリオド・空白を持つ名前を同時に用意し、列挙後のコピー・削除で同名に正規化しない。muonではファイルにも同じ確認を加える。 |
+| [PathInternalTests_Windows.EnsureExtendedPrefixTest / IsExtendedTest / GetRootLength_Data](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Common/tests/Tests/System/IO/PathInternal.Windows.Tests.cs) | 二重の接頭辞、区切り、ドライブルート、UNCルート、予約名を共通変換の契約に照らして確認する。muonで対象外としたデバイス名前空間は、.NETの許容範囲へ広げない。 |
+
+共通変換の試験は段階1のドライバー、builderの試験は段階2、製品のファイルAPIの試験は段階4へ追加する。builderのドライバーだけで公開APIの確認を済ませず、製品E2Eでも対応する操作を実行する。各段階で不足する動作のREDを確認してから修正し、両CPU対象の実機でGREENを確認する。
+
+利用者の追加指示により、共有フォルダーの作成、共有先の権限設定、ネットワーク接続などの環境準備が必要な試験は今回の対象から除く。UNCの文字列変換はネットワークI/Oなしで確認する。除外した共有先へのI/Oを成功扱いにはせず、製品ドキュメントで実機確認済みの範囲を超えて説明しない。
+
 
 ### 機能ごとの確認
 

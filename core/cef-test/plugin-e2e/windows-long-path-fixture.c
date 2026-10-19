@@ -1,0 +1,84 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon-ui
+
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
+
+// Keep fixture preparation independent of Muon and the machine's long-path
+// policy. Only the driver uses extended paths; API tests use ordinary paths.
+static int report_error(const char *operation, DWORD error) {
+  fprintf(stderr, "%s failed: Windows error %lu\n", operation, error);
+  return 1;
+}
+
+static wchar_t *join_path(const wchar_t *parent, const wchar_t *name) {
+  size_t length = wcslen(parent) + wcslen(name) + 2;
+  wchar_t *path = malloc(length * sizeof(wchar_t));
+  if (path != NULL) swprintf(path, length, L"%ls\\%ls", parent, name);
+  return path;
+}
+
+static int create_directory(wchar_t *path) {
+  // The caller supplies a local extended absolute path, including its drive.
+  for (size_t index = 7; ; ++index) {
+    wchar_t separator = path[index];
+    if (separator != L'\\' && separator != L'\0') continue;
+    path[index] = L'\0';
+    BOOL created = CreateDirectoryW(path, NULL);
+    DWORD error = created ? ERROR_SUCCESS : GetLastError();
+    path[index] = separator;
+    if (!created && error != ERROR_ALREADY_EXISTS) {
+      return report_error("CreateDirectoryW", error);
+    }
+    if (separator == L'\0') return 0;
+  }
+}
+
+static int remove_tree(const wchar_t *path) {
+  DWORD attributes = GetFileAttributesW(path);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    DWORD error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+        ? 0 : report_error("GetFileAttributesW", error);
+  }
+  if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    return DeleteFileW(path) ? 0 : report_error("DeleteFileW", GetLastError());
+  }
+  if (!(attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    wchar_t *pattern = join_path(path, L"*");
+    if (pattern == NULL) return 1;
+    WIN32_FIND_DATAW entry;
+    HANDLE search = FindFirstFileW(pattern, &entry);
+    DWORD error = search == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    free(pattern);
+    if (search == INVALID_HANDLE_VALUE) return report_error("FindFirstFileW", error);
+    int result = 0;
+    do {
+      if (!wcscmp(entry.cFileName, L".") || !wcscmp(entry.cFileName, L"..")) continue;
+      wchar_t *child = join_path(path, entry.cFileName);
+      result = child == NULL ? 1 : remove_tree(child);
+      free(child);
+      if (result != 0) break;
+    } while (FindNextFileW(search, &entry));
+    error = GetLastError();
+    FindClose(search);
+    if (result != 0) return result;
+    if (error != ERROR_NO_MORE_FILES) return report_error("FindNextFileW", error);
+  }
+  return RemoveDirectoryW(path) ? 0 : report_error("RemoveDirectoryW", GetLastError());
+}
+
+int wmain(int argc, wchar_t **argv) {
+  if (argc != 3 || wcslen(argv[2]) < 8 ||
+      wcsncmp(argv[2], L"\\\\?\\", 4) || argv[2][5] != L':' || argv[2][6] != L'\\') {
+    fprintf(stderr, "Usage: fixture.exe mkdir|remove \\\\?\\C:\\test-path\n");
+    return 2;
+  }
+  if (!wcscmp(argv[1], L"mkdir")) return create_directory(argv[2]);
+  if (!wcscmp(argv[1], L"remove")) return remove_tree(argv[2]);
+  return 2;
+}

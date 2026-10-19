@@ -100,6 +100,8 @@ describe('Android insets subscriptions', () => {
         'muon.environments': 'environments',
         'muon.fs': 'fs',
         'muon.android.systemBars': 'bars',
+        'muon.android.settings': 'settings-capability',
+        'muon.android.notifications': 'android-notifications-capability',
       }
     );
     const watch = api.android.systemBars.watchInsets;
@@ -156,6 +158,8 @@ describe('Android insets subscriptions', () => {
         'muon.environments': 'environments',
         'muon.fs': 'fs',
         'muon.android.systemBars': 'bars',
+        'muon.android.settings': 'settings-capability',
+        'muon.android.notifications': 'android-notifications-capability',
       }
     );
     const watch = api.android.systemBars.watchInsets;

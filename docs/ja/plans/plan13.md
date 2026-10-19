@@ -114,7 +114,7 @@ await cancel("export-completed");
 
 Android 16以降を対象とするアプリは、Android 16上でedge-to-edgeの強制を無効化できない。`safe-area`はコンテンツを安全領域へ配置するmuonの方針として実現する。ウインドウがカットアウト領域へ広がらないことを保証するAPIにはしない。[Android 16の変更](https://developer.android.com/about/versions/16/behavior-changes-16)、[カットアウトの扱い](https://developer.android.com/develop/ui/views/layout/display-cutout)
 
-`getState()`はアプリの要求を`requested`、OSの公開APIが報告する状態を`actual`として分けて返す。`actual`は画面上の表示を直接検出する値ではない。スワイプで一時表示されたバーをOSが非表示と報告する場合があるため、一時表示の検出は保証しない。Insetsをまだ取得できない場合は表示状態を`null`とし、API 29以前ではAndroidXによる近似値を返す。全画面操作の成功を、バーが常に非表示であり続ける保証とはしない。[immersive mode](https://developer.android.com/develop/ui/views/layout/immersive)、[WindowInsetsControllerCompatの仕様とAPIコメント](https://developer.android.com/reference/androidx/core/view/WindowInsetsControllerCompat)
+`getState()`はアプリの要求を`requested`、OSの公開APIが報告する状態を`actual`として分けて返す。`actual`は画面上の表示を直接検出する値ではない。スワイプで一時表示されたバーをOSが非表示と報告する場合があるため、一時表示の検出は保証しない。Insetsをまだ取得できない場合は表示状態を`null`とし、API 29以前ではAndroidXによる近似値を返す。全画面操作の成功を、バーが常に非表示であり続ける保証とはしない。[immersive mode](https://developer.android.com/develop/ui/views/layout/immersive)、[WindowInsetsControllerCompatの仕様とAPIコメント](https://developer.android.com/reference/androidx/core/view/WindowInsetsControllerCompat)、[WindowInsetsCompatの可視状態と近似値](https://developer.android.com/reference/androidx/core/view/WindowInsetsCompat#isVisible(int))
 
 既存の`enterFullscreen()`は上下のバーの非表示を要求し、`exitFullscreen()`は両方の表示を要求する。`toggleFullscreen()`は共有している要求状態を切り替える。個別APIで片方だけを隠した状態は全画面要求とは扱わず、toggleでは両方を隠す。バーの一時表示だけで要求状態を変更しない。これらの操作では`contentLayout`やアイコンの配色を変更しない。
 
@@ -180,6 +180,18 @@ API 24・25でも共通のローカル通知は提供する。OSチャンネル�
 
 `getPermissionState()`では、OSの許可状態、ダイアログ要求の実施履歴、設定画面への案内が必要な状態を混同しない。ダイアログを閉じただけの場合も扱い、OSが確定できない状態を恒久拒否と断定しない。API 33未満にはこの権限ダイアログがないため、その事実とアプリ全体の通知可否を分けて返す。
 
+権限状態は次の値として返す。取得のたびにOSの状態を読み、設定画面からの復帰後や新規プロセスで古い値を再利用しない。
+
+| フィールド | 意味 |
+| --- | --- |
+| `runtimePermission` | `not-required`、`granted`、`denied`。`denied`には未要求も含む。 |
+| `notificationsEnabled` | OSが現在、自アプリの通知を許可しているか。 |
+| `requestedBefore` | muonがOSの権限要求APIを呼んだ履歴。ダイアログが表示された証拠とはしない。 |
+| `shouldShowRationale` | 権限要求の前に説明を示すべきか、OSが返す推奨値。 |
+| `settingsSuggested` | 設定画面への案内が役立つと考えられる状態。恒久拒否の判定ではない。 |
+
+`settingsSuggested`は、通知が無効で、実行時権限が不要・許可済み、または要求履歴がありOSの説明推奨値がfalseの場合にtrueとする。`requestPermission()`は前面のActivityから明示的に呼び、結果として`{ state, result }`を返す。`result`は`granted`、`not-granted`、`interrupted`、`not-required`のいずれかである。`interrupted`はOSの結果が空だった場合を表し、`not-granted`から拒否や閉じる操作の理由を完全には識別しない。要求は同時に一つとし、Activityやページの破棄時には呼び出しを解放する。
+
 共通設定の`notifications.enabled`が有効な場合に、`android.notifications.channels`と`android.notifications.smallIcon`から必要なManifest宣言と通知用リソースを生成する。既存の`android.permissions`と権限宣言を重複させず、通知を使わないアプリへ新たな実行時権限を要求しない。`notifications.defaultCategory`がある場合は、静的チャンネルの参照先としてビルド時に検証する。動的登録した分類は、`ensureChannel()`が完了した後の`post()`へ明示して使う。
 
 通知用アイコンはランチャーアイコンと分けて指定し、Androidの小アイコンに適したリソースへ変換・検証する。チャンネル名、説明、重要度、既定分類の参照先、アイコンの欠落をビルドで診断する。リソース生成でテキスト処理が必要な場合は既存方針どおり`funcity`を使う。[通知の作成とアイコン](https://developer.android.com/develop/ui/views/notifications/build-notification)
@@ -240,7 +252,9 @@ CEFの既存プロセスへの引数配送には、`root_cache_path`に対応す
 
 `isAvailable()`は、その端末で対象画面への遷移が可能かを返す。`open()`も実際の起動時に失敗を扱う。専用画面が存在しない場合は非対応を返し、呼び出し側が明示的に許可した場合だけアプリ情報画面へ切り替える。その結果には要求した画面と実際の遷移先を含める。[Settingsの公開アクションとAPIコメント](https://developer.android.com/reference/android/provider/Settings)
 
-`open()`の完了は、画面を開く要求が受理されたことを意味する。ユーザーが設定を変更したかどうかの結果にはしない。Activityが復帰したら権限・通知・バーの実効状態を再取得し、その後の状態取得へ反映する。Web側でも復帰後の取得で更新された表示を確認できるようにする。設定画面を開いている間にプロセスが終了した場合は、新しい起動時に再取得する。
+段階3の`target`は`app-details`と`notifications`である。`open(target, { fallback: 'app-details' })`と明示した場合だけ、非対応の通知設定画面をアプリ情報画面へ切り替える。結果は`{ requestedTarget, target, fallbackUsed }`で返す。`isAvailable(target)`はfallbackを適用せず、その画面自体の利用可否を返す。API 24・25には公開された通知専用画面のアクションがないため、`notifications`を非対応として返す。指定チャンネルの設定画面は段階4で追加する。
+
+`open()`は前面のActivityから呼ぶ。バックグラウンドのActivityでは要求を拒否し、OSによる起動制限を成功として扱わない。`open()`の完了は、画面を開く要求が受理されたことを意味する。ユーザーが設定を変更したかどうかの結果にはしない。Activityが復帰したら権限・通知・バーの実効状態を再取得し、その後の状態取得へ反映する。Web側でも復帰後の取得で更新された表示を確認できるようにする。設定画面を開いている間にプロセスが終了した場合は、新しい起動時に再取得する。
 
 OSの通知設定から自アプリの設定画面を開く逆方向の連携は、後続候補として残す。Androidには通知設定用Activityを示すカテゴリがある。採用時は通知タップの起動情報とは別の起動理由として扱い、対象チャンネルをWeb側の設定画面へ渡す。[通知設定用Activityのカテゴリ](https://developer.android.com/reference/android/app/Notification#INTENT_CATEGORY_NOTIFICATION_PREFERENCES)
 
@@ -393,13 +407,14 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 
 ## 進捗記録
 
-2026年10月20日時点で、`feature/plan13`の段階1と段階2を完了した。段階3以降の通知権限、設定画面、Android・CEF通知は未実装である。
+2026年10月20日時点で、`feature/plan13`の段階1〜3を完了した。共通通知、Androidのチャンネル・通知操作、CEFの通知は段階4以降で実装する。
 
 | 段階 | 状態 | 実装・検証した範囲 |
 | --- | --- | --- |
 | 1 | 完了 | `00bd0c5 feat: add Android system bar plugin APIs`。階層名前空間、simple・validate、許可フィルター、上下別の表示と既存fullscreenの状態共有を実装した。TypeScriptと実機のテストで未実装時の失敗と実装後の成功を確認した。 |
 | 2 | 完了 | 配置方式、Insetsの取得・購読、CSS変数、アイコン配色、初期設定とActivity再生成を実装した。一時表示中の状態取得は、承認されたOS報告値の契約へ変更した。 |
-| 3〜9 | 未着手 | 段階3の公開Android APIと既存コードの接続点を調査した。実装は段階2の完了後に進める。 |
+| 3 | 完了 | 自アプリの設定画面、通知設定画面、通知権限の状態取得と明示的な要求を実装した。無効ビルドでは通知専用APIを公開せず、設定から復帰したときに現在の状態を再取得できる。 |
+| 4〜9 | 未着手 | 共通通知、チャンネル、イベント、CEFのOS通知、配布物と全体検証を順に進める。 |
 
 段階2のInsetsは`unit: 'css-px'`を持ち、システムバー、カットアウト、ジェスチャー領域、IMEを分けて返す。`safeArea`はバーとカットアウトの各辺の最大値で、`contentSafeArea`はWeb側で追加する余白である。`safe-area`では`contentSafeArea`と対応するCSS変数を0にし、ネイティブ側の余白を重ねて適用しない。購読は初期状態と変更後の状態を返し、`close()`とページ破棄で解放する。
 
@@ -423,6 +438,24 @@ ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs
 Pixel 6 / API 37では、スワイプでバーが物理的に表示されている間も、公開`WindowInsets.isVisible()`の値は非表示だった。動画と実画面のピクセルでは出現と自動消失を確認できたが、`getState().actual`はどちらも`false`だった。要求状態は両バーとも非表示のままであり、既存fullscreenとの状態共有は維持されている。[WindowInsetsの公開API](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int))、[Androidの一時表示処理とコメント](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java)
 
 2026年10月20日に、`actual`を「OSの公開APIが報告する状態」と定義し、一時表示の検出を保証しない契約への変更が承認された。本文と公開型の説明にこの制約を反映した。スワイプによる一時表示と自動消失は、APIの値とは別に動画のフレームで検証する。
+
+### 段階3の実装と検証
+
+設定画面は自アプリの情報と通知設定を対象とし、専用画面がない場合のアプリ情報への移動は明示的な指定があるときだけ許可する。前面にいないActivityからの設定画面起動と権限要求は失敗させる。通知を有効にしたビルドだけに通知権限APIを公開し、Manifestの権限宣言を生成する。起動時や状態取得時には権限を要求しない。
+
+Pixel 6 / API 37で、実際の権限ダイアログを閉じる操作、拒否、再要求、許可を試験した。閉じた場合と拒否した場合の結果はどちらも`not-granted`で、理由の完全な識別や恒久拒否の判定は行わない。ページ破棄とActivity破棄で呼び出しを解放し、古いOS応答を新しいページへ渡さないことも確認した。API 24のWindowテスト3件では、通知専用設定画面が非対応であること、明示的なアプリ情報への代替、権限要求が不要であること、前面条件を確認した。この試験はWebView全体の動作検証ではない。
+
+Playwright MCPの試験ではWeb側の公開APIから通知設定を開き、OS画面で通知を無効にした後の状態を取得した。続いて同じプロセスのまま設定画面で通知を有効に戻し、復帰時の自動再取得で値が変わることを確認した。OS画面のスクリーンショットでも対象アプリと設定項目を確認した。
+
+Androidのinstrumentation全49件、renderer側の全84件、UIのAndroid・パッケージ試験89件、実機MCP試験1件が成功した。UIの通常実行で省略される端末試験は、この個別実行と分けて扱っている。Androidランタイムの配布用AARもビルドでき、警告は検出しなかった。通知設定の生成、rendererの呼び出し、ネイティブの関数配送、前面条件について、未実装または修正前の失敗と実装後の成功を確認した。
+
+追加した実機試験の入口は次のとおりである。
+
+```bash
+ANDROID_SERIAL=<device> npm run test:android-settings-e2e --workspace muon-ui
+```
+
+権限ダイアログのinstrumentationを再実行するときは、Gradleの前処理がテストホスト`dev.muon.testhost`の通知権限だけを初期化する。API 33未満またはテストホストが未導入の場合は変更しない。この前処理は既存のAndroidテスト入口にも接続し、対象パッケージと処理条件を3件のテストで検証した。
 
 ### 残る検証とビルド警告
 

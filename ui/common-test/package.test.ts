@@ -1496,10 +1496,26 @@ void value;
     ).resolves.toBeUndefined();
   });
 
-  it("provides Android system bar types in simple and validate modes", async () => {
+  it("provides Android system bar, settings and permission types in simple and validate modes", async () => {
     await expect(
       runTypeScriptConsumer(
         `import { configure, getState, getInsets, watchInsets } from "muon:android.systemBars";
+import { open, isAvailable } from "muon:android.settings";
+import { getPermissionState, requestPermission } from "muon:android.notifications";
+const available: boolean = await isAvailable("notifications");
+const opened: MuonAndroidSettingsResult = await open("notifications", { fallback: "app-details" });
+const permission: MuonAndroidNotificationPermissionState = await getPermissionState();
+const permissionResult: MuonAndroidNotificationPermissionResult = await requestPermission();
+await window.muon.android?.settings.open("app-details");
+await window.muon.android?.notifications?.getPermissionState();
+// @ts-expect-error Settings can only target this application's supported screens.
+await open("wifi");
+// @ts-expect-error Fallback must be explicitly app-details.
+await open("notifications", { fallback: true });
+void available;
+void opened;
+void permission;
+void permissionResult;
 await configure({ statusBar: { visible: false, icons: "light" }, contentLayout: "edge-to-edge" });
 await window.muon.android?.systemBars.configure({ navigationBar: { visible: true } });
 const state = await getState();

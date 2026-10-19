@@ -15,6 +15,7 @@ import {
 import { prepareAndroid } from "./toolchain.js";
 import { validateMuonAndroidConfig } from "../../core/android/renderer/android-config.js";
 import { resolveMuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
+import { resolveMuonNotificationConfig } from "../common/notification-config.js";
 import type { MuonAndroidOptions } from "../android.js";
 import type { MuonBuildOptions } from "../common/build.js";
 import type { MuonProgressCallback } from "../common/progress.js";
@@ -196,6 +197,7 @@ export const buildMuonAndroidTarget = async (input: {
   )
     throw new Error("node is unavailable in Android application builds.");
   const browser = object(config.browser, "browser");
+  const notifications = resolveMuonNotificationConfig(config.notifications);
   const systemBars = resolveMuonAndroidInitialSystemBars(
     android.systemBars,
     browser.initialWindowState,
@@ -310,6 +312,11 @@ export const buildMuonAndroidTarget = async (input: {
   );
   const permissions = strings(android.permissions ?? [], "android.permissions");
   if (
+    notifications.enabled &&
+    !permissions.includes("android.permission.POST_NOTIFICATIONS")
+  )
+    permissions.push("android.permission.POST_NOTIFICATIONS");
+  if (
     permissions.some(
       (permission) =>
         !/^android\.permission\.[A-Z][A-Z0-9_]*$/u.test(permission),
@@ -394,6 +401,7 @@ export const buildMuonAndroidTarget = async (input: {
     abis,
     permissions,
     systemBars,
+    notifications,
     values,
     pluginAccess: pluginConfiguration.pluginAccess,
     plugins,

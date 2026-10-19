@@ -43,6 +43,100 @@ declare global {
   interface MuonAndroidApi {
     /** Control and observe the Android system bars. */
     readonly systemBars: MuonAndroidSystemBarsApi;
+    /** Open app-scoped Android system settings. */
+    readonly settings: MuonAndroidSettingsApi;
+    /** Notification permission operations, present only when enabled and permitted. */
+    readonly notifications?: MuonAndroidNotificationsApi;
+  }
+
+  /** System settings screens scoped to this application. */
+  type MuonAndroidSettingsTarget = "app-details" | "notifications";
+
+  /** Explicit fallback when a dedicated settings screen is unavailable. */
+  interface MuonAndroidSettingsOptions {
+    /** Permit opening app information instead of the requested screen. */
+    readonly fallback?: "app-details";
+  }
+
+  /** Accepted settings launch, without a claim about the user's changes. */
+  interface MuonAndroidSettingsResult {
+    /** Screen requested by the caller. */
+    readonly requestedTarget: MuonAndroidSettingsTarget;
+    /** Screen for which Android accepted the launch request. */
+    readonly target: MuonAndroidSettingsTarget;
+    /** Whether the explicitly permitted fallback was used. */
+    readonly fallbackUsed: boolean;
+  }
+
+  /** Access to the application's Android settings screens. */
+  interface MuonAndroidSettingsApi {
+    /**
+     * Checks whether Android can resolve this screen for the current app.
+     * @param target - Screen to check, without applying fallback.
+     * @returns Current availability; a later launch can still fail.
+     */
+    readonly isAvailable: (
+      target: MuonAndroidSettingsTarget,
+    ) => Promise<boolean>;
+    /**
+     * Opens an Android settings screen from the foreground Activity.
+     * @param target - Screen requested for this app.
+     * @param options - Explicit fallback policy; no fallback by default.
+     * @returns The accepted destination, not a settings-change result.
+     * @remarks Read permission and system bar state again when the app resumes.
+     * Rejects when the Activity or destination is unavailable.
+     */
+    readonly open: (
+      target: MuonAndroidSettingsTarget,
+      options?: MuonAndroidSettingsOptions,
+    ) => Promise<MuonAndroidSettingsResult>;
+  }
+
+  /** Current notification permission observations; not a permanent-denial diagnosis. */
+  interface MuonAndroidNotificationPermissionState {
+    /** API <33 needs no runtime permission; denied includes never requested. */
+    readonly runtimePermission: "not-required" | "granted" | "denied";
+    /** Whether Android currently permits notifications for this application. */
+    readonly notificationsEnabled: boolean;
+    /** Whether Muon invoked the OS request API before; does not prove a dialog appeared. */
+    readonly requestedBefore: boolean;
+    /** Android's current recommendation to explain the permission before requesting. */
+    readonly shouldShowRationale: boolean;
+    /**
+     * Whether directing the user to settings may help; not proof of permanent denial.
+     * @remarks True when notifications are disabled and runtime permission is not
+     * needed or already granted, or when a previous request has no rationale flag.
+     */
+    readonly settingsSuggested: boolean;
+  }
+
+  /** Observations after a notification permission request settles. */
+  interface MuonAndroidNotificationPermissionResult {
+    /** Fresh OS permission and app-wide notification state. */
+    readonly state: MuonAndroidNotificationPermissionState;
+    /**
+     * Limited outcome provided by the OS callback.
+     * @remarks Interrupted means an empty permission result. Not-granted does
+     * not distinguish denial from every dismissal or suppressed dialog.
+     */
+    readonly result: "granted" | "not-granted" | "interrupted" | "not-required";
+  }
+
+  /** Android notification permission operations, exposed only when notifications are enabled. */
+  interface MuonAndroidNotificationsApi {
+    /**
+     * Reads current OS state without requesting permission.
+     * @returns Fresh runtime permission and app-wide notification observations.
+     */
+    readonly getPermissionState: () => Promise<MuonAndroidNotificationPermissionState>;
+    /**
+     * Explicitly requests notification permission from the foreground Activity.
+     * @returns State after the limited OS outcome; API <33 returns not-required.
+     * @remarks Only one request can be pending. Rejects if the Activity is not
+     * available or foreground, or when its page context is destroyed. No request
+     * runs automatically at startup or when a notification is posted.
+     */
+    readonly requestPermission: () => Promise<MuonAndroidNotificationPermissionResult>;
   }
 
   /** Placement of web content relative to system bars and display cutouts. */

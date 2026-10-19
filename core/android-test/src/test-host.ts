@@ -41,13 +41,25 @@ if (bridge === undefined) {
     rendererMetadata
   );
   const uninstallCapabilityBridge = installMuonWebViewCapabilityBridge(client);
+  const simpleApi = createMuonAndroidSimpleApi(client, {
+    'muon.browser': 'browser-capability',
+    'muon.environments': 'environment-capability',
+    'muon.fs': 'fs-capability',
+    'muon.android.systemBars': 'system-bars-capability',
+    'muon.android.settings': 'settings-capability',
+    'muon.android.notifications': 'android-notifications-capability',
+  });
   const androidApi = {
-    ...createMuonAndroidSimpleApi(client, {
-      'muon.browser': 'browser-capability',
-      'muon.environments': 'environment-capability',
-      'muon.fs': 'fs-capability',
-      'muon.android.systemBars': 'system-bars-capability',
-    }),
+    ...simpleApi,
+    android: {
+      systemBars: simpleApi.android.systemBars,
+      settings: simpleApi.android.settings,
+      ...(rendererMetadata.builtinFunctions.some((path) =>
+        path.startsWith('muon.android.notifications.')
+      )
+        ? { notifications: simpleApi.android.notifications }
+        : {}),
+    },
   };
   const uninstallNativePluginApi = installMuonAndroidNativePluginApi(
     client,
@@ -228,6 +240,98 @@ if (bridge === undefined) {
     startInsets.disabled = false;
   });
   app.append(startInsets, stopInsets);
+  const settings = document.createElement('fieldset');
+  const settingsLegend = document.createElement('legend');
+  settingsLegend.textContent = 'Android notification permission and settings';
+  const permissionOutput = document.createElement('pre');
+  permissionOutput.id = 'notification-permission-state';
+  const settingsOutput = document.createElement('pre');
+  settingsOutput.id = 'settings-result';
+  settings.append(settingsLegend, permissionOutput, settingsOutput);
+  const refreshPermission = async (): Promise<void> => {
+    try {
+      permissionOutput.textContent =
+        androidApi.android.notifications === undefined
+          ? 'Notifications are disabled in this application.'
+          : JSON.stringify(
+              await androidApi.android.notifications.getPermissionState(),
+              null,
+              2
+            );
+    } catch (error) {
+      permissionOutput.textContent =
+        error instanceof Error ? error.message : String(error);
+    }
+  };
+  const settingActions: ReadonlyArray<
+    readonly [string, () => Promise<unknown>]
+  > = [
+    ['Read notification permission', refreshPermission],
+    [
+      'Request notification permission',
+      async () => {
+        if (androidApi.android.notifications === undefined)
+          throw new Error('Notifications are disabled');
+        const result =
+          await androidApi.android.notifications.requestPermission();
+        await refreshPermission();
+        return result;
+      },
+    ],
+    [
+      'Check settings availability',
+      async () => ({
+        'app-details':
+          await androidApi.android.settings.isAvailable('app-details'),
+        notifications:
+          await androidApi.android.settings.isAvailable('notifications'),
+      }),
+    ],
+    [
+      'Open app settings',
+      async () => await androidApi.android.settings.open('app-details'),
+    ],
+    [
+      'Open notification settings',
+      async () =>
+        await androidApi.android.settings.open('notifications', {
+          fallback: 'app-details',
+        }),
+    ],
+  ];
+  for (const [label, action] of settingActions) {
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.textContent = label;
+    control.addEventListener('click', async () => {
+      control.disabled = true;
+      try {
+        settingsOutput.textContent =
+          JSON.stringify(await action(), null, 2) ?? 'Completed';
+      } catch (error) {
+        settingsOutput.textContent =
+          error instanceof Error ? error.message : String(error);
+      } finally {
+        control.disabled = false;
+      }
+    });
+    settings.append(control);
+  }
+  app.append(settings);
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible') {
+      await refreshPermission();
+      try {
+        barState.textContent = JSON.stringify(
+          await androidApi.android.systemBars.getState(),
+          null,
+          2
+        );
+      } catch (error) {
+        barState.textContent = String(error);
+      }
+    }
+  });
   try {
     insetsOutput.textContent = JSON.stringify(
       await androidApi.android.systemBars.getInsets(),

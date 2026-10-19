@@ -50,13 +50,15 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private WebView webView;
     private final MuonAndroidFilesystemService filesystemService;
     private final MuonAndroidSystemBarsService systemBarsService;
+    private final MuonAndroidSettingsService settingsService;
+    private final MuonAndroidNotificationPermissionService notificationPermissionService;
     private float managedZoomFactor = 1.0f;
 
     MuonAndroidPlatformService(
             @NonNull Activity activity,
-            @NonNull WebView webView) {
+            @NonNull WebView webView,
+            @NonNull MuonAppConfig config) {
         this.activity = activity;
-        MuonAppConfig config = MuonAppConfig.load(activity);
         configValues = config.values;
         this.webView = webView;
         filesystemService = new MuonAndroidFilesystemService(
@@ -66,6 +68,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                 activity.getResources().getDisplayMetrics().density,
                 config.systemBars,
                 retained instanceof String ? (String) retained : null);
+        settingsService = new MuonAndroidSettingsService(activity);
+        notificationPermissionService = new MuonAndroidNotificationPermissionService(activity, config.notificationsEnabled);
     }
 
     void invoke(
@@ -85,6 +89,14 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         }
         if (functionPath.startsWith("muon.android.systemBars.")) {
             systemBarsService.invoke(callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.android.settings.")) {
+            settingsService.invoke(functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.android.notifications.")) {
+            notificationPermissionService.invoke(callId, functionPath, arguments, attachments, completion);
             return;
         }
         if (arguments.length() != 0 || attachments.length != 0) {
@@ -150,11 +162,22 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     void cancel(int callId) {
         filesystemService.cancel(callId);
         systemBarsService.cancel(callId);
+        notificationPermissionService.cancel(callId);
     }
 
     void cancelAll() {
         filesystemService.cancelAll();
         systemBarsService.cancelAll();
+        notificationPermissionService.cancelAll();
+    }
+
+    void setResumed(boolean value) {
+        settingsService.setResumed(value);
+        notificationPermissionService.setResumed(value);
+    }
+
+    boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
+        return notificationPermissionService.onRequestPermissionsResult(code, permissions, results);
     }
 
     MuonAndroidSystemBarsService getSystemBarsService() { return systemBarsService; }
@@ -175,6 +198,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     public void close() {
         filesystemService.close();
         systemBarsService.close();
+        settingsService.close();
+        notificationPermissionService.close();
         activity = null;
         webView = null;
     }

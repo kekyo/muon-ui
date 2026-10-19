@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { muonAndroidBuiltinFunctionPaths } from "../../core/android/function-paths.js";
+import { getMuonAndroidBuiltinFunctionPaths } from "../../core/android/function-paths.js";
 
 /**
  * Import-side capability rule for muon plugin virtual modules.
@@ -472,7 +472,7 @@ const createFunctionPathCatalog = (
   const seen = new Set<string>();
   for (const functionPath of [
     ...(backend === "android"
-      ? muonAndroidBuiltinFunctionPaths
+      ? getMuonAndroidBuiltinFunctionPaths(false)
       : defaultMuonCapabilityFunctionPaths),
     ...(functionPaths ?? []),
   ]) {

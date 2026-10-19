@@ -3,6 +3,20 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+declare module "muon:android.settings" {
+  /** Check whether this app's requested Android settings screen is available. */
+  export const isAvailable: MuonAndroidSettingsApi["isAvailable"];
+  /** Open the requested screen, with an explicitly permitted fallback. */
+  export const open: MuonAndroidSettingsApi["open"];
+}
+
+declare module "muon:android.notifications" {
+  /** Read current runtime permission and app-wide notification state. */
+  export const getPermissionState: MuonAndroidNotificationsApi["getPermissionState"];
+  /** Explicitly request notification permission from the foreground Activity. */
+  export const requestPermission: MuonAndroidNotificationsApi["requestPermission"];
+}
+
 declare module "muon:android.systemBars" {
   /** Update the requested visibility of either Android system bar. */
   export const configure: MuonAndroidSystemBarsApi["configure"];

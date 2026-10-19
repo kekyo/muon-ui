@@ -87,6 +87,15 @@ tasks.named("preBuild") {
     )
 }
 
+val prepareNotificationPermissionTest by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("node", "scripts/prepare-notification-permission-test.mjs")
+}
+
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    dependsOn(prepareNotificationPermissionTest)
+}
+
 dependencies {
     implementation("androidx.core:core:1.19.0")
     implementation("androidx.webkit:webkit:1.17.0")

@@ -55,7 +55,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         this.listener = listener;
     }
 
-    void start(@NonNull String bootstrap) {
+    void start(@NonNull String bootstrap, @NonNull MuonAppConfig config) {
         this.bootstrap = bootstrap;
         try {
             for (String feature : new String[] {
@@ -66,7 +66,6 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                     throw new IllegalStateException("Required WebView feature is unavailable: " + feature);
                 }
             }
-            MuonAppConfig config = MuonAppConfig.load(activity);
             startPage = config.startPage;
             pluginEnabled = config.pluginEnabled;
             assets = new MuonAssetRequestHandler(activity);
@@ -111,7 +110,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                     listener.pageFinished(url);
                 }
             });
-            bridge = new MuonRpcBridge(activity, webView, this);
+            bridge = new MuonRpcBridge(activity, webView, this, config);
             bridge.getSystemBarsService().attach(content, this::updateInsets);
             if (bridge.isNativeHostReady()) {
                 onNativeHostReady(bridge);
@@ -190,6 +189,14 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     }
 
     boolean wasPageLoadStarted() { return pageLoadStarted; }
+
+    void setResumed(boolean value) {
+        if (bridge != null) { bridge.setResumed(value); }
+    }
+
+    boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
+        return bridge != null && bridge.onRequestPermissionsResult(code, permissions, results);
+    }
 
     void close(boolean changingConfigurations) {
         if (script != null) { script.remove(); script = null; }

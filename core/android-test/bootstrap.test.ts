@@ -4,6 +4,69 @@ import { muonAndroidBuiltinFunctionPaths } from '../android/renderer/android-api
 import type { MuonWebViewJavaScriptBridge } from '../android/renderer/webview-rpc.js';
 
 describe('packaged Android renderer', () => {
+  it.each([
+    [
+      'muon.android.settings.open',
+      ['notifications', { fallback: 'app-details' }],
+      ['{"target":"notifications","fallback":"app-details"}'],
+      {
+        requestedTarget: 'notifications',
+        target: 'app-details',
+        fallbackUsed: true,
+      },
+    ],
+    [
+      'muon.android.notifications.getPermissionState',
+      [],
+      [],
+      { runtimePermission: 'denied', notificationsEnabled: false },
+    ],
+  ])(
+    'converts enabled validate calls with their page capability: %s',
+    async (path, args, wire, expected) => {
+      const sent: string[] = [];
+      const bridge: MuonWebViewJavaScriptBridge = {
+        onmessage: null,
+        postMessage: (message) => {
+          sent.push(String(message));
+        },
+      };
+      const target: Record<PropertyKey, unknown> = {};
+      const dispose = bootstrapMuonAndroid(
+        bridge,
+        {
+          version: 1,
+          contextId: 1,
+          mode: 'validate',
+          namespaces: [],
+          functions: [],
+          builtinFunctions: [path],
+        },
+        target
+      );
+      const call = target.__muon_plugin_call as (
+        id: string,
+        path: string,
+        args: unknown[]
+      ) => Promise<unknown>;
+      const pending = call('generated-settings', path, args);
+      const request = JSON.parse(sent[0]!);
+      expect(request.capabilityId).toBe('generated-settings');
+      expect(request.arguments).toEqual(wire);
+      bridge.onmessage?.({
+        data: JSON.stringify({
+          version: 1,
+          type: 'result',
+          callId: request.callId,
+          success: true,
+          value: JSON.stringify(expected),
+        }),
+      });
+      await expect(pending).resolves.toEqual(expected);
+      expect(target.muon).toBeUndefined();
+      dispose();
+    }
+  );
   it('publishes only permitted leaves of the nested Android namespace', async () => {
     const sent: string[] = [];
     const bridge: MuonWebViewJavaScriptBridge = {

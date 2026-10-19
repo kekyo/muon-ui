@@ -51,6 +51,10 @@ const expectedFunctionPaths = [
   'muon.android.systemBars.getState',
   'muon.android.systemBars.getInsets',
   'muon.android.systemBars.watchInsets',
+  'muon.android.settings.isAvailable',
+  'muon.android.settings.open',
+  'muon.android.notifications.getPermissionState',
+  'muon.android.notifications.requestPermission',
 ] as const;
 
 describe('muon Android API metadata', () => {
@@ -94,6 +98,8 @@ describe('muon Android API metadata', () => {
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
       'muon.android.systemBars': 'system-bars-capability',
+      'muon.android.settings': 'settings-capability',
+      'muon.android.notifications': 'android-notifications-capability',
     });
 
     expect(Object.keys(api)).toEqual([
@@ -159,6 +165,8 @@ describe('muon Android API metadata', () => {
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
       'muon.android.systemBars': 'system-bars-capability',
+      'muon.android.settings': 'settings-capability',
+      'muon.android.notifications': 'android-notifications-capability',
     });
     const controller = new AbortController();
     const source = new Uint8Array([1, 2, 3]);
@@ -214,6 +222,8 @@ describe('muon Android API metadata', () => {
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
       'muon.android.systemBars': 'system-bars-capability',
+      'muon.android.settings': 'settings-capability',
+      'muon.android.notifications': 'android-notifications-capability',
     });
 
     await expect(
@@ -271,6 +281,8 @@ describe('muon Android API metadata', () => {
         'muon.environments': 'environment-capability',
         'muon.fs': 'fs-capability',
         'muon.android.systemBars': 'system-bars-capability',
+        'muon.android.settings': 'settings-capability',
+        'muon.android.notifications': 'android-notifications-capability',
       });
       let closeWatcher: (() => Promise<void>) | undefined;
       let listenerCompleted = false;

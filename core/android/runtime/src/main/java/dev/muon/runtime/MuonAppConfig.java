@@ -24,12 +24,13 @@ final class MuonAppConfig {
     final JSONObject values;
     final JSONObject systemBars;
     final boolean pluginEnabled;
+    final boolean notificationsEnabled;
     final String[] internalAllow;
     final boolean validateMode;
     final String[] capabilityIds;
     final String[][] capabilityAllows;
 
-    private MuonAppConfig(@NonNull JSONObject config) throws JSONException {
+    MuonAppConfig(@NonNull JSONObject config) throws JSONException {
         startPage = config.getString("startPage");
         Uri url = Uri.parse(startPage);
         if (!"https".equals(url.getScheme())
@@ -39,6 +40,12 @@ final class MuonAppConfig {
         }
         values = config.getJSONObject("values");
         systemBars = config.has("systemBars") ? config.getJSONObject("systemBars") : new JSONObject();
+        JSONObject notifications = config.has("notifications") ? config.getJSONObject("notifications") : new JSONObject();
+        Object enabled = notifications.opt("enabled");
+        if (notifications.has("enabled") && !(enabled instanceof Boolean)) {
+            throw new JSONException("notifications.enabled must be a boolean");
+        }
+        notificationsEnabled = Boolean.TRUE.equals(enabled);
         JSONObject plugin = config.getJSONObject("plugin");
         String mode = plugin.getString("mode");
         if (!"simple".equals(mode) && !"validate".equals(mode)) {

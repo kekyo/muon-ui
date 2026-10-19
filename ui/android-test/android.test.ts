@@ -50,6 +50,38 @@ const project = async (config: unknown): Promise<string> => {
 };
 
 describe("public Android builds", () => {
+  it.each([true, false, undefined])(
+    "enables notification permissions and functions only when configured: %s",
+    async (enabled) => {
+      const root = await project(
+        enabled === undefined ? {} : { notifications: { enabled } },
+      );
+      await buildMuonApp({ root, targets: ["android"] });
+      const input = buildAndroid.mock.calls[0]![0];
+      expect(input.notifications).toEqual({ enabled: enabled === true });
+      expect(
+        input.permissions.includes("android.permission.POST_NOTIFICATIONS"),
+      ).toBe(enabled === true);
+      expect(
+        input.pluginAccess.internalAllow.includes(
+          "muon.android.notifications.requestPermission",
+        ),
+      ).toBe(enabled === true);
+      expect(input.pluginAccess.internalAllow).toContain(
+        "muon.android.settings.open",
+      );
+    },
+  );
+  it.each([null, true, { enabled: "true" }, { enabled: 1 }, { enable: true }])(
+    "rejects malformed notification configuration: %j",
+    async (notifications) => {
+      const root = await project({ notifications });
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(/notifications/);
+      expect(buildAndroid).not.toHaveBeenCalled();
+    },
+  );
   it("normalizes initial system bars without treating an omitted window state as normal", async () => {
     const root = await project({
       android: {

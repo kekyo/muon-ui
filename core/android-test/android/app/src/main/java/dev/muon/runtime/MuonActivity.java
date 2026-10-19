@@ -17,6 +17,8 @@ import androidx.annotation.Nullable;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebMessageCompat;
 import androidx.webkit.WebViewCompat;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
@@ -67,7 +69,33 @@ public final class MuonActivity extends Activity {
                 startupFailureReady.countDown();
             }
         });
-        host.start("");
+        try {
+            JSONObject config = new JSONObject(MuonAppConfig.readAsset(this, "muon/config.json"));
+            if (getIntent().hasExtra("notifications-enabled")) {
+                config.put("notifications", new JSONObject().put("enabled",
+                        getIntent().getBooleanExtra("notifications-enabled", false)));
+            }
+            host.start("", new MuonAppConfig(config));
+        } catch (JSONException error) {
+            throw new IllegalStateException("Invalid test host configuration", error);
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (host != null) { host.setResumed(true); }
+    }
+
+    @Override protected void onPause() {
+        if (host != null) { host.setResumed(false); }
+        super.onPause();
+    }
+
+    @Override public void onRequestPermissionsResult(int code, @NonNull String[] permissions,
+            @NonNull int[] results) {
+        if (host == null || !host.onRequestPermissionsResult(code, permissions, results)) {
+            super.onRequestPermissionsResult(code, permissions, results);
+        }
     }
 
     private void receiveTestMessage(

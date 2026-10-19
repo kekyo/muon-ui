@@ -13,10 +13,78 @@ import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
 import { createMuonCapabilityModuleResolver } from "../common/capability.js";
 
 const roots: string[] = [];
+const previousCall = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "__muon_plugin_call",
+);
 afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
+  if (previousCall === undefined)
+    Reflect.deleteProperty(globalThis, "__muon_plugin_call");
+  else Object.defineProperty(globalThis, "__muon_plugin_call", previousCall);
 });
+
+it.each([true, false])(
+  "publishes notification permission imports only when enabled: %s",
+  async (enabled) => {
+    const root = await mkdtemp(join(tmpdir(), "muon-notification-catalog-"));
+    roots.push(root);
+    await writeFile(
+      join(root, "muon.json"),
+      JSON.stringify({
+        notifications: { enabled },
+        plugin: {
+          mode: "validate",
+          plugins: [
+            {
+              name: "internal",
+              imports: [
+                {
+                  sources: ["src/**"],
+                  allow: ["muon.android.notifications.*"],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    const access = await resolveMuonPluginAccessOptions({
+      root,
+      configPath: undefined,
+      pluginAccess: undefined,
+    });
+    if (!enabled) {
+      await expect(
+        collectMuonAndroidPluginAccess(root, undefined, undefined, access),
+      ).rejects.toThrow(/unavailable/);
+      return;
+    }
+    const catalog = await collectMuonAndroidPluginAccess(
+      root,
+      undefined,
+      undefined,
+      access,
+    );
+    const resolver = createMuonCapabilityModuleResolver(root, {
+      backend: "android",
+      ...catalog,
+    });
+    const id = resolver.resolveId(
+      "muon:android.notifications",
+      join(root, "src/main.ts"),
+    )!.id;
+    Reflect.set(globalThis, "__muon_plugin_call", async () => undefined);
+    const module = await import(
+      `data:text/javascript,${encodeURIComponent(resolver.load(id)!)}`
+    );
+    expect(Object.keys(module)).toEqual([
+      "getPermissionState",
+      "requestPermission",
+    ]);
+  },
+);
 
 it("resolves Android wildcards per plugin and checks source/package importers", async () => {
   const root = await mkdtemp(join(tmpdir(), "muon-android-catalog-"));

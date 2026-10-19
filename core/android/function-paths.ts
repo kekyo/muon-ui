@@ -57,6 +57,15 @@ export const systemBarsFunctionNames = [
   'watchInsets',
 ] as const;
 
+/** Android settings functions implemented by the runtime. */
+export const androidSettingsFunctionNames = ['isAvailable', 'open'] as const;
+
+/** Android notification permission functions implemented by the runtime. */
+export const androidNotificationFunctionNames = [
+  'getPermissionState',
+  'requestPermission',
+] as const;
+
 /** Fully-qualified built-in function paths implemented by the Android backend. */
 export const muonAndroidBuiltinFunctionPaths = [
   ...browserFunctionNames.map((name) => `muon.browser.${name}` as const),
@@ -67,7 +76,26 @@ export const muonAndroidBuiltinFunctionPaths = [
   ...systemBarsFunctionNames.map(
     (name) => `muon.android.systemBars.${name}` as const
   ),
+  ...androidSettingsFunctionNames.map(
+    (name) => `muon.android.settings.${name}` as const
+  ),
+  ...androidNotificationFunctionNames.map(
+    (name) => `muon.android.notifications.${name}` as const
+  ),
 ] as const;
+
+/**
+ * Selects the implemented functions enabled by application configuration.
+ * @param notificationsEnabled - Whether the application enables notifications.
+ * @returns The effective built-in catalog, before per-page permission filters.
+ */
+export const getMuonAndroidBuiltinFunctionPaths = (
+  notificationsEnabled: boolean
+): readonly MuonAndroidBuiltinFunctionPath[] =>
+  muonAndroidBuiltinFunctionPaths.filter(
+    (path) =>
+      notificationsEnabled || !path.startsWith('muon.android.notifications.')
+  );
 
 /** A built-in function path available on Android. */
 export type MuonAndroidBuiltinFunctionPath =

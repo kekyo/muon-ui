@@ -26,10 +26,27 @@ public final class MuonAppActivity extends Activity {
             @Override public void startupFailed(@NonNull String diagnostic) {}
         });
         try {
-            host.start(MuonAppConfig.readAsset(this, "muon/renderer.js"));
+            host.start(MuonAppConfig.readAsset(this, "muon/renderer.js"), MuonAppConfig.load(this));
         } catch (RuntimeException error) {
             host.showFailure(error.getMessage() == null
                     ? "Muon renderer is unavailable" : error.getMessage());
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (host != null) { host.setResumed(true); }
+    }
+
+    @Override protected void onPause() {
+        if (host != null) { host.setResumed(false); }
+        super.onPause();
+    }
+
+    @Override public void onRequestPermissionsResult(int code, @NonNull String[] permissions,
+            @NonNull int[] results) {
+        if (host == null || !host.onRequestPermissionsResult(code, permissions, results)) {
+            super.onRequestPermissionsResult(code, permissions, results);
         }
     }
 

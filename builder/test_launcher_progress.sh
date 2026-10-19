@@ -127,8 +127,10 @@ cat >"${LAUNCHER_STATE_HARNESS}" <<'HARNESS_EOF'
 #include <string.h>
 
 #define main muon_launcher_original_main
+#define wmain muon_launcher_original_wmain
 #include "../../src/muon_launcher.c"
 #undef main
+#undef wmain
 
 char *muon_substring(const char *start, size_t length) {
   char *result = (char *)malloc(length + 1);
@@ -162,6 +164,26 @@ int muon_get_environment(const char *name, char **value) {
 }
 
 #ifdef _WIN32
+// Starting the application is outside this state-directory harness. Fail if
+// these entrypoint-only operations are accidentally reached by a test.
+wchar_t *muon_wide_from_utf8(const char *value) {
+  (void)value;
+  abort();
+}
+
+HANDLE muon_start_windows_process(char *const argv[], const wchar_t *directory) {
+  (void)argv;
+  (void)directory;
+  abort();
+}
+
+int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **)) {
+  (void)argc;
+  (void)argv;
+  (void)entry;
+  abort();
+}
+
 char *muon_utf8_from_wide(const wchar_t *value) {
   int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
                                   NULL, 0, NULL, NULL);
@@ -684,7 +706,8 @@ x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${OUT_DIR}/launcher_state_directory_windows64_harness.exe" \
-  "${LAUNCHER_STATE_HARNESS}"
+  "${LAUNCHER_STATE_HARNESS}" \
+  "${SCRIPT_DIR}/../core/common/src/muon_windows_path.c"
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_state_directory_windows64_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -k
@@ -695,7 +718,7 @@ x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows64_fallback_harness.exe" \
   "${WIN_FALLBACK_HARNESS}" \
-  -lcomctl32 -lgdi32
+  -lcomctl32 -lgdi32 -limm32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows64_fallback_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -k
@@ -706,7 +729,7 @@ x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows64_ui_harness.exe" \
   "${WIN_UI_HARNESS}" \
-  -lcomctl32 -lgdi32
+  -lcomctl32 -lgdi32 -limm32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows64_ui_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -k
@@ -717,7 +740,7 @@ i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows32_fallback_harness.exe" \
   "${WIN_FALLBACK_HARNESS}" \
-  -lcomctl32 -lgdi32
+  -lcomctl32 -lgdi32 -limm32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows32_fallback_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -k
@@ -728,7 +751,7 @@ i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows32_ui_harness.exe" \
   "${WIN_UI_HARNESS}" \
-  -lcomctl32 -lgdi32
+  -lcomctl32 -lgdi32 -limm32
 xvfb-run -a env WINEDEBUG=-all WINEPREFIX="${wine_prefix}" \
   wine "${OUT_DIR}/launcher_progress_windows32_ui_harness.exe"
 WINEPREFIX="${wine_prefix}" wineserver -k

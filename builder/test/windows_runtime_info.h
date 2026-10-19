@@ -12,6 +12,11 @@
 // an accidental download must fail instead of reaching an external service.
 #define MUON_RUNTIME_INFO_AVAILABLE 1
 
+#ifndef MUON_TEST_CEF_SHA1
+#define MUON_TEST_CEF_SHA1 "0000000000000000000000000000000000000000"
+#define MUON_TEST_CEF_SIZE 1
+#endif
+
 typedef struct {
   const char *file_name;
   const char *url;
@@ -54,7 +59,7 @@ static const MuonRuntimeInfo kMuonRuntimeInfo = {
   .cef_reference_distribution = "minimal",
   .cef_reference_api_version = 14700,
   .cef_reference_api_hash = "test-api",
-  .cef_reference_artifact = {"test-cef.tar.bz2", "unused", "0000000000000000000000000000000000000000", 1},
+  .cef_reference_artifact = {"test-cef.tar.bz2", "unused", MUON_TEST_CEF_SHA1, MUON_TEST_CEF_SIZE},
   .core_payload = NULL,
   .core_payload_count = 0,
 };

@@ -6,12 +6,18 @@ DOWNLOAD_FIXTURE = .run/windows-long-path/$(WINDOWS_TARGET)/download-fixture.exe
 PATH_PLUGIN = .run/windows-long-path/$(WINDOWS_TARGET)/path-plugin.dll
 PATH_PLUGIN_DEPENDENCY = .run/windows-long-path/$(WINDOWS_TARGET)/path-dependency.dll
 PATH_PROCESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-process.exe
+PATH_PROGRESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-progress.exe
 
-.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process
+.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process windows-path-progress
 windows-long-path-fixture: $(LONG_PATH_FIXTURE)
 windows-path-test: $(LONG_PATH_FIXTURE) $(LONG_PATH_TEST) $(DOWNLOAD_FIXTURE)
 windows-path-plugin: $(PATH_PLUGIN)
 windows-path-process: $(PATH_PROCESS)
+windows-path-progress: $(PATH_PROGRESS)
+
+$(PATH_PROGRESS): plugin-e2e/windows-path-progress.c ../../builder/src/launcher_progress.c ../../builder/src/launcher_progress.h ../../builder/src/prepare_progress.h
+	mkdir -p "$(@D)"
+	$(WINDOWS_CC) -std=c99 -Wall -Wextra -Werror -pedantic -municode -static -I../../builder/src -o "$@" "$<" ../../builder/src/launcher_progress.c -lcomctl32 -lgdi32 -limm32
 
 $(PATH_PROCESS): plugin-e2e/windows-path-process.c
 	mkdir -p "$(@D)"

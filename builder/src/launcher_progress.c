@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#include <imm.h>
 #else
 #include <pthread.h>
 #include <time.h>
@@ -281,6 +282,10 @@ static void update_window_controls(MuonLauncherProgressBackend *backend,
 }
 
 static DWORD WINAPI progress_thread_main(LPVOID parameter) {
+  // This thread only displays progress. Windows TextInputFramework can fail
+  // fast when activating a window from a long executable path; disable its
+  // unused IME before creating any window, without affecting the child app.
+  ImmDisableIME(GetCurrentThreadId());
   MuonLauncherProgressBackend *backend =
       (MuonLauncherProgressBackend *)parameter;
   for (;;) {

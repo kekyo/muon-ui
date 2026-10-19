@@ -81,6 +81,7 @@ beforeAll(async () => {
     localDirectory,
     "cef-source",
   ]);
+  const cefArchive = await readFile(join(localDirectory, "cef.tar.bz2"));
   await execFileAsync(process.execPath, [
     "../../builder/scripts/create-windows-resource-fixture.mjs",
     join(localDirectory, "unused.exe"),
@@ -89,6 +90,8 @@ beforeAll(async () => {
   for (const target of targets) {
     await execFileAsync("make", [
       "windows-path-test",
+      "windows-path-process",
+      "windows-path-progress",
       `WINDOWS_TARGET=${target}`,
     ]);
     const nodeRoot = `node-v24.4.0-win-${target === "windows-amd64" ? "x64" : "x86"}`;
@@ -124,6 +127,7 @@ beforeAll(async () => {
       {
         env: {
           ...process.env,
+          CPPFLAGS: `${process.env.CPPFLAGS ?? ""} -DMUON_TEST_CEF_SHA1=\\\"${createHash("sha1").update(cefArchive).digest("hex")}\\\" -DMUON_TEST_CEF_SIZE=${cefArchive.length}`,
           MUON_RUNTIME_INFO_HEADER: fileURLToPath(
             new URL(
               "../../builder/test/windows_runtime_info.h",
@@ -190,6 +194,14 @@ beforeAll(async () => {
     await agent.files.writeFile(
       win32.join(directory, `${target}-fixture.exe`),
       await readFile(`.run/windows-long-path/${target}/fixture.exe`),
+    );
+    await agent.files.writeFile(
+      win32.join(directory, `${target}-process.exe`),
+      await readFile(`.run/windows-long-path/${target}/path-process.exe`),
+    );
+    await agent.files.writeFile(
+      win32.join(directory, `${target}-progress.exe`),
+      await readFile(`.run/windows-long-path/${target}/path-progress.exe`),
     );
     await agent.files.writeFile(
       win32.join(directory, `${target}-builder-test.exe`),
@@ -631,6 +643,110 @@ describe.each(targets)(
           expect(result.code, result.stderr).toBe(0);
           // This checks the actual selected directory, rather than displayed JSON.
           await builder("exists-directory", expected);
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
+    it.each([140, 300, 1100])(
+      "shows the launcher progress window from a %i-unit source",
+      async (length) => {
+        const root = win32.join(directory, `${target}-progress-${length}`);
+        const source = directoryOfLength(win32.join(root, "配布😀"), length);
+        const executable = win32.join(source, "progress.exe");
+        try {
+          await fixture("mkdir", source);
+          await fixture("copy", executable, [
+            win32.join(directory, `${target}-progress.exe`),
+          ]);
+          const result = await run(
+            win32.join(directory, `${target}-fixture.exe`),
+            ["launch-command", "\\\\?\\" + executable, ""],
+            undefined,
+          );
+          expect(result.code, result.stderr).toBe(0);
+          expect(result.stdout.trim()).toBe("progress window shown");
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
+    it("rejects a long runtime before creating installation files", async () => {
+      const root = win32.join(directory, `${target}-runtime-cwd`);
+      const state = directoryOfLength(win32.join(root, "状態😀"), 300);
+      const executable = win32.join(root, "app.exe");
+      try {
+        await fixture("mkdir", root);
+        await fixture("copy", executable, [
+          win32.join(directory, `${target}-muon-launcher.exe`),
+        ]);
+        const result = await run(executable, [], {
+          LOCALAPPDATA: state,
+          MUON_CACHE_DIR: win32.join(root, "cache"),
+        });
+        expect(result.code).toBe(1);
+        expect(result.stderr).toMatch(/runtime.*short.*Windows/);
+        await fixture("absent", win32.join(state, "app", "runtime"));
+        await fixture("absent", win32.join(root, "cache"));
+      } finally {
+        await fixture("remove", root);
+      }
+    });
+
+    it.each([140, 300, 1100])(
+      "launches and restarts from a %i-unit source into a short Unicode runtime",
+      async (length) => {
+        const root = win32.join(directory, `${target}-launch-${length}`);
+        const source = directoryOfLength(win32.join(root, "配布😀"), length);
+        const state = win32.join(root, "状態😀");
+        const cache = win32.join(root, "cache");
+        const runtime = win32.join(state, "app", "runtime");
+        const executable = win32.join(source, "app.exe");
+        const value = "環境😀" + source;
+        try {
+          await fixture("mkdir", source);
+          await fixture("copy", executable, [
+            win32.join(directory, `${target}-muon-launcher.exe`),
+          ]);
+          await fixture("copy", win32.join(source, "muon-core.exe"), [
+            win32.join(directory, `${target}-process.exe`),
+          ]);
+          await fixture("mkdir", win32.join(cache, "artifacts", "cef"));
+          await fixture(
+            "copy",
+            win32.join(cache, "artifacts", "cef", "test-cef.tar.bz2"),
+            [win32.join(directory, "cef.tar.bz2")],
+          );
+          const result = await run(
+            win32.join(directory, `${target}-fixture.exe`),
+            [
+              "launch-command",
+              "\\\\?\\" + executable,
+              String.raw` "日本語😀" "quote\"value" "tail\\" ""`,
+            ],
+            {
+              LOCALAPPDATA: state,
+              MUON_CACHE_DIR: cache,
+              MUON_PATH_VALUE: value,
+              MUON_PATH_RESTART: win32.join(root, "restarted"),
+            },
+          );
+          expect(result.code, result.stderr).toBe(37);
+          const reports = result.stdout
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => JSON.parse(line));
+          expect(reports).toEqual(
+            Array.from({ length: 2 }, () => ({
+              args: ["日本語😀", 'quote"value', "tail\\", ""],
+              cwd: runtime,
+              value,
+              appId: "app",
+            })),
+          );
+          expect(result.stderr.match(/process-stderr/g)).toHaveLength(2);
         } finally {
           await fixture("remove", root);
         }

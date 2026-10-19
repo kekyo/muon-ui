@@ -46,6 +46,17 @@ int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **));
  */
 int muon_windows_io_path(const char *path, muon_windows_path_usage usage,
                          muon_windows_path *result);
+
+/**
+ * Starts a Windows process with Unicode arguments and an explicit executable.
+ * @param argv Null-terminated UTF-8 argument list, including argv[0]. Bare names
+ *     retain Windows executable search; paths use the native I/O representation.
+ * @param current_directory Absolute UTF-16 cwd, or NULL to inherit the parent.
+ * @return Owned process handle to wait on and CloseHandle, or NULL on failure.
+ * @remarks Inherits the parent's environment and inheritable handles. Failure
+ *     sets both errno and GetLastError; the command-line buffer is owned here.
+ */
+HANDLE muon_start_windows_process(char *const argv[], const wchar_t *current_directory);
 #endif
 
 /**

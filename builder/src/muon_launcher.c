@@ -18,8 +18,6 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#include <direct.h>
-#include <process.h>
 #include <windows.h>
 #else
 #include <limits.h>
@@ -1043,6 +1041,25 @@ static char **create_core_argv(const char *core_path, int argc, char **argv) {
   return core_argv;
 }
 
+#ifdef _WIN32
+static int resolve_runtime_working_directory(const char *runtime_dir,
+                                             muon_windows_path *directory) {
+  DWORD error = muon_windows_path_normalize_utf8(runtime_dir, strlen(runtime_dir), directory);
+  if (error != ERROR_SUCCESS) {
+    fprintf(stderr, "muon-launcher: invalid runtime working directory (Windows error %lu): %s\n",
+            error, runtime_dir);
+    return -1;
+  }
+  if (directory->length >= MAX_PATH) {
+    fprintf(stderr, "muon-launcher: runtime working directory requires a short Windows path "
+                    "(under 260 UTF-16 code units): %s\n", runtime_dir);
+    muon_windows_path_destroy(directory);
+    return -1;
+  }
+  return 0;
+}
+#endif
+
 static int launch_core(const char *runtime_dir, const char *core_path,
                        const char *app_id, const char *appimage_path,
                        int enable_cef_sandbox, int argc,
@@ -1054,32 +1071,45 @@ static int launch_core(const char *runtime_dir, const char *core_path,
   }
 #ifdef _WIN32
   (void)appimage_path;
-  if (_chdir(runtime_dir) != 0) {
-    perror(runtime_dir);
+  muon_windows_path directory = {0};
+  if (resolve_runtime_working_directory(runtime_dir, &directory) != 0) {
     free(core_argv);
     return 1;
   }
-  if (_putenv_s(MUON_LAUNCHER_APP_ID_ENVIRONMENT, app_id) != 0) {
+  wchar_t *wide_app_id = muon_wide_from_utf8(app_id);
+  if (wide_app_id == NULL || !SetEnvironmentVariableW(L"MUON_LAUNCHER_APP_ID", wide_app_id)) {
     fprintf(stderr, "muon-launcher: failed to set %s.\n",
             MUON_LAUNCHER_APP_ID_ENVIRONMENT);
+    free(wide_app_id);
+    muon_windows_path_destroy(&directory);
     free(core_argv);
     return 1;
   }
-  if (_putenv_s(MUON_CEF_SANDBOX_ENVIRONMENT,
-                enable_cef_sandbox ? "1" : "") != 0) {
+  free(wide_app_id);
+  if (!SetEnvironmentVariableW(L"MUON_CEF_SANDBOX", enable_cef_sandbox ? L"1" : NULL)) {
     fprintf(stderr, "muon-launcher: failed to set %s.\n",
             MUON_CEF_SANDBOX_ENVIRONMENT);
+    muon_windows_path_destroy(&directory);
     free(core_argv);
     return 1;
   }
-  const intptr_t status =
-      _spawnv(_P_WAIT, core_path, (const char *const *)core_argv);
-  if (status < 0) {
-    perror(core_path);
-    free(core_argv);
+  HANDLE process = muon_start_windows_process(core_argv, directory.value);
+  muon_windows_path_destroy(&directory);
+  free(core_argv);
+  if (process == NULL) {
+    fprintf(stderr, "muon-launcher: failed to start core (Windows error %lu): %s\n",
+            GetLastError(), core_path);
     return 127;
   }
-  free(core_argv);
+  DWORD status = 1;
+  BOOL finished = WaitForSingleObject(process, INFINITE) == WAIT_OBJECT_0 &&
+      GetExitCodeProcess(process, &status);
+  DWORD error = finished ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(process);
+  if (!finished) {
+    fprintf(stderr, "muon-launcher: failed to wait for core (Windows error %lu).\n", error);
+    return 1;
+  }
   return (int)status;
 #else
   if (chdir(runtime_dir) != 0) {
@@ -1175,7 +1205,7 @@ static void on_prepare_progress(const MuonPrepareProgress *progress,
   muon_launcher_progress_update((MuonLauncherProgress *)user_data, progress);
 }
 
-int main(int argc, char **argv) {
+static int run_launcher(int argc, char **argv) {
   static const char insecure_localhost_switch[] =
       "--allow-insecure-localhost";
   for (int index = 1; index < argc; index += 1) {
@@ -1229,6 +1259,12 @@ int main(int argc, char **argv) {
   }
   char *cache_dir = NULL;
   int exit_code = 1;
+#ifdef _WIN32
+  // Validate before preparing a runtime which Windows cannot use as a cwd.
+  muon_windows_path directory = {0};
+  if (resolve_runtime_working_directory(runtime_dir, &directory) != 0) goto done;
+  muon_windows_path_destroy(&directory);
+#endif
   if (muon_get_environment("MUON_CACHE_DIR", &cache_dir) != 0) {
     fprintf(stderr, "muon-launcher: failed to read cache environment.\n");
     goto done;
@@ -1318,3 +1354,13 @@ done:
   install_config_free(&install);
   return exit_code;
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **argv) {
+  return muon_windows_main(argc, argv, run_launcher);
+}
+#else
+int main(int argc, char **argv) {
+  return run_launcher(argc, argv);
+}
+#endif

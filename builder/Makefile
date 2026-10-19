@@ -128,7 +128,7 @@ $(PREPARE_TARGET): src/muon_prepare.c src/prepare.h src/prepare_progress.h src/m
 
 $(LAUNCHER_TARGET): src/muon_launcher.c src/launcher_progress.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h src/prepare.h src/prepare_progress.h $(OUT_DIR)/launcher_progress.o $(LIB_TARGET) $(LAUNCHER_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(LAUNCHER_CPPFLAGS) $(CFLAGS) $(LAUNCHER_LDFLAGS) -o "$@" src/muon_launcher.c "$(OUT_DIR)/launcher_progress.o" $(LAUNCHER_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(LAUNCHER_LDLIBS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(LAUNCHER_CPPFLAGS) $(CFLAGS) $(LAUNCHER_LDFLAGS) $(UNICODE_ENTRY_FLAGS) -o "$@" src/muon_launcher.c "$(OUT_DIR)/launcher_progress.o" $(LAUNCHER_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(LAUNCHER_LDLIBS)
 
 ifneq ($(strip $(RUNTIME_HELPER_TARGET)),)
 $(RUNTIME_HELPER_TARGET): src/muon_runtime_helper.c src/prepare.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(LIB_TARGET)

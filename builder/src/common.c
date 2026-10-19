@@ -2095,7 +2095,7 @@ static int append_command_argument(wchar_t *buffer, size_t *length, const wchar_
   return append_command_character(buffer, length, L'"');
 }
 
-static HANDLE start_windows_process(char *const argv[]) {
+HANDLE muon_start_windows_process(char *const argv[], const wchar_t *current_directory) {
   if (argv == NULL || argv[0] == NULL || argv[0][0] == '\0') {
     windows_path_error(ERROR_INVALID_PARAMETER);
     return NULL;
@@ -2128,9 +2128,19 @@ static HANDLE start_windows_process(char *const argv[]) {
   }
   STARTUPINFOW startup = {0};
   startup.cb = sizeof(startup);
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  // A GUI launcher has no console from which the child can infer its streams.
+  // Preserve redirected handles when all three were supplied by its caller.
+  if (startup.hStdInput != NULL && startup.hStdInput != INVALID_HANDLE_VALUE &&
+      startup.hStdOutput != NULL && startup.hStdOutput != INVALID_HANDLE_VALUE &&
+      startup.hStdError != NULL && startup.hStdError != INVALID_HANDLE_VALUE) {
+    startup.dwFlags |= STARTF_USESTDHANDLES;
+  }
   PROCESS_INFORMATION process = {0};
   BOOL started = CreateProcessW(application.value, command, NULL, NULL, TRUE, 0,
-                                NULL, NULL, &startup, &process);
+                                NULL, current_directory, &startup, &process);
   DWORD error = started ? ERROR_SUCCESS : GetLastError();
   free(command);
   muon_windows_path_destroy(&application);
@@ -2142,7 +2152,7 @@ static HANDLE start_windows_process(char *const argv[]) {
 
 static int run_process(char *const argv[], int report_command_failure) {
 #ifdef _WIN32
-  HANDLE process = start_windows_process(argv);
+  HANDLE process = muon_start_windows_process(argv, NULL);
   if (process == NULL) {
     muon_print_errno(argv[0]);
     return -1;
@@ -2200,7 +2210,7 @@ static int run_process_with_file_progress(
   muon_report_progress(progress_callback, progress_user_data, phase, status, 0,
                        total, total != 0);
 #ifdef _WIN32
-  HANDLE process_handle = start_windows_process(argv);
+  HANDLE process_handle = muon_start_windows_process(argv, NULL);
   if (process_handle == NULL) {
     muon_print_errno(argv[0]);
     return -1;

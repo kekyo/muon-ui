@@ -227,5 +227,6 @@ int wmain(int argc, wchar_t **argv) {
   }
   if (!wcscmp(argv[1], L"launch")) return launch(argv[2], L"");
   if (!wcscmp(argv[1], L"launch-help")) return launch(argv[2], L" --help");
+  if (!wcscmp(argv[1], L"launch-command") && argc == 4) return launch(argv[2], argv[3]);
   return 2;
 }

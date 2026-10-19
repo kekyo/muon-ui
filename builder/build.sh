@@ -135,7 +135,7 @@ case "${TARGET_NAME}" in
     LAUNCHER_LDLIBS_EXTRA="$(pkg-config --libs xcb)"
     ;;
   windows-*)
-    LAUNCHER_LDLIBS_EXTRA="-lcomctl32 -lgdi32"
+    LAUNCHER_LDLIBS_EXTRA="-lcomctl32 -lgdi32 -limm32"
     ;;
 esac
 

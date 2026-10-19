@@ -9,15 +9,21 @@ PATH_PLUGIN_DEPENDENCY = .run/windows-long-path/$(WINDOWS_TARGET)/path-dependenc
 PATH_PROCESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-process.exe
 PATH_PROGRESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-progress.exe
 PATH_AUTOSTART = .run/windows-long-path/$(WINDOWS_TARGET)/path-autostart.exe
+PATH_SHORTCUT = .run/windows-long-path/$(WINDOWS_TARGET)/path-shortcut.exe
 AUTOSTART_SOURCES = ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp
 
-.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process windows-path-progress windows-path-autostart
+.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process windows-path-progress windows-path-autostart windows-path-shortcut
 windows-long-path-fixture: $(LONG_PATH_FIXTURE)
 windows-path-test: $(LONG_PATH_FIXTURE) $(LONG_PATH_TEST) $(DOWNLOAD_FIXTURE)
 windows-path-plugin: $(PATH_PLUGIN)
 windows-path-process: $(PATH_PROCESS)
 windows-path-progress: $(PATH_PROGRESS)
 windows-path-autostart: $(PATH_AUTOSTART)
+windows-path-shortcut: $(PATH_SHORTCUT)
+
+$(PATH_SHORTCUT): plugin-e2e/windows-path-shortcut.cpp
+	mkdir -p "$(@D)"
+	$(WINDOWS_CXX) -std=c++20 -Wall -Wextra -Werror -pedantic -municode -static -o "$@" "$<" -lole32 -luuid
 
 $(PATH_AUTOSTART): plugin-e2e/windows-path-autostart.cpp $(AUTOSTART_SOURCES) ../cef/src/config/muon_autostart.h
 	mkdir -p "$(@D)"

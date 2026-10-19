@@ -802,6 +802,27 @@ const nsisUninstallRegistryRoot =
 const createNsisUninstallRegistryKey = (appId: string): string =>
   `${nsisUninstallRegistryRoot}\\${appId}`;
 
+const getNsisInstallDirectoryLimit = async (
+  directory: string,
+): Promise<number> => {
+  // NSIS still calls non-prefixed Win32 and shell APIs when the OS long-path
+  // policy is disabled. Reserve room for every extracted name and for removal.
+  // JavaScript string lengths count the UTF-16 units used by Unicode NSIS.
+  let limit = 259 - "\\Uninstall.exe".length;
+  const visit = async (
+    parent: string,
+    relativeLength: number,
+  ): Promise<void> => {
+    for (const entry of await readdir(parent, { withFileTypes: true })) {
+      const length = relativeLength + 1 + entry.name.length;
+      limit = Math.min(limit, (entry.isDirectory() ? 247 : 259) - length);
+      if (entry.isDirectory()) await visit(join(parent, entry.name), length);
+    }
+  };
+  await visit(directory, 0);
+  return Math.min(limit, 247);
+};
+
 const packageNsis = async (
   root: string,
   target: MuonBuildTargetResult,
@@ -832,6 +853,9 @@ const packageNsis = async (
   const uninstallRegistryKey = createNsisUninstallRegistryKey(
     target.runtimeAppId,
   );
+  const installDirectoryLimit = await getNsisInstallDirectoryLimit(
+    target.outputPath,
+  );
   await mkdir(dirname(scriptPath), { recursive: true });
   await mkdir(dirname(outputPath), { recursive: true });
   const iconPath = join(
@@ -849,6 +873,7 @@ const packageNsis = async (
     scriptPath,
     [
       "Unicode true",
+      "ManifestLongPathAware true",
       `Name "${escapeNsis(nsisDisplayName)}"`,
       `OutFile "${escapeNsis(outputPath)}"`,
       ...codeSigningDirectives,
@@ -858,6 +883,21 @@ const packageNsis = async (
       "AutoCloseWindow true",
       ...createNsisResourceDirectives(windowsResource, iconPath),
       "Page instfiles",
+      "Function .onInit",
+      '  StrLen $0 "$INSTDIR"',
+      `  IntCmp $0 ${installDirectoryLimit} check_shortcut check_shortcut path_too_long`,
+      "check_shortcut:",
+      `  StrLen $0 "$SMPROGRAMS\\${escapeNsis(nsisDisplayName)}.lnk"`,
+      "  IntCmp $0 260 path_too_long check_runtime path_too_long",
+      "check_runtime:",
+      `  StrLen $0 "$LOCALAPPDATA\\${escapeNsis(target.runtimeAppId)}\\runtime"`,
+      `  IntCmp $0 ${installDirectoryLimit} paths_valid paths_valid path_too_long`,
+      "path_too_long:",
+      '  MessageBox MB_OK|MB_ICONSTOP "The installation, shortcut, or application data path is too long for this installer. Use a shorter installation directory or application name." /SD IDOK',
+      "  SetErrorLevel 206",
+      "  Quit",
+      "paths_valid:",
+      "FunctionEnd",
       "Section",
       '  SetOutPath "$INSTDIR"',
       `  File /r "${escapeNsis(target.outputPath)}\\*"`,

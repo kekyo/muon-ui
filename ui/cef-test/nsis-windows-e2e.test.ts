@@ -174,7 +174,13 @@ const runWindowsPowerShell = async (
   const scriptPath = joinWindowsPath(remoteDirectory, `${label}.ps1`);
   await agent.files.writeFile(
     scriptPath,
-    Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(script)]),
+    Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n",
+      ),
+      Buffer.from(script),
+    ]),
   );
   return await runWindowsProcess(
     agent,
@@ -922,11 +928,263 @@ afterEach(async () => {
   }
 });
 
-afterAll(() => {
-  windowsAgent?.release();
+afterAll(async () => {
+  await windowsAgent?.release();
 });
 
 describeWindowsNsis(suiteName, { concurrent: false }, () => {
+  it.each(["windows-i686", "windows-amd64"] as const)(
+    "installs at a short Unicode destination and rejects unsupported paths before writing (%s)",
+    async (target) => {
+      if (windowsAgent === undefined)
+        throw new Error("Windows e2e environment is not configured.");
+      await expectMakensisAvailable();
+      const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+      const packageName = `muon-nsis-path-${suffix}`;
+      const appId = `muon.nsis.path.${suffix}`;
+      const identity = createWindowsNsisInstallIdentity(
+        packageName,
+        appId,
+        target,
+      );
+      const localRoot = await createTemporaryDirectory("muon-nsis-path-");
+      const remoteRoot = await createRemoteTestDirectory(
+        windowsAgent,
+        windowsE2eEnvironment,
+        packageName,
+      );
+      const packageDirectory = await createFakeMuonPackageDist(localRoot, [
+        target,
+      ]);
+      await writeViteProject(
+        localRoot,
+        packageDirectory,
+        [target],
+        packageName,
+      );
+      await execFileAsync(
+        "make",
+        [
+          "windows-path-test",
+          "windows-path-shortcut",
+          `WINDOWS_TARGET=${target}`,
+        ],
+        { cwd: resolve("../core/cef-test") },
+      );
+      const fixture = joinWindowsPath(remoteRoot, "fixture.exe");
+      const pathTest = joinWindowsPath(remoteRoot, "path-test.exe");
+      const shortcutTest = joinWindowsPath(remoteRoot, "path-shortcut.exe");
+      for (const [name, path] of [
+        ["fixture", fixture],
+        ["path-test", pathTest],
+        ["path-shortcut", shortcutTest],
+      ] as const) {
+        await windowsAgent.files.writeFile(
+          path,
+          await readFile(
+            resolve(
+              `../core/cef-test/.run/windows-long-path/${target}/${name}.exe`,
+            ),
+          ),
+        );
+      }
+      const directoryOfLength = (length: number): string => {
+        let path = joinWindowsPath(remoteRoot, "data", `日本語😀-${length}`);
+        while (length - path.length > 100)
+          path = win32.join(path, "p".repeat(70));
+        path = win32.join(path, "q".repeat(length - path.length - 1));
+        expect(path.length).toBe(length);
+        return path;
+      };
+      const registry = `HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${identity.runtimeAppId}`;
+      const shortcutScript = `Join-Path $env:APPDATA ${quotePowerShellString(`Microsoft\\Windows\\Start Menu\\Programs\\${identity.displayName}.lnk`)}`;
+      const shortDirectory = directoryOfLength(140);
+      try {
+        const policy = await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "policy",
+          "[pscustomobject]@{ Policy=(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem').LongPathsEnabled; Administrator=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } | ConvertTo-Json -Compress",
+          30000,
+        );
+        expectWindowsCommandSucceeded(policy, "Windows policy");
+        expect(JSON.parse(policy.stdout)).toEqual({
+          Policy: 0,
+          Administrator: false,
+        });
+        const result = await packMuonApp({
+          appId,
+          author: "muon Tester",
+          environment: process.env,
+          packageDirectory,
+          packageName,
+          packageVersion: "1.2.3",
+          root: localRoot,
+          targets: [target],
+          types: ["nsis"],
+        });
+        const artifact = result.artifacts.find(
+          (entry) => entry.type === "nsis" && entry.target === target,
+        );
+        expect(artifact).toBeDefined();
+        const installer = joinWindowsPath(remoteRoot, "setup.exe");
+        await windowsAgent.files.writeFile(
+          installer,
+          await readFile(artifact!.path),
+        );
+        // A short base may still make the installed launcher exceed MAX_PATH.
+        for (const length of [240, 300, 1100]) {
+          const destination = directoryOfLength(length);
+          const rejected = await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "unsupported",
+            installer,
+            ["/S", `/D=${destination}`],
+            30000,
+          );
+          expect(rejected.exitCode, rejected.stderr).toBe(206);
+          expectWindowsCommandSucceeded(
+            await runWindowsProcess(
+              windowsAgent,
+              remoteRoot,
+              "absent",
+              fixture,
+              ["absent", "\\\\?\\" + destination],
+              30000,
+            ),
+            "no partial installation",
+          );
+          const registration = await runWindowsPowerShell(
+            windowsAgent,
+            remoteRoot,
+            "no-registration",
+            `[pscustomobject]@{ Registered=(Test-Path -LiteralPath ${quotePowerShellString(registry)}); Shortcut=(Test-Path -LiteralPath (${shortcutScript})) } | ConvertTo-Json -Compress`,
+            30000,
+          );
+          expectWindowsCommandSucceeded(
+            registration,
+            "no partial registration",
+          );
+          expect(JSON.parse(registration.stdout)).toEqual({
+            Registered: false,
+            Shortcut: false,
+          });
+        }
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "install",
+            installer,
+            ["/S", `/D=${shortDirectory}`],
+            30000,
+          ),
+          "Unicode installation",
+        );
+        const uninstaller = joinWindowsPath(shortDirectory, "Uninstall.exe");
+        for (const executable of [installer, uninstaller]) {
+          expectWindowsCommandSucceeded(
+            await runWindowsProcess(
+              windowsAgent,
+              remoteRoot,
+              "manifest",
+              pathTest,
+              ["manifest", executable],
+              30000,
+            ),
+            "installed executable manifest",
+          );
+        }
+        const registered = await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "registered",
+          `[pscustomobject]@{ Installed=(Get-ItemProperty -LiteralPath ${quotePowerShellString(registry)}).InstallLocation; Shortcut=(${shortcutScript}) } | ConvertTo-Json -Compress`,
+          30000,
+        );
+        expectWindowsCommandSucceeded(registered, "installed shortcut");
+        const installed = JSON.parse(registered.stdout) as {
+          Installed: string;
+          Shortcut: string;
+        };
+        expect(installed.Installed).toBe(shortDirectory);
+        const launcher = joinWindowsPath(shortDirectory, `${packageName}.exe`);
+        expect(await windowsAgent.files.exists(launcher)).toBe(true);
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "shortcut",
+            shortcutTest,
+            [installed.Shortcut, launcher],
+            30000,
+          ),
+          "Unicode shortcut target",
+        );
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "uninstall",
+            uninstaller,
+            ["/S"],
+            30000,
+          ),
+          "Unicode uninstall",
+        );
+        await expect
+          .poll(async () => await windowsAgent.files.exists(shortDirectory), {
+            timeout: 30000,
+          })
+          .toBe(false);
+        const removed = await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "removed",
+          `[pscustomobject]@{ Registered=(Test-Path -LiteralPath ${quotePowerShellString(registry)}); Shortcut=(Test-Path -LiteralPath (${shortcutScript})) } | ConvertTo-Json -Compress`,
+          30000,
+        );
+        expectWindowsCommandSucceeded(removed, "removed registration");
+        expect(JSON.parse(removed.stdout)).toEqual({
+          Registered: false,
+          Shortcut: false,
+        });
+      } finally {
+        const uninstaller = joinWindowsPath(shortDirectory, "Uninstall.exe");
+        if (await windowsAgent.files.exists(uninstaller)) {
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "cleanup-uninstall",
+            uninstaller,
+            ["/S"],
+            30000,
+          );
+        }
+        await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "cleanup-registration",
+          `Remove-Item -LiteralPath ${quotePowerShellString(registry)} -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath (${shortcutScript}) -Force -ErrorAction SilentlyContinue`,
+          30000,
+        );
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "cleanup-data",
+            fixture,
+            ["remove", "\\\\?\\" + joinWindowsPath(remoteRoot, "data")],
+            30000,
+          ),
+          "native cleanup",
+        );
+        await removeRemoteDirectoryIfExists(windowsAgent, remoteRoot);
+      }
+    },
+  );
+
   it("runs muon pack on Windows and skips deb when dpkg-deb is unavailable", async () => {
     if (windowsAgent === undefined) {
       throw new Error("Windows e2e environment is not configured.");

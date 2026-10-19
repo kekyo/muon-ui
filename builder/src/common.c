@@ -311,6 +311,43 @@ char *muon_utf8_from_wide(const wchar_t *value) {
   return result;
 }
 
+wchar_t *muon_wide_from_utf8(const char *value) {
+  int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, NULL, 0);
+  if (length == 0) {
+    windows_path_error(GetLastError());
+    return NULL;
+  }
+  if ((size_t)length > SIZE_MAX / sizeof(wchar_t)) {
+    windows_path_error(ERROR_NOT_ENOUGH_MEMORY);
+    return NULL;
+  }
+  wchar_t *result = malloc((size_t)length * sizeof(wchar_t));
+  if (result == NULL) return NULL;
+  if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, result, length)) {
+    DWORD error = GetLastError();
+    free(result);
+    windows_path_error(error);
+    return NULL;
+  }
+  return result;
+}
+
+int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **)) {
+  char **arguments = calloc((size_t)argc + 1, sizeof(char *));
+  if (arguments == NULL) return EXIT_FAILURE;
+  for (int index = 0; index < argc; ++index) {
+    arguments[index] = muon_utf8_from_wide(argv[index]);
+    if (arguments[index] == NULL) {
+      muon_print_errno("Failed to convert command-line arguments");
+      muon_free_string_array(arguments, (size_t)index);
+      return EXIT_FAILURE;
+    }
+  }
+  int result = entry(argc, arguments);
+  muon_free_string_array(arguments, (size_t)argc);
+  return result;
+}
+
 int muon_windows_io_path(const char *path, muon_windows_path_usage usage,
                          muon_windows_path *result) {
   DWORD error = muon_windows_path_normalize_utf8(path, strlen(path), result);
@@ -473,6 +510,47 @@ int muon_path_exists(const char *path) {
   return muon_access(path, F_OK) == 0;
 }
 
+int muon_get_environment(const char *name, char **value) {
+  *value = NULL;
+#ifdef _WIN32
+  wchar_t *native_name = muon_wide_from_utf8(name);
+  if (native_name == NULL) return -1;
+  DWORD capacity = 256;
+  for (;;) {
+    wchar_t *buffer = malloc((size_t)capacity * sizeof(wchar_t));
+    if (buffer == NULL) { free(native_name); return -1; }
+    SetLastError(ERROR_SUCCESS);
+    DWORD length = GetEnvironmentVariableW(native_name, buffer, capacity);
+    DWORD error = GetLastError();
+    if (length == 0) {
+      free(buffer);
+      free(native_name);
+      return error == ERROR_SUCCESS || error == ERROR_ENVVAR_NOT_FOUND
+          ? 0 : windows_path_error(error);
+    }
+    if (length < capacity) {
+      *value = muon_utf8_from_wide(buffer);
+      free(buffer);
+      free(native_name);
+      return *value == NULL ? -1 : 0;
+    }
+    free(buffer);
+    if (length > 32768) {
+      free(native_name);
+      return windows_path_error(ERROR_BUFFER_OVERFLOW);
+    }
+    // Unlike GetModuleFileNameW, an insufficient buffer returns the required
+    // capacity including the terminator. Retry if the variable grew meanwhile.
+    capacity = length;
+  }
+#else
+  const char *current = getenv(name);
+  if (current == NULL || current[0] == '\0') return 0;
+  *value = muon_duplicate_string(current);
+  return *value == NULL ? -1 : 0;
+#endif
+}
+
 FILE *muon_fopen(const char *path, const char *mode) {
 #ifdef _WIN32
   wchar_t wide_mode[16];
@@ -633,7 +711,12 @@ int muon_ensure_directory(const char *path) {
     wchar_t separator = native.value[index];
     if (separator != L'\\' && separator != L'\0') continue;
     native.value[index] = L'\0';
-    if (!CreateDirectoryW(native.value, NULL)) {
+    if (index == native.root_length) {
+      // Roots are existing drives/shares, never intermediate directories to create.
+      DWORD attributes = GetFileAttributesW(native.value);
+      error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() :
+          (attributes & FILE_ATTRIBUTE_DIRECTORY) ? ERROR_SUCCESS : ERROR_DIRECTORY;
+    } else if (!CreateDirectoryW(native.value, NULL)) {
       error = GetLastError();
       if (error == ERROR_ALREADY_EXISTS) {
         DWORD attributes = GetFileAttributesW(native.value);
@@ -2296,17 +2379,19 @@ void muon_release_lock(const char *lock_path) {
 }
 
 char *muon_create_temporary_path(const char *parent, const char *key) {
-  const int size = snprintf(NULL, 0, "%s/.%s.tmp.%ld.%ld", parent, key,
+  const int size = snprintf(NULL, 0, ".%s.tmp.%ld.%ld", key,
                             (long)muon_getpid(), (long)time(NULL));
   if (size < 0) {
     return NULL;
   }
-  char *result = (char *)malloc((size_t)size + 1);
-  if (result == NULL) {
+  char *name = (char *)malloc((size_t)size + 1);
+  if (name == NULL) {
     return NULL;
   }
-  snprintf(result, (size_t)size + 1, "%s/.%s.tmp.%ld.%ld", parent, key,
+  snprintf(name, (size_t)size + 1, ".%s.tmp.%ld.%ld", key,
            (long)muon_getpid(), (long)time(NULL));
+  char *result = muon_path_join(parent, name);
+  free(name);
   return result;
 }
 

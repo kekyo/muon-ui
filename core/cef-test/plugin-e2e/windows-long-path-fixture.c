@@ -94,6 +94,49 @@ static int write_file(const wchar_t *path, const wchar_t *content) {
   return success && written == (DWORD)length - 1 ? 0 : report_error("write fixture", error);
 }
 
+static int launch(const wchar_t *path) {
+  size_t length = wcslen(path) + 3;
+  wchar_t *command = malloc(length * sizeof(wchar_t));
+  if (command == NULL) return 1;
+  swprintf(command, length, L"\"%ls\"", path);
+  SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+  HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             &security, OPEN_EXISTING, 0, NULL);
+  STARTUPINFOW startup = {0};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = input;
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  if (input == INVALID_HANDLE_VALUE ||
+      !SetHandleInformation(startup.hStdOutput, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) ||
+      !SetHandleInformation(startup.hStdError, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+    DWORD error = GetLastError();
+    if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
+    free(command);
+    return report_error("fixture standard handles", error);
+  }
+  PROCESS_INFORMATION process = {0};
+  BOOL started = CreateProcessW(path, command, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                                NULL, NULL, &startup, &process);
+  DWORD error = started ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(input);
+  free(command);
+  if (!started) return report_error("CreateProcessW", error);
+  DWORD wait = WaitForSingleObject(process.hProcess, 20000);
+  DWORD code = 1;
+  if (wait == WAIT_OBJECT_0) {
+    if (!GetExitCodeProcess(process.hProcess, &code)) error = GetLastError();
+  } else {
+    error = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
+    TerminateProcess(process.hProcess, 1);
+    WaitForSingleObject(process.hProcess, 5000);
+  }
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return error == ERROR_SUCCESS ? (int)code : report_error("fixture child", error);
+}
+
 int wmain(int argc, wchar_t **argv) {
   if ((argc != 3 && argc != 4) || wcslen(argv[2]) < 8 ||
       wcsncmp(argv[2], L"\\\\?\\", 4) || argv[2][5] != L':' || argv[2][6] != L'\\') {
@@ -103,5 +146,10 @@ int wmain(int argc, wchar_t **argv) {
   if (!wcscmp(argv[1], L"mkdir")) return create_directory(argv[2]);
   if (!wcscmp(argv[1], L"remove")) return remove_tree(argv[2]);
   if (!wcscmp(argv[1], L"write") && argc == 4) return write_file(argv[2], argv[3]);
+  if (!wcscmp(argv[1], L"copy") && argc == 4) {
+    return CopyFileExW(argv[3], argv[2], NULL, NULL, NULL, COPY_FILE_FAIL_IF_EXISTS)
+        ? 0 : report_error("CopyFileExW", GetLastError());
+  }
+  if (!wcscmp(argv[1], L"launch")) return launch(argv[2]);
   return 2;
 }

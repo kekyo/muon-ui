@@ -46,21 +46,6 @@
 #define MUON_CEF_SANDBOX_ENVIRONMENT "MUON_CEF_SANDBOX"
 #define MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT "--muon-launch-from=normal"
 
-static int is_path_separator(char value) {
-  return value == '/' || value == '\\';
-}
-
-static void normalize_path_separators(char *path) {
-  if (path == NULL) {
-    return;
-  }
-  for (char *cursor = path; *cursor != '\0'; cursor += 1) {
-    if (*cursor == '\\') {
-      *cursor = '/';
-    }
-  }
-}
-
 static char *duplicate_string(const char *value) {
   const size_t size = strlen(value) + 1;
   char *result = (char *)malloc(size);
@@ -71,54 +56,14 @@ static char *duplicate_string(const char *value) {
   return result;
 }
 
-static char *path_join(const char *left, const char *right) {
-  const int needs_separator = !is_path_separator(left[strlen(left) - 1]);
-  const size_t size = strlen(left) + strlen(right) + (needs_separator ? 2 : 1);
-  char *result = (char *)malloc(size);
-  if (result == NULL) {
-    return NULL;
-  }
-  snprintf(result, size, needs_separator ? "%s/%s" : "%s%s", left, right);
-  return result;
-}
-
-static char *parent_directory(const char *path) {
-  const char *slash = strrchr(path, '/');
-  if (slash == NULL) {
-    return duplicate_string(".");
-  }
-  if (slash == path) {
-    return duplicate_string("/");
-  }
-#ifdef _WIN32
-  if (slash == path + 2 && ((path[0] >= 'A' && path[0] <= 'Z') ||
-                            (path[0] >= 'a' && path[0] <= 'z')) &&
-      path[1] == ':') {
-    char *root = (char *)malloc(4);
-    if (root == NULL) {
-      return NULL;
-    }
-    memcpy(root, path, 3);
-    root[3] = '\0';
-    return root;
-  }
-#endif
-  const size_t length = (size_t)(slash - path);
-  char *result = (char *)malloc(length + 1);
-  if (result == NULL) {
-    return NULL;
-  }
-  memcpy(result, path, length);
-  result[length] = '\0';
-  return result;
-}
-
 static char *file_stem(const char *path) {
   const char *start = path;
   const char *slash = strrchr(path, '/');
-  if (slash != NULL) {
-    start = slash + 1;
-  }
+#ifdef _WIN32
+  const char *backslash = strrchr(path, '\\');
+  if (backslash != NULL && (slash == NULL || backslash > slash)) slash = backslash;
+#endif
+  if (slash != NULL) start = slash + 1;
   const char *end = start + strlen(start);
 #ifdef _WIN32
   if (end - start > 4 && strcmp(end - 4, ".exe") == 0) {
@@ -180,24 +125,41 @@ static char *resolve_app_id(const char *launcher_path) {
 static char *get_launcher_path(const char *argv0) {
 #ifdef _WIN32
   (void)argv0;
-  char buffer[PATH_MAX];
-  const DWORD length = GetModuleFileNameA(NULL, buffer, (DWORD)sizeof(buffer));
-  if (length == 0 || length >= sizeof(buffer)) {
-    return NULL;
+  DWORD capacity = 256;
+  for (;;) {
+    wchar_t *buffer = malloc((size_t)capacity * sizeof(wchar_t));
+    if (buffer == NULL) return NULL;
+    DWORD length = GetModuleFileNameW(NULL, buffer, capacity);
+    DWORD error = GetLastError();
+    if (length == 0) {
+      free(buffer);
+      SetLastError(error);
+      return NULL;
+    }
+    if (length < capacity) {
+      char *result = muon_utf8_from_wide(buffer);
+      free(buffer);
+      muon_normalize_path_separators(result);
+      return result;
+    }
+    free(buffer);
+    if (capacity == 32768) {
+      errno = ENAMETOOLONG;
+      SetLastError(ERROR_FILENAME_EXCED_RANGE);
+      return NULL;
+    }
+    capacity *= 2;
   }
-  buffer[length] = '\0';
-  normalize_path_separators(buffer);
-  return duplicate_string(buffer);
 #else
   char buffer[PATH_MAX];
   const ssize_t length = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
   if (length >= 0) {
     buffer[length] = '\0';
-    normalize_path_separators(buffer);
+    muon_normalize_path_separators(buffer);
     return duplicate_string(buffer);
   }
   char *fallback = duplicate_string(argv0);
-  normalize_path_separators(fallback);
+  muon_normalize_path_separators(fallback);
   return fallback;
 #endif
 }
@@ -216,18 +178,18 @@ static const char *get_core_executable_name(void) {
 
 static char *get_default_state_home(void) {
 #ifdef _WIN32
-  const char *local_app_data = getenv("LOCALAPPDATA");
-  if (local_app_data != NULL && local_app_data[0] != '\0') {
-    return muon_duplicate_path_string(local_app_data);
+  char *local_app_data = NULL;
+  if (muon_get_environment("LOCALAPPDATA", &local_app_data) != 0) return NULL;
+  if (local_app_data != NULL) {
+    muon_normalize_path_separators(local_app_data);
+    return local_app_data;
   }
-  const char *user_profile = getenv("USERPROFILE");
-  if (user_profile != NULL && user_profile[0] != '\0') {
-    char *normalized = muon_duplicate_path_string(user_profile);
-    char *result =
-        normalized == NULL
-            ? NULL
-            : muon_path_join3(normalized, "AppData", "Local");
-    free(normalized);
+  char *user_profile = NULL;
+  if (muon_get_environment("USERPROFILE", &user_profile) != 0) return NULL;
+  if (user_profile != NULL) {
+    muon_normalize_path_separators(user_profile);
+    char *result = muon_path_join3(user_profile, "AppData", "Local");
+    free(user_profile);
     return result;
   }
 #else
@@ -1230,7 +1192,7 @@ int main(int argc, char **argv) {
 
   char *launcher_path = get_launcher_path(argv[0]);
   char *source_runtime_dir =
-      launcher_path == NULL ? NULL : parent_directory(launcher_path);
+      launcher_path == NULL ? NULL : muon_parent_directory(launcher_path);
   char *app_id = launcher_path == NULL ? NULL : resolve_app_id(launcher_path);
   MuonInstallConfig install;
   install_config_init(&install);
@@ -1253,7 +1215,7 @@ int main(int argc, char **argv) {
   }
   char *core_path = runtime_dir == NULL
                         ? NULL
-                        : path_join(runtime_dir, get_core_executable_name());
+                        : muon_path_join(runtime_dir, get_core_executable_name());
   if (launcher_path == NULL || source_runtime_dir == NULL || app_id == NULL ||
       runtime_dir == NULL || core_path == NULL) {
     fprintf(stderr, "muon-launcher: failed to resolve runtime directory.\n");
@@ -1265,12 +1227,17 @@ int main(int argc, char **argv) {
     install_config_free(&install);
     return 1;
   }
-  const char *cache_dir = getenv("MUON_CACHE_DIR");
-  int exit_code = 0;
+  char *cache_dir = NULL;
+  int exit_code = 1;
+  if (muon_get_environment("MUON_CACHE_DIR", &cache_dir) != 0) {
+    fprintf(stderr, "muon-launcher: failed to read cache environment.\n");
+    goto done;
+  }
   do {
     if (install.is_system_setuid) {
 #ifdef _WIN32
       fprintf(stderr, "muon-launcher: system-setuid runtime is unsupported on Windows.\n");
+      free(cache_dir);
       free(launcher_path);
       free(source_runtime_dir);
       free(app_id);
@@ -1280,6 +1247,7 @@ int main(int argc, char **argv) {
       return 1;
 #else
       if (run_privileged_prepare_helper(install.privileged_prepare_path) != 0) {
+        free(cache_dir);
         free(launcher_path);
         free(source_runtime_dir);
         free(app_id);
@@ -1301,6 +1269,7 @@ int main(int argc, char **argv) {
           muon_launcher_progress_fail(&progress);
         }
         muon_launcher_progress_dispose(&progress);
+        free(cache_dir);
         free(launcher_path);
         free(source_runtime_dir);
         free(app_id);
@@ -1322,6 +1291,7 @@ int main(int argc, char **argv) {
           muon_launcher_progress_fail(&progress);
         }
         muon_launcher_progress_dispose(&progress);
+        free(cache_dir);
         free(launcher_path);
         free(source_runtime_dir);
         free(app_id);
@@ -1338,6 +1308,8 @@ int main(int argc, char **argv) {
                             install.is_appimage ? install.launcher_path : NULL,
                             install.is_system_setuid, argc, argv);
   } while (exit_code == MUON_RECYCLE_EXIT_CODE);
+done:
+  free(cache_dir);
   free(launcher_path);
   free(source_runtime_dir);
   free(app_id);

@@ -22,6 +22,22 @@
 char *muon_utf8_from_wide(const wchar_t *value);
 
 /**
+ * Converts a UTF-8 string to newly allocated, strict UTF-16.
+ * @param value Null-terminated UTF-8 input.
+ * @return Owned string to free, or NULL with errno set on failure.
+ */
+wchar_t *muon_wide_from_utf8(const char *value);
+
+/**
+ * Runs an entry point with owned UTF-8 arguments converted from Windows argv.
+ * @param argc Argument count, including the executable name.
+ * @param argv Null-terminated UTF-16 argument array from wmain.
+ * @param entry Entry point which borrows the converted arguments during the call.
+ * @return Entry point result, or EXIT_FAILURE if conversion or allocation fails.
+ */
+int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **));
+
+/**
  * Resolves a builder path for a Windows filesystem operation.
  * @param path Null-terminated UTF-8 path.
  * @param usage File or tree operation; tree operations preserve child names.
@@ -31,6 +47,14 @@ char *muon_utf8_from_wide(const wchar_t *value);
 int muon_windows_io_path(const char *path, muon_windows_path_usage usage,
                          muon_windows_path *result);
 #endif
+
+/**
+ * Reads an environment variable without a Windows ANSI-codepage conversion.
+ * @param name UTF-8 environment variable name.
+ * @param value Receives an owned UTF-8 string to free, or NULL if unset/empty.
+ * @return 0 on success, or -1 with errno set on failure and an empty output.
+ */
+int muon_get_environment(const char *name, char **value);
 
 /** Opaque directory enumeration, released with muon_closedir. */
 typedef struct MuonDirectory MuonDirectory;

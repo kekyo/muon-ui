@@ -140,9 +140,45 @@ char *muon_substring(const char *start, size_t length) {
   return result;
 }
 
+// The state-directory harness isolates path selection from real filesystem I/O.
+void muon_normalize_path_separators(char *path) {
+  if (path == NULL) return;
+  for (char *cursor = path; *cursor != '\0'; ++cursor) {
+    if (*cursor == '\\') *cursor = '/';
+  }
+}
+
+char *muon_parent_directory(const char *path) {
+  const char *slash = strrchr(path, '/');
+  return slash == NULL ? muon_substring(".", 1) :
+      muon_substring(path, slash == path ? 1 : (size_t)(slash - path));
+}
+
+int muon_get_environment(const char *name, char **value) {
+  const char *current = getenv(name);
+  *value = current == NULL || current[0] == '\0' ? NULL :
+      muon_substring(current, strlen(current));
+  return 0;
+}
+
+#ifdef _WIN32
+char *muon_utf8_from_wide(const wchar_t *value) {
+  int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
+                                  NULL, 0, NULL, NULL);
+  if (length == 0) return NULL;
+  char *result = malloc((size_t)length);
+  if (result != NULL && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
+                                            result, length, NULL, NULL)) {
+    free(result);
+    return NULL;
+  }
+  return result;
+}
+#endif
+
 char *muon_duplicate_path_string(const char *value) {
   char *result = muon_substring(value, strlen(value));
-  normalize_path_separators(result);
+  muon_normalize_path_separators(result);
   return result;
 }
 
@@ -153,7 +189,8 @@ char *muon_path_join(const char *left, const char *right) {
   if (right == NULL || right[0] == '\0') {
     return muon_substring(left, strlen(left));
   }
-  const int needs_separator = !is_path_separator(left[strlen(left) - 1]);
+  const char last = left[strlen(left) - 1];
+  const int needs_separator = last != '/' && last != '\\';
   const size_t size = strlen(left) + strlen(right) + (needs_separator ? 2 : 1);
   char *result = (char *)malloc(size);
   if (result == NULL) {

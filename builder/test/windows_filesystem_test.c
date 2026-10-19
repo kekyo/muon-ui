@@ -233,6 +233,10 @@ int wmain(int argc, wchar_t **argv) {
   int result = 2;
   if (!wcscmp(argv[1], L"mkdir")) {
     result = muon_ensure_directory(path) == 0 ? 0 : fail("recursive mkdir");
+  } else if (!wcscmp(argv[1], L"exists-directory")) {
+    struct stat entry;
+    result = muon_stat(path, &entry) == 0 && S_ISDIR(entry.st_mode)
+        ? 0 : fail("expected directory");
   } else if (!wcscmp(argv[1], L"files") && argc == 4) {
     result = files(path, argv[3]);
   } else if (!wcscmp(argv[1], L"tree") && other != NULL) {

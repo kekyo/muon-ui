@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { win32 } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { connectRemoteAgent, type RemoteAgent } from "agent-rover";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -18,10 +19,17 @@ const environment = resolveWindowsE2eEnvironment(process.env);
 let agent: RemoteAgent;
 let directory: string;
 
-const run = async (path: string, args: string[]) => {
+const run = async (
+  path: string,
+  args: string[],
+  processEnvironment: Readonly<Record<string, string>> | undefined,
+) => {
   const process = await agent.processes.launchManaged({
     path,
     arguments: args,
+    ...(processEnvironment === undefined
+      ? {}
+      : { environment: processEnvironment }),
     workingDirectory: directory,
     createNoWindow: true,
     captureStdout: true,
@@ -53,16 +61,30 @@ beforeAll(async () => {
       "windows-long-path-fixture",
       `WINDOWS_TARGET=${target}`,
     ]);
-    await execFileAsync("npm", [
-      "run",
-      "build:target",
-      "--workspace",
-      "muon-builder",
-      "--",
-      "test",
-      "Release",
-      target,
-    ]);
+    await execFileAsync(
+      "npm",
+      [
+        "run",
+        "build:target",
+        "--workspace",
+        "muon-builder",
+        "--",
+        "test",
+        "Release",
+        target,
+      ],
+      {
+        env: {
+          ...process.env,
+          MUON_RUNTIME_INFO_HEADER: fileURLToPath(
+            new URL(
+              "../../builder/test/windows_runtime_info.h",
+              import.meta.url,
+            ),
+          ),
+        },
+      },
+    );
   }
   agent = await connectRemoteAgent({
     section: environment.section,
@@ -72,20 +94,28 @@ beforeAll(async () => {
   directory = await agent.files.mkdtemp(
     win32.join(environment.workDir, "builder-path-"),
   );
-  const policy = await run("reg.exe", [
-    "query",
-    String.raw`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`,
-    "/v",
-    "LongPathsEnabled",
-  ]);
+  const policy = await run(
+    "reg.exe",
+    [
+      "query",
+      String.raw`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`,
+      "/v",
+      "LongPathsEnabled",
+    ],
+    undefined,
+  );
   expect(policy.code, policy.stderr).toBe(0);
   expect(policy.stdout).toMatch(/LongPathsEnabled\s+REG_DWORD\s+0x0\b/i);
-  const privilege = await run("powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
-  ]);
+  const privilege = await run(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+    ],
+    undefined,
+  );
   expect(privilege.code, privilege.stderr).toBe(0);
   expect(privilege.stdout.trim()).toBe("False");
   for (const target of targets) {
@@ -99,6 +129,14 @@ beforeAll(async () => {
         `../../builder/.run/test-${target}-release/windows-filesystem-test.exe`,
       ),
     );
+    for (const executable of ["muon-builder", "muon-launcher"]) {
+      await agent.files.writeFile(
+        win32.join(directory, `${target}-${executable}.exe`),
+        await readFile(
+          `../../builder/.run/test-${target}-release/${executable}.exe`,
+        ),
+      );
+    }
   }
 });
 
@@ -115,17 +153,18 @@ describe.each(targets)(
   "builder Windows filesystem (%s, policy=0, ordinary user)",
   (target) => {
     const fixture = async (mode: string, path: string, args: string[] = []) => {
-      const result = await run(win32.join(directory, `${target}-fixture.exe`), [
-        mode,
-        "\\\\?\\" + path,
-        ...args,
-      ]);
+      const result = await run(
+        win32.join(directory, `${target}-fixture.exe`),
+        [mode, "\\\\?\\" + path, ...args],
+        undefined,
+      );
       expect(result.code, result.stderr).toBe(0);
     };
     const builder = async (mode: string, path: string, args: string[] = []) => {
       const result = await run(
         win32.join(directory, `${target}-builder-test.exe`),
         [mode, path, ...args],
+        undefined,
       );
       expect(result.code, result.stderr).toBe(0);
     };
@@ -278,14 +317,18 @@ describe.each(targets)(
         await fixture("mkdir", parent);
         await fixture("mkdir", targetPath);
         await fixture("write", sentinel, ["untouched"]);
-        const linked = await run("cmd.exe", [
-          "/d",
-          "/c",
-          "mklink",
-          "/J",
-          "\\\\?\\" + win32.join(parent, "junction"),
-          targetPath,
-        ]);
+        const linked = await run(
+          "cmd.exe",
+          [
+            "/d",
+            "/c",
+            "mklink",
+            "/J",
+            "\\\\?\\" + win32.join(parent, "junction"),
+            targetPath,
+          ],
+          undefined,
+        );
         expect(linked.code, linked.stderr + linked.stdout).toBe(0);
         await builder("contents", win32.join(parent, "junction", "keep.txt"), [
           "untouched",
@@ -296,5 +339,150 @@ describe.each(targets)(
         await fixture("remove", root);
       }
     });
+
+    it.each([
+      [140, false],
+      [300, false],
+      [4200, false],
+      [300, true],
+    ] as const)(
+      "prepares and reuses a runtime from Unicode CLI paths at %i units (extended=%s)",
+      async (length, extended) => {
+        const root = win32.join(directory, `${target}-cli-${length}`);
+        const parent = directoryOfLength(win32.join(root, "日本語😀"), length);
+        const source = win32.join(parent, "muon");
+        const cef = win32.join(parent, "cef");
+        const output = win32.join(parent, "output");
+        const cache = win32.join(parent, "cache");
+        const argumentPath = (path: string) =>
+          (extended ? "\\\\?\\" : "") + path;
+        try {
+          await fixture("mkdir", source);
+          await fixture("write", win32.join(source, "muon-core.exe"), [
+            "local core payload",
+          ]);
+          await fixture("mkdir", win32.join(cef, "Release"));
+          await fixture("write", win32.join(cef, "Release", "libcef.dll"), [
+            "local CEF payload",
+          ]);
+          for (const cacheHit of [false, true]) {
+            const result = await run(
+              win32.join(directory, `${target}-muon-builder.exe`),
+              [
+                "runtime",
+                "--muon-path",
+                argumentPath(source),
+                "--cef-path",
+                argumentPath(cef),
+                "--stage-dir",
+                argumentPath(output),
+                "--cache-dir",
+                argumentPath(cache),
+                "--target",
+                target,
+                "--json",
+              ],
+              undefined,
+            );
+            expect(result.code, result.stderr).toBe(0);
+            expect(JSON.parse(result.stdout)).toMatchObject({ cacheHit });
+            await builder("contents", win32.join(output, "muon-core.exe"), [
+              "local core payload",
+            ]);
+            await builder("contents", win32.join(output, "libcef.dll"), [
+              "local CEF payload",
+            ]);
+          }
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
+    it.each(["MUON_CACHE_DIR", "LOCALAPPDATA", "USERPROFILE"])(
+      "reads a Unicode long cache path from %s",
+      async (name) => {
+        const root = win32.join(directory, `${target}-env-${name}`);
+        const parent = directoryOfLength(win32.join(root, "日本語😀"), 300);
+        const source = win32.join(root, "muon");
+        const cef = win32.join(root, "cef");
+        const expected =
+          name === "MUON_CACHE_DIR"
+            ? parent
+            : name === "LOCALAPPDATA"
+              ? win32.join(parent, "muon")
+              : win32.join(parent, ".cache", "muon");
+        try {
+          await fixture("mkdir", source);
+          await fixture("write", win32.join(source, "muon-core.exe"), ["core"]);
+          await fixture("mkdir", cef);
+          await fixture("write", win32.join(cef, "libcef.dll"), ["cef"]);
+          const result = await run(
+            win32.join(directory, `${target}-muon-builder.exe`),
+            [
+              "runtime",
+              "--muon-path",
+              source,
+              "--cef-path",
+              cef,
+              "--stage-dir",
+              win32.join(root, "output"),
+              "--target",
+              target,
+              "--json",
+            ],
+            {
+              MUON_CACHE_DIR: "",
+              LOCALAPPDATA: "",
+              USERPROFILE: "",
+              [name]: parent,
+            },
+          );
+          expect(result.code, result.stderr).toBe(0);
+          // This checks the actual selected directory, rather than displayed JSON.
+          await builder("exists-directory", expected);
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
+    it.each([
+      [140, false],
+      [140, true],
+      [300, true],
+      [4200, true],
+    ] as const)(
+      "reads adjacent launcher metadata at %i units (Unicode=%s)",
+      async (length, unicode) => {
+        const root = win32.join(directory, `${target}-launcher-${length}`);
+        const parent = directoryOfLength(
+          win32.join(root, unicode ? "日本語😀" : "ascii"),
+          length,
+        );
+        const executable = win32.join(parent, "muon-launcher.exe");
+        try {
+          await fixture("mkdir", parent);
+          await fixture("copy", executable, [
+            win32.join(directory, `${target}-muon-launcher.exe`),
+          ]);
+          await fixture("write", win32.join(parent, "muon-install.json"), [
+            "invalid json",
+          ]);
+          const result = await run(
+            win32.join(directory, `${target}-fixture.exe`),
+            ["launch", "\\\\?\\" + executable],
+            {
+              LOCALAPPDATA: win32.join(root, "state"),
+              MUON_CACHE_DIR: win32.join(root, "cache"),
+            },
+          );
+          expect(result.code, result.stderr).toBe(1);
+          expect(result.stderr).toContain("failed to read install metadata");
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
   },
 );

@@ -188,6 +188,28 @@ std::filesystem::path CreateLocalFilesystemIoPath(
     std::string_view value, LocalFilesystemIoUsage usage);
 std::string PathToUtf8String(const std::filesystem::path& path);
 /**
+ * Formats a native result without changing the filesystem object it denotes.
+ * @param path Native result, including Windows extended or NT link syntax.
+ * @param preserve_extended Whether the caller explicitly requested extended syntax.
+ * @return UTF-8 path; Windows prefixes are omitted only for equivalent ordinary names.
+ * @remarks Relative link targets remain relative. Exact trailing dots, spaces and
+ * DOS-device filenames retain their extended namespace.
+ */
+std::string PathToPublicUtf8String(const std::filesystem::path& path,
+                                   bool preserve_extended);
+/**
+ * Formats an operation error with a path and the original failure detail.
+ * @param action Filesystem operation name.
+ * @param path Native path identifying the failing object.
+ * @param detail Failure description, including the native error number.
+ * @return Diagnostic text with Windows paths shortened to fit the callback ABI.
+ * @remarks Retains the beginning and end of a long path, cutting only at UTF-8
+ * character boundaries, so the callback limit does not discard the error code.
+ */
+std::string FormatFilesystemError(const char* action,
+                                   const std::filesystem::path& path,
+                                   std::string_view detail);
+/**
  * Reads the type and CRT-compatible permission flags of a native I/O path.
  * @param path Path already converted for the receiving filesystem operation.
  * @param follow_symlink Whether to describe a link's target instead of the link.
@@ -207,8 +229,6 @@ std::string CreateStatusJson(const std::filesystem::path& path,
  */
 std::string CreateDirentJson(const std::filesystem::path& path);
 #endif
-std::string CreateDirentJson(
-    const std::filesystem::directory_entry& entry);
 void ThrowFilesystemError(const char* action,
                           const std::filesystem::path& path,
                           const std::error_code& error);

@@ -420,11 +420,13 @@ if(MINGW)
   set(CEF_LINKER_FLAGS)
   set(CEF_LINKER_FLAGS_DEBUG)
   set(CEF_LINKER_FLAGS_RELEASE)
+  # Share the packaged MinGW C++ runtime with cardio and libmuon-ui. Mixing a
+  # static executable runtime with those DLLs aborts during DW2 exception
+  # unwinding on i686, even when the filesystem caller catches the exception.
+  # https://gcc.gnu.org/onlinedocs/gcc/Link-Options.html#index-shared-libgcc
   set(CEF_EXE_LINKER_FLAGS
     ${MINGW_ARCH_FLAGS}
     -mwindows
-    -static-libgcc
-    -static-libstdc++
     -Wl,--gc-sections
     ${MINGW_STACK_FLAG}
     )

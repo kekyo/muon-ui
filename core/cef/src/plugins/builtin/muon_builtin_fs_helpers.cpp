@@ -7,6 +7,7 @@
 #include "plugins/builtin/muon_builtin_fs_helpers.h"
 
 #include "muon_json_helpers.h"
+#include "muon_plugin_api.h"
 #include "yyjson.h"
 
 #include <cardio.h>
@@ -243,6 +244,49 @@ std::string PathToUtf8String(const std::filesystem::path& path) {
 #endif
 }
 
+std::string PathToPublicUtf8String(const std::filesystem::path& path,
+                                   bool preserve_extended) {
+#if defined(_WIN32)
+  auto exact = path.native();
+  if (exact.starts_with(L"\\??\\")) {
+    exact.replace(0, 4, L"\\\\?\\");
+  }
+  auto ordinary = std::wstring{};
+  if (!preserve_extended && exact.starts_with(L"\\\\?\\UNC\\")) {
+    ordinary = L"\\\\" + exact.substr(8);
+  } else if (!preserve_extended && exact.starts_with(L"\\\\?\\") &&
+             exact.size() >= 7 && exact[5] == L':' && exact[6] == L'\\') {
+    ordinary = exact.substr(4);
+  }
+  if (!ordinary.empty()) {
+    // Normalization can trim a component, including a parent directory. Do not
+    // turn an exact name into a different ordinary name, even if both exist.
+    auto safe = true;
+    for (size_t i = 0; i < ordinary.size(); ++i) {
+      if ((ordinary[i] == L'.' || ordinary[i] == L' ') &&
+          (i + 1 == ordinary.size() || ordinary[i + 1] == L'\\')) {
+        safe = false;
+        break;
+      }
+    }
+    if (safe) {
+      auto normalized = muon_windows_path{};
+      const auto owner = std::unique_ptr<muon_windows_path,
+          decltype(&muon_windows_path_destroy)>(&normalized, &muon_windows_path_destroy);
+      const auto error = muon_windows_path_normalize_wide(
+          ordinary.data(), ordinary.size(), &normalized);
+      if (error == ERROR_SUCCESS && ordinary == normalized.value) {
+        return PathToUtf8String(std::filesystem::path(ordinary));
+      }
+    }
+  }
+  return PathToUtf8String(std::filesystem::path(exact));
+#else
+  (void)preserve_extended;
+  return PathToUtf8String(path);
+#endif
+}
+
 #if !defined(_WIN32)
 static int64_t FileTimeToUnixMillis(
     std::filesystem::file_time_type file_time) {
@@ -291,6 +335,31 @@ static std::string FilesystemErrorMessage(const std::error_code& error) {
 #endif
 }
 
+std::string FormatFilesystemError(const char* action,
+                                   const std::filesystem::path& path,
+                                   std::string_view detail) {
+  const auto prefix = std::string(action) + " failed for ";
+  const auto suffix = ": " + std::string(detail);
+  auto name = PathToPublicUtf8String(path, false);
+#if defined(_WIN32)
+  constexpr auto limit = size_t{MUON_COMPLETION_ERROR_MESSAGE_CAPACITY - 1};
+  const auto available = limit - std::min(limit, prefix.size() + suffix.size());
+  if (name.size() > available && available > 3) {
+    auto first = available / 3;
+    while (first > 0 && (static_cast<unsigned char>(name[first]) & 0xc0) == 0x80) {
+      --first;
+    }
+    auto last = name.size() - (available - first - 3);
+    while (last < name.size() &&
+           (static_cast<unsigned char>(name[last]) & 0xc0) == 0x80) {
+      ++last;
+    }
+    name = name.substr(0, first) + "..." + name.substr(last);
+  }
+#endif
+  return prefix + name + suffix;
+}
+
 void ThrowFilesystemError(const char* action,
                           const std::filesystem::path& path,
                           const std::error_code& error) {
@@ -298,8 +367,7 @@ void ThrowFilesystemError(const char* action,
     return;
   }
   throw std::runtime_error(
-      std::string(action) + " failed for " + PathToUtf8String(path) +
-      ": " + FilesystemErrorMessage(error));
+      FormatFilesystemError(action, path, FilesystemErrorMessage(error)));
 }
 
 void ThrowIfNotRegularFile(const std::filesystem::path& path,
@@ -456,31 +524,6 @@ std::string CreateDirentJson(const std::filesystem::path& path) {
   return result;
 }
 #endif
-
-std::string CreateDirentJson(
-    const std::filesystem::directory_entry& entry) {
-#if defined(_WIN32)
-  return CreateDirentJson(entry.path());
-#else
-  std::error_code error;
-  const auto status = entry.symlink_status(error);
-  ThrowFilesystemError("stat", entry.path(), error);
-  auto result = std::string("{\"name\":");
-  AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
-  result += ",\"type\":";
-  AppendJsonString(&result, FileTypeName(status.type()));
-  result += ",\"size\":";
-  result += std::to_string(ReadFileSize(entry.path(), status));
-  result += ",\"mtimeMs\":";
-  const auto last_write_time = entry.last_write_time(error);
-  ThrowFilesystemError("last_write_time", entry.path(), error);
-  result += std::to_string(FileTimeToUnixMillis(last_write_time));
-  result += ",\"readonly\":";
-  result += IsReadonly(status.permissions()) ? "true" : "false";
-  result += "}";
-  return result;
-#endif
-}
 
 static bool ReadOptionalBool(yyjson_val* object,
                              const char* key,

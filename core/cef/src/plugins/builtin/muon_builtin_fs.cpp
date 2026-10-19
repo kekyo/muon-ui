@@ -573,24 +573,6 @@ static void RemoveWindowsTree(const std::filesystem::path& path,
   }
 }
 
-static bool StartsWithWide(std::wstring_view value,
-                           std::wstring_view prefix) {
-  return value.size() >= prefix.size() &&
-         value.substr(0, prefix.size()) == prefix;
-}
-
-static std::wstring StripWindowsNtPathPrefix(std::wstring value) {
-  if (StartsWithWide(value, L"\\??\\UNC\\") ||
-      StartsWithWide(value, L"\\\\?\\UNC\\")) {
-    return L"\\\\" + value.substr(8);
-  }
-  if (StartsWithWide(value, L"\\??\\") ||
-      StartsWithWide(value, L"\\\\?\\")) {
-    return value.substr(4);
-  }
-  return value;
-}
-
 static std::wstring ReadWindowsReparseName(const WCHAR* path_buffer,
                                            size_t path_buffer_offset,
                                            DWORD returned_bytes,
@@ -646,29 +628,24 @@ static std::wstring ReadWindowsSymbolicLinkTarget(
   if (reparse_tag == IO_REPARSE_TAG_SYMLINK) {
     const auto* data =
         reinterpret_cast<const MuonFsSymbolicLinkReparseData*>(buffer.data());
-    const auto uses_print_name = data->print_name_length != 0;
-    auto target = ReadWindowsReparseName(
+    // The substitute name identifies the target. The optional print name is
+    // only a display spelling and can lose an exact trailing dot or space.
+    return ReadWindowsReparseName(
         data->path_buffer,
         offsetof(MuonFsSymbolicLinkReparseData, path_buffer),
         returned_bytes,
-        uses_print_name ? data->print_name_offset
-                        : data->substitute_name_offset,
-        uses_print_name ? data->print_name_length
-                        : data->substitute_name_length);
-    return StripWindowsNtPathPrefix(std::move(target));
+        data->substitute_name_offset,
+        data->substitute_name_length);
   }
   if (reparse_tag == IO_REPARSE_TAG_MOUNT_POINT) {
     const auto* data =
         reinterpret_cast<const MuonFsMountPointReparseData*>(buffer.data());
-    const auto uses_print_name = data->print_name_length != 0;
-    return StripWindowsNtPathPrefix(ReadWindowsReparseName(
+    return ReadWindowsReparseName(
         data->path_buffer,
         offsetof(MuonFsMountPointReparseData, path_buffer),
         returned_bytes,
-        uses_print_name ? data->print_name_offset
-                        : data->substitute_name_offset,
-        uses_print_name ? data->print_name_length
-                        : data->substitute_name_length));
+        data->substitute_name_offset,
+        data->substitute_name_length);
   }
   throw std::runtime_error("Path is not a symbolic link");
 }
@@ -677,8 +654,8 @@ static std::string CreateWindowsFilesystemErrorMessage(
     const char* action,
     const std::filesystem::path& path,
     DWORD error_code) {
-  return std::string(action) + " failed for " + PathToUtf8String(path) +
-         ": " + WindowsErrorMessage("Windows filesystem API failed", error_code);
+  return FormatFilesystemError(
+      action, path, WindowsErrorMessage("Windows filesystem API failed", error_code));
 }
 
 static std::string TryCreateWindowsSymbolicLink(
@@ -2398,7 +2375,7 @@ static cardio::promise<std::string> RealpathAsync(
         cancellation.throw_if_cancellation_requested();
         const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         // Resolve the opened target, including Windows reparse points, before
-        // removing the NT path prefix from the public filesystem result.
+        // choosing a public spelling that denotes the same object.
         auto file = MuonFsFile(CreateFileW(
             target.c_str(), 0,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -2422,8 +2399,10 @@ static cardio::promise<std::string> RealpathAsync(
           canonical.resize(length);
         }
         cancellation.throw_if_cancellation_requested();
-        return PathToUtf8String(std::filesystem::path(
-            StripWindowsNtPathPrefix(std::move(canonical))));
+        const auto explicit_extended =
+            NormalizeLocalPathOrFileUri(path).starts_with("\\\\?\\");
+        return PathToPublicUtf8String(std::filesystem::path(canonical),
+                                      explicit_extended);
       });
 }
 
@@ -2435,10 +2414,10 @@ static cardio::promise<std::string> ReadlinkAsync(
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto link_path = CreateLocalFilesystemPath(path);
+        const auto link_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         const auto target = ReadWindowsSymbolicLinkTarget(link_path);
         cancellation.throw_if_cancellation_requested();
-        return PathToUtf8String(std::filesystem::path(target));
+        return PathToPublicUtf8String(std::filesystem::path(target), false);
       });
 }
 
@@ -2455,8 +2434,11 @@ static cardio::promise<std::string> SymlinkAsync(
        type = std::move(type),
        cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target_path = CreateLocalFilesystemPath(target);
-        const auto link_path = CreateLocalFilesystemPath(path);
+        auto target_path = CreateLocalFilesystemPath(target);
+        if (target_path.is_absolute()) {
+          target_path = CreateLocalFilesystemIoPath(target, LocalFilesystemIoUsage::File);
+        }
+        const auto link_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         if (type == "dir" || type == "junction") {
           const auto error = TryCreateWindowsSymbolicLink(
               target_path, link_path, SYMBOLIC_LINK_FLAG_DIRECTORY);
@@ -2485,10 +2467,8 @@ static cardio::promise<std::string> WatchSnapshotAsync(
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target = CreateLocalFilesystemPath(path);
-        std::error_code error;
-        const auto status = std::filesystem::symlink_status(target, error);
-        ThrowFilesystemError("watch", target, error);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::Tree);
+        const auto status = ReadFilesystemStatus(target, false);
         auto result = std::string("{\"root\":");
         result += CreateStatusJson(target, false);
         result += ",\"entries\":";
@@ -2496,16 +2476,14 @@ static cardio::promise<std::string> WatchSnapshotAsync(
             !std::filesystem::is_symlink(status)) {
           result += "[";
           auto first = true;
-          for (const auto& entry : std::filesystem::directory_iterator(target,
-                                                                       error)) {
-            ThrowFilesystemError("watch", target, error);
+          ForEachWindowsDirectoryEntry(target, [&](const auto& entry) {
+            cancellation.throw_if_cancellation_requested();
             if (!first) {
               result += ",";
             }
             first = false;
             result += CreateDirentJson(entry);
-          }
-          ThrowFilesystemError("watch", target, error);
+          });
           result += "]";
         } else {
           result += "[]";

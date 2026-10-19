@@ -93,6 +93,26 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
     } finally {
       await policy.releaseAsync();
     }
+    const privilege = await context.agent.processes.launchManaged({
+      path: "powershell.exe",
+      arguments: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+      ],
+      captureStdout: true,
+      captureStderr: true,
+      createNoWindow: true,
+    });
+    try {
+      expect(
+        (await privilege.waitForExit({ timeoutMs: 30000 })).root.exitCode,
+      ).toBe(0);
+      expect((await privilege.stdoutText()).trim()).toBe("False");
+    } finally {
+      await privilege.releaseAsync();
+    }
   });
 
   afterAll(async () => {
@@ -203,6 +223,7 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
         await fs.rmdir(empty);
         return { range, stat: [stat.type, stat.size], lstat: [lstat.type, lstat.size],
           exists, access, overwriteRejected, truncated, roundtrip, textValue, uriValue,
+          canonicalExtended: canonical.startsWith("\\\\\\\\?\\\\"),
           entries: entries.map(e => [e.name, e.isFile()]).sort(),
           missing: [await fs.exists(copy), await fs.exists(moved), await fs.exists(text), await fs.exists(empty)] };
       `);
@@ -217,6 +238,7 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
         roundtrip: [1, 2, 9, 4, 5],
         textValue: "日本語😀",
         uriValue: "日本語😀",
+        canonicalExtended: false,
         entries: [
           ["file.bin", true],
           ["move.bin", true],
@@ -226,6 +248,35 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
       });
     },
   );
+
+  // Path.GetFullPath resolves relative inputs before the native long-path call.
+  it("resolves a long relative Unicode path against the runtime working directory", async () => {
+    const parent = directoryOfLength(
+      join(directory, "data", "relative", "日本語 😀"),
+      420,
+    );
+    await runFixture("mkdir", parent, []);
+    const path = win32.join(parent, "file.txt");
+    const relative = win32.relative(
+      getWindowsRemoteContext()!.runtime.debugRuntimeDirectory,
+      path,
+    );
+    expect(relative.length).toBeGreaterThan(260);
+    const result = await evaluate(`
+      const relative = ${JSON.stringify(relative.replaceAll("\\", "/"))};
+      await fs.writeTextFile(relative, "relative contents", "utf8");
+      return {
+        contents: await fs.readTextFile(${JSON.stringify(path)}, "utf8"),
+        canonical: await fs.realpath(relative),
+        size: (await fs.stat(relative)).size,
+      };
+    `);
+    expect(result).toEqual({
+      contents: "relative contents",
+      canonical: path,
+      size: 17,
+    });
+  });
 
   // Directory.CreateDirectory, File.Create.ValidCreation_LongPathExtendedSyntax
   // and CreateInParentDirectory: normalization must not require existence.
@@ -327,6 +378,193 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
       rejected: true,
       contents: "preserved",
     });
+  });
+
+  // EnumerableTests.EnumerateDirectories_TrailingDot, also applied to files.
+  // An explicit DOS-device spelling is a literal filename in this namespace.
+  it("preserves BCL exact names through realpath, enumeration and deletion", async () => {
+    const parent = directoryOfLength(join(directory, "data", "exact"), 300);
+    const entries = [
+      ["item", false],
+      ["item.", false],
+      ["item ", false],
+      ["NUL", false],
+      ["dir", true],
+      ["dir.", true],
+      ["dir ", true],
+    ] as const;
+    await runFixture("mkdir", parent, []);
+    for (const [name, isDirectory] of entries) {
+      const path = win32.join(parent, name);
+      if (isDirectory) await runFixture("mkdir", path, []);
+      await runFixture(
+        "write",
+        isDirectory ? win32.join(path, "file.txt") : path,
+        [name],
+      );
+    }
+    const result = await evaluate(`
+      const parent = ${JSON.stringify(parent)};
+      const prefix = "\\\\\\\\?\\\\";
+      const names = (await fs.readdir(parent)).sort();
+      const results = [];
+      for (const [name, directory] of ${JSON.stringify(entries)}) {
+        const input = prefix + parent + "\\\\" + name;
+        const canonical = await fs.realpath(input);
+        const file = canonical + (directory ? "\\\\file.txt" : "");
+        const contents = await fs.readTextFile(file, "utf8");
+        const copy = prefix + parent + "\\\\copied";
+        await fs.copyFile(file, copy);
+        results.push([canonical.startsWith(prefix), contents, await fs.readTextFile(copy, "utf8")]);
+        await fs.unlink(copy);
+      }
+      await fs.rm(parent, { recursive: true });
+      return { names, results, removed: !await fs.exists(parent) };
+    `);
+    expect(result).toEqual({
+      names: entries.map(([name]) => name).sort(),
+      results: entries.map(([name]) => [true, name, name]),
+      removed: true,
+    });
+  });
+
+  // Directory_Delete.RecursiveDeletingDoesntFollowLinks. A junction needs no
+  // symlink privilege and lets the ordinary-user baseline verify this behavior.
+  it.each([false, true])(
+    "preserves an outside junction target (exact name=%s)",
+    async (exact) => {
+      const root = join(directory, "data", "junction-" + String(exact));
+      const parent = directoryOfLength(win32.join(root, "tree"), 500);
+      const outside = win32.join(root, exact ? "outside." : "outside");
+      const link = win32.join(parent, "junction");
+      await runFixture("mkdir", parent, []);
+      await runFixture("mkdir", outside, []);
+      await runFixture("write", win32.join(outside, "keep.txt"), ["preserved"]);
+      if (exact) {
+        await runFixture("mkdir", win32.join(root, "outside"), []);
+        await runFixture("write", win32.join(root, "outside", "keep.txt"), [
+          "different object",
+        ]);
+      }
+      await runFixture("junction", link, ["\\\\?\\" + outside]);
+      const result = await evaluate(`
+      const link = ${JSON.stringify(link)};
+      const parent = ${JSON.stringify(parent)};
+      const outside = ${JSON.stringify("\\\\?\\" + outside)};
+      const canonical = await fs.realpath(link);
+      const target = await fs.readlink(link);
+      const before = [
+        (await fs.lstat(link)).isSymbolicLink(),
+        (await fs.stat(link)).isDirectory(),
+        await fs.readTextFile(canonical + "\\\\keep.txt", "utf8"),
+        await fs.readTextFile(target + "\\\\keep.txt", "utf8"),
+      ];
+      await fs.rm(parent, { recursive: true });
+      return { before, extended: canonical.startsWith("\\\\\\\\?\\\\"), removed: !await fs.exists(parent),
+        outside: await fs.readTextFile(outside + "\\\\keep.txt", "utf8") };
+    `);
+      expect(result).toEqual({
+        before: [true, true, "preserved", "preserved"],
+        extended: exact,
+        removed: true,
+        outside: "preserved",
+      });
+    },
+  );
+
+  it("keeps relative symlinks relative after moving a long parent", async (testContext) => {
+    const root = join(directory, "data", "symlink");
+    const parent = directoryOfLength(win32.join(root, "long"), 300);
+    await runFixture("mkdir", win32.join(parent, "nested"), []);
+    const result = await evaluate<{
+      supported: boolean;
+      error?: string;
+      relative?: string;
+      contents?: string[];
+    }>(`
+      const root = ${JSON.stringify(root)};
+      const parent = ${JSON.stringify(parent)};
+      await fs.writeTextFile(root + "\\\\target.txt", "short target", "utf8");
+      try { await fs.symlink("target.txt", root + "\\\\probe", "file"); }
+      catch (error) { return { supported: false, error: String(error) }; }
+      await fs.unlink(root + "\\\\probe");
+      await fs.writeTextFile(parent + "\\\\target.txt", "long target", "utf8");
+      await fs.symlink("..\\\\target.txt", parent + "\\\\nested\\\\link", "file");
+      const moved = parent + "-moved";
+      await fs.rename(parent, moved);
+      const relative = await fs.readlink(moved + "\\\\nested\\\\link");
+      await fs.symlink(moved + "\\\\target.txt", moved + "\\\\absolute", "file");
+      return { supported: true, relative: relative.replaceAll("\\\\", "/"), contents: [
+        await fs.readTextFile(moved + "\\\\nested\\\\link", "utf8"),
+        await fs.readTextFile(await fs.readlink(moved + "\\\\absolute"), "utf8"),
+      ] };
+    `);
+    if (!result.supported) {
+      expect(result.error).toContain("Windows error 1314");
+      testContext.skip(
+        "Ordinary user cannot create even a short symlink; junction I/O is tested separately",
+      );
+    }
+    expect(result).toEqual({
+      supported: true,
+      relative: "../target.txt",
+      contents: ["long target", "long target"],
+    });
+  });
+
+  it.each([300, 4200])(
+    "watches a %i-unit directory after readiness",
+    async (length) => {
+      const parent = directoryOfLength(
+        join(directory, "data", "watch", String(length)),
+        length,
+      );
+      await runFixture("mkdir", parent, []);
+      const result = await evaluate(`
+      const parent = ${JSON.stringify(parent)};
+      let resolveEvent, rejectEvent;
+      const observed = new Promise((resolve, reject) => { resolveEvent = resolve; rejectEvent = reject; });
+      const watcher = await fs.watch(parent, event => {
+        if (event.eventType === "error") rejectEvent(new Error(event.message));
+        else if (event.filename === "観測😀.txt") resolveEvent(event);
+      });
+      const timeout = setTimeout(() => rejectEvent(new Error("Expected filesystem event did not arrive")), 30000);
+      try {
+        await fs.writeTextFile(parent + "\\\\観測😀.txt", "observed", "utf8");
+        const event = await observed;
+        return { filename: event.filename, eventType: event.eventType,
+          contents: await fs.readTextFile(parent + "\\\\" + event.filename, "utf8") };
+      } finally {
+        clearTimeout(timeout);
+        await watcher.close();
+      }
+    `);
+      expect(result).toEqual({
+        filename: "観測😀.txt",
+        eventType: "rename",
+        contents: "observed",
+      });
+    },
+  );
+
+  it("keeps the error code and Unicode filename in a long path diagnostic", async () => {
+    const parent = directoryOfLength(join(directory, "data", "errors"), 300);
+    await runFixture("mkdir", parent, []);
+    const missing = win32.join(parent, "missing-不存在😀");
+    const error = await evaluate<string>(`
+      try { await fs.readdir(${JSON.stringify(missing)}); return ""; }
+      catch (error) { return String(error); }
+    `);
+    expect(error).toContain("readdir failed");
+    expect(error).toContain(join(directory, "data"));
+    expect(error).toContain("missing-不存在😀");
+    expect(error).toContain("...");
+    expect(error).toContain("Windows filesystem error 3");
+    expect(error).not.toContain("\uFFFD");
+    expect(
+      Buffer.byteLength(error.slice("Error: ".length), "utf8"),
+    ).toBeLessThanOrEqual(255);
+    expect(error).not.toContain("\\\\?\\");
   });
 
   // IOInputs.GetPathsLongerThanMaxLongPath and component boundaries. Generate

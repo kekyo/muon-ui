@@ -4,6 +4,8 @@
 // https://github.com/kekyo/muon-ui
 
 #include <windows.h>
+#include <winioctl.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -94,6 +96,71 @@ static int write_file(const wchar_t *path, const wchar_t *content) {
   return success && written == (DWORD)length - 1 ? 0 : report_error("write fixture", error);
 }
 
+typedef struct fixture_mount_point {
+  ULONG tag;
+  USHORT data_length;
+  USHORT reserved;
+  USHORT substitute_offset;
+  USHORT substitute_length;
+  USHORT print_offset;
+  USHORT print_length;
+  WCHAR names[1];
+} fixture_mount_point;
+
+static int create_junction(const wchar_t *path, const wchar_t *target) {
+  if (wcsncmp(target, L"\\\\?\\", 4) || wcslen(target) < 8) return 2;
+  size_t substitute_units = wcslen(target);
+  size_t print_units = substitute_units - 4;
+  size_t size = offsetof(fixture_mount_point, names) +
+      (substitute_units + print_units + 2) * sizeof(wchar_t);
+  if (size > MAXIMUM_REPARSE_DATA_BUFFER_SIZE) return 2;
+  fixture_mount_point *data = calloc(1, size);
+  if (data == NULL) return 1;
+  data->tag = IO_REPARSE_TAG_MOUNT_POINT;
+  data->data_length = (USHORT)(size - 8);
+  data->substitute_length = (USHORT)(substitute_units * sizeof(wchar_t));
+  data->print_offset = (USHORT)((substitute_units + 1) * sizeof(wchar_t));
+  data->print_length = (USHORT)(print_units * sizeof(wchar_t));
+  swprintf(data->names, substitute_units + 1, L"\\??\\%ls", target + 4);
+  wcscpy(data->names + substitute_units + 1, target + 4);
+  if (!CreateDirectoryW(path, NULL)) {
+    DWORD error = GetLastError();
+    free(data);
+    return report_error("create junction directory", error);
+  }
+  HANDLE link = CreateFileW(path, GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  DWORD returned = 0;
+  BOOL created = link != INVALID_HANDLE_VALUE && DeviceIoControl(link,
+      FSCTL_SET_REPARSE_POINT, data, (DWORD)size, NULL, 0, &returned, NULL);
+  DWORD error = created ? ERROR_SUCCESS : GetLastError();
+  if (link != INVALID_HANDLE_VALUE) CloseHandle(link);
+  free(data);
+  if (!created) return report_error("create junction", error);
+
+  // Verify the actual object independently. cmd.exe's mklink can normalize a
+  // trailing dot even when its target argument uses extended syntax.
+  link = CreateFileW(path, 0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  HANDLE destination = CreateFileW(target, 0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  BY_HANDLE_FILE_INFORMATION actual, expected;
+  BOOL inspected = link != INVALID_HANDLE_VALUE && destination != INVALID_HANDLE_VALUE &&
+      GetFileInformationByHandle(link, &actual) &&
+      GetFileInformationByHandle(destination, &expected);
+  error = inspected ? ERROR_SUCCESS : GetLastError();
+  if (link != INVALID_HANDLE_VALUE) CloseHandle(link);
+  if (destination != INVALID_HANDLE_VALUE) CloseHandle(destination);
+  if (!inspected) return report_error("inspect junction target", error);
+  return actual.dwVolumeSerialNumber == expected.dwVolumeSerialNumber &&
+      actual.nFileIndexHigh == expected.nFileIndexHigh &&
+      actual.nFileIndexLow == expected.nFileIndexLow
+      ? 0 : report_error("junction target identity", ERROR_INVALID_DATA);
+}
+
 static int launch(const wchar_t *path, const wchar_t *arguments) {
   size_t length = wcslen(path) + wcslen(arguments) + 3;
   wchar_t *command = malloc(length * sizeof(wchar_t));
@@ -153,6 +220,7 @@ int wmain(int argc, wchar_t **argv) {
         ? 0 : report_error("expected absent fixture path", error);
   }
   if (!wcscmp(argv[1], L"write") && argc == 4) return write_file(argv[2], argv[3]);
+  if (!wcscmp(argv[1], L"junction") && argc == 4) return create_junction(argv[2], argv[3]);
   if (!wcscmp(argv[1], L"copy") && argc == 4) {
     return CopyFileExW(argv[3], argv[2], NULL, NULL, NULL, COPY_FILE_FAIL_IF_EXISTS)
         ? 0 : report_error("CopyFileExW", GetLastError());

@@ -4837,7 +4837,7 @@ export const runBuiltinFsAdditionalOperations = async (
     "additional symlink",
     `(async () => {
     const rootPath = ${JSON.stringify(rootPath)};
-    const basename = (path) => path.split("/").filter(Boolean).at(-1) ?? "";
+    const basename = (path) => path.replaceAll("\\\\", "/").split("/").filter(Boolean).at(-1) ?? "";
     const rejection = async (operation) => {
       try {
         await operation();

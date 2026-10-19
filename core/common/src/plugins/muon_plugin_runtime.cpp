@@ -10,6 +10,7 @@
 
 #include "muon_cardio_post.h"
 #include "muon_sha256.h"
+#include "muon_filesystem.h"
 
 #include "plugins/muon_function_wrapper_lifecycle.h"
 
@@ -28,6 +29,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+using muon_internal::FilesystemPathFromUtf8;
+using muon_internal::FilesystemPathToUtf8;
+using muon_internal::GetFilesystemType;
 
 static constexpr char kMuonPluginEntryPoint[] = "muon_init_plugin";
 static constexpr char kMuonInternalPluginName[] = "internal";
@@ -686,7 +691,8 @@ static muon_plugin_init_context CreateMuonPluginInitContext(
 static std::filesystem::path ResolveMuonPluginLibraryPath(
     const std::filesystem::path& plugin_directory,
     const std::string& plugin) {
-  return plugin_directory / (plugin + GetMuonPluginLibraryExtension());
+  return plugin_directory /
+         FilesystemPathFromUtf8(plugin + GetMuonPluginLibraryExtension());
 }
 
 static void CopyMuonPluginHelperError(const std::string& source,
@@ -1275,7 +1281,7 @@ static bool PrepareMuonPluginNamespaces(
     const auto* source_namespace = *namespace_entry;
     if (source_namespace->plugin_namespace == nullptr) {
       return FailMuonPluginStartup(
-          impl, "Plugin namespace metadata is invalid: " + path.string());
+          impl, "Plugin namespace metadata is invalid: " + FilesystemPathToUtf8(path));
     }
 
     const std::string plugin_namespace(source_namespace->plugin_namespace);
@@ -1304,7 +1310,7 @@ static bool PrepareMuonPluginNamespaces(
           LogMuonPluginRuntimeMessage(
               impl, MuonPluginRuntimeLogSource::Runtime,
               MUON_LOG_LEVEL_WARNING,
-              "Skipping plugin function from " + path.string() + ": " +
+              "Skipping plugin function from " + FilesystemPathToUtf8(path) + ": " +
                   error_message);
           continue;
         }
@@ -2530,7 +2536,7 @@ static bool RegisterMuonPluginMetadata(MuonPluginRuntimeImpl* impl,
                                         bool allow_reserved_namespaces) {
   std::vector<MuonPreparedPluginNamespace> prepared_namespaces;
   if (!PrepareMuonPluginNamespaces(impl, metadata,
-                                    std::filesystem::path(source_name),
+                                    FilesystemPathFromUtf8(source_name),
                                     plugin_policy,
                                     allow_reserved_namespaces,
                                     &prepared_namespaces)) {
@@ -2730,9 +2736,8 @@ static bool LoadMuonPluginLibrary(
           : plugin.plugin + " (" + locator + ")";
   if (file_path != nullptr) {
     std::error_code filesystem_error;
-    if (!std::filesystem::exists(*file_path, filesystem_error) ||
-        filesystem_error ||
-        !std::filesystem::is_regular_file(*file_path, filesystem_error) ||
+    if (GetFilesystemType(*file_path, filesystem_error) !=
+            std::filesystem::file_type::regular ||
         filesystem_error) {
       return FailMuonPluginStartup(
           impl, "Plugin file not found: " + plugin_description);
@@ -2747,11 +2752,11 @@ static bool LoadMuonPluginLibrary(
               *file_path, plugin.signature_salt, &actual_signature)) {
         return FailMuonPluginStartup(
             impl, "Failed to calculate plugin signature: " +
-                      file_path->string());
+                      FilesystemPathToUtf8(*file_path));
       }
       if (actual_signature != plugin.expected_signature) {
         return FailMuonPluginStartup(
-            impl, "Plugin signature mismatch: " + file_path->string() +
+            impl, "Plugin signature mismatch: " + FilesystemPathToUtf8(*file_path) +
                       " expected " + plugin.expected_signature + " actual " +
                       actual_signature);
       }
@@ -2934,7 +2939,7 @@ static bool LoadConfiguredMuonPluginLibraries(MuonPluginRuntimeImpl* impl) {
                                      : impl->plugin_directory,
         plugin.plugin);
     if (!LoadMuonPluginLibrary(
-            impl, path.string(), &path, plugin, *plugin.plugin_policy)) {
+            impl, FilesystemPathToUtf8(path), &path, plugin, *plugin.plugin_policy)) {
       return false;
     }
   }
@@ -2967,7 +2972,7 @@ MuonPluginRuntime::MuonPluginRuntime(
       impl_.get(), MuonPluginRuntimeLogSource::Runtime,
       MUON_LOG_LEVEL_INFO,
       "Loaded " + std::to_string(impl_->registered_functions.size()) +
-          " plugin functions from " + impl_->plugin_directory.string());
+          " plugin functions from " + FilesystemPathToUtf8(impl_->plugin_directory));
 }
 
 MuonPluginRuntime::~MuonPluginRuntime() {

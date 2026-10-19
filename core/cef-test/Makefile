@@ -3,10 +3,20 @@ WINDOWS_CC = $(if $(filter windows-i686,$(WINDOWS_TARGET)),i686,x86_64)-w64-ming
 LONG_PATH_FIXTURE = .run/windows-long-path/$(WINDOWS_TARGET)/fixture.exe
 LONG_PATH_TEST = .run/windows-long-path/$(WINDOWS_TARGET)/path-test.exe
 DOWNLOAD_FIXTURE = .run/windows-long-path/$(WINDOWS_TARGET)/download-fixture.exe
+PATH_PLUGIN = .run/windows-long-path/$(WINDOWS_TARGET)/path-plugin.dll
+PATH_PLUGIN_DEPENDENCY = .run/windows-long-path/$(WINDOWS_TARGET)/path-dependency.dll
 
-.PHONY: windows-long-path-fixture windows-path-test
+.PHONY: windows-long-path-fixture windows-path-test windows-path-plugin
 windows-long-path-fixture: $(LONG_PATH_FIXTURE)
 windows-path-test: $(LONG_PATH_FIXTURE) $(LONG_PATH_TEST) $(DOWNLOAD_FIXTURE)
+windows-path-plugin: $(PATH_PLUGIN)
+
+$(PATH_PLUGIN_DEPENDENCY): plugin-e2e/windows-path-plugin.c
+	mkdir -p "$(@D)"
+	$(WINDOWS_CC) -std=c99 -Wall -Wextra -Werror -pedantic -shared -static -DMUON_PATH_DEPENDENCY -Wl,--out-implib,"$(@D)/path-dependency.a" -o "$@" "$<"
+
+$(PATH_PLUGIN): plugin-e2e/windows-path-plugin.c ../../sdk/include/muon_plugin_api.h $(PATH_PLUGIN_DEPENDENCY)
+	$(WINDOWS_CC) -std=c99 -Wall -Wextra -Werror -pedantic -shared -static -I../../sdk/include -o "$@" "$<" "$(@D)/path-dependency.a"
 
 $(DOWNLOAD_FIXTURE): plugin-e2e/windows-download-fixture.c
 	mkdir -p "$(@D)"

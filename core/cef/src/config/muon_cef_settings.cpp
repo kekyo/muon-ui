@@ -5,18 +5,10 @@
  */
 
 #include "config/muon_cef_settings.h"
+#include "muon_filesystem.h"
 
 #include <cstdlib>
 #include <string_view>
-
-static std::filesystem::path ResolveExecutableRelativePath(
-    const std::filesystem::path& executable_directory,
-    const std::filesystem::path& path) {
-  if (path.is_absolute()) {
-    return path.lexically_normal();
-  }
-  return (executable_directory / path).lexically_normal();
-}
 
 static void SetCefPath(cef_string_t* target,
                        const std::filesystem::path& path) {
@@ -32,7 +24,7 @@ static void ConfigureProfilePath(
     const std::filesystem::path& executable_directory,
     const std::filesystem::path& profile_path) {
   const auto resolved_profile_path =
-      ResolveExecutableRelativePath(executable_directory, profile_path);
+      muon_internal::ResolveFilesystemPath(executable_directory, profile_path);
   SetCefPath(&settings.root_cache_path, resolved_profile_path);
   SetCefPath(&settings.cache_path, resolved_profile_path);
 }

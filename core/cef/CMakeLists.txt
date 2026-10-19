@@ -1211,6 +1211,9 @@ if(WIN32)
     shell32
     uuid
     )
+  if(MINGW)
+    target_link_options(${APP_NAME} PRIVATE -municode)
+  endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(${APP_NAME} PRIVATE
     muon_executor_supervisor_protocol
@@ -1677,6 +1680,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_builtin_fs_watch_registry_test)
   add_executable(muon_app_scheme_storage_test
     ../cef-test/native/muon_app_scheme_storage_test.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
     src/app/muon_app_scheme.cpp
     src/app/muon_app_storage.cpp
@@ -1756,6 +1760,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       ../cef-test/native/muon_tray_linux_dbus_test.cpp
       src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
+      ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
       ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
       src/app/muon_app_scheme.cpp
       src/app/muon_app_storage.cpp
@@ -1794,6 +1799,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       ../cef-test/native/muon_tray_quota_test.cpp
       src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
+      ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
       ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
       src/app/muon_app_scheme.cpp
       src/app/muon_app_storage.cpp
@@ -1935,6 +1941,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   endif()
   add_executable(muon_config_network_test
     ../cef-test/native/muon_config_network_test.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/browser/muon_browser_background_color.cpp
@@ -1967,6 +1974,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_cef_settings_test
     ../cef-test/native/muon_cef_settings_test.cpp
     src/config/muon_cef_settings.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_cef_settings_test)
   target_compile_features(muon_cef_settings_test PRIVATE cxx_std_20)
@@ -1999,6 +2007,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_autostart_test)
   add_executable(muon_log_test
     ../cef-test/native/muon_log_test.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     src/log/muon_log.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_log_test)

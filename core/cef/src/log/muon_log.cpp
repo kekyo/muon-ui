@@ -5,6 +5,7 @@
  */
 
 #include "log/muon_log.h"
+#include "muon_filesystem.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -49,15 +50,6 @@ struct MuonCefLogForwarderState {
 static std::unique_ptr<MuonLoggerState> g_muon_logger;
 static std::unique_ptr<MuonCefLogForwarderState> g_muon_cef_forwarder;
 
-static std::filesystem::path ResolveMuonLogPath(
-    const std::filesystem::path& base_directory,
-    const std::filesystem::path& path) {
-  if (path.is_absolute()) {
-    return path.lexically_normal();
-  }
-  return (base_directory / path).lexically_normal();
-}
-
 static bool EnsureMuonLogParentDirectory(
     const std::filesystem::path& path,
     std::string* error_message) {
@@ -66,9 +58,10 @@ static bool EnsureMuonLogParentDirectory(
     return true;
   }
   std::error_code error;
-  std::filesystem::create_directories(parent, error);
+  muon_internal::CreateFilesystemDirectories(parent, error);
   if (error) {
-    *error_message = "Failed to create log directory: " + parent.string();
+    *error_message = "Failed to create log directory: " +
+                     muon_internal::FilesystemPathToUtf8(parent);
     return false;
   }
   return true;
@@ -218,7 +211,8 @@ static void DrainMuonCefForwardedLogLines(
     return;
   }
   if (!forwarder->input.is_open()) {
-    forwarder->input.open(forwarder->path, std::ios::binary);
+    forwarder->input.open(muon_internal::FilesystemPathForIo(
+        forwarder->path, muon_internal::FilesystemIoUsage::File), std::ios::binary);
     if (!forwarder->input) {
       forwarder->input.close();
       return;
@@ -350,9 +344,8 @@ bool IsMuonLogEnabled(const MuonLogConfig& config,
 std::filesystem::path GetMuonInternalCefLogPath(
     const std::filesystem::path& base_directory,
     const std::filesystem::path& profile_path) {
-  const auto resolved_profile_path =
-      profile_path.is_absolute() ? profile_path : base_directory / profile_path;
-  return (resolved_profile_path / "muon-cef.log").lexically_normal();
+  return muon_internal::ResolveFilesystemPath(base_directory, profile_path) /
+         "muon-cef.log";
 }
 
 const char* GetMuonCefLogSeveritySwitchValue(MuonLogLevel level) {
@@ -382,10 +375,11 @@ bool ResetMuonCefLogFile(const std::filesystem::path& path,
   if (!EnsureMuonLogParentDirectory(path, error_message)) {
     return false;
   }
-  std::ofstream output(path, std::ios::trunc | std::ios::binary);
+  std::ofstream output(muon_internal::FilesystemPathForIo(
+      path, muon_internal::FilesystemIoUsage::File), std::ios::trunc | std::ios::binary);
   if (!output) {
     *error_message = "Failed to initialize internal CEF log file: " +
-                     path.string();
+                     muon_internal::FilesystemPathToUtf8(path);
     return false;
   }
   return true;
@@ -405,17 +399,21 @@ bool InitializeMuonLogger(const MuonLogConfig& config,
   logger->config = config;
   if (logger->config.output.type == kMuonLogOutputFile) {
     logger->file_path =
-        ResolveMuonLogPath(base_directory, logger->config.output.path);
-    if (logger->file_path == internal_cef_log_path.lexically_normal()) {
+        muon_internal::ResolveFilesystemPath(base_directory, logger->config.output.path);
+    if (logger->file_path == muon_internal::ResolveFilesystemPath(
+            base_directory, internal_cef_log_path)) {
       *error_message = "log output file must differ from internal CEF log file";
       return false;
     }
     if (!EnsureMuonLogParentDirectory(logger->file_path, error_message)) {
       return false;
     }
-    logger->file.open(logger->file_path, std::ios::app | std::ios::binary);
+    logger->file.open(muon_internal::FilesystemPathForIo(
+        logger->file_path, muon_internal::FilesystemIoUsage::File),
+        std::ios::app | std::ios::binary);
     if (!logger->file) {
-      *error_message = "Failed to open log file: " + logger->file_path.string();
+      *error_message = "Failed to open log file: " +
+                       muon_internal::FilesystemPathToUtf8(logger->file_path);
       return false;
     }
   }
@@ -481,10 +479,11 @@ bool StartMuonCefLogForwarder(const std::filesystem::path& path,
     return false;
   }
   {
-    std::ofstream output(path, std::ios::app | std::ios::binary);
+    std::ofstream output(muon_internal::FilesystemPathForIo(
+        path, muon_internal::FilesystemIoUsage::File), std::ios::app | std::ios::binary);
     if (!output) {
       *error_message = "Failed to initialize internal CEF log file: " +
-                       path.string();
+                       muon_internal::FilesystemPathToUtf8(path);
       return false;
     }
   }
@@ -497,7 +496,8 @@ bool StartMuonCefLogForwarder(const std::filesystem::path& path,
     directory = ".";
   }
   forwarder->change_handle = FindFirstChangeNotificationW(
-      directory.wstring().c_str(), FALSE,
+      muon_internal::FilesystemPathForIo(
+          directory, muon_internal::FilesystemIoUsage::Tree).c_str(), FALSE,
       FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE |
           FILE_NOTIFY_CHANGE_SIZE);
   if (forwarder->change_handle == INVALID_HANDLE_VALUE) {

@@ -35,7 +35,7 @@ PREPARE_RESOURCE_OBJECTS := $(OUT_DIR)/muon_prepare_resource.o $(OUT_DIR)/engrav
 
 ifneq ($(strip $(PREPARE_WINDOWS_RESOURCE_OBJECTS)),)
 PREPARE_OBJECTS += $(OUT_DIR)/muon_windows_path.o
-PREPARE_ENTRY_FLAGS := -municode
+UNICODE_ENTRY_FLAGS := -municode
 endif
 
 $(OUT_DIR)/muon_windows_path.o: ../core/common/src/muon_windows_path.c ../core/common/include/muon_windows_path.h
@@ -124,7 +124,7 @@ endif
 
 $(PREPARE_TARGET): src/muon_prepare.c src/prepare.h src/prepare_progress.h src/muon_prepare_resource.h $(LIB_TARGET) $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(PREPARE_ENTRY_FLAGS) -o "$@" src/muon_prepare.c $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(UNICODE_ENTRY_FLAGS) -o "$@" src/muon_prepare.c $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
 
 $(LAUNCHER_TARGET): src/muon_launcher.c src/launcher_progress.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h src/prepare.h src/prepare_progress.h $(OUT_DIR)/launcher_progress.o $(LIB_TARGET) $(LAUNCHER_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
@@ -138,7 +138,7 @@ endif
 
 $(PLUGIN_INSPECTOR_TARGET): src/muon_plugin_inspector.c src/common.h ../sdk/include/muon_plugin_api.h $(SHA2_SOURCE_DIR)/sha2.h $(YYJSON_SOURCE_DIR)/yyjson.h $(LIB_TARGET) $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../sdk/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) -o "$@" src/muon_plugin_inspector.c $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../sdk/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) $(UNICODE_ENTRY_FLAGS) -o "$@" src/muon_plugin_inspector.c $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
 
 ifneq ($(strip $(WINDOWS_FILESYSTEM_TEST_TARGET)),)
 $(WINDOWS_FILESYSTEM_TEST_TARGET): test/windows_filesystem_test.c src/common.h $(LIB_TARGET) $(PREPARE_RESOURCE_OBJECTS)

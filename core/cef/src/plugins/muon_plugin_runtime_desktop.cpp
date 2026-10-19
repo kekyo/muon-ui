@@ -5,6 +5,7 @@
  */
 
 #include "plugins/muon_plugin_runtime.h"
+#include "muon_filesystem.h"
 
 #include "browser/muon_builtin_browser.h"
 #include "config/muon_paths.h"
@@ -172,7 +173,9 @@ static void InstallDesktopRuntimeServices(
   services->open_library = [](
       const std::string& locator,
       std::string* error_message) -> void* {
-    const auto path = std::filesystem::path(locator);
+    const auto path = muon_internal::FilesystemPathForIo(
+        muon_internal::FilesystemPathFromUtf8(locator),
+        muon_internal::FilesystemIoUsage::File);
     // Dependencies live beside the plugin; host runtimes remain in the application directory.
     auto* handle = LoadLibraryExW(path.wstring().c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);

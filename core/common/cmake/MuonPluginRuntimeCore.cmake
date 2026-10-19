@@ -35,6 +35,7 @@ function(muon_add_plugin_runtime_core target_name)
   endif()
 
   add_library(${target_name} STATIC
+    "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/src/muon_filesystem.cpp"
     "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/src/muon_sha256.cpp"
     "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/src/plugins/muon_function_wrapper_lifecycle.cpp"
     "${MUON_PLUGIN_RUNTIME_CORE_ROOT}/src/plugins/muon_plugin_metadata.cpp"
@@ -57,6 +58,9 @@ function(muon_add_plugin_runtime_core target_name)
     muon_sha2
     ${LIBFFI_TARGET}
     )
+  if(WIN32)
+    target_link_libraries(${target_name} PUBLIC muon_windows_path)
+  endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${target_name} PRIVATE
       -fexceptions

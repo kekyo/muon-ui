@@ -31,6 +31,7 @@
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
 #include "log/muon_log.h"
+#include "muon_filesystem.h"
 
 static CefMainArgs CreateMainArgs(int argc, char* argv[]) {
 #if defined(_WIN32)
@@ -42,7 +43,7 @@ static CefMainArgs CreateMainArgs(int argc, char* argv[]) {
 #endif
 }
 
-NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
+NO_STACK_PROTECTOR static int RunMuon(int argc, char* argv[]) {
   SetMuonStartupCommandLine(argc, argv);
   MuonConfig config;
   std::string error_message;
@@ -57,6 +58,23 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   }
   (void)embedded_config;
   const auto executable_directory = GetMuonExecutableDirectory();
+#if defined(_WIN32)
+  // CEF/Chromium can silently substitute a different profile for an unsupported
+  // path, even after Muon's own filesystem operations succeed. Do not expose
+  // that fallback as a successful startup with persistent application data.
+  const auto profile_path = muon_internal::ResolveFilesystemPath(
+      executable_directory, config.browser.profile);
+  if (profile_path.native().size() >= MAX_PATH ||
+      profile_path.native().starts_with(L"\\\\?\\")) {
+    std::fprintf(stderr,
+        "muon startup failed: browser.profilePath requires a short ordinary "
+        "Windows path for CEF. Set browser.profilePath to a shallow directory "
+        "without the extended namespace prefix: %s\n",
+        muon_internal::FilesystemPathToUtf8(profile_path).c_str());
+    std::fflush(stderr);
+    return 1;
+  }
+#endif
   const auto cef_log_path =
       GetMuonInternalCefLogPath(executable_directory, config.browser.profile);
   if (!InitializeMuonLogger(config.log, executable_directory, cef_log_path,
@@ -150,3 +168,23 @@ NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
   ShutdownMuonLogger();
   return app_exit_code;
 }
+
+#if defined(_WIN32)
+NO_STACK_PROTECTOR int wmain(int argc, wchar_t* argv[]) {
+  auto values = std::vector<std::string>{};
+  values.reserve(static_cast<size_t>(argc));
+  for (auto index = 0; index < argc; ++index) {
+    values.push_back(muon_internal::FilesystemPathToUtf8(
+        std::filesystem::path(argv[index])));
+  }
+  auto arguments = std::vector<char*>{};
+  arguments.reserve(values.size() + 1);
+  for (auto& value : values) arguments.push_back(value.data());
+  arguments.push_back(nullptr);
+  return RunMuon(argc, arguments.data());
+}
+#else
+NO_STACK_PROTECTOR int main(int argc, char* argv[]) {
+  return RunMuon(argc, argv);
+}
+#endif

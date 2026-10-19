@@ -261,7 +261,7 @@ static int sha256_file_with_salt_hex(
     const uint8_t *salt,
     size_t salt_size,
     char output[SHA256_DIGEST_STRING_LENGTH]) {
-  FILE *file = fopen(path, "rb");
+  FILE *file = muon_fopen(path, "rb");
   if (file == NULL) {
     return -1;
   }
@@ -392,29 +392,18 @@ static int read_plugin_config_entries(yyjson_val *plugin_object,
 }
 
 #ifdef _WIN32
-static wchar_t *utf8_to_wide(const char *value) {
-  const int length = MultiByteToWideChar(CP_UTF8, 0, value, -1, NULL, 0);
-  if (length <= 0) {
-    return NULL;
-  }
-  wchar_t *wide = (wchar_t *)malloc(sizeof(wchar_t) * (size_t)length);
-  if (wide == NULL) {
-    return NULL;
-  }
-  if (MultiByteToWideChar(CP_UTF8, 0, value, -1, wide, length) <= 0) {
-    free(wide);
-    return NULL;
-  }
-  return wide;
-}
-
 static void *open_plugin_library(const char *path) {
-  wchar_t *wide_path = utf8_to_wide(path);
-  if (wide_path == NULL) {
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) {
     return NULL;
   }
-  HMODULE handle = LoadLibraryW(wide_path);
-  free(wide_path);
+  // Match the desktop runtime: dependencies may live beside the plugin, while
+  // runtime DLLs are resolved from the application and system directories.
+  HMODULE handle = LoadLibraryExW(native.value, NULL,
+      LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  DWORD error = GetLastError();
+  muon_windows_path_destroy(&native);
+  SetLastError(error);
   return (void *)handle;
 }
 
@@ -679,7 +668,7 @@ static int inspect_plugins(yyjson_val *input, yyjson_mut_doc *output_document) {
   return 0;
 }
 
-int main(int argc, char **argv) {
+static int run_inspector(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "Usage: muon-plugin-inspector <input-json>\n");
     return 1;
@@ -707,3 +696,13 @@ int main(int argc, char **argv) {
   yyjson_doc_free(input_document);
   return failed ? 1 : 0;
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **argv) {
+  return muon_windows_main(argc, argv, run_inspector);
+}
+#else
+int main(int argc, char **argv) {
+  return run_inspector(argc, argv);
+}
+#endif

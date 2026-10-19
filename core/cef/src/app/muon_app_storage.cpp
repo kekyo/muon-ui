@@ -8,6 +8,7 @@
 
 #include "config/muon_paths.h"
 #include "muon_sha256.h"
+#include "muon_filesystem.h"
 
 #include "include/cef_parser.h"
 
@@ -19,6 +20,13 @@
 #include <limits>
 #include <system_error>
 #include <utility>
+
+using muon_internal::CanonicalFilesystemPath;
+using muon_internal::FilesystemIoUsage;
+using muon_internal::FilesystemPathForIo;
+using muon_internal::FilesystemPathFromUtf8;
+using muon_internal::FilesystemPathToUtf8;
+using muon_internal::GetFilesystemType;
 
 static constexpr char kMuonMainAppHost[] = "main";
 
@@ -134,7 +142,7 @@ static bool IsPathInsideDirectory(const std::filesystem::path& path,
 }
 
 static std::string GetMimeTypeForPath(const std::filesystem::path& path) {
-  auto extension = path.extension().string();
+  auto extension = FilesystemPathToUtf8(path.extension());
   if (!extension.empty() && extension.front() == '.') {
     extension.erase(extension.begin());
   }
@@ -172,7 +180,8 @@ static bool ReadBinaryFile(const std::filesystem::path& path,
     return false;
   }
 
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(FilesystemPathForIo(path, FilesystemIoUsage::File),
+                       std::ios::binary);
   if (!input) {
     return false;
   }
@@ -255,7 +264,7 @@ static MuonAppStorageResource ExtractZipEntrySync(
   }
 
   return {MuonAppStorageStatus::kOk,
-          GetMimeTypeForPath(std::filesystem::path(entry_path)),
+          GetMimeTypeForPath(FilesystemPathFromUtf8(entry_path)),
           std::move(data)};
 }
 
@@ -273,28 +282,29 @@ class MuonFileAppStorage final : public MuonAppStorage {
 
     auto candidate = asset_root_ / request.host;
     for (const auto& segment : segments) {
-      candidate /= segment;
+      candidate /= FilesystemPathFromUtf8(segment);
     }
 
     std::error_code error;
-    if (!std::filesystem::exists(candidate, error) ||
-        !std::filesystem::is_regular_file(candidate, error)) {
+    if (GetFilesystemType(candidate, error) !=
+        std::filesystem::file_type::regular) {
       return {MuonAppStorageStatus::kNotFound, "", {}};
     }
 
     const auto canonical_asset_root =
-        std::filesystem::canonical(asset_root_ / request.host, error);
+        CanonicalFilesystemPath(asset_root_ / request.host, error);
     if (error) {
       return {MuonAppStorageStatus::kNotFound, "", {}};
     }
     const auto canonical_candidate =
-        std::filesystem::canonical(candidate, error);
+        CanonicalFilesystemPath(candidate, error);
     if (error ||
         !IsPathInsideDirectory(canonical_candidate, canonical_asset_root)) {
       return {MuonAppStorageStatus::kRejected, "", {}};
     }
 
-    std::ifstream input(canonical_candidate, std::ios::binary);
+    std::ifstream input(FilesystemPathForIo(canonical_candidate,
+        FilesystemIoUsage::File), std::ios::binary);
     if (!input) {
       return {MuonAppStorageStatus::kReadError, "", {}};
     }
@@ -389,49 +399,50 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
   }
 
   std::error_code error;
-  if (!std::filesystem::exists(asset_from, error) || error) {
+  const auto type = GetFilesystemType(asset_from, error);
+  if (type == std::filesystem::file_type::not_found || error) {
     *error_message = "muon.json asset.sourcePath does not exist: " +
-                     asset_from.string();
+                     FilesystemPathToUtf8(asset_from);
     return nullptr;
   }
-  if (std::filesystem::is_directory(asset_from, error) && !error) {
+  if (type == std::filesystem::file_type::directory) {
     if (has_asset_signature) {
       *error_message =
           "muon.json asset.signature requires asset.sourcePath to be a ZIP "
           "file: " +
-          asset_from.string();
+          FilesystemPathToUtf8(asset_from);
       return nullptr;
     }
     return CreateMuonFileAppStorage(asset_from);
   }
   error.clear();
-  if (std::filesystem::is_regular_file(asset_from, error) && !error) {
+  if (type == std::filesystem::file_type::regular) {
     if (has_asset_signature) {
       std::string actual_signature;
       if (!CalculateFileSha256Hex(asset_from, asset_salt,
                                   &actual_signature)) {
         *error_message = "Failed to read muon.json asset.sourcePath: " +
-                         asset_from.string();
+                         FilesystemPathToUtf8(asset_from);
         return nullptr;
       }
       std::vector<uint8_t> archive_data;
       if (!ReadBinaryFile(asset_from, &archive_data)) {
         *error_message = "Failed to read muon.json asset.sourcePath: " +
-                         asset_from.string();
+                         FilesystemPathToUtf8(asset_from);
         return nullptr;
       }
       if (actual_signature != normalized_asset_signature) {
         *error_message =
             "muon.json asset.signature does not match asset.sourcePath salted "
             "SHA-256: " +
-            asset_from.string();
+            FilesystemPathToUtf8(asset_from);
         return nullptr;
       }
       if (!IsZipArchiveData(archive_data)) {
         *error_message =
             "muon.json asset.signature requires asset.sourcePath to be a "
             "valid ZIP file: " +
-            asset_from.string();
+            FilesystemPathToUtf8(asset_from);
         return nullptr;
       }
     }
@@ -440,7 +451,7 @@ std::shared_ptr<MuonAppStorage> CreateConfiguredMuonAppStorage(
 
   *error_message =
       "muon.json asset.sourcePath must be a directory or regular file: " +
-      asset_from.string();
+      FilesystemPathToUtf8(asset_from);
   return nullptr;
 }
 

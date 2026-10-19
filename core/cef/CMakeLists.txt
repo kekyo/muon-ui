@@ -420,11 +420,13 @@ if(MINGW)
   set(CEF_LINKER_FLAGS)
   set(CEF_LINKER_FLAGS_DEBUG)
   set(CEF_LINKER_FLAGS_RELEASE)
+  # Share the packaged MinGW C++ runtime with cardio and libmuon-ui. Mixing a
+  # static executable runtime with those DLLs aborts during DW2 exception
+  # unwinding on i686, even when the filesystem caller catches the exception.
+  # https://gcc.gnu.org/onlinedocs/gcc/Link-Options.html#index-shared-libgcc
   set(CEF_EXE_LINKER_FLAGS
     ${MINGW_ARCH_FLAGS}
     -mwindows
-    -static-libgcc
-    -static-libstdc++
     -Wl,--gc-sections
     ${MINGW_STACK_FLAG}
     )
@@ -672,6 +674,16 @@ target_link_libraries(muon_cardio INTERFACE
   )
 
 if(WIN32)
+  add_library(muon_windows_path STATIC
+    "${MUON_COMMON_ROOT}/src/muon_windows_path.c"
+    "${MUON_COMMON_ROOT}/include/muon_windows_path.h"
+    )
+  target_compile_features(muon_windows_path PRIVATE c_std_99)
+  target_include_directories(muon_windows_path PUBLIC
+    "${MUON_COMMON_ROOT}/include"
+    )
+  MUON_APPLY_SANITIZERS(muon_windows_path)
+
   add_library(muon_windows_job_process STATIC
     src/platform/muon_windows_job_process.cpp
     src/platform/muon_windows_job_process.h
@@ -926,6 +938,7 @@ target_link_libraries(muon_ui PRIVATE
   )
 if(WIN32)
   target_link_libraries(muon_ui PRIVATE
+    muon_windows_path
     ole32
     shell32
     uuid
@@ -1190,6 +1203,7 @@ target_link_libraries(${APP_NAME} PRIVATE
   )
 if(WIN32)
   target_link_libraries(${APP_NAME} PRIVATE
+    muon_windows_path
     advapi32
     comctl32
     muon_windows_job_process
@@ -1197,6 +1211,9 @@ if(WIN32)
     shell32
     uuid
     )
+  if(MINGW)
+    target_link_options(${APP_NAME} PRIVATE -municode)
+  endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(${APP_NAME} PRIVATE
     muon_executor_supervisor_protocol
@@ -1663,6 +1680,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_builtin_fs_watch_registry_test)
   add_executable(muon_app_scheme_storage_test
     ../cef-test/native/muon_app_scheme_storage_test.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
     src/app/muon_app_scheme.cpp
     src/app/muon_app_storage.cpp
@@ -1742,6 +1760,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       ../cef-test/native/muon_tray_linux_dbus_test.cpp
       src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
+      ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
       ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
       src/app/muon_app_scheme.cpp
       src/app/muon_app_storage.cpp
@@ -1780,6 +1799,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       ../cef-test/native/muon_tray_quota_test.cpp
       src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
+      ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
       ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
       src/app/muon_app_scheme.cpp
       src/app/muon_app_storage.cpp
@@ -1916,8 +1936,12 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ${CMAKE_DL_LIBS}
     )
   MUON_APPLY_SANITIZERS(muon_internal_helpers_test)
+  if(WIN32)
+    target_link_libraries(muon_internal_helpers_test PRIVATE muon_windows_path)
+  endif()
   add_executable(muon_config_network_test
     ../cef-test/native/muon_config_network_test.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/browser/muon_browser_background_color.cpp
@@ -1950,6 +1974,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_cef_settings_test
     ../cef-test/native/muon_cef_settings_test.cpp
     src/config/muon_cef_settings.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_cef_settings_test)
   target_compile_features(muon_cef_settings_test PRIVATE cxx_std_20)
@@ -1982,6 +2007,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_autostart_test)
   add_executable(muon_log_test
     ../cef-test/native/muon_log_test.cpp
+    ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     src/log/muon_log.cpp
     )
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_log_test)

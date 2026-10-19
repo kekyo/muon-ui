@@ -713,8 +713,29 @@ bool TestLinuxTitleBarFollowingTrayIcons() {
     return false;
   }
 
-  const auto fixed_bus_name = watcher.registered_items()[0];
-  const auto follow_bus_name = watcher.registered_items()[1];
+  // Each tray registers over its own connection, so identify it by its public
+  // Id instead of assuming registration callbacks follow creation order.
+  std::string fixed_bus_name;
+  std::string follow_bus_name;
+  for (const auto& name : watcher.registered_items()) {
+    std::string id;
+    if (!Expect(ReadStringProperty(watcher.connection(), name,
+                                   "/StatusNotifierItem",
+                                   "org.freedesktop.StatusNotifierItem", "Id",
+                                   &id, &error_message),
+                error_message)) {
+      return false;
+    }
+    if (id == fixed_id) {
+      fixed_bus_name = name;
+    } else if (id == follow_id) {
+      follow_bus_name = name;
+    }
+  }
+  if (!Expect(!fixed_bus_name.empty() && !follow_bus_name.empty(),
+              "registered trays did not match the created tray IDs")) {
+    return false;
+  }
   std::vector<uint8_t> fixed_icon_bytes;
   std::vector<uint8_t> follow_icon_bytes;
   if (!Expect(ReadIconPixmapProperty(watcher.connection(), fixed_bus_name,

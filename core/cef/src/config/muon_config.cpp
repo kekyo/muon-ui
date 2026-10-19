@@ -10,6 +10,11 @@
 #include "config/muon_startup.h"
 #include "muon_json_helpers.h"
 #include "muon_string_helpers.h"
+#include "muon_filesystem.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include "yyjson.h"
 
@@ -23,6 +28,13 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+using muon_internal::FilesystemIoUsage;
+using muon_internal::FilesystemPathForIo;
+using muon_internal::FilesystemPathFromUtf8;
+using muon_internal::FilesystemPathToUtf8;
+using muon_internal::GetFilesystemType;
+using muon_internal::ResolveFilesystemPath;
 
 static constexpr char kMuonConfigJson5FileName[] = "muon.json5";
 static constexpr char kMuonConfigJsoncFileName[] = "muon.jsonc";
@@ -248,9 +260,11 @@ static bool InspectMuonConfigPath(const std::filesystem::path& path,
                                   bool* exists,
                                   std::string* error_message) {
   std::error_code error;
-  *exists = std::filesystem::exists(path, error);
+  const auto type = GetFilesystemType(path, error);
+  *exists = type != std::filesystem::file_type::not_found &&
+            type != std::filesystem::file_type::none;
   if (error) {
-    *error_message = "Failed to inspect muon config: " + path.string();
+    *error_message = "Failed to inspect muon config: " + FilesystemPathToUtf8(path);
     return false;
   }
   return true;
@@ -295,15 +309,16 @@ static bool ReadTextFile(const std::filesystem::path& path,
     return false;
   }
 
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(FilesystemPathForIo(path, FilesystemIoUsage::File),
+                       std::ios::binary);
   if (!input) {
-    *error_message = "Failed to read muon config: " + path.string();
+    *error_message = "Failed to read muon config: " + FilesystemPathToUtf8(path);
     return false;
   }
   content->assign((std::istreambuf_iterator<char>(input)),
                   std::istreambuf_iterator<char>());
   if (!input.eof() && input.fail()) {
-    *error_message = "Failed to read muon config: " + path.string();
+    *error_message = "Failed to read muon config: " + FilesystemPathToUtf8(path);
     return false;
   }
   return true;
@@ -648,19 +663,40 @@ static bool ResolveCurrentDirectory(std::filesystem::path* current_directory,
   return true;
 }
 
-static bool GetEnvironmentPath(const char* name, std::filesystem::path* path) {
+static std::string GetEnvironmentString(const char* name) {
+#if defined(_WIN32)
+  const auto key = FilesystemPathFromUtf8(name);
+  auto value = std::wstring(128, L'\0');
+  for (;;) {
+    const auto length = GetEnvironmentVariableW(
+        key.c_str(), value.data(), static_cast<DWORD>(value.size()));
+    if (length == 0) return {};
+    if (length < value.size()) {
+      value.resize(length);
+      return FilesystemPathToUtf8(std::filesystem::path(value));
+    }
+    value.resize(length);
+  }
+#else
   const auto* value = std::getenv(name);
-  if (value == nullptr || value[0] == '\0') {
+  return value == nullptr ? std::string{} : std::string(value);
+#endif
+}
+
+static bool GetEnvironmentPath(const char* name, std::filesystem::path* path) {
+  const auto value = GetEnvironmentString(name);
+  if (value.empty()) {
     return false;
   }
-  *path = std::filesystem::path(value);
+  *path = FilesystemPathFromUtf8(value);
   return true;
 }
 
 static std::string GetStartupApplicationName() {
   const auto command_line = GetMuonStartupCommandLine();
   if (!command_line.empty()) {
-    const auto stem = std::filesystem::path(command_line[0]).stem().string();
+    const auto stem = FilesystemPathToUtf8(
+        FilesystemPathFromUtf8(command_line[0]).stem());
     if (!stem.empty()) {
       return stem;
     }
@@ -668,7 +704,7 @@ static std::string GetStartupApplicationName() {
 
   std::filesystem::path executable_path;
   if (GetMuonExecutablePath(&executable_path)) {
-    const auto stem = executable_path.stem().string();
+    const auto stem = FilesystemPathToUtf8(executable_path.stem());
     if (!stem.empty()) {
       return stem;
     }
@@ -677,9 +713,9 @@ static std::string GetStartupApplicationName() {
 }
 
 static std::string GetStartupAppId() {
-  const auto* launcher_app_id =
-      std::getenv(kMuonLauncherAppIdEnvironmentName);
-  if (launcher_app_id != nullptr) {
+  const auto launcher_app_id =
+      GetEnvironmentString(kMuonLauncherAppIdEnvironmentName);
+  if (!launcher_app_id.empty()) {
     const auto app_id = TrimAscii(launcher_app_id);
     if (!app_id.empty()) {
       return app_id;
@@ -756,9 +792,9 @@ static bool ResolveDefaultBrowserProfilePath(
     if (!GetDefaultStateHomeDirectory(&state_home, error_message)) {
       return false;
     }
-    *profile = (state_home / SanitizeAppId(app_id) /
-                kMuonDefaultProfileDirectoryName)
-                   .lexically_normal();
+    *profile = ResolveFilesystemPath(state_home,
+        FilesystemPathFromUtf8(SanitizeAppId(app_id)) /
+        kMuonDefaultProfileDirectoryName);
     return true;
   }
 
@@ -780,7 +816,7 @@ static bool ResolveCommandLineConfigPath(
     return false;
   }
   if (path.is_absolute()) {
-    *resolved_path = path.lexically_normal();
+    *resolved_path = ResolveFilesystemPath({}, path);
     return true;
   }
 
@@ -788,7 +824,7 @@ static bool ResolveCommandLineConfigPath(
   if (!ResolveCurrentDirectory(&current_directory, error_message)) {
     return false;
   }
-  *resolved_path = (current_directory / path).lexically_normal();
+  *resolved_path = ResolveFilesystemPath(current_directory, path);
   return true;
 }
 
@@ -802,7 +838,7 @@ static bool GetMuonConfigBaseDirectory(
 
   const auto directory = config_path.parent_path();
   if (directory.is_absolute()) {
-    *base_directory = directory.lexically_normal();
+    *base_directory = ResolveFilesystemPath({}, directory);
     return true;
   }
 
@@ -811,20 +847,11 @@ static bool GetMuonConfigBaseDirectory(
     return false;
   }
   if (directory.empty()) {
-    *base_directory = current_directory.lexically_normal();
+    *base_directory = ResolveFilesystemPath({}, current_directory);
     return true;
   }
-  *base_directory = (current_directory / directory).lexically_normal();
+  *base_directory = ResolveFilesystemPath(current_directory, directory);
   return true;
-}
-
-static std::filesystem::path ResolveConfigRelativePath(
-    const std::filesystem::path& base_directory,
-    const std::filesystem::path& path) {
-  if (path.is_absolute()) {
-    return path.lexically_normal();
-  }
-  return (base_directory / path).lexically_normal();
 }
 
 static yyjson_val* GetObjectValue(yyjson_val* object, const char* key) {
@@ -896,24 +923,24 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
     return;
   }
   if (HasBrowserProfilePath(root) && path_bases.has_browser_profile) {
-    config->browser.profile = ResolveConfigRelativePath(
+    config->browser.profile = ResolveFilesystemPath(
         path_bases.browser_profile, config->browser.profile);
   }
   if (HasLogOutputPath(root) && path_bases.has_log_output_path) {
-    config->log.output.path = ResolveConfigRelativePath(
+    config->log.output.path = ResolveFilesystemPath(
         path_bases.log_output_path, config->log.output.path);
   }
   if (HasPluginPath(root) && path_bases.has_plugin_path) {
     config->plugin.path =
-        ResolveConfigRelativePath(path_bases.plugin_path, config->plugin.path);
+        ResolveFilesystemPath(path_bases.plugin_path, config->plugin.path);
   }
   if (HasNodeProject(root) && path_bases.has_node_project) {
-    config->node.project = ResolveConfigRelativePath(
+    config->node.project = ResolveFilesystemPath(
         path_bases.node_project, config->node.project);
   }
   if (HasAssetFromPath(root) && path_bases.has_asset_from) {
     config->asset.from =
-        ResolveConfigRelativePath(path_bases.asset_from, config->asset.from);
+        ResolveFilesystemPath(path_bases.asset_from, config->asset.from);
   }
 }
 
@@ -1344,7 +1371,7 @@ static bool ReadBrowserProfileConfig(yyjson_val* browser,
     *error_message = "muon.json browser.profilePath must not be empty";
     return false;
   }
-  config->browser.profile = profile_path;
+  config->browser.profile = FilesystemPathFromUtf8(profile_path);
   return true;
 }
 
@@ -2128,7 +2155,7 @@ static bool ReadLogOutputConfig(yyjson_val* log,
       *error_message = "muon.json log.output.path must be a string";
       return false;
     }
-    config->log.output.path = ReadJsonString(path_value);
+    config->log.output.path = FilesystemPathFromUtf8(ReadJsonString(path_value));
   }
 
   if (config->log.output.type == kMuonLogOutputFile) {
@@ -2287,7 +2314,7 @@ static bool ReadAssetConfig(yyjson_val* root,
       *error_message = "muon.json asset.sourcePath must be a string";
       return false;
     }
-    config->asset.from = ReadJsonString(from);
+    config->asset.from = FilesystemPathFromUtf8(ReadJsonString(from));
     if (config->asset.from.empty()) {
       *error_message = "muon.json asset.sourcePath must not be empty";
       return false;
@@ -2497,7 +2524,7 @@ static bool ReadNodeConfig(yyjson_val* root,
     *error_message = "muon.json node.project must be a string";
     return false;
   }
-  config->node.project = ReadJsonString(project);
+  config->node.project = FilesystemPathFromUtf8(ReadJsonString(project));
   if (config->node.project.empty()) {
     *error_message = "muon.json node.project must not be empty";
     return false;
@@ -2537,7 +2564,7 @@ static bool ReadPluginConfig(yyjson_val* root,
       *error_message = "muon.json plugin.path must be a string";
       return false;
     }
-    config->plugin.path = ReadJsonString(plugin_path);
+    config->plugin.path = FilesystemPathFromUtf8(ReadJsonString(plugin_path));
     if (config->plugin.path.empty()) {
       *error_message = "muon.json plugin.path must not be empty";
       return false;
@@ -2688,14 +2715,15 @@ static bool ReadMuonConfigDocument(const std::filesystem::path& path,
     if (missing_is_success) {
       return true;
     }
-    *error_message = "muon config does not exist: " + path.string();
+    *error_message = "muon config does not exist: " + FilesystemPathToUtf8(path);
     return false;
   }
 
   std::error_code error;
-  if (!std::filesystem::is_regular_file(config_path.path, error) || error) {
+  if (GetFilesystemType(config_path.path, error) !=
+          std::filesystem::file_type::regular || error) {
     *error_message =
-        "muon config is not a regular file: " + config_path.path.string();
+        "muon config is not a regular file: " + FilesystemPathToUtf8(config_path.path);
     return false;
   }
 
@@ -3046,7 +3074,7 @@ bool GetMuonConfigPathsFromCommandLine(
     }
 
     std::filesystem::path config_path;
-    if (!ResolveCommandLineConfigPath(command_line[index + 1], &config_path,
+    if (!ResolveCommandLineConfigPath(FilesystemPathFromUtf8(command_line[index + 1]), &config_path,
                                       error_message)) {
       return false;
     }

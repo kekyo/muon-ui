@@ -754,6 +754,12 @@ const initializeProject = async (
   const manifest = await readPackageManifest(root);
   validateNodeEngine(manifest);
   if (changeWorkingDirectory) {
+    if (process.platform === 'win32' && root.length >= 260) {
+      throw createBridgeError(
+        'ERR_MUON_NODE_PROJECT',
+        'node.project requires a short Windows working directory (under 260 UTF-16 code units). Use a short project root and load nested modules by relative paths.'
+      );
+    }
     try {
       process.chdir(root);
     } catch (error) {

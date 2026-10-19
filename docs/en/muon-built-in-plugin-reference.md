@@ -172,6 +172,8 @@ await window.muon.launcher.triggerUpdate();
 - `getAutostart()` and `setAutostart()` use the platform backend corresponding to the launch source.
   POSIX desktop uses XDG Autostart, and Windows uses the current user's Run registry entry.
 
+On Windows, the complete autostart command, including quotes, must fit within 260 UTF-16 code units. UTF-16 is the Windows string representation; most Japanese characters use one unit, and many emoji use two. Exceeding the limit rejects `setAutostart(true)` with `Windows Run command is too long` without creating the entry. See [Run registry limits](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys).
+
 ```js
 const variables = await window.muon.environments.getVariables();
 const config = await window.muon.environments.getConfigValues();
@@ -265,6 +267,8 @@ A released process cannot be reconnected.
 On Linux, the process tree consists of processes in the process group created at launch.
 A process that removes itself from that group is outside muon's control.
 On Windows, managed processes are members of a Job Object.
+
+On Windows, `command` accepts a long executable path. Pass arguments separately through `args`. A bare command name keeps its existing search behavior. The resolved `cwd` must be shorter than 260 UTF-16 code units. Limits on arguments and files handled by the child program depend on that program. See [Windows process creation and working directories](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setcurrentdirectory).
 
 ```js
 const child = await window.muon.executor.spawn({
@@ -371,6 +375,10 @@ On Linux, GIO/GVfs is used, so local paths or URIs can be specified for file loc
 When `gtk.localOnly: false` in GTK file dialogs and a URI on GVfs is returned as the selection result, that URI can also be passed to normal `muon.fs` functions.
 On non-Linux environments, normal `muon.fs` functions handle paths on the local file system.
 The current Android WebView implementation handles only real filesystem paths allowed by Android. It currently rejects `content://` URIs; direct URI support is deferred. `muon.fs.dialogs` also remains unavailable on Android until that URI contract is implemented.
+
+On Windows, ordinary long paths can be used for reading, writing, enumeration, copying, moving, removal, and watching. Long paths require no administrator action or OS policy change. Relative paths retain their existing base directory. A relative `symlink()` target is stored as relative link text.
+
+`realpath()` returns an ordinary absolute path when it identifies the same object. It preserves an explicitly supplied `\\?\` prefix, or one needed to represent names such as those ending in spaces or periods. Relative targets returned by `readlink()` remain relative. Pass returned paths directly into subsequent `muon.fs` operations without stripping prefixes, and preserve the names returned by `readdir()`. See [Windows placement restrictions and path lengths](./limitation.md#long-paths-on-windows).
 
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |
@@ -483,6 +491,8 @@ await watcher.close();
 
 `window.muon.fs.dialogs` shows native file dialogs.
 Functions in this namespace do not create or modify files or directories. They only return paths or URIs selected by the user.
+
+On Windows, the shell may return an 8.3 short alias or a path prefixed with `\\?\`. Its spelling may differ from the supplied initial folder. Pass the result directly to `muon.fs`. File I/O and the shell have separate long-path restrictions. See [Microsoft's shell notes](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
 
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |

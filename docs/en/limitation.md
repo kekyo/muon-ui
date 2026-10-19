@@ -1,5 +1,23 @@
 # Constraints
 
+## Long paths on Windows
+
+On Windows, `muon.fs` accepts ordinary local paths beyond the traditional `MAX_PATH` limit of 260 characters including the terminator. Long paths do not require administrator privileges, changing `LongPathsEnabled`, or restarting Windows. Builder downloads, extraction, and copying follow the same policy. Lengths are counted in UTF-16 code units: most Japanese characters use one unit, and many emoji use two.
+
+The following placement restrictions still apply.
+
+| Target | Requirements |
+| --- | --- |
+| The runtime running CEF, its profile, and temporary directories | Use short paths in ordinary notation, with room for internal filenames. Accessing data at a long path does not guarantee that CEF can run from that location. |
+| `browser.profilePath` | Startup rejects a resolved path of 260 units or more, or one starting with `\\?\`. It does not silently relocate the profile. |
+| The launcher's runtime, executor `cwd`, and `node.project` | Paths used as Windows working directories must be shorter than 260 units. Load deeply nested Node.js modules by relative paths from a short project root. |
+| NSIS and shortcuts | Installation limits include the names of packaged files. See [installation locations](./package-install-location-advanced-topics.md). |
+| Autostart | The complete Run registry command, including quotes, must fit within 260 units. |
+
+CEF placement restrictions follow the referenced Chromium's [fixed-size executable path handling](https://github.com/chromium/chromium/blob/147.0.7727.138/base/base_paths_win.cc) and [temporary directory and file handling](https://github.com/chromium/chromium/blob/147.0.7727.138/base/files/file_util_win.cc). See the Windows documentation for [working directories and process creation](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setcurrentdirectory) and [Run registry limits](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys).
+
+The filesystem also limits individual path components and the total extended path length. Muon does not truncate names to continue an operation. Extended paths starting with `\\?\` have different parsing rules; do not apply file I/O prefixes indiscriminately to CEF settings, shell operations, URIs, or external program arguments. See [Windows path limits and parsing rules](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
+
 ## Wayland and Vulkan
 
 The current CEF (`147.0.14+g76d2442`) does not fully support use with Vulkan in Linux + Wayland environments.

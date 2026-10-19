@@ -32,6 +32,7 @@
 #include <direct.h>
 #include <io.h>
 #include <process.h>
+#include <share.h>
 #endif
 
 #include "archive.h"
@@ -190,6 +191,10 @@ void muon_normalize_path_separators(char *path) {
   if (path == NULL) {
     return;
   }
+#ifdef _WIN32
+  // Explicit extended paths have literal separator and component semantics.
+  if (strncmp(path, "\\\\?\\", 4) == 0) return;
+#endif
   for (char *cursor = path; *cursor != '\0'; cursor += 1) {
     if (*cursor == '\\') {
       *cursor = '/';
@@ -216,7 +221,20 @@ char *muon_path_join(const char *left, const char *right) {
   if (result == NULL) {
     return NULL;
   }
-  snprintf(result, size, needs_separator ? "%s/%s" : "%s%s", left, right);
+  const char *format = needs_separator ? "%s/%s" : "%s%s";
+#ifdef _WIN32
+  if (needs_separator && strncmp(left, "\\\\?\\", 4) == 0) format = "%s\\%s";
+#endif
+  snprintf(result, size, format, left, right);
+#ifdef _WIN32
+  if (strncmp(left, "\\\\?\\", 4) == 0) {
+    // The left side is literal user input. Only the appended structural path
+    // (for example, a validated archive entry) uses ordinary separators.
+    for (char *cursor = result + strlen(left); *cursor != '\0'; ++cursor) {
+      if (*cursor == '/') *cursor = '\\';
+    }
+  }
+#endif
   return result;
 }
 
@@ -250,57 +268,219 @@ char *muon_parent_directory(const char *path) {
       path[1] == ':') {
     return muon_substring(path, 3);
   }
+  if (strncmp(path, "\\\\?\\", 4) == 0 && slash == path + 6 && path[5] == ':') {
+    return muon_substring(path, 7);
+  }
 #endif
   return muon_substring(path, (size_t)(slash - path));
 }
 
 #ifdef _WIN32
-static int muon_access(const char *path, int mode) { return _access(path, mode); }
+static int windows_path_error(DWORD error) {
+  switch (error) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND: errno = ENOENT; break;
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS: errno = EEXIST; break;
+    case ERROR_ACCESS_DENIED:
+    case ERROR_SHARING_VIOLATION:
+    case ERROR_LOCK_VIOLATION: errno = EACCES; break;
+    case ERROR_NOT_ENOUGH_MEMORY:
+    case ERROR_OUTOFMEMORY: errno = ENOMEM; break;
+    case ERROR_FILENAME_EXCED_RANGE: errno = ENAMETOOLONG; break;
+    case ERROR_NO_UNICODE_TRANSLATION: errno = EILSEQ; break;
+    case ERROR_INVALID_NAME:
+    case ERROR_INVALID_PARAMETER: errno = EINVAL; break;
+    case ERROR_DIRECTORY: errno = ENOTDIR; break;
+    case ERROR_DIR_NOT_EMPTY: errno = ENOTEMPTY; break;
+    case ERROR_DISK_FULL: errno = ENOSPC; break;
+    case ERROR_NOT_SAME_DEVICE: errno = EXDEV; break;
+    default: errno = EIO; break;
+  }
+  SetLastError(error);
+  return -1;
+}
 
-static int muon_chmod(const char *path, int mode) { return _chmod(path, mode); }
+char *muon_utf8_from_wide(const wchar_t *value) {
+  int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
+                                  NULL, 0, NULL, NULL);
+  if (length == 0) {
+    windows_path_error(GetLastError());
+    return NULL;
+  }
+  char *result = malloc((size_t)length);
+  if (result == NULL) return NULL;
+  if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
+                          result, length, NULL, NULL)) {
+    DWORD error = GetLastError();
+    free(result);
+    windows_path_error(error);
+    return NULL;
+  }
+  return result;
+}
+
+wchar_t *muon_wide_from_utf8(const char *value) {
+  int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, NULL, 0);
+  if (length == 0) {
+    windows_path_error(GetLastError());
+    return NULL;
+  }
+  if ((size_t)length > SIZE_MAX / sizeof(wchar_t)) {
+    windows_path_error(ERROR_NOT_ENOUGH_MEMORY);
+    return NULL;
+  }
+  wchar_t *result = malloc((size_t)length * sizeof(wchar_t));
+  if (result == NULL) return NULL;
+  if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, result, length)) {
+    DWORD error = GetLastError();
+    free(result);
+    windows_path_error(error);
+    return NULL;
+  }
+  return result;
+}
+
+int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **)) {
+  char **arguments = calloc((size_t)argc + 1, sizeof(char *));
+  if (arguments == NULL) return EXIT_FAILURE;
+  for (int index = 0; index < argc; ++index) {
+    arguments[index] = muon_utf8_from_wide(argv[index]);
+    if (arguments[index] == NULL) {
+      muon_print_errno("Failed to convert command-line arguments");
+      muon_free_string_array(arguments, (size_t)index);
+      return EXIT_FAILURE;
+    }
+  }
+  int result = entry(argc, arguments);
+  muon_free_string_array(arguments, (size_t)argc);
+  return result;
+}
+
+int muon_windows_io_path(const char *path, muon_windows_path_usage usage,
+                         muon_windows_path *result) {
+  DWORD error = muon_windows_path_normalize_utf8(path, strlen(path), result);
+  if (error == ERROR_SUCCESS) error = muon_windows_path_for_io(result, usage);
+  if (error == ERROR_SUCCESS) return 0;
+  muon_windows_path_destroy(result);
+  return windows_path_error(error);
+}
+
+static int muon_access(const char *path, int mode) {
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return -1;
+  int result = _waccess_s(native.value, mode);
+  muon_windows_path_destroy(&native);
+  return result == 0 ? 0 : -1;
+}
+
+int muon_chmod(const char *path, int mode) {
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return -1;
+  int result = _wchmod(native.value, mode & (_S_IREAD | _S_IWRITE));
+  muon_windows_path_destroy(&native);
+  return result;
+}
 
 static int muon_close(int descriptor) { return _close(descriptor); }
 
 static int muon_getpid(void) { return _getpid(); }
 
 static int muon_lstat(const char *path, struct stat *entry) {
-  return stat(path, entry);
+  return muon_stat(path, entry);
 }
 
 static int muon_mkdir(const char *path, int mode) {
   (void)mode;
-  return _mkdir(path);
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_TREE, &native) != 0) return -1;
+  BOOL created = CreateDirectoryW(native.value, NULL);
+  DWORD error = created ? ERROR_SUCCESS : GetLastError();
+  muon_windows_path_destroy(&native);
+  return created ? 0 : windows_path_error(error);
 }
 
 static int muon_open(const char *path, int flags, int mode) {
-  return _open(path, flags, mode);
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return -1;
+  int descriptor = -1;
+  int result = _wsopen_s(&descriptor, native.value, flags, _SH_DENYNO,
+                         mode & (_S_IREAD | _S_IWRITE));
+  muon_windows_path_destroy(&native);
+  return result == 0 ? descriptor : -1;
 }
 
 static MuonSSize muon_read(int descriptor, void *buffer, size_t size) {
   return _read(descriptor, buffer, (unsigned int)size);
 }
 
-static int muon_rmdir(const char *path) { return _rmdir(path); }
-
-static int muon_stat(const char *path, struct stat *entry) {
-  return stat(path, entry);
+static int muon_rmdir(const char *path) {
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_TREE, &native) != 0) return -1;
+  BOOL removed = RemoveDirectoryW(native.value);
+  DWORD error = removed ? ERROR_SUCCESS : GetLastError();
+  muon_windows_path_destroy(&native);
+  return removed ? 0 : windows_path_error(error);
 }
 
-static int muon_unlink(const char *path) { return _unlink(path); }
+static time_t windows_file_time_to_unix(FILETIME value) {
+  uint64_t ticks = ((uint64_t)value.dwHighDateTime << 32) | value.dwLowDateTime;
+  // Divide before subtracting so all unsigned FILETIME values remain in range.
+  return (time_t)((int64_t)(ticks / 10000000) - INT64_C(11644473600));
+}
+
+int muon_stat(const char *path, struct stat *entry) {
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return -1;
+  // The MinGW/MSVCRT _wstat64 path parser rejects extended paths. Query the
+  // opened object instead, also retaining stat's behavior of following links.
+  HANDLE file = CreateFileW(native.value, 0,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  BY_HANDLE_FILE_INFORMATION info;
+  BOOL success = file != INVALID_HANDLE_VALUE && GetFileInformationByHandle(file, &info);
+  DWORD error = success ? ERROR_SUCCESS : GetLastError();
+  if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+  muon_windows_path_destroy(&native);
+  if (!success) return windows_path_error(error);
+  uint64_t size = ((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+  if (size > INT64_MAX) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  memset(entry, 0, sizeof(*entry));
+  int directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  entry->st_mode = (directory ? S_IFDIR | 0111 : S_IFREG) | 0444;
+  if (!(info.dwFileAttributes & FILE_ATTRIBUTE_READONLY)) entry->st_mode |= 0222;
+  const char *extension = strrchr(path, '.');
+  if (extension != NULL && (strcasecmp(extension, ".exe") == 0 ||
+      strcasecmp(extension, ".com") == 0 || strcasecmp(extension, ".bat") == 0 ||
+      strcasecmp(extension, ".cmd") == 0)) entry->st_mode |= 0111;
+  entry->st_nlink = 1;
+  entry->st_size = directory ? 0 : (off_t)size;
+  entry->st_atime = windows_file_time_to_unix(info.ftLastAccessTime);
+  entry->st_mtime = windows_file_time_to_unix(info.ftLastWriteTime);
+  entry->st_ctime = windows_file_time_to_unix(info.ftCreationTime);
+  return 0;
+}
+
+static int muon_unlink(const char *path) {
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return -1;
+  BOOL removed = DeleteFileW(native.value);
+  DWORD error = removed ? ERROR_SUCCESS : GetLastError();
+  muon_windows_path_destroy(&native);
+  return removed ? 0 : windows_path_error(error);
+}
 
 static MuonSSize muon_write(int descriptor, const void *buffer, size_t size) {
   return _write(descriptor, buffer, (unsigned int)size);
 }
 
-static int is_windows_drive_root_path(const char *path) {
-  return isalpha((unsigned char)path[0]) && path[1] == ':' &&
-         (path[2] == '\0' || ((path[2] == '/' || path[2] == '\\') &&
-                              path[3] == '\0'));
-}
 #else
 static int muon_access(const char *path, int mode) { return access(path, mode); }
 
-static int muon_chmod(const char *path, int mode) { return chmod(path, mode); }
+int muon_chmod(const char *path, int mode) { return chmod(path, mode); }
 
 static int muon_close(int descriptor) { return close(descriptor); }
 
@@ -324,7 +504,7 @@ static MuonSSize muon_read(int descriptor, void *buffer, size_t size) {
 
 static int muon_rmdir(const char *path) { return rmdir(path); }
 
-static int muon_stat(const char *path, struct stat *entry) {
+int muon_stat(const char *path, struct stat *entry) {
   return stat(path, entry);
 }
 
@@ -339,7 +519,230 @@ int muon_path_exists(const char *path) {
   return muon_access(path, F_OK) == 0;
 }
 
+int muon_get_environment(const char *name, char **value) {
+  *value = NULL;
+#ifdef _WIN32
+  wchar_t *native_name = muon_wide_from_utf8(name);
+  if (native_name == NULL) return -1;
+  DWORD capacity = 256;
+  for (;;) {
+    wchar_t *buffer = malloc((size_t)capacity * sizeof(wchar_t));
+    if (buffer == NULL) { free(native_name); return -1; }
+    SetLastError(ERROR_SUCCESS);
+    DWORD length = GetEnvironmentVariableW(native_name, buffer, capacity);
+    DWORD error = GetLastError();
+    if (length == 0) {
+      free(buffer);
+      free(native_name);
+      return error == ERROR_SUCCESS || error == ERROR_ENVVAR_NOT_FOUND
+          ? 0 : windows_path_error(error);
+    }
+    if (length < capacity) {
+      *value = muon_utf8_from_wide(buffer);
+      free(buffer);
+      free(native_name);
+      return *value == NULL ? -1 : 0;
+    }
+    free(buffer);
+    if (length > 32768) {
+      free(native_name);
+      return windows_path_error(ERROR_BUFFER_OVERFLOW);
+    }
+    // Unlike GetModuleFileNameW, an insufficient buffer returns the required
+    // capacity including the terminator. Retry if the variable grew meanwhile.
+    capacity = length;
+  }
+#else
+  const char *current = getenv(name);
+  if (current == NULL || current[0] == '\0') return 0;
+  *value = muon_duplicate_string(current);
+  return *value == NULL ? -1 : 0;
+#endif
+}
+
+FILE *muon_fopen(const char *path, const char *mode) {
+#ifdef _WIN32
+  wchar_t wide_mode[16];
+  size_t mode_length = strlen(mode);
+  if (mode_length >= sizeof(wide_mode) / sizeof(*wide_mode)) {
+    errno = EINVAL;
+    return NULL;
+  }
+  for (size_t index = 0; index <= mode_length; ++index) {
+    wide_mode[index] = (wchar_t)(unsigned char)mode[index];
+  }
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return NULL;
+  FILE *file = NULL;
+  int result = _wfopen_s(&file, native.value, wide_mode);
+  muon_windows_path_destroy(&native);
+  return result == 0 ? file : NULL;
+#else
+  return fopen(path, mode);
+#endif
+}
+
+char *muon_path_join_exact(const char *parent, const char *name) {
+#ifdef _WIN32
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(parent, MUON_WINDOWS_PATH_TREE, &native) != 0) return NULL;
+  char *base = muon_utf8_from_wide(native.value);
+  muon_windows_path_destroy(&native);
+  if (base == NULL) return NULL;
+  char *result = muon_path_join(base, name);
+  free(base);
+  return result;
+#else
+  return muon_path_join(parent, name);
+#endif
+}
+
+struct MuonDirectory {
+  char *path;
+  int error;
+#ifdef _WIN32
+  HANDLE search;
+  WIN32_FIND_DATAW entry;
+  int first;
+  char *name;
+#else
+  DIR *directory;
+#endif
+};
+
+MuonDirectory *muon_opendir(const char *path) {
+  MuonDirectory *result = calloc(1, sizeof(*result));
+  if (result == NULL) return NULL;
+#ifdef _WIN32
+  result->search = INVALID_HANDLE_VALUE;
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_TREE, &native) != 0) {
+    free(result);
+    return NULL;
+  }
+  result->path = muon_utf8_from_wide(native.value);
+  wchar_t *pattern = malloc((native.length + 3) * sizeof(wchar_t));
+  if (result->path == NULL || pattern == NULL) {
+    free(pattern);
+    free(result->path);
+    free(result);
+    muon_windows_path_destroy(&native);
+    return NULL;
+  }
+  swprintf(pattern, native.length + 3,
+           native.value[native.length - 1] == L'\\' ? L"%ls*" : L"%ls\\*",
+           native.value);
+  result->search = FindFirstFileW(pattern, &result->entry);
+  DWORD error = result->search == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  if (error == ERROR_FILE_NOT_FOUND) {
+    DWORD attributes = GetFileAttributesW(native.value);
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+      error = ERROR_SUCCESS;
+    }
+  }
+  free(pattern);
+  muon_windows_path_destroy(&native);
+  if (error != ERROR_SUCCESS) {
+    free(result->path);
+    free(result);
+    windows_path_error(error);
+    return NULL;
+  }
+  result->first = 1;
+#else
+  result->path = muon_duplicate_string(path);
+  if (result->path != NULL) result->directory = opendir(path);
+  if (result->directory == NULL) {
+    int error = errno;
+    free(result->path);
+    free(result);
+    errno = error;
+    return NULL;
+  }
+#endif
+  return result;
+}
+
+const char *muon_readdir(MuonDirectory *directory) {
+  if (directory->error != 0) return NULL;
+#ifdef _WIN32
+  free(directory->name);
+  directory->name = NULL;
+  if (directory->search == INVALID_HANDLE_VALUE) return NULL;
+  if (!directory->first && !FindNextFileW(directory->search, &directory->entry)) {
+    DWORD error = GetLastError();
+    if (error != ERROR_NO_MORE_FILES) {
+      windows_path_error(error);
+      directory->error = errno;
+    }
+    return NULL;
+  }
+  directory->first = 0;
+  directory->name = muon_utf8_from_wide(directory->entry.cFileName);
+  if (directory->name == NULL) directory->error = errno;
+  return directory->name;
+#else
+  errno = 0;
+  struct dirent *entry = readdir(directory->directory);
+  if (entry == NULL) directory->error = errno;
+  return entry == NULL ? NULL : entry->d_name;
+#endif
+}
+
+int muon_closedir(MuonDirectory *directory) {
+  int error = directory->error;
+#ifdef _WIN32
+  if (directory->search != INVALID_HANDLE_VALUE && !FindClose(directory->search) && error == 0) {
+    windows_path_error(GetLastError());
+    error = errno;
+  }
+  free(directory->name);
+#else
+  if (closedir(directory->directory) != 0 && error == 0) error = errno;
+#endif
+  free(directory->path);
+  free(directory);
+  if (error == 0) return 0;
+  errno = error;
+  return -1;
+}
+
+char *muon_directory_child_path(const MuonDirectory *directory, const char *name) {
+  return muon_path_join(directory->path, name);
+}
+
 int muon_ensure_directory(const char *path) {
+#ifdef _WIN32
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_TREE, &native) != 0) return -1;
+  DWORD error = ERROR_SUCCESS;
+  for (size_t index = native.root_length; index <= native.length; ++index) {
+    wchar_t separator = native.value[index];
+    if (separator != L'\\' && separator != L'\0') continue;
+    native.value[index] = L'\0';
+    if (index == native.root_length) {
+      // Roots are existing drives/shares, never intermediate directories to create.
+      DWORD attributes = GetFileAttributesW(native.value);
+      error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() :
+          (attributes & FILE_ATTRIBUTE_DIRECTORY) ? ERROR_SUCCESS : ERROR_DIRECTORY;
+    } else if (!CreateDirectoryW(native.value, NULL)) {
+      error = GetLastError();
+      if (error == ERROR_ALREADY_EXISTS) {
+        DWORD attributes = GetFileAttributesW(native.value);
+        error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() :
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) ? ERROR_SUCCESS : ERROR_DIRECTORY;
+      }
+    }
+    native.value[index] = separator;
+    if (error != ERROR_SUCCESS) break;
+  }
+  muon_windows_path_destroy(&native);
+  if (error != ERROR_SUCCESS) {
+    muon_print_windows_path_error(path, error);
+    return windows_path_error(error);
+  }
+  return 0;
+#else
   char buffer[PATH_MAX];
   const size_t length = strlen(path);
   if (length == 0 || strcmp(path, ".") == 0) {
@@ -350,18 +753,7 @@ int muon_ensure_directory(const char *path) {
     return -1;
   }
   memcpy(buffer, path, length + 1);
-#ifdef _WIN32
-  if (is_windows_drive_root_path(buffer)) {
-    return 0;
-  }
-#endif
   char *cursor = buffer + 1;
-#ifdef _WIN32
-  if (length >= 3 && isalpha((unsigned char)buffer[0]) && buffer[1] == ':' &&
-      (buffer[2] == '/' || buffer[2] == '\\')) {
-    cursor = buffer + 3;
-  }
-#endif
   for (; *cursor != '\0'; cursor += 1) {
     if (is_path_separator(*cursor)) {
       const char separator = *cursor;
@@ -378,14 +770,41 @@ int muon_ensure_directory(const char *path) {
     return -1;
   }
   return 0;
+#endif
 }
+
+#ifdef _WIN32
+typedef struct {
+  MuonPrepareProgressCallback callback;
+  void *user_data;
+  MuonPrepareProgressPhase phase;
+  const char *status;
+} WindowsCopyProgress;
+
+static DWORD CALLBACK report_windows_copy_progress(
+    LARGE_INTEGER total, LARGE_INTEGER transferred,
+    LARGE_INTEGER stream_size, LARGE_INTEGER stream_transferred,
+    DWORD stream_number, DWORD reason, HANDLE source, HANDLE destination,
+    void *user_data) {
+  (void)stream_size;
+  (void)stream_transferred;
+  (void)stream_number;
+  (void)reason;
+  (void)source;
+  (void)destination;
+  WindowsCopyProgress *progress = user_data;
+  muon_report_progress(progress->callback, progress->user_data, progress->phase,
+                       progress->status, (unsigned long long)transferred.QuadPart,
+                       (unsigned long long)total.QuadPart, 1);
+  return PROGRESS_CONTINUE;
+}
+#endif
 
 static int muon_copy_file_internal(
     const char *source, const char *destination, int mode,
     unsigned long long total_size,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data,
     MuonPrepareProgressPhase phase, const char *status) {
-  char buffer[64 * 1024];
   char *parent = muon_parent_directory(destination);
   if (parent == NULL) {
     return -1;
@@ -395,6 +814,29 @@ static int muon_copy_file_internal(
     return -1;
   }
   free(parent);
+#ifdef _WIN32
+  muon_windows_path native_source = {0};
+  muon_windows_path native_destination = {0};
+  if (muon_windows_io_path(source, MUON_WINDOWS_PATH_FILE, &native_source) != 0) return -1;
+  if (muon_windows_io_path(destination, MUON_WINDOWS_PATH_FILE, &native_destination) != 0) {
+    muon_windows_path_destroy(&native_source);
+    return -1;
+  }
+  WindowsCopyProgress progress = {progress_callback, progress_user_data, phase, status};
+  // Native copying rejects aliases of the same file before truncating it and
+  // retains the existing overwrite and link-following behavior (flags = 0).
+  BOOL copied = CopyFileExW(native_source.value, native_destination.value,
+                            total_size == 0 ? NULL : report_windows_copy_progress,
+                            &progress, NULL, 0);
+  DWORD error = copied ? ERROR_SUCCESS : GetLastError();
+  muon_windows_path_destroy(&native_source);
+  muon_windows_path_destroy(&native_destination);
+  if (!copied) {
+    muon_print_windows_path_error(destination, error);
+    return windows_path_error(error);
+  }
+#else
+  char buffer[64 * 1024];
   const int input = muon_open(source, MUON_OPEN_READ_FLAGS, 0);
   if (input < 0) {
     muon_print_errno(source);
@@ -442,6 +884,7 @@ static int muon_copy_file_internal(
     muon_print_errno(destination);
     return -1;
   }
+#endif
   if (muon_chmod(destination, mode & 0777) != 0) {
     muon_print_errno(destination);
     return -1;
@@ -495,31 +938,31 @@ static int muon_copy_path(const char *source, const char *destination,
     if (muon_ensure_directory(destination) != 0) {
       return -1;
     }
-    DIR *directory = opendir(source);
+    MuonDirectory *directory = muon_opendir(source);
     if (directory == NULL) {
       muon_print_errno(source);
       return -1;
     }
-    struct dirent *child;
-    while ((child = readdir(directory)) != NULL) {
-      if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+    const char *child;
+    while ((child = muon_readdir(directory)) != NULL) {
+      if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
         continue;
       }
-      char *child_source = muon_path_join(source, child->d_name);
-      char *child_destination = muon_path_join(destination, child->d_name);
+      char *child_source = muon_directory_child_path(directory, child);
+      char *child_destination = muon_path_join_exact(destination, child);
       if (child_source == NULL || child_destination == NULL ||
           muon_copy_path(child_source, child_destination, file_count,
                          progress_callback, progress_user_data, phase,
                          status) != 0) {
         free(child_source);
         free(child_destination);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       free(child_source);
       free(child_destination);
     }
-    closedir(directory);
+    if (muon_closedir(directory) != 0) return -1;
     muon_chmod(destination, entry.st_mode & 0777);
     return 0;
   }
@@ -542,7 +985,7 @@ int muon_copy_directory_contents_progress(
     const char *source, const char *destination, size_t *file_count,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data,
     MuonPrepareProgressPhase phase, const char *status) {
-  DIR *directory = opendir(source);
+  MuonDirectory *directory = muon_opendir(source);
   if (directory == NULL) {
     if (errno == ENOENT) {
       return 0;
@@ -551,29 +994,29 @@ int muon_copy_directory_contents_progress(
     return -1;
   }
   if (muon_ensure_directory(destination) != 0) {
-    closedir(directory);
+    muon_closedir(directory);
     return -1;
   }
-  struct dirent *child;
-  while ((child = readdir(directory)) != NULL) {
-    if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+  const char *child;
+  while ((child = muon_readdir(directory)) != NULL) {
+    if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
       continue;
     }
-    char *child_source = muon_path_join(source, child->d_name);
-    char *child_destination = muon_path_join(destination, child->d_name);
+    char *child_source = muon_directory_child_path(directory, child);
+    char *child_destination = muon_path_join_exact(destination, child);
     if (child_source == NULL || child_destination == NULL ||
         muon_copy_path(child_source, child_destination, file_count,
                        progress_callback, progress_user_data, phase,
                        status) != 0) {
       free(child_source);
       free(child_destination);
-      closedir(directory);
+      muon_closedir(directory);
       return -1;
     }
     free(child_source);
     free(child_destination);
   }
-  closedir(directory);
+  if (muon_closedir(directory) != 0) return -1;
   return 0;
 }
 
@@ -588,26 +1031,31 @@ int muon_copy_directory_contents(const char *source, const char *destination,
 static int muon_remove_windows_reparse_point_if_present(const char *path,
                                                         int *handled) {
   *handled = 1;
-  const DWORD attributes = GetFileAttributesA(path);
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_TREE, &native) != 0) return -1;
+  const DWORD attributes = GetFileAttributesW(native.value);
   if (attributes == INVALID_FILE_ATTRIBUTES) {
     const DWORD error = GetLastError();
+    muon_windows_path_destroy(&native);
     if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
       return 0;
     }
     muon_print_windows_path_error(path, error);
-    return -1;
+    return windows_path_error(error);
   }
   if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
     *handled = 0;
+    muon_windows_path_destroy(&native);
     return 0;
   }
   const BOOL removed = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
-                           ? RemoveDirectoryA(path)
-                           : DeleteFileA(path);
+                           ? RemoveDirectoryW(native.value)
+                           : DeleteFileW(native.value);
+  DWORD error = removed ? ERROR_SUCCESS : GetLastError();
+  muon_windows_path_destroy(&native);
   if (!removed) {
-    const DWORD error = GetLastError();
     muon_print_windows_path_error(path, error);
-    return -1;
+    return windows_path_error(error);
   }
   return 0;
 }
@@ -630,25 +1078,25 @@ int muon_remove_recursive(const char *path) {
     return errno == ENOENT ? 0 : -1;
   }
   if (S_ISDIR(entry.st_mode)) {
-    DIR *directory = opendir(path);
+    MuonDirectory *directory = muon_opendir(path);
     if (directory == NULL) {
       muon_print_errno(path);
       return -1;
     }
-    struct dirent *child;
-    while ((child = readdir(directory)) != NULL) {
-      if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+    const char *child;
+    while ((child = muon_readdir(directory)) != NULL) {
+      if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
         continue;
       }
-      char *child_path = muon_path_join(path, child->d_name);
+      char *child_path = muon_directory_child_path(directory, child);
       if (child_path == NULL || muon_remove_recursive(child_path) != 0) {
         free(child_path);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       free(child_path);
     }
-    closedir(directory);
+    if (muon_closedir(directory) != 0) return -1;
     if (muon_rmdir(path) != 0) {
       muon_print_errno(path);
       return -1;
@@ -663,7 +1111,7 @@ int muon_remove_recursive(const char *path) {
 }
 
 char *muon_read_text_file(const char *path) {
-  FILE *file = fopen(path, "rb");
+  FILE *file = muon_fopen(path, "rb");
   if (file == NULL) {
     muon_print_errno(path);
     return NULL;
@@ -702,7 +1150,7 @@ int muon_write_text_file(const char *path, const char *content) {
     return -1;
   }
   free(parent);
-  FILE *file = fopen(path, "wb");
+  FILE *file = muon_fopen(path, "wb");
   if (file == NULL) {
     muon_print_errno(path);
     return -1;
@@ -725,7 +1173,7 @@ int muon_append_text_file(const char *path, const char *content) {
     return -1;
   }
   free(parent);
-  FILE *file = fopen(path, "ab");
+  FILE *file = muon_fopen(path, "ab");
   if (file == NULL) {
     muon_print_errno(path);
     return -1;
@@ -755,26 +1203,26 @@ int muon_count_files_recursive(const char *path, size_t *file_count) {
     return -1;
   }
   if (S_ISDIR(entry.st_mode)) {
-    DIR *directory = opendir(path);
+    MuonDirectory *directory = muon_opendir(path);
     if (directory == NULL) {
       muon_print_errno(path);
       return -1;
     }
-    struct dirent *child;
-    while ((child = readdir(directory)) != NULL) {
-      if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+    const char *child;
+    while ((child = muon_readdir(directory)) != NULL) {
+      if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
         continue;
       }
-      char *child_path = muon_path_join(path, child->d_name);
+      char *child_path = muon_directory_child_path(directory, child);
       if (child_path == NULL ||
           muon_count_files_recursive(child_path, file_count) != 0) {
         free(child_path);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       free(child_path);
     }
-    closedir(directory);
+    if (muon_closedir(directory) != 0) return -1;
   } else if (S_ISREG(entry.st_mode)) {
     *file_count += 1;
   }
@@ -1039,22 +1487,22 @@ static int compare_string_pointers(const void *left, const void *right) {
 }
 
 static int read_sorted_directory_names(const char *path, NameList *list) {
-  DIR *directory = opendir(path);
+  MuonDirectory *directory = muon_opendir(path);
   if (directory == NULL) {
     muon_print_errno(path);
     return -1;
   }
-  struct dirent *child;
-  while ((child = readdir(directory)) != NULL) {
-    if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+  const char *child;
+  while ((child = muon_readdir(directory)) != NULL) {
+    if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
       continue;
     }
-    if (name_list_add(list, child->d_name) != 0) {
-      closedir(directory);
+    if (name_list_add(list, child) != 0) {
+      muon_closedir(directory);
       return -1;
     }
   }
-  closedir(directory);
+  if (muon_closedir(directory) != 0) return -1;
   qsort(list->values, list->count, sizeof(char *), compare_string_pointers);
   return 0;
 }
@@ -1079,7 +1527,7 @@ int muon_fingerprint_path_recursive(
       return -1;
     }
     for (size_t index = 0; index < children.count; index += 1) {
-      char *child_path = muon_path_join(path, children.values[index]);
+      char *child_path = muon_path_join_exact(path, children.values[index]);
       char *child_relative =
           relative[0] == '\0' ? muon_duplicate_string(children.values[index])
                               : muon_path_join(relative, children.values[index]);
@@ -1300,6 +1748,33 @@ static int extract_archive_file(struct archive *reader, struct archive_entry *en
   return 0;
 }
 
+int muon_archive_read_open_file(struct archive *reader, const char *path) {
+#ifdef _WIN32
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) {
+    archive_set_error(reader, errno, "Invalid archive path: %s", path);
+    return ARCHIVE_FATAL;
+  }
+  int result = archive_read_open_filename_w(reader, native.value, 64 * 1024);
+  muon_windows_path_destroy(&native);
+  return result;
+#else
+  return archive_read_open_filename(reader, path, 64 * 1024);
+#endif
+}
+
+char *muon_external_file_path(const char *path) {
+#ifdef _WIN32
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return NULL;
+  char *result = muon_utf8_from_wide(native.value);
+  muon_windows_path_destroy(&native);
+  return result;
+#else
+  return muon_duplicate_string(path);
+#endif
+}
+
 int muon_extract_tar_bz2_archive_progress(
     const char *archive_path, const char *destination, int strip_components,
     size_t *file_count, MuonPrepareProgressCallback progress_callback,
@@ -1317,7 +1792,7 @@ int muon_extract_tar_bz2_archive_progress(
   }
   if (archive_read_support_filter_bzip2(reader) != ARCHIVE_OK ||
       archive_read_support_format_tar(reader) != ARCHIVE_OK ||
-      archive_read_open_filename(reader, archive_path, 64 * 1024) !=
+      muon_archive_read_open_file(reader, archive_path) !=
           ARCHIVE_OK) {
     archive_print_error(reader, archive_path);
     archive_read_free(reader);
@@ -1448,7 +1923,7 @@ char *muon_read_tar_bz2_text_file(const char *archive_path,
   }
   if (archive_read_support_filter_bzip2(reader) != ARCHIVE_OK ||
       archive_read_support_format_tar(reader) != ARCHIVE_OK ||
-      archive_read_open_filename(reader, archive_path, 64 * 1024) !=
+      muon_archive_read_open_file(reader, archive_path) !=
           ARCHIVE_OK) {
     archive_print_error(reader, archive_path);
     archive_read_free(reader);
@@ -1590,11 +2065,105 @@ static pid_t wait_for_child_process(pid_t pid, int *status, int options) {
 }
 #endif
 
+#ifdef _WIN32
+static int append_command_character(wchar_t *buffer, size_t *length, wchar_t value) {
+  // CreateProcessW counts the terminator in its 32767-unit command-line limit.
+  if (*length == 32766) {
+    errno = E2BIG;
+    SetLastError(ERROR_BAD_LENGTH);
+    return -1;
+  }
+  if (buffer != NULL) buffer[*length] = value;
+  ++*length;
+  return 0;
+}
+
+static int append_command_argument(wchar_t *buffer, size_t *length, const wchar_t *value) {
+  if (append_command_character(buffer, length, L'"') != 0) return -1;
+  for (;;) {
+    size_t backslashes = 0;
+    while (*value == L'\\') { ++backslashes; ++value; }
+    if (*value == L'"' || *value == L'\0') backslashes *= 2;
+    while (backslashes > 0) {
+      if (append_command_character(buffer, length, L'\\') != 0) return -1;
+      --backslashes;
+    }
+    if (*value == L'\0') break;
+    if (*value == L'"' && append_command_character(buffer, length, L'\\') != 0) return -1;
+    if (append_command_character(buffer, length, *value++) != 0) return -1;
+  }
+  return append_command_character(buffer, length, L'"');
+}
+
+HANDLE muon_start_windows_process(char *const argv[], const wchar_t *current_directory) {
+  if (argv == NULL || argv[0] == NULL || argv[0][0] == '\0') {
+    windows_path_error(ERROR_INVALID_PARAMETER);
+    return NULL;
+  }
+  wchar_t *command = NULL;
+  for (int pass = 0; pass < 2; ++pass) {
+    size_t length = 0;
+    for (size_t index = 0; argv[index] != NULL; ++index) {
+      wchar_t *argument = muon_wide_from_utf8(argv[index]);
+      if (argument == NULL) { free(command); return NULL; }
+      int result = index == 0 ? 0 : append_command_character(command, &length, L' ');
+      if (result == 0) result = append_command_argument(command, &length, argument);
+      free(argument);
+      if (result != 0) { free(command); return NULL; }
+    }
+    if (pass == 0) {
+      command = malloc((length + 1) * sizeof(wchar_t));
+      if (command == NULL) return NULL;
+    } else {
+      command[length] = L'\0';
+    }
+  }
+  muon_windows_path application = {0};
+  // A bare command keeps Windows executable search. A supplied path is resolved
+  // once and passed separately, so its length is not limited by argv[0] parsing.
+  if (strpbrk(argv[0], "/\\:") != NULL &&
+      muon_windows_io_path(argv[0], MUON_WINDOWS_PATH_FILE, &application) != 0) {
+    free(command);
+    return NULL;
+  }
+  STARTUPINFOW startup = {0};
+  startup.cb = sizeof(startup);
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  // A GUI launcher has no console from which the child can infer its streams.
+  // Preserve redirected handles when all three were supplied by its caller.
+  if (startup.hStdInput != NULL && startup.hStdInput != INVALID_HANDLE_VALUE &&
+      startup.hStdOutput != NULL && startup.hStdOutput != INVALID_HANDLE_VALUE &&
+      startup.hStdError != NULL && startup.hStdError != INVALID_HANDLE_VALUE) {
+    startup.dwFlags |= STARTF_USESTDHANDLES;
+  }
+  PROCESS_INFORMATION process = {0};
+  BOOL started = CreateProcessW(application.value, command, NULL, NULL, TRUE, 0,
+                                NULL, current_directory, &startup, &process);
+  DWORD error = started ? ERROR_SUCCESS : GetLastError();
+  free(command);
+  muon_windows_path_destroy(&application);
+  if (!started) { windows_path_error(error); return NULL; }
+  CloseHandle(process.hThread);
+  return process.hProcess;
+}
+#endif
+
 static int run_process(char *const argv[], int report_command_failure) {
 #ifdef _WIN32
-  const intptr_t status =
-      _spawnvp(_P_WAIT, argv[0], (const char *const *)argv);
-  if (status < 0) {
+  HANDLE process = muon_start_windows_process(argv, NULL);
+  if (process == NULL) {
+    muon_print_errno(argv[0]);
+    return -1;
+  }
+  DWORD status = 0;
+  BOOL finished = WaitForSingleObject(process, INFINITE) == WAIT_OBJECT_0 &&
+      GetExitCodeProcess(process, &status);
+  DWORD error = finished ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(process);
+  if (!finished) {
+    windows_path_error(error);
     muon_print_errno(argv[0]);
     return -1;
   }
@@ -1641,13 +2210,11 @@ static int run_process_with_file_progress(
   muon_report_progress(progress_callback, progress_user_data, phase, status, 0,
                        total, total != 0);
 #ifdef _WIN32
-  const intptr_t process_handle_value =
-      _spawnvp(_P_NOWAIT, argv[0], (const char *const *)argv);
-  if (process_handle_value < 0) {
+  HANDLE process_handle = muon_start_windows_process(argv, NULL);
+  if (process_handle == NULL) {
     muon_print_errno(argv[0]);
     return -1;
   }
-  HANDLE process_handle = (HANDLE)process_handle_value;
   for (;;) {
     const DWORD wait_result =
         WaitForSingleObject(process_handle, MUON_PROGRESS_POLL_MILLISECONDS);
@@ -1816,7 +2383,7 @@ static int muon_read_lock_owner_pid(const char *lock_path, int *pid) {
 }
 
 static int muon_directory_is_empty(const char *path, int *is_empty) {
-  DIR *directory = opendir(path);
+  MuonDirectory *directory = muon_opendir(path);
   if (directory == NULL) {
     if (errno == ENOENT) {
       *is_empty = 0;
@@ -1826,15 +2393,15 @@ static int muon_directory_is_empty(const char *path, int *is_empty) {
     return -1;
   }
   *is_empty = 1;
-  struct dirent *child;
-  while ((child = readdir(directory)) != NULL) {
-    if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+  const char *child;
+  while ((child = muon_readdir(directory)) != NULL) {
+    if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
       continue;
     }
     *is_empty = 0;
     break;
   }
-  closedir(directory);
+  if (muon_closedir(directory) != 0) return -1;
   return 0;
 }
 
@@ -1940,28 +2507,53 @@ void muon_release_lock(const char *lock_path) {
 }
 
 char *muon_create_temporary_path(const char *parent, const char *key) {
-  const int size = snprintf(NULL, 0, "%s/.%s.tmp.%ld.%ld", parent, key,
+  const int size = snprintf(NULL, 0, ".%s.tmp.%ld.%ld", key,
                             (long)muon_getpid(), (long)time(NULL));
   if (size < 0) {
     return NULL;
   }
-  char *result = (char *)malloc((size_t)size + 1);
-  if (result == NULL) {
+  char *name = (char *)malloc((size_t)size + 1);
+  if (name == NULL) {
     return NULL;
   }
-  snprintf(result, (size_t)size + 1, "%s/.%s.tmp.%ld.%ld", parent, key,
+  snprintf(name, (size_t)size + 1, ".%s.tmp.%ld.%ld", key,
            (long)muon_getpid(), (long)time(NULL));
+  char *result = muon_path_join(parent, name);
+  free(name);
   return result;
+}
+
+#ifdef _WIN32
+static int move_windows_file(const char *source, const char *destination, DWORD flags) {
+  muon_windows_path native_source = {0};
+  muon_windows_path native_destination = {0};
+  if (muon_windows_io_path(source, MUON_WINDOWS_PATH_FILE, &native_source) != 0) return -1;
+  if (muon_windows_io_path(destination, MUON_WINDOWS_PATH_FILE, &native_destination) != 0) {
+    muon_windows_path_destroy(&native_source);
+    return -1;
+  }
+  BOOL moved = MoveFileExW(native_source.value, native_destination.value, flags);
+  DWORD error = moved ? ERROR_SUCCESS : GetLastError();
+  muon_windows_path_destroy(&native_source);
+  muon_windows_path_destroy(&native_destination);
+  if (moved) return 0;
+  muon_print_windows_path_error(destination, error);
+  return windows_path_error(error);
+}
+#endif
+
+int muon_rename(const char *source, const char *destination) {
+#ifdef _WIN32
+  return move_windows_file(source, destination, 0);
+#else
+  return rename(source, destination);
+#endif
 }
 
 int muon_atomic_replace(const char *source, const char *destination) {
 #ifdef _WIN32
-  if (!MoveFileExA(source, destination,
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    muon_print_errno(destination);
-    return -1;
-  }
-  return 0;
+  return move_windows_file(source, destination,
+                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 #else
   if (rename(source, destination) != 0) {
     muon_print_errno(destination);

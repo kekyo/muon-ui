@@ -277,48 +277,52 @@ cat > "${remove_harness_src}" <<'C_EOF'
 
 #include "common.h"
 
-typedef DWORD(WINAPI *GetFileAttributesAImport)(LPCSTR path);
-typedef BOOL(WINAPI *RemoveDirectoryAImport)(LPCSTR path);
+typedef DWORD(WINAPI *GetFileAttributesWImport)(LPCWSTR path);
+typedef BOOL(WINAPI *RemoveDirectoryWImport)(LPCWSTR path);
 
-static const char *reparse_path;
+static const wchar_t *reparse_path;
 static int reparse_removed;
 
-extern GetFileAttributesAImport __real___imp_GetFileAttributesA;
-extern RemoveDirectoryAImport __real___imp_RemoveDirectoryA;
+extern GetFileAttributesWImport __real___imp_GetFileAttributesW;
+extern RemoveDirectoryWImport __real___imp_RemoveDirectoryW;
 
-static DWORD WINAPI get_file_attributes_with_reparse_point(LPCSTR path) {
-  if (reparse_removed && strcmp(path, reparse_path) == 0) {
+static DWORD WINAPI get_file_attributes_with_reparse_point(LPCWSTR path) {
+  if (reparse_removed && wcscmp(path, reparse_path) == 0) {
     SetLastError(ERROR_FILE_NOT_FOUND);
     return INVALID_FILE_ATTRIBUTES;
   }
-  const DWORD attributes = __real___imp_GetFileAttributesA(path);
+  const DWORD attributes = __real___imp_GetFileAttributesW(path);
   if (attributes != INVALID_FILE_ATTRIBUTES &&
-      strcmp(path, reparse_path) == 0) {
+      wcscmp(path, reparse_path) == 0) {
     return attributes | FILE_ATTRIBUTE_DIRECTORY |
            FILE_ATTRIBUTE_REPARSE_POINT;
   }
   return attributes;
 }
 
-static BOOL WINAPI remove_reparse_point_directory(LPCSTR path) {
-  if (strcmp(path, reparse_path) == 0) {
+static BOOL WINAPI remove_reparse_point_directory(LPCWSTR path) {
+  if (wcscmp(path, reparse_path) == 0) {
     reparse_removed = 1;
     return TRUE;
   }
-  return __real___imp_RemoveDirectoryA(path);
+  return __real___imp_RemoveDirectoryW(path);
 }
 
-GetFileAttributesAImport __wrap___imp_GetFileAttributesA =
+GetFileAttributesWImport __wrap___imp_GetFileAttributesW =
     get_file_attributes_with_reparse_point;
-RemoveDirectoryAImport __wrap___imp_RemoveDirectoryA =
+RemoveDirectoryWImport __wrap___imp_RemoveDirectoryW =
     remove_reparse_point_directory;
 
 int main(int argc, char **argv) {
   if (argc != 4) {
     return 64;
   }
-  reparse_path = argv[1];
-  const DWORD link_attributes = GetFileAttributesA(argv[1]);
+  muon_windows_path native[3] = {{0}};
+  for (int i = 0; i < 3; ++i) {
+    if (muon_windows_io_path(argv[i + 1], MUON_WINDOWS_PATH_TREE, &native[i]) != 0) return 64;
+  }
+  reparse_path = native[0].value;
+  const DWORD link_attributes = GetFileAttributesW(native[0].value);
   if (link_attributes == INVALID_FILE_ATTRIBUTES ||
       (link_attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
       (link_attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
@@ -329,15 +333,16 @@ int main(int argc, char **argv) {
     fprintf(stderr, "recursive removal followed the directory reparse point\n");
     return 2;
   }
-  if (GetFileAttributesA(argv[1]) != INVALID_FILE_ATTRIBUTES) {
+  if (GetFileAttributesW(native[0].value) != INVALID_FILE_ATTRIBUTES) {
     fprintf(stderr, "directory reparse point was not removed\n");
     return 3;
   }
-  if (GetFileAttributesA(argv[2]) == INVALID_FILE_ATTRIBUTES ||
-      GetFileAttributesA(argv[3]) == INVALID_FILE_ATTRIBUTES) {
+  if (GetFileAttributesW(native[1].value) == INVALID_FILE_ATTRIBUTES ||
+      GetFileAttributesW(native[2].value) == INVALID_FILE_ATTRIBUTES) {
     fprintf(stderr, "directory reparse point target was modified\n");
     return 4;
   }
+  for (int i = 0; i < 3; ++i) muon_windows_path_destroy(&native[i]);
   return 0;
 }
 C_EOF
@@ -347,6 +352,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
 
 x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${progress_harness_exe}" \
@@ -358,6 +364,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
 
 x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${node_harness_exe}" \
@@ -369,6 +376,7 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
 
 x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${remove_harness_exe}" \
@@ -377,8 +385,8 @@ x86_64-w64-mingw32-gcc -std=c99 -O0 -g -Wall -Wextra -pedantic \
   "${SCRIPT_DIR}/.deps/build/libarchive-windows64/libarchive/libarchive.a" \
   "${SCRIPT_DIR}/.deps/build/bzip2-windows64/libbz2.a" \
   "${SCRIPT_DIR}/.deps/build/zlib-windows64/install/lib/libzs.a" \
-  -Wl,--wrap=__imp_GetFileAttributesA \
-  -Wl,--wrap=__imp_RemoveDirectoryA
+  -Wl,--wrap=__imp_GetFileAttributesW \
+  -Wl,--wrap=__imp_RemoveDirectoryW
 
 slow_writer_windows="$(winepath -w "${slow_writer_exe}")"
 progress_output_windows="$(winepath -w "${progress_output}")"

@@ -8,6 +8,94 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#include "muon_windows_path.h"
+
+/**
+ * Converts a UTF-16 string to newly allocated, strict UTF-8.
+ * @param value Null-terminated UTF-16 input.
+ * @return Owned string to free, or NULL with errno set on failure.
+ */
+char *muon_utf8_from_wide(const wchar_t *value);
+
+/**
+ * Resolves a builder path for a Windows filesystem operation.
+ * @param path Null-terminated UTF-8 path.
+ * @param usage File or tree operation; tree operations preserve child names.
+ * @param result Receives an owned path to destroy with muon_windows_path_destroy.
+ * @return 0 on success, or -1 with errno and GetLastError set on failure.
+ */
+int muon_windows_io_path(const char *path, muon_windows_path_usage usage,
+                         muon_windows_path *result);
+#endif
+
+/** Opaque directory enumeration, released with muon_closedir. */
+typedef struct MuonDirectory MuonDirectory;
+
+/**
+ * Opens a directory for exact-name enumeration.
+ * @param path UTF-8 directory path.
+ * @return Owned iterator, or NULL with errno set on failure.
+ */
+MuonDirectory *muon_opendir(const char *path);
+
+/**
+ * Reads the next exact UTF-8 entry name, including dot entries if present.
+ * @param directory Open iterator.
+ * @return Borrowed name valid until the next read/close, or NULL at end/error.
+ * @remarks A read error is retained and returned by muon_closedir.
+ */
+const char *muon_readdir(MuonDirectory *directory);
+
+/**
+ * Closes and frees an iterator, reporting any preceding read failure.
+ * @param directory Open iterator.
+ * @return 0 on success, or -1 with errno set on read/close failure.
+ */
+int muon_closedir(MuonDirectory *directory);
+
+/**
+ * Builds a path to an entry without normalizing its exact name.
+ * @param directory Open iterator whose resolved directory is used as the base.
+ * @param name Exact UTF-8 entry name.
+ * @return Owned path to free, or NULL on failure.
+ */
+char *muon_directory_child_path(const MuonDirectory *directory, const char *name);
+
+/**
+ * Appends an exact child name to a resolved filesystem parent.
+ * @param parent UTF-8 parent path, resolved before appending the child.
+ * @param name Exact UTF-8 entry name, without separators.
+ * @return Owned path to free, or NULL on failure.
+ */
+char *muon_path_join_exact(const char *parent, const char *name);
+
+/**
+ * Opens a file using UTF-8 paths on every platform.
+ * @param path File path.
+ * @param mode Standard fopen mode.
+ * @return Stream to fclose, or NULL with errno set on failure.
+ */
+FILE *muon_fopen(const char *path, const char *mode);
+
+/**
+ * Reads file metadata with UTF-8 paths and large file sizes.
+ * @param path File or directory path.
+ * @param entry Receives metadata on success.
+ * @return 0 on success, or -1 with errno set on failure.
+ */
+int muon_stat(const char *path, struct stat *entry);
+
+/**
+ * Renames a filesystem entry with the platform's ordinary rename semantics.
+ * @param source Existing UTF-8 path.
+ * @param destination Destination UTF-8 path.
+ * @return 0 on success, or -1 with errno set on failure.
+ */
+int muon_rename(const char *source, const char *destination);
 
 #include "prepare_progress.h"
 #include "sha1.h"

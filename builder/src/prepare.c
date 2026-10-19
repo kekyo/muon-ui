@@ -1048,22 +1048,22 @@ static int compare_prepare_name_pointers(const void *left, const void *right) {
 }
 
 static int read_sorted_prepare_names(const char *path, PrepareNameList *list) {
-  DIR *directory = opendir(path);
+  MuonDirectory *directory = muon_opendir(path);
   if (directory == NULL) {
     muon_print_errno(path);
     return -1;
   }
-  struct dirent *child;
-  while ((child = readdir(directory)) != NULL) {
-    if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+  const char *child;
+  while ((child = muon_readdir(directory)) != NULL) {
+    if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
       continue;
     }
-    if (prepare_name_list_add(list, child->d_name) != 0) {
-      closedir(directory);
+    if (prepare_name_list_add(list, child) != 0) {
+      muon_closedir(directory);
       return -1;
     }
   }
-  closedir(directory);
+  if (muon_closedir(directory) != 0) return -1;
   qsort(list->values, list->count, sizeof(char *),
         compare_prepare_name_pointers);
   return 0;
@@ -1156,7 +1156,7 @@ static int fingerprint_staging_muon_source_recursive(
     const char *path, const char *relative,
     char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
-  if (stat(path, &entry) != 0) {
+  if (muon_stat(path, &entry) != 0) {
     muon_print_errno(path);
     return -1;
   }
@@ -1172,7 +1172,7 @@ static int fingerprint_staging_muon_source_recursive(
       return -1;
     }
     for (size_t index = 0; index < children.count; index += 1) {
-      char *child_path = muon_path_join(path, children.values[index]);
+      char *child_path = muon_path_join_exact(path, children.values[index]);
       char *child_relative =
           relative[0] == '\0' ? muon_duplicate_string(children.values[index])
                               : muon_path_join(relative, children.values[index]);
@@ -1224,7 +1224,7 @@ static int copy_staging_muon_source_recursive(
     const char *source, const char *destination, const char *relative,
     size_t *file_count) {
   struct stat entry;
-  if (stat(source, &entry) != 0) {
+  if (muon_stat(source, &entry) != 0) {
     muon_print_errno(source);
     return -1;
   }
@@ -1232,27 +1232,27 @@ static int copy_staging_muon_source_recursive(
     if (muon_ensure_directory(destination) != 0) {
       return -1;
     }
-    DIR *directory = opendir(source);
+    MuonDirectory *directory = muon_opendir(source);
     if (directory == NULL) {
       muon_print_errno(source);
       return -1;
     }
-    struct dirent *child;
-    while ((child = readdir(directory)) != NULL) {
-      if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+    const char *child;
+    while ((child = muon_readdir(directory)) != NULL) {
+      if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
         continue;
       }
-      char *child_source = muon_path_join(source, child->d_name);
-      char *child_destination = muon_path_join(destination, child->d_name);
+      char *child_source = muon_directory_child_path(directory, child);
+      char *child_destination = muon_path_join_exact(destination, child);
       char *child_relative =
-          relative[0] == '\0' ? muon_duplicate_string(child->d_name)
-                              : muon_path_join(relative, child->d_name);
+          relative[0] == '\0' ? muon_duplicate_string(child)
+                              : muon_path_join(relative, child);
       if (child_source == NULL || child_destination == NULL ||
           child_relative == NULL) {
         free(child_source);
         free(child_destination);
         free(child_relative);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       if (!staging_relative_path_should_skip(child_relative) &&
@@ -1261,14 +1261,14 @@ static int copy_staging_muon_source_recursive(
         free(child_source);
         free(child_destination);
         free(child_relative);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       free(child_source);
       free(child_destination);
       free(child_relative);
     }
-    closedir(directory);
+    if (muon_closedir(directory) != 0) return -1;
     return 0;
   }
   if (S_ISREG(entry.st_mode)) {
@@ -1331,7 +1331,7 @@ static int fingerprint_cef_source(const char *cef_path,
 static int fingerprint_archive_metadata(
     const char *archive_path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
-  if (stat(archive_path, &entry) != 0) {
+  if (muon_stat(archive_path, &entry) != 0) {
     muon_print_errno(archive_path);
     return -1;
   }
@@ -1620,7 +1620,7 @@ static int prepare_staging_locked(
       muon_remove_recursive(options->stage_dir) != 0) {
     goto cleanup;
   }
-  if (rename(temporary_directory, options->stage_dir) != 0) {
+  if (muon_rename(temporary_directory, options->stage_dir) != 0) {
     muon_print_errno(options->stage_dir);
     goto cleanup;
   }

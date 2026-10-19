@@ -109,6 +109,7 @@ HARNESS_EOF
 
 gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_harness" \
   "${HARNESS}" \
   $(pkg-config --cflags --libs xcb) \
@@ -370,6 +371,7 @@ INSTALL_CONFIG_EOF
 gcc -std=c99 -Wall -Wextra -pedantic \
     -Werror=implicit-function-declaration -Werror=int-conversion \
 	  -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
 	  -I"${SCRIPT_DIR}/../deps/sha2" \
 	  -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
 	  -o "${OUT_DIR}/launcher_state_directory_harness" \
@@ -641,6 +643,7 @@ rm -rf "${wine_prefix}"
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -I"${SCRIPT_DIR}/../deps/sha2" \
   -I"${SCRIPT_DIR}/.deps/src/yyjson-0.12.0/src" \
   -o "${OUT_DIR}/launcher_state_directory_windows64_harness.exe" \
@@ -652,6 +655,7 @@ WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows64_fallback_harness.exe" \
   "${WIN_FALLBACK_HARNESS}" \
   -lcomctl32 -lgdi32
@@ -662,6 +666,7 @@ WINEPREFIX="${wine_prefix}" wineserver -w
 
 x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows64_ui_harness.exe" \
   "${WIN_UI_HARNESS}" \
   -lcomctl32 -lgdi32
@@ -672,6 +677,7 @@ WINEPREFIX="${wine_prefix}" wineserver -w
 
 i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows32_fallback_harness.exe" \
   "${WIN_FALLBACK_HARNESS}" \
   -lcomctl32 -lgdi32
@@ -682,6 +688,7 @@ WINEPREFIX="${wine_prefix}" wineserver -w
 
 i686-w64-mingw32-gcc -std=c99 -Wall -Wextra -pedantic \
   -I"${SCRIPT_DIR}/src" \
+  -I"${SCRIPT_DIR}/../core/common/include" \
   -o "${OUT_DIR}/launcher_progress_windows32_ui_harness.exe" \
   "${WIN_UI_HARNESS}" \
   -lcomctl32 -lgdi32

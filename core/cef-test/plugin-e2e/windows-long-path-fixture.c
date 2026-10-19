@@ -72,13 +72,36 @@ static int remove_tree(const wchar_t *path) {
   return RemoveDirectoryW(path) ? 0 : report_error("RemoveDirectoryW", GetLastError());
 }
 
+static int write_file(const wchar_t *path, const wchar_t *content) {
+  int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, content, -1,
+                                  NULL, 0, NULL, NULL);
+  if (length == 0) return report_error("encode content", GetLastError());
+  char *bytes = malloc((size_t)length);
+  if (bytes == NULL) return 1;
+  if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, content, -1,
+                          bytes, length, NULL, NULL)) {
+    free(bytes);
+    return report_error("encode content", GetLastError());
+  }
+  HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                            FILE_ATTRIBUTE_NORMAL, NULL);
+  DWORD written = 0;
+  BOOL success = file != INVALID_HANDLE_VALUE &&
+      WriteFile(file, bytes, (DWORD)length - 1, &written, NULL);
+  DWORD error = success ? ERROR_SUCCESS : GetLastError();
+  if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+  free(bytes);
+  return success && written == (DWORD)length - 1 ? 0 : report_error("write fixture", error);
+}
+
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 3 || wcslen(argv[2]) < 8 ||
+  if ((argc != 3 && argc != 4) || wcslen(argv[2]) < 8 ||
       wcsncmp(argv[2], L"\\\\?\\", 4) || argv[2][5] != L':' || argv[2][6] != L'\\') {
     fprintf(stderr, "Usage: fixture.exe mkdir|remove \\\\?\\C:\\test-path\n");
     return 2;
   }
   if (!wcscmp(argv[1], L"mkdir")) return create_directory(argv[2]);
   if (!wcscmp(argv[1], L"remove")) return remove_tree(argv[2]);
+  if (!wcscmp(argv[1], L"write") && argc == 4) return write_file(argv[2], argv[3]);
   return 2;
 }

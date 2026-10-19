@@ -138,14 +138,16 @@ describe.each(targets)(
       }
     };
 
-    it.each([259, 260, 261, 300, 1100, 4200])(
+    // .NET IOInputs.GetPathsLongerThanMaxPath also covers 262 UTF-16 units.
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Runtime/tests/System.IO.FileSystem.Tests/PortedCommon/IOInputs.cs
+    it.each([259, 260, 261, 262, 300, 1100, 4200])(
       "reads and writes a %i-unit ordinary path",
       async (length) => {
         await exercise("file", (path) => path, length);
       },
     );
 
-    it.each([247, 248, 249, 4200])(
+    it.each([247, 248, 249, 250, 260, 261, 262, 4200])(
       "creates a %i-unit directory",
       async (length) => {
         await exercise("directory", (path) => path, length);
@@ -158,6 +160,31 @@ describe.each(targets)(
         (path) => `.\\absent\\..\\${win32.relative(directory, path)}`,
         1100,
       );
+    });
+
+    // File.Copy.ShortenLongPath and File.Create.CreateInParentDirectory test
+    // lexical normalization before touching the filesystem.
+    it("opens a short target through an input longer than MAX_PATH", async () => {
+      await exercise(
+        "file",
+        (path) =>
+          `${win32.dirname(path)}${"\\.".repeat(150)}\\${win32.basename(path)}`,
+        180,
+      );
+    });
+
+    it("normalizes dot segments while the resulting path remains long", async () => {
+      await exercise("file", (path) => path.replaceAll("\\", "\\.\\"), 1100);
+    });
+
+    it("uses a short relative input whose absolute target exceeds MAX_PATH", async () => {
+      // The native process keeps a short cwd; a root-relative input itself can
+      // be below MAX_PATH while adding the drive reaches the boundary.
+      await exercise("file", (path) => path.slice(2), 260);
+    });
+
+    it("creates an explicitly extended directory with a trailing separator", async () => {
+      await exercise("directory", (path) => "\\\\?\\" + path + "\\", 500);
     });
 
     it("resolves a drive-relative path using the current directory", async () => {

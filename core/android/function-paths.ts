@@ -49,6 +49,9 @@ export const filesystemFunctionNames = [
   'watch',
 ] as const;
 
+/** Android system bar functions implemented by the runtime. */
+export const systemBarsFunctionNames = ['configure', 'getState'] as const;
+
 /** Fully-qualified built-in function paths implemented by the Android backend. */
 export const muonAndroidBuiltinFunctionPaths = [
   ...browserFunctionNames.map((name) => `muon.browser.${name}` as const),
@@ -56,6 +59,9 @@ export const muonAndroidBuiltinFunctionPaths = [
     (name) => `muon.environments.${name}` as const
   ),
   ...filesystemFunctionNames.map((name) => `muon.fs.${name}` as const),
+  ...systemBarsFunctionNames.map(
+    (name) => `muon.android.systemBars.${name}` as const
+  ),
 ] as const;
 
 /** A built-in function path available on Android. */

@@ -43,6 +43,7 @@ if (bridge === undefined) {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.android.systemBars': 'system-bars-capability',
     }),
   };
   const uninstallNativePluginApi = installMuonAndroidNativePluginApi(
@@ -89,6 +90,66 @@ if (bridge === undefined) {
   });
 
   app.replaceChildren(heading, button, status);
+  const bars = document.createElement('fieldset');
+  const legend = document.createElement('legend');
+  legend.textContent = 'Android system bars';
+  const barState = document.createElement('pre');
+  barState.id = 'system-bars-state';
+  bars.append(legend, barState);
+  const actions: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+    [
+      'Show status bar',
+      async () =>
+        await androidApi.android.systemBars.configure({
+          statusBar: { visible: true },
+        }),
+    ],
+    [
+      'Hide status bar',
+      async () =>
+        await androidApi.android.systemBars.configure({
+          statusBar: { visible: false },
+        }),
+    ],
+    [
+      'Show navigation bar',
+      async () =>
+        await androidApi.android.systemBars.configure({
+          navigationBar: { visible: true },
+        }),
+    ],
+    [
+      'Hide navigation bar',
+      async () =>
+        await androidApi.android.systemBars.configure({
+          navigationBar: { visible: false },
+        }),
+    ],
+    ['Enter fullscreen', androidApi.browser.enterFullscreen],
+    ['Exit fullscreen', androidApi.browser.exitFullscreen],
+    ['Toggle fullscreen', androidApi.browser.toggleFullscreen],
+    ['Read bar state', async () => {}],
+  ];
+  for (const [label, action] of actions) {
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.textContent = label;
+    control.addEventListener('click', async () => {
+      try {
+        await action();
+        barState.textContent = JSON.stringify(
+          await androidApi.android.systemBars.getState(),
+          null,
+          2
+        );
+      } catch (error) {
+        barState.textContent =
+          error instanceof Error ? error.message : String(error);
+      }
+    });
+    bars.append(control);
+  }
+  app.append(bars);
   window.addEventListener(
     'pagehide',
     () => {

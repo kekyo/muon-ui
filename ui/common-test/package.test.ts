@@ -1496,6 +1496,30 @@ void value;
     ).resolves.toBeUndefined();
   });
 
+  it("provides Android system bar types in simple and validate modes", async () => {
+    await expect(
+      runTypeScriptConsumer(
+        `import { configure, getState } from "muon:android.systemBars";
+await configure({ statusBar: { visible: false } });
+await window.muon.android?.systemBars.configure({ navigationBar: { visible: true } });
+const state = await getState();
+const requested: boolean = state.requested.statusBar.visible;
+const observed: boolean | null = state.actual.navigationBar.visible;
+// @ts-expect-error Visibility is a boolean request, never a string.
+await configure({ statusBar: { visible: "false" } });
+// @ts-expect-error Unknown Android-only features are not advertised yet.
+await configure({ contentLayout: "edge-to-edge" });
+// @ts-expect-error Observations must account for insets not being available yet.
+const guaranteed: boolean = state.actual.statusBar.visible;
+void requested;
+void observed;
+void guaranteed;
+`,
+        ["muon-ui"],
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("provides muon virtual modules through configured TypeScript types", async () => {
     await expect(
       runTypeScriptConsumer(

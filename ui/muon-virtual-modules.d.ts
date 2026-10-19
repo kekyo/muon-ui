@@ -3,6 +3,13 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+declare module "muon:android.systemBars" {
+  /** Update the requested visibility of either Android system bar. */
+  export const configure: MuonAndroidSystemBarsApi["configure"];
+  /** Read requested and observed Android system bar visibility. */
+  export const getState: MuonAndroidSystemBarsApi["getState"];
+}
+
 declare module "muon:environments" {
   /** Return the merged application configuration from muon config files. */
   export const getConfigValues: () => Promise<Record<string, string>>;

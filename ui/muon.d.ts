@@ -27,6 +27,8 @@ declare global {
     readonly executor: MuonExecutorApi;
     /** Filesystem operations exposed by the built-in muon filesystem plugin. */
     readonly fs: MuonFsApi;
+    /** Android-only operations, present when permitted by the plugin policy. */
+    readonly android?: MuonAndroidApi;
     /**
      * Optional out-of-process Node.js runtime.
      *
@@ -35,6 +37,79 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** Operations specific to the Android WebView backend. */
+  interface MuonAndroidApi {
+    /** Control and observe the Android system bars. */
+    readonly systemBars: MuonAndroidSystemBarsApi;
+  }
+
+  /** Partial configuration of one Android system bar. */
+  interface MuonAndroidSystemBarOptions {
+    /** Whether the bar should be visible; omission preserves its request. */
+    readonly visible?: boolean;
+  }
+
+  /** Partial Android system bar configuration. */
+  interface MuonAndroidSystemBarsOptions {
+    /** Top status bar configuration. */
+    readonly statusBar?: MuonAndroidSystemBarOptions;
+    /** Bottom navigation bar configuration. */
+    readonly navigationBar?: MuonAndroidSystemBarOptions;
+  }
+
+  /** Requested and observed Android system bar visibility. */
+  interface MuonAndroidSystemBarsState {
+    /** Application requests, unaffected by transient system bar reveals. */
+    readonly requested: {
+      /** Status bar request. */
+      readonly statusBar: {
+        /** Whether the application requests the bar to remain visible. */
+        readonly visible: boolean;
+      };
+      /** Navigation bar request. */
+      readonly navigationBar: {
+        /** Whether the application requests the bar to remain visible. */
+        readonly visible: boolean;
+      };
+    };
+    /**
+     * Visibility observed through window insets.
+     * @remarks Null means insets are not available yet. On API 29 and earlier,
+     * AndroidX reports an approximation of the platform visibility.
+     */
+    readonly actual: {
+      /** Observed status bar visibility. */
+      readonly statusBar: {
+        /** Whether the bar is visible, or null before insets are available. */
+        readonly visible: boolean | null;
+      };
+      /** Observed navigation bar visibility. */
+      readonly navigationBar: {
+        /** Whether the bar is visible, or null before insets are available. */
+        readonly visible: boolean | null;
+      };
+    };
+  }
+
+  /** Android system bar operations. */
+  interface MuonAndroidSystemBarsApi {
+    /**
+     * Update the requested visibility of either system bar.
+     * @param options - Partial configuration; omitted bars retain their request.
+     * @returns Completion of the request, before any OS animation finishes.
+     * @remarks Unsupported keys and invalid values are rejected. Hidden bars
+     * remain available through the system's transient swipe gesture.
+     */
+    readonly configure: (
+      options: MuonAndroidSystemBarsOptions,
+    ) => Promise<void>;
+    /**
+     * Read requested and observed visibility without changing the request.
+     * @returns Current system bar state, including unknown observations.
+     */
+    readonly getState: () => Promise<MuonAndroidSystemBarsState>;
   }
 
   /**

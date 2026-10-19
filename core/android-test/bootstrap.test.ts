@@ -4,6 +4,104 @@ import { muonAndroidBuiltinFunctionPaths } from '../android/renderer/android-api
 import type { MuonWebViewJavaScriptBridge } from '../android/renderer/webview-rpc.js';
 
 describe('packaged Android renderer', () => {
+  it('publishes only permitted leaves of the nested Android namespace', async () => {
+    const sent: string[] = [];
+    const bridge: MuonWebViewJavaScriptBridge = {
+      onmessage: null,
+      postMessage: (message) => {
+        sent.push(String(message));
+      },
+    };
+    const target: Record<PropertyKey, unknown> = {};
+    const dispose = bootstrapMuonAndroid(
+      bridge,
+      {
+        version: 1,
+        contextId: 1,
+        mode: 'simple',
+        namespaces: [],
+        functions: [],
+        builtinFunctions: ['muon.android.systemBars.configure'],
+      },
+      target
+    );
+    const api = target.muon as {
+      android: { systemBars: { configure(options: unknown): Promise<void> } };
+    };
+    expect(Object.keys(api)).toEqual(['android']);
+    expect(Object.keys(api.android)).toEqual(['systemBars']);
+    expect(Object.keys(api.android.systemBars)).toEqual(['configure']);
+    const pending = api.android.systemBars.configure({
+      navigationBar: { visible: false },
+    });
+    const request = JSON.parse(sent[0]!);
+    expect(request.capabilityId).toBe('system-bars-capability');
+    expect(request.functionPath).toBe('muon.android.systemBars.configure');
+    expect(request.arguments).toEqual(['{"navigationBar":{"visible":false}}']);
+    bridge.onmessage?.({
+      data: JSON.stringify({
+        version: 1,
+        type: 'result',
+        callId: request.callId,
+        success: true,
+        value: null,
+      }),
+    });
+    await expect(pending).resolves.toBeUndefined();
+    dispose();
+  });
+
+  it('routes nested validate functions with their generated capability and JSON conversion', async () => {
+    const sent: string[] = [];
+    const bridge: MuonWebViewJavaScriptBridge = {
+      onmessage: null,
+      postMessage: (message) => {
+        sent.push(String(message));
+      },
+    };
+    const target: Record<PropertyKey, unknown> = {};
+    const dispose = bootstrapMuonAndroid(
+      bridge,
+      {
+        version: 1,
+        contextId: 1,
+        mode: 'validate',
+        namespaces: [],
+        functions: [],
+        builtinFunctions: ['muon.android.systemBars.getState'],
+      },
+      target
+    );
+    const call = target.__muon_plugin_call as (
+      id: string,
+      path: string,
+      args: unknown[]
+    ) => Promise<unknown>;
+    const result = call(
+      'generated-bars',
+      'muon.android.systemBars.getState',
+      []
+    );
+    const request = JSON.parse(sent[0]!);
+    expect(request.capabilityId).toBe('generated-bars');
+    const state = {
+      requested: { statusBar: { visible: false } },
+      actual: { statusBar: { visible: true } },
+    };
+    bridge.onmessage?.({
+      data: JSON.stringify({
+        version: 1,
+        type: 'result',
+        callId: request.callId,
+        success: true,
+        value: JSON.stringify(state),
+      }),
+    });
+    await expect(result).resolves.toEqual(state);
+    expect(target.muon).toBeUndefined();
+    dispose();
+  });
+
   it('adapts public validate calls while preserving their capability id', async () => {
     const sent: string[] = [];
     const bridge: MuonWebViewJavaScriptBridge = {
@@ -74,7 +172,12 @@ describe('packaged Android renderer', () => {
     const api = target.muon as {
       environments: { getConfigValues(): Promise<unknown> };
     };
-    expect(Object.keys(api).sort()).toEqual(['browser', 'environments', 'fs']);
+    expect(Object.keys(api).sort()).toEqual([
+      'android',
+      'browser',
+      'environments',
+      'fs',
+    ]);
     const result = api.environments.getConfigValues();
     const call = JSON.parse(sent[0]!);
     expect(call.functionPath).toBe('muon.environments.getConfigValues');

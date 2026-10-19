@@ -1388,7 +1388,15 @@ export const createMuonCapabilityModuleResolver = (
     backend,
   );
   const rules = (options?.imports ?? []).map((rule) => {
-    if (backend !== "android") return rule;
+    if (backend !== "android") {
+      const unavailable = rule.allow.find((path) =>
+        path.startsWith("muon.android."),
+      );
+      if (unavailable !== undefined) {
+        throw new Error(`Muon function is unavailable for CEF: ${unavailable}`);
+      }
+      return rule;
+    }
     const allow = new Set<string>();
     for (const pattern of rule.allow) {
       const matched = functionPaths.filter((path) =>

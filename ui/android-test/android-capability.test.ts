@@ -17,6 +17,47 @@ afterEach(() => {
 });
 
 describe("Android capability modules", () => {
+  it("imports nested system bars and forwards public arguments to the Android bridge", async () => {
+    const calls: unknown[][] = [];
+    Reflect.set(
+      globalThis,
+      "__muon_plugin_call",
+      async (...args: unknown[]) => {
+        calls.push(args);
+      },
+    );
+    const resolver = createMuonCapabilityModuleResolver("/app", {
+      backend: "android",
+      imports: [
+        { sources: ["src/**"], allow: ["muon.android.systemBars.configure"] },
+      ],
+    });
+    const id = resolver.resolveId(
+      "muon:android.systemBars",
+      "/app/src/main.ts",
+    )!.id;
+    const module = await import(
+      `data:text/javascript,${encodeURIComponent(resolver.load(id)!)}`
+    );
+    expect(Object.keys(module)).toEqual(["configure"]);
+    const options = { statusBar: { visible: false } };
+    await module.configure(options);
+    expect(calls).toEqual([
+      [expect.any(String), "muon.android.systemBars.configure", [options]],
+    ]);
+  });
+
+  it("does not expose Android system bars in CEF builds", () => {
+    expect(() =>
+      createMuonCapabilityModuleResolver("/app", {
+        backend: "cef",
+        imports: [
+          { sources: ["src/**"], allow: ["muon.android.systemBars.configure"] },
+        ],
+      }),
+    ).toThrow(/CEF/);
+  });
+
   it("exports only Android browser functions for a wildcard", async () => {
     Reflect.set(globalThis, "__muon_plugin_call", async () => undefined);
     const resolver = createMuonCapabilityModuleResolver("/app", {

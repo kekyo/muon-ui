@@ -47,6 +47,8 @@ const expectedFunctionPaths = [
   'muon.fs.readlink',
   'muon.fs.symlink',
   'muon.fs.watch',
+  'muon.android.systemBars.configure',
+  'muon.android.systemBars.getState',
 ] as const;
 
 describe('muon Android API metadata', () => {
@@ -89,9 +91,15 @@ describe('muon Android API metadata', () => {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.android.systemBars': 'system-bars-capability',
     });
 
-    expect(Object.keys(api)).toEqual(['browser', 'environments', 'fs']);
+    expect(Object.keys(api)).toEqual([
+      'browser',
+      'environments',
+      'fs',
+      'android',
+    ]);
     expect(Object.keys(api.browser)).toEqual([
       'reload',
       'toggleFullscreen',
@@ -148,6 +156,7 @@ describe('muon Android API metadata', () => {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.android.systemBars': 'system-bars-capability',
     });
     const controller = new AbortController();
     const source = new Uint8Array([1, 2, 3]);
@@ -202,6 +211,7 @@ describe('muon Android API metadata', () => {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.android.systemBars': 'system-bars-capability',
     });
 
     await expect(
@@ -258,6 +268,7 @@ describe('muon Android API metadata', () => {
         'muon.browser': 'browser-capability',
         'muon.environments': 'environment-capability',
         'muon.fs': 'fs-capability',
+        'muon.android.systemBars': 'system-bars-capability',
       });
       let closeWatcher: (() => Promise<void>) | undefined;
       let listenerCompleted = false;

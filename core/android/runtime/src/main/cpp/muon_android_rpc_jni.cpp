@@ -130,6 +130,8 @@ static const std::vector<std::string> kPlatformFunctionPaths = {
     "muon.browser.zoomOut",
     "muon.browser.resetZoom",
     "muon.browser.close",
+    "muon.android.systemBars.configure",
+    "muon.android.systemBars.getState",
 };
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {
@@ -1444,6 +1446,13 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
           &browser_policy, error_message)) {
     return false;
   }
+  auto system_bars_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateBuiltinPolicy(
+          state,
+          {"muon.android.systemBars.configure", "muon.android.systemBars.getState"},
+          &system_bars_policy, error_message)) {
+    return false;
+  }
 #if defined(MUON_ANDROID_TEST_HOST)
   auto prototype_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateMuonPluginPolicy({"prototype.*"}, &prototype_policy,
@@ -1521,6 +1530,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   if (!state->validate_mode &&
       (!add_policy("environment-capability", environment_policy) ||
       !add_policy("browser-capability", browser_policy) ||
+      !add_policy("system-bars-capability", system_bars_policy) ||
       !add_policy("fs-capability", filesystem_policy))) {
     return false;
   }

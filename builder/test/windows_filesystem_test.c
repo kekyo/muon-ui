@@ -11,6 +11,30 @@
 #include <wchar.h>
 
 #include "common.h"
+#include "prepare_cef.h"
+#include "prepare_node.h"
+#include "muon_prepare_resource.h"
+
+static int fail_resource_write;
+size_t __real_fwrite(const void *buffer, size_t size, size_t count, FILE *file);
+
+// Inject a disk-write failure after real bytes reach the output. The observable
+// contract is a failed resource update with no partial PE left on disk.
+size_t __wrap_fwrite(const void *buffer, size_t size, size_t count, FILE *file) {
+  if (!fail_resource_write || size != 1 || count <= 16) {
+    return __real_fwrite(buffer, size, count, file);
+  }
+  size_t written = __real_fwrite(buffer, 1, 16, file);
+  fflush(file);
+  fputs("Injected partial resource write failure\n", stderr);
+  errno = ENOSPC;
+  return written;
+}
+
+static int resource_failure(int argc, char **argv) {
+  fail_resource_write = 1;
+  return muon_prepare_resource_main(argc, argv, 2);
+}
 
 static char *utf8(const wchar_t *value) {
   int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
@@ -221,7 +245,44 @@ done:
   return result == 0 ? 0 : fail("path/component limits");
 }
 
+static int cef_archive(const char *path, const char *output, int force) {
+  size_t count = 0;
+  if (muon_prepare_extract_cef_archive_full(path, output, force, &count) != 0 || count != 4) {
+    return fail("CEF archive extraction");
+  }
+  char *license = muon_read_tar_bz2_text_file(path, "LICENSE", 1);
+  int valid = license != NULL && strcmp(license, "CEF license") == 0;
+  free(license);
+  if (!valid) return fail("CEF archive text");
+  return 0;
+}
+
+static int node_archive(const char *path, const char *output) {
+  MuonNodeArtifact artifact = {
+    .version = "v24.4.0",
+#ifdef _WIN64
+    .catalog_file = "win-x64-zip",
+    .archive_target = "win-x64",
+    .file_name = "node-v24.4.0-win-x64.zip",
+#else
+    .catalog_file = "win-x86-zip",
+    .archive_target = "win-x86",
+    .file_name = "node-v24.4.0-win-x86.zip",
+#endif
+    .url = "", .sha256 = "", .lts = "Krypton"
+  };
+  size_t count = 0;
+  return muon_prepare_install_node_runtime_progress(path, MUON_PREPARE_TARGET_NAME,
+      &artifact, output, &count, NULL, NULL) == 0 && count == 2
+      ? 0 : fail("Node archive installation");
+}
+
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 5 && !wcscmp(argv[1], L"resource-failure")) {
+    wchar_t *arguments[] = {argv[0], L"resource", L"--input", argv[2],
+        L"--updates-json", argv[3], L"--output", argv[4], NULL};
+    return muon_windows_main(8, arguments, resource_failure);
+  }
   if (argc < 3 || argc > 4) return 2;
   char *path = utf8(argv[2]);
   char *other = argc == 4 ? utf8(argv[3]) : NULL;
@@ -249,6 +310,10 @@ int wmain(int argc, wchar_t **argv) {
     result = copy_to_self(path);
   } else if (!wcscmp(argv[1], L"limits")) {
     result = limits(path);
+  } else if ((!wcscmp(argv[1], L"cef") || !wcscmp(argv[1], L"cef-force")) && other != NULL) {
+    result = cef_archive(path, other, !wcscmp(argv[1], L"cef-force"));
+  } else if (!wcscmp(argv[1], L"node") && other != NULL) {
+    result = node_archive(path, other);
   } else if (!wcscmp(argv[1], L"remove")) {
     result = muon_remove_recursive(path) == 0 && !muon_path_exists(path) ? 0 : fail("recursive remove");
   } else if (!wcscmp(argv[1], L"contents") && other != NULL) {

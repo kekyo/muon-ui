@@ -4,8 +4,9 @@
 // https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { win32 } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join, win32 } from "node:path";
+import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { connectRemoteAgent, type RemoteAgent } from "agent-rover";
@@ -18,6 +19,7 @@ const targets = ["windows-i686", "windows-amd64"] as const;
 const environment = resolveWindowsE2eEnvironment(process.env);
 let agent: RemoteAgent;
 let directory: string;
+let localDirectory: string;
 
 const run = async (
   path: string,
@@ -56,11 +58,52 @@ const directoryOfLength = (root: string, length: number) => {
 };
 
 beforeAll(async () => {
+  localDirectory = await mkdtemp(join(tmpdir(), "muon-builder-path-"));
+  const cefRoot = join(localDirectory, "cef-source");
+  await mkdir(join(cefRoot, "Release"), { recursive: true });
+  await mkdir(join(cefRoot, "Resources", "locales"), { recursive: true });
+  await writeFile(join(cefRoot, "Release", "libcef.dll"), "CEF payload");
+  await writeFile(join(cefRoot, "Resources", "icudtl.dat"), "CEF data");
+  await writeFile(
+    join(cefRoot, "Resources", "locales", "en-US.pak"),
+    "CEF locale",
+  );
+  await writeFile(join(cefRoot, "LICENSE"), "CEF license");
+  await execFileAsync("tar", [
+    "-cjf",
+    join(localDirectory, "cef.tar.bz2"),
+    "-C",
+    localDirectory,
+    "cef-source",
+  ]);
+  await execFileAsync(process.execPath, [
+    "../../builder/scripts/create-windows-resource-fixture.mjs",
+    join(localDirectory, "unused.exe"),
+    join(localDirectory, "app.ico"),
+  ]);
   for (const target of targets) {
     await execFileAsync("make", [
-      "windows-long-path-fixture",
+      "windows-path-test",
       `WINDOWS_TARGET=${target}`,
     ]);
+    const nodeRoot = `node-v24.4.0-win-${target === "windows-amd64" ? "x64" : "x86"}`;
+    await mkdir(join(localDirectory, nodeRoot));
+    await writeFile(join(localDirectory, nodeRoot, "node.exe"), "Node payload");
+    await execFileAsync(
+      "zip",
+      ["-q", "-r", join(localDirectory, `${target}-bad-node.zip`), nodeRoot],
+      { cwd: localDirectory },
+    );
+    await writeFile(join(localDirectory, nodeRoot, "LICENSE"), "Node license");
+    await writeFile(
+      join(localDirectory, nodeRoot, "README.md"),
+      "not installed",
+    );
+    await execFileAsync(
+      "zip",
+      ["-q", "-r", join(localDirectory, `${target}-node.zip`), nodeRoot],
+      { cwd: localDirectory },
+    );
     await execFileAsync(
       "npm",
       [
@@ -118,7 +161,23 @@ beforeAll(async () => {
   );
   expect(privilege.code, privilege.stderr).toBe(0);
   expect(privilege.stdout.trim()).toBe("False");
+  for (const file of ["cef.tar.bz2", "app.ico"]) {
+    await agent.files.writeFile(
+      win32.join(directory, file),
+      await readFile(join(localDirectory, file)),
+    );
+  }
   for (const target of targets) {
+    for (const file of [`${target}-node.zip`, `${target}-bad-node.zip`]) {
+      await agent.files.writeFile(
+        win32.join(directory, file),
+        await readFile(join(localDirectory, file)),
+      );
+    }
+    await agent.files.writeFile(
+      win32.join(directory, `${target}-path-test.exe`),
+      await readFile(`.run/windows-long-path/${target}/path-test.exe`),
+    );
     await agent.files.writeFile(
       win32.join(directory, `${target}-fixture.exe`),
       await readFile(`.run/windows-long-path/${target}/fixture.exe`),
@@ -146,6 +205,8 @@ afterAll(async () => {
       await agent.files.remove(directory, { recursive: true });
   } finally {
     agent?.release();
+    if (localDirectory !== undefined)
+      await rm(localDirectory, { recursive: true, force: true });
   }
 });
 
@@ -399,6 +460,109 @@ describe.each(targets)(
       },
     );
 
+    it.each([
+      [140, false],
+      [300, false],
+      [4200, false],
+      [300, true],
+    ] as const)(
+      "extracts and reuses a CEF archive at %i units (extended=%s)",
+      async (length, extended) => {
+        const root = win32.join(directory, `${target}-cef-${length}`);
+        const parent = directoryOfLength(win32.join(root, "日本語😀"), length);
+        const archive = win32.join(parent, "配布😀.tar.bz2");
+        const output = win32.join(parent, "output");
+        const ioPath = (path: string) => (extended ? "\\\\?\\" : "") + path;
+        try {
+          await fixture("mkdir", parent);
+          await fixture("copy", archive, [
+            win32.join(directory, "cef.tar.bz2"),
+          ]);
+          for (const mode of ["cef", "cef", "cef-force"]) {
+            await builder(mode, ioPath(archive), [ioPath(output)]);
+            await builder(
+              "contents",
+              win32.join(output, "Release", "libcef.dll"),
+              ["CEF payload"],
+            );
+            await builder(
+              "contents",
+              win32.join(output, "Resources", "locales", "en-US.pak"),
+              ["CEF locale"],
+            );
+          }
+          const invalid = win32.join(parent, "invalid.tar.bz2");
+          await fixture("write", invalid, ["broken archive"]);
+          const failed = await run(
+            win32.join(directory, `${target}-builder-test.exe`),
+            ["cef-force", ioPath(invalid), ioPath(output)],
+            undefined,
+          );
+          expect(failed.code).not.toBe(0);
+          await builder(
+            "contents",
+            win32.join(output, "Release", "libcef.dll"),
+            ["CEF payload"],
+          );
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
+    it.each([
+      [140, false],
+      [300, false],
+      [4200, false],
+      [300, true],
+    ] as const)(
+      "installs and replaces a Node ZIP at %i units (extended=%s)",
+      async (length, extended) => {
+        const root = win32.join(directory, `${target}-zip-${length}`);
+        const parent = directoryOfLength(win32.join(root, "日本語😀"), length);
+        const archive = win32.join(parent, "配布😀.zip");
+        const invalid = win32.join(parent, "incomplete.zip");
+        const output = win32.join(parent, "output");
+        const ioPath = (path: string) => (extended ? "\\\\?\\" : "") + path;
+        try {
+          await fixture("mkdir", parent);
+          await fixture("copy", archive, [
+            win32.join(directory, `${target}-node.zip`),
+          ]);
+          await fixture("copy", invalid, [
+            win32.join(directory, `${target}-bad-node.zip`),
+          ]);
+          for (let round = 0; round < 2; ++round) {
+            await builder("node", ioPath(archive), [ioPath(output)]);
+            await builder(
+              "contents",
+              win32.join(output, "runtimes", "node", "bin", "node.exe"),
+              ["Node payload"],
+            );
+            await builder(
+              "contents",
+              win32.join(output, "runtimes", "node", "LICENSE"),
+              ["Node license"],
+            );
+          }
+          const failed = await run(
+            win32.join(directory, `${target}-builder-test.exe`),
+            ["node", ioPath(invalid), ioPath(output)],
+            undefined,
+          );
+          expect(failed.code).not.toBe(0);
+          expect(failed.stderr).toContain("LICENSE");
+          await builder(
+            "contents",
+            win32.join(output, "runtimes", "node", "bin", "node.exe"),
+            ["Node payload"],
+          );
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
     it.each(["MUON_CACHE_DIR", "LOCALAPPDATA", "USERPROFILE"])(
       "reads a Unicode long cache path from %s",
       async (name) => {
@@ -479,6 +643,129 @@ describe.each(targets)(
           );
           expect(result.code, result.stderr).toBe(1);
           expect(result.stderr).toContain("failed to read install metadata");
+        } finally {
+          await fixture("remove", root);
+        }
+      },
+    );
+
+    it.each([
+      [140, false],
+      [300, false],
+      [4200, false],
+      [300, true],
+    ] as const)(
+      "updates PE resources at %i units and preserves an executable manifest (extended=%s)",
+      async (length, extended) => {
+        const root = win32.join(directory, target + "-resource-" + length);
+        const parent = directoryOfLength(win32.join(root, "日本語😀"), length);
+        const input = win32.join(parent, "入力.exe");
+        const output = win32.join(parent, "出力.exe");
+        const updates = win32.join(parent, "更新.json");
+        const ioPath = (path: string) => (extended ? "\\\\?\\" : "") + path;
+        try {
+          await fixture("mkdir", parent);
+          await fixture("copy", input, [
+            win32.join(directory, target + "-muon-builder.exe"),
+          ]);
+          await fixture("copy", win32.join(parent, "図😀.ico"), [
+            win32.join(directory, "app.ico"),
+          ]);
+          await fixture("write", updates, [
+            JSON.stringify({
+              version: {
+                language: 1033,
+                codePage: 1200,
+                fixed: { fileVersion: "1.2.3.4", productVersion: "2.3.4.5" },
+                strings: { FileDescription: "日本語😀 Resource Test" },
+              },
+              icons: [{ id: 1, language: 1033, path: "図😀.ico" }],
+            }),
+          ]);
+          const result = await run(
+            win32.join(directory, target + "-muon-builder.exe"),
+            [
+              "resource",
+              "--input",
+              ioPath(input),
+              "--updates-json",
+              ioPath(updates),
+              "--output",
+              ioPath(output),
+            ],
+            undefined,
+          );
+          expect(result.code, result.stderr).toBe(0);
+          const manifest = await run(
+            win32.join(directory, target + "-path-test.exe"),
+            ["manifest", "\\\\?\\" + output],
+            undefined,
+          );
+          expect(manifest.code, manifest.stderr).toBe(0);
+          const launched = await run(
+            win32.join(directory, target + "-fixture.exe"),
+            ["launch-help", "\\\\?\\" + output],
+            undefined,
+          );
+          expect(launched.code, launched.stderr).toBe(0);
+          expect(launched.stderr).toContain("Usage: muon-builder");
+          const copy = win32.join(root, "verify.exe");
+          await fixture("copy", copy, ["\\\\?\\" + output]);
+          const localCopy = join(localDirectory, target + "-updated.exe");
+          await writeFile(localCopy, await agent.files.readFile(copy));
+          await execFileAsync(process.execPath, [
+            "../../builder/scripts/assert-windows-icon.mjs",
+            localCopy,
+            join(localDirectory, "app.ico"),
+          ]);
+          await execFileAsync(process.execPath, [
+            "../../builder/scripts/assert-windows-version.mjs",
+            localCopy,
+            "--file-version",
+            "1.2.3.4",
+            "--product-version",
+            "2.3.4.5",
+            "FileDescription=日本語😀 Resource Test",
+          ]);
+          const partial = win32.join(parent, "partial.exe");
+          const failed = await run(
+            win32.join(directory, `${target}-builder-test.exe`),
+            [
+              "resource-failure",
+              ioPath(input),
+              ioPath(updates),
+              ioPath(partial),
+            ],
+            undefined,
+          );
+          expect(failed.code, failed.stderr).toBe(1);
+          expect(failed.stderr).toContain(
+            "Injected partial resource write failure",
+          );
+          await fixture("absent", partial);
+          // Opening a directory as output must fail without deleting its contents.
+          const blocked = win32.join(parent, "blocked");
+          await fixture("mkdir", blocked);
+          await fixture("write", win32.join(blocked, "sentinel"), [
+            "preserved",
+          ]);
+          const blockedResult = await run(
+            win32.join(directory, `${target}-muon-builder.exe`),
+            [
+              "resource",
+              "--input",
+              ioPath(input),
+              "--updates-json",
+              ioPath(updates),
+              "--output",
+              ioPath(blocked),
+            ],
+            undefined,
+          );
+          expect(blockedResult.code).toBe(1);
+          await builder("contents", win32.join(blocked, "sentinel"), [
+            "preserved",
+          ]);
         } finally {
           await fixture("remove", root);
         }

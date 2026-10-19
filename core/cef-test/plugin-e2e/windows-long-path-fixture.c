@@ -94,11 +94,11 @@ static int write_file(const wchar_t *path, const wchar_t *content) {
   return success && written == (DWORD)length - 1 ? 0 : report_error("write fixture", error);
 }
 
-static int launch(const wchar_t *path) {
-  size_t length = wcslen(path) + 3;
+static int launch(const wchar_t *path, const wchar_t *arguments) {
+  size_t length = wcslen(path) + wcslen(arguments) + 3;
   wchar_t *command = malloc(length * sizeof(wchar_t));
   if (command == NULL) return 1;
-  swprintf(command, length, L"\"%ls\"", path);
+  swprintf(command, length, L"\"%ls\"%ls", path, arguments);
   SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
   HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              &security, OPEN_EXISTING, 0, NULL);
@@ -145,11 +145,19 @@ int wmain(int argc, wchar_t **argv) {
   }
   if (!wcscmp(argv[1], L"mkdir")) return create_directory(argv[2]);
   if (!wcscmp(argv[1], L"remove")) return remove_tree(argv[2]);
+  if (!wcscmp(argv[1], L"absent")) {
+    DWORD attributes = GetFileAttributesW(argv[2]);
+    DWORD error = GetLastError();
+    return attributes == INVALID_FILE_ATTRIBUTES &&
+        (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+        ? 0 : report_error("expected absent fixture path", error);
+  }
   if (!wcscmp(argv[1], L"write") && argc == 4) return write_file(argv[2], argv[3]);
   if (!wcscmp(argv[1], L"copy") && argc == 4) {
     return CopyFileExW(argv[3], argv[2], NULL, NULL, NULL, COPY_FILE_FAIL_IF_EXISTS)
         ? 0 : report_error("CopyFileExW", GetLastError());
   }
-  if (!wcscmp(argv[1], L"launch")) return launch(argv[2]);
+  if (!wcscmp(argv[1], L"launch")) return launch(argv[2], L"");
+  if (!wcscmp(argv[1], L"launch-help")) return launch(argv[2], L" --help");
   return 2;
 }

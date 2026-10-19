@@ -1276,14 +1276,6 @@ int muon_prepare_ensure_node_archive_cache_progress(
   return result;
 }
 
-static int node_install_chmod(const char *path, int mode) {
-#ifdef _WIN32
-  return _chmod(path, mode);
-#else
-  return chmod(path, (mode_t)mode);
-#endif
-}
-
 static int node_archive_path_has_drive_prefix(const char *path) {
   const char first = path[0];
   return ((first >= 'A' && first <= 'Z') ||
@@ -1359,7 +1351,7 @@ static int write_node_archive_entry(
     struct archive *reader, const char *destination, int mode,
     size_t *installed_file_count,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data) {
-  FILE *output = fopen(destination, "wb");
+  FILE *output = muon_fopen(destination, "wb");
   if (output == NULL) {
     muon_print_errno(destination);
     return -1;
@@ -1392,7 +1384,7 @@ static int write_node_archive_entry(
   if (result != 0) {
     return -1;
   }
-  if (node_install_chmod(destination, mode) != 0) {
+  if (muon_chmod(destination, mode) != 0) {
     muon_print_errno(destination);
     return -1;
   }
@@ -1448,7 +1440,7 @@ static int extract_node_runtime_files(
   if (archive_read_support_filter_gzip(reader) != ARCHIVE_OK ||
       archive_read_support_format_tar(reader) != ARCHIVE_OK ||
       archive_read_support_format_zip(reader) != ARCHIVE_OK ||
-      archive_read_open_filename(reader, archive_path, 64 * 1024) !=
+      muon_archive_read_open_file(reader, archive_path) !=
           ARCHIVE_OK) {
     print_node_archive_error(reader, "Failed to open Node.js archive");
     archive_read_free(reader);

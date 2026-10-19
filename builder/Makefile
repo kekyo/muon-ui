@@ -141,8 +141,8 @@ $(PLUGIN_INSPECTOR_TARGET): src/muon_plugin_inspector.c src/common.h ../sdk/incl
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -I"../sdk/include" $(CFLAGS) $(PLUGIN_INSPECTOR_LDFLAGS) -o "$@" src/muon_plugin_inspector.c $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(PLUGIN_INSPECTOR_LDLIBS)
 
 ifneq ($(strip $(WINDOWS_FILESYSTEM_TEST_TARGET)),)
-$(WINDOWS_FILESYSTEM_TEST_TARGET): test/windows_filesystem_test.c src/common.h $(LIB_TARGET)
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -Isrc $(CFLAGS) $(LDFLAGS) -municode -o "$@" "$<" "$(LIB_TARGET)" $(LDLIBS)
+$(WINDOWS_FILESYSTEM_TEST_TARGET): test/windows_filesystem_test.c src/common.h $(LIB_TARGET) $(PREPARE_RESOURCE_OBJECTS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -Isrc $(CFLAGS) $(LDFLAGS) -municode -Wl,--wrap=fwrite -o "$@" "$<" $(PREPARE_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
 endif
 
 clean:

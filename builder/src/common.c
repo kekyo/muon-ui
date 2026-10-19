@@ -226,6 +226,15 @@ char *muon_path_join(const char *left, const char *right) {
   if (needs_separator && strncmp(left, "\\\\?\\", 4) == 0) format = "%s\\%s";
 #endif
   snprintf(result, size, format, left, right);
+#ifdef _WIN32
+  if (strncmp(left, "\\\\?\\", 4) == 0) {
+    // The left side is literal user input. Only the appended structural path
+    // (for example, a validated archive entry) uses ordinary separators.
+    for (char *cursor = result + strlen(left); *cursor != '\0'; ++cursor) {
+      if (*cursor == '/') *cursor = '\\';
+    }
+  }
+#endif
   return result;
 }
 
@@ -365,7 +374,7 @@ static int muon_access(const char *path, int mode) {
   return result == 0 ? 0 : -1;
 }
 
-static int muon_chmod(const char *path, int mode) {
+int muon_chmod(const char *path, int mode) {
   muon_windows_path native = {0};
   if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) return -1;
   int result = _wchmod(native.value, mode & (_S_IREAD | _S_IWRITE));
@@ -471,7 +480,7 @@ static MuonSSize muon_write(int descriptor, const void *buffer, size_t size) {
 #else
 static int muon_access(const char *path, int mode) { return access(path, mode); }
 
-static int muon_chmod(const char *path, int mode) { return chmod(path, mode); }
+int muon_chmod(const char *path, int mode) { return chmod(path, mode); }
 
 static int muon_close(int descriptor) { return close(descriptor); }
 
@@ -1739,6 +1748,21 @@ static int extract_archive_file(struct archive *reader, struct archive_entry *en
   return 0;
 }
 
+int muon_archive_read_open_file(struct archive *reader, const char *path) {
+#ifdef _WIN32
+  muon_windows_path native = {0};
+  if (muon_windows_io_path(path, MUON_WINDOWS_PATH_FILE, &native) != 0) {
+    archive_set_error(reader, errno, "Invalid archive path: %s", path);
+    return ARCHIVE_FATAL;
+  }
+  int result = archive_read_open_filename_w(reader, native.value, 64 * 1024);
+  muon_windows_path_destroy(&native);
+  return result;
+#else
+  return archive_read_open_filename(reader, path, 64 * 1024);
+#endif
+}
+
 int muon_extract_tar_bz2_archive_progress(
     const char *archive_path, const char *destination, int strip_components,
     size_t *file_count, MuonPrepareProgressCallback progress_callback,
@@ -1756,7 +1780,7 @@ int muon_extract_tar_bz2_archive_progress(
   }
   if (archive_read_support_filter_bzip2(reader) != ARCHIVE_OK ||
       archive_read_support_format_tar(reader) != ARCHIVE_OK ||
-      archive_read_open_filename(reader, archive_path, 64 * 1024) !=
+      muon_archive_read_open_file(reader, archive_path) !=
           ARCHIVE_OK) {
     archive_print_error(reader, archive_path);
     archive_read_free(reader);
@@ -1887,7 +1911,7 @@ char *muon_read_tar_bz2_text_file(const char *archive_path,
   }
   if (archive_read_support_filter_bzip2(reader) != ARCHIVE_OK ||
       archive_read_support_format_tar(reader) != ARCHIVE_OK ||
-      archive_read_open_filename(reader, archive_path, 64 * 1024) !=
+      muon_archive_read_open_file(reader, archive_path) !=
           ARCHIVE_OK) {
     archive_print_error(reader, archive_path);
     archive_read_free(reader);

@@ -960,7 +960,7 @@ int muon_prepare_extract_cef_archive_full(const char *archive_path,
     free(ready_path);
     return -1;
   }
-  if (rename(temporary_directory, output_dir) != 0) {
+  if (muon_rename(temporary_directory, output_dir) != 0) {
     muon_print_errno(output_dir);
     muon_remove_recursive(temporary_directory);
     free(parent);

@@ -114,6 +114,24 @@ FILE *muon_fopen(const char *path, const char *mode);
 int muon_stat(const char *path, struct stat *entry);
 
 /**
+ * Updates platform file mode bits using a UTF-8 path.
+ * @param path File or directory path.
+ * @param mode Requested mode bits; Windows uses its CRT read/write permissions.
+ * @return 0 on success, or -1 with errno set on failure.
+ */
+int muon_chmod(const char *path, int mode);
+
+struct archive;
+/**
+ * Opens an archive input using the platform's Unicode filesystem path API.
+ * @param reader Configured libarchive reader, owned and freed by the caller.
+ * @param path UTF-8 archive filename, resolved once before opening.
+ * @return A libarchive status, with its error message populated on failure.
+ * @remarks The reader owns the opened file and closes it during archive_read_free.
+ */
+int muon_archive_read_open_file(struct archive *reader, const char *path);
+
+/**
  * Renames a filesystem entry with the platform's ordinary rename semantics.
  * @param source Existing UTF-8 path.
  * @param destination Destination UTF-8 path.

@@ -17,11 +17,25 @@ import {
 } from "agent-rover";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
+import {
+  connectWindowsE2eAgent,
+  resolveWindowsE2eEnvironment,
+} from "../../scripts/windows-e2e-environment.js";
 
 const execFileAsync = promisify(execFile);
 const targets = ["windows-i686", "windows-amd64"] as const;
 const environment = resolveWindowsE2eEnvironment(process.env);
+const connection = await connectWindowsE2eAgent(environment);
+const describeWindowsE2e =
+  connection.status === "connected" ? describe : describe.skip;
+if (connection.status === "connected") {
+  // Release the probe before local compilation and reconnect in beforeAll.
+  connection.agent.release();
+} else {
+  process.stderr.write(
+    `Skipping Windows builder path tests: ${connection.reason}\n`,
+  );
+}
 let agent: RemoteAgent;
 let directory: string;
 let localDirectory: string;
@@ -231,7 +245,7 @@ afterAll(async () => {
   }
 });
 
-describe.each(targets)(
+describeWindowsE2e.each(targets)(
   "builder Windows filesystem (%s, policy=0, ordinary user)",
   (target) => {
     const fixture = async (mode: string, path: string, args: string[] = []) => {

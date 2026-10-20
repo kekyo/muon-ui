@@ -15,7 +15,10 @@ import { createConnection } from "@playwright/mcp";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMuonCapabilityModuleResolver } from "../../ui/common/capability.js";
 import { resolveMuonCefNotificationFunctionPaths } from "../../ui/cef/notifications.js";
-import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
+import {
+  connectWindowsE2eAgent,
+  resolveWindowsE2eEnvironment,
+} from "../../scripts/windows-e2e-environment.js";
 import { connectWindowsAgent } from "./plugin-e2e/windows-agent.js";
 import { resolveWindowsRuntimeTarget } from "./plugin-e2e/windows-matrix.js";
 import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.js";
@@ -27,6 +30,17 @@ import type { MuonNotificationEvent } from "../common/renderer/notifications.js"
 
 const target = resolveWindowsRuntimeTarget(process.env.MUON_E2E_WINDOWS_TARGET);
 const environment = resolveWindowsE2eEnvironment(process.env);
+const connection = await connectWindowsE2eAgent(environment);
+const describeWindowsE2e =
+  connection.status === "connected" ? describe : describe.skip;
+if (connection.status === "connected") {
+  // Release the probe before local compilation and reconnect in beforeAll.
+  connection.agent.release();
+} else {
+  process.stderr.write(
+    `Skipping Windows notification tests: ${connection.reason}\n`,
+  );
+}
 const remoteBase = win32.join(
   environment.workDir,
   "notifications",
@@ -111,7 +125,8 @@ afterAll(async () => {
   }
 });
 
-describe(`Windows notifications through Playwright MCP (${target.target})`, () => {
+const suiteName = `Windows notifications through Playwright MCP (${target.target})`;
+describeWindowsE2e(suiteName, () => {
   it.each([
     ["store", "muon_notification_store_test.exe", []],
     ["service", "muon_notification_service_test.exe", []],

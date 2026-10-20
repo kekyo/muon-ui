@@ -11,10 +11,22 @@ import { promisify } from "node:util";
 import { connectRemoteAgent, type RemoteAgent } from "agent-rover";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
+import {
+  connectWindowsE2eAgent,
+  resolveWindowsE2eEnvironment,
+} from "../../scripts/windows-e2e-environment.js";
 
 const execFileAsync = promisify(execFile);
 const environment = resolveWindowsE2eEnvironment(process.env);
+const connection = await connectWindowsE2eAgent(environment);
+const describeWindowsE2e =
+  connection.status === "connected" ? describe : describe.skip;
+if (connection.status === "connected") {
+  // Release the probe before local compilation and reconnect in beforeAll.
+  connection.agent.release();
+} else {
+  process.stderr.write(`Skipping Windows path tests: ${connection.reason}\n`);
+}
 const targets = ["windows-i686", "windows-amd64"] as const;
 let agent: RemoteAgent;
 let directory: string;
@@ -104,7 +116,7 @@ afterAll(async () => {
   }
 });
 
-describe.each(targets)(
+describeWindowsE2e.each(targets)(
   "native Windows paths (%s, policy=0, ordinary user)",
   (target) => {
     it.each([140, 259, 260, 261, 1100])(

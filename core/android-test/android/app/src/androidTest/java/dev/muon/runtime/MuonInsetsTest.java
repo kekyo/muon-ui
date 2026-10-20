@@ -373,6 +373,8 @@ public final class MuonInsetsTest {
                 MuonActivity restored = reference.get();
                 assertTrue(resized != restored);
                 assertTrue(restored.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                // On API 33 the mode callback can arrive after the new page loads.
+                assertTrue(restored.awaitFullWindowForTest(30, TimeUnit.SECONDS));
                 assertFalse(restored.isInMultiWindowMode());
                 assertWebContentClearsSystemBars(scenario, restored);
                 JSONObject restoredState = new JSONObject(call(scenario, restored, "getState", new JSONArray())

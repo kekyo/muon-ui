@@ -9,6 +9,7 @@ package dev.muon.runtime;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.WebView;
@@ -35,6 +36,7 @@ public final class MuonActivity extends Activity {
     private final CountDownLatch resumed = new CountDownLatch(1);
     private final CountDownLatch startupFailureReady = new CountDownLatch(1);
     private final CountDownLatch destroyed = new CountDownLatch(1);
+    private final CountDownLatch fullWindow = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<Intent> notificationIntents = new LinkedBlockingQueue<>();
@@ -49,6 +51,7 @@ public final class MuonActivity extends Activity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (!isInMultiWindowMode()) fullWindow.countDown();
 
         host = new MuonWebViewHost(this, new MuonWebViewHost.Listener() {
             @Override public void beforePageLoad(@NonNull WebView view, @NonNull MuonRpcBridge bridge) {
@@ -88,6 +91,17 @@ public final class MuonActivity extends Activity {
         super.onResume();
         if (host != null) { host.setResumed(true); }
         resumed.countDown();
+    }
+
+    @Override public void onMultiWindowModeChanged(
+            boolean isInMultiWindowMode, @NonNull Configuration newConfig) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig);
+        if (!isInMultiWindowMode) fullWindow.countDown();
+    }
+
+    boolean awaitFullWindowForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return fullWindow.await(timeout, unit);
     }
 
     @Override protected void onNewIntent(Intent intent) {

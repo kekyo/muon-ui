@@ -19,6 +19,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createGnomeNotificationDriver } from "./notifications-accessibility.js";
+import { createKdeNotificationDriver } from "./notifications-kde-accessibility.js";
 
 const execute = promisify(execFile);
 const enabled =
@@ -44,9 +45,15 @@ describe.skipIf(!enabled)("Linux Portal activation on the desktop", () => {
     const executable = resolve(
       "../cef/.build/test/linux-amd64/release/muon_notification_portal_driver",
     );
-    const artifacts = resolve(".run/notifications-portal");
+    const artifacts = resolve(
+      process.env.MUON_TEST_NOTIFICATION_SHELL === "kde"
+        ? ".run/notifications-portal-kde"
+        : ".run/notifications-portal",
+    );
     const arguments_ = [directory, desktopId, launcher];
-    const driver = await createGnomeNotificationDriver();
+    const driver = await (process.env.MUON_TEST_NOTIFICATION_SHELL === "kde"
+      ? createKdeNotificationDriver()
+      : createGnomeNotificationDriver());
     const installed: string[] = [];
     try {
       for (const path of [applications, services, icons, artifacts])

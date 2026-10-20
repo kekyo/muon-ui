@@ -472,7 +472,7 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 
 ## 進捗記録
 
-2026年10月20日時点で、`feature/plan13`の段階1〜8を完了した。AndroidとCEFのLinux・Windowsで共通通知APIを利用できる。CEFの通知からの起動と配布登録を確認し、段階9の配布物・全体検証と利用文書を進めている。
+2026年10月20日時点で、`feature/plan13`の段階1〜8を完了した。AndroidとCEFのLinux・Windowsで共通通知APIを利用できる。CEFの通知からの起動と配布登録、AndroidのOS境界と配布物、日英の利用文書を確認し、段階9の全体テストの最終確認を進めている。
 
 | 段階 | 状態 | 実装・検証した範囲 |
 | --- | --- | --- |
@@ -484,7 +484,7 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 | 6 | 完了 | CEFの共通通知API、Linuxの非同期OS通知、アプリ単位の永続化とページ単位の購読を実装した。simple・validateの両方で、GNOMEの実通知の更新、通常クリック、追加ボタン、取り消しを確認した。 |
 | 7 | 完了 | `f2dfc67`。MinGW32/64でWindows通知を実装し、両アーキテクチャの実機で通知の表示、操作、永続化と公開APIを確認した。 |
 | 8 | 完了 | Windowsの両アーキテクチャとNSIS、GNOME・修正済みKDEの公開配布アプリで通知起動を確認した。両モードで更新、パス変更、未受領イベント、登録解除も成功した。 |
-| 9 | 実施中 | Androidの境界条件、配布物、全体テスト、利用文書を検証・整備している。 |
+| 9 | 実施中 | Androidの境界条件、配布物、日英の利用文書を確認した。Windowsとルートの全体テストを再実行している。 |
 
 段階2のInsetsは`unit: 'css-px'`を持ち、システムバー、カットアウト、ジェスチャー領域、IMEを分けて返す。`safeArea`はバーとカットアウトの各辺の最大値で、`contentSafeArea`はWeb側で追加する余白である。`safe-area`では`contentSafeArea`と対応するCSS変数を0にし、ネイティブ側の余白を重ねて適用しない。購読は初期状態と変更後の状態を返し、`close()`とページ破棄で解放する。
 
@@ -682,4 +682,37 @@ APKセット生成はJDK 21.0.12.1でも確認し、JDK 25で発生したbundlet
 
 Windows全体の入口はファイル操作の実機試験で止まった。Defenderが`C:\muon-e2e\builder-path-0\windows-amd64-builder-test.exe`を`Trojan:Win32/Bearfoos.A!ml`として隔離し、`CreateProcessW`が225を返した後、ファイルが存在しなくなった。このファイルは`builder/test/windows_filesystem_test.c`からビルドした試験用実行ファイルで、SHA-256は`7e6a1b5d1ced144361f526a159ef18b338592ad0c83a52a667e12ea06e7631e2`である。対象122件のうち93件が成功し、29件はこの遮断で失敗した。誤検知とは断定せず、検出の扱いを利用者へ確認している。[Windowsのエラー225](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-)
 
-Android API 35では、Activity再生成後に初回Insetsが届かず、ページ読み込みが始まらない問題を再現した。あわせて、Activityの破棄と別スレッドのアセット読み込みが重なる競合を調査している。API 35・36の境界試験、修正後のPixel 6・16 KiB環境、Windowsの遮断された試験、ルートの`npm test`の最終確認が残っている。段階9と全体の完了条件は引き続き未達成である。
+この時点では、Android API 35でActivity再生成後に初回Insetsが届かず、ページ読み込みが始まらない問題を再現していた。あわせて、Activityの破棄と別スレッドのアセット読み込みが重なる競合も調査対象となった。API 35・36の境界試験、修正後のPixel 6・16 KiB環境、Windowsの遮断された試験、ルートの`npm test`の最終確認が残っていた。Androidの修正と再検証の結果は次項に記載する。
+
+### Androidの境界検証と再生成時の修正
+
+`49accc6`で、Activity再生成後のページ起動と、破棄中のアセット読み込みを修正した。既存の再生成テストでは、OSのInsetsは存在しているのにWeb側の初期化が始まらず失敗することを確認した。初回レイアウト後に親が消費した残りのInsetsを新しい表示領域へ渡すことで、再生成と分割画面の両方が成功した。[レイアウト変更の通知](https://developer.android.com/reference/android/view/View.OnLayoutChangeListener)
+
+開始済みのアセット要求をActivityの破棄後に完了させるテストを追加し、null参照による失敗を確認した。要求が参照するハンドラーを保持する修正後、正常な応答を返せることを確認した。一時的な診断コードと採用しなかった修正は取り除いた。[別スレッドで呼ばれるアセット要求](https://developer.android.com/reference/android/webkit/WebViewClient#shouldInterceptRequest(android.webkit.WebView,%20android.webkit.WebResourceRequest))
+
+修正後のAndroid検証は次のとおりで、記載したケースに失敗や省略はない。「境界」はWebViewに依存しないWindow、サービス、永続ストアの試験、「全体」はテストホストのinstrumentation全件を指す。
+
+| OS・端末 | ABI・ページサイズ | 画面形状・ナビゲーション | 結果 |
+| --- | --- | --- | --- |
+| API 24・25のエミュレーター | x86_64・4 KiB | 320×640の矩形、仮想ハードキー | 境界試験が各21件成功。 |
+| API 26のエミュレーター | x86_64・4 KiB | 1080×2400のPixel 6プロファイル、ソフトキー | 境界試験21件成功。 |
+| API 33・35のエミュレーター | x86_64・4 KiB | 1080×2400、中央カットアウト、ジェスチャー | 全体試験が各77件成功。 |
+| API 36のエミュレーター | x86_64・16 KiB | 1080×2400、中央カットアウト、ジェスチャー | 全体試験77件成功。 |
+| API 37のエミュレーター（37.2 image） | x86_64・16 KiB | 1080×2400、中央カットアウト、ジェスチャー | `test:android`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。 |
+| Android 17 / API 37のPixel 6 | arm64-v8a・4 KiB | 1080×2400、中央カットアウト、3ボタン | `test:android:pixel6`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。PoCの同じ入口も20件と配布検証が成功。 |
+
+API 24〜26の旧WebViewは必要な機能を満たさないため、この結果をWebアプリ全体の動作保証にはしない。API 33以降のエミュレーターではWebView 149.0.7827.5、Pixel 6では153.0.8010.36を使った。API 36の実行前には旧providerが報告されたため、テスト実行中に切り替え後の版を確認した。16 KiB環境とPixel 6のページサイズは公式手順の`adb shell getconf PAGE_SIZE`で確認した。x86_64の16 KiB環境では`/proc/self/smaps`の`KernelPageSize`を判定に使わない。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiB環境の確認方法](https://developer.android.com/guide/practices/page-sizes)
+
+Pixel 6ではジェスチャーナビゲーションの追加12件と、全画面・IME・バーの一時表示を扱う3種類の動画検証も成功した。試験後は3ボタンへ戻した。最終AARを含むnpmパッケージから生成した公開APKでは、Playwright MCPによる通知2件、バー操作1件、設定画面1件が成功した。通知2件はsimple・validateの両方を対象とし、実通知の操作、プロセス再起動、APK更新後の保存済み未受領イベントまで確認している。
+
+PoCの通常の`npm test --workspace muon-android-poc`も成功し、JavaScriptの3件、QuickJSとネイティブ依存、関数登録、release APK・APKセットを検証した。PoCにも他の小さなバンドルと同じ時間比率診断の設定を適用し、整形・型検査を維持したまま`PLUGIN_TIMINGS`が出ないことを確認した。Androidの最終検証はJDK 21.0.12.1を使用し、ビルド警告は検出しなかった。
+
+### 完了条件との照合
+
+WindowsのCEF試験はi686・amd64とも実機へ接続して実行し、各236件が成功、29件を省略した。所要時間はそれぞれ816.20秒、827.17秒だった。省略分は成功件数に含めない。
+
+Windows通知の再検証では、i686のsimpleケースが設定画面の通知スイッチを見つけられず失敗した。設定ウインドウの存在だけを待ち、その内部を一度だけ検索する試験処理だったため、`7f5128a`でスイッチの出現と指定した状態をOSの画面変更イベントで待つよう修正した。修正後の`npm run test:windows-notifications --workspace muon-core-tester`は、i686・amd64とも全8件が成功し、省略はなかった。所要時間は339.76秒、345.67秒である。通知の実操作、終了後の起動、更新・移動、未受領イベントと受領確認をsimple・validateの両方で再確認した。型検査も成功し、今回のビルドで警告は検出しなかった。[OSの画面構造変更の通知](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-addstructurechangedeventhandler)
+
+全体の完了条件1〜8と10は、各段階の実装、上記の端末・配布物の検証、日英の利用文書と照合した。AndroidのバーとInsets、通知権限・設定連携、共通通知と起動イベント、対応機能の診断、設定の分離、Windows・Linuxの登録と更新を確認済みである。
+
+条件9は未達成である。利用者がDefenderの監視対象から外した`C:\test\`を試験用に指定したため、既存の環境変数`MUON_E2E_REMOTE_WORK_DIR`で作業先を`C:\test\muon-plan13`へ切り替えた。ファイル操作試験は全122件が321.41秒で成功し、今回の試験で遮断が解消したことを確認した。この作業先でWindows全体の入口とルートの`npm test`を再実行して判定する。段階9とplan13全体は完了にしない。

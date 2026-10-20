@@ -14,7 +14,7 @@ This release supports debug APKs and signed release APKs. FCM, QuickJS, the Node
 | Android SDK | Platform `platforms/android-37.0`, Build Tools `build-tools/36.0.0` |
 | Gradle/AGP | The included Wrapper uses Gradle 9.4.1 and AGP 9.2.1 |
 | Application ABIs | `arm64-v8a` and `x86_64`; both included by default |
-| Devices | Pixel 6 on API 37; x86_64 emulators on API 33, 35, 36, and 37. API 37 testing also covers 16 KiB pages |
+| Devices | Pixel 6 on API 37; x86_64 emulators on API 33, 35, 36, and 37. 16 KiB pages were tested on API 36 and 37 |
 
 Ordinary application builds need neither NDK/CMake nor a Muon source checkout. The npm package includes prebuilt Java and native components in an AAR. Initial Gradle and AndroidX downloads need a network connection. Android Studio and a connected device are optional for building.
 

@@ -35,7 +35,7 @@ Starting an exited application from a notification requires `xdg-desktop-portal 
 
 | Distribution | Registration and launch destination |
 | --- | --- |
-| Unpacked tar.gz, zip, and similar distributions | User registration on first launcher execution; launches the extracted launcher |
+| Unpacked tar.gz | User registration on first launcher execution; launches the extracted launcher |
 | AppImage | User registration on first execution; launches the original AppImage |
 | deb | System registration during installation; launches `/usr/lib/<packageName>/<target>/<launcher>` |
 

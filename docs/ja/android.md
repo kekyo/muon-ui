@@ -14,7 +14,7 @@ muon-uiのnpmパッケージから、Webアセットを内蔵したAndroid APK�
 | Android SDK | Platform `platforms/android-37.0`、Build Tools `build-tools/36.0.0` |
 | Gradle/AGP | 同梱WrapperでGradle 9.4.1、AGP 9.2.1を使用 |
 | アプリのABI | `arm64-v8a`と`x86_64`。既定で両方を収録 |
-| 端末 | 実機はPixel 6・API 37。x86_64エミュレーターはAPI 33・35・36・37で検証済み。API 37では16 KiBページも検証 |
+| 端末 | 実機はPixel 6・API 37。x86_64エミュレーターはAPI 33・35・36・37で検証済み。16 KiBページはAPI 36・37で検証 |
 
 通常のアプリビルドにはNDK、CMake、Muonのソース取得は不要です。MuonのJava・ネイティブ部品は事前ビルドしたAARとしてnpm内に収録しています。GradleとAndroidXなどの初回取得にはネットワーク接続が必要です。Android Studioと接続端末はビルドの必須条件ではありません。
 

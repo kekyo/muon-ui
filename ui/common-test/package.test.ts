@@ -809,7 +809,7 @@ describe("muon-ui package root export", () => {
     await expect(verify()).rejects.toThrow("libcef.so");
   });
 
-  it("builds packages with an unbuilt SDK and vendored native dependencies", async () => {
+  it("builds packages with an unbuilt SDK, vendored native dependencies, and a host-built notification renderer", async () => {
     const root = await createFakePackageBuildRoot();
     const binDirectory = join(root, "bin");
     const containerLog = join(root, "container.log");
@@ -834,6 +834,27 @@ if [[ "\${1:-}" == "image" && "\${2:-}" == "exists" ]]; then
 fi
 if [[ "\${1:-}" == "run" ]]; then
   printf '%s\\n' "$@" >> "\${MUON_FAKE_CONTAINER_LOG:?}"
+  notification_header=""
+  for arg in "$@"; do
+    case "\${arg}" in
+      MUON_NOTIFICATION_RENDERER_HEADER=*)
+        notification_header="\${arg#MUON_NOTIFICATION_RENDERER_HEADER=}"
+        ;;
+    esac
+  done
+  if [[ "\${notification_header}" != "/workspace/core/cef/.build/notification-renderer/muon_notification_renderer_generated.h" ]]; then
+    printf 'Missing prebuilt notification renderer path\\n' >&2
+    exit 1
+  fi
+  host_header="\${PWD}/\${notification_header#/workspace/}"
+  if [[ ! -f "\${host_header}" ]]; then
+    printf 'Notification renderer was not generated before starting the container\\n' >&2
+    exit 1
+  fi
+  if [[ "$(<"\${host_header}")" != 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' ]]; then
+    printf 'Unexpected prebuilt notification renderer content\\n' >&2
+    exit 1
+  fi
   exit 0
 fi
 printf 'Unexpected fake container invocation: %s\\n' "$*" >&2
@@ -853,6 +874,10 @@ if [[ "$*" == "run build:js --workspace muon-plugin-sdk" ]]; then
 fi
 if [[ "$*" == "run build:linux-dependencies --workspace muon-ui" ]]; then
   node "\${MUON_FAKE_TSC_PATH:?}" --noEmit --skipLibCheck --module ESNext --moduleResolution Bundler ui/sdk-consumer.ts >&2
+fi
+if [[ "$*" == "run build:notification-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/notification-renderer
+  printf '%s\\n' 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' > core/cef/.build/notification-renderer/muon_notification_renderer_generated.h
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
   output_path=""
@@ -1001,6 +1026,11 @@ if [[ "\${1:-}" == "run" && "\${2:-}" == "build" && " $* " == *" --workspace muo
   exit 0
 fi
 if [[ "$*" == "run build:js --workspace muon-plugin-sdk" ]]; then
+  exit 0
+fi
+if [[ "$*" == "run build:notification-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/notification-renderer
+  printf '%s\\n' 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' > core/cef/.build/notification-renderer/muon_notification_renderer_generated.h
   exit 0
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "build:linux-dependencies" ]]; then

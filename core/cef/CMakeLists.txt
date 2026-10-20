@@ -48,6 +48,8 @@ set(MUON_CORE_GIT_COMMIT_DATE "" CACHE STRING
   "muon-core git commit date used to generate runtime metadata.")
 set(MUON_CORE_VERSION_HEADER "" CACHE FILEPATH
   "Generated muon-core version header used to generate runtime metadata.")
+set(MUON_NOTIFICATION_RENDERER_HEADER "" CACHE FILEPATH
+  "Host-generated notification renderer header for native package builds.")
 set(TRA_FFIC_ROOT "../../deps/tra-ffic" CACHE PATH
   "Path to the tra-ffic checkout.")
 set(CARDIO_ROOT "../../deps/cardio" CACHE PATH
@@ -1200,15 +1202,25 @@ elseif(WIN32)
     src/notifications/muon_notification_windows.cpp)
 endif()
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(MUON_NOTIFICATION_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.build/notification-renderer")
-  add_custom_command(
-    OUTPUT "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h"
-    COMMAND npm run build:notification-renderer --workspace muon-core
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
-    DEPENDS renderer/notifications.ts renderer.vite.config.ts
-      ../common/renderer/notifications.ts ../common/build-notification-renderer.mts
-    COMMENT "Building the shared notification renderer"
-    VERBATIM)
+  if(MUON_NOTIFICATION_RENDERER_HEADER)
+    # Package containers share host node_modules, whose native bundler bindings
+    # cannot run on a different architecture. Consume the host-built script.
+    set(MUON_NOTIFICATION_RENDERER_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/notification-renderer")
+    configure_file(
+      "${MUON_NOTIFICATION_RENDERER_HEADER}"
+      "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h"
+      COPYONLY)
+  else()
+    set(MUON_NOTIFICATION_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.build/notification-renderer")
+    add_custom_command(
+      OUTPUT "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h"
+      COMMAND npm run build:notification-renderer --workspace muon-core
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+      DEPENDS renderer/notifications.ts renderer.vite.config.ts
+        ../common/renderer/notifications.ts ../common/build-notification-renderer.mts
+      COMMENT "Building the shared notification renderer"
+      VERBATIM)
+  endif()
   add_custom_target(muon_notification_renderer
     DEPENDS "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h")
 endif()

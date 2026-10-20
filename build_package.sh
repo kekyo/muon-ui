@@ -15,6 +15,9 @@ CARDIO_ROOT_HOST="${CARDIO_ROOT_HOST:-${SCRIPT_DIR}/deps/cardio}"
 MUON_CORE_VERSION_HEADER_RELATIVE="core/cef/.build/package/muon_core_version_generated.h"
 MUON_CORE_VERSION_HEADER_HOST="${SCRIPT_DIR}/${MUON_CORE_VERSION_HEADER_RELATIVE}"
 MUON_CORE_VERSION_HEADER_CONTAINER="/workspace/${MUON_CORE_VERSION_HEADER_RELATIVE}"
+MUON_NOTIFICATION_RENDERER_HEADER_RELATIVE="core/cef/.build/notification-renderer/muon_notification_renderer_generated.h"
+MUON_NOTIFICATION_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_NOTIFICATION_RENDERER_HEADER_RELATIVE}"
+MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER="/workspace/${MUON_NOTIFICATION_RENDERER_HEADER_RELATIVE}"
 
 usage() {
   cat <<'EOF'
@@ -218,6 +221,7 @@ build_linux_target() {
     -e "MUON_BUILDER_VERSION=${MUON_BUILDER_VERSION}" \
     -e "MUON_BUILDER_GIT_COMMIT_HASH=${MUON_BUILDER_GIT_COMMIT_HASH}" \
     -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
+    -e "MUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER}" \
     -e "MUON_NODE_BRIDGE_PREBUILT=1" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
@@ -269,8 +273,10 @@ build_windows_targets() {
   printf 'Building Windows package targets\n'
   npm run build:target --workspace muon-builder -- dist Release windows-i686
   npm run build:target --workspace muon-builder -- dist Release windows-amd64
-  npm run build:target --workspace muon-core -- dist Release windows-i686
-  npm run build:target --workspace muon-core -- dist Release windows-amd64
+  npm run build:target --workspace muon-core -- dist Release windows-i686 \
+    "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}"
+  npm run build:target --workspace muon-core -- dist Release windows-amd64 \
+    "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}"
 }
 
 stage_targets() {
@@ -413,6 +419,11 @@ build_dist() {
   printf 'Building shared Node bridge\n'
   npm run build --workspace muon-node
   MUON_NODE_BRIDGE_PREBUILT=1
+
+  printf 'Building shared notification renderer\n'
+  npm run build:notification-renderer --workspace muon-core
+  [[ -f "${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" ]] ||
+    fail "Notification renderer header was not generated: ${MUON_NOTIFICATION_RENDERER_HEADER_HOST}"
 
   printf 'Preparing shared native source dependencies\n'
   bash core/cef/build_yyjson.sh

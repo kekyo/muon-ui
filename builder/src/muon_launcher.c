@@ -963,6 +963,9 @@ static int refresh_user_icon_cache(void) {
   if (child == 0) {
     execlp("gtk-update-icon-cache", "gtk-update-icon-cache",
            "--force", "--ignore-theme-index", theme, (char *)NULL);
+    // The icon files remain usable without GTK's optional cache utility.
+    // Keep actual execution failures distinct from an absent installation.
+    if (errno == ENOENT) _exit(0);
     perror("gtk-update-icon-cache");
     _exit(1);
   }

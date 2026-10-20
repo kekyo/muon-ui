@@ -5,6 +5,7 @@
  */
 
 #include "plugins/muon_plugin_runtime.h"
+#include "muon_filesystem.h"
 
 #include "browser/muon_builtin_browser.h"
 #include "config/muon_paths.h"
@@ -13,6 +14,7 @@
 #include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
+#include "plugins/builtin/muon_builtin_notifications.h"
 
 #include <cardio.h>
 
@@ -66,6 +68,7 @@ CreateDesktopPlatformAdapter(
                         &adapter->reserved_namespaces);
   AddMetadataNamespaces(GetMuonBuiltinFsDialogsPluginMetadata(),
                         &adapter->reserved_namespaces);
+  adapter->reserved_namespaces.push_back("muon.notifications");
 
   MuonPluginRuntimePlatformNamespace browser_namespace;
   browser_namespace.plugin_namespace =
@@ -127,11 +130,15 @@ CreateDesktopPlatformAdapter(
     initialization->plugins.push_back(
         {GetMuonBuiltinFsDialogsPluginMetadata(),
          "<builtin muon fs dialogs>"});
+    if (const auto* metadata = GetMuonBuiltinNotificationsMetadata()) {
+      initialization->plugins.push_back({metadata, "<builtin muon notifications>"});
+    }
     initialization->cancel_owner_operations.push_back(
         &muon_builtin_fs_dialogs_cancel_owner_browser);
     return true;
   };
   adapter->shutdown = []() {
+    ShutdownMuonBuiltinNotifications();
     ShutdownMuonBuiltinExecutor();
     ShutdownMuonBuiltinFsDialogs();
     ShutdownMuonBuiltinFs();
@@ -172,7 +179,9 @@ static void InstallDesktopRuntimeServices(
   services->open_library = [](
       const std::string& locator,
       std::string* error_message) -> void* {
-    const auto path = std::filesystem::path(locator);
+    const auto path = muon_internal::FilesystemPathForIo(
+        muon_internal::FilesystemPathFromUtf8(locator),
+        muon_internal::FilesystemIoUsage::File);
     // Dependencies live beside the plugin; host runtimes remain in the application directory.
     auto* handle = LoadLibraryExW(path.wstring().c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);

@@ -33,15 +33,37 @@ const createCapabilityClient = (
       'muon.browser': id,
       'muon.environments': id,
       'muon.fs': id,
+      'muon.android.systemBars': id,
+      'muon.android.settings': id,
+      'muon.android.notifications': id,
+      'muon.notifications': id,
     });
-    const [, namespace, name] = path.split('.');
-    const functions = Reflect.get(api, namespace!) as object;
-    const call = Reflect.get(functions, name!) as (
-      ...args: readonly unknown[]
-    ) => Promise<unknown>;
+    let value: unknown = api;
+    for (const segment of path.split('.').slice(1)) {
+      value = Reflect.get(value as object, segment);
+    }
+    const call = value as (...args: readonly unknown[]) => Promise<unknown>;
     return await call(...args);
   },
 });
+
+const selectAllowedFunctions = (
+  source: object,
+  prefix: string,
+  allowed: ReadonlySet<string>
+): Record<string, unknown> => {
+  const selected: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(source)) {
+    const path = `${prefix}.${name}`;
+    if (typeof value === 'function') {
+      if (allowed.has(path)) selected[name] = value;
+    } else if (typeof value === 'object' && value !== null) {
+      const namespace = selectAllowedFunctions(value, path, allowed);
+      if (Object.keys(namespace).length > 0) selected[name] = namespace;
+    }
+  }
+  return selected;
+};
 
 /**
  * Installs the packaged Android API before application scripts execute.
@@ -67,18 +89,13 @@ export const bootstrapMuonAndroid = (
     'muon.browser': 'browser-capability',
     'muon.environments': 'environment-capability',
     'muon.fs': 'fs-capability',
+    'muon.android.systemBars': 'system-bars-capability',
+    'muon.android.settings': 'settings-capability',
+    'muon.android.notifications': 'android-notifications-capability',
+    'muon.notifications': 'notifications-capability',
   });
   const allowed = new Set(metadata.builtinFunctions);
-  const builtin = Object.fromEntries(
-    Object.entries(api).flatMap(([namespace, functions]) => {
-      const selected = Object.entries(functions).filter(([name]) =>
-        allowed.has(`muon.${namespace}.${name}`)
-      );
-      return selected.length === 0
-        ? []
-        : [[namespace, Object.fromEntries(selected)]];
-    })
-  );
+  const builtin = selectAllowedFunctions(api, 'muon', allowed);
   const uninstallApi = installMuonAndroidNativePluginApi(
     client,
     metadata,

@@ -22,13 +22,17 @@ final class MuonAppConfig {
     static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
     final String startPage;
     final JSONObject values;
+    final JSONObject systemBars;
     final boolean pluginEnabled;
+    final boolean notificationsEnabled;
+    final JSONObject notifications;
+    final JSONObject androidNotifications;
     final String[] internalAllow;
     final boolean validateMode;
     final String[] capabilityIds;
     final String[][] capabilityAllows;
 
-    private MuonAppConfig(@NonNull JSONObject config) throws JSONException {
+    MuonAppConfig(@NonNull JSONObject config) throws JSONException {
         startPage = config.getString("startPage");
         Uri url = Uri.parse(startPage);
         if (!"https".equals(url.getScheme())
@@ -37,6 +41,15 @@ final class MuonAppConfig {
             throw new JSONException("The Android start page must use the trusted asset origin");
         }
         values = config.getJSONObject("values");
+        systemBars = config.has("systemBars") ? config.getJSONObject("systemBars") : new JSONObject();
+        notifications = config.has("notifications") ? config.getJSONObject("notifications") : new JSONObject();
+        androidNotifications = config.has("androidNotifications")
+                ? config.getJSONObject("androidNotifications") : new JSONObject();
+        Object enabled = notifications.opt("enabled");
+        if (notifications.has("enabled") && !(enabled instanceof Boolean)) {
+            throw new JSONException("notifications.enabled must be a boolean");
+        }
+        notificationsEnabled = Boolean.TRUE.equals(enabled);
         JSONObject plugin = config.getJSONObject("plugin");
         String mode = plugin.getString("mode");
         if (!"simple".equals(mode) && !"validate".equals(mode)) {

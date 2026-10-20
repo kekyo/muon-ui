@@ -128,6 +128,8 @@ if (windowsAgent !== undefined) {
   await import("./plugin-e2e/browser-background.js");
   await import("./plugin-e2e/title-bar.js");
   await import("./plugin-e2e/runtime-api.js");
+  await import("./plugin-e2e/application-windows-long-path.js");
+  await import("./plugin-e2e/filesystem-windows-long-path.js");
   await import("./plugin-e2e/plugin-interop.js");
   await import("./plugin-e2e/node-plugin.js");
   await import("./plugin-e2e/node-plugin-express.js");

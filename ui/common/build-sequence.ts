@@ -337,12 +337,17 @@ const copyDefinedBuildOptions = (
 };
 
 /**
- * Runs the project build sequence used by `muon build` and `muon pack`.
+ * Resolves native build options after generating the project's Vite assets.
+ * @param options - Project and target options for the build sequence.
+ * @param loadedProject - Project configuration already resolved by the caller.
+ * @returns Build options containing the policy generated for these exact assets.
+ * @remarks Reuse these options when producing multiple distributions from the
+ * same bundle; resolving Vite again creates different capability identifiers.
  */
-export const runMuonBuildSequence = async (
+export const resolveMuonBuildSequenceOptions = async (
   options: MuonBuildSequenceOptions = {},
   loadedProject?: MuonBuildSequenceProject,
-): Promise<MuonBuildResult> => {
+): Promise<MuonBuildOptions> => {
   const internalOptions = options as InternalMuonBuildSequenceOptions;
   const progress = internalOptions.progress;
   const project =
@@ -411,5 +416,19 @@ export const runMuonBuildSequence = async (
   if (progress !== undefined) {
     (buildOptions as InternalMuonBuildOptions).progress = progress;
   }
-  return await buildMuonApp(buildOptions);
+  return buildOptions;
 };
+
+/**
+ * Runs the project build sequence used by `muon build` and `muon pack`.
+ * @param options - Project and target options for the build sequence.
+ * @param loadedProject - Project configuration already resolved by the caller.
+ * @returns The distributions built from the generated assets and policy.
+ */
+export const runMuonBuildSequence = async (
+  options: MuonBuildSequenceOptions = {},
+  loadedProject?: MuonBuildSequenceProject,
+): Promise<MuonBuildResult> =>
+  await buildMuonApp(
+    await resolveMuonBuildSequenceOptions(options, loadedProject),
+  );

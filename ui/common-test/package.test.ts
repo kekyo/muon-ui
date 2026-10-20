@@ -809,7 +809,7 @@ describe("muon-ui package root export", () => {
     await expect(verify()).rejects.toThrow("libcef.so");
   });
 
-  it("builds packages with an unbuilt SDK and vendored native dependencies", async () => {
+  it("builds packages with an unbuilt SDK, vendored native dependencies, and a host-built notification renderer", async () => {
     const root = await createFakePackageBuildRoot();
     const binDirectory = join(root, "bin");
     const containerLog = join(root, "container.log");
@@ -834,6 +834,27 @@ if [[ "\${1:-}" == "image" && "\${2:-}" == "exists" ]]; then
 fi
 if [[ "\${1:-}" == "run" ]]; then
   printf '%s\\n' "$@" >> "\${MUON_FAKE_CONTAINER_LOG:?}"
+  notification_header=""
+  for arg in "$@"; do
+    case "\${arg}" in
+      MUON_NOTIFICATION_RENDERER_HEADER=*)
+        notification_header="\${arg#MUON_NOTIFICATION_RENDERER_HEADER=}"
+        ;;
+    esac
+  done
+  if [[ "\${notification_header}" != "/workspace/core/cef/.build/notification-renderer/muon_notification_renderer_generated.h" ]]; then
+    printf 'Missing prebuilt notification renderer path\\n' >&2
+    exit 1
+  fi
+  host_header="\${PWD}/\${notification_header#/workspace/}"
+  if [[ ! -f "\${host_header}" ]]; then
+    printf 'Notification renderer was not generated before starting the container\\n' >&2
+    exit 1
+  fi
+  if [[ "$(<"\${host_header}")" != 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' ]]; then
+    printf 'Unexpected prebuilt notification renderer content\\n' >&2
+    exit 1
+  fi
   exit 0
 fi
 printf 'Unexpected fake container invocation: %s\\n' "$*" >&2
@@ -853,6 +874,10 @@ if [[ "$*" == "run build:js --workspace muon-plugin-sdk" ]]; then
 fi
 if [[ "$*" == "run build:linux-dependencies --workspace muon-ui" ]]; then
   node "\${MUON_FAKE_TSC_PATH:?}" --noEmit --skipLibCheck --module ESNext --moduleResolution Bundler ui/sdk-consumer.ts >&2
+fi
+if [[ "$*" == "run build:notification-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/notification-renderer
+  printf '%s\\n' 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' > core/cef/.build/notification-renderer/muon_notification_renderer_generated.h
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
   output_path=""
@@ -1001,6 +1026,11 @@ if [[ "\${1:-}" == "run" && "\${2:-}" == "build" && " $* " == *" --workspace muo
   exit 0
 fi
 if [[ "$*" == "run build:js --workspace muon-plugin-sdk" ]]; then
+  exit 0
+fi
+if [[ "$*" == "run build:notification-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/notification-renderer
+  printf '%s\\n' 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' > core/cef/.build/notification-renderer/muon_notification_renderer_generated.h
   exit 0
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "build:linux-dependencies" ]]; then
@@ -1496,6 +1526,71 @@ void value;
     ).resolves.toBeUndefined();
   });
 
+  it("provides Android system bar, settings and permission types in simple and validate modes", async () => {
+    await expect(
+      runTypeScriptConsumer(
+        `import { configure, getState, getInsets, watchInsets } from "muon:android.systemBars";
+import { open, isAvailable } from "muon:android.settings";
+import { getPermissionState, requestPermission, ensureChannel, getChannel } from "muon:android.notifications";
+import { post, cancel, getStatus, getCapabilities, getPendingEvents, watchEvents, acknowledgeEvent } from "muon:notifications";
+await post({id:"order",title:"Ready",body:"Collect",data:{order:42},actions:[{id:"open",title:"View order"}]});
+const pending: readonly MuonNotificationEvent[] = await getPendingEvents();
+const events: MuonNotificationWatcher = await watchEvents(async event => {
+  const operation: "activate" | "action" = event.type;
+  const action: string | null = event.actionId;
+  await acknowledgeEvent(event.eventId);
+  void operation; void action;
+});
+await events.close();
+await window.muon.notifications?.getPendingEvents();
+void pending;
+await cancel("order");
+const notificationStatus: MuonNotificationStatus = await getStatus("orders");
+const notificationCapabilities: MuonNotificationCapabilities = await getCapabilities();
+const channel: MuonAndroidNotificationChannel = await ensureChannel({id:"orders",name:"Orders",importance:"default"});
+await getChannel("orders");
+await open({type:"notification-channel",channelId:"orders"});
+// @ts-expect-error channel settings require a channel ID
+await open({type:"notification-channel"});
+const available: boolean = await isAvailable("notifications");
+const opened: MuonAndroidSettingsResult = await open("notifications", { fallback: "app-details" });
+const permission: MuonAndroidNotificationPermissionState = await getPermissionState();
+const permissionResult: MuonAndroidNotificationPermissionResult = await requestPermission();
+await window.muon.android?.settings.open("app-details");
+await window.muon.android?.notifications?.getPermissionState();
+// @ts-expect-error Settings can only target this application's supported screens.
+await open("wifi");
+// @ts-expect-error Fallback must be explicitly app-details.
+await open("notifications", { fallback: true });
+void available;
+void opened;
+void permission;
+void permissionResult;
+await configure({ statusBar: { visible: false, icons: "light" }, contentLayout: "edge-to-edge" });
+await window.muon.android?.systemBars.configure({ navigationBar: { visible: true } });
+const state = await getState();
+const insets = await getInsets();
+const unit: "css-px" = insets.unit;
+const watcher = await watchInsets(async (snapshot) => { const bottom: number = snapshot.contentSafeArea.bottom; void bottom; });
+await watcher.close();
+const requested: boolean = state.requested.statusBar.visible;
+const observed: boolean | null = state.actual.navigationBar.visible;
+// @ts-expect-error Visibility is a boolean request, never a string.
+await configure({ statusBar: { visible: "false" } });
+// @ts-expect-error Unsupported layout modes are rejected.
+await configure({ contentLayout: "fit" });
+// @ts-expect-error Observations must account for insets not being available yet.
+const guaranteed: boolean = state.actual.statusBar.visible;
+void requested;
+void observed;
+void guaranteed;
+void unit;
+`,
+        ["muon-ui"],
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("provides muon virtual modules through configured TypeScript types", async () => {
     await expect(
       runTypeScriptConsumer(
@@ -1741,4 +1836,36 @@ void explicitOpenPlugin;
       runJavaScriptConsumer(`require("muon-ui");\n`, "cjs"),
     ).resolves.toBeUndefined();
   });
+
+  it.each(["cjs", "android-host"])(
+    "builds loadable %s Node.js modules without losing import metadata",
+    async (mode) => {
+      await mkdir(resolve(".build"), { recursive: true });
+      const output = await mkdtemp(resolve(".build/node-package-"));
+      cleanupDirectories.push(output);
+      const built = await execFileAsync(
+        process.execPath,
+        [
+          resolve("../node_modules/vite/bin/vite.js"),
+          "build",
+          "--mode",
+          mode,
+          "--outDir",
+          output,
+        ],
+        { maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(`${built.stdout}\n${built.stderr}`).not.toContain(
+        "EMPTY_IMPORT_META",
+      );
+      const loaded = await execFileAsync(process.execPath, [
+        "-e",
+        mode === "cjs"
+          ? "process.stdout.write(typeof require(process.argv[1]));"
+          : "process.stdout.write(typeof require(process.argv[1]).buildAndroidApplication);",
+        join(output, mode === "cjs" ? "vite.cjs" : "index.cjs"),
+      ]);
+      expect(loaded.stdout).toBe("function");
+    },
+  );
 });

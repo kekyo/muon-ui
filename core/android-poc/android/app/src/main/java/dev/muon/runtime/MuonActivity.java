@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Bundle;
@@ -61,7 +62,34 @@ public final class MuonActivity extends Activity {
             @Override public void mainFrameHttpError(int status) {}
             @Override public void startupFailed(@NonNull String diagnostic) {}
         });
-        host.start("");
+        host.start("", MuonAppConfig.load(this));
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (host != null) { host.setResumed(true); }
+    }
+
+    @Override protected void onPause() {
+        if (host != null) { host.setResumed(false); }
+        super.onPause();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (host != null) { host.onNotificationIntent(intent); }
+    }
+
+    @Override public void onRequestPermissionsResult(int code, @NonNull String[] permissions,
+            @NonNull int[] results) {
+        if (host == null || !host.onRequestPermissionsResult(code, permissions, results)) {
+            super.onRequestPermissionsResult(code, permissions, results);
+        }
+    }
+
+    @Override @Nullable public Object onRetainNonConfigurationInstance() {
+        return host == null ? null : host.retainRequestedState();
     }
 
     private void receiveTestMessage(

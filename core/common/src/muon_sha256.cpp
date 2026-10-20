@@ -5,6 +5,7 @@
  */
 
 #include "muon_sha256.h"
+#include "muon_filesystem.h"
 
 #include "sha2.h"
 
@@ -33,7 +34,8 @@ bool CalculateFileSha256Hex(const std::filesystem::path& path,
     return false;
   }
 
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(FilesystemPathForIo(path, FilesystemIoUsage::File),
+                       std::ios::binary);
   if (!input) {
     return false;
   }

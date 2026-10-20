@@ -43,6 +43,7 @@ import {
   type MuonResolvedPluginAccessOptions,
 } from "./plugin-access.js";
 import { collectMuonPluginFunctionPathsForAccess } from "../cef/plugin-inspector.js";
+import { resolveMuonCefNotificationFunctionPaths } from "../cef/notifications.js";
 import { collectMuonAndroidPluginAccess } from "../android/plugin-catalog.js";
 import { startMuonViteBrowserBridge } from "../cef/vite-internals.js";
 import {
@@ -180,7 +181,11 @@ export interface MuonLinuxDesktopOptions {
   /**
    * Desktop entry identifier without the `.desktop` suffix.
    *
-   * @defaultValue Uses the resolved muon `appId`.
+   * @defaultValue Uses the resolved muon `appId` when it is a valid D-Bus
+   * application ID, otherwise a stable ID derived from it.
+   * @remarks An explicit identifier must be a valid D-Bus application ID when
+   * notifications are enabled. The default remains stable when notifications
+   * are disabled so the previous registration can be removed.
    */
   desktopId?: string;
 
@@ -529,6 +534,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
     ) {
       throw new Error("Build Android and desktop Vite bundles separately.");
     }
+    let projectConfigIgnored = false;
     resolvedPluginAccess = await resolveMuonPluginAccessOptions({
       root: config.root,
       configPath: resolveMuonConfigPathForViteCommand(config, options),
@@ -536,6 +542,7 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       ...(config.command === "serve"
         ? {
             onConfigReadError: (error: unknown): void => {
+              projectConfigIgnored = true;
               config.logger.warn(
                 `muon project config will be ignored because it could not be read or parsed: ${getErrorMessage(error)}`,
               );
@@ -616,10 +623,35 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
             resolvedPluginAccess,
           )
         : undefined;
+    const notificationFunctionPaths: readonly string[] =
+      backend === "cef" && !projectConfigIgnored
+        ? resolveMuonCefNotificationFunctionPaths(
+            (
+              await readBuildConfig(
+                config.root,
+                resolveMuonConfigPathForViteCommand(config, options),
+              )
+            ).config.notifications,
+            (config.command === "serve"
+              ? [getDefaultMuonBuildTarget()]
+              : resolveBuildTargets({
+                  ...(typeof options.build === "object" ? options.build : {}),
+                  ...(normalizedTargets.length
+                    ? { targets: normalizedTargets }
+                    : {}),
+                })
+            ).filter((target) => target !== "android"),
+          )
+        : [];
     const pluginFunctionPaths =
       backend === "android"
         ? (androidAccess?.functionPaths ?? [])
-        : await collectMuonPluginFunctionPathsForAccess(resolvedPluginAccess);
+        : [
+            ...notificationFunctionPaths,
+            ...(await collectMuonPluginFunctionPathsForAccess(
+              resolvedPluginAccess,
+            )),
+          ];
     capabilityResolver =
       resolvedPluginAccess.mode === "validate"
         ? createMuonCapabilityModuleResolver(config.root, {

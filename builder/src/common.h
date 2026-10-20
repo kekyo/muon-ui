@@ -8,6 +8,156 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#include "muon_windows_path.h"
+
+/**
+ * Converts a UTF-16 string to newly allocated, strict UTF-8.
+ * @param value Null-terminated UTF-16 input.
+ * @return Owned string to free, or NULL with errno set on failure.
+ */
+char *muon_utf8_from_wide(const wchar_t *value);
+
+/**
+ * Converts a UTF-8 string to newly allocated, strict UTF-16.
+ * @param value Null-terminated UTF-8 input.
+ * @return Owned string to free, or NULL with errno set on failure.
+ */
+wchar_t *muon_wide_from_utf8(const char *value);
+
+/**
+ * Runs an entry point with owned UTF-8 arguments converted from Windows argv.
+ * @param argc Argument count, including the executable name.
+ * @param argv Null-terminated UTF-16 argument array from wmain.
+ * @param entry Entry point which borrows the converted arguments during the call.
+ * @return Entry point result, or EXIT_FAILURE if conversion or allocation fails.
+ */
+int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **));
+
+/**
+ * Resolves a builder path for a Windows filesystem operation.
+ * @param path Null-terminated UTF-8 path.
+ * @param usage File or tree operation; tree operations preserve child names.
+ * @param result Receives an owned path to destroy with muon_windows_path_destroy.
+ * @return 0 on success, or -1 with errno and GetLastError set on failure.
+ */
+int muon_windows_io_path(const char *path, muon_windows_path_usage usage,
+                         muon_windows_path *result);
+
+/**
+ * Starts a Windows process with Unicode arguments and an explicit executable.
+ * @param argv Null-terminated UTF-8 argument list, including argv[0]. Bare names
+ *     retain Windows executable search; paths use the native I/O representation.
+ * @param current_directory Absolute UTF-16 cwd, or NULL to inherit the parent.
+ * @return Owned process handle to wait on and CloseHandle, or NULL on failure.
+ * @remarks Inherits the parent's environment and inheritable handles. Failure
+ *     sets both errno and GetLastError; the command-line buffer is owned here.
+ */
+HANDLE muon_start_windows_process(char *const argv[], const wchar_t *current_directory);
+#endif
+
+/**
+ * Reads an environment variable without a Windows ANSI-codepage conversion.
+ * @param name UTF-8 environment variable name.
+ * @param value Receives an owned UTF-8 string to free, or NULL if unset/empty.
+ * @return 0 on success, or -1 with errno set on failure and an empty output.
+ */
+int muon_get_environment(const char *name, char **value);
+
+/** Opaque directory enumeration, released with muon_closedir. */
+typedef struct MuonDirectory MuonDirectory;
+
+/**
+ * Opens a directory for exact-name enumeration.
+ * @param path UTF-8 directory path.
+ * @return Owned iterator, or NULL with errno set on failure.
+ */
+MuonDirectory *muon_opendir(const char *path);
+
+/**
+ * Reads the next exact UTF-8 entry name, including dot entries if present.
+ * @param directory Open iterator.
+ * @return Borrowed name valid until the next read/close, or NULL at end/error.
+ * @remarks A read error is retained and returned by muon_closedir.
+ */
+const char *muon_readdir(MuonDirectory *directory);
+
+/**
+ * Closes and frees an iterator, reporting any preceding read failure.
+ * @param directory Open iterator.
+ * @return 0 on success, or -1 with errno set on read/close failure.
+ */
+int muon_closedir(MuonDirectory *directory);
+
+/**
+ * Builds a path to an entry without normalizing its exact name.
+ * @param directory Open iterator whose resolved directory is used as the base.
+ * @param name Exact UTF-8 entry name.
+ * @return Owned path to free, or NULL on failure.
+ */
+char *muon_directory_child_path(const MuonDirectory *directory, const char *name);
+
+/**
+ * Appends an exact child name to a resolved filesystem parent.
+ * @param parent UTF-8 parent path, resolved before appending the child.
+ * @param name Exact UTF-8 entry name, without separators.
+ * @return Owned path to free, or NULL on failure.
+ */
+char *muon_path_join_exact(const char *parent, const char *name);
+
+/**
+ * Opens a file using UTF-8 paths on every platform.
+ * @param path File path.
+ * @param mode Standard fopen mode.
+ * @return Stream to fclose, or NULL with errno set on failure.
+ */
+FILE *muon_fopen(const char *path, const char *mode);
+
+/**
+ * Reads file metadata with UTF-8 paths and large file sizes.
+ * @param path File or directory path.
+ * @param entry Receives metadata on success.
+ * @return 0 on success, or -1 with errno set on failure.
+ */
+int muon_stat(const char *path, struct stat *entry);
+
+/**
+ * Updates platform file mode bits using a UTF-8 path.
+ * @param path File or directory path.
+ * @param mode Requested mode bits; Windows uses its CRT read/write permissions.
+ * @return 0 on success, or -1 with errno set on failure.
+ */
+int muon_chmod(const char *path, int mode);
+
+struct archive;
+/**
+ * Opens an archive input using the platform's Unicode filesystem path API.
+ * @param reader Configured libarchive reader, owned and freed by the caller.
+ * @param path UTF-8 archive filename, resolved once before opening.
+ * @return A libarchive status, with its error message populated on failure.
+ * @remarks The reader owns the opened file and closes it during archive_read_free.
+ */
+int muon_archive_read_open_file(struct archive *reader, const char *path);
+
+/**
+ * Creates an owned UTF-8 filename argument for a Unicode-aware external tool.
+ * @param path Filesystem path, resolved once on Windows.
+ * @return Filename to free, or NULL with errno set on failure.
+ * @remarks Windows applies the shared file-I/O prefix rules. The receiving tool
+ * must support extended paths; this is not for shell, URL or executable arguments.
+ */
+char *muon_external_file_path(const char *path);
+
+/**
+ * Renames a filesystem entry with the platform's ordinary rename semantics.
+ * @param source Existing UTF-8 path.
+ * @param destination Destination UTF-8 path.
+ * @return 0 on success, or -1 with errno set on failure.
+ */
+int muon_rename(const char *source, const char *destination);
 
 #include "prepare_progress.h"
 #include "sha1.h"

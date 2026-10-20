@@ -8,13 +8,14 @@ import type { MuonAndroidOptions, MuonAndroidAbi } from "../android.js";
 import { readAndroidPluginMetadata } from "./plugin-metadata.js";
 import {
   expandMuonAndroidFunctionAllows,
-  muonAndroidBuiltinFunctionPaths,
+  getMuonAndroidBuiltinFunctionPaths,
 } from "../../core/android/function-paths.js";
 import {
   resolveMuonConfigPath,
   readJsonObjectFile,
   type MuonResolvedPluginAccessOptions,
 } from "../common/plugin-access.js";
+import { resolveMuonNotificationConfig } from "../common/notification-config.js";
 
 /**
  * Resolves import permissions against producer catalogs for an Android Vite build.
@@ -36,6 +37,9 @@ export const collectMuonAndroidPluginAccess = async (
       ? {}
       : await readJsonObjectFile(path, "muon config file");
   const android = (config.android ?? {}) as MuonAndroidOptions;
+  const builtinPaths = getMuonAndroidBuiltinFunctionPaths(
+    resolveMuonNotificationConfig(config.notifications).enabled,
+  );
   const abis = options?.abis ?? android.abis ?? ["arm64-v8a", "x86_64"];
   if (
     abis.length === 0 ||
@@ -57,9 +61,7 @@ export const collectMuonAndroidPluginAccess = async (
   }
   const imports = access.plugins.flatMap((plugin) => {
     const catalog =
-      plugin.name === "internal"
-        ? muonAndroidBuiltinFunctionPaths
-        : allCatalogs.get(plugin.name);
+      plugin.name === "internal" ? builtinPaths : allCatalogs.get(plugin.name);
     if (catalog === undefined)
       throw new Error(
         `Android plugin ${plugin.name} requires a matching android.plugins metadata entry.`,
@@ -69,5 +71,8 @@ export const collectMuonAndroidPluginAccess = async (
       allow: expandMuonAndroidFunctionAllows(rule.allow ?? [], catalog),
     }));
   });
-  return { imports, functionPaths: [...allCatalogs.values()].flat() };
+  return {
+    imports,
+    functionPaths: [...builtinPaths, ...[...allCatalogs.values()].flat()],
+  };
 };

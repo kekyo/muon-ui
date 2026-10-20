@@ -1007,6 +1007,8 @@ static bool RunLaunchSourceProfilePathTest(
   SetTestLaunchSource("none");
   const auto state_home = SetTestStateHome(test_directory, "profile-state");
   SetEnvironmentValue("MUON_LAUNCHER_APP_ID", "com.example Launcher");
+  const auto launcher_path = test_directory / "launcher with spaces";
+  SetEnvironmentValue("MUON_LAUNCHER_PATH", launcher_path.string());
   const auto env_path = test_directory / "profile-env.json";
   if (!Expect(WriteFile(env_path, "{}"),
               "failed to write environment appId profile config") ||
@@ -1015,6 +1017,8 @@ static bool RunLaunchSourceProfilePathTest(
   }
   if (!Expect(config.app_id == "com.example.Launcher",
               "environment appId was not used") ||
+      !Expect(config.launcher_path == launcher_path,
+              "originating distribution launcher path was not preserved") ||
       !Expect(config.browser.profile ==
                   GetTestDefaultProfilePath(state_home,
                                             "com.example.Launcher"),
@@ -1064,6 +1068,10 @@ static bool RunLaunchSourceProfilePathTest(
   }
 
   ClearEnvironment("MUON_LAUNCHER_APP_ID");
+  ClearEnvironment("MUON_LAUNCHER_PATH");
+  if (!LoadConfigExpectSuccess(env_path, &config) ||
+      !Expect(config.launcher_path.empty(),
+              "direct runtime execution inherited a previous launcher path")) return false;
   return true;
 }
 
@@ -3181,13 +3189,58 @@ static bool RunPluginPolicyInvalidGlobTest() {
          ExpectInvalidPluginGlob({"muon**readFile"});
 }
 
+static bool RunNotificationConfigValidationTest(
+    const std::filesystem::path& directory) {
+  const auto path = directory / "notifications.json";
+  MuonConfig config;
+  if (!WriteFile(path, "{}") || !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(!config.notifications.enabled, "notifications default to enabled") ||
+      !WriteFile(path, R"({"notifications":{"enabled":true,"defaultCategory":"inbox"}})") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.notifications.enabled &&
+                  config.notifications.default_category == "inbox",
+              "notification configuration was not preserved")) {
+    return false;
+  }
+  for (const auto& invalid : std::vector<std::string>{
+           R"({"notifications":true})",
+           R"({"notifications":{"enabled":"true"}})",
+           R"({"notifications":{"enabled":true,"defaultCategory":" "}})",
+           R"({"notifications":{"defaultCategory":"\u3000\u00a0"}})",
+           R"({"notifications":{"enabled":true,"unknown":true}})"}) {
+    if (!WriteFile(path, invalid) ||
+        !LoadConfigExpectFailure(path, "notifications")) {
+      return false;
+    }
+  }
+  const auto category = std::string(127, 'x') + "日";
+  if (!WriteFile(path, "{\"notifications\":{\"defaultCategory\":\"" + category + "\"}}") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.notifications.default_category == category,
+              "category length used UTF-8 bytes instead of UTF-16 code units")) return false;
+  for (const auto& registration : std::vector<std::string>{
+           "true", "{}", R"({"displayName":42})",
+           R"({"displayName":"App","iconPath":" ","activatorClsid":"id"})"}) {
+    if (!WriteFile(path, "{\"launcher\":{\"notificationRegistration\":" + registration + "}}") ||
+        !LoadConfigExpectFailure(path, "notificationRegistration")) return false;
+  }
+  if (!WriteFile(path, R"({"launcher":{"notificationRegistration":{"displayName":"Notification App","iconPath":"./notification-icon.png","activatorClsid":"{58941eb1-8ca0-4dd4-83ae-e7e97b9c1b94}"}}})") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.notifications.windows_display_name == "Notification App" &&
+                  config.notifications.windows_icon_path == directory / "notification-icon.png" &&
+                  config.notifications.windows_activator_clsid == "{58941eb1-8ca0-4dd4-83ae-e7e97b9c1b94}",
+              "Windows notification identity or icon base was not preserved")) return false;
+  return true;
+}
+
 int main() {
   const auto test_directory = CreateTestDirectory();
   if (!Expect(!test_directory.empty(), "failed to create test directory")) {
     return 1;
   }
 
-  const auto passed = RunConfigLoadingTest(test_directory) &&
+  const auto passed = RunNotificationConfigValidationTest(test_directory) &&
+                      RunConfigLoadingTest(test_directory) &&
                       RunConfigJson5LoadingTest(test_directory) &&
                       RunNodeConfigLoadingTest(test_directory) &&
                       RunDebugConfigLoadingTest() &&

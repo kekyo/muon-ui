@@ -25,6 +25,7 @@
 #include "network/muon_network_policy.h"
 #include "plugins/builtin/muon_builtin_launcher.h"
 #include "plugins/builtin/muon_builtin_environments.h"
+#include "plugins/builtin/muon_builtin_notifications.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_plugin_runtime.h"
 #include "plugins/muon_cef_plugin_metadata.h"
@@ -799,6 +800,16 @@ bool MuonApp::RequestShutdown(int32_t exit_code) {
   return true;
 }
 
+bool MuonApp::OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine> command_line,
+                                         const CefString& current_directory) {
+  CEF_REQUIRE_UI_THREAD();
+  (void)current_directory;
+  // COM/D-Bus delivers the actual interaction separately. A launch flag alone
+  // must neither create a Chrome window nor bypass durable token validation.
+  return config_.notifications.enabled && command_line &&
+      command_line->HasSwitch("muon-notification-activation");
+}
+
 void MuonApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
 
@@ -876,6 +887,7 @@ void MuonApp::OnContextInitialized() {
 
   InitializeMuonBuiltinLauncher(config_.default_version_policy);
   InitializeMuonBuiltinEnvironments(config_.config);
+  InitializeMuonBuiltinNotifications(config_);
   const auto rpc_bridge = CreateMuonCefRpcBridge();
   const auto plugin_runtime =
       CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins),
@@ -957,6 +969,9 @@ void MuonApp::OnContextInitialized() {
                      app_storage, config_.browser, title_bar_manifest,
                      title_bar_background_color, has_initial_title_bar_icon,
                      initial_title_bar_icon, config_.desktop_id));
+  SetMuonBuiltinNotificationActivationHandler([client](std::string startup_id) {
+    client->ActivateNotificationWindow(std::move(startup_id));
+  });
   CefRefPtr<MuonBrowserShortcutHandler> shortcut_handler(client.get());
   auto* close_handler = static_cast<MuonWindowCloseHandler*>(client.get());
   auto browser_view = CefBrowserView::CreateBrowserView(

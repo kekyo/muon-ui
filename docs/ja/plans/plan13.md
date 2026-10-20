@@ -1,0 +1,762 @@
+# Android内蔵プラグインとAndroid・CEF共通通知API
+
+## 目的と採用方針
+
+Androidのシステムバー制御、通知、OS設定画面との連携を、muonの内蔵プラグインとして提供する。Android専用の機能を名前空間ごとに分ける案Bと、共通操作を共通APIへ置く案Cを組み合わせる。
+
+共通の`muon.notifications`は通知の投稿、更新、取り消し、対応機能と投稿可否の確認、通知操作の受け取りを担当する。Android専用の`muon.android.*`はシステムバーと安全領域、通知チャンネルと権限、設定画面への遷移を担当する。既存の`muon.browser`の全画面操作はAndroid専用のシステムバー制御と実装・状態を共有する。
+
+CEF版の通知には共通APIとOS固有拡張を組み合わせる案2を採用する。Android、Windows、Linuxで基本操作をそろえ、OS固有の操作が必要になった場合は`muon.windows.notifications`などの専用名前空間へ追加する。CEFは描画基盤なので、OS固有の通知機能を`muon.cef.notifications`へまとめない。Windows・Linux専用APIの具体的な機能追加は後続対象とし、空の名前空間や未実装の関数を先に公開しない。
+
+実装はAndroidから始め、CEFのLinux・Windowsへ進める。CEFでは実行中の通知操作を先に完成させ、次に通知からのアプリ起動を追加する。対象OSの通知実装ができるまでは関数一覧へ登録せず、実装途中の制限と実行環境による差は`getCapabilities()`で示す。
+
+作成日は2026年10月19日、進捗記録の更新日は2026年10月20日。Android調査の基準コミットは`7194a156ce13ebaeee1317fbe3a19b7a5afc70d0`、CEF通知の追加調査は`a23e3cc`を基準とする。以下のAPI名、設定項目、動作は採用した計画を示す。実装済みの範囲と未解決の事項は末尾の進捗記録に記載する。
+
+## 用語と対象範囲
+
+システムバーは上端のステータスバーと下端のナビゲーションバーを指す。ノッチなど、センサーのために表示できない部分をディスプレイカットアウトと呼ぶ。InsetsはシステムUIやカットアウトと重ならないために必要な各辺の余白である。画面端まで背景などを描く配置をedge-to-edgeと呼び、システムバーを隠す全画面表示とは区別する。
+
+通知チャンネルは、Androidでユーザーが通知音や重要度を設定する単位である。共通通知APIでは、アプリが通知を用途別に分けるキーを`category`と呼ぶ。AndroidではこのキーをチャンネルIDに直接対応させる。CEFではアプリ内の用途分類として扱い、Androidのチャンネル登録を要求しない。
+
+本計画に含めるのは、Androidのバー表示と配色、安全領域の取得と変更通知、AndroidとCEFの即時ローカル通知、通知操作による起動とデータの受け渡し、Androidの自アプリ設定画面への遷移である。ローカル通知は、アプリが端末内で発行する通知を意味する。CEFの対象は現在の[デスクトップ対象一覧](../../../ui/cef/targets.ts)にあるWindowsとLinuxとする。
+
+通知の保持、実行中のクリック受信、プロセスが存在しない状態からの起動を区別する。通知がOS上に残っていても、クリックによる起動に対応しているとは限らない。対応状況にはOS、通知サービス、アプリの配布・登録状態が影響する。
+
+次の機能は後続の検討対象として残す。
+
+- Windows・Linux専用APIの具体的な追加、macOS向けの通知。
+- Web標準の`Notification`やService Worker通知をmuonの通知へ接続する互換機能。
+- 指定時刻や周期による予約通知、再起動後の予約復元、正確な時刻のアラーム。
+- Firebase Cloud Messaging（FCM）など、サーバーからのプッシュ通知。
+- フォアグラウンドサービス、バックグラウンドJavaScriptの継続実行。
+- 通知からの直接返信、メディア通知、通話通知、バブル、全画面Intentなど、個別の用途や権限を伴う通知。
+- OSの通知設定からアプリ独自の設定画面へ入る連携、アプリ別言語設定、Wi-Fiなどの端末全体の設定。
+
+通知を表示し続けることと、アプリの処理を継続実行することは別の機能とする。OS設定への遷移はユーザーが設定を変更するための導線であり、muonからOS設定を直接書き換える機能にはしない。
+
+## 現在のコードと拡張する箇所
+
+| 対象 | 現在の実装 | 本計画での変更 |
+| --- | --- | --- |
+| [Androidの公開関数一覧](../../../core/android/function-paths.ts) | `browser`、`environments`、`fs`を登録する。 | 共通通知とAndroid専用機能を、実装できた段階ごとに追加する。 |
+| [AndroidのAPI公開処理](../../../core/android/renderer/bootstrap.ts) | 内蔵関数の解決と許可フィルターが`muon.<名前空間>.<関数>`の深さを前提としている。 | `muon.android.systemBars.*`などの階層を、simple・validateの両モードで扱う。 |
+| [Androidの公開API](../../../core/android/renderer/android-api.ts) | 公開引数とRPCへ渡す値を変換する。 | 通知、構造化された設定・状態、購読の型と変換を追加する。 |
+| [Javaのプラットフォーム処理](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonAndroidPlatformService.java) | 全画面操作で上下のバーをまとめて表示・非表示にする。ファイル操作は別サービスへ委譲する。 | 画面、通知、設定の担当サービスへ処理を分ける。全画面操作の状態を一本化する。 |
+| [Activity](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonAppActivity.java)と[WebViewホスト](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonWebViewHost.java) | Activityの生成・破棄に合わせてWebViewとブリッジを管理する。 | 権限要求の結果、設定からの復帰、初期Intentと後続Intentを各サービスへ渡す。 |
+| [JNI経由のRPC](../../../core/android/runtime/src/main/cpp/muon_android_rpc_jni.cpp)と[Javaブリッジ](../../../core/android/runtime/src/main/java/dev/muon/runtime/MuonRpcBridge.java) | 許可された関数をJavaへ中継する。 | 新しい関数の登録に加え、Javaからの変更・操作イベントを購読先へ渡す。 |
+| [Androidの許可設定](../../../ui/android/plugin-access.ts)と[関数カタログ](../../../ui/android/plugin-catalog.ts) | `internal`内蔵プラグインと関数ごとの許可を扱う。 | 新しい階層の関数を既存の許可設定に含める。 |
+| [Android設定型](../../../ui/android.d.ts)、[ビルド設定](../../../ui/android/target.ts)、[Manifestテンプレート](../../../ui/android/templates/AndroidManifest.xml.fc) | 権限の宣言を生成できる。FCMは無効。起動時fullscreenの指定は製品ビルドで拒否する。 | 初期画面設定、通知チャンネル、通知アイコン、必要な権限宣言を生成する。起動時の全画面設定も接続する。 |
+| [CEFの内蔵登録](../../../core/cef/src/plugins/builtin/muon_builtin.cpp)と[デスクトップ実行処理](../../../core/cef/src/plugins/muon_plugin_runtime_desktop.cpp) | 内蔵メタデータ、初期化・終了、ページの実行コンテキスト解放を扱う。通知サービスは未実装。 | 通知名前空間とアプリ単位のサービスを登録し、ページの購読だけをコンテキスト解放へ接続する。 |
+| [CEFのAPI公開](../../../core/cef/src/app/muon_app.cpp)、[共通の関数一覧と変換](../../../ui/common/capability.ts)、[公開型](../../../ui/muon.d.ts)、[仮想モジュール型](../../../ui/muon-virtual-modules.d.ts) | メタデータからsimpleの関数を作り、validateでは一覧と型を使う。 | 両モードへ共通通知と構造化引数、イベント購読を接続する。 |
+| [CEFのプラットフォーム配送](../../../core/cef/src/browser/muon_client.cpp) | Platform経路の識別子をbrowser専用の関数種別として扱う。trayもBrowser単位で所有する。 | 通知は内蔵プラグインの処理へ登録し、OS操作を専用サービスへ委譲する。browser専用の識別子へ通知操作を混在させない。 |
+| [CEF設定](../../../core/cef/src/config/muon_cef_settings.cpp)と[アプリ](../../../core/cef/src/app/muon_app.h) | `root_cache_path`を設定する。既存プロセスへの再起動通知を受け取る`OnAlreadyRunningAppRelaunch`は未実装。 | 起動時と既存プロセスへの通知情報配送を接続する。 |
+| [アプリ識別子](../../../ui/cef/targets.ts)、[Windowsパッケージ](../../../ui/cef/pack.ts)、[Linux desktop連携](../../../ui/cef/linux-desktop.ts)、[launcher](../../../builder/src/muon_launcher.c) | 安定したappId、NSISのショートカット、`.desktop`生成、追加引数の引き渡しがある。 | 通知用のアプリ登録、クリック起動、更新・アンインストール時の処理を追加する。 |
+
+外部プラグインを読み込む形式へ変更する必要はない。登録名は`internal`のままとし、公開APIとOS側の処理を機能別に分ける。外部プラグイン用のABIや、サブモジュール・ベンダーコードは変更しない。
+
+[現在のツールチェーン](../../../core/android/toolchain.json)は`minSdk: 24`、`compileSdk: 37`、`targetSdk: 37`である。本機能のためだけに最低APIレベルを引き上げず、OSに存在しない機能は利用可否として示す。未対応の指定を成功扱いで無視しない。
+
+## 公開APIの役割分担
+
+関数は既存APIと同様にPromiseを返す。以下の表は名前空間と責務を決めるもので、TypeScriptの型定義は各実装段階で追加する。
+
+| 名前空間 | 主な関数案 | 担当する操作 |
+| --- | --- | --- |
+| `muon.browser` | `enterFullscreen()`、`exitFullscreen()`、`toggleFullscreen()` | 既存の共通全画面操作。Androidでは同じシステムバーサービスを使う。 |
+| `muon.notifications` | `post(options)`、`cancel(id)`、`getStatus(options?)` | 共通形式での投稿・更新・取り消し、アプリ全体と用途分類別の投稿可否。 |
+| `muon.notifications` | `getCapabilities()` | 現在の実装と実行環境で利用できる通知機能。 |
+| `muon.notifications` | `getPendingEvents()`、`watchEvents(handler)`、`acknowledgeEvent(eventId)` | 起動時と実行中の通知操作を、同じイベント形式で受け取る。 |
+| `muon.android.systemBars` | `configure(options)`、`getState()`、`getInsets()`、`watchInsets(handler)` | バー別の表示と配色、配置方針、OSが報告する表示状態、安全領域。 |
+| `muon.android.notifications` | `getPermissionState()`、`requestPermission()`、`ensureChannel(options)`、`getChannels()` | Androidの通知権限とチャンネルの作成・状態取得。 |
+| `muon.android.settings` | `isAvailable(target)`、`open(target, options?)` | 自アプリの情報、通知全体、指定チャンネルの設定画面への遷移。 |
+| `muon.windows.notifications`、`muon.linux.notifications` | 具体的な操作が必要になった時点で定義する。 | 共通形式で表現できないOS固有操作。今回の初期公開には含めない。 |
+
+OS専用側へ`post()`、`cancel()`、通知イベントの別APIを追加しない。Androidの設定画面を開く操作は`muon.android.settings`へ集約する。将来デスクトップの設定画面連携を追加する場合も、設定操作を担当する名前空間へ分ける。
+
+validateモードでは`muon:notifications`、`muon:android.systemBars`、`muon:android.notifications`、`muon:android.settings`からインポートする。simpleモードでは対応する`window.muon.*`の階層を公開する。関数が提供されていない対象では、validateのビルドでそのインポートを拒否し、simpleのオブジェクトにも関数を作らない。
+
+CEFでも共通通知は`muon:notifications`からインポートし、simpleでは`window.muon.notifications`を公開する。OS固有のチャンネルや権限を共通APIの必須引数にしない。既存のデスクトップ全画面操作の意味は変えない。
+
+```ts
+import { post, cancel } from "muon:notifications";
+
+await post({
+  id: "export-completed",
+  category: "jobs",
+  title: "Export completed",
+  body: "Your file is ready.",
+  data: { screen: "exports", exportId: "123" },
+});
+
+await cancel("export-completed");
+```
+
+### CEF向けの公開案と採用理由
+
+| 検討した案 | 公開方法 | 判断 |
+| --- | --- | --- |
+| 案1 共通APIのみ | OS差を内部へ閉じ込め、共通操作だけを公開する。 | APIは小さくできるが、OS固有の要求を追加しにくい。 |
+| 案2 共通APIとOS固有拡張 | 基本操作を共通化し、必要になった固有操作をOS別の名前空間へ追加する。 | 採用する。Androidの案Bと案Cの役割分担を維持できる。 |
+| 案3 Web標準API | `Notification`、権限要求、Service Worker通知を利用する。 | Webアプリの移植には有用だが、権限とアプリ起動の設計が異なるため後続対象とする。 |
+
+現在のCEFは通常ウインドウで[Alloyモード](../../../core/cef/src/browser/muon_browser_view_delegate.cpp)を使用し、[権限処理](../../../core/cef/src/browser/muon_client.cpp)はローカルネットワーク向けである。Alloyでは未処理の権限要求が既定で`IGNORE`となる。Web標準API案を採用するときは、権限、通知に表示するアプリ名、クリック後の動作を別途検証する。共通通知の導入だけでWeb通知が利用可能になったとは扱わない。[CEFの権限API仕様とコメント](https://cef-builds.spotifycdn.com/docs/147.0/classCefPermissionHandler.html)
+
+## システムバーと安全領域
+
+### バーの表示と配置方針
+
+`configure()`はステータスバーとナビゲーションバーについて、表示・非表示とアイコンの明暗を指定できるようにする。隠したバーはスワイプで一時表示できる。背景を画面端まで描くかどうかは、バーの表示とは独立した`contentLayout`で指定する。
+
+| `contentLayout` | WebViewとアプリの担当 |
+| --- | --- |
+| `safe-area` | ネイティブ側が、バーとカットアウトを避けるようWebViewの表示範囲を調整する。アプリは同じ余白を重ねて付けない。 |
+| `edge-to-edge` | WebViewを画面端まで配置する。アプリは取得したInsetsを使い、操作部品など必要な部分へ余白を付ける。 |
+
+Android 16以降を対象とするアプリは、Android 16上でedge-to-edgeの強制を無効化できない。`safe-area`はコンテンツを安全領域へ配置するmuonの方針として実現する。ウインドウがカットアウト領域へ広がらないことを保証するAPIにはしない。[Android 16の変更](https://developer.android.com/about/versions/16/behavior-changes-16)、[カットアウトの扱い](https://developer.android.com/develop/ui/views/layout/display-cutout)
+
+`getState()`はアプリの要求を`requested`、OSの公開APIが報告する状態を`actual`として分けて返す。`actual`は画面上の表示を直接検出する値ではない。スワイプで一時表示されたバーをOSが非表示と報告する場合があるため、一時表示の検出は保証しない。Insetsをまだ取得できない場合は表示状態を`null`とし、API 29以前ではAndroidXによる近似値を返す。全画面操作の成功を、バーが常に非表示であり続ける保証とはしない。[immersive mode](https://developer.android.com/develop/ui/views/layout/immersive)、[WindowInsetsControllerCompatの仕様とAPIコメント](https://developer.android.com/reference/androidx/core/view/WindowInsetsControllerCompat)、[WindowInsetsCompatの可視状態と近似値](https://developer.android.com/reference/androidx/core/view/WindowInsetsCompat#isVisible(int))
+
+既存の`enterFullscreen()`は上下のバーの非表示を要求し、`exitFullscreen()`は両方の表示を要求する。`toggleFullscreen()`は共有している要求状態を切り替える。個別APIで片方だけを隠した状態は全画面要求とは扱わず、toggleでは両方を隠す。バーの一時表示だけで要求状態を変更しない。これらの操作では`contentLayout`やアイコンの配色を変更しない。
+
+### InsetsとCSSへの公開
+
+`getInsets()`と`watchInsets()`ではシステムバー、カットアウト、システムジェスチャー、ソフトウェアキーボード（IME）の余白を区別する。キーボードの表示で、ノッチを避けるための余白まで変わったように見せない。安全領域の合成では各辺の必要量を求め、バーとカットアウトの値を単純加算しない。[edge-to-edgeとInsets](https://developer.android.com/develop/ui/views/layout/edge-to-edge)
+
+Web側に渡す値はCSSピクセルを基本とし、端末の物理ピクセル、画面密度、WebViewのページズームとの換算方法を定義する。回転、ウインドウサイズの変更、キーボード表示、既存のズームAPIに追従する。換算結果は実際のDOMの位置とネイティブ領域を比較して検証する。
+
+必要な余白は`--muon-safe-area-top`などのCSS変数としても公開する。`safe-area`ではネイティブ側ですでに処理した分を再適用させず、Web側に残る余白を示す。生のInsetsと、コンテンツが追加で避ける量を型と名前で区別する。標準の`env(safe-area-inset-*)`をmuonの値と同一と仮定しない。
+
+`watchInsets()`は購読時点の状態と、その後の変更を届ける。初回の通知は購読ハンドルを返した後に届け、ハンドルの`close()`は通知処理の中でも呼べるようにする。解除可能なハンドルを返し、明示的な解除、ページ遷移、リロード、Activityの破棄で購読を解放する。アプリ側に定期的な取得を要求しない。
+
+### 起動時設定
+
+`android.systemBars`へ初期のバー表示、アイコン配色、`contentLayout`を追加する。未指定時は上下のバーを表示し、`contentLayout`を`safe-area`とする。アイコン配色の未指定値にはAndroidテーマの既定値を使う。JavaScriptが起動する前に適用し、実行時の`configure()`と同じ設定処理を使う。起動時設定を既定値とし、Activityの構成変更による再生成では実行中の要求状態を復元する。プロセスが新規起動した場合は設定ファイルの初期値から開始する。
+
+`browser.initialWindowState`も同じ初期化へ接続し、明示的な`normal`は上下のバーの表示、`fullscreen`は両方の非表示を表す。Android専用の初期バー表示も明示して矛盾する場合は、ビルド時にエラーを返す。`initialWindowState`の省略を明示的な`normal`として扱わず、その場合はAndroid専用の指定を使う。背景色はコンテンツ側の描画として扱い、OSバージョンによって意味が変わるバー背景色の直接設定を共通仕様に含めない。
+
+## 共通通知API
+
+### 共通の投稿・更新・取り消し
+
+`post()`の基本項目はアプリ内で安定した文字列の`id`、`title`、`body`、用途分類の`category`、アプリへ返す`data`とする。`data`はJSONとして保存・復元できる値に限定し、関数やネイティブオブジェクトを受け付けない。通知操作に対応する環境では、タップやクリックで自アプリを開き、このデータをアプリ内の画面選択などに使えるようにする。プロセスが存在しない状態からの起動は、別の対応機能として示す。
+
+同じ`id`を再投稿すると、その通知を更新する。`cancel(id)`は該当通知を取り消し、存在しないIDでも完了する。標準のタップ・クリック操作を受け取ったら通知を取り消す。アプリが識別する`id`をプロセス再起動後も同じ通知へ対応させ、更新や取り消しが別の通知へ作用しないようにする。OSや通知サービスが再起動して対応を確認できない場合は、その状態を診断し、古いOS識別子を別の通知へ誤適用しない。
+
+`post()`の成功は、利用するOS APIへ投稿を依頼する処理が完了したことを表す。OSの受領確認を返さないAPIでは、通知サービスへの到達まで保証しない。ユーザーが見たことや、必ず音・画面表示が発生することも保証しない。既知の権限拒否、通知全体の無効化、指定チャンネルの無効化は呼び出し時に診断する。事前に状態を取得した後でOS設定が変わる場合も扱う。[Linuxの通知要求と応答の仕様](https://specifications.freedesktop.org/notification/latest/protocol.html)
+
+`getStatus()`は、引数を省略した場合にはアプリ全体の投稿可否を返す。`category`を指定した場合には、アプリ全体とその分類の状態を区別して返す。投稿可能、無効、判定できない状態を表し、通知の閲覧状態や一時的な表示の抑制とは分ける。Android固有の詳細は専用APIの権限状態とチャンネル情報で取得する。
+
+段階4の`post()`は`id`、`title`、`body`を必須とする。`id`と`category`は空白だけではない128 UTF-16コード単位以内、`title`は空白だけではない1024コード単位以内、`body`は空文字を許す4096コード単位以内の文字列で、いずれもNULを含めない。`data`はJSONの有限数・文字列・真偽値・null・配列・通常のオブジェクトから構成し、UTF-8のJSON表現で16384バイト、配列・オブジェクトの入れ子64個までとする。循環参照やJSON化で失われる値、未対応のオプションは拒否する。
+
+`getStatus(category?)`は`{ app, category }`を返す。`app`は`{ state, reason }`、`category`はその状態と`id`を含むか、引数省略時の`null`である。状態は`enabled`、`disabled`、`unknown`を使う。分類が有効でもアプリ全体が無効な場合を別々に表示し、既定分類は投稿だけに適用する。
+
+### 対応機能と実行環境
+
+`getCapabilities()`は、実装済みの機能と現在のOS・通知サービス・配布登録状態を照らして返す。返却項目は実行中の通知操作、プロセス終了後のクリック起動、通知の保持、追加アクション、アプリ全体と分類別の状態取得を区別する。各項目は対応、非対応、不明を表し、必要な登録がない場合などの理由も取得できるようにする。各項目は`{ state, reason }`とし、`state`は`supported`、`unsupported`、`unknown`、`reason`は理由を表す文字列または`null`で返す。
+
+対応機能の項目は次のとおりである。
+
+| 項目 | 意味 |
+| --- | --- |
+| `interaction` | 実行中のアプリへの通知操作イベントの配送。 |
+| `launch` | 終了したアプリの起動と操作イベントの配送。 |
+| `persistence` | アプリの通常終了後の通知保持。強制停止やユーザーによる削除は含まない。 |
+| `actions` | 追加の操作ボタン。 |
+| `appStatus` | アプリ全体の投稿可否の取得。 |
+| `categoryStatus` | 分類別のOS設定状態の取得。 |
+
+段階4では通知タップでアプリを開けるが、操作イベントの配送は段階5の対象である。このため`interaction`、`launch`、`actions`は非対応として返す。
+
+対応機能はユーザーの現在の許可状態とは異なる。OS名だけで対応を決めたり、非対応と権限拒否を同じ値にしたりしない。投稿可否の状態取得を提供しない環境では、`getStatus()`が判定できないことを表す`unknown`を返す。Linuxの通知サーバーでは操作や保持が任意の機能なので、存在を仮定しない。[Desktop Notificationsの対応機能と操作イベント](https://specifications.freedesktop.org/notification/latest/protocol.html)
+
+ビルドで無効な機能と、実行環境で利用できない機能も区別する。通知を無効にしたビルドでは関数を公開しない。有効なビルドでは関数を残し、通知サービスの停止など、検出できた失敗を実行時に返す。OS APIが結果を返さず検出できない配送失敗は、成功とも到達確認済みとも断定しない。未対応の追加機能を指定された場合は、成功扱いで無視しない。
+
+### 共通設定と用途分類
+
+通知機能の有効設定を`notifications.enabled`、既定の用途分類を`notifications.defaultCategory`へ置く。`enabled`の未指定値は`false`とする。`post()`で`category`を省略した場合に既定分類を使い、両方とも指定されていない場合は引数不足として診断する。無効なビルドでは共通通知と対象OSの通知専用関数をカタログから除外し、validateのインポートを拒否する。simpleにも公開しない。
+
+Androidの`channels`と`smallIcon`は`android.notifications`へ残す。共通の有効設定と既定分類を同階層に重複定義しない。CEFの通知はAndroid用の設定なしで利用できる。将来Windows・Linux固有の配布設定が必要になった場合も、共通設定との役割を分ける。
+
+Androidでは`category`とチャンネルIDを同じ文字列にする。ここでの`category`はmuonの用途分類であり、Androidのアラームなどを表すシステム分類とは別である。別の対応表や登録ハンドルは導入しない。[Androidのチャンネルとシステム分類](https://developer.android.com/develop/ui/compose/notifications/channels)
+
+CEFでは任意の用途分類キーを受け付け、OSのチャンネル登録を要求しない。Linuxの`email.arrived`などのシステム分類へ文字列をそのまま流用しない。分類別の通知制御がないOSへ、Androidと同等のユーザー設定があるようには公開しない。[FDOの通知分類](https://specifications.freedesktop.org/notification/latest/categories.html)
+
+## Androidの通知拡張
+
+### 用途分類とチャンネル
+
+`android.notifications.channels`で静的なチャンネルを宣言し、アプリ起動時に登録する。実行時に用途を増やすアプリ向けには`ensureChannel()`を提供する。未登録の`category`への投稿は失敗させ、投稿の副作用として名前や重要度が未指定のチャンネルを作らない。チャンネルを動的に登録する場合は、`ensureChannel()`の完了後に投稿する。
+
+Android 8以降のチャンネルでは、作成後の重要度などをユーザーが管理する。`ensureChannel()`はユーザーの設定を上書きせず、取得結果で実効値を返す。設定変更のためにチャンネルを削除・再作成する動作は含めない。[チャンネルの作成と制約](https://developer.android.com/develop/ui/compose/notifications/channels)、[NotificationChannelのAPIコメント](https://developer.android.com/reference/android/app/NotificationChannel)
+
+API 24・25でも共通のローカル通知は提供する。OSチャンネルが存在しないことを専用APIの利用可否に示し、OSチャンネルの作成要求は非対応として返す。この環境では静的に宣言した用途分類だけに投稿できる。静的設定はmuonが保持し、対応する通知単位の表示属性へ変換できる範囲を明示する。アプリ全体の投稿可否は取得できるが、分類別のOS設定状態は取得できない。チャンネルをユーザーが設定できるようになったとは表示しない。[Android 7.1以前の通知属性](https://developer.android.com/develop/ui/views/notifications/build-notification)
+
+段階4のチャンネル定義は`{ id, name, description?, importance }`とし、重要度は`min`、`low`、`default`、`high`から指定する。IDと名前は空白だけではない128コード単位以内、説明は1024コード単位以内の文字列で、いずれもNULを含めない。説明の省略値は空文字とする。`ensureChannel()`は既存チャンネルを変更せず、`getChannel(id)`と同じ実効値`{ id, name, description, importance, enabled }`を返す。無効なチャンネルの重要度は`none`、存在しないチャンネルの取得結果は`null`である。
+
+Android専用の`getCapabilities()`は`{ channels: { state, reason } }`を返す。API 24・25の`ensureChannel()`と`getChannel()`は非対応エラーとなる。この環境では静的分類の重要度を通知のpriorityへ変換し、音・振動・ユーザー設定までAPI 26以降と同じになる保証は設けない。
+
+### 通知権限と配布設定
+
+`requestPermission()`は、アプリがユーザーへ通知の用途を説明した後で明示的に呼ぶ。`post()`や起動時のチャンネル登録で、暗黙に権限ダイアログを表示しない。Android 13以降の通常通知は`POST_NOTIFICATIONS`の実行時許可を扱う。[通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)
+
+`getPermissionState()`では、OSの許可状態、ダイアログ要求の実施履歴、設定画面への案内が必要な状態を混同しない。ダイアログを閉じただけの場合も扱い、OSが確定できない状態を恒久拒否と断定しない。API 33未満にはこの権限ダイアログがないため、その事実とアプリ全体の通知可否を分けて返す。
+
+権限状態は次の値として返す。取得のたびにOSの状態を読み、設定画面からの復帰後や新規プロセスで古い値を再利用しない。
+
+| フィールド | 意味 |
+| --- | --- |
+| `runtimePermission` | `not-required`、`granted`、`denied`。`denied`には未要求も含む。 |
+| `notificationsEnabled` | OSが現在、自アプリの通知を許可しているか。 |
+| `requestedBefore` | muonがOSの権限要求APIを呼んだ履歴。ダイアログが表示された証拠とはしない。 |
+| `shouldShowRationale` | 権限要求の前に説明を示すべきか、OSが返す推奨値。 |
+| `settingsSuggested` | 設定画面への案内が役立つと考えられる状態。恒久拒否の判定ではない。 |
+
+`settingsSuggested`は、通知が無効で、実行時権限が不要・許可済み、または要求履歴がありOSの説明推奨値がfalseの場合にtrueとする。`requestPermission()`は前面のActivityから明示的に呼び、結果として`{ state, result }`を返す。`result`は`granted`、`not-granted`、`interrupted`、`not-required`のいずれかである。`interrupted`はOSの結果が空だった場合を表し、`not-granted`から拒否や閉じる操作の理由を完全には識別しない。要求は同時に一つとし、Activityやページの破棄時には呼び出しを解放する。
+
+共通設定の`notifications.enabled`が有効な場合に、`android.notifications.channels`と`android.notifications.smallIcon`から必要なManifest宣言と通知用リソースを生成する。既存の`android.permissions`と権限宣言を重複させず、通知を使わないアプリへ新たな実行時権限を要求しない。`notifications.defaultCategory`がある場合は、静的チャンネルの参照先としてビルド時に検証する。動的登録した分類は、`ensureChannel()`が完了した後の`post()`へ明示して使う。
+
+通知用アイコンはランチャーアイコンと分けて指定し、Androidの小アイコンに適したリソースへ変換・検証する。チャンネル名、説明、重要度、既定分類の参照先、アイコンの欠落をビルドで診断する。リソース生成でテキスト処理が必要な場合は既存方針どおり`funcity`を使う。[通知の作成とアイコン](https://developer.android.com/develop/ui/views/notifications/build-notification)
+
+段階4の`smallIcon`は24〜1024ピクセルの正方形PNGで、透明部分と白いシルエットを持つ画像を要求する。色付き、全透明、全面不透明の画像はエラーとする。24 dpを基準にmdpi、hdpi、xhdpi、xxhdpi、xxxhdpi向けの画像を生成し、ランチャーアイコンとは別のリソースとして登録する。実行時にはManifestのresource参照からIDを取得する。
+
+通知アクションボタンを追加する場合も、初期実装では自アプリを開いて操作IDを渡す用途に限定する。プロセスを起動せずに業務処理だけを実行するボタンや直接返信は、後続のバックグラウンド処理の設計で扱う。
+
+## 通知操作とイベントの受け取り
+
+AndroidとCEFで、通知の操作種別、未処理イベント、購読、受領確認の仕様をそろえる。通知の登録情報と未処理イベントはアプリ単位、購読はページの実行コンテキスト単位で管理する。ページのリロードやウインドウの閉鎖では購読を解放し、通知と未処理イベントは破棄しない。最後のウインドウを閉じてプロセスが終了するかどうかは既存のアプリ終了方針に従い、通知を使うだけで常駐させない。
+
+Androidの通知タップでは、アプリが前面にある場合、バックグラウンドにある場合、プロセスが存在しない場合を扱う。Activityの初期Intentと`onNewIntent`を受け取り、同じ形式の通知イベントへ変換する。通知からActivityを開く経路は、公開されているPendingIntentの方式に従う。[通知からActivityを開始する](https://developer.android.com/develop/ui/views/notifications/navigation)
+
+イベントには`eventId`、通知の`id`、操作種別または操作ID、投稿時の`data`を含める。Activityの再生成で同じIntentを再処理する場合は同じイベントとして識別し、同じ通知IDを更新して再び操作した場合は新しいイベントとして扱う。CEFも通常起動、通知による起動、既存プロセスへの通知情報を同じ形式へ変換する。ネイティブ側で未処理イベントを保持し、ページの初期化後に取得できるようにする。JavaScriptのコールバック参照を、アプリ再起動後の受け取り先として保存しない。
+
+`getPendingEvents()`は未受領のイベントを取得し、`watchEvents()`は追加イベントを通知する。アプリは購読を登録してから未処理イベントを取得し、両方に現れたイベントを`eventId`で重複排除する。処理後に`acknowledgeEvent()`を呼ぶ。受領確認前にページやプロセスが終了した場合は再取得できる方式とし、一度しか配送されない保証は設けない。
+
+未処理イベントは永続化し、受領済みイベントの重複配送を防ぐ記録も保持する。保存量と保持期間には上限を定め、上限到達や期限切れの扱いを公開仕様とテストで確定する。OSがアプリを強制停止した場合や通知自体が削除された場合まで、新しい操作イベントの発生を保証しない。[Androidのプロセスライフサイクル](https://developer.android.com/guide/components/activities/process-lifecycle)
+
+購読ハンドルは明示的な解除とページの破棄で解放する。イベントは許可されたメインフレームの購読へだけ渡し、別のActivityや古いページのコールバックを再利用しない。複数のウインドウやWebViewが購読すると同じイベントを受け取る場合があるため、アプリは処理担当のページを一つ決める。受領確認はアプリ全体へ作用し、すでに配送したイベントを取り消す操作にはしない。再配送への対処と、業務処理を重複実行しない方法をドライバーで示す。
+
+### 段階5のイベント形式と保持条件
+
+イベントは`{ eventId, id, type, actionId, data }`で返す。`type`は通常のタップを表す`activate`か、追加ボタンを表す`action`である。`actionId`は通常のタップではnull、追加ボタンでは指定したIDとなる。`data`は操作した投稿の値で、省略時はnullを返す。同じ通知IDを更新すると新しい投稿として識別し、同じ起動Intentの再処理ではイベントを増やさない。
+
+追加ボタンは`post()`の`actions: [{ id, title }]`に最大3個指定する。IDとラベルは空白だけではない128 UTF-16コード単位以内の文字列で、NULを含めない。同じ通知内でIDを重複させない。すべて自アプリを開く操作とし、バックグラウンドだけで業務処理を行うボタンや返信入力は含めない。1回の投稿について最初に受け取った操作だけをイベント化し、通知を取り消す。イベントの受領確認はその取り消しとは別の操作である。
+
+未操作の投稿と未受領イベントは、合計256件まで保存する。投稿時に1件分を予約し、満杯の場合は新しい投稿を拒否する。未受領イベントを上限のために削除しない。同じIDの更新では未操作の古い投稿を失効させ、その枠を再利用する。すでに受け取った古い投稿のイベントは維持する。`cancel()`も未操作の投稿を失効させるが、すでに受け取った操作イベントは削除しない。更新・取り消し後の古いIntentは無視し、新しい投稿のデータへ置き換えない。
+
+未操作の投稿は投稿時点から30日、未受領イベントは操作を保存した時点から30日保持する。期限を過ぎた情報は次の保存領域へのアクセス時に削除するため、期限後の再取得や新しい操作の配送は保証しない。ユーザーやOSが通知欄の通知を削除しただけでは予約枠を解放しない。アプリから取り消す、同じIDを更新する、期限を迎える、のいずれかで未操作の枠を解放する。
+
+`acknowledgeEvent(eventId)`はアプリ全体の未受領集合からイベントを除き、保存の完了を待って返る。未知または受領確認済みのIDは、変更せず成功とする。重複排除用の受領確認済みIDは最大1024件、30日まで保存し、上限を超えた古い記録を削除する。記録がなくなった後も、未知の操作トークンからイベントを再生成しない。
+
+`watchEvents()`は購読後の追加イベントを届け、既存イベントを自動再送しない。購読を登録してから`getPendingEvents()`を呼び、両方に現れたイベントを`eventId`で重複排除する。リスナーは購読ハンドルを返した後に、順番に呼び出す。リスナーの失敗はログに記録して後続の配送を続け、受領確認とは扱わない。通信が失敗した購読はログを残して閉じる。`close()`はリスナー内でも待つことができ、以後の呼び出しを止めるが、実行中のリスナーの終了は待たない。
+
+別ページで受領確認されたイベントは、未配送の購読へ届かない場合がある。すでに渡したイベントは撤回しない。業務処理は`eventId`による重複排除や冪等な処理を使い、その処理を保存してから受領確認する。UIドライバーは購読と未処理一覧の重複を除き、同じデータで同じ画面を選ぶ例を示す。
+
+Androidでは保存領域をアプリ単位で所有し、永続化とOS通知操作を同じ非同期の実行列で処理する。OSの投稿・取り消しと保存領域のトランザクションは一体ではないため、完了応答を返す前にプロセスが終了した投稿・取り消しの完全な原子性は保証しない。保存が完了していない操作を、保存済みイベントとしてJavaScriptへ渡さない。通知タップのイベントは保存を確定してからOS通知を取り消す。保存に失敗した場合は同じ投稿の操作を再試行できるようにし、取り消しに失敗した場合も保存済みイベントを配送して診断を残す。
+
+### APK更新時の扱い
+
+AndroidのAPK更新では、OSが更新前の通知を削除する場合がある。Pixel 6のAPI 37では、プロセスだけを終了した場合は通知が残り、通常のAPK置き換えでは通知が削除された。OSから削除された通知のタップや、更新後の自動再投稿は保証しない。一方、更新前に保存した未受領イベントは、同じapplicationIdとアプリデータを維持する更新後も取得できる。受領確認後のイベントは再配送しない。
+
+2026年10月20日の確認で、OSによる削除を制約として明記し、未受領イベントの保持を保証する方針に合意した。段階5の更新試験では、通知が削除されることと、保存済みイベントを更新後も同じeventIdで取得できることを別々に確認する。通常のプロセス終了後は、残った通知から起動してデータを受け取れることを確認する。アプリの削除やデータ消去は、データを維持する更新には含めない。[Androidのパッケージ変更に伴う通知取り消し](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010)
+
+## CEFのOS通知実装
+
+### 内蔵プラグインと所有期間
+
+通知の公開関数は既存のC ABIによる内蔵メタデータへ登録し、Windows・Linuxの通知サービスへ委譲する。共通の関数許可とRPCを通し、通知専用のJavaScript直接呼び出し経路を追加しない。現在のPlatform経路はbrowser専用なので、新しい通知名前空間を登録するだけでそこへ配送できるとは扱わない。
+
+現在の[trayサービス](../../../core/cef/src/browser/muon_tray_service.cpp)はBrowser単位で所有され、終了時に削除される。通知サービスはアプリ単位で管理し、trayオブジェクトの有無や寿命に依存させない。通知を使うためだけにトレイアイコンの作成を要求せず、OS通知に失敗した場合もtrayのバルーンやアプリ内表示へ暗黙に置き換えない。
+
+### Windows
+
+Windowsのアプリ通知へ接続し、アプリ名とアイコン、同一IDの更新、取り消し、通知操作を扱う。現在のMicrosoftの推奨APIはWindows App SDKの`AppNotificationManager`である。ただし本プロジェクトはMinGW32/64を使うため、採用前に両方のビルド、APIの利用方法、実行時依存と配布方法をドライバーで検証する。MSVC・ATL専用のサンプルをそのまま導入しない。[通知APIの選択](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/)、[現在のWindowsビルド](../../../core/cef/CMakeLists.txt)
+
+採用するAPIは公式ドキュメントと対象バージョンのヘッダーコメントで確認する。MinGWで利用できない場合は、公開されたWinRT・COM経由の方式を調査し、同じ共通APIの要件を満たせるか確認してから実装手段を確定する。どの方式でも実現できると仮定して先へ進めず、成立しない場合はこの段階で計画を見直す。OS通知を使うためだけにWindowsの配布形式をMSIXへ限定しない。Win32の方式を選ぶ場合も、アプリ識別子など、その方式の登録要件を満たす。[Win32デスクトップ通知の登録要件](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)
+
+既存のruntime appIdはWindowsでアーキテクチャを含む。通知のアプリ識別と起動先もこの単位に合わせ、32bit版と64bit版が互いの通知を更新・取り消ししないようにする。このappIdがあるだけで通知用の登録が済んだとは扱わない。採用方式に必要なアプリ識別、ショートカット属性、COMなどの起動登録をNSISと連携させ、更新とアンインストール時の処理も実装する。[アプリ識別子](../../../ui/cef/targets.ts)、[NSIS生成](../../../ui/cef/pack.ts)、[通知からの起動](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/app-notifications-quickstart)
+
+### Linux
+
+段階6では既存のGIO依存を使い、`org.freedesktop.Notifications`のD-Busプロトコルへ非同期で接続する。第一候補だった`GNotification`は検証したGLib 2.74・2.80でアプリ登録や初回バックエンド選択に同期D-Bus呼び出しを含むため採用しない。cardioとGIOの非同期APIを組み合わせ、通知用の待機スレッドは追加しない。[GIOの非同期D-Bus呼び出し](https://docs.gtk.org/gio/method.DBusConnection.call.html)、[GApplicationの登録処理](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gapplicationimpl-dbus.c)、[GNotificationのバックエンド選択](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/ggtknotificationbackend.c)
+
+アプリが指定する文字列IDと、OSの通知IDを分けて管理する。更新前の通知操作を新しい投稿へ誤って結び付けないよう、同じ文字列IDの更新でも新しいOS通知を投稿してから古い通知を閉じる。処理途中には新旧の通知が一時的に並ぶ場合があり、OSへの投稿と取り消し全体を原子的には実行できない。取り消し先は通知サービスの接続先と組にし、サービス再起動後に再利用された数値IDを操作しない。[通知IDと操作イベントの仕様](https://specifications.freedesktop.org/notification/latest/protocol.html)
+
+実行中の操作はアプリ単位の保存領域へ記録し、その後で各ページへ配送する。保存済みの未受領イベント、受領確認、上限と期限は共通契約に従う。追加ボタンはサービスの対応状況から判断し、アプリ全体と用途分類別の投稿可否を取得できない場合は`unknown`を返す。通知の送信完了だけで、表示された、あるいはユーザーが許可したとは判断しない。
+
+アプリ名とアイコンを対応させるため、appId、desktop ID、`.desktop`、アイコンをそろえる。GNOME 46では、前面のアプリが投稿した保持型通知のバナーを抑止するため、実画面の試験はアプリを最小化した状態でも行う。通知欄への保存とバナー表示を別々に確認する。また、GNOME 46では通知サービスが`persistence`を広告していても、投稿元アプリの接続終了で通知の発行元が削除される。FDO経由では広告値だけからプロセス終了後の保持を保証せず、保持機能が広告されている場合の`persistence`は`unknown`、機能自体がない場合は`unsupported`とする。[GNOMEの通知処理とコメント](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/46.0/js/ui/notificationDaemon.js)
+
+プロセス終了後のクリック起動は段階6では非対応とする。段階8ではPortal Notificationと`org.freedesktop.Application.ActivateAction`を使うD-Bus起動を検証し、対応する配布環境へ接続する。既存の通常の`Exec`に加え、D-Busサービス登録とアプリ識別が必要となる。AppImageなど起動位置が変わり得る配布物では、更新時の登録先も検証する。登録不足や非対応の環境を、起動対応済みとは扱わない。[Portal Notification](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Notification.html)、[D-Busアプリケーションの操作](https://specifications.freedesktop.org/desktop-entry-spec/latest/dbus.html)、[既存のLinux desktop連携](../../../ui/cef/linux-desktop.ts)
+
+段階8では、通知起動を有効にした配布物に、D-Busのアプリ名として使えるdesktop IDと、その名前から定まる受信先を持たせる。`.desktop`とD-Busの`.service`は同じ配布ランチャーを指す。更新時にはこの登録を新しい起動位置へ更新し、古い配置の削除では新しい配置の登録を消さない。ランタイムは、実際の登録と自アプリの起動パスが一致することを確認してから、クリック起動を対応済みと返す。
+
+Linuxの通知クリックによる起動は、ホストアプリの登録APIを備える`xdg-desktop-portal 1.20`以降を対応条件とする。専用のD-Bus接続でアプリ識別子を登録し、通知の送受信には非同期D-Bus APIを使う。旧版や必要な識別・起動登録が成立しない環境では、通知表示と実行中の操作を提供し、クリック起動の非対応理由を返す。[Portalのホストアプリ登録](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html)
+
+旧版向けに検討したsystemdのscope方式は採用しない。scopeは、同じアプリに属するプロセスをsystemdが識別する単位である。CEF 147に含まれるChromiumは、自身のPortal初期化で同じプロセスを`org.chromium.Chromium`のscopeへ移すため、通知用の識別子が起動順によって上書きされる。外部コードを変更せず、この競合を避けられるホスト登録APIを使用する。[Chromium 147のscope登録](https://github.com/chromium/chromium/blob/147.0.7727.138/components/dbus/xdg/systemd.cc)、[Chromium 147のアプリ識別子](https://github.com/chromium/chromium/blob/147.0.7727.138/base/version_info/nix/version_extra_utils.cc)
+
+通知操作を受けるD-Busオブジェクトは、アプリ名の所有を開始する前に登録する。起動直後の操作も共通の永続化処理へ渡し、受信したトークンに対応する保存済み投稿だけをイベントに変換する。OSの起動用識別子はウインドウ表示に使用し、アプリが保存した`data`と混同しない。[GIOのアプリ名所有とオブジェクト登録の順序](https://docs.gtk.org/gio/func.bus_own_name.html)、[D-Bus起動のplatform_data](https://specifications.freedesktop.org/desktop-entry/latest/dbus.html)
+
+KDEで終了済みアプリを通知から起動するには、修正済みの`xdg-desktop-portal-kde 6.2.5`以降を必要とする。旧版には、起動先のアプリが実行中でない場合にD-Bus呼び出しを送らない不具合がある。旧版での通知表示と実行中の操作は対象に含めるが、終了済みアプリの起動は保証しない。この対応条件は2026年10月20日に合意した。[KDEの公式修正](https://github.com/KDE/xdg-desktop-portal-kde/commit/ddb05b229991e13a8b086bf4c006a2cd2ba55ab0)、[未修正の6.2.4](https://github.com/KDE/xdg-desktop-portal-kde/blob/v6.2.4/src/notification.cpp)、[修正済みの6.2.5](https://github.com/KDE/xdg-desktop-portal-kde/blob/v6.2.5/src/notification.cpp)
+
+`getCapabilities()`は配布登録とPortal APIの利用可否を確認するが、Portalの公開APIからKDE側の修正履歴までは判定できない。KDEでは上記のバージョン条件も満たす必要がある。Portal本体のバージョンを上げるだけでは、KDE側の不具合が修正されたとは扱わない。[Portal Notificationの公開インターフェイス](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Notification.html)
+
+通知サービスの有無、GNOME・KDEの環境差、サービス再起動後の状態を検証する。OSによる通知の保持と、受け取った操作イベントの永続化は区別する。
+
+### 通知クリックによる起動
+
+実行中の通知クリックは既存のアプリへ届け、必要なウインドウを開くか前面化する。プロセスが存在しない場合は、配布したアプリのlauncherを通る起動経路へ接続し、共通ランタイムだけを誤って起動しない。ネイティブ側で操作情報を保持してから、ページの初期化と共通イベントの受け取りへ進める。
+
+CEFの既存プロセスへの引数配送には、`root_cache_path`に対応する単一起動機構と`OnAlreadyRunningAppRelaunch`を利用する。LinuxのD-Bus起動も既存プロセスへ操作を渡すため、両方の機構が二重のウインドウやイベントを作らないよう接続する。生の起動引数はOSごとに解釈し、アプリ側へは共通イベントを渡す。[CEFの再起動通知とAPIコメント](https://github.com/chromiumembedded/cef/blob/master/include/cef_browser_process_handler.h)
+
+通知の保持と未処理イベントの永続化は別々に検証する。OSから届いた操作を保持することと、OSがまだ届けていない操作の発生を保証することを混同しない。インストール済み配布物でのクリック起動を完成させた後、未登録の展開実行などでは実際に利用できる範囲を返す。
+
+## AndroidのOS設定画面との連携
+
+`settings.open()`の対象は`app-details`、`notifications`、`notification-channel`の識別可能な型で表す。チャンネル設定にだけチャンネルIDを要求する。任意のIntent文字列、他アプリのパッケージ名、任意URLを渡せる汎用起動APIにはしない。
+
+`isAvailable()`は、その端末で対象画面への遷移が可能かを返す。`open()`も実際の起動時に失敗を扱う。専用画面が存在しない場合は非対応を返し、呼び出し側が明示的に許可した場合だけアプリ情報画面へ切り替える。その結果には要求した画面と実際の遷移先を含める。[Settingsの公開アクションとAPIコメント](https://developer.android.com/reference/android/provider/Settings)
+
+段階3の`target`は`app-details`と`notifications`である。段階4では`{ type: 'notification-channel', channelId }`を追加し、チャンネルIDを必須にする。`open(target, { fallback: 'app-details' })`と明示した場合だけ、非対応の通知設定画面をアプリ情報画面へ切り替える。結果は`{ requestedTarget, target, fallbackUsed }`で返す。`isAvailable(target)`はfallbackを適用せず、その画面自体の利用可否を返す。API 24・25には公開された通知専用画面のアクションがないため、`notifications`を非対応として返す。チャンネル設定はAPI 26以降の登録済みチャンネルだけを対象とし、非対応時は明示されたアプリ情報への代替に従う。
+
+`open()`は前面のActivityから呼ぶ。バックグラウンドのActivityでは要求を拒否し、OSによる起動制限を成功として扱わない。`open()`の完了は、画面を開く要求が受理されたことを意味する。ユーザーが設定を変更したかどうかの結果にはしない。Activityが復帰したら権限・通知・バーの実効状態を再取得し、その後の状態取得へ反映する。Web側でも復帰後の取得で更新された表示を確認できるようにする。設定画面を開いている間にプロセスが終了した場合は、新しい起動時に再取得する。
+
+OSの通知設定から自アプリの設定画面を開く逆方向の連携は、後続候補として残す。Androidには通知設定用Activityを示すカテゴリがある。採用時は通知タップの起動情報とは別の起動理由として扱い、対象チャンネルをWeb側の設定画面へ渡す。[通知設定用Activityのカテゴリ](https://developer.android.com/reference/android/app/Notification#INTENT_CATEGORY_NOTIFICATION_PREFERENCES)
+
+## 許可設定と実装上の方針
+
+関数の呼び出し許可、OS側の宣言・アプリ登録、ユーザーが与える権限を別々に検証する。プラグインの`allow`へ関数を追加しても、OSの通知権限が与えられたことにはしない。Android・CEFとも既存のRPCと関数ごとの許可検証を通す。共通APIへの投稿で、Androidの権限ダイアログやWeb通知の許可要求を暗黙に実行しない。
+
+UI操作はActivityとmain Looperに結び付ける。通知の登録情報と未処理イベントはアプリ単位で管理し、Activityの参照を永続的に保持しない。権限ダイアログの同時要求、Activityの再生成中の要求、破棄済みページへの結果配送も扱う。待機のためだけのワーカースレッドや定期ポーリングは追加しない。
+
+Java側はシステムバー、通知、設定の処理を委譲で分離する。CEF側も共通の通知管理とOSごとの処理をインターフェイスと委譲で分け、必要なOSスレッド・イベントループへ接続する。C++のI/Oは既存のcardioを使う方針に従い、待機専用のワーカースレッドやポーリングを追加しない。
+
+TypeScript側の公開定義にはJSDocを付け、状態、単位、購読の解放方法、権限要求の条件を説明する。C++の公開定義にはdoxygen形式のコメントを付ける。新しい外部APIを使う際は、採用バージョンの公式ドキュメントとAPIコメントの両方を確認する。非推奨・内部用のAPIを公開機能の実装手段に選ばない。
+
+## 実装段階と各段階の完了条件
+
+各段階では実際に公開APIを呼ぶテストを先に追加してREDを確認し、その範囲を実装してGREENにする。利用アプリ、Androidテストホスト、CEFのテスト用アプリへ観測用UIを追加し、その段階だけでもビルド・起動できる状態でコミットする。ソースの文字列や設定ファイルの存在だけを合否に使わない。外部APIの成立性を確認する試作も、実際の通知を観測できるドライバーを成果物に含める。
+
+### 段階1 階層名前空間とシステムバーの基本操作
+
+内蔵APIの階層解決、許可フィルター、メタデータ、型定義を拡張し、バー別の表示操作と状態取得を接続する。既存の全画面操作を同じサービスへ委譲し、テストホストから上下別の表示・非表示を切り替えられるようにする。OS非対応の指定と未許可の呼び出しを診断する。
+
+完了条件はsimple・validateの両モードで新しい階層の関数を呼べること、許可していない関数を呼べないこと、既存fullscreenと個別操作の要求状態が食い違わないことである。デスクトップの関数一覧と既存の全画面操作に影響しないことも確認する。
+
+コミットの目安は`feat: add Android system bar plugin APIs`とする。
+
+### 段階2 安全領域と起動時表示
+
+`contentLayout`、Insetsの取得・購読、CSS変数、アイコン配色、初期設定を追加する。サンプルに画面端の操作部品とInsetsの表示を置き、配置方式を切り替えて比較できるようにする。回転、ズーム、キーボード、Activity再生成にも接続する。
+
+完了条件は、操作部品が指定した安全領域へ配置されること、余白が二重にならないこと、回転とズーム後もCSS上の位置が一致すること、初期表示と復元が設定どおりであることとする。バーの一時表示やキーボードの遷移は動画を記録し、フレームと状態変化を対応させてテストでアサートする。
+
+コミットの目安は`feat: expose Android insets and initial display settings`とする。
+
+### 段階3 OS設定画面と通知権限
+
+自アプリの情報画面、通知設定画面、利用可否、復帰時の状態再取得を実装する。通知の有効設定と必要なManifest宣言を生成し、権限状態の取得と明示的な要求を接続する。サンプルから要求・拒否・設定画面への移動・復帰を確認できるようにする。
+
+完了条件はダイアログの許可・拒否・閉じる操作をそれぞれ試験し、観測できる状態と判定できない状態を正しく返すこととする。操作理由の完全な識別は保証しない。OS設定で変更した状態が復帰後に反映されること、画面が存在しない場合とActivityが破棄された場合の結果を返せること、通知を有効にしていないアプリで新しい権限要求が起きないことも確認する。
+
+コミットの目安は`feat: integrate Android settings and notification permission`とする。
+
+### 段階4 共通のローカル通知とチャンネル
+
+共通の`notifications.enabled`と`notifications.defaultCategory`、Androidの静的チャンネル設定、動的登録、通知アイコンの生成を接続する。共通の`post()`、`cancel()`、`getStatus()`、`getCapabilities()`と、チャンネル設定画面への遷移を実装する。サンプルから投稿、同一IDの更新、取り消し、用途分類別の状態と対応機能の確認を実行できるようにする。
+
+完了条件は生成した利用アプリのAPKから通知を投稿でき、同じIDの更新が別通知を増やさず、取り消しが対象だけに作用することとする。チャンネルの無効化、未知の分類、権限拒否、既定分類、API 24・25の動作も検証する。通知はこの段階でもタップでアプリを開ける状態とし、操作データの受け渡しは次段階で完成させる。対応機能は実装済みの範囲を返し、未完成のイベント機能を対応済みとしない。
+
+コミットの目安は`feat: add shared local notifications with Android channels`とする。
+
+### 段階5 Androidの通知操作と共通イベント
+
+通知タップ、必要な起動型アクション、初期Intentと後続Intentを同じイベントへ変換する。未処理イベントの保存、取得、購読、受領確認、保持上限を実装する。サンプルではイベントのデータから対象画面を開き、受領確認前の終了と再配送も観測できるようにする。
+
+完了条件は、前面・バックグラウンド・プロセス終了後のタップで正しい通知データが届くこと、WebViewの初期化より前のイベントを失わないこと、受領確認と重複排除が機能することである。回転後の同じIntentの再処理と、通知を更新した後の新しいタップも区別して試験する。リロード、複数のWebView、購読解除、保存上限も確認する。アプリ更新ではOSによる既存通知の削除と、保存済みの未受領イベントの保持を確認する。JSのコールバックを保存せずに再起動後の操作を扱えることを合否に含める。
+
+コミットの目安は`feat: deliver notification events across Android restarts`とする。
+
+### 段階6 CEFの公開経路とLinuxのローカル通知
+
+内蔵登録、simple・validateの公開、共通設定のビルドへの受け渡し、購読の解放を接続する。Linuxの通知サービスを実装し、必要な`.desktop`とアイコンを配置したドライバーから投稿、更新、取り消し、状態取得、実行中のクリック受信を試せるようにする。共通イベントの保存・受領確認も利用し、ウインドウのリロードと閉鎖を観測する。
+
+完了条件は両モードの公開APIから実際のOS通知を操作できること、Android用設定なしで任意の用途分類を使えること、アプリ全体と分類別の状態が不明な場合を表現できることとする。通知サービス不在、操作非対応、同一IDの更新、別ウインドウからの取り消し、購読解放を検証する。この段階ではプロセス終了後のクリック起動を非対応と示し、通知の保持とは区別する。Windows側の未実装関数は公開しない。
+
+コミットの目安は`feat: add shared notification APIs for CEF Linux`とする。
+
+### 段階7 Windowsのローカル通知
+
+MinGW32/64で利用できるOS通知APIと配布依存を、ビルド・実行可能なドライバーで確定する。その結果に従ってWindowsの通知サービスと必要なアプリ登録を実装し、段階6と同じ共通APIへ接続する。実行中の通知クリックを共通イベントへ変換する。
+
+完了条件は32bit・64bitのビルドとWindows実機で投稿、更新、取り消し、クリック受信を確認し、アプリ名とアイコンが対象アプリのものとして表示されることとする。各アーキテクチャの通知を混同せず、登録不足やOS側の無効化を診断する。CEFの購読破棄、権限フィルター、未処理イベントをLinuxと同じ振る舞いで検証する。プロセス終了後のクリック起動はこの段階では非対応と示す。
+
+コミットの目安は`feat: add native Windows notification support`とする。
+
+### 段階8 CEFの通知起動と配布登録
+
+Windowsの通知起動登録とNSIS、LinuxのD-Bus起動とdesktop連携を完成させる。新規起動と既存プロセスへの配送を共通イベントへ接続し、対象画面を開くドライバーを用意する。アプリ更新で既存通知の起動情報を引き継ぎ、アンインストールでは自アプリの登録を解除する。
+
+更新で`notifications.enabled`を`false`にする場合は、旧版を上書きする前に、そのアプリが所有する通知履歴と起動登録を解除する。保存済みの未受領イベントとprofileは保持する。登録の所有者はappIdと起動パスで確認し、別の配置が現在所有する登録を削除しない。通知機能を有効にしたまま更新する場合は、既存通知の起動と保存済みイベントを引き継ぐ。
+
+完了条件はWindowsのNSIS導入環境とLinuxのD-Bus起動に対応する導入環境で、プロセスを終了した後の通知クリックから配布アプリが起動し、正しいデータを受け取ることとする。実行中のクリックで二重起動せず、ページ初期化前のイベント、受領前の終了、再配送、複数ウインドウを検証する。更新後の古い通知、起動パスの変更、アンインストール後の残存通知、通知サービスの再起動も確認する。
+
+未登録の展開実行と非対応のデスクトップ環境では、理由を含む対応状況を返す。対応する基準環境でのクリック起動は必須とし、すべての環境を非対応や不明にして完了とはしない。GNOME・KDEそれぞれの結果と、Windows各アーキテクチャの配布・登録条件を記録する。GNOME・KDEの起動試験にはPortal本体1.20以降を使用し、KDEではさらに修正済みの`xdg-desktop-portal-kde 6.2.5`以降を必要とする。
+
+コミットは`feat: activate CEF apps from native notifications`を目安とし、OSや配布形式ごとに動作を確認できる単位へ分ける。
+
+### 段階9 配布物・全体検証・利用文書
+
+公開CLIで利用アプリをビルド・パッケージ化し、事前ビルドしたランタイムから全機能を利用できることを確認する。AndroidのAPK、WindowsのNSISと展開実行、Linuxの既存配布形式で、通知の登録条件と対応状況を検証する。日本語のAndroidガイド、内蔵プラグインリファレンス、CEFの配布ガイドを更新し、それを原本として英語版へ反映する。計画書へのリンクは一般の利用文書に追加しない。
+
+完了条件は、次節の全体テストと端末テストが成功し、必須ケースが未実行のまま残っていないこと、ビルド警告を分析・対処したこと、利用文書がAPIの対応範囲と失敗条件を説明していることである。
+
+コミットは必要に応じて機能の修正と文書を分け、`fix:`、`chore:`、`doc:`を使う。計画外の機能追加が必要になった場合は、その場で範囲を広げず、原因と計画の修正を先に整理する。
+
+## 検証方法
+
+TypeScriptの単体テストは既存のVitest、Web側のドライバーは既存のTypeScript・Viteの構成を使う。AndroidのネイティブUIは既存のinstrumentationとobserverで操作・観測する。ブラウザーを介した操作とWebView・CEF内のE2EにはPlaywright MCPを使う。OS側の通知表示を、JavaScriptのPromise成功だけで判定しない。
+
+| 検証対象 | 確認する動作 |
+| --- | --- |
+| APIと許可 | Android・CEFの両モード、階層解決、関数ごとの許可、無効ビルドでの非公開、実行時の非対応・不明、購読解放。 |
+| バーと配置 | 上下別の表示、既存fullscreenとの併用、3ボタンとジェスチャーナビゲーション、縦横画面、カットアウト、マルチウインドウ。 |
+| Insets | DOMの位置、ズームと密度の換算、キーボードの区別、二重余白の防止、変更イベント。 |
+| 権限と設定 | 初回要求、許可、拒否、ダイアログを閉じる操作、再要求、設定からの復帰、遷移先の非対応。 |
+| 通知 | 各OSの表示内容とアプリ名・アイコン、IDによる更新・取り消し、分類とチャンネル、全体・チャンネル別の無効化。 |
+| 対応機能 | クリック受信と終了後の起動の区別、通知の保持、サービス不在、登録不足、状態取得不可、非対応指定の失敗。 |
+| イベント | 起動中と停止中のタップ・クリック、初期化前の保持、再配送、受領確認、複数ウインドウ、古い購読への誤配送防止。 |
+| 配布 | 通知なし・ありのアプリ、静的・動的チャンネル、Manifestとリソース、APK・NSIS・Linux配布物の生成と実行。 |
+| CEFの登録と更新 | appIdと起動先、32bit版と64bit版の分離、アプリ更新、パス変更、アンインストール、通知サービス再起動。 |
+
+OSの差は、チャンネル導入前のAPI 24・25、チャンネルがあるAPI 26以降、通知権限を扱うAPI 33以降、edge-to-edgeの扱いが変わるAPI 35・36以降で確認する。現在のtargetSdkであるAPI 37の環境も対象に含める。境界を再現するエミュレーターと、既存のPixel 6実機を組み合わせる。実際に実行したOS/API、ナビゲーション方式、画面形状を記録する。
+
+Linuxでは既存の[CEFテスト入口](../../../core/cef-test/package.json)が使う[隔離D-Busセッション](../../../scripts/run-dbus-session-command.mjs)に、通常の通知デーモンが自動で存在するとは仮定しない。制御可能なテスト用通知サービスを用意して、対応機能、クリックイベント、サービス再起動を再現する。それとは別にGNOME・KDEで実際の通知表示、クリック、アプリの再起動を確認する。
+
+WindowsではMinGW32/64のビルドに加え、`agent-rover`を使う既存の実機試験へ通知ケースを追加する。Wineでは実OSの通知センターや起動登録の試験を代替しない。Windows接続がない場合に既存のE2Eがskipする結果は、通知機能の検証成功に数えない。[Windows E2E](../../../core/cef-test/plugin-e2e-windows.test.ts)、[NSIS E2E](../../../ui/cef-test/nsis-windows-e2e.test.ts)
+
+画面遷移やバーのアニメーションは、状態通知やUIの条件を待って判定する。一定時間sleepしただけで成功としない。動画を使うケースは時間軸のアサーションを実装し、画像比較用のマスターを追加する場合は事前に目視で確認する。
+
+実装完了時にはリポジトリルートの`npm test`を必ず実行する。この入口だけで端末上の全ケースを実行したとは扱わず、既存の次の入口も使う。
+
+```bash
+npm test
+npm run test:android --workspace muon-android-tester
+npm run test:android:pixel6 --workspace muon-android-tester
+npm run test:windows-e2e --workspace muon-core-tester
+npm run test:windows-nsis-e2e --workspace muon-ui
+```
+
+LinuxのCEFテストは`npm test`に含まれる。通知サービスを制御する試験と実デスクトップの試験は、段階6・8で実行入口を追加して記録する。既存のテストが通っただけで、この追加ケースまで実行したとは扱わない。
+
+Android端末は`ANDROID_SERIAL`で指定し、x86_64・16 KiBページとarm64実機の既存の検証を維持する。追加のOS境界試験はその環境に適したinstrumentationの実行を用意する。利用できない端末・権限・依存ツールによって必須ケースを実行できない場合は、未検証として記録し、完了とはしない。
+
+計画書だけを変更する場合は、内容の照合、日本語の推敲、相対リンク、Markdownと差分を確認する。実装を変更した場合は、その変更に必要なビルドと製品テストも実行する。
+
+## 全体の完了条件
+
+1. 共通通知とOS専用機能の役割が分かれ、Android・CEFで投稿・取り消し・イベントの同じAPIを使える。未実装のOS専用APIを公開していない。
+2. システムバー、ノッチ、安全領域、起動時表示を制御でき、既存fullscreenと状態を共有している。
+3. Androidの通知権限、チャンネル、設定画面への導線と、Android・Windows・Linuxの投稿・更新・取り消しが公開APIから利用できる。
+4. AndroidとCEFの対応する導入環境で、アプリの新規起動と実行中の通知操作を受け取り、未処理イベントと受領確認を扱える。
+5. simple・validate、関数の許可、Activity再生成、複数ウインドウ、ページ破棄、購読解放の動作を確認している。ページの破棄でアプリ単位の通知と未処理イベントを失わない。
+6. Androidの最低APIレベルを維持する。`getCapabilities()`と`getStatus()`で機能の対応と現在の投稿可否を区別し、非対応・不明・登録不足を明示する。
+7. 共通の有効設定と既定分類、Android固有のチャンネルとアイコンを分離し、CEFでAndroid用設定を要求しない。
+8. Windows・Linuxのアプリ識別、通知起動、既存プロセスへの配送、更新・アンインストールを配布物で確認している。
+9. 公開CLIで生成した配布物、全体テスト、必要なOS境界と実機の試験が成功している。Windows E2Eのskipや通知サービスがない環境だけの試験を完了に数えていない。
+10. 日本語の利用文書と、その内容に対応した英語版が更新されている。
+
+## 計画書保存時の確認
+
+Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。共通APIとOS固有拡張、対応機能と投稿可否、共通設定、Windows・Linuxの実装候補、通知の所有期間、クリック起動と配布登録を記載した。実装段階を9段階へ更新し、各段階で観測できる成果物、検証方法、完了条件を追加した。予約通知・FCM・継続実行・逆方向の設定連携、Web標準APIの互換機能は後続対象として残している。
+
+計画書の保存時点では、全体の完了条件は未達成だった。保存後の実装・検証と完了判定は、次節の進捗記録に記載する。
+
+## 進捗記録
+
+2026年10月20日、`feature/plan13`で全9段階を完了した。AndroidとCEFのLinux・Windowsで共通通知APIを利用できる。CEFの通知からの起動と配布登録、AndroidのOS境界と配布物、日英の利用文書を確認した。Windowsの全体テストとルートの`npm test`も成功し、全体の完了条件10項目を満たした。
+
+| 段階 | 状態 | 実装・検証した範囲 |
+| --- | --- | --- |
+| 1 | 完了 | `00bd0c5 feat: add Android system bar plugin APIs`。階層名前空間、simple・validate、許可フィルター、上下別の表示と既存fullscreenの状態共有を実装した。TypeScriptと実機のテストで未実装時の失敗と実装後の成功を確認した。 |
+| 2 | 完了 | 配置方式、Insetsの取得・購読、CSS変数、アイコン配色、初期設定とActivity再生成を実装した。一時表示中の状態取得は、承認されたOS報告値の契約へ変更した。 |
+| 3 | 完了 | 自アプリの設定画面、通知設定画面、通知権限の状態取得と明示的な要求を実装した。無効ビルドでは通知専用APIを公開せず、設定から復帰したときに現在の状態を再取得できる。 |
+| 4 | 完了 | 共通の投稿・更新・取り消し、状態・対応機能の取得、静的・動的チャンネル、専用アイコンと設定画面を実装した。公開CLIで作成したsimple・validateのAPKから、実際のOS通知とタップによる前面化を確認した。 |
+| 5 | 完了 | Androidの通知操作、未受領イベントの永続化、購読と受領確認を実装した。回転、複数WebView、プロセス終了後の通知起動、APK更新後の保存済みイベント保持を確認した。 |
+| 6 | 完了 | CEFの共通通知API、Linuxの非同期OS通知、アプリ単位の永続化とページ単位の購読を実装した。simple・validateの両方で、GNOMEの実通知の更新、通常クリック、追加ボタン、取り消しを確認した。 |
+| 7 | 完了 | `f2dfc67`。MinGW32/64でWindows通知を実装し、両アーキテクチャの実機で通知の表示、操作、永続化と公開APIを確認した。 |
+| 8 | 完了 | Windowsの両アーキテクチャとNSIS、GNOME・修正済みKDEの公開配布アプリで通知起動を確認した。両モードで更新、パス変更、未受領イベント、登録解除も成功した。 |
+| 9 | 完了 | Androidの境界条件、配布物、日英の利用文書を確認した。Windows全体の入口、ルートの`npm test`、必須の端末・配布試験が成功した。最終結果は末尾に記載する。 |
+
+段階2のInsetsは`unit: 'css-px'`を持ち、システムバー、カットアウト、ジェスチャー領域、IMEを分けて返す。`safeArea`はバーとカットアウトの各辺の最大値で、`contentSafeArea`はWeb側で追加する余白である。`safe-area`では`contentSafeArea`と対応するCSS変数を0にし、ネイティブ側の余白を重ねて適用しない。購読は初期状態と変更後の状態を返し、`close()`とページ破棄で解放する。
+
+初期値は`android.systemBars`から生成し、ページの読み込み前に適用する。`browser.initialWindowState`を明示した場合は上下のバーへ接続し、Android側の明示値と矛盾するとビルドを失敗させる。Activityの構成変更では実行中の要求を復元し、新規プロセスでは設定ファイルの初期値を使う。
+
+Pixel 6のAndroid 17 / API 37、arm64、3ボタンナビゲーションで、DOMの位置とCSS値、回転、ズーム、IMEの区別、購読解除、ページ再読み込み、Activity再生成を検証した。Androidのinstrumentationテスト全41件が成功した。renderer側の全72件とPlaywright MCPの操作試験1件も成功した。初回のInsets通知から購読を解除するケースでは、修正前の失敗と修正後の成功を確認した。API 24のエミュレーターでは、WebViewに依存しないWindowテスト2件で初期設定、濃色ナビゲーションアイコンの原子的な拒否、初回Insets待機とキャンセルを確認した。この結果をAPI 24でのWeb全体の検証成功とは扱わない。
+
+Playwright MCPによるWeb操作では、edge-to-edgeの下端InsetsとCSS変数が48 CSS px、DOM上の余白が約47.7 pxとなり、許容差内で一致した。safe-areaで追加の余白が0になることと、購読の開始・停止も確認した。全画面操作、IME開閉、スワイプによるバーの一時表示は録画し、状態を表す画面上のマーカーと、操作部品・キーボード・OSのナビゲーション操作部の実フレームを照合した。
+
+追加した検証入口は次のとおりである。動画の実行前には、テストホストとinstrumentationのAPKをビルドする。
+
+```bash
+ANDROID_SERIAL=<device> npm run test:android-system-bars-e2e --workspace muon-ui
+ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs <output-directory> fullscreen
+ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs <output-directory> ime
+ANDROID_SERIAL=<device> node core/android-test/scripts/test-fullscreen-video.mjs <output-directory> transient
+```
+
+### 一時表示中の状態取得についての合意
+
+Pixel 6 / API 37では、スワイプでバーが物理的に表示されている間も、公開`WindowInsets.isVisible()`の値は非表示だった。動画と実画面のピクセルでは出現と自動消失を確認できたが、`getState().actual`はどちらも`false`だった。要求状態は両バーとも非表示のままであり、既存fullscreenとの状態共有は維持されている。[WindowInsetsの公開API](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int))、[Androidの一時表示処理とコメント](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java)
+
+2026年10月20日に、`actual`を「OSの公開APIが報告する状態」と定義し、一時表示の検出を保証しない契約への変更が承認された。本文と公開型の説明にこの制約を反映した。スワイプによる一時表示と自動消失は、APIの値とは別に動画のフレームで検証する。
+
+### 段階3の実装と検証
+
+設定画面は自アプリの情報と通知設定を対象とし、専用画面がない場合のアプリ情報への移動は明示的な指定があるときだけ許可する。前面にいないActivityからの設定画面起動と権限要求は失敗させる。通知を有効にしたビルドだけに通知権限APIを公開し、Manifestの権限宣言を生成する。起動時や状態取得時には権限を要求しない。
+
+Pixel 6 / API 37で、実際の権限ダイアログを閉じる操作、拒否、再要求、許可を試験した。閉じた場合と拒否した場合の結果はどちらも`not-granted`で、理由の完全な識別や恒久拒否の判定は行わない。ページ破棄とActivity破棄で呼び出しを解放し、古いOS応答を新しいページへ渡さないことも確認した。API 24のWindowテスト3件では、通知専用設定画面が非対応であること、明示的なアプリ情報への代替、権限要求が不要であること、前面条件を確認した。この試験はWebView全体の動作検証ではない。
+
+Playwright MCPの試験ではWeb側の公開APIから通知設定を開き、OS画面で通知を無効にした後の状態を取得した。続いて同じプロセスのまま設定画面で通知を有効に戻し、復帰時の自動再取得で値が変わることを確認した。OS画面のスクリーンショットでも対象アプリと設定項目を確認した。
+
+Androidのinstrumentation全49件、renderer側の全84件、UIのAndroid・パッケージ試験89件、実機MCP試験1件が成功した。UIの通常実行で省略される端末試験は、この個別実行と分けて扱っている。Androidランタイムの配布用AARもビルドでき、警告は検出しなかった。通知設定の生成、rendererの呼び出し、ネイティブの関数配送、前面条件について、未実装または修正前の失敗と実装後の成功を確認した。
+
+追加した実機試験の入口は次のとおりである。
+
+```bash
+ANDROID_SERIAL=<device> npm run test:android-settings-e2e --workspace muon-ui
+```
+
+権限ダイアログのinstrumentationを再実行するときは、Gradleの前処理がテストホスト`dev.muon.testhost`の通知権限だけを初期化する。API 33未満またはテストホストが未導入の場合は変更しない。この前処理は既存のAndroidテスト入口にも接続し、対象パッケージと処理条件を3件のテストで検証した。
+
+### 段階4の実装と検証
+
+共通の投稿・更新・取り消し、投稿可否と対応機能の取得をAndroidへ接続した。通知IDはアプリ単位で管理し、同じIDの投稿は既存通知を更新する。通知を有効にしたビルドだけに共通APIとAndroid専用APIを公開する。simple・validateの両方で同じAPIを使い、許可のない関数は呼べない。
+
+静的チャンネルと既定分類をビルド設定から生成し、動的なチャンネル登録と専用設定画面への遷移を追加した。既存チャンネルの名前・説明・重要度は変更せず、OSから取得した実効値を返す。通知専用APIを無効にしたビルドでも、以前登録したチャンネルの設定画面は開ける。small iconには透明背景の白いPNGを要求し、24 dpの各密度用リソースを生成する。
+
+renderer側の99件とUIのAndroid・パッケージ試験103件が成功した。引数の深さ、nullのチャンネル説明、未知の分類、無効なビルド、Unicodeの空白だけからなるIDについて、修正前の失敗と修正後の成功を確認した。チャンネル名・説明の長さ制限もJavaScriptとネイティブでそろえた。通常実行で省略される端末試験は、この件数に含めていない。
+
+API 24・25の各エミュレーターでは、WebViewに依存しない9件の試験が成功した。静的分類への投稿、同じIDの更新、個別の取り消し、priorityへの変換、OSチャンネルAPIの非対応を確認した。分類別のOS設定状態はunknownとなる。この結果を、旧版WebViewを含む全機能の検証成功とは扱わない。
+
+Pixel 6のAndroid 17 / API 37では、instrumentation全61件が失敗・スキップなしで成功した。公開CLIの試験では、今回のランタイムを含むnpmパッケージを別の利用アプリへ導入し、simple・validateそれぞれのAPKを生成した。両方ともPlaywright MCPから投稿・更新・取り消し・動的チャンネル登録・チャンネル設定画面を操作できた。通知欄の実表示を確認し、ホーム画面へ移動した後の通知タップで、対象アプリが前面へ戻ることも検証した。通知のタイトル・本文・アプリ名とアイコンは実画面でも確認した。
+
+画面観測の再実行では、Accessibilityのイベントコールバック内で画面情報を読むテストが停滞する事象を再現した。コールバックは変更の通知だけにし、テスト実行スレッドで画面情報を読む方式へ修正した。定期的な待機時間に依存せず、イベントと画面の条件を待つ。修正後は権限ダイアログ・設定画面・通知の表示とタップが成功した。[UiAutomationのコールバック契約](https://developer.android.com/reference/android/app/UiAutomation#setOnAccessibilityEventListener(android.app.UiAutomation.OnAccessibilityEventListener))
+
+追加した公開CLI・実機試験の入口は次のとおりである。事前に今回のランタイムを含むmuon-uiのnpmパッケージを作成する。
+
+```bash
+ANDROID_SERIAL=<device> MUON_ANDROID_NOTIFICATION_TGZ=<muon-ui.tgz> npm run test:android-notifications-e2e --workspace muon-ui
+```
+
+### 段階5の実装と検証
+
+共通APIに追加ボタン、未処理イベントの取得、購読、受領確認を実装した。投稿ごとに操作トークンを分け、同じ通知IDの更新前に作られたIntentへ新しい投稿のデータを渡さない。保存領域はアプリ単位、購読はWebViewのページ単位で管理する。操作イベントを保存した後で通知を取り消し、OS側の取り消しに失敗しても保存済みイベントを配送する。
+
+保存にはAndroidのSQLiteトランザクションを使い、書き込みの完了前にイベントをJavaScriptへ渡さない。破損したデータベースを暗黙に削除する処理は使わず、エラーとして返してデータを保全する。APIは公式ドキュメントとSDKのコメントで照合した。[SQLiteDatabase](https://developer.android.com/reference/android/database/sqlite/SQLiteDatabase)、[DatabaseErrorHandler](https://developer.android.com/reference/android/database/DatabaseErrorHandler)
+
+テストでは未受領イベントの再取得、受領確認、同じ投稿の重複操作、古い投稿の失効、保存容量と期限、書き込み失敗を検証した。複数WebViewでは購読の所有ページ、同じイベントの配送、アプリ全体への受領確認、ページ破棄時の解除を実際のRPCで確認した。JavaScript側ではリスナーの失敗を受領確認と扱わないこと、リスナー内で購読を解除できることも確認した。
+
+| 検証 | 結果 |
+| --- | --- |
+| AndroidのJavaScriptとAPKビルド | 110件成功。debug・releaseのAPKとAAB、native依存と配布内容の検査も成功。 |
+| UIの共通・Android関連テスト | 213件成功。任意の端末試験2件はこの単体テスト入口では対象外。公開パッケージの型と仮想モジュールも検証。 |
+| Pixel 6のnative全件 | 75件成功、失敗・skipなし。イベント、保存失敗、複数WebView、Activity再生成、実際の縦横回転、既存機能の回帰を含む。 |
+| API 24・25 | 各15件成功、失敗・skipなし。各OSで永続ストア10件と従来APIによる通知5件を確認。 |
+| 配布APKの通知操作・更新 | simple・validateの2件が成功。実際のOS通知、通常タップ、追加ボタン、リロード、購読解除、プロセス終了後の通知起動、受領確認に加え、通常のAPK更新後の保存済みイベント保持も確認。 |
+
+APK更新については、実機の切り分けで、投稿直後1件、プロセス終了後1件、通常のAPK置き換え後0件となることを確認した。合意したOSの制約に従い、配布APKの両モードで、削除された通知から新しい操作イベントを作らず、更新前に保存した未受領イベントを同じeventIdで返すことを検証した。受領確認後にプロセスを終了して再起動すると、未受領一覧は空になった。実際の縦横回転でもイベントの内容と識別子を維持でき、段階5の完了条件を満たした。
+
+### 段階6の実装と検証
+
+CEFのsimple・validateへ、Androidと同じ7つの公開関数を接続した。共通のJavaScript実装を両モードで使い、validateでは許可された関数だけを仮想モジュールから公開する。通知を有効にしていないビルドと、まだ実装していないWindowsの関数は公開しない。共通設定をnative側にも渡し、Androidのチャンネル宣言を必要とせず任意の用途分類を使えるようにした。
+
+Linuxの通知サービスはアプリ単位で所有し、GIOとcardioの非同期処理を使う。投稿、取り消し、イベントの保存を同じ実行列で処理する。保存先はアプリのプロファイル内であり、置き換え用のファイルへ書き込んでから切り替える。破損した保存データは削除せず、エラーとして返す。取り消しにOS側で失敗した場合も、保存した対応関係を残して再試行できる。
+
+購読はbrowser・frame・contextの組で所有し、呼び出し元の識別をbrowserプロセスで確定する。別ページの所有者を引数で偽装できないこと、ページ破棄でそのページの購読だけを解放することを検証した。未受領イベントはアプリ全体で保持し、ページの再読み込み後も同じeventIdを返す。受領確認は全ページへ反映する。
+
+通知サービスが広告する`persistence`と、共通APIが表す「通常のプロセス終了後にも通知が残ること」は同一ではなかった。GNOME 46の公開ソースで投稿元の接続終了に伴う削除を確認し、広告値をそのまま`supported`へ変換する試験をREDにした後、`unknown`と理由を返すよう修正した。プロセス終了後のクリック起動は段階6では`unsupported`である。この区別を公開型にも記載した。[GNOME 46の接続終了処理](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/46.0/js/ui/notificationDaemon.js)
+
+| 検証 | 結果 |
+| --- | --- |
+| native全件 | 51件成功。モデル、永続化、容量と期限、購読、所有者検証、設定、既存プラグインの回帰を含む。保持機能の修正後も該当する3件が成功。 |
+| UIのCEF・共通関連 | 163件成功。通知設定の生成、許可フィルター、Windowsでの非公開、両モードの共通実装を確認。 |
+| 制御可能なD-Bus通知サービスとPlaywright MCP | simple・validateの2件が成功。サービス不在、投稿失敗、操作非対応、更新前の古い操作、リロード、受領確認、別ウインドウからの取り消し、ページ破棄後の購読を検証。 |
+| GNOME 46の実通知とPlaywright MCP | simpleは32.55秒、validateは32.52秒で成功。実際のタイトル・本文・アプリ名・アイコンを目視でも確認。更新後の追加ボタン、通常クリック、取り消し、未受領イベントの取得と受領確認を検証。 |
+| ビルドと型検証 | LinuxのDebug・Release、通知renderer、テスト用TypeScriptが成功。今回のReleaseビルドでは警告を検出していない。 |
+
+実画面の操作では、AT-SPIの表示状態と座標で対象通知を特定し、通知一覧から対象をクリックした。GNOMEの通知ボタンには今回の環境で利用できるAction操作がなかったため、確認した座標への実クリックを使った。通知の現出と消失はアクセシビリティのイベントで待ち、固定時間の待機で合否を決めない。アプリ固有の通知とテスト用登録だけを操作する。[GNOMEの通知一覧操作](https://help.gnome.org/gnome-help/shell-notifications.html)、[AT-SPIの画面座標取得](https://gnome.pages.gitlab.gnome.org/at-spi2-core/libatspi/method.Component.get_extents.html)
+
+追加した再実行入口は次のとおりである。先にLinuxのテスト用Releaseビルドを作成する。実画面の試験はGNOMEのログインセッションで実行する。
+
+```bash
+npm run build:test --workspace muon-core
+npm exec --workspace muon-core-tester -- vitest run notifications-linux.test.ts
+npm run test:notifications-desktop --workspace muon-core-tester
+```
+
+段階6の完了条件を、両モードの実通知操作、用途分類、状態の不明値、通知サービス不在、操作非対応、更新、別ウインドウからの取り消し、購読解放で確認した。プロセス終了後のクリック起動とKDEを含む配布環境の検証は段階8へ残している。
+
+### 段階7の実装と検証
+
+Windowsの通知を、OSが提供するWindows.UI.Notificationsの公開WinRT・COM APIへ接続した。MinGW32/64から呼び出すABI宣言は公式IDLと照合した。Windows App SDKについても実行時依存と配布方法を調べ、追加ランタイムを必要としないOS標準APIを選んだ。MSIXへの変更や通知用の常駐ワーカースレッドは必要としない。[デスクトップC++の通知とCOM登録](https://learn.microsoft.com/en-us/windows/apps/design/shell/tiles-and-notifications/send-local-toast-desktop-cpp-wrl)、[Windows App SDKの配布依存](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/deploy-unpackaged-apps)
+
+通知を有効にしたWindowsビルドでは、アプリ名、PNGアイコン、通知操作のCOM受付先を識別するCLSIDを生成する。CLSIDはアーキテクチャを含むruntime appIdから決まり、再ビルドや配置先変更で変わらない。アプリ名にはWindowsのproductNameを使う。実行時には対象アプリの識別情報を登録し、必要な情報やアイコンがない場合は診断を返す。この段階では終了後の起動を登録せず、launchをunsupported、終了後の通知保持をunknownとする。
+
+アプリ全体の投稿可否にはToastNotifier.Settingを使う。OSが無効化を返したときは、投稿前に拒否する。新しいアプリIDでは、登録順序を変えても初回の状態取得がERROR_NOT_FOUNDとなる場合があった。この場合はunknownとwindows-notification-setting-unavailableを返し、有効とは推定しない。実際の投稿後には設定画面での無効化・有効化を共通APIから取得できた。用途分類別のOS状態はunknownのままである。[ToastNotifier.Setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotifier.setting?view=winrt-26100)
+
+イベントはWindowsでもアプリのプロファイルへ保存する。cardioの非同期ファイルI/OとOSの共有スレッドプールを使い、書き込みとflushを完了してから同じディレクトリ内でファイルを置き換える。日本語を含む保存先、保存失敗時の旧データ保持、破損時のエラー、受領確認後の再読込を実Windowsで検証した。操作の識別にはUUIDを使い、OSが通知を識別するTagとGroupの組へ全ビットを保持する。通常停止に入る前の破棄でもバックエンドと購読を解放し、通常停止では受け付けた操作が完了するまで待つ。
+
+COMの受付登録を解除しても、OS側がすでに取得したコールバックは残る。通知クリックと終了が重なっても、停止後のディスパッチャーへ処理を渡さないよう、受付の停止と処理の投入を排他制御した。バリアでこの順序を再現する試験は、修正前の失敗と修正後の成功を確認し、実Windowsでも両アーキテクチャで成功した。[COM登録解除後の既存参照](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-corevokeclassobject)
+
+| 検証 | 結果 |
+| --- | --- |
+| Windowsのnative保存・サービス | 32bit・64bitの計4件が成功。停止前の破棄と停止の冪等性を追加した後も、サービスの両アーキテクチャが成功。 |
+| Windowsの実通知ドライバー | 通知本体と追加ボタンを各アーキテクチャで操作し、計4件が成功。登録不足とOSの無効化についても、計4件で診断と投稿拒否を確認。 |
+| CEFとPlaywright MCP | 32bit・64bitそれぞれのsimple・validate、計4件が成功。投稿・更新・取り消し、通常クリックと追加ボタン、OS設定による拒否、権限フィルター、リロード後の未受領イベント、受領確認の冪等性、別ウインドウからの取り消し、破棄後も残る主ウインドウの購読を確認。 |
+| UIのWindows設定と公開関数 | 関連67件が成功。指定したproductNameの反映は追加のRED確認後に成功。通知無効時の非公開とLinux側の設定も確認。 |
+| ビルドと回帰 | Windowsの両アーキテクチャでDebug・Releaseが成功。Linuxの設定・内蔵プラグイン・保存・サービスの4件、停止処理の追加試験、TypeScriptの型検証が成功。nativeビルドの警告は検出していない。 |
+
+実画面はCUIAutomation8で対象アプリと通知を識別し、通知本体やボタンのInvoke操作でイベントを受け取った。通知の現出と消失はUI Automationの変更イベントで待つ。画像にはアプリ名とアイコンを含め、表示内容を目視でも確認した。通知の全体設定を変更する試験は元の値を記録し、終了処理で復元する。テスト用のアプリ登録と通知だけを削除する。[UI AutomationのInvoke操作](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementinginvoke)
+
+再実行入口は次のとおりである。Windows実機との接続を必須とし、接続できない場合は成功やskipにしない。両アーキテクチャのnative保存・サービス・登録不足・終了時のコールバック競合の試験も、この入口へ組み込んだ。
+
+```bash
+npm run test:windows-notifications --workspace muon-core-tester
+```
+
+段階7の完了条件を、両アーキテクチャの実通知、アプリ識別、登録不足と無効化、両モードの購読と権限フィルター、未受領イベントで確認した。通知からのプロセス起動、NSISへの起動登録、更新とアンインストールは段階8へ残している。
+
+### 段階8の途中経過とKDEの対応条件
+
+CEFの通知操作を、保存済み投稿の識別、未受領イベントの永続化、ウインドウの復元へ接続した。WindowsではNSISの導入・更新・移動・削除を含む実機試験がamd64とi686でそれぞれ8件成功し、インストーラー専用の追加2件も成功した。Linuxの配布関連テストは156件成功した。GNOMEでは、投稿元の終了後に通常クリックと名前付きアクションから新しいプロセスを起動し、保存済みデータの受け取り、未受領イベントの再取得、受領確認、通知履歴の取り消しを確認した。
+
+KDEはPlasma 5.27.12、`xdg-desktop-portal-kde 5.27.11`、Portal本体1.20.3を組み合わせた実デスクトップで調べた。通知のアプリ名とアイコン、本文、追加ボタンを表示できたが、投稿元の終了後はクリックしてもアプリが起動しなかった。D-Busの観測では、OSのクリック通知がKDE側へ届いた後、アプリへの起動呼び出しが送られていなかった。上記の公式修正と一致するため、ランタイムに旧KDE専用の起動方式を追加せず、修正済みKDEを起動対応の条件とする方針に合意した。
+
+Linuxの公開配布アプリを使った起動試験と、修正済みKDEでの確認は継続中である。段階8の完了条件はまだ満たしていない。
+
+### Portal本体の対応条件についての合意
+
+GNOMEの公開配布試験では、simpleモードで更新前の通知、空白を含むパスへの移動、未受領イベントの保持、登録解除時の残存通知削除を確認した。一方、validateモードでは、通知用scopeの作成後にCEF自身が同じプロセスをChromiumのscopeへ移し、通知投稿が別のアプリ識別子として拒否された。表示操作の待機方法を変更せず、上記の公式ソースとD-Bus・systemdの記録から識別子の競合を確認した。
+
+この結果を受け、Linuxの通知起動をPortal本体1.20以降に限定し、旧版は通知表示と実行中の操作を扱う方針に合意した。旧版向けscope処理を削除し、登録APIがない場合の非対応理由と実行中の通知機能を検証する。KDEの追加条件は6.2.5以降のままとする。
+
+KDE Plasma 6.3.6、Portal本体1.20.3、portal-kde 6.3.5では、通知表示と操作が両モードで成功した。公開配布アプリのsimpleモードでは、更新前の通知からの起動、空白を含む移動先への登録更新、登録解除時の通知削除も成功した。validateモードは起動・再配送・受領確認まで成功し、通知無効化ビルドの試験設定を修正して残りを確認する段階だった。この時点では段階8全体は未完了だった。
+
+### 段階9へ引き継いだ検証とビルド警告
+
+この時点では、段階9の全体テスト、各OS境界、16 KiB環境、CEFの通知起動と配布物の検証は未完了だった。バーと配置については、ジェスチャーナビゲーション、マルチウインドウ、API 35・36の境界も残っていた。ここまでの実機試験や個別テストを代替にせず、段階9で確認する対象とした。
+
+UIのCJSビルドでは、既存の`__dirname`と`import.meta.url`の分岐に対して`EMPTY_IMPORT_META`警告を確認した。CJSで使われる`__dirname`側の動作はパッケージテストで確認しており、段階9でビルド設定と合わせて警告を解消する。型検証と整形の処理時間に対する`PLUGIN_TIMINGS`の表示も、段階9のビルド確認で扱う。Androidランタイムの今回のビルドでは警告を検出していない。
+
+段階5のAPKセット生成では、JDK 25.0.3でbundletool 1.18.3内のprotobufによる`sun.misc.Unsafe::arrayBaseOffset`の警告を確認した。通知ランタイムの追加コードからの呼び出しではない。段階9でbundletoolの依存と実行JDKを確認して対処し、警告を残したまま全体完了とはしない。[JDK 24以降のUnsafe警告](https://docs.oracle.com/en/java/javase/24/migrate/significant-changes-jdk-24.html)
+
+### 段階8の完了確認
+
+GNOME Shell 46.0とPortal 1.20.3を使い、公開CLIで生成したtar.gz配布アプリのsimple・validate両モードを確認した。2件の試験が306.61秒で成功した。KDE Plasma 6.3.6、Portal 1.20.3、portal-kde 6.3.5でも、simple・validate両モードの配布試験が成功した。
+
+両デスクトップで、実行中の同じプロセスへの配送、終了後の通常クリックと名前付きボタンによる起動、ページ初期化前の保持、再配送と受領確認を確認した。通知無効版への更新ではOS通知を削除し、保存済みイベントを維持した。通知有効版の更新では古い通知から起動でき、空白を含むパスへ移動した後も新しい起動先で正しいデータを受け取った。登録解除ではOS通知と所有する登録を削除した。通知のアプリ名とアイコンは画像でも確認した。
+
+Portalのホスト登録APIがない環境では、終了済みアプリの起動を非対応とし、理由を返す。通知表示と実行中の操作は従来の通知サービスで扱う。旧scope方式の削除前に失敗するテストを確認し、削除後のネイティブ通知・設定テスト13件が成功した。
+
+Windows実機のamd64・i686各8件、NSISの2件、GNOME・KDEの上記結果を段階8の完了条件と照合した。全体の完了は、段階9の全体テストと配布形式・OS境界の確認、利用文書の更新後に判定する。
+
+### 段階9の全体検証で判明した問題
+
+2026年10月20日、Linux amd64、Windows i686・amd64、Android arm64-v8a・x86_64の配布用ビルドとSDK配置の検証が成功した。Linuxの追加配布試験では、依存情報を含む配布用ランタイムからAppImageとdebを生成した。
+
+| 検証入口・対象 | 結果 |
+| --- | --- |
+| `npm test --workspace muon-builder` | 全処理が成功。Linuxのファイル操作とキャッシュ、Windowsの進捗表示、圧縮・展開、リソース更新を含む。 |
+| `npm test --workspace muon-node` | 40件成功。 |
+| `npm run test:vitest --workspace muon-core-tester` | 226件成功、30件省略、928.43秒。省略分は成功件数に含めない。実デスクトップの通知試験は別記。 |
+| `npm run test:windows-nsis-e2e --workspace muon-ui` | 実機で6件すべて成功、163.71秒。32bit・64bitの導入先検証、通知登録、更新、削除を確認。 |
+| GNOMEのtar.gz配布アプリ | simple・validateの2件が成功、285.79秒。更新前の通知からの起動、保存済みイベント、配置先の移動、無効化と再有効化、登録解除を再確認。 |
+| KDEのAppImage・deb配布アプリ | 両モードの計4件が成功、406.90秒。実行中の操作と新規起動、未受領イベントと受領確認、履歴削除、登録解除を確認。 |
+
+AppImage・debの試験は`MUON_TEST_NOTIFICATION_PACKAGE_FORMATS=appimage,deb`を指定して`notifications-linux-launch.test.ts`を実行する。debは試験ごとに異なるパッケージ名で導入・削除するため、破棄可能なデスクトップ環境と、対象パッケージに限った管理権限を使う。今回のAppImageはFUSEを使わないコンテナで`APPIMAGE_EXTRACT_AND_RUN=1`により起動した。[AppImageの公式実行方法](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
+
+全体テストで見つかった試験用コードの不整合も修正した。ランチャーの単体試験に通知関連の依存を追加し、Nodeの利用アプリ試験には共有rendererを参照できる構成を用意した。GTKの操作試験は、起動した別アプリとCEFのプロファイルが競合しないよう、試験専用の状態ディレクトリを指定した。競合を再現した後、対象10件と上記のLinux全体試験が成功した。Windowsの日本語パス試験は古い配布用バイナリを現行版で作り直すことで成功し、診断のための一時変更は取り除いた。
+
+`EMPTY_IMPORT_META`はホスト向けViteビルドの対象をNodeとして指定して解消し、CJS・Android hostの読み込みを動作で確認した。`PLUGIN_TIMINGS`は、必須の整形・型検査が小さなバンドルの処理時間の大半を占めるという診断だった。各処理の時間表示を維持し、この比率に対する警告だけを無効にした。出力の正しさに関する検査は維持している。[Rolldownの時間比率診断](https://rolldown.rs/reference/InputOptions.checks#bundlertimings)
+
+APKセット生成はJDK 21.0.12.1でも確認し、JDK 25で発生したbundletoolのUnsafe警告を避けられた。Linux配布用ビルドでは、GTKモジュールが推移的に参照するGDKシンボルについて、既存の`dpkg-shlibdeps`警告が出た。同梱ライブラリを含む依存監査は183個のELFを検査して問題0件となったため、外部モジュールは変更せず、解析上の警告として記録した。[dpkg-shlibdepsの診断](https://manpages.debian.org/bookworm/dpkg-dev/dpkg-shlibdeps.1.en.html)
+
+Windows全体の入口はファイル操作の実機試験で止まった。Defenderが`C:\muon-e2e\builder-path-0\windows-amd64-builder-test.exe`を`Trojan:Win32/Bearfoos.A!ml`として隔離し、`CreateProcessW`が225を返した後、ファイルが存在しなくなった。このファイルは`builder/test/windows_filesystem_test.c`からビルドした試験用実行ファイルで、SHA-256は`7e6a1b5d1ced144361f526a159ef18b338592ad0c83a52a667e12ea06e7631e2`である。対象122件のうち93件が成功し、29件はこの遮断で失敗した。誤検知とは断定せず、検出の扱いを利用者へ確認した。[Windowsのエラー225](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-)
+
+この時点では、Android API 35でActivity再生成後に初回Insetsが届かず、ページ読み込みが始まらない問題を再現していた。あわせて、Activityの破棄と別スレッドのアセット読み込みが重なる競合も調査対象となった。API 35・36の境界試験、修正後のPixel 6・16 KiB環境、Windowsの遮断された試験、ルートの`npm test`の最終確認が残っていた。Androidの修正と再検証の結果は次項に記載する。
+
+### Androidの境界検証と再生成時の修正
+
+`49accc6`で、Activity再生成後のページ起動と、破棄中のアセット読み込みを修正した。既存の再生成テストでは、OSのInsetsは存在しているのにWeb側の初期化が始まらず失敗することを確認した。初回レイアウト後に親が消費した残りのInsetsを新しい表示領域へ渡すことで、再生成と分割画面の両方が成功した。[レイアウト変更の通知](https://developer.android.com/reference/android/view/View.OnLayoutChangeListener)
+
+開始済みのアセット要求をActivityの破棄後に完了させるテストを追加し、null参照による失敗を確認した。要求が参照するハンドラーを保持する修正後、正常な応答を返せることを確認した。一時的な診断コードと採用しなかった修正は取り除いた。[別スレッドで呼ばれるアセット要求](https://developer.android.com/reference/android/webkit/WebViewClient#shouldInterceptRequest(android.webkit.WebView,%20android.webkit.WebResourceRequest))
+
+修正後のAndroid検証は次のとおりで、記載したケースに失敗や省略はない。「境界」はWebViewに依存しないWindow、サービス、永続ストアの試験、「全体」はテストホストのinstrumentation全件を指す。
+
+| OS・端末 | ABI・ページサイズ | 画面形状・ナビゲーション | 結果 |
+| --- | --- | --- | --- |
+| API 24・25のエミュレーター | x86_64・4 KiB | 320×640の矩形、仮想ハードキー | 境界試験が各21件成功。 |
+| API 26のエミュレーター | x86_64・4 KiB | 1080×2400のPixel 6プロファイル、ソフトキー | 境界試験21件成功。 |
+| API 33・35のエミュレーター | x86_64・4 KiB | 1080×2400、中央カットアウト、ジェスチャー | 全体試験が各77件成功。 |
+| API 36のエミュレーター | x86_64・16 KiB | 1080×2400、中央カットアウト、ジェスチャー | 全体試験77件成功。 |
+| API 37のエミュレーター（37.2 image） | x86_64・16 KiB | 1080×2400、中央カットアウト、ジェスチャー | `test:android`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。 |
+| Android 17 / API 37のPixel 6 | arm64-v8a・4 KiB | 1080×2400、中央カットアウト、3ボタン | `test:android:pixel6`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。PoCの同じ入口も20件と配布検証が成功。 |
+
+API 24〜26の旧WebViewは必要な機能を満たさないため、この結果をWebアプリ全体の動作保証にはしない。API 33以降のエミュレーターではWebView 149.0.7827.5、Pixel 6では153.0.8010.36を使った。API 36の実行前には旧providerが報告されたため、テスト実行中に切り替え後の版を確認した。16 KiB環境とPixel 6のページサイズは公式手順の`adb shell getconf PAGE_SIZE`で確認した。x86_64の16 KiB環境では`/proc/self/smaps`の`KernelPageSize`を判定に使わない。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiB環境の確認方法](https://developer.android.com/guide/practices/page-sizes)
+
+Pixel 6ではジェスチャーナビゲーションの追加12件と、全画面・IME・バーの一時表示を扱う3種類の動画検証も成功した。試験後は3ボタンへ戻した。最終AARを含むnpmパッケージから生成した公開APKでは、Playwright MCPによる通知2件、バー操作1件、設定画面1件が成功した。通知2件はsimple・validateの両方を対象とし、実通知の操作、プロセス再起動、APK更新後の保存済み未受領イベントまで確認している。
+
+PoCの通常の`npm test --workspace muon-android-poc`も成功し、JavaScriptの3件、QuickJSとネイティブ依存、関数登録、release APK・APKセットを検証した。PoCにも他の小さなバンドルと同じ時間比率診断の設定を適用し、整形・型検査を維持したまま`PLUGIN_TIMINGS`が出ないことを確認した。Androidの最終検証はJDK 21.0.12.1を使用し、ビルド警告は検出しなかった。
+
+### 完了条件との照合
+
+WindowsのCEF試験はi686・amd64とも実機へ接続して実行し、各236件が成功、29件を省略した。所要時間はそれぞれ816.20秒、827.17秒だった。省略分は成功件数に含めない。
+
+Windows通知の再検証では、i686のsimpleケースが設定画面の通知スイッチを見つけられず失敗した。設定ウインドウの存在だけを待ち、その内部を一度だけ検索する試験処理だったため、`7f5128a`でスイッチの出現と指定した状態をOSの画面変更イベントで待つよう修正した。修正後の`npm run test:windows-notifications --workspace muon-core-tester`は、i686・amd64とも全8件が成功し、省略はなかった。所要時間は339.76秒、345.67秒である。通知の実操作、終了後の起動、更新・移動、未受領イベントと受領確認をsimple・validateの両方で再確認した。型検査も成功し、今回のビルドで警告は検出しなかった。[OSの画面構造変更の通知](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-addstructurechangedeventhandler)
+
+全体の完了条件1〜8と10は、各段階の実装、上記の端末・配布物の検証、日英の利用文書と照合した。AndroidのバーとInsets、通知権限・設定連携、共通通知と起動イベント、対応機能の診断、設定の分離、Windows・Linuxの登録と更新を確認済みである。
+
+利用者がDefenderの監視対象から外した`C:\test\`を試験用に指定したため、既存の環境変数`MUON_E2E_REMOTE_WORK_DIR`で作業先を`C:\test\muon-plan13`へ切り替えた。ファイル操作試験は全122件が321.41秒で成功し、今回の試験で遮断が解消したことを確認した。この作業先でWindows全体の入口とルートの`npm test`を再実行した結果も、次項のとおり成功した。条件9を含む全10項目を満たしたため、段階9とplan13全体を完了と判定した。
+
+### 全体テストの最終結果
+
+コミット`5f721be`の状態で、次の2つの入口を順番に実行し、両方とも終了コード0で完了した。JDKは21.0.12.1、Windowsの作業先は`C:\test\muon-plan13`とした。
+
+```bash
+JAVA_HOME=/tmp/muon-plan13-jdk21/jdk \
+MUON_E2E_REMOTE_WORK_DIR='C:\test\muon-plan13' \
+npm run test:windows-e2e --workspace muon-core-tester
+
+JAVA_HOME=/tmp/muon-plan13-jdk21/jdk \
+MUON_E2E_REMOTE_WORK_DIR='C:\test\muon-plan13' \
+npm test
+```
+
+Windows単独の全体入口は672件成功、対象外58件の省略、失敗0件だった。通知のi686・amd64各8件に省略はない。
+
+| Windowsの試験 | 成功件数 | 所要時間 |
+| --- | --- | --- |
+| パス操作 | 62 | 47.48秒 |
+| ビルダーのファイル操作 | 122 | 318.81秒 |
+| i686 CEF | 236、対象外29件を省略 | 745.49秒 |
+| amd64 CEF | 236、対象外29件を省略 | 757.71秒 |
+| i686通知 | 8 | 337.71秒 |
+| amd64通知 | 8 | 344.22秒 |
+
+ルートの`npm test`は、Vitestの合計1538件が成功し、対象外92件を省略した。共通nativeの入口とビルダーの全処理も成功し、CEFのnative CTestは57件すべて成功した。
+
+| ルート全体テストの対象 | 結果 |
+| --- | --- |
+| SDK | 18件成功。 |
+| Androidランタイム・テストアプリ | AARと配布物のビルドが成功。Vitest 110件とnative依存、関数登録、release APK・APKセットの検査が成功。 |
+| Android PoC | 3件とQuickJS、native依存、関数登録、release配布物の検査が成功。 |
+| ビルダー・Node | ビルダーの全処理とNodeの40件が成功。 |
+| UI | 469件成功、対象外4件を省略。NSISの実機6件は省略せず、すべて成功。 |
+| CEF native | 57件成功、3.88秒。 |
+| Linux CEF | 226件成功、対象外30件を省略、851.13秒。 |
+| Windowsパス・ビルダー | 62件と122件が成功。所要時間は47.85秒、323.45秒。 |
+| Windows CEF | i686・amd64とも236件成功、各29件を省略。所要時間は777.17秒、786.70秒。 |
+| Windows通知 | i686・amd64とも8件すべて成功。所要時間は334.34秒、337.92秒。 |
+
+省略したケースは成功件数に含めない。ルート入口で対象外となるAndroid端末、Linux実デスクトップ、公開配布物の試験は、前項までに記録した個別の入口で成功を確認している。Pixel 6と16 KiB環境の必須入口、Windows単独の全体入口、NSISの必須入口もすべて成功し、必須ケースの未実行は残っていない。
+
+最終の2つの全体入口では、新規のビルド警告や未処理例外は検出しなかった。先に分析したLinux配布用ビルドの依存解析警告は、上記の183 ELFの監査結果とともに記録を維持する。

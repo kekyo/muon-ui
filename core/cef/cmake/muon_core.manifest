@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity name="muon.Core" version="1.0.0.0" type="win32" processorArchitecture="*" />
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings xmlns:ws2="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+      <ws2:longPathAware>true</ws2:longPathAware>
+    </windowsSettings>
+  </application>
   <!-- Chromium creates layered child windows in the GPU subprocess. Windows
        requires an OS compatibility declaration in that executable's manifest.
        https://learn.microsoft.com/en-us/windows/win32/winmsg/using-windows#using-layered-windows -->

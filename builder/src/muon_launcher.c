@@ -18,9 +18,8 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#include <direct.h>
-#include <process.h>
 #include <windows.h>
+#include "muon_notification_windows.h"
 #else
 #include <limits.h>
 #include <sys/stat.h>
@@ -42,24 +41,10 @@
 #define MUON_DESKTOP_ICON_FILE_NAME "muon-desktop-icon.png"
 #define MUON_INSTALL_CONFIG_FILE_NAME "muon-install.json"
 #define MUON_LAUNCHER_APP_ID_ENVIRONMENT "MUON_LAUNCHER_APP_ID"
+#define MUON_LAUNCHER_PATH_ENVIRONMENT "MUON_LAUNCHER_PATH"
 #define MUON_LAUNCHER_APPIMAGE_ENVIRONMENT "MUON_LAUNCHER_APPIMAGE"
 #define MUON_CEF_SANDBOX_ENVIRONMENT "MUON_CEF_SANDBOX"
 #define MUON_LAUNCH_SOURCE_NORMAL_ARGUMENT "--muon-launch-from=normal"
-
-static int is_path_separator(char value) {
-  return value == '/' || value == '\\';
-}
-
-static void normalize_path_separators(char *path) {
-  if (path == NULL) {
-    return;
-  }
-  for (char *cursor = path; *cursor != '\0'; cursor += 1) {
-    if (*cursor == '\\') {
-      *cursor = '/';
-    }
-  }
-}
 
 static char *duplicate_string(const char *value) {
   const size_t size = strlen(value) + 1;
@@ -71,54 +56,14 @@ static char *duplicate_string(const char *value) {
   return result;
 }
 
-static char *path_join(const char *left, const char *right) {
-  const int needs_separator = !is_path_separator(left[strlen(left) - 1]);
-  const size_t size = strlen(left) + strlen(right) + (needs_separator ? 2 : 1);
-  char *result = (char *)malloc(size);
-  if (result == NULL) {
-    return NULL;
-  }
-  snprintf(result, size, needs_separator ? "%s/%s" : "%s%s", left, right);
-  return result;
-}
-
-static char *parent_directory(const char *path) {
-  const char *slash = strrchr(path, '/');
-  if (slash == NULL) {
-    return duplicate_string(".");
-  }
-  if (slash == path) {
-    return duplicate_string("/");
-  }
-#ifdef _WIN32
-  if (slash == path + 2 && ((path[0] >= 'A' && path[0] <= 'Z') ||
-                            (path[0] >= 'a' && path[0] <= 'z')) &&
-      path[1] == ':') {
-    char *root = (char *)malloc(4);
-    if (root == NULL) {
-      return NULL;
-    }
-    memcpy(root, path, 3);
-    root[3] = '\0';
-    return root;
-  }
-#endif
-  const size_t length = (size_t)(slash - path);
-  char *result = (char *)malloc(length + 1);
-  if (result == NULL) {
-    return NULL;
-  }
-  memcpy(result, path, length);
-  result[length] = '\0';
-  return result;
-}
-
 static char *file_stem(const char *path) {
   const char *start = path;
   const char *slash = strrchr(path, '/');
-  if (slash != NULL) {
-    start = slash + 1;
-  }
+#ifdef _WIN32
+  const char *backslash = strrchr(path, '\\');
+  if (backslash != NULL && (slash == NULL || backslash > slash)) slash = backslash;
+#endif
+  if (slash != NULL) start = slash + 1;
   const char *end = start + strlen(start);
 #ifdef _WIN32
   if (end - start > 4 && strcmp(end - 4, ".exe") == 0) {
@@ -180,24 +125,41 @@ static char *resolve_app_id(const char *launcher_path) {
 static char *get_launcher_path(const char *argv0) {
 #ifdef _WIN32
   (void)argv0;
-  char buffer[PATH_MAX];
-  const DWORD length = GetModuleFileNameA(NULL, buffer, (DWORD)sizeof(buffer));
-  if (length == 0 || length >= sizeof(buffer)) {
-    return NULL;
+  DWORD capacity = 256;
+  for (;;) {
+    wchar_t *buffer = malloc((size_t)capacity * sizeof(wchar_t));
+    if (buffer == NULL) return NULL;
+    DWORD length = GetModuleFileNameW(NULL, buffer, capacity);
+    DWORD error = GetLastError();
+    if (length == 0) {
+      free(buffer);
+      SetLastError(error);
+      return NULL;
+    }
+    if (length < capacity) {
+      char *result = muon_utf8_from_wide(buffer);
+      free(buffer);
+      muon_normalize_path_separators(result);
+      return result;
+    }
+    free(buffer);
+    if (capacity == 32768) {
+      errno = ENAMETOOLONG;
+      SetLastError(ERROR_FILENAME_EXCED_RANGE);
+      return NULL;
+    }
+    capacity *= 2;
   }
-  buffer[length] = '\0';
-  normalize_path_separators(buffer);
-  return duplicate_string(buffer);
 #else
   char buffer[PATH_MAX];
   const ssize_t length = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
   if (length >= 0) {
     buffer[length] = '\0';
-    normalize_path_separators(buffer);
+    muon_normalize_path_separators(buffer);
     return duplicate_string(buffer);
   }
   char *fallback = duplicate_string(argv0);
-  normalize_path_separators(fallback);
+  muon_normalize_path_separators(fallback);
   return fallback;
 #endif
 }
@@ -216,18 +178,18 @@ static const char *get_core_executable_name(void) {
 
 static char *get_default_state_home(void) {
 #ifdef _WIN32
-  const char *local_app_data = getenv("LOCALAPPDATA");
-  if (local_app_data != NULL && local_app_data[0] != '\0') {
-    return muon_duplicate_path_string(local_app_data);
+  char *local_app_data = NULL;
+  if (muon_get_environment("LOCALAPPDATA", &local_app_data) != 0) return NULL;
+  if (local_app_data != NULL) {
+    muon_normalize_path_separators(local_app_data);
+    return local_app_data;
   }
-  const char *user_profile = getenv("USERPROFILE");
-  if (user_profile != NULL && user_profile[0] != '\0') {
-    char *normalized = muon_duplicate_path_string(user_profile);
-    char *result =
-        normalized == NULL
-            ? NULL
-            : muon_path_join3(normalized, "AppData", "Local");
-    free(normalized);
+  char *user_profile = NULL;
+  if (muon_get_environment("USERPROFILE", &user_profile) != 0) return NULL;
+  if (user_profile != NULL) {
+    muon_normalize_path_separators(user_profile);
+    char *result = muon_path_join3(user_profile, "AppData", "Local");
+    free(user_profile);
     return result;
   }
 #else
@@ -274,6 +236,7 @@ typedef struct {
   char **categories;
   size_t category_count;
   int startup_notify;
+  int notifications_enabled;
   char *icon_file_name;
 } MuonDesktopConfig;
 
@@ -429,7 +392,7 @@ static char *escape_desktop_string(const char *value) {
   return string_builder_take(&builder);
 }
 
-static char *quote_desktop_exec_argument(const char *value) {
+static char *quote_exec_argument(const char *value, int expand_field_codes) {
   MuonLauncherStringBuilder builder;
   string_builder_init(&builder);
   if (string_builder_append_char(&builder, '"') != 0) {
@@ -438,7 +401,7 @@ static char *quote_desktop_exec_argument(const char *value) {
   }
   for (const char *cursor = value; *cursor != '\0'; cursor += 1) {
     if (*cursor == '"' || *cursor == '\\' || *cursor == '$' ||
-        *cursor == '`' || *cursor == '%') {
+        *cursor == '`' || (expand_field_codes && *cursor == '%')) {
       if (string_builder_append_char(&builder, *cursor == '%' ? '%' : '\\') != 0) {
         string_builder_free(&builder);
         return NULL;
@@ -460,7 +423,7 @@ static char *quote_desktop_exec_argument(const char *value) {
 }
 
 static char *create_desktop_exec_command(const char *launcher_path) {
-  char *quoted_launcher = quote_desktop_exec_argument(launcher_path);
+  char *quoted_launcher = quote_exec_argument(launcher_path, 1);
   if (quoted_launcher == NULL) {
     return NULL;
   }
@@ -515,7 +478,9 @@ static char *create_desktop_categories(char **categories, size_t count) {
 static char *create_desktop_entry_content(const MuonDesktopConfig *desktop,
                                           const char *exec,
                                           const char *try_exec,
-                                          const char *icon) {
+                                          const char *icon,
+                                          const char *app_id,
+                                          const char *launcher_path) {
   MuonLauncherStringBuilder builder;
   string_builder_init(&builder);
   if (string_builder_append(&builder, "[Desktop Entry]\n") != 0 ||
@@ -561,6 +526,13 @@ static char *create_desktop_entry_content(const MuonDesktopConfig *desktop,
     string_builder_free(&builder);
     return NULL;
   }
+  if (desktop->notifications_enabled &&
+      (string_builder_append(&builder, "DBusActivatable=true\n") != 0 ||
+       append_desktop_entry_key_value(&builder, "X-muon-AppId", app_id) != 0 ||
+       append_desktop_entry_key_value(&builder, "X-muon-Launcher", launcher_path) != 0)) {
+    string_builder_free(&builder);
+    return NULL;
+  }
   return string_builder_take(&builder);
 }
 
@@ -568,10 +540,12 @@ static int write_desktop_entry(const char *path,
                                const MuonDesktopConfig *desktop,
                                const char *launcher_path,
                                const char *try_exec,
-                               const char *icon) {
+                               const char *icon,
+                               const char *app_id) {
   char *exec = create_desktop_exec_command(launcher_path);
   char *content =
-      exec == NULL ? NULL : create_desktop_entry_content(desktop, exec, try_exec, icon);
+      exec == NULL ? NULL : create_desktop_entry_content(desktop, exec, try_exec, icon,
+                                                         app_id, launcher_path);
   const int result =
       content == NULL ? -1 : muon_write_text_file(path, content);
   free(exec);
@@ -735,6 +709,8 @@ static int read_desktop_config(const char *runtime_dir,
                                           &config->icon_file_name) ||
                read_optional_bool_field(root, "startupNotify", 1,
                                         &config->startup_notify) ||
+               read_optional_bool_field(root, "notificationsEnabled", 0,
+                                        &config->notifications_enabled) ||
                read_desktop_categories(root, config);
   yyjson_doc_free(document);
   if (result != 0 ||
@@ -888,6 +864,171 @@ static int desktop_entry_is_muon_managed(const char *path) {
   return managed;
 }
 
+static char *create_user_notification_path(const char *desktop_id,
+                                           const char *directory,
+                                           const char *suffix) {
+  char *data_home = get_default_data_home();
+  const size_t size = strlen(desktop_id) + strlen(suffix) + 1;
+  char *name = (char *)malloc(size);
+  char *path = NULL;
+  if (data_home != NULL && name != NULL) {
+    snprintf(name, size, "%s%s", desktop_id, suffix);
+    path = muon_path_join3(data_home, directory, name);
+  }
+  free(data_home);
+  free(name);
+  return path;
+}
+
+// Ownership keys are compared in their expected group, using the same escaping
+// as the writer. A key in another group cannot authorize removal.
+static int entry_has_value(const char *content, const char *group,
+                            const char *key, const char *value) {
+  char *escaped = escape_desktop_string(value);
+  if (escaped == NULL) return 0;
+  const size_t group_length = strlen(group);
+  const size_t key_length = strlen(key);
+  const size_t value_length = strlen(escaped);
+  int in_group = 0;
+  int found = 0;
+  for (const char *line = content; *line != '\0';) {
+    const char *end = strchr(line, '\n');
+    const size_t length = end == NULL ? strlen(line) : (size_t)(end - line);
+    if (*line == '[') {
+      in_group = length == group_length + 2 &&
+                 strncmp(line + 1, group, group_length) == 0 &&
+                 line[length - 1] == ']';
+    } else if (in_group && length >= key_length + 1 &&
+               strncmp(line, key, key_length) == 0 && line[key_length] == '=') {
+      found = length == key_length + value_length + 1 &&
+              strncmp(line + key_length + 1, escaped, value_length) == 0;
+    }
+    if (end == NULL) break;
+    line = end + 1;
+  }
+  free(escaped);
+  return found;
+}
+
+static char *create_notification_service_content(const char *desktop_id,
+                                                  const char *app_id,
+                                                  const char *launcher_path) {
+  char *quoted = quote_exec_argument(launcher_path, 0);
+  MuonLauncherStringBuilder builder;
+  string_builder_init(&builder);
+  const int failed = quoted == NULL ||
+      string_builder_append(&builder, "[D-BUS Service]\n") != 0 ||
+      append_desktop_entry_key_value(&builder, "Name", desktop_id) != 0 ||
+      string_builder_append(&builder, "Exec=") != 0 ||
+      string_builder_append(&builder, quoted) != 0 ||
+      string_builder_append(&builder, " --muon-notification-activation\n") != 0 ||
+      append_desktop_entry_key_value(&builder, "X-muon-AppId", app_id) != 0;
+  free(quoted);
+  if (failed) {
+    string_builder_free(&builder);
+    return NULL;
+  }
+  return string_builder_take(&builder);
+}
+
+static int owns_linux_notification_registration(const char *desktop_id,
+                                                 const char *app_id,
+                                                 const char *launcher_path) {
+  char *desktop_path = create_user_desktop_entry_path(desktop_id);
+  char *service_path = create_user_notification_path(desktop_id, "dbus-1/services", ".service");
+  char *desktop = desktop_path == NULL || !muon_path_exists(desktop_path)
+                      ? NULL : muon_read_text_file(desktop_path);
+  char *service = service_path == NULL || !muon_path_exists(service_path)
+                      ? NULL : muon_read_text_file(service_path);
+  char *expected_service = create_notification_service_content(desktop_id, app_id, launcher_path);
+  const int owned = desktop != NULL && service != NULL && expected_service != NULL &&
+      entry_has_value(desktop, "Desktop Entry", "X-muon-Managed", "true") &&
+      entry_has_value(desktop, "Desktop Entry", "X-muon-AppId", app_id) &&
+      entry_has_value(desktop, "Desktop Entry", "X-muon-Launcher", launcher_path) &&
+      strcmp(service, expected_service) == 0;
+  free(desktop_path);
+  free(service_path);
+  free(desktop);
+  free(service);
+  free(expected_service);
+  return owned;
+}
+
+static int refresh_user_icon_cache(void) {
+  char *data_home = get_default_data_home();
+  char *theme = data_home == NULL ? NULL : muon_path_join(data_home, "icons/hicolor");
+  free(data_home);
+  if (theme == NULL) return -1;
+  const pid_t child = fork();
+  if (child == 0) {
+    execlp("gtk-update-icon-cache", "gtk-update-icon-cache",
+           "--force", "--ignore-theme-index", theme, (char *)NULL);
+    // The icon files remain usable without GTK's optional cache utility.
+    // Keep actual execution failures distinct from an absent installation.
+    if (errno == ENOENT) _exit(0);
+    perror("gtk-update-icon-cache");
+    _exit(1);
+  }
+  free(theme);
+  if (child < 0) return -1;
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) return -1;
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+static int remove_linux_notification_registration(const char *desktop_id,
+                                                   const char *app_id,
+                                                   const char *launcher_path) {
+  // Check again after maintenance: a concurrent relocated launch may now own
+  // these names. Never remove that registration.
+  if (!owns_linux_notification_registration(desktop_id, app_id, launcher_path))
+    return -1;
+  char *desktop = create_user_desktop_entry_path(desktop_id);
+  char *service = create_user_notification_path(desktop_id, "dbus-1/services", ".service");
+  char *icon = create_user_notification_path(desktop_id, "icons/hicolor/256x256/apps", ".png");
+  const int result = desktop == NULL || service == NULL || icon == NULL ||
+      unlink(service) != 0 || unlink(desktop) != 0 ||
+      (unlink(icon) != 0 && errno != ENOENT) ? -1 : refresh_user_icon_cache();
+  free(desktop);
+  free(service);
+  free(icon);
+  return result;
+}
+
+static int register_linux_notifications(const char *runtime_dir,
+                                         const char *launcher_path,
+                                         const char *app_id,
+                                         const MuonDesktopConfig *desktop) {
+  char *desktop_path = create_user_desktop_entry_path(desktop->desktop_id);
+  char *service_path = create_user_notification_path(desktop->desktop_id, "dbus-1/services", ".service");
+  char *icon_path = create_user_notification_path(desktop->desktop_id, "icons/hicolor/256x256/apps", ".png");
+  char *source_icon = muon_path_join(runtime_dir, desktop->icon_file_name);
+  char *service = create_notification_service_content(desktop->desktop_id, app_id, launcher_path);
+  const int service_exists = service_path != NULL && muon_path_exists(service_path);
+  char *existing = !service_exists
+                       ? NULL : muon_read_text_file(service_path);
+  int result = -1;
+  if (desktop_path != NULL && service_path != NULL && icon_path != NULL &&
+      source_icon != NULL && service != NULL &&
+      (!service_exists || (existing != NULL &&
+       entry_has_value(existing, "D-BUS Service", "X-muon-AppId", app_id)))) {
+    result = muon_copy_file(source_icon, icon_path, 0644) != 0 ||
+        muon_write_text_file(service_path, service) != 0 ||
+        write_desktop_entry(desktop_path, desktop, launcher_path, launcher_path,
+                             desktop->desktop_id, app_id) != 0 ||
+        refresh_user_icon_cache() != 0 ? -1 : 0;
+  }
+  free(desktop_path);
+  free(service_path);
+  free(icon_path);
+  free(source_icon);
+  free(service);
+  free(existing);
+  return result;
+}
+
 static int update_linux_desktop_entry(const char *runtime_dir,
                                       const char *launcher_path,
                                       const char *app_id) {
@@ -904,16 +1045,27 @@ static int update_linux_desktop_entry(const char *runtime_dir,
   }
 
   char *desktop_path = create_user_desktop_entry_path(desktop.desktop_id);
+  char *service_path = create_user_notification_path(desktop.desktop_id, "dbus-1/services", ".service");
   int result = 0;
   if (desktop_path == NULL) {
     result = -1;
+  } else if (!desktop.notifications_enabled && service_path != NULL &&
+             muon_path_exists(service_path)) {
+    // A disabled build at another location must not replace the current
+    // notification registration. Its owner performs maintenance explicitly.
+    result = 0;
+  } else if (desktop.notifications_enabled &&
+             (!install.is_deb || desktop_entry_is_muon_managed(desktop_path) > 0)) {
+    result = register_linux_notifications(runtime_dir,
+        install.is_appimage && install.launcher_path != NULL
+            ? install.launcher_path : launcher_path, app_id, &desktop);
   } else if (install.is_deb) {
     const int managed = desktop_entry_is_muon_managed(desktop_path);
     if (managed < 0) {
       result = -1;
     } else if (managed) {
       result = write_desktop_entry(desktop_path, &desktop, install.launcher_path,
-                                   install.launcher_path, desktop.desktop_id);
+                                   install.launcher_path, desktop.desktop_id, app_id);
     }
   } else {
     const char *launcher_name = file_name_from_path(launcher_path);
@@ -927,13 +1079,14 @@ static int update_linux_desktop_entry(const char *runtime_dir,
       result = -1;
     } else {
       result = write_desktop_entry(desktop_path, &desktop, runtime_launcher_path,
-                                   runtime_launcher_path, icon_path);
+                                   runtime_launcher_path, icon_path, app_id);
     }
     free(runtime_launcher_path);
     free(icon_path);
   }
 
   free(desktop_path);
+  free(service_path);
   install_config_free(&install);
   desktop_config_free(&desktop);
   return result;
@@ -1081,8 +1234,28 @@ static char **create_core_argv(const char *core_path, int argc, char **argv) {
   return core_argv;
 }
 
+#ifdef _WIN32
+static int resolve_runtime_working_directory(const char *runtime_dir,
+                                             muon_windows_path *directory) {
+  DWORD error = muon_windows_path_normalize_utf8(runtime_dir, strlen(runtime_dir), directory);
+  if (error != ERROR_SUCCESS) {
+    fprintf(stderr, "muon-launcher: invalid runtime working directory (Windows error %lu): %s\n",
+            error, runtime_dir);
+    return -1;
+  }
+  if (directory->length >= MAX_PATH) {
+    fprintf(stderr, "muon-launcher: runtime working directory requires a short Windows path "
+                    "(under 260 UTF-16 code units): %s\n", runtime_dir);
+    muon_windows_path_destroy(directory);
+    return -1;
+  }
+  return 0;
+}
+#endif
+
 static int launch_core(const char *runtime_dir, const char *core_path,
-                       const char *app_id, const char *appimage_path,
+                       const char *app_id, const char *launcher_path,
+                       const char *appimage_path,
                        int enable_cef_sandbox, int argc,
                        char **argv) {
   char **core_argv = create_core_argv(core_path, argc, argv);
@@ -1092,32 +1265,56 @@ static int launch_core(const char *runtime_dir, const char *core_path,
   }
 #ifdef _WIN32
   (void)appimage_path;
-  if (_chdir(runtime_dir) != 0) {
-    perror(runtime_dir);
+  muon_windows_path directory = {0};
+  if (resolve_runtime_working_directory(runtime_dir, &directory) != 0) {
     free(core_argv);
     return 1;
   }
-  if (_putenv_s(MUON_LAUNCHER_APP_ID_ENVIRONMENT, app_id) != 0) {
+  wchar_t *wide_app_id = muon_wide_from_utf8(app_id);
+  if (wide_app_id == NULL || !SetEnvironmentVariableW(L"MUON_LAUNCHER_APP_ID", wide_app_id)) {
     fprintf(stderr, "muon-launcher: failed to set %s.\n",
             MUON_LAUNCHER_APP_ID_ENVIRONMENT);
+    free(wide_app_id);
+    muon_windows_path_destroy(&directory);
     free(core_argv);
     return 1;
   }
-  if (_putenv_s(MUON_CEF_SANDBOX_ENVIRONMENT,
-                enable_cef_sandbox ? "1" : "") != 0) {
+  free(wide_app_id);
+  wchar_t *wide_launcher_path = muon_wide_from_utf8(launcher_path);
+  if (wide_launcher_path == NULL ||
+      !SetEnvironmentVariableW(L"MUON_LAUNCHER_PATH", wide_launcher_path)) {
+    fprintf(stderr, "muon-launcher: failed to set %s.\n",
+            MUON_LAUNCHER_PATH_ENVIRONMENT);
+    free(wide_launcher_path);
+    muon_windows_path_destroy(&directory);
+    free(core_argv);
+    return 1;
+  }
+  free(wide_launcher_path);
+  if (!SetEnvironmentVariableW(L"MUON_CEF_SANDBOX", enable_cef_sandbox ? L"1" : NULL)) {
     fprintf(stderr, "muon-launcher: failed to set %s.\n",
             MUON_CEF_SANDBOX_ENVIRONMENT);
+    muon_windows_path_destroy(&directory);
     free(core_argv);
     return 1;
   }
-  const intptr_t status =
-      _spawnv(_P_WAIT, core_path, (const char *const *)core_argv);
-  if (status < 0) {
-    perror(core_path);
-    free(core_argv);
+  HANDLE process = muon_start_windows_process(core_argv, directory.value);
+  muon_windows_path_destroy(&directory);
+  free(core_argv);
+  if (process == NULL) {
+    fprintf(stderr, "muon-launcher: failed to start core (Windows error %lu): %s\n",
+            GetLastError(), core_path);
     return 127;
   }
-  free(core_argv);
+  DWORD status = 1;
+  BOOL finished = WaitForSingleObject(process, INFINITE) == WAIT_OBJECT_0 &&
+      GetExitCodeProcess(process, &status);
+  DWORD error = finished ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(process);
+  if (!finished) {
+    fprintf(stderr, "muon-launcher: failed to wait for core (Windows error %lu).\n", error);
+    return 1;
+  }
   return (int)status;
 #else
   if (chdir(runtime_dir) != 0) {
@@ -1172,6 +1369,10 @@ static int launch_core(const char *runtime_dir, const char *core_path,
       free(library_path);
     }
     free(module_root);
+    if (setenv(MUON_LAUNCHER_PATH_ENVIRONMENT, launcher_path, 1) != 0) {
+      perror(MUON_LAUNCHER_PATH_ENVIRONMENT);
+      _exit(1);
+    }
     if (setenv(MUON_LAUNCHER_APP_ID_ENVIRONMENT, app_id, 1) != 0) {
       perror("setenv");
       _exit(1);
@@ -1213,7 +1414,7 @@ static void on_prepare_progress(const MuonPrepareProgress *progress,
   muon_launcher_progress_update((MuonLauncherProgress *)user_data, progress);
 }
 
-int main(int argc, char **argv) {
+static int run_launcher(int argc, char **argv) {
   static const char insecure_localhost_switch[] =
       "--allow-insecure-localhost";
   for (int index = 1; index < argc; index += 1) {
@@ -1230,8 +1431,26 @@ int main(int argc, char **argv) {
 
   char *launcher_path = get_launcher_path(argv[0]);
   char *source_runtime_dir =
-      launcher_path == NULL ? NULL : parent_directory(launcher_path);
+      launcher_path == NULL ? NULL : muon_parent_directory(launcher_path);
   char *app_id = launcher_path == NULL ? NULL : resolve_app_id(launcher_path);
+#ifdef _WIN32
+  for (int index = 1; index < argc; index += 1) {
+    if (strcmp(argv[index], "--muon-notification-clear-history") != 0) continue;
+    char *clsid = NULL;
+    int result = 1;
+    if (argc == 2 && launcher_path != NULL && app_id != NULL &&
+        muon_launcher_get_embedded_notification_clsid(&clsid) == 0 && clsid != NULL) {
+      result = muon_notification_clear_history(app_id, launcher_path, clsid);
+    } else {
+      fprintf(stderr, "muon-launcher: invalid notification maintenance configuration.\n");
+    }
+    free(clsid);
+    free(launcher_path);
+    free(source_runtime_dir);
+    free(app_id);
+    return result;
+  }
+#endif
   MuonInstallConfig install;
   install_config_init(&install);
   if (source_runtime_dir != NULL && read_install_config(source_runtime_dir, &install) != 0) {
@@ -1253,7 +1472,7 @@ int main(int argc, char **argv) {
   }
   char *core_path = runtime_dir == NULL
                         ? NULL
-                        : path_join(runtime_dir, get_core_executable_name());
+                        : muon_path_join(runtime_dir, get_core_executable_name());
   if (launcher_path == NULL || source_runtime_dir == NULL || app_id == NULL ||
       runtime_dir == NULL || core_path == NULL) {
     fprintf(stderr, "muon-launcher: failed to resolve runtime directory.\n");
@@ -1265,12 +1484,23 @@ int main(int argc, char **argv) {
     install_config_free(&install);
     return 1;
   }
-  const char *cache_dir = getenv("MUON_CACHE_DIR");
-  int exit_code = 0;
+  char *cache_dir = NULL;
+  int exit_code = 1;
+#ifdef _WIN32
+  // Validate before preparing a runtime which Windows cannot use as a cwd.
+  muon_windows_path directory = {0};
+  if (resolve_runtime_working_directory(runtime_dir, &directory) != 0) goto done;
+  muon_windows_path_destroy(&directory);
+#endif
+  if (muon_get_environment("MUON_CACHE_DIR", &cache_dir) != 0) {
+    fprintf(stderr, "muon-launcher: failed to read cache environment.\n");
+    goto done;
+  }
   do {
     if (install.is_system_setuid) {
 #ifdef _WIN32
       fprintf(stderr, "muon-launcher: system-setuid runtime is unsupported on Windows.\n");
+      free(cache_dir);
       free(launcher_path);
       free(source_runtime_dir);
       free(app_id);
@@ -1280,6 +1510,7 @@ int main(int argc, char **argv) {
       return 1;
 #else
       if (run_privileged_prepare_helper(install.privileged_prepare_path) != 0) {
+        free(cache_dir);
         free(launcher_path);
         free(source_runtime_dir);
         free(app_id);
@@ -1301,6 +1532,7 @@ int main(int argc, char **argv) {
           muon_launcher_progress_fail(&progress);
         }
         muon_launcher_progress_dispose(&progress);
+        free(cache_dir);
         free(launcher_path);
         free(source_runtime_dir);
         free(app_id);
@@ -1322,6 +1554,7 @@ int main(int argc, char **argv) {
           muon_launcher_progress_fail(&progress);
         }
         muon_launcher_progress_dispose(&progress);
+        free(cache_dir);
         free(launcher_path);
         free(source_runtime_dir);
         free(app_id);
@@ -1331,13 +1564,68 @@ int main(int argc, char **argv) {
       }
       muon_launcher_progress_dispose(&progress);
     }
+#ifndef _WIN32
+    const char *registration_launcher =
+        install.is_appimage && install.launcher_path != NULL
+            ? install.launcher_path : launcher_path;
+    const int clear_history = argc >= 2 &&
+        strcmp(argv[1], "--muon-notification-clear-history") == 0;
+    const int unregister_notifications = argc >= 2 &&
+        strcmp(argv[1], "--muon-notification-unregister") == 0;
+    MuonDesktopConfig desktop;
+    const int desktop_result = read_desktop_config(runtime_dir, app_id, &desktop);
+    if (clear_history || unregister_notifications) {
+      if (argc != 2 || desktop_result != 0 ||
+          (unregister_notifications &&
+           !owns_linux_notification_registration(desktop.desktop_id, app_id,
+                                                   registration_launcher))) {
+        fprintf(stderr, "muon-launcher: notification registration is unavailable or belongs to another launcher.\n");
+        if (desktop_result == 0) desktop_config_free(&desktop);
+        exit_code = 1;
+        break;
+      }
+      char *maintenance_argv[] = {argv[0], "--muon-notification-clear-history", NULL};
+      exit_code = launch_core(runtime_dir, core_path, app_id,
+          registration_launcher, install.is_appimage ? install.launcher_path : NULL,
+          install.is_system_setuid, 2, maintenance_argv);
+      if (exit_code == 0 && unregister_notifications &&
+          remove_linux_notification_registration(desktop.desktop_id, app_id,
+                                                   registration_launcher) != 0)
+        exit_code = 1;
+      desktop_config_free(&desktop);
+      break;
+    }
+    if (desktop_result == 0) {
+      if (!desktop.notifications_enabled &&
+          owns_linux_notification_registration(desktop.desktop_id, app_id,
+                                                 registration_launcher)) {
+        char *maintenance_argv[] = {argv[0], "--muon-notification-clear-history", NULL};
+        exit_code = launch_core(runtime_dir, core_path, app_id,
+            registration_launcher, install.is_appimage ? install.launcher_path : NULL,
+            install.is_system_setuid, 2, maintenance_argv);
+        if (exit_code == 0 &&
+            remove_linux_notification_registration(desktop.desktop_id, app_id,
+                                                     registration_launcher) != 0)
+          exit_code = 1;
+        if (exit_code != 0) {
+          desktop_config_free(&desktop);
+          break;
+        }
+      }
+      desktop_config_free(&desktop);
+    }
+#endif
     if (update_linux_desktop_entry(runtime_dir, launcher_path, app_id) != 0) {
       fprintf(stderr, "muon-launcher: failed to update desktop entry.\n");
     }
     exit_code = launch_core(runtime_dir, core_path, app_id,
+                            install.is_appimage && install.launcher_path != NULL
+            ? install.launcher_path : launcher_path,
                             install.is_appimage ? install.launcher_path : NULL,
                             install.is_system_setuid, argc, argv);
   } while (exit_code == MUON_RECYCLE_EXIT_CODE);
+done:
+  free(cache_dir);
   free(launcher_path);
   free(source_runtime_dir);
   free(app_id);
@@ -1346,3 +1634,13 @@ int main(int argc, char **argv) {
   install_config_free(&install);
   return exit_code;
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **argv) {
+  return muon_windows_main(argc, argv, run_launcher);
+}
+#else
+int main(int argc, char **argv) {
+  return run_launcher(argc, argv);
+}
+#endif

@@ -77,6 +77,8 @@ export const createLinuxAppDir = async (
       exec: "AppRun",
       tryExec: "AppRun",
       icon: desktop.desktopId,
+      appId: undefined,
+      launcherPath: undefined,
     }),
   );
   await cp(join(source, desktop.iconFileName), join(icons, iconName));

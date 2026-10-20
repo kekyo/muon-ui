@@ -3612,6 +3612,11 @@ export const startGestamentDebugMuon = async (
 ): Promise<RunningGestamentMuon> => {
   const executable = getMuonExecutable(DEBUG_MUON_DIRECTORY);
   await requireFile(executable);
+  const stateDirectory = await getSharedLocalStateDirectory();
+  await rm(getLocalDefaultProfilePath(stateDirectory, executable), {
+    recursive: true,
+    force: true,
+  });
   const pluginDirectory = await createPluginDirectory(DEBUG_MUON_DIRECTORY, []);
   const configDirectory = join(DEBUG_MUON_DIRECTORY, ".muon-test-config");
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
@@ -3648,6 +3653,7 @@ export const startGestamentDebugMuon = async (
     app = await launchGtkApp(executable, args, {
       cwd: DEBUG_MUON_DIRECTORY,
       env: {
+        XDG_STATE_HOME: stateDirectory,
         ELECTRON_OZONE_PLATFORM_HINT: "x11",
         GIO_USE_VFS: "local",
         GNOME_ACCESSIBILITY: "1",
@@ -4837,7 +4843,7 @@ export const runBuiltinFsAdditionalOperations = async (
     "additional symlink",
     `(async () => {
     const rootPath = ${JSON.stringify(rootPath)};
-    const basename = (path) => path.split("/").filter(Boolean).at(-1) ?? "";
+    const basename = (path) => path.replaceAll("\\\\", "/").split("/").filter(Boolean).at(-1) ?? "";
     const rejection = async (operation) => {
       try {
         await operation();

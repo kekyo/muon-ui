@@ -60,6 +60,8 @@ struct MuonAndroidRpcHost {
   std::shared_ptr<MuonRpcHost> host;
   std::shared_ptr<MuonPluginPolicy> internal_policy;
   bool validate_mode = false;
+  bool notifications_enabled = false;
+  std::vector<std::string> platform_function_paths;
   std::map<std::string, std::shared_ptr<MuonPluginPolicy>> capability_policies;
   std::map<std::string, MuonAndroidResolvedRoute> routes_by_path;
   std::string renderer_metadata_json;
@@ -130,6 +132,30 @@ static const std::vector<std::string> kPlatformFunctionPaths = {
     "muon.browser.zoomOut",
     "muon.browser.resetZoom",
     "muon.browser.close",
+    "muon.android.systemBars.configure",
+    "muon.android.systemBars.getState",
+    "muon.android.systemBars.getInsets",
+    "muon.android.systemBars.watchInsets",
+    "muon.android.settings.isAvailable",
+    "muon.android.settings.open",
+};
+
+static const std::vector<std::string> kAndroidNotificationFunctionPaths = {
+    "muon.android.notifications.getPermissionState",
+    "muon.android.notifications.requestPermission",
+    "muon.android.notifications.getCapabilities",
+    "muon.android.notifications.ensureChannel",
+    "muon.android.notifications.getChannel",
+};
+
+static const std::vector<std::string> kNotificationFunctionPaths = {
+    "muon.notifications.post",
+    "muon.notifications.cancel",
+    "muon.notifications.getStatus",
+    "muon.notifications.getCapabilities",
+    "muon.notifications.getPendingEvents",
+    "muon.notifications.watchEvents",
+    "muon.notifications.acknowledgeEvent",
 };
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {
@@ -379,13 +405,14 @@ static std::string CreateRendererMetadataJson(
     const MuonAndroidPluginCatalog& catalog,
     int context_id,
     const std::shared_ptr<MuonPluginPolicy>& internal_policy,
-    bool validate_mode) {
+    bool validate_mode,
+    const std::vector<std::string>& platform_function_paths) {
   auto output = std::string{"{\"version\":1,\"contextId\":"};
   output.append(std::to_string(context_id));
   output.append(",\"mode\":");
   AppendJsonString(validate_mode ? "validate" : "simple", &output);
   output.append(",\"builtinFunctions\":[");
-  auto builtin_paths = kPlatformFunctionPaths;
+  auto builtin_paths = platform_function_paths;
   builtin_paths.insert(builtin_paths.end(), kFilesystemFunctionPaths.begin(),
                        kFilesystemFunctionPaths.end());
   auto first = true;
@@ -1444,6 +1471,32 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
           &browser_policy, error_message)) {
     return false;
   }
+  auto system_bars_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateBuiltinPolicy(
+          state,
+          {"muon.android.systemBars.configure", "muon.android.systemBars.getState",
+           "muon.android.systemBars.getInsets", "muon.android.systemBars.watchInsets"},
+          &system_bars_policy, error_message)) {
+    return false;
+  }
+  auto settings_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateBuiltinPolicy(state,
+                          {"muon.android.settings.isAvailable", "muon.android.settings.open"},
+                          &settings_policy, error_message)) {
+    return false;
+  }
+  auto common_notification_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (state->notifications_enabled &&
+      !CreateBuiltinPolicy(state, kNotificationFunctionPaths,
+                           &common_notification_policy, error_message)) {
+    return false;
+  }
+  auto notification_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (state->notifications_enabled &&
+      !CreateBuiltinPolicy(state, kAndroidNotificationFunctionPaths,
+                           &notification_policy, error_message)) {
+    return false;
+  }
 #if defined(MUON_ANDROID_TEST_HOST)
   auto prototype_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateMuonPluginPolicy({"prototype.*"}, &prototype_policy,
@@ -1455,7 +1508,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   state->routes_by_path.clear();
   auto routes = std::vector<MuonRpcFunctionRoute>{};
   routes.reserve(plugin_catalog.functions.size() +
-                 kPlatformFunctionPaths.size() +
+                 state->platform_function_paths.size() +
                  kFilesystemFunctionPaths.size());
   auto used_function_ids = std::set<uint32_t>{};
   auto maximum_plugin_function_id = uint32_t{0};
@@ -1475,7 +1528,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
         std::max(maximum_plugin_function_id, function.id);
   }
 
-  auto platform_paths = kPlatformFunctionPaths;
+  auto platform_paths = state->platform_function_paths;
   platform_paths.insert(platform_paths.end(), kFilesystemFunctionPaths.begin(),
                         kFilesystemFunctionPaths.end());
   auto next_platform_function_id =
@@ -1521,6 +1574,11 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   if (!state->validate_mode &&
       (!add_policy("environment-capability", environment_policy) ||
       !add_policy("browser-capability", browser_policy) ||
+      !add_policy("system-bars-capability", system_bars_policy) ||
+      !add_policy("settings-capability", settings_policy) ||
+      (state->notifications_enabled &&
+       (!add_policy("android-notifications-capability", notification_policy) ||
+        !add_policy("notifications-capability", common_notification_policy))) ||
       !add_policy("fs-capability", filesystem_policy))) {
     return false;
   }
@@ -1568,7 +1626,8 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   }
   state->renderer_metadata_json =
       CreateRendererMetadataJson(plugin_catalog, state->owner.context_id,
-                                  state->internal_policy, state->validate_mode);
+                                 state->internal_policy, state->validate_mode,
+                                 state->platform_function_paths);
   return true;
 }
 
@@ -1703,7 +1762,8 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
     jobjectArray internal_allow,
     jboolean validate_mode,
     jobjectArray capability_ids,
-    jobjectArray capability_allows) {
+    jobjectArray capability_allows,
+    jboolean notifications_enabled) {
   if (bridge == nullptr || internal_allow == nullptr ||
       capability_ids == nullptr || capability_allows == nullptr ||
       environment->GetArrayLength(capability_ids) != environment->GetArrayLength(capability_allows)) {
@@ -1711,6 +1771,15 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
     return 0;
   }
   auto state = std::make_unique<MuonAndroidRpcHost>();
+  state->notifications_enabled = notifications_enabled == JNI_TRUE;
+  state->platform_function_paths = kPlatformFunctionPaths;
+  if (state->notifications_enabled) {
+    state->platform_function_paths.insert(state->platform_function_paths.end(),
+                                        kAndroidNotificationFunctionPaths.begin(),
+                                        kAndroidNotificationFunctionPaths.end());
+    state->platform_function_paths.insert(state->platform_function_paths.end(),
+                                        kNotificationFunctionPaths.begin(), kNotificationFunctionPaths.end());
+  }
   auto allowed = std::vector<std::string>{};
   for (jsize i = 0; i < environment->GetArrayLength(internal_allow); ++i) {
     const auto value = static_cast<jstring>(

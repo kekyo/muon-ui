@@ -547,10 +547,26 @@ struct MuonAssetConfig {
   std::vector<uint8_t> salt;
 };
 
+/** Local notification settings shared by supported native backends. */
+struct MuonNotificationsConfig {
+  /** Whether the built-in notification namespace is registered. */
+  bool enabled = false;
+  /** Default application category used only when posting notifications. */
+  std::string default_category;
+  /** Generated Windows application name used for OS notification registration. */
+  std::string windows_display_name;
+  /** Generated Windows notification icon, resolved relative to its config. */
+  std::filesystem::path windows_icon_path;
+  /** Stable, architecture-specific COM notification activator class ID. */
+  std::string windows_activator_clsid;
+};
+
 /**
  * Root muon.json configuration.
  */
 struct MuonConfig {
+  /** Application-owned local notification settings. */
+  MuonNotificationsConfig notifications;
   /**
    * Default CEF version selection policy used when launcher settings omit one.
    */
@@ -563,6 +579,8 @@ struct MuonConfig {
    * Stable application identifier used for runtime state directories.
    */
   std::string app_id = "muon";
+  /** Absolute originating distribution launcher path, empty for direct runtime execution. */
+  std::filesystem::path launcher_path;
   /**
    * Application-defined string key-value configuration exposed through the
    * built-in environments plugin.

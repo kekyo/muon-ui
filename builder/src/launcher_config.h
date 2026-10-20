@@ -62,6 +62,14 @@ int muon_launcher_get_embedded_default_version_policy(char **policy);
 int muon_launcher_get_embedded_app_id(char **app_id);
 
 /**
+ * Reads launcher.notificationRegistration.activatorClsid for maintenance.
+ * @param clsid Receives a heap-allocated string, or NULL when absent. Free it
+ *     with free() after use.
+ * @return Zero on success, nonzero for malformed configuration or allocation failure.
+ */
+int muon_launcher_get_embedded_notification_clsid(char **clsid);
+
+/**
  * Reads the embedded muon.json launcher.nodeRuntime from this executable.
  *
  * @param requirement Receives owned requirement fields when present. The

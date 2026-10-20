@@ -423,6 +423,58 @@ static bool RunPortablePluginRuntimeTest() {
          Expect(stopped, "portable plugin runtime did not stop");
 }
 
+static int builtin_stop_count = 0;
+static std::string builtin_released_owner;
+
+static void StopBuiltin(muon_plugin_stop_completion completion, void* user_data) {
+  ++builtin_stop_count;
+  completion(user_data);
+}
+
+static void ReleaseBuiltinOwner(const char* owner) {
+  builtin_released_owner = owner;
+}
+
+static bool RunBuiltinLifecycleTest() {
+  auto group = cardio::dispatcher_group(cardio::exit_condition::exit_by_manual);
+  auto host = cardio::dispatcher_host(group);
+  auto services = CreateRuntimeServices(&cardio::get_current_dispatcher(), std::this_thread::get_id());
+  static const muon_plugin_metadata metadata = {
+      beta_packaged_namespace_pointers, &StopBuiltin, &ReleaseBuiltinOwner};
+  services.platform_adapter = std::make_shared<MuonPluginRuntimePlatformAdapter>();
+  services.platform_adapter->shutdown = [] {};
+  services.platform_adapter->initialize = [](
+      const muon_plugin_init_context*, MuonPluginRuntimePlatformInitialization* initialization,
+      std::string*) {
+    initialization->plugins.push_back({&metadata, "<builtin lifecycle test>"});
+    return true;
+  };
+  MuonPluginRuntimeLoadEntry internal;
+  internal.plugin = "internal";
+  auto error = std::string{};
+  if (!CreateMuonPluginPolicy({"muon.test.beta.*"}, &internal.plugin_policy, &error)) return false;
+  auto runtime = std::make_shared<MuonPluginRuntime>(std::filesystem::path{},
+      std::vector<MuonPluginRuntimeLoadEntry>{internal}, services);
+  if (!Expect(runtime->IsReady(), runtime->GetStartupError())) return false;
+  MuonRpcCallRequest request;
+  request.owner = {7, "frame", 12};
+  request.call_id = 1;
+  request.function_id = runtime->GetFunctions().front().id;
+  auto stopped = false;
+  auto timeout = StopAfterTimeout(&group);
+  runtime->Invoke(request, [&](const MuonRpcCallResult&) {
+    MuonRpcContextReleased release;
+    release.owner = request.owner;
+    runtime->ReleaseFunctionContext(release);
+    runtime->Stop([&] { stopped = true; group.shutdown(); });
+  });
+  host.park();
+  return Expect(stopped, "builtin runtime did not stop") &&
+         Expect(builtin_stop_count == 1, "builtin stop callback was not called exactly once") &&
+         Expect(builtin_released_owner == CreateMuonRpcOwnerKey(request.owner),
+                "builtin did not receive its full renderer owner on release");
+}
+
 int main() {
-  return RunPluginStopStackTest() && RunPortablePluginRuntimeTest() ? 0 : 1;
+  return RunBuiltinLifecycleTest() && RunPluginStopStackTest() && RunPortablePluginRuntimeTest() ? 0 : 1;
 }

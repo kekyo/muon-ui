@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -46,6 +47,7 @@
 #endif
 #include <windows.h>
 #include <winioctl.h>
+#include "muon_windows_path.h"
 #else
 #include <gio/gio.h>
 #include <sys/stat.h>
@@ -468,22 +470,107 @@ static void ThrowWindowsFilesystemError(const char* action,
       std::error_code(static_cast<int>(error_code), std::system_category()));
 }
 
-static bool StartsWithWide(std::wstring_view value,
-                           std::wstring_view prefix) {
-  return value.size() >= prefix.size() &&
-         value.substr(0, prefix.size()) == prefix;
+// MinGW's directory iterator uses a MAX_PATH buffer in _wopendir. Enumerate
+// directly, retaining each exact child name under the already extended parent.
+template <typename Visitor>
+static void ForEachWindowsDirectoryEntry(const std::filesystem::path& path,
+                                         const Visitor& visit) {
+  const auto pattern = path / L"*";
+  if (pattern.native().size() > MUON_WINDOWS_PATH_MAX_UNITS) {
+    ThrowWindowsFilesystemError("readdir", path, ERROR_FILENAME_EXCED_RANGE);
+  }
+  WIN32_FIND_DATAW data{};
+  const auto raw = FindFirstFileW(pattern.c_str(), &data);
+  if (raw == INVALID_HANDLE_VALUE) {
+    const auto error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND) return;
+    ThrowWindowsFilesystemError("readdir", path, error);
+  }
+  const auto search = std::unique_ptr<void, decltype(&FindClose)>(raw, &FindClose);
+  do {
+    if (std::wcscmp(data.cFileName, L".") != 0 &&
+        std::wcscmp(data.cFileName, L"..") != 0) {
+      visit(path / data.cFileName);
+    }
+  } while (FindNextFileW(search.get(), &data));
+  const auto error = GetLastError();
+  if (error != ERROR_NO_MORE_FILES) {
+    ThrowWindowsFilesystemError("readdir", path, error);
+  }
 }
 
-static std::wstring StripWindowsNtPathPrefix(std::wstring value) {
-  if (StartsWithWide(value, L"\\??\\UNC\\") ||
-      StartsWithWide(value, L"\\\\?\\UNC\\")) {
-    return L"\\\\" + value.substr(8);
+static void CreateWindowsDirectories(const std::filesystem::path& path,
+                                      bool recursive,
+                                      cardio::cancellation cancellation) {
+  auto missing = std::vector<std::filesystem::path>{};
+  if (recursive) {
+    auto parent = path;
+    for (;;) {
+      cancellation.throw_if_cancellation_requested();
+      const auto attributes = GetFileAttributesW(parent.c_str());
+      if (attributes != INVALID_FILE_ATTRIBUTES) {
+        if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+          ThrowWindowsFilesystemError("mkdir", parent, ERROR_DIRECTORY);
+        }
+        break;
+      }
+      const auto error = GetLastError();
+      if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+        ThrowWindowsFilesystemError("mkdir", parent, error);
+      }
+      missing.push_back(parent);
+      const auto next = parent.parent_path();
+      if (next.empty() || next == parent) {
+        ThrowWindowsFilesystemError("mkdir", parent, error);
+      }
+      parent = next;
+    }
+  } else {
+    missing.push_back(path);
   }
-  if (StartsWithWide(value, L"\\??\\") ||
-      StartsWithWide(value, L"\\\\?\\")) {
-    return value.substr(4);
+  for (auto entry = missing.rbegin(); entry != missing.rend(); ++entry) {
+    cancellation.throw_if_cancellation_requested();
+    if (CreateDirectoryW(entry->c_str(), nullptr)) continue;
+    const auto error = GetLastError();
+    if (recursive && error == ERROR_ALREADY_EXISTS) {
+      const auto attributes = GetFileAttributesW(entry->c_str());
+      if (attributes != INVALID_FILE_ATTRIBUTES &&
+          (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+    }
+    ThrowWindowsFilesystemError("mkdir", *entry, error);
   }
-  return value;
+}
+
+static void RemoveWindowsEntry(const std::filesystem::path& path,
+                               DWORD attributes) {
+  const auto removed = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+      ? RemoveDirectoryW(path.c_str()) : DeleteFileW(path.c_str());
+  if (!removed) ThrowWindowsFilesystemError("remove", path, GetLastError());
+}
+
+static void RemoveWindowsTree(const std::filesystem::path& path,
+                              cardio::cancellation cancellation) {
+  // Keep traversal on the heap even for thousands of one-character components.
+  auto pending = std::vector<std::pair<std::filesystem::path, bool>>{{path, false}};
+  while (!pending.empty()) {
+    cancellation.throw_if_cancellation_requested();
+    auto [current, visited] = std::move(pending.back());
+    pending.pop_back();
+    const auto attributes = GetFileAttributesW(current.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+      ThrowWindowsFilesystemError("rm", current, GetLastError());
+    }
+    if (!visited && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+      pending.emplace_back(current, true);
+      ForEachWindowsDirectoryEntry(current, [&](const auto& child) {
+        pending.emplace_back(child, false);
+      });
+    } else {
+      // A reparse point is a leaf; never remove the object that it points to.
+      RemoveWindowsEntry(current, attributes);
+    }
+  }
 }
 
 static std::wstring ReadWindowsReparseName(const WCHAR* path_buffer,
@@ -541,29 +628,24 @@ static std::wstring ReadWindowsSymbolicLinkTarget(
   if (reparse_tag == IO_REPARSE_TAG_SYMLINK) {
     const auto* data =
         reinterpret_cast<const MuonFsSymbolicLinkReparseData*>(buffer.data());
-    const auto uses_print_name = data->print_name_length != 0;
-    auto target = ReadWindowsReparseName(
+    // The substitute name identifies the target. The optional print name is
+    // only a display spelling and can lose an exact trailing dot or space.
+    return ReadWindowsReparseName(
         data->path_buffer,
         offsetof(MuonFsSymbolicLinkReparseData, path_buffer),
         returned_bytes,
-        uses_print_name ? data->print_name_offset
-                        : data->substitute_name_offset,
-        uses_print_name ? data->print_name_length
-                        : data->substitute_name_length);
-    return StripWindowsNtPathPrefix(std::move(target));
+        data->substitute_name_offset,
+        data->substitute_name_length);
   }
   if (reparse_tag == IO_REPARSE_TAG_MOUNT_POINT) {
     const auto* data =
         reinterpret_cast<const MuonFsMountPointReparseData*>(buffer.data());
-    const auto uses_print_name = data->print_name_length != 0;
-    return StripWindowsNtPathPrefix(ReadWindowsReparseName(
+    return ReadWindowsReparseName(
         data->path_buffer,
         offsetof(MuonFsMountPointReparseData, path_buffer),
         returned_bytes,
-        uses_print_name ? data->print_name_offset
-                        : data->substitute_name_offset,
-        uses_print_name ? data->print_name_length
-                        : data->substitute_name_length));
+        data->substitute_name_offset,
+        data->substitute_name_length);
   }
   throw std::runtime_error("Path is not a symbolic link");
 }
@@ -572,8 +654,8 @@ static std::string CreateWindowsFilesystemErrorMessage(
     const char* action,
     const std::filesystem::path& path,
     DWORD error_code) {
-  return std::string(action) + " failed for " + PathToUtf8String(path) +
-         ": " + WindowsErrorMessage("Windows filesystem API failed", error_code);
+  return FormatFilesystemError(
+      action, path, WindowsErrorMessage("Windows filesystem API failed", error_code));
 }
 
 static std::string TryCreateWindowsSymbolicLink(
@@ -613,11 +695,10 @@ static void ValidateWindowsRegularFile(HANDLE file) {
   }
 }
 
-static MuonFsFile OpenRegularFileSync(std::string path,
+static MuonFsFile OpenRegularFileSync(const std::filesystem::path& target_path,
                                       MuonFsOpenMode mode,
                                       cardio::cancellation cancellation) {
   cancellation.throw_if_cancellation_requested();
-  const auto target_path = CreateLocalFilesystemPath(path);
   if (mode == MuonFsOpenMode::Read) {
     const auto preflight_error = WindowsRegularFilePreflightError(target_path);
     if (!preflight_error.empty()) {
@@ -658,7 +739,7 @@ static MuonFsFile OpenRegularFileSync(std::string path,
 
 static cardio::promise<MuonFsFile> OpenRegularFileAsync(
     MuonFsIoContext& context,
-    std::string path,
+    std::filesystem::path path,
     MuonFsOpenMode mode,
     cardio::cancellation cancellation) {
   (void)context;
@@ -692,14 +773,13 @@ static cardio::promise<MuonFsFile> OpenRegularFileAsync(
 
 static cardio::promise<std::string> RegularFileReadPreflightAsync(
     MuonFsIoContext& context,
-    std::string path,
+    std::filesystem::path path,
     cardio::cancellation cancellation) {
   (void)context;
   auto preflight = RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target_path = CreateLocalFilesystemPath(path);
-        const auto error = WindowsRegularFilePreflightError(target_path);
+        const auto error = WindowsRegularFilePreflightError(path);
         cancellation.throw_if_cancellation_requested();
         return error;
       });
@@ -829,7 +909,7 @@ static cardio::promise<void> CloseFileAsync(MuonFsIoContext& context,
 template <typename Result, typename Body>
 static cardio::promise<Result> WithOpenRegularFileAsync(
     MuonFsIoContext& context,
-    std::string path,
+    std::filesystem::path path,
     MuonFsOpenMode mode,
     cardio::cancellation cancellation,
     Body body) {
@@ -1024,8 +1104,9 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
       co_return AllocateResultBuffer(helpers, 0);
     }
     cancellation.throw_if_cancellation_requested();
+    auto target_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
     auto preflight_promise = RegularFileReadPreflightAsync(
-        context, path, cancellation);
+        context, target_path, cancellation);
     const auto preflight_error = co_await preflight_promise;
     if (!preflight_error.empty()) {
       co_return MuonFsBufferResult(preflight_error);
@@ -1033,7 +1114,7 @@ static cardio::promise<MuonFsBufferResult> ReadBytesAsync(
     cancellation.throw_if_cancellation_requested();
     auto result_promise = WithOpenRegularFileAsync<MuonFsBufferResult>(
         context,
-        std::move(path),
+        std::move(target_path),
         MuonFsOpenMode::Read,
         cancellation,
         [&context, helpers, options, max_bytes, cancellation](MuonFsFile& file) {
@@ -1055,8 +1136,9 @@ static cardio::promise<MuonFsStringResult> ReadTextAsync(
   co_await start_gate;
   try {
     cancellation.throw_if_cancellation_requested();
+    auto target_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
     auto preflight_promise = RegularFileReadPreflightAsync(
-        context, path, cancellation);
+        context, target_path, cancellation);
     const auto preflight_error = co_await preflight_promise;
     if (!preflight_error.empty()) {
       co_return MuonFsStringResult{std::string{}, preflight_error};
@@ -1064,7 +1146,7 @@ static cardio::promise<MuonFsStringResult> ReadTextAsync(
     cancellation.throw_if_cancellation_requested();
     auto read_promise = WithOpenRegularFileAsync<MuonFsStringResult>(
         context,
-        std::move(path),
+        std::move(target_path),
         MuonFsOpenMode::Read,
         cancellation,
         [&context, max_bytes, cancellation](MuonFsFile& file) {
@@ -1085,7 +1167,7 @@ static cardio::promise<void> WriteBytesAsync(
     cardio::cancellation cancellation) {
   auto write_promise = WithOpenRegularFileAsync<void>(
       context,
-      std::move(path),
+      CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File),
       options.has_position ? MuonFsOpenMode::WriteAt
                            : MuonFsOpenMode::WriteTruncate,
       cancellation,
@@ -2001,7 +2083,7 @@ static cardio::promise<MuonFsStringResult> StatAsync(
       [path = std::move(path), follow_symlink, cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
         try {
-          const auto target_path = CreateLocalFilesystemPath(path);
+          const auto target_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
           const auto preflight_error = WindowsStatPreflightError(target_path);
           if (!preflight_error.empty()) {
             return MuonFsStringResult{std::string{}, preflight_error};
@@ -2022,11 +2104,15 @@ static cardio::promise<bool> ExistsAsync(MuonFsIoContext& context,
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        std::error_code error;
-        const auto result = std::filesystem::exists(
-            CreateLocalFilesystemPath(path), error);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
+        auto result = false;
+        try {
+          result = std::filesystem::exists(ReadFilesystemStatus(target, true));
+        } catch (const std::exception&) {
+          // Like filesystem::exists(path, error), inaccessible objects are false.
+        }
         cancellation.throw_if_cancellation_requested();
-        return !error && result;
+        return result;
       });
 }
 
@@ -2039,7 +2125,7 @@ static cardio::promise<bool> AccessAsync(MuonFsIoContext& context,
       [path = std::move(path), options, cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
         const auto result = CanAccessPath(
-            CreateLocalFilesystemPath(path), options);
+            CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File), options);
         cancellation.throw_if_cancellation_requested();
         return result;
       });
@@ -2056,11 +2142,8 @@ static cardio::promise<std::string> ReaddirAsync(
         cancellation.throw_if_cancellation_requested();
         auto result = std::string("[");
         auto first = true;
-        std::error_code error;
-        const auto target = CreateLocalFilesystemPath(path);
-        for (const auto& entry : std::filesystem::directory_iterator(target,
-                                                                     error)) {
-          ThrowFilesystemError("readdir", target, error);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::Tree);
+        ForEachWindowsDirectoryEntry(target, [&](const auto& entry) {
           cancellation.throw_if_cancellation_requested();
           if (!first) {
             result += ",";
@@ -2069,10 +2152,9 @@ static cardio::promise<std::string> ReaddirAsync(
           if (options.with_file_types) {
             result += CreateDirentJson(entry);
           } else {
-            AppendJsonString(&result, PathToUtf8String(entry.path().filename()));
+            AppendJsonString(&result, PathToUtf8String(entry.filename()));
           }
-        }
-        ThrowFilesystemError("readdir", target, error);
+        });
         result += "]";
         cancellation.throw_if_cancellation_requested();
         return result;
@@ -2087,19 +2169,8 @@ static cardio::promise<void> MkdirAsync(MuonFsIoContext& context,
   co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), options, cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        std::error_code error;
-        const auto target = CreateLocalFilesystemPath(path);
-        if (options.recursive) {
-          std::filesystem::create_directories(target, error);
-          ThrowFilesystemError("mkdir", target, error);
-          cancellation.throw_if_cancellation_requested();
-          return;
-        }
-        const auto created = std::filesystem::create_directory(target, error);
-        ThrowFilesystemError("mkdir", target, error);
-        if (!created) {
-          throw std::runtime_error("Path already exists");
-        }
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::Tree);
+        CreateWindowsDirectories(target, options.recursive, cancellation);
         cancellation.throw_if_cancellation_requested();
       });
 }
@@ -2112,25 +2183,22 @@ static cardio::promise<void> RmAsync(MuonFsIoContext& context,
   co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), options, cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target = CreateLocalFilesystemPath(path);
-        std::error_code error;
-        const auto status = std::filesystem::symlink_status(target, error);
-        if (error || status.type() == std::filesystem::file_type::not_found) {
-          if (options.force) {
-            return;
-          }
-          ThrowFilesystemError("rm", target, error);
-          throw std::runtime_error("Path does not exist");
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::Tree);
+        const auto attributes = GetFileAttributesW(target.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+          const auto error = GetLastError();
+          if (options.force && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)) return;
+          ThrowWindowsFilesystemError("rm", target, error);
         }
-        if (std::filesystem::is_directory(status) && !options.recursive) {
+        if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 && !options.recursive) {
           throw std::runtime_error("Path is a directory");
         }
-        if (options.recursive && !std::filesystem::is_symlink(status)) {
-          std::filesystem::remove_all(target, error);
+        if (options.recursive) {
+          RemoveWindowsTree(target, cancellation);
         } else {
-          std::filesystem::remove(target, error);
+          RemoveWindowsEntry(target, attributes);
         }
-        ThrowFilesystemError("rm", target, error);
         cancellation.throw_if_cancellation_requested();
       });
 }
@@ -2144,15 +2212,16 @@ static cardio::promise<std::string> UnlinkAsync(
       [path = std::move(path), cancellation]() mutable {
         try {
           cancellation.throw_if_cancellation_requested();
-          const auto target = CreateLocalFilesystemPath(path);
-          std::error_code error;
-          const auto status = std::filesystem::symlink_status(target, error);
-          ThrowFilesystemError("unlink", target, error);
+          const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
+          const auto status = ReadFilesystemStatus(target, false);
           if (std::filesystem::is_directory(status)) {
             return std::string{"Path is a directory"};
           }
-          std::filesystem::remove(target, error);
-          ThrowFilesystemError("unlink", target, error);
+          const auto attributes = GetFileAttributesW(target.c_str());
+          if (attributes == INVALID_FILE_ATTRIBUTES) {
+            ThrowWindowsFilesystemError("unlink", target, GetLastError());
+          }
+          RemoveWindowsEntry(target, attributes);
           cancellation.throw_if_cancellation_requested();
         } catch (const std::exception& error) {
           return std::string{error.what()};
@@ -2168,16 +2237,15 @@ static cardio::promise<void> RmdirAsync(MuonFsIoContext& context,
   co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target = CreateLocalFilesystemPath(path);
-        std::error_code error;
-        const auto status = std::filesystem::symlink_status(target, error);
-        ThrowFilesystemError("rmdir", target, error);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::Tree);
+        const auto status = ReadFilesystemStatus(target, false);
         if (!std::filesystem::is_directory(status) ||
             std::filesystem::is_symlink(status)) {
           throw std::runtime_error("Path is not a directory");
         }
-        std::filesystem::remove(target, error);
-        ThrowFilesystemError("rmdir", target, error);
+        if (!RemoveDirectoryW(target.c_str())) {
+          ThrowWindowsFilesystemError("rmdir", target, GetLastError());
+        }
         cancellation.throw_if_cancellation_requested();
       });
 }
@@ -2192,10 +2260,10 @@ static cardio::promise<void> RenameAsync(MuonFsIoContext& context,
        new_path = std::move(new_path),
        cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto old_target = CreateLocalFilesystemPath(old_path);
+        const auto old_target = CreateLocalFilesystemIoPath(old_path, LocalFilesystemIoUsage::File);
         std::error_code error;
         std::filesystem::rename(
-            old_target, CreateLocalFilesystemPath(new_path), error);
+            old_target, CreateLocalFilesystemIoPath(new_path, LocalFilesystemIoUsage::File), error);
         ThrowFilesystemError("rename", old_target, error);
         cancellation.throw_if_cancellation_requested();
       });
@@ -2215,28 +2283,17 @@ static cardio::promise<std::string> CopyFileAsync(
        cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
         try {
-          const auto source_path = CreateLocalFilesystemPath(source);
+          const auto source_path = CreateLocalFilesystemIoPath(source, LocalFilesystemIoUsage::File);
           ThrowIfNotRegularFile(source_path, "Source is not a regular file");
-          const auto destination_path = CreateLocalFilesystemPath(destination);
-          if (!options.overwrite) {
-            std::error_code exists_error;
-            const auto destination_exists =
-                std::filesystem::exists(destination_path, exists_error);
-            ThrowFilesystemError("copyFile", destination_path, exists_error);
-            if (destination_exists) {
+          const auto destination_path = CreateLocalFilesystemIoPath(destination, LocalFilesystemIoUsage::File);
+          const auto flags = options.overwrite ? DWORD{0} : DWORD{COPY_FILE_FAIL_IF_EXISTS};
+          if (!CopyFileExW(source_path.c_str(), destination_path.c_str(),
+                           nullptr, nullptr, nullptr, flags)) {
+            const auto error = GetLastError();
+            if (!options.overwrite && (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) {
               return std::string{"Destination already exists"};
             }
-          }
-          const auto copy_options =
-              options.overwrite
-                  ? std::filesystem::copy_options::overwrite_existing
-                  : std::filesystem::copy_options::none;
-          std::error_code error;
-          const auto copied = std::filesystem::copy_file(
-              source_path, destination_path, copy_options, error);
-          ThrowFilesystemError("copyFile", source_path, error);
-          if (!copied && !options.overwrite) {
-            return std::string{"Destination already exists"};
+            ThrowWindowsFilesystemError("copyFile", source_path, error);
           }
         } catch (const std::exception& error) {
           return std::string{error.what()};
@@ -2256,7 +2313,7 @@ static cardio::promise<void> AppendBytesAsync(
       [path = std::move(path), source, cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
         auto stream = std::ofstream(
-            CreateLocalFilesystemPath(path), std::ios::binary | std::ios::app);
+            CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File), std::ios::binary | std::ios::app);
         if (!stream.is_open()) {
           throw std::runtime_error("Failed to open file");
         }
@@ -2301,7 +2358,7 @@ static cardio::promise<void> TruncateAsync(MuonFsIoContext& context,
       [path = std::move(path), length, cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
         std::error_code error;
-        const auto target = CreateLocalFilesystemPath(path);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         std::filesystem::resize_file(target, length, error);
         ThrowFilesystemError("truncate", target, error);
         cancellation.throw_if_cancellation_requested();
@@ -2316,9 +2373,9 @@ static cardio::promise<std::string> RealpathAsync(
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target = CreateLocalFilesystemPath(path);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         // Resolve the opened target, including Windows reparse points, before
-        // removing the NT path prefix from the public filesystem result.
+        // choosing a public spelling that denotes the same object.
         auto file = MuonFsFile(CreateFileW(
             target.c_str(), 0,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -2342,8 +2399,10 @@ static cardio::promise<std::string> RealpathAsync(
           canonical.resize(length);
         }
         cancellation.throw_if_cancellation_requested();
-        return PathToUtf8String(std::filesystem::path(
-            StripWindowsNtPathPrefix(std::move(canonical))));
+        const auto explicit_extended =
+            NormalizeLocalPathOrFileUri(path).starts_with("\\\\?\\");
+        return PathToPublicUtf8String(std::filesystem::path(canonical),
+                                      explicit_extended);
       });
 }
 
@@ -2355,10 +2414,10 @@ static cardio::promise<std::string> ReadlinkAsync(
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto link_path = CreateLocalFilesystemPath(path);
+        const auto link_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         const auto target = ReadWindowsSymbolicLinkTarget(link_path);
         cancellation.throw_if_cancellation_requested();
-        return PathToUtf8String(std::filesystem::path(target));
+        return PathToPublicUtf8String(std::filesystem::path(target), false);
       });
 }
 
@@ -2375,8 +2434,11 @@ static cardio::promise<std::string> SymlinkAsync(
        type = std::move(type),
        cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target_path = CreateLocalFilesystemPath(target);
-        const auto link_path = CreateLocalFilesystemPath(path);
+        auto target_path = CreateLocalFilesystemPath(target);
+        if (target_path.is_absolute()) {
+          target_path = CreateLocalFilesystemIoPath(target, LocalFilesystemIoUsage::File);
+        }
+        const auto link_path = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::File);
         if (type == "dir" || type == "junction") {
           const auto error = TryCreateWindowsSymbolicLink(
               target_path, link_path, SYMBOLIC_LINK_FLAG_DIRECTORY);
@@ -2405,10 +2467,8 @@ static cardio::promise<std::string> WatchSnapshotAsync(
   co_return co_await RunWindowsBlockingFsAsync(
       [path = std::move(path), cancellation]() mutable {
         cancellation.throw_if_cancellation_requested();
-        const auto target = CreateLocalFilesystemPath(path);
-        std::error_code error;
-        const auto status = std::filesystem::symlink_status(target, error);
-        ThrowFilesystemError("watch", target, error);
+        const auto target = CreateLocalFilesystemIoPath(path, LocalFilesystemIoUsage::Tree);
+        const auto status = ReadFilesystemStatus(target, false);
         auto result = std::string("{\"root\":");
         result += CreateStatusJson(target, false);
         result += ",\"entries\":";
@@ -2416,16 +2476,14 @@ static cardio::promise<std::string> WatchSnapshotAsync(
             !std::filesystem::is_symlink(status)) {
           result += "[";
           auto first = true;
-          for (const auto& entry : std::filesystem::directory_iterator(target,
-                                                                       error)) {
-            ThrowFilesystemError("watch", target, error);
+          ForEachWindowsDirectoryEntry(target, [&](const auto& entry) {
+            cancellation.throw_if_cancellation_requested();
             if (!first) {
               result += ",";
             }
             first = false;
             result += CreateDirentJson(entry);
-          }
-          ThrowFilesystemError("watch", target, error);
+          });
           result += "]";
         } else {
           result += "[]";

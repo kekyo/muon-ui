@@ -92,6 +92,8 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | :--------- | :---------------- | :--------------- | :------------------------------------------------------------------- |
 | `iconPath` | `string`          | muon既定アイコン | 静的アプリアイコンとして使うPNGファイルです。                        |
 | `config`   | `readonly object` | `{}`             | rendererコードから参照できるアプリケーション用の文字列key-value設定です。 |
+| `notifications` | `object` | `{ "enabled": false }` | Android・CEF共通のローカル通知設定です。 |
+| `android` | `object` | なし | [Androidのビルド・表示設定](./android.md)です。 |
 | `node`     | `object`          | なし             | オプションのNode.js sidecarプロジェクトです。                        |
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
@@ -120,6 +122,31 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 
 すべての値はmuonアプリから取得できるため、パスワード、tokenなどの秘密情報を `config` に保存しないで下さい。
 `plugin.plugins[].config` は別の設定テーブルであり、対応するネイティブプラグインの初期化時だけ渡されます。
+
+## notificationsキー
+
+`notifications`はAndroid・Windows・Linuxで共通のローカル通知設定です。
+
+| キー | 型 | 既定値 | 用途 |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | 通知APIと必要な配布情報をビルドに含める |
+| `defaultCategory` | `string` | なし | `post()`で分類を省略した場合に使うID |
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "defaultCategory": "orders"
+  }
+}
+```
+
+有効化してもOSの権限を暗黙に要求しません。`plugin.plugins`で許可する関数も指定してください。無効ビルドでは通知APIを公開しないため、通知関数のimportと許可設定も削除する必要があります。
+
+`defaultCategory`は空でない最大128 UTF-16コード単位の文字列です。Androidでは`android.notifications.channels`に宣言したIDを指定します。CEFでは任意の用途分類として扱い、Android用設定は不要です。通知の小さいアイコンとチャンネル、システムバーの起動時設定は[Androidガイド](./android.md#ローカル通知とos設定画面)を参照してください。
+
+通知からのアプリ起動には、OSの対応機能と配布先への登録も必要です。`enabled: true`だけでは起動対応を保証しません。[共通通知API](./muon-built-in-plugin-reference.md#共通通知api)、[通知の配布登録](./package-install-location-advanced-topics.md#通知の配布登録)
+
 
 ## nodeキー
 
@@ -221,7 +248,7 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 
 | キー                      | 型         | 既定値                     | 概要                                                                       |
 | :------------------------ | :--------- | :------------------------- | :------------------------------------------------------------------------- |
-| `desktop.desktopId`       | `string`   | `appId`                    | `.desktop` ファイル名、`StartupWMClass`、Wayland app ID、X11 WM_CLASSです。 |
+| `desktop.desktopId`       | `string`   | `appId`から生成           | `.desktop` ファイル名、`StartupWMClass`、Wayland app ID、X11 WM_CLASSです。 |
 | `desktop.name`            | `string`   | `package.json`名           | ランチャーに表示されるアプリ名です。                                       |
 | `desktop.comment`         | `string`   | `package.json.description` | desktop entryの`Comment`です。                                             |
 | `desktop.iconPath`        | `string`   | `iconPath`またはmuon既定アイコン | Linuxターゲットだけで使用するPNGアイコンoverrideです。                    |
@@ -229,13 +256,14 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 | `desktop.startupNotify`   | `boolean`  | `true`                     | desktop entryの`StartupNotify`です。                                       |
 
 - `desktop.iconPath` は `.png` のみ受け付けます。入力PNGはビルド時に正規化され、Linux配布ディレクトリには `muon-desktop-icon.png` として配置されます。
+- `desktopId`を省略すると、D-BusのアプリIDとして有効な`appId`をそのまま使用します。それ以外は`appId`のハッシュから安定したIDを生成します。通知を有効にして`desktopId`を明示する場合は、D-BusのアプリIDとして有効な値が必要です。
 - ポータブル配布物(.tar.gz)から起動した場合、`muon-launcher` は展開先の `<packageName>/<target>` 直下へCEFを準備し、CEFプロファイルを同じディレクトリ直下の `profile/` に置き、`~/.local/share/applications/<desktopId>.desktop` を生成または更新します。
-  このdesktop entryの `Exec`, `TryExec`, `Icon` は、展開先ディレクトリ配下の絶対パスを指します。
+  このdesktop entryの`Exec`と`TryExec`は展開先の絶対パスを指します。`Icon`は通常、展開先の画像の絶対パスです。通知を有効にした場合は、ユーザーのアイコンテーマへ画像を登録し、`desktopId`を使用します。
 - 同じ展開先で再起動した場合は準備済みCEFを再利用します。別のディレクトリへ展開した配布物から起動した場合は、その展開先ごとにCEF準備とdesktop entry更新が行われます。
 - AppImageはユーザーの状態ディレクトリへランタイムを準備し、メニューと有効な自動起動には元のAppImageを登録します。移動・改名後の直接起動で登録先を更新します。[作成と実行](./muon-cli-advanced-topics.md#appimageの作成と実行)を参照してください。
 - `muon pack --type deb` は `/usr/share/applications/<desktopId>.desktop` と `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png` を生成します。
   debでインストールされたruntimeには `muon-install.json` が含まれ、`muon-launcher` はユーザーhomeへ新規desktop entryを作成しません。
-  既存のmuon-managed user desktop entryがある場合だけ、`TryExec=/usr/bin/<packageName>` を持つdeb-aware entryへ更新します。
+  既存のmuon-managed user desktop entryがある場合だけ、debの導入先へ更新します。通知無効時は`/usr/bin/<packageName>`、有効時は`/usr/lib/<packageName>/<target>/<launcher>`を起動先にします。通知有効時はD-Busの起動登録も配置します。[通知の配布登録](./package-install-location-advanced-topics.md#通知の配布登録)
 - 相対パスは、値を定義したファイルのディレクトリから解決されます。
   CLI/Vite optionはproject root、`muon.json` は設定ファイルのディレクトリです。
 - Linuxアイコンの解決順は、CLI/Vite optionの `linuxDesktop.iconPath` または `--linux-icon`、`muon.json` の `linux.desktop.iconPath`、統一 `iconPath`、`project.json.iconPath`、muon既定アイコンです。

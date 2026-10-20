@@ -34,6 +34,9 @@
     "build:dist": "bash ../build_package.sh --target dist",
     "test": "npm run build && vitest run",
     "test:windows-nsis-e2e": "npm run build && vitest run cef-test/nsis-windows-e2e.test.ts",
+    "test:android-system-bars-e2e": "MUON_ANDROID_SYSTEM_BARS_E2E=1 vitest run android-test/system-bars-e2e.test.ts",
+    "test:android-settings-e2e": "MUON_ANDROID_SETTINGS_E2E=1 vitest run android-test/settings-e2e.test.ts",
+    "test:android-notifications-e2e": "MUON_ANDROID_NOTIFICATIONS_E2E=1 vitest run android-test/notifications-e2e.test.ts",
     "verify:package-runtime": "node scripts/verify-package-runtime.mjs",
     "pack": "bash ../build_package.sh",
     "dependencies": "reskill"
@@ -56,12 +59,14 @@
     }
   },
   "devDependencies": {
-    "muon-plugin-sdk": "0.0.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@playwright/mcp": "^0.0.83",
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
     "@types/semver": ">=7.7.0",
     "agent-rover": "^0.10.0",
     "async-primitives": ">=1.7.0",
+    "muon-plugin-sdk": "0.0.1",
     "prettier-max": ">=1.16.0",
     "screw-up": ">=1.35.0",
     "typescript": ">=5.9.0",

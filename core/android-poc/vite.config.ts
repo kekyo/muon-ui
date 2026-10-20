@@ -15,6 +15,11 @@ export default defineConfig({
     minify: false,
     sourcemap: true,
     target: 'es2022',
+    rolldownOptions: {
+      // Required formatting and type checking dominate this small bundle.
+      // prettier-max reports their timings; retain output correctness checks.
+      checks: { bundlerTimings: false },
+    },
   },
   test: {
     environment: 'node',

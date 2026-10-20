@@ -168,11 +168,67 @@ bool ParseTruncateLength(const char* options_json,
 
 std::string NormalizeLocalPathOrFileUri(std::string_view value);
 std::filesystem::path CreateLocalFilesystemPath(std::string_view value);
+/** Native I/O requirements, separate from URI decoding and symlink payloads. */
+enum class LocalFilesystemIoUsage {
+  /** An individual file, using extended syntax only when necessary. */
+  File,
+  /** Directory creation or traversal, preserving exact child names. */
+  Tree,
+};
+/**
+ * Resolves a local path or file URI once for a native filesystem operation.
+ * @param value UTF-8 caller input, including a supported file URI.
+ * @param usage Requirements of the operation receiving the path.
+ * @return Owned native path; on Windows, normalized and extended as needed.
+ * @throws std::system_error When the Windows path cannot be converted.
+ * @remarks Does not require existence. Do not use for relative symlink targets,
+ * public return values, process arguments, or shell/CEF configuration.
+ */
+std::filesystem::path CreateLocalFilesystemIoPath(
+    std::string_view value, LocalFilesystemIoUsage usage);
 std::string PathToUtf8String(const std::filesystem::path& path);
+/**
+ * Formats a native result without changing the filesystem object it denotes.
+ * @param path Native result, including Windows extended or NT link syntax.
+ * @param preserve_extended Whether the caller explicitly requested extended syntax.
+ * @return UTF-8 path; Windows prefixes are omitted only for equivalent ordinary names.
+ * @remarks Relative link targets remain relative. Exact trailing dots, spaces and
+ * DOS-device filenames retain their extended namespace.
+ */
+std::string PathToPublicUtf8String(const std::filesystem::path& path,
+                                   bool preserve_extended);
+/**
+ * Formats an operation error with a path and the original failure detail.
+ * @param action Filesystem operation name.
+ * @param path Native path identifying the failing object.
+ * @param detail Failure description, including the native error number.
+ * @return Diagnostic text with Windows paths shortened to fit the callback ABI.
+ * @remarks Retains the beginning and end of a long path, cutting only at UTF-8
+ * character boundaries, so the callback limit does not discard the error code.
+ */
+std::string FormatFilesystemError(const char* action,
+                                   const std::filesystem::path& path,
+                                   std::string_view detail);
+/**
+ * Reads the type and CRT-compatible permission flags of a native I/O path.
+ * @param path Path already converted for the receiving filesystem operation.
+ * @param follow_symlink Whether to describe a link's target instead of the link.
+ * @return File type and permission flags without CRT path-length restrictions.
+ * @throws std::runtime_error When the object cannot be inspected.
+ */
+std::filesystem::file_status ReadFilesystemStatus(
+    const std::filesystem::path& path, bool follow_symlink);
 std::string CreateStatusJson(const std::filesystem::path& path,
                              bool follow_symlink);
-std::string CreateDirentJson(
-    const std::filesystem::directory_entry& entry);
+#if defined(_WIN32)
+/**
+ * Serializes a Windows directory entry obtained by native enumeration.
+ * @param path Exact child path, including its extended-length parent.
+ * @return Entry name and metadata, describing a link rather than its target.
+ * @throws std::runtime_error When entry metadata cannot be read.
+ */
+std::string CreateDirentJson(const std::filesystem::path& path);
+#endif
 void ThrowFilesystemError(const char* action,
                           const std::filesystem::path& path,
                           const std::error_code& error);

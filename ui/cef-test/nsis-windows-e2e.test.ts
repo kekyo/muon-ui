@@ -13,13 +13,17 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { saveDiagnostics, type RemoteAgent } from "agent-rover";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createConnection } from "@playwright/mcp";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { discoverWindowsTestNetwork } from "../../core/cef-test/plugin-e2e/windows-network.js";
 
 import type { MuonDesktopTarget as MuonBuildTarget } from "../common/targets.js";
 import {
@@ -174,7 +178,13 @@ const runWindowsPowerShell = async (
   const scriptPath = joinWindowsPath(remoteDirectory, `${label}.ps1`);
   await agent.files.writeFile(
     scriptPath,
-    Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(script)]),
+    Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n",
+      ),
+      Buffer.from(script),
+    ]),
   );
   return await runWindowsProcess(
     agent,
@@ -922,11 +932,714 @@ afterEach(async () => {
   }
 });
 
-afterAll(() => {
-  windowsAgent?.release();
+afterAll(async () => {
+  await windowsAgent?.release();
 });
 
 describeWindowsNsis(suiteName, { concurrent: false }, () => {
+  it.each(["windows-i686", "windows-amd64"] as const)(
+    "owns notification launch registration across updates and old-path uninstall (%s)",
+    async (target) => {
+      if (windowsAgent === undefined)
+        throw new Error("Windows e2e environment is not configured.");
+      const agent = windowsAgent;
+      const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+      const packageName = `muon-notification-install-${suffix}`;
+      const appId = `dev.muon.notificationtest.install.${suffix}`;
+      const identity = createWindowsNsisInstallIdentity(
+        packageName,
+        appId,
+        target,
+      );
+      const localRoot = await createTemporaryDirectory(
+        "muon-notification-install-",
+      );
+      const remoteRoot = await createRemoteTestDirectory(
+        agent,
+        windowsE2eEnvironment,
+        packageName,
+      );
+      const packageDirectory = await createFakeMuonPackageDist(localRoot, [
+        target,
+      ]);
+      // Keep packing small while exercising the real launcher's early
+      // maintenance entry. No runtime initialization is needed for uninstall.
+      await writeExecutable(
+        join(packageDirectory, "native", target, "muon-launcher.exe"),
+        await readFile(
+          resolve("..", "builder", `dist-${target}`, "muon-launcher.exe"),
+        ),
+      );
+      await writeViteProject(
+        localRoot,
+        packageDirectory,
+        [target],
+        packageName,
+      );
+      await writeFile(
+        join(localRoot, "muon.json"),
+        JSON.stringify({ notifications: { enabled: true } }),
+      );
+      const firstPath = joinWindowsPath(remoteRoot, "installed 日本語");
+      const nextPath = joinWindowsPath(remoteRoot, "updated 日本語");
+      let clsid = "";
+      const run = async (label: string, script: string): Promise<string> => {
+        const result = await runWindowsPowerShell(
+          agent,
+          remoteRoot,
+          label,
+          `$ErrorActionPreference='Stop'\n${script}`,
+          90000,
+        );
+        expectWindowsCommandSucceeded(result, label);
+        return result.stdout.trim();
+      };
+      try {
+        const packed = await packMuonApp({
+          appId,
+          packageName,
+          packageVersion: "1.2.3",
+          author: "muon Tester",
+          environment: process.env,
+          packageDirectory,
+          root: localRoot,
+          targets: [target],
+          types: ["nsis"],
+        });
+        const built = packed.targets[0]!;
+        if (built.target === "android")
+          throw new Error("Expected desktop package");
+        const registration = (
+          built.embeddedConfig.launcher as {
+            notificationRegistration: { activatorClsid: string };
+          }
+        ).notificationRegistration;
+        clsid = registration.activatorClsid;
+        const installer = joinWindowsPath(remoteRoot, "setup.exe");
+        await agent.files.writeFile(
+          installer,
+          await readFile(packed.artifacts[0]!.path),
+        );
+        const launcherName = basename(built.launcherPath);
+        const serverKey = `Software\\Classes\\CLSID\\${clsid}\\LocalServer32`;
+        const appKey = `Software\\Classes\\AppUserModelId\\${identity.runtimeAppId}`;
+        const registryBase = `[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,[Microsoft.Win32.RegistryView]::Registry64)`;
+        const assertOwner = async (path: string): Promise<void> => {
+          const launcher = joinWindowsPath(path, launcherName);
+          const state = JSON.parse(
+            await run(
+              "read-owner",
+              `
+$root=${registryBase}
+$server=$root.OpenSubKey(${quotePowerShellString(serverKey)})
+$app=$root.OpenSubKey(${quotePowerShellString(appKey)})
+if($null -eq $server -or $null -eq $app){throw 'Notification launch registration is missing'}
+[pscustomobject]@{Owner=$server.GetValue('MuonAppId');Server=$server.GetValue('ServerExecutable');Command=$server.GetValue('');Activator=$app.GetValue('CustomActivator')} | ConvertTo-Json -Compress
+$server.Dispose();$app.Dispose();$root.Dispose()
+`,
+            ),
+          ) as Record<string, string>;
+          expect(state).toEqual({
+            Owner: identity.runtimeAppId,
+            Server: launcher,
+            Command: `"${launcher}" --muon-notification-activation`,
+            Activator: clsid,
+          });
+        };
+        const install = async (path: string): Promise<void> => {
+          await run(
+            "install-notifications",
+            `$app=Start-Process -FilePath ${quotePowerShellString(installer)} -ArgumentList ${quotePowerShellString(`/S /D=${path}`)} -Wait -PassThru; exit $app.ExitCode`,
+          );
+          await assertOwner(path);
+        };
+        await install(firstPath);
+        const profile = await run(
+          "profile",
+          `
+$profile=Join-Path $env:LOCALAPPDATA ${quotePowerShellString(`${identity.runtimeAppId}\\profile`)}
+New-Item -ItemType Directory -Force $profile | Out-Null
+[IO.File]::WriteAllText((Join-Path $profile 'notifications.json'),'pending-event-fixture')
+Write-Output $profile
+`,
+        );
+        await install(firstPath);
+        expect(
+          (
+            await agent.files.readFile(
+              joinWindowsPath(profile, "notifications.json"),
+            )
+          ).toString(),
+        ).toBe("pending-event-fixture");
+        await install(nextPath);
+        // Run the older uninstaller in place: _?= makes NSIS waitable and
+        // prevents its temporary copy from outliving this assertion.
+        await run(
+          "old-uninstall",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(firstPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${firstPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        await assertOwner(nextPath);
+        expect(
+          (
+            await agent.files.readFile(
+              joinWindowsPath(profile, "notifications.json"),
+            )
+          ).toString(),
+        ).toBe("pending-event-fixture");
+        expect(
+          await agent.files.exists(joinWindowsPath(nextPath, launcherName)),
+        ).toBe(true);
+        const nestedPath = joinWindowsPath(nextPath, "relocated child");
+        await install(nestedPath);
+        await run(
+          "protect-nested-installation",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(nextPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${nextPath}`)} -Wait -PassThru; if($app.ExitCode -ne 5){throw ('Expected protected parent uninstall, got '+$app.ExitCode)}`,
+        );
+        await assertOwner(nestedPath);
+        expect(
+          await agent.files.exists(joinWindowsPath(nestedPath, launcherName)),
+        ).toBe(true);
+        await install(nextPath);
+        await run(
+          "old-nested-uninstall",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(nestedPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${nestedPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        await assertOwner(nextPath);
+        const maintenance = await runWindowsProcess(
+          agent,
+          remoteRoot,
+          "owned-maintenance",
+          joinWindowsPath(nextPath, launcherName),
+          ["--muon-notification-clear-history"],
+          30000,
+        );
+        expect(maintenance.exitCode, JSON.stringify(maintenance)).toBe(0);
+        await writeFile(
+          join(localRoot, "muon.json"),
+          JSON.stringify({ notifications: { enabled: false } }),
+        );
+        const disabled = await packMuonApp({
+          appId,
+          packageName,
+          packageVersion: "1.2.4",
+          author: "muon Tester",
+          environment: process.env,
+          packageDirectory,
+          root: localRoot,
+          targets: [target],
+          types: ["nsis"],
+        });
+        const disabledInstaller = joinWindowsPath(
+          remoteRoot,
+          "disabled-setup.exe",
+        );
+        await agent.files.writeFile(
+          disabledInstaller,
+          await readFile(disabled.artifacts[0]!.path),
+        );
+        // Installing another location must leave the currently owned launch
+        // registration and application state intact.
+        await run(
+          "disabled-other-location",
+          `$app=Start-Process -FilePath ${quotePowerShellString(disabledInstaller)} -ArgumentList ${quotePowerShellString(`/S /D=${firstPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        await assertOwner(nextPath);
+        await install(nextPath);
+        await run(
+          "disabled-same-location",
+          `$app=Start-Process -FilePath ${quotePowerShellString(disabledInstaller)} -ArgumentList ${quotePowerShellString(`/S /D=${nextPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        expect(
+          await run(
+            "assert-disabled-unregistered",
+            `
+$root=${registryBase}
+if($null -ne $root.OpenSubKey(${quotePowerShellString(serverKey)}) -or $null -ne $root.OpenSubKey(${quotePowerShellString(appKey)})){throw 'Disabled update kept notification launch registration'}
+$root.Dispose()
+Write-Output 'unregistered'
+`,
+          ),
+        ).toBe("unregistered");
+        expect(
+          (
+            await agent.files.readFile(
+              joinWindowsPath(profile, "notifications.json"),
+            )
+          ).toString(),
+        ).toBe("pending-event-fixture");
+        await run(
+          "current-uninstall",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(nextPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${nextPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        expect(
+          await run(
+            "assert-unregistered",
+            `
+$root=${registryBase}
+if($null -ne $root.OpenSubKey(${quotePowerShellString(serverKey)}) -or $null -ne $root.OpenSubKey(${quotePowerShellString(appKey)})){throw 'Owned notification registration remains'}
+$root.Dispose()
+Write-Output 'unregistered'
+`,
+          ),
+        ).toBe("unregistered");
+        expect(await agent.files.exists(profile)).toBe(false);
+      } finally {
+        await run(
+          "cleanup-notification-install",
+          `
+$root=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,[Microsoft.Win32.RegistryView]::Registry64)
+${clsid ? `$root.DeleteSubKeyTree(${quotePowerShellString(`Software\\Classes\\CLSID\\${clsid}`)},$false)` : ""}
+$root.DeleteSubKeyTree(${quotePowerShellString(`Software\\Classes\\AppUserModelId\\${identity.runtimeAppId}`)},$false)
+$root.Dispose()
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\'+${quotePowerShellString(identity.runtimeAppId)})
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $env:LOCALAPPDATA ${quotePowerShellString(identity.runtimeAppId)})
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $env:LOCALAPPDATA ${quotePowerShellString(`Programs\\${identity.installDirectoryName}`)})
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA ${quotePowerShellString(`Microsoft\\Windows\\Start Menu\\Programs\\${identity.displayName}.lnk`)})
+`,
+        );
+        await removeRemoteDirectoryIfExists(agent, remoteRoot);
+      }
+    },
+  );
+
+  it.each(["windows-i686", "windows-amd64"] as const)(
+    "installs at a short Unicode destination and rejects unsupported paths before writing (%s)",
+    async (target) => {
+      if (windowsAgent === undefined)
+        throw new Error("Windows e2e environment is not configured.");
+      await expectMakensisAvailable();
+      // The UI build clears dist, so stage the real Windows payload again
+      // through the same script used when assembling the distribution.
+      await execFileAsync(process.execPath, [
+        "scripts/stage-muon-builder.mjs",
+        "--target",
+        target,
+        "--dist",
+      ]);
+      const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+      const packageName = `muon-nsis-path-${suffix}`;
+      const appId = `muon.nsis.path.${suffix}`;
+      const identity = createWindowsNsisInstallIdentity(
+        packageName,
+        appId,
+        target,
+      );
+      const localRoot = await createTemporaryDirectory("muon-nsis-path-");
+      const remoteRoot = await createRemoteTestDirectory(
+        windowsAgent,
+        windowsE2eEnvironment,
+        packageName,
+      );
+      const packageDirectory = resolve("dist");
+      await writeViteProject(
+        localRoot,
+        packageDirectory,
+        [target],
+        packageName,
+      );
+      const cdpPort = 19421;
+      await writeFile(
+        join(localRoot, "muon.json"),
+        JSON.stringify({
+          network: { allow: ["asset://main/**"] },
+          plugin: {
+            mode: "simple",
+            pages: ["asset://main/**"],
+            plugins: [{ name: "internal", allow: ["muon.**"] }],
+          },
+          browser: { titleBarType: "native" },
+          cdp: { enable: true, port: cdpPort },
+        }),
+      );
+      await execFileAsync(
+        "make",
+        [
+          "windows-path-test",
+          "windows-path-shortcut",
+          `WINDOWS_TARGET=${target}`,
+        ],
+        { cwd: resolve("../core/cef-test") },
+      );
+      const fixture = joinWindowsPath(remoteRoot, "fixture.exe");
+      const pathTest = joinWindowsPath(remoteRoot, "path-test.exe");
+      const shortcutTest = joinWindowsPath(remoteRoot, "path-shortcut.exe");
+      for (const [name, path] of [
+        ["fixture", fixture],
+        ["path-test", pathTest],
+        ["path-shortcut", shortcutTest],
+      ] as const) {
+        await windowsAgent.files.writeFile(
+          path,
+          await readFile(
+            resolve(
+              `../core/cef-test/.run/windows-long-path/${target}/${name}.exe`,
+            ),
+          ),
+        );
+      }
+      const directoryOfLength = (length: number): string => {
+        let path = joinWindowsPath(remoteRoot, "data", `日本語😀-${length}`);
+        while (length - path.length > 100)
+          path = win32.join(path, "p".repeat(70));
+        path = win32.join(path, "q".repeat(length - path.length - 1));
+        expect(path.length).toBe(length);
+        return path;
+      };
+      const registry = `HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${identity.runtimeAppId}`;
+      const shortcutScript = `Join-Path $env:APPDATA ${quotePowerShellString(`Microsoft\\Windows\\Start Menu\\Programs\\${identity.displayName}.lnk`)}`;
+      const shortDirectory = directoryOfLength(140);
+      try {
+        const policy = await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "policy",
+          "[pscustomobject]@{ Policy=(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem').LongPathsEnabled; Administrator=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } | ConvertTo-Json -Compress",
+          30000,
+        );
+        expectWindowsCommandSucceeded(policy, "Windows policy");
+        expect(JSON.parse(policy.stdout)).toEqual({
+          Policy: 0,
+          Administrator: false,
+        });
+        const result = await packMuonApp({
+          appId,
+          author: "muon Tester",
+          environment: process.env,
+          packageDirectory,
+          packageName,
+          packageVersion: "1.2.3",
+          root: localRoot,
+          targets: [target],
+          types: ["nsis"],
+        });
+        const artifact = result.artifacts.find(
+          (entry) => entry.type === "nsis" && entry.target === target,
+        );
+        expect(artifact).toBeDefined();
+        const installer = joinWindowsPath(remoteRoot, "setup.exe");
+        await windowsAgent.files.writeFile(
+          installer,
+          await readFile(artifact!.path),
+        );
+        // A short base may still make the installed launcher exceed MAX_PATH.
+        for (const length of [240, 300, 1100]) {
+          const destination = directoryOfLength(length);
+          const rejected = await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "unsupported",
+            installer,
+            ["/S", `/D=${destination}`],
+            30000,
+          );
+          expect(rejected.exitCode, rejected.stderr).toBe(206);
+          expectWindowsCommandSucceeded(
+            await runWindowsProcess(
+              windowsAgent,
+              remoteRoot,
+              "absent",
+              fixture,
+              ["absent", "\\\\?\\" + destination],
+              30000,
+            ),
+            "no partial installation",
+          );
+          const registration = await runWindowsPowerShell(
+            windowsAgent,
+            remoteRoot,
+            "no-registration",
+            `[pscustomobject]@{ Registered=(Test-Path -LiteralPath ${quotePowerShellString(registry)}); Shortcut=(Test-Path -LiteralPath (${shortcutScript})) } | ConvertTo-Json -Compress`,
+            30000,
+          );
+          expectWindowsCommandSucceeded(
+            registration,
+            "no partial registration",
+          );
+          expect(JSON.parse(registration.stdout)).toEqual({
+            Registered: false,
+            Shortcut: false,
+          });
+        }
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "install",
+            installer,
+            ["/S", `/D=${shortDirectory}`],
+            30000,
+          ),
+          "Unicode installation",
+        );
+        const uninstaller = joinWindowsPath(shortDirectory, "Uninstall.exe");
+        for (const executable of [installer, uninstaller]) {
+          expectWindowsCommandSucceeded(
+            await runWindowsProcess(
+              windowsAgent,
+              remoteRoot,
+              "manifest",
+              pathTest,
+              ["manifest", executable],
+              30000,
+            ),
+            "installed executable manifest",
+          );
+        }
+        const registered = await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "registered",
+          `[pscustomobject]@{ Installed=(Get-ItemProperty -LiteralPath ${quotePowerShellString(registry)}).InstallLocation; Shortcut=(${shortcutScript}); State=(Join-Path $env:LOCALAPPDATA ${quotePowerShellString(identity.runtimeAppId)}) } | ConvertTo-Json -Compress`,
+          30000,
+        );
+        expectWindowsCommandSucceeded(registered, "installed shortcut");
+        const installed = JSON.parse(registered.stdout) as {
+          Installed: string;
+          Shortcut: string;
+          State: string;
+        };
+        expect(installed.Installed).toBe(shortDirectory);
+        const launcher = joinWindowsPath(shortDirectory, `${packageName}.exe`);
+        expect(await windowsAgent.files.exists(launcher)).toBe(true);
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "shortcut",
+            shortcutTest,
+            [installed.Shortcut, launcher],
+            30000,
+          ),
+          "Unicode shortcut target",
+        );
+        expect(await windowsAgent.files.exists(installed.State)).toBe(false);
+        // Seed the real CEF archive obtained when building this target. The
+        // launcher must still verify, extract and prepare a fresh runtime.
+        const cmakeCache = await readFile(
+          resolve(`../core/cef/.build/dist/${target}/release/CMakeCache.txt`),
+          "utf8",
+        );
+        const archiveName = /^MUON_CEF_PACKAGE:STRING=(.+)$/m
+          .exec(cmakeCache)?.[1]
+          ?.trim();
+        if (!archiveName)
+          throw new Error("Build the Windows distribution before NSIS e2e.");
+        const localCache =
+          process.env.MUON_CACHE_DIR ??
+          (process.env.XDG_CACHE_HOME
+            ? join(process.env.XDG_CACHE_HOME, "muon")
+            : join(homedir(), ".cache", "muon"));
+        const remoteCache = joinWindowsPath(remoteRoot, "cache");
+        await writeRemoteFile(
+          windowsAgent,
+          joinWindowsPath(remoteCache, "artifacts", "cef", archiveName),
+          await readFile(join(localCache, "artifacts", "cef", archiveName)),
+        );
+        await execFileAsync(process.execPath, ["build-windows-cdp-relay.mjs"], {
+          cwd: resolve("../core/cef-test"),
+        });
+        const relayPath = joinWindowsPath(remoteRoot, "relay.exe");
+        await copyLocalFileToRemote(
+          windowsAgent,
+          resolve(
+            `../core/cef-test/.run/windows-cdp-relay/${target}/muon-cdp-relay.exe`,
+          ),
+          relayPath,
+        );
+        const network = await discoverWindowsTestNetwork(windowsAgent);
+        const relay = await windowsAgent.processes.launchManaged({
+          path: relayPath,
+          arguments: ["0", String(cdpPort)],
+          captureStdout: true,
+          captureStderr: true,
+          createNoWindow: true,
+        });
+        let launched:
+          | Awaited<ReturnType<typeof windowsAgent.processes.launchManaged>>
+          | undefined;
+        try {
+          const port = await vi.waitUntil(
+            async () => {
+              const match = /^MUON_CDP_RELAY_PORT=(\d+)$/m.exec(
+                await relay.stdoutText(),
+              );
+              return match ? Number(match[1]) : false;
+            },
+            { timeout: 30000, interval: 100 },
+          );
+          const script = `$ErrorActionPreference = 'Stop'; $app = Start-Process -FilePath ${quotePowerShellString(installed.Shortcut)} -Wait -PassThru; exit $app.ExitCode`;
+          launched = await windowsAgent.processes.launchManaged({
+            path: windowsPowerShellPath,
+            arguments: [
+              "-NoProfile",
+              "-EncodedCommand",
+              Buffer.from(script, "utf16le").toString("base64"),
+            ],
+            workingDirectory: remoteRoot,
+            environment: { MUON_CACHE_DIR: remoteCache },
+            captureStdout: true,
+            captureStderr: true,
+          });
+          const endpoint = `http://${network.cdpHost}:${port}`;
+          await vi.waitUntil(
+            async () => {
+              if (!(await launched!.rootSnapshot()).running)
+                throw new Error(
+                  `Shortcut launch failed: ${await launched!.stderrText()}`,
+                );
+              try {
+                const response = await fetch(endpoint + "/json/list", {
+                  signal: AbortSignal.timeout(1000),
+                });
+                const pages = (await response.json()) as { title: string }[];
+                return pages.some((page) => page.title === "nsis e2e");
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 120000, interval: 250 },
+          );
+          const server = await createConnection({
+            browser: { cdpEndpoint: endpoint },
+          });
+          const client = new Client({
+            name: "muon-nsis-runtime",
+            version: "1.0.0",
+          });
+          try {
+            const [a, b] = InMemoryTransport.createLinkedPair();
+            await server.connect(b);
+            await client.connect(a);
+            const dataPath = joinWindowsPath(
+              directoryOfLength(300),
+              "配布😀.txt",
+            );
+            const result = await client.callTool({
+              name: "browser_evaluate",
+              arguments: {
+                function: `async () => {
+                await muon.fs.mkdir(${JSON.stringify(win32.dirname(dataPath))}, {recursive: true});
+                await muon.fs.writeFile(${JSON.stringify(dataPath)}, new TextEncoder().encode('日本語😀'));
+                return { body: document.body.textContent.trim(),
+                  target: (await muon.environments.getRuntimeInfo()).target,
+                  pid: await muon.environments.getProcessId(),
+                  data: new TextDecoder().decode(await muon.fs.readFile(${JSON.stringify(dataPath)})) };
+              }`,
+              },
+            });
+            const output = (result.content as { type: string; text: string }[])
+              .filter((item) => item.type === "text")
+              .map((item) => item.text)
+              .join("\n");
+            expect(result.isError, output).not.toBe(true);
+            const match = /### Result\n([\s\S]*?)(?:\n###|$)/u.exec(output);
+            expect(match, output).not.toBeNull();
+            const value = JSON.parse(match![1]!) as {
+              body: string;
+              target: string;
+              pid: number;
+              data: string;
+            };
+            expect(value).toMatchObject({
+              body: "nsis e2e",
+              target,
+              data: "日本語😀",
+            });
+            const processPath = await runWindowsPowerShell(
+              windowsAgent,
+              remoteRoot,
+              "runtime-process",
+              `(Get-Process -Id ${value.pid}).Path | ConvertTo-Json -Compress`,
+              30000,
+            );
+            expectWindowsCommandSucceeded(
+              processPath,
+              "prepared runtime process",
+            );
+            expect(JSON.parse(processPath.stdout)).toBe(
+              joinWindowsPath(installed.State, "runtime", "muon-core.exe"),
+            );
+            await client.callTool({
+              name: "browser_tabs",
+              arguments: { action: "close" },
+            });
+          } finally {
+            await client.close();
+            await server.close();
+          }
+          const exited = await launched.waitForExit({
+            timeoutMs: 30000,
+            intervalMs: 100,
+          });
+          expect(exited.root.exitCode, await launched.stderrText()).toBe(0);
+        } finally {
+          await launched?.releaseAsync();
+          await relay.releaseAsync();
+        }
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "uninstall",
+            uninstaller,
+            ["/S"],
+            30000,
+          ),
+          "Unicode uninstall",
+        );
+        await expect
+          .poll(async () => await windowsAgent.files.exists(shortDirectory), {
+            timeout: 30000,
+          })
+          .toBe(false);
+        expect(await windowsAgent.files.exists(installed.State)).toBe(false);
+        const removed = await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "removed",
+          `[pscustomobject]@{ Registered=(Test-Path -LiteralPath ${quotePowerShellString(registry)}); Shortcut=(Test-Path -LiteralPath (${shortcutScript})) } | ConvertTo-Json -Compress`,
+          30000,
+        );
+        expectWindowsCommandSucceeded(removed, "removed registration");
+        expect(JSON.parse(removed.stdout)).toEqual({
+          Registered: false,
+          Shortcut: false,
+        });
+      } finally {
+        const uninstaller = joinWindowsPath(shortDirectory, "Uninstall.exe");
+        if (await windowsAgent.files.exists(uninstaller)) {
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "cleanup-uninstall",
+            uninstaller,
+            ["/S"],
+            30000,
+          );
+        }
+        await runWindowsPowerShell(
+          windowsAgent,
+          remoteRoot,
+          "cleanup-registration",
+          `Remove-Item -LiteralPath ${quotePowerShellString(registry)} -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath (${shortcutScript}) -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA ${quotePowerShellString(identity.runtimeAppId)}) -Recurse -Force -ErrorAction SilentlyContinue`,
+          30000,
+        );
+        expectWindowsCommandSucceeded(
+          await runWindowsProcess(
+            windowsAgent,
+            remoteRoot,
+            "cleanup-data",
+            fixture,
+            ["remove", "\\\\?\\" + joinWindowsPath(remoteRoot, "data")],
+            30000,
+          ),
+          "native cleanup",
+        );
+        await removeRemoteDirectoryIfExists(windowsAgent, remoteRoot);
+      }
+    },
+  );
+
   it("runs muon pack on Windows and skips deb when dpkg-deb is unavailable", async () => {
     if (windowsAgent === undefined) {
       throw new Error("Windows e2e environment is not configured.");

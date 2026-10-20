@@ -8,6 +8,7 @@
 
 #include "muon_cardio_post.h"
 #include "muon_json_helpers.h"
+#include "muon_filesystem.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "plugins/builtin/muon_builtin_environment_helpers.h"
 #include "plugins/muon_traffic_type_metadata.h"
@@ -2523,6 +2524,16 @@ static bool StartPlatformProcess(const RunOptions& options,
     *error_message = "Command is not valid UTF-8";
     return false;
   }
+  auto application = std::filesystem::path{};
+  if (command.find_first_of(L"/\\:") != std::wstring::npos) {
+    try {
+      application = FilesystemPathForIo(command, FilesystemIoUsage::File);
+    } catch (const std::system_error& error) {
+      close_pipe_handles();
+      *error_message = "Unable to resolve executable path: " + std::string(error.what());
+      return false;
+    }
+  }
   std::wstring command_line = QuoteWindowsArgument(command);
   for (const auto& arg : options.args) {
     std::wstring wide_arg;
@@ -2544,6 +2555,18 @@ static bool StartPlatformProcess(const RunOptions& options,
     if (!MuonUtf8ToWide(options.cwd, &cwd)) {
       close_pipe_handles();
       *error_message = "cwd is not valid UTF-8";
+      return false;
+    }
+    try {
+      cwd = ResolveFilesystemPath({}, cwd).native();
+    } catch (const std::system_error& error) {
+      close_pipe_handles();
+      *error_message = "Unable to resolve cwd: " + std::string(error.what());
+      return false;
+    }
+    if (cwd.size() >= MAX_PATH) {
+      close_pipe_handles();
+      *error_message = "cwd requires a short Windows directory (under 260 UTF-16 code units)";
       return false;
     }
     cwd_pointer = cwd.c_str();
@@ -2619,6 +2642,9 @@ static bool StartPlatformProcess(const RunOptions& options,
       stderr_write,
   };
   MuonWindowsJobProcessLaunchOptions launch_options;
+  // Keep name-only executable search, but pass paths separately from argv[0]
+  // to avoid CreateProcessW's MAX_PATH module-token restriction.
+  launch_options.application_name = application.empty() ? nullptr : application.c_str();
   launch_options.command_line = mutable_command_line.data();
   launch_options.current_directory = cwd_pointer;
   launch_options.environment = environment_pointer;

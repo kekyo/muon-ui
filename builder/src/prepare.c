@@ -442,6 +442,18 @@ static const MuonRuntimeInfo *get_embedded_runtime_info(void) {
 }
 
 static char *sanitize_key(const char *value) {
+#ifdef _WIN32
+  // A path may exceed 4096 UTF-16 units, but one filesystem component may not
+  // exceed 255. Keep lock and staging names bounded regardless of input length.
+  SHA256_CTX context;
+  uint8_t digest[SHA256_DIGEST_LENGTH];
+  char hex[SHA256_DIGEST_STRING_LENGTH];
+  SHA256_Init(&context);
+  SHA256_Update(&context, (const uint8_t *)value, strlen(value));
+  SHA256_Final(digest, &context);
+  muon_sha256_digest_to_hex(digest, hex);
+  return muon_duplicate_string(hex);
+#else
   char *result = muon_duplicate_string(value);
   if (result == NULL) {
     return NULL;
@@ -453,6 +465,7 @@ static char *sanitize_key(const char *value) {
     }
   }
   return result;
+#endif
 }
 
 static int extract_archive(
@@ -524,41 +537,26 @@ static int extract_archive(
 }
 
 static char *default_cache_dir(void) {
-  const char *override = getenv("MUON_CACHE_DIR");
-  if (override != NULL && override[0] != '\0') {
-    return muon_duplicate_path_string(override);
-  }
+  static const char *const names[] = {
+      "MUON_CACHE_DIR",
 #ifdef _WIN32
-  const char *local_app_data = getenv("LOCALAPPDATA");
-  if (local_app_data != NULL && local_app_data[0] != '\0') {
-    char *normalized = muon_duplicate_path_string(local_app_data);
-    char *result = normalized == NULL ? NULL : muon_path_join(normalized, "muon");
-    free(normalized);
-    return result;
-  }
-  const char *user_profile = getenv("USERPROFILE");
-  if (user_profile != NULL && user_profile[0] != '\0') {
-    char *normalized = muon_duplicate_path_string(user_profile);
-    char *result = normalized == NULL ? NULL : muon_path_join3(normalized, ".cache", "muon");
-    free(normalized);
-    return result;
-  }
+      "LOCALAPPDATA", "USERPROFILE",
 #endif
-  const char *xdg = getenv("XDG_CACHE_HOME");
-  if (xdg != NULL && xdg[0] != '\0') {
-    char *normalized = muon_duplicate_path_string(xdg);
-    char *result = normalized == NULL ? NULL : muon_path_join(normalized, "muon");
-    free(normalized);
+      "XDG_CACHE_HOME", "HOME"};
+  for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); ++index) {
+    char *base = NULL;
+    if (muon_get_environment(names[index], &base) != 0) return NULL;
+    if (base == NULL) continue;
+    muon_normalize_path_separators(base);
+    if (index == 0) return base;
+    char *result = strcmp(names[index], "USERPROFILE") == 0 ||
+                           strcmp(names[index], "HOME") == 0
+        ? muon_path_join3(base, ".cache", "muon")
+        : muon_path_join(base, "muon");
+    free(base);
     return result;
   }
-  const char *home = getenv("HOME");
-  if (home == NULL || home[0] == '\0') {
-    return muon_duplicate_string(".muon-cache");
-  }
-  char *normalized = muon_duplicate_path_string(home);
-  char *result = normalized == NULL ? NULL : muon_path_join3(normalized, ".cache", "muon");
-  free(normalized);
-  return result;
+  return muon_duplicate_string(".muon-cache");
 }
 
 static int launcher_config_exists(const char *runtime_dir) {
@@ -1048,22 +1046,22 @@ static int compare_prepare_name_pointers(const void *left, const void *right) {
 }
 
 static int read_sorted_prepare_names(const char *path, PrepareNameList *list) {
-  DIR *directory = opendir(path);
+  MuonDirectory *directory = muon_opendir(path);
   if (directory == NULL) {
     muon_print_errno(path);
     return -1;
   }
-  struct dirent *child;
-  while ((child = readdir(directory)) != NULL) {
-    if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+  const char *child;
+  while ((child = muon_readdir(directory)) != NULL) {
+    if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
       continue;
     }
-    if (prepare_name_list_add(list, child->d_name) != 0) {
-      closedir(directory);
+    if (prepare_name_list_add(list, child) != 0) {
+      muon_closedir(directory);
       return -1;
     }
   }
-  closedir(directory);
+  if (muon_closedir(directory) != 0) return -1;
   qsort(list->values, list->count, sizeof(char *),
         compare_prepare_name_pointers);
   return 0;
@@ -1156,7 +1154,7 @@ static int fingerprint_staging_muon_source_recursive(
     const char *path, const char *relative,
     char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
-  if (stat(path, &entry) != 0) {
+  if (muon_stat(path, &entry) != 0) {
     muon_print_errno(path);
     return -1;
   }
@@ -1172,7 +1170,7 @@ static int fingerprint_staging_muon_source_recursive(
       return -1;
     }
     for (size_t index = 0; index < children.count; index += 1) {
-      char *child_path = muon_path_join(path, children.values[index]);
+      char *child_path = muon_path_join_exact(path, children.values[index]);
       char *child_relative =
           relative[0] == '\0' ? muon_duplicate_string(children.values[index])
                               : muon_path_join(relative, children.values[index]);
@@ -1224,7 +1222,7 @@ static int copy_staging_muon_source_recursive(
     const char *source, const char *destination, const char *relative,
     size_t *file_count) {
   struct stat entry;
-  if (stat(source, &entry) != 0) {
+  if (muon_stat(source, &entry) != 0) {
     muon_print_errno(source);
     return -1;
   }
@@ -1232,27 +1230,27 @@ static int copy_staging_muon_source_recursive(
     if (muon_ensure_directory(destination) != 0) {
       return -1;
     }
-    DIR *directory = opendir(source);
+    MuonDirectory *directory = muon_opendir(source);
     if (directory == NULL) {
       muon_print_errno(source);
       return -1;
     }
-    struct dirent *child;
-    while ((child = readdir(directory)) != NULL) {
-      if (strcmp(child->d_name, ".") == 0 || strcmp(child->d_name, "..") == 0) {
+    const char *child;
+    while ((child = muon_readdir(directory)) != NULL) {
+      if (strcmp(child, ".") == 0 || strcmp(child, "..") == 0) {
         continue;
       }
-      char *child_source = muon_path_join(source, child->d_name);
-      char *child_destination = muon_path_join(destination, child->d_name);
+      char *child_source = muon_directory_child_path(directory, child);
+      char *child_destination = muon_path_join_exact(destination, child);
       char *child_relative =
-          relative[0] == '\0' ? muon_duplicate_string(child->d_name)
-                              : muon_path_join(relative, child->d_name);
+          relative[0] == '\0' ? muon_duplicate_string(child)
+                              : muon_path_join(relative, child);
       if (child_source == NULL || child_destination == NULL ||
           child_relative == NULL) {
         free(child_source);
         free(child_destination);
         free(child_relative);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       if (!staging_relative_path_should_skip(child_relative) &&
@@ -1261,14 +1259,14 @@ static int copy_staging_muon_source_recursive(
         free(child_source);
         free(child_destination);
         free(child_relative);
-        closedir(directory);
+        muon_closedir(directory);
         return -1;
       }
       free(child_source);
       free(child_destination);
       free(child_relative);
     }
-    closedir(directory);
+    if (muon_closedir(directory) != 0) return -1;
     return 0;
   }
   if (S_ISREG(entry.st_mode)) {
@@ -1331,7 +1329,7 @@ static int fingerprint_cef_source(const char *cef_path,
 static int fingerprint_archive_metadata(
     const char *archive_path, char fingerprint[SHA256_DIGEST_STRING_LENGTH]) {
   struct stat entry;
-  if (stat(archive_path, &entry) != 0) {
+  if (muon_stat(archive_path, &entry) != 0) {
     muon_print_errno(archive_path);
     return -1;
   }
@@ -1371,15 +1369,17 @@ static int set_prepare_result(PrepareResult *result, const char *stage_path,
 
 static char *create_hidden_lock_path(const char *parent, const char *prefix,
                                      const char *key) {
-  const int size = snprintf(NULL, 0, "%s/.%s-%s.lock", parent, prefix, key);
+  const int size = snprintf(NULL, 0, ".%s-%s.lock", prefix, key);
   if (size < 0) {
     return NULL;
   }
-  char *result = (char *)malloc((size_t)size + 1);
-  if (result == NULL) {
+  char *name = (char *)malloc((size_t)size + 1);
+  if (name == NULL) {
     return NULL;
   }
-  snprintf(result, (size_t)size + 1, "%s/.%s-%s.lock", parent, prefix, key);
+  snprintf(name, (size_t)size + 1, ".%s-%s.lock", prefix, key);
+  char *result = muon_path_join(parent, name);
+  free(name);
   return result;
 }
 
@@ -1620,7 +1620,7 @@ static int prepare_staging_locked(
       muon_remove_recursive(options->stage_dir) != 0) {
     goto cleanup;
   }
-  if (rename(temporary_directory, options->stage_dir) != 0) {
+  if (muon_rename(temporary_directory, options->stage_dir) != 0) {
     muon_print_errno(options->stage_dir);
     goto cleanup;
   }
